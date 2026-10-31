@@ -1,5 +1,5 @@
 {
-  "horizon_revision": "95932161edf5cd908bbb329886308da938cfada4",
+  "horizon_revision": "0ac3e823f8209630740a4ae639bf11d8e135669f",
   "source_sha256": {
     "crates/horizon-client/src/game.rs": "0c198914535282e891d88a010dba504889fa4f17e488dd557e706419d37f6f42",
     "crates/horizon-client/src/game/native_hooks.rs": "0d80d7667520a5910f060358da0c4668468cdd5d8197effb425791c133523e6b"

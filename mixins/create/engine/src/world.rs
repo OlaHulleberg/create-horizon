@@ -119,11 +119,27 @@ pub struct Dimension {
     pub belt_drops: Vec<([i32; 3], crate::belt::Segment, i32, crate::belt::Item)>,
     /// Items saved with a belt, kept until its chain is whole again after loading.
     belt_saved: HashMap<[i32; 3], crate::belt::Inventory>,
+    /// Latches whose inputs may have changed, looked at after the tick
+    /// (`checkTickOnNeighbor`), and their scheduled ticks (position, game time due).
+    pub latch_checks: Vec<[i32; 3]>,
+    pub latch_ticks: Vec<([i32; 3], i64)>,
 }
 
 /// Blocks that keep state of their own here but are not kinetic: depots.
 fn has_state(block: Block) -> bool {
-    matches!(block, Block::Depot | Block::Belt)
+    matches!(
+        block,
+        Block::Depot | Block::Belt | Block::PoweredLatch | Block::PoweredToggleLatch
+    )
+}
+
+/// Create's latches, by block.
+pub fn latch_kind(block: Block) -> Option<crate::latch::Kind> {
+    match block {
+        Block::PoweredLatch => Some(crate::latch::Kind::Powered),
+        Block::PoweredToggleLatch => Some(crate::latch::Kind::Toggle),
+        _ => None,
+    }
 }
 
 /// A whole belt: its segments from the controller, the controller's segment, its items.
@@ -183,6 +199,9 @@ impl CreateWorld {
             d.presses.insert(pos, crate::press::Press::default());
             // A press placed over a depot looks at what it holds.
             d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
+        }
+        if latch_kind(block).is_some() {
+            d.latch_checks.push(pos);
         }
         if block == Block::Belt && !d.belt_of.contains_key(&pos) {
             d.belt_dirty.push(pos);
@@ -445,6 +464,7 @@ impl CreateWorld {
         match self.table.get(state).map(|(b, _)| b) {
             Some(b) if follows_power(b) => self.dims[dim].redstone.push(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
+            Some(b) if latch_kind(b).is_some() => self.dims[dim].latch_checks.push(pos),
             _ => {}
         }
     }

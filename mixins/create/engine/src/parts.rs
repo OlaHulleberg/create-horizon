@@ -15,6 +15,9 @@ pub struct StateInfo {
     pub bottom_shaft: bool,
     /// A belt segment's `facing`, `slope` and `part`.
     pub belt: Option<crate::belt::Segment>,
+    /// A latch's `powering` and `powered_side`.
+    pub powering: bool,
+    pub powered_side: bool,
 }
 
 impl StateInfo {
@@ -45,6 +48,8 @@ impl StateInfo {
                     }
                 }
                 "powered" => s.powered = v == "true",
+                "powering" => s.powering = v == "true",
+                "powered_side" => s.powered_side = v == "true",
                 "top_shaft" => s.top_shaft = v == "true",
                 "bottom_shaft" => s.bottom_shaft = v == "true",
                 _ => {}
@@ -191,6 +196,8 @@ pub fn is_kinetic(block: Block) -> bool {
         bottom_shaft: true,
         powered: false,
         belt: None,
+        powering: false,
+        powered_side: false,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

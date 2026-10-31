@@ -190,6 +190,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
             );
         }
     }
+    tick_latches(game, dimension, dim);
     tick_millstones(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
@@ -336,6 +337,19 @@ pub(super) fn right_click_block(
     }
     if block == Some(create_engine::Block::Belt) {
         use_belt(game, dim, pos, canceled);
+        return;
+    }
+    if let Some((kind, l)) = latch_state(state) {
+        // ToggleLatchBlock.useItemOn: not while sneaking.
+        if back {
+            return;
+        }
+        *canceled = true;
+        if let Some(n) = create_engine::latch::activated(kind, &l)
+            && let Some(p) = game.native_acting_player()
+        {
+            set_latch(game, &p.dimension, pos, n);
+        }
         return;
     }
     if with_world(|w| w.turn_crank(dim, pos, back)) != Some(true) {
@@ -2462,4 +2476,158 @@ fn tick_client_belts(game: &mut Game<'_>) {
         draw_belt(game, &contents, &mut shown, rpm, redraw);
         BELTS.with_borrow_mut(|b| b.belts.insert(c, (contents, shown)));
     }
+}
+
+/// A latch's rules and state, from the state table: None for any other state. Read with
+/// `try_borrow`: the signal hooks ask from inside level updates the glue itself starts.
+fn latch_state(state: u32) -> Option<(create_engine::latch::Kind, create_engine::latch::Latch)> {
+    states::index(state)?;
+    WORLD.with(|w| {
+        let w = w.try_borrow().ok()?;
+        let (block, info) = w.as_ref()?.table.get(state)?;
+        let kind = create_engine::world::latch_kind(block)?;
+        Some((
+            kind,
+            create_engine::latch::Latch {
+                facing: info.facing?,
+                powered: info.powered,
+                powering: info.powering,
+                powered_side: info.powered_side,
+            },
+        ))
+    })
+}
+
+/// `BlockState.getSignal` / `getDirectSignal` of a latch (hot: one range test for others).
+pub(super) fn block_signal(
+    state: BlockStateId,
+    face: horizon_core::geometry::Direction,
+    signal: &mut i32,
+) {
+    if let Some((_, l)) = latch_state(state.0) {
+        // The hook names the face touching the reader; vanilla's direction points from the
+        // reader to the latch.
+        *signal = create_engine::latch::signal(&l, Dir::ALL[face as usize].opposite());
+    }
+}
+
+/// `isSignalSource`: a latch gives a signal.
+pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
+    if latch_state(state.0).is_some() {
+        *source = true;
+    }
+}
+
+/// A latch's scheduled tick is the glue's: the repeater it is built on doesn't run its own.
+pub(super) fn tick_block(state: BlockStateId, handled: &mut bool) {
+    if latch_state(state.0).is_some() {
+        *handled = true;
+    }
+}
+
+/// Sets a latch's new state (`setBlock(.., UPDATE_CLIENTS)`), then the blocks it powers read it
+/// again (`DiodeBlock.onPlace` -> `updateNeighborsInFront`).
+fn set_latch(
+    game: &mut Game<'_>,
+    dimension: &str,
+    pos: [i32; 3],
+    l: create_engine::latch::Latch,
+) {
+    let registry = game.pack.assets.registry;
+    let current = game.world.block(pos[0], pos[1], pos[2]);
+    let Some(mut s) = registry.state(current).cloned() else {
+        return;
+    };
+    let flag = |b: bool| if b { "true" } else { "false" }.to_owned();
+    s.properties.insert("powered".into(), flag(l.powered));
+    s.properties.insert("powering".into(), flag(l.powering));
+    if s.properties.contains_key("powered_side") {
+        s.properties.insert("powered_side".into(), flag(l.powered_side));
+    }
+    let Some(id) = registry.id(&s) else {
+        return;
+    };
+    game.native_set_block(
+        dimension,
+        pos,
+        id,
+        super::native_hooks::flags::UPDATE_CLIENTS,
+    );
+    game.native_update_signal_neighbors(dimension, pos);
+}
+
+/// `DiodeBlock.getInputSignal` > 0 at the latch's back, and a powered latch's
+/// `isPoweredOnSides`: a signal toward it, or redstone dust beside it with power.
+fn latch_inputs(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> (bool, bool) {
+    let registry = game.pack.assets.registry;
+    let wire = |game: &Game<'_>, p: [i32; 3]| {
+        registry
+            .state(game.world.block(p[0], p[1], p[2]))
+            .is_some_and(|s| {
+                s.name == "minecraft:redstone_wire"
+                    && s.properties.get("power").is_some_and(|v| v != "0")
+            })
+    };
+    let powered_from = |game: &mut Game<'_>, d: Dir| {
+        let o = d.offset();
+        let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+        let dir = horizon_core::geometry::Direction::ALL[d as usize];
+        let bp = horizon_core::position::BlockPos::new(at[0], at[1], at[2]);
+        game.with_level(|b, level, ticks| b.signal(level, ticks, bp, dir)) > 0 || wire(game, at)
+    };
+    let back = powered_from(game, facing);
+    // getClockWise / getCounterClockWise.
+    let (left, right) = match facing {
+        Dir::North => (Dir::East, Dir::West),
+        Dir::East => (Dir::South, Dir::North),
+        Dir::South => (Dir::West, Dir::East),
+        _ => (Dir::North, Dir::South),
+    };
+    let side = powered_from(game, left) || powered_from(game, right);
+    (back, side)
+}
+
+/// Latches: their due ticks (`tick`), then the ones whose neighbours changed
+/// (`checkTickOnNeighbor`), which take a tick one game tick later. Nothing runs without either.
+fn tick_latches(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let now = game.world.game_time;
+    let Some((due, checks)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        let (due, later): (Vec<_>, Vec<_>) = d.latch_ticks.drain(..).partition(|t| t.1 <= now);
+        d.latch_ticks = later;
+        (due, std::mem::take(&mut d.latch_checks))
+    }) else {
+        return;
+    };
+    if due.is_empty() && checks.is_empty() {
+        return;
+    }
+    let mut next = Vec::new();
+    for (pos, _) in due {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let Some((kind, l)) = latch_state(state) else {
+            continue;
+        };
+        let (back, side) = latch_inputs(game, pos, l.facing);
+        let (n, again) = create_engine::latch::tick(kind, &l, back, side);
+        if n != l {
+            set_latch(game, dimension, pos, n);
+        }
+        if again {
+            next.push((pos, now + 1));
+        }
+    }
+    for pos in checks {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let Some((kind, l)) = latch_state(state) else {
+            continue;
+        };
+        let (back, side) = latch_inputs(game, pos, l.facing);
+        let pending = next.iter().any(|t: &([i32; 3], i64)| t.0 == pos)
+            || with_world(|w| w.dims[dim].latch_ticks.iter().any(|t| t.0 == pos)) == Some(true);
+        if !pending && create_engine::latch::needs_tick(kind, &l, back, side) {
+            next.push((pos, now + 1));
+        }
+    }
+    with_world(|w| w.dims[dim].latch_ticks.extend(next));
 }

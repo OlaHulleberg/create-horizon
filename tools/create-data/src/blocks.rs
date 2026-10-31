@@ -358,6 +358,27 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 ]),
             )
         }
+        // Create's diodes are vanilla diodes (`AbstractDiodeBlock`, REPEATER's properties): the
+        // repeater gives shape, placement and survival; the glue gives the latch's rules.
+        "powered_toggle_latch" => (
+            "minecraft:repeater",
+            None,
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                ("powered", bools),
+                ("powering", bools),
+            ]),
+        ),
+        "powered_latch" => (
+            "minecraft:repeater",
+            None,
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                ("powered", bools),
+                ("powered_side", bools),
+                ("powering", bools),
+            ]),
+        ),
         "hand_crank" => (
             "minecraft:heavy_core",
             Some(by_facing(&CRANK)),
