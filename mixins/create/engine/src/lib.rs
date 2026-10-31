@@ -13,6 +13,7 @@ pub mod processing;
 pub mod states;
 pub mod waterwheel;
 pub mod world;
+pub mod wrench;
 
 pub use generated::Block;
 

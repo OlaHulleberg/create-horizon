@@ -133,6 +133,11 @@ fn compile(create: &Path, out: &Path) {
             let doc = json!({ "template": "minecraft:stick" });
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
+        } else if name == "wrench" {
+            // WrenchItem: `stacksTo(1)`; its use is the native mod's.
+            let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
         } else {
             let why = format!(
                 "item {}: ported with its subsystem",
