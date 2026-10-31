@@ -414,6 +414,32 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             Some(by_facing(&[[0., 5., 0., 16., 10., 16.]])),
             own(&[("facing", facing)]),
         ),
+        // TrackBlock: its own shapes (TrackShape), drawn by its blockstate's models; collision
+        // as Create's (AllShapes.TRACK_COLLISION, none on a slope), used for the outline too.
+        "track" => {
+            let flat = json!([[0.0, 0.0, 0.0, 1.0, 0.125, 1.0]]);
+            // The default first (TrackBlock's default state is ZO).
+            let shapes = [
+                "zo", "none", "xo", "pd", "nd", "an", "as", "ae", "aw", "tn", "ts", "te", "tw",
+                "cr_o", "cr_d", "cr_pdx", "cr_pdz", "cr_ndx", "cr_ndz",
+            ];
+            let values: Map<String, Value> = shapes
+                .iter()
+                .map(|s| {
+                    let boxes = if matches!(*s, "an" | "as" | "ae" | "aw") {
+                        json!([])
+                    } else {
+                        flat.clone()
+                    };
+                    (s.to_string(), boxes)
+                })
+                .collect();
+            (
+                "minecraft:iron_block",
+                Some(json!({ "property": "shape", "values": values })),
+                own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
+            )
+        }
         "hand_crank" => (
             "minecraft:heavy_core",
             Some(by_facing(&CRANK)),
