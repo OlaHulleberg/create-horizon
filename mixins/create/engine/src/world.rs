@@ -106,11 +106,38 @@ pub struct Dimension {
     pub depot_work: Vec<[i32; 3]>,
     /// Presses whose cycle clients must see again (started, head down, done).
     pub press_changes: Vec<[i32; 3]>,
+    /// Belts by controller, and each segment's controller.
+    pub belts: HashMap<[i32; 3], Belt>,
+    pub belt_of: HashMap<[i32; 3], [i32; 3]>,
+    /// Belt segments placed or loaded whose chain is looked for after the tick.
+    belt_dirty: Vec<[i32; 3]>,
+    /// Belts whose items or shape clients must see again.
+    pub belt_changes: Vec<[i32; 3]>,
+    /// Segments to replace because their neighbour broke, and items a broken belt drops (with
+    /// the controller and segment they were on).
+    pub belt_breaks: Vec<BeltBreak>,
+    pub belt_drops: Vec<([i32; 3], crate::belt::Segment, i32, crate::belt::Item)>,
 }
 
 /// Blocks that keep state of their own here but are not kinetic: depots.
 fn has_state(block: Block) -> bool {
-    matches!(block, Block::Depot)
+    matches!(block, Block::Depot | Block::Belt)
+}
+
+/// A whole belt: its segments from the controller, the controller's segment, its items.
+#[derive(Clone, Debug)]
+pub struct Belt {
+    pub chain: Vec<[i32; 3]>,
+    pub segment: crate::belt::Segment,
+    pub items: crate::belt::Inventory,
+}
+
+/// What breaking a belt segment does to the next ones (`BeltBlock.onRemove`): each becomes a
+/// shaft on the belt's axis (a pulley) or air.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BeltBreak {
+    pub pos: [i32; 3],
+    pub shaft: Option<crate::kinetics::Axis>,
 }
 
 /// Blocks that follow redstone power (`powered`): Create's split shafts.
@@ -154,6 +181,9 @@ impl CreateWorld {
             d.presses.insert(pos, crate::press::Press::default());
             // A press placed over a depot looks at what it holds.
             d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
+        }
+        if block == Block::Belt && !d.belt_of.contains_key(&pos) {
+            d.belt_dirty.push(pos);
         }
         if block == Block::Depot && !d.depots.contains_key(&pos) {
             // Placed or loaded: clients draw what its block entity holds.
@@ -209,6 +239,10 @@ impl CreateWorld {
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
             d.presses.remove(&pos);
+            if let Some(seg) = self.table.get(old).and_then(|(_, i)| i.belt) {
+                self.belt_removed(dim, pos, seg);
+            }
+            let d = &mut self.dims[dim];
             if d.depots.remove(&pos).is_some() {
                 d.sliding.retain(|p| *p != pos);
                 d.depot_changes.push(pos);
@@ -251,6 +285,24 @@ impl CreateWorld {
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            // A belt reaching into the column stops being whole until it is back.
+            let gone: Vec<[i32; 3]> = d
+                .belt_of
+                .iter()
+                .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+                .map(|(_, c)| *c)
+                .collect();
+            for c in gone {
+                if let Some(b) = d.belts.remove(&c) {
+                    for p in &b.chain {
+                        d.belt_of.remove(p);
+                        if (p[0] >> 4, p[2] >> 4) != (cx, cz) {
+                            d.belt_dirty.push(*p);
+                        }
+                    }
+                }
+            }
+            d.belt_dirty.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.depot_work.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sliding.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
@@ -473,6 +525,116 @@ impl CreateWorld {
         }
     }
 
+    /// A belt segment left (`BeltBlock.onRemove`): its belt drops its items, and the segments
+    /// next to it break in turn (a pulley leaves its shaft).
+    fn belt_removed(&mut self, dim: usize, pos: [i32; 3], seg: crate::belt::Segment) {
+        let d = &mut self.dims[dim];
+        if let Some(c) = d.belt_of.remove(&pos)
+            && let Some(belt) = d.belts.remove(&c)
+        {
+            let length = belt.chain.len() as i32;
+            for item in belt.items.items {
+                d.belt_drops.push((c, belt.segment, length, item));
+            }
+            for p in &belt.chain {
+                d.belt_of.remove(p);
+            }
+            d.belt_changes.push(c);
+        }
+        for forward in [true, false] {
+            let Some(next) = seg.next(pos, forward) else {
+                continue;
+            };
+            let Some(n) = d
+                .states
+                .get(&next)
+                .and_then(|s| self.table.get(*s))
+                .and_then(|(_, i)| i.belt)
+            else {
+                continue;
+            };
+            d.belt_breaks.push(BeltBreak {
+                pos: next,
+                shaft: n.has_pulley().then(|| n.rotation_axis()),
+            });
+        }
+    }
+
+    /// Belts whose segments were placed or loaded: their chains, once whole (Create's
+    /// `initBelt`), become belts whose segments turn together. Nothing to do when no belt
+    /// changed.
+    pub fn settle_belts(&mut self, dim: usize) {
+        if self.dims[dim].belt_dirty.is_empty() {
+            return;
+        }
+        let dirty = std::mem::take(&mut self.dims[dim].belt_dirty);
+        for pos in dirty {
+            if self.dims[dim].belt_of.contains_key(&pos) {
+                continue;
+            }
+            let table = &self.table;
+            let states = &self.dims[dim].states;
+            let segment_at = |p: [i32; 3]| {
+                states
+                    .get(&p)
+                    .and_then(|s| table.get(*s))
+                    .and_then(|(b, i)| (b == Block::Belt).then_some(i.belt).flatten())
+            };
+            let Some(controller) = crate::belt::controller_of(pos, segment_at) else {
+                continue;
+            };
+            let chain = crate::belt::chain(controller, segment_at);
+            let whole = chain.len() >= 2
+                && chain
+                    .last()
+                    .and_then(|p| segment_at(*p))
+                    .is_some_and(|s| s.part == crate::belt::Part::End);
+            if !whole {
+                continue;
+            }
+            let Some(segment) = segment_at(controller) else {
+                continue;
+            };
+            let d = &mut self.dims[dim];
+            for p in &chain {
+                d.belt_of.insert(*p, controller);
+            }
+            d.belts.insert(
+                controller,
+                Belt {
+                    chain: chain.clone(),
+                    segment,
+                    items: crate::belt::Inventory::default(),
+                },
+            );
+            d.belt_changes.push(controller);
+            for p in chain {
+                let Some(&state) = self.dims[dim].states.get(&p) else {
+                    continue;
+                };
+                let old = self.dims[dim].settings.get(&p).copied().unwrap_or_default();
+                self.dims[dim].settings.insert(
+                    p,
+                    Settings {
+                        belt: Some(controller),
+                        ..old
+                    },
+                );
+                self.place(dim, p, state);
+            }
+        }
+    }
+
+    /// Belts that hold items: the only ones that tick.
+    pub fn busy_belts(&self, dim: usize) -> Vec<[i32; 3]> {
+        self.dims[dim]
+            .belts
+            .iter()
+            .filter(|(_, b)| !b.items.is_empty())
+            .map(|(c, _)| *c)
+            .collect()
+    }
+
     /// The depot at `pos` changed in a way clients must see (`notifyUpdate`).
     pub fn depot_changed(&mut self, dim: usize, pos: [i32; 3]) {
         if self.dims[dim].depots.contains_key(&pos) {
@@ -676,6 +838,60 @@ mod tests {
         );
         w.column_unloaded(0, 0, 0);
         assert!(w.dims[0].depots.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_belt_turns_as_one_and_breaks_as_create_s_does() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let belt = |part: &'static str| {
+            (
+                "create:belt",
+                vec![
+                    ("facing", "east"),
+                    ("slope", "horizontal"),
+                    ("part", part),
+                    ("casing", "false"),
+                    ("waterlogged", "false"),
+                ],
+            )
+        };
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            belt("start"),
+            belt("middle"),
+            belt("end"),
+            ("create:creative_motor", vec![("facing", "south")]),
+        ];
+        states::set_range(10, 4);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        // A belt east along x from 0 to 2; its pulleys turn on z. A motor north of the start
+        // faces south into it.
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, [1, 0, 0], 0, 11);
+        w.block_changed(0, [2, 0, 0], 0, 12);
+        w.block_changed(0, [0, 0, -1], 0, 13);
+        w.settle_belts(0);
+        assert_eq!(w.dims[0].belts[&[0, 0, 0]].chain.len(), 3);
+        assert_eq!(w.dims[0].belt_of[&[2, 0, 0]], [0, 0, 0]);
+        w.tick(0, &mut Vec::new());
+        // The motor turns the start's pulley; the segments carry it to the end.
+        let start = w.speed(0, [0, 0, 0]).unwrap();
+        assert!(start != 0.0);
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(start));
+        assert_eq!(w.speed(0, [2, 0, 0]), Some(start));
+        // Breaking the middle: the start and end become shafts (they are pulleys).
+        w.block_changed(0, [1, 0, 0], 11, 0);
+        assert!(w.dims[0].belts.is_empty());
+        let breaks = std::mem::take(&mut w.dims[0].belt_breaks);
+        assert_eq!(breaks.len(), 2);
+        assert!(
+            breaks
+                .iter()
+                .all(|b| b.shaft == Some(crate::kinetics::Axis::Z))
+        );
         states::clear_range();
     }
 

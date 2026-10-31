@@ -55,7 +55,7 @@ fn with_world<R>(f: impl FnOnce(&mut CreateWorld) -> R) -> Option<R> {
 
 /// World open: index Create's block states so hot hooks can test them with one compare.
 /// World close: forget them, so a world without Create pays nothing.
-pub(crate) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
+pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
     match phase {
         WorldPhase::WorldOpenReady => {
             if !ensure(game.pack.assets.registry) {
@@ -83,7 +83,7 @@ fn level_index(dimension: horizon_world::level::Dimension) -> usize {
 /// A committed block change on the server. Hot: two range tests, then return, for any change
 /// that is not Create's.
 #[inline(always)]
-pub(crate) fn block_changed(
+pub(super) fn block_changed(
     dimension: horizon_world::level::Dimension,
     pos: horizon_core::position::BlockPos,
     old: BlockStateId,
@@ -98,7 +98,7 @@ pub(crate) fn block_changed(
 /// A neighbour of a block changed on the server. Hot: one range test, then return, for any block
 /// that is not Create's.
 #[inline(always)]
-pub(crate) fn neighbor_changed(
+pub(super) fn neighbor_changed(
     dimension: horizon_world::level::Dimension,
     pos: horizon_core::position::BlockPos,
     state: BlockStateId,
@@ -111,7 +111,7 @@ pub(crate) fn neighbor_changed(
 
 /// A column joined a server level: find its Create blocks. Sections whose palette holds one
 /// state only are tested once; the others are unpacked on the stack, never allocated.
-pub(crate) fn chunk_load(
+pub(super) fn chunk_load(
     game: &mut Game<'_>,
     dimension: &str,
     chunk: &horizon_client::chunk::Chunk,
@@ -143,7 +143,7 @@ pub(crate) fn chunk_load(
     });
 }
 
-pub(crate) fn chunk_unload(dimension: &str, chunk: &horizon_client::chunk::Chunk) {
+pub(super) fn chunk_unload(dimension: &str, chunk: &horizon_client::chunk::Chunk) {
     if let Some(dim) = dimension_index(dimension) {
         with_world(|w| w.column_unloaded(dim, chunk.x, chunk.z));
     }
@@ -151,7 +151,7 @@ pub(crate) fn chunk_unload(dimension: &str, chunk: &horizon_client::chunk::Chunk
 
 /// After a server level's tick: re-solve what changed there (nothing when nothing did), break
 /// the blocks Create would break, and tell the level's players what turns now.
-pub(crate) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
+pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     let Some(dim) = dimension_index(dimension) else {
         return;
     };
@@ -190,8 +190,10 @@ pub(crate) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     }
     tick_millstones(game, dim);
     tick_depots(game, dimension, dim);
+    tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
     let mut events = Vec::new();
+    with_world(|w| w.settle_belts(dim));
     let Some((removed, unsaved)) = with_world(|w| {
         w.tick(dim, &mut events);
         (w.dims[dim].kinetics.take_removed(), w.take_unsaved(dim))
@@ -253,7 +255,7 @@ fn send(game: &mut Game<'_>, players: &[u128], updates: &[Update]) {
 }
 
 /// A client asks for every part of its dimension when it joins (`sync`).
-pub(crate) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, data: &[u8]) {
+pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, data: &[u8]) {
     if channel == SCROLL {
         scroll_from_client(game, player, data);
         return;
@@ -294,11 +296,14 @@ pub(crate) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     })
     .unwrap_or_default();
     send_presses(game, &[player], dim, &presses);
+    let belts: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].belts.keys().copied().collect()).unwrap_or_default();
+    send_belts(game, &[player], dim, &belts);
 }
 
 /// A player right-clicks a block (`HandCrankBlock.useItemOn`): a hand crank turns for 10 ticks,
 /// backwards while sneaking, and tires the player (`crankHungerMultiplier` 0.01 per RPM).
-pub(crate) fn right_click_block(
+pub(super) fn right_click_block(
     game: &mut Game<'_>,
     pos: [i32; 3],
     face: [i32; 3],
@@ -325,6 +330,10 @@ pub(crate) fn right_click_block(
     }
     if block == Some(create_engine::Block::Depot) {
         use_depot(game, dim, pos, face, canceled);
+        return;
+    }
+    if block == Some(create_engine::Block::Belt) {
+        use_belt(game, dim, pos, canceled);
         return;
     }
     if with_world(|w| w.turn_crank(dim, pos, back)) != Some(true) {
@@ -369,7 +378,7 @@ fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
 }
 
 /// The mouse wheel on the client: a creative motor under the crosshair takes it.
-pub(crate) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
+pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
     if *claimed || !client_ensure(game) {
         return;
     }
@@ -407,7 +416,7 @@ fn settings_from_nbt(data: Option<&horizon_world::nbt::Compound>) -> Vec<([i32; 
 }
 
 /// A chunk is being saved: Create's settings in it, as NBT (the only time it writes NBT).
-pub(crate) fn chunk_data_save(
+pub(super) fn chunk_data_save(
     dimension: &str,
     chunk: [i32; 2],
     data: &mut horizon_world::nbt::Compound,
@@ -482,6 +491,34 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
         Model::WaterWheel(d) => find("create:part_water_wheel", "facing", dir_name(d)),
         Model::MillstoneCog => find("create:part_millstone_cog", "facing", "up"),
         Model::PressHead(d) => find("create:part_press_head", "facing", dir_name(d)),
+        Model::Belt(..) | Model::BeltPulley(_) => None,
+    }
+}
+
+/// The part model a draw needs: the block state's own or a partial's, posed for belts.
+fn part_model(
+    game: &mut Game<'_>,
+    registry: &BlockRegistry,
+    own: BlockStateId,
+    model: Model,
+) -> Option<u32> {
+    use create_engine::belt;
+    let partial = |name: &str| {
+        let default = registry.default_state(name)?;
+        let mut s = registry.state(default)?.clone();
+        s.properties.insert("facing".to_owned(), "up".to_owned());
+        registry.id(&s)
+    };
+    match model {
+        Model::Belt(seg, bottom) => {
+            let state = partial(belt::partial(&seg, bottom)?)?;
+            game.native_part_model_posed(state, belt::segment_pose(&seg))
+        }
+        Model::BeltPulley(seg) => {
+            let state = partial("create:part_belt_pulley")?;
+            game.native_part_model_posed(state, belt::pulley_pose(&seg))
+        }
+        _ => model_state(registry, own, model).and_then(|s| game.native_part_model(s)),
     }
 }
 
@@ -502,11 +539,9 @@ fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> bool {
     for d in &draws {
         let handle = match c.models.get(&(state.0, d.model)) {
             Some(&h) => Some(h),
-            None => model_state(registry, state, d.model)
-                .and_then(|s| game.native_part_model(s))
-                .inspect(|&h| {
-                    c.models.insert((state.0, d.model), h);
-                }),
+            None => part_model(game, registry, state, d.model).inspect(|&h| {
+                c.models.insert((state.0, d.model), h);
+            }),
         };
         if let Some(h) = handle {
             game.native_part_set(
@@ -572,13 +607,17 @@ fn client_ensure(game: &Game<'_>) -> bool {
 }
 
 /// The server's speeds, on the client.
-pub(crate) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
+pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
     if channel == create_engine::depot::CHANNEL {
         depots_from_server(game, data);
         return;
     }
     if channel == create_engine::press::CHANNEL {
         presses_from_server(game, data);
+        return;
+    }
+    if channel == create_engine::belt::CHANNEL {
+        belts_from_server(game, data);
         return;
     }
     if channel != client::CHANNEL || !client_ensure(game) {
@@ -606,7 +645,7 @@ pub(crate) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
 
 /// Each tick of the window's game: ask the server for every part once in a world, try parts
 /// whose block hadn't arrived again, and forget everything once out of a world.
-pub(crate) fn client_tick(game: &mut Game<'_>) {
+pub(super) fn client_tick(game: &mut Game<'_>) {
     if !game.native_window() {
         return;
     }
@@ -614,10 +653,12 @@ pub(crate) fn client_tick(game: &mut Game<'_>) {
         CLIENT.with_borrow_mut(|c| *c = None);
         DEPOTS.with_borrow_mut(|d| *d = ClientDepots::default());
         PRESSES.with_borrow_mut(|c| *c = ClientPresses::default());
+        BELTS.with_borrow_mut(|b| *b = ClientBelts::default());
         return;
     }
     tick_client_depots(game);
     tick_client_presses(game);
+    tick_client_belts(game);
     if !client_ensure(game) {
         return;
     }
@@ -830,7 +871,7 @@ fn tick_millstones(game: &mut Game<'_>, dim: usize) {
 }
 
 /// `MillstoneBlock`'s block entity: its id, saved like any block entity with its slots.
-pub(crate) fn block_entity(
+pub(super) fn block_entity(
     block: &str,
     entity: &mut Option<(String, horizon_world::nbt::Compound)>,
 ) {
@@ -841,7 +882,7 @@ pub(crate) fn block_entity(
 
 /// The millstone's slots (`MillstoneInventoryHandler`): hoppers put into the input (0) and take
 /// from the nine outputs, through any face; no menu.
-pub(crate) fn block_entity_container(
+pub(super) fn block_entity_container(
     block: &str,
     container: &mut Option<horizon_client::containers::ModContainer>,
 ) {
@@ -922,14 +963,14 @@ fn flow_at(game: &Game<'_>, dimension: &str, at: [i32; 3]) -> [f64; 3] {
 
 /// `/create_debug speed <pos>`: the kinetic speed the server solved at a block, for tests and
 /// for players who want the number (operators only).
-pub(crate) fn register_commands(commands: &mut Vec<super::native_server::NativeCommand>) {
+pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeCommand>) {
     commands.push(super::native_server::NativeCommand::op(
         "create_debug speed <pos:block_pos>",
         2,
     ));
 }
 
-pub(crate) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool) {
+pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool) {
     let Some(rest) = command.strip_prefix("create_debug speed ") else {
         return;
     };
@@ -1024,7 +1065,7 @@ fn use_depot(game: &mut Game<'_>, dim: usize, pos: [i32; 3], face: [i32; 3], can
 
 /// A hopper put into or took from a block's slots: a depot's held stack arrives from above
 /// (`new TransportedItemStack(stack)`, a quarter-less slide from the edge of nothing) or left.
-pub(crate) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
+pub(super) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
     let state = game.world.block(pos[0], pos[1], pos[2]).0;
     if states::index(state).is_none() {
         return;
@@ -1611,5 +1652,700 @@ fn tick_client_presses(game: &mut Game<'_>) {
                 c.running.remove(&pos);
             }
         });
+    }
+}
+
+/// The belt segment at `pos`: its controller, its index along the chain, and its state.
+fn belt_segment(
+    game: &Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+) -> Option<([i32; 3], i32, create_engine::belt::Segment)> {
+    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    let seg = with_world(|w| w.table.get(state).and_then(|(_, i)| i.belt)).flatten()?;
+    let (c, index) = with_world(|w| {
+        let d = &w.dims[dim];
+        let c = *d.belt_of.get(&pos)?;
+        let index = d.belts.get(&c)?.chain.iter().position(|p| *p == pos)? as i32;
+        Some((c, index))
+    })
+    .flatten()?;
+    Some((c, index, seg))
+}
+
+/// `BeltBlock.useItemOn` with an empty main hand: every item within reach of the segment's
+/// centre goes to the player.
+fn use_belt(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut bool) {
+    if game.native_held().is_some_and(|h| h.0 != "minecraft:air")
+        || game.hand != horizon_client::first_person::Hand::Main
+        || game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+    {
+        return;
+    }
+    let Some((c, index, _)) = belt_segment(game, dim, pos) else {
+        return;
+    };
+    *canceled = true;
+    let taken = with_world(|w| {
+        let b = w.dims[dim].belts.get_mut(&c)?;
+        let taken = b.items.take_within(index as f32 + 0.5, 0.55);
+        if !taken.is_empty() {
+            w.dims[dim].belt_changes.push(c);
+        }
+        Some(taken)
+    })
+    .flatten()
+    .unwrap_or_default();
+    for i in taken {
+        game.native_give_items(&i.item, u32::from(i.count));
+    }
+}
+
+/// `BeltBlock.updateEntityAfterFallOn` / `entityInside` for an item, and
+/// `SharedDepotBlockMethods.onLanded`: a belt takes a landing stack onto its segment (when
+/// nothing just put there is in the way), a depot takes it when it holds nothing.
+pub(super) fn item_landed(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    stack: &mut horizon_client::items::ItemStack,
+    at: [f64; 3],
+) {
+    // The entity's own block, else the one under it; neither a Create block: done.
+    let own = [at[0].floor() as i32, at[1].floor() as i32, at[2].floor() as i32];
+    let s_own = game.world.block(own[0], own[1], own[2]).0;
+    let s_pos = game.world.block(pos[0], pos[1], pos[2]).0;
+    if states::index(s_own).is_none() && states::index(s_pos).is_none() {
+        return;
+    }
+    let Some(dim) = dimension_index(game.dim.id()) else {
+        return;
+    };
+    let kind = |s: u32| with_world(|w| w.table.get(s).map(|(b, _)| b)).flatten();
+    let (spot, block) = match (kind(s_own), kind(s_pos)) {
+        (Some(b @ create_engine::Block::Belt), _) => (own, b),
+        (_, Some(b @ create_engine::Block::Belt)) => (pos, b),
+        (_, Some(b @ create_engine::Block::Depot)) => (pos, b),
+        _ => return,
+    };
+    if stack.extra.is_some() {
+        // Stacks with components keep them only as entities, for now.
+        return;
+    }
+    let max = game
+        .items()
+        .get(&stack.item)
+        .map_or(64, |i| i.max_stack)
+        .clamp(1, 64);
+    let count = stack.count.min(max) as u8;
+    let up = upright(game, &stack.item);
+    if block == create_engine::Block::Depot {
+        // DirectBeltInputBehaviour from above: only into an empty depot.
+        if !depot_items(game, spot).is_empty() {
+            return;
+        }
+        let put = horizon_client::items::ItemStack {
+            item: stack.item.clone(),
+            count: u32::from(count),
+            damage: 0,
+            extra: None,
+        };
+        if game
+            .native_with_mod_block_entity(spot, |be| {
+                be.items
+                    .resize(be.items.len().max(create_engine::depot::SLOTS), None);
+                be.items[0] = Some(put);
+            })
+            .is_none()
+        {
+            return;
+        }
+        stack.count -= u32::from(count);
+        let held = create_engine::depot::Held::new(random_angle(game, spot), up);
+        with_world(|w| w.depot_put(dim, spot, Some(held)));
+        return;
+    }
+    let Some((c, index, seg)) = belt_segment(game, dim, spot) else {
+        return;
+    };
+    if !seg.transports() {
+        return;
+    }
+    let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+    let angle = random_angle(game, spot);
+    let added = with_world(|w| {
+        let b = w.dims[dim].belts.get_mut(&c)?;
+        let movement = create_engine::belt::movement_facing(rpm, b.segment.facing);
+        // ItemHandlerBeltSegment.insertItem: canInsertAt(segment), from above.
+        if !b
+            .items
+            .can_insert_at_from_side(index, create_engine::kinetics::Dir::Up, movement)
+        {
+            return None;
+        }
+        let mut item = create_engine::belt::Item::new(&stack.item, count, angle, up);
+        item.inserted_at = index;
+        item.inserted_from = Some(create_engine::kinetics::Dir::Up);
+        item.position = index as f32 + 0.5 + if b.items.positive { -1.0 } else { 1.0 } / 16.0;
+        b.items.add(item);
+        w.dims[dim].belt_changes.push(c);
+        Some(())
+    })
+    .flatten();
+    if added.is_some() {
+        stack.count -= u32::from(count);
+    }
+}
+
+/// A belt's surroundings on the server: what lies past its end, and the press over a segment.
+struct BeltSide<'a, 'g> {
+    game: &'a mut Game<'g>,
+    dim: usize,
+    controller: [i32; 3],
+    segment: create_engine::belt::Segment,
+    length: i32,
+    rpm: f32,
+    positive: bool,
+}
+
+impl BeltSide<'_, '_> {
+    fn past_end(&self) -> [i32; 3] {
+        create_engine::belt::position_for_offset(
+            self.controller,
+            &self.segment,
+            self.length,
+            if self.positive { self.length } else { -1 },
+        )
+    }
+
+    fn movement(&self) -> create_engine::kinetics::Dir {
+        create_engine::belt::movement_facing(self.rpm, self.segment.facing)
+    }
+}
+
+impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
+    fn ending(&mut self) -> create_engine::belt::Ending {
+        use create_engine::belt::Ending;
+        let next = self.past_end();
+        let has = |w: &mut CreateWorld| {
+            let d = &w.dims[self.dim];
+            d.depots.contains_key(&next) || d.belt_of.contains_key(&next)
+        };
+        if with_world(has) == Some(true) {
+            return Ending::Insert;
+        }
+        // BlockHelper.hasBlockSolidSide toward the belt.
+        let state = self.game.world.block(next[0], next[1], next[2]);
+        let face = self.movement().opposite() as u8;
+        if self.game.res.facts().get(state).sturdy_full & (1 << face) != 0 {
+            return Ending::Blocked;
+        }
+        Ending::Eject
+    }
+
+    fn insert(&mut self, item: &create_engine::belt::Item) -> Option<u8> {
+        let next = self.past_end();
+        let side = self.movement();
+        let dim = self.dim;
+        let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
+        if is_depot {
+            // DepotBehaviour.tryInsertingFromSide: only into an empty depot.
+            if !depot_items(self.game, next).is_empty() {
+                return Some(item.count);
+            }
+            let put = horizon_client::items::ItemStack {
+                item: item.item.as_str().into(),
+                count: u32::from(item.count),
+                damage: 0,
+                extra: None,
+            };
+            self.game.native_with_mod_block_entity(next, |be| {
+                be.items
+                    .resize(be.items.len().max(create_engine::depot::SLOTS), None);
+                be.items[0] = Some(put);
+            })?;
+            let held = create_engine::depot::Held {
+                position: 0.0,
+                from: create_engine::depot::Side::from_dir(side),
+                angle: item.angle,
+                side_offset: item.side_offset,
+                locked: false,
+            };
+            with_world(|w| w.depot_put(dim, next, Some(held)));
+            return Some(0);
+        }
+        // BeltBlockEntity.tryInsertingFromSide on the next belt.
+        let (c2, index, seg2) = belt_segment(self.game, dim, next)?;
+        if !seg2.transports() {
+            return None;
+        }
+        let rpm2 = with_world(|w| w.speed(dim, c2)).flatten().unwrap_or(0.0);
+        let speed2 = create_engine::belt::direction_aware_speed(rpm2, seg2.facing);
+        with_world(|w| {
+            let b = w.dims[dim].belts.get_mut(&c2)?;
+            let movement2 = create_engine::belt::movement_facing(rpm2, b.segment.facing);
+            if rpm2 == 0.0
+                || movement2 == side.opposite()
+                || !b.items.can_insert_at_from_side(index, side, movement2)
+            {
+                return Some(item.count);
+            }
+            let mut moved = item.clone();
+            moved.locked = false;
+            moved.position = index as f32 + 0.5 - speed2.signum() / 16.0;
+            if movement2 != side {
+                moved.side_offset = if side.positive() { 0.675 } else { -0.675 };
+                if side.axis() == create_engine::kinetics::Axis::X {
+                    moved.side_offset = -moved.side_offset;
+                }
+            } else {
+                // A smoother hand-over from the belt behind it.
+                let extra = 0.26;
+                moved.position = if speed2 > 0.0 {
+                    index as f32 - extra
+                } else {
+                    index as f32 + 1.0 + extra
+                };
+            }
+            moved.inserted_at = index;
+            moved.inserted_from = Some(side);
+            b.items.add(moved);
+            w.dims[dim].belt_changes.push(c2);
+            Some(0)
+        })
+        .flatten()
+    }
+
+    fn process(
+        &mut self,
+        segment: i32,
+        item: &mut create_engine::belt::Item,
+        locked: bool,
+    ) -> Option<create_engine::belt::Process> {
+        use create_engine::belt::Process;
+        use create_engine::press::{CYCLE, Mode};
+        let at = create_engine::belt::position_for_offset(
+            self.controller,
+            &self.segment,
+            self.length,
+            segment,
+        );
+        let above = [at[0], at[1] + 2, at[2]];
+        let dim = self.dim;
+        let mut press = with_world(|w| w.dims[dim].presses.get(&above).copied()).flatten()?;
+        if !locked && blocked(self.game, [at[0], at[1] + 1, at[2]]) {
+            return None;
+        }
+        let speed = with_world(|w| w.speed(dim, above)).flatten().unwrap_or(0.0);
+        if speed == 0.0 {
+            return Some(Process::Pass);
+        }
+        if !locked {
+            // BeltPressingCallbacks.onItemReceived.
+            if press.running {
+                return Some(Process::Hold);
+            }
+            let fits = RECIPES.with_borrow(|r| {
+                r.as_ref()
+                    .is_some_and(|r| r.pressing.find_single(&item.item).is_some())
+            });
+            if !fits {
+                return Some(Process::Pass);
+            }
+            press.start(Mode::Belt);
+            with_world(|w| {
+                w.dims[dim].presses.insert(above, press);
+                w.dims[dim].press_changes.push(above);
+            });
+            return Some(Process::Hold);
+        }
+        // whenItemHeld.
+        if !press.running {
+            return Some(Process::Pass);
+        }
+        if press.ticks != CYCLE / 2 {
+            return Some(Process::Hold);
+        }
+        let seed = self.game.world.game_time as u64 ^ (at[0] as u64).wrapping_mul(0x9E37_79B9);
+        let results = RECIPES.with_borrow(|r| {
+            let r = r.as_ref()?;
+            let id = r.pressing.find_single(&item.item)?;
+            Some(create_engine::processing::roll(
+                r.pressing.get(id),
+                &mut create_engine::processing::Rng::new(seed),
+            ))
+        })?;
+        let mut outputs = Vec::new();
+        for (name, n) in results {
+            let mut out = item.clone();
+            out.item = name;
+            out.count = n;
+            out.locked = true;
+            out.angle = random_angle(self.game, at);
+            outputs.push(out);
+        }
+        let held = (item.count > 1).then(|| {
+            let mut left = item.clone();
+            left.count -= 1;
+            left
+        });
+        Some(Process::Convert { held, outputs })
+    }
+}
+
+/// `BeltInventory.eject`: an item thrown off the end, forward and a little up.
+fn eject_from_belt(
+    game: &mut Game<'_>,
+    controller: [i32; 3],
+    seg: &create_engine::belt::Segment,
+    length: i32,
+    rpm: f32,
+    item: &create_engine::belt::Item,
+) {
+    let at = create_engine::belt::vector_for_offset(controller, seg, length, item.position);
+    let speed = create_engine::belt::movement_speed(rpm).abs().max(1.0 / 8.0);
+    let d = create_engine::belt::movement_facing(rpm, seg.facing).offset();
+    let motion = [
+        f64::from(d[0]) * f64::from(speed),
+        1.0 / 8.0,
+        f64::from(d[2]) * f64::from(speed),
+    ];
+    game.native_run_command(&format!(
+        "summon minecraft:item {:.4} {:.4} {:.4} {{Item:{{id:'{}',count:{}}},Motion:[{:.4}d,{:.4}d,{:.4}d]}}",
+        at[0],
+        at[1] + 6.0 / 16.0,
+        at[2],
+        item.item,
+        item.count,
+        motion[0],
+        motion[1],
+        motion[2]
+    ));
+}
+
+/// Belts: segments broken next to a broken one become shafts or air, a broken belt's items
+/// drop, then belts holding items move them (`BeltInventory.tick`); belts at rest or empty cost
+/// nothing.
+fn tick_belts(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let (breaks, drops) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        (
+            std::mem::take(&mut d.belt_breaks),
+            std::mem::take(&mut d.belt_drops),
+        )
+    })
+    .unwrap_or_default();
+    for b in breaks {
+        let block = match b.shaft {
+            Some(a) => format!(
+                "create:shaft[axis={}]",
+                ["x", "y", "z"][axis_index(a) as usize]
+            ),
+            None => "minecraft:air".to_owned(),
+        };
+        game.native_run_command(&format!(
+            "execute in {dimension} run setblock {} {} {} {block}",
+            b.pos[0], b.pos[1], b.pos[2]
+        ));
+    }
+    for (c, seg, length, item) in drops {
+        eject_from_belt(game, c, &seg, length, 0.0, &item);
+    }
+    let busy = with_world(|w| w.busy_belts(dim)).unwrap_or_default();
+    if !busy.is_empty() {
+        ensure_recipes(game);
+    }
+    for c in busy {
+        let Some((seg, length, mut items)) = with_world(|w| {
+            let b = w.dims[dim].belts.get_mut(&c)?;
+            Some((b.segment, b.chain.len() as i32, std::mem::take(&mut b.items)))
+        })
+        .flatten() else {
+            continue;
+        };
+        let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+        let speed = create_engine::belt::direction_aware_speed(rpm, seg.facing);
+        let mut side = BeltSide {
+            game,
+            dim,
+            controller: c,
+            segment: seg,
+            length,
+            rpm,
+            positive: speed > 0.0,
+        };
+        let horizontal = seg.slope == create_engine::belt::Slope::Horizontal;
+        let ticked = items.tick(length, speed, horizontal, &mut side);
+        with_world(|w| {
+            if let Some(b) = w.dims[dim].belts.get_mut(&c) {
+                // Items another belt put here meanwhile go after ours.
+                let added = std::mem::replace(&mut b.items, items);
+                for i in added.items {
+                    b.items.add(i);
+                }
+            }
+            if ticked.changed {
+                w.dims[dim].belt_changes.push(c);
+            }
+        });
+        for item in &ticked.ejected {
+            eject_from_belt(game, c, &seg, length, rpm, item);
+        }
+    }
+    let changed = with_world(|w| {
+        let mut v = std::mem::take(&mut w.dims[dim].belt_changes);
+        v.sort();
+        v.dedup();
+        v
+    })
+    .unwrap_or_default();
+    if !changed.is_empty() {
+        let players = players_in(game, dimension);
+        send_belts(game, &players, dim, &changed);
+    }
+}
+
+fn send_belts(game: &mut Game<'_>, players: &[u128], dim: usize, belts: &[[i32; 3]]) {
+    let all: Vec<create_engine::belt::Contents> = belts
+        .iter()
+        .map(|&c| {
+            with_world(|w| w.dims[dim].belts.get(&c).cloned())
+                .flatten()
+                .map_or(
+                    create_engine::belt::Contents {
+                        controller: c,
+                        segment: create_engine::belt::Segment {
+                            facing: create_engine::kinetics::Dir::North,
+                            slope: create_engine::belt::Slope::Horizontal,
+                            part: create_engine::belt::Part::Start,
+                        },
+                        length: 0,
+                        ending: create_engine::belt::Ending::Eject,
+                        items: create_engine::belt::Inventory::default(),
+                    },
+                    |b| {
+                        let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+                        let speed = create_engine::belt::direction_aware_speed(rpm, b.segment.facing);
+                        let mut side = BeltSide {
+                            game,
+                            dim,
+                            controller: c,
+                            segment: b.segment,
+                            length: b.chain.len() as i32,
+                            rpm,
+                            positive: speed > 0.0,
+                        };
+                        let ending = create_engine::belt::Surroundings::ending(&mut side);
+                        create_engine::belt::Contents {
+                            controller: c,
+                            segment: b.segment,
+                            length: b.chain.len() as u16,
+                            ending,
+                            items: b.items,
+                        }
+                    },
+                )
+        })
+        .collect();
+    for m in create_engine::belt::encode(&all) {
+        for &p in players {
+            let _ = game.native_net_send_to_player(p, create_engine::belt::CHANNEL, &m);
+        }
+    }
+}
+
+/// The belts a client draws: what the server last said, run on tick by tick, and what was
+/// uploaded for each item (so an item is uploaded again only when its motion changes).
+#[derive(Default)]
+struct ClientBelts {
+    belts: HashMap<[i32; 3], (create_engine::belt::Contents, Vec<Shown>)>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct Shown {
+    model: u32,
+    velocity: [f32; 3],
+    phase: f32,
+    copies: u8,
+}
+
+thread_local! {
+    static BELTS: RefCell<ClientBelts> = RefCell::new(ClientBelts::default());
+}
+
+/// A key for copy `copy` of item `index` on the belt at `controller`, apart from the others.
+fn belt_key(controller: [i32; 3], index: usize, copy: u8) -> u64 {
+    depot_key(controller, 200, copy) ^ (index as u64 + 1).wrapping_mul(0xD6E8_FEB8_6659_FD93)
+        | 1 << 63
+}
+
+/// The client's belt surroundings: what the server said lies past the end; machines hold
+/// locked items, nothing else acts.
+struct ClientSide(create_engine::belt::Ending);
+
+impl create_engine::belt::Surroundings for ClientSide {
+    fn ending(&mut self) -> create_engine::belt::Ending {
+        self.0
+    }
+    fn insert(&mut self, _: &create_engine::belt::Item) -> Option<u8> {
+        None
+    }
+    fn process(
+        &mut self,
+        _: i32,
+        item: &mut create_engine::belt::Item,
+        locked: bool,
+    ) -> Option<create_engine::belt::Process> {
+        (locked || item.locked).then_some(create_engine::belt::Process::Hold)
+    }
+}
+
+/// Draws the items of a belt: each copy a GPU item part gliding at its belt's speed; uploads
+/// only what moves differently from before.
+fn draw_belt(
+    game: &mut Game<'_>,
+    contents: &create_engine::belt::Contents,
+    shown: &mut Vec<Shown>,
+    rpm: f32,
+    redraw: bool,
+) {
+    use create_engine::belt;
+    let c = contents.controller;
+    let length = i32::from(contents.length);
+    let speed = belt::direction_aware_speed(rpm, contents.segment.facing);
+    let now = game.native_parts_seconds();
+    if redraw {
+        for (i, s) in shown.iter().enumerate() {
+            for copy in 0..s.copies {
+                game.native_part_clear(belt_key(c, i, copy));
+            }
+        }
+        shown.clear();
+    }
+    for (i, item) in contents.items.items.iter().enumerate() {
+        let place = belt::item_place(&contents.segment, length, item.position, item.side_offset);
+        let moving = !item.locked && speed != 0.0;
+        let velocity = if moving {
+            belt::item_velocity(&contents.segment, length, item.position, speed).to_array()
+        } else {
+            [0.0; 3]
+        };
+        let block_item = game.native_item_uses_block_light(&item.item).unwrap_or(false);
+        let copies = belt::item_copies(u32::from(item.count), block_item, item.angle);
+        let flat = place.tilt == 0.0;
+        // Flat: baked about the block's centre, turned by the item's angle on the GPU; on a
+        // slope the tilt comes first, so the angle is baked in.
+        let (centre, phase) = if flat {
+            (glam::Vec3::new(0.5, 0.0, 0.5), item.angle as f32)
+        } else {
+            (glam::Vec3::ZERO, 0.0)
+        };
+        let tilt = if flat {
+            glam::Mat4::IDENTITY
+        } else {
+            let axis = if place.tilt_axis == create_engine::kinetics::Axis::Z {
+                glam::Vec3::Z
+            } else {
+                glam::Vec3::X
+            };
+            glam::Mat4::from_axis_angle(axis, place.tilt.to_radians())
+                * glam::Mat4::from_rotation_y((item.angle as f32).to_radians())
+        };
+        let mut first = None;
+        for (copy, pose) in copies.iter().enumerate() {
+            let Some(model) = game.native_part_item_model(
+                &item.item,
+                glam::Mat4::from_translation(centre) * tilt * *pose,
+            ) else {
+                continue;
+            };
+            first.get_or_insert(model);
+            let now_shown = Shown {
+                model,
+                velocity,
+                phase,
+                copies: copies.len() as u8,
+            };
+            if copy == 0 && shown.get(i) == Some(&now_shown) {
+                break;
+            }
+            let at = place.at - centre;
+            game.native_part_glide(
+                belt_key(c, i, copy as u8),
+                model,
+                c,
+                1,
+                0.0,
+                phase,
+                [at.x, at.y, at.z, now],
+                velocity,
+            );
+        }
+        let entry = Shown {
+            model: first.unwrap_or(0),
+            velocity,
+            phase,
+            copies: copies.len() as u8,
+        };
+        if i < shown.len() {
+            shown[i] = entry;
+        } else {
+            shown.push(entry);
+        }
+    }
+}
+
+fn belts_from_server(game: &mut Game<'_>, data: &[u8]) {
+    for contents in create_engine::belt::decode(data) {
+        let c = contents.controller;
+        let old = BELTS.with_borrow_mut(|b| b.belts.remove(&c));
+        let mut shown = old.map(|o| o.1).unwrap_or_default();
+        if contents.length == 0 {
+            for (i, s) in shown.iter().enumerate() {
+                for copy in 0..s.copies {
+                    game.native_part_clear(belt_key(c, i, copy));
+                }
+            }
+            continue;
+        }
+        let rpm = belt_rpm(c);
+        draw_belt(game, &contents, &mut shown, rpm, true);
+        BELTS.with_borrow_mut(|b| b.belts.insert(c, (contents, shown)));
+    }
+}
+
+fn belt_rpm(controller: [i32; 3]) -> f32 {
+    CLIENT.with_borrow(|c| {
+        c.as_ref()
+            .and_then(|c| c.speeds.get(&controller))
+            .map_or(0.0, |s| s[0])
+    })
+}
+
+/// Each client tick: belts with items move them on (`BeltInventory.tick` on the client).
+fn tick_client_belts(game: &mut Game<'_>) {
+    let busy: Vec<[i32; 3]> = BELTS.with_borrow(|b| {
+        b.belts
+            .iter()
+            .filter(|(_, (c, _))| !c.items.items.is_empty())
+            .map(|(k, _)| *k)
+            .collect()
+    });
+    for c in busy {
+        let Some((mut contents, mut shown)) = BELTS.with_borrow_mut(|b| b.belts.remove(&c)) else {
+            continue;
+        };
+        let rpm = belt_rpm(c);
+        let speed = create_engine::belt::direction_aware_speed(rpm, contents.segment.facing);
+        let before = contents.items.items.len();
+        let horizontal = contents.segment.slope == create_engine::belt::Slope::Horizontal;
+        contents.items.tick(
+            i32::from(contents.length),
+            speed,
+            horizontal,
+            &mut ClientSide(contents.ending),
+        );
+        let redraw = contents.items.items.len() != before;
+        draw_belt(game, &contents, &mut shown, rpm, redraw);
+        BELTS.with_borrow_mut(|b| b.belts.insert(c, (contents, shown)));
     }
 }

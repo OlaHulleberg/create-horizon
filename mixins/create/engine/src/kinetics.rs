@@ -145,6 +145,9 @@ pub struct Part {
     /// A split shaft's second half: `Some(link)` joins this node to the other node at its position
     /// (index 0) at ratio `link` (1, -1 for a gearshift that reverses, 0 for a clutch that cuts).
     pub link: Option<f32>,
+    /// A belt segment's controller (its chain's start): segments of one belt turn together
+    /// (`BeltBlockEntity.propagateRotationTo`).
+    pub belt: Option<[i32; 3]>,
 }
 
 impl Part {
@@ -159,6 +162,7 @@ impl Part {
             capacity: 0.0,
             impact: 0.0,
             link: None,
+            belt: None,
         }
     }
     pub fn cog(axis: Axis, large: bool) -> Part {
@@ -202,6 +206,15 @@ impl Part {
 
 /// Create's `getRotationSpeedModifier(from, to)` for two parts, `diff` = to - from.
 pub fn ratio(a: &Part, b: &Part, diff: [i32; 3]) -> f32 {
+    // BeltBlockEntity.propagateRotationTo: a belt's segments, side by side, unless their
+    // shafts already meet.
+    if let Some(d) = Dir::from_offset(diff)
+        && a.belt.is_some()
+        && a.belt == b.belt
+        && !(a.shafts & d.bit() != 0 && b.shafts & d.opposite().bit() != 0)
+    {
+        return 1.0;
+    }
     if let Some(d) = Dir::from_offset(diff)
         && a.shafts & d.bit() != 0
         && b.shafts & d.opposite().bit() != 0

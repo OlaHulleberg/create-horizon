@@ -46,6 +46,8 @@ def write_fixture(original, root):
         ('block_entity', "horizon_client::game::native_hooks::Game<'_>::native_block_entity"),
         ('block_entity_container', "horizon_client::game::native_hooks::Game<'_>::native_block_entity_container"),
         ('contents_changed', "horizon_client::game::native_hooks::Game<'_>::native_contents_changed"),
+        ('update_entity_after_fall_on',
+         "horizon_client::game::native_hooks::Game<'_>::native_update_entity_after_fall_on"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -246,6 +248,13 @@ pub mod native_hooks {
             self.glides.push((model, block, axis, rpm, velocity));
         }
         pub fn native_contents_changed(&mut self, pos: [i32; 3]) { let _ = pos; }
+        pub fn native_part_model_posed(&mut self, state: BlockStateId, pose: glam::Mat4) -> Option<u32> {
+            let _ = pose;
+            Some(5000 + state.0)
+        }
+        pub fn native_update_entity_after_fall_on(&mut self, pos: [i32; 3], stack: &mut horizon_client::items::ItemStack, at: [f64; 3]) {
+            let _ = (pos, stack, at);
+        }
         pub fn native_wheel(&mut self, steps: f32, claimed: &mut bool) { let _ = (steps, claimed); }
         pub fn native_chunk_data_save(&self, dimension: &str, chunk: [i32; 2], data: &mut horizon_world::nbt::Compound) {
             let _ = (dimension, chunk, data);
@@ -307,7 +316,16 @@ impl Behaviours {
     }
 }
 pub struct Res;
-impl Res { pub fn behaviours(&self) -> &Behaviours { &Behaviours } }
+pub struct BlockFacts { pub sturdy_full: u8 }
+pub struct AllFacts;
+impl AllFacts {
+    /// Stone (state 1) is sturdy on every face; nothing else is.
+    pub fn get(&self, state: BlockStateId) -> BlockFacts { BlockFacts { sturdy_full: if state.0 == 1 { 63 } else { 0 } } }
+}
+impl Res {
+    pub fn behaviours(&self) -> &Behaviours { &Behaviours }
+    pub fn facts(&self) -> &AllFacts { &AllFacts }
+}
 pub struct Ticks;
 impl Behaviours {
     pub fn has_neighbor_signal(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos) -> bool {
@@ -329,6 +347,14 @@ impl Behaviours {
     states.push(BlockState { name: "create:depot".into(), properties: BTreeMap::new() });
     // 5: a mechanical press facing east (turning on x).
     states.push(BlockState { name: "create:mechanical_press".into(), properties: props("facing", "east") });
+    // 6, 7, 8: a belt going south (turning on x): start, middle, end; 9: a motor facing east.
+    for part in ["start", "middle", "end"] {
+        states.push(BlockState { name: "create:belt".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), "south".to_owned()), ("slope".to_owned(), "horizontal".to_owned()),
+            ("part".to_owned(), part.to_owned()), ("casing".to_owned(), "false".to_owned()),
+            ("waterlogged".to_owned(), "false".to_owned())]) });
+    }
+    states.push(BlockState { name: "create:creative_motor".into(), properties: props("facing", "east") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
@@ -426,6 +452,26 @@ impl Behaviours {
     assert_eq!(slot(0), Some(("minecraft:iron_ingot".into(), 4)), "one of five pressed");
     assert_eq!(slot(1), Some(("create:iron_sheet".into(), 1)));
     assert!(game.sent.iter().any(|m| m.1 == "create:press"), "clients see the head move");
+    // A belt south from (10, 0, 10) to (10, 0, 12), a motor west of its start, and a depot past
+    // its end: four iron ingots land on the start, ride the belt and end up on the depot.
+    let belt = [([10, 0, 10], 6), ([10, 0, 11], 7), ([10, 0, 12], 8), ([9, 0, 10], 9), ([10, 0, 13], 4)];
+    for (pos, state) in belt {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
+    }
+    game.world.block_entities.insert((10, 0, 13), horizon_client::containers::BlockEntity::Mod(
+        horizon_client::containers::ModBlockEntity { items: vec![] }));
+    game.native_level_tick_post("minecraft:overworld");
+    let mut stack = horizon_client::items::ItemStack { item: "minecraft:gold_ingot".into(), count: 4, damage: 0, extra: None };
+    game.native_update_entity_after_fall_on([10, 0, 10], &mut stack, [10.5, 0.8125, 10.5]);
+    assert_eq!(stack.count, 0, "the belt took the stack");
+    for _ in 0..200 { game.native_level_tick_post("minecraft:overworld"); }
+    let horizon_client::containers::BlockEntity::Mod(end) = &game.world.block_entities[&(10, 0, 13)];
+    assert_eq!(end.items.first().and_then(|s| s.as_ref()).map(|s| (s.item.to_string(), s.count)),
+        Some(("minecraft:gold_ingot".into(), 4)), "carried onto the depot");
+    let belts: Vec<Vec<u8>> = game.sent.iter().filter(|m| m.1 == "create:belt").map(|m| m.2.clone()).collect();
+    assert!(!belts.is_empty(), "clients see the belt's items");
+    for m in &belts { game.native_net_from_server("create:belt", m); }
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

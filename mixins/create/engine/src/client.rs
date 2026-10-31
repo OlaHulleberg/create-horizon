@@ -23,6 +23,10 @@ pub enum Model {
     /// The mechanical press's head (`AllPartialModels.MECHANICAL_PRESS_HEAD`), turned to its
     /// facing; it moves down, it does not turn.
     PressHead(Dir),
+    /// A belt segment's partial (`BeltRenderer`), its top or bottom half.
+    Belt(crate::belt::Segment, bool),
+    /// A belt pulley, turning with the belt.
+    BeltPulley(crate::belt::Segment),
 }
 
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
@@ -121,6 +125,40 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                         phase: 0.0,
                     },
                 ]
+            })
+            .unwrap_or_default(),
+        // BeltRenderer: the segment's halves (still: Create scrolls their texture instead), and
+        // the pulley turning on the belt's axis.
+        Block::Belt => s
+            .belt
+            .map(|seg| {
+                let mut v = vec![Draw {
+                    slot: 0,
+                    model: Model::Belt(seg, false),
+                    axis: Axis::Y,
+                    rpm: 0.0,
+                    phase: 0.0,
+                }];
+                if crate::belt::partial(&seg, true).is_some() {
+                    v.push(Draw {
+                        slot: 1,
+                        model: Model::Belt(seg, true),
+                        axis: Axis::Y,
+                        rpm: 0.0,
+                        phase: 0.0,
+                    });
+                }
+                if seg.has_pulley() {
+                    let axis = seg.rotation_axis();
+                    v.push(Draw {
+                        slot: 2,
+                        model: Model::BeltPulley(seg),
+                        axis,
+                        rpm: speeds[0],
+                        phase: rotation_offset(block, axis, pos),
+                    });
+                }
+                v
             })
             .unwrap_or_default(),
         // MillstoneRenderer: the inner stone turns on the y axis.

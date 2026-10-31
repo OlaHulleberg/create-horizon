@@ -50,6 +50,17 @@ impl Side {
     pub fn index(self) -> u8 {
         self as u8
     }
+    /// A horizontal `Direction` as a side.
+    pub fn from_dir(d: crate::kinetics::Dir) -> Option<Side> {
+        use crate::kinetics::Dir;
+        match d {
+            Dir::North => Some(Side::North),
+            Dir::East => Some(Side::East),
+            Dir::South => Some(Side::South),
+            Dir::West => Some(Side::West),
+            _ => None,
+        }
+    }
     pub fn from_index(i: u8) -> Option<Side> {
         [Side::North, Side::East, Side::South, Side::West]
             .get(usize::from(i))
