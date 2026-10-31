@@ -12,6 +12,8 @@ the server thread's smoothed tick time. Scenarios:
   kinetic  the content mod on, 64 creative motors each turning a line of 63 shafts: 4,096 turning
            parts in view, steady (phase 2)
   chains   the control for kinetic: the same layout in vanilla iron blocks and iron chains
+  processing  16 rows of a creative motor turning 16 mechanical presses, each over a depot of 64
+           iron ingots: 256 presses pressing at 16 rpm (phase 3)
 
     python3 tools/bench_create.py --game target/horizon-cargo/fast/horizon-client \\
         --content target/create-content --scenario idle --repeats 3 --out benchmarks/p0-idle.json
@@ -70,6 +72,17 @@ def build(ctl_bin, sock, scenario, center):
             zz = z - 32 + row
             command(ctl_bin, sock, f"setblock {x-32} {y-6} {zz} {motor}", failures)
             command(ctl_bin, sock, f"fill {x-31} {y-6} {zz} {x+31} {y-6} {zz} {shaft}", failures)
+    if scenario == "processing":
+        for row in range(16):
+            zz = z - 16 + 2 * row
+            command(ctl_bin, sock, f"setblock {x-17} {y-4} {zz} create:creative_motor[facing=east]", failures)
+            command(ctl_bin, sock, f"fill {x-16} {y-4} {zz} {x-1} {y-4} {zz} create:mechanical_press[facing=east]",
+                    failures)
+            # Placed holding their stack, as a saved depot loads (one by one: Horizon's `fill`
+            # drops block entity data for mod blocks).
+            for i in range(16):
+                command(ctl_bin, sock, f"setblock {x-16+i} {y-6} {zz} "
+                        'create:depot{Items:[{Slot:0b,id:"minecraft:iron_ingot",count:64}]}', failures)
     return failures
 
 
@@ -107,7 +120,8 @@ def run_once(args, scenario):
         ctl(ctl_bin, sock, "wait-ready")
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
-        expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0}[scenario]
+        expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
+                    "processing": 528}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             have = count_create(ctl_bin, sock, center)
@@ -127,12 +141,17 @@ def run_once(args, scenario):
                       str(args.seconds), "40", "raw", timeout=int(args.seconds) + 120)
         if args.screenshot:
             ctl(ctl_bin, sock, "screenshot", str(Path(args.screenshot).resolve()))
+        pressed = None
+        if scenario == "processing":
+            # The work really ran: sheets in one depot's outputs.
+            pressed = ctl(ctl_bin, sock, "command", f"data get block {x-8} {y-6} {z}").get("chat")
         frames = summary.get("frame_ms") or []
         return {"gpu": gpu, "create_blocks": have, "frames": len(frames),
                 "frame_ms_p50": statistics.median(frames) if frames else None,
                 "frame_ms_p99": sorted(frames)[int(len(frames) * 0.99) - 1] if frames else None,
                 "fps": len(frames) / args.seconds,
-                "tick_ms": summary.get("tick_ms"), "tick_ms_max": summary.get("tick_ms_max")}
+                "tick_ms": summary.get("tick_ms"), "tick_ms_max": summary.get("tick_ms_max"),
+                "check": pressed}
     finally:
         try:
             ctl(ctl_bin, sock, "quit", timeout=60)
@@ -141,6 +160,11 @@ def run_once(args, scenario):
         pid = scratch / "xvfb.pid"
         if pid.exists():
             subprocess.run(["kill", pid.read_text().strip()], capture_output=True)
+        if args.keep_logs:
+            keep = Path(args.keep_logs) / f"{scenario}-{int(time.time())}"
+            keep.mkdir(parents=True, exist_ok=True)
+            for log in scratch.glob("*.log"):
+                shutil.copy(log, keep / log.name)
         shutil.rmtree(scratch, ignore_errors=True)
         shutil.rmtree(work, ignore_errors=True)
 
@@ -149,13 +173,15 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
-    p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains"], required=True)
+    p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing"],
+                   required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
     p.add_argument("--settle", type=float, default=3.0)
     p.add_argument("--distance", type=int, default=12)
     p.add_argument("--out")
     p.add_argument("--screenshot", help="a screenshot of the scene after the last flight")
+    p.add_argument("--keep-logs", help="copy each run's game logs into this folder")
     args = p.parse_args()
     runs = [run_once(args, args.scenario) for _ in range(args.repeats)]
     keys = ["fps", "frame_ms_p50", "frame_ms_p99", "tick_ms", "tick_ms_max"]

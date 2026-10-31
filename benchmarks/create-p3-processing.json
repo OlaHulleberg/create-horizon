@@ -1,0 +1,65 @@
+{
+  "scenario": "processing",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    3.271484375,
+    2.150390625,
+    1.73291015625
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 21940,
+      "frame_ms_p50": 0.5389549732208252,
+      "frame_ms_p99": 0.952314019203186,
+      "fps": 1828.3333333333333,
+      "tick_ms": 4.374815464019775,
+      "tick_ms_max": 10.5947265625,
+      "check": [
+        "-531, 94, 56 has the following block data: {x: -531, y: 94, Items: [{count: 57, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 7, Slot: 1b, id: \"create:iron_sheet\"}], z: 56, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 21017,
+      "frame_ms_p50": 0.5537350177764893,
+      "frame_ms_p99": 1.0729910135269165,
+      "fps": 1751.4166666666667,
+      "tick_ms": 4.364339351654053,
+      "tick_ms_max": 12.070965766906738,
+      "check": [
+        "-530, 88, 71 has the following block data: {x: -530, y: 88, Items: [{count: 57, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 7, Slot: 1b, id: \"create:iron_sheet\"}], z: 71, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 21367,
+      "frame_ms_p50": 0.5473350286483765,
+      "frame_ms_p99": 1.0172120332717896,
+      "fps": 1780.5833333333333,
+      "tick_ms": 4.331007480621338,
+      "tick_ms_max": 10.605701446533203,
+      "check": [
+        "-526, 91, 73 has the following block data: {x: -526, y: 91, Items: [{count: 57, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 7, Slot: 1b, id: \"create:iron_sheet\"}], z: 73, id: \"create:depot\"}"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1786.7777777777778,
+    "frame_ms_p50": 0.5466750065485636,
+    "frame_ms_p99": 1.014172355333964,
+    "tick_ms": 4.356720765431722,
+    "tick_ms_max": 11.09046459197998
+  },
+  "stdev": {
+    "fps": 38.8306806437803,
+    "frame_ms_p50": 0.007412094922896948,
+    "frame_ms_p99": 0.060395893661959306,
+    "tick_ms": 0.022876122800417023,
+    "tick_ms_max": 0.8491566566567385
+  }
+}

@@ -60,6 +60,19 @@ A steady network costs no server tick (3.97 ms against 4.05 off and 4.17 for the
 cost 0.026 ms of frame time over the same blocks chunk-meshed. An earlier run of this table measured an empty scene
 (the scene's commands had failed at unloaded positions); the driver now refuses to measure a scene it could not build.
 
+| Scenario (2026-10-31, Phase 3, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1942 ± 6 | 0.496 / 1.045 | 4.149 ± 0.034 | baseline |
+| idle: Create content, no Create blocks | 1940 ± 41 | 0.502 / 0.897 | 4.051 ± 0.049 | within noise of off |
+| processing: 256 presses at 16 rpm pressing 256 depots of iron (16 motors, 528 Create blocks) | 1787 ± 39 | 0.547 / 1.014 | 4.357 ± 0.023 | tick ≤ off + 0.5 ms, frame p50 ≤ off + 15% |
+
+Under load the presses and depots cost 0.21 ms of server tick (about 0.8 µs per machine per tick) and 0.05 ms of
+frame time (256 heads glided per tick, 256 stacks, 256 turning shafts); the check in each run reads one depot after the
+flight (64 iron → 57 iron + 7 sheets). A first set of three runs had one run at 231 fps with 33 ms p99 frames
+(`benchmarks/create-p3-processing-first.json`); five more runs did not repeat it, and DEBUG timings of the client's
+depot messages (≤ 0.28 ms each, two or three depots a message) and press ticks (never over 1 ms) rule those out. Cause
+unknown, watched for in later runs.
+
 ### Blocked / open
 
 - Startup with Create's content installed: +0.5 s to the title screen and +0.9 s into a world (warm). The native mod
@@ -112,6 +125,10 @@ cost 0.026 ms of frame time over the same blocks chunk-meshed. An earlier run of
   another player already keeps loaded does not get them yet (one `sync` per join).
 - Mod messages are limited to 32 per tick per player (about 1,600 part updates each); a very large network resolving
   at once would exceed it. Not handled yet (queue the rest for the next ticks).
+- Horizon's `fill` drops block entity data for mod blocks (`setblock` and `data merge` keep it); vanilla applies it to
+  every block filled. `/item` reaches only vanilla containers (Create's depot is no `Container` in Create either).
+- A depot that joins holding a stack (a saved world, a block placed with its items) now gets its held stack at rest and
+  asks its press: before, a reloaded depot under a press was never pressed.
 - NeoForge common tags: Create's recipes name 53 `c:` tags (`c:ingots/iron`, `c:dusts/redstone`, every `c:dyes/*`...)
   that NeoForge defines, not Create, and vanilla has none: every such recipe found no ingredient (the iron sheet, half
   of Create's crafting). `create-data prepare` now writes those tags (60 with the ones they nest) from our table of
