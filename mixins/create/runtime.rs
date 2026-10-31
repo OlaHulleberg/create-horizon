@@ -187,6 +187,7 @@ pub(crate) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
             );
         }
     }
+    tick_millstones(game, dim);
     let mut events = Vec::new();
     let Some((removed, unsaved)) = with_world(|w| {
         w.tick(dim, &mut events);
@@ -287,6 +288,12 @@ pub(crate) fn right_click_block(game: &mut Game<'_>, pos: [i32; 3], canceled: &m
         return;
     }
     let back = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
+    if block == Some(create_engine::Block::Millstone) {
+        use_millstone(game, pos, canceled);
+        return;
+    }
     if with_world(|w| w.turn_crank(dim, pos, back)) != Some(true) {
         return;
     }
@@ -440,6 +447,7 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
         Model::ShaftHalf(d) => find("create:part_shaft_half", "facing", dir_name(d)),
         Model::CrankHandle(d) => find("create:part_hand_crank_handle", "facing", dir_name(d)),
         Model::WaterWheel(d) => find("create:part_water_wheel", "facing", dir_name(d)),
+        Model::MillstoneCog => find("create:part_millstone_cog", "facing", "up"),
     }
 }
 
@@ -586,6 +594,233 @@ pub(crate) fn client_tick(game: &mut Game<'_>) {
         }
     }
     CLIENT.with_borrow_mut(|slot| *slot = Some(c));
+}
+
+/// Create's recipes of the types its machines run, read once per world (and again on
+/// `/reload`, when the game's table changes): typed and indexed by input item.
+struct Recipes {
+    milling: create_engine::processing::Book,
+}
+
+thread_local! {
+    static RECIPES: RefCell<Option<Recipes>> = const { RefCell::new(None) };
+}
+
+fn read_book(game: &Game<'_>, kind: &str) -> create_engine::processing::Book {
+    use create_engine::processing::{Book, Output, Recipe};
+    let recipes = game
+        .native_recipes_of_type(kind)
+        .iter()
+        .filter_map(|r| {
+            let json = &*r.json;
+            let ingredients = json["ingredients"]
+                .as_array()?
+                .iter()
+                .map(|i| {
+                    game.native_recipe_ingredient(i)
+                        .map(|ing| ing.1.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let results = json["results"]
+                .as_array()?
+                .iter()
+                .filter_map(|o| {
+                    let stack = game.native_recipe_result(o)?;
+                    Some(Output {
+                        item: stack.item.to_string(),
+                        count: stack.count.min(255) as u8,
+                        chance: o["chance"].as_f64().unwrap_or(1.0) as f32,
+                    })
+                })
+                .collect();
+            Some(Recipe {
+                id: r.id.clone(),
+                ingredients,
+                results,
+                time: json["processing_time"].as_i64().unwrap_or(0) as i32,
+            })
+        })
+        .collect();
+    Book::new(recipes)
+}
+
+/// The millstones that turn: Create's `MillstoneBlockEntity.tick` on their slots (input 0,
+/// outputs 1 to 9). Millstones that don't turn cost nothing.
+fn tick_millstones(game: &mut Game<'_>, dim: usize) {
+    let turning = with_world(|w| w.turning_millstones(dim)).unwrap_or_default();
+    if turning.is_empty() {
+        return;
+    }
+    if RECIPES.with_borrow(Option::is_none) {
+        let milling = read_book(game, "create:milling");
+        if milling.is_empty() {
+            return;
+        }
+        RECIPES.with_borrow_mut(|r| *r = Some(Recipes { milling }));
+    }
+    let seed = game.world.game_time as u64;
+    for (pos, speed) in turning {
+        let Some(mut state) = with_world(|w| w.dims[dim].millstones.get(&pos).copied()).flatten()
+        else {
+            continue;
+        };
+        let max = |item: &str| {
+            game.items()
+                .get(item)
+                .map_or(64, |i| i.max_stack)
+                .clamp(1, 64) as u8
+        };
+        // Stack limits of what the slots hold, read before the block entity is borrowed.
+        let limits: Vec<u8> = game
+            .world
+            .block_entities
+            .get(&(pos[0], pos[1], pos[2]))
+            .and_then(|b| match b {
+                horizon_client::containers::BlockEntity::Mod(m) => Some(
+                    m.items
+                        .iter()
+                        .map(|s| s.as_ref().map_or(64, |s| max(&s.item)))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default();
+        if limits.len() < 10 {
+            continue;
+        }
+        let result_limits: Vec<(String, u8)> = RECIPES.with_borrow(|r| {
+            r.as_ref().map_or_else(Vec::new, |r| {
+                r.milling
+                    .recipes
+                    .iter()
+                    .flat_map(|x| x.results.iter())
+                    .map(|o| (o.item.clone(), max(&o.item)))
+                    .collect()
+            })
+        });
+        game.native_with_mod_block_entity(pos, |be| {
+            if be.items.len() < 10 {
+                return;
+            }
+            let input = be.items[0].as_ref().map(|s| s.item.to_string());
+            let outputs_full = be.items[1..10]
+                .iter()
+                .zip(&limits[1..10])
+                .any(|(s, l)| s.as_ref().is_some_and(|s| s.count >= u32::from(*l)));
+            RECIPES.with_borrow(|r| {
+                let Some(r) = r else { return };
+                let Some(done) = create_engine::processing::tick_millstone(
+                    &mut state,
+                    speed,
+                    input.as_deref(),
+                    outputs_full,
+                    &r.milling,
+                ) else {
+                    return;
+                };
+                // process(): one input, the rolled results stacked into the outputs.
+                if let Some(s) = be.items[0].as_mut() {
+                    s.count -= 1;
+                    if s.count == 0 {
+                        be.items[0] = None;
+                    }
+                }
+                let mut rng = create_engine::processing::Rng::new(
+                    seed ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9) ^ (pos[2] as u64) << 20,
+                );
+                let mut slots: Vec<create_engine::processing::Slot> = be.items[1..10]
+                    .iter()
+                    .map(|s| {
+                        s.as_ref()
+                            .map(|s| (s.item.to_string(), s.count.min(255) as u8))
+                    })
+                    .collect();
+                for (item, n) in create_engine::processing::roll(r.milling.get(done), &mut rng) {
+                    let limit = result_limits
+                        .iter()
+                        .find(|(i, _)| *i == item)
+                        .map_or(64, |(_, l)| *l);
+                    create_engine::processing::insert_stacked(&mut slots, &item, n, limit);
+                }
+                for (slot, s) in be.items[1..10].iter_mut().zip(slots) {
+                    *slot = s.map(|(item, count)| horizon_client::items::ItemStack {
+                        item: item.as_str().into(),
+                        count: u32::from(count),
+                        damage: 0,
+                        extra: None,
+                    });
+                }
+            });
+        });
+        with_world(|w| {
+            if let Some(m) = w.dims[dim].millstones.get_mut(&pos) {
+                *m = state;
+            }
+        });
+    }
+}
+
+/// `MillstoneBlock`'s block entity: its id, saved like any block entity with its slots.
+pub(crate) fn block_entity(
+    block: &str,
+    entity: &mut Option<(String, horizon_world::nbt::Compound)>,
+) {
+    if entity.is_none() && block == "create:millstone" {
+        *entity = Some((
+            "create:millstone".into(),
+            horizon_world::nbt::Compound::new(),
+        ));
+    }
+}
+
+/// The millstone's slots (`MillstoneInventoryHandler`): hoppers put into the input (0) and take
+/// from the nine outputs, through any face; no menu.
+pub(crate) fn block_entity_container(
+    block: &str,
+    container: &mut Option<horizon_client::containers::ModContainer>,
+) {
+    if container.is_some() || block != "create:millstone" {
+        return;
+    }
+    let all: Vec<usize> = (0..10).collect();
+    *container = Some(horizon_client::containers::ModContainer {
+        slots: 10,
+        faces: std::array::from_fn(|_| all.clone()),
+        inputs: vec![0],
+        outputs: (1..10).collect(),
+        menu: None,
+    });
+}
+
+/// `MillstoneBlock.useItemOn` with an empty hand: the outputs go to the player (the input when
+/// there are none); with an item, the block's own use (closed: no menu opens).
+fn use_millstone(game: &mut Game<'_>, pos: [i32; 3], canceled: &mut bool) {
+    *canceled = true;
+    if game.native_held().is_some_and(|h| h.0 != "minecraft:air") {
+        return;
+    }
+    let taken = game
+        .native_with_mod_block_entity(pos, |be| {
+            let outputs: Vec<_> = be
+                .items
+                .iter_mut()
+                .skip(1)
+                .filter_map(Option::take)
+                .collect();
+            if outputs.is_empty() {
+                be.items
+                    .first_mut()
+                    .and_then(Option::take)
+                    .into_iter()
+                    .collect()
+            } else {
+                outputs
+            }
+        })
+        .unwrap_or_default();
+    for s in taken {
+        game.native_give_items(&s.item, s.count);
+    }
 }
 
 /// `WaterWheelBlockEntity.getFlowVectorAtPosition`: the fluid's flow, or a bubble column's

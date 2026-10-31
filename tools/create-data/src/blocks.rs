@@ -296,6 +296,17 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             own(&[("facing", facing)]),
         ),
         "water_wheel" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
+        // A block entity with item slots needs a template that has one (Horizon's API 15): the
+        // barrel's, whose menu the mod keeps closed. AllShapes.MILLSTONE.
+        "millstone" => (
+            "minecraft:barrel",
+            Some(by_property(
+                "open",
+                &["false", "true"],
+                &[[0., 0., 0., 16., 6., 16.], [2., 6., 2., 14., 16., 14.]],
+            )),
+            None,
+        ),
         "hand_crank" => (
             "minecraft:heavy_core",
             Some(by_facing(&CRANK)),
@@ -324,7 +335,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 3] = [
+pub const PARTIALS: [(&str, &str, &str); 4] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -332,6 +343,7 @@ pub const PARTIALS: [(&str, &str, &str); 3] = [
         "north",
     ),
     ("part_water_wheel", "create:block/water_wheel/wheel", "up"),
+    ("part_millstone_cog", "create:block/millstone/inner", "up"),
 ];
 
 /// The blockstate rotation (x, y) that turns a model pointing `from` to point `to`: y turns

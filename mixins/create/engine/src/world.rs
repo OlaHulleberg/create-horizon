@@ -83,6 +83,8 @@ pub struct Dimension {
     /// Hand cranks being turned: ticks left (`HandCrankBlockEntity.inUse`). Empty at rest, so
     /// cranks cost nothing per tick unless turned.
     cranks: HashMap<[i32; 3], u8>,
+    /// Millstones and their state (`MillstoneBlockEntity.timer`, last recipe).
+    pub millstones: HashMap<[i32; 3], crate::processing::Millstone>,
     /// Water wheels, to look at their flow every 60 ticks (`lazyTick`), staggered by position.
     wheels: Vec<[i32; 3]>,
     /// Water wheels to look at now: placed, or a neighbour changed.
@@ -126,6 +128,9 @@ impl CreateWorld {
             return;
         };
         let d = &mut self.dims[dim];
+        if block == Block::Millstone {
+            d.millstones.entry(pos).or_default();
+        }
         let settings = d.settings.get(&pos).copied().unwrap_or_default();
         let [a, b] = parts(block, info, &settings);
         d.kinetics.remove(pos);
@@ -157,6 +162,9 @@ impl CreateWorld {
                 // ClutchBlock.getStateForPlacement: powered as placed.
                 self.dims[dim].redstone.push(pos);
             }
+            if self.table.get(new).map(|(b, _)| b) == Some(Block::Millstone) {
+                self.dims[dim].millstones.entry(pos).or_default();
+            }
             if self.table.get(new).map(|(b, _)| b) == Some(Block::WaterWheel)
                 && self.table.get(old).map(|(b, _)| b) != Some(Block::WaterWheel)
             {
@@ -170,6 +178,7 @@ impl CreateWorld {
             d.states.remove(&pos);
             d.cranks.remove(&pos);
             d.wheels.retain(|p| *p != pos);
+            d.millstones.remove(&pos);
             if d.settings.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
@@ -204,6 +213,8 @@ impl CreateWorld {
                 d.cranks.remove(&pos);
             }
             d.wheels.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.millstones
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
         d.settings.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
     }
@@ -367,6 +378,16 @@ impl CreateWorld {
                 let (block, info) = self.table.get(state)?;
                 (block == Block::WaterWheel).then_some((p, info.facing?.axis()))
             })
+            .collect()
+    }
+
+    /// Millstones that turn: the only ones that do anything this tick (Create's tick returns at
+    /// once without speed), with their speed.
+    pub fn turning_millstones(&self, dim: usize) -> Vec<([i32; 3], f32)> {
+        let d = &self.dims[dim];
+        d.millstones
+            .keys()
+            .filter_map(|p| Some((*p, d.kinetics.speed(*p, 0).filter(|s| *s != 0.0)?)))
             .collect()
     }
 

@@ -43,6 +43,8 @@ def write_fixture(original, root):
         ('chunk_data_save', "horizon_client::game::native_hooks::Game<'_>::native_chunk_data_save"),
         ('neighbor_changed', "horizon_client::game::native_hooks::GameLevel<'_>::native_neighbor_changed"),
         ('right_click_block', "horizon_client::game::native_hooks::Game<'_>::native_right_click_block"),
+        ('block_entity', "horizon_client::game::native_hooks::Game<'_>::native_block_entity"),
+        ('block_entity_container', "horizon_client::game::native_hooks::Game<'_>::native_block_entity_container"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -88,11 +90,27 @@ pub mod registry {
         'crates/horizon-client/Cargo.toml': ('[package]\nname = "horizon-client"\nversion = "0.1.0"\nedition = "2024"\n'
                                              '[dependencies]\nhorizon-world = { path = "../horizon-world" }\n'
                                              'horizon-core = { path = "../horizon-core" }\n'
-                                             'winit = { path = "../winit" }\n'),
+                                             'winit = { path = "../winit" }\n'
+                                             'serde_json = "1"\n'),
         'crates/horizon-client/src/lib.rs': '''
 // The game's module reaches the lib as `horizon_client`, as Horizon's binary does.
 extern crate self as horizon_client;
 pub mod game;
+pub mod items {
+    pub struct ItemStack { pub item: std::sync::Arc<str>, pub count: u32, pub damage: u32, pub extra: Option<Box<()>> }
+    pub struct ItemInfo { pub max_stack: u32 }
+    pub struct Items;
+    impl Items { pub fn get(&self, item: &str) -> Option<ItemInfo> { let _ = item; Some(ItemInfo { max_stack: 64 }) } }
+}
+pub mod containers {
+    pub struct ModBlockEntity { pub items: Vec<Option<crate::items::ItemStack>> }
+    pub enum BlockEntity { Mod(ModBlockEntity) }
+    pub struct ModContainer { pub slots: usize, pub faces: [Vec<usize>; 6], pub inputs: Vec<usize>, pub outputs: Vec<usize>, pub menu: Option<String> }
+}
+pub mod crafting {
+    pub struct CustomRecipe { pub id: String, pub json: std::sync::Arc<serde_json::Value> }
+    pub struct Ingredient(pub std::collections::HashSet<String>, pub Vec<String>);
+}
 pub mod text {
     pub struct Text(pub String);
     impl Text { pub fn literal(s: impl Into<String>) -> Self { Text(s.into()) } }
@@ -143,6 +161,29 @@ pub mod native_hooks {
             let _ = (pos, face, canceled);
         }
         pub fn spectator(&self) -> bool { false }
+        pub fn native_block_entity(&mut self, block: &str, entity: &mut Option<(String, horizon_world::nbt::Compound)>) {
+            let _ = (block, entity);
+        }
+        pub fn native_block_entity_container(&self, block: &str, container: &mut Option<horizon_client::containers::ModContainer>) {
+            let _ = (block, container);
+        }
+        pub fn items(&self) -> horizon_client::items::Items { horizon_client::items::Items }
+        pub fn native_recipes_of_type(&self, kind: &str) -> &[horizon_client::crafting::CustomRecipe] { let _ = kind; &[] }
+        pub fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<horizon_client::crafting::Ingredient> {
+            let _ = json;
+            None
+        }
+        pub fn native_recipe_result(&self, json: &serde_json::Value) -> Option<horizon_client::items::ItemStack> {
+            let _ = json;
+            None
+        }
+        pub fn native_with_mod_block_entity<R>(&mut self, pos: [i32; 3], change: impl FnOnce(&mut horizon_client::containers::ModBlockEntity) -> R) -> Option<R> {
+            match self.world.block_entities.get_mut(&(pos[0], pos[1], pos[2]))? {
+                horizon_client::containers::BlockEntity::Mod(m) => Some(change(m)),
+            }
+        }
+        pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
+        pub fn native_give_items(&mut self, item: &str, count: u32) -> u32 { let _ = item; count }
         pub fn native_fluid_flow(&self, dimension: &str, pos: [i32; 3]) -> Option<[f64; 3]> {
             let _ = (dimension, pos);
             Some([0.0, 0.0, 0.0])
@@ -215,7 +256,10 @@ pub mod native_hooks {
 }
 pub struct Assets { pub registry: &'static BlockRegistry }
 pub struct Pack { pub assets: Assets }
-pub struct World { pub blocks: std::collections::HashMap<[i32; 3], u32>, pub game_time: i64 }
+pub struct World {
+    pub blocks: std::collections::HashMap<[i32; 3], u32>, pub game_time: i64,
+    pub block_entities: std::collections::HashMap<(i32, i32, i32), horizon_client::containers::BlockEntity>,
+}
 impl World {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId { BlockStateId(*self.blocks.get(&[x, y, z]).unwrap_or(&0)) }
 }
@@ -251,7 +295,7 @@ impl Behaviours {
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
-        world: World { blocks: Default::default(), game_time: 0 }, sent: vec![], parts: vec![], aim: None, unsaved: vec![],
+        world: World { blocks: Default::default(), game_time: 0, block_entities: Default::default() }, sent: vec![], parts: vec![], aim: None, unsaved: vec![],
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default() };
     game.native_world_lifecycle(native_lifecycle::WorldPhase::WorldOpenReady, "");
     assert_eq!(create_engine::states::index(2), Some(0));

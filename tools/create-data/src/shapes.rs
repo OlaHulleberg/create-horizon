@@ -74,6 +74,16 @@ pub fn by_axis(boxes: &[Px]) -> Value {
     json!({ "property": "axis", "values": values })
 }
 
+/// A `shapes` object giving every value of `property` the same boxes.
+pub fn by_property(property: &str, values: &[&str], boxes: &[Px]) -> Value {
+    let list: Vec<Value> = boxes.iter().map(|b| units(*b)).collect();
+    let values: serde_json::Map<String, Value> = values
+        .iter()
+        .map(|v| (v.to_string(), json!(list)))
+        .collect();
+    json!({ "property": property, "values": values })
+}
+
 /// A `shapes` object selecting by `facing`, from the up-facing boxes.
 pub fn by_facing(boxes: &[Px]) -> Value {
     let values: serde_json::Map<String, Value> = ["down", "up", "north", "south", "west", "east"]

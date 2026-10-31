@@ -141,6 +141,11 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::half(f.opposite())
             })
         }),
+        // MillstoneBlock: a small cog on the y axis with a shaft below.
+        Block::Millstone => one(Part {
+            shafts: Dir::Down.bit(),
+            ..Part::cog(Axis::Y, false)
+        }),
         Block::WaterWheel => s.facing.map_or([None, None], |f| {
             // WaterWheelBlock.hasShaftTowards: both ends of its axis.
             one(Part {

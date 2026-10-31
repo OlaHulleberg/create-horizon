@@ -1,0 +1,51 @@
+{
+  "template": "minecraft:barrel",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:andesite"
+  },
+  "item": true,
+  "shapes": {
+    "property": "open",
+    "values": {
+      "false": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.375,
+          1.0
+        ],
+        [
+          0.125,
+          0.375,
+          0.125,
+          0.875,
+          1.0,
+          0.875
+        ]
+      ],
+      "true": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.375,
+          1.0
+        ],
+        [
+          0.125,
+          0.375,
+          0.125,
+          0.875,
+          1.0,
+          0.875
+        ]
+      ]
+    }
+  }
+}

@@ -5,6 +5,7 @@ pub mod client;
 pub mod generated;
 pub mod kinetics;
 pub mod parts;
+pub mod processing;
 pub mod states;
 pub mod waterwheel;
 pub mod world;

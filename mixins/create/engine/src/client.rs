@@ -18,6 +18,8 @@ pub enum Model {
     CrankHandle(Dir),
     /// The water wheel (`AllPartialModels.WATER_WHEEL`), its axle along a face.
     WaterWheel(Dir),
+    /// The millstone's turning stone (`AllPartialModels.MILLSTONE_COG`).
+    MillstoneCog,
 }
 
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
@@ -101,6 +103,8 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
             .facing
             .map(|f| vec![half(0, f, speeds[0])])
             .unwrap_or_default(),
+        // MillstoneRenderer: the inner stone turns on the y axis.
+        Block::Millstone => vec![own(Axis::Y, Model::MillstoneCog)],
         // WaterWheelVisual: the wheel, turning on its axis.
         Block::WaterWheel => s
             .facing
