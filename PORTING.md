@@ -100,6 +100,17 @@ first bit nearest the clock), the repeaters pass the pulses on. The latches cost
 glue asks every neighbour of a changed latch to read it again (`native_update_signal_neighbors`), where a diode
 updates only the block in front.
 
+| Scenario (2026-10-31, Phase 8, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1902 ± 45 | 0.510 / 1.022 | 4.121 ± 0.067 | baseline |
+| contraptions: 16 windmills of 17 sails assembled and turning at 2 rpm | 1863 ± 78 | 0.524 / 0.953 | 3.972 ± 0.071 | tick ≤ off + 0.25 ms, frame p50 ≤ off + 10% |
+
+Each run checks that all 16 bearings turn before measuring. A turning windmill is one instanced draw of one model: no
+measurable server tick, 0.014 ms of frame time for the 16.
+
+Equipment (the wrench) and the fluid tank do no work per tick: their cost is the idle row above (content on, nothing
+running).
+
 ### Blocked / open
 
 - Startup with Create's content installed: +0.5 s to the title screen and +0.9 s into a world (warm). The native mod

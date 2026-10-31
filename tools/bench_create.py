@@ -19,6 +19,8 @@ the server thread's smoothed tick time. Scenarios:
   redstone 32 observer clocks, each driving a chain of 16 toggle latches (a binary counter): 512
            latches switching (phase 7)
   repeaters  the control for redstone: the same chains of vanilla repeaters
+  contraptions  16 windmills (17 sails each, a cross) assembled and turning: 16 structures drawn as
+           one GPU part each (phase 8)
 
     python3 tools/bench_create.py --game target/horizon-cargo/fast/horizon-client \\
         --content target/create-content --scenario idle --repeats 3 --out benchmarks/p0-idle.json
@@ -117,7 +119,42 @@ def build(ctl_bin, sock, scenario, center):
             # Two observers watching each other: a clock whose pulses leave the east one's back.
             command(ctl_bin, sock, f"setblock {x-16} {y-6} {zz} minecraft:observer[facing=east]", failures)
             command(ctl_bin, sock, f"setblock {x-15} {y-6} {zz} minecraft:observer[facing=west]", failures)
+    if scenario == "contraptions":
+        for i in range(16):
+            bx, bz = x - 15 + 10 * (i % 4), z - 15 + 10 * (i // 4)
+            # A bearing facing up, its sails in a cross in the plane above it.
+            command(ctl_bin, sock, f"setblock {bx} {y-6} {bz} create:windmill_bearing[facing=up]", failures)
+            command(ctl_bin, sock, f"fill {bx-4} {y-5} {bz} {bx+4} {y-5} {bz} create:white_sail[facing=up]",
+                    failures)
+            command(ctl_bin, sock, f"fill {bx} {y-5} {bz-4} {bx} {y-5} {bz+4} create:white_sail[facing=up]",
+                    failures)
+            # Somewhere to stand within reach of its east side, the eyes below the sails.
+            command(ctl_bin, sock, f"setblock {bx+2} {y-8} {bz} minecraft:glass", failures)
     return failures
+
+
+def assemble_windmills(ctl_bin, sock, center):
+    """Clicks each bearing with an empty hand until it turns (a click the harness loses is tried
+    again); returns how many turn."""
+    x, y, z = center
+    turning = 0
+    for i in range(16):
+        bx, bz = x - 15 + 10 * (i % 4), z - 15 + 10 * (i // 4)
+        for _ in range(4):
+            ctl(ctl_bin, sock, "tp", str(bx + 2), str(y - 7), str(bz))
+            try:
+                ctl(ctl_bin, sock, "look-at-block", str(bx), str(y - 6), str(bz), "east")
+                ctl(ctl_bin, sock, "interact", str(bx), str(y - 6), str(bz), "east")
+            except RuntimeError as e:
+                print(f"windmill {i}: {e}")
+            time.sleep(1)
+            ctl(ctl_bin, sock, "chat", f"/create_debug speed {bx} {y-6} {bz}")
+            time.sleep(0.4)
+            said = ctl(ctl_bin, sock, "messages", "1").get("chat", [""])[0]
+            if said.endswith(": 2 rpm"):
+                turning += 1
+                break
+    return turning
 
 
 def count_create(ctl_bin, sock, center):
@@ -159,7 +196,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512,
-                    "repeaters": 0}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             have = count_create(ctl_bin, sock, center)
@@ -170,6 +207,11 @@ def run_once(args, scenario):
         else:
             raise SystemExit(f"scene holds {have} Create blocks, not {expected}")
         x, y, z = center
+        turning = None
+        if scenario == "contraptions":
+            turning = assemble_windmills(ctl_bin, sock, center)
+            if turning != 16:
+                raise SystemExit(f"only {turning} of 16 windmills turn")
         ctl(ctl_bin, sock, "tp", str(x), str(y), str(z))
         ctl(ctl_bin, sock, "fly", str(x), str(y), str(z), str(x), str(y), str(z), "0.1", "40")
         ctl(ctl_bin, sock, "wait-ready")
@@ -179,7 +221,7 @@ def run_once(args, scenario):
                       str(args.seconds), "40", "raw", timeout=int(args.seconds) + 120)
         if args.screenshot:
             ctl(ctl_bin, sock, "screenshot", str(Path(args.screenshot).resolve()))
-        pressed = None
+        pressed = turning
         if scenario == "logistics":
             # The stacks are on the belts, not lying around as entities.
             ents = ctl(ctl_bin, sock, "entities")
@@ -228,7 +270,8 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "redstone", "repeaters"], required=True)
+                                          "logistics", "redstone", "repeaters", "contraptions"],
+                   required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
     p.add_argument("--settle", type=float, default=3.0)
