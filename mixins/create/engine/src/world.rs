@@ -80,6 +80,14 @@ pub struct Dimension {
     states: HashMap<[i32; 3], u32>,
     /// Columns whose saved data changed, to mark unsaved when the dimension is in place.
     unsaved: Vec<(i32, i32)>,
+    /// Blocks whose redstone power may have changed (a clutch or gearshift that was placed or
+    /// whose neighbour changed), checked after the level's tick.
+    redstone: Vec<[i32; 3]>,
+}
+
+/// Blocks that follow redstone power (`powered`): Create's split shafts.
+fn follows_power(block: Block) -> bool {
+    matches!(block, Block::Clutch | Block::Gearshift)
 }
 
 /// Create's state for the open world: three vanilla dimensions, by index.
@@ -136,6 +144,12 @@ impl CreateWorld {
             return;
         }
         if is {
+            if self.table.get(new).is_some_and(|(b, _)| follows_power(b))
+                && self.table.get(old).map(|(b, _)| b) != self.table.get(new).map(|(b, _)| b)
+            {
+                // ClutchBlock.getStateForPlacement: powered as placed.
+                self.dims[dim].redstone.push(pos);
+            }
             self.place(dim, pos, new);
         } else {
             let d = &mut self.dims[dim];
@@ -243,6 +257,32 @@ impl CreateWorld {
         }
     }
 
+    /// A neighbour of the block `state` at `pos` changed: a block that follows redstone is
+    /// checked after the tick. The first line is the hot path for every other block.
+    #[inline]
+    pub fn neighbor_changed(&mut self, dim: usize, pos: [i32; 3], state: u32) {
+        if !self.table.is_kinetic(state) {
+            return;
+        }
+        if self.table.get(state).is_some_and(|(b, _)| follows_power(b)) {
+            self.dims[dim].redstone.push(pos);
+        }
+    }
+
+    /// Blocks to check for redstone power, with whether each is powered now.
+    pub fn take_redstone(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        let mut v = std::mem::take(&mut self.dims[dim].redstone);
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// Whether the block `state` is powered (`powered`), for a block that follows redstone.
+    pub fn powered(&self, state: u32) -> Option<bool> {
+        let (block, info) = self.table.get(state)?;
+        follows_power(block).then_some(info.powered)
+    }
+
     /// Columns whose saved data changed since the last call.
     pub fn take_unsaved(&mut self, dim: usize) -> Vec<(i32, i32)> {
         let mut v = std::mem::take(&mut self.dims[dim].unsaved);
@@ -326,6 +366,39 @@ mod tests {
         w.block_changed(0, [2, 64, 1], 0, 2);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [2, 64, 1]), Some(256.0));
+        states::clear_range();
+    }
+
+    #[test]
+    fn split_shafts_are_checked_for_power_when_placed_or_their_neighbour_changes() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:clutch", vec![("axis", "x"), ("powered", "false")]),
+            ("create:clutch", vec![("axis", "x"), ("powered", "true")]),
+            ("create:shaft", vec![("axis", "x")]),
+        ];
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        assert_eq!(w.take_redstone(0), [[0, 0, 0]], "placed: checked once");
+        w.block_changed(0, [0, 0, 0], 10, 11);
+        assert!(
+            w.take_redstone(0).is_empty(),
+            "its own power change is no new check"
+        );
+        w.neighbor_changed(0, [0, 0, 0], 11);
+        w.neighbor_changed(0, [1, 0, 0], 12);
+        w.neighbor_changed(0, [2, 0, 0], 3);
+        assert_eq!(
+            w.take_redstone(0),
+            [[0, 0, 0]],
+            "shafts and vanilla blocks are not"
+        );
+        assert_eq!(w.powered(11), Some(true));
+        assert_eq!(w.powered(12), None);
         states::clear_range();
     }
 

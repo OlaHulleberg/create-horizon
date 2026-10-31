@@ -94,6 +94,20 @@ pub(crate) fn block_changed(
     with_world(|w| w.block_changed(level_index(dimension), [pos.x, pos.y, pos.z], old.0, new.0));
 }
 
+/// A neighbour of a block changed on the server. Hot: one range test, then return, for any block
+/// that is not Create's.
+#[inline(always)]
+pub(crate) fn neighbor_changed(
+    dimension: horizon_world::level::Dimension,
+    pos: horizon_core::position::BlockPos,
+    state: BlockStateId,
+) {
+    if states::index(state.0).is_none() {
+        return;
+    }
+    with_world(|w| w.neighbor_changed(level_index(dimension), [pos.x, pos.y, pos.z], state.0));
+}
+
 /// A column joined a server level: find its Create blocks. Sections whose palette holds one
 /// state only are tested once; the others are unpacked on the stack, never allocated.
 pub(crate) fn chunk_load(
@@ -140,6 +154,25 @@ pub(crate) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     let Some(dim) = dimension_index(dimension) else {
         return;
     };
+    // Split shafts follow redstone (ClutchBlock.neighborChanged): set `powered` before solving,
+    // so the change turns the network in this tick's solve.
+    for pos in with_world(|w| w.take_redstone(dim)).unwrap_or_default() {
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let Some(was) = with_world(|w| w.powered(state.0)).flatten() else {
+            continue;
+        };
+        let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+        let now = game.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, at));
+        if now != was {
+            let value = if now { "true" } else { "false" };
+            game.native_set_block_property_with(
+                pos,
+                "powered",
+                value,
+                super::native_hooks::flags::UPDATE_CLIENTS,
+            );
+        }
+    }
     let mut events = Vec::new();
     let Some((removed, unsaved)) = with_world(|w| {
         w.tick(dim, &mut events);

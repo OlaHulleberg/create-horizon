@@ -41,6 +41,7 @@ def write_fixture(original, root):
         ('tick', "horizon_client::game::native_hooks::Game<'_>::native_tick"),
         ('wheel', "horizon_client::game::native_hooks::Game<'_>::native_wheel"),
         ('chunk_data_save', "horizon_client::game::native_hooks::Game<'_>::native_chunk_data_save"),
+        ('neighbor_changed', "horizon_client::game::native_hooks::GameLevel<'_>::native_neighbor_changed"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -49,6 +50,7 @@ def write_fixture(original, root):
         'crates/horizon-core/src/lib.rs': '''
 pub mod position {
     #[derive(Clone, Copy)] pub struct BlockPos { pub x: i32, pub y: i32, pub z: i32 }
+    impl BlockPos { pub fn new(x: i32, y: i32, z: i32) -> Self { Self { x, y, z } } }
 }
 ''',
         'crates/horizon-world/Cargo.toml': '[package]\nname = "horizon-world"\nversion = "0.1.0"\nedition = "2024"\n',
@@ -121,11 +123,15 @@ pub mod native_server {
 }
 pub mod native_hooks {
     use super::*;
+    pub mod flags { pub const UPDATE_CLIENTS: i32 = 2; }
     use native_lifecycle::WorldPhase;
     use native_server::{NativeCommand, NativeServerPlayer};
     impl GameLevel<'_> {
         pub fn native_block_changed(&self, dimension: LevelDimension, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
             let _ = (dimension, pos, old, new);
+        }
+        pub fn native_neighbor_changed(&self, dimension: LevelDimension, pos: BlockPos, state: BlockStateId) {
+            let _ = (dimension, pos, state);
         }
     }
     impl Game<'_> {
@@ -179,6 +185,16 @@ pub mod native_hooks {
             true
         }
         pub fn pick(&self) -> Option<Hit> { self.aim.map(|pos| Hit { pos }) }
+        pub fn with_level<R>(&mut self, f: impl FnOnce(&Behaviours, &mut GameLevel<'_>, &mut Ticks) -> R) -> R {
+            let mut level = GameLevel { registry: self.pack.assets.registry };
+            f(&Behaviours, &mut level, &mut Ticks)
+        }
+        pub fn native_set_block_property_with(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
+            let _ = flags;
+            self.said.push(format!("set {pos:?} {key}={value}"));
+            true
+        }
+
         pub fn native_feedback(&mut self, line: horizon_client::text::Text) { self.said.push(line.0); }
         pub fn native_run_command(&mut self, line: &str) -> bool { self.said.push(line.to_owned()); true }
     }
@@ -196,6 +212,14 @@ pub struct Game<'a> {
     pub aim: Option<[i32; 3]>, pub unsaved: Vec<[i32; 2]>,
 }
 pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
+pub struct Behaviours;
+pub struct Ticks;
+impl Behaviours {
+    pub fn has_neighbor_signal(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos) -> bool {
+        let _ = (level, ticks, pos);
+        true
+    }
+}
 #[test] fn every_hook_reaches_the_engine() {
     use horizon_world::registry::BlockState;
     use std::collections::BTreeMap;
