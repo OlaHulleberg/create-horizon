@@ -87,6 +87,16 @@ looked at only when its motion changes. `bench_create.py` sets `inactivityFpsLim
 frames at 30 a minute after the last input, which a long scene build reaches (a first logistics run measured exactly
 30 fps).
 
+| Scenario (2026-10-31, Phase 7, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| repeaters: 32 observer clocks into chains of 16 vanilla repeaters (control) | 1937 ± 59 | 0.502 / 0.937 | 4.665 ± 0.039 | control |
+| redstone: the same clocks into chains of 16 toggle latches (512 latches, ripple counters) | 1953 ± 86 | 0.497 / 0.909 | 4.866 ± 0.033 | tick ≤ control + 0.3 ms, frame p50 ≤ control + 10% |
+
+Each run reads one chain twice a second apart: the latches count (`0000111011111111` then `1011011011111111`, the
+first bit nearest the clock), the repeaters pass the pulses on. The latches cost 0.2 ms more than repeaters: their
+glue asks every neighbour of a changed latch to read it again (`native_update_signal_neighbors`), where a diode
+updates only the block in front.
+
 ### Blocked / open
 
 - Startup with Create's content installed: +0.5 s to the title screen and +0.9 s into a world (warm). The native mod

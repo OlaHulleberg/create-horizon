@@ -16,6 +16,9 @@ the server thread's smoothed tick time. Scenarios:
            iron ingots: 256 presses pressing at 16 rpm (phase 3)
   logistics  32 belts 48 long at 16 rpm, each carrying 21 stacks dropped on it: 672 stacks moving
            (phase 4)
+  redstone 32 observer clocks, each driving a chain of 16 toggle latches (a binary counter): 512
+           latches switching (phase 7)
+  repeaters  the control for redstone: the same chains of vanilla repeaters
 
     python3 tools/bench_create.py --game target/horizon-cargo/fast/horizon-client \\
         --content target/create-content --scenario idle --repeats 3 --out benchmarks/p0-idle.json
@@ -104,6 +107,16 @@ def build(ctl_bin, sock, scenario, center):
                 ctl(ctl_bin, sock, "command",
                     f"summon minecraft:item {xx + 0.5} {y - 5} {z - 24 + s + 0.5} "
                     "{Item:{id:'minecraft:iron_ingot',count:8}}")
+    if scenario in ("redstone", "repeaters"):
+        diode = ("create:powered_toggle_latch[facing=west]" if scenario == "redstone"
+                 else "minecraft:repeater[facing=west]")
+        for row in range(32):
+            zz = z - 31 + 2 * row
+            command(ctl_bin, sock, f"fill {x-17} {y-7} {zz} {x+2} {y-7} {zz} minecraft:stone", failures)
+            command(ctl_bin, sock, f"fill {x-14} {y-6} {zz} {x+1} {y-6} {zz} {diode}", failures)
+            # Two observers watching each other: a clock whose pulses leave the east one's back.
+            command(ctl_bin, sock, f"setblock {x-16} {y-6} {zz} minecraft:observer[facing=east]", failures)
+            command(ctl_bin, sock, f"setblock {x-15} {y-6} {zz} minecraft:observer[facing=west]", failures)
     return failures
 
 
@@ -145,7 +158,8 @@ def run_once(args, scenario):
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
-                    "processing": 528, "logistics": 32 * 48 + 32}[scenario]
+                    "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512,
+                    "repeaters": 0}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             have = count_create(ctl_bin, sock, center)
@@ -170,6 +184,18 @@ def run_once(args, scenario):
             # The stacks are on the belts, not lying around as entities.
             ents = ctl(ctl_bin, sock, "entities")
             pressed = sum(1 for e in ents.get("entities", []) if "item" in str(e.get("type", "")))
+        if scenario in ("redstone", "repeaters"):
+            # The counters really count: the states along one chain.
+            chain = ctl(ctl_bin, sock, "blocks", str(x - 14), str(y - 6), str(z - 31), str(x + 1), str(y - 6),
+                        str(z - 31)).get("blocks", [])
+            # A latch's output is `powering`; a repeater's, `powered`. Two reads a second apart:
+            # a counter changes between them.
+            key = "powering=true" if scenario == "redstone" else "powered=true"
+            first = "".join("1" if key in b[3] else "0" for b in sorted(chain))
+            time.sleep(1)
+            chain = ctl(ctl_bin, sock, "blocks", str(x - 14), str(y - 6), str(z - 31), str(x + 1), str(y - 6),
+                        str(z - 31)).get("blocks", [])
+            pressed = [first, "".join("1" if key in b[3] else "0" for b in sorted(chain))]
         if scenario == "processing":
             # The work really ran: sheets in one depot's outputs.
             pressed = ctl(ctl_bin, sock, "command", f"data get block {x-8} {y-6} {z}").get("chat")
@@ -202,7 +228,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics"], required=True)
+                                          "logistics", "redstone", "repeaters"], required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
     p.add_argument("--settle", type=float, default=3.0)
