@@ -1,0 +1,252 @@
+{
+ "format": "horizon-benchmark-report",
+ "version": 1,
+ "kind": "game",
+ "created": "2026-10-31T23:54:42Z",
+ "app": {
+  "name": "horizon-client",
+  "version": "0.1.0",
+  "commit": "1754ad635"
+ },
+ "hardware": {
+  "os": "linux",
+  "arch": "x86_64",
+  "cpu_threads": 12,
+  "os_version": "Debian GNU/Linux 13 (trixie) (kernel 7.0.14-16-pve)",
+  "cpu": "AMD Ryzen 7 5700X 8-Core Processor",
+  "ram_mb": 32035,
+  "gpu": {
+   "name": "Intel(R) Graphics (BMG G21)",
+   "vendor": "intel",
+   "driver": "Intel open-source Mesa driver Mesa 25.0.7-2+deb13u1",
+   "backend": "vulkan",
+   "kind": "discrete"
+  }
+ },
+ "conditions": {
+  "scenario": "perf_bench:village",
+  "seed": "1234",
+  "render_distance": 12,
+  "simulation_distance": 12,
+  "vsync": false,
+  "offscreen": true,
+  "repeats": 3,
+  "warmup_s": 2.0,
+  "load_avg_1m": 4.035,
+  "window": [
+   1280,
+   720
+  ]
+ },
+ "metrics": {
+  "startup.title_ms": {
+   "n": 3,
+   "mean": 748.427,
+   "stdev": 3.622,
+   "min": 745.533,
+   "max": 752.488,
+   "ci95": 8.997
+  },
+  "startup.world_ms": {
+   "n": 3,
+   "mean": 3684.776,
+   "stdev": 40.249,
+   "min": 3639.93,
+   "max": 3717.764,
+   "ci95": 99.993
+  },
+  "chunks.village.load_ms": {
+   "n": 3,
+   "mean": 2410.905,
+   "stdev": 148.976,
+   "min": 2261.984,
+   "max": 2559.937,
+   "ci95": 370.107
+  },
+  "chunks.village.meshed_count": {
+   "n": 3,
+   "mean": 15193.333,
+   "stdev": 55.806,
+   "min": 15149.0,
+   "max": 15256.0,
+   "ci95": 138.642
+  },
+  "fps.village.avg_fps": {
+   "n": 3,
+   "mean": 1416.85,
+   "stdev": 33.142,
+   "min": 1381.481,
+   "max": 1447.191,
+   "ci95": 82.337
+  },
+  "fps.village.low_1pct_fps": {
+   "n": 3,
+   "mean": 294.879,
+   "stdev": 15.716,
+   "min": 285.42,
+   "max": 313.02,
+   "ci95": 39.043
+  },
+  "fps.village.low_01pct_fps": {
+   "n": 3,
+   "mean": 163.309,
+   "stdev": 44.667,
+   "min": 118.833,
+   "max": 208.165,
+   "ci95": 110.968
+  },
+  "memory.village.gpu_mb": {
+   "n": 3,
+   "mean": 444.792,
+   "stdev": 1.155,
+   "min": 444.125,
+   "max": 446.125,
+   "ci95": 2.869
+  },
+  "memory.rss_peak_mb": {
+   "n": 3,
+   "mean": 1272.672,
+   "stdev": 7.768,
+   "min": 1264.914,
+   "max": 1280.449,
+   "ci95": 19.297
+  },
+  "memory.rss_steady_mb": {
+   "n": 3,
+   "mean": 1235.86,
+   "stdev": 3.485,
+   "min": 1231.941,
+   "max": 1238.613,
+   "ci95": 8.659
+  }
+ },
+ "frames": [
+  {
+   "phase": "village",
+   "repeat": 0,
+   "frames": 2895,
+   "seconds": 2.0,
+   "avg_fps": 1447.191,
+   "low_1pct_fps": 286.196,
+   "low_01pct_fps": 118.833,
+   "p50_ms": 0.57,
+   "p95_ms": 1.108,
+   "p99_ms": 2.196,
+   "p999_ms": 4.5,
+   "max_ms": 15.122,
+   "cpu_p50_ms": 0.492,
+   "gpu_p50_ms": 0.492,
+   "histogram": [
+    2624,
+    236,
+    23,
+    4,
+    6,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "phase": "village",
+   "repeat": 1,
+   "frames": 2763,
+   "seconds": 2.0,
+   "avg_fps": 1381.481,
+   "low_1pct_fps": 313.02,
+   "low_01pct_fps": 208.165,
+   "p50_ms": 0.592,
+   "p95_ms": 1.261,
+   "p99_ms": 2.256,
+   "p999_ms": 4.129,
+   "max_ms": 5.384,
+   "cpu_p50_ms": 0.53,
+   "gpu_p50_ms": 0.491,
+   "histogram": [
+    2394,
+    331,
+    23,
+    13,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "phase": "village",
+   "repeat": 2,
+   "frames": 2844,
+   "seconds": 2.0,
+   "avg_fps": 1421.879,
+   "low_1pct_fps": 285.42,
+   "low_01pct_fps": 162.928,
+   "p50_ms": 0.573,
+   "p95_ms": 1.206,
+   "p99_ms": 2.392,
+   "p999_ms": 4.879,
+   "max_ms": 7.901,
+   "cpu_p50_ms": 0.494,
+   "gpu_p50_ms": 0.491,
+   "histogram": [
+    2548,
+    253,
+    24,
+    15,
+    2,
+    1,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  }
+ ],
+ "label": "create-p0b-off"
+}

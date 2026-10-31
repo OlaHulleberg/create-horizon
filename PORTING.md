@@ -113,10 +113,18 @@ running).
 
 ### Blocked / open
 
-- Startup with Create's content installed: +0.5 s to the title screen and +0.9 s into a world (warm). The native mod
-  does nothing at startup but scan the registry once; the time is Horizon reading Create's content: 25,349 more block
-  states (56 walls are 18,144 of them), 5,557 asset/data files and Create's textures in the atlas. Not yet
-  "no measurable cost": to investigate (fewer states via gap 2 own states for walls, or a faster content load in Horizon).
+- Startup with Create's content installed (warm, `perf_bench`, render distance 12, 3 runs): title screen 748 ± 9 ms
+  without, 1161 ± 22 ms with Create (`benchmarks/perf/create-p0b-*`); first measured 854 / 1379 ms. The native mod does
+  nothing at startup but scan the registry once: the time is Horizon reading Create's content, 25,349 more block states
+  (56 walls are 18,144 of them: 250 ms of the difference, measured by leaving them out). DEBUG timings of the loading
+  steps: block facts (`gameplay-facts.json`, 104 MB with Create against 56 MB: ~1.9 KB a state), the registry
+  (`facts.json`), model states, occlusion and collision tables all grow with the states; the texture atlas adds about
+  100 ms after them. Horizon fix `1754ad635`: those tables are read whole and parsed from memory (serde_json from a reader
+  was several times slower) and the block facts' validation pass runs beside their decode instead of before it: the
+  core tables went from 461 to 321 ms without Create and from 791 to 555 ms with it. **Open:** the rest is proportional
+  to the size of Horizon's per-state JSON tables; making an unused content mod cost nothing at startup needs Horizon to
+  cache those tables decoded (binary) or load them lazily. Ticks and frames with Create installed and unused are within
+  noise of mods off (see the idle rows).
 
 - Horizon pin: `feat/create-hooks` at `aea7ed878` (NATIVE_HOOKS_API 47). History: first `0a96593cf`, two commits on 9d979ca: gap 2
   (`a83a4b380`, content blocks with their own `state_properties`) and gap 8 (`0a96593cf`, hook points API 41:
