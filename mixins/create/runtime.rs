@@ -155,6 +155,19 @@ pub(crate) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
         return;
     };
     with_world(|w| w.tick_cranks(dim));
+    // Water wheels whose surroundings changed, and one in 60 of the others each tick.
+    let tick = game.world.game_time as u64;
+    for (pos, axis) in with_world(|w| w.take_wheel_checks(dim, tick)).unwrap_or_default() {
+        let samples: Vec<([i32; 3], [f64; 3])> = create_engine::waterwheel::small_offsets(axis)
+            .into_iter()
+            .map(|o| {
+                let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+                (o, flow_at(game, dimension, at))
+            })
+            .collect();
+        let score = create_engine::waterwheel::flow_score(axis, &samples);
+        with_world(|w| w.set_wheel_flow(dim, pos, score));
+    }
     // Split shafts follow redstone (ClutchBlock.neighborChanged): set `powered` before solving,
     // so the change turns the network in this tick's solve.
     for pos in with_world(|w| w.take_redstone(dim)).unwrap_or_default() {
@@ -426,6 +439,7 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
         ),
         Model::ShaftHalf(d) => find("create:part_shaft_half", "facing", dir_name(d)),
         Model::CrankHandle(d) => find("create:part_hand_crank_handle", "facing", dir_name(d)),
+        Model::WaterWheel(d) => find("create:part_water_wheel", "facing", dir_name(d)),
     }
 }
 
@@ -572,6 +586,19 @@ pub(crate) fn client_tick(game: &mut Game<'_>) {
         }
     }
     CLIENT.with_borrow_mut(|slot| *slot = Some(c));
+}
+
+/// `WaterWheelBlockEntity.getFlowVectorAtPosition`: the fluid's flow, or a bubble column's
+/// push (up, or down when it drags down).
+fn flow_at(game: &Game<'_>, dimension: &str, at: [i32; 3]) -> [f64; 3] {
+    let state = game.world.block(at[0], at[1], at[2]);
+    if let Some(s) = game.pack.assets.registry.state(state)
+        && s.name == "minecraft:bubble_column"
+    {
+        let down = s.properties.get("drag").is_some_and(|v| v == "true");
+        return [0.0, if down { -1.0 } else { 1.0 }, 0.0];
+    }
+    game.native_fluid_flow(dimension, at).unwrap_or_default()
 }
 
 /// `/create_debug speed <pos>`: the kinetic speed the server solved at a block, for tests and

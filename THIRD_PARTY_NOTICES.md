@@ -28,6 +28,13 @@ This port translates Create 6.0.11's Java code and compiles its data (everything
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
 
+## Ponder and Catnip (MIT)
+
+Create's utility library Catnip ships in its Ponder project; the port translates a few of its helpers
+(`VecHelper.rotate` for the water wheel's flow score). Source:
+<https://github.com/Creators-of-Create/Ponder>, branch `mc1.21.1/dev`, file `LICENSE`:
+"MIT License, Copyright (c) 2022 The Create Team", with the same permission notice as above.
+
 ## Create (assets: All Rights Reserved)
 
 `src/main/resources/assets/` (textures, hand-written models, sounds, shaders, ponder) is

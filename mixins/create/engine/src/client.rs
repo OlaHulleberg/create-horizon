@@ -16,6 +16,8 @@ pub enum Model {
     ShaftHalf(Dir),
     /// The hand crank's handle (`AllPartialModels.HAND_CRANK_HANDLE`), turned to a face.
     CrankHandle(Dir),
+    /// The water wheel (`AllPartialModels.WATER_WHEEL`), its axle along a face.
+    WaterWheel(Dir),
 }
 
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
@@ -98,6 +100,11 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
         Block::CreativeMotor => s
             .facing
             .map(|f| vec![half(0, f, speeds[0])])
+            .unwrap_or_default(),
+        // WaterWheelVisual: the wheel, turning on its axis.
+        Block::WaterWheel => s
+            .facing
+            .map(|f| vec![own(f.axis(), Model::WaterWheel(f))])
             .unwrap_or_default(),
         // HandCrankVisual: its shaft half into the block it hangs from, and the handle facing
         // away from it, both turning with the crank.

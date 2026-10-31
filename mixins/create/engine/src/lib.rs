@@ -6,6 +6,7 @@ pub mod generated;
 pub mod kinetics;
 pub mod parts;
 pub mod states;
+pub mod waterwheel;
 pub mod world;
 
 pub use generated::Block;

@@ -143,6 +143,10 @@ pub mod native_hooks {
             let _ = (pos, face, canceled);
         }
         pub fn spectator(&self) -> bool { false }
+        pub fn native_fluid_flow(&self, dimension: &str, pos: [i32; 3]) -> Option<[f64; 3]> {
+            let _ = (dimension, pos);
+            Some([0.0, 0.0, 0.0])
+        }
     }
     impl Game<'_> {
         pub fn native_world_lifecycle(&mut self, phase: WorldPhase, error_text: &str) {
@@ -211,7 +215,7 @@ pub mod native_hooks {
 }
 pub struct Assets { pub registry: &'static BlockRegistry }
 pub struct Pack { pub assets: Assets }
-pub struct World { pub blocks: std::collections::HashMap<[i32; 3], u32> }
+pub struct World { pub blocks: std::collections::HashMap<[i32; 3], u32>, pub game_time: i64 }
 impl World {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId { BlockStateId(*self.blocks.get(&[x, y, z]).unwrap_or(&0)) }
 }
@@ -247,7 +251,7 @@ impl Behaviours {
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
-        world: World { blocks: Default::default() }, sent: vec![], parts: vec![], aim: None, unsaved: vec![],
+        world: World { blocks: Default::default(), game_time: 0 }, sent: vec![], parts: vec![], aim: None, unsaved: vec![],
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default() };
     game.native_world_lifecycle(native_lifecycle::WorldPhase::WorldOpenReady, "");
     assert_eq!(create_engine::states::index(2), Some(0));

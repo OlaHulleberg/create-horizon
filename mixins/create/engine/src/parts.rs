@@ -57,6 +57,8 @@ pub struct Settings {
     pub motor_rpm: f32,
     /// A hand crank being turned: 1, -1 backwards (sneaking), 0 at rest.
     pub crank: i8,
+    /// A water wheel's flow score (`WaterWheelBlockEntity.flowScore`).
+    pub flow: i8,
 }
 
 impl Default for Settings {
@@ -64,6 +66,7 @@ impl Default for Settings {
         Settings {
             motor_rpm: 16.0,
             crank: 0,
+            flow: 0,
         }
     }
 }
@@ -136,6 +139,13 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             one(Part {
                 generated: convert_to_direction(f32::from(settings.crank) * CRANK_RPM, f),
                 ..Part::half(f.opposite())
+            })
+        }),
+        Block::WaterWheel => s.facing.map_or([None, None], |f| {
+            // WaterWheelBlock.hasShaftTowards: both ends of its axis.
+            one(Part {
+                generated: crate::waterwheel::generated_speed(i32::from(settings.flow), 1),
+                ..Part::shaft(f.axis())
             })
         }),
         _ => [None, None],

@@ -167,7 +167,7 @@ fn kept(path: &str) -> bool {
         Some(("data", rest)) => data(rest) && !rest.contains("/.") && path.ends_with(".json"),
         Some(("assets", rest)) => {
             assets(rest)
-                && [".json", ".png", ".ogg", ".mcmeta"]
+                && [".json", ".png", ".ogg", ".mcmeta", ".obj", ".mtl"]
                     .iter()
                     .any(|e| rest.ends_with(e))
         }
@@ -318,5 +318,11 @@ mod tests {
         assert!(kept("assets/create/textures/block/a.png"));
         assert!(!kept("assets/create/ponder/a.nbt"));
         assert!(!kept("assets/create/lang/README.md"));
+        assert!(kept(
+            "assets/create/models/block/water_wheel/water_wheel.obj"
+        ));
+        assert!(kept(
+            "assets/create/models/block/water_wheel/water_wheel.mtl"
+        ));
     }
 }

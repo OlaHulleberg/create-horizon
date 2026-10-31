@@ -83,6 +83,10 @@ pub struct Dimension {
     /// Hand cranks being turned: ticks left (`HandCrankBlockEntity.inUse`). Empty at rest, so
     /// cranks cost nothing per tick unless turned.
     cranks: HashMap<[i32; 3], u8>,
+    /// Water wheels, to look at their flow every 60 ticks (`lazyTick`), staggered by position.
+    wheels: Vec<[i32; 3]>,
+    /// Water wheels to look at now: placed, or a neighbour changed.
+    wheel_checks: Vec<[i32; 3]>,
     /// Blocks whose redstone power may have changed (a clutch or gearshift that was placed or
     /// whose neighbour changed), checked after the level's tick.
     redstone: Vec<[i32; 3]>,
@@ -153,12 +157,19 @@ impl CreateWorld {
                 // ClutchBlock.getStateForPlacement: powered as placed.
                 self.dims[dim].redstone.push(pos);
             }
+            if self.table.get(new).map(|(b, _)| b) == Some(Block::WaterWheel)
+                && self.table.get(old).map(|(b, _)| b) != Some(Block::WaterWheel)
+            {
+                self.dims[dim].wheels.push(pos);
+                self.dims[dim].wheel_checks.push(pos);
+            }
             self.place(dim, pos, new);
         } else {
             let d = &mut self.dims[dim];
             d.kinetics.remove(pos);
             d.states.remove(&pos);
             d.cranks.remove(&pos);
+            d.wheels.retain(|p| *p != pos);
             if d.settings.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
@@ -192,6 +203,7 @@ impl CreateWorld {
                 d.states.remove(&pos);
                 d.cranks.remove(&pos);
             }
+            d.wheels.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
         d.settings.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
     }
@@ -327,8 +339,47 @@ impl CreateWorld {
         if !self.table.is_kinetic(state) {
             return;
         }
-        if self.table.get(state).is_some_and(|(b, _)| follows_power(b)) {
-            self.dims[dim].redstone.push(pos);
+        match self.table.get(state).map(|(b, _)| b) {
+            Some(b) if follows_power(b) => self.dims[dim].redstone.push(pos),
+            Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
+            _ => {}
+        }
+    }
+
+    /// The water wheels to look at in this tick (`tick` counts ticks): those whose neighbour
+    /// changed, and one in 60 of the others (Create's `lazyTick` every 60 ticks), with their axis.
+    pub fn take_wheel_checks(
+        &mut self,
+        dim: usize,
+        tick: u64,
+    ) -> Vec<([i32; 3], crate::kinetics::Axis)> {
+        let d = &mut self.dims[dim];
+        let mut list = std::mem::take(&mut d.wheel_checks);
+        list.extend(d.wheels.iter().filter(|p| {
+            (p[0].wrapping_mul(31) ^ p[2].wrapping_mul(17) ^ p[1]).rem_euclid(60) as u64
+                == tick % 60
+        }));
+        list.sort();
+        list.dedup();
+        list.into_iter()
+            .filter_map(|p| {
+                let state = *self.dims[dim].states.get(&p)?;
+                let (block, info) = self.table.get(state)?;
+                (block == Block::WaterWheel).then_some((p, info.facing?.axis()))
+            })
+            .collect()
+    }
+
+    /// A water wheel's new flow score: it turns again when the score changed.
+    pub fn set_wheel_flow(&mut self, dim: usize, pos: [i32; 3], score: i32) {
+        let flow = score.clamp(-1, 1) as i8;
+        let d = &mut self.dims[dim];
+        let Some(&state) = d.states.get(&pos) else {
+            return;
+        };
+        let old = d.settings.get(&pos).copied().unwrap_or_default();
+        if old.flow != flow {
+            self.set_settings(dim, pos, state, Settings { flow, ..old });
         }
     }
 

@@ -295,6 +295,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             Some(by_facing(&[MOTOR_BLOCK])),
             own(&[("facing", facing)]),
         ),
+        "water_wheel" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
         "hand_crank" => (
             "minecraft:heavy_core",
             Some(by_facing(&CRANK)),
@@ -323,13 +324,14 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 2] = [
+pub const PARTIALS: [(&str, &str, &str); 3] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
         "create:block/hand_crank/handle",
         "north",
     ),
+    ("part_water_wheel", "create:block/water_wheel/wheel", "up"),
 ];
 
 /// The blockstate rotation (x, y) that turns a model pointing `from` to point `to`: y turns
@@ -337,6 +339,14 @@ pub const PARTIALS: [(&str, &str, &str); 2] = [
 fn rotation(from: &str, to: &str) -> (i32, i32) {
     let h = ["north", "east", "south", "west"];
     let at = |d: &str| h.iter().position(|x| *x == d);
+    // A model pointing up: x 90 turns it north, then y turns it around; x 180 turns it down.
+    if from == "up" {
+        return match to {
+            "up" => (0, 0),
+            "down" => (180, 0),
+            t => (90, at(t).unwrap_or(0) as i32 * 90),
+        };
+    }
     match (at(from), to) {
         (Some(f), "up") => (
             if f == 0 { 270 } else { 90 },
@@ -475,6 +485,10 @@ mod tests {
         assert_eq!(rotation("north", "east"), (0, 90));
         assert_eq!(rotation("north", "up"), (270, 0));
         assert_eq!(rotation("north", "down"), (90, 0));
+        // A model pointing up (the water wheel's axle).
+        assert_eq!(rotation("up", "north"), (90, 0));
+        assert_eq!(rotation("up", "east"), (90, 90));
+        assert_eq!(rotation("up", "down"), (180, 0));
     }
 
     #[test]
