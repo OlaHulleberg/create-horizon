@@ -4,7 +4,7 @@ version = "0.1.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "95932161edf5cd908bbb329886308da938cfada4"
+horizon_revision = "0ac3e823f8209630740a4ae639bf11d8e135669f"
 
 # Game glue: per-world state on the server thread, translating hooks into engine calls.
 [[module]]
@@ -224,4 +224,38 @@ bindings = [
   { name = "pos", ty = "[i32; 3]", value = "pos" },
   { name = "stack", ty = "&mut horizon_client::items::ItemStack", value = "stack" },
   { name = "at", ty = "[f64; 3]", value = "at" },
+]
+
+[[injection]]
+id = "block-signal"
+hook = "block_signal"
+hook_version = 1
+kind = "HEAD"
+helper = "signal.rs"
+bindings = [
+  { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
+  { name = "face", ty = "horizon_core::geometry::Direction", value = "face" },
+  { name = "signal", ty = "&mut i32", value = "signal" },
+]
+
+[[injection]]
+id = "is-signal-source"
+hook = "is_signal_source"
+hook_version = 1
+kind = "HEAD"
+helper = "signal_source.rs"
+bindings = [
+  { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
+  { name = "source", ty = "&mut bool", value = "source" },
+]
+
+[[injection]]
+id = "tick-block"
+hook = "tick_block"
+hook_version = 1
+kind = "HEAD"
+helper = "tick_block.rs"
+bindings = [
+  { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
+  { name = "handled", ty = "&mut bool", value = "handled" },
 ]

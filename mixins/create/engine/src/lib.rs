@@ -6,6 +6,7 @@ pub mod client;
 pub mod depot;
 pub mod generated;
 pub mod kinetics;
+pub mod latch;
 pub mod parts;
 pub mod press;
 pub mod processing;

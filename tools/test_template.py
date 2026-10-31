@@ -48,6 +48,9 @@ def write_fixture(original, root):
         ('contents_changed', "horizon_client::game::native_hooks::Game<'_>::native_contents_changed"),
         ('update_entity_after_fall_on',
          "horizon_client::game::native_hooks::Game<'_>::native_update_entity_after_fall_on"),
+        ('block_signal', "horizon_client::game::native_hooks::GameLevel<'_>::native_block_signal"),
+        ('is_signal_source', "horizon_client::game::native_hooks::GameLevel<'_>::native_is_signal_source"),
+        ('tick_block', "horizon_client::game::native_hooks::GameLevel<'_>::native_tick_block"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -59,6 +62,10 @@ def write_fixture(original, root):
 pub mod position {
     #[derive(Clone, Copy)] pub struct BlockPos { pub x: i32, pub y: i32, pub z: i32 }
     impl BlockPos { pub fn new(x: i32, y: i32, z: i32) -> Self { Self { x, y, z } } }
+}
+pub mod geometry {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum Direction { Down, Up, North, South, West, East }
+    impl Direction { pub const ALL: [Self; 6] = [Self::Down, Self::Up, Self::North, Self::South, Self::West, Self::East]; }
 }
 ''',
         'crates/horizon-world/Cargo.toml': '[package]\nname = "horizon-world"\nversion = "0.1.0"\nedition = "2024"\n',
@@ -162,6 +169,15 @@ pub mod native_hooks {
         }
         pub fn native_neighbor_changed(&self, dimension: LevelDimension, pos: BlockPos, state: BlockStateId) {
             let _ = (dimension, pos, state);
+        }
+        pub fn native_block_signal(&self, dimension: LevelDimension, pos: BlockPos, state: BlockStateId,
+                                   face: horizon_core::geometry::Direction, direct: bool, signal: &mut i32) {
+            let _ = (dimension, pos, state, face, direct, signal);
+        }
+        pub fn native_is_signal_source(&self, state: BlockStateId, source: &mut bool) { let _ = (state, source); }
+        pub fn native_tick_block(&mut self, ticks: &mut Ticks, dimension: LevelDimension, pos: BlockPos,
+                                 state: BlockStateId, handled: &mut bool) {
+            let _ = (ticks, dimension, pos, state, handled);
         }
     }
     impl Game<'_> {
@@ -280,6 +296,15 @@ pub mod native_hooks {
             true
         }
 
+        pub fn native_set_block(&mut self, dimension: &str, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool {
+            let _ = (dimension, flags);
+            self.world.blocks.insert(pos, state.0);
+            true
+        }
+        pub fn native_update_signal_neighbors(&mut self, dimension: &str, pos: [i32; 3]) -> bool {
+            let _ = (dimension, pos);
+            true
+        }
         pub fn native_feedback(&mut self, line: horizon_client::text::Text) { self.said.push(line.0); }
         pub fn native_run_command(&mut self, line: &str) -> bool { self.said.push(line.to_owned()); true }
     }
@@ -328,10 +353,19 @@ impl Res {
     pub fn facts(&self) -> &AllFacts { &AllFacts }
 }
 pub struct Ticks;
+thread_local! {
+    /// Blocks giving a signal of 15 toward every side, for the latch test.
+    pub static SIGNALS: std::cell::RefCell<std::collections::HashSet<[i32; 3]>> = Default::default();
+}
 impl Behaviours {
     pub fn has_neighbor_signal(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos) -> bool {
         let _ = (level, ticks, pos);
         true
+    }
+    pub fn signal(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos,
+                  direction: horizon_core::geometry::Direction) -> i32 {
+        let _ = (level, ticks, direction);
+        if SIGNALS.with_borrow(|s| s.contains(&[pos.x, pos.y, pos.z])) { 15 } else { 0 }
     }
 }
 #[test] fn every_hook_reaches_the_engine() {
@@ -356,6 +390,12 @@ impl Behaviours {
             ("waterlogged".to_owned(), "false".to_owned())]) });
     }
     states.push(BlockState { name: "create:creative_motor".into(), properties: props("facing", "east") });
+    // 10..: a toggle latch facing north, every powered/powering pair (10: both off).
+    for (powered, powering) in [("false", "false"), ("true", "false"), ("false", "true"), ("true", "true")] {
+        states.push(BlockState { name: "create:powered_toggle_latch".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), "north".to_owned()), ("powered".to_owned(), powered.to_owned()),
+            ("powering".to_owned(), powering.to_owned())]) });
+    }
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
@@ -482,6 +522,33 @@ impl Behaviours {
     let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create".into()) else { panic!("no create data") };
     let Some(horizon_world::nbt::Tag::List(saved)) = own.get(&"belts".into()) else { panic!("no belts saved: {own:?}") };
     assert_eq!(saved.len(), 1);
+    // A toggle latch facing north at (20, 0, 20), a signal at its back: a tick later it is on and
+    // gives 15 toward the north, nothing elsewhere; its repeater template's tick is the glue's.
+    game.world.blocks.insert([20, 0, 20], 10);
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 20, y: 0, z: 20 }, BlockStateId(0), BlockStateId(10));
+    SIGNALS.with_borrow_mut(|s| s.insert([20, 0, 19]));
+    game.native_level_tick_post("minecraft:overworld");
+    assert_eq!(game.world.blocks[&[20, 0, 20]], 10, "not before its tick");
+    game.world.game_time += 1;
+    game.native_level_tick_post("minecraft:overworld");
+    let on = game.world.blocks[&[20, 0, 20]];
+    assert_eq!(on, 13, "powered and powering");
+    let mut level = GameLevel { registry };
+    let read = |level: &GameLevel<'_>, face| {
+        let mut signal = 0;
+        level.native_block_signal(LevelDimension::Overworld, BlockPos { x: 20, y: 0, z: 20 }, BlockStateId(on), face, false, &mut signal);
+        signal
+    };
+    // The hook's face is the latch's side touching the reader: its south face, toward what it
+    // powers.
+    assert_eq!(read(&level, horizon_core::geometry::Direction::South), 15);
+    assert_eq!(read(&level, horizon_core::geometry::Direction::North), 0);
+    let mut source = false;
+    level.native_is_signal_source(BlockStateId(on), &mut source);
+    assert!(source);
+    let mut handled = false;
+    level.native_tick_block(&mut Ticks, LevelDimension::Overworld, BlockPos { x: 20, y: 0, z: 20 }, BlockStateId(on), &mut handled);
+    assert!(handled);
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);
