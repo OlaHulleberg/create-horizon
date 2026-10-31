@@ -259,3 +259,17 @@ bindings = [
   { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
   { name = "handled", ty = "&mut bool", value = "handled" },
 ]
+
+[[injection]]
+id = "use-item-on"
+hook = "use_item_on"
+hook_version = 1
+kind = "HEAD"
+helper = "use_item_on.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "face", ty = "[i32; 3]", value = "face" },
+  { name = "claimed", ty = "&mut bool", value = "claimed" },
+]

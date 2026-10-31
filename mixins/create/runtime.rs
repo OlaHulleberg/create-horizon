@@ -340,8 +340,8 @@ pub(super) fn right_click_block(
         return;
     }
     if let Some((kind, l)) = latch_state(state) {
-        // ToggleLatchBlock.useItemOn: not while sneaking.
-        if back {
+        // ToggleLatchBlock.useItemOn: not while sneaking, nor with a wrench.
+        if back || game.native_held().is_some_and(|h| h.0 == "create:wrench") {
             return;
         }
         *canceled = true;
@@ -2630,4 +2630,81 @@ fn tick_latches(game: &mut Game<'_>, dimension: &str, dim: usize) {
         }
     }
     with_world(|w| w.dims[dim].latch_ticks.extend(next));
+}
+
+/// `WrenchItem.useOn` on a Create block: sneaking, `onSneakWrenched` (its item to the player
+/// unless creative, the block gone without drops); else `onWrenched`, turned about the axis of
+/// the face clicked. Belts (their own wrench use) and other blocks are left alone.
+pub(super) fn use_item_on(
+    game: &mut Game<'_>,
+    stack: &horizon_client::items::ItemStack,
+    pos: [i32; 3],
+    face: [i32; 3],
+    claimed: &mut bool,
+) {
+    if &*stack.item != "create:wrench" {
+        return;
+    }
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    if states::index(state.0).is_none() {
+        return;
+    }
+    let block = with_world(|w| w.table.get(state.0).map(|(b, _)| b)).flatten();
+    let Some(block) = block else {
+        return;
+    };
+    if block == create_engine::Block::Belt {
+        return;
+    }
+    // The hook runs for the level in place.
+    let dimension = game.dim.id().to_owned();
+    let Some(clicked) = Dir::from_offset(face) else {
+        return;
+    };
+    *claimed = true;
+    let registry = game.pack.assets.registry;
+    let Some(current) = registry.state(state).cloned() else {
+        return;
+    };
+    if game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
+        if !game.creative && game.items().get(&current.name).is_some() {
+            game.native_give_items(&current.name, 1);
+        }
+        if let Some(air) = registry.default_state("minecraft:air") {
+            game.native_set_block(
+                &dimension,
+                pos,
+                air,
+                super::native_hooks::flags::UPDATE_ALL,
+            );
+        }
+        return;
+    }
+    // A `facing` that never points up is a horizontal one (HORIZONTAL_FACING).
+    let horizontal = {
+        let mut up = current.clone();
+        up.properties.insert("facing".into(), "up".into());
+        current.properties.contains_key("facing") && registry.id(&up).is_none()
+    };
+    let props: std::collections::BTreeMap<String, String> = current
+        .properties
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let turned = create_engine::wrench::rotated(&props, horizontal, clicked);
+    if turned == props {
+        return;
+    }
+    let mut next = current.clone();
+    for (k, v) in turned {
+        next.properties.insert(k, v);
+    }
+    if let Some(id) = registry.id(&next) {
+        game.native_set_block(
+            &dimension,
+            pos,
+            id,
+            super::native_hooks::flags::UPDATE_ALL,
+        );
+    }
 }

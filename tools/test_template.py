@@ -51,6 +51,7 @@ def write_fixture(original, root):
         ('block_signal', "horizon_client::game::native_hooks::GameLevel<'_>::native_block_signal"),
         ('is_signal_source', "horizon_client::game::native_hooks::GameLevel<'_>::native_is_signal_source"),
         ('tick_block', "horizon_client::game::native_hooks::GameLevel<'_>::native_tick_block"),
+        ('use_item_on', "horizon_client::game::native_hooks::Game<'_>::native_use_item_on"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -160,7 +161,7 @@ pub mod native_server {
 }
 pub mod native_hooks {
     use super::*;
-    pub mod flags { pub const UPDATE_CLIENTS: i32 = 2; }
+    pub mod flags { pub const UPDATE_CLIENTS: i32 = 2; pub const UPDATE_ALL: i32 = 3; }
     use native_lifecycle::WorldPhase;
     use native_server::{NativeCommand, NativeServerPlayer};
     impl GameLevel<'_> {
@@ -265,6 +266,9 @@ pub mod native_hooks {
             self.glides.push((model, block, axis, rpm, velocity));
         }
         pub fn native_contents_changed(&mut self, pos: [i32; 3]) { let _ = pos; }
+        pub fn native_use_item_on(&mut self, stack: &horizon_client::items::ItemStack, pos: [i32; 3], face: [i32; 3], claimed: &mut bool) {
+            let _ = (stack, pos, face, claimed);
+        }
         pub fn native_part_model_posed(&mut self, state: BlockStateId, pose: glam::Mat4) -> Option<u32> {
             let _ = pose;
             Some(5000 + state.0)
@@ -396,6 +400,8 @@ impl Behaviours {
             ("facing".to_owned(), "north".to_owned()), ("powered".to_owned(), powered.to_owned()),
             ("powering".to_owned(), powering.to_owned())]) });
     }
+    // 14: a shaft along z.
+    states.push(BlockState { name: "create:shaft".into(), properties: props("axis", "z") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
@@ -549,6 +555,18 @@ impl Behaviours {
     let mut handled = false;
     level.native_tick_block(&mut Ticks, LevelDimension::Overworld, BlockPos { x: 20, y: 0, z: 20 }, BlockStateId(on), &mut handled);
     assert!(handled);
+    // A wrench on the top of a shaft along x turns it to z (a quarter turn about y).
+    game.world.blocks.insert([30, 0, 30], 2);
+    let wrench = horizon_client::items::ItemStack { item: "create:wrench".into(), count: 1, damage: 0, extra: None };
+    let mut claimed = false;
+    game.native_use_item_on(&wrench, [30, 0, 30], [0, 1, 0], &mut claimed);
+    assert!(claimed);
+    assert_eq!(game.world.blocks[&[30, 0, 30]], 14, "turned to z");
+    // Another item is not the wrench's to take.
+    let stick = horizon_client::items::ItemStack { item: "minecraft:stick".into(), count: 1, damage: 0, extra: None };
+    let mut claimed = false;
+    game.native_use_item_on(&stick, [30, 0, 30], [0, 1, 0], &mut claimed);
+    assert!(!claimed);
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);
