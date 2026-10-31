@@ -1,0 +1,8 @@
+{
+  "template": "minecraft:stone_slab",
+  "properties": {
+    "hardness": 1.25,
+    "explosion_resistance": 6.0
+  },
+  "item": true
+}

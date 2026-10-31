@@ -1,0 +1,8 @@
+id = "create"
+name = "Create"
+version = "6.0.11"
+description = "Create's blocks, items and data for the Horizon port (behaviour is the native mod)"
+authors = ["The Create Team / The Creators of Create"]
+api = "0.2"
+side = "both"
+capabilities = ["registries"]

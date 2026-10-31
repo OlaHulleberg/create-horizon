@@ -1,3 +1,6 @@
 /target/
 __pycache__/
 *.pyc
+.horizon-cache/
+saves/
+horizon-player.txt

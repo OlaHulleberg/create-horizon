@@ -1,30 +1,18 @@
 # Validation
 
-Validated on Linux with Rust 1.95.0 on 2026-10-30, using the exact revisions in
-`compatibility.json` and the real bundle committed here.
+Run on 2026-10-31 in the port sandbox (Linux, Rust 1.95.0 for this workspace, Horizon pinned at
+`9d979caa48a3bb58203319b9ea044db58c38e0d8`, horizon-mixins `d9c83d7`).
 
 | Check | Result |
 |---|---|
 | `cargo fmt --all --check` | Pass |
 | `cargo clippy --workspace --all-targets --locked --offline -- -D warnings` | Pass |
-| `cargo test --workspace --locked --offline` | Runtime unit test passes |
-| `python3 tools/test_template.py` | Actual bundle compiles in the tiny fixture; original method calls/result, shared runtime, AST audit, unchanged bytes/mtimes and incompatible revision/target rejection pass |
-| `python3 tools/test_stage.py` | Complete pinned Horizon export stages deterministically; original checkout unchanged; exact HEAD/module audit passes |
-| `python3 tools/horizon.py check` | Actual `horizon-client` binary checks successfully with `--no-default-features` |
-| `python3 tools/horizon.py test` | The runtime's embedded test passes inside the actual Horizon game test binary |
+| `cargo test --workspace --locked --offline` | Engine and create-data unit tests pass |
+| `python3 tools/test_template.py` | The real bundle (named hook, glue module, engine crate) compiles on a two-crate fixture; its hook test runs the glue and the original body; AST audit, unchanged bytes/mtimes, wrong revision and renamed hook target rejected |
+| `python3 tools/test_stage.py --horizon /workspace/horizon` | The full pinned export stages deterministically; checkout unchanged; only the planned HEAD and module differ |
+| `python3 tools/horizon.py stage/check/test/build --horizon /workspace/horizon` | Pass; `test` also runs the engine's tests as a member of the staged Horizon workspace |
 
-The native check reported 69.55 seconds in Cargo, and the native test passed.
-Both reused an existing external Cargo target directory with cached
-Horizon dependencies. These are compilation/test checks, not a fresh-build
-benchmark. Staging the full export took about 24 seconds per command on this
-machine; a repeated application preserved the stage.
-
-No game was launched and no Minecraft resources or player data were read or
-changed. Interactive logging/gameplay remains a manual check with the compatible
-prepared resources. The source audit verifies only the declared HEAD statement
-and support module differ from pristine Rust ASTs; it does not claim compatibility
-with other Horizon revisions or arbitrary third-party mods.
-
-CI reproduces the formatting, clippy, standalone runtime and tiny-fixture tests.
-The full native checks additionally need a Horizon Git history containing the
-pin and its cached dependencies; use the commands in README.md to reproduce them.
+In game (headless, `/workspace/headless.sh`, renderer `Intel(R) Graphics (BMG G21)`, Vulkan): with the prepared
+content mod the game registers 25,349 Create states from id 35,723 and the mod logs its range; without it the mod
+logs that it stays idle. Create's decoration blocks place and render with Create's textures. Performance: see
+PORTING.md, "Budgets".

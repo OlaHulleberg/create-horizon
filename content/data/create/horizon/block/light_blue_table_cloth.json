@@ -1,0 +1,8 @@
+{
+  "template": "minecraft:white_carpet",
+  "properties": {
+    "hardness": 0.1,
+    "explosion_resistance": 0.1
+  },
+  "item": true
+}

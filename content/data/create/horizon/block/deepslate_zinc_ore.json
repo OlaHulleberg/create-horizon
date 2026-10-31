@@ -1,0 +1,9 @@
+{
+  "template": "minecraft:deepslate_iron_ore",
+  "properties": {
+    "hardness": 4.5,
+    "explosion_resistance": 3.0,
+    "sounds": "minecraft:deepslate"
+  },
+  "item": true
+}

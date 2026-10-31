@@ -2,7 +2,58 @@
 
 Source of truth for behaviour: this repo's Java tree (`src/`, branch `main`, NeoForge 1.21.1); the port lives in `horizon/` on branch `port/horizon`.
 Target: a horizon-mixins native bundle in `horizon/`, plus new hook points upstreamed to Horizon on
-`/home/techi/repos/horizon` branch `feat/create-hooks` (based on `9d979ca`, `NATIVE_HOOKS_API` 40).
+`/workspace/horizon` branch `feat/create-hooks` (based on `9d979ca`, `NATIVE_HOOKS_API` 40).
+
+## Status (updated with every commit)
+
+| Phase | State | Verified | Measured |
+|---|---|---|---|
+| 0 Setup | done: bundle `create` on 9d979ca, `create-engine` crate, glue module, `create-data compile/prepare`, MIT notice, perf baseline | stage/check/test/build green; fixture test; headless launch on BMG G21: content loads, mod idles without it | see Budgets |
+| 1 Static content | in progress: 400 of 643 blocks and 35 plain items declared from exact vanilla templates; 1369 recipes, loot, tags, models, textures, lang from the prepare step | headless screenshot: casings, metal blocks, stone palettes, windows, shingles, stairs, slab, ladder, pillar, wall, scaffolding render with Create's textures | idle cost: see Budgets |
+| 2-9 | not started | | |
+
+### How the port is built
+
+- `mixins/create/engine` (`create-engine`): Create's rules as plain Rust with no game types, staged into Horizon's
+  workspace as a bundle crate (horizon-mixins 0.6 `[[crate]]`); its tests also run there (`horizon.py test`).
+- `mixins/create/runtime.rs`: the glue module `crate::game::create`, per-world state on the server thread.
+- Content: Horizon content-mod layer, namespace `create`. `create-data compile` writes the block/item declarations
+  (`content/`, committed: our own files) and `engine/src/generated.rs` (one `Block` enum over all 643 blocks, sorted as
+  Horizon registers them). `create-data prepare <jar|folders>` writes the playable content mod: declarations + Create's
+  MIT data converted to 26.3 (`{"item": x}` ingredients become `"x"`, `neoforge:conditions` naming other mods drop the
+  recipe) + Create's assets from the player's jar + the `assets/create/items/*.json` model definitions 26.3 needs.
+- Hot-path test: Create's states are one contiguous id run (mods are appended in id order), so "is this a Create block"
+  is one load, one subtract, one compare on an `AtomicU64` (`create_engine::states::index`). Without the content mod the
+  run is empty and every test misses.
+
+### Budgets (measured on this sandbox: Ryzen 7 5700X, Arc B580-class BMG G21, Mesa 25.0.7 Vulkan, offscreen)
+
+`tools/perf_headless.sh` runs Horizon's `perf_bench.py --offscreen` under Xvfb with scratch homes: 1280x720, render
+distance 12, seed 1234, 3 repeats, the four scenes; `--warm` excludes the one-time content-overlay build. Reports
+in `benchmarks/perf/`, compared with `tools/perf_table.py`. A difference inside the two runs' 95% CIs is noise (~).
+
+| Metric (warm) | Mods off | Create content on, no Create blocks | Budget |
+|---|---|---|---|
+| Frame rate, 4 scenes (avg fps) | 1762 / 1570 / 1752 / 1557 | -1.3% ~ / +0.3% ~ / -0.4% ~ / +0.2% ~ | within CI of mods off |
+| 1% low fps, 4 scenes | 772 / 574 / 869 / 665 | all ~ (inside CI) | within CI of mods off |
+| Chunk load, 4 scenes (ms) | 2400 / 2845 / 2152 / 3743 | all ~ | within CI of mods off |
+| Start to title (ms) | 845 ± 5 | 1360 (+515) | **open**: content cost, see below |
+| Start to world (ms) | 3748 ± 29 | 4651 (+903) | **open** |
+
+Server tick time during flights is recorded per scenario by `tools/bench_create.py` from Phase 2 on.
+
+### Blocked / open
+
+- Startup with Create's content installed: +0.5 s to the title screen and +0.9 s into a world (warm). The native mod
+  does nothing at startup but scan the registry once; the time is Horizon reading Create's content: 25,349 more block
+  states (56 walls are 18,144 of them), 5,557 asset/data files and Create's textures in the atlas. Not yet
+  "no measurable cost": to investigate (fewer states via gap 2 own states for walls, or a faster content load in Horizon).
+
+- Gap 2 (block state properties no vanilla template has): 243 blocks wait for it or for their subsystem. Horizon change
+  in progress on `feat/create-hooks`: `state_properties` in a content block declaration.
+- Zinc ore generation: Create adds it with a NeoForge biome modifier, which Horizon's content mods do not read.
+- Copper shingles/tiles do not weather yet (template `minecraft:andesite`, copper sounds).
+- Food items (bar of chocolate, sweet roll, honeyed apple, chocolate glazed berries) wait for Phase 6.
 
 ## Licensing
 
@@ -147,7 +198,7 @@ every frame.
 ### Measured, not assumed
 
 - Each subsystem gets a benchmark world, measured with Horizon's `--benchmark` and `tools/perf_bench.py`
-  ([docs/benchmark.md](../../horizon/docs/benchmark.md)): tick time and frame time, with mods off, with
+  (Horizon's `docs/benchmark.md`): tick time and frame time, with mods off, with
   Create on and idle, and with Create under load.
 - **Free when unused** (Horizon's rule, docs/modpacks.md): with no Create block in the world, every hook
   is a bit test and returns, and the tick and frame times match the run with mods off.
@@ -186,4 +237,4 @@ every frame.
 ## Paths
 
 `tools/horizon.py`'s default `--horizon` is `ROOT.parent / "horizon"`, which here is this folder itself:
-always pass `--horizon /home/techi/repos/horizon`.
+always pass `--horizon /workspace/horizon`.

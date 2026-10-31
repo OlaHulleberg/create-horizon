@@ -1,0 +1,8 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 2.0,
+    "explosion_resistance": 2.0
+  },
+  "item": true
+}

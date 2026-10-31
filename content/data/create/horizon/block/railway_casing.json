@@ -1,0 +1,9 @@
+{
+  "template": "minecraft:andesite",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "sounds": "minecraft:netherite_block"
+  },
+  "item": true
+}

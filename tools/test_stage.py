@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
 import horizon
 from test_template import audit, snapshot
 
@@ -27,7 +28,9 @@ def main():
             assert second == output and not changed and first == snapshot(output)
             plan = json.loads((root/'plan.json').read_text())
             assert plan['schema'] == horizon.COMPAT['mixin_schema']
-            assert len(plan['injections']) == 1 and len(plan['modules']) == 1
+            manifest = tomllib.loads((horizon.ROOT/'mixins/create/horizon-mixin.toml').read_text())
+            assert len(plan['injections']) == len(manifest['injection'])
+            assert len(plan['modules']) == len(manifest['module'])
             original = next((root/'original').glob('*/.horizon-mod-template.json')).parent
             audit(original, output, root/'plan.json')
     assert all((checkout/p).read_bytes() == content for p, content in before.items())

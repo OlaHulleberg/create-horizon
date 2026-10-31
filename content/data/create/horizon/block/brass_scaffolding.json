@@ -1,0 +1,8 @@
+{
+  "template": "minecraft:scaffolding",
+  "properties": {
+    "hardness": 0.0,
+    "explosion_resistance": 0.0
+  },
+  "item": true
+}

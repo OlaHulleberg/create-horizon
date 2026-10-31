@@ -1,0 +1,30 @@
+[mod]
+id = "create"
+version = "0.1.0"
+priority = 100
+
+[compatibility]
+horizon_revision = "9d979caa48a3bb58203319b9ea044db58c38e0d8"
+
+# Game glue: per-world state on the server thread, translating hooks into engine calls.
+[[module]]
+id = "runtime"
+file = "crates/horizon-client/src/game.rs"
+name = "create"
+source = "runtime.rs"
+
+# Pure logic and the tables create-data compiles from Create's MIT data.
+[[crate]]
+id = "engine"
+path = "engine"
+
+[[injection]]
+id = "world-lifecycle"
+hook = "world_lifecycle"
+hook_version = 1
+kind = "HEAD"
+helper = "lifecycle.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "phase", ty = "&crate::game::native_lifecycle::WorldPhase", value = "&phase" },
+]

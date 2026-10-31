@@ -1,0 +1,11 @@
+[package]
+name = "create-data"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Compiles Create's MIT data into the port's tables, and prepares its content mod from a Create jar"
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }

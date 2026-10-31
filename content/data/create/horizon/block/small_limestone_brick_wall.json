@@ -1,0 +1,8 @@
+{
+  "template": "minecraft:stone_brick_wall",
+  "properties": {
+    "hardness": 1.25,
+    "explosion_resistance": 0.8
+  },
+  "item": true
+}

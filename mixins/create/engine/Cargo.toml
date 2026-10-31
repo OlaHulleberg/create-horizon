@@ -1,0 +1,8 @@
+[package]
+name = "create-engine"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Create's rules for Horizon: pure Rust, no game types"
+
+[dependencies]

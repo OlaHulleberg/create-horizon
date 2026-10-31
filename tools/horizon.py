@@ -17,7 +17,10 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 COMPAT = json.loads((ROOT / "compatibility.json").read_text())
 PIN = COMPAT["horizon_revision"]
-MIXINS = Path(os.environ.get("HORIZON_MIXINS", ROOT.parent / "horizon-mixins")).resolve()
+# This mod lives in Create/horizon, so look for horizon-mixins beside Create too.
+MIXINS = Path(os.environ.get("HORIZON_MIXINS") or next(
+    (p for p in (ROOT.parent / "horizon-mixins", ROOT.parents[1] / "horizon-mixins") if p.exists()),
+    ROOT.parent / "horizon-mixins")).resolve()
 
 
 def digest(data):
@@ -121,12 +124,21 @@ def main():
             command = ["cargo", args.action, "--locked", "--offline", "-p", "horizon-client",
                        "--bin", "horizon-client", "--no-default-features", "--target-dir", str(target)]
             if args.action == "build":
-                command.extend(["--profile", "fast"])
+                # horizon-ctl drives the built game in tests (headless runs, benchmarks).
+                command.extend(["--bin", "horizon-ctl", "--profile", "fast"])
             if args.action == "test":
-                command.extend(["game::example_mod::tests", "--", "--nocapture"])
+                command.extend(["game::create::", "--", "--nocapture"])
             with lock(target.parent / (target.name + ".mod-template.lock")):
                 run_start = time.monotonic()
                 result = subprocess.run(command, cwd=output, capture_output=True, text=True)
+                if args.action == "test" and not result.returncode:
+                    # The engine crate's own tests, built as a member of the staged Horizon workspace.
+                    engine = ["cargo", "test", "--locked", "--offline", "-p", "create-engine",
+                              "--target-dir", str(target)]
+                    more = subprocess.run(engine, cwd=output, capture_output=True, text=True)
+                    result = subprocess.CompletedProcess(command + ["&&"] + engine, more.returncode,
+                                                         result.stdout + more.stdout,
+                                                         result.stderr + more.stderr)
             report.update(cargo_seconds=time.monotonic()-run_start, cargo_command=command,
                           cargo_exit=result.returncode)
             log = ROOT / "target" / f"horizon-{args.action}.log"

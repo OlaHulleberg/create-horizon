@@ -1,0 +1,8 @@
+{
+  "template": "minecraft:andesite",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0
+  },
+  "item": true
+}
