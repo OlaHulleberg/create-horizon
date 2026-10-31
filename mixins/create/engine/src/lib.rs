@@ -2,7 +2,10 @@
 //! so every rule is unit-tested here and the game glue (`runtime.rs`) stays thin.
 
 pub mod generated;
+pub mod kinetics;
+pub mod parts;
 pub mod states;
+pub mod world;
 
 pub use generated::Block;
 
@@ -19,5 +22,15 @@ mod tests {
         assert_eq!(Block::from_name("shaft"), Some(Block::Shaft));
         assert_eq!(Block::Shaft.name(), "shaft");
         assert_eq!(Block::from_name("not_a_block"), None);
+    }
+
+    #[test]
+    fn stress_values_come_from_create_s_registrations() {
+        // AllBlocks.java: CREATIVE_MOTOR setCapacity(16384.0), MECHANICAL_PRESS setImpact(8.0),
+        // SHAFT setNoImpact(), WATER_WHEEL setCapacity(32).
+        assert_eq!(Block::CreativeMotor.capacity(), 16384.0);
+        assert_eq!(Block::MechanicalPress.impact(), 8.0);
+        assert_eq!(Block::Shaft.impact(), 0.0);
+        assert_eq!(Block::WaterWheel.capacity(), 32.0);
     }
 }

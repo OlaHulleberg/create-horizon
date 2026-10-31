@@ -1,0 +1,21 @@
+{
+  "template": "minecraft:quartz_pillar",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:andesite"
+  },
+  "item": true,
+  "state_properties": {
+    "axis": [
+      "x",
+      "y",
+      "z"
+    ],
+    "powered": [
+      "false",
+      "true"
+    ]
+  }
+}

@@ -18,6 +18,27 @@ pub struct JavaFacts {
     pub no_occlusion: bool,
     /// An item chain that sets `.food(...)`.
     pub food: bool,
+    /// `CStress.setImpact(x)` (`setNoImpact` is 0), directly or through a `BuilderTransformers`
+    /// helper that sets it: stress units per RPM.
+    pub impact: Option<f64>,
+    /// `CStress.setCapacity(x)`: stress units per RPM of generated speed.
+    pub capacity: Option<f64>,
+}
+
+/// `BuilderTransformers` helpers that set a stress impact (BuilderTransformers.java).
+const TRANSFORMER_IMPACTS: [(&str, f64); 3] = [
+    ("BuilderTransformers.cuckooClock(", 1.0),
+    ("BuilderTransformers.mechanicalPiston(", 4.0),
+    ("BuilderTransformers.backtank(", 4.0),
+];
+
+fn number_after(s: &str, prefix: &str) -> Option<f64> {
+    let i = s.find(prefix)? + prefix.len();
+    let t = &s[i..];
+    let n = t
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(t.len());
+    t[..n].parse().ok()
 }
 
 /// Item registrations: `REGISTRATE.item("name", X::new)` chains, and Create's `ingredient("name")`
@@ -150,6 +171,15 @@ fn facts(body: &str) -> JavaFacts {
         sound,
         no_occlusion: body.contains("noOcclusion()"),
         food: body.contains(".food("),
+        impact: number_after(body, "CStress.setImpact(")
+            .or_else(|| body.contains("CStress.setNoImpact()").then_some(0.0))
+            .or_else(|| {
+                TRANSFORMER_IMPACTS
+                    .iter()
+                    .find(|(t, _)| body.contains(t))
+                    .map(|(_, v)| *v)
+            }),
+        capacity: number_after(body, "CStress.setCapacity("),
     }
 }
 
@@ -164,17 +194,23 @@ mod tests {
 		.initialProperties(SharedProperties::stone)
 		.properties(p -> p.sound(SoundType.WOOD)
 			.mapColor(MapColor.DIRT))
+		.transform(CStress.setNoImpact())
+		.register();
+	public static final BlockEntry<CreativeMotorBlock> CREATIVE_MOTOR = REGISTRATE.block("creative_motor", CreativeMotorBlock::new)
+		.transform(CStress.setCapacity(16384.0))
 		.register();
 	public static final BlockEntry<EncasedShaftBlock> X =
 		REGISTRATE.block("andesite_encased_shaft", p -> new EncasedShaftBlock(p, AllBlocks.ANDESITE_CASING::get))
 			.register();
 "#;
         let c = chains(java, ".block(\"");
-        assert_eq!(c.len(), 2);
+        assert_eq!(c.len(), 3);
+        assert_eq!(c[0].1.impact, Some(0.0));
+        assert_eq!(c[1].1.capacity, Some(16384.0));
         assert_eq!(c[0].0, "cogwheel");
         assert_eq!(c[0].1.class.as_deref(), Some("CogWheelBlock"));
         assert_eq!(c[0].1.base.as_deref(), Some("stone"));
         assert_eq!(c[0].1.sound.as_deref(), Some("wood"));
-        assert_eq!(c[1].1.class.as_deref(), Some("EncasedShaftBlock"));
+        assert_eq!(c[2].1.class.as_deref(), Some("EncasedShaftBlock"));
     }
 }

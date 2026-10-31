@@ -8,6 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Zero length means no Create states are registered (the mod's content is off): every test misses.
 static RANGE: AtomicU64 = AtomicU64::new(0);
 
+/// Tests that set the range hold this, as it is one static for the process.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Sets Create's state range for the world being opened.
 pub fn set_range(first: u32, len: u32) {
     RANGE.store(u64::from(first) | (u64::from(len) << 32), Ordering::Relaxed);
@@ -69,6 +73,7 @@ mod tests {
 
     #[test]
     fn index_misses_outside_the_range_and_when_cleared() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_range(100, 3);
         assert_eq!(index(99), None);
         assert_eq!(index(100), Some(0));

@@ -118,6 +118,32 @@ pub fn convert_recipe(mut doc: Value) -> Option<Value> {
     Some(doc)
 }
 
+/// A 1.21.1 loot table as 26.3 writes it, the form Horizon reads: a condition names its kind in
+/// `type` (1.21.1: `condition`), a function in `type` (1.21.1: `function`), and a pool's or
+/// entry's functions are its `modifier` list (1.21.1: `functions`).
+pub fn convert_loot(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            if let Some(f) = o.remove("functions") {
+                o.insert("modifier".into(), f);
+            }
+            for key in ["condition", "function"] {
+                if !o.contains_key("type")
+                    && let Some(Value::String(kind)) = o.get(key).cloned()
+                {
+                    o.remove(key);
+                    o.insert("type".into(), Value::String(kind));
+                }
+            }
+            for child in o.values_mut() {
+                convert_loot(child);
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(convert_loot),
+        _ => {}
+    }
+}
+
 /// Data and asset paths the content mod keeps: Create's own namespace, plus additions to vanilla's
 /// and the convention (`c`) tags. NeoForge's biome modifiers, Curios and other loaders' files stay
 /// out (Horizon's content fence refuses them).
@@ -193,6 +219,12 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
                 }
                 None => skipped += 1,
             }
+        } else if path.starts_with("data/create/loot_table/") {
+            let mut doc: Value =
+                serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
+            convert_loot(&mut doc);
+            put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
+            copied += 1;
         } else {
             put(path, bytes)?;
             copied += 1;
@@ -250,6 +282,30 @@ mod tests {
         let r = json!({"type": "create:milling", "neoforge:conditions": [
             {"type": "neoforge:not", "value": {"type": "neoforge:mod_loaded", "modid": "byg"}}]});
         assert!(convert_recipe(r).is_some());
+    }
+
+    #[test]
+    fn converts_1_21_1_loot_tables() {
+        let mut t = json!({"type": "minecraft:block", "pools": [{
+            "conditions": [{"condition": "minecraft:survives_explosion"}],
+            "entries": [{"type": "minecraft:item", "name": "create:shaft",
+                "functions": [{"function": "minecraft:set_count", "count": 2.0,
+                    "conditions": [{"condition": "minecraft:inverted",
+                        "term": {"condition": "minecraft:random_chance", "chance": 0.5}}]}]}],
+            "rolls": 1.0}]});
+        convert_loot(&mut t);
+        let pool = &t["pools"][0];
+        assert_eq!(
+            pool["conditions"][0],
+            json!({"type": "minecraft:survives_explosion"})
+        );
+        let f = &pool["entries"][0]["modifier"][0];
+        assert_eq!(f["type"], "minecraft:set_count");
+        assert_eq!(
+            f["conditions"][0]["term"]["type"],
+            "minecraft:random_chance"
+        );
+        assert!(pool["entries"][0].get("functions").is_none());
     }
 
     #[test]

@@ -10,7 +10,8 @@ Target: a horizon-mixins native bundle in `horizon/`, plus new hook points upstr
 |---|---|---|---|
 | 0 Setup | done: bundle `create` on 9d979ca, `create-engine` crate, glue module, `create-data compile/prepare`, MIT notice, perf baseline | stage/check/test/build green; fixture test; headless launch on BMG G21: content loads, mod idles without it | see Budgets |
 | 1 Static content | in progress: 400 of 643 blocks and 35 plain items declared from exact vanilla templates; 1369 recipes, loot, tags, models, textures, lang from the prepare step | headless screenshot: casings, metal blocks, stone palettes, windows, shingles, stairs, slab, ladder, pillar, wall, scaffolding render with Create's textures | idle cost: see Budgets |
-| 2-9 | not started | | |
+| 2 Kinetic core | in progress: solver (`kinetics.rs`: Create's ratios for shafts, gearbox faces, small/large cogs, split shafts; overpowering, direction conflicts, 256 RPM limit, stress/capacity from CStress), block→part table (`parts.rs`), per-world model (`world.rs`), glue on `block_changed` (hot: two range tests), `chunk_load`/`chunk_unload`, `level_tick_post` (solve only when dirty), `/create_debug speed`; shaft, cogwheels, gearbox, encased shafts/cogs, clutch, gearshift, creative motor, hand crank declared. **Not yet:** rotation visuals (gap 1), motor/crank interaction, redstone on clutch/gearshift, water wheel, chain drives, belts | engine 21 tests; fixture drives every hook into the engine; headless: motor 16 rpm → shafts 16 → gearbox corner +16 → cogs 16/−16 → large cog 8; unload/reload rebuilds the network; opposing motors break the newer one; screenshot of the build | pending |
+| 3-9 | not started | | |
 
 ### How the port is built
 
@@ -49,8 +50,18 @@ Server tick time during flights is recorded per scenario by `tools/bench_create.
   states (56 walls are 18,144 of them), 5,557 asset/data files and Create's textures in the atlas. Not yet
   "no measurable cost": to investigate (fewer states via gap 2 own states for walls, or a faster content load in Horizon).
 
-- Gap 2 (block state properties no vanilla template has): 243 blocks wait for it or for their subsystem. Horizon change
-  in progress on `feat/create-hooks`: `state_properties` in a content block declaration.
+- Horizon pin: the mod now builds on `feat/create-hooks` (`0a96593cf`, two commits on 9d979ca): gap 2
+  (`a83a4b380`, content blocks with their own `state_properties`) and gap 8 (`0a96593cf`, hook points API 41:
+  `chunk_load`/`chunk_unload`). Horizon's `pr_ready --quick` is green for gap 2; for gap 8 every check is green except
+  `horizon-client-render`'s parallel GPU tests, which segfault in this sandbox on untouched 9d979ca too (2 of 3 runs);
+  they pass single-threaded (700/700).
+- Loot: Create's 1.21.1 tables name a condition's kind `condition` and list `functions`; 26.3 (and Horizon) read
+  `type` and `modifier`. `create-data prepare` converts them; before, every Create block dropped nothing.
+- Horizon's `/loot ... mine` looks up `minecraft:blocks/<name>` even for mod blocks, and `/loot loot <id>` checks a
+  vanilla-only id list: both refuse Create's tables (Horizon issue; drops themselves work).
+- `horizon-ctl command` runs as the server console, which does not reach mod commands; drive `/create_debug` with
+  `horizon-ctl chat "/create_debug ..."`.
+- Gap 1 (instanced part rendering) is next: nothing rotates on screen yet.
 - Zinc ore generation: Create adds it with a NeoForge biome modifier, which Horizon's content mods do not read.
 - Copper shingles/tiles do not weather yet (template `minecraft:andesite`, copper sounds).
 - Food items (bar of chocolate, sweet roll, honeyed apple, chocolate glazed berries) wait for Phase 6.

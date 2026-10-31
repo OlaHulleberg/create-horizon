@@ -1,4 +1,7 @@
 // World open and close: index Create's block states, or drop the world's state.
-fn world_lifecycle(game: &mut crate::game::Game<'_>, phase: &crate::game::native_lifecycle::WorldPhase) {
+fn world_lifecycle(
+    game: &mut crate::game::Game<'_>,
+    phase: &crate::game::native_lifecycle::WorldPhase,
+) {
     crate::game::create::world_lifecycle(game, phase);
 }

@@ -9,6 +9,7 @@
 mod blocks;
 mod java;
 mod prepare;
+mod shapes;
 
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -156,6 +157,16 @@ capabilities = [\"registries\"]\n",
     for b in &all {
         writeln!(rs, "        {:?},", b.name).unwrap();
     }
+    rs.push_str("    ];\n\n    /// Stress impact per RPM (CStress.setImpact; 0 when Create sets none), by `Block as usize`.\n");
+    writeln!(rs, "    pub const IMPACT: [f32; {}] = [", all.len()).unwrap();
+    for b in &all {
+        writeln!(rs, "        {:?},", b.java.impact.unwrap_or(0.0) as f32).unwrap();
+    }
+    rs.push_str("    ];\n\n    /// Stress capacity per RPM generated (CStress.setCapacity), by `Block as usize`.\n");
+    writeln!(rs, "    pub const CAPACITY: [f32; {}] = [", all.len()).unwrap();
+    for b in &all {
+        writeln!(rs, "        {:?},", b.java.capacity.unwrap_or(0.0) as f32).unwrap();
+    }
     rs.push_str("    ];\n\n    /// Every block, by `Block as usize`.\n");
     writeln!(rs, "    pub const ALL: [Block; {}] = [", all.len()).unwrap();
     for b in &all {
@@ -166,7 +177,9 @@ capabilities = [\"registries\"]\n",
          /// when a world opens, never in a tick.\n    \
          pub fn from_name(name: &str) -> Option<Block> {\n        \
          Self::NAMES.binary_search(&name).ok().map(|i| Self::ALL[i])\n    }\n\n    \
-         pub fn name(self) -> &'static str {\n        Self::NAMES[self as usize]\n    }\n}\n",
+         pub fn name(self) -> &'static str {\n        Self::NAMES[self as usize]\n    }\n\n    \
+         pub fn impact(self) -> f32 {\n        Self::IMPACT[self as usize]\n    }\n\n    \
+         pub fn capacity(self) -> f32 {\n        Self::CAPACITY[self as usize]\n    }\n}\n",
     );
     write(
         &out.join("mixins/create/engine/src/generated.rs"),

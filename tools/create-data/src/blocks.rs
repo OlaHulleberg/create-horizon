@@ -30,6 +30,8 @@ pub enum Decision {
         sounds: Option<&'static str>,
         requires_tool: Option<bool>,
         shapes: Option<Value>,
+        /// Own state properties (Horizon's `state_properties`), when no template has them.
+        own: Option<Value>,
     },
     Pending(String),
 }
@@ -181,7 +183,11 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
         sounds,
         requires_tool: requires_tool(b),
         shapes: shapes.get(n).cloned(),
+        own: None,
     };
+    if let Some(d) = kinetic(b, sounds) {
+        return d;
+    }
     // Blocks with behaviour of their own wait for the phase that ports it.
     if let Some(reason) = later_phase(b) {
         return Decision::Pending(reason);
@@ -230,6 +236,77 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
     }
 }
 
+/// Phase 2's kinetic blocks: templates where vanilla has their properties (a shaft is an iron
+/// chain's axis and waterlogging), own states where it doesn't, and Create's shapes.
+fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
+    use crate::shapes::*;
+    let own = |props: &[(&str, &[&str])]| -> Option<Value> {
+        let mut m = Map::new();
+        for (k, v) in props {
+            m.insert((*k).into(), json!(v));
+        }
+        Some(Value::Object(m))
+    };
+    let axis: &[&str] = &["x", "y", "z"];
+    let bools: &[&str] = &["false", "true"];
+    let facing: &[&str] = &["up", "down", "north", "south", "west", "east"];
+    let (template, shapes, own) = match b.name.as_str() {
+        "shaft" | "powered_shaft" => (
+            "minecraft:iron_chain",
+            Some(by_axis(&[SIX_VOXEL_POLE])),
+            None,
+        ),
+        "cogwheel" => (
+            "minecraft:iron_chain",
+            Some(by_axis(&[SMALL_GEAR, SIX_VOXEL_POLE])),
+            None,
+        ),
+        "large_cogwheel" => (
+            "minecraft:iron_chain",
+            Some(by_axis(&[LARGE_GEAR, SIX_VOXEL_POLE])),
+            None,
+        ),
+        "gearbox" | "andesite_encased_shaft" | "brass_encased_shaft" => {
+            ("minecraft:quartz_pillar", None, None)
+        }
+        "clutch" | "gearshift" => (
+            "minecraft:quartz_pillar",
+            None,
+            own(&[("axis", axis), ("powered", bools)]),
+        ),
+        "andesite_encased_cogwheel"
+        | "brass_encased_cogwheel"
+        | "andesite_encased_large_cogwheel"
+        | "brass_encased_large_cogwheel" => (
+            "minecraft:quartz_pillar",
+            None,
+            own(&[
+                ("axis", axis),
+                ("bottom_shaft", bools),
+                ("top_shaft", bools),
+            ]),
+        ),
+        "creative_motor" => (
+            "minecraft:iron_block",
+            Some(by_facing(&[MOTOR_BLOCK])),
+            own(&[("facing", facing)]),
+        ),
+        "hand_crank" => (
+            "minecraft:heavy_core",
+            Some(by_facing(&CRANK)),
+            own(&[("facing", facing), ("waterlogged", bools)]),
+        ),
+        _ => return None,
+    };
+    Some(Decision::Declared {
+        template,
+        sounds,
+        requires_tool: requires_tool(b),
+        shapes,
+        own,
+    })
+}
+
 /// Blocks whose behaviour belongs to a later phase: kinetic, processing, logistics, fluids...
 /// They are declared when that phase ports them.
 fn later_phase(b: &CreateBlock) -> Option<String> {
@@ -270,6 +347,7 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
         sounds,
         requires_tool,
         shapes,
+        own,
     } = d
     else {
         return None;
@@ -295,6 +373,9 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     }
     if let Some(s) = shapes {
         doc.insert("shapes".into(), s.clone());
+    }
+    if let Some(o) = own {
+        doc.insert("state_properties".into(), o.clone());
     }
     Some(Value::Object(doc))
 }

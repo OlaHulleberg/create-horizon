@@ -26,14 +26,35 @@ def audit(original, stage, plan):
 
 
 def write_fixture(original, root):
-    """A two-crate stand-in for Horizon with the hook points, types and paths the bundle uses."""
+    """A small stand-in for Horizon with the hook points, types and paths the bundle uses: each hook
+    the bundle names, the helpers its glue calls, and a test that drives every hook into the engine."""
+    hooks = [
+        ('world_lifecycle', "horizon_client::game::native_hooks::Game<'_>::native_world_lifecycle"),
+        ('block_changed', "horizon_client::game::native_hooks::GameLevel<'_>::native_block_changed"),
+        ('chunk_load', "horizon_client::game::native_hooks::Game<'_>::native_chunk_load"),
+        ('chunk_unload', "horizon_client::game::native_hooks::Game<'_>::native_chunk_unload"),
+        ('level_tick_post', "horizon_client::game::native_hooks::Game<'_>::native_level_tick_post"),
+        ('register_commands', "horizon_client::game::native_hooks::Game<'_>::native_register_commands"),
+        ('perform_command', "horizon_client::game::native_hooks::Game<'_>::native_perform_command"),
+    ]
     files = {
-        'Cargo.toml': '[workspace]\nmembers = ["crates/horizon-world", "crates/horizon-client"]\nresolver = "2"\n',
+        'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
+                       '"crates/horizon-client"]\nresolver = "2"\n'),
+        'crates/horizon-core/Cargo.toml': '[package]\nname = "horizon-core"\nversion = "0.1.0"\nedition = "2024"\n',
+        'crates/horizon-core/src/lib.rs': '''
+pub mod position {
+    #[derive(Clone, Copy)] pub struct BlockPos { pub x: i32, pub y: i32, pub z: i32 }
+}
+''',
         'crates/horizon-world/Cargo.toml': '[package]\nname = "horizon-world"\nversion = "0.1.0"\nedition = "2024"\n',
         'crates/horizon-world/src/lib.rs': '''
+pub mod level {
+    #[derive(Clone, Copy)] pub enum Dimension { Overworld, Nether, End }
+}
 pub mod registry {
+    use std::collections::BTreeMap;
     #[derive(Clone, Copy)] pub struct BlockStateId(pub u32);
-    pub struct BlockState { pub name: String }
+    pub struct BlockState { pub name: String, pub properties: BTreeMap<String, String> }
     pub struct BlockRegistry { pub states: Vec<BlockState> }
     impl BlockRegistry {
         pub fn len(&self) -> usize { self.states.len() }
@@ -43,43 +64,121 @@ pub mod registry {
 }
 ''',
         'crates/horizon-client/Cargo.toml': ('[package]\nname = "horizon-client"\nversion = "0.1.0"\nedition = "2024"\n'
-                                             '[dependencies]\nhorizon-world = { path = "../horizon-world" }\n'),
-        'crates/horizon-client/src/lib.rs': 'pub mod game;\n',
+                                             '[dependencies]\nhorizon-world = { path = "../horizon-world" }\n'
+                                             'horizon-core = { path = "../horizon-core" }\n'),
+        'crates/horizon-client/src/lib.rs': '''
+// The game's module reaches the lib as `horizon_client`, as Horizon's binary does.
+extern crate self as horizon_client;
+pub mod game;
+pub mod text {
+    pub struct Text(pub String);
+    impl Text { pub fn literal(s: impl Into<String>) -> Self { Text(s.into()) } }
+}
+pub mod chunk {
+    pub struct Blocks(pub Vec<u32>);
+    impl Blocks {
+        pub fn uniform(&self) -> Option<u32> { self.0.iter().all(|&v| v == self.0[0]).then(|| self.0[0]) }
+    }
+    pub struct Section { pub blocks: Blocks }
+    impl Section {
+        pub fn unpack(&self, out: &mut [u32; 4096]) { out.copy_from_slice(&self.blocks.0); }
+    }
+    pub struct Chunk { pub x: i32, pub z: i32, pub sections: Vec<std::sync::Arc<Section>> }
+    impl Chunk { pub fn min_y(&self) -> i32 { 0 } }
+}
+''',
         'crates/horizon-client/src/game.rs': '''
-use horizon_world::registry::BlockRegistry;
+use horizon_world::registry::{BlockRegistry, BlockStateId};
+use horizon_world::level::Dimension as LevelDimension;
+use horizon_core::position::BlockPos;
+use horizon_client::chunk::Chunk;
 pub mod native_lifecycle {
     pub enum WorldPhase { WorldOpenReady, WorldOpenFailed, WorldCloseFinal, WorldCloseFailed }
 }
+pub mod native_server {
+    pub struct NativeCommand { pub usage: String, pub level: u8 }
+    impl NativeCommand {
+        pub fn op(usage: &str, level: u8) -> Self { Self { usage: usage.to_owned(), level } }
+    }
+    pub struct NativeServerPlayer { pub dimension: String, pub position: [f64; 3] }
+}
 pub mod native_hooks {
-    use super::{Game, native_lifecycle::WorldPhase};
+    use super::*;
+    use native_lifecycle::WorldPhase;
+    use native_server::{NativeCommand, NativeServerPlayer};
+    impl GameLevel<'_> {
+        pub fn native_block_changed(&self, dimension: LevelDimension, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
+            let _ = (dimension, pos, old, new);
+        }
+    }
     impl Game<'_> {
         pub fn native_world_lifecycle(&mut self, phase: WorldPhase, error_text: &str) {
             let _ = (phase, error_text);
             *self.calls += 1;
         }
+        pub fn native_chunk_load(&mut self, dimension: &str, chunk: &Chunk) { let _ = (dimension, chunk); }
+        pub fn native_chunk_unload(&mut self, dimension: &str, chunk: &Chunk) { let _ = (dimension, chunk); }
+        pub fn native_level_tick_post(&mut self, dimension: &str) { let _ = dimension; }
+        pub fn native_register_commands(&mut self, commands: &mut Vec<NativeCommand>) { let _ = commands; }
+        pub fn native_perform_command(&mut self, player: &NativeServerPlayer, command: &str, ran: &mut bool) {
+            let _ = (player, command, ran);
+        }
+        pub fn native_acting_player(&self) -> Option<NativeServerPlayer> {
+            Some(NativeServerPlayer { dimension: "minecraft:overworld".into(), position: [0.5, 64.0, 0.5] })
+        }
+        pub fn native_feedback(&mut self, line: horizon_client::text::Text) { self.said.push(line.0); }
+        pub fn native_run_command(&mut self, line: &str) -> bool { self.said.push(line.to_owned()); true }
     }
 }
 pub struct Assets { pub registry: &'static BlockRegistry }
 pub struct Pack { pub assets: Assets }
-pub struct Game<'a> { pub pack: Pack, pub calls: &'a mut u32 }
-#[test] fn world_open_finds_create_states_and_close_forgets_them() {
+pub struct Game<'a> { pub pack: Pack, pub calls: &'a mut u32, pub said: Vec<String> }
+pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
+#[test] fn every_hook_reaches_the_engine() {
     use horizon_world::registry::BlockState;
-    let names = ["minecraft:air", "minecraft:stone", "create:shaft", "create:shaft"];
-    let registry = Box::leak(Box::new(BlockRegistry {
-        states: names.iter().map(|n| BlockState { name: n.to_string() }).collect(),
-    }));
+    use std::collections::BTreeMap;
+    let props = |k: &str, v: &str| BTreeMap::from([(k.to_owned(), v.to_owned())]);
+    let mut states = vec![
+        BlockState { name: "minecraft:air".into(), properties: BTreeMap::new() },
+        BlockState { name: "minecraft:stone".into(), properties: BTreeMap::new() },
+    ];
+    // 2: shaft along x; 3: creative motor facing east.
+    states.push(BlockState { name: "create:shaft".into(), properties: props("axis", "x") });
+    states.push(BlockState { name: "create:creative_motor".into(), properties: props("facing", "east") });
+    let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
-    let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls };
+    let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![] };
     game.native_world_lifecycle(native_lifecycle::WorldPhase::WorldOpenReady, "");
     assert_eq!(create_engine::states::index(2), Some(0));
-    assert_eq!(create_engine::states::index(1), None);
+    // A column with a motor at (0, 0, 0) and a shaft at (1, 0, 0).
+    let mut blocks = vec![0u32; 4096];
+    blocks[0] = 3;
+    blocks[1] = 2;
+    let chunk = Chunk { x: 0, z: 0, sections: vec![std::sync::Arc::new(horizon_client::chunk::Section {
+        blocks: horizon_client::chunk::Blocks(blocks) })] };
+    game.native_chunk_load("minecraft:overworld", &chunk);
+    // A shaft placed later at (2, 0, 0), through the hot hook.
+    let level = GameLevel { registry };
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 2, y: 0, z: 0 }, BlockStateId(0), BlockStateId(2));
+    game.native_level_tick_post("minecraft:overworld");
+    let mut commands = Vec::new();
+    game.native_register_commands(&mut commands);
+    assert_eq!(commands.len(), 1);
+    let player = game.native_acting_player().unwrap();
+    let mut ran = false;
+    game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
+    assert!(ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("create speed at 2 0 0: 16 rpm"));
+    game.native_chunk_unload("minecraft:overworld", &chunk);
+    let mut ran = false;
+    game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("create speed at 1 0 0: not kinetic"));
     game.native_world_lifecycle(native_lifecycle::WorldPhase::WorldCloseFinal, "");
     assert_eq!(create_engine::states::index(2), None);
     assert_eq!(calls, 2, "the original body still runs");
 }
 ''',
-        'native-hooks.json': json.dumps({'hooks': [{'name': 'world_lifecycle', 'version': 1,
-            'target': "horizon_client::game::native_hooks::Game<'_>::native_world_lifecycle"}]}),
+        'native-hooks.json': json.dumps({'hooks': [{'name': n, 'version': 1, 'target': t} for n, t in hooks]}),
         '.horizon-revision': horizon.PIN + '\n',
     }
     for rel, text in files.items():
