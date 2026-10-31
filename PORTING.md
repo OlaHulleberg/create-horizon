@@ -4,17 +4,20 @@ Source of truth for behaviour: this repo's Java tree (`src/`, branch `main`, Neo
 Target: a horizon-mixins native bundle in `horizon/`, plus new hook points upstreamed to Horizon on
 `/home/techi/repos/horizon` branch `feat/create-hooks` (based on `9d979ca`, `NATIVE_HOOKS_API` 40).
 
-## Licensing (read before copying anything)
+## Licensing
 
-- Create **code** is MIT. Horizon's CONTRIBUTING allows reading MIT code since 30 Oct 2026, but
-  `docs/modpacks.md` (Licences, rule 4) still says ports are written from behaviour, data and public docs,
-  never from reading mod code. See "Spec sources" for which applies.
-  Keep Create's MIT notice in `LICENSE`/`THIRD_PARTY_NOTICES`.
-- Create **assets** (`src/main/resources/assets/`, textures, models, lang, sounds) are **All Rights Reserved**:
-  never commit them here or in Horizon. Load them at runtime from the player's own Create jar
-  (as `horizon-port-pack` carries data from jars), or ship placeholder art.
-- Registrate (MPL-2.0) and any GPL/LGPL addon source are off limits, even to read. Flywheel/Ponder:
-  check each LICENSE at the pinned commit before reading.
+Create's licence (`LICENSE.md` at upstream Create; the file isn't in this repo's initial commit) splits the tree in two:
+
+- **MIT: everything outside `src/main/resources/assets/`.** That covers all the Java code and everything under
+  `src/generated/`, generated blockstates, models and lang included. Read it, translate it, copy it, change it
+  as needed. The one condition: keep Create's copyright and MIT notice with the port (add it to this folder's
+  `LICENSE` / `THIRD_PARTY_NOTICES` in phase 0).
+- **All Rights Reserved: `src/main/resources/assets/`**: textures, hand-written models, sounds, shaders, ponder
+  and its lang files. Don't commit or ship these. The prepare step reads them from the player's own Create
+  jar at install time.
+- Third-party libraries keep their own licences. Registrate (MPL-2.0) isn't needed. Horizon's CONTRIBUTING
+  doesn't allow MPL/GPL/LGPL source, so stay out of it for anything that goes upstream. Check Flywheel's and
+  Ponder's LICENSE before reusing either.
 
 ## Size
 
@@ -66,34 +69,36 @@ Each is its own small Horizon PR (< ~500 lines, NeoForge-named per docs/native-h
    saves. Today `ModBlockEntity` is `{id: String, nbt: Compound, items, data}` and is ticked through that
    compound (`game/native_hooks.rs` `tick_mod_block_entity`, `save.rs`), with no load/unload/save hook.
 
-## Spec sources (decided 2026-10-31)
+## Using Create's Java
 
-The Java in `../src` is a **read-only spec**: read it one feature at a time for rules and numbers (for example
-the stress values in `CStress.java`, the speeds in `CKinetics.java`), then write Horizon's own data-oriented
-Rust design. Don't translate its classes, behaviours, inheritance or NBT layout. Prefer the MIT data files
-over the Java wherever both hold a fact. Create's MIT code permits this, as does Horizon CONTRIBUTING since 30 Oct.
+The Java in `../src` is MIT: translate it directly wherever it fits, for rules, numbers, formulas and
+algorithms (stress values in `CStress.java`, speeds in `CKinetics.java`, recipe processing, contraption
+assembly, track geometry...). The only reason to depart from it is speed. Where Create's runtime structure is
+slow (below), keep its behaviour and restructure the data. Where a fact is in both the data files and the
+Java, read it from the data, which the build-time compiler can turn into tables.
 
 ## Performance architecture
 
-The port is a Rust rewrite in Horizon's spirit, not a translation of Create's Java. No JVM, no Java oracle
-and no Java code runs at build time or at play time. Create's Java design (one ticking object per block,
-behaviours found by lookup, state as NBT, renderers rebuilding vertices) is never copied.
+The port runs no Java: no JVM and no Java oracle, at build time or at play time. Behaviour comes from
+Create; the runtime layout is Horizon's. Four Create runtime patterns are replaced where they cost time: one
+ticking object per block, behaviours looked up per tick, NBT as live state, and renderers rebuilding vertices
+every frame.
 
 ### No Java, anywhere
 
 - **Play time.** Everything is Rust that horizon-mixins compiles into the game: plain inlined calls,
   no FFI, no scripting, no reflection.
-- **Data at build time.** Create's generated data is MIT (`src/generated/resources/data`, about 4.9k files:
+- **Data at build time.** Everything under `src/generated/` is MIT (about 7.2k files, data and generated assets:
   1881 recipes, 640 loot tables, 185 tags, 643 `.wiki/block_info` files with hardness, blast resistance,
-  stack size, waterlogging). A small Rust tool, `create-data`, reads it once and writes a typed table:
+  stack size, waterlogging, 643 blockstates, 1921 generated models). It can be committed and embedded. A small Rust tool, `create-data`, reads it once and writes a typed table:
   a `Kind` enum per Create block, and dense arrays for its properties, kinetic role and part models.
   The game does no JSON parsing for anything a data pack can't change.
 - **Data a world can change** (recipes, tags, loot) stays data-driven. Vanilla recipe types go into the
   content-mod layer Horizon already loads. Create's own types (crushing, milling, pressing, mixing, ...: 20
   folders) come from API 36's `native_recipes_of_type`. They are parsed once per load or `/reload` into typed
   tables indexed by input item, and never read again as JSON during a tick.
-- **Assets** (`src/main/resources/assets/`, 1294 textures, 841 hand-written models, sounds, lang) are All
-  Rights Reserved. A one-time prepare step reads them as a zip from the player's own Create jar. Reading a
+- **ARR assets** (`src/main/resources/assets/`: 1294 textures, 841 hand-written models, sounds, shaders) are
+  the only files that can't ship. A one-time prepare step reads them as a zip from the player's own Create jar. Reading a
   zip runs no Java. It writes the result into the content-mod resource layer, so Horizon bakes them into its
   atlas exactly as it does vanilla's, and the part meshes are baked once into GPU buffers.
 
@@ -152,7 +157,7 @@ behaviours found by lookup, state as NBT, renderers rebuilding vertices) is neve
 
 0. Setup: rename template (`create`), repin to `9d979ca`, stage+check+test green. Build `create-data`,
    the build-time data compiler (below), and the asset prepare step from the player's Create jar
-   (no ARR assets in git). Add a benchmark world and record a baseline with Horizon's `--benchmark`.
+   (nothing from `src/main/resources/assets/` in git); add Create's MIT notice. Add a benchmark world and record a baseline with Horizon's `--benchmark`.
 1. Static content: every decoration/material block and item (andesite alloy, brass, casings, stone types,
    windows, ...) with models, loot, tags, vanilla-type recipes.
 2. Kinetic core: rotation propagation graph, speed/direction, stress units & capacity, overstress;
