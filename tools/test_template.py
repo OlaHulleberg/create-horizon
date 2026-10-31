@@ -64,9 +64,10 @@ pub mod position {
         'crates/horizon-world/Cargo.toml': '[package]\nname = "horizon-world"\nversion = "0.1.0"\nedition = "2024"\n',
         'crates/horizon-world/src/lib.rs': '''
 pub mod nbt {
-    #[derive(Clone, PartialEq, Debug)] pub enum Tag { IntArray(Vec<i32>), Compound(Compound) }
+    #[derive(Clone, PartialEq, Debug)] pub enum Tag { IntArray(Vec<i32>), Compound(Compound), List(Vec<Tag>), String(JavaString) }
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)] pub struct JavaString(String);
     impl From<&str> for JavaString { fn from(s: &str) -> Self { JavaString(s.to_owned()) } }
+    impl JavaString { pub fn to_string_lossy(&self) -> String { self.0.clone() } }
     pub type Compound = std::collections::BTreeMap<JavaString, Tag>;
 }
 pub mod level {
@@ -472,6 +473,15 @@ impl Behaviours {
     let belts: Vec<Vec<u8>> = game.sent.iter().filter(|m| m.1 == "create:belt").map(|m| m.2.clone()).collect();
     assert!(!belts.is_empty(), "clients see the belt's items");
     for m in &belts { game.native_net_from_server("create:belt", m); }
+    // A stack still on the belt is saved with the chunk of its controller.
+    let mut more = horizon_client::items::ItemStack { item: "minecraft:copper_ingot".into(), count: 2, damage: 0, extra: None };
+    game.native_update_entity_after_fall_on([10, 0, 10], &mut more, [10.5, 0.8125, 10.5]);
+    for _ in 0..3 { game.native_level_tick_post("minecraft:overworld"); }
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [0, 0], &mut data);
+    let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create".into()) else { panic!("no create data") };
+    let Some(horizon_world::nbt::Tag::List(saved)) = own.get(&"belts".into()) else { panic!("no belts saved: {own:?}") };
+    assert_eq!(saved.len(), 1);
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

@@ -124,9 +124,11 @@ pub(super) fn chunk_load(
     };
     // Settings saved with the column (`chunk_data_save`), before its blocks are found.
     let saved = settings_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let belts = belts_from_nbt(Game::native_chunk_data(chunk, "create"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.load_settings(dim, saved.into_iter());
+        w.load_belt_items(dim, belts.into_iter());
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
                 && states::index(single).is_none()
@@ -415,6 +417,89 @@ fn settings_from_nbt(data: Option<&horizon_world::nbt::Compound>) -> Vec<([i32; 
         .collect()
 }
 
+/// Belts' items as saved (`BeltInventory.write`): for each belt its controller (`pos`), each
+/// item's numbers (position and side offset as float bits, angle, count, locked) and its id.
+fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)]) -> horizon_world::nbt::Tag {
+    use horizon_world::nbt::{Compound, Tag};
+    Tag::List(
+        belts
+            .iter()
+            .map(|(c, inv)| {
+                let mut b = Compound::new();
+                b.insert("pos".into(), Tag::IntArray(c.to_vec()));
+                let numbers = inv
+                    .items
+                    .iter()
+                    .flat_map(|i| {
+                        [
+                            i.position.to_bits() as i32,
+                            i.side_offset.to_bits() as i32,
+                            i.angle,
+                            i32::from(i.count),
+                            i32::from(i.locked),
+                        ]
+                    })
+                    .collect();
+                b.insert("items".into(), Tag::IntArray(numbers));
+                b.insert(
+                    "ids".into(),
+                    Tag::List(
+                        inv.items
+                            .iter()
+                            .map(|i| Tag::String(i.item.as_str().into()))
+                            .collect(),
+                    ),
+                );
+                b.insert("positive".into(), Tag::IntArray(vec![i32::from(inv.positive)]));
+                Tag::Compound(b)
+            })
+            .collect(),
+    )
+}
+
+fn belts_from_nbt(
+    data: Option<&horizon_world::nbt::Compound>,
+) -> Vec<([i32; 3], create_engine::belt::Inventory)> {
+    use horizon_world::nbt::Tag;
+    let Some(Tag::List(list)) = data.and_then(|d| d.get(&"belts".into())) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|b| {
+            let Tag::Compound(b) = b else { return None };
+            let Some(Tag::IntArray(pos)) = b.get(&"pos".into()) else {
+                return None;
+            };
+            let Some(Tag::IntArray(numbers)) = b.get(&"items".into()) else {
+                return None;
+            };
+            let Some(Tag::List(ids)) = b.get(&"ids".into()) else {
+                return None;
+            };
+            let positive = matches!(b.get(&"positive".into()), Some(Tag::IntArray(v)) if v.first() == Some(&1));
+            let items = numbers
+                .chunks_exact(5)
+                .zip(ids)
+                .filter_map(|(n, id)| {
+                    let Tag::String(id) = id else { return None };
+                    let mut item = create_engine::belt::Item::new(
+                        &id.to_string_lossy(),
+                        n[3].clamp(1, 255) as u8,
+                        n[2],
+                        false,
+                    );
+                    item.position = f32::from_bits(n[0] as u32);
+                    item.side_offset = f32::from_bits(n[1] as u32);
+                    item.locked = n[4] != 0;
+                    Some(item)
+                })
+                .collect();
+            let c = [*pos.first()?, *pos.get(1)?, *pos.get(2)?];
+            Some((c, create_engine::belt::Inventory::from_saved(items, positive)))
+        })
+        .collect()
+}
+
 /// A chunk is being saved: Create's settings in it, as NBT (the only time it writes NBT).
 pub(super) fn chunk_data_save(
     dimension: &str,
@@ -425,16 +510,22 @@ pub(super) fn chunk_data_save(
         return;
     };
     let settings = with_world(|w| w.column_settings(dim, chunk[0], chunk[1])).unwrap_or_default();
-    if settings.is_empty() {
+    let belts = with_world(|w| w.column_belts(dim, chunk[0], chunk[1])).unwrap_or_default();
+    if settings.is_empty() && belts.is_empty() {
         data.remove(&"create".into());
         return;
     }
-    let motors: Vec<i32> = settings
-        .iter()
-        .flat_map(|(p, rpm)| [p[0], p[1], p[2], *rpm])
-        .collect();
     let mut own = horizon_world::nbt::Compound::new();
-    own.insert("motors".into(), horizon_world::nbt::Tag::IntArray(motors));
+    if !settings.is_empty() {
+        let motors: Vec<i32> = settings
+            .iter()
+            .flat_map(|(p, rpm)| [p[0], p[1], p[2], *rpm])
+            .collect();
+        own.insert("motors".into(), horizon_world::nbt::Tag::IntArray(motors));
+    }
+    if !belts.is_empty() {
+        own.insert("belts".into(), belts_to_nbt(&belts));
+    }
     data.insert("create".into(), horizon_world::nbt::Tag::Compound(own));
 }
 
@@ -2095,6 +2186,9 @@ fn tick_belts(game: &mut Game<'_>, dimension: &str, dim: usize) {
         let mut v = std::mem::take(&mut w.dims[dim].belt_changes);
         v.sort();
         v.dedup();
+        for c in &v {
+            w.mark_unsaved(dim, *c);
+        }
         v
     })
     .unwrap_or_default();
