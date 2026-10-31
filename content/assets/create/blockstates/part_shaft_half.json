@@ -1,12 +1,5 @@
 {
   "variants": {
-    "facing=south": {
-      "model": "create:block/shaft_half"
-    },
-    "facing=west": {
-      "model": "create:block/shaft_half",
-      "y": 90
-    },
     "facing=north": {
       "model": "create:block/shaft_half",
       "y": 180
@@ -14,6 +7,13 @@
     "facing=east": {
       "model": "create:block/shaft_half",
       "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/shaft_half"
+    },
+    "facing=west": {
+      "model": "create:block/shaft_half",
+      "y": 90
     },
     "facing=up": {
       "model": "create:block/shaft_half",

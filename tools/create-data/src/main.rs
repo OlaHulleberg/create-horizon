@@ -114,8 +114,8 @@ fn compile(create: &Path, out: &Path) {
     // Partial models as hidden blocks, with their own blockstates.
     let states_dir = out.join("content/assets/create/blockstates");
     let _ = fs::remove_dir_all(&states_dir);
-    for (name, model) in blocks::PARTIALS {
-        let (decl, states) = blocks::partial_files(model);
+    for (name, model, points) in blocks::PARTIALS {
+        let (decl, states) = blocks::partial_files(model, points);
         write(&decl_dir.join(format!("block/{name}.json")), &pretty(&decl));
         write(&states_dir.join(format!("{name}.json")), &pretty(&states));
     }

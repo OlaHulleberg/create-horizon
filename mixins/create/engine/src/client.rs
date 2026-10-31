@@ -14,6 +14,8 @@ pub enum Model {
     Own,
     Shaft(Axis),
     ShaftHalf(Dir),
+    /// The hand crank's handle (`AllPartialModels.HAND_CRANK_HANDLE`), turned to a face.
+    CrankHandle(Dir),
 }
 
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
@@ -96,6 +98,23 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
         Block::CreativeMotor => s
             .facing
             .map(|f| vec![half(0, f, speeds[0])])
+            .unwrap_or_default(),
+        // HandCrankVisual: its shaft half into the block it hangs from, and the handle facing
+        // away from it, both turning with the crank.
+        Block::HandCrank => s
+            .facing
+            .map(|f| {
+                vec![
+                    half(0, f.opposite(), speeds[0]),
+                    Draw {
+                        slot: 1,
+                        model: Model::CrankHandle(f.opposite()),
+                        axis: f.axis(),
+                        rpm: speeds[0],
+                        phase: 0.0,
+                    },
+                ]
+            })
             .unwrap_or_default(),
         _ => Vec::new(),
     }
@@ -210,6 +229,19 @@ mod tests {
             11.25
         );
         assert_eq!(rotation_offset(Block::Cogwheel, Axis::Z, [-1, 0, 5]), 0.0);
+    }
+
+    #[test]
+    fn a_hand_crank_shows_its_half_shaft_and_handle() {
+        let s = StateInfo {
+            facing: Some(Dir::West),
+            ..StateInfo::default()
+        };
+        let d = draws(Block::HandCrank, &s, [0, 0, 0], [-32.0, 0.0]);
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].model, Model::ShaftHalf(Dir::East));
+        assert_eq!(d[1].model, Model::CrankHandle(Dir::East));
+        assert!(d.iter().all(|x| x.axis == Axis::X && x.rpm == -32.0));
     }
 
     #[test]

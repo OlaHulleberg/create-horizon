@@ -80,6 +80,9 @@ pub struct Dimension {
     states: HashMap<[i32; 3], u32>,
     /// Columns whose saved data changed, to mark unsaved when the dimension is in place.
     unsaved: Vec<(i32, i32)>,
+    /// Hand cranks being turned: ticks left (`HandCrankBlockEntity.inUse`). Empty at rest, so
+    /// cranks cost nothing per tick unless turned.
+    cranks: HashMap<[i32; 3], u8>,
     /// Blocks whose redstone power may have changed (a clutch or gearshift that was placed or
     /// whose neighbour changed), checked after the level's tick.
     redstone: Vec<[i32; 3]>,
@@ -155,6 +158,7 @@ impl CreateWorld {
             let d = &mut self.dims[dim];
             d.kinetics.remove(pos);
             d.states.remove(&pos);
+            d.cranks.remove(&pos);
             if d.settings.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
@@ -186,6 +190,7 @@ impl CreateWorld {
             for pos in list {
                 d.kinetics.remove(pos);
                 d.states.remove(&pos);
+                d.cranks.remove(&pos);
             }
         }
         d.settings.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -229,7 +234,16 @@ impl CreateWorld {
         }
         let new = new.clamp(-256, 256) as f32;
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-        self.set_settings(dim, pos, state, Settings { motor_rpm: new });
+        let old = d.settings.get(&pos).copied().unwrap_or_default();
+        self.set_settings(
+            dim,
+            pos,
+            state,
+            Settings {
+                motor_rpm: new,
+                ..old
+            },
+        );
         Some(new)
     }
 
@@ -239,10 +253,58 @@ impl CreateWorld {
             .settings
             .iter()
             .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+            .filter(|(p, _)| {
+                self.dims[dim]
+                    .states
+                    .get(*p)
+                    .and_then(|s| self.table.get(*s))
+                    .map(|(b, _)| b)
+                    == Some(Block::CreativeMotor)
+            })
             .map(|(p, s)| (*p, s.motor_rpm as i32))
             .collect();
         out.sort();
         out
+    }
+
+    /// A player turns the hand crank at `pos` (`HandCrankBlockEntity.turn`): it generates for
+    /// the next 10 ticks, backwards when `back` (sneaking). False when there is no crank there.
+    pub fn turn_crank(&mut self, dim: usize, pos: [i32; 3], back: bool) -> bool {
+        let Some(&state) = self.dims[dim].states.get(&pos) else {
+            return false;
+        };
+        if self.table.get(state).map(|(b, _)| b) != Some(Block::HandCrank) {
+            return false;
+        }
+        let d = &mut self.dims[dim];
+        d.cranks.insert(pos, 10);
+        let crank = if back { -1 } else { 1 };
+        let old = d.settings.get(&pos).copied().unwrap_or_default();
+        if old.crank != crank {
+            self.set_settings(dim, pos, state, Settings { crank, ..old });
+        }
+        true
+    }
+
+    /// One tick of the cranks being turned: those whose time ran out stop.
+    pub fn tick_cranks(&mut self, dim: usize) {
+        if self.dims[dim].cranks.is_empty() {
+            return;
+        }
+        let mut stopped = Vec::new();
+        for (pos, left) in self.dims[dim].cranks.iter_mut() {
+            *left -= 1;
+            if *left == 0 {
+                stopped.push(*pos);
+            }
+        }
+        for pos in stopped {
+            let d = &mut self.dims[dim];
+            d.cranks.remove(&pos);
+            if let (Some(&state), Some(old)) = (d.states.get(&pos), d.settings.get(&pos).copied()) {
+                self.set_settings(dim, pos, state, Settings { crank: 0, ..old });
+            }
+        }
     }
 
     /// Settings saved with a column, before its blocks are scanned.
@@ -252,6 +314,7 @@ impl CreateWorld {
                 pos,
                 Settings {
                     motor_rpm: rpm as f32,
+                    ..Settings::default()
                 },
             );
         }
@@ -332,7 +395,15 @@ mod tests {
         assert_eq!(w.speed(0, [1, 64, 0]), Some(16.0));
         assert_eq!(w.tick(0, &mut e), SolveStats::default(), "steady: no work");
         // The motor's speed setting re-solves it.
-        w.set_settings(0, [0, 64, 0], motor_east, Settings { motor_rpm: 64.0 });
+        w.set_settings(
+            0,
+            [0, 64, 0],
+            motor_east,
+            Settings {
+                motor_rpm: 64.0,
+                ..Settings::default()
+            },
+        );
         w.tick(0, &mut e);
         assert_eq!(w.speed(0, [1, 64, 0]), Some(64.0));
         // Breaking the motor stops the shaft.
@@ -399,6 +470,46 @@ mod tests {
         );
         assert_eq!(w.powered(11), Some(true));
         assert_eq!(w.powered(12), None);
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_turned_crank_drives_for_ten_ticks() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:hand_crank",
+                vec![("facing", "west"), ("waterlogged", "false")],
+            ),
+            ("create:shaft", vec![("axis", "x")]),
+        ];
+        states::set_range(10, 2);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        // Facing west, hanging from the block to its east: the shaft at x + 1.
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, [1, 0, 0], 0, 11);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0));
+        assert!(w.turn_crank(0, [0, 0, 0], false));
+        w.tick(0, &mut Vec::new());
+        // convertToDirection(32, west): -32 along x.
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(-32.0));
+        for _ in 0..9 {
+            w.tick_cranks(0);
+        }
+        w.tick(0, &mut Vec::new());
+        assert_eq!(
+            w.speed(0, [1, 0, 0]),
+            Some(-32.0),
+            "still turning at tick 9"
+        );
+        w.tick_cranks(0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "stopped after 10 ticks");
+        assert!(!w.turn_crank(0, [1, 0, 0], false), "a shaft is no crank");
         states::clear_range();
     }
 

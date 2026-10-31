@@ -55,13 +55,21 @@ impl StateInfo {
 pub struct Settings {
     /// A creative motor's speed setting (CreativeMotorBlockEntity.DEFAULT_SPEED is 16).
     pub motor_rpm: f32,
+    /// A hand crank being turned: 1, -1 backwards (sneaking), 0 at rest.
+    pub crank: i8,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { motor_rpm: 16.0 }
+        Settings {
+            motor_rpm: 16.0,
+            crank: 0,
+        }
     }
 }
+
+/// `HandCrankBlock.getRotationSpeed`.
+pub const CRANK_RPM: f32 = 32.0;
 
 /// The kinetic parts of a block state: none for a block that is not kinetic, two for a split shaft
 /// (its halves, the second linked to the first).
@@ -122,9 +130,14 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::half(f)
             })
         }),
-        Block::HandCrank => s
-            .facing
-            .map_or([None, None], |f| one(Part::half(f.opposite()))),
+        Block::HandCrank => s.facing.map_or([None, None], |f| {
+            // HandCrankBlock.hasShaftTowards: the face it hangs from; HandCrankBlockEntity
+            // .getGeneratedSpeed: 32 while turned (negated backwards), in its facing's direction.
+            one(Part {
+                generated: convert_to_direction(f32::from(settings.crank) * CRANK_RPM, f),
+                ..Part::half(f.opposite())
+            })
+        }),
         _ => [None, None],
     }
 }
@@ -164,7 +177,14 @@ mod tests {
     fn a_creative_motor_drives_a_shaft_and_a_press_costs_its_stress() {
         let mut k = Kinetics::new();
         let motor = info(&[("facing", "east")]);
-        let [m, _] = parts(Block::CreativeMotor, &motor, &Settings { motor_rpm: 32.0 });
+        let [m, _] = parts(
+            Block::CreativeMotor,
+            &motor,
+            &Settings {
+                motor_rpm: 32.0,
+                ..Settings::default()
+            },
+        );
         k.set([0, 0, 0], 0, m.unwrap());
         let shaft = info(&[("axis", "x")]);
         k.set(

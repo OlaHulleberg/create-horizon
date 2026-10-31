@@ -306,7 +306,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
     // motors keep their model and show their shafts as parts.
     let animated = matches!(
         b.name.as_str(),
-        "shaft" | "powered_shaft" | "cogwheel" | "large_cogwheel"
+        "shaft" | "powered_shaft" | "cogwheel" | "large_cogwheel" | "hand_crank"
     );
     Some(Decision::Declared {
         template,
@@ -321,11 +321,42 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
 /// Create's partial models (`AllPartialModels`) that turn as parts, as hidden blocks of the
 /// content mod so Horizon bakes them like any block model: `(block, model, facing variants)`.
 /// Nobody can hold or place them (no item, invisible).
-pub const PARTIALS: [(&str, &str); 1] = [("part_shaft_half", "create:block/shaft_half")];
+/// The third value is the face the model points to as written (`shaft_half` points south, the
+/// crank handle north).
+pub const PARTIALS: [(&str, &str, &str); 2] = [
+    ("part_shaft_half", "create:block/shaft_half", "south"),
+    (
+        "part_hand_crank_handle",
+        "create:block/hand_crank/handle",
+        "north",
+    ),
+];
 
-/// A partial's declaration and blockstate: one state per facing, the model (which points south)
-/// turned to it as a blockstate variant turns a model.
-pub fn partial_files(model: &str) -> (Value, Value) {
+/// The blockstate rotation (x, y) that turns a model pointing `from` to point `to`: y turns
+/// clockwise seen from above (north, east, south, west), x turns about the x axis.
+fn rotation(from: &str, to: &str) -> (i32, i32) {
+    let h = ["north", "east", "south", "west"];
+    let at = |d: &str| h.iter().position(|x| *x == d);
+    match (at(from), to) {
+        (Some(f), "up") => (
+            if f == 0 { 270 } else { 90 },
+            if f % 2 == 0 { 0 } else { 90 * f as i32 + 180 } % 360,
+        ),
+        (Some(f), "down") => (
+            if f == 0 { 90 } else { 270 },
+            if f % 2 == 0 { 0 } else { 90 * f as i32 } % 360,
+        ),
+        (Some(f), t) => (
+            0,
+            ((at(t).unwrap_or(0) as i32 - f as i32).rem_euclid(4)) * 90,
+        ),
+        _ => (0, 0),
+    }
+}
+
+/// A partial's declaration and blockstate: one state per facing, the model turned to it as a
+/// blockstate variant turns a model.
+pub fn partial_files(model: &str, points: &str) -> (Value, Value) {
     let decl = json!({
         "template": "minecraft:stone",
         "item": false,
@@ -343,15 +374,12 @@ pub fn partial_files(model: &str) -> (Value, Value) {
         }
         Value::Object(v)
     };
-    let states = json!({ "variants": {
-        "facing=south": turn(0, 0),
-        "facing=west": turn(0, 90),
-        "facing=north": turn(0, 180),
-        "facing=east": turn(0, 270),
-        "facing=up": turn(90, 0),
-        "facing=down": turn(270, 0),
-    }});
-    (decl, states)
+    let mut variants = Map::new();
+    for to in ["north", "east", "south", "west", "up", "down"] {
+        let (x, y) = rotation(points, to);
+        variants.insert(format!("facing={to}"), turn(x, y));
+    }
+    (decl, json!({ "variants": variants }))
 }
 
 /// Blocks whose behaviour belongs to a later phase: kinetic, processing, logistics, fluids...
@@ -434,6 +462,20 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partials_turn_to_every_face() {
+        // shaft_half points south: west is y 90, north y 180, up x 90.
+        assert_eq!(rotation("south", "south"), (0, 0));
+        assert_eq!(rotation("south", "west"), (0, 90));
+        assert_eq!(rotation("south", "north"), (0, 180));
+        assert_eq!(rotation("south", "up"), (90, 0));
+        assert_eq!(rotation("south", "down"), (270, 0));
+        // A model pointing north: east is y 90, up is x 270 (as the observer's model).
+        assert_eq!(rotation("north", "east"), (0, 90));
+        assert_eq!(rotation("north", "up"), (270, 0));
+        assert_eq!(rotation("north", "down"), (90, 0));
+    }
 
     #[test]
     fn reads_variant_and_multipart_properties() {

@@ -42,10 +42,13 @@ def write_fixture(original, root):
         ('wheel', "horizon_client::game::native_hooks::Game<'_>::native_wheel"),
         ('chunk_data_save', "horizon_client::game::native_hooks::Game<'_>::native_chunk_data_save"),
         ('neighbor_changed', "horizon_client::game::native_hooks::GameLevel<'_>::native_neighbor_changed"),
+        ('right_click_block', "horizon_client::game::native_hooks::Game<'_>::native_right_click_block"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
-                       '"crates/horizon-client"]\nresolver = "2"\n'),
+                       '"crates/horizon-client", "crates/winit"]\nresolver = "2"\n'),
+        'crates/winit/Cargo.toml': '[package]\nname = "winit"\nversion = "0.1.0"\nedition = "2024"\n',
+        'crates/winit/src/lib.rs': 'pub mod keyboard { #[derive(Hash, PartialEq, Eq)] pub enum KeyCode { ShiftLeft } }\n',
         'crates/horizon-core/Cargo.toml': '[package]\nname = "horizon-core"\nversion = "0.1.0"\nedition = "2024"\n',
         'crates/horizon-core/src/lib.rs': '''
 pub mod position {
@@ -84,7 +87,8 @@ pub mod registry {
 ''',
         'crates/horizon-client/Cargo.toml': ('[package]\nname = "horizon-client"\nversion = "0.1.0"\nedition = "2024"\n'
                                              '[dependencies]\nhorizon-world = { path = "../horizon-world" }\n'
-                                             'horizon-core = { path = "../horizon-core" }\n'),
+                                             'horizon-core = { path = "../horizon-core" }\n'
+                                             'winit = { path = "../winit" }\n'),
         'crates/horizon-client/src/lib.rs': '''
 // The game's module reaches the lib as `horizon_client`, as Horizon's binary does.
 extern crate self as horizon_client;
@@ -133,6 +137,12 @@ pub mod native_hooks {
         pub fn native_neighbor_changed(&self, dimension: LevelDimension, pos: BlockPos, state: BlockStateId) {
             let _ = (dimension, pos, state);
         }
+    }
+    impl Game<'_> {
+        pub fn native_right_click_block(&mut self, pos: [i32; 3], face: [i32; 3], canceled: &mut bool) {
+            let _ = (pos, face, canceled);
+        }
+        pub fn spectator(&self) -> bool { false }
     }
     impl Game<'_> {
         pub fn native_world_lifecycle(&mut self, phase: WorldPhase, error_text: &str) {
@@ -206,10 +216,13 @@ impl World {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId { BlockStateId(*self.blocks.get(&[x, y, z]).unwrap_or(&0)) }
 }
 pub struct Hit { pub pos: [i32; 3] }
+pub struct Player { pub exhaustion: f32 }
+impl Player { pub fn cause_food_exhaustion(&mut self, amount: f32) { self.exhaustion += amount; } }
 pub struct Game<'a> {
     pub pack: Pack, pub calls: &'a mut u32, pub said: Vec<String>, pub world: World,
     pub sent: Vec<(u128, String, Vec<u8>)>, pub parts: Vec<(u32, [i32; 3], u8, f32)>,
     pub aim: Option<[i32; 3]>, pub unsaved: Vec<[i32; 2]>,
+    pub creative: bool, pub player: Option<Player>, pub keys: std::collections::HashSet<winit::keyboard::KeyCode>,
 }
 pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
 pub struct Behaviours;
@@ -234,7 +247,8 @@ impl Behaviours {
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
-        world: World { blocks: Default::default() }, sent: vec![], parts: vec![], aim: None, unsaved: vec![] };
+        world: World { blocks: Default::default() }, sent: vec![], parts: vec![], aim: None, unsaved: vec![],
+        creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default() };
     game.native_world_lifecycle(native_lifecycle::WorldPhase::WorldOpenReady, "");
     assert_eq!(create_engine::states::index(2), Some(0));
     // A column with a motor at (0, 0, 0) and a shaft at (1, 0, 0).

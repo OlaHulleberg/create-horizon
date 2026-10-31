@@ -154,6 +154,7 @@ pub(crate) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     let Some(dim) = dimension_index(dimension) else {
         return;
     };
+    with_world(|w| w.tick_cranks(dim));
     // Split shafts follow redstone (ClutchBlock.neighborChanged): set `powered` before solving,
     // so the change turns the network in this tick's solve.
     for pos in with_world(|w| w.take_redstone(dim)).unwrap_or_default() {
@@ -255,6 +256,33 @@ pub(crate) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     })
     .unwrap_or_default();
     send(game, &[player], &updates);
+}
+
+/// A player right-clicks a block (`HandCrankBlock.useItemOn`): a hand crank turns for 10 ticks,
+/// backwards while sneaking, and tires the player (`crankHungerMultiplier` 0.01 per RPM).
+pub(crate) fn right_click_block(game: &mut Game<'_>, pos: [i32; 3], canceled: &mut bool) {
+    if *canceled || states::index(game.world.block(pos[0], pos[1], pos[2]).0).is_none() {
+        return;
+    }
+    let Some(dim) = game
+        .native_acting_player()
+        .and_then(|p| dimension_index(&p.dimension))
+    else {
+        return;
+    };
+    if game.spectator() {
+        return;
+    }
+    let back = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+    if with_world(|w| w.turn_crank(dim, pos, back)) != Some(true) {
+        return;
+    }
+    *canceled = true;
+    if !game.creative
+        && let Some(p) = game.player.as_mut()
+    {
+        p.cause_food_exhaustion(create_engine::parts::CRANK_RPM * 0.01);
+    }
 }
 
 /// A player scrolled on a block (`create:scroll`: position, steps); what a client sends is
@@ -397,6 +425,7 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
             ["x", "y", "z"][axis_index(a) as usize],
         ),
         Model::ShaftHalf(d) => find("create:part_shaft_half", "facing", dir_name(d)),
+        Model::CrankHandle(d) => find("create:part_hand_crank_handle", "facing", dir_name(d)),
     }
 }
 
