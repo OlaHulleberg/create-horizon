@@ -39,6 +39,8 @@ def write_fixture(original, root):
         ('net_from_client', "horizon_client::game::native_hooks::Game<'_>::native_net_from_client"),
         ('net_from_server', "horizon_client::game::native_hooks::Game<'_>::native_net_from_server"),
         ('tick', "horizon_client::game::native_hooks::Game<'_>::native_tick"),
+        ('wheel', "horizon_client::game::native_hooks::Game<'_>::native_wheel"),
+        ('chunk_data_save', "horizon_client::game::native_hooks::Game<'_>::native_chunk_data_save"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -51,6 +53,12 @@ pub mod position {
 ''',
         'crates/horizon-world/Cargo.toml': '[package]\nname = "horizon-world"\nversion = "0.1.0"\nedition = "2024"\n',
         'crates/horizon-world/src/lib.rs': '''
+pub mod nbt {
+    #[derive(Clone, PartialEq, Debug)] pub enum Tag { IntArray(Vec<i32>), Compound(Compound) }
+    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)] pub struct JavaString(String);
+    impl From<&str> for JavaString { fn from(s: &str) -> Self { JavaString(s.to_owned()) } }
+    pub type Compound = std::collections::BTreeMap<JavaString, Tag>;
+}
 pub mod level {
     #[derive(Clone, Copy)] pub enum Dimension { Overworld, Nether, End }
 }
@@ -133,7 +141,7 @@ pub mod native_hooks {
             let _ = (player, command, ran);
         }
         pub fn native_acting_player(&self) -> Option<NativeServerPlayer> {
-            Some(NativeServerPlayer { uuid: 7, dimension: "minecraft:overworld".into(), position: [0.5, 64.0, 0.5] })
+            Some(NativeServerPlayer { uuid: 7, dimension: "minecraft:overworld".into(), position: [0.5, 2.0, 0.5] })
         }
         pub fn native_server_players(&self) -> Vec<NativeServerPlayer> {
             self.native_acting_player().into_iter().collect()
@@ -157,6 +165,20 @@ pub mod native_hooks {
             self.parts.push((model, block, axis, rpm));
         }
         pub fn native_part_clear(&mut self, key: u64) { let _ = key; }
+        pub fn native_wheel(&mut self, steps: f32, claimed: &mut bool) { let _ = (steps, claimed); }
+        pub fn native_chunk_data_save(&self, dimension: &str, chunk: [i32; 2], data: &mut horizon_world::nbt::Compound) {
+            let _ = (dimension, chunk, data);
+        }
+        pub fn native_chunk_data<'c>(chunk: &'c Chunk, mod_id: &str) -> Option<&'c horizon_world::nbt::Compound> {
+            let _ = (chunk, mod_id);
+            None
+        }
+        pub fn native_mark_chunk_unsaved(&mut self, dimension: &str, chunk: [i32; 2]) -> bool {
+            let _ = dimension;
+            self.unsaved.push(chunk);
+            true
+        }
+        pub fn pick(&self) -> Option<Hit> { self.aim.map(|pos| Hit { pos }) }
         pub fn native_feedback(&mut self, line: horizon_client::text::Text) { self.said.push(line.0); }
         pub fn native_run_command(&mut self, line: &str) -> bool { self.said.push(line.to_owned()); true }
     }
@@ -167,9 +189,11 @@ pub struct World { pub blocks: std::collections::HashMap<[i32; 3], u32> }
 impl World {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId { BlockStateId(*self.blocks.get(&[x, y, z]).unwrap_or(&0)) }
 }
+pub struct Hit { pub pos: [i32; 3] }
 pub struct Game<'a> {
     pub pack: Pack, pub calls: &'a mut u32, pub said: Vec<String>, pub world: World,
     pub sent: Vec<(u128, String, Vec<u8>)>, pub parts: Vec<(u32, [i32; 3], u8, f32)>,
+    pub aim: Option<[i32; 3]>, pub unsaved: Vec<[i32; 2]>,
 }
 pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
 #[test] fn every_hook_reaches_the_engine() {
@@ -186,7 +210,7 @@ pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
-        world: World { blocks: Default::default() }, sent: vec![], parts: vec![] };
+        world: World { blocks: Default::default() }, sent: vec![], parts: vec![], aim: None, unsaved: vec![] };
     game.native_world_lifecycle(native_lifecycle::WorldPhase::WorldOpenReady, "");
     assert_eq!(create_engine::states::index(2), Some(0));
     // A column with a motor at (0, 0, 0) and a shaft at (1, 0, 0).
@@ -206,6 +230,26 @@ pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
     game.world.blocks.insert([2, 0, 0], 2);
     for m in &speeds { game.native_net_from_server("create:kinetics", m); }
     assert!(game.parts.iter().any(|p| p.1 == [2, 0, 0] && p.2 == 0 && p.3 == 16.0), "{:?}", game.parts);
+    // The player scrolls up once on the motor: the client claims the wheel and tells the server,
+    // which speeds the motor up, re-solves, and saves the setting with its chunk.
+    game.world.blocks.insert([0, 0, 0], 3);
+    game.aim = Some([0, 0, 0]);
+    let mut claimed = false;
+    game.native_wheel(1.0, &mut claimed);
+    assert!(claimed);
+    let scroll = game.sent.iter().rev().find(|m| m.1 == "create:scroll").unwrap().2.clone();
+    game.native_net_from_client(7, "create:scroll", &scroll);
+    game.native_level_tick_post("minecraft:overworld");
+    assert_eq!(game.unsaved, vec![[0, 0]]);
+    let me = game.native_acting_player().unwrap();
+    let mut ran = false;
+    game.native_perform_command(&me, "create_debug speed 2 0 0", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("create speed at 2 0 0: 17 rpm"));
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [0, 0], &mut data);
+    let expected = horizon_world::nbt::Tag::Compound(
+        [("motors".into(), horizon_world::nbt::Tag::IntArray(vec![0, 0, 0, 17]))].into_iter().collect());
+    assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
     assert_eq!(commands.len(), 1);
@@ -213,7 +257,7 @@ pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
     assert!(ran);
-    assert_eq!(game.said.last().map(String::as_str), Some("create speed at 2 0 0: 16 rpm"));
+    assert_eq!(game.said.last().map(String::as_str), Some("create speed at 2 0 0: 17 rpm"), "after the scroll");
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

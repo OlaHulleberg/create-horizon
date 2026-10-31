@@ -10,7 +10,7 @@ Target: a horizon-mixins native bundle in `horizon/`, plus new hook points upstr
 |---|---|---|---|
 | 0 Setup | done: bundle `create` on 9d979ca, `create-engine` crate, glue module, `create-data compile/prepare`, MIT notice, perf baseline | stage/check/test/build green; fixture test; headless launch on BMG G21: content loads, mod idles without it | see Budgets |
 | 1 Static content | in progress: 400 of 643 blocks and 35 plain items declared from exact vanilla templates; 1369 recipes, loot, tags, models, textures, lang from the prepare step | headless screenshot: casings, metal blocks, stone palettes, windows, shingles, stairs, slab, ladder, pillar, wall, scaffolding render with Create's textures | idle cost: see Budgets |
-| 2 Kinetic core | in progress: solver (`kinetics.rs`: Create's ratios for shafts, gearbox faces, small/large cogs, split shafts; overpowering, direction conflicts, 256 RPM limit, stress/capacity from CStress), block→part table (`parts.rs`), per-world model (`world.rs`), glue on `block_changed` (hot: two range tests), `chunk_load`/`chunk_unload`, `level_tick_post` (solve only when dirty), `/create_debug speed`; shaft, cogwheels, gearbox, encased shafts/cogs, clutch, gearshift, creative motor, hand crank declared. **Not yet:** rotation visuals (gap 1), motor/crank interaction, redstone on clutch/gearshift, water wheel, chain drives, belts | engine 21 tests; fixture drives every hook into the engine; headless: motor 16 rpm → shafts 16 → gearbox corner +16 → cogs 16/−16 → large cog 8; unload/reload rebuilds the network; opposing motors break the newer one; screenshot of the build | pending |
+| 2 Kinetic core | in progress: solver (`kinetics.rs`: Create's ratios for shafts, gearbox faces, small/large cogs, split shafts; overpowering, direction conflicts, 256 RPM limit, stress/capacity from CStress), block→part table (`parts.rs`), per-world model (`world.rs`), glue on `block_changed` (hot: two range tests), `chunk_load`/`chunk_unload`, `level_tick_post` (solve only when dirty), `/create_debug speed`; turning parts (gap 1): the server sends changed speeds after a solve (`create:kinetics` mod messages, `client.rs` wire format; a joining client asks for all with `sync`), the client shows Create's models as GPU-turned instances (`client.rs`: own model for shafts/cogs, shaft halves for gearbox faces, motor and split shafts; Create's 22.5°/11.25° offsets); shaft, cogwheels, gearbox, encased shafts/cogs, clutch, gearshift, creative motor, hand crank declared. motor speed by mouse wheel on the motor (Create 5's scroll; Create 6's value board needs the overlay gap), saved with its chunk through API 43 (`chunk_data_save`, `horizon:mod_data`) and read back on load — proven: scrolled 16→32 rpm, saved, quit, relaunched, 32 rpm. **Not yet:** hand crank use, redstone on clutch/gearshift, water wheel, windmill, chain drives, belts, goggles' overstress display | engine 26 tests; fixture: chunk scan + hot hook + solve + server→client message → part instance at 16 rpm; headless: motor 16 → shafts 16 → gearbox +16 → cogs 16/−16 → large cog 8; unload/reload; opposing motors break the newer; two screenshots 0.7 s apart show the parts turning | see Budgets |
 | 3-9 | not started | | |
 
 ### How the port is built
@@ -41,7 +41,23 @@ in `benchmarks/perf/`, compared with `tools/perf_table.py`. A difference inside 
 | Start to title (ms) | 845 ± 5 | 1360 (+515) | **open**: content cost, see below |
 | Start to world (ms) | 3748 ± 29 | 4651 (+903) | **open** |
 
-Server tick time during flights is recorded per scenario by `tools/bench_create.py` from Phase 2 on.
+`tools/bench_create.py` (through `/workspace/headless.sh`, uncapped frame rate, VSync off, 12 s flight over the
+scene, 3 runs; the server thread's smoothed tick time over the flight). Reports in `benchmarks/create-*.json`.
+
+The scene is built 30 blocks above the spawn point and checked before measuring (the driver counts its Create blocks
+in 16-row bands: a single `horizon-ctl blocks` reply lists at most 4,096 blocks). `chains` is the control for
+`kinetic`: the same layout in vanilla iron blocks and iron chains (the shaft's template).
+
+| Scenario (2026-10-31, Phase 2, 25 s settle) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1841 ± 157 | 0.530 / 1.028 | 4.047 ± 0.062 | baseline |
+| idle: Create content, no Create blocks | 1944 ± 29 | 0.500 / 0.908 | 4.011 ± 0.040 | within noise of off |
+| chains: the kinetic layout in vanilla blocks | 1935 ± 72 | 0.502 / 0.914 | 4.167 ± 0.083 | control |
+| kinetic: 64 motors × 63 shafts, 4,096 GPU-turned parts, steady | 1856 ± 29 | 0.528 / 0.892 | 3.970 ± 0.058 | frame p50 ≤ chains + 10%, tick ≤ off + 0.25 ms |
+
+A steady network costs no server tick (3.97 ms against 4.05 off and 4.17 for the vanilla control); 4,096 turning parts
+cost 0.026 ms of frame time over the same blocks chunk-meshed. An earlier run of this table measured an empty scene
+(the scene's commands had failed at unloaded positions); the driver now refuses to measure a scene it could not build.
 
 ### Blocked / open
 
@@ -61,7 +77,17 @@ Server tick time during flights is recorded per scenario by `tools/bench_create.
   vanilla-only id list: both refuse Create's tables (Horizon issue; drops themselves work).
 - `horizon-ctl command` runs as the server console, which does not reach mod commands; drive `/create_debug` with
   `horizon-ctl chat "/create_debug ..."`.
-- Gap 1 (instanced part rendering) is next: nothing rotates on screen yet.
+- Gap 1 landed as three Horizon commits: `91ea0acdc` (content `render_shape`), `a0fccb2df` (renderer:
+  `gfx/parts.rs`, `entity.wgsl` `vs_part`: one instanced draw per model, instances uploaded only when their model's
+  revision changes, angle `phase + rpm·6·seconds` on the GPU from the synced game time), `a81b8ef53` (API 42 helpers
+  `native_part_model/set/clear`, light sampled at set and refreshed when a section remeshes). Create's partial models
+  (`AllPartialModels`) are hidden content blocks (`part_*`, invisible, no item) with our own blockstates, so Horizon's
+  model baker handles them; `shaft_half` is the first.
+- Gap 8 is complete: API 41 (`chunk_load`/`chunk_unload`, `0a96593cf`) and API 43 (`chunk_data_save`,
+  `native_chunk_data`, `native_mark_chunk_unsaved`, `d607feed5`). Mod state is typed in memory; NBT is written only
+  when the chunk saves.
+- Mod messages are limited to 32 per tick per player (about 1,600 part updates each); a very large network resolving
+  at once would exceed it. Not handled yet (queue the rest for the next ticks).
 - Zinc ore generation: Create adds it with a NeoForge biome modifier, which Horizon's content mods do not read.
 - Copper shingles/tiles do not weather yet (template `minecraft:andesite`, copper sounds).
 - Food items (bar of chocolate, sweet roll, honeyed apple, chocolate glazed berries) wait for Phase 6.

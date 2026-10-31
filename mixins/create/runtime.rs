@@ -107,8 +107,11 @@ pub(crate) fn chunk_load(
     let Some(dim) = dimension_index(dimension) else {
         return;
     };
+    // Settings saved with the column (`chunk_data_save`), before its blocks are found.
+    let saved = settings_from_nbt(Game::native_chunk_data(chunk, "create"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
+        w.load_settings(dim, saved.into_iter());
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
                 && states::index(single).is_none()
@@ -138,12 +141,15 @@ pub(crate) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
         return;
     };
     let mut events = Vec::new();
-    let Some(removed) = with_world(|w| {
+    let Some((removed, unsaved)) = with_world(|w| {
         w.tick(dim, &mut events);
-        w.dims[dim].kinetics.take_removed()
+        (w.dims[dim].kinetics.take_removed(), w.take_unsaved(dim))
     }) else {
         return;
     };
+    for (cx, cz) in unsaved {
+        game.native_mark_chunk_unsaved(dimension, [cx, cz]);
+    }
     if events.is_empty() && removed.is_empty() {
         return;
     }
@@ -189,6 +195,10 @@ fn send(game: &mut Game<'_>, players: &[u128], updates: &[Update]) {
 
 /// A client asks for every part of its dimension when it joins (`sync`).
 pub(crate) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, data: &[u8]) {
+    if channel == SCROLL {
+        scroll_from_client(game, player, data);
+        return;
+    }
     if channel != client::CHANNEL || data != b"sync" {
         return;
     }
@@ -212,6 +222,97 @@ pub(crate) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     })
     .unwrap_or_default();
     send(game, &[player], &updates);
+}
+
+/// A player scrolled on a block (`create:scroll`: position, steps); what a client sends is
+/// checked here: the player's own dimension, and the block within their reach.
+const SCROLL: &str = "create:scroll";
+
+fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
+    let [x, y, z, steps] = match data {
+        d if d.len() == 16 => {
+            [0, 4, 8, 12].map(|i| i32::from_le_bytes(d[i..i + 4].try_into().unwrap()))
+        }
+        _ => return,
+    };
+    let Some(p) = game
+        .native_server_players()
+        .into_iter()
+        .find(|p| p.uuid == player)
+    else {
+        return;
+    };
+    let Some(dim) = dimension_index(&p.dimension) else {
+        return;
+    };
+    let center = [f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5];
+    let d2: f64 = (0..3).map(|i| (p.position[i] - center[i]).powi(2)).sum();
+    // ServerGamePacketListenerImpl: blocks within the interaction range (plus a margin).
+    if d2 > 8.0 * 8.0 {
+        return;
+    }
+    with_world(|w| w.scroll_motor(dim, [x, y, z], steps.clamp(-64, 64)));
+}
+
+/// The mouse wheel on the client: a creative motor under the crosshair takes it.
+pub(crate) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
+    if *claimed || !client_ensure(game) {
+        return;
+    }
+    let Some(hit) = game.pick() else {
+        return;
+    };
+    let pos = hit.pos;
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    let is_motor = CLIENT.with_borrow(|c| {
+        c.as_ref()
+            .and_then(|c| c.table.get(state.0))
+            .is_some_and(|(b, _)| b == create_engine::Block::CreativeMotor)
+    });
+    if !is_motor {
+        return;
+    }
+    *claimed = true;
+    let steps = steps.round() as i32;
+    let mut data = Vec::with_capacity(16);
+    for v in [pos[0], pos[1], pos[2], steps] {
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    let _ = game.native_net_send_to_server(SCROLL, &data);
+}
+
+/// Settings saved with a column: `motors` holds x, y, z and speed for each motor.
+fn settings_from_nbt(data: Option<&horizon_world::nbt::Compound>) -> Vec<([i32; 3], i32)> {
+    let Some(horizon_world::nbt::Tag::IntArray(v)) = data.and_then(|d| d.get(&"motors".into()))
+    else {
+        return Vec::new();
+    };
+    v.chunks_exact(4)
+        .map(|c| ([c[0], c[1], c[2]], c[3]))
+        .collect()
+}
+
+/// A chunk is being saved: Create's settings in it, as NBT (the only time it writes NBT).
+pub(crate) fn chunk_data_save(
+    dimension: &str,
+    chunk: [i32; 2],
+    data: &mut horizon_world::nbt::Compound,
+) {
+    let Some(dim) = dimension_index(dimension) else {
+        return;
+    };
+    let settings = with_world(|w| w.column_settings(dim, chunk[0], chunk[1])).unwrap_or_default();
+    if settings.is_empty() {
+        data.remove(&"create".into());
+        return;
+    }
+    let motors: Vec<i32> = settings
+        .iter()
+        .flat_map(|(p, rpm)| [p[0], p[1], p[2], *rpm])
+        .collect();
+    let mut own = horizon_world::nbt::Compound::new();
+    own.insert("motors".into(), horizon_world::nbt::Tag::IntArray(motors));
+    data.insert("create".into(), horizon_world::nbt::Tag::Compound(own));
 }
 
 /// The client's side: the parts it shows, from the server's speeds.

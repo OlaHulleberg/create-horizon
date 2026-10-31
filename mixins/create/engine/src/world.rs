@@ -76,6 +76,10 @@ pub struct Dimension {
     columns: HashMap<(i32, i32), Vec<[i32; 3]>>,
     /// Block entity settings that change a part (a motor's speed), by position.
     settings: HashMap<[i32; 3], Settings>,
+    /// The state of each kinetic block, by position.
+    states: HashMap<[i32; 3], u32>,
+    /// Columns whose saved data changed, to mark unsaved when the dimension is in place.
+    unsaved: Vec<(i32, i32)>,
 }
 
 /// Create's state for the open world: three vanilla dimensions, by index.
@@ -110,6 +114,7 @@ impl CreateWorld {
         let settings = d.settings.get(&pos).copied().unwrap_or_default();
         let [a, b] = parts(block, info, &settings);
         d.kinetics.remove(pos);
+        d.states.insert(pos, state);
         if let Some(a) = a {
             d.kinetics.set(pos, 0, a);
             d.columns
@@ -135,7 +140,10 @@ impl CreateWorld {
         } else {
             let d = &mut self.dims[dim];
             d.kinetics.remove(pos);
-            d.settings.remove(&pos);
+            d.states.remove(&pos);
+            if d.settings.remove(&pos).is_some() {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if let Some(list) = d.columns.get_mut(&(pos[0] >> 4, pos[2] >> 4)) {
                 list.retain(|p| *p != pos);
             }
@@ -163,8 +171,10 @@ impl CreateWorld {
         if let Some(list) = d.columns.remove(&(cx, cz)) {
             for pos in list {
                 d.kinetics.remove(pos);
+                d.states.remove(&pos);
             }
         }
+        d.settings.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
     }
 
     /// A block entity setting that changes a part (a motor's speed), then re-places the block.
@@ -183,6 +193,62 @@ impl CreateWorld {
             return SolveStats::default();
         }
         k.solve(events)
+    }
+
+    /// A player scrolls on the creative motor at `pos`: its speed moves by one per step, between
+    /// -256 and 256, never 0 (Create 5's scroll value; Create 6 sets it on a value board).
+    /// Returns the new speed, or None when there is no motor there.
+    pub fn scroll_motor(&mut self, dim: usize, pos: [i32; 3], steps: i32) -> Option<f32> {
+        let state = *self.dims[dim].states.get(&pos)?;
+        let (block, _) = self.table.get(state)?;
+        if block != Block::CreativeMotor || steps == 0 {
+            return None;
+        }
+        let d = &mut self.dims[dim];
+        let old = d.settings.get(&pos).copied().unwrap_or_default().motor_rpm as i32;
+        let mut new = old;
+        for _ in 0..steps.unsigned_abs().min(512) {
+            new += steps.signum();
+            if new == 0 {
+                new += steps.signum();
+            }
+        }
+        let new = new.clamp(-256, 256) as f32;
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        self.set_settings(dim, pos, state, Settings { motor_rpm: new });
+        Some(new)
+    }
+
+    /// The settings of a column's blocks, to save with it: `(position, motor speed)`.
+    pub fn column_settings(&self, dim: usize, cx: i32, cz: i32) -> Vec<([i32; 3], i32)> {
+        let mut out: Vec<([i32; 3], i32)> = self.dims[dim]
+            .settings
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+            .map(|(p, s)| (*p, s.motor_rpm as i32))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Settings saved with a column, before its blocks are scanned.
+    pub fn load_settings(&mut self, dim: usize, saved: impl Iterator<Item = ([i32; 3], i32)>) {
+        for (pos, rpm) in saved {
+            self.dims[dim].settings.insert(
+                pos,
+                Settings {
+                    motor_rpm: rpm as f32,
+                },
+            );
+        }
+    }
+
+    /// Columns whose saved data changed since the last call.
+    pub fn take_unsaved(&mut self, dim: usize) -> Vec<(i32, i32)> {
+        let mut v = std::mem::take(&mut self.dims[dim].unsaved);
+        v.sort();
+        v.dedup();
+        v
     }
 
     pub fn speed(&self, dim: usize, pos: [i32; 3]) -> Option<f32> {
@@ -233,6 +299,33 @@ mod tests {
         w.block_changed(0, [0, 64, 0], motor_east, 0);
         w.tick(0, &mut e);
         assert_eq!(w.speed(0, [1, 64, 0]), Some(0.0));
+        states::clear_range();
+    }
+
+    #[test]
+    fn scrolling_a_motor_skips_zero_and_saves_with_its_column() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = world();
+        let motor_east = 5;
+        w.block_changed(0, [1, 64, 1], 0, motor_east);
+        assert_eq!(
+            w.scroll_motor(0, [1, 64, 1], -16),
+            Some(-1.0),
+            "16 down 16 skips 0"
+        );
+        assert_eq!(w.scroll_motor(0, [1, 64, 1], 1), Some(1.0));
+        assert_eq!(w.scroll_motor(0, [1, 64, 1], 1000), Some(256.0));
+        assert_eq!(w.scroll_motor(0, [2, 64, 1], 1), None, "no motor there");
+        assert_eq!(w.take_unsaved(0), [(0, 0)]);
+        assert_eq!(w.column_settings(0, 0, 0), [([1, 64, 1], 256)]);
+        // A reload brings the setting back before the motor is found.
+        w.column_unloaded(0, 0, 0);
+        assert!(w.column_settings(0, 0, 0).is_empty());
+        w.load_settings(0, [([1, 64, 1], 256)].into_iter());
+        w.block_changed(0, [1, 64, 1], 0, motor_east);
+        w.block_changed(0, [2, 64, 1], 0, 2);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [2, 64, 1]), Some(256.0));
         states::clear_range();
     }
 
