@@ -11,6 +11,7 @@ pub mod parts;
 pub mod press;
 pub mod processing;
 pub mod states;
+pub mod tank;
 pub mod waterwheel;
 pub mod world;
 pub mod wrench;

@@ -120,6 +120,10 @@ fn compile(create: &Path, out: &Path) {
         write(&decl_dir.join(format!("block/{name}.json")), &pretty(&decl));
         write(&states_dir.join(format!("{name}.json")), &pretty(&states));
     }
+    let models_dir = out.join("content/assets/create/models/block");
+    for (name, model) in blocks::fluid_models() {
+        write(&models_dir.join(format!("{name}.json")), &pretty(&model));
+    }
 
     // Items that are not blocks: plain ingredients now, the rest with their subsystem.
     let block_names: std::collections::BTreeSet<&str> =

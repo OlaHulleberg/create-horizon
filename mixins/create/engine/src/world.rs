@@ -123,13 +123,22 @@ pub struct Dimension {
     /// (`checkTickOnNeighbor`), and their scheduled ticks (position, game time due).
     pub latch_checks: Vec<[i32; 3]>,
     pub latch_ticks: Vec<([i32; 3], i64)>,
+    /// Fluid tanks and their contents; contents saved with a column wait here for their tank.
+    pub tanks: HashMap<[i32; 3], crate::tank::Tank>,
+    tank_saved: HashMap<[i32; 3], crate::tank::Tank>,
+    /// Tanks clients must see again.
+    pub tank_changes: Vec<[i32; 3]>,
 }
 
 /// Blocks that keep state of their own here but are not kinetic: depots.
 fn has_state(block: Block) -> bool {
     matches!(
         block,
-        Block::Depot | Block::Belt | Block::PoweredLatch | Block::PoweredToggleLatch
+        Block::Depot
+            | Block::Belt
+            | Block::PoweredLatch
+            | Block::PoweredToggleLatch
+            | Block::FluidTank
     )
 }
 
@@ -203,6 +212,11 @@ impl CreateWorld {
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
         }
+        if block == Block::FluidTank && !d.tanks.contains_key(&pos) {
+            let t = d.tank_saved.remove(&pos).unwrap_or_default();
+            d.tanks.insert(pos, t);
+            d.tank_changes.push(pos);
+        }
         if block == Block::Belt && !d.belt_of.contains_key(&pos) {
             d.belt_dirty.push(pos);
         }
@@ -260,6 +274,10 @@ impl CreateWorld {
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
             d.presses.remove(&pos);
+            if d.tanks.remove(&pos).is_some() {
+                d.tank_changes.push(pos);
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if let Some(seg) = self.table.get(old).and_then(|(_, i)| i.belt) {
                 self.belt_removed(dim, pos, seg);
             }
@@ -306,6 +324,7 @@ impl CreateWorld {
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.tanks.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             // A belt reaching into the column stops being whole until it is back.
             let gone: Vec<[i32; 3]> = d
                 .belt_of
@@ -671,6 +690,27 @@ impl CreateWorld {
             .map(|(c, b)| (*c, b.items.to_save()))
             .collect();
         out.sort_by_key(|(c, _)| *c);
+        out
+    }
+
+    /// Tank contents saved with a column, for when its tanks are found.
+    pub fn load_tanks(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], crate::tank::Tank)>,
+    ) {
+        self.dims[dim].tank_saved.extend(saved);
+    }
+
+    /// The tanks of a column that hold something, to save.
+    pub fn column_tanks(&self, dim: usize, cx: i32, cz: i32) -> Vec<([i32; 3], crate::tank::Tank)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .tanks
+            .iter()
+            .filter(|(p, t)| (p[0] >> 4, p[2] >> 4) == (cx, cz) && t.fluid.is_some())
+            .map(|(p, t)| (*p, *t))
+            .collect();
+        out.sort_by_key(|(p, _)| *p);
         out
     }
 

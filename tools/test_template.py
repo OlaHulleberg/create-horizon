@@ -52,6 +52,7 @@ def write_fixture(original, root):
         ('is_signal_source', "horizon_client::game::native_hooks::GameLevel<'_>::native_is_signal_source"),
         ('tick_block', "horizon_client::game::native_hooks::GameLevel<'_>::native_tick_block"),
         ('use_item_on', "horizon_client::game::native_hooks::Game<'_>::native_use_item_on"),
+        ('use_item', "horizon_client::game::native_hooks::Game<'_>::native_use_item"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -209,7 +210,10 @@ pub mod native_hooks {
                 horizon_client::containers::BlockEntity::Mod(m) => Some(change(m)),
             }
         }
-        pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
+        pub fn native_held(&self) -> Option<(String, u32, bool)> {
+            self.inventory.get(self.selected)?.as_ref().map(|s| (s.item.to_string(), s.count, true))
+        }
+        pub fn native_count_items(&mut self, item: &str) -> u32 { let _ = item; 0 }
         pub fn native_give_items(&mut self, item: &str, count: u32) -> u32 { let _ = item; count }
         pub fn native_fluid_flow(&self, dimension: &str, pos: [i32; 3]) -> Option<[f64; 3]> {
             let _ = (dimension, pos);
@@ -269,9 +273,16 @@ pub mod native_hooks {
         pub fn native_use_item_on(&mut self, stack: &horizon_client::items::ItemStack, pos: [i32; 3], face: [i32; 3], claimed: &mut bool) {
             let _ = (stack, pos, face, claimed);
         }
+        pub fn native_use_item(&mut self, stack: &horizon_client::items::ItemStack, claimed: &mut bool) {
+            let _ = (stack, claimed);
+        }
         pub fn native_part_model_posed(&mut self, state: BlockStateId, pose: glam::Mat4) -> Option<u32> {
             let _ = pose;
             Some(5000 + state.0)
+        }
+        pub fn native_part_model_tinted(&mut self, state: BlockStateId, pose: glam::Mat4, tint: Option<u32>) -> Option<u32> {
+            let _ = (pose, tint);
+            Some(6000 + state.0)
         }
         pub fn native_update_entity_after_fall_on(&mut self, pos: [i32; 3], stack: &mut horizon_client::items::ItemStack, at: [f64; 3]) {
             let _ = (pos, stack, at);
@@ -400,8 +411,11 @@ impl Behaviours {
             ("facing".to_owned(), "north".to_owned()), ("powered".to_owned(), powered.to_owned()),
             ("powering".to_owned(), powering.to_owned())]) });
     }
-    // 14: a shaft along z.
+    // 14: a shaft along z; 15: a fluid tank; 16: the water box's partial.
     states.push(BlockState { name: "create:shaft".into(), properties: props("axis", "z") });
+    states.push(BlockState { name: "create:fluid_tank".into(), properties: BTreeMap::from([
+        ("bottom".to_owned(), "true".to_owned()), ("shape".to_owned(), "window".to_owned()), ("top".to_owned(), "true".to_owned())]) });
+    states.push(BlockState { name: "create:part_fluid_water".into(), properties: props("facing", "up") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
@@ -567,6 +581,32 @@ impl Behaviours {
     let mut claimed = false;
     game.native_use_item_on(&stick, [30, 0, 30], [0, 1, 0], &mut claimed);
     assert!(!claimed);
+    // A fluid tank at (40, 0, 40): a creative player empties a water bucket into it; it is saved
+    // with its chunk, and the client draws its water.
+    game.world.blocks.insert([40, 0, 40], 15);
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 40, y: 0, z: 40 }, BlockStateId(0), BlockStateId(15));
+    game.creative = true;
+    game.inventory[0] = Some(horizon_client::items::ItemStack { item: "minecraft:water_bucket".into(), count: 1, damage: 0, extra: None });
+    let mut canceled = false;
+    game.native_right_click_block([40, 0, 40], [0, 1, 0], &mut canceled);
+    assert!(canceled);
+    // The bucket's own use that follows the click is taken: no water placed in the world.
+    let bucket = horizon_client::items::ItemStack { item: "minecraft:water_bucket".into(), count: 1, damage: 0, extra: None };
+    let mut claimed = false;
+    game.native_use_item(&bucket, &mut claimed);
+    assert!(claimed);
+    let mut claimed = false;
+    game.native_use_item(&bucket, &mut claimed);
+    assert!(!claimed, "only the one use");
+    game.native_level_tick_post("minecraft:overworld");
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [2, 2], &mut data);
+    let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create".into()) else { panic!("no create data") };
+    assert_eq!(own.get(&"tanks".into()), Some(&horizon_world::nbt::Tag::IntArray(vec![40, 0, 40, 0, 1000])));
+    let tanks: Vec<Vec<u8>> = game.sent.iter().filter(|m| m.1 == "create:tank").map(|m| m.2.clone()).collect();
+    assert!(!tanks.is_empty());
+    for m in &tanks { game.native_net_from_server("create:tank", m); }
+    assert!(game.parts.iter().any(|p| p.0 == 6016 && p.1 == [40, 0, 40]), "the water's box is drawn");
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

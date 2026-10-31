@@ -4,7 +4,7 @@ version = "0.1.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "0ac3e823f8209630740a4ae639bf11d8e135669f"
+horizon_revision = "dd629a26badb3bcda73a05ffc429d7d929df53f2"
 
 # Game glue: per-world state on the server thread, translating hooks into engine calls.
 [[module]]
@@ -271,5 +271,16 @@ bindings = [
   { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
   { name = "pos", ty = "[i32; 3]", value = "pos" },
   { name = "face", ty = "[i32; 3]", value = "face" },
+  { name = "claimed", ty = "&mut bool", value = "claimed" },
+]
+
+[[injection]]
+id = "use-item"
+hook = "use_item"
+hook_version = 1
+kind = "HEAD"
+helper = "use_item.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "claimed", ty = "&mut bool", value = "claimed" },
 ]
