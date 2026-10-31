@@ -146,6 +146,10 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             shafts: Dir::Down.bit(),
             ..Part::cog(Axis::Y, false)
         }),
+        // MechanicalPressBlock: turns on its horizontal facing's axis, shafts at both ends.
+        Block::MechanicalPress => s
+            .facing
+            .map_or([None, None], |f| one(Part::shaft(f.axis()))),
         Block::WaterWheel => s.facing.map_or([None, None], |f| {
             // WaterWheelBlock.hasShaftTowards: both ends of its axis.
             one(Part {

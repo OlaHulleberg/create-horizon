@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/mechanical_press/head",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/mechanical_press/head",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/mechanical_press/head"
+    },
+    "facing=west": {
+      "model": "create:block/mechanical_press/head",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/mechanical_press/head",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/mechanical_press/head",
+      "x": 270
+    }
+  }
+}

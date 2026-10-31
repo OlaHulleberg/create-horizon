@@ -6,6 +6,7 @@ pub mod depot;
 pub mod generated;
 pub mod kinetics;
 pub mod parts;
+pub mod press;
 pub mod processing;
 pub mod states;
 pub mod waterwheel;

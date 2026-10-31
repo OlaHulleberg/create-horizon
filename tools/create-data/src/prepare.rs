@@ -175,6 +175,17 @@ fn kept(path: &str) -> bool {
     }
 }
 
+/// The `c:` item tag files of `common_tags::ITEM_TAGS`: (tag path, file, contents).
+fn common_tag_files() -> impl Iterator<Item = (&'static str, String, Value)> {
+    crate::common_tags::ITEM_TAGS.iter().map(|(path, values)| {
+        (
+            *path,
+            format!("data/c/tags/item/{path}.json"),
+            json!({ "values": values }),
+        )
+    })
+}
+
 pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String, String> {
     let files = read_sources(sources)?;
     if !files
@@ -230,6 +241,14 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
             copied += 1;
         }
     }
+    // NeoForge's common tags Create's recipes name and nobody else defines here.
+    let mut common = 0;
+    for (_, rel, doc) in common_tag_files() {
+        if !files.contains_key(&rel) {
+            put(&rel, &serde_json::to_vec_pretty(&doc).unwrap())?;
+            common += 1;
+        }
+    }
     // 26.3 finds an item's model through `assets/<ns>/items/<id>.json`; 1.21.1 had none.
     // Hidden partial-model blocks (`part_*`) have no item.
     for name in declared.iter().filter(|n| !n.starts_with("part_")) {
@@ -253,6 +272,7 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
     report.insert("recipes".into(), json!(recipes));
     report.insert("recipes_skipped_for_other_mods".into(), json!(skipped));
     report.insert("files_copied".into(), json!(copied));
+    report.insert("common_tags_added".into(), json!(common));
     Ok(serde_json::to_string_pretty(&Value::Object(report)).unwrap())
 }
 
@@ -273,6 +293,22 @@ mod tests {
         let c = convert_recipe(s).unwrap();
         assert_eq!(c["ingredients"][0], json!(["a:b", "c:d"]));
         assert_eq!(c["ingredients"][1], "#x:y");
+    }
+
+    #[test]
+    fn common_tags_cover_create_s_iron_and_nest_their_parts() {
+        let all: Vec<_> = common_tag_files().collect();
+        let (_, rel, doc) = all.iter().find(|(p, ..)| *p == "ingots/iron").unwrap();
+        assert_eq!(rel, "data/c/tags/item/ingots/iron.json");
+        assert_eq!(doc["values"], json!(["minecraft:iron_ingot"]));
+        // A tag naming another `c:` tag finds it in the table too.
+        for (_, _, doc) in &all {
+            for v in doc["values"].as_array().unwrap() {
+                if let Some(t) = v.as_str().unwrap().strip_prefix("#c:") {
+                    assert!(all.iter().any(|(p, ..)| *p == t), "{t}");
+                }
+            }
+        }
     }
 
     #[test]

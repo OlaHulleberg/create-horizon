@@ -296,6 +296,22 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             own(&[("facing", facing)]),
         ),
         "water_wheel" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
+        // MechanicalPressBlock: a horizontal facing; AllShapes.MECHANICAL_PROCESSOR_SHAPE (a
+        // block with a 8x8 hole down its middle, where the head goes).
+        "mechanical_press" => (
+            "minecraft:iron_block",
+            Some(by_property(
+                "facing",
+                &["north", "south", "west", "east"],
+                &[
+                    [0., 0., 0., 16., 16., 4.],
+                    [0., 0., 12., 16., 16., 16.],
+                    [0., 0., 4., 4., 16., 12.],
+                    [12., 0., 4., 16., 16., 12.],
+                ],
+            )),
+            own(&[("facing", &["north", "south", "west", "east"])]),
+        ),
         // A block entity with item slots needs a template that has one (Horizon's API 15): the
         // barrel's, whose menu the mod keeps closed. AllShapes.MILLSTONE.
         "millstone" => (
@@ -346,7 +362,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 4] = [
+pub const PARTIALS: [(&str, &str, &str); 5] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -355,6 +371,12 @@ pub const PARTIALS: [(&str, &str, &str); 4] = [
     ),
     ("part_water_wheel", "create:block/water_wheel/wheel", "up"),
     ("part_millstone_cog", "create:block/millstone/inner", "up"),
+    // CachedBuffers.partialFacing turns it by AngleHelper.horizontalAngle: 0° for south.
+    (
+        "part_press_head",
+        "create:block/mechanical_press/head",
+        "south",
+    ),
 ];
 
 /// The blockstate rotation (x, y) that turns a model pointing `from` to point `to`: y turns

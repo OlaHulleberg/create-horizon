@@ -99,6 +99,13 @@ pub struct Dimension {
     pub sliding: Vec<[i32; 3]>,
     /// Depots whose contents clients must see again (put down, taken, filled by a hopper).
     pub depot_changes: Vec<[i32; 3]>,
+    /// Mechanical presses and their cycle.
+    pub presses: HashMap<[i32; 3], crate::press::Press>,
+    /// Depots that ask the press above them each tick (`DepotBehaviour.tick` after its stack
+    /// arrived), until the press has nothing to do with them.
+    pub depot_work: Vec<[i32; 3]>,
+    /// Presses whose cycle clients must see again (started, head down, done).
+    pub press_changes: Vec<[i32; 3]>,
 }
 
 /// Blocks that keep state of their own here but are not kinetic: depots.
@@ -142,6 +149,11 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
+        }
+        if block == Block::MechanicalPress && !d.presses.contains_key(&pos) {
+            d.presses.insert(pos, crate::press::Press::default());
+            // A press placed over a depot looks at what it holds.
+            d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
         }
         if block == Block::Depot && !d.depots.contains_key(&pos) {
             // Placed or loaded: clients draw what its block entity holds.
@@ -196,6 +208,7 @@ impl CreateWorld {
             d.cranks.remove(&pos);
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
+            d.presses.remove(&pos);
             if d.depots.remove(&pos).is_some() {
                 d.sliding.retain(|p| *p != pos);
                 d.depot_changes.push(pos);
@@ -237,6 +250,8 @@ impl CreateWorld {
             d.millstones
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.depot_work.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sliding.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
         d.settings.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -448,6 +463,9 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         if let Some(h) = d.depots.get_mut(&pos) {
             *h = held;
+            if held.is_some_and(|h| !h.sliding()) && !d.depot_work.contains(&pos) {
+                d.depot_work.push(pos);
+            }
             if held.is_some_and(|h| h.sliding()) && !d.sliding.contains(&pos) {
                 d.sliding.push(pos);
             }
@@ -459,6 +477,15 @@ impl CreateWorld {
     pub fn depot_changed(&mut self, dim: usize, pos: [i32; 3]) {
         if self.dims[dim].depots.contains_key(&pos) {
             self.dims[dim].depot_changes.push(pos);
+        }
+    }
+
+    /// The depot at `pos` asks the press above it from the next tick on (its stack arrived or
+    /// changed, the press finished or started turning).
+    pub fn wake_depot(&mut self, dim: usize, pos: [i32; 3]) {
+        let d = &mut self.dims[dim];
+        if d.depots.contains_key(&pos) && !d.depot_work.contains(&pos) {
+            d.depot_work.push(pos);
         }
     }
 
@@ -474,7 +501,10 @@ impl CreateWorld {
             let Some(Some(h)) = depots.get_mut(p) else {
                 return false;
             };
-            h.slide(upright(*p));
+            if h.slide(upright(*p)) && !d.depot_work.contains(p) {
+                // Arrived: from now on Create's depot asks the processing above it.
+                d.depot_work.push(*p);
+            }
             h.sliding()
         });
     }

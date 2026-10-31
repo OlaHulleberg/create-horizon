@@ -35,6 +35,14 @@ Create's utility library Catnip ships in its Ponder project; the port translates
 <https://github.com/Creators-of-Create/Ponder>, branch `mc1.21.1/dev`, file `LICENSE`:
 "MIT License, Copyright (c) 2022 The Create Team", with the same permission notice as above.
 
+## NeoForge common tags (facts)
+
+`tools/create-data/src/common_tags.rs` lists which vanilla items belong to 60 of NeoForge's common
+(`c:`) item tags that Create's recipes use (`c:ingots/iron` is `minecraft:iron_ingot`), as NeoForge 21.1
+for Minecraft 1.21.1 defines them (<https://github.com/neoforged/NeoForge>, branch `1.21.1`,
+`src/generated/resources/data/c/tags/item`). The table is our own, written from those memberships; no
+NeoForge file is copied.
+
 ## Create (assets: All Rights Reserved)
 
 `src/main/resources/assets/` (textures, hand-written models, sounds, shaders, ponder) is

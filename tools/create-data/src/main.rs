@@ -7,6 +7,7 @@
 //! for one), converting 1.21.1 formats to 26.3. See `prepare.rs`.
 
 mod blocks;
+mod common_tags;
 mod java;
 mod prepare;
 mod shapes;
