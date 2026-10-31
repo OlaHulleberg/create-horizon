@@ -2,6 +2,7 @@
 //! so every rule is unit-tested here and the game glue (`runtime.rs`) stays thin.
 
 pub mod client;
+pub mod depot;
 pub mod generated;
 pub mod kinetics;
 pub mod parts;

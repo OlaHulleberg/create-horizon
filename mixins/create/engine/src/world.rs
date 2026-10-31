@@ -35,7 +35,7 @@ impl StateTable {
                 .and_then(Block::from_name)
                 // A Create id this build doesn't know (another version's): inert.
                 .unwrap_or(Block::AndesiteCasing);
-            t.kinetic.push(is_kinetic(block));
+            t.kinetic.push(is_kinetic(block) || has_state(block));
             t.block.push(block);
             t.info.push(StateInfo::read(props));
         }
@@ -49,7 +49,8 @@ impl StateTable {
         Some((*self.block.get(i)?, self.info.get(i)?))
     }
 
-    /// Whether a state is a kinetic Create block: the bit test of the hot hooks.
+    /// Whether a state is a Create block this keeps (kinetic, or with state of its own like a
+    /// depot): the bit test of the hot hooks.
     #[inline]
     pub fn is_kinetic(&self, state: u32) -> bool {
         states::index(state).is_some_and(|i| self.kinetic.get(i as usize).copied().unwrap_or(false))
@@ -92,6 +93,17 @@ pub struct Dimension {
     /// Blocks whose redstone power may have changed (a clutch or gearshift that was placed or
     /// whose neighbour changed), checked after the level's tick.
     redstone: Vec<[i32; 3]>,
+    /// Depots and their held stack's motion; the stacks are in their block entities' slots.
+    pub depots: HashMap<[i32; 3], Option<crate::depot::Held>>,
+    /// Depots whose held stack still slides: the only ones that tick.
+    pub sliding: Vec<[i32; 3]>,
+    /// Depots whose contents clients must see again (put down, taken, filled by a hopper).
+    pub depot_changes: Vec<[i32; 3]>,
+}
+
+/// Blocks that keep state of their own here but are not kinetic: depots.
+fn has_state(block: Block) -> bool {
+    matches!(block, Block::Depot)
 }
 
 /// Blocks that follow redstone power (`powered`): Create's split shafts.
@@ -131,16 +143,21 @@ impl CreateWorld {
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
         }
+        if block == Block::Depot && !d.depots.contains_key(&pos) {
+            // Placed or loaded: clients draw what its block entity holds.
+            d.depots.insert(pos, None);
+            d.depot_changes.push(pos);
+        }
         let settings = d.settings.get(&pos).copied().unwrap_or_default();
         let [a, b] = parts(block, info, &settings);
         d.kinetics.remove(pos);
         d.states.insert(pos, state);
+        d.columns
+            .entry((pos[0] >> 4, pos[2] >> 4))
+            .or_default()
+            .push(pos);
         if let Some(a) = a {
             d.kinetics.set(pos, 0, a);
-            d.columns
-                .entry((pos[0] >> 4, pos[2] >> 4))
-                .or_default()
-                .push(pos);
         }
         if let Some(b) = b {
             d.kinetics.set(pos, 1, b);
@@ -179,6 +196,10 @@ impl CreateWorld {
             d.cranks.remove(&pos);
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
+            if d.depots.remove(&pos).is_some() {
+                d.sliding.retain(|p| *p != pos);
+                d.depot_changes.push(pos);
+            }
             if d.settings.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
@@ -215,6 +236,8 @@ impl CreateWorld {
             d.wheels.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.millstones
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.sliding.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
         d.settings.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
     }
@@ -419,6 +442,51 @@ impl CreateWorld {
     }
 
     /// Columns whose saved data changed since the last call.
+    /// A stack was put on the depot at `pos` with this motion (it slides from now on), or its
+    /// held stack left (None).
+    pub fn depot_put(&mut self, dim: usize, pos: [i32; 3], held: Option<crate::depot::Held>) {
+        let d = &mut self.dims[dim];
+        if let Some(h) = d.depots.get_mut(&pos) {
+            *h = held;
+            if held.is_some_and(|h| h.sliding()) && !d.sliding.contains(&pos) {
+                d.sliding.push(pos);
+            }
+            d.depot_changes.push(pos);
+        }
+    }
+
+    /// The depot at `pos` changed in a way clients must see (`notifyUpdate`).
+    pub fn depot_changed(&mut self, dim: usize, pos: [i32; 3]) {
+        if self.dims[dim].depots.contains_key(&pos) {
+            self.dims[dim].depot_changes.push(pos);
+        }
+    }
+
+    /// `DepotBehaviour.tick` for the depots whose stack slides; `upright(pos)` says whether the
+    /// stack there stands (`BeltHelper.isItemUpright`). Depots at rest cost nothing.
+    pub fn tick_depots(&mut self, dim: usize, upright: impl Fn([i32; 3]) -> bool) {
+        let d = &mut self.dims[dim];
+        if d.sliding.is_empty() {
+            return;
+        }
+        let depots = &mut d.depots;
+        d.sliding.retain(|p| {
+            let Some(Some(h)) = depots.get_mut(p) else {
+                return false;
+            };
+            h.slide(upright(*p));
+            h.sliding()
+        });
+    }
+
+    /// Depots whose contents changed since the last call, once each.
+    pub fn take_depot_changes(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        let mut v = std::mem::take(&mut self.dims[dim].depot_changes);
+        v.sort();
+        v.dedup();
+        v
+    }
+
     pub fn take_unsaved(&mut self, dim: usize) -> Vec<(i32, i32)> {
         let mut v = std::mem::take(&mut self.dims[dim].unsaved);
         v.sort();
@@ -542,6 +610,42 @@ mod tests {
         );
         assert_eq!(w.powered(11), Some(true));
         assert_eq!(w.powered(12), None);
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_depot_ticks_only_while_its_stack_slides() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![("create:depot", vec![])];
+        states::set_range(10, 1);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        assert_eq!(
+            w.take_depot_changes(0),
+            [[0, 0, 0]],
+            "placed: clients see it"
+        );
+        assert!(w.dims[0].sliding.is_empty(), "an empty depot does nothing");
+        let held = crate::depot::Held::put_by_player(0, false, crate::depot::Side::East);
+        w.depot_put(0, [0, 0, 0], Some(held));
+        assert_eq!(w.take_depot_changes(0), [[0, 0, 0]]);
+        let mut ticks = 0;
+        while !w.dims[0].sliding.is_empty() {
+            w.tick_depots(0, |_| false);
+            ticks += 1;
+        }
+        assert!((5..30).contains(&ticks), "{ticks}");
+        let at = w.dims[0].depots[&[0, 0, 0]].unwrap();
+        assert!(0.5 - at.position <= 1.0 / 512.0);
+        assert!(
+            w.take_depot_changes(0).is_empty(),
+            "arriving is no change to send"
+        );
+        w.column_unloaded(0, 0, 0);
+        assert!(w.dims[0].depots.is_empty());
         states::clear_range();
     }
 

@@ -307,6 +307,17 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             )),
             None,
         ),
+        // DepotBlock: its stacks are a block entity's slots, so the barrel's template too.
+        // AllShapes.CASING_13PX.
+        "depot" => (
+            "minecraft:barrel",
+            Some(by_property(
+                "open",
+                &["false", "true"],
+                &[[0., 0., 0., 16., 13., 16.]],
+            )),
+            None,
+        ),
         "hand_crank" => (
             "minecraft:heavy_core",
             Some(by_facing(&CRANK)),

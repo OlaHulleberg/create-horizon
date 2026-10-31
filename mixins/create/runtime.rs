@@ -188,6 +188,7 @@ pub(crate) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
         }
     }
     tick_millstones(game, dim);
+    tick_depots(game, dimension, dim);
     let mut events = Vec::new();
     let Some((removed, unsaved)) = with_world(|w| {
         w.tick(dim, &mut events);
@@ -270,11 +271,19 @@ pub(crate) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     })
     .unwrap_or_default();
     send(game, &[player], &updates);
+    let depots: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].depots.keys().copied().collect()).unwrap_or_default();
+    send_depots(game, &[player], dim, &depots);
 }
 
 /// A player right-clicks a block (`HandCrankBlock.useItemOn`): a hand crank turns for 10 ticks,
 /// backwards while sneaking, and tires the player (`crankHungerMultiplier` 0.01 per RPM).
-pub(crate) fn right_click_block(game: &mut Game<'_>, pos: [i32; 3], canceled: &mut bool) {
+pub(crate) fn right_click_block(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    face: [i32; 3],
+    canceled: &mut bool,
+) {
     if *canceled || states::index(game.world.block(pos[0], pos[1], pos[2]).0).is_none() {
         return;
     }
@@ -292,6 +301,10 @@ pub(crate) fn right_click_block(game: &mut Game<'_>, pos: [i32; 3], canceled: &m
     let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
     if block == Some(create_engine::Block::Millstone) {
         use_millstone(game, pos, canceled);
+        return;
+    }
+    if block == Some(create_engine::Block::Depot) {
+        use_depot(game, dim, pos, face, canceled);
         return;
     }
     if with_world(|w| w.turn_crank(dim, pos, back)) != Some(true) {
@@ -539,6 +552,10 @@ fn client_ensure(game: &Game<'_>) -> bool {
 
 /// The server's speeds, on the client.
 pub(crate) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
+    if channel == create_engine::depot::CHANNEL {
+        depots_from_server(game, data);
+        return;
+    }
     if channel != client::CHANNEL || !client_ensure(game) {
         return;
     }
@@ -570,8 +587,10 @@ pub(crate) fn client_tick(game: &mut Game<'_>) {
     }
     if !game.native_playing() {
         CLIENT.with_borrow_mut(|c| *c = None);
+        DEPOTS.with_borrow_mut(|d| *d = ClientDepots::default());
         return;
     }
+    tick_client_depots(game);
     if !client_ensure(game) {
         return;
     }
@@ -765,11 +784,8 @@ pub(crate) fn block_entity(
     block: &str,
     entity: &mut Option<(String, horizon_world::nbt::Compound)>,
 ) {
-    if entity.is_none() && block == "create:millstone" {
-        *entity = Some((
-            "create:millstone".into(),
-            horizon_world::nbt::Compound::new(),
-        ));
+    if entity.is_none() && matches!(block, "create:millstone" | "create:depot") {
+        *entity = Some((block.into(), horizon_world::nbt::Compound::new()));
     }
 }
 
@@ -779,7 +795,24 @@ pub(crate) fn block_entity_container(
     block: &str,
     container: &mut Option<horizon_client::containers::ModContainer>,
 ) {
-    if container.is_some() || block != "create:millstone" {
+    if container.is_some() {
+        return;
+    }
+    if block == "create:depot" {
+        // DepotItemHandler: in only to the held slot while the depot holds nothing; out of
+        // every slot; through any face.
+        let all: Vec<usize> = (0..create_engine::depot::SLOTS).collect();
+        *container = Some(horizon_client::containers::ModContainer {
+            slots: create_engine::depot::SLOTS,
+            faces: std::array::from_fn(|_| all.clone()),
+            inputs: vec![0],
+            outputs: all,
+            menu: None,
+            only_when_empty: true,
+        });
+        return;
+    }
+    if block != "create:millstone" {
         return;
     }
     let all: Vec<usize> = (0..10).collect();
@@ -789,6 +822,7 @@ pub(crate) fn block_entity_container(
         inputs: vec![0],
         outputs: (1..10).collect(),
         menu: None,
+        only_when_empty: false,
     });
 }
 
@@ -873,4 +907,297 @@ pub(crate) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
         _ => "usage: create_debug speed <x> <y> <z>".into(),
     };
     game.native_feedback(horizon_client::text::Text::literal(line));
+}
+
+/// `BeltHelper.isItemUpright`: items of `create:upright_on_belt` stand, unless also in
+/// `create:not_upright_on_belt`. (Fluid-holding items stand in Create too: not yet.)
+fn upright(game: &Game<'_>, item: &str) -> bool {
+    let tags = &game.items().item_tags;
+    let has = |t: &str| tags.get(t).is_some_and(|m| m.contains(item));
+    has("create:upright_on_belt") && !has("create:not_upright_on_belt")
+}
+
+/// `TransportedItemStack`'s `R.nextInt(360)`: Create's shared random; any angle will do.
+fn random_angle(game: &Game<'_>, pos: [i32; 3]) -> i32 {
+    let mut x = (game.world.game_time as u64)
+        ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (pos[2] as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ (pos[1] as u64) << 40;
+    x ^= x >> 31;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 29;
+    (x % 360) as i32
+}
+
+/// `SharedDepotBlockMethods.onUse` on the depot's top: everything it holds goes to the
+/// player, then the stack in hand is put down, sliding in from the player's side.
+fn use_depot(game: &mut Game<'_>, dim: usize, pos: [i32; 3], face: [i32; 3], canceled: &mut bool) {
+    if face != [0, 1, 0] {
+        return;
+    }
+    *canceled = true;
+    // The main hand's use always succeeds, so the off hand is never asked.
+    if game.hand != horizon_client::first_person::Hand::Main {
+        return;
+    }
+    let hand = game
+        .inventory
+        .get_mut(game.selected)
+        .and_then(Option::take);
+    let facing = create_engine::depot::Side::of_yaw(game.yaw);
+    let put = hand.as_ref().map(|s| {
+        create_engine::depot::Held::put_by_player(
+            random_angle(game, pos),
+            upright(game, &s.item),
+            facing,
+        )
+    });
+    let taken = game
+        .native_with_mod_block_entity(pos, |be| {
+            be.items.resize(be.items.len().max(create_engine::depot::SLOTS), None);
+            let taken: Vec<_> = be.items.iter_mut().filter_map(Option::take).collect();
+            be.items[0] = hand.clone();
+            taken
+        });
+    let Some(taken) = taken else {
+        // No block entity: the stack stays in hand.
+        if let Some(slot) = game.inventory.get_mut(game.selected) {
+            *slot = hand;
+        }
+        return;
+    };
+    for s in taken {
+        game.native_give_items(&s.item, s.count);
+    }
+    with_world(|w| w.depot_put(dim, pos, put));
+}
+
+/// A hopper put into or took from a block's slots: a depot's held stack arrives from above
+/// (`new TransportedItemStack(stack)`, a quarter-less slide from the edge of nothing) or left.
+pub(crate) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
+    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    if states::index(state).is_none() {
+        return;
+    }
+    let Some(dim) = dimension_index(game.dim.id()) else {
+        return;
+    };
+    // Outer: the world is open; inner: a depot is there (its held stack's motion, if any).
+    let Some(had) = with_world(|w| w.dims[dim].depots.get(&pos).copied()).flatten() else {
+        return;
+    };
+    let held = game
+        .world
+        .block_entities
+        .get(&(pos[0], pos[1], pos[2]))
+        .and_then(|b| match b {
+            horizon_client::containers::BlockEntity::Mod(m) => m.items.first().cloned().flatten(),
+            _ => None,
+        });
+    let now = match (had, held) {
+        (_, None) => None,
+        (Some(h), Some(_)) => Some(h),
+        (None, Some(s)) => {
+            let up = upright(game, &s.item);
+            Some(create_engine::depot::Held {
+                position: 0.0,
+                ..create_engine::depot::Held::new(random_angle(game, pos), up)
+            })
+        }
+    };
+    with_world(|w| w.depot_put(dim, pos, now));
+}
+
+/// `DepotBehaviour.tick` for depots whose stack slides, then the depots whose contents
+/// changed go to the players of the level.
+fn tick_depots(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let sliding = with_world(|w| w.dims[dim].sliding.clone()).unwrap_or_default();
+    if !sliding.is_empty() {
+        let standing: Vec<[i32; 3]> = sliding
+            .iter()
+            .copied()
+            .filter(|p| {
+                depot_items(game, *p)
+                    .first()
+                    .is_some_and(|(slot, item, _)| *slot == 0 && upright(game, item))
+            })
+            .collect();
+        with_world(|w| w.tick_depots(dim, |p| standing.contains(&p)));
+    }
+    let changed = with_world(|w| w.take_depot_changes(dim)).unwrap_or_default();
+    if changed.is_empty() {
+        return;
+    }
+    let players: Vec<u128> = game
+        .native_server_players()
+        .into_iter()
+        .filter(|p| p.dimension == dimension)
+        .map(|p| p.uuid)
+        .collect();
+    send_depots(game, &players, dim, &changed);
+}
+
+/// The stacks of the depot at `pos`, by slot.
+fn depot_items(game: &Game<'_>, pos: [i32; 3]) -> Vec<(u8, String, u8)> {
+    match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+        Some(horizon_client::containers::BlockEntity::Mod(m)) => m
+            .items
+            .iter()
+            .take(create_engine::depot::SLOTS)
+            .enumerate()
+            .filter_map(|(i, s)| {
+                let s = s.as_ref()?;
+                Some((i as u8, s.item.to_string(), s.count.min(255) as u8))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn send_depots(game: &mut Game<'_>, players: &[u128], dim: usize, depots: &[[i32; 3]]) {
+    let contents: Vec<create_engine::depot::Contents> = depots
+        .iter()
+        .map(|&pos| {
+            let held = with_world(|w| w.dims[dim].depots.get(&pos).copied().flatten()).flatten();
+            let stacks = if with_world(|w| w.dims[dim].depots.contains_key(&pos)) == Some(true) {
+                depot_items(game, pos)
+            } else {
+                Vec::new()
+            };
+            create_engine::depot::Contents {
+                pos,
+                held: held.unwrap_or(create_engine::depot::Held::new(0, false)),
+                stacks,
+            }
+        })
+        .collect();
+    for m in create_engine::depot::encode(&contents) {
+        for &p in players {
+            let _ = game.native_net_send_to_player(p, create_engine::depot::CHANNEL, &m);
+        }
+    }
+}
+
+/// The depots a client draws: their contents and the held stack's motion, which it slides
+/// itself, tick by tick, as the server does.
+#[derive(Default)]
+struct ClientDepots {
+    shown: HashMap<[i32; 3], create_engine::depot::Contents>,
+    sliding: Vec<[i32; 3]>,
+}
+
+thread_local! {
+    static DEPOTS: RefCell<ClientDepots> = RefCell::new(ClientDepots::default());
+}
+
+/// A key for copy `copy` of the stack in `slot` of the depot at `pos`, apart from the kinetic
+/// parts' keys (a well-mixed hash of the three).
+fn depot_key(pos: [i32; 3], slot: u8, copy: u8) -> u64 {
+    let mut x = client::key(pos, 0) ^ (u64::from(slot) << 8 | u64::from(copy)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31) | 1 << 63
+}
+
+const COPIES: u8 = 4;
+
+fn hide_depot(game: &mut Game<'_>, pos: [i32; 3]) {
+    for slot in 0..create_engine::depot::SLOTS as u8 {
+        for copy in 0..COPIES {
+            game.native_part_clear(depot_key(pos, slot, copy));
+        }
+    }
+}
+
+/// Draws a depot's stacks as Create's `DepotRenderer` does: the held stack at its offset, turned
+/// by its angle; each output 0.35 out at 45° steps. `next` is where the held stack will be a
+/// tick from now, for the GPU to glide it there.
+fn show_depot(
+    game: &mut Game<'_>,
+    c: &create_engine::depot::Contents,
+    next: Option<create_engine::depot::Held>,
+) {
+    use create_engine::depot;
+    hide_depot(game, c.pos);
+    let now = game.native_parts_seconds();
+    for (slot, item, count) in &c.stacks {
+        let block_item = game.native_item_uses_block_light(item).unwrap_or(false);
+        let (poses, phase, offset, velocity) = if *slot == 0 {
+            let at = c.held.offset();
+            let to = next.map_or(at, |n| n.offset());
+            let poses = depot::stack_poses(u32::from(*count), block_item, &mut depot::JavaRandom::new(0));
+            (poses, c.held.angle as f32, at, (to - at) * 20.0)
+        } else {
+            let (poses, phase) = depot::output_place(usize::from(*slot) - 1, u32::from(*count), block_item);
+            (poses, phase, glam::Vec3::ZERO, glam::Vec3::ZERO)
+        };
+        for (copy, pose) in poses.into_iter().take(usize::from(COPIES)).enumerate() {
+            let Some(model) = game.native_part_item_model(item, depot::top_centre() * pose) else {
+                continue;
+            };
+            game.native_part_glide(
+                depot_key(c.pos, *slot, copy as u8),
+                model,
+                c.pos,
+                1,
+                0.0,
+                phase,
+                [offset.x, offset.y, offset.z, now],
+                velocity.to_array(),
+            );
+        }
+    }
+}
+
+/// Depots' contents from the server.
+fn depots_from_server(game: &mut Game<'_>, data: &[u8]) {
+    for c in create_engine::depot::decode(data) {
+        let pos = c.pos;
+        if c.stacks.is_empty() {
+            hide_depot(game, pos);
+            DEPOTS.with_borrow_mut(|d| {
+                d.shown.remove(&pos);
+                d.sliding.retain(|p| *p != pos);
+            });
+            continue;
+        }
+        let sliding = c.held.sliding() && c.stacks.iter().any(|s| s.0 == 0);
+        let mut next = c.held;
+        next.slide(false);
+        show_depot(game, &c, sliding.then_some(next));
+        DEPOTS.with_borrow_mut(|d| {
+            d.shown.insert(pos, c);
+            d.sliding.retain(|p| *p != pos);
+            if sliding {
+                d.sliding.push(pos);
+            }
+        });
+    }
+}
+
+/// Each client tick: held stacks still sliding move on a tick (`DepotBehaviour.tick` on the
+/// client), drawn gliding to where they will be next.
+fn tick_client_depots(game: &mut Game<'_>) {
+    let sliding = DEPOTS.with_borrow(|d| d.sliding.clone());
+    for pos in sliding {
+        let Some(mut c) = DEPOTS.with_borrow(|d| d.shown.get(&pos).cloned()) else {
+            continue;
+        };
+        let up = c
+            .stacks
+            .iter()
+            .find(|s| s.0 == 0)
+            .is_some_and(|s| upright(game, &s.1));
+        c.held.slide(up);
+        let still = c.held.sliding();
+        let mut next = c.held;
+        next.slide(up);
+        show_depot(game, &c, still.then_some(next));
+        DEPOTS.with_borrow_mut(|d| {
+            d.shown.insert(pos, c);
+            if !still {
+                d.sliding.retain(|p| *p != pos);
+            }
+        });
+    }
 }

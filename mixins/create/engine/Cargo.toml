@@ -6,3 +6,4 @@ license = "MIT"
 description = "Create's rules for Horizon: pure Rust, no game types"
 
 [dependencies]
+glam = "0.30"

@@ -4,7 +4,7 @@ version = "0.1.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "3f2df45b1f8e61ed58e858504aa40c2412b71c66"
+horizon_revision = "aea7ed87831d5ed2d6da6678fa6ba4adf7a2edb7"
 
 # Game glue: per-world state on the server thread, translating hooks into engine calls.
 [[module]]
@@ -176,6 +176,7 @@ helper = "right_click.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "face", ty = "[i32; 3]", value = "face" },
   { name = "canceled", ty = "&mut bool", value = "canceled" },
 ]
 
@@ -199,4 +200,15 @@ helper = "block_entity_container.rs"
 bindings = [
   { name = "block", ty = "&str", value = "block" },
   { name = "container", ty = "&mut Option<horizon_client::containers::ModContainer>", value = "container" },
+]
+
+[[injection]]
+id = "contents-changed"
+hook = "contents_changed"
+hook_version = 1
+kind = "HEAD"
+helper = "contents_changed.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
 ]

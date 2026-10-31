@@ -45,6 +45,7 @@ def write_fixture(original, root):
         ('right_click_block', "horizon_client::game::native_hooks::Game<'_>::native_right_click_block"),
         ('block_entity', "horizon_client::game::native_hooks::Game<'_>::native_block_entity"),
         ('block_entity_container', "horizon_client::game::native_hooks::Game<'_>::native_block_entity_container"),
+        ('contents_changed', "horizon_client::game::native_hooks::Game<'_>::native_contents_changed"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -91,21 +92,24 @@ pub mod registry {
                                              '[dependencies]\nhorizon-world = { path = "../horizon-world" }\n'
                                              'horizon-core = { path = "../horizon-core" }\n'
                                              'winit = { path = "../winit" }\n'
-                                             'serde_json = "1"\n'),
+                                             'serde_json = "1"\nglam = "0.30"\n'),
         'crates/horizon-client/src/lib.rs': '''
 // The game's module reaches the lib as `horizon_client`, as Horizon's binary does.
 extern crate self as horizon_client;
 pub mod game;
 pub mod items {
-    pub struct ItemStack { pub item: std::sync::Arc<str>, pub count: u32, pub damage: u32, pub extra: Option<Box<()>> }
+    #[derive(Clone)] pub struct ItemStack { pub item: std::sync::Arc<str>, pub count: u32, pub damage: u32, pub extra: Option<Box<()>> }
     pub struct ItemInfo { pub max_stack: u32 }
-    pub struct Items;
+    pub struct Items { pub item_tags: std::collections::HashMap<String, std::collections::HashSet<String>> }
     impl Items { pub fn get(&self, item: &str) -> Option<ItemInfo> { let _ = item; Some(ItemInfo { max_stack: 64 }) } }
 }
 pub mod containers {
     pub struct ModBlockEntity { pub items: Vec<Option<crate::items::ItemStack>> }
     pub enum BlockEntity { Mod(ModBlockEntity) }
-    pub struct ModContainer { pub slots: usize, pub faces: [Vec<usize>; 6], pub inputs: Vec<usize>, pub outputs: Vec<usize>, pub menu: Option<String> }
+    pub struct ModContainer { pub slots: usize, pub faces: [Vec<usize>; 6], pub inputs: Vec<usize>, pub outputs: Vec<usize>, pub menu: Option<String>, pub only_when_empty: bool }
+}
+pub mod first_person {
+    #[derive(Clone, Copy, PartialEq)] pub enum Hand { Main, Off }
 }
 pub mod crafting {
     pub struct CustomRecipe { pub id: String, pub json: std::sync::Arc<serde_json::Value> }
@@ -167,7 +171,7 @@ pub mod native_hooks {
         pub fn native_block_entity_container(&self, block: &str, container: &mut Option<horizon_client::containers::ModContainer>) {
             let _ = (block, container);
         }
-        pub fn items(&self) -> horizon_client::items::Items { horizon_client::items::Items }
+        pub fn items(&self) -> horizon_client::items::Items { horizon_client::items::Items { item_tags: Default::default() } }
         pub fn native_recipes_of_type(&self, kind: &str) -> &[horizon_client::crafting::CustomRecipe] { let _ = kind; &[] }
         pub fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<horizon_client::crafting::Ingredient> {
             let _ = json;
@@ -226,6 +230,19 @@ pub mod native_hooks {
             self.parts.push((model, block, axis, rpm));
         }
         pub fn native_part_clear(&mut self, key: u64) { let _ = key; }
+        pub fn native_parts_seconds(&self) -> f32 { 1.0 }
+        pub fn native_part_item_model(&mut self, item: &str, pose: glam::Mat4) -> Option<u32> {
+            let _ = pose;
+            Some(1000 + item.len() as u32)
+        }
+        pub fn native_item_uses_block_light(&self, item: &str) -> Option<bool> { let _ = item; Some(false) }
+        #[allow(clippy::too_many_arguments)]
+        pub fn native_part_glide(&mut self, key: u64, model: u32, block: [i32; 3], axis: u8, rpm: f32, phase: f32,
+                                 offset: [f32; 4], velocity: [f32; 3]) {
+            let _ = (key, phase, offset);
+            self.glides.push((model, block, axis, rpm, velocity));
+        }
+        pub fn native_contents_changed(&mut self, pos: [i32; 3]) { let _ = pos; }
         pub fn native_wheel(&mut self, steps: f32, claimed: &mut bool) { let _ = (steps, claimed); }
         pub fn native_chunk_data_save(&self, dimension: &str, chunk: [i32; 2], data: &mut horizon_world::nbt::Compound) {
             let _ = (dimension, chunk, data);
@@ -271,7 +288,11 @@ pub struct Game<'a> {
     pub sent: Vec<(u128, String, Vec<u8>)>, pub parts: Vec<(u32, [i32; 3], u8, f32)>,
     pub aim: Option<[i32; 3]>, pub unsaved: Vec<[i32; 2]>,
     pub creative: bool, pub player: Option<Player>, pub keys: std::collections::HashSet<winit::keyboard::KeyCode>,
+    pub glides: Vec<(u32, [i32; 3], u8, f32, [f32; 3])>, pub hand: horizon_client::first_person::Hand, pub yaw: f32,
+    pub inventory: Vec<Option<horizon_client::items::ItemStack>>, pub selected: usize, pub dim: Dim,
 }
+pub struct Dim;
+impl Dim { pub fn id(&self) -> &str { "minecraft:overworld" } }
 pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
 pub struct Behaviours;
 pub struct Ticks;
@@ -289,14 +310,18 @@ impl Behaviours {
         BlockState { name: "minecraft:air".into(), properties: BTreeMap::new() },
         BlockState { name: "minecraft:stone".into(), properties: BTreeMap::new() },
     ];
-    // 2: shaft along x; 3: creative motor facing east.
+    // 2: shaft along x; 3: creative motor facing east; 4: depot.
     states.push(BlockState { name: "create:shaft".into(), properties: props("axis", "x") });
     states.push(BlockState { name: "create:creative_motor".into(), properties: props("facing", "east") });
+    states.push(BlockState { name: "create:depot".into(), properties: BTreeMap::new() });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
         world: World { blocks: Default::default(), game_time: 0, block_entities: Default::default() }, sent: vec![], parts: vec![], aim: None, unsaved: vec![],
-        creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default() };
+        creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),
+        glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0,
+        inventory: vec![Some(horizon_client::items::ItemStack { item: "minecraft:iron_ingot".into(), count: 5, damage: 0, extra: None })],
+        selected: 0, dim: Dim };
     game.native_world_lifecycle(native_lifecycle::WorldPhase::WorldOpenReady, "");
     assert_eq!(create_engine::states::index(2), Some(0));
     // A column with a motor at (0, 0, 0) and a shaft at (1, 0, 0).
@@ -344,6 +369,28 @@ impl Behaviours {
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
     assert!(ran);
     assert_eq!(game.said.last().map(String::as_str), Some("create speed at 2 0 0: 17 rpm"), "after the scroll");
+    // A depot at (5, 0, 0): its block entity, its slots, then a player facing north puts iron
+    // on it; the server sends its contents and the client glides the stack in.
+    let mut entity = None;
+    game.native_block_entity("create:depot", &mut entity);
+    assert_eq!(entity.map(|e| e.0).as_deref(), Some("create:depot"));
+    let mut container = None;
+    game.native_block_entity_container("create:depot", &mut container);
+    assert!(container.as_ref().is_some_and(|c| c.slots == 9 && c.only_when_empty));
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 5, y: 0, z: 0 }, BlockStateId(0), BlockStateId(4));
+    game.world.blocks.insert([5, 0, 0], 4);
+    game.world.block_entities.insert((5, 0, 0), horizon_client::containers::BlockEntity::Mod(
+        horizon_client::containers::ModBlockEntity { items: vec![] }));
+    let mut canceled = false;
+    game.native_right_click_block([5, 0, 0], [0, 1, 0], &mut canceled);
+    assert!(canceled && game.inventory[0].is_none(), "the stack left the hand");
+    game.native_level_tick_post("minecraft:overworld");
+    let depot: Vec<Vec<u8>> = game.sent.iter().filter(|m| m.1 == "create:depot").map(|m| m.2.clone()).collect();
+    assert_eq!(depot.len(), 1, "one message for the change");
+    for m in &depot { game.native_net_from_server("create:depot", m); }
+    let glide = game.glides.last().expect("the stack is drawn");
+    assert_eq!((glide.1, glide.2), ([5, 0, 0], 1));
+    assert!(glide.4[2] < 0.0, "it glides north, toward the centre from the south edge: {:?}", glide.4);
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);
