@@ -4,7 +4,7 @@ version = "0.1.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "aea7ed87831d5ed2d6da6678fa6ba4adf7a2edb7"
+horizon_revision = "95932161edf5cd908bbb329886308da938cfada4"
 
 # Game glue: per-world state on the server thread, translating hooks into engine calls.
 [[module]]
@@ -211,4 +211,17 @@ helper = "contents_changed.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "pos", ty = "[i32; 3]", value = "pos" },
+]
+
+[[injection]]
+id = "update-entity-after-fall-on"
+hook = "update_entity_after_fall_on"
+hook_version = 1
+kind = "HEAD"
+helper = "fall_on.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "stack", ty = "&mut horizon_client::items::ItemStack", value = "stack" },
+  { name = "at", ty = "[f64; 3]", value = "at" },
 ]

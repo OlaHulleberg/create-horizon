@@ -13,12 +13,16 @@ pub struct StateInfo {
     /// Encased cogwheels' `top_shaft` / `bottom_shaft`.
     pub top_shaft: bool,
     pub bottom_shaft: bool,
+    /// A belt segment's `facing`, `slope` and `part`.
+    pub belt: Option<crate::belt::Segment>,
 }
 
 impl StateInfo {
     /// Reads the properties the kinetic rules use; others are ignored.
     pub fn read<'a>(props: impl Iterator<Item = (&'a str, &'a str)>) -> StateInfo {
         let mut s = StateInfo::default();
+        let props: Vec<(&str, &str)> = props.collect();
+        s.belt = crate::belt::Segment::read(props.iter().copied());
         for (k, v) in props {
             match k {
                 "axis" => {
@@ -59,6 +63,8 @@ pub struct Settings {
     pub crank: i8,
     /// A water wheel's flow score (`WaterWheelBlockEntity.flowScore`).
     pub flow: i8,
+    /// A belt segment's controller, once its chain is whole (`BeltBlockEntity.controller`).
+    pub belt: Option<[i32; 3]>,
 }
 
 impl Default for Settings {
@@ -67,6 +73,7 @@ impl Default for Settings {
             motor_rpm: 16.0,
             crank: 0,
             flow: 0,
+            belt: None,
         }
     }
 }
@@ -146,6 +153,20 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             shafts: Dir::Down.bit(),
             ..Part::cog(Axis::Y, false)
         }),
+        // BeltBlock: turns on its axis, with a shaft through its pulleys; its segments turn
+        // together once their chain is whole.
+        Block::Belt => match (s.belt, settings.belt) {
+            (Some(seg), Some(controller)) => {
+                let axis = seg.rotation_axis();
+                let mut p = Part::shaft(axis);
+                if !seg.has_pulley() {
+                    p.shafts = 0;
+                }
+                p.belt = Some(controller);
+                one(p)
+            }
+            _ => [None, None],
+        },
         // MechanicalPressBlock: turns on its horizontal facing's axis, shafts at both ends.
         Block::MechanicalPress => s
             .facing
@@ -169,6 +190,7 @@ pub fn is_kinetic(block: Block) -> bool {
         top_shaft: true,
         bottom_shaft: true,
         powered: false,
+        belt: None,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

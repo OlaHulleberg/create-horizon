@@ -1,0 +1,84 @@
+{
+  "template": "minecraft:iron_block",
+  "properties": {
+    "hardness": 0.8,
+    "explosion_resistance": 0.8,
+    "sounds": "minecraft:white_wool",
+    "render_shape": "entityblock_animated"
+  },
+  "item": false,
+  "shapes": {
+    "property": "facing",
+    "values": {
+      "north": [
+        [
+          0.0625,
+          0.1875,
+          0.0,
+          0.9375,
+          0.8125,
+          1.0
+        ]
+      ],
+      "south": [
+        [
+          0.0625,
+          0.1875,
+          0.0,
+          0.9375,
+          0.8125,
+          1.0
+        ]
+      ],
+      "west": [
+        [
+          0.0,
+          0.1875,
+          0.0625,
+          1.0,
+          0.8125,
+          0.9375
+        ]
+      ],
+      "east": [
+        [
+          0.0,
+          0.1875,
+          0.0625,
+          1.0,
+          0.8125,
+          0.9375
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "slope": [
+      "horizontal",
+      "upward",
+      "downward",
+      "vertical",
+      "sideways"
+    ],
+    "part": [
+      "start",
+      "middle",
+      "end",
+      "pulley"
+    ],
+    "casing": [
+      "false",
+      "true"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}

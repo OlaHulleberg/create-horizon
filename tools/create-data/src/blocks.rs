@@ -35,6 +35,8 @@ pub enum Decision {
         /// Drawn as turning parts by the native mod, not in the chunk mesh
         /// (Create's `RenderShape.ENTITYBLOCK_ANIMATED`).
         animated: bool,
+        /// Whether it has an item of its own (a belt has none: the belt connector places it).
+        item: bool,
     },
     Pending(String),
 }
@@ -188,6 +190,7 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
         shapes: shapes.get(n).cloned(),
         own: None,
         animated: false,
+        item: true,
     };
     if let Some(d) = kinetic(b, sounds) {
         return d;
@@ -334,6 +337,27 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             )),
             None,
         ),
+        // BeltBlock: drawn by its renderer only (the block model is a particle). Shapes:
+        // BeltShapes' flat part (`box(1,3,0,15,13,16)` along the belt) for every slope, for now.
+        "belt" => {
+            let along_z = json!([[0.0625, 0.1875, 0.0, 0.9375, 0.8125, 1.0]]);
+            let along_x = json!([[0.0, 0.1875, 0.0625, 1.0, 0.8125, 0.9375]]);
+            (
+                "minecraft:iron_block",
+                Some(json!({ "property": "facing", "values": {
+                    "north": along_z, "south": along_z, "west": along_x, "east": along_x } })),
+                own(&[
+                    ("facing", &["north", "south", "west", "east"]),
+                    (
+                        "slope",
+                        &["horizontal", "upward", "downward", "vertical", "sideways"],
+                    ),
+                    ("part", &["start", "middle", "end", "pulley"]),
+                    ("casing", bools),
+                    ("waterlogged", bools),
+                ]),
+            )
+        }
         "hand_crank" => (
             "minecraft:heavy_core",
             Some(by_facing(&CRANK)),
@@ -345,7 +369,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
     // motors keep their model and show their shafts as parts.
     let animated = matches!(
         b.name.as_str(),
-        "shaft" | "powered_shaft" | "cogwheel" | "large_cogwheel" | "hand_crank"
+        "shaft" | "powered_shaft" | "cogwheel" | "large_cogwheel" | "hand_crank" | "belt"
     );
     Some(Decision::Declared {
         template,
@@ -354,6 +378,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         shapes,
         own,
         animated,
+        item: b.name != "belt",
     })
 }
 
@@ -362,7 +387,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 5] = [
+pub const PARTIALS: [(&str, &str, &str); 15] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -377,6 +402,38 @@ pub const PARTIALS: [(&str, &str, &str); 5] = [
         "create:block/mechanical_press/head",
         "south",
     ),
+    // BeltRenderer's segments and pulley, posed by the glue (`native_part_model_posed`): only
+    // their unturned `up` state is drawn.
+    ("part_belt_start", "create:block/belt/start", "up"),
+    ("part_belt_middle", "create:block/belt/middle", "up"),
+    ("part_belt_end", "create:block/belt/end", "up"),
+    (
+        "part_belt_start_bottom",
+        "create:block/belt/start_bottom",
+        "up",
+    ),
+    (
+        "part_belt_middle_bottom",
+        "create:block/belt/middle_bottom",
+        "up",
+    ),
+    ("part_belt_end_bottom", "create:block/belt/end_bottom", "up"),
+    (
+        "part_belt_diagonal_start",
+        "create:block/belt/diagonal_start",
+        "up",
+    ),
+    (
+        "part_belt_diagonal_middle",
+        "create:block/belt/diagonal_middle",
+        "up",
+    ),
+    (
+        "part_belt_diagonal_end",
+        "create:block/belt/diagonal_end",
+        "up",
+    ),
+    ("part_belt_pulley", "create:block/belt_pulley", "up"),
 ];
 
 /// The blockstate rotation (x, y) that turns a model pointing `from` to point `to`: y turns
@@ -479,6 +536,7 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
         shapes,
         own,
         animated,
+        item,
     } = d
     else {
         return None;
@@ -498,7 +556,7 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));
     doc.insert("properties".into(), Value::Object(props));
-    doc.insert("item".into(), json!(true));
+    doc.insert("item".into(), json!(item));
     if b.stack != 64 {
         doc.insert(
             "components".into(),
