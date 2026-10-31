@@ -113,6 +113,15 @@ def main():
     target = args.target_dir.resolve()
     if target.is_relative_to(horizon):
         parser.error("Cargo target must be outside the original Horizon checkout")
+    if args.action == "check":
+        # The glue module and hook helpers are no crate's files: `cargo fmt` doesn't see them.
+        sources = sorted(str(p) for p in (ROOT / "mixins").glob("*/*.rs"))
+        fmt = subprocess.run(["rustfmt", "--edition", "2024", "--check", *sources],
+                             capture_output=True, text=True)
+        if fmt.returncode:
+            print(fmt.stdout[-4000:] + fmt.stderr[-2000:], file=sys.stderr)
+            print("Native mod: rustfmt --edition 2024 mixins/*/*.rs", file=sys.stderr)
+            return fmt.returncode
     started = time.monotonic()
     with lock(ROOT / "target/stage.lock"):
         output, changed = mixin_stage(horizon, ROOT / "target/mixins")

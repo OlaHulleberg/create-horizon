@@ -3,6 +3,7 @@
 
 pub mod belt;
 pub mod client;
+pub mod contraption;
 pub mod depot;
 pub mod generated;
 pub mod kinetics;

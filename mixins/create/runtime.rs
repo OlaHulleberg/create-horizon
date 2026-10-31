@@ -126,11 +126,13 @@ pub(super) fn chunk_load(
     let saved = settings_from_nbt(Game::native_chunk_data(chunk, "create"));
     let belts = belts_from_nbt(Game::native_chunk_data(chunk, "create"));
     let tanks = tanks_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let windmills = windmills_from_nbt(game, Game::native_chunk_data(chunk, "create"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.load_settings(dim, saved.into_iter());
         w.load_belt_items(dim, belts.into_iter());
         w.load_tanks(dim, tanks.into_iter());
+        w.load_windmills(dim, windmills.into_iter());
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
                 && states::index(single).is_none()
@@ -193,6 +195,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
         }
     }
     tick_latches(game, dimension, dim);
+    tick_windmills(game, dimension, dim);
     tick_millstones(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
@@ -308,6 +311,9 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     let tanks: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].tanks.keys().copied().collect()).unwrap_or_default();
     send_tanks(game, &[player], dim, &tanks);
+    let windmills: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].windmills.keys().copied().collect()).unwrap_or_default();
+    send_windmills(game, &[player], dim, &windmills);
 }
 
 /// A player right-clicks a block (`HandCrankBlock.useItemOn`): a hand crank turns for 10 ticks,
@@ -319,18 +325,41 @@ pub(super) fn right_click_block(
     canceled: &mut bool,
 ) {
     let was = *canceled;
+    // The off hand's click after a main-hand click a Create block took: vanilla's client never
+    // sends it (SUCCESS ends the use), Horizon's does, sometimes a few ticks later; it is taken
+    // once, not acted on.
+    if game.hand == horizon_client::first_person::Hand::Off {
+        let player = game.native_acting_player().map_or(0, |p| p.uuid);
+        if TAKEN_OFF_HAND.with(|t| t.get()).is_some_and(|(p, at)| {
+            p == player && (at..=at + TAKEN_WINDOW).contains(&game.world.game_time)
+        }) {
+            TAKEN_OFF_HAND.with(|t| t.set(None));
+            *canceled = true;
+            return;
+        }
+    }
     right_click_inner(game, pos, face, canceled);
     if *canceled && !was {
         // Create's `useItemOn` answered SUCCESS: the client sends no item use after it. Ours
         // does, so the item use that follows this click is taken (`use_item`).
         let player = game.native_acting_player().map_or(0, |p| p.uuid);
-        TAKEN_USE.with(|t| t.set(Some((player, game.world.game_time))));
+        let taken = Some((player, game.world.game_time));
+        TAKEN_USE.with(|t| t.set(taken));
+        if game.hand == horizon_client::first_person::Hand::Main {
+            TAKEN_OFF_HAND.with(|t| t.set(taken));
+        }
     }
 }
 
+/// How many game ticks after a taken click its follow-ups (the item use, the off hand's click)
+/// may still arrive.
+const TAKEN_WINDOW: i64 = 10;
+
 thread_local! {
-    /// The player and game time of the last click a Create block took.
+    /// The player and game time of the last click a Create block took: for the item use and
+    /// the off hand's click that follow it, each taken once.
     static TAKEN_USE: std::cell::Cell<Option<(u128, i64)>> = const { std::cell::Cell::new(None) };
+    static TAKEN_OFF_HAND: std::cell::Cell<Option<(u128, i64)>> = const { std::cell::Cell::new(None) };
 }
 
 /// The item use that follows a click a Create block took (the same tick, or the next).
@@ -340,18 +369,13 @@ pub(super) fn use_item(game: &mut Game<'_>, claimed: &mut bool) {
     };
     let now = game.world.game_time;
     let me = game.native_acting_player().map_or(0, |p| p.uuid);
-    if me == player && (at..=at + 1).contains(&now) {
+    if me == player && (at..=at + TAKEN_WINDOW).contains(&now) {
         *claimed = true;
         TAKEN_USE.with(|t| t.set(None));
     }
 }
 
-fn right_click_inner(
-    game: &mut Game<'_>,
-    pos: [i32; 3],
-    face: [i32; 3],
-    canceled: &mut bool,
-) {
+fn right_click_inner(game: &mut Game<'_>, pos: [i32; 3], face: [i32; 3], canceled: &mut bool) {
     if *canceled || states::index(game.world.block(pos[0], pos[1], pos[2]).0).is_none() {
         return;
     }
@@ -381,6 +405,10 @@ fn right_click_inner(
     }
     if block == Some(create_engine::Block::FluidTank) {
         use_tank(game, dim, pos, canceled);
+        return;
+    }
+    if block == Some(create_engine::Block::WindmillBearing) {
+        use_windmill(game, dim, pos, back, canceled);
         return;
     }
     if let Some((kind, l)) = latch_state(state) {
@@ -508,7 +536,10 @@ fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)]) -> horizon
                             .collect(),
                     ),
                 );
-                b.insert("positive".into(), Tag::IntArray(vec![i32::from(inv.positive)]));
+                b.insert(
+                    "positive".into(),
+                    Tag::IntArray(vec![i32::from(inv.positive)]),
+                );
                 Tag::Compound(b)
             })
             .collect(),
@@ -560,6 +591,7 @@ fn belts_from_nbt(
 
 /// A chunk is being saved: Create's settings in it, as NBT (the only time it writes NBT).
 pub(super) fn chunk_data_save(
+    game: &Game<'_>,
     dimension: &str,
     chunk: [i32; 2],
     data: &mut horizon_world::nbt::Compound,
@@ -570,7 +602,8 @@ pub(super) fn chunk_data_save(
     let settings = with_world(|w| w.column_settings(dim, chunk[0], chunk[1])).unwrap_or_default();
     let belts = with_world(|w| w.column_belts(dim, chunk[0], chunk[1])).unwrap_or_default();
     let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
-    if settings.is_empty() && belts.is_empty() && tanks.is_empty() {
+    let windmills = with_world(|w| w.column_windmills(dim, chunk[0], chunk[1])).unwrap_or_default();
+    if settings.is_empty() && belts.is_empty() && tanks.is_empty() && windmills.is_empty() {
         data.remove(&"create".into());
         return;
     }
@@ -600,6 +633,9 @@ pub(super) fn chunk_data_save(
             })
             .collect();
         own.insert("tanks".into(), horizon_world::nbt::Tag::IntArray(v));
+    }
+    if !windmills.is_empty() {
+        own.insert("windmills".into(), windmills_to_nbt(game, &windmills));
     }
     data.insert("create".into(), horizon_world::nbt::Tag::Compound(own));
 }
@@ -658,6 +694,7 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
         Model::MillstoneCog => find("create:part_millstone_cog", "facing", "up"),
         Model::PressHead(d) => find("create:part_press_head", "facing", dir_name(d)),
         Model::Belt(..) | Model::BeltPulley(_) => None,
+        Model::BearingTop(d) => find("create:part_bearing_top_wooden", "facing", dir_name(d)),
     }
 }
 
@@ -790,6 +827,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         tanks_from_server(game, data);
         return;
     }
+    if channel == CONTRAPTION_CHANNEL {
+        contraptions_from_server(game, data);
+        return;
+    }
     if channel != client::CHANNEL || !client_ensure(game) {
         return;
     }
@@ -803,6 +844,7 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
                 if !show(game, &mut c, pos) {
                     c.pending.push((pos, 0));
                 }
+                turn_contraption(game, pos, speed);
             }
             Update::Clear { pos } => {
                 c.speeds.remove(&pos);
@@ -1201,10 +1243,7 @@ fn use_depot(game: &mut Game<'_>, dim: usize, pos: [i32; 3], face: [i32; 3], can
     if game.hand != horizon_client::first_person::Hand::Main {
         return;
     }
-    let hand = game
-        .inventory
-        .get_mut(game.selected)
-        .and_then(Option::take);
+    let hand = game.inventory.get_mut(game.selected).and_then(Option::take);
     let facing = create_engine::depot::Side::of_yaw(game.yaw);
     let put = hand.as_ref().map(|s| {
         create_engine::depot::Held::put_by_player(
@@ -1213,13 +1252,13 @@ fn use_depot(game: &mut Game<'_>, dim: usize, pos: [i32; 3], face: [i32; 3], can
             facing,
         )
     });
-    let taken = game
-        .native_with_mod_block_entity(pos, |be| {
-            be.items.resize(be.items.len().max(create_engine::depot::SLOTS), None);
-            let taken: Vec<_> = be.items.iter_mut().filter_map(Option::take).collect();
-            be.items[0] = hand.clone();
-            taken
-        });
+    let taken = game.native_with_mod_block_entity(pos, |be| {
+        be.items
+            .resize(be.items.len().max(create_engine::depot::SLOTS), None);
+        let taken: Vec<_> = be.items.iter_mut().filter_map(Option::take).collect();
+        be.items[0] = hand.clone();
+        taken
+    });
     let Some(taken) = taken else {
         // No block entity: the stack stays in hand.
         if let Some(slot) = game.inventory.get_mut(game.selected) {
@@ -1297,7 +1336,8 @@ fn tick_depots(game: &mut Game<'_>, dimension: &str, dim: usize) {
             continue;
         }
         if let Some((_, item, _)) = depot_items(game, pos).into_iter().find(|s| s.0 == 0) {
-            let held = create_engine::depot::Held::new(random_angle(game, pos), upright(game, &item));
+            let held =
+                create_engine::depot::Held::new(random_angle(game, pos), upright(game, &item));
             with_world(|w| {
                 if let Some(h) = w.dims[dim].depots.get_mut(&pos) {
                     *h = Some(held);
@@ -1371,7 +1411,8 @@ thread_local! {
 /// A key for copy `copy` of the stack in `slot` of the depot at `pos`, apart from the kinetic
 /// parts' keys (a well-mixed hash of the three).
 fn depot_key(pos: [i32; 3], slot: u8, copy: u8) -> u64 {
-    let mut x = client::key(pos, 0) ^ (u64::from(slot) << 8 | u64::from(copy)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut x = client::key(pos, 0)
+        ^ (u64::from(slot) << 8 | u64::from(copy)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     x ^ (x >> 31) | 1 << 63
@@ -1403,10 +1444,15 @@ fn show_depot(
         let (poses, phase, offset, velocity) = if *slot == 0 {
             let at = c.held.offset();
             let to = next.map_or(at, |n| n.offset());
-            let poses = depot::stack_poses(u32::from(*count), block_item, &mut depot::JavaRandom::new(0));
+            let poses = depot::stack_poses(
+                u32::from(*count),
+                block_item,
+                &mut depot::JavaRandom::new(0),
+            );
             (poses, c.held.angle as f32, at, (to - at) * 20.0)
         } else {
-            let (poses, phase) = depot::output_place(usize::from(*slot) - 1, u32::from(*count), block_item);
+            let (poses, phase) =
+                depot::output_place(usize::from(*slot) - 1, u32::from(*count), block_item);
             (poses, phase, glam::Vec3::ZERO, glam::Vec3::ZERO)
         };
         for (copy, pose) in poses.into_iter().take(usize::from(COPIES)).enumerate() {
@@ -1534,8 +1580,7 @@ fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
         if held.sliding() && held.position < 0.5 - 1.0 / 16.0 {
             continue;
         }
-        let Some((_, item, count)) = depot_items(game, depot).into_iter().find(|s| s.0 == 0)
-        else {
+        let Some((_, item, count)) = depot_items(game, depot).into_iter().find(|s| s.0 == 0) else {
             continue;
         };
         let speed = with_world(|w| w.speed(dim, above)).flatten().unwrap_or(0.0);
@@ -1626,7 +1671,10 @@ fn press_on_depot(
     let results = RECIPES.with_borrow(|r| {
         let r = r.as_ref()?;
         let id = r.pressing.find_single(item)?;
-        Some(processing::roll(r.pressing.get(id), &mut processing::Rng::new(seed)))
+        Some(processing::roll(
+            r.pressing.get(id),
+            &mut processing::Rng::new(seed),
+        ))
     });
     let Some(results) = results else {
         return held;
@@ -1674,7 +1722,10 @@ fn press_on_depot(
                     dropped.push((i.clone(), left));
                 }
             }
-            for (slot, s) in be.items[create_engine::depot::OUTPUTS].iter_mut().zip(outputs) {
+            for (slot, s) in be.items[create_engine::depot::OUTPUTS]
+                .iter_mut()
+                .zip(outputs)
+            {
                 *slot = s.map(|(i, n)| stack(&i, n));
             }
             dropped
@@ -1881,7 +1932,11 @@ pub(super) fn item_landed(
     at: [f64; 3],
 ) {
     // The entity's own block, else the one under it; neither a Create block: done.
-    let own = [at[0].floor() as i32, at[1].floor() as i32, at[2].floor() as i32];
+    let own = [
+        at[0].floor() as i32,
+        at[1].floor() as i32,
+        at[2].floor() as i32,
+    ];
     let s_own = game.world.block(own[0], own[1], own[2]).0;
     let s_pos = game.world.block(pos[0], pos[1], pos[2]).0;
     if states::index(s_own).is_none() && states::index(s_pos).is_none() {
@@ -2172,7 +2227,9 @@ fn eject_from_belt(
     item: &create_engine::belt::Item,
 ) {
     let at = create_engine::belt::vector_for_offset(controller, seg, length, item.position);
-    let speed = create_engine::belt::movement_speed(rpm).abs().max(1.0 / 8.0);
+    let speed = create_engine::belt::movement_speed(rpm)
+        .abs()
+        .max(1.0 / 8.0);
     let d = create_engine::belt::movement_facing(rpm, seg.facing).offset();
     let motion = [
         f64::from(d[0]) * f64::from(speed),
@@ -2227,7 +2284,11 @@ fn tick_belts(game: &mut Game<'_>, dimension: &str, dim: usize) {
     for c in busy {
         let Some((seg, length, mut items)) = with_world(|w| {
             let b = w.dims[dim].belts.get_mut(&c)?;
-            Some((b.segment, b.chain.len() as i32, std::mem::take(&mut b.items)))
+            Some((
+                b.segment,
+                b.chain.len() as i32,
+                std::mem::take(&mut b.items),
+            ))
         })
         .flatten() else {
             continue;
@@ -2297,7 +2358,8 @@ fn send_belts(game: &mut Game<'_>, players: &[u128], dim: usize, belts: &[[i32; 
                     },
                     |b| {
                         let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
-                        let speed = create_engine::belt::direction_aware_speed(rpm, b.segment.facing);
+                        let speed =
+                            create_engine::belt::direction_aware_speed(rpm, b.segment.facing);
                         let mut side = BeltSide {
                             game,
                             dim,
@@ -2592,12 +2654,7 @@ pub(super) fn tick_block(state: BlockStateId, handled: &mut bool) {
 
 /// Sets a latch's new state (`setBlock(.., UPDATE_CLIENTS)`), then the blocks it powers read it
 /// again (`DiodeBlock.onPlace` -> `updateNeighborsInFront`).
-fn set_latch(
-    game: &mut Game<'_>,
-    dimension: &str,
-    pos: [i32; 3],
-    l: create_engine::latch::Latch,
-) {
+fn set_latch(game: &mut Game<'_>, dimension: &str, pos: [i32; 3], l: create_engine::latch::Latch) {
     let registry = game.pack.assets.registry;
     let current = game.world.block(pos[0], pos[1], pos[2]);
     let Some(mut s) = registry.state(current).cloned() else {
@@ -2607,7 +2664,8 @@ fn set_latch(
     s.properties.insert("powered".into(), flag(l.powered));
     s.properties.insert("powering".into(), flag(l.powering));
     if s.properties.contains_key("powered_side") {
-        s.properties.insert("powered_side".into(), flag(l.powered_side));
+        s.properties
+            .insert("powered_side".into(), flag(l.powered_side));
     }
     let Some(id) = registry.id(&s) else {
         return;
@@ -2736,12 +2794,7 @@ pub(super) fn use_item_on(
             game.native_give_items(&current.name, 1);
         }
         if let Some(air) = registry.default_state("minecraft:air") {
-            game.native_set_block(
-                &dimension,
-                pos,
-                air,
-                super::native_hooks::flags::UPDATE_ALL,
-            );
+            game.native_set_block(&dimension, pos, air, super::native_hooks::flags::UPDATE_ALL);
         }
         return;
     }
@@ -2765,17 +2818,15 @@ pub(super) fn use_item_on(
         next.properties.insert(k, v);
     }
     if let Some(id) = registry.id(&next) {
-        game.native_set_block(
-            &dimension,
-            pos,
-            id,
-            super::native_hooks::flags::UPDATE_ALL,
-        );
+        game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
     }
 }
 
-fn tanks_from_nbt(data: Option<&horizon_world::nbt::Compound>) -> Vec<([i32; 3], create_engine::tank::Tank)> {
-    let Some(horizon_world::nbt::Tag::IntArray(v)) = data.and_then(|d| d.get(&"tanks".into())) else {
+fn tanks_from_nbt(
+    data: Option<&horizon_world::nbt::Compound>,
+) -> Vec<([i32; 3], create_engine::tank::Tank)> {
+    let Some(horizon_world::nbt::Tag::IntArray(v)) = data.and_then(|d| d.get(&"tanks".into()))
+    else {
         return Vec::new();
     };
     v.chunks_exact(5)
@@ -2892,4 +2943,383 @@ fn tanks_from_server(game: &mut Game<'_>, data: &[u8]) {
             game.native_part_set(key, model, pos, 1, 0.0, 0.0);
         }
     }
+}
+
+/// `WindmillBearingBlock.useItemOn` with an empty hand, not sneaking: assembled sails come
+/// apart now; otherwise they assemble on the next tick (`assembleNextTick`).
+fn use_windmill(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    sneaking: bool,
+    canceled: &mut bool,
+) {
+    if sneaking {
+        *canceled = true;
+        return;
+    }
+    if game.native_held().is_some_and(|h| h.0 != "minecraft:air") {
+        return;
+    }
+    *canceled = true;
+    let running = with_world(|w| w.dims[dim].windmills.contains_key(&pos)) == Some(true);
+    if running {
+        let dimension = game.dim.id().to_owned();
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        if let Some(w) = with_world(|w| w.windmill_disassembled(dim, pos, state)).flatten() {
+            put_back(game, &dimension, pos, &w);
+        }
+    } else {
+        with_world(|w| {
+            if !w.dims[dim].windmill_assemble.contains(&pos) {
+                w.dims[dim].windmill_assemble.push(pos);
+            }
+        });
+    }
+}
+
+/// `ControlledContraptionEntity.disassemble` at angle 0 (a windmill turns back first): each
+/// block where it was, or dropped where something else took its place.
+fn put_back(
+    game: &mut Game<'_>,
+    dimension: &str,
+    bearing: [i32; 3],
+    w: &create_engine::world::Windmill,
+) {
+    let registry = game.pack.assets.registry;
+    for (o, state) in &w.blocks {
+        let p = [bearing[0] + o[0], bearing[1] + o[1], bearing[2] + o[2]];
+        let here = game.world.block(p[0], p[1], p[2]);
+        let free = registry
+            .state(here)
+            .is_some_and(|s| s.name == "minecraft:air" || s.name == "minecraft:cave_air");
+        if free {
+            game.native_set_block(
+                dimension,
+                p,
+                BlockStateId(*state),
+                super::native_hooks::flags::UPDATE_ALL,
+            );
+        } else if let Some(s) = registry.state(BlockStateId(*state)) {
+            game.native_run_command(&format!(
+                "execute in {dimension} run summon minecraft:item {}.5 {}.5 {}.5 {{Item:{{id:'{}',count:1}}}}",
+                p[0], p[1], p[2], s.name
+            ));
+        }
+    }
+}
+
+/// Blocks Create can't move (unbreakable ones) and blocks whose block entity would be lost
+/// (moving block entities isn't ported: refused rather than emptied).
+fn contraption_found(game: &Game<'_>, p: [i32; 3]) -> Option<create_engine::contraption::Found> {
+    use create_engine::contraption::{Found, Sticky};
+    let registry = game.pack.assets.registry;
+    let id = game.world.block(p[0], p[1], p[2]);
+    let s = registry.state(id)?;
+    if matches!(
+        s.name.as_str(),
+        "minecraft:air"
+            | "minecraft:cave_air"
+            | "minecraft:void_air"
+            | "minecraft:water"
+            | "minecraft:lava"
+    ) {
+        return None;
+    }
+    let sail = s.name == "create:sail_frame"
+        || (s.name.starts_with("create:") && s.name.ends_with("_sail"));
+    let sail_facing = sail
+        .then(|| {
+            s.properties
+                .get("facing")
+                .and_then(|f| Dir::ALL.into_iter().find(|d| dir_name(*d) == f))
+        })
+        .flatten();
+    let unmovable = matches!(
+        s.name.as_str(),
+        "minecraft:bedrock"
+            | "minecraft:barrier"
+            | "minecraft:end_portal_frame"
+            | "minecraft:command_block"
+            | "minecraft:chain_command_block"
+            | "minecraft:repeating_command_block"
+            | "minecraft:structure_block"
+            | "minecraft:jigsaw"
+    ) || game.world.block_entities.contains_key(&(p[0], p[1], p[2]));
+    Some(Found {
+        state: id.0,
+        sail_facing,
+        sticky: match s.name.as_str() {
+            "minecraft:slime_block" => Some(Sticky::Slime),
+            "minecraft:honey_block" => Some(Sticky::Honey),
+            _ => None,
+        },
+        movable: !unmovable,
+    })
+}
+
+/// Windmills: structures whose bearing broke go back; right-clicked bearings assemble their
+/// sails (`assemble`), the blocks leaving the world; clients see the changes. Nothing runs
+/// without either.
+fn tick_windmills(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let Some((orphans, queued)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        (
+            std::mem::take(&mut d.windmill_orphans),
+            std::mem::take(&mut d.windmill_assemble),
+        )
+    }) else {
+        return;
+    };
+    for (pos, w) in orphans {
+        put_back(game, dimension, pos, &w);
+    }
+    for pos in queued {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let facing = with_world(|w| {
+            w.table
+                .get(state)
+                .filter(|(b, _)| *b == create_engine::Block::WindmillBearing)
+                .and_then(|(_, i)| i.facing)
+        })
+        .flatten();
+        let Some(facing) = facing else {
+            continue;
+        };
+        let gathered = create_engine::contraption::gather_windmill(pos, facing, |p| {
+            contraption_found(game, p)
+        });
+        let Ok((blocks, sails)) = gathered else {
+            continue;
+        };
+        if let Some(air) = game.pack.assets.registry.default_state("minecraft:air") {
+            for (o, _) in &blocks {
+                let p = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+                game.native_set_block(
+                    dimension,
+                    p,
+                    air,
+                    super::native_hooks::flags::UPDATE_CLIENTS,
+                );
+            }
+        }
+        let w = create_engine::world::Windmill {
+            blocks,
+            sails,
+            clockwise: true,
+        };
+        with_world(|world| world.windmill_assembled(dim, pos, state, w));
+    }
+    let changed = with_world(|w| {
+        let mut v = std::mem::take(&mut w.dims[dim].windmill_changes);
+        v.sort();
+        v.dedup();
+        v
+    })
+    .unwrap_or_default();
+    if !changed.is_empty() {
+        let players = players_in(game, dimension);
+        send_windmills(game, &players, dim, &changed);
+    }
+}
+
+const CONTRAPTION_CHANNEL: &str = "create:contraption";
+
+/// A windmill's structure for clients: bearing, facing, then each block's offset and state (16
+/// bytes); none when it came apart.
+fn send_windmills(game: &mut Game<'_>, players: &[u128], dim: usize, bearings: &[[i32; 3]]) {
+    for &pos in bearings {
+        let w = with_world(|w| w.dims[dim].windmills.get(&pos).cloned()).flatten();
+        let facing = with_world(|w| {
+            w.table
+                .get(game.world.block(pos[0], pos[1], pos[2]).0)
+                .and_then(|(_, i)| i.facing)
+        })
+        .flatten()
+        .unwrap_or(Dir::Up);
+        let mut m = Vec::new();
+        for v in pos {
+            m.extend_from_slice(&v.to_le_bytes());
+        }
+        m.push(facing as u8);
+        let blocks = w.map(|w| w.blocks).unwrap_or_default();
+        let blocks = &blocks[..blocks.len().min((30_000 - 17) / 16)];
+        m.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+        for (o, s) in blocks {
+            for v in o {
+                m.extend_from_slice(&v.to_le_bytes());
+            }
+            m.extend_from_slice(&s.to_le_bytes());
+        }
+        for &p in players {
+            let _ = game.native_net_send_to_player(p, CONTRAPTION_CHANNEL, &m);
+        }
+    }
+}
+
+thread_local! {
+    /// Structures a client draws, by bearing: their part model and the axis they turn on.
+    static CONTRAPTIONS: RefCell<HashMap<[i32; 3], (u32, Dir)>> = RefCell::new(HashMap::new());
+}
+
+fn contraptions_from_server(game: &mut Game<'_>, d: &[u8]) {
+    let i = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
+    if d.len() < 17 {
+        return;
+    }
+    let pos = [i(&d[0..4]), i(&d[4..8]), i(&d[8..12])];
+    let facing = Dir::ALL[usize::from(d[12].min(5))];
+    let n = u32::from_le_bytes(d[13..17].try_into().unwrap()) as usize;
+    let key = depot_key(pos, 220, 0);
+    if let Some((old, _)) = CONTRAPTIONS.with_borrow_mut(|c| c.remove(&pos)) {
+        game.native_part_clear(key);
+        game.native_part_model_free(old);
+    }
+    let blocks: Vec<(BlockStateId, glam::Mat4)> = d[17..]
+        .chunks_exact(16)
+        .take(n)
+        .map(|r| {
+            let o = glam::Vec3::new(i(&r[0..4]) as f32, i(&r[4..8]) as f32, i(&r[8..12]) as f32);
+            (
+                BlockStateId(u32::from_le_bytes(r[12..16].try_into().unwrap())),
+                glam::Mat4::from_translation(o),
+            )
+        })
+        .collect();
+    if blocks.is_empty() {
+        return;
+    }
+    let Some(model) = game.native_part_model_compound(&blocks) else {
+        return;
+    };
+    CONTRAPTIONS.with_borrow_mut(|c| c.insert(pos, (model, facing)));
+    let rpm = press_speed(pos);
+    turn_contraption(game, pos, rpm);
+}
+
+/// The structure turns with its bearing about the bearing's axis (through its centre).
+fn turn_contraption(game: &mut Game<'_>, pos: [i32; 3], rpm: f32) {
+    let Some((model, facing)) = CONTRAPTIONS.with_borrow(|c| c.get(&pos).copied()) else {
+        return;
+    };
+    game.native_part_set(
+        depot_key(pos, 220, 0),
+        model,
+        pos,
+        axis_index(facing.axis()),
+        rpm,
+        0.0,
+    );
+}
+
+/// The block states of windmills as text (`name[key=value,...]`), to save.
+fn state_text(registry: &BlockRegistry, id: u32) -> String {
+    let Some(s) = registry.state(BlockStateId(id)) else {
+        return "minecraft:air".into();
+    };
+    if s.properties.is_empty() {
+        return s.name.clone();
+    }
+    let props: Vec<String> = s
+        .properties
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    format!("{}[{}]", s.name, props.join(","))
+}
+
+fn state_of_text(registry: &BlockRegistry, text: &str) -> Option<u32> {
+    let (name, rest) = text.split_once('[').unwrap_or((text, ""));
+    let default = registry.default_state(name)?;
+    let mut s = registry.state(default)?.clone();
+    for kv in rest
+        .trim_end_matches(']')
+        .split(',')
+        .filter(|x| !x.is_empty())
+    {
+        let (k, v) = kv.split_once('=')?;
+        s.properties.insert(k.to_owned(), v.to_owned());
+    }
+    registry.id(&s).map(|i| i.0)
+}
+
+fn windmills_to_nbt(
+    game: &Game<'_>,
+    all: &[([i32; 3], create_engine::world::Windmill)],
+) -> horizon_world::nbt::Tag {
+    use horizon_world::nbt::{Compound, Tag};
+    let registry = game.pack.assets.registry;
+    Tag::List(
+        all.iter()
+            .map(|(p, w)| {
+                let mut c = Compound::new();
+                c.insert("pos".into(), Tag::IntArray(p.to_vec()));
+                c.insert(
+                    "blocks".into(),
+                    Tag::IntArray(w.blocks.iter().flat_map(|(o, _)| *o).collect()),
+                );
+                c.insert(
+                    "states".into(),
+                    Tag::List(
+                        w.blocks
+                            .iter()
+                            .map(|(_, s)| Tag::String(state_text(registry, *s).as_str().into()))
+                            .collect(),
+                    ),
+                );
+                c.insert(
+                    "sails".into(),
+                    Tag::IntArray(vec![w.sails as i32, i32::from(w.clockwise)]),
+                );
+                Tag::Compound(c)
+            })
+            .collect(),
+    )
+}
+
+fn windmills_from_nbt(
+    game: &Game<'_>,
+    data: Option<&horizon_world::nbt::Compound>,
+) -> Vec<([i32; 3], create_engine::world::Windmill)> {
+    use horizon_world::nbt::Tag;
+    let registry = game.pack.assets.registry;
+    let Some(Tag::List(list)) = data.and_then(|d| d.get(&"windmills".into())) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|c| {
+            let Tag::Compound(c) = c else { return None };
+            let Some(Tag::IntArray(p)) = c.get(&"pos".into()) else {
+                return None;
+            };
+            let Some(Tag::IntArray(offsets)) = c.get(&"blocks".into()) else {
+                return None;
+            };
+            let Some(Tag::List(states)) = c.get(&"states".into()) else {
+                return None;
+            };
+            let Some(Tag::IntArray(sails)) = c.get(&"sails".into()) else {
+                return None;
+            };
+            let blocks = offsets
+                .chunks_exact(3)
+                .zip(states)
+                .filter_map(|(o, s)| {
+                    let Tag::String(s) = s else { return None };
+                    Some((
+                        [o[0], o[1], o[2]],
+                        state_of_text(registry, &s.to_string_lossy())?,
+                    ))
+                })
+                .collect();
+            Some((
+                [*p.first()?, *p.get(1)?, *p.get(2)?],
+                create_engine::world::Windmill {
+                    blocks,
+                    sails: (*sails.first()?).max(0) as u32,
+                    clockwise: sails.get(1) != Some(&0),
+                },
+            ))
+        })
+        .collect()
 }
