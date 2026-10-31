@@ -4,7 +4,7 @@ version = "0.1.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "dd629a26badb3bcda73a05ffc429d7d929df53f2"
+horizon_revision = "2fb4499e9a8cae83adb8e3cdd63c6d81cdf80947"
 
 # Game glue: per-world state on the server thread, translating hooks into engine calls.
 [[module]]
@@ -150,6 +150,7 @@ hook_version = 1
 kind = "HEAD"
 helper = "chunk_save.rs"
 bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "self" },
   { name = "dimension", ty = "&str", value = "dimension" },
   { name = "chunk", ty = "[i32; 2]", value = "chunk" },
   { name = "data", ty = "&mut horizon_world::nbt::Compound", value = "data" },

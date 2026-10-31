@@ -1,0 +1,85 @@
+{
+  "template": "minecraft:oak_planks",
+  "properties": {
+    "hardness": 2.0,
+    "explosion_resistance": 2.0,
+    "requires_tool": false,
+    "sounds": "minecraft:scaffolding"
+  },
+  "item": true,
+  "shapes": {
+    "property": "facing",
+    "values": {
+      "down": [
+        [
+          0.0,
+          0.4375,
+          0.0,
+          1.0,
+          0.6875,
+          1.0
+        ]
+      ],
+      "up": [
+        [
+          0.0,
+          0.3125,
+          0.0,
+          1.0,
+          0.5625,
+          1.0
+        ]
+      ],
+      "north": [
+        [
+          0.0,
+          0.0,
+          0.4375,
+          1.0,
+          1.0,
+          0.6875
+        ]
+      ],
+      "south": [
+        [
+          0.0,
+          0.0,
+          0.3125,
+          1.0,
+          1.0,
+          0.5625
+        ]
+      ],
+      "west": [
+        [
+          0.4375,
+          0.0,
+          0.0,
+          0.6875,
+          1.0,
+          1.0
+        ]
+      ],
+      "east": [
+        [
+          0.3125,
+          0.0,
+          0.0,
+          0.5625,
+          1.0,
+          1.0
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "facing": [
+      "up",
+      "down",
+      "north",
+      "south",
+      "west",
+      "east"
+    ]
+  }
+}

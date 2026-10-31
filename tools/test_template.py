@@ -284,6 +284,10 @@ pub mod native_hooks {
             let _ = (pose, tint);
             Some(6000 + state.0)
         }
+        pub fn native_part_model_compound(&mut self, blocks: &[(BlockStateId, glam::Mat4)]) -> Option<u32> {
+            Some(7000 + blocks.len() as u32)
+        }
+        pub fn native_part_model_free(&mut self, model: u32) { let _ = model; }
         pub fn native_update_entity_after_fall_on(&mut self, pos: [i32; 3], stack: &mut horizon_client::items::ItemStack, at: [f64; 3]) {
             let _ = (pos, stack, at);
         }
@@ -416,6 +420,9 @@ impl Behaviours {
     states.push(BlockState { name: "create:fluid_tank".into(), properties: BTreeMap::from([
         ("bottom".to_owned(), "true".to_owned()), ("shape".to_owned(), "window".to_owned()), ("top".to_owned(), "true".to_owned())]) });
     states.push(BlockState { name: "create:part_fluid_water".into(), properties: props("facing", "up") });
+    // 17: a windmill bearing facing north; 18: a white sail facing north (in the xy plane).
+    states.push(BlockState { name: "create:windmill_bearing".into(), properties: props("facing", "north") });
+    states.push(BlockState { name: "create:white_sail".into(), properties: props("facing", "north") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
@@ -607,6 +614,38 @@ impl Behaviours {
     assert!(!tanks.is_empty());
     for m in &tanks { game.native_net_from_server("create:tank", m); }
     assert!(game.parts.iter().any(|p| p.0 == 6016 && p.1 == [40, 0, 40]), "the water's box is drawn");
+    // A windmill bearing at (50, 0, 50) facing north, eight sails in a row in front of it: an
+    // empty hand assembles them the next tick (gone from the world, generating 1 rpm), they are
+    // saved with the chunk, and a second click puts them back.
+    game.world.blocks.insert([50, 0, 50], 17);
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 50, y: 0, z: 50 }, BlockStateId(0), BlockStateId(17));
+    for x in 46..54 { game.world.blocks.insert([x, 0, 49], 18); }
+    game.inventory[0] = None;
+    let mut canceled = false;
+    game.native_right_click_block([50, 0, 50], [0, 0, -1], &mut canceled);
+    assert!(canceled);
+    // The off hand's click that Horizon's client sends after it is taken, not acted on.
+    game.hand = horizon_client::first_person::Hand::Off;
+    let mut canceled = false;
+    game.native_right_click_block([50, 0, 50], [0, 0, -1], &mut canceled);
+    assert!(canceled);
+    game.hand = horizon_client::first_person::Hand::Main;
+    game.native_level_tick_post("minecraft:overworld");
+    assert!((46..54).all(|x| game.world.blocks.get(&[x, 0, 49]) == Some(&0)), "the sails left");
+    game.native_level_tick_post("minecraft:overworld");
+    let me = game.native_acting_player().unwrap();
+    let mut ran = false;
+    game.native_perform_command(&me, "create_debug speed 50 0 50", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("create speed at 50 0 50: 1 rpm"));
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [3, 3], &mut data);
+    let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create".into()) else { panic!("no create data") };
+    assert!(own.contains_key(&"windmills".into()));
+    assert!(game.sent.iter().any(|m| m.1 == "create:contraption" && m.2.len() == 17 + 8 * 16));
+    game.world.game_time += 5;
+    let mut canceled = false;
+    game.native_right_click_block([50, 0, 50], [0, 0, -1], &mut canceled);
+    assert!((46..54).all(|x| game.world.blocks.get(&[x, 0, 49]) == Some(&18)), "the sails are back");
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

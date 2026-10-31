@@ -400,6 +400,20 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 ("top", &["true", "false"]),
             ]),
         ),
+        // WindmillBearingBlock (BearingBlock): any facing, a full block.
+        "windmill_bearing" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
+        // SailBlock: a thin plane on any facing (AllShapes.SAIL / SAIL_FRAME, forDirectional
+        // from up), wood's template with scaffolding's sounds.
+        "sail_frame" => (
+            "minecraft:oak_planks",
+            Some(by_facing(&[[0., 5., 0., 16., 9., 16.]])),
+            own(&[("facing", facing)]),
+        ),
+        n if n.ends_with("_sail") => (
+            "minecraft:oak_planks",
+            Some(by_facing(&[[0., 5., 0., 16., 10., 16.]])),
+            own(&[("facing", facing)]),
+        ),
         "hand_crank" => (
             "minecraft:heavy_core",
             Some(by_facing(&CRANK)),
@@ -429,7 +443,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 17] = [
+pub const PARTIALS: [(&str, &str, &str); 18] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -478,6 +492,11 @@ pub const PARTIALS: [(&str, &str, &str); 17] = [
     ("part_belt_pulley", "create:block/belt_pulley", "up"),
     // A fluid's still texture on a unit cube (our own models, `fluid_models`), posed and
     // tinted to a tank's level (`FluidTankRenderer`'s fluid box).
+    (
+        "part_bearing_top_wooden",
+        "create:block/bearing/top_wooden",
+        "up",
+    ),
     ("part_fluid_water", "create:block/part_fluid_water", "up"),
     ("part_fluid_lava", "create:block/part_fluid_lava", "up"),
 ];

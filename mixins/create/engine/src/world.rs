@@ -128,6 +128,22 @@ pub struct Dimension {
     tank_saved: HashMap<[i32; 3], crate::tank::Tank>,
     /// Tanks clients must see again.
     pub tank_changes: Vec<[i32; 3]>,
+    /// Windmill bearings whose sails are assembled, by bearing; ones saved with a column wait
+    /// for their bearing; right-clicks waiting for the next tick (`assembleNextTick`); bearings
+    /// clients must see again; and structures whose bearing broke, to put back.
+    pub windmills: HashMap<[i32; 3], Windmill>,
+    windmill_saved: HashMap<[i32; 3], Windmill>,
+    pub windmill_assemble: Vec<[i32; 3]>,
+    pub windmill_changes: Vec<[i32; 3]>,
+    pub windmill_orphans: Vec<([i32; 3], Windmill)>,
+}
+
+/// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Windmill {
+    pub blocks: Vec<([i32; 3], u32)>,
+    pub sails: u32,
+    pub clockwise: bool,
 }
 
 /// Blocks that keep state of their own here but are not kinetic: depots.
@@ -139,6 +155,7 @@ fn has_state(block: Block) -> bool {
             | Block::PoweredLatch
             | Block::PoweredToggleLatch
             | Block::FluidTank
+            | Block::WindmillBearing
     )
 }
 
@@ -212,6 +229,23 @@ impl CreateWorld {
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
         }
+        if block == Block::WindmillBearing
+            && !d.windmills.contains_key(&pos)
+            && let Some(w) = d.windmill_saved.remove(&pos)
+        {
+            let speed = crate::contraption::windmill_speed(w.sails, w.clockwise);
+            d.windmills.insert(pos, w);
+            d.windmill_changes.push(pos);
+            let old = d.settings.get(&pos).copied().unwrap_or_default();
+            d.settings.insert(
+                pos,
+                Settings {
+                    windmill: speed,
+                    ..old
+                },
+            );
+        }
+        let d = &mut self.dims[dim];
         if block == Block::FluidTank && !d.tanks.contains_key(&pos) {
             let t = d.tank_saved.remove(&pos).unwrap_or_default();
             d.tanks.insert(pos, t);
@@ -274,6 +308,11 @@ impl CreateWorld {
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
             d.presses.remove(&pos);
+            if let Some(w) = d.windmills.remove(&pos) {
+                d.windmill_orphans.push((pos, w));
+                d.windmill_changes.push(pos);
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if d.tanks.remove(&pos).is_some() {
                 d.tank_changes.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
@@ -325,6 +364,8 @@ impl CreateWorld {
             d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tanks.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.windmills
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             // A belt reaching into the column stops being whole until it is back.
             let gone: Vec<[i32; 3]> = d
                 .belt_of
@@ -690,6 +731,70 @@ impl CreateWorld {
             .map(|(c, b)| (*c, b.items.to_save()))
             .collect();
         out.sort_by_key(|(c, _)| *c);
+        out
+    }
+
+    /// A windmill's sails were assembled (`assemble`): it generates from the next solve on.
+    pub fn windmill_assembled(&mut self, dim: usize, pos: [i32; 3], state: u32, w: Windmill) {
+        let speed = crate::contraption::windmill_speed(w.sails, w.clockwise);
+        let d = &mut self.dims[dim];
+        d.windmills.insert(pos, w);
+        d.windmill_changes.push(pos);
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        let old = d.settings.get(&pos).copied().unwrap_or_default();
+        self.set_settings(
+            dim,
+            pos,
+            state,
+            Settings {
+                windmill: speed,
+                ..old
+            },
+        );
+    }
+
+    /// A windmill was taken apart (`disassemble`): its structure, to put back; it stops.
+    pub fn windmill_disassembled(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        state: u32,
+    ) -> Option<Windmill> {
+        let d = &mut self.dims[dim];
+        let w = d.windmills.remove(&pos)?;
+        d.windmill_changes.push(pos);
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        let old = d.settings.get(&pos).copied().unwrap_or_default();
+        self.set_settings(
+            dim,
+            pos,
+            state,
+            Settings {
+                windmill: 0.0,
+                ..old
+            },
+        );
+        Some(w)
+    }
+
+    /// Windmills saved with a column, for when their bearings are found.
+    pub fn load_windmills(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], Windmill)>,
+    ) {
+        self.dims[dim].windmill_saved.extend(saved);
+    }
+
+    /// The assembled windmills of a column, to save.
+    pub fn column_windmills(&self, dim: usize, cx: i32, cz: i32) -> Vec<([i32; 3], Windmill)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .windmills
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+            .map(|(p, w)| (*p, w.clone()))
+            .collect();
+        out.sort_by_key(|(p, _)| *p);
         out
     }
 

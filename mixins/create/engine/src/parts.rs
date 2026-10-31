@@ -70,6 +70,8 @@ pub struct Settings {
     pub flow: i8,
     /// A belt segment's controller, once its chain is whole (`BeltBlockEntity.controller`).
     pub belt: Option<[i32; 3]>,
+    /// A windmill bearing's generated speed while its sails turn (0 at rest).
+    pub windmill: f32,
 }
 
 impl Default for Settings {
@@ -79,6 +81,7 @@ impl Default for Settings {
             crank: 0,
             flow: 0,
             belt: None,
+            windmill: 0.0,
         }
     }
 }
@@ -172,6 +175,15 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             }
             _ => [None, None],
         },
+        // WindmillBearingBlock (BearingBlock): a shaft out of its back; while its sails are
+        // assembled it generates `WindmillBearingBlockEntity.getGeneratedSpeed`, not converted
+        // to its facing.
+        Block::WindmillBearing => s.facing.map_or([None, None], |f| {
+            one(Part {
+                generated: settings.windmill,
+                ..Part::half(f.opposite())
+            })
+        }),
         // MechanicalPressBlock: turns on its horizontal facing's axis, shafts at both ends.
         Block::MechanicalPress => s
             .facing
