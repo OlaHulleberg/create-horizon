@@ -66,6 +66,7 @@ pub(crate) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
         | WorldPhase::WorldOpenFailed
         | WorldPhase::WorldCloseFailed => {
             WORLD.with_borrow_mut(|w| *w = None);
+            RECIPES.with_borrow_mut(|r| *r = None);
             states::clear_range();
         }
     }
@@ -189,6 +190,7 @@ pub(crate) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     }
     tick_millstones(game, dim);
     tick_depots(game, dimension, dim);
+    tick_presses(game, dimension, dim);
     let mut events = Vec::new();
     let Some((removed, unsaved)) = with_world(|w| {
         w.tick(dim, &mut events);
@@ -217,7 +219,15 @@ pub(crate) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
             }
             Event::Speed {
                 pos, sub, speed, ..
-            } => updates.push(Update::Set { pos, sub, speed }),
+            } => {
+                // A press that starts turning looks at the depot below it again.
+                with_world(|w| {
+                    if w.dims[dim].presses.contains_key(&pos) {
+                        w.wake_depot(dim, [pos[0], pos[1] - 2, pos[2]]);
+                    }
+                });
+                updates.push(Update::Set { pos, sub, speed })
+            }
         }
     }
     let players: Vec<u128> = game
@@ -274,6 +284,16 @@ pub(crate) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     let depots: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].depots.keys().copied().collect()).unwrap_or_default();
     send_depots(game, &[player], dim, &depots);
+    let presses: Vec<[i32; 3]> = with_world(|w| {
+        w.dims[dim]
+            .presses
+            .iter()
+            .filter(|(_, p)| p.running)
+            .map(|(k, _)| *k)
+            .collect()
+    })
+    .unwrap_or_default();
+    send_presses(game, &[player], dim, &presses);
 }
 
 /// A player right-clicks a block (`HandCrankBlock.useItemOn`): a hand crank turns for 10 ticks,
@@ -461,6 +481,7 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
         Model::CrankHandle(d) => find("create:part_hand_crank_handle", "facing", dir_name(d)),
         Model::WaterWheel(d) => find("create:part_water_wheel", "facing", dir_name(d)),
         Model::MillstoneCog => find("create:part_millstone_cog", "facing", "up"),
+        Model::PressHead(d) => find("create:part_press_head", "facing", dir_name(d)),
     }
 }
 
@@ -556,6 +577,10 @@ pub(crate) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         depots_from_server(game, data);
         return;
     }
+    if channel == create_engine::press::CHANNEL {
+        presses_from_server(game, data);
+        return;
+    }
     if channel != client::CHANNEL || !client_ensure(game) {
         return;
     }
@@ -588,9 +613,11 @@ pub(crate) fn client_tick(game: &mut Game<'_>) {
     if !game.native_playing() {
         CLIENT.with_borrow_mut(|c| *c = None);
         DEPOTS.with_borrow_mut(|d| *d = ClientDepots::default());
+        PRESSES.with_borrow_mut(|c| *c = ClientPresses::default());
         return;
     }
     tick_client_depots(game);
+    tick_client_presses(game);
     if !client_ensure(game) {
         return;
     }
@@ -618,7 +645,34 @@ pub(crate) fn client_tick(game: &mut Game<'_>) {
 /// Create's recipes of the types its machines run, read once per world (and again on
 /// `/reload`, when the game's table changes): typed and indexed by input item.
 struct Recipes {
+    /// Where the game's list of milling recipes was, and its length, when these were read:
+    /// `/reload` builds a new table.
+    table: (usize, usize),
     milling: create_engine::processing::Book,
+    pressing: create_engine::processing::Book,
+}
+
+/// Reads Create's recipe books the first time a machine needs them in a world, and again after
+/// `/reload`. False when there are none (Create's data isn't installed).
+fn ensure_recipes(game: &Game<'_>) -> bool {
+    let list = game.native_recipes_of_type("create:milling");
+    let table = (list.as_ptr() as usize, list.len());
+    if RECIPES.with_borrow(|r| r.as_ref().is_some_and(|r| r.table == table)) {
+        return true;
+    }
+    let milling = read_book(game, "create:milling");
+    let pressing = read_book(game, "create:pressing");
+    if milling.is_empty() && pressing.is_empty() {
+        return false;
+    }
+    RECIPES.with_borrow_mut(|r| {
+        *r = Some(Recipes {
+            table,
+            milling,
+            pressing,
+        })
+    });
+    true
 }
 
 thread_local! {
@@ -670,12 +724,8 @@ fn tick_millstones(game: &mut Game<'_>, dim: usize) {
     if turning.is_empty() {
         return;
     }
-    if RECIPES.with_borrow(Option::is_none) {
-        let milling = read_book(game, "create:milling");
-        if milling.is_empty() {
-            return;
-        }
-        RECIPES.with_borrow_mut(|r| *r = Some(Recipes { milling }));
+    if !ensure_recipes(game) {
+        return;
     }
     let seed = game.world.game_time as u64;
     for (pos, speed) in turning {
@@ -1197,6 +1247,351 @@ fn tick_client_depots(game: &mut Game<'_>) {
             d.shown.insert(pos, c);
             if !still {
                 d.sliding.retain(|p| *p != pos);
+            }
+        });
+    }
+}
+
+/// `BeltProcessingBehaviour.isBlocked`: a block with a collision shape between a depot and the
+/// press above it. (Funnels, which Create lets through, are not ported yet.)
+fn blocked(game: &Game<'_>, at: [i32; 3]) -> bool {
+    let state = game.world.block(at[0], at[1], at[2]);
+    game.res.behaviours().facts(state).flags
+        & horizon_world::level::data::state_flags::COLLISION_EMPTY
+        == 0
+}
+
+/// The players of `dimension`.
+fn players_in(game: &Game<'_>, dimension: &str) -> Vec<u128> {
+    game.native_server_players()
+        .into_iter()
+        .filter(|p| p.dimension == dimension)
+        .map(|p| p.uuid)
+        .collect()
+}
+
+/// Depots that ask their press, then running presses: `DepotBehaviour.tick` with
+/// `BeltPressingCallbacks`, then `PressingBehaviour.tick`. Nothing runs without either.
+fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    use create_engine::press::{self, Step, Tick};
+    let Some((work, running)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        let running: Vec<[i32; 3]> = d
+            .presses
+            .iter()
+            .filter(|(_, p)| p.running)
+            .map(|(k, _)| *k)
+            .collect();
+        (std::mem::take(&mut d.depot_work), running)
+    }) else {
+        return;
+    };
+    if work.is_empty() && running.is_empty() {
+        return;
+    }
+    if !ensure_recipes(game) {
+        return;
+    }
+    let mut keep = Vec::new();
+    for depot in work {
+        let above = [depot[0], depot[1] + 2, depot[2]];
+        let Some(mut p) = with_world(|w| w.dims[dim].presses.get(&above).copied()).flatten() else {
+            continue;
+        };
+        let Some(mut held) =
+            with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten()
+        else {
+            continue;
+        };
+        if held.sliding() && held.position < 0.5 - 1.0 / 16.0 {
+            continue;
+        }
+        let Some((_, item, count)) = depot_items(game, depot).into_iter().find(|s| s.0 == 0)
+        else {
+            continue;
+        };
+        let speed = with_world(|w| w.speed(dim, above)).flatten().unwrap_or(0.0);
+        let in_way = blocked(game, [depot[0], depot[1] + 1, depot[2]]);
+        let fits = RECIPES.with_borrow(|r| {
+            r.as_ref()
+                .is_some_and(|r| r.pressing.find_single(&item).is_some())
+        });
+        let step = press::depot_step(&mut held, &p, speed, in_way, fits);
+        match step {
+            Step::Idle => {}
+            Step::Wait => keep.push(depot),
+            Step::Start => {
+                p.start(press::Mode::Belt);
+                with_world(|w| {
+                    w.dims[dim].presses.insert(above, p);
+                    w.dims[dim].press_changes.push(above);
+                });
+                keep.push(depot);
+            }
+            Step::Process => {
+                held = press_on_depot(game, dim, depot, &item, count, held);
+                keep.push(depot);
+            }
+        }
+        with_world(|w| {
+            if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
+                *h = h.map(|_| held);
+            }
+        });
+    }
+    for at in running {
+        let speed = with_world(|w| w.speed(dim, at)).flatten().unwrap_or(0.0);
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            let Some(p) = d.presses.get_mut(&at) else {
+                return;
+            };
+            match p.tick(speed) {
+                Tick::Moving => {}
+                Tick::Down => d.press_changes.push(at),
+                Tick::Done => {
+                    d.press_changes.push(at);
+                    let below = [at[0], at[1] - 2, at[2]];
+                    if d.depots.contains_key(&below) && !keep.contains(&below) {
+                        keep.push(below);
+                    }
+                }
+            }
+        });
+    }
+    let changed = with_world(|w| {
+        let d = &mut w.dims[dim];
+        for p in keep {
+            if !d.depot_work.contains(&p) {
+                d.depot_work.push(p);
+            }
+        }
+        let mut c = std::mem::take(&mut d.press_changes);
+        c.sort();
+        c.dedup();
+        c
+    })
+    .unwrap_or_default();
+    if !changed.is_empty() {
+        let players = players_in(game, dimension);
+        send_presses(game, &players, dim, &changed);
+    }
+}
+
+/// `BeltPressingCallbacks.whenItemHeld` at the head's lowest point: one of the stack (all of
+/// it when it is one) becomes the recipe's rolled results. A single item is replaced by them
+/// (the first held, centred; the rest in the outputs); otherwise the rest stays held and the
+/// results go to the outputs. What finds no room drops above the depot. Returns the held
+/// stack's motion after.
+fn press_on_depot(
+    game: &mut Game<'_>,
+    dim: usize,
+    depot: [i32; 3],
+    item: &str,
+    count: u8,
+    held: create_engine::depot::Held,
+) -> create_engine::depot::Held {
+    use create_engine::processing;
+    let seed = game.world.game_time as u64
+        ^ (depot[0] as u64).wrapping_mul(0x9E37_79B9)
+        ^ (depot[2] as u64) << 20;
+    let results = RECIPES.with_borrow(|r| {
+        let r = r.as_ref()?;
+        let id = r.pressing.find_single(item)?;
+        Some(processing::roll(r.pressing.get(id), &mut processing::Rng::new(seed)))
+    });
+    let Some(results) = results else {
+        return held;
+    };
+    let limits: Vec<u8> = results
+        .iter()
+        .map(|(i, _)| game.items().get(i).map_or(64, |x| x.max_stack).clamp(1, 64) as u8)
+        .collect();
+    let stack = |item: &str, count: u8| horizon_client::items::ItemStack {
+        item: item.into(),
+        count: u32::from(count),
+        damage: 0,
+        extra: None,
+    };
+    let single = count == 1;
+    let angle = random_angle(game, depot);
+    let mut next = held;
+    let dropped = game
+        .native_with_mod_block_entity(depot, |be| {
+            be.items
+                .resize(be.items.len().max(create_engine::depot::SLOTS), None);
+            let mut rest = results.iter().zip(&limits);
+            if single {
+                be.items[0] = None;
+                if let Some(((first, n), _)) = rest.next() {
+                    be.items[0] = Some(stack(first, *n));
+                    next = create_engine::depot::Held {
+                        angle,
+                        position: 0.5,
+                        locked: true,
+                        ..held
+                    };
+                }
+            } else if let Some(s) = be.items[0].as_mut() {
+                s.count -= 1;
+            }
+            let mut outputs: Vec<processing::Slot> = be.items[create_engine::depot::OUTPUTS]
+                .iter()
+                .map(slot_of)
+                .collect();
+            let mut dropped = Vec::new();
+            for ((i, n), limit) in rest {
+                let left = processing::insert_stacked(&mut outputs, i, *n, *limit);
+                if left > 0 {
+                    dropped.push((i.clone(), left));
+                }
+            }
+            for (slot, s) in be.items[create_engine::depot::OUTPUTS].iter_mut().zip(outputs) {
+                *slot = s.map(|(i, n)| stack(&i, n));
+            }
+            dropped
+        })
+        .unwrap_or_default();
+    for (i, n) in dropped {
+        // Containers.dropItemStack at the depot's centre, half a block up.
+        game.native_run_command(&format!(
+            "summon minecraft:item {}.5 {}.0 {}.5 {{Item:{{id:'{i}',count:{n}}}}}",
+            depot[0],
+            depot[1] + 1,
+            depot[2]
+        ));
+    }
+    if results.is_empty() && single {
+        with_world(|w| w.depot_put(dim, depot, None));
+    }
+    with_world(|w| w.depot_changed(dim, depot));
+    next
+}
+
+/// A block entity slot as the processing rules see it.
+fn slot_of(s: &Option<horizon_client::items::ItemStack>) -> create_engine::processing::Slot {
+    s.as_ref()
+        .map(|s| (s.item.to_string(), s.count.min(255) as u8))
+}
+
+fn send_presses(game: &mut Game<'_>, players: &[u128], dim: usize, presses: &[[i32; 3]]) {
+    let all: Vec<([i32; 3], create_engine::press::Press)> = presses
+        .iter()
+        .map(|&pos| {
+            let p = with_world(|w| w.dims[dim].presses.get(&pos).copied())
+                .flatten()
+                .unwrap_or_default();
+            (pos, p)
+        })
+        .collect();
+    for m in create_engine::press::encode(&all) {
+        for &p in players {
+            let _ = game.native_net_send_to_player(p, create_engine::press::CHANNEL, &m);
+        }
+    }
+}
+
+/// Presses a client draws mid-cycle: their cycle, run on from the server's last word, the head
+/// waiting at its lowest point until the server says it pressed (as Create's client does).
+#[derive(Default)]
+struct ClientPresses {
+    running: HashMap<[i32; 3], (create_engine::press::Press, bool)>,
+}
+
+thread_local! {
+    static PRESSES: RefCell<ClientPresses> = RefCell::new(ClientPresses::default());
+}
+
+/// Moves the press head at `pos` to where `p` has it, gliding to where it will be a tick on.
+fn draw_press_head(game: &mut Game<'_>, pos: [i32; 3], p: &create_engine::press::Press, next: f32) {
+    use create_engine::press::head_offset;
+    let Some(model) = CLIENT.with_borrow(|c| {
+        let c = c.as_ref()?;
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let (_, info) = c.table.get(state.0)?;
+        let f = info.facing?;
+        c.models.get(&(state.0, Model::PressHead(f))).copied()
+    }) else {
+        return;
+    };
+    let depth = p.mode.head_offset();
+    let (now, to) = if p.running {
+        (
+            head_offset(p.ticks as f32) * depth,
+            head_offset(next) * depth,
+        )
+    } else {
+        (0.0, 0.0)
+    };
+    game.native_part_glide(
+        client::key(pos, client::PRESS_HEAD_SLOT),
+        model,
+        pos,
+        1,
+        0.0,
+        0.0,
+        [0.0, -now, 0.0, game.native_parts_seconds()],
+        [0.0, -(to - now) * 20.0, 0.0],
+    );
+}
+
+/// The client's next cycle tick for a press at `speed`: `PressingBehaviour.tick` on the client,
+/// which waits at the lowest point for the server.
+fn client_press_step(p: &create_engine::press::Press, speed: f32, waiting: bool) -> i32 {
+    use create_engine::press::CYCLE;
+    if waiting && p.ticks >= CYCLE / 2 {
+        return CYCLE / 2;
+    }
+    let next = p.ticks + create_engine::press::tick_speed(speed);
+    if p.ticks < CYCLE / 2 && next >= CYCLE / 2 {
+        return CYCLE / 2;
+    }
+    next
+}
+
+fn presses_from_server(game: &mut Game<'_>, data: &[u8]) {
+    use create_engine::press::CYCLE;
+    for (pos, p) in create_engine::press::decode(data) {
+        // At the lowest point the server has pressed: the head goes on up.
+        let waiting = p.running && p.ticks < CYCLE / 2;
+        PRESSES.with_borrow_mut(|c| {
+            if p.running {
+                c.running.insert(pos, (p, waiting));
+            } else {
+                c.running.remove(&pos);
+            }
+        });
+        let speed = press_speed(pos);
+        let next = client_press_step(&p, speed, waiting) as f32;
+        draw_press_head(game, pos, &p, next);
+    }
+}
+
+fn press_speed(pos: [i32; 3]) -> f32 {
+    CLIENT.with_borrow(|c| {
+        c.as_ref()
+            .and_then(|c| c.speeds.get(&pos))
+            .map_or(0.0, |s| s[0])
+    })
+}
+
+/// Each client tick: running presses move on a cycle step, drawn gliding to the next.
+fn tick_client_presses(game: &mut Game<'_>) {
+    let running: Vec<([i32; 3], create_engine::press::Press, bool)> =
+        PRESSES.with_borrow(|c| c.running.iter().map(|(k, v)| (*k, v.0, v.1)).collect());
+    for (pos, mut p, waiting) in running {
+        let speed = press_speed(pos);
+        p.ticks = client_press_step(&p, speed, waiting);
+        if p.ticks > create_engine::press::CYCLE {
+            p.running = false;
+        }
+        let next = client_press_step(&p, speed, waiting) as f32;
+        draw_press_head(game, pos, &p, next);
+        PRESSES.with_borrow_mut(|c| {
+            if p.running {
+                c.running.insert(pos, (p, waiting));
+            } else {
+                c.running.remove(&pos);
             }
         });
     }

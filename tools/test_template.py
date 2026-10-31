@@ -69,6 +69,7 @@ pub mod nbt {
 }
 pub mod level {
     #[derive(Clone, Copy)] pub enum Dimension { Overworld, Nether, End }
+    pub mod data { pub mod state_flags { pub const COLLISION_EMPTY: u32 = 1 << 5; } }
 }
 pub mod registry {
     use std::collections::BTreeMap;
@@ -172,14 +173,16 @@ pub mod native_hooks {
             let _ = (block, container);
         }
         pub fn items(&self) -> horizon_client::items::Items { horizon_client::items::Items { item_tags: Default::default() } }
-        pub fn native_recipes_of_type(&self, kind: &str) -> &[horizon_client::crafting::CustomRecipe] { let _ = kind; &[] }
+        pub fn native_recipes_of_type(&self, kind: &str) -> &[horizon_client::crafting::CustomRecipe] {
+            self.recipes.get(kind).map_or(&[], Vec::as_slice)
+        }
         pub fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<horizon_client::crafting::Ingredient> {
-            let _ = json;
-            None
+            let item = json.as_str()?.to_owned();
+            Some(horizon_client::crafting::Ingredient([item.clone()].into_iter().collect(), vec![item]))
         }
         pub fn native_recipe_result(&self, json: &serde_json::Value) -> Option<horizon_client::items::ItemStack> {
-            let _ = json;
-            None
+            Some(horizon_client::items::ItemStack { item: json["id"].as_str()?.into(),
+                count: json["count"].as_u64().unwrap_or(1) as u32, damage: 0, extra: None })
         }
         pub fn native_with_mod_block_entity<R>(&mut self, pos: [i32; 3], change: impl FnOnce(&mut horizon_client::containers::ModBlockEntity) -> R) -> Option<R> {
             match self.world.block_entities.get_mut(&(pos[0], pos[1], pos[2]))? {
@@ -290,11 +293,21 @@ pub struct Game<'a> {
     pub creative: bool, pub player: Option<Player>, pub keys: std::collections::HashSet<winit::keyboard::KeyCode>,
     pub glides: Vec<(u32, [i32; 3], u8, f32, [f32; 3])>, pub hand: horizon_client::first_person::Hand, pub yaw: f32,
     pub inventory: Vec<Option<horizon_client::items::ItemStack>>, pub selected: usize, pub dim: Dim,
+    pub res: Res, pub recipes: std::collections::HashMap<String, Vec<horizon_client::crafting::CustomRecipe>>,
 }
 pub struct Dim;
 impl Dim { pub fn id(&self) -> &str { "minecraft:overworld" } }
 pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
 pub struct Behaviours;
+pub struct Facts { pub flags: u32 }
+impl Behaviours {
+    /// Air (state 0) has no collision; every other state of the fixture has.
+    pub fn facts(&self, state: BlockStateId) -> Facts {
+        Facts { flags: if state.0 == 0 { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 } }
+    }
+}
+pub struct Res;
+impl Res { pub fn behaviours(&self) -> &Behaviours { &Behaviours } }
 pub struct Ticks;
 impl Behaviours {
     pub fn has_neighbor_signal(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos) -> bool {
@@ -314,6 +327,8 @@ impl Behaviours {
     states.push(BlockState { name: "create:shaft".into(), properties: props("axis", "x") });
     states.push(BlockState { name: "create:creative_motor".into(), properties: props("facing", "east") });
     states.push(BlockState { name: "create:depot".into(), properties: BTreeMap::new() });
+    // 5: a mechanical press facing east (turning on x).
+    states.push(BlockState { name: "create:mechanical_press".into(), properties: props("facing", "east") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
@@ -321,7 +336,14 @@ impl Behaviours {
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),
         glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0,
         inventory: vec![Some(horizon_client::items::ItemStack { item: "minecraft:iron_ingot".into(), count: 5, damage: 0, extra: None })],
-        selected: 0, dim: Dim };
+        selected: 0, dim: Dim, res: Res, recipes: Default::default() };
+    // data/create/recipe/pressing/iron_ingot.json
+    game.recipes.insert("create:pressing".into(), vec![horizon_client::crafting::CustomRecipe {
+        id: "create:pressing/iron_ingot".into(),
+        json: std::sync::Arc::new(serde_json::json!({
+            "type": "create:pressing", "ingredients": ["minecraft:iron_ingot"],
+            "results": [{"id": "create:iron_sheet"}]})),
+    }]);
     game.native_world_lifecycle(native_lifecycle::WorldPhase::WorldOpenReady, "");
     assert_eq!(create_engine::states::index(2), Some(0));
     // A column with a motor at (0, 0, 0) and a shaft at (1, 0, 0).
@@ -391,6 +413,19 @@ impl Behaviours {
     let glide = game.glides.last().expect("the stack is drawn");
     assert_eq!((glide.1, glide.2), ([5, 0, 0], 1));
     assert!(glide.4[2] < 0.0, "it glides north, toward the centre from the south edge: {:?}", glide.4);
+    // A press two above the depot, driven by a motor at 16 rpm: once the stack arrives the press
+    // runs a cycle and, at its lowest point, presses one ingot into a sheet (Create's iron_ingot
+    // pressing recipe; one at a time, the rest stays held).
+    for (pos, state) in [([4, 2, 0], 3), ([5, 2, 0], 5)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
+    }
+    for _ in 0..80 { game.native_level_tick_post("minecraft:overworld"); }
+    let horizon_client::containers::BlockEntity::Mod(depot) = &game.world.block_entities[&(5, 0, 0)];
+    let slot = |i: usize| depot.items.get(i).and_then(|s| s.as_ref()).map(|s| (s.item.to_string(), s.count));
+    assert_eq!(slot(0), Some(("minecraft:iron_ingot".into(), 4)), "one of five pressed");
+    assert_eq!(slot(1), Some(("create:iron_sheet".into(), 1)));
+    assert!(game.sent.iter().any(|m| m.1 == "create:press"), "clients see the head move");
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

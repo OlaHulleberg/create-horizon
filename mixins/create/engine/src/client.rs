@@ -20,6 +20,9 @@ pub enum Model {
     WaterWheel(Dir),
     /// The millstone's turning stone (`AllPartialModels.MILLSTONE_COG`).
     MillstoneCog,
+    /// The mechanical press's head (`AllPartialModels.MECHANICAL_PRESS_HEAD`), turned to its
+    /// facing; it moves down, it does not turn.
+    PressHead(Dir),
 }
 
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
@@ -102,6 +105,23 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
         Block::CreativeMotor => s
             .facing
             .map(|f| vec![half(0, f, speeds[0])])
+            .unwrap_or_default(),
+        // MechanicalPressRenderer: Create's shaft on its axis, and the head (slot 1; its stroke
+        // is the press's own, drawn by the glue).
+        Block::MechanicalPress => s
+            .facing
+            .map(|f| {
+                vec![
+                    own(f.axis(), Model::Shaft(f.axis())),
+                    Draw {
+                        slot: PRESS_HEAD_SLOT,
+                        model: Model::PressHead(f),
+                        axis: Axis::Y,
+                        rpm: 0.0,
+                        phase: 0.0,
+                    },
+                ]
+            })
             .unwrap_or_default(),
         // MillstoneRenderer: the inner stone turns on the y axis.
         Block::Millstone => vec![own(Axis::Y, Model::MillstoneCog)],
@@ -197,6 +217,9 @@ pub fn key(pos: [i32; 3], slot: u8) -> u64 {
     let y = ((pos[1] + 64) as u64) & 0x1FF;
     x | z << 26 | y << 52 | u64::from(slot & 7) << 61
 }
+
+/// The press head's slot among its block's parts.
+pub const PRESS_HEAD_SLOT: u8 = 1;
 
 /// Slots a block may use, to clear them all.
 pub const SLOTS: u8 = 8;
