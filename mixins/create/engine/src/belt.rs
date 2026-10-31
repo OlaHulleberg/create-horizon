@@ -512,6 +512,24 @@ pub struct Inventory {
 }
 
 impl Inventory {
+    /// An inventory read back from a save.
+    pub fn from_saved(items: Vec<Item>, positive: bool) -> Inventory {
+        Inventory {
+            items,
+            positive,
+            to_insert: Vec::new(),
+        }
+    }
+
+    /// What a save keeps: the items and those still waiting to go on (`write` inserts them).
+    pub fn to_save(&self) -> Inventory {
+        let mut copy = self.clone();
+        for i in std::mem::take(&mut copy.to_insert) {
+            copy.insert(i);
+        }
+        copy
+    }
+
     /// Whether it has anything to move or insert.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty() && self.to_insert.is_empty()

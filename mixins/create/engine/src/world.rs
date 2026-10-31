@@ -117,6 +117,8 @@ pub struct Dimension {
     /// the controller and segment they were on).
     pub belt_breaks: Vec<BeltBreak>,
     pub belt_drops: Vec<([i32; 3], crate::belt::Segment, i32, crate::belt::Item)>,
+    /// Items saved with a belt, kept until its chain is whole again after loading.
+    belt_saved: HashMap<[i32; 3], crate::belt::Inventory>,
 }
 
 /// Blocks that keep state of their own here but are not kinetic: depots.
@@ -599,12 +601,13 @@ impl CreateWorld {
             for p in &chain {
                 d.belt_of.insert(*p, controller);
             }
+            let items = d.belt_saved.remove(&controller).unwrap_or_default();
             d.belts.insert(
                 controller,
                 Belt {
                     chain: chain.clone(),
                     segment,
-                    items: crate::belt::Inventory::default(),
+                    items,
                 },
             );
             d.belt_changes.push(controller);
@@ -623,6 +626,37 @@ impl CreateWorld {
                 self.place(dim, p, state);
             }
         }
+    }
+
+    /// Items saved with belts in a column (`chunk_data_save`), for when their chains form.
+    pub fn load_belt_items(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], crate::belt::Inventory)>,
+    ) {
+        self.dims[dim].belt_saved.extend(saved);
+    }
+
+    /// The belts whose controller is in a column, with their items, to save.
+    pub fn column_belts(
+        &self,
+        dim: usize,
+        cx: i32,
+        cz: i32,
+    ) -> Vec<([i32; 3], crate::belt::Inventory)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .belts
+            .iter()
+            .filter(|(c, b)| (c[0] >> 4, c[2] >> 4) == (cx, cz) && !b.items.is_empty())
+            .map(|(c, b)| (*c, b.items.to_save()))
+            .collect();
+        out.sort_by_key(|(c, _)| *c);
+        out
+    }
+
+    /// The column of `pos` must be saved again (its belt's items moved).
+    pub fn mark_unsaved(&mut self, dim: usize, pos: [i32; 3]) {
+        self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }
 
     /// Belts that hold items: the only ones that tick.
