@@ -1,0 +1,258 @@
+{
+ "format": "horizon-benchmark-report",
+ "version": 1,
+ "kind": "game",
+ "created": "2026-10-31T23:03:49Z",
+ "app": {
+  "name": "horizon-client",
+  "version": "0.1.0",
+  "commit": "2fb4499e9",
+  "mods": [
+   {
+    "name": "create",
+    "version": "carried"
+   }
+  ]
+ },
+ "hardware": {
+  "os": "linux",
+  "arch": "x86_64",
+  "cpu_threads": 12,
+  "os_version": "Debian GNU/Linux 13 (trixie) (kernel 7.0.14-16-pve)",
+  "cpu": "AMD Ryzen 7 5700X 8-Core Processor",
+  "ram_mb": 32035,
+  "gpu": {
+   "name": "Intel(R) Graphics (BMG G21)",
+   "vendor": "intel",
+   "driver": "Intel open-source Mesa driver Mesa 25.0.7-2+deb13u1",
+   "backend": "vulkan",
+   "kind": "discrete"
+  }
+ },
+ "conditions": {
+  "scenario": "perf_bench:village",
+  "seed": "1234",
+  "render_distance": 12,
+  "simulation_distance": 12,
+  "vsync": false,
+  "offscreen": true,
+  "repeats": 3,
+  "warmup_s": 2.0,
+  "load_avg_1m": 5.47,
+  "window": [
+   1920,
+   1080
+  ]
+ },
+ "metrics": {
+  "startup.title_ms": {
+   "n": 3,
+   "mean": 1357.456,
+   "stdev": 11.011,
+   "min": 1348.736,
+   "max": 1369.829,
+   "ci95": 27.356
+  },
+  "startup.world_ms": {
+   "n": 3,
+   "mean": 4995.412,
+   "stdev": 536.699,
+   "min": 4650.211,
+   "max": 5613.74,
+   "ci95": 1333.342
+  },
+  "chunks.village.load_ms": {
+   "n": 3,
+   "mean": 2510.509,
+   "stdev": 130.023,
+   "min": 2363.098,
+   "max": 2608.884,
+   "ci95": 323.021
+  },
+  "chunks.village.meshed_count": {
+   "n": 3,
+   "mean": 15336.0,
+   "stdev": 148.091,
+   "min": 15166.0,
+   "max": 15437.0,
+   "ci95": 367.909
+  },
+  "fps.village.avg_fps": {
+   "n": 3,
+   "mean": 1281.847,
+   "stdev": 4.193,
+   "min": 1277.152,
+   "max": 1285.22,
+   "ci95": 10.418
+  },
+  "fps.village.low_1pct_fps": {
+   "n": 3,
+   "mean": 331.065,
+   "stdev": 36.558,
+   "min": 306.812,
+   "max": 373.113,
+   "ci95": 90.822
+  },
+  "fps.village.low_01pct_fps": {
+   "n": 3,
+   "mean": 139.352,
+   "stdev": 22.884,
+   "min": 125.334,
+   "max": 165.76,
+   "ci95": 56.853
+  },
+  "memory.village.gpu_mb": {
+   "n": 3,
+   "mean": 486.798,
+   "stdev": 3.464,
+   "min": 484.798,
+   "max": 490.798,
+   "ci95": 8.606
+  },
+  "memory.rss_peak_mb": {
+   "n": 3,
+   "mean": 1384.375,
+   "stdev": 6.875,
+   "min": 1376.684,
+   "max": 1389.922,
+   "ci95": 17.079
+  },
+  "memory.rss_steady_mb": {
+   "n": 3,
+   "mean": 1330.495,
+   "stdev": 0.888,
+   "min": 1329.605,
+   "max": 1331.381,
+   "ci95": 2.205
+  }
+ },
+ "frames": [
+  {
+   "phase": "village",
+   "repeat": 0,
+   "frames": 5142,
+   "seconds": 4.001,
+   "avg_fps": 1285.22,
+   "low_1pct_fps": 373.113,
+   "low_01pct_fps": 165.76,
+   "p50_ms": 0.736,
+   "p95_ms": 1.019,
+   "p99_ms": 1.657,
+   "p999_ms": 4.013,
+   "max_ms": 10.09,
+   "cpu_p50_ms": 0.444,
+   "gpu_p50_ms": 0.678,
+   "histogram": [
+    4859,
+    252,
+    19,
+    8,
+    1,
+    1,
+    0,
+    0,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "phase": "village",
+   "repeat": 1,
+   "frames": 5133,
+   "seconds": 4.0,
+   "avg_fps": 1283.169,
+   "low_1pct_fps": 306.812,
+   "low_01pct_fps": 126.962,
+   "p50_ms": 0.731,
+   "p95_ms": 1.035,
+   "p99_ms": 1.877,
+   "p999_ms": 4.497,
+   "max_ms": 12.176,
+   "cpu_p50_ms": 0.448,
+   "gpu_p50_ms": 0.672,
+   "histogram": [
+    4835,
+    253,
+    27,
+    11,
+    2,
+    2,
+    0,
+    0,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "phase": "village",
+   "repeat": 2,
+   "frames": 5109,
+   "seconds": 4.0,
+   "avg_fps": 1277.152,
+   "low_1pct_fps": 313.269,
+   "low_01pct_fps": 125.334,
+   "p50_ms": 0.735,
+   "p95_ms": 1.058,
+   "p99_ms": 1.701,
+   "p999_ms": 4.3,
+   "max_ms": 15.768,
+   "cpu_p50_ms": 0.442,
+   "gpu_p50_ms": 0.678,
+   "histogram": [
+    4808,
+    265,
+    15,
+    14,
+    5,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    2,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  }
+ ],
+ "label": "startup-create-1080p"
+}
