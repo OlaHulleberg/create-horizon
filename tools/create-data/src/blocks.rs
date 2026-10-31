@@ -379,6 +379,27 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 ("powering", bools),
             ]),
         ),
+        // FluidTankBlock: `noOcclusion`, see-through windows: glass's template (no random
+        // ticks, nothing hidden behind it), copper's sounds. Defaults first: TOP, BOTTOM, WINDOW.
+        "fluid_tank" => (
+            "minecraft:glass",
+            None,
+            own(&[
+                ("bottom", &["true", "false"]),
+                (
+                    "shape",
+                    &[
+                        "window",
+                        "plain",
+                        "window_nw",
+                        "window_sw",
+                        "window_ne",
+                        "window_se",
+                    ],
+                ),
+                ("top", &["true", "false"]),
+            ]),
+        ),
         "hand_crank" => (
             "minecraft:heavy_core",
             Some(by_facing(&CRANK)),
@@ -408,7 +429,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 15] = [
+pub const PARTIALS: [(&str, &str, &str); 17] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -455,7 +476,40 @@ pub const PARTIALS: [(&str, &str, &str); 15] = [
         "up",
     ),
     ("part_belt_pulley", "create:block/belt_pulley", "up"),
+    // A fluid's still texture on a unit cube (our own models, `fluid_models`), posed and
+    // tinted to a tank's level (`FluidTankRenderer`'s fluid box).
+    ("part_fluid_water", "create:block/part_fluid_water", "up"),
+    ("part_fluid_lava", "create:block/part_fluid_lava", "up"),
 ];
+
+/// The unit-cube models of `part_fluid_*`: every face the fluid's still texture, water's
+/// tinted (tint index 0).
+pub fn fluid_models() -> [(&'static str, Value); 2] {
+    let cube = |texture: &str, tint: bool| {
+        let face = |_: &str| {
+            let mut f = json!({ "uv": [0, 0, 16, 16], "texture": "#fluid" });
+            if tint {
+                f["tintindex"] = json!(0);
+            }
+            f
+        };
+        let faces: Map<String, Value> = ["north", "south", "east", "west", "up", "down"]
+            .iter()
+            .map(|d| (d.to_string(), face(d)))
+            .collect();
+        json!({
+            "textures": { "fluid": texture, "particle": texture },
+            "elements": [{ "from": [0, 0, 0], "to": [16, 16, 16], "faces": faces }]
+        })
+    };
+    [
+        (
+            "part_fluid_water",
+            cube("minecraft:block/water_still", true),
+        ),
+        ("part_fluid_lava", cube("minecraft:block/lava_still", false)),
+    ]
+}
 
 /// The blockstate rotation (x, y) that turns a model pointing `from` to point `to`: y turns
 /// clockwise seen from above (north, east, south, west), x turns about the x axis.

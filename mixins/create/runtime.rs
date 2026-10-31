@@ -125,10 +125,12 @@ pub(super) fn chunk_load(
     // Settings saved with the column (`chunk_data_save`), before its blocks are found.
     let saved = settings_from_nbt(Game::native_chunk_data(chunk, "create"));
     let belts = belts_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let tanks = tanks_from_nbt(Game::native_chunk_data(chunk, "create"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.load_settings(dim, saved.into_iter());
         w.load_belt_items(dim, belts.into_iter());
+        w.load_tanks(dim, tanks.into_iter());
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
                 && states::index(single).is_none()
@@ -195,6 +197,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
+    send_tank_changes(game, dimension, dim);
     let mut events = Vec::new();
     with_world(|w| w.settle_belts(dim));
     let Some((removed, unsaved)) = with_world(|w| {
@@ -302,11 +305,48 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     let belts: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].belts.keys().copied().collect()).unwrap_or_default();
     send_belts(game, &[player], dim, &belts);
+    let tanks: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].tanks.keys().copied().collect()).unwrap_or_default();
+    send_tanks(game, &[player], dim, &tanks);
 }
 
 /// A player right-clicks a block (`HandCrankBlock.useItemOn`): a hand crank turns for 10 ticks,
 /// backwards while sneaking, and tires the player (`crankHungerMultiplier` 0.01 per RPM).
 pub(super) fn right_click_block(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    face: [i32; 3],
+    canceled: &mut bool,
+) {
+    let was = *canceled;
+    right_click_inner(game, pos, face, canceled);
+    if *canceled && !was {
+        // Create's `useItemOn` answered SUCCESS: the client sends no item use after it. Ours
+        // does, so the item use that follows this click is taken (`use_item`).
+        let player = game.native_acting_player().map_or(0, |p| p.uuid);
+        TAKEN_USE.with(|t| t.set(Some((player, game.world.game_time))));
+    }
+}
+
+thread_local! {
+    /// The player and game time of the last click a Create block took.
+    static TAKEN_USE: std::cell::Cell<Option<(u128, i64)>> = const { std::cell::Cell::new(None) };
+}
+
+/// The item use that follows a click a Create block took (the same tick, or the next).
+pub(super) fn use_item(game: &mut Game<'_>, claimed: &mut bool) {
+    let Some((player, at)) = TAKEN_USE.with(|t| t.get()) else {
+        return;
+    };
+    let now = game.world.game_time;
+    let me = game.native_acting_player().map_or(0, |p| p.uuid);
+    if me == player && (at..=at + 1).contains(&now) {
+        *claimed = true;
+        TAKEN_USE.with(|t| t.set(None));
+    }
+}
+
+fn right_click_inner(
     game: &mut Game<'_>,
     pos: [i32; 3],
     face: [i32; 3],
@@ -337,6 +377,10 @@ pub(super) fn right_click_block(
     }
     if block == Some(create_engine::Block::Belt) {
         use_belt(game, dim, pos, canceled);
+        return;
+    }
+    if block == Some(create_engine::Block::FluidTank) {
+        use_tank(game, dim, pos, canceled);
         return;
     }
     if let Some((kind, l)) = latch_state(state) {
@@ -525,7 +569,8 @@ pub(super) fn chunk_data_save(
     };
     let settings = with_world(|w| w.column_settings(dim, chunk[0], chunk[1])).unwrap_or_default();
     let belts = with_world(|w| w.column_belts(dim, chunk[0], chunk[1])).unwrap_or_default();
-    if settings.is_empty() && belts.is_empty() {
+    let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
+    if settings.is_empty() && belts.is_empty() && tanks.is_empty() {
         data.remove(&"create".into());
         return;
     }
@@ -539,6 +584,22 @@ pub(super) fn chunk_data_save(
     }
     if !belts.is_empty() {
         own.insert("belts".into(), belts_to_nbt(&belts));
+    }
+    if !tanks.is_empty() {
+        // x, y, z, fluid, amount for each tank (`FluidTankBlockEntity`'s `TankContent`).
+        let v = tanks
+            .iter()
+            .flat_map(|(p, t)| {
+                [
+                    p[0],
+                    p[1],
+                    p[2],
+                    i32::from(t.fluid.map_or(255, |f| f.index())),
+                    t.amount as i32,
+                ]
+            })
+            .collect();
+        own.insert("tanks".into(), horizon_world::nbt::Tag::IntArray(v));
     }
     data.insert("create".into(), horizon_world::nbt::Tag::Compound(own));
 }
@@ -723,6 +784,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
     }
     if channel == create_engine::belt::CHANNEL {
         belts_from_server(game, data);
+        return;
+    }
+    if channel == create_engine::tank::CHANNEL {
+        tanks_from_server(game, data);
         return;
     }
     if channel != client::CHANNEL || !client_ensure(game) {
@@ -2706,5 +2771,125 @@ pub(super) fn use_item_on(
             id,
             super::native_hooks::flags::UPDATE_ALL,
         );
+    }
+}
+
+fn tanks_from_nbt(data: Option<&horizon_world::nbt::Compound>) -> Vec<([i32; 3], create_engine::tank::Tank)> {
+    let Some(horizon_world::nbt::Tag::IntArray(v)) = data.and_then(|d| d.get(&"tanks".into())) else {
+        return Vec::new();
+    };
+    v.chunks_exact(5)
+        .map(|c| {
+            (
+                [c[0], c[1], c[2]],
+                create_engine::tank::Tank {
+                    fluid: create_engine::tank::Fluid::from_index(c[3].clamp(0, 255) as u8),
+                    amount: c[4].max(0) as u32,
+                },
+            )
+        })
+        .collect()
+}
+
+/// `FluidTankBlock.useItemOn` for a creative player (Create 6 leaves survival to spouts and
+/// drains): a filled bucket empties into the tank, an empty one takes a bucket's worth (and
+/// is given, filled, unless the player has one already), each only whole.
+fn use_tank(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut bool) {
+    use create_engine::tank::Fluid;
+    if !game.creative {
+        return;
+    }
+    let Some((held, _, _)) = game.native_held() else {
+        return;
+    };
+    let Some(mut t) = with_world(|w| w.dims[dim].tanks.get(&pos).copied()).flatten() else {
+        return;
+    };
+    let changed = if let Some(f) = Fluid::of_bucket(&held) {
+        t.fill(f)
+    } else if held == "minecraft:bucket" {
+        match t.drain() {
+            Some(f) => {
+                if game.native_count_items(f.bucket()) == 0 {
+                    game.native_give_items(f.bucket(), 1);
+                }
+                true
+            }
+            None => false,
+        }
+    } else {
+        return;
+    };
+    *canceled = true;
+    if changed {
+        with_world(|w| {
+            w.dims[dim].tanks.insert(pos, t);
+            w.dims[dim].tank_changes.push(pos);
+            w.mark_unsaved(dim, pos);
+        });
+    }
+}
+
+fn send_tank_changes(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let changed = with_world(|w| {
+        let mut v = std::mem::take(&mut w.dims[dim].tank_changes);
+        v.sort();
+        v.dedup();
+        v
+    })
+    .unwrap_or_default();
+    if changed.is_empty() {
+        return;
+    }
+    let players = players_in(game, dimension);
+    send_tanks(game, &players, dim, &changed);
+}
+
+fn send_tanks(game: &mut Game<'_>, players: &[u128], dim: usize, tanks: &[[i32; 3]]) {
+    let all: Vec<([i32; 3], create_engine::tank::Tank)> = tanks
+        .iter()
+        .map(|&p| {
+            (
+                p,
+                with_world(|w| w.dims[dim].tanks.get(&p).copied())
+                    .flatten()
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+    for m in create_engine::tank::encode(&all) {
+        for &p in players {
+            let _ = game.native_net_send_to_player(p, create_engine::tank::CHANNEL, &m);
+        }
+    }
+}
+
+/// A tank's fluid on the client: `FluidTankRenderer`'s box, the fluid's still texture tinted
+/// (water by its default colour), one part a tank, uploaded when its contents change.
+fn tanks_from_server(game: &mut Game<'_>, data: &[u8]) {
+    use create_engine::tank::Fluid;
+    let registry = game.pack.assets.registry;
+    for (pos, t) in create_engine::tank::decode(data) {
+        let key = depot_key(pos, 210, 0);
+        let Some((min, max)) = create_engine::tank::fluid_box(&t) else {
+            game.native_part_clear(key);
+            continue;
+        };
+        let (name, tint) = match t.fluid {
+            Some(Fluid::Water) => ("create:part_fluid_water", Some(0x3F_76E4)),
+            _ => ("create:part_fluid_lava", None),
+        };
+        let Some(state) = registry.default_state(name).and_then(|d| {
+            let mut s = registry.state(d)?.clone();
+            s.properties.insert("facing".into(), "up".into());
+            registry.id(&s)
+        }) else {
+            continue;
+        };
+        let pose = glam::Mat4::from_translation(glam::Vec3::from_array(min))
+            * glam::Mat4::from_scale(glam::Vec3::from_array(max) - glam::Vec3::from_array(min));
+        if let Some(model) = game.native_part_model_tinted(state, pose, tint) {
+            game.native_part_set(key, model, pos, 1, 0.0, 0.0);
+        }
     }
 }
