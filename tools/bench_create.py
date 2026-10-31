@@ -14,6 +14,8 @@ the server thread's smoothed tick time. Scenarios:
   chains   the control for kinetic: the same layout in vanilla iron blocks and iron chains
   processing  16 rows of a creative motor turning 16 mechanical presses, each over a depot of 64
            iron ingots: 256 presses pressing at 16 rpm (phase 3)
+  logistics  32 belts 48 long at 16 rpm, each carrying 21 stacks dropped on it: 672 stacks moving
+           (phase 4)
 
     python3 tools/bench_create.py --game target/horizon-cargo/fast/horizon-client \\
         --content target/create-content --scenario idle --repeats 3 --out benchmarks/p0-idle.json
@@ -83,6 +85,25 @@ def build(ctl_bin, sock, scenario, center):
             for i in range(16):
                 command(ctl_bin, sock, f"setblock {x-16+i} {y-6} {zz} "
                         'create:depot{Items:[{Slot:0b,id:"minecraft:iron_ingot",count:64}]}', failures)
+    if scenario == "logistics":
+        belt = "facing=south,slope=horizontal,casing=false,waterlogged=false"
+        for row in range(32):
+            xx = x - 31 + 2 * row
+            command(ctl_bin, sock, f"setblock {xx-1} {y-6} {z-24} create:creative_motor[facing=east]", failures)
+            command(ctl_bin, sock, f"setblock {xx} {y-6} {z-24} create:belt[{belt},part=start]", failures)
+            command(ctl_bin, sock, f"fill {xx} {y-6} {z-23} {xx} {y-6} {z+22} create:belt[{belt},part=middle]",
+                    failures)
+            command(ctl_bin, sock, f"setblock {xx} {y-6} {z+23} create:belt[{belt},part=end]", failures)
+            # A stone past the end: the stacks queue up instead of falling off.
+            command(ctl_bin, sock, f"setblock {xx} {y-6} {z+24} minecraft:stone", failures)
+        # Wait for the chains to form, then drop a stack on every other segment of the first 42.
+        time.sleep(1)
+        for row in range(32):
+            xx = x - 31 + 2 * row
+            for s in range(0, 42, 2):
+                ctl(ctl_bin, sock, "command",
+                    f"summon minecraft:item {xx + 0.5} {y - 5} {z - 24 + s + 0.5} "
+                    "{Item:{id:'minecraft:iron_ingot',count:8}}")
     return failures
 
 
@@ -100,9 +121,12 @@ def count_create(ctl_bin, sock, center):
 
 def run_once(args, scenario):
     work = Path(tempfile.mkdtemp(prefix="create-bench-"))
-    # As perf_bench.py: no frame cap and no VSync, so frame times show the work, not the cap.
+    # As perf_bench.py: no frame cap and no VSync, so frame times show the work, not the cap; and
+    # no idle cap (vanilla's `inactivityFpsLimit` "afk" drops to 30 fps a minute after the last
+    # input, which a long scene build reaches).
     (work / "options.txt").write_text("maxFps:260\nenableVsync:false\nrenderDistance:%d\n"
-                                      "simulationDistance:12\npauseOnLostFocus:false\n" % args.distance)
+                                      "simulationDistance:12\npauseOnLostFocus:false\n"
+                                      "inactivityFpsLimit:minimized\n" % args.distance)
     game = Path(args.game).resolve()
     launch = ["--world", "B", "--creative", "--seed", "1234", "--no-pause", "--weather", "clear",
               "--time", "6000", "--render-distance", str(args.distance)]
@@ -121,7 +145,7 @@ def run_once(args, scenario):
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
-                    "processing": 528}[scenario]
+                    "processing": 528, "logistics": 32 * 48 + 32}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             have = count_create(ctl_bin, sock, center)
@@ -142,6 +166,10 @@ def run_once(args, scenario):
         if args.screenshot:
             ctl(ctl_bin, sock, "screenshot", str(Path(args.screenshot).resolve()))
         pressed = None
+        if scenario == "logistics":
+            # The stacks are on the belts, not lying around as entities.
+            ents = ctl(ctl_bin, sock, "entities")
+            pressed = sum(1 for e in ents.get("entities", []) if "item" in str(e.get("type", "")))
         if scenario == "processing":
             # The work really ran: sheets in one depot's outputs.
             pressed = ctl(ctl_bin, sock, "command", f"data get block {x-8} {y-6} {z}").get("chat")
@@ -173,8 +201,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
-    p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing"],
-                   required=True)
+    p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
+                                          "logistics"], required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
     p.add_argument("--settle", type=float, default=3.0)

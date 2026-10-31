@@ -74,6 +74,18 @@ flight (64 iron → 57 iron + 7 sheets). A first set of three runs had one run a
 depot messages (≤ 0.28 ms each, two or three depots a message) and press ticks (never over 1 ms) rule those out. Cause
 unknown, watched for in later runs.
 
+| Scenario (2026-10-31, Phase 4, 25 s settle, same session, idle frame cap off) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1891 ± 76 | 0.516 / 1.034 | 4.212 ± 0.207 | baseline |
+| logistics: 32 belts × 48 at 16 rpm, 32 motors, 672 stacks of 8 iron dropped on them, stone past each end | 1621 ± 21 | 0.604 / 0.998 | 4.132 ± 0.083 | tick ≤ off + 0.5 ms, frame p50 ≤ off + 20% |
+
+Belts holding items cost no measurable server tick; 1,568 belt segments (top, bottom and the pulleys turning: about
+3,100 part instances) and the stacks on them cost 0.09 ms of frame time. Each run checks no stack is left lying as an
+entity. Before measuring this, the client looked every item's model up again every tick (630 fps); now an item is
+looked at only when its motion changes. `bench_create.py` sets `inactivityFpsLimit:minimized`: vanilla's default caps
+frames at 30 a minute after the last input, which a long scene build reaches (a first logistics run measured exactly
+30 fps).
+
 ### Blocked / open
 
 - Startup with Create's content installed: +0.5 s to the title screen and +0.9 s into a world (warm). The native mod

@@ -2254,16 +2254,31 @@ struct ClientBelts {
     belts: HashMap<[i32; 3], (create_engine::belt::Contents, Vec<Shown>)>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+/// What was uploaded for an item: enough to tell, without looking anything up, whether it now
+/// moves or looks differently.
+#[derive(Clone, PartialEq)]
 struct Shown {
-    model: u32,
+    item: String,
+    count: u8,
+    angle: i32,
+    flat: bool,
     velocity: [f32; 3],
-    phase: f32,
     copies: u8,
 }
 
 thread_local! {
     static BELTS: RefCell<ClientBelts> = RefCell::new(ClientBelts::default());
+    /// `isGui3d` by item id, looked up once.
+    static BLOCK_ITEMS: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
+}
+
+fn is_block_item(game: &Game<'_>, item: &str) -> bool {
+    if let Some(b) = BLOCK_ITEMS.with_borrow(|m| m.get(item).copied()) {
+        return b;
+    }
+    let b = game.native_item_uses_block_light(item).unwrap_or(false);
+    BLOCK_ITEMS.with_borrow_mut(|m| m.insert(item.to_owned(), b));
+    b
 }
 
 /// A key for copy `copy` of item `index` on the belt at `controller`, apart from the others.
@@ -2323,9 +2338,19 @@ fn draw_belt(
         } else {
             [0.0; 3]
         };
-        let block_item = game.native_item_uses_block_light(&item.item).unwrap_or(false);
-        let copies = belt::item_copies(u32::from(item.count), block_item, item.angle);
         let flat = place.tilt == 0.0;
+        // Moving as it was uploaded: the GPU already has it where it is.
+        if let Some(s) = shown.get(i)
+            && s.velocity == velocity
+            && s.flat == flat
+            && s.angle == item.angle
+            && s.count == item.count
+            && s.item == item.item
+        {
+            continue;
+        }
+        let block_item = is_block_item(game, &item.item);
+        let copies = belt::item_copies(u32::from(item.count), block_item, item.angle);
         // Flat: baked about the block's centre, turned by the item's angle on the GPU; on a
         // slope the tilt comes first, so the angle is baked in.
         let (centre, phase) = if flat {
@@ -2344,7 +2369,10 @@ fn draw_belt(
             glam::Mat4::from_axis_angle(axis, place.tilt.to_radians())
                 * glam::Mat4::from_rotation_y((item.angle as f32).to_radians())
         };
-        let mut first = None;
+        let old_copies = shown.get(i).map_or(0, |s| s.copies);
+        for copy in copies.len() as u8..old_copies {
+            game.native_part_clear(belt_key(c, i, copy));
+        }
         for (copy, pose) in copies.iter().enumerate() {
             let Some(model) = game.native_part_item_model(
                 &item.item,
@@ -2352,16 +2380,6 @@ fn draw_belt(
             ) else {
                 continue;
             };
-            first.get_or_insert(model);
-            let now_shown = Shown {
-                model,
-                velocity,
-                phase,
-                copies: copies.len() as u8,
-            };
-            if copy == 0 && shown.get(i) == Some(&now_shown) {
-                break;
-            }
             let at = place.at - centre;
             game.native_part_glide(
                 belt_key(c, i, copy as u8),
@@ -2375,9 +2393,11 @@ fn draw_belt(
             );
         }
         let entry = Shown {
-            model: first.unwrap_or(0),
+            item: item.item.clone(),
+            count: item.count,
+            angle: item.angle,
+            flat,
             velocity,
-            phase,
             copies: copies.len() as u8,
         };
         if i < shown.len() {
