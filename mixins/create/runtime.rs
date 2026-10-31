@@ -1078,6 +1078,23 @@ fn tick_depots(game: &mut Game<'_>, dimension: &str, dim: usize) {
     if changed.is_empty() {
         return;
     }
+    // A depot that joined holding a stack (a saved world, a block placed with its items) has
+    // it at rest in the centre, as Create reads `HeldItem` back.
+    for &pos in &changed {
+        let unknown = with_world(|w| matches!(w.dims[dim].depots.get(&pos), Some(None)));
+        if unknown != Some(true) {
+            continue;
+        }
+        if let Some((_, item, _)) = depot_items(game, pos).into_iter().find(|s| s.0 == 0) {
+            let held = create_engine::depot::Held::new(random_angle(game, pos), upright(game, &item));
+            with_world(|w| {
+                if let Some(h) = w.dims[dim].depots.get_mut(&pos) {
+                    *h = Some(held);
+                }
+                w.wake_depot(dim, pos);
+            });
+        }
+    }
     let players: Vec<u128> = game
         .native_server_players()
         .into_iter()

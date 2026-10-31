@@ -1,0 +1,65 @@
+{
+  "scenario": "processing",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.04248046875,
+    1.46728515625,
+    1.482421875
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 21692,
+      "frame_ms_p50": 0.5365549921989441,
+      "frame_ms_p99": 0.9983419179916382,
+      "fps": 1807.6666666666667,
+      "tick_ms": 4.20648193359375,
+      "tick_ms_max": 10.605645179748535,
+      "check": [
+        "-529, 93, 64 has the following block data: {x: -529, y: 93, Items: [{count: 57, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 7, Slot: 1b, id: \"create:iron_sheet\"}], z: 64, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 2775,
+      "frame_ms_p50": 0.46947699785232544,
+      "frame_ms_p99": 33.431068420410156,
+      "fps": 231.25,
+      "tick_ms": 6.093421936035156,
+      "tick_ms_max": 10.327951431274414,
+      "check": [
+        "-542, 88, 68 has the following block data: {x: -542, y: 88, Items: [{count: 57, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 7, Slot: 1b, id: \"create:iron_sheet\"}], z: 68, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 22056,
+      "frame_ms_p50": 0.5324999690055847,
+      "frame_ms_p99": 1.001202940940857,
+      "fps": 1838.0,
+      "tick_ms": 4.325451850891113,
+      "tick_ms_max": 10.654647827148438,
+      "check": [
+        "-534, 91, 69 has the following block data: {x: -534, y: 91, Items: [{count: 57, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 7, Slot: 1b, id: \"create:iron_sheet\"}], z: 69, id: \"create:depot\"}"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1292.3055555555557,
+    "frame_ms_p50": 0.5128439863522848,
+    "frame_ms_p99": 11.81020442644755,
+    "tick_ms": 4.875118573506673,
+    "tick_ms_max": 10.529414812723795
+  },
+  "stdev": {
+    "fps": 919.0262220194043,
+    "frame_ms_p50": 0.03761160156044107,
+    "frame_ms_p99": 18.72421752518472,
+    "tick_ms": 1.0567571966476461,
+    "tick_ms_max": 0.17618437902326653
+  }
+}
