@@ -32,6 +32,9 @@ pub enum Decision {
         shapes: Option<Value>,
         /// Own state properties (Horizon's `state_properties`), when no template has them.
         own: Option<Value>,
+        /// Drawn as turning parts by the native mod, not in the chunk mesh
+        /// (Create's `RenderShape.ENTITYBLOCK_ANIMATED`).
+        animated: bool,
     },
     Pending(String),
 }
@@ -184,6 +187,7 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
         requires_tool: requires_tool(b),
         shapes: shapes.get(n).cloned(),
         own: None,
+        animated: false,
     };
     if let Some(d) = kinetic(b, sounds) {
         return d;
@@ -298,13 +302,56 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         ),
         _ => return None,
     };
+    // KineticBlock.getRenderShape: shafts and cogs are all moving parts; casings, gearboxes and
+    // motors keep their model and show their shafts as parts.
+    let animated = matches!(
+        b.name.as_str(),
+        "shaft" | "powered_shaft" | "cogwheel" | "large_cogwheel"
+    );
     Some(Decision::Declared {
         template,
         sounds,
         requires_tool: requires_tool(b),
         shapes,
         own,
+        animated,
     })
+}
+
+/// Create's partial models (`AllPartialModels`) that turn as parts, as hidden blocks of the
+/// content mod so Horizon bakes them like any block model: `(block, model, facing variants)`.
+/// Nobody can hold or place them (no item, invisible).
+pub const PARTIALS: [(&str, &str); 1] = [("part_shaft_half", "create:block/shaft_half")];
+
+/// A partial's declaration and blockstate: one state per facing, the model (which points south)
+/// turned to it as a blockstate variant turns a model.
+pub fn partial_files(model: &str) -> (Value, Value) {
+    let decl = json!({
+        "template": "minecraft:stone",
+        "item": false,
+        "properties": { "render_shape": "invisible" },
+        "state_properties": { "facing": ["north", "east", "south", "west", "up", "down"] }
+    });
+    let turn = |x: i32, y: i32| {
+        let mut v = Map::new();
+        v.insert("model".into(), json!(model));
+        if x != 0 {
+            v.insert("x".into(), json!(x));
+        }
+        if y != 0 {
+            v.insert("y".into(), json!(y));
+        }
+        Value::Object(v)
+    };
+    let states = json!({ "variants": {
+        "facing=south": turn(0, 0),
+        "facing=west": turn(0, 90),
+        "facing=north": turn(0, 180),
+        "facing=east": turn(0, 270),
+        "facing=up": turn(90, 0),
+        "facing=down": turn(270, 0),
+    }});
+    (decl, states)
 }
 
 /// Blocks whose behaviour belongs to a later phase: kinetic, processing, logistics, fluids...
@@ -348,6 +395,7 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
         requires_tool,
         shapes,
         own,
+        animated,
     } = d
     else {
         return None;
@@ -360,6 +408,9 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     }
     if let Some(s) = sounds {
         props.insert("sounds".into(), json!(s));
+    }
+    if *animated {
+        props.insert("render_shape".into(), json!("entityblock_animated"));
     }
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));

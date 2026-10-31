@@ -303,6 +303,9 @@ struct Node {
     speed: f32,
     overstressed: bool,
     live: bool,
+    /// Set or replaced since the last solve: reported even when its speed is unchanged, so the
+    /// game shows every part (a still one too).
+    fresh: bool,
 }
 
 /// The kinetic parts of one dimension.
@@ -313,6 +316,8 @@ pub struct Kinetics {
     /// Nodes at a position: index 0, and a split shaft's second half at 1.
     at: HashMap<[i32; 3], [u32; 2]>,
     dirty: Vec<u32>,
+    /// Positions whose parts left since the last `take_removed`.
+    removed: Vec<[i32; 3]>,
     stamp: u64,
     /// Scratch for solving, kept to avoid allocating per solve.
     factor: HashMap<u32, f32>,
@@ -357,6 +362,7 @@ impl Kinetics {
             }
             n.part = part;
             n.stamp = self.stamp;
+            n.fresh = true;
             self.dirty.push(existing);
             return;
         }
@@ -368,6 +374,7 @@ impl Kinetics {
             speed: 0.0,
             overstressed: false,
             live: true,
+            fresh: true,
         };
         let id = match self.free.pop() {
             Some(id) => {
@@ -398,6 +405,20 @@ impl Kinetics {
             self.nodes[id as usize].live = false;
             self.free.push(id);
         }
+        self.removed.push(pos);
+    }
+
+    /// The positions whose parts left since the last call (for the game to hide them).
+    pub fn take_removed(&mut self) -> Vec<[i32; 3]> {
+        std::mem::take(&mut self.removed)
+    }
+
+    /// Every part: position, half (`sub`), shown speed and whether its network is overstressed.
+    pub fn parts(&self) -> impl Iterator<Item = ([i32; 3], u8, f32, bool)> + '_ {
+        self.nodes
+            .iter()
+            .filter(|n| n.live)
+            .map(|n| (n.pos, n.sub, n.speed, n.overstressed))
     }
 
     pub fn speed(&self, pos: [i32; 3], sub: u8) -> Option<f32> {
@@ -568,7 +589,8 @@ impl Kinetics {
                 let theoretical = root * self.factor[&id];
                 let shown = if overstressed { 0.0 } else { theoretical };
                 let n = &mut self.nodes[id as usize];
-                if n.speed != shown || n.overstressed != overstressed {
+                if n.fresh || n.speed != shown || n.overstressed != overstressed {
+                    n.fresh = false;
                     n.speed = shown;
                     n.overstressed = overstressed;
                     events.push(Event::Speed {
@@ -623,6 +645,27 @@ mod tests {
         solve(&mut k);
         assert_eq!(k.speed([2, 0, 0], 0), Some(32.0));
         assert_eq!(k.speed([4, 0, 0], 0), Some(0.0));
+    }
+
+    #[test]
+    fn new_parts_are_reported_even_when_still_and_removals_are_kept() {
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, Part::shaft(Axis::X));
+        let e = solve(&mut k);
+        assert_eq!(
+            e,
+            [Event::Speed {
+                pos: [0, 0, 0],
+                sub: 0,
+                speed: 0.0,
+                overstressed: false
+            }]
+        );
+        assert!(solve(&mut k).is_empty());
+        k.remove([0, 0, 0]);
+        assert_eq!(k.take_removed(), [[0, 0, 0]]);
+        assert!(k.take_removed().is_empty());
+        assert_eq!(k.parts().count(), 0);
     }
 
     #[test]

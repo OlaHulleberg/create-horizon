@@ -111,6 +111,15 @@ fn compile(create: &Path, out: &Path) {
         }
     }
 
+    // Partial models as hidden blocks, with their own blockstates.
+    let states_dir = out.join("content/assets/create/blockstates");
+    let _ = fs::remove_dir_all(&states_dir);
+    for (name, model) in blocks::PARTIALS {
+        let (decl, states) = blocks::partial_files(model);
+        write(&decl_dir.join(format!("block/{name}.json")), &pretty(&decl));
+        write(&states_dir.join(format!("{name}.json")), &pretty(&states));
+    }
+
     // Items that are not blocks: plain ingredients now, the rest with their subsystem.
     let block_names: std::collections::BTreeSet<&str> =
         all.iter().map(|b| b.name.as_str()).collect();
@@ -181,10 +190,16 @@ capabilities = [\"registries\"]\n",
          pub fn impact(self) -> f32 {\n        Self::IMPACT[self as usize]\n    }\n\n    \
          pub fn capacity(self) -> f32 {\n        Self::CAPACITY[self as usize]\n    }\n}\n",
     );
-    write(
-        &out.join("mixins/create/engine/src/generated.rs"),
-        rs.as_bytes(),
-    );
+    let generated = out.join("mixins/create/engine/src/generated.rs");
+    write(&generated, rs.as_bytes());
+    // Keep the committed file in rustfmt's layout, so regenerating it changes nothing.
+    let formatted = std::process::Command::new("rustfmt")
+        .args(["--edition", "2024"])
+        .arg(&generated)
+        .status();
+    if !formatted.is_ok_and(|s| s.success()) {
+        eprintln!("create-data: rustfmt failed on {}", generated.display());
+    }
 
     println!(
         "{} Create blocks: {} declared, {} items declared",

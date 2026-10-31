@@ -36,6 +36,9 @@ def write_fixture(original, root):
         ('level_tick_post', "horizon_client::game::native_hooks::Game<'_>::native_level_tick_post"),
         ('register_commands', "horizon_client::game::native_hooks::Game<'_>::native_register_commands"),
         ('perform_command', "horizon_client::game::native_hooks::Game<'_>::native_perform_command"),
+        ('net_from_client', "horizon_client::game::native_hooks::Game<'_>::native_net_from_client"),
+        ('net_from_server', "horizon_client::game::native_hooks::Game<'_>::native_net_from_server"),
+        ('tick', "horizon_client::game::native_hooks::Game<'_>::native_tick"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -53,13 +56,19 @@ pub mod level {
 }
 pub mod registry {
     use std::collections::BTreeMap;
-    #[derive(Clone, Copy)] pub struct BlockStateId(pub u32);
-    pub struct BlockState { pub name: String, pub properties: BTreeMap<String, String> }
+    #[derive(Clone, Copy, PartialEq, Debug)] pub struct BlockStateId(pub u32);
+    #[derive(Clone, PartialEq)] pub struct BlockState { pub name: String, pub properties: BTreeMap<String, String> }
     pub struct BlockRegistry { pub states: Vec<BlockState> }
     impl BlockRegistry {
         pub fn len(&self) -> usize { self.states.len() }
         pub fn is_empty(&self) -> bool { self.states.is_empty() }
         pub fn state(&self, id: BlockStateId) -> Option<&BlockState> { self.states.get(id.0 as usize) }
+        pub fn default_state(&self, name: &str) -> Option<BlockStateId> {
+            self.states.iter().position(|s| s.name == name).map(|i| BlockStateId(i as u32))
+        }
+        pub fn id(&self, state: &BlockState) -> Option<BlockStateId> {
+            self.states.iter().position(|s| s == state).map(|i| BlockStateId(i as u32))
+        }
     }
 }
 ''',
@@ -100,7 +109,7 @@ pub mod native_server {
     impl NativeCommand {
         pub fn op(usage: &str, level: u8) -> Self { Self { usage: usage.to_owned(), level } }
     }
-    pub struct NativeServerPlayer { pub dimension: String, pub position: [f64; 3] }
+    pub struct NativeServerPlayer { pub uuid: u128, pub dimension: String, pub position: [f64; 3] }
 }
 pub mod native_hooks {
     use super::*;
@@ -124,15 +133,44 @@ pub mod native_hooks {
             let _ = (player, command, ran);
         }
         pub fn native_acting_player(&self) -> Option<NativeServerPlayer> {
-            Some(NativeServerPlayer { dimension: "minecraft:overworld".into(), position: [0.5, 64.0, 0.5] })
+            Some(NativeServerPlayer { uuid: 7, dimension: "minecraft:overworld".into(), position: [0.5, 64.0, 0.5] })
         }
+        pub fn native_server_players(&self) -> Vec<NativeServerPlayer> {
+            self.native_acting_player().into_iter().collect()
+        }
+        pub fn native_net_send_to_player(&mut self, player: u128, channel: &str, data: &[u8]) -> Result<(), String> {
+            self.sent.push((player, channel.to_owned(), data.to_vec()));
+            Ok(())
+        }
+        pub fn native_net_send_to_server(&mut self, channel: &str, data: &[u8]) -> Result<(), String> {
+            self.sent.push((0, channel.to_owned(), data.to_vec()));
+            Ok(())
+        }
+        pub fn native_net_from_client(&mut self, player: u128, channel: &str, data: &[u8]) { let _ = (player, channel, data); }
+        pub fn native_net_from_server(&mut self, channel: &str, data: &[u8]) { let _ = (channel, data); }
+        pub fn native_tick(&mut self) {}
+        pub fn native_window(&self) -> bool { true }
+        pub fn native_playing(&self) -> bool { true }
+        pub fn native_part_model(&mut self, state: BlockStateId) -> Option<u32> { Some(state.0) }
+        pub fn native_part_set(&mut self, key: u64, model: u32, block: [i32; 3], axis: u8, rpm: f32, phase: f32) {
+            let _ = (key, phase);
+            self.parts.push((model, block, axis, rpm));
+        }
+        pub fn native_part_clear(&mut self, key: u64) { let _ = key; }
         pub fn native_feedback(&mut self, line: horizon_client::text::Text) { self.said.push(line.0); }
         pub fn native_run_command(&mut self, line: &str) -> bool { self.said.push(line.to_owned()); true }
     }
 }
 pub struct Assets { pub registry: &'static BlockRegistry }
 pub struct Pack { pub assets: Assets }
-pub struct Game<'a> { pub pack: Pack, pub calls: &'a mut u32, pub said: Vec<String> }
+pub struct World { pub blocks: std::collections::HashMap<[i32; 3], u32> }
+impl World {
+    pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId { BlockStateId(*self.blocks.get(&[x, y, z]).unwrap_or(&0)) }
+}
+pub struct Game<'a> {
+    pub pack: Pack, pub calls: &'a mut u32, pub said: Vec<String>, pub world: World,
+    pub sent: Vec<(u128, String, Vec<u8>)>, pub parts: Vec<(u32, [i32; 3], u8, f32)>,
+}
 pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
 #[test] fn every_hook_reaches_the_engine() {
     use horizon_world::registry::BlockState;
@@ -147,7 +185,8 @@ pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
     states.push(BlockState { name: "create:creative_motor".into(), properties: props("facing", "east") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
-    let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![] };
+    let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
+        world: World { blocks: Default::default() }, sent: vec![], parts: vec![] };
     game.native_world_lifecycle(native_lifecycle::WorldPhase::WorldOpenReady, "");
     assert_eq!(create_engine::states::index(2), Some(0));
     // A column with a motor at (0, 0, 0) and a shaft at (1, 0, 0).
@@ -161,6 +200,12 @@ pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
     let level = GameLevel { registry };
     level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 2, y: 0, z: 0 }, BlockStateId(0), BlockStateId(2));
     game.native_level_tick_post("minecraft:overworld");
+    // The solve went to the level's player; as their client, it shows the parts.
+    let speeds: Vec<Vec<u8>> = game.sent.iter().filter(|m| m.1 == "create:kinetics").map(|m| m.2.clone()).collect();
+    assert!(!speeds.is_empty(), "the server sent the speeds");
+    game.world.blocks.insert([2, 0, 0], 2);
+    for m in &speeds { game.native_net_from_server("create:kinetics", m); }
+    assert!(game.parts.iter().any(|p| p.1 == [2, 0, 0] && p.2 == 0 && p.3 == 16.0), "{:?}", game.parts);
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
     assert_eq!(commands.len(), 1);

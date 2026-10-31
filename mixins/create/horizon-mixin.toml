@@ -4,7 +4,7 @@ version = "0.1.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "0a96593cf3fbdd5e00fcb1e60ada8c80e19386a5"
+horizon_revision = "a81b8ef53d7d3698a06948e8ce895718e24fcb39"
 
 # Game glue: per-world state on the server thread, translating hooks into engine calls.
 [[module]]
@@ -97,3 +97,36 @@ bindings = [
   { name = "command", ty = "&str", value = "command" },
   { name = "ran", ty = "&mut bool", value = "ran" },
 ]
+
+[[injection]]
+id = "net-from-client"
+hook = "net_from_client"
+hook_version = 1
+kind = "HEAD"
+helper = "net.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "u128", value = "player" },
+  { name = "channel", ty = "&str", value = "channel" },
+  { name = "data", ty = "&[u8]", value = "data" },
+]
+
+[[injection]]
+id = "net-from-server"
+hook = "net_from_server"
+hook_version = 1
+kind = "HEAD"
+helper = "net_client.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "channel", ty = "&str", value = "channel" },
+  { name = "data", ty = "&[u8]", value = "data" },
+]
+
+[[injection]]
+id = "tick"
+hook = "tick"
+hook_version = 1
+kind = "HEAD"
+helper = "tick.rs"
+bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]

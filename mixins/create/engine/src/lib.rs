@@ -1,6 +1,7 @@
 //! Create 6.0.11's rules, translated from its MIT Java into plain Rust with no game types,
 //! so every rule is unit-tested here and the game glue (`runtime.rs`) stays thin.
 
+pub mod client;
 pub mod generated;
 pub mod kinetics;
 pub mod parts;

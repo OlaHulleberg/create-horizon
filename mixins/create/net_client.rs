@@ -1,0 +1,4 @@
+// The server's speeds, shown as turning parts on the client.
+fn net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &[u8]) {
+    crate::game::create::net_from_server(game, channel, data);
+}

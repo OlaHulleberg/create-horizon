@@ -231,7 +231,8 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
         }
     }
     // 26.3 finds an item's model through `assets/<ns>/items/<id>.json`; 1.21.1 had none.
-    for name in &declared {
+    // Hidden partial-model blocks (`part_*`) have no item.
+    for name in declared.iter().filter(|n| !n.starts_with("part_")) {
         let model = format!("assets/create/models/item/{name}.json");
         let target = if files.contains_key(&model) {
             format!("create:item/{name}")
