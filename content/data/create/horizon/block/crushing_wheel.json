@@ -1,0 +1,46 @@
+{
+  "template": "minecraft:iron_chain",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:andesite",
+    "render_shape": "entityblock_animated"
+  },
+  "item": true,
+  "shapes": {
+    "property": "axis",
+    "values": {
+      "x": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      ],
+      "y": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      ],
+      "z": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      ]
+    }
+  }
+}

@@ -4,6 +4,7 @@
 pub mod belt;
 pub mod client;
 pub mod contraption;
+pub mod crusher;
 pub mod depot;
 pub mod fan;
 pub mod generated;

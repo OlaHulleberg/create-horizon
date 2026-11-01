@@ -396,6 +396,7 @@ impl Behaviours {
     }
     /// No block tags; no cached shapes (the collision flag decides).
     pub fn tag(&self, name: &str) -> Option<&BlockSet> { let _ = name; None }
+    pub fn is_replaceable(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
     /// State 20 is a water source.

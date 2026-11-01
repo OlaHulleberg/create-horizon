@@ -443,6 +443,21 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // CrushingWheelBlock (RotatedPillarKineticBlock): a full block on an axis, stone's
+        // properties, not hiding its neighbours; an iron chain's template places it on the
+        // clicked face's axis.
+        "crushing_wheel" => (
+            "minecraft:iron_chain",
+            Some(by_axis(&[[0., 0., 0., 16., 16., 16.]])),
+            None,
+        ),
+        // CrushingWheelControllerBlock: air to players (no shape, invisible, replaceable, no
+        // drops), placed and removed by the wheels.
+        "crushing_wheel_controller" => (
+            "minecraft:structure_void",
+            Some(json!({ "property": "valid", "values": { "false": [], "true": [] } })),
+            own(&[("facing", facing), ("valid", bools)]),
+        ),
         "hand_crank" => (
             "minecraft:heavy_core",
             Some(by_facing(&CRANK)),
@@ -454,7 +469,13 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
     // motors keep their model and show their shafts as parts.
     let animated = matches!(
         b.name.as_str(),
-        "shaft" | "powered_shaft" | "cogwheel" | "large_cogwheel" | "hand_crank" | "belt"
+        "shaft"
+            | "powered_shaft"
+            | "cogwheel"
+            | "large_cogwheel"
+            | "hand_crank"
+            | "belt"
+            | "crushing_wheel"
     );
     Some(Decision::Declared {
         template,
@@ -463,7 +484,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         shapes,
         own,
         animated,
-        item: b.name != "belt",
+        item: b.name != "belt" && b.name != "crushing_wheel_controller",
     })
 }
 
@@ -682,11 +703,14 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     if *animated {
         props.insert("render_shape".into(), json!("entityblock_animated"));
     }
+    if b.name == "crushing_wheel_controller" {
+        props.insert("render_shape".into(), json!("invisible"));
+    }
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));
     doc.insert("properties".into(), Value::Object(props));
     doc.insert("item".into(), json!(item));
-    if b.stack != 64 {
+    if b.stack != 64 && *item {
         doc.insert(
             "components".into(),
             json!({ "minecraft:max_stack_size": b.stack }),

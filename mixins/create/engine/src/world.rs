@@ -142,6 +142,13 @@ pub struct Dimension {
     /// Item entities' fan progress (Create keeps it in their persistent data), by entity id; kept
     /// while they are in a current.
     pub item_fan: HashMap<u32, crate::fan::Progress>,
+    /// Crushing wheels whose controllers must be looked at (placed, removed, speed changed), and
+    /// the controllers: their state and crushing speed; the turning ones tick. Contents saved with
+    /// a column wait for their controller.
+    pub crusher_checks: Vec<[i32; 3]>,
+    pub crushers: HashMap<[i32; 3], (crate::crusher::Crusher, f32)>,
+    pub running_crushers: Vec<[i32; 3]>,
+    crusher_saved: HashMap<[i32; 3], crate::crusher::Crusher>,
 }
 
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
@@ -176,6 +183,7 @@ fn has_state(block: Block) -> bool {
     matches!(
         block,
         Block::Depot
+            | Block::CrushingWheelController
             | Block::Belt
             | Block::PoweredLatch
             | Block::PoweredToggleLatch
@@ -253,6 +261,13 @@ impl CreateWorld {
         }
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
+        }
+        if block == Block::CrushingWheel {
+            d.crusher_checks.push(pos);
+        }
+        if block == Block::CrushingWheelController && !d.crushers.contains_key(&pos) {
+            let c = d.crusher_saved.remove(&pos).unwrap_or_default();
+            d.crushers.insert(pos, (c, 0.0));
         }
         if block == Block::EncasedFan {
             // Placed, loaded or turned by a wrench: its current is looked at again.
@@ -339,6 +354,13 @@ impl CreateWorld {
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
             d.presses.remove(&pos);
+            if self.table.get(old).map(|(b, _)| b) == Some(Block::CrushingWheel) {
+                d.crusher_checks.push(pos);
+            }
+            if d.crushers.remove(&pos).is_some() {
+                d.running_crushers.retain(|p| *p != pos);
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if d.fans.remove(&pos).is_some() {
                 d.running_fans.retain(|p| *p != pos);
             }
@@ -398,6 +420,11 @@ impl CreateWorld {
             d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.fans.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.crushers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.running_crushers
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.crusher_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.running_fans
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tanks.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -444,18 +471,25 @@ impl CreateWorld {
         }
         let from = events.len();
         let stats = d.kinetics.solve(events);
-        // Fans follow their speed (`onSpeedChanged`: the current is rebuilt).
-        if !d.fans.is_empty() {
-            for e in &events[from..] {
-                if let Event::Speed { pos, speed, .. } = *e
-                    && let Some(fan) = d.fans.get_mut(&pos)
-                    && fan.speed != speed
-                {
-                    fan.speed = speed;
-                    fan.rebuild = true;
-                    if !d.running_fans.contains(&pos) {
-                        d.running_fans.push(pos);
-                    }
+        // Fans follow their speed (`onSpeedChanged`: the current is rebuilt); crushing wheels
+        // look at their controllers again.
+        for e in &events[from..] {
+            if let Event::Speed { pos, .. } = *e
+                && d.states
+                    .get(&pos)
+                    .and_then(|&s| self.table.get(s))
+                    .is_some_and(|(b, _)| b == Block::CrushingWheel)
+            {
+                d.crusher_checks.push(pos);
+            }
+            if let Event::Speed { pos, speed, .. } = *e
+                && let Some(fan) = d.fans.get_mut(&pos)
+                && fan.speed != speed
+            {
+                fan.speed = speed;
+                fan.rebuild = true;
+                if !d.running_fans.contains(&pos) {
+                    d.running_fans.push(pos);
                 }
             }
         }
@@ -868,6 +902,45 @@ impl CreateWorld {
             .iter()
             .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
             .map(|(p, w)| (*p, w.clone()))
+            .collect();
+        out.sort_by_key(|(p, _)| *p);
+        out
+    }
+
+    /// A controller's crushing speed (`updateSpeed`): it ticks while not 0.
+    pub fn set_crusher_speed(&mut self, dim: usize, pos: [i32; 3], speed: f32) {
+        let d = &mut self.dims[dim];
+        let Some(c) = d.crushers.get_mut(&pos) else {
+            return;
+        };
+        c.1 = speed;
+        d.running_crushers.retain(|p| *p != pos);
+        if speed != 0.0 {
+            d.running_crushers.push(pos);
+        }
+    }
+
+    /// Controller contents saved with a column, for when their controllers are found.
+    pub fn load_crushers(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], crate::crusher::Crusher)>,
+    ) {
+        self.dims[dim].crusher_saved.extend(saved);
+    }
+
+    /// The controllers of a column that hold something, to save.
+    pub fn column_crushers(
+        &self,
+        dim: usize,
+        cx: i32,
+        cz: i32,
+    ) -> Vec<([i32; 3], crate::crusher::Crusher)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .crushers
+            .iter()
+            .filter(|(p, c)| (p[0] >> 4, p[2] >> 4) == (cx, cz) && !c.0.slots.is_empty())
+            .map(|(p, c)| (*p, c.0.clone()))
             .collect();
         out.sort_by_key(|(p, _)| *p);
         out
