@@ -236,6 +236,10 @@ pub struct Item {
     pub inserted_from: Option<Dir>,
     /// `processedBy` / `processingTime`: how far a fan's current has processed it.
     pub fan: crate::fan::Progress,
+    /// `lockedExternally`: a mechanical arm reaching for it holds it still for a tick.
+    pub held_externally: bool,
+    /// A belt funnel facing against the belt holds it at its entry (drawn standing still).
+    pub at_funnel: bool,
 }
 
 impl Item {
@@ -252,6 +256,8 @@ impl Item {
             inserted_at: 0,
             inserted_from: None,
             fan: Default::default(),
+            held_externally: false,
+            at_funnel: false,
         };
         i.side_offset = i.target_side_offset();
         i
@@ -502,6 +508,19 @@ pub trait Surroundings {
         let _ = (segment, item);
         false
     }
+    /// The belt funnel over segment `segment` (any offset along the belt's line), with the way
+    /// the belt moves; None when there is none.
+    fn funnel(&mut self, segment: i32) -> Option<(crate::funnel::OnBelt, Dir)> {
+        let _ = segment;
+        None
+    }
+    /// The funnel over `segment` inserts `item` into the inventory behind it
+    /// (`InvManipulationBehaviour.insert`): the count left, None when it has no inventory or
+    /// takes nothing (the client never inserts).
+    fn funnel_insert(&mut self, segment: i32, item: &Item) -> Option<u8> {
+        let _ = (segment, item);
+        None
+    }
 }
 
 /// What a tick did that the game must act on.
@@ -665,6 +684,13 @@ impl Inventory {
                 self.items.remove(i);
                 continue;
             }
+            // Held still for a tick by a mechanical arm reaching for it (`lockedExternally`).
+            if self.items[i].held_externally {
+                self.items[i].held_externally = false;
+                front = Some(self.items[i].position);
+                i += 1;
+                continue;
+            }
             let mut movement = speed;
             let mut no_movement = false;
             let current = self.items[i].position;
@@ -706,6 +732,16 @@ impl Inventory {
                     }
                     Step::Free => {}
                 }
+            }
+            // Belt funnels: a funnel over a segment the item reaches takes what it can of it.
+            match self.funnels(i, next, length, world, &mut out) {
+                FunnelStep::Gone => continue,
+                FunnelStep::Held => {
+                    front = Some(self.items[i].position);
+                    i += 1;
+                    continue;
+                }
+                FunnelStep::Free => {}
             }
             if no_movement {
                 front = Some(self.items[i].position);
@@ -845,6 +881,62 @@ impl Inventory {
         Step::Free
     }
 
+    /// `BeltFunnelInteractionHandler.checkForFunnels` for item `i` about to move to `next`: each
+    /// funnel it reaches takes what it can into the inventory behind it; one facing against the
+    /// belt holds it at its entry.
+    fn funnels(
+        &mut self,
+        i: usize,
+        next: f32,
+        length: i32,
+        world: &mut impl Surroundings,
+        out: &mut Ticked,
+    ) -> FunnelStep {
+        use crate::funnel::Check;
+        let positive = self.positive;
+        let mut held = false;
+        self.items[i].at_funnel = false;
+        for segment in crate::funnel::segments(self.items[i].position, next, positive, length) {
+            let Some((f, movement)) = world.funnel(segment) else {
+                continue;
+            };
+            let (blocking, entry) =
+                match crate::funnel::check(&f, movement, positive, segment, next) {
+                    Check::Skip => continue,
+                    Check::Stop => break,
+                    Check::Crossed { blocking, entry } => (blocking, entry),
+                };
+            if blocking && self.items[i].position != entry {
+                self.items[i].position = entry;
+                out.changed = true;
+            }
+            let before = self.items[i].count;
+            let left = if f.powered {
+                None
+            } else {
+                world.funnel_insert(segment, &self.items[i])
+            };
+            if let Some(left) = left.filter(|l| *l != before) {
+                self.items[i].count = left;
+                out.changed = true;
+                if left == 0 {
+                    self.items.remove(i);
+                    return FunnelStep::Gone;
+                }
+            }
+            if blocking {
+                held = true;
+                break;
+            }
+        }
+        if held {
+            self.items[i].at_funnel = true;
+            FunnelStep::Held
+        } else {
+            FunnelStep::Free
+        }
+    }
+
     /// `applyToEachWithin` applying a `TransportedResult`: the item is replaced by what it was
     /// turned into, inserted next tick (`toInsert`).
     fn replace(&mut self, i: usize, segment: i32, held: Option<Item>, outputs: Vec<Item>) {
@@ -867,6 +959,12 @@ enum Step {
     Held,
     Removed,
     Replaced,
+}
+
+enum FunnelStep {
+    Free,
+    Held,
+    Gone,
 }
 
 /// The mod-message channel that brings belts' items to clients.
@@ -993,6 +1091,8 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
                 inserted_at: 0,
                 inserted_from: None,
                 fan: Default::default(),
+                held_externally: false,
+                at_funnel: false,
             });
         }
         out.push(c);
@@ -1070,6 +1170,114 @@ mod tests {
             glam::Vec3::new(2.0, 0.0, 0.0)
         );
         assert_eq!(item_copies(16, false, 0).len(), 3);
+    }
+
+    /// A belt with funnels over some of its segments, each taking up to `room` items.
+    struct Funnels {
+        at: Vec<(i32, crate::funnel::OnBelt)>,
+        room: u8,
+        taken: Vec<(i32, u8)>,
+    }
+    impl Surroundings for Funnels {
+        fn ending(&mut self) -> Ending {
+            Ending::Blocked
+        }
+        fn insert(&mut self, _: &Item) -> Option<u8> {
+            None
+        }
+        fn process(&mut self, _: i32, _: &mut Item, _: bool) -> Option<Process> {
+            None
+        }
+        fn funnel(&mut self, segment: i32) -> Option<(crate::funnel::OnBelt, Dir)> {
+            let f = self.at.iter().find(|(s, _)| *s == segment)?.1;
+            Some((f, Dir::South))
+        }
+        fn funnel_insert(&mut self, segment: i32, item: &Item) -> Option<u8> {
+            let n = item.count.min(self.room);
+            self.room -= n;
+            self.taken.push((segment, n));
+            Some(item.count - n)
+        }
+    }
+
+    #[test]
+    fn funnels_over_a_belt_take_what_passes_them() {
+        use crate::funnel::{BeltShape, OnBelt};
+        // A belt of four moving south (positive) at a tenth of a block a tick; a funnel facing
+        // north over segment 2 (against the belt) with room for 3 of a stack of 5.
+        let blocking = OnBelt {
+            facing: Dir::North,
+            shape: BeltShape::Retracted,
+            powered: false,
+        };
+        let mut world = Funnels {
+            at: vec![(2, blocking)],
+            room: 3,
+            taken: Vec::new(),
+        };
+        let mut inv = Inventory {
+            positive: true,
+            ..Default::default()
+        };
+        let mut item = Item::new("minecraft:iron_ingot", 5, 180, false);
+        item.position = 2.0;
+        inv.add(item);
+        // Once a tick's move would cross the entry at 2.5, 3 go in and the other 2 wait there.
+        for _ in 0..6 {
+            inv.tick(4, 0.1, true, &mut world);
+        }
+        assert_eq!(world.taken, [(2, 3)]);
+        assert_eq!(inv.items.len(), 1);
+        assert_eq!(inv.items[0].count, 2);
+        assert_eq!(inv.items[0].position, 2.5);
+        // Room again: the rest goes in and the item is gone.
+        world.room = 64;
+        inv.tick(4, 0.1, true, &mut world);
+        assert!(inv.items.is_empty());
+        // Powered, a blocking funnel still holds items but takes none.
+        world.at[0].1.powered = true;
+        let mut item = Item::new("minecraft:iron_ingot", 1, 180, false);
+        item.position = 2.45;
+        inv.add(item);
+        world.taken.clear();
+        for _ in 0..3 {
+            inv.tick(4, 0.1, true, &mut world);
+        }
+        assert!(world.taken.is_empty());
+        assert_eq!(inv.items[0].position, 2.5);
+        // A pulling funnel beside the belt takes from items passing under it, and lets the rest
+        // go on.
+        let mut world = Funnels {
+            at: vec![(
+                1,
+                OnBelt {
+                    facing: Dir::East,
+                    shape: BeltShape::Pulling,
+                    powered: false,
+                },
+            )],
+            room: 1,
+            taken: Vec::new(),
+        };
+        let mut inv = Inventory {
+            positive: true,
+            ..Default::default()
+        };
+        let mut item = Item::new("minecraft:dirt", 2, 180, false);
+        item.position = 1.3;
+        inv.add(item);
+        inv.tick(4, 0.1, true, &mut world);
+        inv.tick(4, 0.1, true, &mut world);
+        inv.tick(4, 0.1, true, &mut world);
+        assert_eq!(world.taken, [(1, 1)]);
+        assert_eq!(inv.items[0].count, 1);
+        assert!(inv.items[0].position > 1.5);
+        // An item an arm reaches for stays still for a tick.
+        inv.items[0].held_externally = true;
+        let at = inv.items[0].position;
+        inv.tick(4, 0.1, true, &mut world);
+        assert_eq!(inv.items[0].position, at);
+        assert!(!inv.items[0].held_externally);
     }
 
     #[test]
