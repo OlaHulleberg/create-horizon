@@ -199,6 +199,8 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 ]
             })
             .unwrap_or_default(),
+        // CrushingWheelBlock: its whole model turns on its axis (`ENTITYBLOCK_ANIMATED`).
+        Block::CrushingWheel => s.axis.map(|a| vec![own(a, Model::Own)]).unwrap_or_default(),
         // MillstoneRenderer: the inner stone turns on the y axis.
         Block::Millstone => vec![own(Axis::Y, Model::MillstoneCog)],
         // WaterWheelVisual: the wheel, turning on its axis.

@@ -127,12 +127,14 @@ pub(super) fn chunk_load(
     let belts = belts_from_nbt(Game::native_chunk_data(chunk, "create"));
     let tanks = tanks_from_nbt(Game::native_chunk_data(chunk, "create"));
     let windmills = windmills_from_nbt(game, Game::native_chunk_data(chunk, "create"));
+    let crushers = crushers_from_nbt(Game::native_chunk_data(chunk, "create"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.load_settings(dim, saved.into_iter());
         w.load_belt_items(dim, belts.into_iter());
         w.load_tanks(dim, tanks.into_iter());
         w.load_windmills(dim, windmills.into_iter());
+        w.load_crushers(dim, crushers.into_iter());
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
                 && states::index(single).is_none()
@@ -198,6 +200,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_windmills(game, dimension, dim);
     tick_millstones(game, dim);
     tick_fans(game, dimension, dim);
+    tick_crushers(game, dimension, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -547,6 +550,84 @@ fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)]) -> horizon
     )
 }
 
+/// Crushing wheel controllers' contents (`ProcessingInventory`): each one's position, time left
+/// (float bits) and whether its recipe was applied, its stacks' ids and counts.
+fn crushers_to_nbt(
+    crushers: &[([i32; 3], create_engine::crusher::Crusher)],
+) -> horizon_world::nbt::Tag {
+    use horizon_world::nbt::{Compound, Tag};
+    Tag::List(
+        crushers
+            .iter()
+            .map(|(p, c)| {
+                let mut b = Compound::new();
+                b.insert(
+                    "pos".into(),
+                    Tag::IntArray(vec![
+                        p[0],
+                        p[1],
+                        p[2],
+                        c.remaining.to_bits() as i32,
+                        i32::from(c.applied),
+                    ]),
+                );
+                b.insert(
+                    "ids".into(),
+                    Tag::List(
+                        c.slots
+                            .iter()
+                            .map(|s| Tag::String(s.0.as_str().into()))
+                            .collect(),
+                    ),
+                );
+                b.insert(
+                    "counts".into(),
+                    Tag::IntArray(c.slots.iter().map(|s| i32::from(s.1)).collect()),
+                );
+                Tag::Compound(b)
+            })
+            .collect(),
+    )
+}
+
+fn crushers_from_nbt(
+    data: Option<&horizon_world::nbt::Compound>,
+) -> Vec<([i32; 3], create_engine::crusher::Crusher)> {
+    use horizon_world::nbt::Tag;
+    let Some(Tag::List(list)) = data.and_then(|d| d.get(&"crushers".into())) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|b| {
+            let Tag::Compound(b) = b else { return None };
+            let Some(Tag::IntArray(pos)) = b.get(&"pos".into()) else {
+                return None;
+            };
+            let Some(Tag::List(ids)) = b.get(&"ids".into()) else {
+                return None;
+            };
+            let Some(Tag::IntArray(counts)) = b.get(&"counts".into()) else {
+                return None;
+            };
+            let slots = ids
+                .iter()
+                .zip(counts)
+                .filter_map(|(id, n)| match id {
+                    Tag::String(id) => Some((id.to_string_lossy(), (*n).clamp(1, 255) as u8)),
+                    _ => None,
+                })
+                .collect();
+            let c = create_engine::crusher::Crusher {
+                entity: None,
+                slots,
+                remaining: f32::from_bits(*pos.get(3)? as u32),
+                applied: *pos.get(4)? != 0,
+            };
+            Some(([*pos.first()?, *pos.get(1)?, *pos.get(2)?], c))
+        })
+        .collect()
+}
+
 fn belts_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], create_engine::belt::Inventory)> {
@@ -604,7 +685,13 @@ pub(super) fn chunk_data_save(
     let belts = with_world(|w| w.column_belts(dim, chunk[0], chunk[1])).unwrap_or_default();
     let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
     let windmills = with_world(|w| w.column_windmills(dim, chunk[0], chunk[1])).unwrap_or_default();
-    if settings.is_empty() && belts.is_empty() && tanks.is_empty() && windmills.is_empty() {
+    let crushers = with_world(|w| w.column_crushers(dim, chunk[0], chunk[1])).unwrap_or_default();
+    if settings.is_empty()
+        && belts.is_empty()
+        && tanks.is_empty()
+        && windmills.is_empty()
+        && crushers.is_empty()
+    {
         data.remove(&"create".into());
         return;
     }
@@ -618,6 +705,9 @@ pub(super) fn chunk_data_save(
     }
     if !belts.is_empty() {
         own.insert("belts".into(), belts_to_nbt(&belts));
+    }
+    if !crushers.is_empty() {
+        own.insert("crushers".into(), crushers_to_nbt(&crushers));
     }
     if !tanks.is_empty() {
         // x, y, z, fluid, amount for each tank (`FluidTankBlockEntity`'s `TankContent`).
@@ -905,6 +995,7 @@ struct Recipes {
     table: (usize, usize),
     milling: create_engine::processing::Book,
     pressing: create_engine::processing::Book,
+    crushing: create_engine::processing::Book,
     /// The fan's: Create's washing and haunting, vanilla's cooking.
     splashing: create_engine::processing::Book,
     haunting: create_engine::processing::Book,
@@ -943,6 +1034,7 @@ fn ensure_recipes(game: &Game<'_>) -> bool {
             table,
             milling,
             pressing,
+            crushing: read_book(game, "create:crushing"),
             splashing: read_book(game, "create:splashing"),
             haunting: read_book(game, "create:haunting"),
             smoking: read_cooking(game, "minecraft:smoking"),
@@ -1836,6 +1928,216 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
     if let Some(f) = facing {
         game.native_set_block_property(pos, "facing", dir_name(f));
     }
+}
+
+/// A block state of `name` with `props` set (others at their defaults).
+fn state_with(
+    registry: &BlockRegistry,
+    name: &str,
+    props: &[(&str, &str)],
+) -> Option<BlockStateId> {
+    let mut s = registry.state(registry.default_state(name)?)?.clone();
+    for (k, v) in props {
+        s.properties.insert((*k).to_owned(), (*v).to_owned());
+    }
+    registry.id(&s)
+}
+
+/// Crushing wheels: the controllers between wheels turning against each other
+/// (`CrushingWheelBlock.updateControllers`, after a wheel is placed, broken or changes speed),
+/// then the turning controllers' `tick`.
+fn tick_crushers(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let mut checks =
+        with_world(|w| std::mem::take(&mut w.dims[dim].crusher_checks)).unwrap_or_default();
+    checks.sort();
+    checks.dedup();
+    for pos in checks {
+        fix_controllers(game, dimension, dim, pos);
+    }
+    let running = with_world(|w| w.dims[dim].running_crushers.clone()).unwrap_or_default();
+    if running.is_empty() || !ensure_recipes(game) {
+        return;
+    }
+    for pos in running {
+        tick_crusher(game, dimension, dim, pos);
+    }
+}
+
+fn fix_controllers(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+    use create_engine::{Block, crusher};
+    let registry = game.pack.assets.registry;
+    let at = |p: [i32; 3], side: Dir, n: i32| {
+        let o = side.offset();
+        [p[0] + o[0] * n, p[1] + o[1] * n, p[2] + o[2] * n]
+    };
+    let block_of = |game: &Game<'_>, p: [i32; 3]| {
+        let s = game.world.block(p[0], p[1], p[2]);
+        with_world(|w| w.table.get(s.0).map(|(b, i)| (b, i.axis))).flatten()
+    };
+    let wheel = block_of(game, pos).filter(|b| b.0 == Block::CrushingWheel);
+    let air = BlockStateId(0);
+    for side in Dir::ALL {
+        let cpos = at(pos, side, 1);
+        let existing = block_of(game, cpos).is_some_and(|b| b.0 == Block::CrushingWheelController);
+        let want = wheel.and_then(|(_, axis)| {
+            let axis = axis?;
+            let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+            let opos = at(pos, side, 2);
+            let other = block_of(game, opos)
+                .filter(|b| b.0 == Block::CrushingWheel)
+                .and_then(|b| b.1)
+                .map(|a| {
+                    (
+                        a,
+                        with_world(|w| w.speed(dim, opos)).flatten().unwrap_or(0.0),
+                    )
+                });
+            crusher::controller(axis, side, speed, other).map(|c| (c, speed))
+        });
+        match want {
+            // A wheel that went (`onRemove`) or no partner: no controller.
+            None => {
+                if existing && (wheel.is_none() || wheel.and_then(|w| w.1) != Some(side.axis())) {
+                    game.native_set_block(
+                        dimension,
+                        cpos,
+                        air,
+                        super::native_hooks::flags::UPDATE_ALL,
+                    );
+                }
+            }
+            Some(((valid, facing), speed)) => {
+                let here = game.world.block(cpos[0], cpos[1], cpos[2]);
+                if !existing && !game.res.behaviours().is_replaceable(here) {
+                    continue;
+                }
+                let Some(state) = state_with(
+                    registry,
+                    "create:crushing_wheel_controller",
+                    &[
+                        ("facing", dir_name(facing)),
+                        ("valid", if valid { "true" } else { "false" }),
+                    ],
+                ) else {
+                    continue;
+                };
+                if here != state {
+                    game.native_set_block(
+                        dimension,
+                        cpos,
+                        state,
+                        super::native_hooks::flags::UPDATE_ALL,
+                    );
+                }
+                let crushing = if valid {
+                    crusher::crushing_speed(speed)
+                } else {
+                    0.0
+                };
+                with_world(|w| w.set_crusher_speed(dim, cpos, crushing));
+            }
+        }
+    }
+}
+
+/// `CrushingWheelControllerBlockEntity.tick` (and the controller block's `entityInside`).
+fn tick_crusher(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+    use create_engine::{crusher, processing};
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    let Some(facing) = with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten()
+    else {
+        return;
+    };
+    let Some((mut c, speed)) = with_world(|w| w.dims[dim].crushers.get(&pos).cloned()).flatten()
+    else {
+        return;
+    };
+    let cell = |grow: f64| {
+        let lo = pos.map(|v| f64::from(v) - grow);
+        let hi = pos.map(|v| f64::from(v) + 1.0 + grow);
+        (lo, hi)
+    };
+    let before = c.clone();
+    if let Some(id) = c.entity {
+        // The held item: drawn to the middle and in; taken a quarter past the middle.
+        let (lo, hi) = cell(0.5);
+        let mut found = None;
+        game.native_items_in(dimension, lo, hi, |i, stack, at, _| {
+            if i == id {
+                found = Some((stack.item.to_string(), stack.count.min(255) as u8, at));
+            }
+        });
+        match found {
+            None => c.entity = None,
+            Some((item, count, at)) => {
+                let (motion, taken) = crusher::hold(pos, facing, speed, at);
+                if taken {
+                    let time = RECIPES.with_borrow(|r| {
+                        let r = r.as_ref()?;
+                        crusher::recipe(&r.crushing, &r.milling, &item).map(|x| x.time)
+                    });
+                    crusher::intake(&mut c, &item, count, time);
+                }
+                game.native_items_in(dimension, lo, hi, |i, stack, _, v| {
+                    if i == id {
+                        if taken {
+                            stack.count = 0;
+                        } else {
+                            *v = motion;
+                        }
+                    }
+                });
+            }
+        }
+    } else if c.slots.is_empty() {
+        // `checkEntityForProcessing`: the first item inside starts it.
+        let (lo, hi) = cell(0.0);
+        let mut first = None;
+        game.native_items_in(dimension, lo, hi, |i, _, at, _| {
+            if !crusher::bypassed(pos, facing, at) {
+                first.get_or_insert(i);
+            }
+        });
+        c.entity = first;
+    } else {
+        match crusher::tick_inventory(&mut c, speed) {
+            crusher::Step::Wait => {}
+            crusher::Step::Apply => {
+                let max =
+                    |i: &str| game.items().get(i).map_or(64, |x| x.max_stack).clamp(1, 64) as u8;
+                let mut rng = processing::Rng::new(
+                    game.world.game_time as u64
+                        ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9)
+                        ^ (pos[2] as u64) << 20,
+                );
+                let item = c.slots[0].0.clone();
+                RECIPES.with_borrow(|r| {
+                    let recipe = r
+                        .as_ref()
+                        .and_then(|r| crusher::recipe(&r.crushing, &r.milling, &item));
+                    crusher::apply(&mut c, recipe, max, &mut rng);
+                });
+            }
+            crusher::Step::Output => {
+                // Results thrown out past the facing side (`outPos`, `outSpeed`).
+                let (at, v) = crusher::output(pos, facing);
+                for (item, count) in std::mem::take(&mut c.slots) {
+                    game.native_run_command(&format!(
+                        "summon minecraft:item {} {} {} {{Item:{{id:'{item}',count:{count}}},Motion:[{}d,{}d,{}d]}}",
+                        at[0], at[1], at[2], v[0], v[1], v[2]
+                    ));
+                }
+            }
+        }
+    }
+    with_world(|w| {
+        if let Some(e) = w.dims[dim].crushers.get_mut(&pos) {
+            e.0 = c.clone();
+        }
+        if c.slots != before.slots {
+            w.mark_unsaved(dim, pos);
+        }
+    });
 }
 
 /// Encased fans that turn (`EncasedFanBlockEntity.tick`): the current looked at again when due

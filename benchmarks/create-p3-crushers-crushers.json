@@ -1,0 +1,71 @@
+{
+  "scenario": "crushers",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.71240234375,
+    1.9501953125,
+    1.71728515625
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 120,
+      "frames": 21179,
+      "frame_ms_p50": 0.514835000038147,
+      "frame_ms_p99": 1.1338390111923218,
+      "fps": 1764.9166666666667,
+      "tick_ms": 4.352170944213867,
+      "tick_ms_max": 9.379205703735352,
+      "check": [
+        "minecraft:clay_ball",
+        "minecraft:flint",
+        "minecraft:sand"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 120,
+      "frames": 21404,
+      "frame_ms_p50": 0.5196855068206787,
+      "frame_ms_p99": 1.058230996131897,
+      "fps": 1783.6666666666667,
+      "tick_ms": 4.540492534637451,
+      "tick_ms_max": 9.633174896240234,
+      "check": [
+        "minecraft:clay_ball",
+        "minecraft:flint",
+        "minecraft:sand"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 120,
+      "frames": 20860,
+      "frame_ms_p50": 0.5256850123405457,
+      "frame_ms_p99": 1.147297978401184,
+      "fps": 1738.3333333333333,
+      "tick_ms": 4.484469890594482,
+      "tick_ms_max": 9.87405776977539,
+      "check": [
+        "minecraft:clay_ball",
+        "minecraft:flint",
+        "minecraft:sand"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1762.3055555555557,
+    "frame_ms_p50": 0.5200685063997904,
+    "frame_ms_p99": 1.1131226619084675,
+    "tick_ms": 4.459044456481934,
+    "tick_ms_max": 9.628812789916992
+  },
+  "stdev": {
+    "fps": 22.779183560955545,
+    "frame_ms_p50": 0.005435136451714024,
+    "frame_ms_p99": 0.048011531722882576,
+    "tick_ms": 0.09670105935187939,
+    "tick_ms_max": 0.24745487021819806
+  }
+}

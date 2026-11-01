@@ -1,0 +1,30 @@
+{
+  "template": "minecraft:structure_void",
+  "properties": {
+    "hardness": 0.0,
+    "explosion_resistance": 0.0,
+    "render_shape": "invisible"
+  },
+  "item": false,
+  "shapes": {
+    "property": "valid",
+    "values": {
+      "false": [],
+      "true": []
+    }
+  },
+  "state_properties": {
+    "facing": [
+      "up",
+      "down",
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "valid": [
+      "false",
+      "true"
+    ]
+  }
+}

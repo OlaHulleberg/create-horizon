@@ -21,6 +21,8 @@ the server thread's smoothed tick time. Scenarios:
   repeaters  the control for redstone: the same chains of vanilla repeaters
   contraptions  16 windmills (17 sails each, a cross) assembled and turning: 16 structures drawn as
            one GPU part each (phase 8)
+  crushers 30 pairs of crushing wheels at 16 rpm (z axis, turning against each other), each fed a
+           stack of 16 gravel: 30 controllers crushing (phase 3)
   fans     32 encased fans at 16 rpm blowing through water over three depots each of 64 ice: 96
            stacks washed into packed ice (phase 3)
 
@@ -92,6 +94,14 @@ def build(ctl_bin, sock, scenario, center):
             for i in range(16):
                 command(ctl_bin, sock, f"setblock {x-16+i} {y-6} {zz} "
                         'create:depot{Items:[{Slot:0b,id:"minecraft:iron_ingot",count:64}]}', failures)
+    if scenario == "crushers":
+        for row in range(30):
+            zz = z - 30 + 2 * row
+            # Wheels at x-2 and x (z axis), driven -16 and +16 by motors on either side.
+            command(ctl_bin, sock, f"setblock {x-2} {y-4} {zz} create:crushing_wheel[axis=z]", failures)
+            command(ctl_bin, sock, f"setblock {x} {y-4} {zz} create:crushing_wheel[axis=z]", failures)
+            command(ctl_bin, sock, f"setblock {x-2} {y-4} {zz+1} create:creative_motor[facing=north]", failures)
+            command(ctl_bin, sock, f"setblock {x} {y-4} {zz-1} create:creative_motor[facing=south]", failures)
     if scenario == "fans":
         for row in range(32):
             zz = z - 32 + 2 * row
@@ -181,7 +191,9 @@ def count_create(ctl_bin, sock, center):
     for band in range(z - 32, z + 33, 16):
         found = ctl(ctl_bin, sock, "blocks", str(x - 32), str(y - 7), str(band), str(x + 32), str(y - 4),
                     str(min(band + 15, z + 32)))
-        total += sum(n for k, n in found.get("counts", {}).items() if k.startswith("create:"))
+        # Crushing wheel controllers come and go with the wheels' speed: not counted.
+        total += sum(n for k, n in found.get("counts", {}).items()
+                     if k.startswith("create:") and not k.startswith("create:crushing_wheel_controller"))
     return total
 
 
@@ -212,7 +224,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             have = count_create(ctl_bin, sock, center)
@@ -224,6 +236,12 @@ def run_once(args, scenario):
             raise SystemExit(f"scene holds {have} Create blocks, not {expected}")
         x, y, z = center
         turning = None
+        if scenario == "crushers":
+            # The controllers appear once the wheels turn; then a stack falls into each gap.
+            time.sleep(2)
+            for row in range(30):
+                ctl(ctl_bin, sock, "command", f"summon minecraft:item {x-0.5} {y-2} {z-30+2*row+0.5} "
+                    "{Item:{id:'minecraft:gravel',count:16},PickupDelay:32767}")
         if scenario == "contraptions":
             turning = assemble_windmills(ctl_bin, sock, center)
             if turning != 16:
@@ -257,6 +275,11 @@ def run_once(args, scenario):
         if scenario == "processing":
             # The work really ran: sheets in one depot's outputs.
             pressed = ctl(ctl_bin, sock, "command", f"data get block {x-8} {y-6} {z}").get("chat")
+        if scenario == "crushers":
+            # Crushed: sand lying below the gaps.
+            ents = ctl(ctl_bin, sock, "entities")
+            pressed = sorted({str(e.get("item", {}).get("item")) for e in ents.get("entities", [])
+                              if "item" in str(e.get("type", ""))})
         if scenario == "fans":
             # The current really washed: one row's depots.
             pressed = [ctl(ctl_bin, sock, "command", f"data get block {x-13+i} {y-5} {z}").get("chat")
@@ -290,7 +313,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "redstone", "repeaters", "contraptions", "fans"],
+                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
