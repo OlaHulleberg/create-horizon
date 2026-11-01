@@ -3,6 +3,7 @@
 use super::Game;
 use super::create::*;
 use super::create_contraptions::*;
+use super::create_logistics::*;
 use create_engine::kinetics::{Axis, Dir};
 use horizon_world::registry::BlockStateId;
 use std::cell::RefCell;

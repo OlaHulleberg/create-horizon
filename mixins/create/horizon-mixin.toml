@@ -14,6 +14,24 @@ name = "create"
 source = "runtime.rs"
 
 [[module]]
+id = "redstone"
+file = "crates/horizon-client/src/game.rs"
+name = "create_redstone"
+source = "redstone.rs"
+
+[[module]]
+id = "logistics"
+file = "crates/horizon-client/src/game.rs"
+name = "create_logistics"
+source = "logistics.rs"
+
+[[module]]
+id = "fluids"
+file = "crates/horizon-client/src/game.rs"
+name = "create_fluids"
+source = "fluids.rs"
+
+[[module]]
 id = "processing"
 file = "crates/horizon-client/src/game.rs"
 name = "create_processing"
