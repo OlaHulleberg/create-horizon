@@ -34,6 +34,10 @@ the server thread's smoothed tick time. Scenarios:
   crafters 16 pairs of mechanical crafters at 16 rpm (cogs between them), each fed coal from a
            hopper above and sticks from a hopper beside, crafting torches into a chest below
            (phase 3)
+  brass    16 belts 30 long at 16 rpm, each with a brass tunnel over segment 15 between two depots,
+           5 stacks of 8 iron dropped on the first 9 segments: each stack split among the
+           depots and the belt ahead (phase 4)
+  brassbelts  the control for brass: the same belts, depots and stacks, no tunnels
   links    32 observer clocks, each pulsing a redstone link 16 blocks from a receiving one that
            lights a lamp; all untuned, so one network of 64 links changes at every pulse (phase 7)
   contraptions  16 windmills (17 sails each, a cross) assembled and turning: 16 structures drawn as
@@ -351,6 +355,26 @@ def build(ctl_bin, sock, scenario, center):
                     "{Items:[{Slot:0b,id:'minecraft:stick',count:64}]}", failures)
         command(ctl_bin, sock, f"setblock {x-17} {y-6} {z} create:cogwheel[axis=z]", failures)
         command(ctl_bin, sock, f"setblock {x-17} {y-6} {z-1} create:creative_motor[facing=south]", failures)
+    if scenario in ("brass", "brassbelts"):
+        belt = "facing=south,slope=horizontal,casing=false,waterlogged=false"
+        for row in range(16):
+            xx = x - 30 + 4 * row
+            command(ctl_bin, sock, f"setblock {xx-1} {y-6} {z-15} create:creative_motor[facing=east]", failures)
+            command(ctl_bin, sock, f"setblock {xx} {y-6} {z-15} create:belt[{belt},part=start]", failures)
+            command(ctl_bin, sock, f"fill {xx} {y-6} {z-14} {xx} {y-6} {z+13} create:belt[{belt},part=middle]",
+                    failures)
+            command(ctl_bin, sock, f"setblock {xx} {y-6} {z+14} create:belt[{belt},part=end]", failures)
+            command(ctl_bin, sock, f"setblock {xx} {y-6} {z+15} minecraft:stone", failures)
+            command(ctl_bin, sock, f"setblock {xx-1} {y-6} {z} create:depot", failures)
+            command(ctl_bin, sock, f"setblock {xx+1} {y-6} {z} create:depot", failures)
+            if scenario == "brass":
+                command(ctl_bin, sock, f"setblock {xx} {y-5} {z} create:brass_tunnel", failures)
+        time.sleep(1)
+        for row in range(16):
+            xx = x - 30 + 4 * row
+            for seg in range(0, 9, 2):
+                ctl(ctl_bin, sock, "command", f"summon minecraft:item {xx + 0.5} {y - 5} {z - 15 + seg + 0.5} "
+                    "{Item:{id:'minecraft:iron_ingot',count:8}}")
     if scenario == "bearings":
         for i in range(16):
             bx, bz = x - 15 + 10 * (i % 4), z - 15 + 10 * (i // 4)
@@ -462,7 +486,7 @@ def run_once(args, scenario):
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
-                    "processing": 528, "deployers": 48, "bearings": 32, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
+                    "processing": 528, "deployers": 48, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
                     "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
@@ -545,6 +569,8 @@ def run_once(args, scenario):
             # The carriages are moving: none left where they started.
             pressed = ctl(ctl_bin, sock, "blocks", str(x - 15), str(y - 6), str(z - 16), str(x - 15), str(y - 4),
                           str(z + 14)).get("counts", {})
+        if scenario in ("brass", "brassbelts"):
+            pressed = ctl(ctl_bin, sock, "command", f"data get block {x-31} {y-6} {z} Items").get("chat")
         if scenario == "bearings":
             # The structures are out of the world, turning: no slime block left in place.
             found = ctl(ctl_bin, sock, "blocks", str(x - 16), str(y - 5), str(z - 16), str(x + 16), str(y - 5),
@@ -611,7 +637,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "bearings", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
+                                          "logistics", "tunnels", "belts9", "deployers", "bearings", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

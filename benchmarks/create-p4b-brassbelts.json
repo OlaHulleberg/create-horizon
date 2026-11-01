@@ -1,0 +1,65 @@
+{
+  "scenario": "brassbelts",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.90869140625,
+    1.765625,
+    1.65478515625
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 18961,
+      "frame_ms_p50": 0.6051329970359802,
+      "frame_ms_p99": 1.1180989742279053,
+      "fps": 1580.0833333333333,
+      "tick_ms": 4.687479496002197,
+      "tick_ms_max": 10.547470092773438,
+      "check": [
+        "Found no elements matching Items"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 20311,
+      "frame_ms_p50": 0.5496450066566467,
+      "frame_ms_p99": 1.1600970029830933,
+      "fps": 1692.5833333333333,
+      "tick_ms": 4.492946147918701,
+      "tick_ms_max": 9.714601516723633,
+      "check": [
+        "Found no elements matching Items"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 18944,
+      "frame_ms_p50": 0.6205129623413086,
+      "frame_ms_p99": 1.1231290102005005,
+      "fps": 1578.6666666666667,
+      "tick_ms": 4.6892476081848145,
+      "tick_ms_max": 9.303239822387695,
+      "check": [
+        "Found no elements matching Items"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1617.111111111111,
+    "frame_ms_p50": 0.5917636553446451,
+    "frame_ms_p99": 1.133774995803833,
+    "tick_ms": 4.623224417368571,
+    "tick_ms_max": 9.855103810628256
+  },
+  "stdev": {
+    "fps": 65.36469981175983,
+    "frame_ms_p50": 0.03727762410180605,
+    "frame_ms_p99": 0.022933847516938183,
+    "tick_ms": 0.11282775444593514,
+    "tick_ms_max": 0.633902920312243
+  }
+}

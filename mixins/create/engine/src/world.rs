@@ -190,6 +190,10 @@ pub struct Dimension {
     /// Mechanical bearings whose speed changed (`assembleNextTick`).
     pub bearing_checks: Vec<[i32; 3]>,
     pub tunnel_fresh: Vec<[i32; 3]>,
+    /// Brass tunnels and what they hold to hand out, and those holding a stack (the only ones
+    /// that tick).
+    pub brass: HashMap<[i32; 3], crate::tunnel::Brass>,
+    pub brass_running: Vec<[i32; 3]>,
     pub tunnels_new: Vec<[i32; 3]>,
     /// Mechanical mixers and their cycle, the running ones (the only ones that tick), and those
     /// to look at their basin again (`basinChecker`: placed, speed changed, basin changed).
@@ -306,6 +310,7 @@ fn has_state(block: Block) -> bool {
             | Block::PoweredToggleLatch
             | Block::RedstoneLink
             | Block::AndesiteTunnel
+            | Block::BrassTunnel
             | Block::GantryShaft
             | Block::GantryCarriage
             | Block::MechanicalCrafter
@@ -396,8 +401,11 @@ impl CreateWorld {
             // A depot below may have work for it.
             d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
         }
-        if block == Block::AndesiteTunnel {
+        if block == Block::AndesiteTunnel || block == Block::BrassTunnel {
             d.tunnel_fresh.push(pos);
+        }
+        if block == Block::BrassTunnel {
+            d.brass.entry(pos).or_default();
         }
         if block == Block::GantryShaft {
             d.gantry_checks.push(pos);
@@ -564,9 +572,13 @@ impl CreateWorld {
                 // ClutchBlock.getStateForPlacement: powered as placed.
                 self.dims[dim].redstone.push(pos);
             }
-            if self.table.get(new).map(|(b, _)| b) == Some(Block::AndesiteTunnel)
-                && self.table.get(old).map(|(b, _)| b) != Some(Block::AndesiteTunnel)
-            {
+            let tunnel = |s: u32| {
+                matches!(
+                    self.table.get(s).map(|(b, _)| b),
+                    Some(Block::AndesiteTunnel | Block::BrassTunnel)
+                )
+            };
+            if tunnel(new) && !tunnel(old) {
                 // `BeltTunnelItem`: the belt below is cased.
                 self.dims[dim].tunnels_new.push(pos);
             }
@@ -631,6 +643,14 @@ impl CreateWorld {
                 d.link_changes.extend(changed);
                 d.link_shown.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
+            if let Some(b) = d.brass.remove(&pos) {
+                d.brass_running.retain(|p| *p != pos);
+                // What it held drops (`BrassTunnelBlockEntity.destroy`).
+                if let Some((item, n)) = b.stack {
+                    d.crafter_drops
+                        .extend(std::iter::repeat_n((pos, item), usize::from(n)));
+                }
             }
             if let Some(c) = d.crafters.remove(&pos) {
                 d.crafting.retain(|p| *p != pos);
@@ -770,6 +790,9 @@ impl CreateWorld {
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tunnels_new.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tunnel_fresh
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.brass.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.brass_running
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.running_crushers
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1022,7 +1045,9 @@ impl CreateWorld {
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(b) if latch_kind(b).is_some() => self.dims[dim].latch_checks.push(pos),
             Some(Block::RedstoneLink) => self.dims[dim].link_checks.push(pos),
-            Some(Block::AndesiteTunnel) => self.dims[dim].tunnel_checks.push(pos),
+            Some(Block::AndesiteTunnel | Block::BrassTunnel) => {
+                self.dims[dim].tunnel_checks.push(pos)
+            }
             Some(Block::GantryShaft) => self.dims[dim].gantry_checks.push(pos),
             // `BeltBlock.updateShape`: the tunnel over a belt follows its neighbours.
             Some(Block::Belt) => self.dims[dim]

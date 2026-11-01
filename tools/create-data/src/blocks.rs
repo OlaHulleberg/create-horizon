@@ -666,7 +666,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         // BeltTunnelBlock (andesite): its own `axis` (HORIZONTAL_AXIS) and shape. Content shapes select by one
         // property, so every state takes the cross's boxes (BeltTunnelShapes, all four sides
         // open: a closed side's lower wall is missing).
-        "andesite_tunnel" => {
+        "andesite_tunnel" | "brass_tunnel" => {
             let boxes: Vec<Value> = [
                 [2., -5., 2., 14., 16., 14.],
                 [0., -5., 0., 2., 16., 2.],
@@ -682,7 +682,12 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             .map(|b: &Px| json!(b.map(|v| v / 16.0)))
             .collect();
             (
-                "minecraft:polished_andesite",
+                // BrassTunnelBlock: brass's properties (gold), andesite's for the other.
+                if b.name == "brass_tunnel" {
+                    "minecraft:gold_block"
+                } else {
+                    "minecraft:polished_andesite"
+                },
                 Some(json!({ "property": "axis", "values": {
                     "x": boxes, "z": boxes } })),
                 own(&[

@@ -131,9 +131,188 @@ pub fn splits(axis: Axis, shape: Shape, movement: Dir, count: u8) -> bool {
     count > 1 && shape.junction() && movement.axis() == axis
 }
 
+/// `BrassTunnelBlockEntity.SelectionMode` (the value box that picks it is not ported: tunnels
+/// split).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Split,
+    ForcedSplit,
+    RoundRobin,
+    ForcedRoundRobin,
+    PreferNearest,
+}
+
+/// A brass tunnel's typed state: the stack it holds to hand out, the side it came in through,
+/// `distributionProgress` (-1 to look for outputs), whether it just arrived, and
+/// `previousOutputIndex`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Brass {
+    pub stack: Option<(String, u8)>,
+    pub entered_from: Option<Dir>,
+    pub progress: i32,
+    pub new_item: bool,
+    pub previous_output: usize,
+}
+
+impl Default for Brass {
+    fn default() -> Brass {
+        Brass {
+            stack: None,
+            entered_from: None,
+            progress: -1,
+            new_item: false,
+            previous_output: 0,
+        }
+    }
+}
+
+/// `brassTunnelTimer`: ticks between distributions.
+pub const BRASS_TIMER: i32 = 10;
+
+/// `BrassTunnelBlockEntity.distribute`: hands `count` items out to `targets` outputs from
+/// `previous_output`, as the mode says; `insert(target, count, simulate)` is
+/// `insertIntoTunnel` (None: that output takes nothing of it, else what it leaves). The items
+/// left over.
+pub fn distribute(
+    count: u8,
+    targets: usize,
+    previous_output: usize,
+    mode: Mode,
+    mut insert: impl FnMut(usize, u8, bool) -> Option<u8>,
+) -> u8 {
+    if targets == 0 {
+        return count;
+    }
+    let start = if mode == Mode::PreferNearest {
+        0
+    } else {
+        previous_output % targets
+    };
+    let force = matches!(mode, Mode::ForcedRoundRobin | Mode::ForcedSplit);
+    let split = matches!(mode, Mode::ForcedSplit | Mode::Split);
+    let robin = matches!(mode, Mode::ForcedRoundRobin | Mode::RoundRobin);
+    let mut distributed: Vec<(usize, u8)> = Vec::new();
+    let mut full: Vec<usize> = Vec::new();
+    let mut to_distribute = count;
+    for again in [true, false] {
+        let mut this_cycle = to_distribute;
+        let mut remaining = targets;
+        let mut leftovers: u8 = 0;
+        for simulate in [true, false] {
+            if remaining == 0 {
+                break;
+            }
+            leftovers = 0;
+            let mut index = start;
+            let size = to_distribute;
+            let split_size = size as usize / remaining;
+            let mut split_rem = (size as usize % remaining) as i32;
+            this_cycle = to_distribute;
+            if !(force || split) && simulate {
+                continue;
+            }
+            let mut visited = 0;
+            while visited < targets {
+                let t = index;
+                index = (index + 1) % targets;
+                visited += 1;
+                if full.contains(&t) {
+                    if split && simulate {
+                        remaining -= 1;
+                    }
+                    continue;
+                }
+                let n = if split {
+                    (split_size + usize::from(split_rem > 0)) as u8
+                } else {
+                    size
+                };
+                // Grown by what it was already given, to tell whether it is full after it.
+                let before = distributed.iter().find(|d| d.0 == t).map(|d| d.1);
+                let output = n.saturating_add(before.unwrap_or(0));
+                let left = insert(t, output, true);
+                let whole = if before.is_some() { n + 1 } else { n };
+                if left.is_none() || left == Some(whole) {
+                    if force {
+                        return count;
+                    }
+                    if split && simulate {
+                        remaining -= 1;
+                    }
+                    if !simulate {
+                        full.push(t);
+                    }
+                    if robin {
+                        break;
+                    }
+                    continue;
+                }
+                let left = left.unwrap_or(0);
+                if left > 0 && !simulate {
+                    full.push(t);
+                }
+                if !simulate {
+                    distributed.retain(|d| d.0 != t);
+                    distributed.push((t, output - left));
+                }
+                leftovers += left;
+                this_cycle = this_cycle.saturating_sub(n);
+                if this_cycle == 0 {
+                    break;
+                }
+                split_rem -= 1;
+                if !split {
+                    break;
+                }
+            }
+        }
+        to_distribute = this_cycle + leftovers;
+        if leftovers == 0 && again {
+            break;
+        }
+        if !split {
+            break;
+        }
+    }
+    let failed: u8 = distributed
+        .iter()
+        .map(|&(t, n)| insert(t, n, false).unwrap_or(n))
+        .sum();
+    to_distribute + failed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_brass_tunnel_splits_a_stack_evenly() {
+        // Three outputs taking anything: 10 items as 4, 3, 3.
+        let mut got = [0u8; 3];
+        let left = distribute(10, 3, 0, Mode::Split, |t, n, sim| {
+            if !sim {
+                got[t] += n;
+            }
+            Some(0)
+        });
+        assert_eq!((left, got), (0, [4, 3, 3]));
+        // One output refusing: the other two share it.
+        let mut got = [0u8; 3];
+        let left = distribute(9, 3, 0, Mode::Split, |t, n, sim| {
+            if t == 1 {
+                return None;
+            }
+            if !sim {
+                got[t] += n;
+            }
+            Some(0)
+        });
+        assert_eq!((left, got), (0, [5, 0, 4]));
+        // Outputs taking at most 2: what is left stays in the tunnel.
+        let left = distribute(9, 3, 0, Mode::Split, |_, n, _| Some(n.saturating_sub(2)));
+        assert_eq!(left, 3);
+    }
 
     #[test]
     fn shapes_follow_the_outputs_and_open_their_sides() {
