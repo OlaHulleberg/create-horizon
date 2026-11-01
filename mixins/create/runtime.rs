@@ -1533,7 +1533,7 @@ pub(super) fn links_to_nbt(
     )
 }
 
-/// `DeployerBlockEntity.write`: `State`, `Timer`, `Reach` and the held stack, per deployer.
+/// `DeployerBlockEntity.write`: `State`, `Timer`, `Reach`, the held stack and `Mode`, per deployer.
 pub(super) fn deployers_to_nbt(
     list: &[([i32; 3], create_engine::deployer::Deployer)],
 ) -> horizon_world::nbt::Tag {
@@ -1553,6 +1553,7 @@ pub(super) fn deployers_to_nbt(
                         d.timer,
                         d.reach.to_bits() as i32,
                         i32::from(n),
+                        i32::from(d.mode.index()),
                     ]),
                 );
                 b.insert("HeldItem".into(), Tag::String(item.as_str().into()));
@@ -1587,6 +1588,11 @@ pub(super) fn deployers_from_nbt(
                     timer: *v.get(4)?,
                     reach: f32::from_bits(*v.get(5)? as u32),
                     held: (!item.is_empty() && n > 0).then_some((item, n)),
+                    // Saved before modes: using.
+                    mode: create_engine::deployer::Mode::from_index(
+                        v.get(7).copied().unwrap_or(0) as u8
+                    ),
+                    breaking: None,
                 },
             ))
         })
@@ -3191,6 +3197,12 @@ pub(super) fn use_item_on(
         if let Some(air) = registry.default_state("minecraft:air") {
             game.native_set_block(&dimension, pos, air, super::native_hooks::flags::UPDATE_ALL);
         }
+        return;
+    }
+    if block == create_engine::Block::Deployer
+        && let Some(dim) = dimension_index(&dimension)
+        && wrench_deployer(game, dim, pos)
+    {
         return;
     }
     // A `facing` that never points up is a horizontal one (HORIZONTAL_FACING).

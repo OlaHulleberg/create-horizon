@@ -267,20 +267,25 @@ pub(super) fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]
 /// Deployers mid-stroke (`DeployerBlockEntity.tick` without a fake player): the stroke runs;
 /// one back at rest has the depot below look at it again. Nothing runs without one.
 pub(super) fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
-    use create_engine::deployer::{State, Tick};
-    // Deployers at rest holding something, turning, not over a depot or belt: `tick`'s
-    // `WAITING` start (`shouldActivate`), else a look again `getTimerSpeed() × 10` later.
-    let idle: Vec<([i32; 3], f32)> = with_world(|w| {
+    use create_engine::deployer::{Mode, State, Tick};
+    // Deployers at rest holding something or punching, turning: `tick`'s `WAITING` start
+    // (`shouldActivate` when using), else a look again `getTimerSpeed() × 10` later. Using ones
+    // over a depot or belt wait for it.
+    let idle: Vec<([i32; 3], f32, Mode)> = with_world(|w| {
         let d = &w.dims[dim];
         d.deployers
             .iter()
-            .filter(|(p, dp)| dp.held.is_some() && !dp.busy() && !d.deploying.contains(p))
-            .map(|(p, _)| (*p, w.speed(dim, *p).unwrap_or(0.0)))
-            .filter(|(_, rpm)| *rpm != 0.0)
+            .filter(|(p, dp)| {
+                (dp.held.is_some() || dp.mode == Mode::Punch)
+                    && !dp.busy()
+                    && !d.deploying.contains(p)
+            })
+            .map(|(p, dp)| (*p, w.speed(dim, *p).unwrap_or(0.0), dp.mode))
+            .filter(|(_, rpm, _)| *rpm != 0.0)
             .collect()
     })
     .unwrap_or_default();
-    for (pos, rpm) in idle {
+    for (pos, rpm, mode) in idle {
         let Some(facing) = deployer_facing(game, pos) else {
             continue;
         };
@@ -290,16 +295,20 @@ pub(super) fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
             && with_world(|w| {
                 w.dims[dim].depots.contains_key(&below) || w.dims[dim].belt_of.contains_key(&below)
             }) == Some(true);
-        if over_depot {
+        if over_depot && mode == Mode::Use {
             continue;
         }
-        let place = deployer_place_target(game, dim, pos, facing).or_else(|| {
-            deployer_uses(game, dim, pos, facing).then_some([
-                pos[0] + o[0],
-                pos[1] + o[1],
-                pos[2] + o[2],
-            ])
-        });
+        let place = if mode == Mode::Punch {
+            Some(below)
+        } else {
+            deployer_place_target(game, dim, pos, facing).or_else(|| {
+                deployer_uses(game, dim, pos, facing).then_some([
+                    pos[0] + o[0],
+                    pos[1] + o[1],
+                    pos[2] + o[2],
+                ])
+            })
+        };
         with_world(|w| {
             let d = &mut w.dims[dim];
             let Some(dp) = d.deployers.get_mut(&pos) else {
@@ -325,6 +334,7 @@ pub(super) fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
         return;
     };
     for pos in list {
+        deployer_lost_block(game, dim, pos);
         let activated = with_world(|w| {
             let rpm = w.speed(dim, pos).unwrap_or(0.0);
             let d = &mut w.dims[dim];
@@ -442,13 +452,32 @@ pub(super) fn deployer_uses(game: &Game<'_>, dim: usize, pos: [i32; 3], facing: 
         .is_none_or(|s| s.name != fluid || s.properties.get("level").is_some_and(|l| l != "0"))
 }
 
-/// `DeployerHandler.activate` for what is ported: a held block item is placed (its default
-/// state) where it fits, and one is used up; another item is used on the block it reaches the
-/// way a dispenser would (`dispenser::create_use`: buckets, bone meal, shears, flint and steel...).
+/// `DeployerBlockEntity.activate` for what is ported: nothing over a depot or belt (their
+/// callbacks do the work); punching, `deployer_punch`; else a held block item is placed (its
+/// default state) where it fits, and one is used up, and another item is used on the block it
+/// reaches (`dispenser::create_use`: tools, spawn eggs, buckets, bone meal, shears...).
 pub(super) fn deployer_activate(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
     let Some(facing) = deployer_facing(game, pos) else {
         return;
     };
+    let reached = create_engine::deployer::clicked(pos, facing);
+    let over_depot = facing == Dir::Down
+        && with_world(|w| {
+            w.dims[dim].depots.contains_key(&reached) || w.dims[dim].belt_of.contains_key(&reached)
+        }) == Some(true);
+    if over_depot {
+        return;
+    }
+    let punching = with_world(|w| {
+        w.dims[dim]
+            .deployers
+            .get(&pos)
+            .is_some_and(|d| d.mode == create_engine::deployer::Mode::Punch)
+    }) == Some(true);
+    if punching {
+        deployer_punch(game, dimension, dim, pos, facing);
+        return;
+    }
     let Some(target) = deployer_place_target(game, dim, pos, facing) else {
         deployer_use_item(game, dim, pos, facing);
         return;
@@ -497,10 +526,7 @@ pub(super) fn deployer_use_item(game: &mut Game<'_>, dim: usize, pos: [i32; 3], 
         damage: 0,
         extra: None,
     };
-    let o = facing.offset();
-    let before = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-    let face = horizon_core::geometry::Direction::ALL[facing as usize];
-    let Some(left) = super::dispenser::create_use::use_item_at(game, before, face, stack) else {
+    let Some(left) = super::dispenser::create_use::use_item_at(game, pos, facing, stack) else {
         return;
     };
     let held = left.map(|s| (s.item.to_string(), s.count.min(64) as u8));
@@ -513,6 +539,174 @@ pub(super) fn deployer_use_item(game: &mut Game<'_>, dim: usize, pos: [i32; 3], 
             }
         }
     });
+}
+
+/// `DeployerHandler.activateInner` in `Mode.PUNCH`: an entity in the block it reaches takes the
+/// hit (`create_use::punch_entity_at`); else, with a held stack, the block there breaks in
+/// strokes (`Deployer::punch`), the fake player's cracks on it, a fire in front of it goes out.
+/// A broken block drops what it drops (`tryHarvestBlock`, when the tool harvests it) where it
+/// was; Create puts the drops in the deployer.
+pub(super) fn deployer_punch(
+    game: &mut Game<'_>,
+    dimension: &str,
+    dim: usize,
+    pos: [i32; 3],
+    facing: Dir,
+) {
+    use create_engine::deployer::{self, Punch};
+    let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten() else {
+        return;
+    };
+    let at = deployer::clicked(pos, facing);
+    let held = d.held.as_ref().map(|h| h.0.clone());
+    let bonus = held
+        .as_deref()
+        .and_then(|h| game.items().get(h))
+        .map_or(0.0, |i| i.attack_damage);
+    let (from, _) = deployer::ray(pos, facing);
+    let damage = deployer::attack_damage(bonus);
+    if super::dispenser::create_use::punch_entity_at(game, at, from, damage) {
+        return;
+    }
+    let breaker = deployer::breaker_id(pos);
+    // `getShape(..).isEmpty()`: nothing to punch, and the breaking is forgotten.
+    if game.outline_boxes(at).is_empty() {
+        if d.breaking.take().is_some() {
+            with_world(|w| w.set_deployer(dim, pos, d));
+        }
+        return;
+    }
+    // `BlockHelper.extinguishFire`: fire on the face toward the deployer goes out.
+    let o = deployer::clicked_face(facing).offset();
+    let front = [at[0] + o[0], at[1] + o[1], at[2] + o[2]];
+    let registry = game.pack.assets.registry;
+    let fire = registry
+        .state(game.world.block(front[0], front[1], front[2]))
+        .is_some_and(|s| s.name == "minecraft:fire");
+    if fire {
+        game.level_event_at(1009, front, 0);
+        if let Some(air) = registry.default_state("minecraft:air") {
+            game.native_set_block(
+                dimension,
+                front,
+                air,
+                super::native_hooks::flags::UPDATE_ALL,
+            );
+        }
+        return;
+    }
+    let Some(held) = held else {
+        return;
+    };
+    let state = game.world.block(at[0], at[1], at[2]);
+    let facts = game.res.facts().get(state);
+    let (name, hardness, requires_tool) = (facts.name.clone(), facts.hardness, facts.requires_tool);
+    let stack = horizon_client::items::ItemStack::new(held.as_str(), 1);
+    let harvest = !requires_tool || game.items().correct_for_drops(Some(&stack), &name);
+    let per_hit = deployer::destroy_progress(deployer::Dig {
+        hardness,
+        tool_speed: game.items().mining_speed(Some(&stack), &name),
+        // Held stacks carry no enchantments here.
+        efficiency: 0.0,
+        harvest,
+    });
+    // `level.playSound(.., getHitSound(), NEUTRAL, .25, 1)`.
+    let hit = game.res.facts().get(state).sounds.hit.clone();
+    game.audio
+        .play(&hit, Some(at.map(|v| f64::from(v) + 0.5)), 0.25, 1.0);
+    let punched = d.punch(at, per_hit);
+    with_world(|w| w.set_deployer(dim, pos, d));
+    match punched {
+        Punch::Broken => {
+            deployer_crack(game, breaker, at, -1);
+            if harvest {
+                // Level.destroyBlock with drops (`Block.getDrops`, `spawnAfterBreak`).
+                game.native_run_command(&format!(
+                    "execute in {dimension} run setblock {} {} {} air destroy",
+                    at[0], at[1], at[2]
+                ));
+            } else if let Some(air) = registry.default_state("minecraft:air") {
+                // `onDestroyedByPlayer` without drops: the break particles and sound.
+                game.level_event_at(2001, at, state.0 as i32);
+                game.native_set_block(dimension, at, air, super::native_hooks::flags::UPDATE_ALL);
+            }
+        }
+        Punch::Crack(Some(stage)) => deployer_crack(game, breaker, at, stage),
+        Punch::Crack(None) | Punch::Stop => {}
+    }
+}
+
+/// `Level.destroyBlockProgress` for a deployer's fake player: the cracks at `at` (0..=9, else
+/// none) for the host and the players near it.
+pub(super) fn deployer_crack(game: &mut Game<'_>, breaker: i32, at: [i32; 3], stage: i32) {
+    game.destroy_block_progress(breaker, at, stage);
+    if let Some(host) = game.lan.as_ref() {
+        use horizon_protocol::packets::play::{BlockDestruction, Clientbound};
+        host.hub.broadcast_near(
+            at.map(f64::from),
+            64.0,
+            &Clientbound::BlockDestruction(BlockDestruction {
+                id: breaker,
+                pos: at,
+                progress: if (0..10).contains(&stage) {
+                    stage as u8
+                } else {
+                    255
+                },
+            }),
+            None,
+        );
+    }
+}
+
+/// `DeployerBlockEntity.tick`: cracks on a block that is gone since are cleared.
+pub(super) fn deployer_lost_block(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
+    let Some(at) =
+        with_world(|w| w.dims[dim].deployers.get(&pos).and_then(|d| d.breaking)).flatten()
+    else {
+        return;
+    };
+    let at = at.0;
+    if !game
+        .res
+        .behaviours()
+        .is_air(game.world.block(at[0], at[1], at[2]))
+    {
+        return;
+    }
+    deployer_crack(game, create_engine::deployer::breaker_id(pos), at, -1);
+    with_world(|w| {
+        if let Some(d) = w.dims[dim].deployers.get_mut(&pos) {
+            d.breaking = None;
+        }
+    });
+}
+
+/// `DeployerBlock.onWrenched`: the wrench on its front half (more than .75 from its back along
+/// the facing) toggles using and punching (`changeMode`); true when it did.
+pub(super) fn wrench_deployer(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) -> bool {
+    let Some(facing) = deployer_facing(game, pos) else {
+        return false;
+    };
+    let Some(hit) = game.pick() else {
+        return false;
+    };
+    let o = facing.offset();
+    let along = (0..3)
+        .map(|i| {
+            (hit.point[i] - (f64::from(pos[i]) + 0.5 - 0.5 * f64::from(o[i]))) * f64::from(o[i])
+        })
+        .sum::<f64>();
+    if along.abs() <= 0.75 {
+        return false;
+    }
+    with_world(|w| {
+        if let Some(mut d) = w.dims[dim].deployers.get(&pos).cloned() {
+            d.mode = d.mode.toggled();
+            w.set_deployer(dim, pos, d);
+        }
+    });
+    true
 }
 
 /// Deployers' strokes to `players`: where the hand is and how fast it moves, what it holds.
