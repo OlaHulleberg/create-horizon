@@ -36,6 +36,8 @@ pub enum Model {
     ShaftlessCog,
     /// The pump's cog (`AllPartialModels.MECHANICAL_PUMP_COG`), turned to its facing.
     PumpCog(Dir),
+    /// The drill's head (`AllPartialModels.DRILL_HEAD`), turned to its facing.
+    DrillHead(Dir),
     MixerPole,
     MixerHead,
 }
@@ -224,6 +226,22 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 phase: 0.0,
             },
         ],
+        // DrillRenderer: the shaft half behind, the head turning with it in front.
+        Block::MechanicalDrill => s
+            .facing
+            .map(|f| {
+                vec![
+                    half(0, f.opposite(), speeds[0]),
+                    Draw {
+                        slot: 1,
+                        model: Model::DrillHead(f),
+                        axis: f.axis(),
+                        rpm: speeds[0],
+                        phase: 0.0,
+                    },
+                ]
+            })
+            .unwrap_or_default(),
         // PumpRenderer: its cog turns with it.
         Block::MechanicalPump => s
             .facing

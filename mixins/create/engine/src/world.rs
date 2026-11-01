@@ -175,6 +175,9 @@ pub struct Dimension {
     pub trains: Vec<TrainOnTrack>,
     /// Chutes holding a stack: where it is (1 top, 0 bottom); the only ones that tick.
     pub chutes: HashMap<[i32; 3], f32>,
+    /// Drills and their breaking, the turning ones (the only ones that tick).
+    pub drills: HashMap<[i32; 3], crate::drill::Breaker>,
+    pub drilling: Vec<[i32; 3]>,
 }
 
 /// An assembled train: its run, its blocks (offset from its first bogey, state), where that
@@ -344,6 +347,9 @@ impl CreateWorld {
                     .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
             }
         }
+        if block == Block::MechanicalDrill {
+            d.drills.entry(pos).or_default();
+        }
         if block == Block::MechanicalPump {
             d.pumps.entry(pos).or_default();
         }
@@ -470,6 +476,9 @@ impl CreateWorld {
                 d.pumping.retain(|p| *p != pos);
             }
             d.chutes.remove(&pos);
+            if d.drills.remove(&pos).is_some() {
+                d.drilling.retain(|p| *p != pos);
+            }
             if d.mixers.remove(&pos).is_some() {
                 d.mixing.retain(|p| *p != pos);
             }
@@ -548,6 +557,8 @@ impl CreateWorld {
             d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chutes.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             // Trains standing in it leave with it (saved with it).
             d.trains
@@ -630,6 +641,14 @@ impl CreateWorld {
                     })
             {
                 d.piston_checks.push(pos);
+            }
+            if let Event::Speed { pos, speed, .. } = *e
+                && d.drills.contains_key(&pos)
+            {
+                d.drilling.retain(|p| *p != pos);
+                if speed != 0.0 {
+                    d.drilling.push(pos);
+                }
             }
             if let Event::Speed { pos, speed, .. } = *e
                 && d.pumps.contains_key(&pos)

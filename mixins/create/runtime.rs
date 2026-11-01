@@ -211,6 +211,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_pistons(game, dimension, dim);
     tick_trains(game, dimension, dim);
     tick_chutes(game, dim);
+    tick_drills(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -930,6 +931,7 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
         Model::FanPropeller(d) => find("create:part_fan_propeller", "facing", dir_name(d)),
         Model::ShaftlessCog => find("create:part_cogwheel_shaftless", "facing", "up"),
         Model::PumpCog(d) => find("create:part_pump_cog", "facing", dir_name(d)),
+        Model::DrillHead(d) => find("create:part_drill_head", "facing", dir_name(d)),
         Model::MixerPole | Model::MixerHead => None,
     }
 }
@@ -2489,6 +2491,57 @@ fn tick_chutes(game: &mut Game<'_>, dim: usize) {
                 w.dims[dim].chutes.remove(&pos);
             }
         });
+    }
+}
+
+/// Turning drills (`BlockBreakingKineticBlockEntity.tick`): the block in front breaks in steps
+/// (`isBreakable`: not air, a fluid, unbreakable or `create:non_breakable`), dropping what it
+/// drops; a drill that broke one looks again at its next lazy tick (every 10 ticks).
+fn tick_drills(game: &mut Game<'_>, dim: usize) {
+    let drills = with_world(|w| w.dims[dim].drilling.clone()).unwrap_or_default();
+    if drills.is_empty() {
+        return;
+    }
+    let lazy = game.world.game_time % 10 == 0;
+    for pos in drills {
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let Some(facing) =
+            with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten()
+        else {
+            continue;
+        };
+        let o = facing.offset();
+        let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+        let target = game.world.block(at[0], at[1], at[2]);
+        let b = game.res.behaviours();
+        let fluid = b.fluid(target).kind() != horizon_world::fluid::FluidKind::Empty
+            && b.is_replaceable(target);
+        let tagged = b
+            .tag("create:non_breakable")
+            .is_some_and(|t| t.contains(b.block(target)));
+        let hardness = if b.is_air(target) || fluid || tagged {
+            None
+        } else {
+            create_engine::drill::breakable(b.facts(target).hardness)
+        };
+        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        let Some(step) = with_world(|w| {
+            let d = w.dims[dim].drills.get_mut(&pos)?;
+            if lazy {
+                d.lazy();
+            }
+            Some(d.tick(speed, hardness))
+        })
+        .flatten() else {
+            continue;
+        };
+        if step == create_engine::drill::Step::Broken {
+            // Level.destroyBlock with drops (`BlockHelper.destroyBlock`).
+            game.native_run_command(&format!(
+                "setblock {} {} {} air destroy",
+                at[0], at[1], at[2]
+            ));
+        }
     }
 }
 
