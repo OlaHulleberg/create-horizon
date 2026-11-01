@@ -643,6 +643,13 @@ pub(super) fn right_click_inner(
         use_millstone(game, pos, canceled);
         return;
     }
+    if matches!(
+        block,
+        Some(create_engine::Block::CreativeMotor | create_engine::Block::BrassTunnel)
+    ) {
+        use_value_box(game, pos, face, canceled);
+        return;
+    }
     if block == Some(create_engine::Block::Depot) {
         use_depot(game, dim, pos, face, canceled);
         return;
@@ -779,7 +786,8 @@ pub(super) fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8])
     let _ = game.native_net_send_to_player(player, VALUE, &m);
 }
 
-/// Values set by the wheel, from the server to the player who set them.
+/// Values set by the wheel or a board, and the value a board asked for, from the server to the
+/// player.
 pub(super) const VALUE: &str = "create:value";
 
 thread_local! {
@@ -792,18 +800,42 @@ pub(super) fn values_from_server(d: &[u8]) {
         return;
     }
     let [x, y, z, v] = [0, 4, 8, 12].map(|i| i32::from_le_bytes(d[i..i + 4].try_into().unwrap()));
-    VALUES.with_borrow_mut(|m| m.insert([x, y, z], v));
+    let pos = [x, y, z];
+    VALUES.with_borrow_mut(|m| m.insert(pos, v));
+    // The setting a held press or an open board waits for (`getValueSettings`).
+    HOLD.with_borrow_mut(|h| {
+        if let Some(h) = h.as_mut().filter(|h| h.pos == pos) {
+            h.known = true;
+        }
+    });
+    BOARD.with_borrow_mut(|b| {
+        if let Some(open) = b.as_mut().filter(|o| o.pos == pos) {
+            if !open.moved {
+                open.pick = board_pick(open.board, v);
+            }
+            open.known = true;
+        }
+    });
 }
 
-/// A pick on a value board (`ValueSettingsPacket`: position, row, column), from the client.
+/// A pick on a value board (`ValueSettingsPacket`: position, row, column), or a board's question
+/// for the current setting (the position alone), from the client.
 pub(super) const VALUE_SETTINGS: &str = "create:value_settings";
 
-/// `ValueSettingsPacket.applySettings`, checked as `scroll_from_client` checks a scroll.
+/// `ValueSettingsPacket.applySettings` (`BlockEntityConfigurationPacket.handle`: no spectator or
+/// adventure player), checked as `scroll_from_client` checks a scroll. The current setting goes
+/// back either way, as the client's board starts on it.
 pub(super) fn value_settings_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
-    let [x, y, z, row, value] = match data {
-        d if d.len() == 20 => {
-            [0, 4, 8, 12, 16].map(|i| i32::from_le_bytes(d[i..i + 4].try_into().unwrap()))
-        }
+    let word = |i: usize| i32::from_le_bytes(data[i..i + 4].try_into().unwrap());
+    let ([x, y, z], pick) = match data.len() {
+        12 => ([0, 4, 8].map(word), None),
+        20 => (
+            [0, 4, 8].map(word),
+            Some(create_engine::board::Settings {
+                row: word(12),
+                value: word(16),
+            }),
+        ),
         _ => return,
     };
     let Some(p) = game
@@ -813,6 +845,10 @@ pub(super) fn value_settings_from_client(game: &mut Game<'_>, player: u128, data
     else {
         return;
     };
+    // GameType ids: adventure 2, spectator 3.
+    if matches!(p.game_mode, 2 | 3) {
+        return;
+    }
     let Some(dim) = dimension_index(&p.dimension) else {
         return;
     };
@@ -822,33 +858,113 @@ pub(super) fn value_settings_from_client(game: &mut Game<'_>, player: u128, data
         return;
     }
     let pos = [x, y, z];
-    let pick = create_engine::board::Settings { row, value };
     let state = game.world.block(x, y, z).0;
     let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
     use create_engine::Block as B;
-    use create_engine::tunnel::Mode;
+    use create_engine::tunnel::{self, Mode};
     let value = match block {
-        Some(B::CreativeMotor) => {
-            with_world(|w| w.board_motor(dim, pos, pick));
-            return;
-        }
+        Some(B::CreativeMotor) => with_world(|w| {
+            if let Some(pick) = pick {
+                w.board_motor(dim, pos, pick);
+            }
+            w.motor_setting(dim, pos).map(|rpm| rpm as i32)
+        }),
+        // `ScrollOptionBehaviour` over Create's seven `SelectionMode`s: `RANDOMIZE` and
+        // `SYNCHRONIZE` are not ported and leave the mode as it is (as do connected tunnels,
+        // which would take it too).
         Some(B::BrassTunnel) => with_world(|w| {
             let b = w.dims[dim].brass.get_mut(&pos)?;
-            let i = create_engine::board::option_value(pick, Mode::ALL.len() as i32);
-            b.mode = Mode::ALL[i as usize];
-            w.mark_unsaved(dim, pos);
-            Some(i)
-        })
-        .flatten()
-        .unwrap_or(0),
+            let now = b.mode.index() as i32;
+            let picked = pick.and_then(|s| {
+                create_engine::board::option_value(s, now, tunnel::OPTIONS.len() as i32)
+            });
+            if let Some(mode) = picked.and_then(Mode::from_option) {
+                b.mode = mode;
+                w.mark_unsaved(dim, pos);
+            }
+            w.dims[dim].brass.get(&pos).map(|b| b.mode.index() as i32)
+        }),
         _ => return,
     };
-    // The value back to the player (its value box shows it).
+    let Some(value) = value.flatten() else {
+        return;
+    };
+    // The value back to the player (its value box and board show it).
     let mut m = Vec::with_capacity(16);
     for v in [x, y, z, value] {
         m.extend_from_slice(&v.to_le_bytes());
     }
     let _ = game.native_net_send_to_player(player, VALUE, &m);
+}
+
+/// `ValueSettingsInputHandler.canInteract` (not sneaking, a spectator or in adventure) and no
+/// clipboard in the main hand (it copies settings instead).
+pub(super) fn may_use_value_box(game: &Game<'_>) -> bool {
+    game.may_build()
+        && !game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+        && !game
+            .inventory
+            .get(game.selected)
+            .and_then(|s| s.as_ref())
+            .is_some_and(|s| &*s.item == "create:clipboard")
+}
+
+/// Whether a hit at `local` (in the block) on its face `side` lands on the active value box of
+/// the block at `pos` (`ValueSettingsInputHandler.onBlockActivated`: `isActive`,
+/// `Sided.isSideActive`, `testHit`): a creative motor's speed, a distributing brass tunnel's mode.
+pub(super) fn value_box_hit(
+    game: &Game<'_>,
+    table: &StateTable,
+    pos: [i32; 3],
+    side: Dir,
+    local: [f64; 3],
+) -> bool {
+    use create_engine::Block as B;
+    use create_engine::board;
+    let Some((block, info)) = table.get(game.world.block(pos[0], pos[1], pos[2]).0) else {
+        return false;
+    };
+    let slot = match (block, info.axis, info.tunnel) {
+        (B::CreativeMotor, ..) => info.facing.and_then(|f| board::motor_slot(f, side)),
+        // `selectionMode.onlyActiveWhen(this::hasDistributionBehaviour)`.
+        (B::BrassTunnel, Some(axis), Some(shape)) => {
+            let tunnel = |d: Dir| {
+                let o = d.offset();
+                let s = game.world.block(pos[0] + o[0], pos[1], pos[2] + o[2]).0;
+                table
+                    .get(s)
+                    .is_some_and(|(b, _)| matches!(b, B::AndesiteTunnel | B::BrassTunnel))
+            };
+            create_engine::tunnel::distributes(axis, shape, tunnel)
+                .then(|| board::tunnel_mode_slot(side))
+                .flatten()
+        }
+        _ => None,
+    };
+    slot.is_some_and(|s| board::hits_box(s, local))
+}
+
+/// `ValueSettingsInputHandler.onBlockActivated` on the server: a click on an active value box is
+/// taken (`setCanceled`: the block does not use it) whatever the hand holds but a clipboard. The
+/// client holds it to open the board (`tick_value_board`); a short click does no more
+/// (`ScrollValueBehaviour.onShortInteract` acts for fake players only).
+pub(super) fn use_value_box(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    face: [i32; 3],
+    canceled: &mut bool,
+) {
+    if !may_use_value_box(game) {
+        return;
+    }
+    let (Some(side), Some(hit)) = (Dir::from_offset(face), game.pick()) else {
+        return;
+    };
+    let local = [0, 1, 2].map(|i| hit.point[i] - f64::from(pos[i]));
+    let game = &*game;
+    if with_world(|w| value_box_hit(game, &w.table, pos, side, local)) == Some(true) {
+        *canceled = true;
+    }
 }
 
 /// A value board open on this client (`ValueSettingsScreen`).
@@ -858,18 +974,43 @@ pub(super) struct OpenBoard {
     /// The pick under the cursor: the wheel moves it, as there is no free cursor while playing.
     pub(super) pick: create_engine::board::Settings,
     pub(super) ticks: u32,
+    /// Whether the server told the block's setting (the pick starts on it), and whether the
+    /// wheel moved the pick: a board that knows neither sends nothing.
+    pub(super) known: bool,
+    pub(super) moved: bool,
+}
+
+/// The use press held on a value box (`ValueSettingsClient.interactHeldPos`,
+/// `interactHeldTicks`), and whether the server told its setting yet.
+pub(super) struct Held {
+    pub(super) pos: [i32; 3],
+    pub(super) hold: create_engine::board::Hold,
+    pub(super) known: bool,
 }
 
 thread_local! {
-    /// The use press held on a block (`ValueSettingsClient.interactHeldPos`, `interactHeldTicks`).
-    pub(super) static HOLD: RefCell<Option<([i32; 3], create_engine::board::Hold)>> =
-        const { RefCell::new(None) };
+    pub(super) static HOLD: RefCell<Option<Held>> = const { RefCell::new(None) };
     pub(super) static BOARD: RefCell<Option<OpenBoard>> = const { RefCell::new(None) };
+    /// Whether use was down last tick: a new press is a click.
+    pub(super) static USE_DOWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// The board of the value box at `pos` with its current pick: the creative motor's speed and a
+/// A board's pick for the block's setting `v` (`getValueSettings`): a motor's speed, an option.
+pub(super) fn board_pick(
+    board: create_engine::board::Board,
+    v: i32,
+) -> create_engine::board::Settings {
+    if board.icons {
+        create_engine::board::Settings { row: 0, value: v }
+    } else {
+        create_engine::board::kinetic_settings(v)
+    }
+}
+
+/// The board of the value box at `pos` (`createBoard`), starting on the block's setting when the
+/// server told it (`known`), else on what this client sees: the creative motor's speed and a
 /// brass tunnel's mode (the chassis' board needs the wrench, whose use turns the block here).
-pub(super) fn board_of(game: &Game<'_>, pos: [i32; 3]) -> Option<OpenBoard> {
+pub(super) fn board_of(game: &Game<'_>, pos: [i32; 3], known: bool) -> Option<OpenBoard> {
     use create_engine::Block as B;
     use create_engine::board;
     let state = game.world.block(pos[0], pos[1], pos[2]);
@@ -879,46 +1020,62 @@ pub(super) fn board_of(game: &Game<'_>, pos: [i32; 3]) -> Option<OpenBoard> {
         let (block, info) = c.table.get(state.0)?;
         Some((block, info.facing, c.speeds.get(&pos).map_or(0.0, |s| s[0])))
     })?;
-    let (board, pick) = match block {
-        B::CreativeMotor => {
-            let setting = facing.map_or(speed, |f| {
-                create_engine::kinetics::convert_to_direction(speed, f)
-            });
-            (board::MOTOR, board::kinetic_settings(setting as i32))
-        }
-        // `BrassTunnelBlockEntity.selectionMode` (`logistics.when_multiple_outputs_available`),
-        // over the modes ported.
-        B::BrassTunnel => (
-            board::options(
-                "Distribution Method",
-                create_engine::tunnel::Mode::ALL.len() as i32,
-            ),
-            board::Settings {
-                row: 0,
-                value: VALUES.with_borrow(|m| m.get(&pos).copied()).unwrap_or(0),
-            },
+    let seen = VALUES.with_borrow(|m| m.get(&pos).copied());
+    let board = match block {
+        B::CreativeMotor => board::MOTOR,
+        // `BrassTunnelBlockEntity.selectionMode` (`logistics.when_multiple_outputs_available`).
+        B::BrassTunnel => board::options(
+            "Distribution Method",
+            create_engine::tunnel::OPTIONS.len() as i32,
         ),
         _ => return None,
+    };
+    let setting = match (block, seen.filter(|_| known)) {
+        (_, Some(v)) => v,
+        (B::CreativeMotor, None) => facing.map_or(speed, |f| {
+            create_engine::kinetics::convert_to_direction(speed, f)
+        }) as i32,
+        (_, None) => seen.unwrap_or(0),
     };
     Some(OpenBoard {
         pos,
         board,
-        pick,
+        pick: board_pick(board, setting),
         ticks: 0,
+        known,
+        moved: false,
     })
 }
 
-/// `ValueSettingsClient.tick` and the board's release (`ValueSettingsScreen.saveAndClose`): use
-/// held on a value box with an empty hand opens its board on the sixth tick; letting go of use
-/// sends the pick.
+/// The block under the crosshair when the hit lands on its active value box.
+pub(super) fn aimed_value_box(game: &Game<'_>) -> Option<[i32; 3]> {
+    let hit = game.pick()?;
+    let pos = hit.pos;
+    states::index(game.world.block(pos[0], pos[1], pos[2]).0)?;
+    let side = Dir::from_offset(hit.face)?;
+    let local = [0, 1, 2].map(|i| hit.point[i] - f64::from(pos[i]));
+    CLIENT
+        .with_borrow(|c| Some(value_box_hit(game, &c.as_ref()?.table, pos, side, local)))?
+        .then_some(pos)
+}
+
+/// `ValueSettingsClient.tick` and the board's release (`ValueSettingsScreen.saveAndClose`): a
+/// use click on an active value box starts a hold, which goes on while the player may interact
+/// and aims at that box; on its sixth tick the board opens. Letting go of use sends the pick.
 pub(super) fn tick_value_board(game: &mut Game<'_>) {
-    let down = game.native_mapping("key.use").is_some_and(|m| m.0);
+    // Hot: `keyUse.isDown()` is one load; nothing else runs while no press is new or held.
+    let down = game.right;
+    let pressed = down && !USE_DOWN.replace(down);
     let released = BOARD.with_borrow_mut(|b| {
         let open = b.as_mut()?;
         open.ticks += 1;
         if down { None } else { b.take() }
     });
     if let Some(open) = released {
+        // Never a guess: unmoved and with no answer from the server, nothing changes.
+        if !open.known && !open.moved {
+            return;
+        }
         let mut data = Vec::with_capacity(20);
         for v in [
             open.pos[0],
@@ -932,32 +1089,51 @@ pub(super) fn tick_value_board(game: &mut Game<'_>) {
         let _ = game.native_net_send_to_server(VALUE_SETTINGS, &data);
         return;
     }
-    // Hot: nothing while use is up or a board is open.
-    if !down || BOARD.with_borrow(Option::is_some) {
-        HOLD.with_borrow_mut(|h| *h = None);
+    if BOARD.with_borrow(Option::is_some) {
         return;
     }
-    let empty = game
-        .inventory
-        .get(game.selected)
-        .and_then(|s| s.as_ref())
-        .is_none();
-    let Some(pos) = game.pick().map(|h| h.pos).filter(|_| empty) else {
-        HOLD.with_borrow_mut(|h| *h = None);
+    let holding = HOLD.with_borrow(Option::is_some);
+    if !holding && !pressed {
         return;
+    }
+    let aimed = if may_use_value_box(game) {
+        aimed_value_box(game)
+    } else {
+        None
     };
-    let step = HOLD.with_borrow_mut(|h| {
-        if h.is_none_or(|(at, _)| at != pos) {
-            *h = Some((pos, Default::default()));
+    if !holding {
+        // `startInteractionWith`, and the server asked for the setting the board starts on.
+        let Some(pos) = aimed else {
+            return;
+        };
+        HOLD.with_borrow_mut(|h| {
+            *h = Some(Held {
+                pos,
+                hold: Default::default(),
+                known: false,
+            })
+        });
+        let mut data = Vec::with_capacity(12);
+        for v in pos {
+            data.extend_from_slice(&v.to_le_bytes());
         }
-        h.as_mut().map(|(_, hold)| hold.tick(true))
-    });
-    if step != Some(create_engine::board::Step::Open) {
-        return;
+        let _ = game.native_net_send_to_server(VALUE_SETTINGS, &data);
     }
-    HOLD.with_borrow_mut(|h| *h = None);
-    if let Some(open) = board_of(game, pos) {
-        BOARD.with_borrow_mut(|b| *b = Some(open));
+    // `cancelInteraction` when the player may no longer interact or looks off the box.
+    let step = HOLD.with_borrow_mut(|h| {
+        let held = h.as_mut().filter(|held| Some(held.pos) == aimed)?;
+        Some((held.pos, held.known, held.hold.tick(down)))
+    });
+    match step {
+        Some((_, _, create_engine::board::Step::Wait)) => {}
+        Some((pos, known, create_engine::board::Step::Open)) => {
+            HOLD.with_borrow_mut(|h| *h = None);
+            if let Some(open) = board_of(game, pos, known) {
+                BOARD.with_borrow_mut(|b| *b = Some(open));
+            }
+        }
+        // A short click (the server took it) or the press is off the box.
+        _ => HOLD.with_borrow_mut(|h| *h = None),
     }
 }
 
@@ -976,6 +1152,7 @@ pub(super) fn scroll_board(game: &mut Game<'_>, steps: f32) -> bool {
             && let Some(column) = open.board.scrolled(open.pick, steps > 0.0, shift)
         {
             open.pick.value = column;
+            open.moved = true;
         }
     });
     true
@@ -985,7 +1162,7 @@ pub(super) fn scroll_board(game: &mut Game<'_>, steps: f32) -> bool {
 /// (`AllGuiTextures.VALUE_SETTINGS_*`, from the player's jar). Whether a board is open.
 pub(super) fn value_board(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) -> bool {
     use create_engine::board::{self, Layout, Settings};
-    use create_engine::tunnel::Mode;
+    use create_engine::tunnel::OPTIONS;
     let Some((b, pick, ticks)) =
         BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.pick, o.ticks)))
     else {
@@ -1004,9 +1181,7 @@ pub(super) fn value_board(game: &mut Game<'_>, batch: &mut horizon_client::hud::
     let tip = board::release_to_confirm(&key);
     let text = |s: Settings| {
         if b.icons {
-            Mode::ALL[s.value.clamp(0, Mode::ALL.len() as i32 - 1) as usize]
-                .label()
-                .to_owned()
+            OPTIONS[s.value.clamp(0, OPTIONS.len() as i32 - 1) as usize].to_owned()
         } else {
             board::kinetic_text(s)
         }
