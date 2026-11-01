@@ -811,7 +811,8 @@ impl Behaviours {
     let mut data = horizon_world::nbt::Compound::new();
     game.native_chunk_data_save("minecraft:overworld", [2, 2], &mut data);
     let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create".into()) else { panic!("no create data") };
-    assert_eq!(own.get(&"tanks".into()), Some(&horizon_world::nbt::Tag::IntArray(vec![40, 0, 40, 0, 1000])));
+    // Saved by its controller: x, y, z, fluid, amount, width, height, windows.
+    assert_eq!(own.get(&"tank_multis".into()), Some(&horizon_world::nbt::Tag::IntArray(vec![40, 0, 40, 0, 1000, 1, 1, 1])));
     let tanks: Vec<Vec<u8>> = game.sent.iter().filter(|m| m.1 == "create:tank").map(|m| m.2.clone()).collect();
     assert!(!tanks.is_empty());
     for m in &tanks { game.native_net_from_server("create:tank", m); }

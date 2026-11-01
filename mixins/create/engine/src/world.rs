@@ -149,11 +149,14 @@ pub struct Dimension {
     pub lamp_placed: Vec<[i32; 3]>,
     pub lamp_checks: Vec<[i32; 3]>,
     pub lamp_ticks: Vec<([i32; 3], i64)>,
-    /// Fluid tanks and their contents; contents saved with a column wait here for their tank.
-    pub tanks: HashMap<[i32; 3], crate::tank::Tank>,
-    tank_saved: HashMap<[i32; 3], crate::tank::Tank>,
-    /// Tanks clients must see again.
+    /// Fluid tanks: each tank block's controller and each controller's tank; tanks saved with
+    /// a column wait here for their controller.
+    pub tanks: crate::tank::Tanks,
+    tank_saved: HashMap<[i32; 3], crate::tank::Multi>,
+    /// Tank blocks clients must see again (a controller's fluid, or none).
     pub tank_changes: Vec<[i32; 3]>,
+    /// Tank blocks whose `top`, `bottom` and `shape` follow their tank again.
+    pub tank_states: Vec<[i32; 3]>,
     /// Windmill bearings whose sails are assembled, by bearing; ones saved with a column wait
     /// for their bearing; right-clicks waiting for the next tick (`assembleNextTick`); bearings
     /// clients must see again; and structures whose bearing broke, to put back.
@@ -381,18 +384,15 @@ fn has_state(block: Block) -> bool {
     )
 }
 
-/// A boiler (`FluidTankBlockEntity.boiler`): its data, the engines on it and its tank's size.
+/// A boiler (`FluidTankBlockEntity.boiler` of a controller): its data, the engines on its tank
+/// and its tank's size.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SteamBoiler {
     pub data: crate::steam::Boiler,
     pub engines: Vec<[i32; 3]>,
-    /// `getTotalTankSize`.
+    /// `getTotalTankSize`: width × width × height.
     pub size: i32,
 }
-
-/// The size of a boiler (`FluidTankBlockEntity.getTotalTankSize`): tanks are one block until
-/// multiblock tanks (`ConnectivityHandler`) are ported, too small for a boiler level.
-pub const BOILER_SIZE: i32 = 1;
 
 /// The way a steam engine's state points (`SteamEngineBlock.getFacing`).
 fn engine_facing(info: &StateInfo) -> Option<crate::kinetics::Dir> {
@@ -714,11 +714,14 @@ impl CreateWorld {
         if block == Block::FluidTank {
             d.boiler_checks.push(pos);
         }
-        if block == Block::FluidTank && !d.tanks.contains_key(&pos) {
-            let t = d.tank_saved.remove(&pos).unwrap_or_default();
-            d.tanks.insert(pos, t);
+        if block == Block::FluidTank && !d.tanks.parts.contains_key(&pos) {
+            // Loaded: a saved tank's controller takes its blocks back (`read`).
+            let saved = d.tank_saved.remove(&pos);
+            d.tanks.load(pos, saved);
             d.tank_changes.push(pos);
+            self.tanks_touched(dim, false);
         }
+        let d = &mut self.dims[dim];
         if block == Block::Belt && !d.belt_of.contains_key(&pos) {
             d.belt_dirty.push(pos);
         }
@@ -758,6 +761,22 @@ impl CreateWorld {
         let (was, is) = (self.table.is_kinetic(old), self.table.is_kinetic(new));
         if !was && !is {
             return;
+        }
+        // `FluidTankBlock.onPlace` / `onRemove`: tanks form or split (a tank's own state
+        // changes don't).
+        let tank = |s: u32| {
+            self.table
+                .get(s)
+                .is_some_and(|(b, _)| b == Block::FluidTank)
+        };
+        let (was_tank, is_tank) = (tank(old), tank(new));
+        if was_tank != is_tank {
+            if is_tank {
+                self.dims[dim].tanks.place(pos);
+            } else {
+                self.dims[dim].tanks.remove(pos);
+            }
+            self.tanks_touched(dim, true);
         }
         if is {
             let (was_block, is_block) = (
@@ -924,10 +943,6 @@ impl CreateWorld {
                 d.windmill_changes.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
-            if d.tanks.remove(&pos).is_some() {
-                d.tank_changes.push(pos);
-                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-            }
             if let Some(seg) = self.table.get(old).and_then(|(_, i)| i.belt) {
                 self.belt_removed(dim, pos, seg);
             }
@@ -1076,7 +1091,9 @@ impl CreateWorld {
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.running_fans
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.tanks.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.tanks.unload_column(cx, cz);
+            d.tank_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.boilers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.boiler_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -2224,24 +2241,124 @@ impl CreateWorld {
         ids
     }
 
-    /// Tank contents saved with a column, for when its tanks are found.
+    /// Tanks saved with a column (by controller), for when their controllers are found.
     pub fn load_tanks(
         &mut self,
         dim: usize,
-        saved: impl Iterator<Item = ([i32; 3], crate::tank::Tank)>,
+        saved: impl Iterator<Item = ([i32; 3], crate::tank::Multi)>,
     ) {
         self.dims[dim].tank_saved.extend(saved);
     }
 
-    /// The tanks of a column that hold something, to save.
-    pub fn column_tanks(&self, dim: usize, cx: i32, cz: i32) -> Vec<([i32; 3], crate::tank::Tank)> {
+    /// The controllers of a column whose tank is more than a placed tank (bigger, filled or
+    /// without windows), to save.
+    pub fn column_tanks(
+        &self,
+        dim: usize,
+        cx: i32,
+        cz: i32,
+    ) -> Vec<([i32; 3], crate::tank::Multi)> {
         let mut out: Vec<_> = self.dims[dim]
             .tanks
+            .multis
             .iter()
-            .filter(|(p, t)| (p[0] >> 4, p[2] >> 4) == (cx, cz) && t.fluid.is_some())
-            .map(|(p, t)| (*p, *t))
+            .filter(|(p, m)| {
+                (p[0] >> 4, p[2] >> 4) == (cx, cz) && **m != crate::tank::Multi::default()
+            })
+            .map(|(p, m)| (*p, *m))
             .collect();
         out.sort_by_key(|(p, _)| *p);
+        out
+    }
+
+    /// Tank blocks whose part changed (formed, split or loaded): their states, drawing and
+    /// boilers follow, and their columns are saved again unless just loaded
+    /// (`removeController`'s `boiler.clear()` for blocks split off).
+    fn tanks_touched(&mut self, dim: usize, save: bool) {
+        let d = &mut self.dims[dim];
+        for p in d.tanks.cleared.drain(..) {
+            if let Some(b) = d.boilers.get_mut(&p) {
+                b.data.clear();
+            }
+        }
+        for p in d.tanks.touched.drain(..) {
+            d.tank_changes.push(p);
+            d.tank_states.push(p);
+            d.boiler_checks.push(p);
+            if save {
+                d.unsaved.push((p[0] >> 4, p[2] >> 4));
+            }
+        }
+    }
+
+    /// The tank the block at `pos` is part of: its controller and tank.
+    pub fn tank(&self, dim: usize, pos: [i32; 3]) -> Option<([i32; 3], crate::tank::Multi)> {
+        self.dims[dim].tanks.get(pos).map(|(c, m)| (c, *m))
+    }
+
+    /// The `top`, `bottom` and `shape` the tank block at `pos` should have.
+    pub fn tank_shape(&self, dim: usize, pos: [i32; 3]) -> Option<crate::tank::BlockShape> {
+        self.dims[dim].tanks.block_shape(pos)
+    }
+
+    /// Tank blocks whose states must follow their tank, each once.
+    pub fn take_tank_states(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        let d = &mut self.dims[dim];
+        if d.tank_states.is_empty() {
+            return Vec::new();
+        }
+        let mut v = std::mem::take(&mut d.tank_states);
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// The tank of the block at `pos` set to `tank` (a bucket used on it).
+    pub fn set_tank(&mut self, dim: usize, pos: [i32; 3], tank: crate::tank::Tank) {
+        let d = &mut self.dims[dim];
+        let Some((c, m)) = d.tanks.get_mut(pos) else {
+            return;
+        };
+        m.tank = tank;
+        d.tank_changes.push(c);
+        d.unsaved.push((c[0] >> 4, c[2] >> 4));
+    }
+
+    /// Fluid poured into the tank of the block at `pos` (`FluidTank.fill`): what it took.
+    pub fn fill_tank(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        fluid: crate::tank::Fluid,
+        amount: u32,
+    ) -> u32 {
+        let d = &mut self.dims[dim];
+        let Some((c, m)) = d.tanks.get_mut(pos) else {
+            return 0;
+        };
+        let capacity = m.capacity();
+        let took = m.tank.fill_amount(fluid, amount, capacity);
+        if took > 0 {
+            d.tank_changes.push(c);
+            d.unsaved.push((c[0] >> 4, c[2] >> 4));
+        }
+        took
+    }
+
+    /// Fluid drawn from the tank of the block at `pos` (`FluidTank.drain`): what came out.
+    pub fn drain_tank(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        amount: u32,
+    ) -> Option<(crate::tank::Fluid, u32)> {
+        let d = &mut self.dims[dim];
+        let (c, m) = d.tanks.get_mut(pos)?;
+        let out = m.tank.drain_amount(amount);
+        if out.is_some() {
+            d.tank_changes.push(c);
+            d.unsaved.push((c[0] >> 4, c[2] >> 4));
+        }
         out
     }
 
@@ -2306,15 +2423,19 @@ impl CreateWorld {
     /// (`updateBoilerTemperature`, only for an active boiler).
     fn boiler_heat_changed(&mut self, dim: usize, tank: [i32; 3]) {
         let d = &mut self.dims[dim];
+        let Some(tank) = d.tanks.controller(tank) else {
+            return;
+        };
         if let Some(b) = d.boilers.get_mut(&tank) {
             b.data.needs_heat_level_update = true;
             d.boiler_heat_checks.push(tank);
         }
     }
 
-    /// `updateBoilerState` for the tanks to look at: the engines on each counted
-    /// (`BoilerData.evaluate`); a tank without engines is no boiler, and engines no longer on one
-    /// stop their shafts.
+    /// `updateBoilerState` for the tank blocks to look at, by their controller: the engines on
+    /// every block of the tank counted (`BoilerData.evaluate`); a tank without engines is no
+    /// boiler, a new boiler loses its windows (`setWindows(false)`), and engines no longer on a
+    /// boiler stop their shafts.
     pub fn evaluate_boilers(&mut self, dim: usize) {
         if self.dims[dim].boiler_checks.is_empty() {
             return;
@@ -2322,45 +2443,66 @@ impl CreateWorld {
         let mut checks = std::mem::take(&mut self.dims[dim].boiler_checks);
         checks.sort();
         checks.dedup();
-        for tank in checks {
-            let is_tank = self.dims[dim]
-                .states
-                .get(&tank)
-                .and_then(|s| self.table.get(*s))
-                .is_some_and(|(b, _)| b == Block::FluidTank);
-            let engines = if is_tank {
-                crate::steam::attached_engines([tank], |p| self.engine_at(dim, p))
-            } else {
-                Vec::new()
+        let mut stopped = Vec::new();
+        for p in checks {
+            let controller = self.dims[dim].tanks.controller(p);
+            // A boiler whose tank went or joined another (`BoilerData.clear`).
+            if controller != Some(p)
+                && let Some(b) = self.dims[dim].boilers.remove(&p)
+            {
+                stopped.extend(b.engines);
+            }
+            let Some(c) = controller else {
+                continue;
             };
+            let Some(m) = self.dims[dim].tanks.multis.get(&c).copied() else {
+                continue;
+            };
+            let parts = &self.dims[dim].tanks.parts;
+            let engines = crate::steam::attached_engines(
+                crate::tank::blocks(c, m.width, m.height).filter(|q| parts.contains_key(q)),
+                |q| self.engine_at(dim, q),
+            );
             let d = &mut self.dims[dim];
-            let old = d
-                .boilers
-                .get(&tank)
-                .map(|b| b.engines.clone())
-                .unwrap_or_default();
             if engines.is_empty() {
-                // `BoilerData.clear` with the tank gone, or no engine left.
-                d.boilers.remove(&tank);
-            } else {
-                let b = d.boilers.entry(tank).or_insert_with(|| SteamBoiler {
-                    size: BOILER_SIZE,
-                    ..SteamBoiler::default()
-                });
-                b.data.attached_engines = engines.len() as i32;
-                b.data.needs_heat_level_update = true;
-                b.engines.clone_from(&engines);
-                d.boiler_heat_checks.push(tank);
+                if let Some(b) = d.boilers.remove(&c) {
+                    stopped.extend(b.engines);
+                }
+                continue;
             }
-            for e in old.into_iter().filter(|e| !engines.contains(e)) {
-                self.stop_engine(dim, e);
+            let b = d.boilers.entry(c).or_default();
+            let was_active = b.data.is_active();
+            stopped.extend(b.engines.iter().filter(|e| !engines.contains(e)).copied());
+            b.size = m.blocks();
+            b.data.attached_engines = engines.len() as i32;
+            b.data.needs_heat_level_update = true;
+            b.engines = engines;
+            d.boiler_heat_checks.push(c);
+            if !was_active && m.window {
+                if let Some(m) = d.tanks.multis.get_mut(&c) {
+                    m.window = false;
+                }
+                d.tank_states
+                    .extend(crate::tank::blocks(c, m.width, m.height));
+                d.tank_changes.push(c);
+                d.unsaved.push((c[0] >> 4, c[2] >> 4));
             }
+        }
+        // Engines on no boiler now stop (an engine moved to another boiler keeps going).
+        stopped.retain(|e| {
+            !self.dims[dim]
+                .boilers
+                .values()
+                .any(|b| b.engines.contains(e))
+        });
+        for e in stopped {
+            self.stop_engine(dim, e);
         }
     }
 
-    /// Boilers whose heat must be read again: their tanks (one block each, so the heater is the
-    /// block under it).
-    pub fn take_heat_checks(&mut self, dim: usize) -> Vec<[i32; 3]> {
+    /// Boilers whose heat must be read again: their controllers and widths (the heaters are
+    /// the blocks under the tank's bottom layer).
+    pub fn take_heat_checks(&mut self, dim: usize) -> Vec<([i32; 3], u8)> {
         let d = &mut self.dims[dim];
         if d.boiler_heat_checks.is_empty() {
             return Vec::new();
@@ -2368,12 +2510,14 @@ impl CreateWorld {
         let mut v = std::mem::take(&mut d.boiler_heat_checks);
         v.sort();
         v.dedup();
-        v.retain(|p| {
-            d.boilers
-                .get(p)
-                .is_some_and(|b| b.data.needs_heat_level_update)
-        });
-        v
+        v.into_iter()
+            .filter(|p| {
+                d.boilers
+                    .get(p)
+                    .is_some_and(|b| b.data.needs_heat_level_update)
+            })
+            .filter_map(|p| Some((p, d.tanks.multis.get(&p)?.width)))
+            .collect()
     }
 
     /// The heat of each block under the boiler at `tank` (`updateTemperature`); its engines
@@ -2395,7 +2539,8 @@ impl CreateWorld {
         }
         let mut sampled = std::mem::take(&mut d.boiler_sampled);
         for (tank, b) in d.boilers.iter_mut() {
-            if b.data.tick(crate::tank::CAPACITY, false) {
+            let capacity = d.tanks.multis.get(tank).map_or(0, |m| m.capacity());
+            if b.data.tick(capacity, false) {
                 sampled.push(*tank);
             }
         }
@@ -2415,14 +2560,19 @@ impl CreateWorld {
         fluid: crate::tank::Fluid,
         amount: u32,
     ) -> Option<u32> {
-        let b = self.dims[dim].boilers.get_mut(&tank)?;
+        let d = &mut self.dims[dim];
+        let c = d.tanks.controller(tank)?;
+        let b = d.boilers.get_mut(&c)?;
         Some(b.data.fill(fluid == crate::tank::Fluid::Water, amount))
     }
 
     /// Whether the tank at `tank` is a boiler (its fluid handler is the boiler's: nothing can be
     /// drawn from it).
     pub fn is_boiler(&self, dim: usize, tank: [i32; 3]) -> bool {
-        self.dims[dim].boilers.contains_key(&tank)
+        let d = &self.dims[dim];
+        d.tanks
+            .controller(tank)
+            .is_some_and(|c| d.boilers.contains_key(&c))
     }
 
     /// `SteamEngineBlockEntity.tick` for the engines of the boiler at `tank`: each drives the
@@ -2963,7 +3113,7 @@ mod tests {
         assert_eq!(w.dims[0].boilers[&tank].engines, vec![engine]);
         assert_eq!(w.shaft_changes(0), vec![(shaft, true)]);
         w.block_changed(0, shaft, 12, 13);
-        assert_eq!(w.take_heat_checks(0), vec![tank]);
+        assert_eq!(w.take_heat_checks(0), vec![(tank, 1)]);
         w.set_boiler_heat(0, tank, &[2]);
         assert!(w.take_heat_checks(0).is_empty());
         w.tick(0, &mut Vec::new());
@@ -2992,7 +3142,7 @@ mod tests {
         assert_eq!(w.speed(0, shaft), Some(64.0));
         // The burner goes out: the engine stops.
         w.block_changed(0, [0, -1, 0], 14, 0);
-        assert_eq!(w.take_heat_checks(0), vec![tank]);
+        assert_eq!(w.take_heat_checks(0), vec![(tank, 1)]);
         w.set_boiler_heat(0, tank, &[]);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, shaft), Some(0.0));
@@ -3005,6 +3155,101 @@ mod tests {
         assert!(w.dims[0].boilers.is_empty());
         assert_eq!(w.shaft_changes(0), vec![(shaft, false)]);
         assert!(w.dims[0].shaft_engine.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_two_by_two_boiler_over_kindled_burners_drives_its_engine() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:fluid_tank",
+                vec![("bottom", "true"), ("top", "true"), ("shape", "window")],
+            ),
+            (
+                "create:steam_engine",
+                vec![
+                    ("face", "wall"),
+                    ("facing", "south"),
+                    ("waterlogged", "false"),
+                ],
+            ),
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:powered_shaft", vec![("axis", "x")]),
+            ("create:blaze_burner", vec![("blaze", "kindled")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let square = [[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]];
+        for p in square {
+            w.block_changed(0, [p[0], -1, p[2]], 0, 14);
+        }
+        for p in square {
+            w.block_changed(0, p, 0, 10);
+        }
+        // One tank, its controller the north-west corner, each block its corner window.
+        let c = [0, 0, 0];
+        let (controller, m) = w.tank(0, [1, 0, 1]).unwrap();
+        assert_eq!((controller, m.width, m.height), (c, 2, 1));
+        assert_eq!(w.take_tank_states(0), {
+            let mut v = square.to_vec();
+            v.sort();
+            v
+        });
+        assert_eq!(
+            w.tank_shape(0, [1, 0, 1]).unwrap().shape,
+            crate::tank::Shape::WindowSe
+        );
+        // An engine on the south side of the south-east block, its shaft two blocks on.
+        let (engine, shaft) = ([1, 0, 2], [1, 0, 4]);
+        w.block_changed(0, shaft, 0, 12);
+        w.block_changed(0, engine, 0, 11);
+        w.evaluate_boilers(0);
+        assert_eq!(w.dims[0].boilers[&c].engines, vec![engine]);
+        assert_eq!(w.dims[0].boilers[&c].size, 4);
+        assert!(w.is_boiler(0, [1, 0, 1]) && w.is_boiler(0, c));
+        // A new boiler loses its windows.
+        assert_eq!(
+            w.tank_shape(0, [1, 0, 1]).unwrap().shape,
+            crate::tank::Shape::Plain
+        );
+        assert_eq!(w.shaft_changes(0), vec![(shaft, true)]);
+        w.block_changed(0, shaft, 12, 13);
+        // Heat from the four burners under it.
+        assert_eq!(w.take_heat_checks(0), vec![(c, 2)]);
+        w.set_boiler_heat(0, c, &[1, 1, 1, 1]);
+        // 50 mB of water into any of its blocks: 10 mB a tick, level 1 (a 4-block tank's most).
+        assert_eq!(
+            w.fill_boiler(0, [1, 0, 0], crate::tank::Fluid::Water, 50),
+            Some(50)
+        );
+        w.tick_boilers(0);
+        let b = &w.dims[0].boilers[&c];
+        assert_eq!((b.data.active_heat, b.data.level(b.size)), (4, 1));
+        assert_eq!(b.data.engine_efficiency(b.size), 1.0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft), Some(64.0));
+        // A block broken: the tank splits, the engine's block is a boiler of its own, too small.
+        w.block_changed(0, [1, 0, 0], 10, 0);
+        assert_eq!(w.tank(0, [1, 0, 1]).unwrap().0, [1, 0, 1]);
+        w.evaluate_boilers(0);
+        assert_eq!(
+            w.dims[0].boilers.keys().copied().collect::<Vec<_>>(),
+            vec![[1, 0, 1]]
+        );
+        assert_eq!(w.dims[0].boilers[&[1, 0, 1]].size, 1);
+        assert_eq!(w.take_heat_checks(0), vec![([1, 0, 1], 1)]);
+        w.set_boiler_heat(0, [1, 0, 1], &[1]);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft), Some(0.0));
+        assert_eq!(w.dims[0].shaft_engine.get(&shaft), Some(&engine));
+        // Saved by controller: the three tanks left are plain one-block tanks without windows.
+        let saved = w.column_tanks(0, 0, 0);
+        assert_eq!(saved.len(), 3);
+        assert!(saved.iter().all(|(_, m)| m.blocks() == 1 && !m.window));
         states::clear_range();
     }
 
