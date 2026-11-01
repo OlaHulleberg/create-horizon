@@ -267,6 +267,8 @@ pub struct Dimension {
     /// be told of again (their needle moved after a solve).
     pub gauges: HashMap<[i32; 3], crate::gauge::Gauge>,
     pub gauge_changes: Vec<[i32; 3]>,
+    /// Scratch for the gauges a solve looked at, kept to avoid allocating per solve.
+    pub gauges_touched: Vec<[i32; 3]>,
 }
 
 /// An assembled train: its run, its blocks (offset from its first bogey, state), where that
@@ -507,6 +509,7 @@ impl CreateWorld {
         {
             // Read at the next solve (its part is new, so its network solves).
             d.gauges.insert(pos, crate::gauge::Gauge::new(kind));
+            d.kinetics.watch(pos, true);
         }
         if block == Block::Deployer && !d.deployers.contains_key(&pos) {
             let saved = d.deployer_saved.remove(&pos).unwrap_or_default();
@@ -751,7 +754,9 @@ impl CreateWorld {
             d.presses.remove(&pos);
             self.diode_removed(dim, pos);
             let d = &mut self.dims[dim];
-            d.gauges.remove(&pos);
+            if d.gauges.remove(&pos).is_some() {
+                d.kinetics.watch(pos, false);
+            }
             if self.table.get(old).map(|(b, _)| b) == Some(Block::CrushingWheel) {
                 d.crusher_checks.push(pos);
             }
@@ -900,7 +905,13 @@ impl CreateWorld {
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.gauges.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.gauges.retain(|p, _| {
+                let keep = (p[0] >> 4, p[2] >> 4) != (cx, cz);
+                if !keep {
+                    d.kinetics.watch(*p, false);
+                }
+                keep
+            });
             d.fans.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crushers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1108,15 +1119,20 @@ impl CreateWorld {
                 }
             }
         }
-        // Gauges read their network after each solve (`onSpeedChanged`, `updateFromNetwork`):
-        // a network's stress can change while their speed does not. Nothing when there are none.
-        for (pos, g) in d.gauges.iter_mut() {
-            if let Some((speed, stress, capacity, over)) = d.kinetics.network(*pos, 0)
+        // Gauges read their network after each solve of it (`onSpeedChanged`,
+        // `updateFromNetwork`): a network's stress can change while their speed does not. Only
+        // those in a solved network are looked at.
+        let mut touched = std::mem::take(&mut d.gauges_touched);
+        d.kinetics.take_touched(&mut touched);
+        for pos in touched.drain(..) {
+            if let Some(g) = d.gauges.get_mut(&pos)
+                && let Some((speed, stress, capacity, over)) = d.kinetics.network(pos, 0)
                 && g.update(speed, stress, capacity, over)
             {
-                d.gauge_changes.push(*pos);
+                d.gauge_changes.push(pos);
             }
         }
+        d.gauges_touched = touched;
         stats
     }
 

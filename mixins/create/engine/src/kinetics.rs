@@ -19,7 +19,7 @@
 //! - stress is the sum of each part's impact times its speed, capacity the sum of each generator's
 //!   capacity times its own generated speed; a network whose stress exceeds its capacity stops.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Create's `maxRotationSpeed` (CKinetics, default 256).
 pub const MAX_SPEED: f32 = 256.0;
@@ -390,6 +390,10 @@ pub struct Kinetics {
     /// Which side of a coupling each part solved is on.
     side: HashMap<u32, u32>,
     queue: Vec<u32>,
+    /// Positions whose network's figures someone reads (gauges), and those of them a solve
+    /// looked at since the last `take_touched`.
+    watched: HashSet<[i32; 3]>,
+    touched: Vec<[i32; 3]>,
 }
 
 const NONE: u32 = u32::MAX;
@@ -482,6 +486,20 @@ impl Kinetics {
     /// The positions whose parts left since the last call (for the game to hide them).
     pub fn take_removed(&mut self) -> Vec<[i32; 3]> {
         std::mem::take(&mut self.removed)
+    }
+
+    /// Watches (or stops watching) `pos`: each solve of its network lists it in `take_touched`.
+    pub fn watch(&mut self, pos: [i32; 3], on: bool) {
+        if on {
+            self.watched.insert(pos);
+        } else {
+            self.watched.remove(&pos);
+        }
+    }
+
+    /// The watched positions whose network solved since the last call, moved into `out`.
+    pub fn take_touched(&mut self, out: &mut Vec<[i32; 3]>) {
+        out.append(&mut self.touched);
     }
 
     /// Every part: position, half (`sub`), shown speed and whether its network is overstressed.
@@ -804,6 +822,14 @@ impl Kinetics {
                 .map(|&id| self.nodes[id as usize].part.impact * theoretical(self, id).abs())
                 .sum();
             let overstressed = stress > capacity;
+            if !self.watched.is_empty() {
+                for &id in &self.queue {
+                    let pos = self.nodes[id as usize].pos;
+                    if self.nodes[id as usize].sub == 0 && self.watched.contains(&pos) {
+                        self.touched.push(pos);
+                    }
+                }
+            }
             for i in 0..self.queue.len() {
                 let id = self.queue[i];
                 let turned = theoretical(self, id);
@@ -1331,5 +1357,36 @@ mod tests {
                 "{m}: {e:?}"
             );
         }
+    }
+
+    #[test]
+    fn only_watched_parts_of_solved_networks_are_touched() {
+        let mut k = Kinetics::new();
+        for z in [0, 10] {
+            k.set([0, 0, z], 0, motor(Dir::East, 16.0));
+            k.set([1, 0, z], 0, Part::shaft(Axis::X));
+        }
+        k.watch([1, 0, 0], true);
+        k.solve(&mut Vec::new());
+        let mut out = Vec::new();
+        k.take_touched(&mut out);
+        assert_eq!(out, [[1, 0, 0]]);
+        // The other network solves: nothing to read.
+        k.set([2, 0, 10], 0, Part::shaft(Axis::X));
+        k.solve(&mut Vec::new());
+        out.clear();
+        k.take_touched(&mut out);
+        assert!(out.is_empty());
+        // Its own does, until it is no longer watched.
+        k.set([2, 0, 0], 0, Part::shaft(Axis::X));
+        k.solve(&mut Vec::new());
+        k.take_touched(&mut out);
+        assert_eq!(out, [[1, 0, 0]]);
+        k.watch([1, 0, 0], false);
+        k.set([3, 0, 0], 0, Part::shaft(Axis::X));
+        k.solve(&mut Vec::new());
+        out.clear();
+        k.take_touched(&mut out);
+        assert!(out.is_empty());
     }
 }
