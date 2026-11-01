@@ -139,6 +139,9 @@ pub struct Dimension {
     /// Encased fans, and the ones turning: only those tick.
     pub fans: HashMap<[i32; 3], Fan>,
     pub running_fans: Vec<[i32; 3]>,
+    /// Item entities' fan progress (Create keeps it in their persistent data), by entity id; kept
+    /// while they are in a current.
+    pub item_fan: HashMap<u32, crate::fan::Progress>,
 }
 
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
@@ -163,6 +166,9 @@ pub struct Fan {
     pub handlers: Vec<([i32; 3], Option<crate::fan::Kind>)>,
     /// Clients must see its propeller and current again.
     pub changed: bool,
+    /// `entitySearchCooldown` and the item entities its last search caught (`caughtEntities`).
+    pub search_cooldown: u8,
+    pub caught: Vec<u32>,
 }
 
 /// Blocks that keep state of their own here but are not kinetic: depots.

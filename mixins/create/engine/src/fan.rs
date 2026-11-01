@@ -223,6 +223,74 @@ pub fn advance(p: &mut Progress, kind: Kind, count: u32, can: bool) -> bool {
     was <= 0
 }
 
+/// `AirCurrent.bounds`: the block in front of the fan stretched `max` blocks along `facing`
+/// (empty under a quarter block), as (min, max) corners.
+pub fn bounds(fan: [i32; 3], facing: Dir, max: f32) -> Option<([f64; 3], [f64; 3])> {
+    if max < 0.25 {
+        return None;
+    }
+    let o = facing.offset();
+    let mut lo = [0.0; 3];
+    let mut hi = [0.0; 3];
+    for a in 0..3 {
+        let start = f64::from(fan[a] + o[a]);
+        lo[a] = start;
+        hi[a] = start + 1.0;
+        let reach = f64::from(max) - 1.0;
+        if o[a] > 0 {
+            hi[a] += reach;
+        } else if o[a] < 0 {
+            lo[a] -= reach;
+        }
+    }
+    Some((lo, hi))
+}
+
+/// Catnip's `VecHelper.alignedDistanceToFace`: how far `pos` is from the fan's `facing` face along
+/// its axis.
+pub fn aligned_distance(pos: [f64; 3], fan: [i32; 3], facing: Dir) -> f64 {
+    let a = match facing.axis() {
+        crate::kinetics::Axis::X => 0,
+        crate::kinetics::Axis::Y => 1,
+        crate::kinetics::Axis::Z => 2,
+    };
+    let face = f64::from(fan[a]) + if facing.positive() { 1.0 } else { 0.0 };
+    (pos[a] - face).abs()
+}
+
+/// `tickAffectedEntities`' push on an item: its new motion, `flow` the way the air goes,
+/// `distance` from the fan's centre.
+pub fn push(flow: Dir, speed: f32, max: f32, distance: f64, motion: [f64; 3]) -> [f64; 3] {
+    let o = flow.offset();
+    // An item never sneaks: 512.
+    let acceleration = (f64::from(speed.abs()) / 512.0 / (distance / f64::from(max))) as f32;
+    let mut out = motion;
+    for a in 0..3 {
+        let add = (f64::from(o[a] as f32 * acceleration) - motion[a]).clamp(-5.0, 5.0);
+        out[a] = motion[a] + add / 8.0;
+    }
+    out
+}
+
+/// `FanProcessing.canProcess` for an item entity: its own progress decides once it has some.
+pub fn entity_can(p: &Progress, kind: Kind, can: bool) -> bool {
+    if p.by == Some(kind) {
+        return p.time >= 0;
+    }
+    can
+}
+
+/// `decrementProcessingTime` for an item entity, one tick: true when done now. Unlike a stack on
+/// a belt it counts down from the first tick and is done at 0.
+pub fn advance_entity(p: &mut Progress, kind: Kind, count: u32) -> bool {
+    if p.by != Some(kind) {
+        p.by = Some(kind);
+        p.time = PROCESSING_TIME * ((count.max(1) as i32 - 1) / 16 + 1) + 1;
+    }
+    p.time -= 1;
+    p.time == 0
+}
+
 /// The recipe books the fan's types read: Create's splashing and haunting, vanilla's smoking,
 /// smelting and blasting (cooking recipes: one ingredient, one result, chance 1).
 #[derive(Clone, Copy)]
@@ -446,6 +514,32 @@ mod tests {
         let washed = process(Kind::Splashing, "minecraft:sand", 64, b, max, &mut rng).unwrap();
         assert_eq!(washed.len(), 1);
         assert!((5..30).contains(&washed[0].1), "{washed:?}");
+    }
+
+    #[test]
+    fn items_in_the_air() {
+        // A fan facing east at 0,0,0 reaching 4: the box from x 1 to 5.
+        assert_eq!(
+            bounds([0, 0, 0], Dir::East, 4.0),
+            Some(([1.0, 0.0, 0.0], [5.0, 1.0, 1.0]))
+        );
+        assert_eq!(
+            bounds([0, 0, 0], Dir::West, 2.0),
+            Some(([-2.0, 0.0, 0.0], [0.0, 1.0, 1.0]))
+        );
+        assert_eq!(aligned_distance([3.5, 0.2, 0.5], [0, 0, 0], Dir::East), 2.5);
+        // Pushed east: an eighth of the way to speed/512 over distance/max.
+        let v = push(Dir::East, 64.0, 4.0, 2.0, [0.0, 0.0, 0.0]);
+        assert!((v[0] - 0.25 / 8.0).abs() < 1e-6 && v[1] == 0.0, "{v:?}");
+        // An entity's timer: 151 ticks for one stack, then never again by that type.
+        let mut p = Progress::default();
+        let ticks = (1..)
+            .find(|_| advance_entity(&mut p, Kind::Splashing, 1))
+            .unwrap();
+        assert_eq!(ticks, 151);
+        assert!(entity_can(&p, Kind::Splashing, false));
+        advance_entity(&mut p, Kind::Splashing, 1);
+        assert!(!entity_can(&p, Kind::Splashing, true));
     }
 
     #[test]

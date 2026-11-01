@@ -292,6 +292,10 @@ pub mod native_hooks {
         pub fn native_use_item(&mut self, stack: &horizon_client::items::ItemStack, claimed: &mut bool) {
             let _ = (stack, claimed);
         }
+        pub fn native_items_in(&mut self, dimension: &str, min: [f64; 3], max: [f64; 3],
+                               f: impl FnMut(u32, &mut horizon_client::items::ItemStack, [f64; 3], &mut [f64; 3])) {
+            let _ = (dimension, min, max, f);
+        }
         pub fn native_place_block(&mut self, stack: &horizon_client::items::ItemStack, pos: [i32; 3], state: BlockStateId) {
             let _ = (stack, pos, state);
         }

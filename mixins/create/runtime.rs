@@ -197,7 +197,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_latches(game, dimension, dim);
     tick_windmills(game, dimension, dim);
     tick_millstones(game, dim);
-    tick_fans(game, dim);
+    tick_fans(game, dimension, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -1841,12 +1841,15 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
 /// Encased fans that turn (`EncasedFanBlockEntity.tick`): the current looked at again when due
 /// (`AirCurrent.rebuild`), then the depots and belts in it processed
 /// (`tickAffectedHandlers`). Stopped fans cost nothing.
-fn tick_fans(game: &mut Game<'_>, dim: usize) {
+fn tick_fans(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let fans = with_world(|w| w.fans_to_tick(dim)).unwrap_or_default();
     if fans.is_empty() {
         return;
     }
     let recipes = ensure_recipes(game);
+    // Item entities' progress, kept for those still in a current this tick.
+    let mut kept = std::collections::HashMap::new();
+    let mut old = with_world(|w| std::mem::take(&mut w.dims[dim].item_fan)).unwrap_or_default();
     for pos in fans {
         let Some((rebuild, speed, facing)) = with_world(|w| {
             let f = w.dims[dim].fans.get(&pos)?;
@@ -1872,6 +1875,7 @@ fn tick_fans(game: &mut Game<'_>, dim: usize) {
         if speed == 0.0 || !recipes {
             continue;
         }
+        fan_on_items(game, dimension, dim, pos, &mut old, &mut kept);
         let handlers = with_world(|w| w.dims[dim].fans.get(&pos).map(|f| f.handlers.clone()))
             .flatten()
             .unwrap_or_default();
@@ -1882,6 +1886,135 @@ fn tick_fans(game: &mut Game<'_>, dim: usize) {
             fan_on_depot(game, dim, at, kind);
             fan_on_belt(game, dim, at, kind);
         }
+    }
+    with_world(|w| w.dims[dim].item_fan = kept);
+}
+
+/// `AirCurrent.tickAffectedEntities` for items: those its search caught (every 5 ticks) and still
+/// in its box are pushed along the current, and processed by the type at their distance
+/// (`FanProcessing.applyProcessing`): the first result replaces the stack, the others are
+/// dropped beside it with its motion, none discards it.
+fn fan_on_items(
+    game: &mut Game<'_>,
+    dimension: &str,
+    dim: usize,
+    pos: [i32; 3],
+    old: &mut std::collections::HashMap<u32, create_engine::fan::Progress>,
+    kept: &mut std::collections::HashMap<u32, create_engine::fan::Progress>,
+) {
+    use create_engine::{fan, processing};
+    let Some((facing, speed, current, search)) = with_world(|w| {
+        let f = w.dims[dim].fans.get_mut(&pos)?;
+        let search = f.search_cooldown == 0;
+        f.search_cooldown = if search { 5 } else { f.search_cooldown - 1 };
+        Some((f.facing?, f.speed, f.current.clone(), search))
+    })
+    .flatten() else {
+        return;
+    };
+    let Some((lo, hi)) = fan::bounds(pos, facing, current.max) else {
+        return;
+    };
+    let mut items = Vec::new();
+    game.native_items_in(dimension, lo, hi, |id, stack, at, v| {
+        items.push((id, stack.item.to_string(), stack.count, at, *v));
+    });
+    let caught: Vec<u32> = if search {
+        let ids: Vec<u32> = items.iter().map(|i| i.0).collect();
+        with_world(|w| {
+            if let Some(f) = w.dims[dim].fans.get_mut(&pos) {
+                f.caught = ids.clone();
+            }
+        });
+        ids
+    } else {
+        with_world(|w| w.dims[dim].fans.get(&pos).map(|f| f.caught.clone()))
+            .flatten()
+            .unwrap_or_default()
+    };
+    if items.is_empty() {
+        return;
+    }
+    let flow = if current.pushing {
+        facing
+    } else {
+        facing.opposite()
+    };
+    let centre = [
+        f64::from(pos[0]) + 0.5,
+        f64::from(pos[1]) + 0.5,
+        f64::from(pos[2]) + 0.5,
+    ];
+    let max = |i: &str| game.items().get(i).map_or(64, |x| x.max_stack).clamp(1, 64) as u8;
+    let mut rng =
+        processing::Rng::new(game.world.game_time as u64 ^ (pos[0] as u64) << 16 ^ pos[2] as u64);
+    // id → (motion, the stack it becomes when processed: None to discard).
+    let mut changes: std::collections::HashMap<u32, ([f64; 3], Option<Option<(String, u8)>>)> =
+        Default::default();
+    let mut spawn = Vec::new();
+    for (id, item, count, at, v) in items {
+        if !caught.contains(&id) {
+            continue;
+        }
+        let distance = ((at[0] - centre[0]).powi(2)
+            + (at[1] - centre[1]).powi(2)
+            + (at[2] - centre[2]).powi(2))
+        .sqrt();
+        let motion = fan::push(flow, speed, current.max, distance, v);
+        let mut result = None;
+        if let Some(kind) = current.type_at(fan::aligned_distance(at, pos, facing) as f32) {
+            let mut p = kept
+                .remove(&id)
+                .or_else(|| old.remove(&id))
+                .unwrap_or_default();
+            let fire_resistant = game.items().get(&item).is_some_and(|i| i.fire_resistant);
+            let count = count.min(255) as u8;
+            let done = RECIPES.with_borrow(|r| {
+                let r = r.as_ref()?;
+                let can = fan::can_process(kind, &item, fire_resistant, r.fan());
+                if !fan::entity_can(&p, kind, can)
+                    || !fan::advance_entity(&mut p, kind, u32::from(count))
+                {
+                    return None;
+                }
+                fan::process(kind, &item, count, r.fan(), max, &mut rng)
+            });
+            kept.insert(id, p);
+            if let Some(mut stacks) = done {
+                if stacks.is_empty() {
+                    result = Some(None);
+                } else {
+                    let first = stacks.remove(0);
+                    for s in stacks {
+                        spawn.push((at, motion, s));
+                    }
+                    result = Some(Some(first));
+                }
+            }
+        }
+        changes.insert(id, (motion, result));
+    }
+    game.native_items_in(dimension, lo, hi, |id, stack, _, v| {
+        let Some((motion, result)) = changes.get(&id) else {
+            return;
+        };
+        *v = *motion;
+        match result {
+            Some(Some((item, count))) => {
+                stack.item = item.as_str().into();
+                stack.count = u32::from(*count);
+                stack.damage = 0;
+                stack.extra = None;
+            }
+            Some(None) => stack.count = 0,
+            None => {}
+        }
+    });
+    for (at, v, (item, count)) in spawn {
+        game.native_run_command(&format!(
+            "summon minecraft:item {} {} {} {{Item:{{id:'{item}',count:{count}}},Motion:[{}d,{}d,{}d]}}",
+            at[0], at[1], at[2], v[0], v[1], v[2]
+        ));
     }
 }
 
