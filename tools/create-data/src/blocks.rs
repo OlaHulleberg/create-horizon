@@ -497,6 +497,15 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 ("powered", bools),
             ]),
         ),
+        // GaugeBlock (DirectionalAxisKineticBlock, `SharedProperties::wooden`): facing and its
+        // shaft's axis; AllShapes.GAUGE_SHAPE_UP to its facing (GaugeShaper's quarter turn for
+        // `axis_along_first` is not kept: content shapes select by one property). The base is
+        // its model; shaft, heads and dials are parts.
+        "speedometer" | "stressometer" => (
+            "minecraft:stripped_spruce_wood",
+            Some(by_facing(&GAUGE)),
+            own(&[("axis_along_first", bools), ("facing", facing)]),
+        ),
         // GantryCarriageBlock (DirectionalAxisKineticBlock): a full block of stone's properties.
         "gantry_carriage" => (
             "minecraft:stone",
@@ -1013,6 +1022,19 @@ pub const PARTIALS: [(&str, &str, &str); 34] = [
         "create:block/deployer/hand_holding",
         "south",
     ),
+    // GaugeRenderer: a head and a dial per shown face, `rotateBufferTowards` (0° for east);
+    // the dial's needle turned about its pivot by the glue.
+    (
+        "part_gauge_head_speed",
+        "create:block/gauge/speedometer/head",
+        "east",
+    ),
+    (
+        "part_gauge_head_stress",
+        "create:block/gauge/stressometer/head",
+        "east",
+    ),
+    ("part_gauge_dial", "create:block/gauge/dial", "east"),
     ("part_fluid_water", "create:block/part_fluid_water", "up"),
     ("part_fluid_lava", "create:block/part_fluid_lava", "up"),
     ("part_fluid_honey", "create:block/part_fluid_honey", "up"),

@@ -364,6 +364,10 @@ struct Node {
     /// The speed its network turns it at, overstressed or not (`getTheoreticalSpeed`).
     theoretical: f32,
     overstressed: bool,
+    /// The network's stress and capacity at the last solve (`KineticBlockEntity.stress`,
+    /// `capacity`).
+    stress: f32,
+    capacity: f32,
     live: bool,
     /// Set or replaced since the last solve: reported even when its speed is unchanged, so the
     /// game shows every part (a still one too).
@@ -438,6 +442,8 @@ impl Kinetics {
             speed: 0.0,
             theoretical: 0.0,
             overstressed: false,
+            stress: 0.0,
+            capacity: 0.0,
             live: true,
             fresh: true,
         };
@@ -484,6 +490,16 @@ impl Kinetics {
             .iter()
             .filter(|n| n.live)
             .map(|n| (n.pos, n.sub, n.speed, n.overstressed))
+    }
+
+    /// A part's theoretical speed, its network's stress and capacity, and whether it is
+    /// overstressed, as of the last solve (what a stressometer reads).
+    pub fn network(&self, pos: [i32; 3], sub: u8) -> Option<(f32, f32, f32, bool)> {
+        let id = *self.at.get(&pos)?.get(sub as usize)?;
+        (id != NONE).then(|| {
+            let n = &self.nodes[id as usize];
+            (n.theoretical, n.stress, n.capacity, n.overstressed)
+        })
     }
 
     pub fn speed(&self, pos: [i32; 3], sub: u8) -> Option<f32> {
@@ -793,6 +809,8 @@ impl Kinetics {
                 let turned = theoretical(self, id);
                 let shown = if overstressed { 0.0 } else { turned };
                 let n = &mut self.nodes[id as usize];
+                n.stress = stress;
+                n.capacity = capacity;
                 // Create calls `onSpeedChanged` when the theoretical speed changes too, shown or
                 // not (`RotationPropagator` sets it on overstressed networks as well).
                 if n.fresh

@@ -42,6 +42,10 @@ pub enum Model {
     DrillHead(Dir),
     MixerPole,
     MixerHead,
+    /// A gauge's head on one face (`AllPartialModels.GAUGE_HEAD_SPEED` / `_STRESS`), and its
+    /// dial (`GAUGE_DIAL`), turned to that face; the dial's needle is posed by the glue.
+    GaugeHead(Dir, crate::gauge::Kind),
+    GaugeDial(Dir),
 }
 
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
@@ -270,6 +274,32 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 ]
             })
             .unwrap_or_default(),
+        // GaugeRenderer (a ShaftRenderer): Create's shaft on its axis, then each shown face's
+        // head (slots 1, 2) and dial at rest (slots 3, 4).
+        Block::Speedometer | Block::Stressometer => s
+            .facing
+            .map(|f| {
+                let axis = crate::parts::directional_axis(f, s.along_first);
+                let kind = if block == Block::Speedometer {
+                    crate::gauge::Kind::Speed
+                } else {
+                    crate::gauge::Kind::Stress
+                };
+                let mut v = vec![own(axis, Model::Shaft(axis))];
+                for (i, face) in crate::gauge::dial_faces(f, axis).enumerate() {
+                    let still = |slot: u8, model: Model| Draw {
+                        slot,
+                        model,
+                        axis: Axis::Y,
+                        rpm: 0.0,
+                        phase: 0.0,
+                    };
+                    v.push(still(1 + i as u8, Model::GaugeHead(face, kind)));
+                    v.push(still(GAUGE_DIAL_SLOT + i as u8, Model::GaugeDial(face)));
+                }
+                v
+            })
+            .unwrap_or_default(),
         // PumpRenderer: its cog turns with it.
         Block::MechanicalPump => s
             .facing
@@ -375,6 +405,9 @@ pub fn key(pos: [i32; 3], slot: u8) -> u64 {
 /// The press head's slot among its block's parts.
 pub const PRESS_HEAD_SLOT: u8 = 1;
 
+/// A gauge's first dial slot (its second dial is the next).
+pub const GAUGE_DIAL_SLOT: u8 = 3;
+
 /// Slots a block may use, to clear them all.
 pub const SLOTS: u8 = 8;
 
@@ -430,6 +463,24 @@ mod tests {
         assert_eq!(d[0].model, Model::ShaftHalf(Dir::East));
         assert_eq!(d[1].model, Model::CrankHandle(Dir::East));
         assert!(d.iter().all(|x| x.axis == Axis::X && x.rpm == -32.0));
+    }
+
+    #[test]
+    fn a_gauge_shows_its_shaft_and_a_head_and_dial_on_each_side() {
+        let s = StateInfo {
+            facing: Some(Dir::Up),
+            along_first: true,
+            ..StateInfo::default()
+        };
+        let d = draws(Block::Speedometer, &s, [0, 0, 0], [16.0, 0.0]);
+        assert_eq!(d.len(), 5);
+        assert_eq!((d[0].model, d[0].rpm), (Model::Shaft(Axis::X), 16.0));
+        assert_eq!(
+            d[1].model,
+            Model::GaugeHead(Dir::North, crate::gauge::Kind::Speed)
+        );
+        assert_eq!((d[2].slot, d[2].model), (3, Model::GaugeDial(Dir::North)));
+        assert_eq!((d[4].slot, d[4].model), (4, Model::GaugeDial(Dir::South)));
     }
 
     #[test]
