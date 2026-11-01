@@ -18,6 +18,8 @@ pub struct StateInfo {
     /// A latch's `powering` and `powered_side`.
     pub powering: bool,
     pub powered_side: bool,
+    /// `DirectionalAxisKineticBlock.AXIS_ALONG_FIRST_COORDINATE`.
+    pub along_first: bool,
     /// A blaze burner's `blaze` (heat level).
     pub heat: Option<crate::fan::Heat>,
 }
@@ -54,6 +56,7 @@ impl StateInfo {
                 "powered_side" => s.powered_side = v == "true",
                 "top_shaft" => s.top_shaft = v == "true",
                 "bottom_shaft" => s.bottom_shaft = v == "true",
+                "axis_along_first" => s.along_first = v == "true",
                 "blaze" => {
                     use crate::fan::Heat;
                     s.heat = match v {
@@ -201,6 +204,21 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         Block::MechanicalPress => s
             .facing
             .map_or([None, None], |f| one(Part::shaft(f.axis()))),
+        // MechanicalPistonBlock (DirectionalAxisKineticBlock.getRotationAxis): a shaft across
+        // its facing, on the first or second other axis.
+        Block::MechanicalPiston | Block::StickyMechanicalPiston => {
+            s.facing.map_or([None, None], |f| {
+                let axis = match (f.axis(), s.along_first) {
+                    (Axis::X, true) => Axis::Y,
+                    (Axis::X, false) => Axis::Z,
+                    (Axis::Y, true) => Axis::X,
+                    (Axis::Y, false) => Axis::Z,
+                    (Axis::Z, true) => Axis::X,
+                    (Axis::Z, false) => Axis::Y,
+                };
+                one(Part::shaft(axis))
+            })
+        }
         // PumpBlock: a small cog on its facing's axis, no shaft.
         Block::MechanicalPump => s.facing.map_or([None, None], |f| {
             one(Part {
@@ -242,6 +260,7 @@ pub fn is_kinetic(block: Block) -> bool {
         powering: false,
         powered_side: false,
         heat: None,
+        along_first: false,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

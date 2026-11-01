@@ -167,6 +167,20 @@ pub struct Dimension {
     pub pumping: Vec<[i32; 3]>,
     pub pipe_checks: Vec<[i32; 3]>,
     pub pipes_changed: bool,
+    /// Mechanical pistons: those asked to start or stop (`assembleNextTick`, after a speed
+    /// change), and the moving ones with what they carry (the only ones that tick).
+    pub piston_checks: Vec<[i32; 3]>,
+    pub pistons: HashMap<[i32; 3], Moving>,
+}
+
+/// A piston's moving structure (`ControlledContraptionEntity` of a `PistonContraption`): its
+/// blocks (offset from the anchor at offset 0, state), how far it is out and can go.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Moving {
+    pub anchor: [i32; 3],
+    pub blocks: Vec<([i32; 3], u32)>,
+    pub offset: f32,
+    pub range: i32,
 }
 
 /// A mechanical pump: the ends behind and in front of it, found when its pipes changed, and the
@@ -585,6 +599,16 @@ impl CreateWorld {
                     .is_some_and(|(b, _)| b == Block::CrushingWheel)
             {
                 d.crusher_checks.push(pos);
+            }
+            if let Event::Speed { pos, .. } = *e
+                && d.states
+                    .get(&pos)
+                    .and_then(|&s| self.table.get(s))
+                    .is_some_and(|(b, _)| {
+                        matches!(b, Block::MechanicalPiston | Block::StickyMechanicalPiston)
+                    })
+            {
+                d.piston_checks.push(pos);
             }
             if let Event::Speed { pos, speed, .. } = *e
                 && d.pumps.contains_key(&pos)

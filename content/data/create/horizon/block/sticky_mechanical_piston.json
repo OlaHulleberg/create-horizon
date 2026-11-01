@@ -1,0 +1,27 @@
+{
+  "template": "minecraft:andesite",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0
+  },
+  "item": true,
+  "state_properties": {
+    "axis_along_first": [
+      "false",
+      "true"
+    ],
+    "facing": [
+      "up",
+      "down",
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "state": [
+      "retracted",
+      "moving",
+      "extended"
+    ]
+  }
+}

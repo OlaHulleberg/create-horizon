@@ -206,6 +206,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_burners(game, dim);
     tick_mixers(game, dim);
     tick_pipes(game, dimension, dim);
+    tick_pistons(game, dimension, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -1052,6 +1053,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
     }
     if channel == create_engine::tank::CHANNEL {
         tanks_from_server(game, data);
+        return;
+    }
+    if channel == PISTON_CHANNEL {
+        pistons_from_server(game, data);
         return;
     }
     if channel == CONTRAPTION_CHANNEL {
@@ -4874,6 +4879,282 @@ fn tick_windmills(game: &mut Game<'_>, dimension: &str, dim: usize) {
 }
 
 const CONTRAPTION_CHANNEL: &str = "create:contraption";
+const PISTON_CHANNEL: &str = "create:piston";
+
+/// A block's world position on a piston's structure at `offset` blocks out.
+fn piston_world(anchor: [i32; 3], local: [i32; 3], facing: Dir, offset: i32) -> [i32; 3] {
+    let o = facing.offset();
+    [0, 1, 2].map(|a| anchor[a] + local[a] + o[a] * offset)
+}
+
+/// Mechanical pistons (`LinearActuatorBlockEntity.tick`): a speed change makes a still piston
+/// assemble or a moving one stop (`assembleNextTick`); moving ones slide `getMovementSpeed`
+/// a tick and are put back at their end (`tryDisassemble`). Clients glide the structure.
+fn tick_pistons(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let mut checks =
+        with_world(|w| std::mem::take(&mut w.dims[dim].piston_checks)).unwrap_or_default();
+    let moving: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].pistons.keys().copied().collect()).unwrap_or_default();
+    if checks.is_empty() && moving.is_empty() {
+        return;
+    }
+    checks.sort();
+    checks.dedup();
+    for pos in checks {
+        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        let running = with_world(|w| w.dims[dim].pistons.contains_key(&pos)).unwrap_or(false);
+        match (running, speed != 0.0) {
+            (false, true) => assemble_piston(game, dimension, dim, pos, speed),
+            (true, false) => disassemble_piston(game, dimension, dim, pos),
+            (true, true) => send_piston(game, dimension, dim, pos),
+            _ => {}
+        }
+    }
+    for pos in moving {
+        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let Some(facing) =
+            with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten()
+        else {
+            continue;
+        };
+        let end = with_world(|w| {
+            let m = w.dims[dim].pistons.get_mut(&pos)?;
+            m.offset += create_engine::piston::movement(speed, facing, m.offset, m.range);
+            Some(m.offset <= 0.0 || m.offset >= m.range as f32)
+        })
+        .flatten();
+        if end == Some(true) {
+            disassemble_piston(game, dimension, dim, pos);
+        }
+    }
+}
+
+/// `MechanicalPistonBlockEntity.assemble`: the head, poles and structure leave the world.
+fn assemble_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], speed: f32) {
+    use create_engine::piston::{self, PoleCell};
+    let registry = game.pack.assets.registry;
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    let Some((block, facing)) =
+        with_world(|w| w.table.get(state.0).map(|(b, i)| (b, i.facing))).flatten()
+    else {
+        return;
+    };
+    let Some(facing) = facing else {
+        return;
+    };
+    let extended = registry
+        .state(state)
+        .is_some_and(|s| s.properties.get("state").is_some_and(|v| v == "extended"));
+    let cell = |p: [i32; 3]| {
+        let s = game.world.block(p[0], p[1], p[2]);
+        match with_world(|w| w.table.get(s.0).map(|(b, i)| (b, i.facing))).flatten() {
+            Some((create_engine::Block::PistonExtensionPole, Some(f))) => PoleCell::Pole(f.axis()),
+            Some((create_engine::Block::MechanicalPistonHead, Some(f))) => PoleCell::Head(f),
+            _ => PoleCell::Other,
+        }
+    };
+    let Some(c) = piston::collect(pos, facing, extended, cell) else {
+        return;
+    };
+    let m = piston::movement(speed, facing, c.progress as f32, c.range);
+    let result = c.progress as f32 + m.signum() * 0.5;
+    if m == 0.0 || result <= 0.0 || result >= c.range as f32 {
+        return;
+    }
+    // The poles' and head's own states, then the structure in front (searched from the anchor,
+    // pushed the way it moves).
+    let sticky = block == create_engine::Block::StickyMechanicalPiston;
+    let head = state_with(
+        registry,
+        "create:mechanical_piston_head",
+        &[
+            ("facing", dir_name(facing)),
+            ("type", if sticky { "sticky" } else { "normal" }),
+        ],
+    );
+    let pole = state_with(
+        registry,
+        "create:piston_extension_pole",
+        &[("facing", dir_name(facing))],
+    );
+    let (Some(head), Some(pole)) = (head, pole) else {
+        return;
+    };
+    let pole_worlds: Vec<[i32; 3]> = c
+        .poles
+        .iter()
+        .map(|(l, _)| piston_world(c.anchor, *l, facing, c.progress))
+        .collect();
+    let forced = if m > 0.0 { facing } else { facing.opposite() };
+    let mut exclude = pole_worlds.clone();
+    exclude.push(pos);
+    let Ok(structure) = piston::gather(c.anchor, forced, &exclude, |p| contraption_found(game, p))
+    else {
+        return;
+    };
+    let o = facing.offset();
+    let mut blocks: Vec<([i32; 3], u32)> = c
+        .poles
+        .iter()
+        .map(|(l, is_head)| (*l, if *is_head { head.0 } else { pole.0 }))
+        .collect();
+    for (off, s) in &structure {
+        blocks.push(([0, 1, 2].map(|a| off[a] - o[a] * c.progress), *s));
+    }
+    // Off the world: everything but the piston itself.
+    let air = BlockStateId(0);
+    for (l, _) in &blocks {
+        let p = piston_world(c.anchor, *l, facing, c.progress);
+        if p != pos {
+            game.native_set_block(dimension, p, air, super::native_hooks::flags::UPDATE_ALL);
+        }
+    }
+    game.native_set_block_property(pos, "state", "moving");
+    with_world(|w| {
+        w.dims[dim].pistons.insert(
+            pos,
+            create_engine::world::Moving {
+                anchor: c.anchor,
+                blocks,
+                offset: c.progress as f32,
+                range: c.range,
+            },
+        )
+    });
+    send_piston(game, dimension, dim, pos);
+}
+
+/// `tryDisassemble`: the structure goes back into the world at the nearest whole offset; the
+/// piston is extended unless all the way in.
+fn disassemble_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+    let Some(m) = with_world(|w| w.dims[dim].pistons.remove(&pos)).flatten() else {
+        return;
+    };
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    let Some(facing) = with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten()
+    else {
+        return;
+    };
+    let grid = m.offset.round() as i32;
+    for (l, s) in &m.blocks {
+        let p = piston_world(m.anchor, *l, facing, grid);
+        if p == pos {
+            continue;
+        }
+        game.native_set_block(
+            dimension,
+            p,
+            BlockStateId(*s),
+            super::native_hooks::flags::UPDATE_ALL,
+        );
+    }
+    game.native_set_block_property(
+        pos,
+        "state",
+        if grid > 0 { "extended" } else { "retracted" },
+    );
+    let players = players_in(game, dimension);
+    let mut msg = Vec::new();
+    for v in pos {
+        msg.extend_from_slice(&v.to_le_bytes());
+    }
+    for p in players {
+        let _ = game.native_net_send_to_player(p, PISTON_CHANNEL, &msg);
+    }
+}
+
+/// A moving piston for clients: piston, anchor, facing, offset now, blocks a tick, then each
+/// block (offset from the anchor at offset 0, state: 16 bytes). Just the position: it stopped.
+fn send_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+    let Some(m) = with_world(|w| w.dims[dim].pistons.get(&pos).cloned()).flatten() else {
+        return;
+    };
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    let Some(facing) = with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten()
+    else {
+        return;
+    };
+    let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+    let per_tick = create_engine::piston::movement(speed, facing, m.offset, m.range);
+    let mut msg = Vec::new();
+    for v in pos.iter().chain(m.anchor.iter()) {
+        msg.extend_from_slice(&v.to_le_bytes());
+    }
+    msg.push(facing as u8);
+    msg.extend_from_slice(&m.offset.to_le_bytes());
+    msg.extend_from_slice(&per_tick.to_le_bytes());
+    let blocks = &m.blocks[..m.blocks.len().min((30_000 - 33) / 16)];
+    msg.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+    for (o, s) in blocks {
+        for v in o {
+            msg.extend_from_slice(&v.to_le_bytes());
+        }
+        msg.extend_from_slice(&s.to_le_bytes());
+    }
+    for p in players_in(game, dimension) {
+        let _ = game.native_net_send_to_player(p, PISTON_CHANNEL, &msg);
+    }
+}
+
+thread_local! {
+    /// Pistons' moving structures a client draws: their part model.
+    static PISTONS: RefCell<HashMap<[i32; 3], u32>> = RefCell::new(HashMap::new());
+}
+
+/// A piston's structure on the client: one part model gliding along the facing on the GPU from
+/// its offset now, at its speed (`ControlledContraptionEntity`'s motion).
+fn pistons_from_server(game: &mut Game<'_>, d: &[u8]) {
+    let i = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
+    if d.len() < 12 {
+        return;
+    }
+    let pos = [i(&d[0..4]), i(&d[4..8]), i(&d[8..12])];
+    let key = depot_key(pos, 221, 0);
+    if let Some(old) = PISTONS.with_borrow_mut(|c| c.remove(&pos)) {
+        game.native_part_clear(key);
+        game.native_part_model_free(old);
+    }
+    if d.len() < 37 {
+        return;
+    }
+    let anchor = [i(&d[12..16]), i(&d[16..20]), i(&d[20..24])];
+    let facing = Dir::ALL[usize::from(d[24].min(5))];
+    let f = |b: &[u8]| f32::from_le_bytes(b.try_into().unwrap());
+    let (offset, per_tick) = (f(&d[25..29]), f(&d[29..33]));
+    let n = u32::from_le_bytes(d[33..37].try_into().unwrap()) as usize;
+    let blocks: Vec<(BlockStateId, glam::Mat4)> = d[37..]
+        .chunks_exact(16)
+        .take(n)
+        .map(|r| {
+            let o = glam::Vec3::new(i(&r[0..4]) as f32, i(&r[4..8]) as f32, i(&r[8..12]) as f32);
+            (
+                BlockStateId(u32::from_le_bytes(r[12..16].try_into().unwrap())),
+                glam::Mat4::from_translation(o),
+            )
+        })
+        .collect();
+    let Some(model) = game.native_part_model_compound(&blocks) else {
+        return;
+    };
+    PISTONS.with_borrow_mut(|c| c.insert(pos, model));
+    let o = facing.offset().map(|v| v as f32);
+    let now = game.native_parts_seconds();
+    game.native_part_glide(
+        key,
+        model,
+        anchor,
+        0,
+        0.0,
+        0.0,
+        [o[0] * offset, o[1] * offset, o[2] * offset, now],
+        [
+            o[0] * per_tick * 20.0,
+            o[1] * per_tick * 20.0,
+            o[2] * per_tick * 20.0,
+        ],
+    );
+}
 
 /// A windmill's structure for clients: bearing, facing, then each block's offset and state (16
 /// bytes); none when it came apart.

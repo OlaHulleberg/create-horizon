@@ -443,6 +443,32 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // MechanicalPistonBlock (DirectionalAxisKineticBlock): facing, its shaft's axis
+        // (`axis_along_first`) and `state`; a full block here (Create's casing is 12px).
+        "mechanical_piston" | "sticky_mechanical_piston" => (
+            "minecraft:andesite",
+            None,
+            own(&[
+                ("axis_along_first", bools),
+                ("facing", facing),
+                ("state", &["retracted", "moving", "extended"]),
+            ]),
+        ),
+        // PistonExtensionPoleBlock: AllShapes.FOUR_VOXEL_POLE along its facing.
+        "piston_extension_pole" => (
+            "minecraft:andesite",
+            Some(by_facing(&[[6., 0., 6., 10., 16., 10.]])),
+            own(&[("facing", facing)]),
+        ),
+        // MechanicalPistonHeadBlock: its plate and the pole into it (vanilla's piston head).
+        "mechanical_piston_head" => (
+            "minecraft:andesite",
+            Some(by_facing(&[
+                [0., 12., 0., 16., 16., 16.],
+                [6., 0., 6., 10., 12., 10.],
+            ])),
+            own(&[("facing", facing), ("type", &["normal", "sticky"])]),
+        ),
         // FluidPipeBlock: a side open where it connects (the glue sets them,
         // `updateBlockState`); copper's properties; the core as its shape.
         "fluid_pipe" => (
