@@ -680,6 +680,15 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             Some(json!({ "property": "valid", "values": { "false": [], "true": [] } })),
             own(&[("facing", facing), ("valid", bools)]),
         ),
+        // CartAssemblerBlock.MinecartAnchorBlock: a plain block with HORIZONTAL_AXIS, stone's
+        // properties and an empty shape (`Shapes.empty()`: no outline, collision or occlusion;
+        // so not a solid render, letting light and sky through, as glass's template does). No
+        // item: only contraptions hold it.
+        "minecart_anchor" => (
+            "minecraft:glass",
+            Some(json!({ "property": "axis", "values": { "x": [], "z": [] } })),
+            own(&[("axis", &["x", "z"])]),
+        ),
         "hand_crank" => (
             "minecraft:heavy_core",
             Some(by_facing(&CRANK)),
@@ -760,7 +769,10 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         shapes,
         own,
         animated,
-        item: b.name != "belt" && b.name != "crushing_wheel_controller",
+        item: !matches!(
+            b.name.as_str(),
+            "belt" | "crushing_wheel_controller" | "minecart_anchor"
+        ),
     })
 }
 
