@@ -224,6 +224,14 @@ Brass tunnels splitting stacks cost nothing measurable (`benchmarks/create-p4b-*
 
 Signals cost no tick; frame p50 is 6% over the control, within budget and its run's spread (`benchmarks/create-p9s-*.json`). Headless proof: one straight track with stations at 0, 25 and 50 and signals at 15 and 35; a train assembled at the first and sent to the last stopped just before the signal at 15 while a second train stood assembled at 25 (after 15 s nothing at the last station; a screenshot shows it waiting by the signal); once the second was taken apart at its station the first went on and stood at the last (its bogey, slime and gold there). Engine tests: a red signal ahead, a green one, one beyond the stop, the other way; a train waits at the stop and keeps its destination.
 
+| Scenario (2026-11-01, Phase 9 curved track, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1784 ± 35 | 0.515 / 1.220 | 2.996 ± 0.085 | baseline |
+| curvetracks: 32 tracks in pairs (control) | 1992 ± 54 | 0.462 / 1.025 | 3.184 ± 0.089 | control |
+| curves: the same pairs joined by 16 curves placed with the track item | 2048 ± 28 | 0.449 / 1.049 | 2.596 ± 0.098 | tick ≤ control + 0.25 ms, frame p50 ≤ control + 10% |
+
+Curved track (`track.rs` placement rules, `track_curves.rs` the curves at their tracks, `track_render.rs` after `SegmentAngles`): the track item's first click on a track picks it (`TrackBlockItem.select`; a junction refuses), the second, on a track or where a new one goes, joins them as `tryConnect` allows, laying the straight runs and marking both ends `turn` (`HAS_BE`); a failure's `track.<key>` message shows on the action bar; each curve is one part model of Create's tie and rail partials, baked once and drawn on the GPU at its first track; curves are saved with the column (`track_curves`) and a track broken takes its curves, the other end losing `turn` (`benchmarks/create-p9curves-*.json`: no measurable cost). Proven headless: an east-west and a north-south track 8 apart joined into a quarter turn (screenshot), the same after quitting and relaunching, and breaking one end left the other a plain track. Not yet: trains running on curves (the engine's `graph.rs` is not wired to stations yet), the pick kept on the item and its glint, items a survival player spends, girders, slopes' smoothing (`tilt`), the hover preview, junctions from curves.
+
 | Scenario (2026-11-01, Phase 3 deployer as a fake player, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1792 ± 24 | 0.513 / 1.149 | 3.199 ± 0.134 | baseline |
