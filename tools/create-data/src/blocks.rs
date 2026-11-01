@@ -847,7 +847,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 31] = [
+pub const PARTIALS: [(&str, &str, &str); 34] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -954,6 +954,19 @@ pub const PARTIALS: [(&str, &str, &str); 31] = [
         "up",
     ),
     ("part_fluid_milk", "create:block/part_fluid_milk", "up"),
+    // A curved track's pieces (`TrackMaterial.TrackModelHolder`), placed by their own transforms
+    // (`BezierConnection.SegmentAngles`): drawn as they are, from their south-facing state.
+    ("part_track_tie", "create:block/track/tie", "south"),
+    (
+        "part_track_segment_left",
+        "create:block/track/segment_left",
+        "south",
+    ),
+    (
+        "part_track_segment_right",
+        "create:block/track/segment_right",
+        "south",
+    ),
 ];
 
 /// The unit-cube models of `part_fluid_*`: every face the fluid's still texture, water's

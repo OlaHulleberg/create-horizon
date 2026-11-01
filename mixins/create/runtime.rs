@@ -137,6 +137,7 @@ pub(super) fn chunk_load(
     let trains = trains_from_nbt(game, Game::native_chunk_data(chunk, "create"));
     let burners = burners_from_nbt(Game::native_chunk_data(chunk, "create"));
     let links = links_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let curves = curves_from_nbt(Game::native_chunk_data(chunk, "create"));
     let deployers = deployers_from_nbt(Game::native_chunk_data(chunk, "create"));
     let brass: Vec<([i32; 3], create_engine::tunnel::Brass)> = {
         use horizon_world::nbt::Tag;
@@ -205,6 +206,9 @@ pub(super) fn chunk_load(
         w.load_trains(dim, trains);
         w.load_burners(dim, burners.into_iter());
         w.load_links(dim, links.into_iter());
+        for c in curves {
+            w.dims[dim].track_curves.add(c);
+        }
         w.load_deployers(dim, deployers.into_iter());
         w.load_brass(dim, brass.into_iter());
         w.dims[dim].chassis_range.extend(ranges);
@@ -295,6 +299,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_pipes(game, dimension, dim);
     tick_pistons(game, dimension, dim);
     tick_trains(game, dimension, dim);
+    sync_curves(game, dimension, dim);
     tick_chutes(game, dim);
     tick_drills(game, dim);
     tick_saws(game, dim);
@@ -450,6 +455,15 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     })
     .unwrap_or_default();
     send_links(game, &[player], dim, &links);
+    let curves: Vec<_> = with_world(|w| {
+        let c = &w.dims[dim].track_curves;
+        c.at.keys()
+            .map(|p| (*p, c.drawn_from(*p)))
+            .filter(|(_, l)| !l.is_empty())
+            .collect()
+    })
+    .unwrap_or_default();
+    send_curves(game, &[player], &curves);
     let deployers: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].deployers.keys().copied().collect()).unwrap_or_default();
     send_deployers(game, &[player], dim, &deployers);
@@ -1782,6 +1796,8 @@ pub(super) fn chunk_data_save(
     let trains = with_world(|w| w.column_trains(dim, chunk[0], chunk[1])).unwrap_or_default();
     let burners = with_world(|w| w.column_burners(dim, chunk[0], chunk[1])).unwrap_or_default();
     let links = with_world(|w| w.column_links(dim, chunk[0], chunk[1])).unwrap_or_default();
+    let curves =
+        with_world(|w| w.dims[dim].track_curves.column(chunk[0], chunk[1])).unwrap_or_default();
     let deployers = with_world(|w| w.column_deployers(dim, chunk[0], chunk[1])).unwrap_or_default();
     let brass = with_world(|w| w.column_brass(dim, chunk[0], chunk[1])).unwrap_or_default();
     // Basins' tanks: x, y, z, then fluid (255: none) and amount for each of the four.
@@ -1831,6 +1847,7 @@ pub(super) fn chunk_data_save(
         && basins.is_empty()
         && brass.is_empty()
         && trains.is_empty()
+        && curves.is_empty()
     {
         data.remove(&"create".into());
         return;
@@ -1854,6 +1871,9 @@ pub(super) fn chunk_data_save(
     }
     if !links.is_empty() {
         own.insert("links".into(), links_to_nbt(&links));
+    }
+    if !curves.is_empty() {
+        own.insert("track_curves".into(), curves_to_nbt(&curves));
     }
     if !deployers.is_empty() {
         own.insert("deployers".into(), deployers_to_nbt(&deployers));
@@ -2114,6 +2134,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
     }
     if channel == create_engine::link::CHANNEL {
         links_from_server(game, data);
+        return;
+    }
+    if channel == create_engine::track_curves::CHANNEL {
+        curves_from_server(game, data);
         return;
     }
     if channel == VALUE {
@@ -3166,6 +3190,10 @@ pub(super) fn use_item_on(
 ) {
     // The face a placement that follows was clicked on (`BlockPlaceContext.getClickedFace`).
     CLICKED.set(Some((game.world.game_time, face)));
+    if &*stack.item == "create:track" {
+        use_track(game, pos, face, claimed);
+        return;
+    }
     if &*stack.item != "create:wrench" {
         return;
     }

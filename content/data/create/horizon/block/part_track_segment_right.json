@@ -1,0 +1,17 @@
+{
+  "template": "minecraft:stone",
+  "item": false,
+  "properties": {
+    "render_shape": "invisible"
+  },
+  "state_properties": {
+    "facing": [
+      "north",
+      "east",
+      "south",
+      "west",
+      "up",
+      "down"
+    ]
+  }
+}

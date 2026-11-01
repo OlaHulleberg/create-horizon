@@ -5,6 +5,7 @@ use super::create::*;
 use super::create_contraptions::*;
 use super::create_logistics::*;
 use create_engine::kinetics::{Axis, Dir};
+use create_engine::world::dimension_index;
 use horizon_world::registry::BlockStateId;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -504,6 +505,322 @@ pub(super) fn trains_from_nbt(
                 start: f(m[7]),
                 id: 0,
             })
+        })
+        .collect()
+}
+
+thread_local! {
+    /// The track each player picked first with the track item (`TRACK_CONNECTING_FROM`, kept
+    /// in Create on the item; here per player until used or cleared), with its dimension.
+    pub(super) static TRACK_FROM: RefCell<HashMap<u128, (String, create_engine::track::End)>> =
+        RefCell::new(HashMap::new());
+    /// Curves a client draws, by their first track block: their part models.
+    pub(super) static CURVE_MODELS: RefCell<HashMap<[i32; 3], Vec<u32>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// A block state of `name` with `props` changed, if the registry has it.
+fn state_with_props(
+    game: &Game<'_>,
+    base: BlockStateId,
+    props: &[(&str, &str)],
+) -> Option<BlockStateId> {
+    let registry = game.pack.assets.registry;
+    let mut s = registry.state(base)?.clone();
+    for (k, v) in props {
+        s.properties.insert((*k).to_owned(), (*v).to_owned());
+    }
+    registry.id(&s)
+}
+
+/// `TrackBlockItem.useOn` with a track in hand, on the server: the first click on a track picks
+/// it (`select`; a junction can't start a curve); the next, on another track or where a new
+/// one goes (`getPlacementState`), joins the two as `TrackPlacement.tryConnect` decides and lays
+/// the track (`placeTracks`); sneaking with a pick clears it. Create's message for a failure
+/// shows on the action bar. The items a survival player spends are not taken yet.
+pub(super) fn use_track(game: &mut Game<'_>, pos: [i32; 3], face: [i32; 3], claimed: &mut bool) {
+    use create_engine::track::{self, End, Request, TrackShape};
+    let Some(player) = game.native_acting_player() else {
+        return;
+    };
+    let (uuid, dimension) = (player.uuid, player.dimension.to_owned());
+    let Some(dim) = dimension_index(&dimension) else {
+        return;
+    };
+    let Some((_, look)) = game.aim() else {
+        return;
+    };
+    let registry = game.pack.assets.registry;
+    let here = game.world.block(pos[0], pos[1], pos[2]);
+    let shape_of = |id: BlockStateId| {
+        registry
+            .state(id)
+            .filter(|s| s.name == "create:track")
+            .and_then(|s| TrackShape::read(s.properties.get("shape")?))
+    };
+    let say = |game: &mut Game<'_>, key: &str| {
+        let line = horizon_client::text::Text::translate(&format!("create.{key}"), &[]);
+        game.native_action_bar(uuid, line);
+    };
+    let picked = TRACK_FROM
+        .with_borrow(|m| m.get(&uuid).cloned())
+        .filter(|(d, _)| *d == dimension)
+        .map(|(_, e)| e);
+    let Some(from) = picked else {
+        let Some(shape) = shape_of(here) else {
+            return;
+        };
+        *claimed = true;
+        if shape.is_junction() {
+            say(game, "track.junction_start");
+            return;
+        }
+        let end = End::select(pos, shape, look);
+        TRACK_FROM.with_borrow_mut(|m| m.insert(uuid, (dimension, end)));
+        return;
+    };
+    *claimed = true;
+    if game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
+        TRACK_FROM.with_borrow_mut(|m| m.remove(&uuid));
+        say(game, "track.selection_cleared");
+        return;
+    }
+    // The second end: the track clicked, else a new one where the click places it.
+    let (pos2, state2) = match shape_of(here) {
+        Some(_) => (pos, here),
+        None => {
+            let p = if game.res.behaviours().is_replaceable(here) {
+                pos
+            } else {
+                [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]]
+            };
+            let Some(base) = registry.default_state("create:track") else {
+                return;
+            };
+            let shape = TrackShape::for_placement(look, |_| false);
+            let Some(s) = state_with_props(game, base, &[("shape", shape.name())]) else {
+                return;
+            };
+            (p, s)
+        }
+    };
+    let Some(shape2) = shape_of(state2) else {
+        return;
+    };
+    let state1 = game.world.block(from.pos[0], from.pos[1], from.pos[2]);
+    let info = track::try_connect(
+        from,
+        End::select(pos2, shape2, look),
+        Request {
+            original_present: shape_of(state1).is_some(),
+            second_tilted: false,
+            max_length: track::MAX_PLACEMENT_LENGTH,
+            maximise_turn: false,
+            preview: false,
+        },
+    );
+    if let Some(m) = info.message {
+        say(game, &format!("track.{}", m.key()));
+    }
+    if !info.valid {
+        return;
+    }
+    TRACK_FROM.with_borrow_mut(|m| m.remove(&uuid));
+    // `placeTracks`: each end's state (a T junction's straight part) along its run.
+    for (i, state) in [state1, state2].into_iter().enumerate() {
+        let shape = match shape_of(state).map(TrackShape::name) {
+            Some("te" | "tw") => "xo",
+            Some("tn" | "ts") => "zo",
+            Some(other) => other,
+            None => continue,
+        };
+        let Some(place) = state_with_props(game, state, &[("shape", shape), ("turn", "false")])
+        else {
+            continue;
+        };
+        for p in info.straight(i).collect::<Vec<_>>() {
+            let at = game.world.block(p[0], p[1], p[2]);
+            if game.res.behaviours().is_replaceable(at) || shape_of(at).is_some() {
+                game.native_set_block(&dimension, p, place, super::native_hooks::flags::UPDATE_ALL);
+            }
+        }
+    }
+    let Some(curve) = info.curve.as_ref() else {
+        return;
+    };
+    for (t, state) in info.targets.into_iter().zip([state1, state2]) {
+        let at = game.world.block(t[0], t[1], t[2]);
+        let base = if shape_of(at).is_some() { at } else { state };
+        if let Some(s) = state_with_props(game, base, &[("turn", "true")]) {
+            game.native_set_block(&dimension, t, s, super::native_hooks::flags::UPDATE_ALL);
+        }
+    }
+    let saved = create_engine::track_curves::Saved {
+        from: info.targets[0],
+        to: info.targets[1],
+        starts: curve.starts,
+        axes: curve.axes,
+        normals: curve.normals,
+    };
+    with_world(|w| {
+        w.dims[dim].track_curves.add(saved);
+        w.mark_unsaved(dim, saved.from);
+        w.mark_unsaved(dim, saved.to);
+    });
+}
+
+/// Curves that changed since the last tick: a track left with none is no longer `turn`
+/// (`HAS_BE`), and players are sent what each block draws now.
+pub(super) fn sync_curves(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let Some(changed) = with_world(|w| {
+        let c = &mut w.dims[dim].track_curves.changed;
+        if c.is_empty() {
+            return Vec::new();
+        }
+        let mut c = std::mem::take(c);
+        c.sort();
+        c.dedup();
+        c
+    }) else {
+        return;
+    };
+    if changed.is_empty() {
+        return;
+    }
+    let registry = game.pack.assets.registry;
+    let mut shown = Vec::with_capacity(changed.len());
+    for pos in changed {
+        let curves = with_world(|w| w.dims[dim].track_curves.drawn_from(pos)).unwrap_or_default();
+        let none = with_world(|w| !w.dims[dim].track_curves.at.contains_key(&pos)).unwrap_or(true);
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let turned = registry.state(state).is_some_and(|s| {
+            s.name == "create:track" && s.properties.get("turn").map(String::as_str) == Some("true")
+        });
+        if none && turned {
+            if let Some(s) = state_with_props(game, state, &[("turn", "false")]) {
+                game.native_set_block(dimension, pos, s, super::native_hooks::flags::UPDATE_ALL);
+            }
+        }
+        shown.push((pos, curves));
+    }
+    let players = players_in(game, dimension);
+    send_curves(game, &players, &shown);
+}
+
+pub(super) fn send_curves(
+    game: &mut Game<'_>,
+    players: &[u128],
+    shown: &[([i32; 3], Vec<create_engine::track_curves::Saved>)],
+) {
+    if shown.is_empty() {
+        return;
+    }
+    let data = create_engine::track_curves::encode(shown);
+    for &p in players {
+        let _ = game.native_net_send_to_player(p, create_engine::track_curves::CHANNEL, &data);
+    }
+}
+
+/// Curves on the client (`TrackRenderer.renderBezierTurn`): each block's curves are one part
+/// model of ties and rails, baked when they change (drawn on the GPU, never re-uploaded while
+/// they stay).
+pub(super) fn curves_from_server(game: &mut Game<'_>, data: &[u8]) {
+    use create_engine::track_render::{Piece, segment_parts};
+    let registry = game.pack.assets.registry;
+    let part = |name: &str| {
+        let d = registry.default_state(name)?;
+        let mut s = registry.state(d)?.clone();
+        s.properties.insert("facing".to_owned(), "south".to_owned());
+        registry.id(&s)
+    };
+    let (Some(tie), Some(left), Some(right)) = (
+        part("create:part_track_tie"),
+        part("create:part_track_segment_left"),
+        part("create:part_track_segment_right"),
+    ) else {
+        return;
+    };
+    for (pos, curves) in create_engine::track_curves::decode(data) {
+        if let Some(old) = CURVE_MODELS.with_borrow_mut(|m| m.remove(&pos)) {
+            for (k, model) in old.into_iter().enumerate() {
+                game.native_part_clear(depot_key(pos, 120, k as u8));
+                game.native_part_model_free(model);
+            }
+        }
+        let mut models = Vec::new();
+        for (k, s) in curves.iter().enumerate() {
+            let blocks: Vec<(BlockStateId, glam::Mat4)> = segment_parts(&s.curve(), pos)
+                .into_iter()
+                .map(|(piece, m)| {
+                    let state = match piece {
+                        Piece::Tie => tie,
+                        Piece::RailLeft => left,
+                        Piece::RailRight => right,
+                    };
+                    (state, glam::Mat4::from_cols_array_2d(&m))
+                })
+                .collect();
+            let Some(model) = game.native_part_model_compound(&blocks) else {
+                continue;
+            };
+            game.native_part_set(depot_key(pos, 120, k as u8), model, pos, 0, 0.0, 0.0);
+            models.push(model);
+        }
+        if !models.is_empty() {
+            CURVE_MODELS.with_borrow_mut(|m| m.insert(pos, models));
+        }
+    }
+}
+
+/// A column's curves as saved (`TrackBlockEntity.write`'s `Connections`): ends and numbers.
+pub(super) fn curves_to_nbt(
+    list: &[create_engine::track_curves::Saved],
+) -> horizon_world::nbt::Tag {
+    use horizon_world::nbt::{Compound, Tag};
+    Tag::List(
+        list.iter()
+            .map(|s| {
+                let (i, f) = s.numbers();
+                let mut c = Compound::new();
+                c.insert("ends".into(), Tag::IntArray(i.to_vec()));
+                c.insert(
+                    "curve".into(),
+                    Tag::List(f.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+                );
+                Tag::Compound(c)
+            })
+            .collect(),
+    )
+}
+
+pub(super) fn curves_from_nbt(
+    data: Option<&horizon_world::nbt::Compound>,
+) -> Vec<create_engine::track_curves::Saved> {
+    use horizon_world::nbt::Tag;
+    let Some(Tag::List(list)) = data.and_then(|d| d.get(&"track_curves".into())) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|t| {
+            let Tag::Compound(c) = t else { return None };
+            let Some(Tag::IntArray(i)) = c.get(&"ends".into()) else {
+                return None;
+            };
+            let Some(Tag::List(f)) = c.get(&"curve".into()) else {
+                return None;
+            };
+            let i: [i32; 6] = i.as_slice().try_into().ok()?;
+            let f: Vec<f64> = f
+                .iter()
+                .filter_map(|v| match v {
+                    Tag::Double(b) => Some(f64::from_bits(*b)),
+                    _ => None,
+                })
+                .collect();
+            Some(create_engine::track_curves::Saved::from_numbers(
+                i,
+                f.try_into().ok()?,
+            ))
         })
         .collect()
 }

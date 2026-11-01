@@ -89,7 +89,7 @@ pub mod fluid {
     impl FluidState { pub fn kind(self) -> FluidKind { self.0 } pub fn is_source(self) -> bool { self.0 != FluidKind::Empty } }
 }
 pub mod nbt {
-    #[derive(Clone, PartialEq, Debug)] pub enum Tag { IntArray(Vec<i32>), Compound(Compound), List(Vec<Tag>), String(JavaString) }
+    #[derive(Clone, PartialEq, Debug)] pub enum Tag { IntArray(Vec<i32>), Compound(Compound), List(Vec<Tag>), String(JavaString), Double(u64) }
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)] pub struct JavaString(String);
     impl From<&str> for JavaString { fn from(s: &str) -> Self { JavaString(s.to_owned()) } }
     impl JavaString { pub fn to_string_lossy(&self) -> String { self.0.clone() } }
@@ -162,7 +162,10 @@ pub mod hud {
 }
 pub mod text {
     pub struct Text(pub String);
-    impl Text { pub fn literal(s: impl Into<String>) -> Self { Text(s.into()) } }
+    impl Text {
+        pub fn literal(s: impl Into<String>) -> Self { Text(s.into()) }
+        pub fn translate(key: &str, args: &[Text]) -> Self { let _ = args; Text(key.into()) }
+    }
 }
 pub mod chunk {
     pub struct Blocks(pub Vec<u32>);
@@ -428,6 +431,7 @@ pub mod native_hooks {
             true
         }
         pub fn native_feedback(&mut self, line: horizon_client::text::Text) { self.said.push(line.0); }
+        pub fn native_action_bar(&mut self, uuid: u128, line: horizon_client::text::Text) -> bool { let _ = uuid; self.said.push(line.0); true }
         pub fn native_run_command(&mut self, line: &str) -> bool { self.said.push(line.to_owned()); true }
     }
 }

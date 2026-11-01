@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/track/tie",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/track/tie",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/track/tie"
+    },
+    "facing=west": {
+      "model": "create:block/track/tie",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/track/tie",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/track/tie",
+      "x": 270
+    }
+  }
+}
