@@ -1,0 +1,50 @@
+{
+  "template": "minecraft:gold_block",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:gold_block"
+  },
+  "item": true,
+  "components": {
+    "minecraft:max_stack_size": 1
+  },
+  "shapes": {
+    "property": "flame_type",
+    "values": {
+      "regular": [
+        [
+          0.0625,
+          0.0,
+          0.0625,
+          0.9375,
+          0.875,
+          0.9375
+        ]
+      ],
+      "soul": [
+        [
+          0.0625,
+          0.0,
+          0.0625,
+          0.9375,
+          0.875,
+          0.9375
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "flame_type": [
+      "regular",
+      "soul"
+    ]
+  }
+}

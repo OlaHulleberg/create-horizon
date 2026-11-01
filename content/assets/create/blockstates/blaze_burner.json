@@ -1,0 +1,165 @@
+{
+  "multipart": [
+    {
+      "apply": {
+        "model": "create:block/blaze_burner/block"
+      }
+    },
+    {
+      "when": {
+        "blaze": "smouldering",
+        "facing": "north"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/inert"
+      }
+    },
+    {
+      "when": {
+        "blaze": "smouldering",
+        "facing": "east"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/inert",
+        "y": 90
+      }
+    },
+    {
+      "when": {
+        "blaze": "smouldering",
+        "facing": "south"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/inert",
+        "y": 180
+      }
+    },
+    {
+      "when": {
+        "blaze": "smouldering",
+        "facing": "west"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/inert",
+        "y": 270
+      }
+    },
+    {
+      "when": {
+        "blaze": "fading",
+        "facing": "north"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/idle"
+      }
+    },
+    {
+      "when": {
+        "blaze": "fading",
+        "facing": "east"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/idle",
+        "y": 90
+      }
+    },
+    {
+      "when": {
+        "blaze": "fading",
+        "facing": "south"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/idle",
+        "y": 180
+      }
+    },
+    {
+      "when": {
+        "blaze": "fading",
+        "facing": "west"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/idle",
+        "y": 270
+      }
+    },
+    {
+      "when": {
+        "blaze": "kindled",
+        "facing": "north"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/idle"
+      }
+    },
+    {
+      "when": {
+        "blaze": "kindled",
+        "facing": "east"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/idle",
+        "y": 90
+      }
+    },
+    {
+      "when": {
+        "blaze": "kindled",
+        "facing": "south"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/idle",
+        "y": 180
+      }
+    },
+    {
+      "when": {
+        "blaze": "kindled",
+        "facing": "west"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/idle",
+        "y": 270
+      }
+    },
+    {
+      "when": {
+        "blaze": "seething",
+        "facing": "north"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/super"
+      }
+    },
+    {
+      "when": {
+        "blaze": "seething",
+        "facing": "east"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/super",
+        "y": 90
+      }
+    },
+    {
+      "when": {
+        "blaze": "seething",
+        "facing": "south"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/super",
+        "y": 180
+      }
+    },
+    {
+      "when": {
+        "blaze": "seething",
+        "facing": "west"
+      },
+      "apply": {
+        "model": "create:block/blaze_burner/blaze/super",
+        "y": 270
+      }
+    }
+  ]
+}

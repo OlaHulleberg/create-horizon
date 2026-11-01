@@ -128,6 +128,7 @@ pub(super) fn chunk_load(
     let tanks = tanks_from_nbt(Game::native_chunk_data(chunk, "create"));
     let windmills = windmills_from_nbt(game, Game::native_chunk_data(chunk, "create"));
     let crushers = crushers_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let burners = burners_from_nbt(Game::native_chunk_data(chunk, "create"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.load_settings(dim, saved.into_iter());
@@ -135,6 +136,7 @@ pub(super) fn chunk_load(
         w.load_tanks(dim, tanks.into_iter());
         w.load_windmills(dim, windmills.into_iter());
         w.load_crushers(dim, crushers.into_iter());
+        w.load_burners(dim, burners.into_iter());
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
                 && states::index(single).is_none()
@@ -201,6 +203,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_millstones(game, dim);
     tick_fans(game, dimension, dim);
     tick_crushers(game, dimension, dim);
+    tick_burners(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -409,6 +412,10 @@ fn right_click_inner(game: &mut Game<'_>, pos: [i32; 3], face: [i32; 3], cancele
     }
     if block == Some(create_engine::Block::FluidTank) {
         use_tank(game, dim, pos, canceled);
+        return;
+    }
+    if block == Some(create_engine::Block::BlazeBurner) {
+        use_burner(game, dim, pos, canceled);
         return;
     }
     if block == Some(create_engine::Block::WindmillBearing) {
@@ -628,6 +635,24 @@ fn crushers_from_nbt(
         .collect()
 }
 
+fn burners_from_nbt(
+    data: Option<&horizon_world::nbt::Compound>,
+) -> Vec<([i32; 3], create_engine::burner::Burner)> {
+    let Some(horizon_world::nbt::Tag::IntArray(v)) = data.and_then(|d| d.get(&"burners".into()))
+    else {
+        return Vec::new();
+    };
+    v.chunks_exact(5)
+        .map(|c| {
+            let b = create_engine::burner::Burner {
+                fuel: create_engine::burner::Fuel::from_index(c[3]),
+                remaining: c[4],
+            };
+            ([c[0], c[1], c[2]], b)
+        })
+        .collect()
+}
+
 fn belts_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], create_engine::belt::Inventory)> {
@@ -686,11 +711,13 @@ pub(super) fn chunk_data_save(
     let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
     let windmills = with_world(|w| w.column_windmills(dim, chunk[0], chunk[1])).unwrap_or_default();
     let crushers = with_world(|w| w.column_crushers(dim, chunk[0], chunk[1])).unwrap_or_default();
+    let burners = with_world(|w| w.column_burners(dim, chunk[0], chunk[1])).unwrap_or_default();
     if settings.is_empty()
         && belts.is_empty()
         && tanks.is_empty()
         && windmills.is_empty()
         && crushers.is_empty()
+        && burners.is_empty()
     {
         data.remove(&"create".into());
         return;
@@ -708,6 +735,14 @@ pub(super) fn chunk_data_save(
     }
     if !crushers.is_empty() {
         own.insert("crushers".into(), crushers_to_nbt(&crushers));
+    }
+    if !burners.is_empty() {
+        // x, y, z, fuel type, burn time left for each burner (`fuelLevel`, `burnTimeRemaining`).
+        let v = burners
+            .iter()
+            .flat_map(|(p, b)| [p[0], p[1], p[2], b.fuel.index(), b.remaining])
+            .collect();
+        own.insert("burners".into(), horizon_world::nbt::Tag::IntArray(v));
     }
     if !tanks.is_empty() {
         // x, y, z, fluid, amount for each tank (`FluidTankBlockEntity`'s `TankContent`).
@@ -1927,6 +1962,101 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
     .flatten();
     if let Some(f) = facing {
         game.native_set_block_property(pos, "facing", dir_name(f));
+    }
+}
+
+/// `BlazeBurnerBlock.useItemOn`: flint and steel lights an empty burner (a lit burner, no blaze);
+/// fuel goes to the blaze (`tryInsert` with a player's overflow), one used up outside creative
+/// (a lava bucket leaves its bucket).
+fn use_burner(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut bool) {
+    use create_engine::burner::Fuel;
+    use create_engine::fan::Heat;
+    let Some((held, _, plain)) = game.native_held() else {
+        return;
+    };
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    let Some((heat, facing)) =
+        with_world(|w| w.table.get(state.0).map(|(_, i)| (i.heat, i.facing))).flatten()
+    else {
+        return;
+    };
+    if heat == Some(Heat::None) {
+        if held == "minecraft:flint_and_steel" {
+            let facing = facing.map_or("north", dir_name);
+            if let Some(lit) = state_with(
+                game.pack.assets.registry,
+                "create:lit_blaze_burner",
+                &[("facing", facing)],
+            ) {
+                let dimension = game.dim.id().to_owned();
+                game.native_set_block(&dimension, pos, lit, super::native_hooks::flags::UPDATE_ALL);
+                *canceled = true;
+            }
+        }
+        return;
+    }
+    if !plain {
+        return;
+    }
+    let stack = horizon_client::items::ItemStack {
+        item: held.as_str().into(),
+        count: 1,
+        damage: 0,
+        extra: None,
+    };
+    let tagged = |t: &str| {
+        game.items()
+            .item_tags
+            .get(t)
+            .is_some_and(|m| m.contains(&held))
+    };
+    // A data map's superheating fuel (the blaze cake), the special tag; else a furnace fuel's
+    // burn time, the regular tag (as coal).
+    let (fuel, time) = if held == "create:blaze_cake" || tagged("create:blaze_burner_fuel/special")
+    {
+        (Fuel::Special, 3200)
+    } else {
+        let t = game.res.providers().burn_time(game.items(), &stack, false);
+        if t > 0 {
+            (Fuel::Normal, t)
+        } else if tagged("create:blaze_burner_fuel/regular") {
+            (Fuel::Normal, 1600)
+        } else {
+            return;
+        }
+    };
+    let Some(heat) = with_world(|w| {
+        w.fuel_burner(dim, pos, fuel, time, true)
+            .then(|| w.dims[dim].burners.get(&pos).map(|b| b.heat()))
+            .flatten()
+    })
+    .flatten() else {
+        return;
+    };
+    *canceled = true;
+    game.native_set_block_property(pos, "blaze", create_engine::burner::heat_name(heat));
+    if !game.creative {
+        let remainder = game.items().get(&held).and_then(|i| i.remainder.clone());
+        game.native_take_items(&held, 1);
+        if let Some(r) = remainder {
+            game.native_give_items(&r, 1);
+        }
+    }
+}
+
+/// Burning blaze burners (`BlazeBurnerBlockEntity.tick`): the fuel burns down; a changed heat is
+/// written to the block (`blaze`), which fans and basins read.
+fn tick_burners(game: &mut Game<'_>, dim: usize) {
+    let changed = with_world(|w| {
+        if w.dims[dim].burning.is_empty() {
+            Vec::new()
+        } else {
+            w.tick_burners(dim)
+        }
+    })
+    .unwrap_or_default();
+    for (pos, heat) in changed {
+        game.native_set_block_property(pos, "blaze", create_engine::burner::heat_name(heat));
     }
 }
 

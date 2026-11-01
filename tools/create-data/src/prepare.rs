@@ -218,7 +218,8 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
 
     let (mut recipes, mut skipped, mut copied) = (0, 0, 0);
     for (path, bytes) in &files {
-        if !kept(path) {
+        // Our own files (a blockstate we draw differently) stand over Create's.
+        if !kept(path) || ours.contains_key(path) {
             continue;
         }
         if path.starts_with("data/create/recipe/") {

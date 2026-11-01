@@ -126,9 +126,9 @@ extern crate self as horizon_client;
 pub mod game;
 pub mod items {
     #[derive(Clone)] pub struct ItemStack { pub item: std::sync::Arc<str>, pub count: u32, pub damage: u32, pub extra: Option<Box<()>> }
-    pub struct ItemInfo { pub max_stack: u32, pub fire_resistant: bool }
+    pub struct ItemInfo { pub max_stack: u32, pub fire_resistant: bool, pub remainder: Option<String> }
     pub struct Items { pub item_tags: std::collections::HashMap<String, std::collections::HashSet<String>> }
-    impl Items { pub fn get(&self, item: &str) -> Option<ItemInfo> { let _ = item; Some(ItemInfo { max_stack: 64, fire_resistant: false }) } }
+    impl Items { pub fn get(&self, item: &str) -> Option<ItemInfo> { let _ = item; Some(ItemInfo { max_stack: 64, fire_resistant: false, remainder: None }) } }
 }
 pub mod containers {
     pub struct ModBlockEntity { pub items: Vec<Option<crate::items::ItemStack>> }
@@ -231,6 +231,7 @@ pub mod native_hooks {
         }
         pub fn native_count_items(&mut self, item: &str) -> u32 { let _ = item; 0 }
         pub fn native_give_items(&mut self, item: &str, count: u32) -> u32 { let _ = item; count }
+        pub fn native_take_items(&mut self, item: &str, count: u32) -> u32 { let _ = item; count }
         pub fn native_fluid_flow(&self, dimension: &str, pos: [i32; 3]) -> Option<[f64; 3]> {
             let _ = (dimension, pos);
             Some([0.0, 0.0, 0.0])
@@ -412,7 +413,16 @@ impl AllFacts {
     /// Stone (state 1) is sturdy on every face; nothing else is.
     pub fn get(&self, state: BlockStateId) -> BlockFacts { BlockFacts { sturdy_full: if state.0 == 1 { 63 } else { 0 } } }
 }
+pub struct Providers;
+impl Providers {
+    /// Coal burns 1600 ticks; nothing else is fuel.
+    pub fn burn_time<T>(&self, items: T, stack: &horizon_client::items::ItemStack, fast: bool) -> i32 {
+        let _ = (items, fast);
+        if &*stack.item == "minecraft:coal" { 1600 } else { 0 }
+    }
+}
 impl Res {
+    pub fn providers(&self) -> &Providers { &Providers }
     pub fn behaviours(&self) -> &Behaviours { &Behaviours }
     pub fn facts(&self) -> &AllFacts { &AllFacts }
 }

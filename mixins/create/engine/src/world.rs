@@ -149,6 +149,11 @@ pub struct Dimension {
     pub crushers: HashMap<[i32; 3], (crate::crusher::Crusher, f32)>,
     pub running_crushers: Vec<[i32; 3]>,
     crusher_saved: HashMap<[i32; 3], crate::crusher::Crusher>,
+    /// Blaze burners' fuel, the burning ones (the only ones that tick), and fuel saved with a
+    /// column waiting for its burner.
+    pub burners: HashMap<[i32; 3], crate::burner::Burner>,
+    pub burning: Vec<[i32; 3]>,
+    burner_saved: HashMap<[i32; 3], crate::burner::Burner>,
 }
 
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
@@ -183,6 +188,7 @@ fn has_state(block: Block) -> bool {
     matches!(
         block,
         Block::Depot
+            | Block::BlazeBurner
             | Block::CrushingWheelController
             | Block::Belt
             | Block::PoweredLatch
@@ -264,6 +270,13 @@ impl CreateWorld {
         }
         if block == Block::CrushingWheel {
             d.crusher_checks.push(pos);
+        }
+        if block == Block::BlazeBurner && !d.burners.contains_key(&pos) {
+            let b = d.burner_saved.remove(&pos).unwrap_or_default();
+            if b.burning() {
+                d.burning.push(pos);
+            }
+            d.burners.insert(pos, b);
         }
         if block == Block::CrushingWheelController && !d.crushers.contains_key(&pos) {
             let c = d.crusher_saved.remove(&pos).unwrap_or_default();
@@ -357,6 +370,10 @@ impl CreateWorld {
             if self.table.get(old).map(|(b, _)| b) == Some(Block::CrushingWheel) {
                 d.crusher_checks.push(pos);
             }
+            if d.burners.remove(&pos).is_some() {
+                d.burning.retain(|p| *p != pos);
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if d.crushers.remove(&pos).is_some() {
                 d.running_crushers.retain(|p| *p != pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
@@ -421,6 +438,10 @@ impl CreateWorld {
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.fans.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crushers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.burning.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.burner_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.running_crushers
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crusher_saved
@@ -902,6 +923,77 @@ impl CreateWorld {
             .iter()
             .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
             .map(|(p, w)| (*p, w.clone()))
+            .collect();
+        out.sort_by_key(|(p, _)| *p);
+        out
+    }
+
+    /// Fuel put in the burner at `pos` (`tryUpdateFuel`); true when it took it.
+    pub fn fuel_burner(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        fuel: crate::burner::Fuel,
+        time: i32,
+        overflow: bool,
+    ) -> bool {
+        let d = &mut self.dims[dim];
+        let Some(b) = d.burners.get_mut(&pos) else {
+            return false;
+        };
+        if !b.try_fuel(fuel, time, overflow) {
+            return false;
+        }
+        if !d.burning.contains(&pos) {
+            d.burning.push(pos);
+        }
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        true
+    }
+
+    /// One tick of the burning burners: those whose heat changed, with the new heat. A burner
+    /// whose fuel ran out leaves the list.
+    pub fn tick_burners(&mut self, dim: usize) -> Vec<([i32; 3], crate::fan::Heat)> {
+        let d = &mut self.dims[dim];
+        let mut changed = Vec::new();
+        let burners = &mut d.burners;
+        d.burning.retain(|pos| {
+            let Some(b) = burners.get_mut(pos) else {
+                return false;
+            };
+            let before = b.heat();
+            b.tick();
+            if b.heat() != before {
+                changed.push((*pos, b.heat()));
+            }
+            b.burning()
+        });
+        for (p, _) in &changed {
+            d.unsaved.push((p[0] >> 4, p[2] >> 4));
+        }
+        changed
+    }
+
+    pub fn load_burners(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], crate::burner::Burner)>,
+    ) {
+        self.dims[dim].burner_saved.extend(saved);
+    }
+
+    /// The burners of a column with fuel, to save.
+    pub fn column_burners(
+        &self,
+        dim: usize,
+        cx: i32,
+        cz: i32,
+    ) -> Vec<([i32; 3], crate::burner::Burner)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .burners
+            .iter()
+            .filter(|(p, b)| (p[0] >> 4, p[2] >> 4) == (cx, cz) && b.burning())
+            .map(|(p, b)| (*p, *b))
             .collect();
         out.sort_by_key(|(p, _)| *p);
         out
