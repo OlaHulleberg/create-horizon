@@ -956,21 +956,48 @@ impl CreateWorld {
     /// -256 and 256, never 0 (Create 5's scroll value; Create 6 sets it on a value board).
     /// Returns the new speed, or None when there is no motor there.
     pub fn scroll_motor(&mut self, dim: usize, pos: [i32; 3], steps: i32) -> Option<f32> {
-        let state = *self.dims[dim].states.get(&pos)?;
-        let (block, _) = self.table.get(state)?;
-        if block != Block::CreativeMotor || steps == 0 {
+        if steps == 0 {
             return None;
         }
-        let d = &mut self.dims[dim];
-        let old = d.settings.get(&pos).copied().unwrap_or_default().motor_rpm as i32;
-        let mut new = old;
+        let mut new = self.motor_setting(dim, pos)? as i32;
         for _ in 0..steps.unsigned_abs().min(512) {
             new += steps.signum();
             if new == 0 {
                 new += steps.signum();
             }
         }
-        let new = new.clamp(-256, 256) as f32;
+        self.set_motor(dim, pos, new.clamp(-256, 256) as f32)
+    }
+
+    /// The creative motor at `pos`'s speed setting, None when there is no motor there.
+    pub fn motor_setting(&self, dim: usize, pos: [i32; 3]) -> Option<f32> {
+        let state = *self.dims[dim].states.get(&pos)?;
+        let (block, _) = self.table.get(state)?;
+        (block == Block::CreativeMotor).then(|| {
+            self.dims[dim]
+                .settings
+                .get(&pos)
+                .copied()
+                .unwrap_or_default()
+                .motor_rpm
+        })
+    }
+
+    /// A player picks `s` on the creative motor's value board (`KineticScrollValueBehaviour`
+    /// with `between(-256, 256)`). Returns the new speed, or None when there is no motor there.
+    pub fn board_motor(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        s: crate::board::Settings,
+    ) -> Option<f32> {
+        self.motor_setting(dim, pos)?;
+        self.set_motor(dim, pos, crate::board::kinetic_value(s, 256) as f32)
+    }
+
+    fn set_motor(&mut self, dim: usize, pos: [i32; 3], rpm: f32) -> Option<f32> {
+        let state = *self.dims[dim].states.get(&pos)?;
+        let d = &mut self.dims[dim];
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         let old = d.settings.get(&pos).copied().unwrap_or_default();
         self.set_settings(
@@ -978,11 +1005,11 @@ impl CreateWorld {
             pos,
             state,
             Settings {
-                motor_rpm: new,
+                motor_rpm: rpm,
                 ..old
             },
         );
-        Some(new)
+        Some(rpm)
     }
 
     /// The settings of a column's blocks, to save with it: `(position, motor speed)`.
@@ -1814,6 +1841,17 @@ mod tests {
         assert_eq!(w.scroll_motor(0, [1, 64, 1], 1), Some(1.0));
         assert_eq!(w.scroll_motor(0, [1, 64, 1], 1000), Some(256.0));
         assert_eq!(w.scroll_motor(0, [2, 64, 1], 1), None, "no motor there");
+        // The value board: row 0 turns it counter to its axis, column 0 is speed 1.
+        use crate::board::Settings as Pick;
+        let pick = |row, value| Pick { row, value };
+        assert_eq!(w.board_motor(0, [1, 64, 1], pick(0, 0)), Some(-1.0));
+        assert_eq!(w.motor_setting(0, [1, 64, 1]), Some(-1.0));
+        assert_eq!(w.board_motor(0, [1, 64, 1], pick(1, 256)), Some(256.0));
+        assert_eq!(
+            w.board_motor(0, [2, 64, 1], pick(1, 1)),
+            None,
+            "no motor there"
+        );
         assert_eq!(w.take_unsaved(0), [(0, 0)]);
         assert_eq!(w.column_settings(0, 0, 0), [([1, 64, 1], 256)]);
         // A reload brings the setting back before the motor is found.
