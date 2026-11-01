@@ -443,6 +443,29 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // BlazeBurnerBlock: its heat level and horizontal facing, gold's properties
+        // (SharedProperties.softMetal), AllShapes.HEATER_BLOCK_SHAPE; drawn by our multipart
+        // blockstate (`blaze_burner_states`). LitBlazeBurnerBlock: its flame instead.
+        "blaze_burner" => (
+            "minecraft:gold_block",
+            Some(by_property("blaze", HEATS, &[[1., 0., 1., 15., 14., 15.]])),
+            own(&[
+                ("blaze", HEATS),
+                ("facing", &["north", "south", "west", "east"]),
+            ]),
+        ),
+        "lit_blaze_burner" => (
+            "minecraft:gold_block",
+            Some(by_property(
+                "flame_type",
+                &["regular", "soul"],
+                &[[1., 0., 1., 15., 14., 15.]],
+            )),
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                ("flame_type", &["regular", "soul"]),
+            ]),
+        ),
         // CrushingWheelBlock (RotatedPillarKineticBlock): a full block on an axis, stone's
         // properties, not hiding its neighbours; an iron chain's template places it on the
         // clicked face's axis.
@@ -486,6 +509,36 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         animated,
         item: b.name != "belt" && b.name != "crushing_wheel_controller",
     })
+}
+
+/// `BlazeBurnerBlock.HEAT_LEVEL` (`blaze`), in order.
+pub const HEATS: &[&str] = &["none", "smouldering", "fading", "kindled", "seething"];
+
+/// The blaze burner's blockstate: Create draws the cage as its model and the blaze in its
+/// renderer (`BlazeBurnerRenderer`: the head chosen by heat, turned to `horizontalAngle(facing) +
+/// 180`); here the head at rest is part of the block's model, by heat and facing.
+pub fn blaze_burner_states() -> Value {
+    let mut parts = vec![json!({ "apply": { "model": "create:block/blaze_burner/block" } })];
+    for (heat, model) in [
+        ("smouldering", "inert"),
+        ("fading", "idle"),
+        ("kindled", "idle"),
+        ("seething", "super"),
+    ] {
+        // Blockstate y turns clockwise from above; the head turns the other way.
+        for (facing, y) in [("north", 0), ("east", 90), ("south", 180), ("west", 270)] {
+            let mut apply = Map::new();
+            apply.insert(
+                "model".into(),
+                json!(format!("create:block/blaze_burner/blaze/{model}")),
+            );
+            if y != 0 {
+                apply.insert("y".into(), json!(y));
+            }
+            parts.push(json!({ "when": { "blaze": heat, "facing": facing }, "apply": apply }));
+        }
+    }
+    json!({ "multipart": parts })
 }
 
 /// Create's partial models (`AllPartialModels`) that turn as parts, as hidden blocks of the

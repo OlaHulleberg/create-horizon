@@ -2,6 +2,7 @@
 //! so every rule is unit-tested here and the game glue (`runtime.rs`) stays thin.
 
 pub mod belt;
+pub mod burner;
 pub mod client;
 pub mod contraption;
 pub mod crusher;

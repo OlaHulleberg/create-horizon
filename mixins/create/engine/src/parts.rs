@@ -18,6 +18,8 @@ pub struct StateInfo {
     /// A latch's `powering` and `powered_side`.
     pub powering: bool,
     pub powered_side: bool,
+    /// A blaze burner's `blaze` (heat level).
+    pub heat: Option<crate::fan::Heat>,
 }
 
 impl StateInfo {
@@ -52,6 +54,17 @@ impl StateInfo {
                 "powered_side" => s.powered_side = v == "true",
                 "top_shaft" => s.top_shaft = v == "true",
                 "bottom_shaft" => s.bottom_shaft = v == "true",
+                "blaze" => {
+                    use crate::fan::Heat;
+                    s.heat = match v {
+                        "none" => Some(Heat::None),
+                        "smouldering" => Some(Heat::Smouldering),
+                        "fading" => Some(Heat::Fading),
+                        "kindled" => Some(Heat::Kindled),
+                        "seething" => Some(Heat::Seething),
+                        _ => None,
+                    }
+                }
                 _ => {}
             }
         }
@@ -216,6 +229,7 @@ pub fn is_kinetic(block: Block) -> bool {
         belt: None,
         powering: false,
         powered_side: false,
+        heat: None,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

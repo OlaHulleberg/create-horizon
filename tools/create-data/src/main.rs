@@ -120,6 +120,10 @@ fn compile(create: &Path, out: &Path) {
         write(&decl_dir.join(format!("block/{name}.json")), &pretty(&decl));
         write(&states_dir.join(format!("{name}.json")), &pretty(&states));
     }
+    write(
+        &states_dir.join("blaze_burner.json"),
+        &pretty(&blocks::blaze_burner_states()),
+    );
     let models_dir = out.join("content/assets/create/models/block");
     for (name, model) in blocks::fluid_models() {
         write(&models_dir.join(format!("{name}.json")), &pretty(&model));
