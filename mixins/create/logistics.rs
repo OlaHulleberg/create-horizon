@@ -2,6 +2,7 @@
 // A sibling of the `create` module (`runtime.rs`).
 use super::Game;
 use super::create::*;
+use super::create_arms::*;
 use super::create_processing::*;
 use create_engine::client;
 use create_engine::kinetics::Dir;
@@ -94,6 +95,9 @@ pub(super) fn tick_depots(game: &mut Game<'_>, dimension: &str, dim: usize) {
     if changed.is_empty() {
         return;
     }
+    // Arms using these depots and ejectors holding a new stack look again.
+    arms_touched(dim, &changed, &[]);
+    wake_ejectors(dim, &changed);
     // A depot that joined holding a stack (a saved world, a block placed with its items) has
     // it at rest in the centre, as Create reads `HeldItem` back.
     for &pos in &changed {
@@ -396,6 +400,10 @@ pub(super) fn set_chute_stack(
         be.items.resize(be.items.len().max(1), None);
         be.items[0] = stack;
     });
+    // Arms using the chute look again.
+    if let Some(dim) = dimension_index(game.dim.id()) {
+        with_world(|w| w.dims[dim].arms.touched(pos));
+    }
 }
 
 /// Chutes holding a stack (`ChuteBlockEntity.tick` falling, `handleDownwardOutput`): into the
@@ -725,6 +733,30 @@ pub(super) fn insert_item(
     }
 }
 
+/// How much of `stack` `insert_item` would put into the container at `pos` (simulated, nothing
+/// changes); None when there is no container.
+pub(super) fn insert_room(
+    game: &Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    face: horizon_core::geometry::Direction,
+    stack: &horizon_client::items::ItemStack,
+) -> Option<u32> {
+    match vault_at(game, dim, pos) {
+        Some(parts) => {
+            let slots = vault_slots(game, &parts);
+            let view: Vec<Option<(bool, u32)>> = slots
+                .iter()
+                .map(|s| s.as_ref().map(|s| (same_stack(s, stack), s.count)))
+                .collect();
+            let limit = u32::from(stack_limit(game, &stack.item));
+            let plan = create_engine::vault::insert_stacked(&view, stack.count, limit);
+            Some(plan.iter().map(|(_, n)| n).sum())
+        }
+        None => super::machines::create_extract::insert_room(game, pos, face, stack),
+    }
+}
+
 /// A player's click on a smart chute's filter slot (`FilteringBehaviour.onShortInteract` through
 /// `ValueSettingsInputHandler`): on a side, not sneaking, at the slot 11 px up; the held item
 /// becomes its filter, an empty hand clears it (no filter items or counts yet).
@@ -878,85 +910,301 @@ pub(super) fn vaults_from_nbt(
     (vaults, filters)
 }
 
-/// Extracting funnels (`FunnelBlockEntity.activateExtractor`): every 8 ticks, while no item lies
-/// in front, a stack leaves the inventory behind and drops in front.
+/// A funnel's state as its rules read it: its kind (brass or not), facing, `powered`,
+/// `extracting`, and a belt funnel's shape (None for a funnel on an inventory).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FunnelState {
+    pub(super) brass: bool,
+    pub(super) facing: Dir,
+    pub(super) powered: bool,
+    pub(super) extracting: bool,
+    pub(super) belt: Option<create_engine::funnel::BeltShape>,
+}
+
+/// The funnel at `pos`, if one is there (a miss is a state test).
+pub(super) fn funnel_at(game: &Game<'_>, pos: [i32; 3]) -> Option<FunnelState> {
+    use create_engine::Block;
+    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    states::index(state)?;
+    with_world(|w| {
+        let (block, info) = w.table.get(state)?;
+        let (brass, belt) = match block {
+            Block::AndesiteFunnel => (false, false),
+            Block::BrassFunnel => (true, false),
+            Block::AndesiteBeltFunnel => (false, true),
+            Block::BrassBeltFunnel => (true, true),
+            _ => return None,
+        };
+        Some(FunnelState {
+            brass,
+            facing: info.facing?,
+            powered: info.powered,
+            extracting: info.extracting,
+            belt: if belt {
+                Some(info.belt_funnel.unwrap_or_default())
+            } else {
+                None
+            },
+        })
+    })
+    .flatten()
+}
+
+/// The way the belt below `pos` moves (`getMovementFacing`), when a belt that carries items is
+/// there.
+pub(super) fn belt_movement_below(game: &Game<'_>, dim: usize, pos: [i32; 3]) -> Option<Dir> {
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    let (c, _, seg) = belt_segment(game, dim, below)?;
+    if !seg.transports() {
+        return None;
+    }
+    let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+    Some(create_engine::belt::movement_facing(rpm, seg.facing))
+}
+
+/// The facing of a belt that carries items below `pos` (`BeltFunnelBlock.isOnValidBelt`; Create
+/// also lets saws and item drains carry belt funnels: not yet).
+fn belt_facing_below(game: &Game<'_>, pos: [i32; 3]) -> Option<Dir> {
+    let state = game.world.block(pos[0], pos[1] - 1, pos[2]).0;
+    states::index(state)?;
+    let seg = with_world(|w| w.table.get(state).and_then(|(_, i)| i.belt)).flatten()?;
+    seg.transports().then_some(seg.facing)
+}
+
+/// Funnels whose block below changed (`FunnelBlock.updateShape`, `BeltFunnelBlock.updateShape`):
+/// a horizontal funnel over a belt becomes its belt funnel (`getEquivalentBeltFunnel`, shaped by
+/// `getShapeForPosition`), a belt funnel no longer on a belt becomes its funnel again (extracting
+/// when it pushed), and a belt funnel's shape follows the belt below (wrenched shapes kept).
+pub(super) fn tick_funnel_shapes(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    use create_engine::funnel::{BeltShape, shape_for_position, updated_shape};
+    let checks = with_world(|w| std::mem::take(&mut w.dims[dim].funnel_shapes)).unwrap_or_default();
+    for pos in checks {
+        let Some(f) = funnel_at(game, pos) else {
+            continue;
+        };
+        if f.facing.axis() == create_engine::kinetics::Axis::Y {
+            continue;
+        }
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let water = game
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("waterlogged").cloned())
+            .unwrap_or_else(|| "false".to_owned());
+        let belt = belt_facing_below(game, pos);
+        let metal = if f.brass { "brass" } else { "andesite" };
+        let flag = |b: bool| if b { "true" } else { "false" };
+        let (name, shape) = match (f.belt, belt) {
+            (None, Some(b)) => (
+                format!("create:{metal}_belt_funnel"),
+                Some(shape_for_position(Some(b), f.facing, f.extracting)),
+            ),
+            (Some(shape), None) => (format!("create:{metal}_funnel"), Some(shape)),
+            (Some(shape), Some(b)) => {
+                let fresh = shape_for_position(Some(b), f.facing, shape == BeltShape::Pushing);
+                let now = updated_shape(shape, fresh);
+                if now == shape {
+                    continue;
+                }
+                (format!("create:{metal}_belt_funnel"), Some(now))
+            }
+            (None, None) => continue,
+        };
+        let shape = shape.unwrap_or_default();
+        let props: [(&str, &str); 4] = if f.belt.is_some() && belt.is_none() {
+            [
+                ("facing", dir_name(f.facing)),
+                ("powered", flag(f.powered)),
+                ("extracting", flag(shape == BeltShape::Pushing)),
+                ("waterlogged", &water),
+            ]
+        } else {
+            [
+                ("facing", dir_name(f.facing)),
+                ("powered", flag(f.powered)),
+                ("shape", shape.name()),
+                ("waterlogged", &water),
+            ]
+        };
+        if let Some(id) = state_with(game.pack.assets.registry, &name, &props)
+            && id != state
+        {
+            game.native_set_block(dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+        }
+    }
+}
+
+/// Funnels due to look again (`FunnelBlockEntity.tick` once its cooldown has run out): an
+/// extracting funnel on an inventory drops a stack in front while nothing lies there
+/// (`activateExtractor`); a belt funnel pushing onto its belt puts one there
+/// (`activateExtractingBeltFunnel`); either looks again 8 ticks after it moved items, the next
+/// tick while blocked, and 8 ticks later when the inventory gave nothing (Create looks every
+/// tick then). An inserting, pulling or powered funnel is dormant until its state changes; a
+/// tick with no funnel due costs one look at the earliest.
 pub(super) fn tick_funnels(game: &mut Game<'_>, dim: usize) {
-    let funnels: Vec<[i32; 3]> = with_world(|w| {
+    use create_engine::funnel::{EXTRACTION_COOLDOWN, Mode, amount, belt_mode};
+    let now = game.world.game_time.max(0) as u64;
+    let due = with_world(|w| {
         let d = &mut w.dims[dim];
-        d.funnels
-            .iter_mut()
-            .filter_map(|(p, cooldown)| {
-                if *cooldown == u32::MAX {
-                    return None;
-                }
-                if *cooldown > 0 {
-                    *cooldown -= 1;
-                    return None;
-                }
-                Some(*p)
-            })
-            .collect()
+        if d.funnel_timers.is_empty() {
+            return Vec::new();
+        }
+        let funnels = &d.funnels;
+        d.funnel_timers
+            .due(now, |p, t| funnels.get(&p).is_some_and(|due| *due == t))
     })
     .unwrap_or_default();
-    for pos in funnels {
-        let state = game.world.block(pos[0], pos[1], pos[2]);
-        let Some(s) = game.pack.assets.registry.state(state) else {
+    let schedule = |pos: [i32; 3], at: u64| {
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            if let Some(due) = d.funnels.get_mut(&pos) {
+                *due = at;
+                if at != u64::MAX {
+                    d.funnel_timers.at(at, pos);
+                }
+            }
+        });
+    };
+    for pos in due {
+        let Some(f) = funnel_at(game, pos) else {
+            schedule(pos, u64::MAX);
             continue;
         };
-        if s.properties.get("extracting").is_none_or(|v| v != "true")
-            || s.properties.get("powered").is_some_and(|v| v == "true")
-        {
-            // Inserting or paused: dormant until its state changes.
-            with_world(|w| w.dims[dim].funnels.insert(pos, u32::MAX));
-            continue;
-        }
-        let Some(facing) =
-            with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten()
-        else {
-            continue;
+        let mode = match f.belt {
+            Some(shape) => belt_mode(
+                f.powered,
+                shape,
+                belt_movement_below(game, dim, pos),
+                f.facing,
+            ),
+            None if f.powered => Mode::Paused,
+            None if f.extracting => Mode::Extract,
+            None => Mode::Collect,
         };
-        let (at, v) = create_engine::funnel::output(pos, facing);
-        // Something still in front: wait (`lastObserved`, the overflow area).
-        let mut blocked = false;
-        let dimension = game.dim.id().to_owned();
-        items_in(
-            game,
-            &dimension,
-            [at[0] - 0.5, at[1] - 0.5, at[2] - 0.5],
-            [at[0] + 0.5, at[1] + 0.5, at[2] + 0.5],
-            |_, _, _, _| {
-                blocked = true;
+        let face = horizon_core::geometry::Direction::ALL[f.facing as usize];
+        let behind = create_engine::funnel::behind(pos, f.facing);
+        let max = amount(f.brass);
+        let next = match mode {
+            Mode::Extract => extract_in_front(game, dim, pos, f.facing, face, behind, max),
+            Mode::PushingToBelt => push_onto_belt(game, dim, pos, f.facing, face, behind, max),
+            // Inserting, pulling from a belt (the belt does it), paused or invalid: dormant.
+            _ => None,
+        };
+        schedule(
+            pos,
+            match next {
+                Some(Some(false)) => now + 1,
+                Some(_) => now + u64::from(EXTRACTION_COOLDOWN),
+                None => u64::MAX,
             },
         );
-        if blocked {
-            continue;
-        }
-        let o = facing.offset();
-        let behind = [pos[0] - o[0], pos[1] - o[1], pos[2] - o[2]];
-        let face = horizon_core::geometry::Direction::ALL[facing as usize];
-        // A vault behind it gives up to a stack of its first item (`ItemHelper.extract`).
-        let taken = match vault_at(game, dim, behind) {
-            Some(parts) => extract_vault(game, &parts, |_| true, create_engine::funnel::AMOUNT),
-            None => super::machines::create_extract::extract_item(
-                game,
-                behind,
-                face,
-                create_engine::funnel::AMOUNT,
-            ),
-        };
-        let Some(stack) = taken else {
-            continue;
-        };
-        game.native_run_command(&format!(
-            "summon minecraft:item {} {} {} {{Item:{{id:'{}',count:{}}},Motion:[{}d,{}d,{}d]}}",
-            at[0], at[1], at[2], stack.item, stack.count, v[0], v[1], v[2]
-        ));
-        with_world(|w| {
-            w.dims[dim]
-                .funnels
-                .insert(pos, create_engine::funnel::EXTRACTION_COOLDOWN)
-        });
     }
+}
+
+/// Takes up to `max` from the inventory behind a funnel through its face (a vault's whole
+/// inventory, else as a hopper takes); None when nothing was there.
+fn take_from_behind(
+    game: &mut Game<'_>,
+    dim: usize,
+    behind: [i32; 3],
+    face: horizon_core::geometry::Direction,
+    max: u32,
+) -> Option<horizon_client::items::ItemStack> {
+    match vault_at(game, dim, behind) {
+        Some(parts) => extract_vault(game, &parts, |_| true, max),
+        None => super::machines::create_extract::extract_item(game, behind, face, max),
+    }
+}
+
+/// `activateExtractor`: Some(Some(true)) when a stack left, Some(Some(false)) when an item in
+/// front blocks it, Some(None) when the inventory gave nothing.
+fn extract_in_front(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    facing: Dir,
+    face: horizon_core::geometry::Direction,
+    behind: [i32; 3],
+    max: u32,
+) -> Option<Option<bool>> {
+    let (at, v) = create_engine::funnel::output(pos, facing);
+    // Something still in front: wait (`lastObserved`, the overflow area).
+    let mut blocked = false;
+    let dimension = game.dim.id().to_owned();
+    items_in(
+        game,
+        &dimension,
+        [at[0] - 0.5, at[1] - 0.5, at[2] - 0.5],
+        [at[0] + 0.5, at[1] + 0.5, at[2] + 0.5],
+        |_, _, _, _| {
+            blocked = true;
+        },
+    );
+    if blocked {
+        return Some(Some(false));
+    }
+    let Some(stack) = take_from_behind(game, dim, behind, face, max) else {
+        return Some(None);
+    };
+    game.native_run_command(&format!(
+        "summon minecraft:item {} {} {} {{Item:{{id:'{}',count:{}}},Motion:[{}d,{}d,{}d]}}",
+        at[0], at[1], at[2], stack.item, stack.count, v[0], v[1], v[2]
+    ));
+    Some(Some(true))
+}
+
+/// `activateExtractingBeltFunnel`: up to `max` of the inventory behind onto the belt below,
+/// inserted from the funnel's side (`handleInsertion(stack, facing)`) while the belt takes items
+/// there (`canInsertFromSide`, `isOccupied`). Same answers as `extract_in_front`.
+fn push_onto_belt(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    facing: Dir,
+    face: horizon_core::geometry::Direction,
+    behind: [i32; 3],
+    max: u32,
+) -> Option<Option<bool>> {
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    let (c, index, _) = belt_segment(game, dim, below)?;
+    let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+    let free = with_world(|w| {
+        let b = w.dims[dim].belts.get(&c)?;
+        let movement = create_engine::belt::movement_facing(rpm, b.segment.facing);
+        Some(
+            rpm != 0.0
+                && movement != facing.opposite()
+                && b.items.can_insert_at_from_side(index, facing, movement),
+        )
+    })
+    .flatten()?;
+    if !free {
+        return Some(Some(false));
+    }
+    let Some(stack) = take_from_behind(game, dim, behind, face, max) else {
+        return Some(None);
+    };
+    let count = stack.count.min(64) as u8;
+    let item = create_engine::belt::Item::new(
+        &stack.item,
+        count,
+        random_angle(game, pos),
+        upright(game, &stack.item),
+    );
+    let left = insert_into_from(game, dim, below, facing, &item, false).unwrap_or(count);
+    if left > 0 {
+        // The belt took less after all: the rest goes back where it came from.
+        let back = horizon_client::items::ItemStack {
+            count: u32::from(left),
+            ..stack
+        };
+        if let Some(rest) = insert_item(game, dim, behind, face, back) {
+            game.native_give_items(&rest.item, rest.count);
+        }
+    }
+    Some(Some(true))
 }
 
 /// A block entity slot as the processing rules see it.
@@ -1041,6 +1289,8 @@ pub(super) fn item_landed(
         (Some(b @ create_engine::Block::Belt), _) => (own, b),
         (_, Some(b @ create_engine::Block::Belt)) => (pos, b),
         (_, Some(b @ create_engine::Block::Depot)) => (pos, b),
+        // EjectorBlock.updateEntityAfterFallOn: an item stack lands as on a depot.
+        (_, Some(create_engine::Block::WeightedEjector)) => (pos, create_engine::Block::Depot),
         (Some(b @ create_engine::Block::Basin), _) => (own, b),
         (_, Some(b @ (create_engine::Block::Chute | create_engine::Block::SmartChute))) => (pos, b),
         (_, Some(b @ create_engine::Block::MechanicalSaw)) => (pos, b),
@@ -1119,8 +1369,9 @@ pub(super) fn item_landed(
     let count = stack.count.min(max) as u8;
     let up = upright(game, &stack.item);
     if block == create_engine::Block::Depot {
-        // DirectBeltInputBehaviour from above: only into an empty depot.
-        if !depot_items(game, spot).is_empty() {
+        // DirectBeltInputBehaviour from above: only into an empty depot (an ejector's while
+        // charged).
+        if !depot_items(game, spot).is_empty() || !ejector_accepts(dim, spot) {
             return;
         }
         let put = horizon_client::items::ItemStack {
@@ -1185,10 +1436,24 @@ pub(super) fn insert_into(
     side: create_engine::kinetics::Dir,
     item: &create_engine::belt::Item,
 ) -> Option<u8> {
+    insert_into_from(game, dim, next, side, item, true)
+}
+
+/// `insert_into` for a stack that comes from a belt behind (`from_belt`: Create's smoother
+/// hand-over starts it a quarter block back) or from elsewhere (a funnel).
+pub(super) fn insert_into_from(
+    game: &mut Game<'_>,
+    dim: usize,
+    next: [i32; 3],
+    side: create_engine::kinetics::Dir,
+    item: &create_engine::belt::Item,
+    from_belt: bool,
+) -> Option<u8> {
     let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
     if is_depot {
-        // DepotBehaviour.tryInsertingFromSide: only into an empty depot.
-        if !depot_items(game, next).is_empty() {
+        // DepotBehaviour.tryInsertingFromSide: only into an empty depot (an ejector's only
+        // while charged, `canAcceptItems`).
+        if !depot_items(game, next).is_empty() || !ejector_accepts(dim, next) {
             return Some(item.count);
         }
         let put = horizon_client::items::ItemStack {
@@ -1239,7 +1504,7 @@ pub(super) fn insert_into(
             }
         } else {
             // A smoother hand-over from the belt behind it.
-            let extra = 0.26;
+            let extra = if from_belt { 0.26 } else { 0.0 };
             moved.position = if speed2 > 0.0 {
                 index as f32 - extra
             } else {
@@ -1371,6 +1636,7 @@ pub(super) fn tick_belts(game: &mut Game<'_>, dimension: &str, dim: usize) {
     })
     .unwrap_or_default();
     if !changed.is_empty() {
+        arms_touched(dim, &[], &changed);
         let players = players_in(game, dimension);
         send_belts(game, &players, dim, &changed);
     }
@@ -1465,7 +1731,7 @@ pub(super) fn draw_belt(
     }
     for (i, item) in contents.items.items.iter().enumerate() {
         let place = belt::item_place(&contents.segment, length, item.position, item.side_offset);
-        let moving = !item.locked && speed != 0.0;
+        let moving = !item.locked && !item.at_funnel && speed != 0.0;
         let velocity = if moving {
             belt::item_velocity(&contents.segment, length, item.position, speed).to_array()
         } else {
@@ -1568,6 +1834,59 @@ pub(super) fn belt_rpm(controller: [i32; 3]) -> f32 {
     })
 }
 
+/// A belt's surroundings on the client: its ending as the server last said, and the belt
+/// funnels over it, which hold the items they face on the client too (`checkForFunnels` on the
+/// client: blocking, never inserting).
+pub(super) struct ClientBelt<'a, 'g> {
+    pub(super) game: &'a Game<'g>,
+    pub(super) ending: create_engine::belt::Ending,
+    pub(super) controller: [i32; 3],
+    pub(super) segment: create_engine::belt::Segment,
+    pub(super) length: i32,
+    pub(super) movement: Dir,
+}
+
+impl create_engine::belt::Surroundings for ClientBelt<'_, '_> {
+    fn ending(&mut self) -> create_engine::belt::Ending {
+        self.ending
+    }
+    fn insert(&mut self, _: &create_engine::belt::Item) -> Option<u8> {
+        None
+    }
+    fn process(
+        &mut self,
+        _: i32,
+        item: &mut create_engine::belt::Item,
+        locked: bool,
+    ) -> Option<create_engine::belt::Process> {
+        (locked || item.locked).then_some(create_engine::belt::Process::Hold)
+    }
+    fn funnel(&mut self, segment: i32) -> Option<(create_engine::funnel::OnBelt, Dir)> {
+        let at = create_engine::belt::position_for_offset(
+            self.controller,
+            &self.segment,
+            self.length,
+            segment,
+        );
+        let state = self.game.world.block(at[0], at[1] + 1, at[2]).0;
+        states::index(state)?;
+        let info = CLIENT.with_borrow(|c| {
+            let (block, info) = c.as_ref()?.table.get(state)?;
+            matches!(
+                block,
+                create_engine::Block::AndesiteBeltFunnel | create_engine::Block::BrassBeltFunnel
+            )
+            .then_some(*info)
+        })?;
+        let on = create_engine::funnel::OnBelt {
+            facing: info.facing?,
+            shape: info.belt_funnel.unwrap_or_default(),
+            powered: info.powered,
+        };
+        Some((on, self.movement))
+    }
+}
+
 /// Each client tick: belts with items move them on (`BeltInventory.tick` on the client).
 pub(super) fn tick_client_belts(game: &mut Game<'_>) {
     let busy: Vec<[i32; 3]> = BELTS.with_borrow(|b| {
@@ -1585,12 +1904,17 @@ pub(super) fn tick_client_belts(game: &mut Game<'_>) {
         let speed = create_engine::belt::direction_aware_speed(rpm, contents.segment.facing);
         let before = contents.items.items.len();
         let horizontal = contents.segment.slope == create_engine::belt::Slope::Horizontal;
-        contents.items.tick(
-            i32::from(contents.length),
-            speed,
-            horizontal,
-            &mut ClientSide(contents.ending),
-        );
+        let mut side = ClientBelt {
+            game,
+            ending: contents.ending,
+            controller: c,
+            segment: contents.segment,
+            length: i32::from(contents.length),
+            movement: create_engine::belt::movement_facing(rpm, contents.segment.facing),
+        };
+        contents
+            .items
+            .tick(i32::from(contents.length), speed, horizontal, &mut side);
         let redraw = contents.items.items.len() != before;
         draw_belt(game, &contents, &mut shown, rpm, redraw);
         BELTS.with_borrow_mut(|b| b.belts.insert(c, (contents, shown)));

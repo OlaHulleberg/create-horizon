@@ -3,6 +3,7 @@
 // State lives on the server thread that fires the hooks (one per world).
 
 use super::Game;
+use super::create_arms::*;
 use super::create_contraptions::*;
 use super::create_fluids::*;
 use super::create_logistics::*;
@@ -201,6 +202,7 @@ pub(super) fn chunk_load(
         };
     let (vaults, filters) = vaults_from_nbt(Game::native_chunk_data(chunk, "create"));
     load_lifts(dim, lifts);
+    arms_from_nbt(dim, Game::native_chunk_data(chunk, "create"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.dims[dim].vaults.load(vaults.into_iter());
@@ -328,6 +330,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_saws(game, dim);
     tick_spouts(game, dim);
     tick_drains(game, dim);
+    tick_funnel_shapes(game, dimension, dim);
     tick_funnels(game, dim);
     tick_tunnels(game, dimension, dim);
     tick_brass(game, dim);
@@ -335,6 +338,8 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
     tick_deployers(game, dimension, dim);
+    tick_arms(game, dimension, dim);
+    tick_ejectors(game, dimension, dim);
     send_tank_changes(game, dimension, dim);
     let mut events = Vec::new();
     with_world(|w| w.settle_belts(dim));
@@ -381,6 +386,8 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
                 if block == Some(create_engine::Block::GantryShaft) {
                     gantry_carriages_on(game, dim, pos);
                 }
+                // An arm or an ejector moves at its new speed.
+                wake_on_speed(dim, pos);
                 // A crafter that starts turning looks at its items (`lazyTick`).
                 if block == Some(create_engine::Block::MechanicalCrafter) {
                     with_world(|w| w.dims[dim].crafter_checks.push(pos));
@@ -551,6 +558,7 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     let deployers: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].deployers.keys().copied().collect()).unwrap_or_default();
     send_deployers(game, &[player], dim, &deployers);
+    sync_arms(game, player, dim);
     let trains: Vec<u32> =
         with_world(|w| w.dims[dim].railway.trains.iter().map(|t| t.id).collect())
             .unwrap_or_default();
@@ -756,6 +764,17 @@ pub(super) fn right_click_inner(
     }
     if block == Some(create_engine::Block::Depot) {
         use_depot(game, dim, pos, face, canceled);
+        return;
+    }
+    // EjectorBlock.useItemOn: as a depot's (a wrench passes on to the wrench).
+    if block == Some(create_engine::Block::WeightedEjector) {
+        if game.native_held().is_none_or(|h| h.0 != "create:wrench") {
+            use_depot(game, dim, pos, face, canceled);
+        }
+        return;
+    }
+    if block == Some(create_engine::Block::MechanicalArm) {
+        use_arm(game, dim, pos, canceled);
         return;
     }
     if block == Some(create_engine::Block::SmartChute) {
@@ -2043,7 +2062,9 @@ pub(super) fn chunk_data_save(
         v
     })
     .unwrap_or_default();
+    let arms = arms_to_nbt(dim, chunk);
     if settings.is_empty()
+        && arms.is_none()
         && vaults.is_empty()
         && filters.is_empty()
         && belts.is_empty()
@@ -2064,7 +2085,7 @@ pub(super) fn chunk_data_save(
         data.remove(&"create".into());
         return;
     }
-    let mut own = horizon_world::nbt::Compound::new();
+    let mut own = arms.unwrap_or_default();
     vaults_to_nbt(&mut own, &vaults, &filters);
     if !settings.is_empty() {
         let motors: Vec<i32> = settings
@@ -2236,6 +2257,7 @@ pub(super) fn model_state(
             find("create:part_gauge_head_stress", "facing", dir_name(d))
         }
         Model::GaugeDial(d) => find("create:part_gauge_dial", "facing", dir_name(d)),
+        Model::ArmCog => find("create:part_arm_cog", "facing", "up"),
     }
 }
 
@@ -2378,6 +2400,14 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         depots_from_server(game, data);
         return;
     }
+    if channel == create_engine::arm::CHANNEL {
+        arms_from_server(game, data);
+        return;
+    }
+    if channel == create_engine::ejector::CHANNEL {
+        ejectors_from_server(game, data);
+        return;
+    }
     if channel == create_engine::link::CHANNEL {
         links_from_server(game, data);
         return;
@@ -2464,10 +2494,12 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         BELTS.with_borrow_mut(|b| *b = ClientBelts::default());
         GAUGES.with_borrow_mut(|g| *g = ClientGauges::default());
         reset_client_lifts();
+        ARMS.with_borrow_mut(|a| *a = ClientArms::default());
         return;
     }
     tick_client_depots(game);
     tick_client_lifts(game);
+    tick_client_arms(game);
     tick_client_presses(game);
     tick_client_belts(game);
     if !client_ensure(game) {
@@ -2973,6 +3005,24 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
         "create_debug curve <from:block_pos> <to:block_pos>",
         2,
     ));
+    // A mechanical arm's points (the arm item's selection) and an ejector's target (the ejector
+    // item's), and what each does, for tests.
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug arm <pos:block_pos> <points:text>",
+        2,
+    ));
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug arm_state <pos:block_pos>",
+        2,
+    ));
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug ejector <pos:block_pos> <target:block_pos>",
+        2,
+    ));
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug ejector_state <pos:block_pos>",
+        2,
+    ));
 }
 
 pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool) {
@@ -2981,6 +3031,10 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
     let schedule = command.strip_prefix("create_debug schedule ");
     let name = command.strip_prefix("create_debug station_name ");
     let curve = command.strip_prefix("create_debug curve ");
+    let arm = command.strip_prefix("create_debug arm ");
+    let arm_state = command.strip_prefix("create_debug arm_state ");
+    let ejector = command.strip_prefix("create_debug ejector ");
+    let ejector_state = command.strip_prefix("create_debug ejector_state ");
     let Some(rest) = command
         .strip_prefix("create_debug speed ")
         .or(train)
@@ -2988,6 +3042,10 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
         .or(schedule)
         .or(name)
         .or(curve)
+        .or(arm)
+        .or(arm_state)
+        .or(ejector)
+        .or(ejector_state)
     else {
         return;
     };
@@ -3015,6 +3073,48 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
             (Some(&[x, y, z]), false) => name_station(dim, [x, y, z], &text),
             (_, true) => "usage: create_debug schedule <x> <y> <z> <station[@seconds]>...".into(),
             (_, false) => "usage: create_debug station_name <x> <y> <z> <name>".into(),
+        };
+        game.native_feedback(horizon_client::text::Text::literal(line));
+        return;
+    }
+    if arm.is_some() || arm_state.is_some() || ejector.is_some() || ejector_state.is_some() {
+        let dimension = player
+            .as_ref()
+            .map_or_else(|| "minecraft:overworld".to_owned(), |p| p.dimension.clone());
+        let line = match (parts.get(0..3), arm.is_some(), ejector.is_some()) {
+            (Some(&[x, y, z]), true, _) => {
+                let tokens: Vec<&str> = rest.split_whitespace().skip(3).collect();
+                // Relative coordinates are the player's, as the block positions take them.
+                let mut words = Vec::with_capacity(tokens.len());
+                let mut n = 0;
+                for t in &tokens {
+                    if matches!(*t, "input" | "output") {
+                        words.push((*t).to_owned());
+                        continue;
+                    }
+                    let v = match t.strip_prefix('~') {
+                        Some(off) => here
+                            .and_then(|h| h.get(n % 3).copied())
+                            .map(|h| h.floor() as i32 + off.parse::<i32>().unwrap_or(0)),
+                        None => t.parse().ok(),
+                    };
+                    n += 1;
+                    words.push(v.map_or_else(|| (*t).to_owned(), |v: i32| v.to_string()));
+                }
+                let words: Vec<&str> = words.iter().map(String::as_str).collect();
+                debug_arm(game, dim, [x, y, z], &words)
+            }
+            (Some(&[x, y, z]), _, true) => match parts.get(3..6) {
+                Some(&[tx, ty, tz]) => {
+                    debug_ejector(game, &dimension, dim, [x, y, z], [tx, ty, tz])
+                }
+                _ => "usage: create_debug ejector <x> <y> <z> <x> <y> <z>".into(),
+            },
+            (Some(&[x, y, z]), false, false) if arm_state.is_some() => {
+                debug_arm_state(dim, [x, y, z])
+            }
+            (Some(&[x, y, z]), false, false) => debug_ejector_state(dim, [x, y, z]),
+            _ => "usage: create_debug arm <x> <y> <z> <input|output> <x> <y> <z>...".into(),
         };
         game.native_feedback(horizon_client::text::Text::literal(line));
         return;
@@ -3061,8 +3161,13 @@ pub(super) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
     let Some(dim) = dimension_index(game.dim.id()) else {
         return;
     };
-    // Chutes asleep under this container (or under its vault) look into it again.
-    with_world(|w| w.container_changed(dim, pos));
+    // Chutes asleep under this container (or under its vault) look into it again; arms using
+    // it as a point, and an ejector it is, look again.
+    with_world(|w| {
+        w.container_changed(dim, pos);
+        w.dims[dim].arms.touched(pos);
+    });
+    wake_ejectors(dim, &[pos]);
     // An item put into a crafter: its chain may start (`insertItem` -> `checkCompletedRecipe`).
     if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
         == Some(create_engine::Block::MechanicalCrafter)
@@ -3358,6 +3463,43 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
         self.insert_at(next, side, item)
     }
 
+    fn funnel(&mut self, segment: i32) -> Option<(create_engine::funnel::OnBelt, Dir)> {
+        let at = create_engine::belt::position_for_offset(
+            self.controller,
+            &self.segment,
+            self.length,
+            segment,
+        );
+        let f = funnel_at(self.game, [at[0], at[1] + 1, at[2]])?;
+        let on = create_engine::funnel::OnBelt {
+            facing: f.facing,
+            shape: f.belt?,
+            powered: f.powered,
+        };
+        Some((on, self.movement()))
+    }
+
+    fn funnel_insert(&mut self, segment: i32, item: &create_engine::belt::Item) -> Option<u8> {
+        let at = create_engine::belt::position_for_offset(
+            self.controller,
+            &self.segment,
+            self.length,
+            segment,
+        );
+        let pos = [at[0], at[1] + 1, at[2]];
+        let f = funnel_at(self.game, pos)?;
+        let behind = create_engine::funnel::behind(pos, f.facing);
+        let face = horizon_core::geometry::Direction::ALL[f.facing as usize];
+        let stack = horizon_client::items::ItemStack {
+            item: item.item.as_str().into(),
+            count: u32::from(item.count),
+            damage: 0,
+            extra: None,
+        };
+        let left = insert_item(self.game, self.dim, behind, face, stack);
+        Some(left.map_or(0, |l| l.count.min(255) as u8))
+    }
+
     fn tunnel(&mut self, segment: i32, item: &mut create_engine::belt::Item) -> bool {
         use create_engine::belt::Slope;
         if self.segment.slope != Slope::Horizontal {
@@ -3534,27 +3676,6 @@ thread_local! {
     pub(super) static BELTS: RefCell<ClientBelts> = RefCell::new(ClientBelts::default());
     /// `isGui3d` by item id, looked up once.
     pub(super) static BLOCK_ITEMS: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
-}
-
-/// The client's belt surroundings: what the server said lies past the end; machines hold
-/// locked items, nothing else acts.
-pub(super) struct ClientSide(pub(super) create_engine::belt::Ending);
-
-impl create_engine::belt::Surroundings for ClientSide {
-    fn ending(&mut self) -> create_engine::belt::Ending {
-        self.0
-    }
-    fn insert(&mut self, _: &create_engine::belt::Item) -> Option<u8> {
-        None
-    }
-    fn process(
-        &mut self,
-        _: i32,
-        item: &mut create_engine::belt::Item,
-        locked: bool,
-    ) -> Option<create_engine::belt::Process> {
-        (locked || item.locked).then_some(create_engine::belt::Process::Hold)
-    }
 }
 
 /// `BlockState.getSignal` / `getDirectSignal` of a latch or a redstone link (hot: one range test
