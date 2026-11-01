@@ -27,6 +27,9 @@ the server thread's smoothed tick time. Scenarios:
            driven by a cog on a motor): 32 mixers making andesite alloy (phase 3)
   pumps    10 mechanical pumps at 16 rpm, each pulling water from an infinite pool through pipes
            into a fluid tank (phase 5)
+  trains   12 straight tracks of 57 with a station at each end and a train (a bogey, a slime block
+           and a gold block) assembled at the first, all sent to the far station as the
+           measured flight starts (phase 9)
   burners  a 32x32 floor of blaze burners with their blaze (1,024 passive burners, the head in the
            chunk mesh): no tick (phase 3)
   fans     32 encased fans at 16 rpm blowing through water over three depots each of 64 ice: 96
@@ -122,6 +125,15 @@ def build(ctl_bin, sock, scenario, center):
             command(ctl_bin, sock, f"setblock {x0+3} {y-6} {zz} create:fluid_tank", failures)
             command(ctl_bin, sock, f"setblock {x0} {y-5} {zz} create:cogwheel[axis=x]", failures)
             command(ctl_bin, sock, f"setblock {x0+1} {y-5} {zz} create:creative_motor[facing=west]", failures)
+    if scenario == "trains":
+        for row in range(12):
+            zz = z - 24 + 4 * row
+            command(ctl_bin, sock, f"fill {x-28} {y-6} {zz} {x+28} {y-6} {zz} create:track[shape=xo]", failures)
+            command(ctl_bin, sock, f"setblock {x-27} {y-6} {zz-1} create:track_station", failures)
+            command(ctl_bin, sock, f"setblock {x+27} {y-6} {zz-1} create:track_station", failures)
+            command(ctl_bin, sock, f"setblock {x-26} {y-5} {zz} create:small_bogey[axis=x]", failures)
+            command(ctl_bin, sock, f"setblock {x-26} {y-4} {zz} minecraft:slime_block", failures)
+            command(ctl_bin, sock, f"setblock {x-26} {y-3} {zz} minecraft:gold_block", failures)
     if scenario == "burners":
         command(ctl_bin, sock, f"fill {x-16} {y-5} {z-16} {x+15} {y-5} {z+15} "
                 "create:blaze_burner[blaze=smouldering,facing=south]", failures)
@@ -255,7 +267,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
@@ -275,6 +287,9 @@ def run_once(args, scenario):
             for row in range(30):
                 ctl(ctl_bin, sock, "command", f"summon minecraft:item {x-0.5} {y-2} {z-30+2*row+0.5} "
                     "{Item:{id:'minecraft:gravel',count:16},PickupDelay:32767}")
+        if scenario == "trains":
+            for row in range(12):
+                ctl(ctl_bin, sock, "chat", f"/create_debug assemble {x-27} {y-6} {z-24+4*row-1}")
         if scenario == "contraptions":
             turning = assemble_windmills(ctl_bin, sock, center)
             if turning != 16:
@@ -283,6 +298,11 @@ def run_once(args, scenario):
         ctl(ctl_bin, sock, "fly", str(x), str(y), str(z), str(x), str(y), str(z), "0.1", "40")
         ctl(ctl_bin, sock, "wait-ready")
         time.sleep(args.settle)
+        if scenario == "trains":
+            turning = [ctl(ctl_bin, sock, "chat", f"/create_debug train {x+27} {y-6} {z-24+4*row-1}")
+                       for row in range(12)]
+            time.sleep(0.5)
+            turning = ctl(ctl_bin, sock, "messages", "12").get("chat")
         # A slow circle-ish line over the scenario, looking down at it.
         summary = ctl(ctl_bin, sock, "fly", str(x - 12), str(y), str(z - 12), str(x + 12), str(y), str(z + 12),
                       str(args.seconds), "40", "raw", timeout=int(args.seconds) + 120)
@@ -349,7 +369,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers", "pumps"],
+                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

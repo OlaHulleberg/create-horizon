@@ -1,0 +1,98 @@
+{
+  "scenario": "trains",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.9580078125,
+    2.361328125,
+    2.13037109375
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 21372,
+      "frame_ms_p50": 0.5273849964141846,
+      "frame_ms_p99": 1.0492210388183594,
+      "fps": 1781.0,
+      "tick_ms": 4.692422389984131,
+      "tick_ms_max": 10.368090629577637,
+      "check": [
+        "train 12 heading for -508.0",
+        "train 11 heading for -508.0",
+        "train 10 heading for -508.0",
+        "train 9 heading for -508.0",
+        "train 8 heading for -508.0",
+        "train 7 heading for -508.0",
+        "train 6 heading for -508.0",
+        "train 5 heading for -508.0",
+        "train 4 heading for -508.0",
+        "train 3 heading for -508.0",
+        "train 2 heading for -508.0",
+        "train 1 heading for -508.0"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 20461,
+      "frame_ms_p50": 0.5663549900054932,
+      "frame_ms_p99": 1.0533509254455566,
+      "fps": 1705.0833333333333,
+      "tick_ms": 4.64027738571167,
+      "tick_ms_max": 10.088043212890623,
+      "check": [
+        "train 12 heading for -493.0",
+        "train 11 heading for -493.0",
+        "train 10 heading for -493.0",
+        "train 9 heading for -493.0",
+        "train 8 heading for -493.0",
+        "train 7 heading for -493.0",
+        "train 6 heading for -493.0",
+        "train 5 heading for -493.0",
+        "train 4 heading for -493.0",
+        "train 3 heading for -493.0",
+        "train 2 heading for -493.0",
+        "train 1 heading for -493.0"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 21454,
+      "frame_ms_p50": 0.5367050170898438,
+      "frame_ms_p99": 1.0256019830703735,
+      "fps": 1787.8333333333333,
+      "tick_ms": 4.647176265716553,
+      "tick_ms_max": 9.982392311096191,
+      "check": [
+        "train 12 heading for -508.0",
+        "train 11 heading for -508.0",
+        "train 10 heading for -508.0",
+        "train 9 heading for -508.0",
+        "train 8 heading for -508.0",
+        "train 7 heading for -508.0",
+        "train 6 heading for -508.0",
+        "train 5 heading for -508.0",
+        "train 4 heading for -508.0",
+        "train 3 heading for -508.0",
+        "train 2 heading for -508.0",
+        "train 1 heading for -508.0"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1757.9722222222222,
+    "frame_ms_p50": 0.5434816678365072,
+    "frame_ms_p99": 1.04272464911143,
+    "tick_ms": 4.659958680470784,
+    "tick_ms_max": 10.146175384521484
+  },
+  "stdev": {
+    "fps": 45.93037706177731,
+    "frame_ms_p50": 0.02034962767800307,
+    "frame_ms_p99": 0.014971748733983384,
+    "tick_ms": 0.028325217790083165,
+    "tick_ms_max": 0.19931209259285668
+  }
+}

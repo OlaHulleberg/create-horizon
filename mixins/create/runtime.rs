@@ -207,6 +207,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_mixers(game, dim);
     tick_pipes(game, dimension, dim);
     tick_pistons(game, dimension, dim);
+    tick_trains(game, dimension, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -415,6 +416,11 @@ fn right_click_inner(game: &mut Game<'_>, pos: [i32; 3], face: [i32; 3], cancele
     }
     if block == Some(create_engine::Block::FluidTank) {
         use_tank(game, dim, pos, canceled);
+        return;
+    }
+    if block == Some(create_engine::Block::TrackStation) {
+        *canceled = true;
+        use_station(game, dim, pos);
         return;
     }
     if block == Some(create_engine::Block::BlazeBurner) {
@@ -1055,6 +1061,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         tanks_from_server(game, data);
         return;
     }
+    if channel == TRAIN_CHANNEL {
+        trains_from_server(game, data);
+        return;
+    }
     if channel == PISTON_CHANNEL {
         pistons_from_server(game, data);
         return;
@@ -1524,10 +1534,26 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
         "create_debug speed <pos:block_pos>",
         2,
     ));
+    // A train's destination and a station's assembly, for tests: Create gives them with a
+    // schedule and the station's screen.
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug train <pos:block_pos>",
+        2,
+    ));
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug assemble <pos:block_pos>",
+        2,
+    ));
 }
 
 pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool) {
-    let Some(rest) = command.strip_prefix("create_debug speed ") else {
+    let train = command.strip_prefix("create_debug train ");
+    let assemble = command.strip_prefix("create_debug assemble ");
+    let Some(rest) = command
+        .strip_prefix("create_debug speed ")
+        .or(train)
+        .or(assemble)
+    else {
         return;
     };
     *ran = true;
@@ -1546,6 +1572,20 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
             None => t.parse().ok(),
         })
         .collect();
+    if assemble.is_some() {
+        if let [x, y, z] = parts.as_slice() {
+            use_station(game, dim, [*x, *y, *z]);
+        }
+        return;
+    }
+    if train.is_some() {
+        let line = match parts.as_slice() {
+            [x, y, z] => send_train(game, dim, [*x, *y, *z]),
+            _ => "usage: create_debug train <x> <y> <z>".into(),
+        };
+        game.native_feedback(horizon_client::text::Text::literal(line));
+        return;
+    }
     let line = match parts.as_slice() {
         [x, y, z] => match with_world(|w| w.speed(dim, [*x, *y, *z])).flatten() {
             Some(speed) => format!("create speed at {x} {y} {z}: {speed} rpm"),
@@ -4885,6 +4925,293 @@ const PISTON_CHANNEL: &str = "create:piston";
 fn piston_world(anchor: [i32; 3], local: [i32; 3], facing: Dir, offset: i32) -> [i32; 3] {
     let o = facing.offset();
     [0, 1, 2].map(|a| anchor[a] + local[a] + o[a] * offset)
+}
+
+const TRAIN_CHANNEL: &str = "create:train";
+
+/// The straight track a station targets (`TrackTargetingBehaviour`): the track block beside it,
+/// and the line through it.
+fn station_track(
+    game: &Game<'_>,
+    pos: [i32; 3],
+) -> Option<([i32; 3], create_engine::trains::Line)> {
+    use create_engine::trains::Line;
+    let registry = game.pack.assets.registry;
+    let axis_at = |p: [i32; 3]| -> Option<Axis> {
+        let s = registry.state(game.world.block(p[0], p[1], p[2]))?;
+        if s.name != "create:track" {
+            return None;
+        }
+        match s.properties.get("shape").map(String::as_str) {
+            Some("zo") => Some(Axis::Z),
+            Some("xo") => Some(Axis::X),
+            _ => None,
+        }
+    };
+    for d in [Dir::North, Dir::South, Dir::West, Dir::East] {
+        let o = d.offset();
+        let t = [pos[0] + o[0], pos[1], pos[2] + o[2]];
+        if let Some(axis) = axis_at(t) {
+            return Some((t, Line::trace(t, axis, |p| axis_at(p) == Some(axis))));
+        }
+    }
+    None
+}
+
+/// The station's assembly (`StationBlockEntity.assemble` / `disassemble` from its screen):
+/// a train standing at it goes back into the world; else the bogeys on its track (a block above
+/// it) and what sticks to them become a train.
+fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
+    use create_engine::trains::{Line, Train};
+    let Some((target, line)) = station_track(game, pos) else {
+        return;
+    };
+    let here = Line::along(line.axis, target) as f64;
+    let dimension = game.dim.id().to_owned();
+    let stopped = with_world(|w| {
+        let d = &mut w.dims[dim];
+        let i = d.trains.iter().position(|t| {
+            t.train.line == line
+                && t.train.destination.is_none()
+                && (t.train.position - here).abs() < 0.5
+        })?;
+        Some(d.trains.remove(i))
+    })
+    .flatten();
+    if let Some(t) = stopped {
+        let shift = (t.train.position - t.start).round() as i32;
+        let along = |p: [i32; 3]| {
+            let mut p = p;
+            match line.axis {
+                Axis::X => p[0] += shift,
+                Axis::Y => p[1] += shift,
+                Axis::Z => p[2] += shift,
+            }
+            p
+        };
+        for (l, s) in &t.blocks {
+            let p = along([t.origin[0] + l[0], t.origin[1] + l[1], t.origin[2] + l[2]]);
+            game.native_set_block(
+                &dimension,
+                p,
+                BlockStateId(*s),
+                super::native_hooks::flags::UPDATE_ALL,
+            );
+        }
+        send_train_clear(game, &dimension, t.id);
+        return;
+    }
+    // Bogeys along the track, one above it.
+    let step = |a: i32| match line.axis {
+        Axis::X => [a, target[1] + 1, target[2]],
+        Axis::Y => [target[0], a, target[2]],
+        Axis::Z => [target[0], target[1] + 1, a],
+    };
+    let bogeys: Vec<[i32; 3]> = (line.from..=line.to)
+        .map(step)
+        .filter(|p| {
+            let s = game.world.block(p[0], p[1], p[2]);
+            matches!(
+                with_world(|w| w.table.get(s.0).map(|(b, _)| b)).flatten(),
+                Some(create_engine::Block::SmallBogey | create_engine::Block::LargeBogey)
+            )
+        })
+        .collect();
+    let Some(&origin) = bogeys.first() else {
+        return;
+    };
+    // The bogeys and what is stuck to them (slime, honey; glue is not ported), not the track.
+    let track: Vec<[i32; 3]> = (line.from..=line.to)
+        .map(|a| [step(a)[0], target[1], step(a)[2]])
+        .collect();
+    let mut blocks: Vec<([i32; 3], u32)> = Vec::new();
+    for b in &bogeys {
+        // Down is the track, left out: only what sticks is taken.
+        let Ok(found) =
+            create_engine::piston::gather(*b, Dir::Down, &track, |p| contraption_found(game, p))
+        else {
+            return;
+        };
+        for (o, s) in found {
+            let l = [
+                b[0] + o[0] - origin[0],
+                b[1] + o[1] - origin[1],
+                b[2] + o[2] - origin[2],
+            ];
+            if !blocks.iter().any(|(x, _)| *x == l) {
+                blocks.push((l, s));
+            }
+        }
+    }
+    let air = BlockStateId(0);
+    for (l, _) in &blocks {
+        let p = [origin[0] + l[0], origin[1] + l[1], origin[2] + l[2]];
+        game.native_set_block(&dimension, p, air, super::native_hooks::flags::UPDATE_ALL);
+    }
+    let start = Line::along(line.axis, origin) as f64;
+    let id = with_world(|w| {
+        let d = &mut w.dims[dim];
+        let id = d.trains.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+        d.trains.push(create_engine::world::TrainOnTrack {
+            train: Train {
+                line,
+                position: start,
+                speed: 0.0,
+                destination: None,
+            },
+            blocks,
+            origin,
+            start,
+            id,
+        });
+        id
+    })
+    .unwrap_or(0);
+    send_train(game, dim, [i32::MIN, 0, id as i32]);
+}
+
+/// `create_debug train <station>`: the train on that station's track heads for it. With a
+/// position of `[i32::MIN, 0, id]`, sends train `id` to clients as it is.
+fn send_train(game: &mut Game<'_>, dim: usize, station: [i32; 3]) -> String {
+    use create_engine::trains::Line;
+    let id = if station[0] == i32::MIN {
+        Some(station[2] as u32)
+    } else {
+        let Some((target, line)) = station_track(game, station) else {
+            return "no track beside that station".into();
+        };
+        let dest = Line::along(line.axis, target) as f64;
+        with_world(|w| {
+            let t = w.dims[dim]
+                .trains
+                .iter_mut()
+                .find(|t| t.train.line == line)?;
+            t.train.destination = Some(dest);
+            Some(t.id)
+        })
+        .flatten()
+    };
+    let Some(id) = id else {
+        return "no train on that track".into();
+    };
+    let Some(t) = with_world(|w| w.dims[dim].trains.iter().find(|t| t.id == id).cloned()).flatten()
+    else {
+        return "no such train".into();
+    };
+    let mut msg = Vec::new();
+    msg.extend_from_slice(&t.id.to_le_bytes());
+    for v in t.origin {
+        msg.extend_from_slice(&v.to_le_bytes());
+    }
+    msg.push(axis_index(t.train.line.axis));
+    msg.extend_from_slice(&((t.train.position - t.start) as f32).to_le_bytes());
+    msg.extend_from_slice(&(t.train.speed as f32).to_le_bytes());
+    let blocks = &t.blocks[..t.blocks.len().min((30_000 - 29) / 16)];
+    msg.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+    for (o, s) in blocks {
+        for v in o {
+            msg.extend_from_slice(&v.to_le_bytes());
+        }
+        msg.extend_from_slice(&s.to_le_bytes());
+    }
+    let dimension = game.dim.id().to_owned();
+    for p in players_in(game, &dimension) {
+        let _ = game.native_net_send_to_player(p, TRAIN_CHANNEL, &msg);
+    }
+    format!(
+        "train {id} heading for {:.1}",
+        t.train.destination.unwrap_or(t.train.position)
+    )
+}
+
+fn send_train_clear(game: &mut Game<'_>, dimension: &str, id: u32) {
+    for p in players_in(game, dimension) {
+        let _ = game.native_net_send_to_player(p, TRAIN_CHANNEL, &id.to_le_bytes());
+    }
+}
+
+/// Trains running to a destination (`Train.tick`, `Navigation.tick`); clients get each one's
+/// motion when it starts, every ten ticks while its speed changes, and when it stops.
+fn tick_trains(game: &mut Game<'_>, _dimension: &str, dim: usize) {
+    use create_engine::trains::Run;
+    let running: Vec<(u32, Run, f64)> = with_world(|w| {
+        w.dims[dim]
+            .trains
+            .iter_mut()
+            .filter(|t| t.train.destination.is_some())
+            .map(|t| {
+                let before = t.train.speed;
+                let run = t.train.tick();
+                (t.id, run, (t.train.speed - before).abs())
+            })
+            .collect()
+    })
+    .unwrap_or_default();
+    let tick = game.world.game_time;
+    for (id, run, change) in running {
+        if run == Run::Arrived || (change > 0.0 && tick % 10 == 0) {
+            send_train(game, dim, [i32::MIN, 0, id as i32]);
+        }
+    }
+}
+
+thread_local! {
+    /// Trains a client draws, by id: their part model.
+    static TRAINS: RefCell<HashMap<u32, u32>> = RefCell::new(HashMap::new());
+}
+
+/// A train on the client: one part model gliding along its track at its speed from where it is
+/// now (`CarriageContraptionEntity`'s motion), until the next message.
+fn trains_from_server(game: &mut Game<'_>, d: &[u8]) {
+    let i = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
+    if d.len() < 4 {
+        return;
+    }
+    let id = u32::from_le_bytes(d[0..4].try_into().unwrap());
+    let key = depot_key([id as i32, 0, 0], 222, 0);
+    if d.len() < 29 {
+        if let Some(old) = TRAINS.with_borrow_mut(|t| t.remove(&id)) {
+            game.native_part_clear(key);
+            game.native_part_model_free(old);
+        }
+        return;
+    }
+    let origin = [i(&d[4..8]), i(&d[8..12]), i(&d[12..16])];
+    let axis = d[16].min(2) as usize;
+    let f = |b: &[u8]| f32::from_le_bytes(b.try_into().unwrap());
+    let (offset, speed) = (f(&d[17..21]), f(&d[21..25]));
+    let n = u32::from_le_bytes(d[25..29].try_into().unwrap()) as usize;
+    let model = match TRAINS.with_borrow(|t| t.get(&id).copied()) {
+        Some(m) => m,
+        None => {
+            let blocks: Vec<(BlockStateId, glam::Mat4)> = d[29..]
+                .chunks_exact(16)
+                .take(n)
+                .map(|r| {
+                    let o = glam::Vec3::new(
+                        i(&r[0..4]) as f32,
+                        i(&r[4..8]) as f32,
+                        i(&r[8..12]) as f32,
+                    );
+                    (
+                        BlockStateId(u32::from_le_bytes(r[12..16].try_into().unwrap())),
+                        glam::Mat4::from_translation(o),
+                    )
+                })
+                .collect();
+            let Some(m) = game.native_part_model_compound(&blocks) else {
+                return;
+            };
+            TRAINS.with_borrow_mut(|t| t.insert(id, m));
+            m
+        }
+    };
+    let mut at = [0.0f32; 4];
+    let mut v = [0.0f32; 3];
+    at[axis] = offset;
+    at[3] = game.native_parts_seconds();
+    v[axis] = speed * 20.0;
+    game.native_part_glide(key, model, origin, 0, 0.0, 0.0, at, v);
 }
 
 /// Mechanical pistons (`LinearActuatorBlockEntity.tick`): a speed change makes a still piston

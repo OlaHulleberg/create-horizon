@@ -20,6 +20,7 @@ pub mod press;
 pub mod processing;
 pub mod states;
 pub mod tank;
+pub mod trains;
 pub mod waterwheel;
 pub mod world;
 pub mod wrench;

@@ -1,0 +1,59 @@
+{
+  "scenario": "off",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    2.0537109375,
+    2.0048828125,
+    1.755859375
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 0,
+      "frames": 22051,
+      "frame_ms_p50": 0.5029459595680237,
+      "frame_ms_p99": 1.1131490468978882,
+      "fps": 1837.5833333333333,
+      "tick_ms": 4.679266929626465,
+      "tick_ms_max": 10.119059562683104,
+      "check": null
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 0,
+      "frames": 22397,
+      "frame_ms_p50": 0.48838701844215393,
+      "frame_ms_p99": 1.1033190488815308,
+      "fps": 1866.4166666666667,
+      "tick_ms": 4.452917098999023,
+      "tick_ms_max": 9.654916763305664,
+      "check": null
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 0,
+      "frames": 21142,
+      "frame_ms_p50": 0.5367249846458435,
+      "frame_ms_p99": 1.090399980545044,
+      "fps": 1761.8333333333333,
+      "tick_ms": 4.414711952209473,
+      "tick_ms_max": 9.656326293945312,
+      "check": null
+    }
+  ],
+  "mean": {
+    "fps": 1821.9444444444443,
+    "frame_ms_p50": 0.5093526542186737,
+    "frame_ms_p99": 1.102289358774821,
+    "tick_ms": 4.515631993611653,
+    "tick_ms_max": 9.81010087331136
+  },
+  "stdev": {
+    "fps": 54.017122628265234,
+    "frame_ms_p50": 0.02479766211636209,
+    "frame_ms_p99": 0.011409434747980264,
+    "tick_ms": 0.14299371497982455,
+    "tick_ms_max": 0.26756700188529453
+  }
+}
