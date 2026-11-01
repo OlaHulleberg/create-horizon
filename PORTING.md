@@ -214,6 +214,14 @@ Brass tunnels splitting stacks cost nothing measurable (`benchmarks/create-p4b-*
 
 Signals cost no tick; frame p50 is 6% over the control, within budget and its run's spread (`benchmarks/create-p9s-*.json`). Headless proof: one straight track with stations at 0, 25 and 50 and signals at 15 and 35; a train assembled at the first and sent to the last stopped just before the signal at 15 while a second train stood assembled at 25 (after 15 s nothing at the last station; a screenshot shows it waiting by the signal); once the second was taken apart at its station the first went on and stood at the last (its bogey, slime and gold there). Engine tests: a red signal ahead, a green one, one beyond the stop, the other way; a train waits at the stop and keeps its destination.
 
+| Scenario (2026-11-01, Phase 4 funnels from the bundle's own module, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1769 ± 9 | 0.522 / 1.213 | 2.999 ± 0.110 | baseline |
+| chests (control) | 1655 ± 8 | 0.570 / 1.168 | 3.277 ± 0.079 | control |
+| funnels | 1596 ± 43 | 0.597 / 1.179 | 3.392 ± 0.131 | tick ≤ control + 0.25 ms, frame p50 ≤ control + 10% |
+
+Funnels now take items out of containers from a module the bundle places in Horizon's `game/machines.rs` (`funnel_extract.rs`, beside the hopper's own container rules), not through Horizon's API 53 helper; re-proven headless (a funnel took the 64 iron from a chest and threw them out in front, the gold left) and still within budget (`benchmarks/create-p4x-*.json`).
+
 | Scenario (2026-11-01, Phase 5 fluid blocks, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1754 ± 20 | 0.523 / 1.227 | 3.022 ± 0.023 | baseline |

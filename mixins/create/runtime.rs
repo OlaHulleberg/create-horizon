@@ -4118,8 +4118,12 @@ fn tick_funnels(game: &mut Game<'_>, dim: usize) {
         let o = facing.offset();
         let behind = [pos[0] - o[0], pos[1] - o[1], pos[2] - o[2]];
         let face = horizon_core::geometry::Direction::ALL[facing as usize];
-        let Some(stack) = game.native_extract_item(behind, face, create_engine::funnel::AMOUNT)
-        else {
+        let Some(stack) = super::machines::create_extract::extract_item(
+            game,
+            behind,
+            face,
+            create_engine::funnel::AMOUNT,
+        ) else {
             continue;
         };
         game.native_run_command(&format!(
