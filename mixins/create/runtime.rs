@@ -1413,6 +1413,10 @@ struct Recipes {
     blasting: create_engine::processing::Book,
     /// The deployer's: `create:deploying`, then `create:item_application` (automatable ones).
     deploying: Vec<create_engine::deployer::Recipe>,
+    /// The item drain's and the spout's: `create:emptying`, `create:filling` with the fluids
+    /// the machines carry.
+    emptying: Vec<(String, create_engine::drain::Emptying)>,
+    filling: Vec<create_engine::spout::Filling>,
 }
 
 impl Recipes {
@@ -1458,6 +1462,8 @@ fn ensure_recipes(game: &Game<'_>) -> bool {
                 .into_iter()
                 .flat_map(|k| read_application(game, k))
                 .collect(),
+            emptying: read_emptying(game),
+            filling: read_filling(game),
         })
     });
     true
@@ -1493,6 +1499,82 @@ fn read_cooking(game: &Game<'_>, kind: &str) -> create_engine::processing::Book 
 
 /// A basin recipe type: item ingredients and results only (a fluid ingredient or result drops the
 /// recipe until fluids are ported), with its `heat_requirement`.
+/// A recipe's fluid (`FluidIngredient` or a result): its fluid by id or tag, and amount.
+fn recipe_fluid(json: &serde_json::Value) -> Option<(create_engine::tank::Fluid, u32)> {
+    let amount = u32::try_from(json["amount"].as_u64()?).ok()?;
+    let id = json["fluid"]
+        .as_str()
+        .or_else(|| json["tag"].as_str())
+        .or_else(|| json["id"].as_str())?;
+    Some((create_engine::tank::Fluid::of_id(id)?, amount))
+}
+
+/// `create:emptying`: each item its fluid and what is left of it.
+fn read_emptying(game: &Game<'_>) -> Vec<(String, create_engine::drain::Emptying)> {
+    let mut out = Vec::new();
+    for r in game.native_recipes_of_type("create:emptying") {
+        let json = &*r.json;
+        let Some(items) = json["ingredients"]
+            .get(0)
+            .and_then(|i| game.native_recipe_ingredient(i))
+        else {
+            continue;
+        };
+        let results = json["results"].as_array().cloned().unwrap_or_default();
+        let Some((fluid, amount)) = results.iter().find_map(recipe_fluid) else {
+            continue;
+        };
+        let leftover = results
+            .iter()
+            .find(|o| o.get("amount").is_none())
+            .and_then(|o| game.native_recipe_result(o))
+            .map(|s| s.item.to_string());
+        for item in items.1.iter() {
+            out.push((
+                item.to_string(),
+                create_engine::drain::Emptying {
+                    fluid,
+                    amount,
+                    leftover: leftover.clone(),
+                },
+            ));
+        }
+    }
+    out
+}
+
+/// `create:filling`: an item and a fluid, what it becomes.
+fn read_filling(game: &Game<'_>) -> Vec<create_engine::spout::Filling> {
+    let mut out = Vec::new();
+    for r in game.native_recipes_of_type("create:filling") {
+        let json = &*r.json;
+        let Some(items) = json["ingredients"]
+            .get(0)
+            .and_then(|i| game.native_recipe_ingredient(i))
+        else {
+            continue;
+        };
+        let Some((fluid, amount)) = json["ingredients"].get(1).and_then(recipe_fluid) else {
+            continue;
+        };
+        let Some(result) = json["results"]
+            .get(0)
+            .and_then(|o| game.native_recipe_result(o))
+        else {
+            continue;
+        };
+        for item in items.1.iter() {
+            out.push(create_engine::spout::Filling {
+                item: item.to_string(),
+                fluid,
+                amount,
+                result: result.item.to_string(),
+            });
+        }
+    }
+    out
+}
+
 /// `ItemApplicationRecipe`s: the item worked on, the one held, the results; `_manual_only`
 /// ones left out (`CAN_BE_AUTOMATED`).
 fn read_application(game: &Game<'_>, kind: &str) -> Vec<create_engine::deployer::Recipe> {
@@ -3349,11 +3431,15 @@ fn tick_spouts(game: &mut Game<'_>, dim: usize) {
         let held = on_depot
             .then(|| depot_items(game, depot).into_iter().find(|x| x.0 == 0))
             .flatten();
-        let fluid = s.fluid.map(|f| f.0);
-        if create_engine::spout::step(&mut s, held.as_ref().map(|h| h.1.as_str()))
-            && let (Some((_, item, count)), Some(fluid)) = (held, fluid)
-            && let Some(out) = create_engine::spout::filled(&item, fluid)
-        {
+        if !ensure_recipes(game) {
+            continue;
+        }
+        let filled = RECIPES.with_borrow(|r| {
+            let r = r.as_ref()?;
+            create_engine::spout::step(&mut s, held.as_ref().map(|h| h.1.as_str()), &r.filling)
+        });
+        if let (Some(out), Some((_, item, count))) = (filled, held) {
+            let out = out.as_str();
             // `convertToAndLeaveHeld`: one is filled; the rest stays held, the filled one goes to
             // the outputs.
             game.native_with_mod_block_entity(depot, |be| {
@@ -3369,10 +3455,15 @@ fn tick_spouts(game: &mut Game<'_>, dim: usize) {
                     be.items[0] = Some(stack(out, 1));
                 } else {
                     be.items[0] = Some(stack(&item, u32::from(count) - 1));
-                    if let Some(slot) = be.items[create_engine::depot::OUTPUTS]
+                    // Into the outputs as the depot stacks them (`insertItemStacked`).
+                    let outputs = &mut be.items[create_engine::depot::OUTPUTS];
+                    if let Some(s) = outputs
                         .iter_mut()
-                        .find(|s| s.is_none())
+                        .flatten()
+                        .find(|s| &*s.item == out && s.count < 64)
                     {
+                        s.count += 1;
+                    } else if let Some(slot) = outputs.iter_mut().find(|s| s.is_none()) {
                         *slot = Some(stack(out, 1));
                     }
                 }
@@ -3396,20 +3487,26 @@ fn tick_drains(game: &mut Game<'_>, dim: usize) {
             .collect()
     })
     .unwrap_or_default();
+    if !drains.is_empty() && !ensure_recipes(game) {
+        return;
+    }
     for pos in drains {
-        let Some(out) = with_world(|w| {
-            let d = w.dims[dim].drains.get_mut(&pos)?;
-            let held = d.held.clone();
-            if held
-                .as_ref()
-                .is_some_and(|h| create_engine::drain::contents(&h.0).is_none())
-            {
-                d.held = None;
-                return held.map(|h| (h.0, h.1));
-            }
-            create_engine::drain::tick(d).then(|| ("minecraft:bucket".to_owned(), 1))
-        })
-        .flatten() else {
+        let Some(out) = RECIPES.with_borrow(|r| {
+            let emptying = r.as_ref().map_or(&[][..], |r| &r.emptying[..]);
+            with_world(|w| {
+                let d = w.dims[dim].drains.get_mut(&pos)?;
+                let held = d.held.clone();
+                if held
+                    .as_ref()
+                    .is_some_and(|h| create_engine::drain::contents(&h.0, emptying).is_none())
+                {
+                    d.held = None;
+                    return held.map(|h| (h.0, h.1));
+                }
+                create_engine::drain::tick(d, emptying)?.map(|left| (left, 1))
+            })
+            .flatten()
+        }) else {
             continue;
         };
         let (x, y, z) = (
@@ -3939,7 +4036,10 @@ fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                         // `OpenEndedPipe.provideFluidToSpace`: a bucket's worth becomes a source.
                         let have = pump.out.filter(|o| o.0 == fluid).map_or(0, |o| o.1);
                         let total = have + n;
-                        if total >= BUCKET {
+                        if !fluid.placeable() {
+                            // Create's own fluids have no blocks in the world yet.
+                            0
+                        } else if total >= BUCKET {
                             let name = if fluid == create_engine::tank::Fluid::Water {
                                 "minecraft:water"
                             } else {
@@ -6398,6 +6498,9 @@ fn tanks_from_server(game: &mut Game<'_>, data: &[u8]) {
         };
         let (name, tint) = match t.fluid {
             Some(Fluid::Water) => ("create:part_fluid_water", Some(0x3F_76E4)),
+            Some(Fluid::Honey) => ("create:part_fluid_honey", None),
+            Some(Fluid::Chocolate) => ("create:part_fluid_chocolate", None),
+            Some(Fluid::Milk) => ("create:part_fluid_milk", None),
             _ => ("create:part_fluid_lava", None),
         };
         let Some(state) = registry.default_state(name).and_then(|d| {
