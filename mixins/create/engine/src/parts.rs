@@ -188,6 +188,10 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         Block::MechanicalPress => s
             .facing
             .map_or([None, None], |f| one(Part::shaft(f.axis()))),
+        // EncasedFanBlock.hasShaftTowards: the face behind it.
+        Block::EncasedFan => s
+            .facing
+            .map_or([None, None], |f| one(Part::half(f.opposite()))),
         Block::WaterWheel => s.facing.map_or([None, None], |f| {
             // WaterWheelBlock.hasShaftTowards: both ends of its axis.
             one(Part {

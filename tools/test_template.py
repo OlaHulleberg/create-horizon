@@ -68,10 +68,23 @@ pub mod position {
 pub mod geometry {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum Direction { Down, Up, North, South, West, East }
     impl Direction { pub const ALL: [Self; 6] = [Self::Down, Self::Up, Self::North, Self::South, Self::West, Self::East]; }
+    #[derive(Clone, Copy)] pub enum Axis { X, Y, Z }
+    pub struct VoxelShape;
+    impl VoxelShape {
+        pub fn is_empty(&self) -> bool { false }
+        pub fn is_block(&self) -> bool { true }
+        pub fn min_at(&self, axis: Axis, first: f64, second: f64) -> f64 { let _ = (axis, first, second); 0.0 }
+        pub fn max_at(&self, axis: Axis, first: f64, second: f64) -> f64 { let _ = (axis, first, second); 1.0 }
+    }
 }
 ''',
         'crates/horizon-world/Cargo.toml': '[package]\nname = "horizon-world"\nversion = "0.1.0"\nedition = "2024"\n',
         'crates/horizon-world/src/lib.rs': '''
+pub mod fluid {
+    #[derive(Clone, Copy, PartialEq)] pub enum FluidKind { Empty, FlowingWater, Water, FlowingLava, Lava }
+    #[derive(Clone, Copy)] pub struct FluidState(pub FluidKind);
+    impl FluidState { pub fn kind(self) -> FluidKind { self.0 } }
+}
 pub mod nbt {
     #[derive(Clone, PartialEq, Debug)] pub enum Tag { IntArray(Vec<i32>), Compound(Compound), List(Vec<Tag>), String(JavaString) }
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)] pub struct JavaString(String);
@@ -112,9 +125,9 @@ extern crate self as horizon_client;
 pub mod game;
 pub mod items {
     #[derive(Clone)] pub struct ItemStack { pub item: std::sync::Arc<str>, pub count: u32, pub damage: u32, pub extra: Option<Box<()>> }
-    pub struct ItemInfo { pub max_stack: u32 }
+    pub struct ItemInfo { pub max_stack: u32, pub fire_resistant: bool }
     pub struct Items { pub item_tags: std::collections::HashMap<String, std::collections::HashSet<String>> }
-    impl Items { pub fn get(&self, item: &str) -> Option<ItemInfo> { let _ = item; Some(ItemInfo { max_stack: 64 }) } }
+    impl Items { pub fn get(&self, item: &str) -> Option<ItemInfo> { let _ = item; Some(ItemInfo { max_stack: 64, fire_resistant: false }) } }
 }
 pub mod containers {
     pub struct ModBlockEntity { pub items: Vec<Option<crate::items::ItemStack>> }
@@ -127,6 +140,8 @@ pub mod first_person {
 pub mod crafting {
     pub struct CustomRecipe { pub id: String, pub json: std::sync::Arc<serde_json::Value> }
     pub struct Ingredient(pub std::collections::HashSet<String>, pub Vec<String>);
+    pub struct Cooking { pub id: String, pub kind: String, pub ingredient: Ingredient, pub result: crate::items::ItemStack }
+    #[derive(Default)] pub struct Recipes { pub cooking: Vec<Cooking> }
 }
 pub mod text {
     pub struct Text(pub String);
@@ -195,7 +210,7 @@ pub mod native_hooks {
         }
         pub fn items(&self) -> horizon_client::items::Items { horizon_client::items::Items { item_tags: Default::default() } }
         pub fn native_recipes_of_type(&self, kind: &str) -> &[horizon_client::crafting::CustomRecipe] {
-            self.recipes.get(kind).map_or(&[], Vec::as_slice)
+            self.custom_recipes.get(kind).map_or(&[], Vec::as_slice)
         }
         pub fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<horizon_client::crafting::Ingredient> {
             let item = json.as_str()?.to_owned();
@@ -336,6 +351,7 @@ pub struct World {
 }
 impl World {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId { BlockStateId(*self.blocks.get(&[x, y, z]).unwrap_or(&0)) }
+    pub fn loaded(&self, x: i32, z: i32) -> bool { let _ = (x, z); true }
 }
 pub struct Hit { pub pos: [i32; 3] }
 pub struct Player { pub exhaustion: f32 }
@@ -347,17 +363,34 @@ pub struct Game<'a> {
     pub creative: bool, pub player: Option<Player>, pub keys: std::collections::HashSet<winit::keyboard::KeyCode>,
     pub glides: Vec<(u32, [i32; 3], u8, f32, [f32; 3])>, pub hand: horizon_client::first_person::Hand, pub yaw: f32,
     pub inventory: Vec<Option<horizon_client::items::ItemStack>>, pub selected: usize, pub dim: Dim,
-    pub res: Res, pub recipes: std::collections::HashMap<String, Vec<horizon_client::crafting::CustomRecipe>>,
+    pub res: Res, pub custom_recipes: std::collections::HashMap<String, Vec<horizon_client::crafting::CustomRecipe>>,
+    pub cooking: horizon_client::crafting::Recipes,
+}
+impl Game<'_> {
+    pub fn recipes(&self) -> &horizon_client::crafting::Recipes { &self.cooking }
 }
 pub struct Dim;
 impl Dim { pub fn id(&self) -> &str { "minecraft:overworld" } }
 pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
 pub struct Behaviours;
 pub struct Facts { pub flags: u32 }
+#[derive(Clone, Copy)] pub struct BlockId(pub u16);
+pub struct BlockSet;
+impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) has no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 20) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        Facts { flags: if state.0 == 0 { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 } }
+        let empty = state.0 == 0 || state.0 == 20;
+        Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 } }
+    }
+    /// No block tags; no cached shapes (the collision flag decides).
+    pub fn tag(&self, name: &str) -> Option<&BlockSet> { let _ = name; None }
+    pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
+    pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
+    /// State 20 is a water source.
+    pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
+        use horizon_world::fluid::{FluidKind, FluidState};
+        FluidState(if state.0 == 20 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -423,6 +456,9 @@ impl Behaviours {
     // 17: a windmill bearing facing north; 18: a white sail facing north (in the xy plane).
     states.push(BlockState { name: "create:windmill_bearing".into(), properties: props("facing", "north") });
     states.push(BlockState { name: "create:white_sail".into(), properties: props("facing", "north") });
+    // 19: an encased fan facing east; 20: a water source.
+    states.push(BlockState { name: "create:encased_fan".into(), properties: props("facing", "east") });
+    states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
@@ -430,13 +466,20 @@ impl Behaviours {
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),
         glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0,
         inventory: vec![Some(horizon_client::items::ItemStack { item: "minecraft:iron_ingot".into(), count: 5, damage: 0, extra: None })],
-        selected: 0, dim: Dim, res: Res, recipes: Default::default() };
+        selected: 0, dim: Dim, res: Res, custom_recipes: Default::default(), cooking: Default::default() };
     // data/create/recipe/pressing/iron_ingot.json
-    game.recipes.insert("create:pressing".into(), vec![horizon_client::crafting::CustomRecipe {
+    game.custom_recipes.insert("create:pressing".into(), vec![horizon_client::crafting::CustomRecipe {
         id: "create:pressing/iron_ingot".into(),
         json: std::sync::Arc::new(serde_json::json!({
             "type": "create:pressing", "ingredients": ["minecraft:iron_ingot"],
             "results": [{"id": "create:iron_sheet"}]})),
+    }]);
+    // data/create/recipe/splashing/ice.json, for the fan.
+    game.custom_recipes.insert("create:splashing".into(), vec![horizon_client::crafting::CustomRecipe {
+        id: "create:splashing/ice".into(),
+        json: std::sync::Arc::new(serde_json::json!({
+            "type": "create:splashing", "ingredients": ["minecraft:ice"],
+            "results": [{"id": "minecraft:packed_ice"}]})),
     }]);
     game.native_world_lifecycle(native_lifecycle::WorldPhase::WorldOpenReady, "");
     assert_eq!(create_engine::states::index(2), Some(0));
@@ -646,6 +689,23 @@ impl Behaviours {
     let mut canceled = false;
     game.native_right_click_block([50, 0, 50], [0, 0, -1], &mut canceled);
     assert!((46..54).all(|x| game.world.blocks.get(&[x, 0, 49]) == Some(&18)), "the sails are back");
+    // A fan at (60, 0, 60) facing east, its motor behind it, water in front and a depot below the
+    // current three blocks out holding two ice: washed into packed ice after 151 ticks.
+    game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
+        horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
+            item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 20), ([63, -1, 60], 4)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
+    }
+    let washed = |game: &Game<'_>| {
+        let horizon_client::containers::BlockEntity::Mod(d) = &game.world.block_entities[&(63, -1, 60)];
+        d.items.first().and_then(|s| s.as_ref()).map(|s| (s.item.to_string(), s.count))
+    };
+    for _ in 0..100 { game.native_level_tick_post("minecraft:overworld"); }
+    assert_eq!(washed(&game), Some(("minecraft:ice".into(), 2)), "not yet");
+    for _ in 0..60 { game.native_level_tick_post("minecraft:overworld"); }
+    assert_eq!(washed(&game), Some(("minecraft:packed_ice".into(), 2)));
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

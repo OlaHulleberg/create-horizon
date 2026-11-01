@@ -197,6 +197,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_latches(game, dimension, dim);
     tick_windmills(game, dimension, dim);
     tick_millstones(game, dim);
+    tick_fans(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -695,6 +696,7 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
         Model::PressHead(d) => find("create:part_press_head", "facing", dir_name(d)),
         Model::Belt(..) | Model::BeltPulley(_) => None,
         Model::BearingTop(d) => find("create:part_bearing_top_wooden", "facing", dir_name(d)),
+        Model::FanPropeller(d) => find("create:part_fan_propeller", "facing", dir_name(d)),
     }
 }
 
@@ -903,6 +905,24 @@ struct Recipes {
     table: (usize, usize),
     milling: create_engine::processing::Book,
     pressing: create_engine::processing::Book,
+    /// The fan's: Create's washing and haunting, vanilla's cooking.
+    splashing: create_engine::processing::Book,
+    haunting: create_engine::processing::Book,
+    smoking: create_engine::processing::Book,
+    smelting: create_engine::processing::Book,
+    blasting: create_engine::processing::Book,
+}
+
+impl Recipes {
+    fn fan(&self) -> create_engine::fan::Books<'_> {
+        create_engine::fan::Books {
+            splashing: &self.splashing,
+            haunting: &self.haunting,
+            smoking: &self.smoking,
+            smelting: &self.smelting,
+            blasting: &self.blasting,
+        }
+    }
 }
 
 /// Reads Create's recipe books the first time a machine needs them in a world, and again after
@@ -923,6 +943,11 @@ fn ensure_recipes(game: &Game<'_>) -> bool {
             table,
             milling,
             pressing,
+            splashing: read_book(game, "create:splashing"),
+            haunting: read_book(game, "create:haunting"),
+            smoking: read_cooking(game, "minecraft:smoking"),
+            smelting: read_cooking(game, "minecraft:smelting"),
+            blasting: read_cooking(game, "minecraft:blasting"),
         })
     });
     true
@@ -930,6 +955,30 @@ fn ensure_recipes(game: &Game<'_>) -> bool {
 
 thread_local! {
     static RECIPES: RefCell<Option<Recipes>> = const { RefCell::new(None) };
+}
+
+/// A vanilla cooking recipe type (`minecraft:smelting`) as a book: its one ingredient, its one
+/// result. These are the game's own table (vanilla's, the content mods' and the world's packs'),
+/// in file order; `native_recipes_of_type` serves only mods' own types.
+fn read_cooking(game: &Game<'_>, kind: &str) -> create_engine::processing::Book {
+    use create_engine::processing::{Book, Output, Recipe};
+    let recipes = game
+        .recipes()
+        .cooking
+        .iter()
+        .filter(|c| c.kind == kind)
+        .map(|c| Recipe {
+            id: c.id.clone(),
+            ingredients: vec![c.ingredient.1.iter().map(|s| s.to_string()).collect()],
+            results: vec![Output {
+                item: c.result.item.to_string(),
+                count: c.result.count.min(255) as u8,
+                chance: 1.0,
+            }],
+            time: 0,
+        })
+        .collect();
+    Book::new(recipes)
 }
 
 fn read_book(game: &Game<'_>, kind: &str) -> create_engine::processing::Book {
@@ -1747,6 +1796,364 @@ fn press_on_depot(
     next
 }
 
+/// Encased fans that turn (`EncasedFanBlockEntity.tick`): the current looked at again when due
+/// (`AirCurrent.rebuild`), then the depots and belts in it processed
+/// (`tickAffectedHandlers`). Stopped fans cost nothing.
+fn tick_fans(game: &mut Game<'_>, dim: usize) {
+    let fans = with_world(|w| w.fans_to_tick(dim)).unwrap_or_default();
+    if fans.is_empty() {
+        return;
+    }
+    let recipes = ensure_recipes(game);
+    for pos in fans {
+        let Some((rebuild, speed, facing)) = with_world(|w| {
+            let f = w.dims[dim].fans.get(&pos)?;
+            Some((f.rebuild, f.speed, f.facing))
+        })
+        .flatten() else {
+            continue;
+        };
+        if rebuild {
+            let (current, handlers) = match facing {
+                Some(facing) if speed != 0.0 => fan_current(game, dim, pos, facing, speed),
+                _ => Default::default(),
+            };
+            with_world(|w| {
+                if let Some(f) = w.dims[dim].fans.get_mut(&pos) {
+                    f.rebuild = false;
+                    f.changed |= f.current != current;
+                    f.current = current;
+                    f.handlers = handlers;
+                }
+            });
+        }
+        if speed == 0.0 || !recipes {
+            continue;
+        }
+        let handlers = with_world(|w| w.dims[dim].fans.get(&pos).map(|f| f.handlers.clone()))
+            .flatten()
+            .unwrap_or_default();
+        for (at, kind) in handlers {
+            let Some(kind) = kind else {
+                continue;
+            };
+            fan_on_depot(game, dim, at, kind);
+            fan_on_belt(game, dim, at, kind);
+        }
+    }
+}
+
+/// `AirCurrent.rebuild` and `findAffectedHandlers` for the fan at `pos`.
+fn fan_current(
+    game: &Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    facing: Dir,
+    speed: f32,
+) -> (
+    create_engine::fan::Current,
+    Vec<([i32; 3], Option<create_engine::fan::Kind>)>,
+) {
+    use create_engine::fan::{self, Current, Way};
+    let o = facing.offset();
+    let at = |i: i32| [pos[0] + o[0] * i, pos[1] + o[1] * i, pos[2] + o[2] * i];
+    let b = game.res.behaviours();
+    let transparent = b.tag("create:fan_transparent");
+    let way = |i: i32| {
+        let p = at(i);
+        if !game.world.loaded(p[0], p[2]) {
+            return Way::Unloaded;
+        }
+        let state = game.world.block(p[0], p[1], p[2]);
+        if transparent.is_some_and(|t| t.contains(b.block(state))) {
+            return Way::Open;
+        }
+        match b.collision_shape(state) {
+            Some(shape) if shape.is_empty() => Way::Open,
+            Some(shape) if shape.is_block() => Way::Full,
+            Some(shape) => Way::Depth(max_depth(shape, facing)),
+            None if b.facts(state).flags
+                & horizon_world::level::data::state_flags::COLLISION_EMPTY
+                != 0 =>
+            {
+                Way::Open
+            }
+            None => Way::Full,
+        }
+    };
+    let max = fan::flow_limit(fan::max_distance(speed), way);
+    let current = Current::build(max, fan::pushing(speed, facing), |i| {
+        catalyst_at(game, at(i))
+    });
+    let mut handlers = Vec::new();
+    for i in 1..=current.limit() {
+        let segment = current.type_at((i - 1) as f32);
+        for below in 0..2 {
+            let p = at(i);
+            let p = [p[0], p[1] - below, p[2]];
+            let held = with_world(|w| {
+                let d = &w.dims[dim];
+                d.depots.contains_key(&p) || d.belt_of.contains_key(&p)
+            });
+            if held == Some(true) {
+                handlers.push((p, catalyst_at(game, p).or(segment)));
+            }
+            if facing.axis() == Axis::Y {
+                break;
+            }
+        }
+    }
+    (current, handlers)
+}
+
+/// `AirCurrent.findMaxDepth`: how far air gets into `shape` going `facing`, sampled at five
+/// points of the face; infinite where a sample finds a hole.
+fn max_depth(shape: &horizon_core::geometry::VoxelShape, facing: Dir) -> f32 {
+    use horizon_core::geometry::Axis as A;
+    let axis = match facing.axis() {
+        Axis::X => A::X,
+        Axis::Y => A::Y,
+        Axis::Z => A::Z,
+    };
+    let positive = matches!(facing, Dir::East | Dir::Up | Dir::South);
+    let mut depth = 0.0f64;
+    for (a, b) in [
+        (0.25, 0.25),
+        (0.25, 0.75),
+        (0.5, 0.5),
+        (0.75, 0.25),
+        (0.75, 0.75),
+    ] {
+        let d = if positive {
+            let min = shape.min_at(axis, a, b);
+            if min == f64::INFINITY {
+                return f32::INFINITY;
+            }
+            min
+        } else {
+            let max = shape.max_at(axis, a, b);
+            if max == f64::NEG_INFINITY {
+                return f32::INFINITY;
+            }
+            1.0 - max
+        };
+        depth = depth.max(d);
+    }
+    depth as f32
+}
+
+/// `FanProcessingType.getAt` at a block: its fluid and the catalyst block tags with the state
+/// properties they check (a campfire's `lit`, a blaze burner's `blaze` and `flame_type`).
+fn catalyst_at(game: &Game<'_>, p: [i32; 3]) -> Option<create_engine::fan::Kind> {
+    use create_engine::fan::{Catalyst, Heat, kind_at};
+    use horizon_world::fluid::FluidKind;
+    let b = game.res.behaviours();
+    let state = game.world.block(p[0], p[1], p[2]);
+    let fluid = b.fluid(state).kind();
+    let block = b.block(state);
+    let tagged = |t: &str| b.tag(t).is_some_and(|t| t.contains(block));
+    let mut c = Catalyst {
+        water: matches!(fluid, FluidKind::Water | FluidKind::FlowingWater),
+        lava: matches!(fluid, FluidKind::Lava | FluidKind::FlowingLava),
+        splashing: tagged("create:fan_processing_catalysts/splashing"),
+        haunting: tagged("create:fan_processing_catalysts/haunting"),
+        smoking: tagged("create:fan_processing_catalysts/smoking"),
+        blasting: tagged("create:fan_processing_catalysts/blasting"),
+        ..Default::default()
+    };
+    if !(c.haunting || c.smoking || c.blasting) {
+        return kind_at(&c);
+    }
+    let Some(s) = game.pack.assets.registry.state(state) else {
+        return kind_at(&c);
+    };
+    let prop = |k: &str| s.properties.get(k).map(String::as_str);
+    if tagged("minecraft:campfires") {
+        c.campfire_lit = prop("lit").map(|v| v == "true");
+    }
+    c.soul_flame = prop("flame_type").map(|v| v == "soul");
+    c.heat = prop("blaze").and_then(|v| {
+        Some(match v {
+            "none" => Heat::None,
+            "smouldering" => Heat::Smouldering,
+            "fading" => Heat::Fading,
+            "kindled" => Heat::Kindled,
+            "seething" => Heat::Seething,
+            _ => return None,
+        })
+    });
+    kind_at(&c)
+}
+
+/// `DepotBehaviour.applyToAllItems` with `FanProcessing.applyProcessing`: the held stack's
+/// progress, and when done, its results: the first held (centred), the rest in the outputs,
+/// what finds no room dropped; none, and the stack is gone.
+fn fan_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3], kind: create_engine::fan::Kind) {
+    use create_engine::{fan, processing};
+    let Some(Some(mut held)) = with_world(|w| w.dims[dim].depots.get(&depot).copied()).flatten()
+    else {
+        return;
+    };
+    let Some((_, item, count)) = depot_items(game, depot).into_iter().find(|s| s.0 == 0) else {
+        return;
+    };
+    let fire_resistant = game.items().get(&item).is_some_and(|i| i.fire_resistant);
+    let can = RECIPES.with_borrow(|r| {
+        r.as_ref()
+            .is_some_and(|r| fan::can_process(kind, &item, fire_resistant, r.fan()))
+    });
+    let done = fan::advance(&mut held.fan, kind, u32::from(count), can);
+    if !done {
+        with_world(|w| w.dims[dim].depots.insert(depot, Some(held)));
+        return;
+    }
+    let mut rng = processing::Rng::new(
+        game.world.game_time as u64
+            ^ (depot[0] as u64).wrapping_mul(0x9E37_79B9)
+            ^ (depot[2] as u64) << 20,
+    );
+    let max = |i: &str| game.items().get(i).map_or(64, |x| x.max_stack).clamp(1, 64) as u8;
+    let results =
+        RECIPES.with_borrow(|r| fan::process(kind, &item, count, r.as_ref()?.fan(), max, &mut rng));
+    let Some(results) = results else {
+        with_world(|w| w.dims[dim].depots.insert(depot, Some(held)));
+        return;
+    };
+    let limits: Vec<u8> = results.iter().map(|(i, _)| max(i)).collect();
+    let stack = |item: &str, count: u8| horizon_client::items::ItemStack {
+        item: item.into(),
+        count: u32::from(count),
+        damage: 0,
+        extra: None,
+    };
+    let dropped = game
+        .native_with_mod_block_entity(depot, |be| {
+            be.items
+                .resize(be.items.len().max(create_engine::depot::SLOTS), None);
+            be.items[0] = None;
+            let mut outputs: Vec<processing::Slot> = be.items[create_engine::depot::OUTPUTS]
+                .iter()
+                .map(slot_of)
+                .collect();
+            let mut dropped = Vec::new();
+            for ((i, n), limit) in results.iter().zip(&limits) {
+                if be.items[0].is_none() {
+                    be.items[0] = Some(stack(i, *n));
+                    continue;
+                }
+                let left = processing::insert_stacked(&mut outputs, i, *n, *limit);
+                if left > 0 {
+                    dropped.push((i.clone(), left));
+                }
+            }
+            for (slot, s) in be.items[create_engine::depot::OUTPUTS]
+                .iter_mut()
+                .zip(outputs)
+            {
+                *slot = s.map(|(i, n)| stack(&i, n));
+            }
+            dropped
+        })
+        .unwrap_or_default();
+    for (i, n) in dropped {
+        game.native_run_command(&format!(
+            "summon minecraft:item {}.5 {}.0 {}.5 {{Item:{{id:'{i}',count:{n}}}}}",
+            depot[0],
+            depot[1] + 1,
+            depot[2]
+        ));
+    }
+    // getSimilar keeps the motion and the progress (done: -1, never again by this type).
+    let next = (!results.is_empty()).then_some(create_engine::depot::Held {
+        position: 0.5,
+        ..held
+    });
+    with_world(|w| {
+        w.dims[dim].depots.insert(depot, next);
+        w.depot_changed(dim, depot);
+    });
+}
+
+/// `BeltBlockEntity.applyToAllItems` with `FanProcessing.applyProcessing`: the items over the
+/// segment at `at` (within .51 of its middle).
+fn fan_on_belt(game: &mut Game<'_>, dim: usize, at: [i32; 3], kind: create_engine::fan::Kind) {
+    use create_engine::{belt, fan, processing};
+    let Some((c, index)) = with_world(|w| {
+        let d = &w.dims[dim];
+        let c = *d.belt_of.get(&at)?;
+        let index = d.belts.get(&c)?.chain.iter().position(|p| *p == at)? as f32;
+        let any = d.belts[&c]
+            .items
+            .items
+            .iter()
+            .any(|i| (index + 0.5 - i.position).abs() < 0.51);
+        any.then_some((c, index))
+    })
+    .flatten() else {
+        return;
+    };
+    let Some(mut inv) = with_world(|w| {
+        w.dims[dim]
+            .belts
+            .get_mut(&c)
+            .map(|b| std::mem::take(&mut b.items))
+    })
+    .flatten() else {
+        return;
+    };
+    let mut rng = processing::Rng::new(
+        game.world.game_time as u64
+            ^ (at[0] as u64).wrapping_mul(0x9E37_79B9)
+            ^ (at[2] as u64) << 20,
+    );
+    let max = |i: &str| game.items().get(i).map_or(64, |x| x.max_stack).clamp(1, 64) as u8;
+    let mut made = 0;
+    let dirty = RECIPES.with_borrow(|r| {
+        let Some(r) = r.as_ref() else {
+            return false;
+        };
+        inv.apply_within(index + 0.5, 0.51, |it| {
+            let fire_resistant = game.items().get(&it.item).is_some_and(|i| i.fire_resistant);
+            let can = fan::can_process(kind, &it.item, fire_resistant, r.fan());
+            if !fan::advance(&mut it.fan, kind, u32::from(it.count), can) {
+                return belt::Process::Pass;
+            }
+            let Some(results) = fan::process(kind, &it.item, it.count, r.fan(), max, &mut rng)
+            else {
+                return belt::Process::Pass;
+            };
+            let outputs = results
+                .into_iter()
+                .map(|(item, count)| {
+                    // getSimilar: a new stack's angle (`R.nextInt(360)`), the old one's place
+                    // and progress.
+                    made += 1;
+                    let angle = random_angle(game, [at[0] + made, at[1], at[2]]);
+                    let mut out = belt::Item::new(&item, count, angle, upright(game, &item));
+                    out.position = it.position;
+                    out.inserted_at = it.inserted_at;
+                    out.inserted_from = it.inserted_from;
+                    out.fan = it.fan;
+                    out
+                })
+                .collect();
+            belt::Process::Convert {
+                held: None,
+                outputs,
+            }
+        })
+    });
+    with_world(|w| {
+        if let Some(b) = w.dims[dim].belts.get_mut(&c) {
+            b.items = inv;
+        }
+        if dirty {
+            w.dims[dim].belt_changes.push(c);
+            w.mark_unsaved(dim, c);
+        }
+    });
+}
+
 /// A block entity slot as the processing rules see it.
 fn slot_of(s: &Option<horizon_client::items::ItemStack>) -> create_engine::processing::Slot {
     s.as_ref()
@@ -2094,6 +2501,7 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
                 angle: item.angle,
                 side_offset: item.side_offset,
                 locked: false,
+                fan: item.fan,
             };
             with_world(|w| w.depot_put(dim, next, Some(held)));
             return Some(0);

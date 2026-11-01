@@ -400,6 +400,9 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 ("top", &["true", "false"]),
             ]),
         ),
+        // EncasedFanBlock: any facing, a full block of andesite's properties
+        // (SharedProperties.stone).
+        "encased_fan" => ("minecraft:andesite", None, own(&[("facing", facing)])),
         // WindmillBearingBlock (BearingBlock): any facing, a full block.
         "windmill_bearing" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
         // SailBlock: a thin plane on any facing (AllShapes.SAIL / SAIL_FRAME, forDirectional
@@ -469,7 +472,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 18] = [
+pub const PARTIALS: [(&str, &str, &str); 19] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -522,6 +525,12 @@ pub const PARTIALS: [(&str, &str, &str); 18] = [
         "part_bearing_top_wooden",
         "create:block/bearing/top_wooden",
         "up",
+    ),
+    // CachedBuffers.partialFacing, as the shaft half.
+    (
+        "part_fan_propeller",
+        "create:block/encased_fan/propeller",
+        "south",
     ),
     ("part_fluid_water", "create:block/part_fluid_water", "up"),
     ("part_fluid_lava", "create:block/part_fluid_lava", "up"),

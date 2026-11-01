@@ -1,0 +1,89 @@
+{
+  "scenario": "fans",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.35546875,
+    1.39013671875,
+    1.4541015625
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 160,
+      "frames": 23641,
+      "frame_ms_p50": 0.4793969988822937,
+      "frame_ms_p99": 1.0020819902420044,
+      "fps": 1970.0833333333333,
+      "tick_ms": 4.312186241149902,
+      "tick_ms_max": 9.77828311920166,
+      "check": [
+        [
+          "-531, 94, 54 has the following block data: {x: -531, y: 94, Items: [{count: 64, Slot: 0b, id: \"minecraft:packed_ice\"}], z: 54, id: \"create:depot\"}"
+        ],
+        [
+          "-530, 94, 54 has the following block data: {x: -530, y: 94, Items: [{count: 64, Slot: 0b, id: \"minecraft:packed_ice\"}], z: 54, id: \"create:depot\"}"
+        ],
+        [
+          "-529, 94, 54 has the following block data: {x: -529, y: 94, Items: [{count: 64, Slot: 0b, id: \"minecraft:packed_ice\"}], z: 54, id: \"create:depot\"}"
+        ]
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 160,
+      "frames": 22787,
+      "frame_ms_p50": 0.4959659874439239,
+      "frame_ms_p99": 1.0090830326080322,
+      "fps": 1898.9166666666667,
+      "tick_ms": 4.291357040405273,
+      "tick_ms_max": 11.01626205444336,
+      "check": [
+        [
+          "-532, 91, 66 has the following block data: {x: -532, y: 91, Items: [{count: 64, Slot: 0b, id: \"minecraft:packed_ice\"}], z: 66, id: \"create:depot\"}"
+        ],
+        [
+          "-531, 91, 66 has the following block data: {x: -531, y: 91, Items: [{count: 64, Slot: 0b, id: \"minecraft:packed_ice\"}], z: 66, id: \"create:depot\"}"
+        ],
+        [
+          "-530, 91, 66 has the following block data: {x: -530, y: 91, Items: [{count: 64, Slot: 0b, id: \"minecraft:packed_ice\"}], z: 66, id: \"create:depot\"}"
+        ]
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 160,
+      "frames": 22642,
+      "frame_ms_p50": 0.4971760213375091,
+      "frame_ms_p99": 0.9944220185279846,
+      "fps": 1886.8333333333333,
+      "tick_ms": 4.462689399719238,
+      "tick_ms_max": 10.437524795532228,
+      "check": [
+        [
+          "-549, 93, 57 has the following block data: {x: -549, y: 93, Items: [{count: 64, Slot: 0b, id: \"minecraft:packed_ice\"}], z: 57, id: \"create:depot\"}"
+        ],
+        [
+          "-548, 93, 57 has the following block data: {x: -548, y: 93, Items: [{count: 64, Slot: 0b, id: \"minecraft:packed_ice\"}], z: 57, id: \"create:depot\"}"
+        ],
+        [
+          "-547, 93, 57 has the following block data: {x: -547, y: 93, Items: [{count: 64, Slot: 0b, id: \"minecraft:packed_ice\"}], z: 57, id: \"create:depot\"}"
+        ]
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1918.611111111111,
+    "frame_ms_p50": 0.4908463358879089,
+    "frame_ms_p99": 1.001862347126007,
+    "tick_ms": 4.355410893758138,
+    "tick_ms_max": 10.41068998972575
+  },
+  "stdev": {
+    "fps": 44.98381910733546,
+    "frame_ms_p50": 0.009933857956857367,
+    "frame_ms_p99": 0.0073329745525020276,
+    "tick_ms": 0.0934878188955619,
+    "tick_ms_max": 0.6194255735175506
+  }
+}

@@ -30,6 +30,8 @@ pub enum Model {
     /// A windmill bearing's wooden top (`AllPartialModels.BEARING_TOP_WOODEN`), turned to its
     /// facing, turning with its sails.
     BearingTop(Dir),
+    /// The encased fan's propeller (`AllPartialModels.ENCASED_FAN_INNER`), turned to a face.
+    FanPropeller(Dir),
 }
 
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
@@ -175,6 +177,23 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                         model: Model::BearingTop(f),
                         axis: f.axis(),
                         rpm: speeds[0],
+                        phase: 0.0,
+                    },
+                ]
+            })
+            .unwrap_or_default(),
+        // EncasedFanRenderer: the shaft half out of its back, and the propeller (facing back too)
+        // turning five times as fast, 80 to 1,280 rpm.
+        Block::EncasedFan => s
+            .facing
+            .map(|f| {
+                vec![
+                    half(0, f.opposite(), speeds[0]),
+                    Draw {
+                        slot: 1,
+                        model: Model::FanPropeller(f.opposite()),
+                        axis: f.axis(),
+                        rpm: crate::fan::propeller_rpm(speeds[0]),
                         phase: 0.0,
                     },
                 ]
