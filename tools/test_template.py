@@ -53,6 +53,7 @@ def write_fixture(original, root):
         ('tick_block', "horizon_client::game::native_hooks::GameLevel<'_>::native_tick_block"),
         ('use_item_on', "horizon_client::game::native_hooks::Game<'_>::native_use_item_on"),
         ('use_item', "horizon_client::game::native_hooks::Game<'_>::native_use_item"),
+        ('place_block', "horizon_client::game::native_hooks::Game<'_>::native_place_block"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -291,6 +292,12 @@ pub mod native_hooks {
         pub fn native_use_item(&mut self, stack: &horizon_client::items::ItemStack, claimed: &mut bool) {
             let _ = (stack, claimed);
         }
+        pub fn native_place_block(&mut self, stack: &horizon_client::items::ItemStack, pos: [i32; 3], state: BlockStateId) {
+            let _ = (stack, pos, state);
+        }
+        pub fn native_set_block_property(&mut self, pos: [i32; 3], key: &str, value: &str) -> bool {
+            self.native_set_block_property_with(pos, key, value, 3)
+        }
         pub fn native_part_model_posed(&mut self, state: BlockStateId, pose: glam::Mat4) -> Option<u32> {
             let _ = pose;
             Some(5000 + state.0)
@@ -361,7 +368,7 @@ pub struct Game<'a> {
     pub sent: Vec<(u128, String, Vec<u8>)>, pub parts: Vec<(u32, [i32; 3], u8, f32)>,
     pub aim: Option<[i32; 3]>, pub unsaved: Vec<[i32; 2]>,
     pub creative: bool, pub player: Option<Player>, pub keys: std::collections::HashSet<winit::keyboard::KeyCode>,
-    pub glides: Vec<(u32, [i32; 3], u8, f32, [f32; 3])>, pub hand: horizon_client::first_person::Hand, pub yaw: f32,
+    pub glides: Vec<(u32, [i32; 3], u8, f32, [f32; 3])>, pub hand: horizon_client::first_person::Hand, pub yaw: f32, pub pitch: f32,
     pub inventory: Vec<Option<horizon_client::items::ItemStack>>, pub selected: usize, pub dim: Dim,
     pub res: Res, pub custom_recipes: std::collections::HashMap<String, Vec<horizon_client::crafting::CustomRecipe>>,
     pub cooking: horizon_client::crafting::Recipes,
@@ -464,7 +471,7 @@ impl Behaviours {
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
         world: World { blocks: Default::default(), game_time: 0, block_entities: Default::default() }, sent: vec![], parts: vec![], aim: None, unsaved: vec![],
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),
-        glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0,
+        glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0, pitch: 0.0,
         inventory: vec![Some(horizon_client::items::ItemStack { item: "minecraft:iron_ingot".into(), count: 5, damage: 0, extra: None })],
         selected: 0, dim: Dim, res: Res, custom_recipes: Default::default(), cooking: Default::default() };
     // data/create/recipe/pressing/iron_ingot.json
@@ -706,6 +713,17 @@ impl Behaviours {
     assert_eq!(washed(&game), Some(("minecraft:ice".into(), 2)), "not yet");
     for _ in 0..60 { game.native_level_tick_post("minecraft:overworld"); }
     assert_eq!(washed(&game), Some(("minecraft:packed_ice".into(), 2)));
+    // Fans placed from an item, by a player looking north (yaw 180): alone it blows back at them
+    // (south); with a motor's shaft west of it, it turns its back to the shaft (east, as placed).
+    let stack = horizon_client::items::ItemStack { item: "create:encased_fan".into(), count: 1, damage: 0, extra: None };
+    for (pos, state) in [([72, 0, 72], 19), ([69, 0, 75], 3), ([70, 0, 75], 19)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
+    }
+    game.native_place_block(&stack, [72, 0, 72], BlockStateId(19));
+    assert_eq!(game.said.last().map(String::as_str), Some("set [72, 0, 72] facing=south"));
+    game.native_place_block(&stack, [70, 0, 75], BlockStateId(19));
+    assert!(!game.said.iter().any(|l| l.starts_with("set [70, 0, 75]")), "already facing away from the shaft");
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);
