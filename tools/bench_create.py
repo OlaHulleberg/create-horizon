@@ -22,6 +22,13 @@ the server thread's smoothed tick time. Scenarios:
   tunnels  the logistics belts with 21 andesite tunnels over each (segments 10 to 30, windowed
            straight tunnels): five stacks dropped on the first 9 segments of each pass under them (phase 4)
   belts9   the control for tunnels: the same belts and stacks, no tunnels
+  deployeruse 16 deployers at 16 rpm facing east, each given a water bucket by a player's click: each
+           stroke pours the water out or takes it back up (`native_use_item_at`, phase 3)
+  deployerstroke the same 16 deployers given a stick instead: strokes that use nothing, the control
+           for `deployeruse` (its water placed and taken up remeshes chunks: vanilla's cost)
+  waterchurn the vanilla control for `deployeruse`: 16 dispensers with a water bucket each where the
+           deployers' hands reach from, fired every 4 s (a deployer at 16 rpm: 80 ticks a use)
+  waterstill the same 16 water sources set once and left to spread: the water sheet's own drawing
   deployers  16 deployers at 16 rpm facing down over depots, each given 64 oak planks by a
            player's click and 64 shafts on its depot: 16 deployers making cogwheels (phase 3)
   bearings 16 mechanical bearings facing up at 16 rpm, each turning a slime block with four
@@ -335,6 +342,22 @@ def build(ctl_bin, sock, scenario, center):
                     failures)
             command(ctl_bin, sock, f"setblock {xx} {y-5} {z-1} create:creative_motor[facing=south]", failures)
         command(ctl_bin, sock, f"fill {x-16} {y-8} {z-2} {x+17} {y-8} {z+3} minecraft:stone", failures)
+    if scenario in ("deployeruse", "deployerstroke", "waterchurn", "waterstill"):
+        # Wide enough that the water (7 blocks of flow) never pours off onto plants below: their
+        # drops would be drawn as item entities.
+        command(ctl_bin, sock, f"fill {x-12} {y-7} {z-34} {x+12} {y-7} {z+34} minecraft:stone", failures)
+        if scenario == "waterchurn":
+            for i in range(16):
+                command(ctl_bin, sock, f"setblock {x-1} {y-6} {z - 24 + 3 * i} minecraft:dispenser[facing=east]"
+                        "{Items:[{Slot:0b,id:'minecraft:water_bucket',count:1}]}", failures)
+        if scenario == "waterstill":
+            for i in range(16):
+                command(ctl_bin, sock, f"setblock {x} {y-6} {z - 24 + 3 * i} minecraft:water", failures)
+        for i in range(16 if scenario in ("deployeruse", "deployerstroke") else 0):
+            zz = z - 24 + 3 * i
+            command(ctl_bin, sock, f"setblock {x-2} {y-6} {zz} create:deployer[facing=east,axis_along_first=false]",
+                    failures)
+            command(ctl_bin, sock, f"setblock {x-2} {y-6} {zz-1} create:creative_motor[facing=south]", failures)
     if scenario in ("gantries", "gantryshafts"):
         for row in range(16):
             zz = z - 16 + 2 * row
@@ -451,6 +474,45 @@ def arm_deployers(ctl_bin, sock, center):
     return armed
 
 
+def arm_deployers_east(ctl_bin, sock, center, item):
+    """Gives each east-facing deployer of `deployeruse` one `item` with a click on its pole; returns
+    how many took it."""
+    x, y, z = center
+    armed = 0
+    for i in range(16):
+        zz = z - 24 + 3 * i
+        for _ in range(3):
+            ctl(ctl_bin, sock, "command", f"item replace entity @p hotbar.0 with {item} 1")
+            ctl(ctl_bin, sock, "select", "1")
+            ctl(ctl_bin, sock, "tp", str(x - 0.5), str(y - 6), str(zz + 1.7))
+            time.sleep(0.3)
+            ctl(ctl_bin, sock, "look-at", str(x - 0.999), str(y - 5.5), str(zz + 0.5))
+            time.sleep(0.3)
+            ctl(ctl_bin, sock, "use-item")
+            time.sleep(0.4)
+            inv = ctl(ctl_bin, sock, "inventory")
+            if not any(s.get("item") for s in inv.get("hotbar", [])):
+                armed += 1
+                break
+    return armed
+
+
+# `waterchurn`'s clock: a redstone block put on each dispenser and taken off again, staggered, so
+# each fires once every 4 s.
+WATER_CHURN = """
+import subprocess, sys, time
+ctl_bin, sock, x, y, z, seconds = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:6]), float(sys.argv[6])
+end, k = time.time() + seconds, 0
+while time.time() < end:
+    i = k % 16
+    block = "minecraft:redstone_block" if (k // 16) % 2 == 0 else "minecraft:air"
+    subprocess.run([ctl_bin, "--socket", sock, "command", f"setblock {x - 1} {y + 1} {z - 24 + 3 * i} {block}"],
+                   capture_output=True)
+    k += 1
+    time.sleep(2 / 16)
+"""
+
+
 def count_create(ctl_bin, sock, center):
     """Create blocks the scene really holds, counted in 16-row bands: one `blocks` reply lists at
     most 4,096 blocks."""
@@ -491,7 +553,7 @@ def run_once(args, scenario):
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
-                    "processing": 528, "deployers": 48, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
+                    "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
                     "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
@@ -519,10 +581,19 @@ def run_once(args, scenario):
             armed = arm_deployers(ctl_bin, sock, center)
             if armed != 16:
                 raise SystemExit(f"only {armed} of 16 deployers took their planks")
+        if scenario in ("deployeruse", "deployerstroke"):
+            item = "minecraft:water_bucket" if scenario == "deployeruse" else "minecraft:stick"
+            armed = arm_deployers_east(ctl_bin, sock, center, item)
+            if armed != 16:
+                raise SystemExit(f"only {armed} of 16 deployers took their {item}")
         if scenario == "contraptions":
             turning = assemble_windmills(ctl_bin, sock, center)
             if turning != 16:
                 raise SystemExit(f"only {turning} of 16 windmills turn")
+        if args.no_mobs:
+            # Mobs wandering into view swing the frame time (vanilla's entity drawing) from run to run.
+            ctl(ctl_bin, sock, "command", "gamerule spawn_mobs false")
+            ctl(ctl_bin, sock, "command", "kill @e[type=!player,type=!item]")
         ctl(ctl_bin, sock, "tp", str(x), str(y), str(z))
         ctl(ctl_bin, sock, "fly", str(x), str(y), str(z), str(x), str(y), str(z), "0.1", "40")
         ctl(ctl_bin, sock, "wait-ready")
@@ -549,8 +620,14 @@ def run_once(args, scenario):
             time.sleep(0.5)
             turning = ctl(ctl_bin, sock, "messages", "12").get("chat")
         # A slow circle-ish line over the scenario, looking down at it.
+        churn = None
+        if scenario == "waterchurn":
+            churn = subprocess.Popen(["python3", "-c", WATER_CHURN, ctl_bin, sock, str(x), str(y - 6), str(z),
+                                      str(args.seconds + 4)])
         summary = ctl(ctl_bin, sock, "fly", str(x - 12), str(y), str(z - 12), str(x + 12), str(y), str(z + 12),
                       str(args.seconds), "40", "raw", timeout=int(args.seconds) + 120)
+        if churn:
+            churn.wait()
         if args.screenshot:
             ctl(ctl_bin, sock, "screenshot", str(Path(args.screenshot).resolve()))
         pressed = turning
@@ -585,6 +662,11 @@ def run_once(args, scenario):
             pressed = ctl(ctl_bin, sock, "command", f"data get block {x-16} {y-7} {z} Items").get("chat")
         if scenario == "deployers":
             pressed = ctl(ctl_bin, sock, "command", f"data get block {x-15} {y-7} {z} Items").get("chat")
+        if scenario in ("deployeruse", "waterstill", "waterchurn"):
+            # Water where the hands reach, in some of the 16 at any moment.
+            found = ctl(ctl_bin, sock, "blocks", str(x), str(y - 6), str(z - 24), str(x), str(y - 6),
+                        str(z + 21)).get("blocks", [])
+            pressed = sum(1 for b in found if b[3].startswith("minecraft:water"))
         if scenario == "links":
             # The receivers follow the clocks: the lamps read twice, a moment apart.
             reads = []
@@ -619,6 +701,9 @@ def run_once(args, scenario):
                 "frame_ms_p99": sorted(frames)[int(len(frames) * 0.99) - 1] if frames else None,
                 "fps": len(frames) / args.seconds,
                 "tick_ms": summary.get("tick_ms"), "tick_ms_max": summary.get("tick_ms_max"),
+                # Where a frame's time goes: the game's CPU work and the GPU's (medians).
+                "cpu_ms_p50": statistics.median(summary["cpu_ms"]) if summary.get("cpu_ms") else None,
+                "gpu_ms_p50": statistics.median(summary["gpu_ms"]) if summary.get("gpu_ms") else None,
                 "check": pressed}
     finally:
         try:
@@ -642,7 +727,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
+                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
@@ -650,6 +735,8 @@ def main():
     p.add_argument("--distance", type=int, default=12)
     p.add_argument("--out")
     p.add_argument("--screenshot", help="a screenshot of the scene after the last flight")
+    p.add_argument("--no-mobs", action="store_true",
+                   help="turn mob spawning off and clear mobs before measuring (a steadier frame time)")
     p.add_argument("--keep-logs", help="copy each run's game logs into this folder")
     args = p.parse_args()
     runs = [run_once(args, args.scenario) for _ in range(args.repeats)]
