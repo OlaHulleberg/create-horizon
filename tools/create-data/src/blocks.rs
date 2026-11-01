@@ -195,6 +195,19 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
     if let Some(d) = kinetic(b, sounds) {
         return d;
     }
+    // AllFluids' `standardFluid` blocks: `LiquidBlock`s, water's states; how they flow is
+    // their fluid declaration's (`fluid_declarations`).
+    if matches!(n, "honey" | "chocolate") {
+        return Decision::Declared {
+            template: "minecraft:water",
+            sounds,
+            requires_tool: None,
+            shapes: None,
+            own: None,
+            animated: false,
+            item: false,
+        };
+    }
     // Blocks with behaviour of their own wait for the phase that ports it.
     if let Some(reason) = later_phase(b) {
         return Decision::Pending(reason);
@@ -768,6 +781,31 @@ pub const HEATS: &[&str] = &["none", "smouldering", "fading", "kindled", "seethi
 /// The blaze burner's blockstate: Create draws the cage as its model and the blaze in its
 /// renderer (`BlazeBurnerRenderer`: the head chosen by heat, turned to `horizontalAngle(facing) +
 /// 180`); here the head at rest is part of the block's model, by heat and facing.
+/// AllFluids' honey and chocolate as Horizon fluid declarations: `levelDecreasePerBlock(2)`,
+/// `tickRate(25)`, `slopeFindDistance(3)`, `registerFluidInteractions` with lava (obsidian from a
+/// source, limestone or scoria from flowing lava), Create's still and flowing textures, untinted
+/// (`SolidRenderedPlaceableFluidType.getTintColor`).
+pub fn fluid_declarations() -> [(&'static str, Value); 2] {
+    let fluid = |name: &str, flowing_stone: &str| {
+        json!({
+            "block": format!("create:{name}"),
+            "bucket": format!("create:{name}_bucket"),
+            "tick_delay": 25,
+            "drop_off": 2,
+            "slope_find_distance": 3,
+            "lava_source": "minecraft:obsidian",
+            "lava_flowing": format!("create:{flowing_stone}"),
+            "still_texture": format!("create:block/fluid/{name}_still"),
+            "flowing_texture": format!("create:block/fluid/{name}_flow"),
+            "tint": 0xFF_FFFF
+        })
+    };
+    [
+        ("honey", fluid("honey", "limestone")),
+        ("chocolate", fluid("chocolate", "scoria")),
+    ]
+}
+
 pub fn blaze_burner_states() -> Value {
     let mut parts = vec![json!({ "apply": { "model": "create:block/blaze_burner/block" } })];
     for (heat, model) in [
@@ -1030,10 +1068,7 @@ fn later_phase(b: &CreateBlock) -> Option<String> {
         "TransparentBlock",
         "RotatedPillarBlock",
     ];
-    // Fluids are gap 5; copycats need custom models (gap 2).
-    if matches!(b.name.as_str(), "honey" | "chocolate") {
-        return Some("fluid block (gap 5)".into());
-    }
+    // Copycats need custom models (gap 2).
     if b.name.starts_with("copycat") {
         return Some("copycat model (gap 2)".into());
     }

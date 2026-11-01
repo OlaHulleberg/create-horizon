@@ -1,0 +1,12 @@
+{
+  "block": "create:honey",
+  "bucket": "create:honey_bucket",
+  "tick_delay": 25,
+  "drop_off": 2,
+  "slope_find_distance": 3,
+  "lava_source": "minecraft:obsidian",
+  "lava_flowing": "create:limestone",
+  "still_texture": "create:block/fluid/honey_still",
+  "flowing_texture": "create:block/fluid/honey_flow",
+  "tint": 16777215
+}
