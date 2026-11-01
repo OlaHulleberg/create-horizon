@@ -205,6 +205,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_crushers(game, dimension, dim);
     tick_burners(game, dim);
     tick_mixers(game, dim);
+    tick_pipes(game, dimension, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -908,6 +909,7 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
         Model::BearingTop(d) => find("create:part_bearing_top_wooden", "facing", dir_name(d)),
         Model::FanPropeller(d) => find("create:part_fan_propeller", "facing", dir_name(d)),
         Model::ShaftlessCog => find("create:part_cogwheel_shaftless", "facing", "up"),
+        Model::PumpCog(d) => find("create:part_pump_cog", "facing", dir_name(d)),
         Model::MixerPole | Model::MixerHead => None,
     }
 }
@@ -2121,6 +2123,16 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
         .filter(|c| c.0 == game.world.game_time)
         .and_then(|c| Dir::from_offset(c.1))
         .unwrap_or(Dir::Up);
+    if with_world(|w| w.table.get(state.0).map(|(b, _)| b)).flatten()
+        == Some(create_engine::Block::FluidPipe)
+    {
+        // FluidPipeBlock.getStateForPlacement: straight toward the player's view when nothing is
+        // around.
+        let looking = create_engine::place::ordered_by_nearest(game.yaw, game.pitch)[0];
+        let dimension = game.dim.id().to_owned();
+        connect_pipe(game, &dimension, pos, Some(looking));
+        return;
+    }
     let ctx = create_engine::place::Context {
         yaw: game.yaw,
         pitch: game.pitch,
@@ -2531,6 +2543,231 @@ fn compact_in_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
                     })
                 })
                 .collect();
+        });
+    }
+}
+
+/// What a block is to the pipes (`FluidPropagator`): a pipe and its open sides, a pump and its
+/// facing, a tank, open space a pipe may end in, or neither.
+fn pipe_cell(game: &Game<'_>, p: [i32; 3]) -> create_engine::fluids::Cell {
+    use create_engine::Block;
+    use create_engine::fluids::Cell;
+    if !game.world.loaded(p[0], p[2]) {
+        return Cell::Solid;
+    }
+    let state = game.world.block(p[0], p[1], p[2]);
+    if let Some((block, info)) =
+        with_world(|w| w.table.get(state.0).map(|(b, i)| (b, *i))).flatten()
+    {
+        return match block {
+            Block::FluidPipe => Cell::Pipe(pipe_sides_of(game, state)),
+            Block::MechanicalPump => info.facing.map_or(Cell::Solid, Cell::Pump),
+            Block::FluidTank => Cell::Tank,
+            _ => Cell::Solid,
+        };
+    }
+    let b = game.res.behaviours();
+    if b.is_replaceable(state) || b.fluid(state).kind() != horizon_world::fluid::FluidKind::Empty {
+        Cell::Open
+    } else {
+        Cell::Solid
+    }
+}
+
+/// A pipe state's open sides (`Dir::bit`).
+fn pipe_sides_of(game: &Game<'_>, state: BlockStateId) -> u8 {
+    let Some(s) = game.pack.assets.registry.state(state) else {
+        return 0;
+    };
+    Dir::ALL
+        .into_iter()
+        .filter(|d| s.properties.get(dir_name(*d)).is_some_and(|v| v == "true"))
+        .fold(0, |m, d| m | d.bit())
+}
+
+/// `FluidPipeBlock.updateBlockState` for the pipe at `pos`, written when it changes.
+fn connect_pipe(game: &mut Game<'_>, dimension: &str, pos: [i32; 3], preferred: Option<Dir>) {
+    use create_engine::fluids;
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    let is_pipe = with_world(|w| w.table.get(state.0).map(|(b, _)| b)).flatten()
+        == Some(create_engine::Block::FluidPipe);
+    if !is_pipe {
+        return;
+    }
+    let previous = pipe_sides_of(game, state);
+    let sides = fluids::pipe_sides(
+        previous,
+        |d| {
+            let o = d.offset();
+            pipe_cell(game, [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]])
+        },
+        preferred.unwrap_or(Dir::North),
+    );
+    if sides == previous && preferred.is_none() {
+        return;
+    }
+    let Some(mut s) = game.pack.assets.registry.state(state).cloned() else {
+        return;
+    };
+    for d in Dir::ALL {
+        let open = if sides & d.bit() != 0 {
+            "true"
+        } else {
+            "false"
+        };
+        s.properties.insert(dir_name(d).to_owned(), open.to_owned());
+    }
+    if let Some(id) = game.pack.assets.registry.id(&s)
+        && id != state
+    {
+        game.native_set_block(dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+    }
+}
+
+/// Pipes and pumps: pipes that changed connect again; turning pumps find their ends when pipes
+/// changed (`distributePressureTo`) and carry fluid from the first end behind them to the
+/// first end in front that takes it, `max(1, pressure / 2)` mB a tick (`FluidNetwork`).
+fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    use create_engine::fluids;
+    use create_engine::tank::BUCKET;
+    let mut checks =
+        with_world(|w| std::mem::take(&mut w.dims[dim].pipe_checks)).unwrap_or_default();
+    checks.sort();
+    checks.dedup();
+    for pos in checks {
+        connect_pipe(game, dimension, pos, None);
+    }
+    let changed =
+        with_world(|w| std::mem::replace(&mut w.dims[dim].pipes_changed, false)).unwrap_or(false);
+    let pumps = with_world(|w| w.dims[dim].pumping.clone()).unwrap_or_default();
+    for pos in pumps {
+        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let Some(facing) =
+            with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten()
+        else {
+            continue;
+        };
+        let Some(mut pump) = with_world(|w| w.dims[dim].pumps.get(&pos).cloned()).flatten() else {
+            continue;
+        };
+        if changed || !pump.found {
+            pump.pull = fluids::reach(pos, facing.opposite(), speed, |p| pipe_cell(game, p));
+            pump.push = fluids::reach(pos, facing, speed, |p| pipe_cell(game, p));
+            pump.found = true;
+        }
+        if let (Some(from), false) = (pump.pull.first().copied(), pump.push.is_empty()) {
+            let amount = fluids::transfer_speed(from.pressure);
+            // What the source can give this tick.
+            let offer = if from.tank {
+                with_world(|w| {
+                    w.dims[dim]
+                        .tanks
+                        .get(&from.pos)
+                        .and_then(|t| t.fluid.map(|f| (f, t.amount.min(amount))))
+                })
+                .flatten()
+            } else {
+                if pump.buffer.is_none() {
+                    // `OpenEndedPipe.removeFluidFromSpace`: a source block gives a bucket's worth.
+                    let s = game.world.block(from.pos[0], from.pos[1], from.pos[2]);
+                    let f = game.res.behaviours().fluid(s);
+                    let kind = f.kind();
+                    use horizon_world::fluid::FluidKind;
+                    let fluid =
+                        fluids::open_fluid(kind == FluidKind::Water, kind == FluidKind::Lava);
+                    if let Some(fluid) = fluid.filter(|_| f.is_source()) {
+                        pump.buffer = Some((fluid, BUCKET));
+                        let name = if fluid == create_engine::tank::Fluid::Water {
+                            "minecraft:water"
+                        } else {
+                            "minecraft:lava"
+                        };
+                        if let Some(left) =
+                            state_with(game.pack.assets.registry, name, &[("level", "14")])
+                        {
+                            game.native_set_block(
+                                dimension,
+                                from.pos,
+                                left,
+                                super::native_hooks::flags::UPDATE_ALL,
+                            );
+                        }
+                    }
+                }
+                pump.buffer.map(|(f, n)| (f, n.min(amount)))
+            };
+            if let Some((fluid, n)) = offer {
+                // The first end in front that takes some.
+                let mut moved = 0;
+                for to in &pump.push {
+                    moved = if to.tank {
+                        with_world(|w| {
+                            let d = &mut w.dims[dim];
+                            let took = d
+                                .tanks
+                                .get_mut(&to.pos)
+                                .map_or(0, |t| t.fill_amount(fluid, n));
+                            if took > 0 {
+                                d.tank_changes.push(to.pos);
+                            }
+                            took
+                        })
+                        .unwrap_or(0)
+                    } else {
+                        // `OpenEndedPipe.provideFluidToSpace`: a bucket's worth becomes a source.
+                        let have = pump.out.filter(|o| o.0 == fluid).map_or(0, |o| o.1);
+                        let total = have + n;
+                        if total >= BUCKET {
+                            let name = if fluid == create_engine::tank::Fluid::Water {
+                                "minecraft:water"
+                            } else {
+                                "minecraft:lava"
+                            };
+                            let here = game.world.block(to.pos[0], to.pos[1], to.pos[2]);
+                            if !game.res.behaviours().is_replaceable(here) {
+                                0
+                            } else {
+                                if let Some(src) =
+                                    state_with(game.pack.assets.registry, name, &[("level", "0")])
+                                {
+                                    game.native_set_block(
+                                        dimension,
+                                        to.pos,
+                                        src,
+                                        super::native_hooks::flags::UPDATE_ALL,
+                                    );
+                                }
+                                pump.out = (total > BUCKET).then_some((fluid, total - BUCKET));
+                                n
+                            }
+                        } else {
+                            pump.out = Some((fluid, total));
+                            n
+                        }
+                    };
+                    if moved > 0 {
+                        break;
+                    }
+                }
+                if moved > 0 {
+                    if from.tank {
+                        with_world(|w| {
+                            let d = &mut w.dims[dim];
+                            if let Some(t) = d.tanks.get_mut(&from.pos) {
+                                t.drain_amount(moved);
+                                d.tank_changes.push(from.pos);
+                            }
+                        });
+                    } else if let Some((f, left)) = pump.buffer {
+                        pump.buffer = (left > moved).then_some((f, left - moved));
+                    }
+                    with_world(|w| w.mark_unsaved(dim, pos));
+                }
+            }
+        }
+        with_world(|w| {
+            w.dims[dim].pumps.insert(pos, pump);
         });
     }
 }

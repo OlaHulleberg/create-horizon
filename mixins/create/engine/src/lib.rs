@@ -9,6 +9,7 @@ pub mod contraption;
 pub mod crusher;
 pub mod depot;
 pub mod fan;
+pub mod fluids;
 pub mod generated;
 pub mod kinetics;
 pub mod latch;

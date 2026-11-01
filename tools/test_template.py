@@ -85,7 +85,7 @@ pub mod geometry {
 pub mod fluid {
     #[derive(Clone, Copy, PartialEq)] pub enum FluidKind { Empty, FlowingWater, Water, FlowingLava, Lava }
     #[derive(Clone, Copy)] pub struct FluidState(pub FluidKind);
-    impl FluidState { pub fn kind(self) -> FluidKind { self.0 } }
+    impl FluidState { pub fn kind(self) -> FluidKind { self.0 } pub fn is_source(self) -> bool { self.0 != FluidKind::Empty } }
 }
 pub mod nbt {
     #[derive(Clone, PartialEq, Debug)] pub enum Tag { IntArray(Vec<i32>), Compound(Compound), List(Vec<Tag>), String(JavaString) }

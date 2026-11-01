@@ -59,6 +59,30 @@ impl Tank {
         true
     }
 
+    /// `FluidTank.fill`: as much of `amount` as fits; what it took.
+    pub fn fill_amount(&mut self, fluid: Fluid, amount: u32) -> u32 {
+        if self.fluid.is_some_and(|f| f != fluid) {
+            return 0;
+        }
+        let took = amount.min(CAPACITY - self.amount);
+        if took > 0 {
+            self.fluid = Some(fluid);
+            self.amount += took;
+        }
+        took
+    }
+
+    /// `FluidTank.drain`: up to `amount`; what came out.
+    pub fn drain_amount(&mut self, amount: u32) -> Option<(Fluid, u32)> {
+        let fluid = self.fluid?;
+        let out = amount.min(self.amount);
+        self.amount -= out;
+        if self.amount == 0 {
+            self.fluid = None;
+        }
+        (out > 0).then_some((fluid, out))
+    }
+
     /// `FluidHelper.tryFillItemFromBE` for an empty bucket: a whole bucket's worth or nothing.
     pub fn drain(&mut self) -> Option<Fluid> {
         let fluid = self.fluid?;

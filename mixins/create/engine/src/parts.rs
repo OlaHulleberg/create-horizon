@@ -201,6 +201,13 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         Block::MechanicalPress => s
             .facing
             .map_or([None, None], |f| one(Part::shaft(f.axis()))),
+        // PumpBlock: a small cog on its facing's axis, no shaft.
+        Block::MechanicalPump => s.facing.map_or([None, None], |f| {
+            one(Part {
+                shafts: 0,
+                ..Part::cog(f.axis(), false)
+            })
+        }),
         // MechanicalMixerBlock: a small cog on the y axis, no shaft (`hasShaftTowards` false).
         Block::MechanicalMixer => one(Part {
             shafts: 0,

@@ -161,6 +161,24 @@ pub struct Dimension {
     pub mixer_checks: Vec<[i32; 3]>,
     /// Presses compacting in the basin below them, with the recipe (`currentRecipe`).
     pub press_basin: HashMap<[i32; 3], usize>,
+    /// Pumps and what their pipes reach, the turning ones (the only ones that tick), pipes to
+    /// connect again, and whether pipes, pumps or tanks changed since the ends were found.
+    pub pumps: HashMap<[i32; 3], Pump>,
+    pub pumping: Vec<[i32; 3]>,
+    pub pipe_checks: Vec<[i32; 3]>,
+    pub pipes_changed: bool,
+}
+
+/// A mechanical pump: the ends behind and in front of it, found when its pipes changed, and the
+/// fluid it carries between them (an open end's bucket being drawn or let out).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Pump {
+    pub pull: Vec<crate::fluids::End>,
+    pub push: Vec<crate::fluids::End>,
+    pub found: bool,
+    pub buffer: Option<(crate::tank::Fluid, u32)>,
+    /// What arrived at an open end in front, placed as a source block once a bucket's worth.
+    pub out: Option<(crate::tank::Fluid, u32)>,
 }
 
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
@@ -195,6 +213,7 @@ fn has_state(block: Block) -> bool {
     matches!(
         block,
         Block::Depot
+            | Block::FluidPipe
             | Block::Basin
             | Block::BlazeBurner
             | Block::CrushingWheelController
@@ -280,6 +299,23 @@ impl CreateWorld {
         }
         if block == Block::CrushingWheel {
             d.crusher_checks.push(pos);
+        }
+        if matches!(
+            block,
+            Block::FluidPipe | Block::MechanicalPump | Block::FluidTank
+        ) {
+            // `FluidPropagator.propagateChangedPipe`: the pipe and its neighbours connect again,
+            // pumps find their ends again.
+            d.pipes_changed = true;
+            d.pipe_checks.push(pos);
+            for dir in crate::kinetics::Dir::ALL {
+                let o = dir.offset();
+                d.pipe_checks
+                    .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
+            }
+        }
+        if block == Block::MechanicalPump {
+            d.pumps.entry(pos).or_default();
         }
         if block == Block::MechanicalMixer && !d.mixers.contains_key(&pos) {
             d.mixers.insert(pos, Default::default());
@@ -387,6 +423,22 @@ impl CreateWorld {
             if self.table.get(old).map(|(b, _)| b) == Some(Block::CrushingWheel) {
                 d.crusher_checks.push(pos);
             }
+            if let Some((b, _)) = self.table.get(old)
+                && matches!(
+                    b,
+                    Block::FluidPipe | Block::MechanicalPump | Block::FluidTank
+                )
+            {
+                d.pipes_changed = true;
+                for dir in crate::kinetics::Dir::ALL {
+                    let o = dir.offset();
+                    d.pipe_checks
+                        .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
+                }
+            }
+            if d.pumps.remove(&pos).is_some() {
+                d.pumping.retain(|p| *p != pos);
+            }
             if d.mixers.remove(&pos).is_some() {
                 d.mixing.retain(|p| *p != pos);
             }
@@ -464,6 +516,9 @@ impl CreateWorld {
             d.crushers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.pumping.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.pipes_changed = true;
             d.mixing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixer_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -530,6 +585,15 @@ impl CreateWorld {
                     .is_some_and(|(b, _)| b == Block::CrushingWheel)
             {
                 d.crusher_checks.push(pos);
+            }
+            if let Event::Speed { pos, speed, .. } = *e
+                && d.pumps.contains_key(&pos)
+            {
+                d.pumping.retain(|p| *p != pos);
+                if speed != 0.0 {
+                    d.pumping.push(pos);
+                }
+                d.pipes_changed = true;
             }
             if let Event::Speed { pos, .. } = *e
                 && (d.mixers.contains_key(&pos) || d.presses.contains_key(&pos))

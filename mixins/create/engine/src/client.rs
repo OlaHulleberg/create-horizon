@@ -34,6 +34,8 @@ pub enum Model {
     FanPropeller(Dir),
     /// The mixer's shaftless cog, and its pole and head at rest (`MechanicalMixerRenderer`).
     ShaftlessCog,
+    /// The pump's cog (`AllPartialModels.MECHANICAL_PUMP_COG`), turned to its facing.
+    PumpCog(Dir),
     MixerPole,
     MixerHead,
 }
@@ -222,6 +224,11 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 phase: 0.0,
             },
         ],
+        // PumpRenderer: its cog turns with it.
+        Block::MechanicalPump => s
+            .facing
+            .map(|f| vec![own(f.axis(), Model::PumpCog(f))])
+            .unwrap_or_default(),
         // CrushingWheelBlock: its whole model turns on its axis (`ENTITYBLOCK_ANIMATED`).
         Block::CrushingWheel => s.axis.map(|a| vec![own(a, Model::Own)]).unwrap_or_default(),
         // MillstoneRenderer: the inner stone turns on the y axis.
