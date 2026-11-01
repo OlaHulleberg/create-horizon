@@ -1,0 +1,84 @@
+{
+  "template": "minecraft:andesite",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 1.5,
+    "sounds": "minecraft:scaffolding"
+  },
+  "item": true,
+  "shapes": {
+    "property": "facing",
+    "values": {
+      "down": [
+        [
+          0.375,
+          0.0,
+          0.375,
+          0.625,
+          1.0,
+          0.625
+        ]
+      ],
+      "up": [
+        [
+          0.375,
+          0.0,
+          0.375,
+          0.625,
+          1.0,
+          0.625
+        ]
+      ],
+      "north": [
+        [
+          0.375,
+          0.375,
+          0.0,
+          0.625,
+          0.625,
+          1.0
+        ]
+      ],
+      "south": [
+        [
+          0.375,
+          0.375,
+          0.0,
+          0.625,
+          0.625,
+          1.0
+        ]
+      ],
+      "west": [
+        [
+          0.0,
+          0.375,
+          0.375,
+          1.0,
+          0.625,
+          0.625
+        ]
+      ],
+      "east": [
+        [
+          0.0,
+          0.375,
+          0.375,
+          1.0,
+          0.625,
+          0.625
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "facing": [
+      "up",
+      "down",
+      "north",
+      "south",
+      "west",
+      "east"
+    ]
+  }
+}
