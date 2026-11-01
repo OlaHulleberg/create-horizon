@@ -224,6 +224,15 @@ Brass tunnels splitting stacks cost nothing measurable (`benchmarks/create-p4b-*
 
 Signals cost no tick; frame p50 is 6% over the control, within budget and its run's spread (`benchmarks/create-p9s-*.json`). Headless proof: one straight track with stations at 0, 25 and 50 and signals at 15 and 35; a train assembled at the first and sent to the last stopped just before the signal at 15 while a second train stood assembled at 25 (after 15 s nothing at the last station; a screenshot shows it waiting by the signal); once the second was taken apart at its station the first went on and stood at the last (its bogey, slime and gold there). Engine tests: a red signal ahead, a green one, one beyond the stop, the other way; a train waits at the stop and keeps its destination.
 
+| Scenario (2026-11-01, Phase 2 chain drives, controller and sequencer, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1764 ± 20 | 0.520 / 1.285 | 3.078 ± 0.096 | baseline |
+| idle | 1759 ± 13 | 0.523 / 1.324 | 3.002 ± 0.057 | within noise of off |
+| chains (control) | 1800 ± 15 | 0.510 / 1.201 | 2.982 ± 0.066 | control |
+| kinetic (5 runs) | 1659 ± 29 | 0.555 / 1.411 | 2.968 ± 0.095 | frame p50 ≤ chains + 10%, tick ≤ off + 0.25 ms |
+
+Chain drives, the adjustable chain gearshift, the rotation speed controller and the sequenced gearshift (`kinetics.rs` couplings, `chain.rs`, `sequencer.rs`) cost the solver nothing measurable (`benchmarks/create-p2drives-*.json`; kinetic 0.557 ms before them). Proven headless: a motor at 16 rpm through two chain drives turned the far shaft at 16; through an adjustable chain gearshift at signal 15, 32; a speed controller's large cog (across its axis) at the controller's target, 16, then 24 after eight wheel steps on the controller while its input stayed 16; a sequenced gearshift passed nothing idle, 16 rpm once pulsed, and 0 again when its 90° were done.
+
 | Scenario (2026-11-01, Phase 9 curved track, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1784 ± 35 | 0.515 / 1.220 | 2.996 ± 0.085 | baseline |
