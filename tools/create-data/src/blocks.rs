@@ -405,6 +405,16 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         "encased_fan" => ("minecraft:andesite", None, own(&[("facing", facing)])),
         // WindmillBearingBlock (BearingBlock): any facing, a full block.
         "windmill_bearing" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
+        // LinearChassisBlock (`SharedProperties::wooden`): a pillar on its axis, glued ends.
+        "linear_chassis" | "secondary_linear_chassis" => (
+            "minecraft:stripped_spruce_wood",
+            None,
+            own(&[
+                ("axis", axis),
+                ("sticky_bottom", bools),
+                ("sticky_top", bools),
+            ]),
+        ),
         // MechanicalBearingBlock (BearingBlock): as the windmill bearing.
         "mechanical_bearing" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
         // SailBlock: a thin plane on any facing (AllShapes.SAIL / SAIL_FRAME, forDirectional

@@ -130,6 +130,13 @@ pub fn gather(
         if !found.movable {
             return Err(Refused::Unmovable(pos));
         }
+        if let Some(c) = found.chassis {
+            for p in crate::contraption::chassis_reach(pos, c, Some(forced), &at) {
+                if !visited.contains(&p) && !exclude.contains(&p) {
+                    frontier.push_back(p);
+                }
+            }
+        }
         for d in Dir::ALL {
             let next = add(pos, d, 1);
             if visited.contains(&next) || exclude.contains(&next) {
@@ -198,6 +205,7 @@ mod tests {
                 sail_facing: None,
                 sticky: None,
                 movable: true,
+                chassis: None,
             })
         };
         let got = gather([1, 0, 0], Dir::East, &[], stone).unwrap();
