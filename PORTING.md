@@ -317,7 +317,7 @@ running).
   (mods off 2.5 s, unchanged: its core tables are bound by the render tables, 258 ms). The rest of the gap is the render
   tables (model states, atlas) and the item and pack tables, still read from JSON for every state.
 
-- Horizon pin: `feat/create-hooks` at `e4f3833ae` (earlier `aea7ed878`) (NATIVE_HOOKS_API 47). History: first `0a96593cf`, two commits on 9d979ca: gap 2
+- Horizon pin: `feat/create-hooks` at `e4f3833ae` (NATIVE_HOOKS_API 53; earlier `aea7ed878`, API 47). History: first `0a96593cf`, two commits on 9d979ca: gap 2
   (`a83a4b380`, content blocks with their own `state_properties`) and gap 8 (`0a96593cf`, hook points API 41:
   `chunk_load`/`chunk_unload`). Horizon's `pr_ready --quick` is green for gap 2; for gap 8 every check is green except
   `horizon-client-render`'s parallel GPU tests, which segfault in this sandbox on untouched 9d979ca too (2 of 3 runs);
