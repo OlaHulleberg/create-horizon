@@ -56,6 +56,9 @@ def write_fixture(original, root):
         ('use_item', "horizon_client::game::native_hooks::Game<'_>::native_use_item"),
         ('place_block', "horizon_client::game::native_hooks::Game<'_>::native_place_block"),
         ('hud', "horizon_client::game::native_hooks::Game<'_>::native_hud"),
+        ('player_tick', "horizon_client::game::native_hooks::Game<'_>::native_player_tick"),
+        ('destroy_block', "horizon_client::game::native_hooks::Game<'_>::native_destroy_block"),
+        ('hurt_enemy', "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -238,7 +241,7 @@ pub mod native_server {
     impl NativeCommand {
         pub fn op(usage: &str, level: u8) -> Self { Self { usage: usage.to_owned(), level } }
     }
-    pub struct NativeServerPlayer { pub uuid: u128, pub dimension: String, pub position: [f64; 3], pub game_mode: i32 }
+    pub struct NativeServerPlayer { pub uuid: u128, pub name: String, pub dimension: String, pub position: [f64; 3], pub game_mode: i32 }
 }
 pub mod native_hooks {
     use super::*;
@@ -314,7 +317,7 @@ pub mod native_hooks {
             let _ = (player, command, ran);
         }
         pub fn native_acting_player(&self) -> Option<NativeServerPlayer> {
-            Some(NativeServerPlayer { uuid: 7, dimension: "minecraft:overworld".into(), position: [0.5, 2.0, 0.5], game_mode: 1 })
+            Some(NativeServerPlayer { uuid: 7, name: "Alex".into(), dimension: "minecraft:overworld".into(), position: [0.5, 2.0, 0.5], game_mode: 1 })
         }
         pub fn native_server_players(&self) -> Vec<NativeServerPlayer> {
             self.native_acting_player().into_iter().collect()
@@ -361,6 +364,13 @@ pub mod native_hooks {
             let _ = (stack, claimed);
         }
         pub fn native_hud(&mut self, batch: &mut horizon_client::hud::HudBatch) { let _ = batch; }
+        pub fn native_player_tick(&mut self) {}
+        pub fn native_destroy_block(&mut self, pos: [i32; 3], state: BlockStateId, canceled: &mut bool) {
+            let _ = (pos, state, canceled);
+        }
+        pub fn native_hurt_enemy(&mut self, stack: &horizon_client::items::ItemStack, entity: u32, kind: &str) {
+            let _ = (stack, entity, kind);
+        }
         pub fn native_text_width(&self, text: &str) -> f32 { text.len() as f32 * 6.0 }
         pub fn native_fill(&self, batch: &mut horizon_client::hud::HudBatch, rect: [f32; 4], argb: u32) {
             let _ = (batch, rect, argb);
@@ -475,9 +485,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 22) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 24) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 22;
+        let empty = state.0 == 0 || state.0 == 24;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -486,10 +496,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 22 is a water source.
+    /// State 24 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 22 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 24 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -578,13 +588,18 @@ impl Behaviours {
     states.push(BlockState { name: "create:windmill_bearing".into(), properties: props("facing", "north") });
     states.push(BlockState { name: "create:white_sail".into(), properties: props("facing", "north") });
     // 19: an encased fan facing east; 20: a redstone link facing up, transmitting; 21: one
-    // receiving (both unpowered); 22: a water source.
+    // receiving (both unpowered).
     states.push(BlockState { name: "create:encased_fan".into(), properties: props("facing", "east") });
     for receiver in ["false", "true"] {
         states.push(BlockState { name: "create:redstone_link".into(), properties: BTreeMap::from([
             ("facing".to_owned(), "up".to_owned()), ("powered".to_owned(), "false".to_owned()),
             ("receiver".to_owned(), receiver.to_owned())]) });
     }
+    // 22: a copper backtank facing north, dry; 23: a creative motor facing down.
+    states.push(BlockState { name: "create:copper_backtank".into(), properties: BTreeMap::from([
+        ("facing".to_owned(), "north".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
+    states.push(BlockState { name: "create:creative_motor".into(), properties: props("facing", "down") });
+    // 24: a water source.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
@@ -854,7 +869,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 22), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 24), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -891,6 +906,55 @@ impl Behaviours {
     game.armor[0] = Some(horizon_client::items::ItemStack { item: "create:goggles".into(), count: 1, damage: 0, extra: None });
     game.native_hud(&mut batch);
     assert!(batch.drawn.iter().any(|s| s.trim() == "Generator Stats:"), "{:?}", batch.drawn);
+    // A copper backtank at (200, 0, 200) under a motor facing down (16 rpm): it fills one air,
+    // then waits 16 ticks (`BacktankBlockEntity.tick`); its air is saved with its column.
+    for (pos, state) in [([200, 0, 200], 22), ([200, 1, 200], 23)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
+    }
+    for _ in 0..37 { game.native_level_tick_post("minecraft:overworld"); }
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [12, 12], &mut data);
+    let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create_equipment".into()) else { panic!("no backtank saved: {data:?}") };
+    let Some(horizon_world::nbt::Tag::IntArray(tank)) = own.get(&"backtanks".into()) else { panic!("{own:?}") };
+    assert_eq!(tank[..4], [200, 0, 200, 3], "1 air at once, then one each 17 ticks: {tank:?}");
+    // An empty hand and an empty chest slot take it up: on the chest with its air, the block gone.
+    game.inventory[0] = None;
+    game.armor = [None, None, None, None];
+    let mut canceled = false;
+    game.native_right_click_block([200, 0, 200], [0, 1, 0], &mut canceled);
+    assert!(canceled);
+    assert_eq!(game.world.blocks[&[200, 0, 200]], 0, "picked up");
+    let worn = game.armor[1].as_ref().map(|s| (s.item.to_string(), s.damage));
+    assert_eq!(worn, Some(("create:copper_backtank".into(), 3)), "air on the item (the stand-in keeps it in damage)");
+    // A diving helmet under water: one air from the tank every 20 game ticks, and breath.
+    game.armor[0] = Some(horizon_client::items::ItemStack { item: "create:copper_diving_helmet".into(), count: 1, damage: 0, extra: None });
+    create_equipment_body::BODY.set((false, false));
+    game.world.game_time = 40;
+    game.native_player_tick();
+    assert_eq!(game.armor[1].as_ref().map(|s| s.damage), Some(2));
+    assert_eq!(create_equipment_body::REFILLS.get(), 1);
+    game.world.game_time = 41;
+    game.native_player_tick();
+    assert_eq!(game.armor[1].as_ref().map(|s| s.damage), Some(2), "not between seconds");
+    // Above water: nothing.
+    create_equipment_body::BODY.set((true, false));
+    game.world.game_time = 60;
+    game.native_player_tick();
+    assert_eq!((game.armor[1].as_ref().map(|s| s.damage), create_equipment_body::REFILLS.get()), (Some(2), 2));
+    // An extendo grip in hand reaches 3 further; breaking a block with it costs the tank an air
+    // (a survival player's: creative ones pay nothing).
+    game.creative = false;
+    game.inventory[0] = Some(horizon_client::items::ItemStack { item: "create:extendo_grip".into(), count: 1, damage: 0, extra: None });
+    game.native_player_tick();
+    assert_eq!(create_equipment_body::REACH.with_borrow(|r| r.clone()), vec!["create:single_range_attribute_modifier".to_owned()]);
+    let mut canceled = false;
+    game.native_destroy_block([1, 5, 1], BlockStateId(1), &mut canceled);
+    assert_eq!(game.armor[1].as_ref().map(|s| s.damage), Some(1), "the backtank paid");
+    assert!(create_equipment_body::WORN.with_borrow(Vec::is_empty));
+    game.inventory[0] = None;
+    game.native_player_tick();
+    assert!(create_equipment_body::REACH.with_borrow(Vec::is_empty), "the reach goes with the grip");
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

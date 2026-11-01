@@ -49,6 +49,20 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_trains"
 source = "trains.rs"
 
+[[module]]
+id = "equipment"
+file = "crates/horizon-client/src/game.rs"
+name = "create_equipment"
+source = "equipment.rs"
+
+# What the equipment reads of stacks and players beyond the hook helpers (air on a stack, breathing,
+# reach); the template test swaps it for `tools/fixture/equipment_body.rs`.
+[[module]]
+id = "equipment-body"
+file = "crates/horizon-client/src/game.rs"
+name = "create_equipment_body"
+source = "equipment_body.rs"
+
 # Pure logic and the tables create-data compiles from Create's MIT data.
 [[crate]]
 id = "engine"
@@ -334,6 +348,7 @@ kind = "HEAD"
 helper = "place_block.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
   { name = "pos", ty = "[i32; 3]", value = "pos" },
   { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
 ]
@@ -347,6 +362,40 @@ helper = "hud.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "batch" },
+]
+
+[[injection]]
+id = "player-tick"
+hook = "player_tick"
+hook_version = 1
+kind = "HEAD"
+helper = "player_tick.rs"
+bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
+
+[[injection]]
+id = "destroy-block"
+hook = "destroy_block"
+hook_version = 1
+kind = "HEAD"
+helper = "destroy_block.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
+  { name = "canceled", ty = "&mut bool", value = "canceled" },
+]
+
+[[injection]]
+id = "hurt-enemy"
+hook = "hurt_enemy"
+hook_version = 1
+kind = "HEAD"
+helper = "hurt_enemy.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
+  { name = "entity", ty = "u32", value = "entity" },
+  { name = "kind", ty = "&str", value = "kind" },
 ]
 
 
