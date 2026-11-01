@@ -454,6 +454,13 @@ fn right_click_inner(game: &mut Game<'_>, pos: [i32; 3], face: [i32; 3], cancele
         use_depot(game, dim, pos, face, canceled);
         return;
     }
+    if matches!(
+        block,
+        Some(create_engine::Block::LinearChassis | create_engine::Block::SecondaryLinearChassis)
+    ) {
+        use_chassis(game, pos, face, back, canceled);
+        return;
+    }
     if block == Some(create_engine::Block::Deployer) {
         if let Some(f) = with_world(|w| w.table.get(state).and_then(|(_, i)| i.facing)).flatten() {
             use_deployer(game, dim, pos, f, canceled);
@@ -2474,6 +2481,76 @@ fn deployers_from_server(game: &mut Game<'_>, data: &[u8]) {
                 game.native_part_glide(key, model, s.pos, 0, 0.0, 0.0, offset, v);
             }
         }
+    }
+}
+
+/// `AbstractChassisBlock.useItemOn` for a linear chassis: a slime ball on an end along its axis
+/// glues it (on a glued end: every end that may be glued); sneaking with an empty hand unglues
+/// it. An end against a chassis of its kind on its axis can't be glued (`glueAllowedOnSide`).
+fn use_chassis(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    face: [i32; 3],
+    sneaking: bool,
+    canceled: &mut bool,
+) {
+    let registry = game.pack.assets.registry;
+    let id = game.world.block(pos[0], pos[1], pos[2]);
+    let Some(mut s) = registry.state(id).cloned() else {
+        return;
+    };
+    let held = game.native_held().map(|h| h.0);
+    let slime = held.as_deref() == Some("minecraft:slime_ball")
+        || held.as_deref() == Some("create:super_glue");
+    let axis = s.properties.get("axis").cloned().unwrap_or_default();
+    // getGlueableSide: an end on its axis, sticky_top toward the positive end.
+    let side_of = |f: [i32; 3]| -> Option<&'static str> {
+        let i = ["x", "y", "z"].iter().position(|a| *a == axis)?;
+        match f[i] {
+            1 => Some("sticky_top"),
+            -1 => Some("sticky_bottom"),
+            _ => None,
+        }
+    };
+    let Some(side) = side_of(face) else {
+        return;
+    };
+    let allowed = |game: &Game<'_>, f: [i32; 3]| {
+        registry
+            .state(
+                game.world
+                    .block(pos[0] + f[0], pos[1] + f[1], pos[2] + f[2]),
+            )
+            .is_none_or(|o| o.name != s.name || o.properties.get("axis") != Some(&axis))
+    };
+    let glued = s.properties.get(side).is_some_and(|v| v == "true");
+    if slime && glued {
+        for f in [
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, -1, 0],
+            [0, 0, 1],
+            [0, 0, -1],
+        ] {
+            if let Some(other) = side_of(f)
+                && allowed(game, f)
+            {
+                s.properties.insert(other.into(), "true".into());
+            }
+        }
+    } else if (slime || (sneaking && held.is_none())) && glued != slime && allowed(game, face) {
+        s.properties
+            .insert(side.into(), if slime { "true" } else { "false" }.into());
+    } else {
+        return;
+    }
+    *canceled = true;
+    if let Some(new) = registry.id(&s)
+        && new != id
+    {
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, new, super::native_hooks::flags::UPDATE_ALL);
     }
 }
 
@@ -6414,6 +6491,25 @@ fn contraption_found(game: &Game<'_>, p: [i32; 3]) -> Option<create_engine::cont
             _ => None,
         },
         movable: !unmovable,
+        // LinearChassisBlock: its kind, axis and glued ends.
+        chassis: matches!(
+            s.name.as_str(),
+            "create:linear_chassis" | "create:secondary_linear_chassis"
+        )
+        .then(|| create_engine::contraption::Chassis {
+            secondary: s.name == "create:secondary_linear_chassis",
+            axis: match s.properties.get("axis").map(String::as_str) {
+                Some("x") => Axis::X,
+                Some("z") => Axis::Z,
+                _ => Axis::Y,
+            },
+            sticky_top: s.properties.get("sticky_top").is_some_and(|v| v == "true"),
+            sticky_bottom: s
+                .properties
+                .get("sticky_bottom")
+                .is_some_and(|v| v == "true"),
+            range: create_engine::contraption::CHASSIS_RANGE,
+        }),
     })
 }
 

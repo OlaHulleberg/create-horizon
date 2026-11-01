@@ -13,6 +13,69 @@ pub struct Found {
     pub sail_facing: Option<Dir>,
     pub sticky: Option<Sticky>,
     pub movable: bool,
+    /// A linear chassis (`LinearChassisBlock`) and what it holds on to.
+    pub chassis: Option<Chassis>,
+}
+
+/// A linear chassis as the search reads it: its kind (`sameKind`: linear or secondary), axis,
+/// glued ends (`sticky_top` toward the positive end, `sticky_bottom`) and range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Chassis {
+    pub secondary: bool,
+    pub axis: crate::kinetics::Axis,
+    pub sticky_top: bool,
+    pub sticky_bottom: bool,
+    pub range: i32,
+}
+
+/// `ChassisBlockEntity`'s range when not set (`maxChassisRange / 2`).
+pub const CHASSIS_RANGE: i32 = 8;
+
+/// `Contraption.moveChassis` for the chassis at `pos`: the chassis beside it of its kind on its
+/// axis (`addAttachedChasses`), then `getIncludedBlockPositionsLinear`: from each end, along its
+/// axis, up to its range of blocks that need moving, while that end is glued or is the way the
+/// structure moves.
+pub fn chassis_reach(
+    pos: [i32; 3],
+    c: Chassis,
+    forced: Option<Dir>,
+    at: &impl Fn([i32; 3]) -> Option<Found>,
+) -> Vec<[i32; 3]> {
+    let mut out = Vec::new();
+    for d in Dir::ALL {
+        let next = add(pos, d.offset());
+        if let Some(Found {
+            chassis: Some(o), ..
+        }) = at(next)
+            && o.secondary == c.secondary
+            && o.axis == c.axis
+        {
+            out.push(next);
+        }
+    }
+    for positive in [true, false] {
+        let facing = Dir::ALL
+            .into_iter()
+            .find(|d| d.axis() == c.axis && d.positive() == positive)
+            .unwrap_or(Dir::Up);
+        let sticky = if positive {
+            c.sticky_top
+        } else {
+            c.sticky_bottom
+        };
+        if forced != Some(facing) && !sticky {
+            continue;
+        }
+        let o = facing.offset();
+        for i in 1..=c.range {
+            let current = [pos[0] + o[0] * i, pos[1] + o[1] * i, pos[2] + o[2] * i];
+            if at(current).is_none() {
+                break;
+            }
+            out.push(current);
+        }
+    }
+    out
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +159,13 @@ pub fn gather_bearing(
         };
         if !found.movable {
             return Err(Refused::Unmovable(pos));
+        }
+        if let Some(c) = found.chassis {
+            for p in chassis_reach(pos, c, None, &at) {
+                if !visited.contains(&p) && p != bearing {
+                    frontier.push_back(p);
+                }
+            }
         }
         for d in Dir::ALL {
             let next = add(pos, d.offset());
@@ -243,12 +313,51 @@ mod tests {
         assert_eq!(rotate([2, 1, 0], 180, Axis::Z), [-2, -1, 0]);
     }
 
+    #[test]
+    fn a_chassis_carries_its_glued_end_and_its_linked_chassis() {
+        use crate::kinetics::Axis;
+        // A vertical chassis at the origin glued on top, a second one above it, stone above
+        // both up to y 4, air at 5; another stone below (its bottom isn't glued).
+        let chassis = Chassis {
+            secondary: false,
+            axis: Axis::Y,
+            sticky_top: true,
+            sticky_bottom: false,
+            range: CHASSIS_RANGE,
+        };
+        let at = |p: [i32; 3]| -> Option<Found> {
+            if p[0] != 0 || p[2] != 0 || !(-1..=4).contains(&p[1]) {
+                return None;
+            }
+            Some(Found {
+                state: 1,
+                sail_facing: None,
+                sticky: None,
+                movable: true,
+                chassis: (p[1] == 0 || p[1] == 1).then_some(chassis),
+            })
+        };
+        let reach = chassis_reach([0, 0, 0], chassis, None, &at);
+        assert_eq!(
+            reach,
+            vec![[0, 1, 0], [0, 1, 0], [0, 2, 0], [0, 3, 0], [0, 4, 0]]
+        );
+        // Moved down, its bottom end goes too.
+        assert!(chassis_reach([0, 0, 0], chassis, Some(Dir::Down), &at).contains(&[0, -1, 0]));
+        let range = Chassis {
+            range: 2,
+            ..chassis
+        };
+        assert!(!chassis_reach([0, 0, 0], range, None, &at).contains(&[0, 3, 0]));
+    }
+
     fn sail() -> Found {
         Found {
             state: 7,
             sail_facing: Some(Dir::North),
             sticky: None,
             movable: true,
+            chassis: None,
         }
     }
 
@@ -267,6 +376,7 @@ mod tests {
                 sail_facing: None,
                 sticky: None,
                 movable: true,
+                chassis: None,
             }),
             _ => None,
         };
@@ -289,6 +399,7 @@ mod tests {
         let stuck = |p: [i32; 3]| {
             (p == [0, 0, -1]).then(|| Found {
                 movable: false,
+                chassis: None,
                 ..sail()
             })
         };

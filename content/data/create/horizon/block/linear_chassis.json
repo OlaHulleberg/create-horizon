@@ -1,0 +1,25 @@
+{
+  "template": "minecraft:stripped_spruce_wood",
+  "properties": {
+    "hardness": 2.0,
+    "explosion_resistance": 2.0,
+    "requires_tool": false,
+    "sounds": "minecraft:stripped_spruce_wood"
+  },
+  "item": true,
+  "state_properties": {
+    "axis": [
+      "x",
+      "y",
+      "z"
+    ],
+    "sticky_bottom": [
+      "false",
+      "true"
+    ],
+    "sticky_top": [
+      "false",
+      "true"
+    ]
+  }
+}
