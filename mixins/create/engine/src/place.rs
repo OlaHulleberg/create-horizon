@@ -119,6 +119,10 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
         Block::MechanicalPress => {
             preferred(true, shaft).unwrap_or_else(|| horizontal_direction(ctx.yaw).opposite())
         }
+        // BacktankBlock (HorizontalKineticBlock): facing the player.
+        Block::CopperBacktank | Block::NetheriteBacktank => {
+            horizontal_direction(ctx.yaw).opposite()
+        }
         // RedstoneLinkBlock: on the clicked face.
         Block::RedstoneLink => ctx.clicked_face,
         // SailBlock (WrenchableDirectionalBlock): away from the player's view.

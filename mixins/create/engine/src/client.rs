@@ -147,6 +147,8 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 ]
             })
             .unwrap_or_default(),
+        // BacktankRenderer: its shaft's half out of the top.
+        Block::CopperBacktank | Block::NetheriteBacktank => vec![half(0, Dir::Up, speeds[0])],
         Block::CreativeMotor => s
             .facing
             .map(|f| vec![half(0, f, speeds[0])])
