@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compile the real bundle on a tiny source fixture; no Horizon/assets required."""
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -905,7 +906,13 @@ def main():
         write_fixture(original, root)
         run(['cargo', 'generate-lockfile', '--offline'], cwd=original)
         before = snapshot(original)
-        base = ['--workspace', str(original), '--mods', str(root/'mixins')]
+        # Modules that reach deep into Horizon's internals are compiled against Horizon itself
+        # (`horizon.py check`); here they are swapped for stand-ins with the same functions.
+        mods = scratch/'mixins'
+        shutil.copytree(root/'mixins', mods, ignore=shutil.ignore_patterns('target'))
+        for standin in (root/'tools/fixture').glob('*.rs'):
+            shutil.copy(standin, mods/'create'/standin.name)
+        base = ['--workspace', str(original), '--mods', str(mods)]
         report = json.loads(run([str(cli), 'check', *base, '--out', str(stage), '--trust-native-mods']).stdout)
         assert report['injections'] == len(manifest['injection']), report
         assert report['modules'] == len(manifest['module']), report
