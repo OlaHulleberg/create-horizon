@@ -502,6 +502,54 @@ fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
 /// crosshair tells its stress (`KineticBlockEntity.addToGoggleTooltip`: impact × speed;
 /// `GeneratingKineticBlockEntity`: capacity × speed), in a tooltip right of the crosshair.
 pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
+    value_tip(game, batch);
+    goggle_overlay(game, batch);
+}
+
+/// `ValueSettingsClient.render` for the creative motor's speed (`KineticScrollValueBehaviour`):
+/// its label over the hotbar, centred, with the value and how to change it here (the wheel:
+/// Create 6's value board is not ported).
+fn value_tip(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
+    // Free when unused: no ray while no kinetic block has a speed here.
+    if CLIENT.with_borrow(|c| c.as_ref().is_none_or(|c| c.speeds.is_empty())) {
+        return;
+    }
+    let Some(hit) = game.pick() else {
+        return;
+    };
+    let pos = hit.pos;
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    // Hot: one range test for any other block.
+    if states::index(state.0).is_none() || !client_ensure(game) {
+        return;
+    }
+    let Some((facing, speed)) = CLIENT.with_borrow(|c| {
+        let c = c.as_ref()?;
+        let (block, info) = c.table.get(state.0)?;
+        (block == create_engine::Block::CreativeMotor)
+            .then(|| (info.facing, c.speeds.get(&pos).map_or(0.0, |s| s[0])))
+    }) else {
+        return;
+    };
+    // The setting, from the speed the motor gives along its axis.
+    let setting = facing.map_or(speed, |f| {
+        create_engine::kinetics::convert_to_direction(speed, f)
+    });
+    let lines = [
+        ("Generated Speed in RPM".to_owned(), 0xFB_DC7D),
+        (format!("{setting:.0}"), 0xFF_FFFF),
+        ("Scroll to change".to_owned(), 0xFF_FFFF),
+    ];
+    let mut y = batch.height - 75.0 - lines.len() as f32 * 12.0;
+    for (text, rgb) in &lines {
+        let w = game.native_text_width(text);
+        game.native_text(batch, text, [batch.width / 2.0 - w / 2.0, y], *rgb, true);
+        y += 12.0;
+    }
+}
+
+/// `GoggleOverlayRenderer` for kinetic blocks.
+fn goggle_overlay(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
     // Hot: one compare on the head slot.
     if !game.armor[0]
         .as_ref()
