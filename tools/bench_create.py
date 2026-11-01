@@ -186,6 +186,26 @@ def build(ctl_bin, sock, scenario, center):
             command(ctl_bin, sock, f"setblock {x0+3} {y-6} {zz} create:fluid_tank", failures)
             command(ctl_bin, sock, f"setblock {x0} {y-5} {zz} create:cogwheel[axis=x]", failures)
             command(ctl_bin, sock, f"setblock {x0+1} {y-5} {zz} create:creative_motor[facing=west]", failures)
+    if scenario in ("boilers", "tanks"):
+        # Pool -> pump at 32 rpm (a large cogwheel turning its small cog) -> a 2x2 tank over four
+        # kindled blaze burners; "boilers" adds a steam engine on its south side driving a shaft.
+        for row in range(10):
+            zz, x0 = z - 30 + 6 * row, x
+            command(ctl_bin, sock, f"fill {x0-7} {y-7} {zz-1} {x0+6} {y-7} {zz+5} stone", failures)
+            command(ctl_bin, sock, f"fill {x0-6} {y-6} {zz-1} {x0-2} {y-6} {zz+2} glass", failures)
+            command(ctl_bin, sock, f"fill {x0-5} {y-6} {zz} {x0-3} {y-6} {zz+1} water", failures)
+            command(ctl_bin, sock, f"fill {x0-2} {y-6} {zz} {x0-1} {y-6} {zz} create:fluid_pipe", failures)
+            command(ctl_bin, sock, f"setblock {x0} {y-6} {zz} create:mechanical_pump[facing=east]", failures)
+            command(ctl_bin, sock, f"fill {x0+1} {y-6} {zz} {x0+2} {y-6} {zz} create:fluid_pipe", failures)
+            command(ctl_bin, sock, f"fill {x0+3} {y-7} {zz} {x0+4} {y-7} {zz+1} create:blaze_burner[blaze=kindled]",
+                    failures)
+            command(ctl_bin, sock, f"fill {x0+3} {y-6} {zz} {x0+4} {y-6} {zz+1} create:fluid_tank", failures)
+            command(ctl_bin, sock, f"setblock {x0} {y-5} {zz+1} create:large_cogwheel[axis=x]", failures)
+            command(ctl_bin, sock, f"setblock {x0+1} {y-5} {zz+1} create:creative_motor[facing=west]", failures)
+            command(ctl_bin, sock, f"setblock {x0+4} {y-6} {zz+4} create:shaft[axis=x]", failures)
+            if scenario == "boilers":
+                command(ctl_bin, sock, f"setblock {x0+4} {y-6} {zz+2} "
+                        "create:steam_engine[face=wall,facing=south,waterlogged=false]", failures)
     if scenario in ("trains", "signals"):
         for row in range(12):
             zz = z - 24 + 4 * row
@@ -603,7 +623,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "curves": 32, "curvetracks": 32, "gauges": 64 * 64, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "diodes": 512, "links": 64,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8, "boilers": 10 * 17, "tanks": 10 * 16}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
@@ -724,6 +744,14 @@ def run_once(args, scenario):
             found = ctl(ctl_bin, sock, "blocks", str(x), str(y - 6), str(z - 24), str(x), str(y - 6),
                         str(z + 21)).get("blocks", [])
             pressed = sum(1 for b in found if b[3].startswith("minecraft:water"))
+        if scenario in ("boilers", "tanks"):
+            # Each row's shaft (powered by its engine) and the speed of the first one.
+            found = ctl(ctl_bin, sock, "blocks", str(x + 4), str(y - 6), str(z - 26), str(x + 4), str(y - 6),
+                        str(z + 28)).get("blocks", [])
+            ctl(ctl_bin, sock, "chat", f"/create_debug speed {x+4} {y-6} {z-26}")
+            time.sleep(0.5)
+            pressed = [sum(1 for b in found if b[3].startswith("create:powered_shaft")),
+                       ctl(ctl_bin, sock, "messages", "1").get("chat")]
         if scenario == "links":
             # The receivers follow the clocks: the lamps read twice, a moment apart.
             reads = []
@@ -784,7 +812,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "gauges", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
+                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "gauges", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains", "boilers", "tanks"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
