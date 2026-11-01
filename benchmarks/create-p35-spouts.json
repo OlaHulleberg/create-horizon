@@ -1,0 +1,65 @@
+{
+  "scenario": "spouts",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.87939453125,
+    2.14501953125,
+    2.05810546875
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 80,
+      "frames": 20989,
+      "frame_ms_p50": 0.5525349974632263,
+      "frame_ms_p99": 1.0512009859085083,
+      "fps": 1749.0833333333333,
+      "tick_ms": 4.395002841949463,
+      "tick_ms_max": 9.716778755187988,
+      "check": [
+        "-518, 91, 49 has the following block data: {x: -518, y: 91, Items: [{count: 10, Slot: 0b, id: \"minecraft:bucket\"}, {count: 1, Slot: 1b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 2b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 3b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 4b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 5b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 6b, id: \"minecraft:water_bucket\"}], z: 49, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 80,
+      "frames": 23082,
+      "frame_ms_p50": 0.4907359778881073,
+      "frame_ms_p99": 1.0278420448303225,
+      "fps": 1923.5,
+      "tick_ms": 4.429844379425049,
+      "tick_ms_max": 9.768180847167969,
+      "check": [
+        "-523, 91, 49 has the following block data: {x: -523, y: 91, Items: [{count: 10, Slot: 0b, id: \"minecraft:bucket\"}, {count: 1, Slot: 1b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 2b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 3b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 4b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 5b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 6b, id: \"minecraft:water_bucket\"}], z: 49, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 80,
+      "frames": 21775,
+      "frame_ms_p50": 0.5242049694061279,
+      "frame_ms_p99": 0.9922720193862916,
+      "fps": 1814.5833333333333,
+      "tick_ms": 4.337409973144531,
+      "tick_ms_max": 9.671500205993652,
+      "check": [
+        "-517, 88, 57 has the following block data: {x: -517, y: 88, Items: [{count: 10, Slot: 0b, id: \"minecraft:bucket\"}, {count: 1, Slot: 1b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 2b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 3b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 4b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 5b, id: \"minecraft:water_bucket\"}, {count: 1, Slot: 6b, id: \"minecraft:water_bucket\"}], z: 57, id: \"create:depot\"}"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1829.0555555555554,
+    "frame_ms_p50": 0.5224919815858206,
+    "frame_ms_p99": 1.0237716833750408,
+    "tick_ms": 4.387419064839681,
+    "tick_ms_max": 9.718819936116537
+  },
+  "stdev": {
+    "fps": 88.10435468701205,
+    "frame_ms_p50": 0.030935100623173624,
+    "frame_ms_p99": 0.029674596132493798,
+    "tick_ms": 0.04668152870832409,
+    "tick_ms_max": 0.04837263078597786
+  }
+}

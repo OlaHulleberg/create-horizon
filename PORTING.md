@@ -148,6 +148,16 @@ Chutes moving items cost no measurable tick; 6% of frame p50 with 128 chutes, 16
 Turning drills cost 0.09 ms of tick and 5% of frame p50 against the off run above (4.498 ms, 0.519 ms)
 (`benchmarks/create-p3-drills.json`).
 
+| Scenario (2026-11-01, Phases 3 and 5, saws and spouts, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1868 ± 41 | 0.498 / 1.085 | 4.400 ± 0.111 | baseline |
+| saws: 16 saws facing up at 16 rpm, each given 64 andesite alloy | 1695 ± 10 | 0.569 / 1.061 | 4.486 ± 0.015 | tick ≤ off + 0.25 ms, frame p50 ≤ off + 15% |
+| spouts: 10 pumps filling spouts over depots of 16 empty buckets | 1829 ± 88 | 0.522 / 1.024 | 4.387 ± 0.047 | tick ≤ off + 0.25 ms, frame p50 ≤ off + 10% |
+
+Saws cost 0.09 ms of tick; most of their 14% of frame p50 is the shafts they throw out as item entities (a run
+ends with hundreds lying around). Spouts filling buckets cost nothing measurable; each run's check reads a depot
+mid-way (10 empty, the filled ones in its outputs) (`benchmarks/create-p35-*.json`).
+
 Under load the presses and depots cost 0.21 ms of server tick (about 0.8 µs per machine per tick) and 0.05 ms of
 frame time (256 heads glided per tick, 256 stacks, 256 turning shafts); the check in each run reads one depot after the
 flight (64 iron → 57 iron + 7 sheets). A first set of three runs had one run at 231 fps with 33 ms p99 frames
