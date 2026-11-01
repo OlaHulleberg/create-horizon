@@ -924,7 +924,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 34] = [
+pub const PARTIALS: [(&str, &str, &str); 37] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
