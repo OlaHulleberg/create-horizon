@@ -4,6 +4,7 @@
 pub mod basin;
 pub mod belt;
 pub mod burner;
+pub mod chute;
 pub mod client;
 pub mod contraption;
 pub mod crusher;

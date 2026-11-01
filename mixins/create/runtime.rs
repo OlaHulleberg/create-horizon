@@ -210,6 +210,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_pipes(game, dimension, dim);
     tick_pistons(game, dimension, dim);
     tick_trains(game, dimension, dim);
+    tick_chutes(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -1439,7 +1440,12 @@ pub(super) fn block_entity(
     block: &str,
     entity: &mut Option<(String, horizon_world::nbt::Compound)>,
 ) {
-    if entity.is_none() && matches!(block, "create:millstone" | "create:depot" | "create:basin") {
+    if entity.is_none()
+        && matches!(
+            block,
+            "create:millstone" | "create:depot" | "create:basin" | "create:chute"
+        )
+    {
         *entity = Some((block.into(), horizon_world::nbt::Compound::new()));
     }
 }
@@ -1462,6 +1468,18 @@ pub(super) fn block_entity_container(
             faces: std::array::from_fn(|_| all.clone()),
             inputs: vec![0],
             outputs: all,
+            menu: None,
+            only_when_empty: true,
+        });
+        return;
+    }
+    if block == "create:chute" {
+        // ChuteItemHandler: one stack, taken only while the chute holds nothing.
+        *container = Some(horizon_client::containers::ModContainer {
+            slots: 1,
+            faces: std::array::from_fn(|_| vec![0]),
+            inputs: vec![0],
+            outputs: vec![0],
             menu: None,
             only_when_empty: true,
         });
@@ -1678,6 +1696,15 @@ pub(super) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
     let Some(dim) = dimension_index(game.dim.id()) else {
         return;
     };
+    // A chute was given a stack (a hopper above): it falls from the top.
+    if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
+        == Some(create_engine::Block::Chute)
+    {
+        with_world(|w| {
+            w.dims[dim].chutes.entry(pos).or_insert(1.0);
+        });
+        return;
+    }
     // A basin's contents changed: the mixer over it looks again.
     if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
         == Some(create_engine::Block::Basin)
@@ -2342,6 +2369,127 @@ fn stack_limit(game: &Game<'_>, item: &str) -> u8 {
         .get(item)
         .map_or(64, |x| x.max_stack)
         .clamp(1, 64) as u8
+}
+
+/// `ChuteBlockEntity` taking an item that landed on it (`canAcceptItem`: only while empty): the
+/// whole stack, at the top.
+fn chute_take(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    stack: &mut horizon_client::items::ItemStack,
+) {
+    let taken = game
+        .native_with_mod_block_entity(pos, |be| {
+            be.items.resize(be.items.len().max(1), None);
+            if be.items[0].is_some() {
+                return false;
+            }
+            be.items[0] = Some(stack.clone());
+            true
+        })
+        .unwrap_or(false);
+    if taken {
+        stack.count = 0;
+        with_world(|w| w.dims[dim].chutes.insert(pos, 1.0));
+    }
+}
+
+fn chute_stack(game: &Game<'_>, pos: [i32; 3]) -> Option<horizon_client::items::ItemStack> {
+    match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+        Some(horizon_client::containers::BlockEntity::Mod(m)) => m.items.first().cloned().flatten(),
+        _ => None,
+    }
+}
+
+fn set_chute_stack(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    stack: Option<horizon_client::items::ItemStack>,
+) {
+    game.native_with_mod_block_entity(pos, |be| {
+        be.items.resize(be.items.len().max(1), None);
+        be.items[0] = stack;
+    });
+}
+
+/// Chutes holding a stack (`ChuteBlockEntity.tick` falling, `handleDownwardOutput`): into the
+/// container below (as a hopper puts in), else the chute below if it is empty, else out of the
+/// bottom when nothing solid is under it; it waits in the middle while the way is shut.
+fn tick_chutes(game: &mut Game<'_>, dim: usize) {
+    use create_engine::chute::{Fall, fall};
+    let moving: Vec<([i32; 3], f32)> =
+        with_world(|w| w.dims[dim].chutes.iter().map(|(p, v)| (*p, *v)).collect())
+            .unwrap_or_default();
+    for (pos, position) in moving {
+        let Some(stack) = chute_stack(game, pos) else {
+            with_world(|w| w.dims[dim].chutes.remove(&pos));
+            continue;
+        };
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        let below_state = game.world.block(below[0], below[1], below[2]);
+        let below_chute = with_world(|w| w.table.get(below_state.0).map(|(b, _)| b)).flatten()
+            == Some(create_engine::Block::Chute);
+        let container = !below_chute
+            && game
+                .world
+                .block_entities
+                .contains_key(&(below[0], below[1], below[2]));
+        let can = if below_chute {
+            chute_stack(game, below).is_none()
+        } else if container {
+            true
+        } else {
+            // Block.canSupportRigidBlock: nothing to drop onto.
+            game.res.behaviours().facts(below_state).flags
+                & horizon_world::level::data::state_flags::COLLISION_EMPTY
+                != 0
+        };
+        let next = match fall(position, can) {
+            Fall::At(p) => Some(p),
+            Fall::Out if below_chute => {
+                set_chute_stack(game, below, Some(stack));
+                set_chute_stack(game, pos, None);
+                with_world(|w| w.dims[dim].chutes.insert(below, 1.0));
+                None
+            }
+            Fall::Out if container => {
+                let count = stack.count;
+                let left = game
+                    .native_insert_item(below, horizon_core::geometry::Direction::Up, stack.clone())
+                    .filter(|s| s.count > 0);
+                if left.as_ref().is_some_and(|l| l.count == count) {
+                    Some(0.5)
+                } else {
+                    let done = left.is_none();
+                    set_chute_stack(game, pos, left);
+                    (!done).then_some(0.5)
+                }
+            }
+            Fall::Out => {
+                // An item 12/16 below the centre, falling at a quarter block a tick.
+                let (x, y, z) = (
+                    f64::from(pos[0]) + 0.5,
+                    f64::from(pos[1]) + 0.5 - 0.75,
+                    f64::from(pos[2]) + 0.5,
+                );
+                game.native_run_command(&format!(
+                    "summon minecraft:item {x} {y} {z} {{Item:{{id:'{}',count:{}}},Motion:[0d,-0.25d,0d]}}",
+                    stack.item, stack.count
+                ));
+                set_chute_stack(game, pos, None);
+                None
+            }
+        };
+        with_world(|w| match next {
+            Some(p) => {
+                w.dims[dim].chutes.insert(pos, p);
+            }
+            None => {
+                w.dims[dim].chutes.remove(&pos);
+            }
+        });
+    }
 }
 
 /// The heat under a basin (`BasinBlockEntity.getHeatLevelOf`): a blaze burner's, smouldering for
@@ -3750,6 +3898,7 @@ pub(super) fn item_landed(
         (_, Some(b @ create_engine::Block::Belt)) => (pos, b),
         (_, Some(b @ create_engine::Block::Depot)) => (pos, b),
         (Some(b @ create_engine::Block::Basin), _) => (own, b),
+        (_, Some(b @ create_engine::Block::Chute)) => (pos, b),
         _ => return,
     };
     if stack.extra.is_some() {
@@ -3758,6 +3907,10 @@ pub(super) fn item_landed(
     }
     if block == create_engine::Block::Basin {
         basin_take(game, dim, spot, stack);
+        return;
+    }
+    if block == create_engine::Block::Chute {
+        chute_take(game, dim, spot, stack);
         return;
     }
     let max = game
