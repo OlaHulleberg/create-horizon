@@ -132,6 +132,26 @@ pub(super) fn chunk_load(
     let burners = burners_from_nbt(Game::native_chunk_data(chunk, "create"));
     let links = links_from_nbt(Game::native_chunk_data(chunk, "create"));
     let deployers = deployers_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let basins: Vec<([i32; 3], create_engine::basin::Tanks)> =
+        match Game::native_chunk_data(chunk, "create").and_then(|d| d.get(&"basins".into())) {
+            Some(horizon_world::nbt::Tag::IntArray(v)) => v
+                .chunks_exact(11)
+                .map(|c| {
+                    let tank = |i: usize| {
+                        create_engine::tank::Fluid::from_index(c[3 + 2 * i].clamp(0, 255) as u8)
+                            .map(|f| (f, c[4 + 2 * i].clamp(0, 1000) as u32))
+                    };
+                    (
+                        [c[0], c[1], c[2]],
+                        create_engine::basin::Tanks {
+                            input: [tank(0), tank(1)],
+                            output: [tank(2), tank(3)],
+                        },
+                    )
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
     let ranges: Vec<([i32; 3], i32)> =
         match Game::native_chunk_data(chunk, "create").and_then(|d| d.get(&"chassis".into())) {
             Some(horizon_world::nbt::Tag::IntArray(v)) => v
@@ -152,6 +172,7 @@ pub(super) fn chunk_load(
         w.load_links(dim, links.into_iter());
         w.load_deployers(dim, deployers.into_iter());
         w.dims[dim].chassis_range.extend(ranges);
+        w.dims[dim].basin_fluids.extend(basins);
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
                 && states::index(single).is_none()
@@ -1166,6 +1187,27 @@ pub(super) fn chunk_data_save(
     let burners = with_world(|w| w.column_burners(dim, chunk[0], chunk[1])).unwrap_or_default();
     let links = with_world(|w| w.column_links(dim, chunk[0], chunk[1])).unwrap_or_default();
     let deployers = with_world(|w| w.column_deployers(dim, chunk[0], chunk[1])).unwrap_or_default();
+    // Basins' tanks: x, y, z, then fluid (255: none) and amount for each of the four.
+    let basins: Vec<i32> = with_world(|w| {
+        let mut v: Vec<([i32; 3], create_engine::basin::Tanks)> = w.dims[dim]
+            .basin_fluids
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]))
+            .map(|(p, t)| (*p, *t))
+            .collect();
+        v.sort_by_key(|e| e.0);
+        v.into_iter()
+            .flat_map(|(p, t)| {
+                let mut out = p.to_vec();
+                for f in t.input.iter().chain(&t.output) {
+                    out.push(f.map_or(255, |f| i32::from(f.0.index())));
+                    out.push(f.map_or(0, |f| f.1 as i32));
+                }
+                out
+            })
+            .collect()
+    })
+    .unwrap_or_default();
     // Chassis ranges set with the wrench: x, y, z, range each.
     let ranges: Vec<i32> = with_world(|w| {
         let mut v: Vec<([i32; 3], i32)> = w.dims[dim]
@@ -1189,6 +1231,7 @@ pub(super) fn chunk_data_save(
         && links.is_empty()
         && deployers.is_empty()
         && ranges.is_empty()
+        && basins.is_empty()
         && trains.is_empty()
     {
         data.remove(&"create".into());
@@ -1219,6 +1262,9 @@ pub(super) fn chunk_data_save(
     }
     if !ranges.is_empty() {
         own.insert("chassis".into(), horizon_world::nbt::Tag::IntArray(ranges));
+    }
+    if !basins.is_empty() {
+        own.insert("basins".into(), horizon_world::nbt::Tag::IntArray(basins));
     }
     if !burners.is_empty() {
         // x, y, z, fuel type, burn time left for each burner (`fuelLevel`, `burnTimeRemaining`).
@@ -1772,35 +1818,38 @@ fn read_basin(game: &Game<'_>, kind: &str) -> Vec<create_engine::basin::Recipe> 
         .iter()
         .filter_map(|r| {
             let json = &*r.json;
-            let ingredients = json["ingredients"]
-                .as_array()?
-                .iter()
-                .map(|i| {
-                    game.native_recipe_ingredient(i)
-                        .map(|ing| ing.1.iter().map(|s| s.to_string()).collect::<Vec<_>>())
-                })
-                .collect::<Option<Vec<_>>>()?;
-            let results = json["results"]
-                .as_array()?
-                .iter()
-                .map(|o| {
-                    if o.get("amount").is_some() {
-                        return None;
-                    }
-                    let stack = game.native_recipe_result(o)?;
-                    Some(Output {
-                        item: stack.item.to_string(),
-                        count: stack.count.min(255) as u8,
-                        chance: o["chance"].as_f64().unwrap_or(1.0) as f32,
-                    })
-                })
-                .collect::<Option<Vec<_>>>()?;
+            let mut ingredients = Vec::new();
+            let mut fluids = Vec::new();
+            for i in json["ingredients"].as_array()? {
+                if i.get("amount").is_some() {
+                    fluids.push(recipe_fluid(i)?);
+                } else {
+                    let ing = game.native_recipe_ingredient(i)?;
+                    ingredients.push(ing.1.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+                }
+            }
+            let mut results = Vec::new();
+            let mut fluid_results = Vec::new();
+            for o in json["results"].as_array()? {
+                if o.get("amount").is_some() {
+                    fluid_results.push(recipe_fluid(o)?);
+                    continue;
+                }
+                let stack = game.native_recipe_result(o)?;
+                results.push(Output {
+                    item: stack.item.to_string(),
+                    count: stack.count.min(255) as u8,
+                    chance: o["chance"].as_f64().unwrap_or(1.0) as f32,
+                });
+            }
             Some(Recipe {
                 id: r.id.clone(),
                 ingredients,
                 results,
                 time: json["processing_time"].as_i64().unwrap_or(0) as i32,
                 heat: HeatReq::read(json["heat_requirement"].as_str()),
+                fluids,
+                fluid_results,
             })
         })
         .collect()
@@ -3919,6 +3968,19 @@ fn basin_slots(game: &Game<'_>, pos: [i32; 3]) -> Option<Vec<create_engine::proc
 /// Mechanical mixers: those asked to look at their basin (`updateBasin`: turning, not running,
 /// a recipe the basin can do), then the running ones' cycle (`tick`), mixing at the bottom
 /// (`applyBasinRecipe`) and going on with the same recipe while it still fits.
+/// Whether the block at `p` is a basin.
+fn basin_at(game: &Game<'_>, p: [i32; 3]) -> bool {
+    let s = game.world.block(p[0], p[1], p[2]).0;
+    with_world(|w| w.table.get(s).map(|(b, _)| b)).flatten() == Some(create_engine::Block::Basin)
+}
+
+/// A basin's tanks (none: empty).
+fn basin_tanks(dim: usize, pos: [i32; 3]) -> create_engine::basin::Tanks {
+    with_world(|w| w.dims[dim].basin_fluids.get(&pos).copied())
+        .flatten()
+        .unwrap_or_default()
+}
+
 fn tick_mixers(game: &mut Game<'_>, dim: usize) {
     use create_engine::basin::{self, MixStep};
     let mut checks =
@@ -3953,20 +4015,25 @@ fn tick_mixers(game: &mut Game<'_>, dim: usize) {
                 );
                 if let (Some(mut slots), Some(i)) = (basin_slots(game, basin_pos), m.recipe) {
                     let limit = |i: &str| stack_limit(game, i);
+                    let mut tanks = basin_tanks(dim, basin_pos);
                     let done = RECIPES.with_borrow(|r| {
                         r.as_ref()
                             .and_then(|r| r.mixing.get(i))
                             .is_some_and(|recipe| {
-                                basin::apply(&mut slots, recipe, heat, &limit, &mut rng, false)
+                                basin::apply(
+                                    &mut slots, &mut tanks, recipe, heat, &limit, &mut rng, false,
+                                )
                             })
                     });
                     if done {
+                        with_world(|w| w.set_basin_fluids(dim, basin_pos, tanks));
                         let again = RECIPES.with_borrow(|r| {
                             r.as_ref()
                                 .and_then(|r| r.mixing.get(i))
                                 .is_some_and(|recipe| {
                                     basin::apply(
                                         &mut slots.clone(),
+                                        &mut tanks.clone(),
                                         recipe,
                                         heat,
                                         &limit,
@@ -4040,9 +4107,15 @@ fn tick_mixers(game: &mut Game<'_>, dim: usize) {
         let limit = |i: &str| stack_limit(game, i);
         let found = RECIPES.with_borrow(|r| {
             r.as_ref().and_then(|r| {
-                basin::matching(&r.mixing, &slots, heat, &limit)
-                    .first()
-                    .copied()
+                basin::matching(
+                    &r.mixing,
+                    &slots,
+                    &basin_tanks(dim, basin_pos),
+                    heat,
+                    &limit,
+                )
+                .first()
+                .copied()
             })
         });
         if let Some(i) = found {
@@ -4082,9 +4155,15 @@ fn press_on_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
     let limit = |i: &str| stack_limit(game, i);
     let found = RECIPES.with_borrow(|r| {
         r.as_ref().and_then(|r| {
-            basin::matching(&r.compacting, &slots, heat, &limit)
-                .first()
-                .copied()
+            basin::matching(
+                &r.compacting,
+                &slots,
+                &basin_tanks(dim, basin_pos),
+                heat,
+                &limit,
+            )
+            .first()
+            .copied()
         })
     });
     if let Some(i) = found {
@@ -4116,12 +4195,18 @@ fn compact_in_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
             ^ (pos[2] as u64) << 20,
     );
     let limit = |i: &str| stack_limit(game, i);
+    let mut tanks = basin_tanks(dim, basin_pos);
     let done = RECIPES.with_borrow(|r| {
         r.as_ref()
             .and_then(|r| r.compacting.get(i))
-            .is_some_and(|recipe| basin::apply(&mut slots, recipe, heat, &limit, &mut rng, false))
+            .is_some_and(|recipe| {
+                basin::apply(
+                    &mut slots, &mut tanks, recipe, heat, &limit, &mut rng, false,
+                )
+            })
     });
     if done {
+        with_world(|w| w.set_basin_fluids(dim, basin_pos, tanks));
         game.native_with_mod_block_entity(basin_pos, |be| {
             be.items = slots
                 .iter()
@@ -4153,7 +4238,7 @@ fn pipe_cell(game: &Game<'_>, p: [i32; 3]) -> create_engine::fluids::Cell {
         return match block {
             Block::FluidPipe => Cell::Pipe(pipe_sides_of(game, state)),
             Block::MechanicalPump => info.facing.map_or(Cell::Solid, Cell::Pump),
-            Block::FluidTank | Block::Spout | Block::ItemDrain => Cell::Tank,
+            Block::FluidTank | Block::Spout | Block::ItemDrain | Block::Basin => Cell::Tank,
             _ => Cell::Solid,
         };
     }
@@ -4252,7 +4337,12 @@ fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
             // What the source can give this tick.
             let drained_from_drain = from.tank
                 && with_world(|w| w.dims[dim].drains.contains_key(&from.pos)).unwrap_or(false);
-            let offer = if drained_from_drain {
+            let from_basin = from.tank && basin_at(game, from.pos);
+            let offer = if from_basin {
+                // A basin gives from its outputs.
+                let mut t = basin_tanks(dim, from.pos);
+                create_engine::basin::drain(&mut t.output, amount)
+            } else if drained_from_drain {
                 with_world(|w| {
                     w.dims[dim]
                         .drains
@@ -4302,7 +4392,15 @@ fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                 // The first end in front that takes some.
                 let mut moved = 0;
                 for to in &pump.push {
-                    moved = if to.tank {
+                    moved = if to.tank && basin_at(game, to.pos) {
+                        // A basin takes into its inputs.
+                        let mut t = basin_tanks(dim, to.pos);
+                        let took = create_engine::basin::fill(&mut t.input, fluid, n);
+                        if took > 0 {
+                            with_world(|w| w.set_basin_fluids(dim, to.pos, t));
+                        }
+                        took
+                    } else if to.tank {
                         with_world(|w| {
                             let d = &mut w.dims[dim];
                             let took = match d.spouts.get_mut(&to.pos) {
@@ -4358,7 +4456,11 @@ fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                     }
                 }
                 if moved > 0 {
-                    if drained_from_drain {
+                    if from_basin {
+                        let mut t = basin_tanks(dim, from.pos);
+                        create_engine::basin::drain(&mut t.output, moved);
+                        with_world(|w| w.set_basin_fluids(dim, from.pos, t));
+                    } else if drained_from_drain {
                         with_world(|w| {
                             if let Some(d) = w.dims[dim].drains.get_mut(&from.pos) {
                                 create_engine::drain::drain(d, moved);
