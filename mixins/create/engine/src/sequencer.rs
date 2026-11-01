@@ -149,8 +149,11 @@ pub struct Sequencer {
     pub timer: i32,
     /// `poweredPreviously`.
     pub powered_before: bool,
-    /// The speed its block entity turns at (the half turned), as its tick reads it.
+    /// The speed its block entity turns at (the half turned), as its tick reads it: the
+    /// theoretical one (`speed`), overstressed or not.
     pub speed: f32,
+    /// Its network is overstressed: it shows no speed (`getSpeed` is 0).
+    pub overstressed: bool,
 }
 
 impl Default for Sequencer {
@@ -163,6 +166,7 @@ impl Default for Sequencer {
             timer: 0,
             powered_before: false,
             speed: 0.0,
+            overstressed: false,
         }
     }
 }
@@ -183,6 +187,11 @@ pub type State = Option<Step>;
 impl Sequencer {
     pub fn is_idle(&self) -> bool {
         self.current == -1
+    }
+
+    /// `getSpeed`: 0 while overstressed.
+    pub fn shown_speed(&self) -> f32 {
+        if self.overstressed { 0.0 } else { self.speed }
     }
 
     fn instruction(&self, index: i32) -> Option<Instruction> {
@@ -237,16 +246,23 @@ impl Sequencer {
         !self.is_idle() && self.duration >= 0
     }
 
-    /// `onSpeedChanged`: the running instruction's time is worked out again for the new speed;
-    /// stopping ends the sequence.
-    pub fn speed_changed(&mut self, speed: f32) -> State {
-        let previous = self.speed;
+    /// `onSpeedChanged`: the running instruction's time is worked out again for the new
+    /// theoretical `speed`; showing none ends the sequence. Create compares the speed shown
+    /// before with the theoretical one now, so becoming overstressed changes nothing, while the
+    /// speed changing as it is overstressed ends it.
+    pub fn speed_changed(&mut self, speed: f32, overstressed: bool) -> State {
+        let previous = self.shown_speed();
         self.speed = speed;
+        self.overstressed = overstressed;
         if self.is_idle() || previous.abs() == speed.abs() {
             return None;
         }
         let instruction = self.instruction(self.current)?;
-        let state = if speed == 0.0 { self.run(-1) } else { None };
+        let state = if self.shown_speed() == 0.0 {
+            self.run(-1)
+        } else {
+            None
+        };
         self.duration = instruction.duration(self.progress, speed);
         self.timer = 0;
         state
@@ -270,7 +286,7 @@ impl Sequencer {
         if !powered {
             return Some(Step::Idle);
         }
-        if self.speed == 0.0 {
+        if self.shown_speed() == 0.0 {
             return None;
         }
         self.run(0)
@@ -387,16 +403,43 @@ mod tests {
             s.tick();
         }
         // 48° done; at 32 RPM the 42° left take ceil(4.375) + 2.
-        assert_eq!(s.speed_changed(32.0), None);
+        assert_eq!(s.speed_changed(32.0, false), None);
         assert_eq!(s.duration, 7);
         assert_eq!(s.timer, 0);
         // The same speed the other way: nothing changes.
-        assert_eq!(s.speed_changed(-32.0), None);
+        assert_eq!(s.speed_changed(-32.0, false), None);
         assert_eq!(s.duration, 7);
         // Stopped: it ends.
-        assert_eq!(s.speed_changed(0.0), Some(Step::Ended));
+        assert_eq!(s.speed_changed(0.0, false), Some(Step::Ended));
         assert!(s.is_idle());
         // Not turning, power does not start it.
+        assert_eq!(s.redstone(true, false), None);
+    }
+
+    #[test]
+    fn overstress_holds_the_sequence_at_its_theoretical_speed() {
+        let mut s = Sequencer {
+            speed: 16.0,
+            ..Sequencer::default()
+        };
+        s.redstone(true, false);
+        for _ in 0..10 {
+            s.tick();
+        }
+        // Overstressed: the shown speed before equals the theoretical one, nothing changes; it
+        // goes on counting 4.8° a tick.
+        assert_eq!(s.speed_changed(16.0, true), None);
+        assert_eq!((s.duration, s.timer), (21, 10));
+        s.tick();
+        assert!((s.progress - 52.8).abs() < 1e-3);
+        // No longer: from 0 shown, the 37.2° left are timed again at 16 RPM.
+        assert_eq!(s.speed_changed(16.0, false), None);
+        assert_eq!((s.duration, s.timer), (10, 0));
+        // The speed changing while overstressed shows none: it ends.
+        s.speed_changed(16.0, true);
+        assert_eq!(s.speed_changed(32.0, true), Some(Step::Ended));
+        // Overstressed, power does not start it.
+        s.redstone(false, false);
         assert_eq!(s.redstone(true, false), None);
     }
 }

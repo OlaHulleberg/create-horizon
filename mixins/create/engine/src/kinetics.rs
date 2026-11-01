@@ -361,6 +361,8 @@ struct Node {
     stamp: u64,
     /// The speed it shows now (0 when overstressed).
     speed: f32,
+    /// The speed its network turns it at, overstressed or not (`getTheoreticalSpeed`).
+    theoretical: f32,
     overstressed: bool,
     live: bool,
     /// Set or replaced since the last solve: reported even when its speed is unchanged, so the
@@ -434,6 +436,7 @@ impl Kinetics {
             part,
             stamp: self.stamp,
             speed: 0.0,
+            theoretical: 0.0,
             overstressed: false,
             live: true,
             fresh: true,
@@ -486,6 +489,16 @@ impl Kinetics {
     pub fn speed(&self, pos: [i32; 3], sub: u8) -> Option<f32> {
         let id = *self.at.get(&pos)?.get(sub as usize)?;
         (id != NONE).then(|| self.nodes[id as usize].speed)
+    }
+
+    /// The speed the part's network turns it at, shown or not (`getTheoreticalSpeed`), and
+    /// whether that network is overstressed.
+    pub fn theoretical(&self, pos: [i32; 3], sub: u8) -> Option<(f32, bool)> {
+        let id = *self.at.get(&pos)?.get(sub as usize)?;
+        (id != NONE).then(|| {
+            let n = &self.nodes[id as usize];
+            (n.theoretical, n.overstressed)
+        })
     }
 
     /// The nodes connected to `id`, with the ratio from it to each.
@@ -719,6 +732,35 @@ impl Kinetics {
                     break;
                 }
             }
+            // A coupling whose ends a loop already joins: Create does not overpower its own
+            // network (`RotationPropagator.propagateNewSource`), it breaks the block when the
+            // speed conveyed is faster than, or opposed to, what the other end turns at.
+            for c in &couplings {
+                let s = self.side[&c.from] as usize;
+                if s != self.side[&c.to] as usize || root[s] == 0.0 {
+                    continue;
+                }
+                let (from, to) = (root[s] * self.factor[&c.from], root[s] * self.factor[&c.to]);
+                let breaks = match c.kind {
+                    // `SpeedControllerBlockEntity.getConveyedSpeed`: the larger of the target and
+                    // the cog's speed, or the target when their signs differ; Create's epsilon is
+                    // the cog's speed / 256 / 256.
+                    Couple::Controller(target) => {
+                        target != 0.0
+                            && (target.signum() != to.signum()
+                                || target.abs() > to.abs() + to.abs() / 256.0 / 256.0)
+                    }
+                    // The far half at the modifier times the near one's, as any loop's ratio
+                    // (`getRotationSpeedModifier`; 0 cuts, conveying nothing either way).
+                    Couple::Relay(m) => {
+                        m != 0.0 && (to - from * m).abs() > to.abs().max((from * m).abs()) * 1e-4
+                    }
+                };
+                if breaks {
+                    let newer = self.newer(c.from, c.to);
+                    conflict = Some(conflict.map_or(newer, |x| self.newer(x, newer)));
+                }
+            }
             if conflict.is_none() {
                 // Too fast anywhere breaks the newest part that turns too fast.
                 let mut fastest: Option<u32> = None;
@@ -748,15 +790,19 @@ impl Kinetics {
             let overstressed = stress > capacity;
             for i in 0..self.queue.len() {
                 let id = self.queue[i];
-                let shown = if overstressed {
-                    0.0
-                } else {
-                    theoretical(self, id)
-                };
+                let turned = theoretical(self, id);
+                let shown = if overstressed { 0.0 } else { turned };
                 let n = &mut self.nodes[id as usize];
-                if n.fresh || n.speed != shown || n.overstressed != overstressed {
+                // Create calls `onSpeedChanged` when the theoretical speed changes too, shown or
+                // not (`RotationPropagator` sets it on overstressed networks as well).
+                if n.fresh
+                    || n.speed != shown
+                    || n.theoretical != turned
+                    || n.overstressed != overstressed
+                {
                     n.fresh = false;
                     n.speed = shown;
+                    n.theoretical = turned;
                     n.overstressed = overstressed;
                     events.push(Event::Speed {
                         pos: n.pos,
@@ -1162,6 +1208,11 @@ mod tests {
         solve(&mut k);
         assert_eq!(k.speed([1, 1, 0], 0), Some(0.0), "overstressed");
         assert_eq!(
+            k.theoretical([1, 1, 0], 0),
+            Some((128.0, true)),
+            "still turned at its target in theory"
+        );
+        assert_eq!(
             k.speed([1, 0, 0], 0),
             Some(0.0),
             "the controller's side too"
@@ -1205,5 +1256,62 @@ mod tests {
         sequencer(&mut k, 2.0);
         let e = solve(&mut k);
         assert!(e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+    }
+
+    #[test]
+    fn a_controller_geared_back_into_its_own_network_breaks_unless_slower() {
+        // Motor -> controller -> small cog, up to a large cog and across to the controlled one:
+        // the controlled cog already turns at 8 from the controller's own network.
+        let build = |target: f32| {
+            let mut k = Kinetics::new();
+            k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+            k.set([1, 0, 0], 0, controller(target));
+            k.set([2, 0, 0], 0, Part::cog(Axis::X, false));
+            k.set([2, 1, 1], 0, Part::cog(Axis::X, true));
+            k.set([1, 1, 0], 0, Part::cog(Axis::Z, true));
+            let e = solve(&mut k);
+            (k, e)
+        };
+        let (k, _) = build(0.0);
+        let wheel = k.speed([1, 1, 0], 0).unwrap();
+        assert_eq!(wheel.abs(), 8.0);
+        // Slower than the cog turns, the same way: the loop holds at the cog's speed
+        // (`getConveyedSpeed` is the larger).
+        let (k, e) = build(wheel / 2.0);
+        assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+        assert_eq!(k.speed([1, 1, 0], 0), Some(wheel));
+        assert!(
+            !build(wheel)
+                .1
+                .iter()
+                .any(|x| matches!(x, Event::Break { .. }))
+        );
+        // Faster, or the other way: Create breaks it (`propagateNewSource`).
+        for target in [wheel * 8.0, -wheel / 2.0] {
+            let (_, e) = build(target);
+            assert!(
+                e.contains(&Event::Break { pos: [1, 1, 0] }),
+                "{target}: {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_relay_whose_halves_a_loop_joins_breaks_unless_it_agrees() {
+        // The far half reached around the sequencer by cogs, at the near half's speed.
+        for (m, breaks) in [(1.0, false), (2.0, true), (-1.0, true), (0.0, false)] {
+            let mut k = Kinetics::new();
+            k.set([-2, 0, 0], 0, motor(Dir::East, 12.0));
+            for p in [[-1, 0, 0], [-1, 1, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]] {
+                k.set(p, 0, Part::cog(Axis::X, false));
+            }
+            sequencer(&mut k, m);
+            let e = solve(&mut k);
+            assert_eq!(
+                e.iter().any(|x| matches!(x, Event::Break { .. })),
+                breaks,
+                "{m}: {e:?}"
+            );
+        }
     }
 }
