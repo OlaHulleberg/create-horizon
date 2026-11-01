@@ -179,6 +179,12 @@ pub struct Dimension {
     /// Gantry shafts whose place in their line may have changed (`updateShape`), carriages to try
     /// to start (`queueAssembly`), and the moving gantries.
     pub gantry_checks: Vec<[i32; 3]>,
+    /// Mechanical crafters and their phase and grid, those at work (the only ones that tick),
+    /// those to look at (an item put in, turning), and what broken ones held.
+    pub crafters: HashMap<[i32; 3], crate::crafter::Crafter>,
+    pub crafting: Vec<[i32; 3]>,
+    pub crafter_checks: Vec<[i32; 3]>,
+    pub crafter_drops: Vec<([i32; 3], String)>,
     pub gantry_assemble: Vec<[i32; 3]>,
     pub gantries: Vec<crate::gantry::Moving>,
     /// Mechanical bearings whose speed changed (`assembleNextTick`).
@@ -302,6 +308,7 @@ fn has_state(block: Block) -> bool {
             | Block::AndesiteTunnel
             | Block::GantryShaft
             | Block::GantryCarriage
+            | Block::MechanicalCrafter
             | Block::FluidTank
             | Block::WindmillBearing
     )
@@ -394,6 +401,10 @@ impl CreateWorld {
         }
         if block == Block::GantryShaft {
             d.gantry_checks.push(pos);
+        }
+        if block == Block::MechanicalCrafter && !d.crafters.contains_key(&pos) {
+            d.crafters.insert(pos, crate::crafter::Crafter::default());
+            d.crafter_checks.push(pos);
         }
         if block == Block::GantryCarriage {
             // `checkValidGantryShaft` when it is placed.
@@ -621,6 +632,13 @@ impl CreateWorld {
                 d.link_shown.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
+            if let Some(c) = d.crafters.remove(&pos) {
+                d.crafting.retain(|p| *p != pos);
+                // `ejectWholeGrid` when it breaks: what it held drops (its slot drops with its
+                // block entity).
+                d.crafter_drops
+                    .extend(c.grid.into_iter().map(|(_, item)| (pos, item)));
+            }
             if let Some(dp) = d.deployers.remove(&pos) {
                 d.deploying.retain(|p| *p != pos);
                 d.deployer_changes.push(pos);
@@ -740,6 +758,10 @@ impl CreateWorld {
             d.deployers
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.deploying.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.crafters.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.crafting.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.crafter_checks
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.bearing_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.deployer_saved

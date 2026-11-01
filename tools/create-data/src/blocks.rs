@@ -422,6 +422,16 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             None,
             own(&[("axis_along_first", bools), ("facing", facing)]),
         ),
+        // MechanicalCrafterBlock (HorizontalKineticBlock, `SharedProperties::softMetal`): a full
+        // block, its facing and where it points.
+        "mechanical_crafter" => (
+            "minecraft:gold_block",
+            None,
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                ("pointing", &["up", "left", "down", "right"]),
+            ]),
+        ),
         // LinearChassisBlock (`SharedProperties::wooden`): a pillar on its axis, glued ends.
         "linear_chassis" | "secondary_linear_chassis" => (
             "minecraft:stripped_spruce_wood",

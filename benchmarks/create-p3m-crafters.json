@@ -1,0 +1,65 @@
+{
+  "scenario": "crafters",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    2.77783203125,
+    2.26025390625,
+    2.06591796875
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 50,
+      "frames": 19565,
+      "frame_ms_p50": 0.5835039615631104,
+      "frame_ms_p99": 1.125378966331482,
+      "fps": 1630.4166666666667,
+      "tick_ms": 4.8902387619018555,
+      "tick_ms_max": 11.607872009277344,
+      "check": [
+        "-542, 92, 65 has the following block data: [{count: 4, Slot: 0b, id: \"minecraft:torch\"}]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 50,
+      "frames": 20323,
+      "frame_ms_p50": 0.5466650128364563,
+      "frame_ms_p99": 1.1390379667282104,
+      "fps": 1693.5833333333333,
+      "tick_ms": 4.940472602844238,
+      "tick_ms_max": 12.26275634765625,
+      "check": [
+        "-536, 90, 74 has the following block data: [{count: 4, Slot: 0b, id: \"minecraft:torch\"}]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 50,
+      "frames": 18986,
+      "frame_ms_p50": 0.5938829779624939,
+      "frame_ms_p99": 1.1276180744171145,
+      "fps": 1582.1666666666667,
+      "tick_ms": 5.021917343139648,
+      "tick_ms_max": 12.085413932800291,
+      "check": [
+        "-535, 90, 73 has the following block data: [{count: 4, Slot: 0b, id: \"minecraft:torch\"}]"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1635.388888888889,
+    "frame_ms_p50": 0.5746839841206869,
+    "frame_ms_p99": 1.1306783358256023,
+    "tick_ms": 4.950876235961914,
+    "tick_ms_max": 11.985347429911295
+  },
+  "stdev": {
+    "fps": 55.874508034954005,
+    "frame_ms_p50": 0.024813868284178715,
+    "frame_ms_p99": 0.007325706305583597,
+    "tick_ms": 0.06645290720303297,
+    "tick_ms_max": 0.3387157405758102
+  }
+}

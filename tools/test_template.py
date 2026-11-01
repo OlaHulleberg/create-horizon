@@ -127,6 +127,9 @@ extern crate self as horizon_client;
 pub mod game;
 pub mod items {
     #[derive(Clone)] pub struct ItemStack { pub item: std::sync::Arc<str>, pub count: u32, pub damage: u32, pub extra: Option<Box<()>> }
+    impl ItemStack {
+        pub fn new(item: &str, count: u32) -> ItemStack { ItemStack { item: item.into(), count, damage: 0, extra: None } }
+    }
     pub struct ItemInfo { pub max_stack: u32, pub fire_resistant: bool, pub remainder: Option<String> }
     pub struct Items { pub item_tags: std::collections::HashMap<String, std::collections::HashSet<String>> }
     impl Items { pub fn get(&self, item: &str) -> Option<ItemInfo> { let _ = item; Some(ItemInfo { max_stack: 64, fire_resistant: false, remainder: None }) } }
@@ -144,6 +147,10 @@ pub mod crafting {
     pub struct Ingredient(pub std::collections::HashSet<String>, pub Vec<String>);
     pub struct Cooking { pub id: String, pub kind: String, pub ingredient: Ingredient, pub result: crate::items::ItemStack }
     #[derive(Default)] pub struct Recipes { pub cooking: Vec<Cooking> }
+    impl Recipes {
+        /// No crafting recipes in the fixture.
+        pub fn craft(&self, grid: &[Option<crate::items::ItemStack>], size: usize) -> Option<crate::items::ItemStack> { let _ = (grid, size); None }
+    }
 }
 pub mod hud {
     pub struct HudBatch { pub width: f32, pub height: f32, pub drawn: Vec<String> }
