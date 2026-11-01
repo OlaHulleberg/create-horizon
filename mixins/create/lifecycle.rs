@@ -4,4 +4,10 @@ fn world_lifecycle(
     phase: &crate::game::native_lifecycle::WorldPhase,
 ) {
     crate::game::create::world_lifecycle(game, phase);
+    if !matches!(
+        phase,
+        crate::game::native_lifecycle::WorldPhase::WorldOpenReady
+    ) {
+        crate::game::create_equipment::world_closed();
+    }
 }

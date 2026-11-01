@@ -738,6 +738,13 @@ pub(super) fn right_click_inner(
     }
     if matches!(
         block,
+        Some(create_engine::Block::CopperBacktank | create_engine::Block::NetheriteBacktank)
+    ) {
+        super::create_equipment::use_backtank(game, dim, pos, back, canceled);
+        return;
+    }
+    if matches!(
+        block,
         Some(create_engine::Block::CreativeMotor | create_engine::Block::BrassTunnel)
     ) {
         use_value_box(game, pos, face, canceled);
