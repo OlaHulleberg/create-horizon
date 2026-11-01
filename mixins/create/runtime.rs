@@ -3635,27 +3635,36 @@ pub(super) fn gauges_from_server(data: &[u8]) {
 }
 
 /// Each client tick: moving needles take a step (`GaugeBlockEntity.tick`) and glide to it; a
-/// settled one is drawn still and leaves the list.
+/// settled one is drawn still (`GaugeVisual.beginFrame` leaves it once `Mth.equal`) and leaves
+/// the list, so no glide outlives its tick.
 pub(super) fn tick_client_gauges(game: &mut Game<'_>, c: &mut ClientParts) {
-    let moving = GAUGES.with_borrow(|g| g.moving.clone());
+    // Taken out and put back (no copy): drawing does not touch the gauges.
+    let mut moving = GAUGES.with_borrow_mut(|g| std::mem::take(&mut g.moving));
     if moving.is_empty() {
         return;
     }
     let time = game.world.game_time as u64;
-    for pos in moving {
+    moving.retain(|&pos| {
         let Some(mut n) = GAUGES.with_borrow(|g| g.needles.get(&pos).copied()) else {
-            continue;
+            return false;
         };
         let mut rng = create_engine::processing::Rng::new(time ^ client::key(pos, 0));
         n.tick(&mut rng);
-        draw_gauge_dials(game, c, pos, &n);
-        GAUGES.with_borrow_mut(|g| {
-            g.needles.insert(pos, n);
-            if n.settled() {
-                g.moving.retain(|p| *p != pos);
-            }
-        });
-    }
+        let settled = n.settled();
+        let drawn = if settled {
+            create_engine::gauge::Needle { prev: n.state, ..n }
+        } else {
+            n
+        };
+        draw_gauge_dials(game, c, pos, &drawn);
+        GAUGES.with_borrow_mut(|g| g.needles.insert(pos, n));
+        !settled
+    });
+    GAUGES.with_borrow_mut(|g| {
+        // Anything added meanwhile stays (none is today).
+        moving.append(&mut g.moving);
+        g.moving = moving;
+    });
 }
 
 /// Turns the dials of the gauge at `pos` from the needle's last tick to this one
