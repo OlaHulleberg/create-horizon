@@ -1,7 +1,7 @@
 {
-  "horizon_revision": "4ff4fa8c80f3d23f72b48c1d7d6e154b5727d699",
+  "horizon_revision": "e4f3833ae99f0379e60b0314daa69a62250de46a",
   "source_sha256": {
-    "crates/horizon-client/src/game.rs": "2ba74771ff6cd629a2da1e6f1e47602aa866b466458772923753d4db41d70c70",
+    "crates/horizon-client/src/game.rs": "7379a938900797c22b2a7e4b55e5a3eb54b384f6f3d2ca80ada1e482c6bc012b",
     "crates/horizon-client/src/game/native_hooks.rs": "d5316068e0dacf10164eb8cda22bbbccf986bff5160c23c96c6c2f1679d2bfe7"
   },
   "horizon_repository": "https://github.com/horizon-rust/horizon",

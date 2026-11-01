@@ -311,8 +311,13 @@ running).
   leave the render tables (models, atlas) as the longest step, about 170 ms over mods off: the cost of an installed,
   unused content mod is its state count in every per-state table, and only binary caches of all of them remove it.
   No Create code runs at startup but the one registry scan (`ensure`), and none per tick or frame without its blocks.
+  Horizon `e4f3833ae` (on `feat/create-hooks`): the decoded block facts are snapshotted in the game's cache folder
+  (keyed by the tables' and the executable's length and time; a stale or broken one is decoded again), so a warm start
+  no longer parses `gameplay-facts.json`: with Create `load core tables` 0.64 -> 0.60 s, launch to ready 3.0 -> 2.9 s
+  (mods off 2.5 s, unchanged: its core tables are bound by the render tables, 258 ms). The rest of the gap is the render
+  tables (model states, atlas) and the item and pack tables, still read from JSON for every state.
 
-- Horizon pin: `feat/create-hooks` at `aea7ed878` (NATIVE_HOOKS_API 47). History: first `0a96593cf`, two commits on 9d979ca: gap 2
+- Horizon pin: `feat/create-hooks` at `e4f3833ae` (earlier `aea7ed878`) (NATIVE_HOOKS_API 47). History: first `0a96593cf`, two commits on 9d979ca: gap 2
   (`a83a4b380`, content blocks with their own `state_properties`) and gap 8 (`0a96593cf`, hook points API 41:
   `chunk_load`/`chunk_unload`). Horizon's `pr_ready --quick` is green for gap 2; for gap 8 every check is green except
   `horizon-client-render`'s parallel GPU tests, which segfault in this sandbox on untouched 9d979ca too (2 of 3 runs);
