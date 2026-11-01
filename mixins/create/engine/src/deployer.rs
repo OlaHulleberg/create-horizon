@@ -3,7 +3,9 @@
 //! over a depot whose item a `create:deploying` or `create:item_application` recipe takes with
 //! the held item, it reaches down, applies it and draws back, using up the held item unless the
 //! recipe keeps it. Placing blocks and using items on blocks are in the glue (`deployer_activate`);
-//! punching and uses that need a whole fake player are gap 6.
+//! what the fake player (`DeployerFakePlayer`, `DeployerHandler.activateInner`) does is ruled
+//! here: the mode it is in, where it reaches, the items it uses on the block there, and its
+//! punch (`Mode.PUNCH`: attacking entities, breaking the block in steps).
 
 use crate::kinetics::Dir;
 use crate::processing::Output;
@@ -31,14 +33,42 @@ impl State {
     }
 }
 
-/// A deployer's typed state: its cycle, `timer` (1000 a stroke) and `reach`, and the stack in
-/// its hand.
+/// `DeployerBlockEntity.Mode`: using the held item, or punching with it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Use,
+    Punch,
+}
+
+impl Mode {
+    pub fn index(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_index(i: u8) -> Mode {
+        if i == 1 { Mode::Punch } else { Mode::Use }
+    }
+
+    /// `changeMode`.
+    pub fn toggled(self) -> Mode {
+        match self {
+            Mode::Use => Mode::Punch,
+            Mode::Punch => Mode::Use,
+        }
+    }
+}
+
+/// A deployer's typed state: its cycle, `timer` (1000 a stroke) and `reach`, the stack in its
+/// hand, its mode, and the fake player's `blockBreakingProgress` (not saved, as in Create).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Deployer {
     pub state: State,
     pub timer: i32,
     pub reach: f32,
     pub held: Option<(String, u8)>,
+    pub mode: Mode,
+    pub breaking: Option<([i32; 3], f32)>,
 }
 
 /// `getTimerSpeed`: twice the speed, held between 8 and 512 (0 when still).
@@ -105,9 +135,16 @@ impl Deployer {
     }
 
     /// `getHandOffset` at the start of a tick, and blocks a tick it moves at: the hand runs out
-    /// over the stroke to `reach + handLength` (4/16 holding, none pointing), at most 21/16.
+    /// over the stroke to `reach + handLength` (3/16 punching, else 4/16 holding, none
+    /// pointing), at most 21/16.
     pub fn hand(&self, rpm: f32) -> (f32, f32) {
-        let length = if self.held.is_some() { 4.0 / 16.0 } else { 0.0 };
+        let length = if self.mode == Mode::Punch {
+            3.0 / 16.0
+        } else if self.held.is_some() {
+            4.0 / 16.0
+        } else {
+            0.0
+        };
         let full = self.reach + length;
         let speed = timer_speed(rpm) as f32 / 1000.0;
         let progress = match self.state {
@@ -155,9 +192,13 @@ pub enum Depot {
 }
 
 /// `BeltDeployerCallbacks.onItemReceived` (`locked` false) and `whenItemHeld` (true) for a
-/// deployer facing down; `fits` whether a recipe takes the stack with the held item.
+/// deployer facing down; `fits` whether a recipe takes the stack with the held item. A punching
+/// deployer lets new stacks pass.
 pub fn on_depot(d: &Deployer, rpm: f32, locked: bool, fits: bool) -> Depot {
     if rpm == 0.0 {
+        return Depot::Pass;
+    }
+    if !locked && d.mode == Mode::Punch {
         return Depot::Pass;
     }
     if !locked && d.state != State::Waiting {
@@ -210,6 +251,166 @@ pub fn use_held(held: &mut Option<(String, u8)>, recipe: &Recipe) {
             *held = None;
         }
     }
+}
+
+/// The block the fake player reaches (`activate`'s `clickedPos`): two ahead of the deployer.
+pub fn clicked(pos: [i32; 3], facing: Dir) -> [i32; 3] {
+    let o = facing.offset();
+    [pos[0] + o[0] * 2, pos[1] + o[1] * 2, pos[2] + o[2] * 2]
+}
+
+/// `activateInner`'s ray, from the deployer's centre `3/2 + 1/64` to `5/2 - 1/64` along its
+/// facing; the fake player stands at its start, eyes at its feet (`deployerHasEyesOnHisFeet`).
+pub fn ray(pos: [i32; 3], facing: Dir) -> ([f64; 3], [f64; 3]) {
+    let o = facing.offset();
+    let at = |scale: f64| -> [f64; 3] {
+        std::array::from_fn(|i| f64::from(pos[i]) + 0.5 + f64::from(o[i]) * scale)
+    };
+    (at(3.0 / 2.0 + 1.0 / 64.0), at(5.0 / 2.0 - 1.0 / 64.0))
+}
+
+/// The face the fake player clicks: the ray starts and ends inside the block it reaches, so
+/// the hit (or the miss, `Direction.getNearest(from - to)`) faces back toward the deployer.
+pub fn clicked_face(facing: Dir) -> Dir {
+    facing.opposite()
+}
+
+/// What `ItemStack.useOn` / `Item.use` does with a held item that is not a block, for the items
+/// the port knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Use {
+    /// An axe, hoe or shovel (`minecraft:block_transformer`): strips, scrapes, unwaxes, tills or
+    /// flattens the block it reaches (`BlockTransformer.transformBlock`).
+    Transform,
+    /// `SpawnEggItem.useOn`.
+    SpawnEgg,
+    /// An item whose use acts on the block the way its dispenser behaviour does (buckets,
+    /// flint and steel, bone meal, glass bottles, glowstone, shears, honeycomb, brushes).
+    Dispense,
+    Nothing,
+}
+
+/// The items that act on the block the way their dispenser behaviour does.
+pub const DISPENSED: [&str; 11] = [
+    "minecraft:bucket",
+    "minecraft:water_bucket",
+    "minecraft:lava_bucket",
+    "minecraft:powder_snow_bucket",
+    "minecraft:flint_and_steel",
+    "minecraft:bone_meal",
+    "minecraft:glass_bottle",
+    "minecraft:glowstone",
+    "minecraft:shears",
+    "minecraft:honeycomb",
+    "minecraft:brush",
+];
+
+/// Which use `item` has; `transformer` whether it has a `minecraft:block_transformer`.
+pub fn item_use(item: &str, transformer: bool) -> Use {
+    if transformer {
+        Use::Transform
+    } else if item.ends_with("_spawn_egg") {
+        Use::SpawnEgg
+    } else if DISPENSED.contains(&item) {
+        Use::Dispense
+    } else {
+        Use::Nothing
+    }
+}
+
+/// `SpawnEggItem.useOn` from the deployer (`clicked_face`): the mob comes at the block it
+/// reaches when that has no collision shape, else in the space before it.
+pub fn spawn_egg_at(pos: [i32; 3], facing: Dir, reached_empty: bool) -> [i32; 3] {
+    let reached = clicked(pos, facing);
+    if reached_empty {
+        return reached;
+    }
+    let o = clicked_face(facing).offset();
+    [reached[0] + o[0], reached[1] + o[1], reached[2] + o[2]]
+}
+
+/// What `getDestroyProgress` reads of the block and the held tool: its hardness (-1
+/// unbreakable), the tool's `Tool.getMiningSpeed` and `mining_efficiency` bonus, and whether it
+/// harvests it (`!requiresCorrectToolForDrops || isCorrectForDrops`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Dig {
+    pub hardness: f32,
+    pub tool_speed: f32,
+    pub efficiency: f32,
+    pub harvest: bool,
+}
+
+/// `BlockBehaviour.getDestroyProgress` for the fake player (`Player.getDestroySpeed`): the tool's
+/// speed, plus its efficiency above 1; no effects (`canBeAffected` is false), the block break
+/// speed attribute at 1; never eyes in water nor on the ground (a fake player never ticks), so a
+/// fifth; over the hardness and 30 when it harvests, else 100. 0 for an unbreakable block.
+pub fn destroy_progress(d: Dig) -> f32 {
+    if d.hardness == -1.0 {
+        return 0.0;
+    }
+    let mut speed = d.tool_speed;
+    if speed > 1.0 {
+        speed += d.efficiency;
+    }
+    speed /= 5.0;
+    speed / d.hardness / if d.harvest { 30.0 } else { 100.0 }
+}
+
+/// What a punch at a block did (`activateInner`, `Mode.PUNCH`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Punch {
+    /// The block breaks now (`tryHarvestBlock`); its cracks go.
+    Broken,
+    /// No progress: the breaking is forgotten.
+    Stop,
+    /// Progress kept; the cracks move to this stage when it changed (`destroyBlockProgress`).
+    Crack(Option<i32>),
+}
+
+impl Deployer {
+    /// A punch with a held stack at the block at `pos` whose `destroy_progress` is `per_hit`:
+    /// sixteen times that, added to the progress so far.
+    pub fn punch(&mut self, pos: [i32; 3], per_hit: f32) -> Punch {
+        let before = self.breaking.map_or(0.0, |(_, p)| p);
+        let progress = per_hit * 16.0 + before;
+        if progress >= 1.0 {
+            self.breaking = None;
+            return Punch::Broken;
+        }
+        if progress <= 0.0 {
+            self.breaking = None;
+            return Punch::Stop;
+        }
+        let stage = progress * 10.0;
+        let moved = (before * 10.0) as i32 != stage as i32;
+        self.breaking = Some((pos, progress));
+        Punch::Crack(moved.then_some(stage as i32))
+    }
+}
+
+/// `getCurrentItemAttackStrengthDelay`: 1/64 tick for the fake player.
+pub const ATTACK_DELAY: f32 = 1.0 / 64.0;
+
+/// `Player.getAttackStrengthScale(.5)` right after `resetAttackStrengthTicker`.
+pub fn attack_strength() -> f32 {
+    (0.5 / ATTACK_DELAY).clamp(0.0, 1.0)
+}
+
+/// `Player.attack`'s damage: the base 1 and the held item's `attack_damage` modifier
+/// (`activate` adds its modifiers), scaled by the attack strength (`0.2 + s² × 0.8`); never a
+/// critical hit (it never falls). Enchantments are not counted (held stacks carry none here).
+pub fn attack_damage(item_bonus: f32) -> f32 {
+    let s = attack_strength();
+    (1.0 + item_bonus) * (0.2 + s * s * 0.8)
+}
+
+/// The breaker id a deployer's cracks go by (Create: its fake player's entity id): negative, so
+/// it never meets a real entity's.
+pub fn breaker_id(pos: [i32; 3]) -> i32 {
+    let h = pos[0].wrapping_mul(73_856_093)
+        ^ pos[1].wrapping_mul(19_349_663)
+        ^ pos[2].wrapping_mul(83_492_791);
+    h | i32::MIN
 }
 
 /// The mod message channel for deployers' strokes, server to client.
@@ -339,6 +540,114 @@ mod tests {
             },
         ];
         assert_eq!(decode(&encode(&list)), list);
+    }
+
+    #[test]
+    fn the_fake_player_reaches_into_the_block_two_ahead() {
+        for facing in Dir::ALL {
+            let pos = [3, -4, 5];
+            let at = clicked(pos, facing);
+            let (from, to) = ray(pos, facing);
+            // Both ends of the ray lie inside the block it reaches, 1/64 from its faces.
+            for end in [from, to] {
+                assert_eq!(end.map(|v| v.floor() as i32), at, "{facing:?}");
+            }
+            assert_eq!(clicked_face(facing).offset().map(|v| -v), facing.offset());
+        }
+        let (from, to) = ray([0, 0, 0], Dir::East);
+        assert_eq!((from[0], to[0]), (2.015625, 2.984375));
+        // A spawn egg: in the block reached when it is passable, else the space before it.
+        assert_eq!(spawn_egg_at([0, 0, 0], Dir::Down, true), [0, -2, 0]);
+        assert_eq!(spawn_egg_at([0, 0, 0], Dir::Down, false), [0, -1, 0]);
+    }
+
+    #[test]
+    fn items_used_on_the_block() {
+        assert_eq!(item_use("minecraft:iron_hoe", true), Use::Transform);
+        assert_eq!(item_use("minecraft:pig_spawn_egg", false), Use::SpawnEgg);
+        assert_eq!(item_use("minecraft:water_bucket", false), Use::Dispense);
+        assert_eq!(item_use("minecraft:stick", false), Use::Nothing);
+    }
+
+    #[test]
+    fn punching_breaks_in_strokes() {
+        let mut d = Deployer {
+            mode: Mode::Punch,
+            ..Deployer::default()
+        };
+        let at = [0, 0, 0];
+        // A diamond pickaxe (8) on stone (1.5): 8 / 5 / 1.5 / 30 × 16 = .569 a stroke.
+        let diamond = destroy_progress(Dig {
+            hardness: 1.5,
+            tool_speed: 8.0,
+            efficiency: 0.0,
+            harvest: true,
+        });
+        assert!((diamond * 16.0 - 0.568_888).abs() < 1e-5, "{diamond}");
+        assert_eq!(d.punch(at, diamond), Punch::Crack(Some(5)));
+        assert_eq!(d.punch(at, diamond), Punch::Broken);
+        assert_eq!(d.breaking, None);
+        // A wooden pickaxe (2): .142 a stroke, eight strokes.
+        let wood = destroy_progress(Dig {
+            hardness: 1.5,
+            tool_speed: 2.0,
+            efficiency: 0.0,
+            harvest: true,
+        });
+        let strokes = (1..20).find(|_| d.punch(at, wood) == Punch::Broken);
+        assert_eq!(strokes, Some(8));
+        // A stick on stone it cannot harvest (1, over 100): 1 / 5 / 1.5 / 100 × 16.
+        let stick = destroy_progress(Dig {
+            hardness: 1.5,
+            tool_speed: 1.0,
+            efficiency: 5.0,
+            harvest: false,
+        });
+        assert!((stick * 16.0 - 0.021_333).abs() < 1e-5, "{stick}");
+        // Bedrock: no progress, and none is kept.
+        let bedrock = Dig {
+            hardness: -1.0,
+            tool_speed: 8.0,
+            efficiency: 0.0,
+            harvest: false,
+        };
+        assert_eq!(d.punch(at, destroy_progress(bedrock)), Punch::Stop);
+        // Instant blocks (0 hardness) break on the first stroke.
+        let grass = Dig {
+            hardness: 0.0,
+            ..bedrock
+        };
+        assert_eq!(d.punch(at, destroy_progress(grass)), Punch::Broken);
+    }
+
+    #[test]
+    fn punching_hits_at_full_strength() {
+        assert_eq!(attack_strength(), 1.0);
+        assert_eq!(attack_damage(0.0), 1.0);
+        // A diamond sword's +6.
+        assert_eq!(attack_damage(6.0), 7.0);
+        let ids = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]].map(breaker_id);
+        assert!(ids.iter().all(|i| *i < 0));
+        assert!((1..4).all(|i| !ids[..i].contains(&ids[i])));
+    }
+
+    #[test]
+    fn a_punching_deployer_lets_stacks_pass() {
+        let mut d = Deployer {
+            held: Some(("minecraft:oak_planks".into(), 1)),
+            mode: Mode::Use.toggled(),
+            ..Deployer::default()
+        };
+        assert_eq!(d.mode, Mode::Punch);
+        assert_eq!(Mode::from_index(d.mode.index()), Mode::Punch);
+        assert_eq!(on_depot(&d, 16.0, false, true), Depot::Pass);
+        d.mode = d.mode.toggled();
+        assert_eq!(on_depot(&d, 16.0, false, true), Depot::Start);
+        // The punching hand is 3/16 long.
+        d.mode = Mode::Punch;
+        d.start(0.25);
+        d.timer = 0;
+        assert!((d.hand(16.0).0 - (0.75 + 3.0 / 16.0)).abs() < 1e-6);
     }
 
     #[test]
