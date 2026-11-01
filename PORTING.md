@@ -224,6 +224,15 @@ Brass tunnels splitting stacks cost nothing measurable (`benchmarks/create-p4b-*
 
 Signals cost no tick; frame p50 is 6% over the control, within budget and its run's spread (`benchmarks/create-p9s-*.json`). Headless proof: one straight track with stations at 0, 25 and 50 and signals at 15 and 35; a train assembled at the first and sent to the last stopped just before the signal at 15 while a second train stood assembled at 25 (after 15 s nothing at the last station; a screenshot shows it waiting by the signal); once the second was taken apart at its station the first went on and stood at the last (its bogey, slime and gold there). Engine tests: a red signal ahead, a green one, one beyond the stop, the other way; a train waits at the stop and keeps its destination.
 
+| Scenario (2026-11-01, Phase 7 brass diodes, `--no-mobs`, 5 runs, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1792 ± 16 | 0.513 / 1.135 | 3.119 ± 0.145 | baseline |
+| repeaters (control) | 1845 ± 50 | 0.498 / 1.102 | 3.502 ± 0.048 | control |
+| diodes: the same chains of 512 pulse extenders | 1867 ± 12 | 0.492 / 1.100 | 3.737 ± 0.095 | tick ≤ control + 0.3 ms, frame p50 ≤ control + 10% |
+| redstone: the same chains of toggle latches | 1861 ± 28 | 0.492 / 1.120 | 3.852 ± 0.133 | tick ≤ control + 0.3 ms — **over: +0.35 ms** |
+
+Brass diodes (`diode.rs`, after `BrassDiodeBlock` and the pulse repeater's, extender's and timer's block entities: delay as a value box from 2 ticks to an hour, `inverted` toggled with the wrench on the box) and the rose quartz lamp (`lamp.rs`) are within budget (`benchmarks/create-p7diodes-*.json`). Proven headless: an unpowered pulse timer lit its lamp in short bursts about once a second; a pulse repeater lit its lamp once shortly after its input came on and went dark while the input stayed; a pulse extender kept its lamp lit a moment after its input went; of two joined rose quartz lamps the powered one lit and powering the other turned the first off. **Open:** the toggle latch scene is now +0.35 ms over its vanilla control (budget 0.3; +0.20 when first measured): an A/B against the build before the diodes gives the same +0.37, so something earlier made latches slower; not yet found.
+
 | Scenario (2026-11-01, Phase 2 chain drives, controller and sequencer, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1764 ± 20 | 0.520 / 1.285 | 3.078 ± 0.096 | baseline |
