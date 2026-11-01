@@ -159,6 +159,8 @@ pub struct Dimension {
     pub mixers: HashMap<[i32; 3], crate::basin::Mixer>,
     pub mixing: Vec<[i32; 3]>,
     pub mixer_checks: Vec<[i32; 3]>,
+    /// Presses compacting in the basin below them, with the recipe (`currentRecipe`).
+    pub press_basin: HashMap<[i32; 3], usize>,
 }
 
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
@@ -268,6 +270,8 @@ impl CreateWorld {
         }
         if block == Block::MechanicalPress && !d.presses.contains_key(&pos) {
             d.presses.insert(pos, crate::press::Press::default());
+            // A press placed over a basin looks at it (`basinChecker`).
+            d.mixer_checks.push(pos);
             // A press placed over a depot looks at what it holds.
             d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
         }
@@ -528,7 +532,7 @@ impl CreateWorld {
                 d.crusher_checks.push(pos);
             }
             if let Event::Speed { pos, .. } = *e
-                && d.mixers.contains_key(&pos)
+                && (d.mixers.contains_key(&pos) || d.presses.contains_key(&pos))
             {
                 d.mixer_checks.push(pos);
             }

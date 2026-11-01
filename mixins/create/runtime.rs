@@ -1047,6 +1047,8 @@ struct Recipes {
     crushing: create_engine::processing::Book,
     /// Create's mixing recipes made of items only (fluids are gap 5).
     mixing: Vec<create_engine::basin::Recipe>,
+    /// Create's compacting recipes (a press over a basin), items only.
+    compacting: Vec<create_engine::basin::Recipe>,
     /// The fan's: Create's washing and haunting, vanilla's cooking.
     splashing: create_engine::processing::Book,
     haunting: create_engine::processing::Book,
@@ -1087,6 +1089,7 @@ fn ensure_recipes(game: &Game<'_>) -> bool {
             pressing,
             crushing: read_book(game, "create:crushing"),
             mixing: read_basin(game, "create:mixing"),
+            compacting: read_basin(game, "create:compacting"),
             splashing: read_book(game, "create:splashing"),
             haunting: read_book(game, "create:haunting"),
             smoking: read_cooking(game, "minecraft:smoking"),
@@ -1871,12 +1874,11 @@ fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
     }
     for at in running {
         let speed = with_world(|w| w.speed(dim, at)).flatten().unwrap_or(0.0);
-        with_world(|w| {
+        let basin_mode = with_world(|w| {
             let d = &mut w.dims[dim];
-            let Some(p) = d.presses.get_mut(&at) else {
-                return;
-            };
-            match p.tick(speed) {
+            let p = d.presses.get_mut(&at)?;
+            let tick = p.tick(speed);
+            match tick {
                 Tick::Moving => {}
                 Tick::Down => d.press_changes.push(at),
                 Tick::Done => {
@@ -1887,7 +1889,18 @@ fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
                     }
                 }
             }
-        });
+            (p.mode == press::Mode::Basin).then_some(tick)
+        })
+        .flatten();
+        // Over a basin: compact at the bottom (`tryProcessInBasin`), look again when done
+        // (`onPressingCompleted`).
+        match basin_mode {
+            Some(Tick::Down) => compact_in_basin(game, dim, at),
+            Some(Tick::Done) => {
+                with_world(|w| w.dims[dim].mixer_checks.push(at));
+            }
+            _ => {}
+        }
     }
     let changed = with_world(|w| {
         let d = &mut w.dims[dim];
@@ -2308,6 +2321,7 @@ fn tick_mixers(game: &mut Game<'_>, dim: usize) {
     checks.dedup();
     for pos in checks {
         let Some(mut m) = with_world(|w| w.dims[dim].mixers.get(&pos).copied()).flatten() else {
+            press_on_basin(game, dim, pos);
             continue;
         };
         let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
@@ -2354,6 +2368,86 @@ fn tick_mixers(game: &mut Game<'_>, dim: usize) {
                 }
             });
         }
+    }
+}
+
+/// `MechanicalPressBlockEntity` as a basin operator (`updateBasin`): a turning press with a
+/// basin two below starts a cycle over it (`Mode.BASIN`) for the compacting recipe with the most
+/// ingredients the basin can do.
+fn press_on_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
+    use create_engine::{basin, press};
+    let Some(p) = with_world(|w| w.dims[dim].presses.get(&pos).copied()).flatten() else {
+        return;
+    };
+    let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+    if p.running || speed == 0.0 {
+        return;
+    }
+    let basin_pos = [pos[0], pos[1] - 2, pos[2]];
+    let Some(slots) = basin_slots(game, basin_pos).filter(|_| {
+        let s = game.world.block(basin_pos[0], basin_pos[1], basin_pos[2]);
+        with_world(|w| w.table.get(s.0).map(|(b, _)| b)).flatten()
+            == Some(create_engine::Block::Basin)
+    }) else {
+        return;
+    };
+    let heat = basin_heat(game, basin_pos);
+    let limit = |i: &str| stack_limit(game, i);
+    let found = RECIPES.with_borrow(|r| {
+        r.as_ref().and_then(|r| {
+            basin::matching(&r.compacting, &slots, heat, &limit)
+                .first()
+                .copied()
+        })
+    });
+    if let Some(i) = found {
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            if let Some(p) = d.presses.get_mut(&pos) {
+                p.start(press::Mode::Basin);
+            }
+            d.press_basin.insert(pos, i);
+            d.press_changes.push(pos);
+        });
+    }
+}
+
+/// `tryProcessInBasin` at the head's lowest point: the press's compacting recipe on the basin.
+fn compact_in_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
+    use create_engine::basin;
+    let Some(i) = with_world(|w| w.dims[dim].press_basin.get(&pos).copied()).flatten() else {
+        return;
+    };
+    let basin_pos = [pos[0], pos[1] - 2, pos[2]];
+    let Some(mut slots) = basin_slots(game, basin_pos) else {
+        return;
+    };
+    let heat = basin_heat(game, basin_pos);
+    let mut rng = create_engine::processing::Rng::new(
+        game.world.game_time as u64
+            ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9)
+            ^ (pos[2] as u64) << 20,
+    );
+    let limit = |i: &str| stack_limit(game, i);
+    let done = RECIPES.with_borrow(|r| {
+        r.as_ref()
+            .and_then(|r| r.compacting.get(i))
+            .is_some_and(|recipe| basin::apply(&mut slots, recipe, heat, &limit, &mut rng, false))
+    });
+    if done {
+        game.native_with_mod_block_entity(basin_pos, |be| {
+            be.items = slots
+                .iter()
+                .map(|s| {
+                    s.as_ref().map(|(i, n)| horizon_client::items::ItemStack {
+                        item: i.as_str().into(),
+                        count: u32::from(*n),
+                        damage: 0,
+                        extra: None,
+                    })
+                })
+                .collect();
+        });
     }
 }
 
