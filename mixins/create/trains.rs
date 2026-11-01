@@ -2,6 +2,7 @@
 // save data, over the engine's `trains`. A sibling of the `create` module (`runtime.rs`).
 use super::Game;
 use super::create::*;
+use super::create_contraptions::*;
 use create_engine::kinetics::{Axis, Dir};
 use horizon_world::registry::BlockStateId;
 use std::cell::RefCell;
