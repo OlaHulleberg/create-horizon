@@ -249,6 +249,10 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                 .flatten()
             } else if from.tank {
                 with_world(|w| {
+                    // A boiler gives nothing (`BoilerFluidHandler.drain`).
+                    if w.is_boiler(dim, from.pos) {
+                        return None;
+                    }
                     w.dims[dim]
                         .tanks
                         .get(&from.pos)
@@ -299,6 +303,11 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                         took
                     } else if to.tank {
                         with_world(|w| {
+                            // A boiler takes all the water as supply, none into its tank
+                            // (`BoilerFluidHandler.fill`).
+                            if let Some(took) = w.fill_boiler(dim, to.pos, fluid, n) {
+                                return took;
+                            }
                             let d = &mut w.dims[dim];
                             let took = match d.spouts.get_mut(&to.pos) {
                                 Some(s) => create_engine::spout::fill(s, fluid, n),
@@ -381,6 +390,110 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
         with_world(|w| {
             w.dims[dim].pumps.insert(pos, pump);
         });
+    }
+}
+
+/// Boilers and steam engines (`BoilerData.tick`, `SteamEngineBlockEntity.tick`): tanks whose
+/// engines changed count them again, shafts in front of engines become powered shafts or plain
+/// ones again, boilers whose heaters changed read them, and boilers sample their water supply.
+/// Nothing runs without a boiler or a changed engine.
+pub(super) fn tick_boilers(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let changes = with_world(|w| {
+        w.evaluate_boilers(dim);
+        w.shaft_changes(dim)
+    })
+    .unwrap_or_default();
+    for (pos, powered) in changes {
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let Some(s) = game.pack.assets.registry.state(state) else {
+            continue;
+        };
+        // `PoweredShaftBlock.getEquivalent` and its way back: axis and waterlogging kept.
+        let axis = s.properties.get("axis").cloned().unwrap_or_default();
+        let water = s.properties.get("waterlogged").cloned().unwrap_or_default();
+        let name = if powered {
+            "create:powered_shaft"
+        } else {
+            "create:shaft"
+        };
+        if let Some(id) = state_with(
+            game.pack.assets.registry,
+            name,
+            &[("axis", &axis), ("waterlogged", &water)],
+        ) {
+            game.native_set_block(dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+        }
+    }
+    for tank in with_world(|w| w.take_heat_checks(dim)).unwrap_or_default() {
+        // One-block tanks: the one block under it.
+        let heat = boiler_heater(game, [tank[0], tank[1] - 1, tank[2]]);
+        with_world(|w| w.set_boiler_heat(dim, tank, &[heat]));
+    }
+    with_world(|w| w.tick_boilers(dim));
+}
+
+/// `BoilerHeater.findHeat` under a boiler: a blaze burner by its heat (`BoilerHeaters
+/// .blazeBurner`), another block in `create:passive_boiler_heaters` passive unless it is out
+/// (`BoilerHeaters.passive`: an unlit campfire), anything else none.
+pub(super) fn boiler_heater(game: &Game<'_>, p: [i32; 3]) -> i32 {
+    use create_engine::steam;
+    let state = game.world.block(p[0], p[1], p[2]);
+    if let Some((block, heat)) =
+        with_world(|w| w.table.get(state.0).map(|(b, i)| (b, i.heat))).flatten()
+        && block == create_engine::Block::BlazeBurner
+    {
+        return heat.map_or(steam::NO_HEAT, steam::blaze_burner_heat);
+    }
+    let b = game.res.behaviours();
+    if !b
+        .tag("create:passive_boiler_heaters")
+        .is_some_and(|t| t.contains(b.block(state)))
+    {
+        return steam::NO_HEAT;
+    }
+    let lit = game
+        .pack
+        .assets
+        .registry
+        .state(state)
+        .and_then(|s| s.properties.get("lit").cloned());
+    steam::passive_heat(lit.as_deref() != Some("false"))
+}
+
+/// `SteamEngineBlock.getStateForPlacement`: a placed engine goes on the tank nearest the
+/// player's view (floor, wall or ceiling), turned to it. With no tank around it stays as placed
+/// (Create refuses the placement).
+pub(super) fn place_engine(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateId) {
+    use create_engine::place::{horizontal_direction, ordered_by_nearest};
+    let tanks: Vec<Dir> = Dir::ALL
+        .into_iter()
+        .filter(|d| {
+            let o = d.offset();
+            let s = game
+                .world
+                .block(pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]);
+            with_world(|w| w.table.get(s.0).map(|(b, _)| b)).flatten()
+                == Some(create_engine::Block::FluidTank)
+        })
+        .collect();
+    let Some((face, facing)) = create_engine::steam::placement(
+        ordered_by_nearest(game.yaw, game.pitch),
+        horizontal_direction(game.yaw),
+        |d| tanks.contains(&d),
+    ) else {
+        return;
+    };
+    let Some(mut s) = game.pack.assets.registry.state(state).cloned() else {
+        return;
+    };
+    s.properties.insert("face".into(), face.name().into());
+    s.properties
+        .insert("facing".into(), dir_name(facing).into());
+    if let Some(id) = game.pack.assets.registry.id(&s)
+        && id != state
+    {
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
     }
 }
 

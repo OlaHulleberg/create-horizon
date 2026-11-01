@@ -39,6 +39,7 @@ pub mod schedule;
 pub mod sequencer;
 pub mod spout;
 pub mod states;
+pub mod steam;
 pub mod tank;
 pub mod track;
 pub mod track_curves;

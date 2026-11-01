@@ -34,6 +34,8 @@ pub struct StateInfo {
     /// A sequenced gearshift's `vertical` and `state` (0 idle, else its instruction + 1).
     pub vertical: bool,
     pub sequence: u8,
+    /// A steam engine's `face`.
+    pub face: Option<crate::steam::Face>,
 }
 
 impl StateInfo {
@@ -72,6 +74,7 @@ impl StateInfo {
                 "part" => s.chain = crate::chain::Part::read(v),
                 "vertical" => s.vertical = v == "true",
                 "state" => s.sequence = v.parse().unwrap_or(0),
+                "face" => s.face = crate::steam::Face::read(v),
                 "powered_side" => s.powered_side = v == "true",
                 "top_shaft" => s.top_shaft = v == "true",
                 "bottom_shaft" => s.bottom_shaft = v == "true",
@@ -112,6 +115,8 @@ pub struct Settings {
     pub signal: i8,
     /// A sequenced gearshift's far half's speed modifier (`getModifier`: 0 idle).
     pub sequence: i8,
+    /// What drives a powered shaft: its steam engine's direction and efficiency.
+    pub steam: crate::steam::Output,
 }
 
 impl Default for Settings {
@@ -124,6 +129,7 @@ impl Default for Settings {
             windmill: 0.0,
             signal: 0,
             sequence: 0,
+            steam: crate::steam::Output::default(),
         }
     }
 }
@@ -141,7 +147,19 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
     };
     let one = |p: Part| [Some(with_stress(p)), None];
     match block {
-        Block::Shaft | Block::PoweredShaft => s.axis.map_or([None, None], |a| one(Part::shaft(a))),
+        Block::Shaft => s.axis.map_or([None, None], |a| one(Part::shaft(a))),
+        // PoweredShaftBlock (AbstractShaftBlock): a shaft its engine turns
+        // (`PoweredShaftBlockEntity.getGeneratedSpeed`, `calculateAddedStressCapacity`).
+        Block::PoweredShaft => s.axis.map_or([None, None], |a| {
+            [
+                Some(Part {
+                    generated: settings.steam.generated_speed(),
+                    capacity: settings.steam.capacity(),
+                    ..with_stress(Part::shaft(a))
+                }),
+                None,
+            ]
+        }),
         Block::Cogwheel => s.axis.map_or([None, None], |a| one(Part::cog(a, false))),
         Block::LargeCogwheel => s.axis.map_or([None, None], |a| one(Part::cog(a, true))),
         Block::AndesiteEncasedShaft | Block::BrassEncasedShaft | Block::MetalGirderEncasedShaft => {
@@ -370,6 +388,7 @@ pub fn is_kinetic(block: Block) -> bool {
         chain: None,
         vertical: false,
         sequence: 0,
+        face: None,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

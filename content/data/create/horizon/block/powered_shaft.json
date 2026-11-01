@@ -7,40 +7,37 @@
     "sounds": "minecraft:andesite",
     "render_shape": "entityblock_animated"
   },
-  "item": true,
-  "components": {
-    "minecraft:max_stack_size": 1
-  },
+  "item": false,
   "shapes": {
     "property": "axis",
     "values": {
       "x": [
         [
           0.0,
-          0.3125,
-          0.3125,
+          0.25,
+          0.25,
           1.0,
-          0.6875,
-          0.6875
+          0.75,
+          0.75
         ]
       ],
       "y": [
         [
-          0.3125,
+          0.25,
           0.0,
-          0.3125,
-          0.6875,
+          0.25,
+          0.75,
           1.0,
-          0.6875
+          0.75
         ]
       ],
       "z": [
         [
-          0.3125,
-          0.3125,
+          0.25,
+          0.25,
           0.0,
-          0.6875,
-          0.6875,
+          0.75,
+          0.75,
           1.0
         ]
       ]
