@@ -440,6 +440,26 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 ("powering", bools),
             ]),
         ),
+        // BrassDiodeBlock (`AbstractDiodeBlock`, REPEATER's properties): the repeater gives
+        // shape, placement and survival; the glue gives the diode's rules and its block entity.
+        "pulse_repeater" | "pulse_extender" | "pulse_timer" => (
+            "minecraft:repeater",
+            None,
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                ("inverted", bools),
+                ("powered", bools),
+                ("powering", bools),
+            ]),
+        ),
+        // RoseQuartzLampBlock: REDSTONE_LAMP's properties (glass sounds, strength 0.3) but no
+        // redstone conductor (`shouldCheckWeakPower` false): glowstone's template, without its
+        // light (`declaration`); the glue gives its signal and its cluster.
+        "rose_quartz_lamp" => (
+            "minecraft:glowstone",
+            None,
+            own(&[("activate", bools), ("powered", bools), ("powering", bools)]),
+        ),
         // FluidTankBlock: `noOcclusion`, see-through windows: glass's template (no random
         // ticks, nothing hidden behind it), copper's sounds. Defaults first: TOP, BOTTOM, WINDOW.
         "fluid_tank" => (
@@ -1176,6 +1196,12 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     }
     if b.name == "crushing_wheel_controller" {
         props.insert("render_shape".into(), json!("invisible"));
+    }
+    // AllBlocks.ROSE_QUARTZ_LAMP: `mapColor(TERRACOTTA_PINK)` (MapColor id 42); its light by
+    // `powering` is per state, which a declaration can't give: none.
+    if b.name == "rose_quartz_lamp" {
+        props.insert("light".into(), json!(0));
+        props.insert("map_color".into(), json!(42));
     }
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));

@@ -1,5 +1,5 @@
-// Create's redstone in the game: redstone links and powered latches. A sibling of the `create`
-// module (`runtime.rs`).
+// Create's redstone in the game: redstone links, powered latches, brass diodes and rose quartz
+// lamps. A sibling of the `create` module (`runtime.rs`).
 use super::Game;
 use super::create::*;
 use super::create_logistics::*;
@@ -26,6 +26,66 @@ pub(super) fn latch_state(
             },
         ))
     })
+}
+
+/// A brass diode's kind and block state, from the state table: None for any other state. Read
+/// with `try_borrow`, as `latch_state`.
+pub(super) fn diode_state(
+    state: u32,
+) -> Option<(create_engine::diode::Kind, create_engine::diode::State)> {
+    states::index(state)?;
+    WORLD.with(|w| {
+        let w = w.try_borrow().ok()?;
+        let (block, info) = w.as_ref()?.table.get(state)?;
+        let kind = create_engine::world::diode_kind(block)?;
+        Some((
+            kind,
+            create_engine::diode::State {
+                facing: info.facing?,
+                powered: info.powered,
+                powering: info.powering,
+                inverted: info.inverted,
+            },
+        ))
+    })
+}
+
+/// A rose quartz lamp's state; None for any other block.
+pub(super) fn lamp_state(state: u32) -> Option<create_engine::lamp::Lamp> {
+    states::index(state)?;
+    WORLD.with(|w| {
+        let w = w.try_borrow().ok()?;
+        let (block, info) = w.as_ref()?.table.get(state)?;
+        (block == create_engine::Block::RoseQuartzLamp).then_some(create_engine::lamp::Lamp {
+            powered: info.powered,
+            powering: info.powering,
+            activate: info.activate,
+        })
+    })
+}
+
+/// Sets boolean properties of the block at `pos` (`setBlock` with `flags`); whether its state
+/// changed.
+pub(super) fn set_flags(
+    game: &mut Game<'_>,
+    dimension: &str,
+    pos: [i32; 3],
+    props: &[(&str, bool)],
+    flags: i32,
+) -> bool {
+    let registry = game.pack.assets.registry;
+    let current = game.world.block(pos[0], pos[1], pos[2]);
+    let Some(mut s) = registry.state(current).cloned() else {
+        return false;
+    };
+    for (k, v) in props {
+        s.properties
+            .insert((*k).into(), if *v { "true" } else { "false" }.to_owned());
+    }
+    let Some(id) = registry.id(&s) else {
+        return false;
+    };
+    id != current && game.native_set_block(dimension, pos, id, flags)
 }
 
 /// A redstone link's `facing`, `receiver` and `powered`; None for any other block.
@@ -286,26 +346,30 @@ pub(super) fn set_latch(
     game.native_update_signal_neighbors(dimension, pos);
 }
 
+/// Whether a diode at `pos` is powered from its side `d` (`DiodeBlock.getInputSignal` > 0 from
+/// there): a signal toward it, or redstone dust there with power.
+pub(super) fn powered_from(game: &mut Game<'_>, pos: [i32; 3], d: Dir) -> bool {
+    let o = d.offset();
+    let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+    let dir = horizon_core::geometry::Direction::ALL[d as usize];
+    let bp = horizon_core::position::BlockPos::new(at[0], at[1], at[2]);
+    if game.with_level(|b, level, ticks| b.signal(level, ticks, bp, dir)) > 0 {
+        return true;
+    }
+    game.pack
+        .assets
+        .registry
+        .state(game.world.block(at[0], at[1], at[2]))
+        .is_some_and(|s| {
+            s.name == "minecraft:redstone_wire"
+                && s.properties.get("power").is_some_and(|v| v != "0")
+        })
+}
+
 /// `DiodeBlock.getInputSignal` > 0 at the latch's back, and a powered latch's
-/// `isPoweredOnSides`: a signal toward it, or redstone dust beside it with power.
+/// `isPoweredOnSides`.
 pub(super) fn latch_inputs(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> (bool, bool) {
-    let registry = game.pack.assets.registry;
-    let wire = |game: &Game<'_>, p: [i32; 3]| {
-        registry
-            .state(game.world.block(p[0], p[1], p[2]))
-            .is_some_and(|s| {
-                s.name == "minecraft:redstone_wire"
-                    && s.properties.get("power").is_some_and(|v| v != "0")
-            })
-    };
-    let powered_from = |game: &mut Game<'_>, d: Dir| {
-        let o = d.offset();
-        let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-        let dir = horizon_core::geometry::Direction::ALL[d as usize];
-        let bp = horizon_core::position::BlockPos::new(at[0], at[1], at[2]);
-        game.with_level(|b, level, ticks| b.signal(level, ticks, bp, dir)) > 0 || wire(game, at)
-    };
-    let back = powered_from(game, facing);
+    let back = powered_from(game, pos, facing);
     // getClockWise / getCounterClockWise.
     let (left, right) = match facing {
         Dir::North => (Dir::East, Dir::West),
@@ -313,7 +377,7 @@ pub(super) fn latch_inputs(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> (
         Dir::South => (Dir::West, Dir::East),
         _ => (Dir::North, Dir::South),
     };
-    let side = powered_from(game, left) || powered_from(game, right);
+    let side = powered_from(game, pos, left) || powered_from(game, pos, right);
     (back, side)
 }
 
@@ -360,4 +424,190 @@ pub(super) fn tick_latches(game: &mut Game<'_>, dimension: &str, dim: usize) {
         }
     }
     with_world(|w| w.dims[dim].latch_ticks.extend(next));
+}
+
+/// `BrassDiodeBlock.toggle`: `inverted` flips (`setBlock(.., UPDATE_ALL)`, its output with it)
+/// and a lever clicks.
+pub(super) fn toggle_diode(game: &mut Game<'_>, dimension: &str, pos: [i32; 3], inverted: bool) {
+    if set_flags(
+        game,
+        dimension,
+        pos,
+        &[("inverted", !inverted)],
+        super::native_hooks::flags::UPDATE_ALL,
+    ) {
+        game.native_update_signal_neighbors(dimension, pos);
+    }
+    let center = pos.map(|v| f64::from(v) + 0.5);
+    game.audio.play(
+        "minecraft:block.lever.click",
+        Some(center),
+        0.3,
+        create_engine::diode::toggle_pitch(inverted),
+    );
+}
+
+/// Brass diodes: their due block ticks (`DiodeBlock.tick`: `powered` follows the input), then
+/// their block entities' ticks (`BrassDiodeBlockEntity.tick`: `powering`), then the ones whose
+/// input may have changed (`checkTickOnNeighbor`), which take a block tick later. Nothing runs
+/// without any of these.
+pub(super) fn tick_diodes(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    use create_engine::diode;
+    let now = game.world.game_time;
+    let Some((due, checks, running)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        let (due, later): (Vec<_>, Vec<_>) = d.diode_ticks.drain(..).partition(|t| t.1 <= now);
+        d.diode_ticks = later;
+        (
+            due,
+            std::mem::take(&mut d.diode_checks),
+            !d.diode_running.is_empty(),
+        )
+    }) else {
+        return;
+    };
+    if due.is_empty() && checks.is_empty() && !running {
+        return;
+    }
+    let mut next = Vec::new();
+    for (pos, _) in due {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let Some((_, s)) = diode_state(state) else {
+            continue;
+        };
+        let input = powered_from(game, pos, s.facing);
+        let (powered, again) = diode::block_tick(s.powered, input);
+        // `setBlock(.., UPDATE_CLIENTS)`: its output does not follow `powered`, so no neighbour
+        // reads it again.
+        set_flags(
+            game,
+            dimension,
+            pos,
+            &[("powered", powered)],
+            super::native_hooks::flags::UPDATE_CLIENTS,
+        );
+        if again {
+            next.push((pos, now + diode::BLOCK_DELAY));
+        }
+    }
+    if running {
+        for (pos, powering) in with_world(|w| w.tick_diodes(dim)).unwrap_or_default() {
+            // `setBlockAndUpdate`, then `DiodeBlock.onPlace` -> `updateNeighborsInFront`.
+            if set_flags(
+                game,
+                dimension,
+                pos,
+                &[("powering", powering)],
+                super::native_hooks::flags::UPDATE_ALL,
+            ) {
+                game.native_update_signal_neighbors(dimension, pos);
+            }
+        }
+    }
+    for (pos, delay) in checks {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let Some((_, s)) = diode_state(state) else {
+            continue;
+        };
+        let pending = next.iter().any(|t: &([i32; 3], i64)| t.0 == pos)
+            || with_world(|w| w.dims[dim].diode_ticks.iter().any(|t| t.0 == pos)) == Some(true);
+        if !pending && diode::needs_tick(s.powered, powered_from(game, pos, s.facing)) {
+            next.push((pos, now + delay));
+        }
+    }
+    if !next.is_empty() {
+        with_world(|w| w.dims[dim].diode_ticks.extend(next));
+    }
+}
+
+/// `Level.hasNeighborSignal` at `pos`.
+fn neighbor_signal(game: &mut Game<'_>, pos: [i32; 3]) -> bool {
+    let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+    game.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, at))
+}
+
+/// Rose quartz lamps: those just placed (`getStateForPlacement`: `powered` as placed), their
+/// due ticks (`tick`), then the ones whose neighbours changed (`neighborChanged`): a new signal
+/// turns off the rest of the lamp's cluster and lights it at its next tick. Nothing runs
+/// without any of these.
+pub(super) fn tick_lamps(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    use create_engine::lamp;
+    let now = game.world.game_time;
+    let Some((placed, due, checks)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        let (due, later): (Vec<_>, Vec<_>) = d.lamp_ticks.drain(..).partition(|t| t.1 <= now);
+        d.lamp_ticks = later;
+        (
+            std::mem::take(&mut d.lamp_placed),
+            due,
+            std::mem::take(&mut d.lamp_checks),
+        )
+    }) else {
+        return;
+    };
+    if placed.is_empty() && due.is_empty() && checks.is_empty() {
+        return;
+    }
+    let flags = super::native_hooks::flags::UPDATE_CLIENTS;
+    for pos in placed {
+        if lamp_state(game.world.block(pos[0], pos[1], pos[2]).0).is_none() {
+            continue;
+        }
+        let signal = neighbor_signal(game, pos);
+        set_flags(game, dimension, pos, &[("powered", signal)], flags);
+    }
+    for (pos, _) in due {
+        let Some(l) = lamp_state(game.world.block(pos[0], pos[1], pos[2]).0) else {
+            continue;
+        };
+        if let Some(n) = lamp::tick(&l) {
+            set_flags(
+                game,
+                dimension,
+                pos,
+                &[("activate", n.activate), ("powering", n.powering)],
+                flags,
+            );
+        }
+        game.native_update_signal_neighbors(dimension, pos);
+    }
+    // `scheduleActivation`: a tick next game tick unless one is due.
+    let schedule = |p: [i32; 3]| {
+        with_world(|w| {
+            let t = &mut w.dims[dim].lamp_ticks;
+            if !t.iter().any(|t| t.0 == p) {
+                t.push((p, now + 1));
+            }
+        });
+    };
+    for pos in checks {
+        let Some(l) = lamp_state(game.world.block(pos[0], pos[1], pos[2]).0) else {
+            continue;
+        };
+        let signal = neighbor_signal(game, pos);
+        match lamp::neighbor_changed(&l, signal) {
+            lamp::Change::None => {}
+            lamp::Change::Unpower => {
+                set_flags(game, dimension, pos, &[("powered", false)], flags);
+            }
+            lamp::Change::Activate => {
+                let cluster = lamp::cluster(pos, |p| {
+                    lamp_state(game.world.block(p[0], p[1], p[2]).0).is_some()
+                });
+                for p in cluster {
+                    set_flags(game, dimension, p, &[("powering", false)], flags);
+                    schedule(p);
+                }
+                set_flags(
+                    game,
+                    dimension,
+                    pos,
+                    &[("activate", true), ("powered", true), ("powering", true)],
+                    flags,
+                );
+                game.native_update_signal_neighbors(dimension, pos);
+                schedule(pos);
+            }
+        }
+    }
 }

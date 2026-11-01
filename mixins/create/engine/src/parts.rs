@@ -24,6 +24,9 @@ pub struct StateInfo {
     pub heat: Option<crate::fan::Heat>,
     /// A redstone link's `receiver`.
     pub receiver: bool,
+    /// A brass diode's `inverted`; a rose quartz lamp's `activate`.
+    pub inverted: bool,
+    pub activate: bool,
     /// A belt tunnel's `shape`.
     pub tunnel: Option<crate::tunnel::Shape>,
     /// An encased chain drive's `part`.
@@ -63,6 +66,8 @@ impl StateInfo {
                 "powered" => s.powered = v == "true",
                 "powering" => s.powering = v == "true",
                 "receiver" => s.receiver = v == "true",
+                "inverted" => s.inverted = v == "true",
+                "activate" => s.activate = v == "true",
                 "shape" => s.tunnel = crate::tunnel::Shape::read(v),
                 "part" => s.chain = crate::chain::Part::read(v),
                 "vertical" => s.vertical = v == "true",
@@ -351,6 +356,8 @@ pub fn is_kinetic(block: Block) -> bool {
         heat: None,
         along_first: false,
         receiver: false,
+        inverted: false,
+        activate: false,
         tunnel: None,
         chain: None,
         vertical: false,

@@ -1,5 +1,5 @@
-// A block's redstone signal: Create's latches and redstone links answer from their state (hot: one
-// range test).
+// A block's redstone signal: Create's latches, brass diodes, rose quartz lamps and redstone links
+// answer from their state (hot: one range test).
 fn block_signal(
     dimension: horizon_world::level::Dimension,
     pos: horizon_core::position::BlockPos,
