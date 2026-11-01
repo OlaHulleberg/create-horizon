@@ -443,11 +443,11 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
-        // FunnelBlock: facing (away from the inventory it is on), `extracting`, `powered`; a
-        // full block here, so items land on it.
+        // FunnelBlock: facing (away from the inventory it is on), `extracting`, `powered`;
+        // AllShapes.FUNNEL_FLOOR turned to its facing: the half against the inventory.
         "andesite_funnel" | "brass_funnel" => (
             "minecraft:iron_block",
-            None,
+            Some(by_facing(&[[1., 0., 1., 15., 8., 15.]])),
             own(&[
                 ("extracting", bools),
                 ("facing", facing),
