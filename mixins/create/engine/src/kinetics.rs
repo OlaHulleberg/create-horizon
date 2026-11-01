@@ -9,7 +9,10 @@
 //! - two parts are connected with a speed ratio (`ratio`, Create's `getRotationSpeedModifier`):
 //!   facing shafts carry the speed (through a gearbox's or split shaft's face signs), small cogs
 //!   beside each other reverse it, a large cog turns a small one diagonally at -2 (and back at -0.5),
-//!   and two large cogs on crossed axes at ±1;
+//!   and two large cogs on crossed axes at ±1, encased chain drives along their chain at the
+//!   adjustable gearshift's modifier;
+//! - a speed controller sets the large cog above it to its target, and a sequenced gearshift its
+//!   far half to the running instruction's modifier, from whichever side turns (`Couple`);
 //! - the generator whose speed reaches the network fastest drives it; one turning the other way, or a
 //!   loop whose ratios disagree, breaks the newest part (Create destroys the block that caused it), and
 //!   so does any part past the maximum speed (256 RPM);
@@ -148,6 +151,36 @@ pub struct Part {
     /// A belt segment's controller (its chain's start): segments of one belt turn together
     /// (`BeltBlockEntity.propagateRotationTo`).
     pub belt: Option<[i32; 3]>,
+    /// An encased chain drive's chain to its neighbours (`ChainDriveBlock`).
+    pub chain: Option<Chain>,
+    /// A speed set across to another part instead of a ratio: a rotation speed controller's, or a
+    /// sequenced gearshift's second half.
+    pub couple: Option<Couple>,
+}
+
+/// The chain of an encased chain drive or adjustable chain gearshift: the axis it runs along
+/// (`getConnectionAxis`), whether it goes on toward the positive (`START`, `MIDDLE`) and the
+/// negative (`MIDDLE`, `END`) side, and the speed it gives the chain
+/// (`ChainGearshiftBlockEntity.getModifier`, 1 for a plain drive).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Chain {
+    pub along: Axis,
+    pub positive: bool,
+    pub negative: bool,
+    pub modifier: f32,
+}
+
+/// A part that sets another's speed, whichever turns first driving the other
+/// (`RotationPropagator.getConveyedSpeed`, `SplitShaftBlockEntity.getRotationSpeedModifier`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Couple {
+    /// A rotation speed controller's target (RPM): the large cog on a horizontal axis across it,
+    /// above it, turns at it while the controller turns, and the controller at it while only
+    /// the cog does (`SpeedControllerBlockEntity.getDesiredOutputSpeed`).
+    Controller(f32),
+    /// On a split shaft's second half: the half away from the one turned turns at this times
+    /// its speed (a sequenced gearshift's instruction modifier; 0 cuts).
+    Relay(f32),
 }
 
 impl Part {
@@ -163,6 +196,8 @@ impl Part {
             impact: 0.0,
             link: None,
             belt: None,
+            chain: None,
+            couple: None,
         }
     }
     pub fn cog(axis: Axis, large: bool) -> Part {
@@ -220,6 +255,18 @@ pub fn ratio(a: &Part, b: &Part, diff: [i32; 3]) -> f32 {
         && b.shafts & d.opposite().bit() != 0
     {
         return a.face_sign[d as usize] as f32 / b.face_sign[d.opposite() as usize] as f32;
+    }
+    // Attached encased chain drives: ChainDriveBlock.areBlocksConnected, at
+    // `ChainDriveBlock.getRotationSpeedModifier` (from's modifier over to's).
+    if let (Some(d), Some(x), Some(y)) = (Dir::from_offset(diff), a.chain, b.chain) {
+        let connected = x.along == y.along
+            && d.axis() == x.along
+            && if d.positive() { x.positive } else { x.negative };
+        return if connected {
+            x.modifier / y.modifier
+        } else {
+            0.0
+        };
     }
     let axes = [Axis::X, Axis::Y, Axis::Z];
     // Large <-> large on crossed axes, diagonally.
@@ -334,6 +381,8 @@ pub struct Kinetics {
     stamp: u64,
     /// Scratch for solving, kept to avoid allocating per solve.
     factor: HashMap<u32, f32>,
+    /// Which side of a coupling each part solved is on.
+    side: HashMap<u32, u32>,
     queue: Vec<u32>,
 }
 
@@ -480,63 +529,132 @@ impl Kinetics {
         }
     }
 
+    /// The parts `id` sets the speed of, or that set its speed (`Couple`), as couplings from the
+    /// part that holds the setting; `pull` gets the parts on the other side, to solve with it.
+    fn couplings(&self, id: u32, out: &mut Vec<Coupling>, pull: &mut Vec<u32>) {
+        let n = &self.nodes[id as usize];
+        let at =
+            |p: [i32; 3], sub: usize| self.at.get(&p).map(|pair| pair[sub]).filter(|&m| m != NONE);
+        match n.part.couple {
+            Some(Couple::Controller(target)) => {
+                if let Some(cog) = at(add(n.pos, [0, 1, 0]), 0)
+                    && controls(&n.part, &self.nodes[cog as usize].part)
+                {
+                    out.push(Coupling {
+                        from: id,
+                        to: cog,
+                        kind: Couple::Controller(target),
+                        dir: 0,
+                    });
+                    pull.push(cog);
+                }
+            }
+            Some(Couple::Relay(m)) if n.sub == 1 => {
+                if let Some(first) = at(n.pos, 0) {
+                    out.push(Coupling {
+                        from: first,
+                        to: id,
+                        kind: Couple::Relay(m),
+                        dir: 0,
+                    });
+                    pull.push(first);
+                }
+            }
+            _ => {}
+        }
+        // The other side: the controller below a large cog, a split shaft's second half.
+        if n.part.cog == Cog::Large
+            && n.part.axis != Axis::Y
+            && let Some(c) = at(add(n.pos, [0, -1, 0]), 0)
+            && controls(&self.nodes[c as usize].part, &n.part)
+        {
+            pull.push(c);
+        }
+        if n.sub == 0
+            && n.part.shafts.count_ones() == 1
+            && let Some(second) = at(n.pos, 1)
+            && matches!(
+                self.nodes[second as usize].part.couple,
+                Some(Couple::Relay(_))
+            )
+        {
+            pull.push(second);
+        }
+    }
+
     /// Re-solves every component holding a changed part, and reports what changed.
+    ///
+    /// Parts set across by a `Couple` solve together, each side with its own factors: the side
+    /// whose own generators turn it drives the other, then sides reached that way drive theirs.
+    /// Stress and capacity are the whole group's, as Create's controller and cog share one
+    /// network (`KineticBlockEntity.setSource` takes the source's network).
     pub fn solve(&mut self, events: &mut Vec<Event>) -> SolveStats {
         let mut stats = SolveStats::default();
         let mut done: HashMap<u32, ()> = HashMap::new();
         let mut edges = Vec::new();
+        let mut couplings: Vec<Coupling> = Vec::new();
+        let mut pull: Vec<u32> = Vec::new();
+        let mut root: Vec<f32> = Vec::new();
+        let mut driver: Vec<u32> = Vec::new();
         while let Some(start) = self.dirty.pop() {
             if !self.nodes[start as usize].live || done.contains_key(&start) {
                 continue;
             }
-            // Factors relative to `start`, by breadth-first search; a loop that disagrees
-            // breaks the newest part on it.
+            // Factors relative to each side's first part, by breadth-first search; a loop that
+            // disagrees breaks the newest part on it.
             self.factor.clear();
+            self.side.clear();
             self.queue.clear();
-            self.factor.insert(start, 1.0);
-            self.queue.push(start);
+            couplings.clear();
+            pull.clear();
+            pull.push(start);
+            let mut sides = 0u32;
             let mut head = 0;
             let mut conflict: Option<u32> = None;
-            while head < self.queue.len() {
-                let id = self.queue[head];
-                head += 1;
-                let f = self.factor[&id];
-                self.edges(id, &mut edges);
-                for &(m, r) in &edges {
-                    let want = f * r;
-                    match self.factor.get(&m) {
-                        None => {
-                            self.factor.insert(m, want);
-                            self.queue.push(m);
-                        }
-                        Some(&have) if (have - want).abs() > have.abs().max(want.abs()) * 1e-4 => {
-                            let newer =
-                                if self.nodes[m as usize].stamp > self.nodes[id as usize].stamp {
-                                    m
-                                } else {
-                                    id
-                                };
-                            conflict = Some(conflict.map_or(newer, |c| {
-                                if self.nodes[c as usize].stamp >= self.nodes[newer as usize].stamp
-                                {
-                                    c
-                                } else {
-                                    newer
-                                }
-                            }));
-                        }
-                        _ => {}
-                    }
+            while let Some(first) = pull.pop() {
+                if self.factor.contains_key(&first) {
+                    continue;
                 }
+                self.factor.insert(first, 1.0);
+                self.side.insert(first, sides);
+                self.queue.push(first);
+                while head < self.queue.len() {
+                    let id = self.queue[head];
+                    head += 1;
+                    let f = self.factor[&id];
+                    self.edges(id, &mut edges);
+                    for &(m, r) in &edges {
+                        let want = f * r;
+                        match self.factor.get(&m) {
+                            None => {
+                                self.factor.insert(m, want);
+                                self.side.insert(m, sides);
+                                self.queue.push(m);
+                            }
+                            Some(&have)
+                                if (have - want).abs() > have.abs().max(want.abs()) * 1e-4 =>
+                            {
+                                let newer = self.newer(m, id);
+                                conflict = Some(conflict.map_or(newer, |c| self.newer(c, newer)));
+                            }
+                            _ => {}
+                        }
+                    }
+                    self.couplings(id, &mut couplings, &mut pull);
+                }
+                sides += 1;
             }
             stats.components += 1;
             stats.nodes += self.queue.len() as u32;
             for &id in &self.queue {
                 done.insert(id, ());
             }
-            // Generators: the one reaching the network fastest drives it (Create's overpowering);
+            // Generators: the one reaching its side fastest drives it (Create's overpowering);
             // one turning the other way breaks the newest of the two.
-            let mut drive: Option<(u32, f32)> = None;
+            root.clear();
+            root.resize(sides as usize, 0.0);
+            driver.clear();
+            driver.resize(sides as usize, NONE);
             let mut capacity = 0.0f32;
             for &id in &self.queue {
                 let g = self.nodes[id as usize].part.generated;
@@ -544,39 +662,69 @@ impl Kinetics {
                     continue;
                 }
                 capacity += self.nodes[id as usize].part.capacity * g.abs();
-                let root = g / self.factor[&id];
-                match drive {
-                    None => drive = Some((id, root)),
-                    Some((other, r)) => {
-                        if r.signum() != root.signum() {
-                            let newer = if self.nodes[id as usize].stamp
-                                > self.nodes[other as usize].stamp
-                            {
-                                id
-                            } else {
-                                other
-                            };
-                            conflict = conflict.or(Some(newer));
-                        } else if root.abs() > r.abs() {
-                            drive = Some((id, root));
-                        }
-                    }
+                let s = self.side[&id] as usize;
+                let r = g / self.factor[&id];
+                if driver[s] == NONE {
+                    (root[s], driver[s]) = (r, id);
+                } else if r.signum() != root[s].signum() {
+                    conflict = conflict.or(Some(self.newer(id, driver[s])));
+                } else if r.abs() > root[s].abs() {
+                    (root[s], driver[s]) = (r, id);
                 }
             }
-            let root = drive.map_or(0.0, |(_, r)| r);
-            if conflict.is_none() && root != 0.0 {
+            // Couplings carry speed from a side that turns to the other, as far as it reaches;
+            // a side turned the other way by its own generators breaks the newer part.
+            for _ in 0..=couplings.len() {
+                let mut changed = false;
+                for c in couplings.iter_mut() {
+                    let (a, b) = (self.side[&c.from] as usize, self.side[&c.to] as usize);
+                    if a == b {
+                        continue;
+                    }
+                    if c.dir == 0 {
+                        c.dir = if root[a] != 0.0 {
+                            1
+                        } else if root[b] != 0.0 {
+                            -1
+                        } else {
+                            continue;
+                        };
+                    }
+                    let (src, dst) = if c.dir > 0 {
+                        (c.from, c.to)
+                    } else {
+                        (c.to, c.from)
+                    };
+                    let (s, d) = (self.side[&src] as usize, self.side[&dst] as usize);
+                    let want = match c.kind {
+                        Couple::Controller(target) => target,
+                        Couple::Relay(m) => root[s] * self.factor[&src] * m,
+                    };
+                    if root[s] == 0.0 || want == 0.0 {
+                        continue;
+                    }
+                    let r = want / self.factor[&dst];
+                    if root[d] == 0.0 {
+                        root[d] = r;
+                        changed = true;
+                    } else if r.signum() != root[d].signum() {
+                        let newer = self.newer(src, dst);
+                        conflict = conflict.or(Some(newer));
+                    } else if r.abs() > root[d].abs() * (1.0 + 1e-4) {
+                        root[d] = r;
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+            if conflict.is_none() {
                 // Too fast anywhere breaks the newest part that turns too fast.
                 let mut fastest: Option<u32> = None;
                 for &id in &self.queue {
-                    if (root * self.factor[&id]).abs() > MAX_SPEED {
-                        fastest = Some(match fastest {
-                            Some(f)
-                                if self.nodes[f as usize].stamp > self.nodes[id as usize].stamp =>
-                            {
-                                f
-                            }
-                            _ => id,
-                        });
+                    if (root[self.side[&id] as usize] * self.factor[&id]).abs() > MAX_SPEED {
+                        fastest = Some(fastest.map_or(id, |f| self.newer(f, id)));
                     }
                 }
                 conflict = fastest;
@@ -591,16 +739,20 @@ impl Kinetics {
                 self.remove(pos);
                 continue;
             }
+            let theoretical = |k: &Self, id: u32| root[k.side[&id] as usize] * k.factor[&id];
             let stress: f32 = self
                 .queue
                 .iter()
-                .map(|&id| self.nodes[id as usize].part.impact * (root * self.factor[&id]).abs())
+                .map(|&id| self.nodes[id as usize].part.impact * theoretical(self, id).abs())
                 .sum();
             let overstressed = stress > capacity;
             for i in 0..self.queue.len() {
                 let id = self.queue[i];
-                let theoretical = root * self.factor[&id];
-                let shown = if overstressed { 0.0 } else { theoretical };
+                let shown = if overstressed {
+                    0.0
+                } else {
+                    theoretical(self, id)
+                };
                 let n = &mut self.nodes[id as usize];
                 if n.fresh || n.speed != shown || n.overstressed != overstressed {
                     n.fresh = false;
@@ -617,6 +769,34 @@ impl Kinetics {
         }
         stats
     }
+
+    /// The newer of two parts (set later): the one Create breaks in a conflict.
+    fn newer(&self, a: u32, b: u32) -> u32 {
+        if self.nodes[a as usize].stamp > self.nodes[b as usize].stamp {
+            a
+        } else {
+            b
+        }
+    }
+}
+
+/// A coupling found while solving: `from` holds the setting (the controller, a split shaft's
+/// first half), `dir` says which side drives (1 `from`'s, -1 `to`'s, 0 not known yet).
+#[derive(Clone, Copy, Debug)]
+struct Coupling {
+    from: u32,
+    to: u32,
+    kind: Couple,
+    dir: i8,
+}
+
+/// `RotationPropagator.isLargeCogToSpeedController`: a large cog on a horizontal axis right above
+/// a speed controller, across the controller's axis.
+fn controls(controller: &Part, cog: &Part) -> bool {
+    matches!(controller.couple, Some(Couple::Controller(_)))
+        && cog.cog == Cog::Large
+        && cog.axis != Axis::Y
+        && cog.axis != controller.axis
 }
 
 #[cfg(test)]
@@ -863,5 +1043,167 @@ mod tests {
                 nodes: 102
             }
         );
+    }
+
+    /// A chain drive on the x axis whose chain runs along z.
+    fn drive(positive: bool, negative: bool, modifier: f32) -> Part {
+        Part {
+            chain: Some(Chain {
+                along: Axis::Z,
+                positive,
+                negative,
+                modifier,
+            }),
+            ..Part::shaft(Axis::X)
+        }
+    }
+
+    #[test]
+    fn chain_drives_carry_their_speed_times_the_gearshift_s_modifier() {
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([1, 0, 0], 0, drive(true, false, 1.0));
+        k.set([1, 0, 1], 0, drive(true, true, 1.0));
+        k.set([1, 0, 2], 0, drive(false, true, 1.0));
+        k.set([2, 0, 2], 0, Part::shaft(Axis::X));
+        // Off the chain's line: a drive beside it on x does not join.
+        k.set([1, 1, 0], 0, drive(true, true, 1.0));
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 2], 0), Some(16.0));
+        assert_eq!(k.speed([2, 0, 2], 0), Some(16.0));
+        assert_eq!(k.speed([1, 1, 0], 0), Some(0.0));
+        // An adjustable chain gearshift at 2 (signal 15) as the first: the chain turns twice as
+        // fast (from 2 to 1), its own shaft as the motor.
+        k.set([1, 0, 0], 0, drive(true, false, 2.0));
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        assert_eq!(k.speed([1, 0, 1], 0), Some(32.0));
+        assert_eq!(k.speed([2, 0, 2], 0), Some(32.0));
+        // Neither going on toward the other (an end, then a start): they do not connect. One
+        // toward the other is enough (Create checks both ways).
+        k.set([1, 0, 1], 0, drive(false, true, 1.0));
+        k.set([1, 0, 2], 0, drive(true, false, 1.0));
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 2], 0), Some(0.0));
+    }
+
+    fn controller(target: f32) -> Part {
+        Part {
+            couple: Some(Couple::Controller(target)),
+            ..Part::shaft(Axis::X)
+        }
+    }
+
+    #[test]
+    fn a_speed_controller_sets_the_large_cog_above_it() {
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([1, 0, 0], 0, controller(64.0));
+        k.set([1, 1, 0], 0, Part::cog(Axis::Z, true));
+        k.set([2, 2, 0], 0, Part::cog(Axis::Z, false));
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        assert_eq!(k.speed([1, 1, 0], 0), Some(64.0));
+        assert_eq!(k.speed([2, 2, 0], 0), Some(-128.0));
+        // A cog on the controller's own axis is not set.
+        let mut k2 = Kinetics::new();
+        k2.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k2.set([1, 0, 0], 0, controller(64.0));
+        k2.set([1, 1, 0], 0, Part::cog(Axis::X, true));
+        solve(&mut k2);
+        assert_eq!(k2.speed([1, 1, 0], 0), Some(0.0));
+        // The controller not turning: nothing turns (getDesiredOutputSpeed: no source, 0).
+        k.remove([0, 0, 0]);
+        solve(&mut k);
+        assert_eq!(k.speed([1, 1, 0], 0), Some(0.0));
+        // Target 0: the cog stays still.
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.remove([1, 0, 0]);
+        k.set([1, 0, 0], 0, controller(0.0));
+        solve(&mut k);
+        assert_eq!(k.speed([1, 1, 0], 0), Some(0.0));
+    }
+
+    #[test]
+    fn a_turning_cog_drives_a_still_controller_at_its_target() {
+        let mut k = Kinetics::new();
+        k.set([1, 0, 0], 0, controller(-48.0));
+        k.set([2, 0, 0], 0, Part::shaft(Axis::X));
+        k.set([1, 1, 0], 0, Part::cog(Axis::Z, true));
+        k.set([1, 1, -1], 0, motor(Dir::South, 16.0));
+        solve(&mut k);
+        assert_eq!(k.speed([1, 1, 0], 0), Some(16.0));
+        assert_eq!(k.speed([2, 0, 0], 0), Some(-48.0));
+    }
+
+    #[test]
+    fn a_controlled_cog_shares_its_controller_s_stress() {
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0)); // 1024 SU
+        k.set([1, 0, 0], 0, controller(128.0));
+        k.set(
+            [1, 1, 0],
+            0,
+            Part {
+                impact: 8.0, // 8 * 128 = 1024 SU: at capacity
+                ..Part::cog(Axis::Z, true)
+            },
+        );
+        solve(&mut k);
+        assert_eq!(k.speed([1, 1, 0], 0), Some(128.0));
+        k.set(
+            [1, 1, 1],
+            0,
+            Part {
+                impact: 1.0,
+                ..Part::shaft(Axis::Z)
+            },
+        );
+        solve(&mut k);
+        assert_eq!(k.speed([1, 1, 0], 0), Some(0.0), "overstressed");
+        assert_eq!(
+            k.speed([1, 0, 0], 0),
+            Some(0.0),
+            "the controller's side too"
+        );
+    }
+
+    fn sequencer(k: &mut Kinetics, modifier: f32) {
+        k.set([0, 0, 0], 0, Part::half(Dir::West));
+        k.set(
+            [0, 0, 0],
+            1,
+            Part {
+                couple: Some(Couple::Relay(modifier)),
+                ..Part::half(Dir::East)
+            },
+        );
+    }
+
+    #[test]
+    fn a_relay_turns_the_far_half_from_whichever_side_turns() {
+        for (m, expect) in [(2.0, 24.0), (-1.0, -12.0), (-2.0, -24.0), (0.0, 0.0)] {
+            // Turned from the west.
+            let mut k = Kinetics::new();
+            k.set([-1, 0, 0], 0, motor(Dir::East, 12.0));
+            sequencer(&mut k, m);
+            k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+            solve(&mut k);
+            assert_eq!(k.speed([1, 0, 0], 0), Some(expect), "west, {m}");
+            assert_eq!(k.speed([0, 0, 0], 0), Some(12.0));
+            // Turned from the east: the west half turns at the modifier times it too.
+            let mut k = Kinetics::new();
+            k.set([1, 0, 0], 0, motor(Dir::West, -12.0));
+            sequencer(&mut k, m);
+            k.set([-1, 0, 0], 0, Part::shaft(Axis::X));
+            solve(&mut k);
+            assert_eq!(k.speed([-1, 0, 0], 0), Some(expect), "east, {m}");
+        }
+        // Past 256 RPM breaks it.
+        let mut k = Kinetics::new();
+        k.set([-1, 0, 0], 0, motor(Dir::East, 200.0));
+        sequencer(&mut k, 2.0);
+        let e = solve(&mut k);
+        assert!(e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
     }
 }

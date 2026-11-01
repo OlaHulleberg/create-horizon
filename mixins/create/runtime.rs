@@ -284,7 +284,15 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
                 super::native_hooks::flags::UPDATE_CLIENTS,
             );
         }
+        // ChainGearshiftBlockEntity.neighbourChanged: the signal's strength sets its chain.
+        if with_world(|w| w.reads_signal(state.0)) == Some(true) {
+            let signal =
+                game.with_level(|b, level, ticks| b.best_neighbor_signal(level, ticks, at));
+            with_world(|w| w.set_chain_signal(dim, pos, signal));
+        }
     }
+    tick_chain_drives(game, dim);
+    tick_sequencers(game, dim);
     tick_latches(game, dimension, dim);
     tick_links(game, dimension, dim);
     tick_bearings(game, dimension, dim);
@@ -374,6 +382,56 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
         .map(|p| p.uuid)
         .collect();
     send(game, &players, &updates);
+}
+
+/// Encased chain drives placed or beside a change take their place in their chain
+/// (`ChainDriveBlock.updateShape`). Nothing runs without one.
+fn tick_chain_drives(game: &mut Game<'_>, dim: usize) {
+    for (pos, drive) in with_world(|w| w.take_chain_shapes(dim)).unwrap_or_default() {
+        let along = if drive.along_first { "true" } else { "false" };
+        let flags = super::native_hooks::flags::UPDATE_ALL;
+        game.native_set_block_property_with(pos, "axis_along_first", along, flags);
+        game.native_set_block_property_with(pos, "part", drive.part.name(), flags);
+    }
+}
+
+/// Sequenced gearshifts: those whose neighbour changed look at their power
+/// (`SequencedGearshiftBlock.tick`), those running an instruction tick; their blocks show the
+/// step (`state`). Nothing runs without one.
+fn tick_sequencers(game: &mut Game<'_>, dim: usize) {
+    use create_engine::sequencer::Step;
+    let mut steps = Vec::new();
+    for (pos, running) in with_world(|w| w.take_sequencer_checks(dim)).unwrap_or_default() {
+        let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+        let powered = game.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, at));
+        if let Some(step) =
+            with_world(|w| w.sequencer_redstone(dim, pos, powered, running)).flatten()
+        {
+            steps.push((pos, step));
+        }
+    }
+    steps.extend(with_world(|w| w.tick_sequencers(dim)).unwrap_or_default());
+    for (pos, step) in steps {
+        let state = match step {
+            Step::Run(n) => n,
+            Step::Idle => 0,
+            // `run` past the end: back to 0 unless still powered.
+            Step::Ended => {
+                let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+                if game.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, at)) {
+                    continue;
+                }
+                0
+            }
+        };
+        const STATES: [&str; 6] = ["0", "1", "2", "3", "4", "5"];
+        game.native_set_block_property_with(
+            pos,
+            "state",
+            STATES[usize::from(state.min(5))],
+            super::native_hooks::flags::UPDATE_ALL,
+        );
+    }
 }
 
 pub(super) fn send(game: &mut Game<'_>, players: &[u128], updates: &[Update]) {
@@ -767,7 +825,7 @@ pub(super) fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8])
     let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
     use create_engine::Block as B;
     let value = match block {
-        Some(B::CreativeMotor) => {
+        Some(B::CreativeMotor | B::RotationSpeedController) => {
             with_world(|w| w.scroll_motor(dim, pos, steps));
             return;
         }
@@ -877,7 +935,7 @@ pub(super) fn value_settings_from_client(game: &mut Game<'_>, player: u128, data
     use create_engine::Block as B;
     use create_engine::tunnel::{self, Mode};
     let value = match block {
-        Some(B::CreativeMotor) => with_world(|w| {
+        Some(B::CreativeMotor | B::RotationSpeedController) => with_world(|w| {
             if let Some(pick) = pick {
                 w.board_motor(dim, pos, pick);
             }
@@ -1442,15 +1500,17 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
         .get(game.selected)
         .and_then(|s| s.as_ref())
         .is_some_and(|s| &*s.item == "create:wrench");
-    // The motor's speed, a brass tunnel's mode, and (with the wrench, `requiresWrench`) a
-    // chassis' range.
+    // The motor's or speed controller's speed, a brass tunnel's mode, and (with the wrench,
+    // `requiresWrench`) a chassis' range.
     let scrolls = CLIENT.with_borrow(|c| {
         c.as_ref()
             .and_then(|c| c.table.get(state.0))
             .is_some_and(|(b, _)| {
                 use create_engine::Block as B;
-                matches!(b, B::CreativeMotor | B::BrassTunnel)
-                    || wrench && matches!(b, B::LinearChassis | B::SecondaryLinearChassis)
+                matches!(
+                    b,
+                    B::CreativeMotor | B::RotationSpeedController | B::BrassTunnel
+                ) || wrench && matches!(b, B::LinearChassis | B::SecondaryLinearChassis)
             })
     });
     if !scrolls {
@@ -2835,6 +2895,38 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
     .flatten();
     if let Some(f) = facing {
         game.native_set_block_property(pos, "facing", dir_name(f));
+    }
+    // Create's axis blocks: chain drives, the speed controller, the sequenced gearshift.
+    let axis = with_world(|w| {
+        let (block, info) = w.table.get(state.0)?;
+        let above = w.large_cog_axis(dim, [pos[0], pos[1] + 1, pos[2]]);
+        let to = create_engine::place::axis(
+            block,
+            ctx,
+            |side| {
+                let o = side.offset();
+                let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+                w.has_shaft_towards(dim, at, side.opposite())
+            },
+            above,
+        )?;
+        (info.axis != Some(to.0) || info.vertical != to.1).then_some((block, to))
+    })
+    .flatten();
+    if let Some((block, (a, vertical))) = axis {
+        let name = match a {
+            Axis::X => "x",
+            Axis::Y => "y",
+            Axis::Z => "z",
+        };
+        game.native_set_block_property(pos, "axis", name);
+        if block == create_engine::Block::SequencedGearshift {
+            game.native_set_block_property(
+                pos,
+                "vertical",
+                if vertical { "true" } else { "false" },
+            );
+        }
     }
 }
 

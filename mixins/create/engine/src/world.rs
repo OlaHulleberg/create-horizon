@@ -93,6 +93,18 @@ pub struct Dimension {
     /// Blocks whose redstone power may have changed (a clutch or gearshift that was placed or
     /// whose neighbour changed), checked after the level's tick.
     redstone: Vec<[i32; 3]>,
+    /// Encased chain drives whose place in their chain may have changed (placed, or a neighbour
+    /// changed), shaped after the level's tick (`ChainDriveBlock.updateShape`).
+    chain_checks: Vec<[i32; 3]>,
+    /// Sequenced gearshifts and their sequence (`SequencedGearshiftBlockEntity`).
+    pub sequencers: HashMap<[i32; 3], crate::sequencer::Sequencer>,
+    /// Sequenced gearshifts whose instruction runs: the only ones that tick.
+    sequencing: Vec<[i32; 3]>,
+    /// Sequenced gearshifts whose neighbour changed: their redstone is looked at after the
+    /// level's tick (Create's scheduled block tick).
+    sequencer_checks: Vec<[i32; 3]>,
+    /// Steps sequenced gearshifts took when their speed changed, for their blocks to show.
+    sequencer_steps: Vec<([i32; 3], crate::sequencer::Step)>,
     /// Depots and their held stack's motion; the stacks are in their block entities' slots.
     pub depots: HashMap<[i32; 3], Option<crate::depot::Held>>,
     /// Depots whose held stack still slides: the only ones that tick.
@@ -357,7 +369,23 @@ pub struct BeltBreak {
 
 /// Blocks that follow redstone power (`powered`): Create's split shafts.
 fn follows_power(block: Block) -> bool {
-    matches!(block, Block::Clutch | Block::Gearshift | Block::GantryShaft)
+    matches!(
+        block,
+        Block::Clutch | Block::Gearshift | Block::GantryShaft | Block::AdjustableChainGearshift
+    )
+}
+
+/// Blocks whose speed setting is scrolled or picked on a board (`KineticScrollValueBehaviour`):
+/// the creative motor's and the rotation speed controller's.
+fn has_speed_setting(block: Block) -> bool {
+    matches!(block, Block::CreativeMotor | Block::RotationSpeedController)
+}
+
+fn is_chain_drive(block: Block) -> bool {
+    matches!(
+        block,
+        Block::EncasedChainDrive | Block::AdjustableChainGearshift
+    )
 }
 
 /// Create's state for the open world: three vanilla dimensions, by index.
@@ -391,6 +419,14 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
+        }
+        if block == Block::SequencedGearshift {
+            d.sequencers.entry(pos).or_default();
+        }
+        if block == Block::AdjustableChainGearshift && !d.settings.contains_key(&pos) {
+            // Its signal is read again when it joins (Create saves `Signal`, and its `lazyTick`
+            // reads it every 40 ticks).
+            d.redstone.push(pos);
         }
         if block == Block::MechanicalPress && !d.presses.contains_key(&pos) {
             d.presses.insert(pos, crate::press::Press::default());
@@ -597,6 +633,12 @@ impl CreateWorld {
                 // ClutchBlock.getStateForPlacement: powered as placed.
                 self.dims[dim].redstone.push(pos);
             }
+            if self.table.get(new).is_some_and(|(b, _)| is_chain_drive(b))
+                && self.table.get(old).map(|(b, _)| b) != self.table.get(new).map(|(b, _)| b)
+            {
+                // ChainDriveBlock.getStateForPlacement: joined to the drives beside it.
+                self.dims[dim].chain_checks.push(pos);
+            }
             let tunnel = |s: u32| {
                 matches!(
                     self.table.get(s).map(|(b, _)| b),
@@ -649,6 +691,9 @@ impl CreateWorld {
                 d.pumping.retain(|p| *p != pos);
             }
             d.chutes.remove(&pos);
+            if d.sequencers.remove(&pos).is_some() {
+                d.sequencing.retain(|p| *p != pos);
+            }
             d.saws.remove(&pos);
             d.spouts.remove(&pos);
             d.drains.remove(&pos);
@@ -782,6 +827,15 @@ impl CreateWorld {
             d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.sequencers
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.sequencing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.sequencer_checks
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.sequencer_steps
+                .retain(|(p, _)| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.chain_checks
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             // Trains standing in it leave with it (saved with it).
             d.trains
                 .retain(|t| CreateWorld::train_column(t) != (cx, cz));
@@ -887,6 +941,20 @@ impl CreateWorld {
         }
         let from = events.len();
         let stats = d.kinetics.solve(events);
+        // Sequenced gearshifts follow their speed (`onSpeedChanged`).
+        if !d.sequencers.is_empty() {
+            let turned: Vec<[i32; 3]> = events[from..]
+                .iter()
+                .filter_map(|e| match *e {
+                    Event::Speed { pos, .. } if d.sequencers.contains_key(&pos) => Some(pos),
+                    _ => None,
+                })
+                .collect();
+            for pos in turned {
+                self.sequencer_speed(dim, pos);
+            }
+        }
+        let d = &mut self.dims[dim];
         // Fans follow their speed (`onSpeedChanged`: the current is rebuilt); crushing wheels
         // look at their controllers again.
         for e in &events[from..] {
@@ -982,11 +1050,12 @@ impl CreateWorld {
         self.set_motor(dim, pos, new.clamp(-256, 256) as f32)
     }
 
-    /// The creative motor at `pos`'s speed setting, None when there is no motor there.
+    /// The creative motor or rotation speed controller at `pos`'s speed setting, None when there
+    /// is neither there.
     pub fn motor_setting(&self, dim: usize, pos: [i32; 3]) -> Option<f32> {
         let state = *self.dims[dim].states.get(&pos)?;
         let (block, _) = self.table.get(state)?;
-        (block == Block::CreativeMotor).then(|| {
+        has_speed_setting(block).then(|| {
             self.dims[dim]
                 .settings
                 .get(&pos)
@@ -1036,8 +1105,7 @@ impl CreateWorld {
                     .states
                     .get(*p)
                     .and_then(|s| self.table.get(*s))
-                    .map(|(b, _)| b)
-                    == Some(Block::CreativeMotor)
+                    .is_some_and(|(b, _)| has_speed_setting(b))
             })
             .map(|(p, s)| (*p, s.motor_rpm as i32))
             .collect();
@@ -1111,7 +1179,12 @@ impl CreateWorld {
                 if b == Block::GantryShaft {
                     self.dims[dim].gantry_checks.push(pos);
                 }
+                if b == Block::AdjustableChainGearshift {
+                    self.dims[dim].chain_checks.push(pos);
+                }
             }
+            Some(Block::EncasedChainDrive) => self.dims[dim].chain_checks.push(pos),
+            Some(Block::SequencedGearshift) => self.dims[dim].sequencer_checks.push(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(b) if latch_kind(b).is_some() => self.dims[dim].latch_checks.push(pos),
             Some(Block::RedstoneLink) => self.dims[dim].link_checks.push(pos),
@@ -1186,6 +1259,190 @@ impl CreateWorld {
     pub fn powered(&self, state: u32) -> Option<bool> {
         let (block, info) = self.table.get(state)?;
         follows_power(block).then_some(info.powered)
+    }
+
+    /// Whether the block `state` reads how strong its signal is (an adjustable chain gearshift),
+    /// besides whether it is powered.
+    pub fn reads_signal(&self, state: u32) -> bool {
+        self.table
+            .get(state)
+            .is_some_and(|(b, _)| b == Block::AdjustableChainGearshift)
+    }
+
+    /// `ChainGearshiftBlockEntity.analogSignalChanged`: the strongest signal into the adjustable
+    /// chain gearshift at `pos` (`getBestNeighborSignal`); its chain turns again when it changed.
+    pub fn set_chain_signal(&mut self, dim: usize, pos: [i32; 3], signal: i32) {
+        let d = &mut self.dims[dim];
+        let Some(&state) = d.states.get(&pos) else {
+            return;
+        };
+        let signal = signal.clamp(0, 15) as i8;
+        let known = d.settings.get(&pos).copied();
+        if known.is_none_or(|s| s.signal != signal) {
+            let old = known.unwrap_or_default();
+            self.set_settings(dim, pos, state, Settings { signal, ..old });
+        }
+    }
+
+    /// The axis of the large cog at `pos` (`ICogWheel.isLargeCog`), for a speed controller placed
+    /// below it.
+    pub fn large_cog_axis(&self, dim: usize, pos: [i32; 3]) -> Option<crate::kinetics::Axis> {
+        let state = *self.dims[dim].states.get(&pos)?;
+        let (block, info) = self.table.get(state)?;
+        matches!(
+            block,
+            Block::LargeCogwheel
+                | Block::AndesiteEncasedLargeCogwheel
+                | Block::BrassEncasedLargeCogwheel
+        )
+        .then_some(info.axis)?
+    }
+
+    /// The encased chain drive at `pos` as its chain rules read it; None for any other block.
+    fn chain_drive(&self, dim: usize, pos: [i32; 3]) -> Option<crate::chain::Drive> {
+        let state = *self.dims[dim].states.get(&pos)?;
+        let (block, info) = self.table.get(state)?;
+        if !is_chain_drive(block) {
+            return None;
+        }
+        Some(crate::chain::Drive {
+            axis: info.axis?,
+            part: info.chain.unwrap_or_default(),
+            along_first: info.along_first,
+        })
+    }
+
+    /// Chain drives placed or beside a change, shaped by their neighbours
+    /// (`ChainDriveBlock.updateShape` toward each side off their axis): those whose `part` or
+    /// `axis_along_first` must change, with what they become.
+    pub fn take_chain_shapes(&mut self, dim: usize) -> Vec<([i32; 3], crate::chain::Drive)> {
+        if self.dims[dim].chain_checks.is_empty() {
+            return Vec::new();
+        }
+        let mut checks = std::mem::take(&mut self.dims[dim].chain_checks);
+        checks.sort();
+        checks.dedup();
+        checks
+            .into_iter()
+            .filter_map(|pos| {
+                let now = self.chain_drive(dim, pos)?;
+                let shaped = now.shaped(|d| {
+                    let o = d.offset();
+                    self.chain_drive(dim, [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]])
+                });
+                (shaped != now).then_some((pos, shaped))
+            })
+            .collect()
+    }
+
+    /// Sequenced gearshifts whose neighbour changed, with whether each runs (its `state` is
+    /// not 0).
+    pub fn take_sequencer_checks(&mut self, dim: usize) -> Vec<([i32; 3], bool)> {
+        if self.dims[dim].sequencer_checks.is_empty() {
+            return Vec::new();
+        }
+        let mut checks = std::mem::take(&mut self.dims[dim].sequencer_checks);
+        checks.sort();
+        checks.dedup();
+        checks
+            .into_iter()
+            .filter_map(|pos| {
+                let state = *self.dims[dim].states.get(&pos)?;
+                let (block, info) = self.table.get(state)?;
+                (block == Block::SequencedGearshift).then_some((pos, info.sequence != 0))
+            })
+            .collect()
+    }
+
+    /// `SequencedGearshiftBlock.tick`: the sequenced gearshift at `pos` is `powered` or not, its
+    /// block `running` (`state` not 0). Returns what its block's `state` becomes.
+    pub fn sequencer_redstone(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        powered: bool,
+        running: bool,
+    ) -> Option<crate::sequencer::Step> {
+        let step = self.dims[dim]
+            .sequencers
+            .get_mut(&pos)?
+            .redstone(powered, running);
+        self.sequencer_stepped(dim, pos);
+        step
+    }
+
+    /// One tick of the sequenced gearshifts whose instruction runs (`tick`), and the steps they
+    /// took as their speed changed: what their blocks' `state` becomes. Nothing without one.
+    pub fn tick_sequencers(&mut self, dim: usize) -> Vec<([i32; 3], crate::sequencer::Step)> {
+        let d = &mut self.dims[dim];
+        if d.sequencing.is_empty() && d.sequencer_steps.is_empty() {
+            return Vec::new();
+        }
+        let mut steps = std::mem::take(&mut d.sequencer_steps);
+        for pos in d.sequencing.clone() {
+            let step = self.dims[dim]
+                .sequencers
+                .get_mut(&pos)
+                .and_then(|s| s.tick());
+            if let Some(step) = step {
+                self.sequencer_stepped(dim, pos);
+                steps.push((pos, step));
+            }
+        }
+        steps
+    }
+
+    /// The speed the sequenced gearshift at `pos` is turned at (its block entity's: the half
+    /// turned, which the other turns at the modifier times), after a solve changed it.
+    fn sequencer_speed(&mut self, dim: usize, pos: [i32; 3]) {
+        let d = &self.dims[dim];
+        let (a, b) = (
+            d.kinetics.speed(pos, 0).unwrap_or(0.0),
+            d.kinetics.speed(pos, 1).unwrap_or(0.0),
+        );
+        let m = f32::from(d.settings.get(&pos).map_or(0, |s| s.sequence));
+        let speed = if m == 0.0 {
+            if a != 0.0 { a } else { b }
+        } else if (b - a * m).abs() <= 1e-4 * b.abs().max(1.0) {
+            a
+        } else {
+            b
+        };
+        let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
+            return;
+        };
+        if let Some(step) = s.speed_changed(speed) {
+            self.dims[dim].sequencer_steps.push((pos, step));
+        }
+        self.sequencer_stepped(dim, pos);
+    }
+
+    /// After a sequenced gearshift's step: it ticks while an instruction runs, and its far half
+    /// turns at the instruction's modifier (`detachKinetics`, then `attachKinetics`).
+    fn sequencer_stepped(&mut self, dim: usize, pos: [i32; 3]) {
+        let d = &mut self.dims[dim];
+        let Some(s) = d.sequencers.get(&pos) else {
+            return;
+        };
+        let (modifier, ticks) = (s.modifier() as i8, s.ticks());
+        d.sequencing.retain(|p| *p != pos);
+        if ticks {
+            d.sequencing.push(pos);
+        }
+        let old = d.settings.get(&pos).copied().unwrap_or_default();
+        if old.sequence != modifier
+            && let Some(&state) = d.states.get(&pos)
+        {
+            self.set_settings(
+                dim,
+                pos,
+                state,
+                Settings {
+                    sequence: modifier,
+                    ..old
+                },
+            );
+        }
     }
 
     /// Columns whose saved data changed since the last call.
@@ -2083,6 +2340,137 @@ mod tests {
         w.column_unloaded(0, 1, 2);
         assert_eq!(w.speed(0, [18, 64, 32]), None);
         assert!(w.dims[0].kinetics.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn chain_drives_shape_their_chain_and_follow_the_signal() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let drive = |part| vec![("axis", "x"), ("axis_along_first", "false"), ("part", part)];
+        let gearshift = |part, powered| {
+            vec![
+                ("axis", "x"),
+                ("axis_along_first", "false"),
+                ("part", part),
+                ("powered", powered),
+            ]
+        };
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:encased_chain_drive", drive("none")),
+            ("create:encased_chain_drive", drive("end")),
+            (
+                "create:adjustable_chain_gearshift",
+                gearshift("none", "false"),
+            ),
+            (
+                "create:adjustable_chain_gearshift",
+                gearshift("start", "false"),
+            ),
+            ("create:creative_motor", vec![("facing", "east")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, [-1, 0, 0], 0, 14);
+        w.block_changed(0, [0, 0, 0], 0, 12);
+        w.block_changed(0, [0, 0, 1], 0, 10);
+        // Placed: both are shaped (the gearshift starts the chain south, the drive ends it),
+        // and the gearshift's signal is read.
+        let shapes = w.take_chain_shapes(0);
+        let part = |p: [i32; 3]| shapes.iter().find(|s| s.0 == p).map(|s| s.1.part);
+        assert_eq!(part([0, 0, 0]), Some(crate::chain::Part::Start));
+        assert_eq!(part([0, 0, 1]), Some(crate::chain::Part::End));
+        assert_eq!(w.take_redstone(0), [[0, 0, 0]]);
+        assert!(w.reads_signal(12) && !w.reads_signal(10));
+        // The glue sets them; nothing more to shape.
+        w.block_changed(0, [0, 0, 0], 12, 13);
+        w.block_changed(0, [0, 0, 1], 10, 11);
+        assert!(w.take_chain_shapes(0).is_empty());
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [0, 0, 1]), Some(16.0));
+        // A signal of 7: the chain turns at 1.5 times the gearshift.
+        w.set_chain_signal(0, [0, 0, 0], 7);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [0, 0, 0]), Some(16.0));
+        assert_eq!(w.speed(0, [0, 0, 1]), Some(24.0));
+        // The drive's neighbour changes: it is shaped again (no change here).
+        w.neighbor_changed(0, [0, 0, 1], 11);
+        assert!(w.take_chain_shapes(0).is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_sequenced_gearshift_turns_its_far_half_through_its_sequence() {
+        use crate::sequencer::Step;
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:sequenced_gearshift", seq("1")),
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:shaft", vec![("axis", "x")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, [-1, 0, 0], 0, 12);
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, [1, 0, 0], 0, 13);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(
+            w.speed(0, [1, 0, 0]),
+            Some(0.0),
+            "idle: the far half is still"
+        );
+        assert!(w.tick_sequencers(0).is_empty());
+        // Powered: its neighbour changed, its redstone is looked at; the 90° turn starts.
+        w.neighbor_changed(0, [0, 0, 0], 10);
+        assert_eq!(w.take_sequencer_checks(0), [([0, 0, 0], false)]);
+        assert_eq!(
+            w.sequencer_redstone(0, [0, 0, 0], true, false),
+            Some(Step::Run(1))
+        );
+        w.block_changed(0, [0, 0, 0], 10, 11);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(16.0));
+        // 21 ticks at 16 RPM, then it ends and the far half stops.
+        for _ in 0..21 {
+            assert!(w.tick_sequencers(0).is_empty());
+        }
+        assert_eq!(w.tick_sequencers(0), [([0, 0, 0], Step::Ended)]);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0));
+        assert!(w.tick_sequencers(0).is_empty(), "idle: nothing ticks");
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_speed_controller_is_set_like_a_motor() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:rotation_speed_controller", vec![("axis", "x")]),
+            ("create:large_cogwheel", vec![("axis", "z")]),
+            ("create:creative_motor", vec![("facing", "east")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, [-1, 0, 0], 0, 12);
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, [0, 1, 0], 0, 11);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.motor_setting(0, [0, 0, 0]), Some(16.0));
+        assert_eq!(w.speed(0, [0, 1, 0]), Some(16.0));
+        assert_eq!(w.scroll_motor(0, [0, 0, 0], 48), Some(64.0));
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [0, 1, 0]), Some(64.0));
+        assert_eq!(w.column_settings(0, 0, 0), [([0, 0, 0], 64)]);
         states::clear_range();
     }
 }

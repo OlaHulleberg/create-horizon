@@ -3,7 +3,7 @@
 //! vanilla's `Direction.orderedByNearest` they read the player's look with.
 
 use crate::Block;
-use crate::kinetics::Dir;
+use crate::kinetics::{Axis, Dir};
 
 /// What a placement knows of the player: their view and whether they sneak, and the face of the
 /// block they clicked (`BlockPlaceContext`).
@@ -127,6 +127,56 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
     })
 }
 
+/// The axis Create gives `block` placed in `ctx`, and whether it stands `vertical` (a block with
+/// a horizontal axis), or None when its placement isn't Create's own. `shaft` as for `facing`;
+/// `cog_above` is the axis of a large cog right above it.
+pub fn axis(
+    block: Block,
+    ctx: Context,
+    shaft: impl Fn(Dir) -> bool,
+    cog_above: Option<Axis>,
+) -> Option<(Axis, bool)> {
+    let across = |a: Axis| if a == Axis::X { Axis::Z } else { Axis::X };
+    let facing = horizontal_direction(ctx.yaw).axis();
+    match block {
+        // SpeedControllerBlock: across the large cog above it; else
+        // HorizontalAxisKineticBlock's: the axis of the shafts beside it, else across the
+        // player's facing (`getClockWise`).
+        Block::RotationSpeedController => {
+            let axis = match cog_above {
+                Some(a) if a != Axis::Y => across(a),
+                _ => preferred(true, &shaft).map_or(across(facing), |d| d.axis()),
+            };
+            Some((axis, false))
+        }
+        // ChainDriveBlock: the view's axis when sneaking, else the axis of the shafts around it
+        // (`getPreferredAxis`), else the view's.
+        Block::EncasedChainDrive | Block::AdjustableChainGearshift => {
+            let view = ordered_by_nearest(ctx.yaw, ctx.pitch)[0].axis();
+            let axis = match preferred(false, &shaft) {
+                Some(p) if !ctx.sneaking => p.axis(),
+                _ => view,
+            };
+            Some((axis, false))
+        }
+        // SequencedGearshiftBlock: the axis of the shafts around it unless sneaking
+        // (`getPreferredAxis`), else the view's; standing on y, its horizontal axis is the
+        // player's facing (`withAxis`).
+        Block::SequencedGearshift => {
+            let axis = match preferred(false, &shaft) {
+                Some(p) if !ctx.sneaking => p.axis(),
+                _ => ordered_by_nearest(ctx.yaw, ctx.pitch)[0].axis(),
+            };
+            Some(if axis == Axis::Y {
+                (facing, true)
+            } else {
+                (axis, false)
+            })
+        }
+        _ => None,
+    }
+}
+
 fn is_sail(block: Block) -> bool {
     block == Block::SailFrame || block.name().ends_with("_sail")
 }
@@ -221,5 +271,42 @@ mod tests {
             Some(Dir::North)
         );
         assert_eq!(facing(Block::Shaft, ctx(0.0, 0.0, false), none), None);
+    }
+
+    #[test]
+    fn axis_blocks_lie_as_create_places_them() {
+        let none = |_: Dir| false;
+        let b = Block::RotationSpeedController;
+        // Looking south: across the view, on x; a large cog above on x: on z.
+        assert_eq!(
+            axis(b, ctx(0.0, 0.0, false), none, None),
+            Some((Axis::X, false))
+        );
+        assert_eq!(
+            axis(b, ctx(0.0, 0.0, false), none, Some(Axis::X)),
+            Some((Axis::Z, false))
+        );
+        // A shaft to the north: along it.
+        assert_eq!(
+            axis(b, ctx(0.0, 0.0, false), |d| d == Dir::North, None),
+            Some((Axis::Z, false))
+        );
+        let s = Block::SequencedGearshift;
+        // Looking down while facing west: vertical, its horizontal axis x.
+        assert_eq!(
+            axis(s, ctx(90.0, 80.0, false), none, None),
+            Some((Axis::X, true))
+        );
+        // A shaft below: vertical; sneaking, the view's axis.
+        let below = |d: Dir| d == Dir::Down;
+        assert_eq!(
+            axis(s, ctx(0.0, 0.0, false), below, None),
+            Some((Axis::Z, true))
+        );
+        assert_eq!(
+            axis(s, ctx(0.0, 0.0, true), below, None),
+            Some((Axis::Z, false))
+        );
+        assert_eq!(axis(Block::Shaft, ctx(0.0, 0.0, false), none, None), None);
     }
 }
