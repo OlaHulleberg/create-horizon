@@ -135,6 +135,20 @@ pub struct Dimension {
     /// (`checkTickOnNeighbor`), and their scheduled ticks (position, game time due).
     pub latch_checks: Vec<[i32; 3]>,
     pub latch_ticks: Vec<([i32; 3], i64)>,
+    /// Brass diodes' block entities; the ones whose tick changes something (the only ones that
+    /// tick); what was saved for those not placed yet (`state`, delay); diodes whose input may
+    /// have changed, with the delay of the tick that follows (`checkTickOnNeighbor`,
+    /// `setPlacedBy`); and their scheduled block ticks (position, game time due).
+    pub diodes: HashMap<[i32; 3], crate::diode::Diode>,
+    pub diode_running: Vec<[i32; 3]>,
+    diode_saved: HashMap<[i32; 3], (i32, i32)>,
+    pub diode_checks: Vec<([i32; 3], i64)>,
+    pub diode_ticks: Vec<([i32; 3], i64)>,
+    /// Rose quartz lamps just placed (`getStateForPlacement`: `powered` as placed), those whose
+    /// neighbours changed, and their scheduled ticks (position, game time due).
+    pub lamp_placed: Vec<[i32; 3]>,
+    pub lamp_checks: Vec<[i32; 3]>,
+    pub lamp_ticks: Vec<([i32; 3], i64)>,
     /// Fluid tanks and their contents; contents saved with a column wait here for their tank.
     pub tanks: HashMap<[i32; 3], crate::tank::Tank>,
     tank_saved: HashMap<[i32; 3], crate::tank::Tank>,
@@ -330,6 +344,10 @@ fn has_state(block: Block) -> bool {
             | Block::Belt
             | Block::PoweredLatch
             | Block::PoweredToggleLatch
+            | Block::PulseRepeater
+            | Block::PulseExtender
+            | Block::PulseTimer
+            | Block::RoseQuartzLamp
             | Block::RedstoneLink
             | Block::AndesiteTunnel
             | Block::BrassTunnel
@@ -347,6 +365,16 @@ pub fn latch_kind(block: Block) -> Option<crate::latch::Kind> {
     match block {
         Block::PoweredLatch => Some(crate::latch::Kind::Powered),
         Block::PoweredToggleLatch => Some(crate::latch::Kind::Toggle),
+        _ => None,
+    }
+}
+
+/// Create's brass diodes, by block.
+pub fn diode_kind(block: Block) -> Option<crate::diode::Kind> {
+    match block {
+        Block::PulseRepeater => Some(crate::diode::Kind::Repeater),
+        Block::PulseExtender => Some(crate::diode::Kind::Extender),
+        Block::PulseTimer => Some(crate::diode::Kind::Timer),
         _ => None,
     }
 }
@@ -437,6 +465,26 @@ impl CreateWorld {
         }
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
+        }
+        if let Some(kind) = diode_kind(block) {
+            // Placed or loaded: `BrassDiodeBlockEntity.read`, or a new one at its default delay.
+            // Else its block changed (`powered`, `powering`, `inverted`), which its tick reads.
+            if d.diodes.get(&pos).is_none_or(|x| x.kind != kind) {
+                let mut x = crate::diode::Diode::new(kind);
+                if let Some((state, max)) = d.diode_saved.remove(&pos) {
+                    x.set_delay(max);
+                    x.state = state.clamp(0, x.max);
+                }
+                d.diodes.insert(pos, x);
+                d.diode_checks.push((pos, crate::diode::PLACED_DELAY));
+            }
+            if let Some(x) = d.diodes.get_mut(&pos) {
+                x.powered = info.powered;
+                x.powering = info.powering;
+                if !x.idle() && !d.diode_running.contains(&pos) {
+                    d.diode_running.push(pos);
+                }
+            }
         }
         if block == Block::Deployer && !d.deployers.contains_key(&pos) {
             let saved = d.deployer_saved.remove(&pos).unwrap_or_default();
@@ -599,11 +647,13 @@ impl CreateWorld {
         let settings = d.settings.get(&pos).copied().unwrap_or_default();
         let [a, b] = parts(block, info, &settings);
         d.kinetics.remove(pos);
-        d.states.insert(pos, state);
-        d.columns
-            .entry((pos[0] >> 4, pos[2] >> 4))
-            .or_default()
-            .push(pos);
+        // A block whose state changes often (a diode) is listed in its column once.
+        if d.states.insert(pos, state).is_none() {
+            d.columns
+                .entry((pos[0] >> 4, pos[2] >> 4))
+                .or_default()
+                .push(pos);
+        }
         if let Some(a) = a {
             d.kinetics.set(pos, 0, a);
         }
@@ -627,6 +677,16 @@ impl CreateWorld {
             return;
         }
         if is {
+            let (was_block, is_block) = (
+                self.table.get(old).map(|(b, _)| b),
+                self.table.get(new).map(|(b, _)| b),
+            );
+            if is_block == Some(Block::RoseQuartzLamp) && was_block != Some(Block::RoseQuartzLamp) {
+                self.dims[dim].lamp_placed.push(pos);
+            }
+            if is_block.and_then(diode_kind).is_none() && was_block.and_then(diode_kind).is_some() {
+                self.diode_removed(dim, pos);
+            }
             if self.table.get(new).is_some_and(|(b, _)| follows_power(b))
                 && self.table.get(old).map(|(b, _)| b) != self.table.get(new).map(|(b, _)| b)
             {
@@ -667,6 +727,8 @@ impl CreateWorld {
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
             d.presses.remove(&pos);
+            self.diode_removed(dim, pos);
+            let d = &mut self.dims[dim];
             if self.table.get(old).map(|(b, _)| b) == Some(Block::CrushingWheel) {
                 d.crusher_checks.push(pos);
             }
@@ -862,6 +924,19 @@ impl CreateWorld {
                 d.link_changes.extend(changed);
             }
             d.link_checks.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.diodes.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.diode_running
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.diode_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.diode_checks
+                .retain(|p| (p.0[0] >> 4, p.0[2] >> 4) != (cx, cz));
+            d.diode_ticks
+                .retain(|p| (p.0[0] >> 4, p.0[2] >> 4) != (cx, cz));
+            d.lamp_placed.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.lamp_checks.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.lamp_ticks
+                .retain(|p| (p.0[0] >> 4, p.0[2] >> 4) != (cx, cz));
             d.link_changes
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.link_shown.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1187,6 +1262,10 @@ impl CreateWorld {
             Some(Block::SequencedGearshift) => self.dims[dim].sequencer_checks.push(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(b) if latch_kind(b).is_some() => self.dims[dim].latch_checks.push(pos),
+            Some(b) if diode_kind(b).is_some() => self.dims[dim]
+                .diode_checks
+                .push((pos, crate::diode::BLOCK_DELAY)),
+            Some(Block::RoseQuartzLamp) => self.dims[dim].lamp_checks.push(pos),
             Some(Block::RedstoneLink) => self.dims[dim].link_checks.push(pos),
             Some(Block::AndesiteTunnel | Block::BrassTunnel) => {
                 self.dims[dim].tunnel_checks.push(pos)
@@ -1811,6 +1890,76 @@ impl CreateWorld {
         }
         d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+    }
+
+    /// A diode left the world: its block entity goes; a set delay or count is saved no more.
+    fn diode_removed(&mut self, dim: usize, pos: [i32; 3]) {
+        let d = &mut self.dims[dim];
+        if let Some(x) = d.diodes.remove(&pos) {
+            d.diode_running.retain(|p| *p != pos);
+            if x.state != 0 || x.max != x.kind.default_delay() {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
+        }
+    }
+
+    /// `BrassDiodeBlockEntity.tick` for the diodes whose tick changes something: the ones whose
+    /// block must change, with their new `powering` (`setBlockAndUpdate`). Diodes with nothing
+    /// left to do leave the list.
+    pub fn tick_diodes(&mut self, dim: usize) -> Vec<([i32; 3], bool)> {
+        let d = &mut self.dims[dim];
+        let mut out = Vec::new();
+        let diodes = &mut d.diodes;
+        d.diode_running.retain(|pos| {
+            let Some(x) = diodes.get_mut(pos) else {
+                return false;
+            };
+            if let Some(p) = x.tick() {
+                out.push((*pos, p));
+            }
+            !x.idle()
+        });
+        out
+    }
+
+    /// The delay set on a diode's value box (`ScrollValueBehaviour.setValue`); its column is
+    /// saved.
+    pub fn set_diode_delay(&mut self, dim: usize, pos: [i32; 3], value: i32) -> Option<i32> {
+        let d = &mut self.dims[dim];
+        let x = d.diodes.get_mut(&pos)?;
+        if x.set_delay(value) {
+            if !x.idle() && !d.diode_running.contains(&pos) {
+                d.diode_running.push(pos);
+            }
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+        Some(x.max)
+    }
+
+    pub fn load_diodes(&mut self, dim: usize, saved: impl Iterator<Item = ([i32; 3], (i32, i32))>) {
+        self.dims[dim].diode_saved.extend(saved);
+    }
+
+    /// The diodes of a column not at rest at their default delay (`BrassDiodeBlockEntity.write`:
+    /// `State`, and the delay), to save.
+    pub fn column_diodes(&self, dim: usize, cx: i32, cz: i32) -> Vec<([i32; 3], i32, i32)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .diodes
+            .iter()
+            .filter(|(p, x)| {
+                (p[0] >> 4, p[2] >> 4) == (cx, cz)
+                    && (x.state != 0 || x.max != x.kind.default_delay())
+            })
+            .map(|(p, x)| (*p, x.state, x.max))
+            .collect();
+        out.sort_by_key(|e| e.0);
+        out
+    }
+
+    /// The Create block at `pos` as this world last saw it, for blocks it keeps.
+    pub fn block_at(&self, dim: usize, pos: [i32; 3]) -> Option<Block> {
+        let state = *self.dims.get(dim)?.states.get(&pos)?;
+        self.table.get(state).map(|(b, _)| b)
     }
 
     pub fn load_links(
@@ -2470,6 +2619,67 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [0, 1, 0]), Some(64.0));
         assert_eq!(w.column_settings(0, 0, 0), [([0, 0, 0], 64)]);
+        states::clear_range();
+    }
+
+    #[test]
+    fn diodes_tick_only_while_they_have_work_and_lamps_are_tracked() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:pulse_extender", vec![("facing", "north")]),
+            (
+                "create:pulse_extender",
+                vec![("facing", "north"), ("powered", "true")],
+            ),
+            (
+                "create:pulse_extender",
+                vec![
+                    ("facing", "north"),
+                    ("powered", "true"),
+                    ("powering", "true"),
+                ],
+            ),
+            ("create:pulse_timer", vec![("facing", "north")]),
+            ("create:rose_quartz_lamp", vec![]),
+        ];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let (off, powered, on, timer, lamp) = (2, 3, 4, 5, 6);
+        let p = [0, 64, 0];
+        // Placed at rest: no tick, a check of its input one tick later.
+        w.block_changed(0, p, 0, off);
+        assert!(w.dims[0].diode_running.is_empty());
+        assert_eq!(w.dims[0].diode_checks, [(p, crate::diode::PLACED_DELAY)]);
+        // Its input on: `powering` at the next tick, then held, idle.
+        w.block_changed(0, p, off, powered);
+        assert_eq!(w.tick_diodes(0), [(p, true)]);
+        w.block_changed(0, p, powered, on);
+        assert!(w.tick_diodes(0).is_empty());
+        assert!(w.dims[0].diode_running.is_empty());
+        assert_eq!(w.dims[0].columns[&(0, 0)], [p], "listed once");
+        // A delay set on it is saved with its column.
+        assert_eq!(w.set_diode_delay(0, p, 1), Some(2));
+        assert_eq!(w.set_diode_delay(0, p, 40), Some(40));
+        assert_eq!(w.column_diodes(0, 0, 0), [(p, 2, 40)]);
+        // Neighbours: a check two ticks out.
+        w.neighbor_changed(0, p, on);
+        assert_eq!(
+            w.dims[0].diode_checks.last(),
+            Some(&(p, crate::diode::BLOCK_DELAY))
+        );
+        // Broken: gone.
+        w.block_changed(0, p, on, 0);
+        assert!(w.dims[0].diodes.is_empty());
+        // A timer at rest still runs.
+        w.block_changed(0, p, 0, timer);
+        assert_eq!(w.dims[0].diode_running, [p]);
+        // A lamp placed is looked at; a lamp is known by position for the signal hook.
+        w.block_changed(0, [1, 64, 0], 0, lamp);
+        assert_eq!(w.dims[0].lamp_placed, [[1, 64, 0]]);
+        assert_eq!(w.block_at(0, [1, 64, 0]), Some(Block::RoseQuartzLamp));
+        w.neighbor_changed(0, [1, 64, 0], lamp);
+        assert_eq!(w.dims[0].lamp_checks, [[1, 64, 0]]);
         states::clear_range();
     }
 }

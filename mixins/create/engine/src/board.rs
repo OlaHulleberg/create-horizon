@@ -86,6 +86,9 @@ pub const fn brass_diode(title: &'static str) -> Board {
     }
 }
 
+/// A brass diode's board (`BrassDiodeBlockEntity`, `create.logistics.redstone_interval`).
+pub const DIODE: Board = brass_diode("Redstone Interval");
+
 /// `ValveHandleScrollValueBehaviour.createBoard`: both directions up to 180°, a milestone every 45.
 pub const VALVE_HANDLE: Board = Board {
     title: "Rotation when used",

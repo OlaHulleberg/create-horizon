@@ -138,6 +138,7 @@ pub(super) fn chunk_load(
     let burners = burners_from_nbt(Game::native_chunk_data(chunk, "create"));
     let links = links_from_nbt(Game::native_chunk_data(chunk, "create"));
     let curves = curves_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let diodes = diodes_from_nbt(Game::native_chunk_data(chunk, "create"));
     let deployers = deployers_from_nbt(Game::native_chunk_data(chunk, "create"));
     let brass: Vec<([i32; 3], create_engine::tunnel::Brass)> = {
         use horizon_world::nbt::Tag;
@@ -209,6 +210,7 @@ pub(super) fn chunk_load(
         for c in curves {
             w.dims[dim].track_curves.add(c);
         }
+        w.load_diodes(dim, diodes.into_iter());
         w.load_deployers(dim, deployers.into_iter());
         w.load_brass(dim, brass.into_iter());
         w.dims[dim].chassis_range.extend(ranges);
@@ -294,6 +296,8 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_chain_drives(game, dim);
     tick_sequencers(game, dim);
     tick_latches(game, dimension, dim);
+    tick_diodes(game, dimension, dim);
+    tick_lamps(game, dimension, dim);
     tick_links(game, dimension, dim);
     tick_bearings(game, dimension, dim);
     tick_gantries(game, dimension, dim);
@@ -768,6 +772,24 @@ pub(super) fn right_click_inner(
         use_link(game, dim, pos, (facing, receiver), back, canceled);
         return;
     }
+    if let Some((_, s)) = diode_state(state) {
+        // A click on its value box is the box's (a short one toggles it, `onShortInteract`).
+        use_value_box(game, pos, face, canceled);
+        // BrassDiodeBlock.useItemOn -> `toggle`: not while sneaking, nor with a wrench, nor for
+        // a player who may not build.
+        if *canceled
+            || back
+            || !game.may_build()
+            || game.native_held().is_some_and(|h| h.0 == "create:wrench")
+        {
+            return;
+        }
+        *canceled = true;
+        if let Some(p) = game.native_acting_player() {
+            toggle_diode(game, &p.dimension, pos, s.inverted);
+        }
+        return;
+    }
     if let Some((kind, l)) = latch_state(state) {
         // ToggleLatchBlock.useItemOn: not while sneaking, nor with a wrench.
         if back || game.native_held().is_some_and(|h| h.0 == "create:wrench") {
@@ -890,8 +912,9 @@ pub(super) fn values_from_server(d: &[u8]) {
     });
 }
 
-/// A pick on a value board (`ValueSettingsPacket`: position, row, column), or a board's question
-/// for the current setting (the position alone), from the client.
+/// A pick on a value board (`ValueSettingsPacket`: position, row, column), a board's question
+/// for the current setting (the position alone), or a short click on a value box (position and
+/// a zero), from the client.
 pub(super) const VALUE_SETTINGS: &str = "create:value_settings";
 
 /// `ValueSettingsPacket.applySettings` (`BlockEntityConfigurationPacket.handle`: no spectator or
@@ -899,14 +922,16 @@ pub(super) const VALUE_SETTINGS: &str = "create:value_settings";
 /// back either way, as the client's board starts on it.
 pub(super) fn value_settings_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
     let word = |i: usize| i32::from_le_bytes(data[i..i + 4].try_into().unwrap());
-    let ([x, y, z], pick) = match data.len() {
-        12 => ([0, 4, 8].map(word), None),
+    let ([x, y, z], pick, short) = match data.len() {
+        12 => ([0, 4, 8].map(word), None, false),
+        16 => ([0, 4, 8].map(word), None, true),
         20 => (
             [0, 4, 8].map(word),
             Some(create_engine::board::Settings {
                 row: word(12),
                 value: word(16),
             }),
+            false,
         ),
         _ => return,
     };
@@ -956,6 +981,19 @@ pub(super) fn value_settings_from_client(game: &mut Game<'_>, player: u128, data
             }
             w.dims[dim].brass.get(&pos).map(|b| b.mode.index() as i32)
         }),
+        // `BrassDiodeScrollValueBehaviour`: `onShortInteract` toggles the diode;
+        // `setValueSettings` sets its delay.
+        Some(B::PulseRepeater | B::PulseExtender | B::PulseTimer) => {
+            if short && let Some((_, s)) = diode_state(state) {
+                toggle_diode(game, &p.dimension, pos, s.inverted);
+            }
+            with_world(|w| {
+                if let Some(pick) = pick {
+                    w.set_diode_delay(dim, pos, create_engine::board::diode_value(pick));
+                }
+                w.dims[dim].diodes.get(&pos).map(|d| d.max)
+            })
+        }
         _ => return,
     };
     let Some(value) = value.flatten() else {
@@ -998,6 +1036,10 @@ pub(super) fn value_box_hit(
     };
     let slot = match (block, info.axis, info.tunnel) {
         (B::CreativeMotor, ..) => info.facing.and_then(|f| board::motor_slot(f, side)),
+        // `BrassDiodeScrollSlot`: not a sided box, any face reaches it.
+        (B::PulseRepeater | B::PulseExtender | B::PulseTimer, ..) => {
+            Some(create_engine::diode::SLOT)
+        }
         // `selectionMode.onlyActiveWhen(this::hasDistributionBehaviour)`.
         (B::BrassTunnel, Some(axis), Some(shape)) => {
             let tunnel = |d: Dir| {
@@ -1074,6 +1116,8 @@ pub(super) fn board_pick(
 ) -> create_engine::board::Settings {
     if board.icons {
         create_engine::board::Settings { row: 0, value: v }
+    } else if board == create_engine::board::DIODE {
+        create_engine::board::diode_settings(v)
     } else {
         create_engine::board::kinetic_settings(v)
     }
@@ -1100,6 +1144,7 @@ pub(super) fn board_of(game: &Game<'_>, pos: [i32; 3], known: bool) -> Option<Op
             "Distribution Method",
             create_engine::tunnel::OPTIONS.len() as i32,
         ),
+        B::PulseRepeater | B::PulseExtender | B::PulseTimer => board::DIODE,
         _ => return None,
     };
     let setting = match (block, seen.filter(|_| known)) {
@@ -1107,7 +1152,9 @@ pub(super) fn board_of(game: &Game<'_>, pos: [i32; 3], known: bool) -> Option<Op
         (B::CreativeMotor, None) => facing.map_or(speed, |f| {
             create_engine::kinetics::convert_to_direction(speed, f)
         }) as i32,
-        (_, None) => seen.unwrap_or(0),
+        (_, None) => seen.unwrap_or_else(|| {
+            create_engine::world::diode_kind(block).map_or(0, |k| k.default_delay())
+        }),
     };
     Some(OpenBoard {
         pos,
@@ -1204,8 +1251,17 @@ pub(super) fn tick_value_board(game: &mut Game<'_>) {
                 BOARD.with_borrow_mut(|b| *b = Some(open));
             }
         }
-        // A short click (the server took it) or the press is off the box.
-        _ => HOLD.with_borrow_mut(|h| *h = None),
+        // A short click: `onShortInteract` on the server (`ValueSettingsPacket` with its hand).
+        Some((pos, _, create_engine::board::Step::Short)) => {
+            HOLD.with_borrow_mut(|h| *h = None);
+            let mut data = Vec::with_capacity(16);
+            for v in [pos[0], pos[1], pos[2], 0] {
+                data.extend_from_slice(&v.to_le_bytes());
+            }
+            let _ = game.native_net_send_to_server(VALUE_SETTINGS, &data);
+        }
+        // The press is off the box.
+        None => HOLD.with_borrow_mut(|h| *h = None),
     }
 }
 
@@ -1254,6 +1310,8 @@ pub(super) fn value_board(game: &mut Game<'_>, batch: &mut horizon_client::hud::
     let text = |s: Settings| {
         if b.icons {
             OPTIONS[s.value.clamp(0, OPTIONS.len() as i32 - 1) as usize].to_owned()
+        } else if b == board::DIODE {
+            board::diode_text(s)
         } else {
             board::kinetic_text(s)
         }
@@ -1777,6 +1835,19 @@ pub(super) fn crushers_from_nbt(
         .collect()
 }
 
+/// Brass diodes saved with a column: position, then `State` and the delay.
+pub(super) fn diodes_from_nbt(
+    data: Option<&horizon_world::nbt::Compound>,
+) -> Vec<([i32; 3], (i32, i32))> {
+    let Some(horizon_world::nbt::Tag::IntArray(v)) = data.and_then(|d| d.get(&"diodes".into()))
+    else {
+        return Vec::new();
+    };
+    v.chunks_exact(5)
+        .map(|c| ([c[0], c[1], c[2]], (c[3], c[4])))
+        .collect()
+}
+
 pub(super) fn burners_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], create_engine::burner::Burner)> {
@@ -1858,6 +1929,7 @@ pub(super) fn chunk_data_save(
     let links = with_world(|w| w.column_links(dim, chunk[0], chunk[1])).unwrap_or_default();
     let curves =
         with_world(|w| w.dims[dim].track_curves.column(chunk[0], chunk[1])).unwrap_or_default();
+    let diodes = with_world(|w| w.column_diodes(dim, chunk[0], chunk[1])).unwrap_or_default();
     let deployers = with_world(|w| w.column_deployers(dim, chunk[0], chunk[1])).unwrap_or_default();
     let brass = with_world(|w| w.column_brass(dim, chunk[0], chunk[1])).unwrap_or_default();
     // Basins' tanks: x, y, z, then fluid (255: none) and amount for each of the four.
@@ -1902,6 +1974,7 @@ pub(super) fn chunk_data_save(
         && crushers.is_empty()
         && burners.is_empty()
         && links.is_empty()
+        && diodes.is_empty()
         && deployers.is_empty()
         && ranges.is_empty()
         && basins.is_empty()
@@ -1934,6 +2007,14 @@ pub(super) fn chunk_data_save(
     }
     if !curves.is_empty() {
         own.insert("track_curves".into(), curves_to_nbt(&curves));
+    }
+    if !diodes.is_empty() {
+        // Brass diodes (`BrassDiodeBlockEntity.write`): x, y, z, `State` and the delay each.
+        let v: Vec<i32> = diodes
+            .iter()
+            .flat_map(|(p, state, max)| [p[0], p[1], p[2], *state, *max])
+            .collect();
+        own.insert("diodes".into(), horizon_world::nbt::Tag::IntArray(v));
     }
     if !deployers.is_empty() {
         own.insert("deployers".into(), deployers_to_nbt(&deployers));
@@ -3235,6 +3316,24 @@ pub(super) fn block_signal(
         *signal = create_engine::latch::signal(&l, side);
         return;
     }
+    if let Some((_, s)) = diode_state(state.0) {
+        *signal = create_engine::diode::signal(&s, side);
+        return;
+    }
+    if let Some(l) = lamp_state(state.0) {
+        // The reader, on the face the hook names: another lamp reads 0.
+        let o = Dir::ALL[face as usize].offset();
+        let reader = [pos.x + o[0], pos.y + o[1], pos.z + o[2]];
+        let reader_is_lamp = WORLD.with(|w| {
+            w.try_borrow().ok().is_some_and(|w| {
+                w.as_ref()
+                    .and_then(|w| w.block_at(level_index(dimension), reader))
+                    == Some(create_engine::Block::RoseQuartzLamp)
+            })
+        });
+        *signal = create_engine::lamp::signal(&l, reader_is_lamp, direct);
+        return;
+    }
     if let Some((facing, receiver, _)) = link_state(state.0) {
         let received = if receiver {
             WORLD
@@ -3254,18 +3353,22 @@ pub(super) fn block_signal(
     }
 }
 
-/// `isSignalSource`: a latch gives a signal, and a powered receiver.
+/// `isSignalSource`: a latch, a brass diode and a rose quartz lamp give a signal, and a powered
+/// receiver.
 pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
     if latch_state(state.0).is_some()
+        || diode_state(state.0).is_some()
+        || lamp_state(state.0).is_some()
         || link_state(state.0).is_some_and(|(_, receiver, powered)| receiver && powered)
     {
         *source = true;
     }
 }
 
-/// A latch's scheduled tick is the glue's: the repeater it is built on doesn't run its own.
+/// A latch's or a brass diode's scheduled tick is the glue's: the repeater it is built on doesn't
+/// run its own.
 pub(super) fn tick_block(state: BlockStateId, handled: &mut bool) {
-    if latch_state(state.0).is_some() {
+    if latch_state(state.0).is_some() || diode_state(state.0).is_some() {
         *handled = true;
     }
 }

@@ -1,0 +1,28 @@
+{
+  "template": "minecraft:repeater",
+  "properties": {
+    "hardness": 0.0,
+    "explosion_resistance": 0.0
+  },
+  "item": true,
+  "state_properties": {
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "inverted": [
+      "false",
+      "true"
+    ],
+    "powered": [
+      "false",
+      "true"
+    ],
+    "powering": [
+      "false",
+      "true"
+    ]
+  }
+}
