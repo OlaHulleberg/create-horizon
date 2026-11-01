@@ -22,6 +22,8 @@ pub struct StateInfo {
     pub along_first: bool,
     /// A blaze burner's `blaze` (heat level).
     pub heat: Option<crate::fan::Heat>,
+    /// A redstone link's `receiver`.
+    pub receiver: bool,
 }
 
 impl StateInfo {
@@ -53,6 +55,7 @@ impl StateInfo {
                 }
                 "powered" => s.powered = v == "true",
                 "powering" => s.powering = v == "true",
+                "receiver" => s.receiver = v == "true",
                 "powered_side" => s.powered_side = v == "true",
                 "top_shaft" => s.top_shaft = v == "true",
                 "bottom_shaft" => s.bottom_shaft = v == "true",
@@ -265,6 +268,7 @@ pub fn is_kinetic(block: Block) -> bool {
         powered_side: false,
         heat: None,
         along_first: false,
+        receiver: false,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

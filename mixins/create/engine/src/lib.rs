@@ -17,6 +17,7 @@ pub mod funnel;
 pub mod generated;
 pub mod kinetics;
 pub mod latch;
+pub mod link;
 pub mod parts;
 pub mod piston;
 pub mod place;

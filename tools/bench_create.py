@@ -19,6 +19,8 @@ the server thread's smoothed tick time. Scenarios:
   redstone 32 observer clocks, each driving a chain of 16 toggle latches (a binary counter): 512
            latches switching (phase 7)
   repeaters  the control for redstone: the same chains of vanilla repeaters
+  links    32 observer clocks, each pulsing a redstone link 16 blocks from a receiving one that
+           lights a lamp; all untuned, so one network of 64 links changes at every pulse (phase 7)
   contraptions  16 windmills (17 sails each, a cross) assembled and turning: 16 structures drawn as
            one GPU part each (phase 8)
   crushers 30 pairs of crushing wheels at 16 rpm (z axis, turning against each other), each fed a
@@ -282,6 +284,17 @@ def build(ctl_bin, sock, scenario, center):
             # Two observers watching each other: a clock whose pulses leave the east one's back.
             command(ctl_bin, sock, f"setblock {x-16} {y-6} {zz} minecraft:observer[facing=east]", failures)
             command(ctl_bin, sock, f"setblock {x-15} {y-6} {zz} minecraft:observer[facing=west]", failures)
+    if scenario == "links":
+        for row in range(32):
+            zz = z - 31 + 2 * row
+            command(ctl_bin, sock, f"fill {x-17} {y-7} {zz} {x+4} {y-7} {zz} minecraft:stone", failures)
+            command(ctl_bin, sock, f"setblock {x-14} {y-6} {zz} create:redstone_link[facing=up]", failures)
+            command(ctl_bin, sock, f"setblock {x+2} {y-6} {zz} create:redstone_link[facing=up,receiver=true]",
+                    failures)
+            command(ctl_bin, sock, f"setblock {x+3} {y-6} {zz} minecraft:redstone_lamp", failures)
+            # Two observers watching each other: a clock whose pulses leave the east one's back.
+            command(ctl_bin, sock, f"setblock {x-16} {y-6} {zz} minecraft:observer[facing=east]", failures)
+            command(ctl_bin, sock, f"setblock {x-15} {y-6} {zz} minecraft:observer[facing=west]", failures)
     if scenario == "contraptions":
         for i in range(16):
             bx, bz = x - 15 + 10 * (i % 4), z - 15 + 10 * (i // 4)
@@ -360,7 +373,7 @@ def run_once(args, scenario):
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
-                    "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512,
+                    "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512, "links": 64,
                     "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
@@ -432,6 +445,15 @@ def run_once(args, scenario):
             chain = ctl(ctl_bin, sock, "blocks", str(x - 14), str(y - 6), str(z - 31), str(x + 1), str(y - 6),
                         str(z - 31)).get("blocks", [])
             pressed = [first, "".join("1" if key in b[3] else "0" for b in sorted(chain))]
+        if scenario == "links":
+            # The receivers follow the clocks: the lamps read twice, a moment apart.
+            reads = []
+            for _ in range(4):
+                lamps = ctl(ctl_bin, sock, "blocks", str(x + 3), str(y - 6), str(z - 31), str(x + 3),
+                            str(y - 6), str(z + 31)).get("blocks", [])
+                reads.append(sum(1 for b in lamps if "lit=true" in b[3]))
+                time.sleep(0.15)
+            pressed = reads
         if scenario == "processing":
             # The work really ran: sheets in one depot's outputs.
             pressed = ctl(ctl_bin, sock, "command", f"data get block {x-8} {y-6} {z}").get("chat")
@@ -480,7 +502,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
+                                          "logistics", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

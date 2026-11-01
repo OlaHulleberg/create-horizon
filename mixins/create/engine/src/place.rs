@@ -119,6 +119,8 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
         Block::MechanicalPress => {
             preferred(true, shaft).unwrap_or_else(|| horizontal_direction(ctx.yaw).opposite())
         }
+        // RedstoneLinkBlock: on the clicked face.
+        Block::RedstoneLink => ctx.clicked_face,
         // SailBlock (WrenchableDirectionalBlock): away from the player's view.
         b if is_sail(b) => nearest.opposite(),
         _ => return None,
@@ -205,9 +207,13 @@ mod tests {
                 == Dir::North),
             Some(Dir::North)
         );
-        // A crank goes on the clicked face; a sail faces away from the view.
+        // A crank and a link go on the clicked face; a sail faces away from the view.
         assert_eq!(
             facing(Block::HandCrank, ctx(0.0, 0.0, false), none),
+            Some(Dir::Up)
+        );
+        assert_eq!(
+            facing(Block::RedstoneLink, ctx(0.0, 0.0, true), |_| true),
             Some(Dir::Up)
         );
         assert_eq!(

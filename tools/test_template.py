@@ -354,7 +354,9 @@ pub mod native_hooks {
             self.unsaved.push(chunk);
             true
         }
-        pub fn pick(&self) -> Option<Hit> { self.aim.map(|pos| Hit { pos }) }
+        pub fn pick(&self) -> Option<Hit> {
+            self.aim.map(|pos| Hit { pos, point: self.aim_point.unwrap_or(pos.map(|v| f64::from(v) + 0.5)) })
+        }
         pub fn with_level<R>(&mut self, f: impl FnOnce(&Behaviours, &mut GameLevel<'_>, &mut Ticks) -> R) -> R {
             let mut level = GameLevel { registry: self.pack.assets.registry };
             f(&Behaviours, &mut level, &mut Ticks)
@@ -388,13 +390,14 @@ impl World {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId { BlockStateId(*self.blocks.get(&[x, y, z]).unwrap_or(&0)) }
     pub fn loaded(&self, x: i32, z: i32) -> bool { let _ = (x, z); true }
 }
-pub struct Hit { pub pos: [i32; 3] }
+pub struct Hit { pub pos: [i32; 3], pub point: [f64; 3] }
 pub struct Player { pub exhaustion: f32 }
 impl Player { pub fn cause_food_exhaustion(&mut self, amount: f32) { self.exhaustion += amount; } }
 pub struct Game<'a> {
     pub pack: Pack, pub calls: &'a mut u32, pub said: Vec<String>, pub world: World,
     pub sent: Vec<(u128, String, Vec<u8>)>, pub parts: Vec<(u32, [i32; 3], u8, f32)>,
-    pub aim: Option<[i32; 3]>, pub unsaved: Vec<[i32; 2]>,
+    pub aim: Option<[i32; 3]>, pub aim_point: Option<[f64; 3]>, pub unsaved: Vec<[i32; 2]>,
+    pub offhand: Option<horizon_client::items::ItemStack>,
     pub creative: bool, pub player: Option<Player>, pub keys: std::collections::HashSet<winit::keyboard::KeyCode>,
     pub glides: Vec<(u32, [i32; 3], u8, f32, [f32; 3])>, pub hand: horizon_client::first_person::Hand, pub yaw: f32, pub pitch: f32,
     pub armor: [Option<horizon_client::items::ItemStack>; 4],
@@ -414,9 +417,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 20) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 22) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 20;
+        let empty = state.0 == 0 || state.0 == 22;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -425,10 +428,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 20 is a water source.
+    /// State 22 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 20 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 22 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -503,13 +506,20 @@ impl Behaviours {
     // 17: a windmill bearing facing north; 18: a white sail facing north (in the xy plane).
     states.push(BlockState { name: "create:windmill_bearing".into(), properties: props("facing", "north") });
     states.push(BlockState { name: "create:white_sail".into(), properties: props("facing", "north") });
-    // 19: an encased fan facing east; 20: a water source.
+    // 19: an encased fan facing east; 20: a redstone link facing up, transmitting; 21: one
+    // receiving (both unpowered); 22: a water source.
     states.push(BlockState { name: "create:encased_fan".into(), properties: props("facing", "east") });
+    for receiver in ["false", "true"] {
+        states.push(BlockState { name: "create:redstone_link".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), "up".to_owned()), ("powered".to_owned(), "false".to_owned()),
+            ("receiver".to_owned(), receiver.to_owned())]) });
+    }
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
-        world: World { blocks: Default::default(), game_time: 0, block_entities: Default::default() }, sent: vec![], parts: vec![], aim: None, unsaved: vec![],
+        world: World { blocks: Default::default(), game_time: 0, block_entities: Default::default() }, sent: vec![], parts: vec![], aim: None, aim_point: None, unsaved: vec![],
+        offhand: None,
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),
         glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0, pitch: 0.0, armor: [None, None, None, None],
         inventory: vec![Some(horizon_client::items::ItemStack { item: "minecraft:iron_ingot".into(), count: 5, damage: 0, extra: None })],
@@ -666,6 +676,36 @@ impl Behaviours {
     let mut handled = false;
     level.native_tick_block(&mut Ticks, LevelDimension::Overworld, BlockPos { x: 20, y: 0, z: 20 }, BlockStateId(on), &mut handled);
     assert!(handled);
+    // Redstone links: a transmitter at (100, 0, 100) and a receiver 20 blocks east, each tuned with
+    // the iron ingot in hand by a click on its first slot; a signal beside the transmitter
+    // reaches the receiver, which turns `powered` on and gives 15.
+    for (pos, state) in [([100, 0, 100], 20), ([120, 0, 100], 21)] {
+        game.world.blocks.insert([pos[0], -1, pos[2]], 1);
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: 0, z: pos[2] }, BlockStateId(0), BlockStateId(state));
+    }
+    for pos in [[100, 0, 100], [120, 0, 100]] {
+        game.aim = Some(pos);
+        game.aim_point = Some([f64::from(pos[0]) + 0.5, 3.01 / 16.0, f64::from(pos[2]) + 10.5 / 16.0]);
+        let mut canceled = false;
+        game.native_right_click_block(pos, [0, 1, 0], &mut canceled);
+        assert!(canceled, "the slot took the click");
+    }
+    game.aim_point = None;
+    SIGNALS.with_borrow_mut(|s| s.insert([101, 0, 100]));
+    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 100, y: 0, z: 100 }, BlockStateId(20));
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(game.said.iter().any(|l| l == "set [100, 0, 100] powered=true"), "{:?}", game.said);
+    assert!(game.said.iter().any(|l| l == "set [120, 0, 100] powered=true"), "{:?}", game.said);
+    let mut signal = 0;
+    level.native_block_signal(LevelDimension::Overworld, BlockPos { x: 120, y: 0, z: 100 }, BlockStateId(21),
+        horizon_core::geometry::Direction::East, false, &mut signal);
+    assert_eq!(signal, 15);
+    assert!(game.sent.iter().any(|(_, ch, _)| ch == "create:link"), "clients see the frequencies");
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [7, 6], &mut data);
+    let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create".into()) else { panic!("no create data") };
+    assert!(own.get(&"links".into()).is_some(), "{own:?}");
     // A wrench on the top of a shaft along x turns it to z (a quarter turn about y).
     game.world.blocks.insert([30, 0, 30], 2);
     let wrench = horizon_client::items::ItemStack { item: "create:wrench".into(), count: 1, damage: 0, extra: None };
@@ -741,7 +781,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 20), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 22), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
