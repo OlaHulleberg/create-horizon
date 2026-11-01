@@ -30,6 +30,11 @@ the server thread's smoothed tick time. Scenarios:
   trains   12 straight tracks of 57 with a station at each end and a train (a bogey, a slime block
            and a gold block) assembled at the first, all sent to the far station as the
            measured flight starts (phase 9)
+  pistons  16 mechanical pistons with 8 poles each pushing a stone, started by motors as the
+           measured flight starts (16 structures gliding, phase 8)
+  goggles  the kinetic layout in mechanical presses with Engineer's Goggles worn, the overlay
+           drawn for the press under the crosshair every frame (phase 6)
+  presses  its control: the same presses, no goggles
   burners  a 32x32 floor of blaze burners with their blaze (1,024 passive burners, the head in the
            chunk mesh): no tick (phase 3)
   fans     32 encased fans at 16 rpm blowing through water over three depots each of 64 ice: 96
@@ -84,10 +89,12 @@ def build(ctl_bin, sock, scenario, center):
         for i, name in enumerate(STATIC_BLOCKS):
             x0 = x - 16 + i * 4
             command(ctl_bin, sock, f"fill {x0} {y-5} {z-16} {x0+3} {y-5} {z+15} create:{name}", failures)
-    if scenario in ("kinetic", "chains"):
+    if scenario in ("kinetic", "chains", "goggles", "presses"):
         # `chains`, the control: the same layout in vanilla blocks (the shaft's template, an iron chain).
-        motor, shaft = (("create:creative_motor[facing=east]", "create:shaft[axis=x]") if scenario == "kinetic"
-                        else ("minecraft:iron_block", "minecraft:iron_chain[axis=x]"))
+        motor, shaft = {
+            "kinetic": ("create:creative_motor[facing=east]", "create:shaft[axis=x]"),
+            "chains": ("minecraft:iron_block", "minecraft:iron_chain[axis=x]"),
+        }.get(scenario, ("create:creative_motor[facing=east]", "create:mechanical_press[facing=east]"))
         for row in range(64):
             zz = z - 32 + row
             command(ctl_bin, sock, f"setblock {x-32} {y-6} {zz} {motor}", failures)
@@ -134,6 +141,19 @@ def build(ctl_bin, sock, scenario, center):
             command(ctl_bin, sock, f"setblock {x-26} {y-5} {zz} create:small_bogey[axis=x]", failures)
             command(ctl_bin, sock, f"setblock {x-26} {y-4} {zz} minecraft:slime_block", failures)
             command(ctl_bin, sock, f"setblock {x-26} {y-3} {zz} minecraft:gold_block", failures)
+    if scenario in ("goggles", "presses"):
+        # A floor of presses just under the flight, in reach of the crosshair: the overlay shows
+        # the one looked at (not counted: the count looks lower).
+        command(ctl_bin, sock, f"fill {x-14} {y-1} {z-14} {x+14} {y-1} {z+14} create:mechanical_press[facing=east]",
+                failures)
+    if scenario == "pistons":
+        for row in range(16):
+            zz = z - 16 + 2 * row
+            command(ctl_bin, sock, f"fill {x-18} {y-6} {zz} {x-11} {y-6} {zz} create:piston_extension_pole[facing=east]",
+                    failures)
+            command(ctl_bin, sock, f"setblock {x-10} {y-6} {zz} "
+                    "create:mechanical_piston[facing=east,axis_along_first=true,state=retracted]", failures)
+            command(ctl_bin, sock, f"setblock {x-9} {y-6} {zz} minecraft:stone", failures)
     if scenario == "burners":
         command(ctl_bin, sock, f"fill {x-16} {y-5} {z-16} {x+15} {y-5} {z+15} "
                 "create:blaze_burner[blaze=smouldering,facing=south]", failures)
@@ -267,7 +287,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "pistons": 16 * 9, "goggles": 4096, "presses": 4096}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
@@ -298,6 +318,11 @@ def run_once(args, scenario):
         ctl(ctl_bin, sock, "fly", str(x), str(y), str(z), str(x), str(y), str(z), "0.1", "40")
         ctl(ctl_bin, sock, "wait-ready")
         time.sleep(args.settle)
+        if scenario == "pistons":
+            for row in range(16):
+                ctl(ctl_bin, sock, "command", f"setblock {x-10} {y-5} {z-16+2*row} create:creative_motor[facing=down]")
+        if scenario == "goggles":
+            ctl(ctl_bin, sock, "command", "item replace entity @p armor.head with create:goggles")
         if scenario == "trains":
             turning = [ctl(ctl_bin, sock, "chat", f"/create_debug train {x+27} {y-6} {z-24+4*row-1}")
                        for row in range(12)]
@@ -369,7 +394,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains"],
+                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
