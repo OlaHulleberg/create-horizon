@@ -1,0 +1,21 @@
+{
+  "template": "minecraft:iron_block",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0
+  },
+  "item": true,
+  "components": {
+    "minecraft:max_stack_size": 1
+  },
+  "state_properties": {
+    "axis": [
+      "z",
+      "x"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}

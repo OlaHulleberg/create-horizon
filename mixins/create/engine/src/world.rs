@@ -171,6 +171,19 @@ pub struct Dimension {
     /// change), and the moving ones with what they carry (the only ones that tick).
     pub piston_checks: Vec<[i32; 3]>,
     pub pistons: HashMap<[i32; 3], Moving>,
+    /// Trains on this dimension's tracks.
+    pub trains: Vec<TrainOnTrack>,
+}
+
+/// An assembled train: its run, its blocks (offset from its first bogey, state), where that
+/// bogey was when assembled (its world position and the position along the line then).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrainOnTrack {
+    pub train: crate::trains::Train,
+    pub blocks: Vec<([i32; 3], u32)>,
+    pub origin: [i32; 3],
+    pub start: f64,
+    pub id: u32,
 }
 
 /// A piston's moving structure (`ControlledContraptionEntity` of a `PistonContraption`): its

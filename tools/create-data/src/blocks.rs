@@ -443,6 +443,14 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // StationBlock: a full block of gold's properties (its track target is the glue's).
+        "track_station" => ("minecraft:gold_block", None, None),
+        // StandardBogeyBlock: on the track, along an axis; its wheels drawn by the train.
+        "small_bogey" | "large_bogey" => (
+            "minecraft:iron_block",
+            None,
+            own(&[("axis", &["z", "x"]), ("waterlogged", bools)]),
+        ),
         // MechanicalPistonBlock (DirectionalAxisKineticBlock): facing, its shaft's axis
         // (`axis_along_first`) and `state`; a full block here (Create's casing is 12px).
         "mechanical_piston" | "sticky_mechanical_piston" => (
