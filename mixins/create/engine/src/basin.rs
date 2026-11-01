@@ -6,6 +6,43 @@
 
 use crate::fan::Heat;
 use crate::processing::{Output, Rng, Slot, insert_stacked};
+use crate::tank::Fluid;
+
+/// `BasinBlockEntity`'s fluid tanks: two inputs and two outputs of a bucket each.
+pub const TANK: u32 = 1000;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Tanks {
+    pub input: [Option<(Fluid, u32)>; 2],
+    pub output: [Option<(Fluid, u32)>; 2],
+}
+
+/// Puts up to `amount` of `fluid` in one of `tanks` (one holding it, else an empty one): what
+/// went in.
+pub fn fill(tanks: &mut [Option<(Fluid, u32)>; 2], fluid: Fluid, amount: u32) -> u32 {
+    let i = tanks
+        .iter()
+        .position(|t| t.is_some_and(|(f, _)| f == fluid))
+        .or_else(|| tanks.iter().position(Option::is_none));
+    let Some(i) = i else {
+        return 0;
+    };
+    let have = tanks[i].map_or(0, |t| t.1);
+    let took = amount.min(TANK - have);
+    if took > 0 {
+        tanks[i] = Some((fluid, have + took));
+    }
+    took
+}
+
+/// Takes up to `amount` from the first non-empty tank: the fluid and how much.
+pub fn drain(tanks: &mut [Option<(Fluid, u32)>; 2], amount: u32) -> Option<(Fluid, u32)> {
+    let i = tanks.iter().position(Option::is_some)?;
+    let (fluid, have) = tanks[i]?;
+    let out = amount.min(have);
+    tanks[i] = (have > out).then_some((fluid, have - out));
+    (out > 0).then_some((fluid, out))
+}
 
 pub const INPUTS: std::ops::Range<usize> = 0..9;
 pub const OUTPUTS: std::ops::Range<usize> = 9..18;
@@ -47,6 +84,9 @@ pub struct Recipe {
     pub results: Vec<Output>,
     pub time: i32,
     pub heat: HeatReq,
+    /// Fluid ingredients and results (`FluidIngredient`, `FluidStack`).
+    pub fluids: Vec<(Fluid, u32)>,
+    pub fluid_results: Vec<(Fluid, u32)>,
 }
 
 /// `BasinRecipe.apply`: takes one item per ingredient from the inputs (each from the first slot
@@ -54,6 +94,7 @@ pub struct Recipe {
 /// fits. With `simulate`, only says whether it would.
 pub fn apply(
     slots: &mut [Slot],
+    tanks: &mut Tanks,
     recipe: &Recipe,
     heat: Heat,
     max: impl Fn(&str) -> u8,
@@ -62,6 +103,25 @@ pub fn apply(
 ) -> bool {
     if !recipe.heat.met(heat) {
         return false;
+    }
+    // Fluids: each ingredient from an input tank that holds enough; each result into the
+    // outputs.
+    let mut fluids = *tanks;
+    for &(fluid, amount) in &recipe.fluids {
+        let Some(t) = fluids
+            .input
+            .iter_mut()
+            .find(|t| t.is_some_and(|(f, n)| f == fluid && n >= amount))
+        else {
+            return false;
+        };
+        let (f, n) = t.unwrap();
+        *t = (n > amount).then_some((f, n - amount));
+    }
+    for &(fluid, amount) in &recipe.fluid_results {
+        if fill(&mut fluids.output, fluid, amount) < amount {
+            return false;
+        }
     }
     let mut taken = [0u8; 9];
     for ingredient in &recipe.ingredients {
@@ -102,6 +162,7 @@ pub fn apply(
     if simulate {
         return true;
     }
+    *tanks = fluids;
     for i in INPUTS {
         if taken[i] > 0
             && let Some((_, n)) = slots[i].as_mut()
@@ -122,14 +183,26 @@ pub fn apply(
 pub fn matching(
     recipes: &[Recipe],
     slots: &[Slot],
+    tanks: &Tanks,
     heat: Heat,
     max: impl Fn(&str) -> u8 + Copy,
 ) -> Vec<usize> {
     let mut copy = slots.to_vec();
+    let mut t = *tanks;
     let mut out: Vec<usize> = (0..recipes.len())
-        .filter(|&i| apply(&mut copy, &recipes[i], heat, max, &mut Rng::new(1), true))
+        .filter(|&i| {
+            apply(
+                &mut copy,
+                &mut t,
+                &recipes[i],
+                heat,
+                max,
+                &mut Rng::new(1),
+                true,
+            )
+        })
         .collect();
-    out.sort_by_key(|&i| std::cmp::Reverse(recipes[i].ingredients.len()));
+    out.sort_by_key(|&i| std::cmp::Reverse(recipes[i].ingredients.len() + recipes[i].fluids.len()));
     out
 }
 
@@ -229,6 +302,8 @@ mod tests {
             }],
             time: 0,
             heat: HeatReq::None,
+            fluids: vec![],
+            fluid_results: vec![],
         }
     }
 
@@ -239,11 +314,18 @@ mod tests {
         slots[1] = Some(("minecraft:iron_nugget".into(), 1));
         let r = alloy();
         assert_eq!(
-            matching(std::slice::from_ref(&r), &slots, Heat::None, |_| 64),
+            matching(
+                std::slice::from_ref(&r),
+                &slots,
+                &Tanks::default(),
+                Heat::None,
+                |_| 64
+            ),
             vec![0]
         );
         assert!(apply(
             &mut slots,
+            &mut Tanks::default(),
             &r,
             Heat::None,
             |_| 64,
@@ -254,7 +336,15 @@ mod tests {
         assert_eq!(slots[1], None);
         assert_eq!(slots[9], Some(("create:andesite_alloy".into(), 1)));
         assert!(
-            !apply(&mut slots, &r, Heat::None, |_| 64, &mut Rng::new(1), true),
+            !apply(
+                &mut slots,
+                &mut Tanks::default(),
+                &r,
+                Heat::None,
+                |_| 64,
+                &mut Rng::new(1),
+                true
+            ),
             "no nugget left"
         );
         let brass = Recipe {
@@ -264,6 +354,7 @@ mod tests {
         slots[1] = Some(("minecraft:iron_nugget".into(), 1));
         assert!(!apply(
             &mut slots,
+            &mut Tanks::default(),
             &brass,
             Heat::Smouldering,
             |_| 64,
@@ -272,12 +363,84 @@ mod tests {
         ));
         assert!(apply(
             &mut slots,
+            &mut Tanks::default(),
             &brass,
             Heat::Kindled,
             |_| 64,
             &mut Rng::new(1),
             true
         ));
+    }
+
+    #[test]
+    fn chocolate_takes_milk_from_a_tank_and_fills_an_output() {
+        // data/create/recipe/mixing/chocolate.json: sugar, cocoa beans, 250 milk -> 250 chocolate.
+        let r = Recipe {
+            id: "create:mixing/chocolate".into(),
+            ingredients: vec![
+                vec!["minecraft:sugar".into()],
+                vec!["minecraft:cocoa_beans".into()],
+            ],
+            results: vec![],
+            time: 0,
+            heat: HeatReq::Heated,
+            fluids: vec![(Fluid::Milk, 250)],
+            fluid_results: vec![(Fluid::Chocolate, 250)],
+        };
+        let mut slots: Vec<Slot> = vec![None; SLOTS];
+        slots[0] = Some(("minecraft:sugar".into(), 2));
+        slots[1] = Some(("minecraft:cocoa_beans".into(), 2));
+        let mut tanks = Tanks::default();
+        assert!(
+            !apply(
+                &mut slots.clone(),
+                &mut tanks.clone(),
+                &r,
+                Heat::Kindled,
+                |_| 64,
+                &mut Rng::new(1),
+                true
+            ),
+            "no milk"
+        );
+        assert_eq!(fill(&mut tanks.input, Fluid::Milk, 400), 400);
+        assert_eq!(
+            matching(
+                std::slice::from_ref(&r),
+                &slots,
+                &tanks,
+                Heat::Kindled,
+                |_| 64
+            ),
+            vec![0]
+        );
+        assert!(apply(
+            &mut slots,
+            &mut tanks,
+            &r,
+            Heat::Kindled,
+            |_| 64,
+            &mut Rng::new(1),
+            false
+        ));
+        assert_eq!(tanks.input[0], Some((Fluid::Milk, 150)));
+        assert_eq!(tanks.output[0], Some((Fluid::Chocolate, 250)));
+        assert!(
+            !apply(
+                &mut slots.clone(),
+                &mut tanks.clone(),
+                &r,
+                Heat::Kindled,
+                |_| 64,
+                &mut Rng::new(1),
+                true
+            ),
+            "150 left"
+        );
+        assert_eq!(
+            drain(&mut tanks.output, 1000),
+            Some((Fluid::Chocolate, 250))
+        );
     }
 
     #[test]

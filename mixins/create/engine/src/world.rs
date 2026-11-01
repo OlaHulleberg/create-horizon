@@ -194,6 +194,8 @@ pub struct Dimension {
     /// that tick).
     pub brass: HashMap<[i32; 3], crate::tunnel::Brass>,
     pub brass_running: Vec<[i32; 3]>,
+    /// Basins' fluid tanks (`BasinBlockEntity`'s inputs and outputs).
+    pub basin_fluids: HashMap<[i32; 3], crate::basin::Tanks>,
     /// Linear chassis ranges set with the wrench (`ChassisScrollValueBehaviour`; others 8).
     pub chassis_range: HashMap<[i32; 3], i32>,
     /// Track signals (the line they stand by is found when trains look at them).
@@ -653,6 +655,9 @@ impl CreateWorld {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
             d.signals.retain(|p| *p != pos);
+            if d.basin_fluids.remove(&pos).is_some() {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if d.chassis_range.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
@@ -805,6 +810,8 @@ impl CreateWorld {
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.signals.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.basin_fluids
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chassis_range
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass_running
@@ -1459,6 +1466,18 @@ impl CreateWorld {
             d.chassis_range.insert(*p, range);
             d.unsaved.push((p[0] >> 4, p[2] >> 4));
         }
+    }
+
+    /// A basin's tanks changed: its mixer or press looks again, its column is saved.
+    pub fn set_basin_fluids(&mut self, dim: usize, pos: [i32; 3], t: crate::basin::Tanks) {
+        let d = &mut self.dims[dim];
+        if t == crate::basin::Tanks::default() {
+            d.basin_fluids.remove(&pos);
+        } else {
+            d.basin_fluids.insert(pos, t);
+        }
+        d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }
 
     pub fn load_links(

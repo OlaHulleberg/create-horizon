@@ -1,0 +1,65 @@
+{
+  "scenario": "mixers",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    3.3310546875,
+    2.3828125,
+    1.974609375
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 128,
+      "frames": 20322,
+      "frame_ms_p50": 0.5624350309371948,
+      "frame_ms_p99": 1.0841599702835083,
+      "fps": 1693.5,
+      "tick_ms": 4.745109558105469,
+      "tick_ms_max": 10.760109901428224,
+      "check": [
+        "-536, 90, 57 has the following block data: {x: -536, y: 90, Items: [{count: 59, Slot: 0b, id: \"minecraft:andesite\"}, {count: 59, Slot: 1b, id: \"minecraft:iron_nugget\"}, {count: 5, Slot: 9b, id: \"create:andesite_alloy\"}], z: 57, id: \"create:basin\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 128,
+      "frames": 21065,
+      "frame_ms_p50": 0.5286149978637695,
+      "frame_ms_p99": 1.1373380422592163,
+      "fps": 1755.4166666666667,
+      "tick_ms": 4.742749214172363,
+      "tick_ms_max": 7.637194633483887,
+      "check": [
+        "-535, 92, 47 has the following block data: {x: -535, y: 92, Items: [{count: 59, Slot: 0b, id: \"minecraft:andesite\"}, {count: 59, Slot: 1b, id: \"minecraft:iron_nugget\"}, {count: 5, Slot: 9b, id: \"create:andesite_alloy\"}], z: 47, id: \"create:basin\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 128,
+      "frames": 20620,
+      "frame_ms_p50": 0.5412949919700623,
+      "frame_ms_p99": 1.0734399557113647,
+      "fps": 1718.3333333333333,
+      "tick_ms": 4.7967915534973145,
+      "tick_ms_max": 11.609846115112305,
+      "check": [
+        "-533, 90, 54 has the following block data: {x: -533, y: 90, Items: [{count: 59, Slot: 0b, id: \"minecraft:andesite\"}, {count: 59, Slot: 1b, id: \"minecraft:iron_nugget\"}, {count: 5, Slot: 9b, id: \"create:andesite_alloy\"}], z: 54, id: \"create:basin\"}"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1722.4166666666667,
+    "frame_ms_p50": 0.5441150069236755,
+    "frame_ms_p99": 1.0983126560846965,
+    "tick_ms": 4.761550108591716,
+    "tick_ms_max": 10.002383550008139
+  },
+  "stdev": {
+    "fps": 31.159647159605544,
+    "frame_ms_p50": 0.01708546231525056,
+    "frame_ms_p99": 0.03421936955380018,
+    "tick_ms": 0.03054279596150968,
+    "tick_ms_max": 2.091913446189496
+  }
+}
