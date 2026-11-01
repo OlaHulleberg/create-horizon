@@ -1240,3 +1240,27 @@ mod tests {
         assert_eq!(decode(&m[0]), vec![c]);
     }
 }
+
+/// Whether an item entity at `position` touches the box `min`..`max` (`ItemEntity`'s box, a
+/// quarter block wide and tall from its feet, against `AABB.intersects`).
+pub fn item_touches(position: [f64; 3], min: [f64; 3], max: [f64; 3]) -> bool {
+    const W: f64 = 0.25;
+    let h = W / 2.0;
+    let lo = [position[0] - h, position[1], position[2] - h];
+    let hi = [position[0] + h, position[1] + W, position[2] + h];
+    (0..3).all(|a| lo[a] < max[a] && hi[a] > min[a])
+}
+
+#[cfg(test)]
+mod item_box_tests {
+    #[test]
+    fn an_item_touches_a_box_its_quarter_block_reaches() {
+        let b = ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        assert!(super::item_touches([0.5, 0.5, 0.5], b.0, b.1));
+        // Its box reaches 1/8 sideways and 1/4 up.
+        assert!(super::item_touches([1.1, 0.5, 0.5], b.0, b.1));
+        assert!(!super::item_touches([1.2, 0.5, 0.5], b.0, b.1));
+        assert!(super::item_touches([0.5, -0.2, 0.5], b.0, b.1));
+        assert!(!super::item_touches([0.5, 1.0, 0.5], b.0, b.1));
+    }
+}

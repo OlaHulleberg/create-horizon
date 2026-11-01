@@ -579,6 +579,35 @@ fn use_nugget(game: &mut Game<'_>, count: u32) {
     }
 }
 
+/// The item entities of the level `dimension` whose box touches `lo`..`hi`
+/// (`Level.getEntitiesOfClass(ItemEntity.class, box)`), on the server: `f` gets each one's id,
+/// stack, position and motion and may change the stack and the motion; one left empty is removed.
+fn items_in(
+    game: &mut Game<'_>,
+    dimension: &str,
+    lo: [f64; 3],
+    hi: [f64; 3],
+    mut f: impl FnMut(u32, &mut horizon_client::items::ItemStack, [f64; 3], &mut [f64; 3]),
+) {
+    if game.native_window() || dimension != game.dim.id() {
+        return;
+    }
+    let mut emptied = false;
+    for item in game.dropped.iter_mut() {
+        let p = [item.position.x, item.position.y, item.position.z];
+        if !create_engine::belt::item_touches(p, lo, hi) {
+            continue;
+        }
+        let mut v = [item.velocity.x, item.velocity.y, item.velocity.z];
+        f(item.id, &mut item.stack, p, &mut v);
+        (item.velocity.x, item.velocity.y, item.velocity.z) = (v[0], v[1], v[2]);
+        emptied |= item.stack.count == 0;
+    }
+    if emptied {
+        game.dropped.retain(|i| i.stack.count > 0);
+    }
+}
+
 fn right_click_inner(game: &mut Game<'_>, pos: [i32; 3], face: [i32; 3], canceled: &mut bool) {
     if *canceled || states::index(game.world.block(pos[0], pos[1], pos[2]).0).is_none() {
         return;
@@ -4104,7 +4133,8 @@ fn tick_funnels(game: &mut Game<'_>, dim: usize) {
         // Something still in front: wait (`lastObserved`, the overflow area).
         let mut blocked = false;
         let dimension = game.dim.id().to_owned();
-        game.native_items_in(
+        items_in(
+            game,
             &dimension,
             [at[0] - 0.5, at[1] - 0.5, at[2] - 0.5],
             [at[0] + 0.5, at[1] + 0.5, at[2] + 0.5],
@@ -4846,7 +4876,7 @@ fn tick_crusher(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3])
         // The held item: drawn to the middle and in; taken a quarter past the middle.
         let (lo, hi) = cell(0.5);
         let mut found = None;
-        game.native_items_in(dimension, lo, hi, |i, stack, at, _| {
+        items_in(game, dimension, lo, hi, |i, stack, at, _| {
             if i == id {
                 found = Some((stack.item.to_string(), stack.count.min(255) as u8, at));
             }
@@ -4862,7 +4892,7 @@ fn tick_crusher(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3])
                     });
                     crusher::intake(&mut c, &item, count, time);
                 }
-                game.native_items_in(dimension, lo, hi, |i, stack, _, v| {
+                items_in(game, dimension, lo, hi, |i, stack, _, v| {
                     if i == id {
                         if taken {
                             stack.count = 0;
@@ -4877,7 +4907,7 @@ fn tick_crusher(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3])
         // `checkEntityForProcessing`: the first item inside starts it.
         let (lo, hi) = cell(0.0);
         let mut first = None;
-        game.native_items_in(dimension, lo, hi, |i, _, at, _| {
+        items_in(game, dimension, lo, hi, |i, _, at, _| {
             if !crusher::bypassed(pos, facing, at) {
                 first.get_or_insert(i);
             }
@@ -5002,7 +5032,7 @@ fn fan_on_items(
         return;
     };
     let mut items = Vec::new();
-    game.native_items_in(dimension, lo, hi, |id, stack, at, v| {
+    items_in(game, dimension, lo, hi, |id, stack, at, v| {
         items.push((id, stack.item.to_string(), stack.count, at, *v));
     });
     let caught: Vec<u32> = if search {
@@ -5080,7 +5110,7 @@ fn fan_on_items(
         }
         changes.insert(id, (motion, result));
     }
-    game.native_items_in(dimension, lo, hi, |id, stack, _, v| {
+    items_in(game, dimension, lo, hi, |id, stack, _, v| {
         let Some((motion, result)) = changes.get(&id) else {
             return;
         };

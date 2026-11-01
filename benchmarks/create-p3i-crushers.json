@@ -1,0 +1,79 @@
+{
+  "scenario": "crushers",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    2.35400390625,
+    2.2412109375,
+    1.875
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 120,
+      "frames": 21609,
+      "frame_ms_p50": 0.5054759979248047,
+      "frame_ms_p99": 1.3006839752197266,
+      "fps": 1800.75,
+      "tick_ms": 2.8455944061279297,
+      "tick_ms_max": 7.510261535644531,
+      "cpu_ms_p50": 0.36435002088546753,
+      "gpu_ms_p50": 0.45119789242744446,
+      "check": [
+        "minecraft:clay_ball",
+        "minecraft:flint",
+        "minecraft:porkchop",
+        "minecraft:sand"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 120,
+      "frames": 21394,
+      "frame_ms_p50": 0.5103660225868225,
+      "frame_ms_p99": 1.1129090785980225,
+      "fps": 1782.8333333333333,
+      "tick_ms": 2.8313775062561035,
+      "tick_ms_max": 9.071853637695312,
+      "cpu_ms_p50": 0.3418949991464615,
+      "gpu_ms_p50": 0.4553124904632568,
+      "check": [
+        "minecraft:clay_ball",
+        "minecraft:flint",
+        "minecraft:porkchop",
+        "minecraft:sand"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 120,
+      "frames": 21899,
+      "frame_ms_p50": 0.49634596705436707,
+      "frame_ms_p99": 1.0761899948120115,
+      "fps": 1824.9166666666667,
+      "tick_ms": 2.960049867630005,
+      "tick_ms_max": 8.27525520324707,
+      "cpu_ms_p50": 0.4339980185031891,
+      "gpu_ms_p50": 0.43406248092651367,
+      "check": [
+        "minecraft:clay_ball",
+        "minecraft:flint",
+        "minecraft:sand"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1802.8333333333333,
+    "frame_ms_p50": 0.504062662521998,
+    "frame_ms_p99": 1.1632610162099202,
+    "tick_ms": 2.879007260004679,
+    "tick_ms_max": 8.28579012552897
+  },
+  "stdev": {
+    "fps": 21.118876495790385,
+    "frame_ms_p50": 0.00711608227916903,
+    "frame_ms_p99": 0.12041957907989555,
+    "tick_ms": 0.0705440163906602,
+    "tick_ms_max": 0.780849352780329
+  }
+}
