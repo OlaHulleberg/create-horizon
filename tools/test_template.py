@@ -448,9 +448,11 @@ pub mod native_hooks {
 pub struct Assets { pub registry: &'static BlockRegistry }
 pub struct Pack { pub assets: Assets }
 pub struct World {
-    pub blocks: std::collections::HashMap<[i32; 3], u32>, pub game_time: i64,
+    pub blocks: std::collections::HashMap<[i32; 3], u32>, pub game_time: i64, pub day_time: i64,
     pub block_entities: std::collections::HashMap<(i32, i32, i32), horizon_client::containers::BlockEntity>,
+    pub shape: LevelShape,
 }
+#[derive(Clone, Copy)] pub struct LevelShape { pub min_y: i32, pub height: i32 }
 impl World {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId { BlockStateId(*self.blocks.get(&[x, y, z]).unwrap_or(&0)) }
     pub fn loaded(&self, x: i32, z: i32) -> bool { let _ = (x, z); true }
@@ -604,7 +606,7 @@ impl Behaviours {
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
-        world: World { blocks: Default::default(), game_time: 0, block_entities: Default::default() }, sent: vec![], parts: vec![], aim: None, aim_point: None, unsaved: vec![],
+        world: World { blocks: Default::default(), game_time: 0, day_time: 0, block_entities: Default::default(), shape: LevelShape { min_y: -64, height: 384 } }, sent: vec![], parts: vec![], aim: None, aim_point: None, unsaved: vec![],
         offhand: None,
         dropped: Vec::new(), right: false, audio: Audio,
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),

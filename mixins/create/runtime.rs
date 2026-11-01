@@ -141,6 +141,7 @@ pub(super) fn chunk_load(
     let curves = curves_from_nbt(Game::native_chunk_data(chunk, "create"));
     let diodes = diodes_from_nbt(Game::native_chunk_data(chunk, "create"));
     let deployers = deployers_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let lifts = lifts_from_nbt(game, Game::native_chunk_data(chunk, "create_lifts"));
     let brass: Vec<([i32; 3], create_engine::tunnel::Brass)> = {
         use horizon_world::nbt::Tag;
         match Game::native_chunk_data(chunk, "create").and_then(|d| d.get(&"brass".into())) {
@@ -199,6 +200,7 @@ pub(super) fn chunk_load(
             _ => Vec::new(),
         };
     let (vaults, filters) = vaults_from_nbt(Game::native_chunk_data(chunk, "create"));
+    load_lifts(dim, lifts);
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.dims[dim].vaults.load(vaults.into_iter());
@@ -317,6 +319,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_boilers(game, dimension, dim);
     tick_tank_states(game, dimension, dim);
     tick_pistons(game, dimension, dim);
+    tick_lifts(game, dimension, dim);
     tick_trains(game, dimension, dim);
     sync_curves(game, dimension, dim);
     tick_vaults(game, dim);
@@ -524,6 +527,7 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     let windmills: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].windmills.keys().copied().collect()).unwrap_or_default();
     send_windmills(game, &[player], dim, &windmills);
+    send_all_lifts(game, player, dim);
     let links: Vec<[i32; 3]> = with_world(|w| {
         w.dims[dim]
             .links
@@ -794,6 +798,15 @@ pub(super) fn right_click_inner(
     }
     if block == Some(create_engine::Block::WindmillBearing) {
         use_windmill(game, dim, pos, back, canceled);
+        return;
+    }
+    if let Some(
+        b @ (create_engine::Block::ClockworkBearing
+        | create_engine::Block::RopePulley
+        | create_engine::Block::ElevatorPulley),
+    ) = block
+    {
+        use_lift(game, dim, pos, b, back, canceled);
         return;
     }
     if let Some((facing, receiver, _)) = link_state(state) {
@@ -1967,6 +1980,7 @@ pub(super) fn chunk_data_save(
     let Some(dim) = dimension_index(dimension) else {
         return;
     };
+    lifts_chunk_save(game, dim, chunk, data);
     let settings = with_world(|w| w.column_settings(dim, chunk[0], chunk[1])).unwrap_or_default();
     let belts = with_world(|w| w.column_belts(dim, chunk[0], chunk[1])).unwrap_or_default();
     let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
@@ -2301,6 +2315,10 @@ pub(super) fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> b
             game.native_part_clear(client::key(pos, slot));
         }
     }
+    // A running clock's bearing top turns with its hour hand, which draws it.
+    if block == create_engine::Block::ClockworkBearing && clock_shown(pos) {
+        game.native_part_clear(client::key(pos, 1));
+    }
     // The dials were drawn at rest: put the needle back where it is.
     if create_engine::world::gauge_kind(block).is_some()
         && let Some(n) = GAUGES.with_borrow(|g| g.needles.get(&pos).copied())
@@ -2396,6 +2414,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         trains_from_server(game, data);
         return;
     }
+    if channel == LIFT_CHANNEL {
+        lifts_from_server(game, data);
+        return;
+    }
     if channel == PISTON_CHANNEL {
         pistons_from_server(game, data);
         return;
@@ -2441,9 +2463,11 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         PRESSES.with_borrow_mut(|c| *c = ClientPresses::default());
         BELTS.with_borrow_mut(|b| *b = ClientBelts::default());
         GAUGES.with_borrow_mut(|g| *g = ClientGauges::default());
+        reset_client_lifts();
         return;
     }
     tick_client_depots(game);
+    tick_client_lifts(game);
     tick_client_presses(game);
     tick_client_belts(game);
     if !client_ensure(game) {
@@ -3120,6 +3144,10 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
         place_engine(game, pos, state);
         return;
     }
+    if block == Some(create_engine::Block::RedstoneContact) {
+        place_contact(game, pos, clicked_face);
+        return;
+    }
     if block == Some(create_engine::Block::ItemVault) {
         // ItemVaultBlock.getStateForPlacement: the axis of the vault it was placed against
         // unless sneaking, else the player's horizontal facing's.
@@ -3545,6 +3573,10 @@ pub(super) fn block_signal(
     // The hook names the face touching the reader; vanilla's direction points from the reader
     // to the block.
     let side = Dir::ALL[face as usize].opposite();
+    if let Some(s) = lift_signal(dimension, [pos.x, pos.y, pos.z], state.0, side.opposite()) {
+        *signal = s;
+        return;
+    }
     if let Some((_, l)) = latch_state(state.0) {
         *signal = create_engine::latch::signal(&l, side);
         return;
@@ -3593,6 +3625,7 @@ pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
         || diode_state(state.0).is_some()
         || lamp_state(state.0).is_some()
         || link_state(state.0).is_some_and(|(_, receiver, powered)| receiver && powered)
+        || lift_signal_source(state.0)
     {
         *source = true;
     }
