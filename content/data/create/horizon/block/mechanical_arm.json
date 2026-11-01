@@ -1,0 +1,73 @@
+{
+  "template": "minecraft:gold_block",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:gold_block"
+  },
+  "item": true,
+  "shapes": {
+    "property": "ceiling",
+    "values": {
+      "false": [
+        [
+          0.125,
+          0.0,
+          0.125,
+          0.875,
+          0.625,
+          0.875
+        ],
+        [
+          0.1875,
+          0.0,
+          0.1875,
+          0.8125,
+          0.875,
+          0.8125
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.375,
+          1.0
+        ]
+      ],
+      "true": [
+        [
+          0.125,
+          0.375,
+          0.125,
+          0.875,
+          1.0,
+          0.875
+        ],
+        [
+          0.1875,
+          0.125,
+          0.1875,
+          0.8125,
+          1.0,
+          0.8125
+        ],
+        [
+          0.0,
+          0.625,
+          0.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "ceiling": [
+      "false",
+      "true"
+    ]
+  }
+}
