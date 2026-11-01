@@ -28,6 +28,7 @@ pub mod kinetics;
 pub mod lamp;
 pub mod latch;
 pub mod link;
+pub mod network;
 pub mod nugget;
 pub mod parts;
 pub mod piston;

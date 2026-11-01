@@ -29,17 +29,26 @@ pub struct Edge {
 }
 
 /// The nodes (their positions) and the edges leaving each (both ways of a piece of track are
-/// two edges, as Create keeps them).
+/// two edges, as Create keeps them: an edge and its reverse are `e` and `e ^ 1`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Graph {
     pub nodes: Vec<Vec3>,
     pub edges: Vec<Edge>,
+    /// The edges leaving each node (`getConnectionsFrom`).
+    pub out: Vec<Vec<usize>>,
 }
 
 impl Graph {
     pub fn node(&mut self, at: Vec3) -> usize {
         self.nodes.push(at);
+        self.out.push(Vec::new());
         self.nodes.len() - 1
+    }
+
+    /// The same piece of track the other way.
+    #[inline]
+    pub fn reverse(e: usize) -> usize {
+        e ^ 1
     }
 
     /// A piece of track between `a` and `b`, both ways; `turn` runs from `a` to `b` (its
@@ -52,11 +61,13 @@ impl Graph {
                 [c.normals[1], c.normals[0]],
             )
         });
+        self.out[a].push(self.edges.len());
         self.edges.push(Edge {
             from: a,
             to: b,
             turn,
         });
+        self.out[b].push(self.edges.len());
         self.edges.push(Edge {
             from: b,
             to: a,
@@ -105,7 +116,7 @@ impl Graph {
     }
 
     /// `getDirection(fromFirst)`: the way the edge leaves its first node, or enters its last.
-    fn direction(&self, e: usize, from_first: bool) -> Vec3 {
+    pub fn direction(&self, e: usize, from_first: bool) -> Vec3 {
         let (a, b) = if from_first { (0.0, 0.25) } else { (0.75, 1.0) };
         normalize(sub(self.position(e, b), self.position(e, a)))
     }
@@ -117,13 +128,16 @@ impl Graph {
 
     /// The edges a train on `e` may go on to at its end (not straight back).
     pub fn onward(&self, e: usize) -> Vec<usize> {
+        self.onward_iter(e).collect()
+    }
+
+    /// [`Graph::onward`] without collecting.
+    pub fn onward_iter(&self, e: usize) -> impl Iterator<Item = usize> + '_ {
         let edge = &self.edges[e];
-        (0..self.edges.len())
-            .filter(|&n| {
-                let next = &self.edges[n];
-                next.from == edge.to && next.to != edge.from && self.can_travel_to(e, n)
-            })
-            .collect()
+        self.out[edge.to].iter().copied().filter(move |&n| {
+            let next = &self.edges[n];
+            next.to != edge.from && self.can_travel_to(e, n)
+        })
     }
 }
 
@@ -140,7 +154,12 @@ impl Point {
     /// `TravellingPoint.travel`, forward: moves `distance` along, on to the next edge at an end
     /// (`select` chooses among several, given the candidates), stopping at a dead end. The
     /// distance it really travelled.
-    pub fn travel(&mut self, g: &Graph, distance: f64, select: impl Fn(&[usize]) -> usize) -> f64 {
+    pub fn travel(
+        &mut self,
+        g: &Graph,
+        distance: f64,
+        mut select: impl FnMut(&[usize]) -> usize,
+    ) -> f64 {
         self.blocked = false;
         let length = g.length(self.edge);
         if distance.abs() < 1.0e-5 {
@@ -165,13 +184,40 @@ impl Point {
             let next = if targets.len() == 1 {
                 targets[0]
             } else {
-                targets[select(&targets)]
+                targets[select(&targets).min(targets.len() - 1)]
             };
             self.edge = next;
             self.position -= length;
             length = g.length(next);
         }
         travelled
+    }
+
+    /// The same place facing the other way (on the reverse edge).
+    pub fn flipped(&self, g: &Graph) -> Point {
+        Point {
+            edge: Graph::reverse(self.edge),
+            position: g.length(self.edge) - self.position,
+            blocked: self.blocked,
+        }
+    }
+
+    /// [`Point::travel`] either way: a negative distance runs backward along the track (the
+    /// selector then chooses among the edges behind it, facing the way it moves). The signed
+    /// distance it really travelled.
+    pub fn travel_signed(
+        &mut self,
+        g: &Graph,
+        distance: f64,
+        select: impl FnMut(&[usize]) -> usize,
+    ) -> f64 {
+        if distance >= 0.0 {
+            return self.travel(g, distance, select);
+        }
+        let mut back = self.flipped(g);
+        let travelled = back.travel(g, -distance, select);
+        *self = back.flipped(g);
+        -travelled
     }
 
     /// Where it is in the world.
