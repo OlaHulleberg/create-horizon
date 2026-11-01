@@ -19,6 +19,7 @@ pub mod fluids;
 pub mod funnel;
 pub mod gantry;
 pub mod generated;
+pub mod graph;
 pub mod kinetics;
 pub mod latch;
 pub mod link;
