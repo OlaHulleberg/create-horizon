@@ -142,6 +142,25 @@ pub fn gather_bearing(
     at: impl Fn([i32; 3]) -> Option<Found>,
 ) -> Result<Gathered, Refused> {
     let start = add(bearing, facing.offset());
+    let (blocks, sails) = gather_from(start, bearing, |p| p == bearing, at)?;
+    if sails < min_sails {
+        return Err(Refused::NotEnoughSails(sails));
+    }
+    if blocks.is_empty() {
+        return Err(Refused::Empty);
+    }
+    Ok((blocks, sails))
+}
+
+/// `Contraption.searchMovedStructure` from `start` with no forced direction: the block there
+/// and what holds on to it (slime, honey, sails in their plane, chassis), never a block `skip`
+/// names (`isAnchoringBlockAt`, a clock's other hand). Offsets from `origin`, and the sails.
+pub fn gather_from(
+    start: [i32; 3],
+    origin: [i32; 3],
+    skip: impl Fn([i32; 3]) -> bool,
+    at: impl Fn([i32; 3]) -> Option<Found>,
+) -> Result<Gathered, Refused> {
     let mut frontier = VecDeque::from([start]);
     let mut visited: HashSet<[i32; 3]> = HashSet::new();
     let mut blocks = Vec::new();
@@ -150,8 +169,7 @@ pub fn gather_bearing(
         if !visited.insert(pos) {
             continue;
         }
-        // isAnchoringBlockAt: the bearing itself stays.
-        if pos == bearing {
+        if skip(pos) {
             continue;
         }
         let Some(found) = at(pos) else {
@@ -162,14 +180,14 @@ pub fn gather_bearing(
         }
         if let Some(c) = found.chassis {
             for p in chassis_reach(pos, c, None, &at) {
-                if !visited.contains(&p) && p != bearing {
+                if !visited.contains(&p) && !skip(p) {
                     frontier.push_back(p);
                 }
             }
         }
         for d in Dir::ALL {
             let next = add(pos, d.offset());
-            if visited.contains(&next) || next == bearing {
+            if visited.contains(&next) || skip(next) {
                 continue;
             }
             let Some(other) = at(next) else {
@@ -186,22 +204,12 @@ pub fn gather_bearing(
             sails += 1;
         }
         blocks.push((
-            [
-                pos[0] - bearing[0],
-                pos[1] - bearing[1],
-                pos[2] - bearing[2],
-            ],
+            [pos[0] - origin[0], pos[1] - origin[1], pos[2] - origin[2]],
             found.state,
         ));
         if blocks.len() > MAX_BLOCKS {
             return Err(Refused::TooLarge);
         }
-    }
-    if sails < min_sails {
-        return Err(Refused::NotEnoughSails(sails));
-    }
-    if blocks.is_empty() {
-        return Err(Refused::Empty);
     }
     Ok((blocks, sails))
 }

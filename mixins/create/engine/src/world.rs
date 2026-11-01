@@ -249,6 +249,8 @@ pub struct Dimension {
     /// change), and the moving ones with what they carry (the only ones that tick).
     pub piston_checks: Vec<[i32; 3]>,
     pub pistons: HashMap<[i32; 3], Moving>,
+    /// Clockwork bearings, rope pulleys, elevators and their contacts (`lifts.rs`).
+    pub lifts: crate::lifts::Lifts,
     /// Track, stations and signals, the graph built from them, and the trains on it.
     pub railway: crate::trains::Railway,
     /// Chutes holding a stack: where it is (1 top, 0 bottom); the only ones that tick.
@@ -383,6 +385,8 @@ fn has_state(block: Block) -> bool {
             | Block::FluidTank
             | Block::WindmillBearing
             | Block::SteamEngine
+            | Block::ElevatorContact
+            | Block::RedstoneContact
     )
 }
 
@@ -500,6 +504,7 @@ impl CreateWorld {
         };
         let info = &info;
         let d = &mut self.dims[dim];
+        d.lifts.placed(pos, block, info);
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
         }
@@ -790,6 +795,9 @@ impl CreateWorld {
         if !was && !is {
             return;
         }
+        self.dims[dim]
+            .lifts
+            .changed(pos, self.table.get(old), self.table.get(new));
         // `FluidTankBlock.onPlace` / `onRemove`: tanks form or split (a tank's own state
         // changes don't).
         let tank = |s: u32| {
@@ -1034,6 +1042,7 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         // Its track leaves the graph; trains standing in it leave with it (saved with it).
         d.railway.column_unloaded(cx, cz);
+        d.lifts.column_unloaded(cx, cz);
         if let Some(list) = d.columns.remove(&(cx, cz)) {
             for pos in list {
                 d.kinetics.remove(pos);
@@ -1240,6 +1249,15 @@ impl CreateWorld {
                     })
             {
                 d.piston_checks.push(pos);
+            }
+            if let Event::Speed { pos, .. } = *e
+                && let Some(b) = d.states.get(&pos).and_then(|&s| self.table.get(s))
+                && matches!(
+                    b.0,
+                    Block::ClockworkBearing | Block::RopePulley | Block::ElevatorPulley
+                )
+            {
+                d.lifts.speed_changed(pos, b.0);
             }
             if let Event::Speed { pos, speed, .. } = *e
                 && d.drills.contains_key(&pos)
@@ -1479,6 +1497,9 @@ impl CreateWorld {
                 .diode_checks
                 .push((pos, crate::diode::BLOCK_DELAY)),
             Some(Block::RoseQuartzLamp) => self.dims[dim].lamp_checks.push(pos),
+            Some(Block::ElevatorContact | Block::RedstoneContact) => {
+                self.dims[dim].lifts.contact_checks.push(pos)
+            }
             Some(Block::RedstoneLink) => self.dims[dim].link_checks.push(pos),
             Some(Block::AndesiteTunnel | Block::BrassTunnel) => {
                 self.dims[dim].tunnel_checks.push(pos)
