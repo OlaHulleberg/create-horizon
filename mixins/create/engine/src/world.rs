@@ -263,6 +263,10 @@ pub struct Dimension {
     pub drains: HashMap<[i32; 3], crate::drain::Drain>,
     /// Funnels and their extraction cooldown.
     pub funnels: HashMap<[i32; 3], u32>,
+    /// Speedometers and stressometers and what clients were last told, and those clients must
+    /// be told of again (their needle moved after a solve).
+    pub gauges: HashMap<[i32; 3], crate::gauge::Gauge>,
+    pub gauge_changes: Vec<[i32; 3]>,
 }
 
 /// An assembled train: its run, its blocks (offset from its first bogey, state), where that
@@ -361,6 +365,15 @@ fn has_state(block: Block) -> bool {
 }
 
 /// Create's latches, by block.
+/// A gauge's kind (`GaugeBlock.Type`), for a speedometer or a stressometer.
+pub fn gauge_kind(block: Block) -> Option<crate::gauge::Kind> {
+    match block {
+        Block::Speedometer => Some(crate::gauge::Kind::Speed),
+        Block::Stressometer => Some(crate::gauge::Kind::Stress),
+        _ => None,
+    }
+}
+
 pub fn latch_kind(block: Block) -> Option<crate::latch::Kind> {
     match block {
         Block::PoweredLatch => Some(crate::latch::Kind::Powered),
@@ -488,6 +501,12 @@ impl CreateWorld {
                     d.diode_running.push(pos);
                 }
             }
+        }
+        if let Some(kind) = gauge_kind(block)
+            && d.gauges.get(&pos).is_none_or(|g| g.kind != kind)
+        {
+            // Read at the next solve (its part is new, so its network solves).
+            d.gauges.insert(pos, crate::gauge::Gauge::new(kind));
         }
         if block == Block::Deployer && !d.deployers.contains_key(&pos) {
             let saved = d.deployer_saved.remove(&pos).unwrap_or_default();
@@ -732,6 +751,7 @@ impl CreateWorld {
             d.presses.remove(&pos);
             self.diode_removed(dim, pos);
             let d = &mut self.dims[dim];
+            d.gauges.remove(&pos);
             if self.table.get(old).map(|(b, _)| b) == Some(Block::CrushingWheel) {
                 d.crusher_checks.push(pos);
             }
@@ -880,6 +900,7 @@ impl CreateWorld {
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.gauges.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.fans.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crushers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1087,7 +1108,21 @@ impl CreateWorld {
                 }
             }
         }
+        // Gauges read their network after each solve (`onSpeedChanged`, `updateFromNetwork`):
+        // a network's stress can change while their speed does not. Nothing when there are none.
+        for (pos, g) in d.gauges.iter_mut() {
+            if let Some((speed, stress, capacity, over)) = d.kinetics.network(*pos, 0)
+                && g.update(speed, stress, capacity, over)
+            {
+                d.gauge_changes.push(*pos);
+            }
+        }
         stats
+    }
+
+    /// Gauges whose needle clients must see again.
+    pub fn take_gauge_changes(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        std::mem::take(&mut self.dims[dim].gauge_changes)
     }
 
     /// Fans to tick: each turning one, and one that just stopped (its current goes). Those whose
@@ -2216,6 +2251,46 @@ mod tests {
         states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         CreateWorld::new(table)
+    }
+
+    #[test]
+    fn gauges_change_only_when_their_network_does() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_motor", vec![("facing", "east")]),
+            (
+                "create:stressometer",
+                vec![("facing", "up"), ("axis_along_first", "true")],
+            ),
+            (
+                "create:speedometer",
+                vec![("facing", "up"), ("axis_along_first", "true")],
+            ),
+            ("create:mechanical_press", vec![("facing", "east")]),
+        ];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let (motor, stress, speed, press) = (2, 3, 4, 5);
+        w.block_changed(0, [0, 64, 0], 0, motor);
+        w.block_changed(0, [1, 64, 0], 0, stress);
+        w.block_changed(0, [2, 64, 0], 0, speed);
+        w.tick(0, &mut Vec::new());
+        let mut changed = w.take_gauge_changes(0);
+        changed.sort();
+        assert_eq!(changed, [[1, 64, 0], [2, 64, 0]]);
+        assert!(crate::gauge::speed_dial(16.0) == w.dims[0].gauges[&[2, 64, 0]].shown.dial);
+        assert_eq!(w.dims[0].gauges[&[1, 64, 0]].shown.dial, 0.0);
+        // A press joins: the stressometer reads its stress, the speedometer is unchanged.
+        w.block_changed(0, [3, 64, 0], 0, press);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.take_gauge_changes(0), [[1, 64, 0]]);
+        assert!(w.dims[0].gauges[&[1, 64, 0]].shown.dial > 0.0);
+        // Steady: nothing.
+        w.tick(0, &mut Vec::new());
+        assert!(w.take_gauge_changes(0).is_empty());
+        w.block_changed(0, [1, 64, 0], stress, 0);
+        assert!(!w.dims[0].gauges.contains_key(&[1, 64, 0]));
     }
 
     #[test]

@@ -327,9 +327,13 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     send_tank_changes(game, dimension, dim);
     let mut events = Vec::new();
     with_world(|w| w.settle_belts(dim));
-    let Some((removed, unsaved)) = with_world(|w| {
+    let Some((removed, unsaved, gauges)) = with_world(|w| {
         w.tick(dim, &mut events);
-        (w.dims[dim].kinetics.take_removed(), w.take_unsaved(dim))
+        (
+            w.dims[dim].kinetics.take_removed(),
+            w.take_unsaved(dim),
+            w.take_gauge_changes(dim),
+        )
     }) else {
         return;
     };
@@ -337,6 +341,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
         game.native_mark_chunk_unsaved(dimension, [cx, cz]);
     }
     if events.is_empty() && removed.is_empty() {
+        send_gauge_changes(game, dimension, dim, &gauges);
         return;
     }
     let mut updates: Vec<Update> = removed
@@ -386,6 +391,8 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
         .map(|p| p.uuid)
         .collect();
     send(game, &players, &updates);
+    // After the speeds: a client forgets a cleared block's needle.
+    send_gauge_changes(game, dimension, dim, &gauges);
 }
 
 /// Encased chain drives placed or beside a change take their place in their chain
@@ -497,6 +504,9 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     })
     .unwrap_or_default();
     send_presses(game, &[player], dim, &presses);
+    let gauges: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].gauges.keys().copied().collect()).unwrap_or_default();
+    send_gauges(game, &[player], dim, &gauges);
     let belts: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].belts.keys().copied().collect()).unwrap_or_default();
     send_belts(game, &[player], dim, &belts);
@@ -1485,18 +1495,19 @@ pub(super) fn goggle_overlay(game: &mut Game<'_>, batch: &mut horizon_client::hu
     };
     let pos = hit.pos;
     let state = game.world.block(pos[0], pos[1], pos[2]);
-    let Some((impact, capacity, speed)) = CLIENT.with_borrow(|c| {
+    let Some((block, impact, capacity, speed)) = CLIENT.with_borrow(|c| {
         let c = c.as_ref()?;
         let (block, info) = c.table.get(state.0)?;
         let [part, _] = create_engine::parts::parts(block, info, &Default::default());
         let part = part?;
         let speed = c.speeds.get(&pos).map_or(0.0, |s| s[0]);
-        Some((part.impact, part.capacity, speed))
+        Some((block, part.impact, part.capacity, speed))
     }) else {
         return;
     };
-    // Create's tooltip: a header, then each stat indented by four spaces and its value by one more.
-    let mut lines: Vec<(String, u32)> = Vec::new();
+    // Create's tooltip: a header, then each stat indented by four spaces and its value by one more;
+    // a line may change colour along the way.
+    let mut lines: Vec<Vec<(String, u32)>> = Vec::new();
     // LangNumberFormat: grouped thousands, at most two decimals (en_us).
     let number = |v: f32| {
         let text = format!("{:.2}", v);
@@ -1516,37 +1527,45 @@ pub(super) fn goggle_overlay(game: &mut Game<'_>, batch: &mut horizon_client::hu
         }
     };
     if impact != 0.0 {
-        lines.push(("    Kinetic Stats:".into(), 0xFFFFFF));
-        lines.push(("    Kinetic Stress Impact:".into(), 0xAAAAAA));
-        lines.push((
+        lines.push(vec![("    Kinetic Stats:".into(), 0xFFFFFF)]);
+        lines.push(vec![("    Kinetic Stress Impact:".into(), 0xAAAAAA)]);
+        lines.push(vec![(
             format!("     {}su at current speed", number(impact * speed.abs())),
             0x55FFFF,
-        ));
+        )]);
     }
     if capacity != 0.0 {
-        lines.push(("    Generator Stats:".into(), 0xFFFFFF));
-        lines.push(("    Kinetic Stress Capacity:".into(), 0xAAAAAA));
-        lines.push((
+        lines.push(vec![("    Generator Stats:".into(), 0xFFFFFF)]);
+        lines.push(vec![("    Kinetic Stress Capacity:".into(), 0xAAAAAA)]);
+        lines.push(vec![(
             format!("     {}su at current speed", number(capacity * speed.abs())),
             0x55FFFF,
-        ));
+        )]);
+    }
+    // GaugeBlockEntity.addToGoggleTooltip: what the server last said of it.
+    if let Some(kind) = create_engine::world::gauge_kind(block) {
+        let shown = GAUGES.with_borrow(|g| g.shown.get(&pos).copied().unwrap_or_default());
+        lines.extend(create_engine::gauge::tooltip(kind, &shown));
     }
     if lines.is_empty() {
         return;
     }
+    let line_width =
+        |l: &[(String, u32)]| -> f32 { l.iter().map(|(t, _)| game.native_text_width(t)).sum() };
     // RemovedGuiUtils.drawHoveringText at (width / 2 + 20, height / 2): vanilla's tooltip box.
-    let w = lines
-        .iter()
-        .map(|l| game.native_text_width(&l.0))
-        .fold(0.0f32, f32::max);
+    let w = lines.iter().map(|l| line_width(l)).fold(0.0f32, f32::max);
     let h = lines.len() as f32 * 10.0 - 2.0;
     let x = (batch.width / 2.0 + 20.0).min(batch.width - w - 20.0) + 4.0;
     let y = (batch.height / 2.0).min(batch.height - h - 20.0) + 4.0;
     game.native_fill(batch, [x - 3.0, y - 4.0, w + 6.0, h + 8.0], 0xF010_0010);
     game.native_fill(batch, [x - 3.0, y - 3.0, w + 6.0, 1.0], 0x5050_00FF);
     game.native_fill(batch, [x - 3.0, y + h + 2.0, w + 6.0, 1.0], 0x5028_007F);
-    for (i, (text, rgb)) in lines.iter().enumerate() {
-        game.native_text(batch, text, [x, y + i as f32 * 10.0], *rgb, true);
+    for (i, line) in lines.iter().enumerate() {
+        let mut dx = 0.0;
+        for (text, rgb) in line {
+            game.native_text(batch, text, [x + dx, y + i as f32 * 10.0], *rgb, true);
+            dx += game.native_text_width(text);
+        }
     }
 }
 
@@ -2153,6 +2172,13 @@ pub(super) fn model_state(
         Model::PumpCog(d) => find("create:part_pump_cog", "facing", dir_name(d)),
         Model::DrillHead(d) => find("create:part_drill_head", "facing", dir_name(d)),
         Model::MixerPole | Model::MixerHead => None,
+        Model::GaugeHead(d, create_engine::gauge::Kind::Speed) => {
+            find("create:part_gauge_head_speed", "facing", dir_name(d))
+        }
+        Model::GaugeHead(d, create_engine::gauge::Kind::Stress) => {
+            find("create:part_gauge_head_stress", "facing", dir_name(d))
+        }
+        Model::GaugeDial(d) => find("create:part_gauge_dial", "facing", dir_name(d)),
     }
 }
 
@@ -2232,6 +2258,13 @@ pub(super) fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> b
             game.native_part_clear(client::key(pos, slot));
         }
     }
+    // The dials were drawn at rest: put the needle back where it is.
+    if create_engine::world::gauge_kind(block).is_some()
+        && let Some(n) = GAUGES.with_borrow(|g| g.needles.get(&pos).copied())
+    {
+        let still = create_engine::gauge::Needle { prev: n.state, ..n };
+        draw_gauge_dials(game, c, pos, &still);
+    }
     true
 }
 
@@ -2304,6 +2337,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         presses_from_server(game, data);
         return;
     }
+    if channel == create_engine::gauge::CHANNEL {
+        gauges_from_server(data);
+        return;
+    }
     if channel == create_engine::belt::CHANNEL {
         belts_from_server(game, data);
         return;
@@ -2342,6 +2379,7 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
             Update::Clear { pos } => {
                 c.speeds.remove(&pos);
                 hide(game, pos);
+                GAUGES.with_borrow_mut(|g| g.forget(pos));
             }
         }
     }
@@ -2359,6 +2397,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         DEPOTS.with_borrow_mut(|d| *d = ClientDepots::default());
         PRESSES.with_borrow_mut(|c| *c = ClientPresses::default());
         BELTS.with_borrow_mut(|b| *b = ClientBelts::default());
+        GAUGES.with_borrow_mut(|g| *g = ClientGauges::default());
         return;
     }
     tick_client_depots(game);
@@ -2386,6 +2425,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
             }
         }
     }
+    tick_client_gauges(game, &mut c);
     CLIENT.with_borrow_mut(|slot| *slot = Some(c));
 }
 
@@ -2968,6 +3008,42 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
         connect_pipe(game, &dimension, pos, Some(looking));
         return;
     }
+    if let Some((now, along_now)) = with_world(|w| {
+        let (b, info) = w.table.get(state.0)?;
+        create_engine::world::gauge_kind(b).map(|_| (info.facing, info.along_first))
+    })
+    .flatten()
+    {
+        // GaugeBlock.getStateForPlacement: the block it was placed on (behind the clicked face)
+        // carries its shaft on through it.
+        let o = clicked_face.offset();
+        let on = [pos[0] - o[0], pos[1] - o[1], pos[2] - o[2]];
+        let look = create_engine::place::ordered_by_nearest(game.yaw, game.pitch)[0];
+        let horizontal = create_engine::place::horizontal_direction(game.yaw);
+        let Some((facing, along)) = with_world(|w| {
+            create_engine::gauge::placement(
+                clicked_face,
+                look,
+                horizontal,
+                w.has_shaft_towards(dim, on, clicked_face),
+                |side| {
+                    let o = side.offset();
+                    let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+                    w.has_shaft_towards(dim, at, side.opposite())
+                },
+            )
+        }) else {
+            return;
+        };
+        if now != Some(facing) {
+            game.native_set_block_property(pos, "facing", dir_name(facing));
+        }
+        if along_now != along {
+            let value = if along { "true" } else { "false" };
+            game.native_set_block_property(pos, "axis_along_first", value);
+        }
+        return;
+    }
     let ctx = create_engine::place::Context {
         yaw: game.yaw,
         pitch: game.pitch,
@@ -3492,4 +3568,137 @@ pub(super) fn state_of_text(registry: &BlockRegistry, text: &str) -> Option<u32>
         s.properties.insert(k.to_owned(), v.to_owned());
     }
     registry.id(&s).map(|i| i.0)
+}
+
+/// Tells the players in `dimension` of gauges whose needle moved after a solve.
+pub(super) fn send_gauge_changes(
+    game: &mut Game<'_>,
+    dimension: &str,
+    dim: usize,
+    gauges: &[[i32; 3]],
+) {
+    if gauges.is_empty() {
+        return;
+    }
+    let players = players_in(game, dimension);
+    send_gauges(game, &players, dim, gauges);
+}
+
+/// Tells `players` what the gauges at `gauges` show (`GaugeBlockEntity.sendData`).
+pub(super) fn send_gauges(game: &mut Game<'_>, players: &[u128], dim: usize, gauges: &[[i32; 3]]) {
+    let all: Vec<([i32; 3], create_engine::gauge::Shown)> = with_world(|w| {
+        gauges
+            .iter()
+            .filter_map(|p| Some((*p, w.dims[dim].gauges.get(p)?.shown)))
+            .collect()
+    })
+    .unwrap_or_default();
+    for m in create_engine::gauge::encode(&all) {
+        for &p in players {
+            let _ = game.native_net_send_to_player(p, create_engine::gauge::CHANNEL, &m);
+        }
+    }
+}
+
+/// Gauges on the client: what the server last said of each (for goggles), each needle, and the
+/// needles still moving (the only ones that tick).
+#[derive(Default)]
+pub(super) struct ClientGauges {
+    pub(super) shown: HashMap<[i32; 3], create_engine::gauge::Shown>,
+    pub(super) needles: HashMap<[i32; 3], create_engine::gauge::Needle>,
+    pub(super) moving: Vec<[i32; 3]>,
+}
+
+impl ClientGauges {
+    pub(super) fn forget(&mut self, pos: [i32; 3]) {
+        self.shown.remove(&pos);
+        self.needles.remove(&pos);
+        self.moving.retain(|p| *p != pos);
+    }
+}
+
+thread_local! {
+    pub(super) static GAUGES: RefCell<ClientGauges> = RefCell::new(ClientGauges::default());
+}
+
+/// The server's gauges: each needle sets off toward its new target.
+pub(super) fn gauges_from_server(data: &[u8]) {
+    GAUGES.with_borrow_mut(|g| {
+        for (pos, s) in create_engine::gauge::decode(data) {
+            g.shown.insert(pos, s);
+            g.needles.entry(pos).or_default().target = s.dial;
+            if !g.moving.contains(&pos) {
+                g.moving.push(pos);
+            }
+        }
+    });
+}
+
+/// Each client tick: moving needles take a step (`GaugeBlockEntity.tick`) and glide to it; a
+/// settled one is drawn still and leaves the list.
+pub(super) fn tick_client_gauges(game: &mut Game<'_>, c: &mut ClientParts) {
+    let moving = GAUGES.with_borrow(|g| g.moving.clone());
+    if moving.is_empty() {
+        return;
+    }
+    let time = game.world.game_time as u64;
+    for pos in moving {
+        let Some(mut n) = GAUGES.with_borrow(|g| g.needles.get(&pos).copied()) else {
+            continue;
+        };
+        let mut rng = create_engine::processing::Rng::new(time ^ client::key(pos, 0));
+        n.tick(&mut rng);
+        draw_gauge_dials(game, c, pos, &n);
+        GAUGES.with_borrow_mut(|g| {
+            g.needles.insert(pos, n);
+            if n.settled() {
+                g.moving.retain(|p| *p != pos);
+            }
+        });
+    }
+}
+
+/// Turns the dials of the gauge at `pos` from the needle's last tick to this one
+/// (`GaugeVisual.DialFace.updateTransform`, about the dial's pivot).
+pub(super) fn draw_gauge_dials(
+    game: &mut Game<'_>,
+    c: &mut ClientParts,
+    pos: [i32; 3],
+    n: &create_engine::gauge::Needle,
+) {
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    let Some((facing, along_first)) = c
+        .table
+        .get(state.0)
+        .filter(|(b, _)| create_engine::world::gauge_kind(*b).is_some())
+        .and_then(|(_, i)| Some((i.facing?, i.along_first)))
+    else {
+        return;
+    };
+    let axis = create_engine::parts::directional_axis(facing, along_first);
+    let registry = game.pack.assets.registry;
+    let now = game.native_parts_seconds();
+    for (i, face) in create_engine::gauge::dial_faces(facing, axis).enumerate() {
+        let model = Model::GaugeDial(face);
+        let handle = match c.models.get(&(state.0, model)) {
+            Some(&h) => Some(h),
+            None => part_model(game, registry, state, model).inspect(|&h| {
+                c.models.insert((state.0, model), h);
+            }),
+        };
+        let Some(h) = handle else {
+            continue;
+        };
+        let g = create_engine::gauge::dial_glide(face, n.prev, n.state, now);
+        game.native_part_glide(
+            client::key(pos, client::GAUGE_DIAL_SLOT + i as u8),
+            h,
+            pos,
+            axis_index(g.axis),
+            g.rpm,
+            g.phase,
+            g.offset,
+            g.velocity,
+        );
+    }
 }

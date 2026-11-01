@@ -294,20 +294,15 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             .facing
             .map_or([None, None], |f| one(Part::shaft(f.axis()))),
         // MechanicalPistonBlock (DirectionalAxisKineticBlock.getRotationAxis): a shaft across
-        // its facing, on the first or second other axis.
+        // its facing, on the first or second other axis. GaugeBlock too, with no stress
+        // (`CStress.setNoImpact`).
         Block::MechanicalPiston
         | Block::StickyMechanicalPiston
         | Block::MechanicalSaw
-        | Block::Deployer => s.facing.map_or([None, None], |f| {
-            let axis = match (f.axis(), s.along_first) {
-                (Axis::X, true) => Axis::Y,
-                (Axis::X, false) => Axis::Z,
-                (Axis::Y, true) => Axis::X,
-                (Axis::Y, false) => Axis::Z,
-                (Axis::Z, true) => Axis::X,
-                (Axis::Z, false) => Axis::Y,
-            };
-            one(Part::shaft(axis))
+        | Block::Deployer
+        | Block::Speedometer
+        | Block::Stressometer => s.facing.map_or([None, None], |f| {
+            one(Part::shaft(directional_axis(f, s.along_first)))
         }),
         // DrillBlock (DirectionalKineticBlock): a shaft out of its back.
         Block::MechanicalDrill => s
@@ -339,6 +334,19 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             })
         }),
         _ => [None, None],
+    }
+}
+
+/// `DirectionalAxisKineticBlock.getRotationAxis`: the first or second axis other than the
+/// facing's.
+pub fn directional_axis(facing: Dir, along_first: bool) -> Axis {
+    match (facing.axis(), along_first) {
+        (Axis::X, true) => Axis::Y,
+        (Axis::X, false) => Axis::Z,
+        (Axis::Y, true) => Axis::X,
+        (Axis::Y, false) => Axis::Z,
+        (Axis::Z, true) => Axis::X,
+        (Axis::Z, false) => Axis::Y,
     }
 }
 
@@ -408,6 +416,35 @@ mod tests {
         k.solve(&mut e);
         assert_eq!(k.speed([1, 0, 0], 0), Some(32.0));
         assert!(e.iter().all(|x| !matches!(x, Event::Break { .. })));
+    }
+
+    #[test]
+    fn a_gauge_passes_rotation_on_and_costs_nothing() {
+        let mut k = Kinetics::new();
+        let motor = info(&[("facing", "east")]);
+        k.set(
+            [-1, 0, 0],
+            0,
+            parts(Block::CreativeMotor, &motor, &Settings::default())[0].unwrap(),
+        );
+        // Facing up, along the first axis: its shaft runs along x.
+        let gauge = info(&[("facing", "up"), ("axis_along_first", "true")]);
+        let [g, _] = parts(Block::Stressometer, &gauge, &Settings::default());
+        let g = g.unwrap();
+        assert_eq!((g.axis, g.impact), (Axis::X, 0.0));
+        k.set([0, 0, 0], 0, g);
+        let shaft = info(&[("axis", "x")]);
+        k.set(
+            [1, 0, 0],
+            0,
+            parts(Block::Shaft, &shaft, &Settings::default())[0].unwrap(),
+        );
+        k.solve(&mut Vec::new());
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        let (speed, stress, capacity, over) = k.network([0, 0, 0], 0).unwrap();
+        assert_eq!((speed, stress, over), (16.0, 0.0, false));
+        assert!(capacity > 0.0);
+        assert_eq!(Block::Speedometer.impact(), 0.0);
     }
 
     #[test]

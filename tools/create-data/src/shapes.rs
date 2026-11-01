@@ -14,6 +14,8 @@ pub const SMALL_GEAR: Px = [2., 6., 2., 14., 10., 14.];
 pub const LARGE_GEAR: Px = [0., 6., 0., 16., 10., 16.];
 /// `AllShapes.MOTOR_BLOCK`, facing up.
 pub const MOTOR_BLOCK: Px = [3., 0., 3., 13., 14., 13.];
+/// `AllShapes.GAUGE_SHAPE_UP`: the plate and the dial box on it.
+pub const GAUGE: [Px; 2] = [[1., 0., 0., 15., 2., 16.], [2., 2., 1., 14., 14., 15.]];
 /// `AllShapes.CRANK`, facing up.
 pub const CRANK: [Px; 2] = [[5., 0., 5., 11., 6., 11.], [1., 3., 1., 15., 8., 15.]];
 
