@@ -443,6 +443,18 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // FunnelBlock: facing (away from the inventory it is on), `extracting`, `powered`; a
+        // full block here, so items land on it.
+        "andesite_funnel" | "brass_funnel" => (
+            "minecraft:iron_block",
+            None,
+            own(&[
+                ("extracting", bools),
+                ("facing", facing),
+                ("powered", bools),
+                ("waterlogged", bools),
+            ]),
+        ),
         // ItemDrainBlock: a full block here, so items land on top of it.
         "item_drain" => ("minecraft:iron_block", None, None),
         // SpoutBlock: a copper-propertied block, AllShapes.SPOUT approximated by its body.

@@ -184,6 +184,8 @@ pub struct Dimension {
     pub spouts: HashMap<[i32; 3], crate::spout::Spout>,
     /// Item drains, their held stack and tank; those holding items tick.
     pub drains: HashMap<[i32; 3], crate::drain::Drain>,
+    /// Funnels and their extraction cooldown.
+    pub funnels: HashMap<[i32; 3], u32>,
 }
 
 /// An assembled train: its run, its blocks (offset from its first bogey, state), where that
@@ -251,6 +253,8 @@ fn has_state(block: Block) -> bool {
     matches!(
         block,
         Block::Depot
+            | Block::AndesiteFunnel
+            | Block::BrassFunnel
             | Block::ItemDrain
             | Block::Spout
             | Block::Chute
@@ -358,6 +362,10 @@ impl CreateWorld {
                 d.pipe_checks
                     .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
             }
+        }
+        if matches!(block, Block::AndesiteFunnel | Block::BrassFunnel) {
+            // Placed or changed (extracting, powered): looked at again.
+            d.funnels.insert(pos, 0);
         }
         if block == Block::ItemDrain {
             d.drains.entry(pos).or_default();
@@ -501,6 +509,7 @@ impl CreateWorld {
             d.saws.remove(&pos);
             d.spouts.remove(&pos);
             d.drains.remove(&pos);
+            d.funnels.remove(&pos);
             if d.drills.remove(&pos).is_some() {
                 d.drilling.retain(|p| *p != pos);
             }
@@ -585,6 +594,7 @@ impl CreateWorld {
             d.saws.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.spouts.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drains.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.funnels.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
