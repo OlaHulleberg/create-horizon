@@ -1,0 +1,65 @@
+{
+  "scenario": "spouts",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.93212890625,
+    1.98095703125,
+    1.69287109375
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 80,
+      "frames": 20906,
+      "frame_ms_p50": 0.5550144910812378,
+      "frame_ms_p99": 1.0856599807739258,
+      "fps": 1742.1666666666667,
+      "tick_ms": 4.911196231842041,
+      "tick_ms_max": 9.42492389678955,
+      "check": [
+        "-529, 86, 56 has the following block data: {x: -529, y: 86, Items: [{count: 13, Slot: 0b, id: \"minecraft:bucket\"}, {count: 3, Slot: 1b, id: \"minecraft:water_bucket\"}], z: 56, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 80,
+      "frames": 21108,
+      "frame_ms_p50": 0.5344004929065704,
+      "frame_ms_p99": 1.0338119268417358,
+      "fps": 1759.0,
+      "tick_ms": 4.840081691741943,
+      "tick_ms_max": 11.780277252197266,
+      "check": [
+        "-514, 88, 54 has the following block data: {x: -514, y: 88, Items: [{count: 13, Slot: 0b, id: \"minecraft:bucket\"}, {count: 3, Slot: 1b, id: \"minecraft:water_bucket\"}], z: 54, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 80,
+      "frames": 20941,
+      "frame_ms_p50": 0.5370749831199646,
+      "frame_ms_p99": 1.0874890089035034,
+      "fps": 1745.0833333333333,
+      "tick_ms": 4.7430925369262695,
+      "tick_ms_max": 8.318058013916016,
+      "check": [
+        "-522, 91, 46 has the following block data: {x: -522, y: 91, Items: [{count: 13, Slot: 0b, id: \"minecraft:bucket\"}, {count: 3, Slot: 1b, id: \"minecraft:water_bucket\"}], z: 46, id: \"create:depot\"}"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1748.75,
+    "frame_ms_p50": 0.5421633223692576,
+    "frame_ms_p99": 1.068986972173055,
+    "tick_ms": 4.831456820170085,
+    "tick_ms_max": 9.841086387634277
+  },
+  "stdev": {
+    "fps": 8.995755171808028,
+    "frame_ms_p50": 0.011209488276599388,
+    "frame_ms_p99": 0.030476207055996414,
+    "tick_ms": 0.08438308105483579,
+    "tick_ms_max": 1.7682290370794065
+  }
+}

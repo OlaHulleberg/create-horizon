@@ -783,7 +783,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 28] = [
+pub const PARTIALS: [(&str, &str, &str); 31] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -883,11 +883,18 @@ pub const PARTIALS: [(&str, &str, &str); 28] = [
     ),
     ("part_fluid_water", "create:block/part_fluid_water", "up"),
     ("part_fluid_lava", "create:block/part_fluid_lava", "up"),
+    ("part_fluid_honey", "create:block/part_fluid_honey", "up"),
+    (
+        "part_fluid_chocolate",
+        "create:block/part_fluid_chocolate",
+        "up",
+    ),
+    ("part_fluid_milk", "create:block/part_fluid_milk", "up"),
 ];
 
 /// The unit-cube models of `part_fluid_*`: every face the fluid's still texture, water's
 /// tinted (tint index 0).
-pub fn fluid_models() -> [(&'static str, Value); 2] {
+pub fn fluid_models() -> [(&'static str, Value); 5] {
     let cube = |texture: &str, tint: bool| {
         let face = |_: &str| {
             let mut f = json!({ "uv": [0, 0, 16, 16], "texture": "#fluid" });
@@ -911,6 +918,20 @@ pub fn fluid_models() -> [(&'static str, Value); 2] {
             cube("minecraft:block/water_still", true),
         ),
         ("part_fluid_lava", cube("minecraft:block/lava_still", false)),
+        // Create's own still textures (`AllFluids`), not tinted; `prepare` puts them under
+        // `textures/block/fluid/`, on the block atlas (NeoForge's fluid types stitch them there).
+        (
+            "part_fluid_honey",
+            cube("create:block/fluid/honey_still", false),
+        ),
+        (
+            "part_fluid_chocolate",
+            cube("create:block/fluid/chocolate_still", false),
+        ),
+        (
+            "part_fluid_milk",
+            cube("create:block/fluid/milk_still", false),
+        ),
     ]
 }
 

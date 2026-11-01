@@ -240,6 +240,11 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
         } else {
             put(path, bytes)?;
             copied += 1;
+            // Fluid textures go on the block atlas too (NeoForge's fluid types stitch them
+            // there; vanilla's atlas reads `textures/block/`): the tanks' fluid parts use them.
+            if let Some(rest) = path.strip_prefix("assets/create/textures/fluid/") {
+                put(&format!("assets/create/textures/block/fluid/{rest}"), bytes)?;
+            }
         }
     }
     // NeoForge's common tags Create's recipes name and nobody else defines here.

@@ -151,6 +151,15 @@ fn compile(create: &Path, out: &Path) {
             });
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
+        } else if let Some((nutrition, modifier)) = food(name) {
+            // AllItems' FoodProperties: nutrition and saturation (`nutrition × modifier × 2`).
+            let saturation = (f64::from(nutrition) * f64::from(modifier) * 200.0).round() / 100.0;
+            let doc = json!({
+                "template": "minecraft:apple",
+                "components": { "minecraft:food": { "nutrition": nutrition, "saturation": saturation } }
+            });
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
         } else if name == "wrench" {
             // WrenchItem: `stacksTo(1)`; its use is the native mod's.
             let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
@@ -163,6 +172,15 @@ fn compile(create: &Path, out: &Path) {
             );
             pending.entry(why).or_default().push(name.clone());
         }
+    }
+
+    // AllFluids' buckets (registered with their fluids, not in the item list): held by the
+    // native mod's tanks, spouts and drains; their fluid has no block in the world yet (gap 5),
+    // so they place nothing.
+    for name in ["honey_bucket", "chocolate_bucket"] {
+        let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
+        write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+        items.push(name.to_owned());
     }
 
     write(
@@ -254,4 +272,15 @@ fn camel(name: &str) -> String {
         }
     }
     out
+}
+
+/// AllItems' plain foods: nutrition and saturation modifier.
+fn food(name: &str) -> Option<(u32, f32)> {
+    Some(match name {
+        "bar_of_chocolate" => (6, 0.3),
+        "sweet_roll" => (6, 0.8),
+        "chocolate_glazed_berries" => (7, 0.8),
+        "honeyed_apple" => (8, 0.8),
+        _ => return None,
+    })
 }

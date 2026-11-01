@@ -23,40 +23,45 @@ impl Default for Spout {
     }
 }
 
-/// `GenericItemFilling` for what is ported: an empty bucket takes a bucket's worth.
-pub fn fill_amount(item: &str) -> Option<u32> {
-    (item == "minecraft:bucket").then_some(BUCKET)
+/// A `create:filling` recipe: the item, the fluid and how much of it, what it becomes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Filling {
+    pub item: String,
+    pub fluid: Fluid,
+    pub amount: u32,
+    pub result: String,
 }
 
-/// What the item becomes filled with `fluid`.
-pub fn filled(item: &str, fluid: Fluid) -> Option<&'static str> {
-    (item == "minecraft:bucket").then(|| fluid.bucket())
+/// `GenericItemFilling.getRequiredAmountForItem` and `fillItem`: a filling recipe for the item
+/// and fluid, else an empty bucket taking a bucket's worth. How much it takes and what it
+/// becomes.
+pub fn filling(item: &str, fluid: Fluid, recipes: &[Filling]) -> Option<(u32, String)> {
+    if let Some(r) = recipes.iter().find(|r| r.item == item && r.fluid == fluid) {
+        return Some((r.amount, r.result.clone()));
+    }
+    (item == "minecraft:bucket").then(|| (BUCKET, fluid.bucket().to_owned()))
 }
 
-/// `whenItemHeld` and `tick` for a held `item`: true when it is filled now.
-pub fn step(s: &mut Spout, item: Option<&str>) -> bool {
+/// `whenItemHeld` and `tick` for a held `item`: what it became when it is filled now.
+pub fn step(s: &mut Spout, item: Option<&str>, recipes: &[Filling]) -> Option<String> {
     if s.processing >= 0 {
         s.processing -= 1;
     }
-    let Some(item) = item else {
-        return false;
-    };
+    let item = item?;
     if s.processing != -1 && s.processing != 5 {
-        return false;
+        return None;
     }
-    let (Some(need), Some((_, have))) = (fill_amount(item), s.fluid) else {
-        return false;
-    };
+    let (fluid, have) = s.fluid?;
+    let (need, result) = filling(item, fluid, recipes)?;
     if need > have {
-        return false;
+        return None;
     }
     if s.processing == -1 {
         s.processing = FILLING_TIME;
-        return false;
+        return None;
     }
-    let (fluid, have) = s.fluid.unwrap();
     s.fluid = (have > need).then_some((fluid, have - need));
-    true
+    Some(result)
 }
 
 /// Fluid put into the spout's tank: what it took.
@@ -80,17 +85,38 @@ mod tests {
     fn a_bucket_is_filled_after_the_cycle() {
         let mut s = Spout::default();
         assert_eq!(fill(&mut s, Fluid::Water, 1500), 1000);
-        assert!(!step(&mut s, Some("minecraft:bucket")), "the cycle starts");
-        let mut ticks = 1;
-        while !step(&mut s, Some("minecraft:bucket")) {
-            ticks += 1;
-        }
-        assert_eq!(ticks, 15, "filled when 5 of the 20 ticks are left");
-        assert_eq!(s.fluid, None);
-        assert_eq!(
-            filled("minecraft:bucket", Fluid::Water),
-            Some("minecraft:water_bucket")
+        assert!(
+            step(&mut s, Some("minecraft:bucket"), &[]).is_none(),
+            "the cycle starts"
         );
-        assert!(!step(&mut s, Some("minecraft:stone")));
+        let mut ticks = 1;
+        let filled = loop {
+            if let Some(r) = step(&mut s, Some("minecraft:bucket"), &[]) {
+                break r;
+            }
+            ticks += 1;
+        };
+        assert_eq!(ticks, 15, "filled when 5 of the 20 ticks are left");
+        assert_eq!(filled, "minecraft:water_bucket");
+        assert_eq!(s.fluid, None);
+        assert!(step(&mut s, Some("minecraft:stone"), &[]).is_none());
+    }
+
+    #[test]
+    fn an_apple_takes_honey_by_its_recipe() {
+        // data/create/recipe/filling/honeyed_apple.json
+        let recipes = vec![Filling {
+            item: "minecraft:apple".into(),
+            fluid: Fluid::Honey,
+            amount: 250,
+            result: "create:honeyed_apple".into(),
+        }];
+        let mut s = Spout::default();
+        fill(&mut s, Fluid::Honey, 1000);
+        let made = (0..200)
+            .filter_map(|_| step(&mut s, Some("minecraft:apple"), &recipes))
+            .count();
+        assert_eq!(made, 4, "a bucket of honey glazes four apples");
+        assert!(filling("minecraft:apple", Fluid::Water, &recipes).is_none());
     }
 }

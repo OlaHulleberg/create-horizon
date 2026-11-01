@@ -7,32 +7,65 @@
 pub enum Fluid {
     Water,
     Lava,
+    /// Create's own (`AllFluids`): kept in its machines; no fluid blocks in the world yet.
+    Honey,
+    Chocolate,
+    /// NeoForge's milk (`NeoForgeMod.MILK`), which Create enables.
+    Milk,
 }
 
 impl Fluid {
+    pub const ALL: [Fluid; 5] = [
+        Fluid::Water,
+        Fluid::Lava,
+        Fluid::Honey,
+        Fluid::Chocolate,
+        Fluid::Milk,
+    ];
+
     pub fn index(self) -> u8 {
         self as u8
     }
     pub fn from_index(i: u8) -> Option<Fluid> {
-        match i {
-            0 => Some(Fluid::Water),
-            1 => Some(Fluid::Lava),
-            _ => None,
+        Fluid::ALL.get(usize::from(i)).copied()
+    }
+    /// Its registry id.
+    pub fn id(self) -> &'static str {
+        match self {
+            Fluid::Water => "minecraft:water",
+            Fluid::Lava => "minecraft:lava",
+            Fluid::Honey => "create:honey",
+            Fluid::Chocolate => "create:chocolate",
+            Fluid::Milk => "minecraft:milk",
         }
+    }
+    /// A recipe's fluid by id or by its tag (`c:honey`, `c:milk`, `minecraft:water`...).
+    pub fn of_id(id: &str) -> Option<Fluid> {
+        Some(match id {
+            "minecraft:water" | "c:water" => Fluid::Water,
+            "minecraft:lava" | "c:lava" => Fluid::Lava,
+            "create:honey" | "c:honey" => Fluid::Honey,
+            "create:chocolate" | "c:chocolate" => Fluid::Chocolate,
+            "minecraft:milk" | "c:milk" => Fluid::Milk,
+            _ => return None,
+        })
     }
     /// The bucket that holds it.
     pub fn bucket(self) -> &'static str {
         match self {
             Fluid::Water => "minecraft:water_bucket",
             Fluid::Lava => "minecraft:lava_bucket",
+            Fluid::Honey => "create:honey_bucket",
+            Fluid::Chocolate => "create:chocolate_bucket",
+            Fluid::Milk => "minecraft:milk_bucket",
         }
     }
     pub fn of_bucket(item: &str) -> Option<Fluid> {
-        match item {
-            "minecraft:water_bucket" => Some(Fluid::Water),
-            "minecraft:lava_bucket" => Some(Fluid::Lava),
-            _ => None,
-        }
+        Fluid::ALL.into_iter().find(|f| f.bucket() == item)
+    }
+    /// Whether it can be let out into the world as a source block (vanilla's fluids only here).
+    pub fn placeable(self) -> bool {
+        matches!(self, Fluid::Water | Fluid::Lava)
     }
 }
 

@@ -15,42 +15,61 @@ pub struct Drain {
     pub fluid: Option<(Fluid, u32)>,
 }
 
-/// `GenericItemEmptying` for what is ported: a filled bucket gives a bucket's worth.
-pub fn contents(item: &str) -> Option<Fluid> {
-    Fluid::of_bucket(item)
+/// What emptying an item gives (`GenericItemEmptying`): a fluid and how much, and what is left
+/// of the item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Emptying {
+    pub fluid: Fluid,
+    pub amount: u32,
+    pub leftover: Option<String>,
 }
 
-/// A tick (`tick`, `continueProcessing`): true when one item of the held stack was emptied now
-/// (the caller throws its empty bucket off).
-pub fn tick(d: &mut Drain) -> bool {
+/// `GenericItemEmptying.emptyItem`: a `create:emptying` recipe for the item (`recipes`, by
+/// item), else a filled bucket's worth leaving the bucket.
+pub fn contents(item: &str, recipes: &[(String, Emptying)]) -> Option<Emptying> {
+    if let Some((_, e)) = recipes.iter().find(|(i, _)| i == item) {
+        return Some(e.clone());
+    }
+    Fluid::of_bucket(item).map(|fluid| Emptying {
+        fluid,
+        amount: BUCKET,
+        leftover: Some("minecraft:bucket".into()),
+    })
+}
+
+/// A tick (`tick`, `continueProcessing`): when one item of the held stack was emptied now, what
+/// is left of it (the caller throws it off: an empty bucket, a glass bottle), or None.
+pub fn tick(d: &mut Drain, recipes: &[(String, Emptying)]) -> Option<Option<String>> {
     let Some((item, count)) = d.held.clone() else {
         d.processing = 0;
-        return false;
+        return None;
     };
-    let Some(fluid) = contents(&item) else {
-        return false;
-    };
+    let Emptying {
+        fluid,
+        amount,
+        leftover,
+    } = contents(&item, recipes)?;
     if d.processing == 0 {
         d.processing = FILLING_TIME;
-        return false;
+        return None;
     }
     d.processing -= 1;
     let room = d
         .fluid
-        .is_none_or(|(f, n)| f == fluid && n + BUCKET <= CAPACITY);
+        .is_none_or(|(f, n)| f == fluid && n + amount <= CAPACITY);
     if d.processing > 5 {
         if !room {
             d.processing = FILLING_TIME;
         }
-        return false;
+        return None;
     }
     if d.processing != 5 || !room {
-        return false;
+        return None;
     }
-    d.fluid = Some((fluid, d.fluid.map_or(0, |f| f.1) + BUCKET));
+    d.fluid = Some((fluid, d.fluid.map_or(0, |f| f.1) + amount));
     d.held = (count > 1).then(|| (item, count - 1));
     d.processing = 0;
-    true
+    Some(leftover)
 }
 
 /// Drained by a pump: up to `amount`.
@@ -71,11 +90,37 @@ mod tests {
             held: Some(("minecraft:water_bucket".into(), 2)),
             ..Drain::default()
         };
-        let emptied = (0..100).filter(|_| tick(&mut d)).count();
+        let emptied = (0..100).filter(|_| tick(&mut d, &[]).is_some()).count();
         assert_eq!(emptied, 1, "1,500 mB: room for one bucket");
         assert_eq!(d.fluid, Some((Fluid::Water, 1000)));
         assert_eq!(drain(&mut d, 600), Some((Fluid::Water, 600)));
-        assert!((0..40).any(|_| tick(&mut d)), "room again for the second");
+        let left = (0..40).find_map(|_| tick(&mut d, &[]));
+        assert_eq!(
+            left,
+            Some(Some("minecraft:bucket".into())),
+            "room again for the second"
+        );
         assert_eq!(d.held, None);
+    }
+
+    #[test]
+    fn honey_bottles_empty_by_their_recipe() {
+        // data/create/recipe/emptying/honey_bottle.json
+        let recipes = vec![(
+            "minecraft:honey_bottle".to_owned(),
+            Emptying {
+                fluid: Fluid::Honey,
+                amount: 250,
+                leftover: Some("minecraft:glass_bottle".into()),
+            },
+        )];
+        let mut d = Drain {
+            held: Some(("minecraft:honey_bottle".into(), 7)),
+            ..Drain::default()
+        };
+        let bottles = (0..400).filter_map(|_| tick(&mut d, &recipes)).count();
+        assert_eq!(bottles, 6, "1,500 mB holds six bottles");
+        assert_eq!(d.fluid, Some((Fluid::Honey, 1500)));
+        assert_eq!(d.held, Some(("minecraft:honey_bottle".into(), 1)));
     }
 }
