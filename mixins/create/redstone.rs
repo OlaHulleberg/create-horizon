@@ -5,6 +5,9 @@ use super::create::*;
 use super::create_logistics::*;
 use create_engine::kinetics::Dir;
 use create_engine::states;
+use horizon_world::registry::BlockStateId;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// A latch's rules and state, from the state table: None for any other state. Read with
 /// `try_borrow`: the signal hooks ask from inside level updates the glue itself starts.
@@ -322,20 +325,31 @@ pub(super) fn set_latch(
     pos: [i32; 3],
     l: create_engine::latch::Latch,
 ) {
-    let registry = game.pack.assets.registry;
     let current = game.world.block(pos[0], pos[1], pos[2]);
-    let Some(mut s) = registry.state(current).cloned() else {
-        return;
-    };
-    let flag = |b: bool| if b { "true" } else { "false" }.to_owned();
-    s.properties.insert("powered".into(), flag(l.powered));
-    s.properties.insert("powering".into(), flag(l.powering));
-    if s.properties.contains_key("powered_side") {
-        s.properties
-            .insert("powered_side".into(), flag(l.powered_side));
-    }
-    let Some(id) = registry.id(&s) else {
-        return;
+    // The state for these flags, worked out once per (state, flags) and remembered: a latch
+    // flipping every tick costs a lookup, not a block state built from strings.
+    let flags = u8::from(l.powered) | u8::from(l.powering) << 1 | u8::from(l.powered_side) << 2;
+    let known = LATCH_STATES.with_borrow(|m| m.get(&(current.0, flags)).copied());
+    let id = match known {
+        Some(id) => id,
+        None => {
+            let registry = game.pack.assets.registry;
+            let Some(mut s) = registry.state(current).cloned() else {
+                return;
+            };
+            let flag = |b: bool| if b { "true" } else { "false" }.to_owned();
+            s.properties.insert("powered".into(), flag(l.powered));
+            s.properties.insert("powering".into(), flag(l.powering));
+            if s.properties.contains_key("powered_side") {
+                s.properties
+                    .insert("powered_side".into(), flag(l.powered_side));
+            }
+            let Some(id) = registry.id(&s) else {
+                return;
+            };
+            LATCH_STATES.with_borrow_mut(|m| m.insert((current.0, flags), id));
+            id
+        }
     };
     game.native_set_block(
         dimension,
@@ -344,6 +358,14 @@ pub(super) fn set_latch(
         super::native_hooks::flags::UPDATE_CLIENTS,
     );
     game.native_update_signal_neighbors(dimension, pos);
+}
+
+thread_local! {
+    /// `set_latch`'s states by (state, flags), and `powered_from`'s answer to "is this powered
+    /// redstone dust" by state: both fixed for a world's block registry.
+    pub(super) static LATCH_STATES: RefCell<HashMap<(u32, u8), BlockStateId>> =
+        RefCell::new(HashMap::new());
+    pub(super) static POWERED_WIRE: RefCell<HashMap<u32, bool>> = RefCell::new(HashMap::new());
 }
 
 /// Whether a diode at `pos` is powered from its side `d` (`DiodeBlock.getInputSignal` > 0 from
@@ -356,14 +378,15 @@ pub(super) fn powered_from(game: &mut Game<'_>, pos: [i32; 3], d: Dir) -> bool {
     if game.with_level(|b, level, ticks| b.signal(level, ticks, bp, dir)) > 0 {
         return true;
     }
-    game.pack
-        .assets
-        .registry
-        .state(game.world.block(at[0], at[1], at[2]))
-        .is_some_and(|s| {
-            s.name == "minecraft:redstone_wire"
-                && s.properties.get("power").is_some_and(|v| v != "0")
-        })
+    let state = game.world.block(at[0], at[1], at[2]);
+    if let Some(known) = POWERED_WIRE.with_borrow(|m| m.get(&state.0).copied()) {
+        return known;
+    }
+    let wire = game.pack.assets.registry.state(state).is_some_and(|s| {
+        s.name == "minecraft:redstone_wire" && s.properties.get("power").is_some_and(|v| v != "0")
+    });
+    POWERED_WIRE.with_borrow_mut(|m| m.insert(state.0, wire));
+    wire
 }
 
 /// `DiodeBlock.getInputSignal` > 0 at the latch's back, and a powered latch's
@@ -397,6 +420,9 @@ pub(super) fn tick_latches(game: &mut Game<'_>, dimension: &str, dim: usize) {
         return;
     }
     let mut next = Vec::new();
+    // Latches with a tick coming, to look up in one step (a counter's ripple re-checks many).
+    let mut pending: std::collections::HashSet<[i32; 3]> =
+        with_world(|w| w.dims[dim].latch_ticks.iter().map(|t| t.0).collect()).unwrap_or_default();
     for (pos, _) in due {
         let state = game.world.block(pos[0], pos[1], pos[2]).0;
         let Some((kind, l)) = latch_state(state) else {
@@ -407,7 +433,7 @@ pub(super) fn tick_latches(game: &mut Game<'_>, dimension: &str, dim: usize) {
         if n != l {
             set_latch(game, dimension, pos, n);
         }
-        if again {
+        if again && pending.insert(pos) {
             next.push((pos, now + 1));
         }
     }
@@ -417,9 +443,8 @@ pub(super) fn tick_latches(game: &mut Game<'_>, dimension: &str, dim: usize) {
             continue;
         };
         let (back, side) = latch_inputs(game, pos, l.facing);
-        let pending = next.iter().any(|t: &([i32; 3], i64)| t.0 == pos)
-            || with_world(|w| w.dims[dim].latch_ticks.iter().any(|t| t.0 == pos)) == Some(true);
-        if !pending && create_engine::latch::needs_tick(kind, &l, back, side) {
+        if !pending.contains(&pos) && create_engine::latch::needs_tick(kind, &l, back, side) {
+            pending.insert(pos);
             next.push((pos, now + 1));
         }
     }
