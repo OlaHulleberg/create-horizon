@@ -201,6 +201,11 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         Block::MechanicalPress => s
             .facing
             .map_or([None, None], |f| one(Part::shaft(f.axis()))),
+        // MechanicalMixerBlock: a small cog on the y axis, no shaft (`hasShaftTowards` false).
+        Block::MechanicalMixer => one(Part {
+            shafts: 0,
+            ..Part::cog(Axis::Y, false)
+        }),
         // CrushingWheelBlock (RotatedPillarKineticBlock): shafts at both ends of its axis.
         Block::CrushingWheel => s.axis.map_or([None, None], |a| one(Part::shaft(a))),
         // EncasedFanBlock.hasShaftTowards: the face behind it.

@@ -154,6 +154,11 @@ pub struct Dimension {
     pub burners: HashMap<[i32; 3], crate::burner::Burner>,
     pub burning: Vec<[i32; 3]>,
     burner_saved: HashMap<[i32; 3], crate::burner::Burner>,
+    /// Mechanical mixers and their cycle, the running ones (the only ones that tick), and those
+    /// to look at their basin again (`basinChecker`: placed, speed changed, basin changed).
+    pub mixers: HashMap<[i32; 3], crate::basin::Mixer>,
+    pub mixing: Vec<[i32; 3]>,
+    pub mixer_checks: Vec<[i32; 3]>,
 }
 
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
@@ -188,6 +193,7 @@ fn has_state(block: Block) -> bool {
     matches!(
         block,
         Block::Depot
+            | Block::Basin
             | Block::BlazeBurner
             | Block::CrushingWheelController
             | Block::Belt
@@ -270,6 +276,13 @@ impl CreateWorld {
         }
         if block == Block::CrushingWheel {
             d.crusher_checks.push(pos);
+        }
+        if block == Block::MechanicalMixer && !d.mixers.contains_key(&pos) {
+            d.mixers.insert(pos, Default::default());
+            d.mixer_checks.push(pos);
+        }
+        if block == Block::Basin {
+            d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
         }
         if block == Block::BlazeBurner && !d.burners.contains_key(&pos) {
             let b = d.burner_saved.remove(&pos).unwrap_or_default();
@@ -370,6 +383,13 @@ impl CreateWorld {
             if self.table.get(old).map(|(b, _)| b) == Some(Block::CrushingWheel) {
                 d.crusher_checks.push(pos);
             }
+            if d.mixers.remove(&pos).is_some() {
+                d.mixing.retain(|p| *p != pos);
+            }
+            if self.table.get(old).map(|(b, _)| b) == Some(Block::Basin) {
+                // `onBasinRemoved`: a mixer over it stops.
+                d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
+            }
             if d.burners.remove(&pos).is_some() {
                 d.burning.retain(|p| *p != pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
@@ -439,6 +459,10 @@ impl CreateWorld {
             d.fans.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crushers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.mixers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.mixing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.mixer_checks
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burning.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burner_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -502,6 +526,11 @@ impl CreateWorld {
                     .is_some_and(|(b, _)| b == Block::CrushingWheel)
             {
                 d.crusher_checks.push(pos);
+            }
+            if let Event::Speed { pos, .. } = *e
+                && d.mixers.contains_key(&pos)
+            {
+                d.mixer_checks.push(pos);
             }
             if let Event::Speed { pos, speed, .. } = *e
                 && let Some(fan) = d.fans.get_mut(&pos)
