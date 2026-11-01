@@ -544,6 +544,9 @@ impl CreateWorld {
             d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            // Trains standing in it leave with it (saved with it).
+            d.trains
+                .retain(|t| CreateWorld::train_column(t) != (cx, cz));
             d.pumping.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pipes_changed = true;
             d.mixing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1170,6 +1173,40 @@ impl CreateWorld {
             .collect();
         out.sort_by_key(|(p, _)| *p);
         out
+    }
+
+    /// The column a train is in now: its first bogey's.
+    pub fn train_column(t: &TrainOnTrack) -> (i32, i32) {
+        let shift = (t.train.position - t.start).round() as i32;
+        let mut p = t.origin;
+        match t.train.line.axis {
+            crate::kinetics::Axis::X => p[0] += shift,
+            crate::kinetics::Axis::Y => p[1] += shift,
+            crate::kinetics::Axis::Z => p[2] += shift,
+        }
+        (p[0] >> 4, p[2] >> 4)
+    }
+
+    /// The trains in a column now, to save with it.
+    pub fn column_trains(&self, dim: usize, cx: i32, cz: i32) -> Vec<TrainOnTrack> {
+        self.dims[dim]
+            .trains
+            .iter()
+            .filter(|t| CreateWorld::train_column(t) == (cx, cz))
+            .cloned()
+            .collect()
+    }
+
+    /// Trains saved with a column that joined: each gets a fresh id.
+    pub fn load_trains(&mut self, dim: usize, saved: Vec<TrainOnTrack>) -> Vec<u32> {
+        let d = &mut self.dims[dim];
+        let mut ids = Vec::new();
+        for mut t in saved {
+            t.id = d.trains.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+            ids.push(t.id);
+            d.trains.push(t);
+        }
+        ids
     }
 
     /// Tank contents saved with a column, for when its tanks are found.

@@ -128,6 +128,7 @@ pub(super) fn chunk_load(
     let tanks = tanks_from_nbt(Game::native_chunk_data(chunk, "create"));
     let windmills = windmills_from_nbt(game, Game::native_chunk_data(chunk, "create"));
     let crushers = crushers_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let trains = trains_from_nbt(game, Game::native_chunk_data(chunk, "create"));
     let burners = burners_from_nbt(Game::native_chunk_data(chunk, "create"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
@@ -136,6 +137,7 @@ pub(super) fn chunk_load(
         w.load_tanks(dim, tanks.into_iter());
         w.load_windmills(dim, windmills.into_iter());
         w.load_crushers(dim, crushers.into_iter());
+        w.load_trains(dim, trains);
         w.load_burners(dim, burners.into_iter());
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
@@ -325,6 +327,11 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     let windmills: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].windmills.keys().copied().collect()).unwrap_or_default();
     send_windmills(game, &[player], dim, &windmills);
+    let trains: Vec<u32> =
+        with_world(|w| w.dims[dim].trains.iter().map(|t| t.id).collect()).unwrap_or_default();
+    for id in trains {
+        send_train(game, dim, [i32::MIN, 0, id as i32]);
+    }
 }
 
 /// A player right-clicks a block (`HandCrankBlock.useItemOn`): a hand crank turns for 10 ticks,
@@ -804,6 +811,7 @@ pub(super) fn chunk_data_save(
     let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
     let windmills = with_world(|w| w.column_windmills(dim, chunk[0], chunk[1])).unwrap_or_default();
     let crushers = with_world(|w| w.column_crushers(dim, chunk[0], chunk[1])).unwrap_or_default();
+    let trains = with_world(|w| w.column_trains(dim, chunk[0], chunk[1])).unwrap_or_default();
     let burners = with_world(|w| w.column_burners(dim, chunk[0], chunk[1])).unwrap_or_default();
     if settings.is_empty()
         && belts.is_empty()
@@ -811,6 +819,7 @@ pub(super) fn chunk_data_save(
         && windmills.is_empty()
         && crushers.is_empty()
         && burners.is_empty()
+        && trains.is_empty()
     {
         data.remove(&"create".into());
         return;
@@ -828,6 +837,9 @@ pub(super) fn chunk_data_save(
     }
     if !crushers.is_empty() {
         own.insert("crushers".into(), crushers_to_nbt(&crushers));
+    }
+    if !trains.is_empty() {
+        own.insert("trains".into(), trains_to_nbt(game, &trains));
     }
     if !burners.is_empty() {
         // x, y, z, fuel type, burn time left for each burner (`fuelLevel`, `burnTimeRemaining`).
@@ -5067,6 +5079,7 @@ fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
         id
     })
     .unwrap_or(0);
+    game.native_mark_chunk_unsaved(&dimension, [origin[0] >> 4, origin[2] >> 4]);
     send_train(game, dim, [i32::MIN, 0, id as i32]);
 }
 
@@ -5134,19 +5147,42 @@ fn send_train_clear(game: &mut Game<'_>, dimension: &str, id: u32) {
 /// motion when it starts, every ten ticks while its speed changes, and when it stops.
 fn tick_trains(game: &mut Game<'_>, _dimension: &str, dim: usize) {
     use create_engine::trains::Run;
-    let running: Vec<(u32, Run, f64)> = with_world(|w| {
+    let running: Vec<(u32, Run, f64, (i32, i32), (i32, i32))> = with_world(|w| {
         w.dims[dim]
             .trains
             .iter_mut()
             .filter(|t| t.train.destination.is_some())
             .map(|t| {
                 let before = t.train.speed;
+                let was = create_engine::world::CreateWorld::train_column(t);
                 let run = t.train.tick();
-                (t.id, run, (t.train.speed - before).abs())
+                (
+                    t.id,
+                    run,
+                    (t.train.speed - before).abs(),
+                    was,
+                    create_engine::world::CreateWorld::train_column(t),
+                )
             })
             .collect()
     })
     .unwrap_or_default();
+    // Saved with the column it stands in: the one it left and the one it is in save again.
+    for (_, _, _, was, now) in &running {
+        if was != now {
+            game.native_mark_chunk_unsaved(_dimension, [was.0, was.1]);
+            game.native_mark_chunk_unsaved(_dimension, [now.0, now.1]);
+        }
+    }
+    let running: Vec<(u32, create_engine::trains::Run, f64)> = running
+        .into_iter()
+        .map(|(id, run, change, _, now)| {
+            if run == create_engine::trains::Run::Arrived {
+                game.native_mark_chunk_unsaved(_dimension, [now.0, now.1]);
+            }
+            (id, run, change)
+        })
+        .collect();
     let tick = game.world.game_time;
     for (id, run, change) in running {
         if run == Run::Arrived || (change > 0.0 && tick % 10 == 0) {
@@ -5599,6 +5635,128 @@ fn state_of_text(registry: &BlockRegistry, text: &str) -> Option<u32> {
         s.properties.insert(k.to_owned(), v.to_owned());
     }
     registry.id(&s).map(|i| i.0)
+}
+
+/// Trains as saved (`Train.write`, here with the column they stand in): their line, motion,
+/// first bogey and the blocks they carry.
+fn trains_to_nbt(
+    game: &Game<'_>,
+    all: &[create_engine::world::TrainOnTrack],
+) -> horizon_world::nbt::Tag {
+    use horizon_world::nbt::{Compound, Tag};
+    let registry = game.pack.assets.registry;
+    let f = |v: f64| (v as f32).to_bits() as i32;
+    Tag::List(
+        all.iter()
+            .map(|t| {
+                let l = t.train.line;
+                let mut c = Compound::new();
+                c.insert(
+                    "line".into(),
+                    Tag::IntArray(vec![
+                        i32::from(axis_index(l.axis)),
+                        l.fixed[0],
+                        l.fixed[1],
+                        l.fixed[2],
+                        l.from,
+                        l.to,
+                    ]),
+                );
+                c.insert(
+                    "motion".into(),
+                    Tag::IntArray(vec![
+                        f(t.train.position),
+                        f(t.train.speed),
+                        f(t.train.destination.unwrap_or(0.0)),
+                        i32::from(t.train.destination.is_some()),
+                        t.origin[0],
+                        t.origin[1],
+                        t.origin[2],
+                        f(t.start),
+                    ]),
+                );
+                c.insert(
+                    "blocks".into(),
+                    Tag::IntArray(t.blocks.iter().flat_map(|(o, _)| *o).collect()),
+                );
+                c.insert(
+                    "states".into(),
+                    Tag::List(
+                        t.blocks
+                            .iter()
+                            .map(|(_, s)| Tag::String(state_text(registry, *s).as_str().into()))
+                            .collect(),
+                    ),
+                );
+                Tag::Compound(c)
+            })
+            .collect(),
+    )
+}
+
+fn trains_from_nbt(
+    game: &Game<'_>,
+    data: Option<&horizon_world::nbt::Compound>,
+) -> Vec<create_engine::world::TrainOnTrack> {
+    use create_engine::trains::{Line, Train};
+    use horizon_world::nbt::Tag;
+    let registry = game.pack.assets.registry;
+    let Some(Tag::List(list)) = data.and_then(|d| d.get(&"trains".into())) else {
+        return Vec::new();
+    };
+    let f = |v: i32| f64::from(f32::from_bits(v as u32));
+    list.iter()
+        .filter_map(|c| {
+            let Tag::Compound(c) = c else { return None };
+            let (
+                Some(Tag::IntArray(l)),
+                Some(Tag::IntArray(m)),
+                Some(Tag::IntArray(o)),
+                Some(Tag::List(s)),
+            ) = (
+                c.get(&"line".into()),
+                c.get(&"motion".into()),
+                c.get(&"blocks".into()),
+                c.get(&"states".into()),
+            )
+            else {
+                return None;
+            };
+            if l.len() < 6 || m.len() < 8 {
+                return None;
+            }
+            let axis = [Axis::X, Axis::Y, Axis::Z][l[0].clamp(0, 2) as usize];
+            let line = Line {
+                axis,
+                fixed: [l[1], l[2], l[3]],
+                from: l[4],
+                to: l[5],
+            };
+            let blocks = o
+                .chunks_exact(3)
+                .zip(s)
+                .filter_map(|(o, s)| {
+                    let Tag::String(s) = s else { return None };
+                    Some((
+                        [o[0], o[1], o[2]],
+                        state_of_text(registry, &s.to_string_lossy())?,
+                    ))
+                })
+                .collect();
+            Some(create_engine::world::TrainOnTrack {
+                train: Train {
+                    line,
+                    position: f(m[0]),
+                    speed: f(m[1]),
+                    destination: (m[3] != 0).then(|| f(m[2])),
+                },
+                blocks,
+                origin: [m[4], m[5], m[6]],
+                start: f(m[7]),
+                id: 0,
+            })
+        })
+        .collect()
 }
 
 fn windmills_to_nbt(
