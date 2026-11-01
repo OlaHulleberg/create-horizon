@@ -21,6 +21,8 @@ the server thread's smoothed tick time. Scenarios:
   repeaters  the control for redstone: the same chains of vanilla repeaters
   contraptions  16 windmills (17 sails each, a cross) assembled and turning: 16 structures drawn as
            one GPU part each (phase 8)
+  fans     32 encased fans at 16 rpm blowing through water over three depots each of 64 ice: 96
+           stacks washed into packed ice (phase 3)
 
     python3 tools/bench_create.py --game target/horizon-cargo/fast/horizon-client \\
         --content target/create-content --scenario idle --repeats 3 --out benchmarks/p0-idle.json
@@ -90,6 +92,20 @@ def build(ctl_bin, sock, scenario, center):
             for i in range(16):
                 command(ctl_bin, sock, f"setblock {x-16+i} {y-6} {zz} "
                         'create:depot{Items:[{Slot:0b,id:"minecraft:iron_ingot",count:64}]}', failures)
+    if scenario == "fans":
+        for row in range(32):
+            zz = z - 32 + 2 * row
+            command(ctl_bin, sock, f"setblock {x-17} {y-4} {zz} create:creative_motor[facing=east]", failures)
+            command(ctl_bin, sock, f"setblock {x-16} {y-4} {zz} create:encased_fan[facing=east]", failures)
+            # A water source in front, held by glass below and beside it and iron bars ahead (the
+            # current passes bars, `create:fan_transparent`).
+            command(ctl_bin, sock, f"fill {x-15} {y-4} {zz-1} {x-15} {y-4} {zz+1} minecraft:glass", failures)
+            command(ctl_bin, sock, f"setblock {x-15} {y-5} {zz} minecraft:glass", failures)
+            command(ctl_bin, sock, f"setblock {x-14} {y-4} {zz} minecraft:iron_bars", failures)
+            command(ctl_bin, sock, f"setblock {x-15} {y-4} {zz} minecraft:water", failures)
+            for i in range(3):
+                command(ctl_bin, sock, f"setblock {x-13+i} {y-5} {zz} "
+                        'create:depot{Items:[{Slot:0b,id:"minecraft:ice",count:64}]}', failures)
     if scenario == "logistics":
         belt = "facing=south,slope=horizontal,casing=false,waterlogged=false"
         for row in range(32):
@@ -196,7 +212,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512,
-                    "repeaters": 0, "contraptions": 16 * 18}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             have = count_create(ctl_bin, sock, center)
@@ -241,6 +257,10 @@ def run_once(args, scenario):
         if scenario == "processing":
             # The work really ran: sheets in one depot's outputs.
             pressed = ctl(ctl_bin, sock, "command", f"data get block {x-8} {y-6} {z}").get("chat")
+        if scenario == "fans":
+            # The current really washed: one row's depots.
+            pressed = [ctl(ctl_bin, sock, "command", f"data get block {x-13+i} {y-5} {z}").get("chat")
+                       for i in range(3)]
         frames = summary.get("frame_ms") or []
         return {"gpu": gpu, "create_blocks": have, "frames": len(frames),
                 "frame_ms_p50": statistics.median(frames) if frames else None,
@@ -270,7 +290,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "redstone", "repeaters", "contraptions"],
+                                          "logistics", "redstone", "repeaters", "contraptions", "fans"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

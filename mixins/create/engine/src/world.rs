@@ -136,6 +136,9 @@ pub struct Dimension {
     pub windmill_assemble: Vec<[i32; 3]>,
     pub windmill_changes: Vec<[i32; 3]>,
     pub windmill_orphans: Vec<([i32; 3], Windmill)>,
+    /// Encased fans, and the ones turning: only those tick.
+    pub fans: HashMap<[i32; 3], Fan>,
+    pub running_fans: Vec<[i32; 3]>,
 }
 
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
@@ -144,6 +147,22 @@ pub struct Windmill {
     pub blocks: Vec<([i32; 3], u32)>,
     pub sails: u32,
     pub clockwise: bool,
+}
+
+/// An encased fan (`EncasedFanBlockEntity`): its facing, speed and air current, and the depots
+/// and belt segments in the current with the processing each gets.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Fan {
+    pub facing: Option<crate::kinetics::Dir>,
+    pub speed: f32,
+    pub current: crate::fan::Current,
+    /// `airCurrentUpdateCooldown`: ticks until the current is looked at again.
+    pub cooldown: u32,
+    /// `updateAirFlow`: rebuild the current this tick.
+    pub rebuild: bool,
+    pub handlers: Vec<([i32; 3], Option<crate::fan::Kind>)>,
+    /// Clients must see its propeller and current again.
+    pub changed: bool,
 }
 
 /// Blocks that keep state of their own here but are not kinetic: depots.
@@ -229,6 +248,12 @@ impl CreateWorld {
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
         }
+        if block == Block::EncasedFan {
+            // Placed, loaded or turned by a wrench: its current is looked at again.
+            let fan = d.fans.entry(pos).or_default();
+            fan.facing = info.facing;
+            fan.rebuild = true;
+        }
         if block == Block::WindmillBearing
             && !d.windmills.contains_key(&pos)
             && let Some(w) = d.windmill_saved.remove(&pos)
@@ -308,6 +333,9 @@ impl CreateWorld {
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
             d.presses.remove(&pos);
+            if d.fans.remove(&pos).is_some() {
+                d.running_fans.retain(|p| *p != pos);
+            }
             if let Some(w) = d.windmills.remove(&pos) {
                 d.windmill_orphans.push((pos, w));
                 d.windmill_changes.push(pos);
@@ -363,6 +391,9 @@ impl CreateWorld {
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.fans.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.running_fans
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tanks.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.windmills
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -401,11 +432,49 @@ impl CreateWorld {
     /// Re-solves what changed in a dimension: nothing at all when nothing did.
     #[inline]
     pub fn tick(&mut self, dim: usize, events: &mut Vec<Event>) -> SolveStats {
-        let k = &mut self.dims[dim].kinetics;
-        if !k.has_dirty() {
+        let d = &mut self.dims[dim];
+        if !d.kinetics.has_dirty() {
             return SolveStats::default();
         }
-        k.solve(events)
+        let from = events.len();
+        let stats = d.kinetics.solve(events);
+        // Fans follow their speed (`onSpeedChanged`: the current is rebuilt).
+        if !d.fans.is_empty() {
+            for e in &events[from..] {
+                if let Event::Speed { pos, speed, .. } = *e
+                    && let Some(fan) = d.fans.get_mut(&pos)
+                    && fan.speed != speed
+                {
+                    fan.speed = speed;
+                    fan.rebuild = true;
+                    if !d.running_fans.contains(&pos) {
+                        d.running_fans.push(pos);
+                    }
+                }
+            }
+        }
+        stats
+    }
+
+    /// Fans to tick: each turning one, and one that just stopped (its current goes). Those whose
+    /// current is due to be looked at again (`fanBlockCheckRate`) are marked to rebuild.
+    pub fn fans_to_tick(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        let d = &mut self.dims[dim];
+        let mut out = Vec::with_capacity(d.running_fans.len());
+        d.running_fans.retain(|pos| {
+            let Some(fan) = d.fans.get_mut(pos) else {
+                return false;
+            };
+            if fan.cooldown == 0 {
+                fan.cooldown = crate::fan::CHECK_RATE;
+                fan.rebuild = true;
+            } else {
+                fan.cooldown -= 1;
+            }
+            out.push(*pos);
+            fan.speed != 0.0
+        });
+        out
     }
 
     /// A player scrolls on the creative motor at `pos`: its speed moves by one per step, between

@@ -89,6 +89,8 @@ pub struct Held {
     pub angle: i32,
     pub side_offset: f32,
     pub locked: bool,
+    /// `processedBy` / `processingTime`: how far a fan's current has processed it.
+    pub fan: crate::fan::Progress,
 }
 
 impl Held {
@@ -102,6 +104,7 @@ impl Held {
             angle,
             side_offset: (angle - 180) as f32 / (360.0 * 3.0),
             locked: false,
+            fan: Default::default(),
         }
     }
 
@@ -300,6 +303,7 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
                 angle: i32_of(&head[14..18]),
                 position: f32_of(&head[18..22]),
                 side_offset: f32_of(&head[22..26]),
+                fan: Default::default(),
             },
             stacks: Vec::new(),
         };

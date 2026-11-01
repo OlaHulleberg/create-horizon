@@ -234,6 +234,8 @@ pub struct Item {
     pub locked: bool,
     pub inserted_at: i32,
     pub inserted_from: Option<Dir>,
+    /// `processedBy` / `processingTime`: how far a fan's current has processed it.
+    pub fan: crate::fan::Progress,
 }
 
 impl Item {
@@ -249,6 +251,7 @@ impl Item {
             locked: false,
             inserted_at: 0,
             inserted_from: None,
+            fan: Default::default(),
         };
         i.side_offset = i.target_side_offset();
         i
@@ -582,6 +585,43 @@ impl Inventory {
             .partition(|s| (position - s.position).abs() < max);
         self.items = kept;
         taken
+    }
+
+    /// `applyToEachWithin`: `f` processes each item within `max` of `position`; one it converts
+    /// leaves, its held output put back at the segment's middle and its outputs where it was, all
+    /// on the belt from the next tick. True when anything changed.
+    pub fn apply_within(
+        &mut self,
+        position: f32,
+        max: f32,
+        mut f: impl FnMut(&mut Item) -> Process,
+    ) -> bool {
+        let mut dirty = false;
+        let mut i = 0;
+        while i < self.items.len() {
+            if (position - self.items[i].position).abs() >= max {
+                i += 1;
+                continue;
+            }
+            match f(&mut self.items[i]) {
+                Process::Convert { held, outputs } => {
+                    dirty = true;
+                    self.items.remove(i);
+                    if let Some(mut h) = held {
+                        let nudge = if self.positive {
+                            1.0 / 512.0
+                        } else {
+                            -1.0 / 512.0
+                        };
+                        h.position = position.trunc() + 0.5 - nudge;
+                        self.to_insert.push(h);
+                    }
+                    self.to_insert.extend(outputs);
+                }
+                _ => i += 1,
+            }
+        }
+        dirty
     }
 
     /// `BeltInventory.tick` on the server for a belt of `length` turning at `speed` (direction
@@ -928,6 +968,7 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
                 item: String::from_utf8_lossy(name).into_owned(),
                 inserted_at: 0,
                 inserted_from: None,
+                fan: Default::default(),
             });
         }
         out.push(c);
