@@ -357,7 +357,26 @@ pub(super) fn set_latch(
         id,
         super::native_hooks::flags::UPDATE_CLIENTS,
     );
-    game.native_update_signal_neighbors(dimension, pos);
+    update_in_front(game, dimension, pos, l.facing);
+}
+
+/// `DiodeBlock.updateNeighborsInFront`: the block the diode at `pos` (input side `facing`)
+/// powers reads it again, then that block's neighbours but the diode. Latches tick on the server
+/// only.
+fn update_in_front(game: &mut Game<'_>, dimension: &str, pos: [i32; 3], facing: Dir) {
+    use horizon_core::geometry::Direction;
+    if dimension != game.dim.id() {
+        return;
+    }
+    let o = facing.opposite().offset();
+    let front = horizon_core::position::BlockPos::new(pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]);
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    let skip = Direction::ALL[facing as usize];
+    game.with_level(|b, level, ticks| {
+        let block = b.block(state);
+        b.neighbor_changed_at(level, ticks, front, block);
+        b.update_neighbors_at_except(level, ticks, front, block, skip);
+    });
 }
 
 thread_local! {

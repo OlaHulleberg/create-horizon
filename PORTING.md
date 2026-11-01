@@ -236,7 +236,14 @@ The speedometer and stressometer (`gauge.rs`, after `GaugeBlock`, `SpeedGaugeBlo
 | off: no content mod | 1792 ± 16 | 0.513 / 1.135 | 3.119 ± 0.145 | baseline |
 | repeaters (control) | 1845 ± 50 | 0.498 / 1.102 | 3.502 ± 0.048 | control |
 | diodes: the same chains of 512 pulse extenders | 1867 ± 12 | 0.492 / 1.100 | 3.737 ± 0.095 | tick ≤ control + 0.3 ms, frame p50 ≤ control + 10% |
-| redstone: the same chains of toggle latches | 1861 ± 28 | 0.492 / 1.120 | 3.852 ± 0.133 | tick ≤ control + 0.3 ms — **over: +0.35 ms** |
+| redstone: the same chains of toggle latches | 1861 ± 28 | 0.492 / 1.120 | 3.852 ± 0.133 | tick ≤ control + 0.3 ms — over here (+0.35 ms); within budget since the fix below |
+
+Latches now update only what is in front of them, as vanilla's `DiodeBlock.updateNeighborsInFront` does (the
+block they power, then its neighbours but the latch: 6 updates where `native_update_signal_neighbors` made 42), through
+Horizon `38b275046` (`Behaviours::neighbor_changed_at`, `update_neighbors_at_except`). Rerun, 5 runs each, while two
+other builds loaded the machine (`benchmarks/create-p7front-*.json`): repeaters tick 3.523 ± 0.082 ms (median 3.557),
+latches 3.623 ± 0.317 (median 3.453; two runs near 4.0 under the builds' load), frame p50 0.491 / 0.498 ms: within
+tick ≤ control + 0.3 ms. The counters still count (`0110110111111111` then `0100110111111111`).
 
 Brass diodes (`diode.rs`, after `BrassDiodeBlock` and the pulse repeater's, extender's and timer's block entities: delay as a value box from 2 ticks to an hour, `inverted` toggled with the wrench on the box) and the rose quartz lamp (`lamp.rs`) are within budget (`benchmarks/create-p7diodes-*.json`). Proven headless: an unpowered pulse timer lit its lamp in short bursts about once a second; a pulse repeater lit its lamp once shortly after its input came on and went dark while the input stayed; a pulse extender kept its lamp lit a moment after its input went; of two joined rose quartz lamps the powered one lit and powering the other turned the first off. **Open:** the toggle latch scene is now +0.35 ms over its vanilla control (budget 0.3; +0.20 when first measured): an A/B against the build before the diodes gives the same +0.37, so something earlier made latches slower; not yet found.
 
