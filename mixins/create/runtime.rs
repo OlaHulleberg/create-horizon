@@ -1796,6 +1796,48 @@ fn press_on_depot(
     next
 }
 
+thread_local! {
+    /// The face of the last block an item was used on, and when: `native_place_block` doesn't
+    /// say which face was clicked, the use before it does.
+    static CLICKED: std::cell::Cell<Option<(i64, [i32; 3])>> = const { std::cell::Cell::new(None) };
+}
+
+/// `getStateForPlacement` of Create's directional blocks: a block placed from an item turns to
+/// the facing Create gives it (from the shafts around it, the player's view and sneaking).
+pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateId) {
+    if states::index(state.0).is_none() {
+        return;
+    }
+    let Some(dim) = dimension_index(game.dim.id()) else {
+        return;
+    };
+    let clicked_face = CLICKED
+        .get()
+        .filter(|c| c.0 == game.world.game_time)
+        .and_then(|c| Dir::from_offset(c.1))
+        .unwrap_or(Dir::Up);
+    let ctx = create_engine::place::Context {
+        yaw: game.yaw,
+        pitch: game.pitch,
+        sneaking: game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft),
+        clicked_face,
+    };
+    let facing = with_world(|w| {
+        let (block, info) = w.table.get(state.0)?;
+        let now = info.facing;
+        let to = create_engine::place::facing(block, ctx, |side| {
+            let o = side.offset();
+            let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+            w.has_shaft_towards(dim, at, side.opposite())
+        })?;
+        (now != Some(to)).then_some(to)
+    })
+    .flatten();
+    if let Some(f) = facing {
+        game.native_set_block_property(pos, "facing", dir_name(f));
+    }
+}
+
 /// Encased fans that turn (`EncasedFanBlockEntity.tick`): the current looked at again when due
 /// (`AirCurrent.rebuild`), then the depots and belts in it processed
 /// (`tickAffectedHandlers`). Stopped fans cost nothing.
@@ -3173,6 +3215,8 @@ pub(super) fn use_item_on(
     face: [i32; 3],
     claimed: &mut bool,
 ) {
+    // The face a placement that follows was clicked on (`BlockPlaceContext.getClickedFace`).
+    CLICKED.set(Some((game.world.game_time, face)));
     if &*stack.item != "create:wrench" {
         return;
     }

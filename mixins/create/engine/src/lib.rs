@@ -10,6 +10,7 @@ pub mod generated;
 pub mod kinetics;
 pub mod latch;
 pub mod parts;
+pub mod place;
 pub mod press;
 pub mod processing;
 pub mod states;

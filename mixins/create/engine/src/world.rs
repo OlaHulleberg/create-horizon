@@ -954,6 +954,19 @@ impl CreateWorld {
         v
     }
 
+    /// `IRotate.hasShaftTowards`: whether the kinetic block at `pos` has a shaft on `face`.
+    pub fn has_shaft_towards(&self, dim: usize, pos: [i32; 3], face: crate::kinetics::Dir) -> bool {
+        let d = &self.dims[dim];
+        let Some((block, info)) = d.states.get(&pos).and_then(|&s| self.table.get(s)) else {
+            return false;
+        };
+        let settings = d.settings.get(&pos).copied().unwrap_or_default();
+        parts(block, info, &settings)
+            .iter()
+            .flatten()
+            .any(|p| p.shafts & face.bit() != 0)
+    }
+
     pub fn speed(&self, dim: usize, pos: [i32; 3]) -> Option<f32> {
         self.dims[dim].kinetics.speed(pos, 0)
     }
