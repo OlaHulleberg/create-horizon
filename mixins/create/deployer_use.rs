@@ -127,7 +127,8 @@ fn transform(
 
 /// `SpawnEggItem.useOn` for the fake player: on a spawner the egg sets its mob (the fake player
 /// is no op, so not the egg's data); else its mob comes where `deployer::spawn_egg_at` says,
-/// moved down onto the ground (`EntityType.spawn`, `tryMoveDown`), and one egg is used.
+/// moved down onto the ground (`EntityType.spawn`, `tryMoveDown`; further down when
+/// `deployer::spawn_egg_offsets_more`), and one egg is used.
 fn spawn_egg(
     game: &mut crate::game::Game<'_>,
     pos: [i32; 3],
@@ -159,7 +160,12 @@ fn spawn_egg(
         .collision_shape(state)
         .is_some_and(|s| s.is_empty());
     let p = deployer::spawn_egg_at(pos, facing, empty);
-    let Some(mob) = game.spawn_mob_at(&kind, (p[0], p[1], p[2]), true) else {
+    let spawned = if deployer::spawn_egg_offsets_more(facing, empty) {
+        spawn_mob_offset_more(game, &id, p)
+    } else {
+        game.spawn_mob_at(&kind, (p[0], p[1], p[2]), true)
+    };
+    let Some(mob) = spawned else {
         return Some(stack);
     };
     // EntityType.create: `finalizeSpawn` first, the egg's components after.
@@ -171,10 +177,64 @@ fn spawn_egg(
     super::shrink(stack)
 }
 
-/// `activateInner`'s entities in `Mode.PUNCH`: one of those in the block at `at`, at random
-/// (`level.random`), is attacked (`Player.attack`) for `damage` from `from`, where the fake
-/// player stands; true when there was one, and the block is then left alone. Only mobs take the
-/// hit here; the hit has no attacker, so nothing turns on the player for it.
+/// `EntityType.spawn(.., pos, SPAWN_EGG, true, true)` for the mob `name` at `p`
+/// (`Dispenser::spawn_mob_at` with `shouldOffsetYMore`): `getYOffset(level, pos, true, box)`,
+/// its box set on top of the block at `p` falls up to two blocks against the collision shapes
+/// of that block and the one below it.
+fn spawn_mob_offset_more(game: &mut crate::game::Game<'_>, name: &str, p: [i32; 3]) -> Option<u32> {
+    use horizon_core::geometry::{Aabb, Vec3};
+    use horizon_world::{
+        block_collision_scan::BlockCollisionScan, collision_context::CollisionContext,
+    };
+    let t = game.res.mob_types().get(name)?.clone();
+    let h = t.width / 2.0;
+    let (x, z) = (f64::from(p[0]) + 0.5, f64::from(p[2]) + 0.5);
+    let y = f64::from(p[1]) + 1.0;
+    let entity = Aabb::new(
+        Vec3::new(x - h, y, z - h),
+        Vec3::new(x + h, y + t.height, z + h),
+    );
+    // `new AABB(pos).expandTowards(0, -1, 0)`.
+    let cells = Aabb::new(
+        Vec3::new(f64::from(p[0]), f64::from(p[1]) - 1.0, f64::from(p[2])),
+        Vec3::new(
+            f64::from(p[0]) + 1.0,
+            f64::from(p[1]) + 1.0,
+            f64::from(p[2]) + 1.0,
+        ),
+    );
+    let mut scene = horizon_client::collisions::SceneCollisions {
+        world: &game.world,
+        binding: game.collision,
+        subject: None,
+    };
+    let mut amount = -2.0;
+    // Level.getCollisions(null, aabb): CollisionContext.empty().
+    if let Ok(scan) = BlockCollisionScan::new(
+        &mut scene,
+        CollisionContext::empty(false),
+        cells,
+        false,
+        1_000_000,
+    ) {
+        for hit in scan.flatten() {
+            amount = hit
+                .shape
+                .collide(horizon_core::geometry::Axis::Y, entity, amount);
+        }
+    }
+    let id = game.spawn_mob(name, [x, f64::from(p[1]) + 1.0 + amount, z], true)?;
+    game.spawn_jockeys(id, false);
+    Some(id)
+}
+
+/// `activateInner`'s entities in `Mode.PUNCH`: one of those in the block at `at` (any but a
+/// contraption), at random (`level.random`), is attacked (`Player.attack`) for `damage` from
+/// `from`, where the fake player stands; true when there was one, and the block is then left
+/// alone. Only mobs take the hit here (`others_at` counts the rest, unharmed). The hit has no
+/// attacker: Create's fake player is one, so mobs but creepers (`ignoreDeployerAttacks`, default
+/// `CREEPERS`) turn on it and its kills count as a player's, but Horizon has no entity for it
+/// and naming the host instead would set them on the host.
 pub(crate) fn punch_entity_at(
     game: &mut crate::game::Game<'_>,
     at: [i32; 3],
@@ -182,15 +242,13 @@ pub(crate) fn punch_entity_at(
     damage: f32,
 ) -> bool {
     use horizon_core::random::RandomSource;
-    let targets = game.targets_at((at[0], at[1], at[2]));
-    if targets.is_empty() {
+    let p = (at[0], at[1], at[2]);
+    let targets = game.targets_at(p);
+    let total = targets.len() + others_at(game, p);
+    if total == 0 {
         return false;
     }
-    let pick = game
-        .world
-        .random
-        .next_int_bound(targets.len() as i32)
-        .unwrap_or(0) as usize;
+    let pick = game.world.random.next_int_bound(total as i32).unwrap_or(0) as usize;
     if let Some(super::Target::Mob(index)) = targets.get(pick) {
         let index = *index;
         let source = horizon_client::mobs::Damage {
@@ -205,4 +263,56 @@ pub(crate) fn punch_entity_at(
         }
     }
     true
+}
+
+/// The entities `targets_at` leaves out whose box meets the block at `p`
+/// (`getEntitiesOfClass(Entity.class, new AABB(clickedPos))`): items, experience orbs,
+/// projectiles, item frames, paintings, boats, minecarts, end crystals, and by their position
+/// the entities Horizon keeps without simulating them.
+fn others_at(game: &crate::game::Game<'_>, p: (i32, i32, i32)) -> usize {
+    use super::super::{boats, minecarts};
+    use horizon_core::geometry::{Aabb, Vec3};
+    let block = super::block_box(p);
+    let pair = |(lo, hi): ([f64; 3], [f64; 3])| {
+        Aabb::new(
+            Vec3::new(lo[0], lo[1], lo[2]),
+            Vec3::new(hi[0], hi[1], hi[2]),
+        )
+    };
+    // `EntityDimensions.makeBoundingBox`.
+    let standing = |at: Vec3, width: f64, height: f64| {
+        let h = width / 2.0;
+        Aabb::new(
+            Vec3::new(at.x - h, at.y, at.z - h),
+            Vec3::new(at.x + h, at.y + height, at.z + h),
+        )
+    };
+    let inside = |v: Vec3| {
+        [v.x, v.y, v.z]
+            .iter()
+            .zip([p.0, p.1, p.2])
+            .all(|(c, b)| c.floor() as i32 == b)
+    };
+    let boxes = game
+        .dropped
+        .iter()
+        .map(|i| i.bounds())
+        .chain(game.orbs.iter().map(|o| o.bounds()))
+        .chain(game.creatures.projectiles.iter().map(|j| j.bounds()))
+        .chain(game.item_frames.iter().map(|f| pair(f.bounds())))
+        .chain(game.paintings.iter().map(|f| pair(f.bounds())))
+        .chain(
+            game.boats
+                .iter()
+                .map(|b| standing(b.position, boats::WIDTH, boats::HEIGHT)),
+        )
+        .chain(
+            game.carts
+                .iter()
+                .map(|c| standing(c.position, minecarts::WIDTH, minecarts::HEIGHT)),
+        )
+        // EntityType.END_CRYSTAL is 2 by 2.
+        .chain(game.crystals.iter().map(|c| standing(c.position, 2.0, 2.0)));
+    boxes.filter(|b| super::overlaps(*b, block)).count()
+        + game.others.iter().filter(|o| inside(o.position)).count()
 }

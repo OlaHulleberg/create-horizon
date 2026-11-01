@@ -329,6 +329,13 @@ pub fn spawn_egg_at(pos: [i32; 3], facing: Dir, reached_empty: bool) -> [i32; 3]
     [reached[0] + o[0], reached[1] + o[1], reached[2] + o[2]]
 }
 
+/// `SpawnEggItem.useOn`'s `shouldOffsetYMore` for `EntityType.spawn`: the mob comes before the
+/// block it reaches (not into it) and the face clicked is the top, as for a deployer facing down
+/// onto a block with a collision shape.
+pub fn spawn_egg_offsets_more(facing: Dir, reached_empty: bool) -> bool {
+    !reached_empty && clicked_face(facing) == Dir::Up
+}
+
 /// What `getDestroyProgress` reads of the block and the held tool: its hardness (-1
 /// unbreakable), the tool's `Tool.getMiningSpeed` and `mining_efficiency` bonus, and whether it
 /// harvests it (`!requiresCorrectToolForDrops || isCorrectForDrops`).
@@ -559,6 +566,12 @@ mod tests {
         // A spawn egg: in the block reached when it is passable, else the space before it.
         assert_eq!(spawn_egg_at([0, 0, 0], Dir::Down, true), [0, -2, 0]);
         assert_eq!(spawn_egg_at([0, 0, 0], Dir::Down, false), [0, -1, 0]);
+        // Over a block with a shape, a deployer facing down offsets it more; nothing else does.
+        assert!(spawn_egg_offsets_more(Dir::Down, false));
+        assert!(!spawn_egg_offsets_more(Dir::Down, true));
+        for facing in [Dir::Up, Dir::North, Dir::South, Dir::West, Dir::East] {
+            assert!(!spawn_egg_offsets_more(facing, false), "{facing:?}");
+        }
     }
 
     #[test]
