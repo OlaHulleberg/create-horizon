@@ -143,6 +143,38 @@ pub enum Mode {
     PreferNearest,
 }
 
+impl Mode {
+    /// The modes in Create's order (`RANDOMIZE` and `SYNCHRONIZE` are not ported).
+    pub const ALL: [Mode; 5] = [
+        Mode::Split,
+        Mode::ForcedSplit,
+        Mode::RoundRobin,
+        Mode::ForcedRoundRobin,
+        Mode::PreferNearest,
+    ];
+
+    pub fn index(self) -> usize {
+        Mode::ALL.iter().position(|m| *m == self).unwrap_or(0)
+    }
+
+    /// Its name (`create.tunnel.selection_mode.*`).
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Split => "Split",
+            Mode::ForcedSplit => "Forced Split",
+            Mode::RoundRobin => "Round Robin",
+            Mode::ForcedRoundRobin => "Forced Round Robin",
+            Mode::PreferNearest => "Prefer Nearest",
+        }
+    }
+
+    /// Scrolled `steps` through the options, held at the ends (`ScrollOptionBehaviour`).
+    pub fn scrolled(self, steps: i32) -> Mode {
+        let i = (self.index() as i32 + steps).clamp(0, Mode::ALL.len() as i32 - 1);
+        Mode::ALL[i as usize]
+    }
+}
+
 /// A brass tunnel's typed state: the stack it holds to hand out, the side it came in through,
 /// `distributionProgress` (-1 to look for outputs), whether it just arrived, and
 /// `previousOutputIndex`.
@@ -153,6 +185,8 @@ pub struct Brass {
     pub progress: i32,
     pub new_item: bool,
     pub previous_output: usize,
+    /// `selectionMode`.
+    pub mode: Mode,
 }
 
 impl Default for Brass {
@@ -163,6 +197,7 @@ impl Default for Brass {
             progress: -1,
             new_item: false,
             previous_output: 0,
+            mode: Mode::Split,
         }
     }
 }

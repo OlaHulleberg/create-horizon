@@ -194,6 +194,8 @@ pub struct Dimension {
     /// that tick).
     pub brass: HashMap<[i32; 3], crate::tunnel::Brass>,
     pub brass_running: Vec<[i32; 3]>,
+    /// Linear chassis ranges set with the wrench (`ChassisScrollValueBehaviour`; others 8).
+    pub chassis_range: HashMap<[i32; 3], i32>,
     /// Track signals (the line they stand by is found when trains look at them).
     pub signals: Vec<[i32; 3]>,
     pub tunnels_new: Vec<[i32; 3]>,
@@ -651,6 +653,9 @@ impl CreateWorld {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
             d.signals.retain(|p| *p != pos);
+            if d.chassis_range.remove(&pos).is_some() {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if let Some(b) = d.brass.remove(&pos) {
                 d.brass_running.retain(|p| *p != pos);
                 // What it held drops (`BrassTunnelBlockEntity.destroy`).
@@ -800,6 +805,8 @@ impl CreateWorld {
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.signals.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.chassis_range
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass_running
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.running_crushers
@@ -1443,6 +1450,15 @@ impl CreateWorld {
             .collect();
         out.sort_by_key(|e| e.0);
         out
+    }
+
+    /// Chassis ranges set for `group`, saved with their columns.
+    pub fn set_chassis_range(&mut self, dim: usize, group: &[[i32; 3]], range: i32) {
+        let d = &mut self.dims[dim];
+        for p in group {
+            d.chassis_range.insert(*p, range);
+            d.unsaved.push((p[0] >> 4, p[2] >> 4));
+        }
     }
 
     pub fn load_links(

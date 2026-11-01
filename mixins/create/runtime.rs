@@ -132,6 +132,14 @@ pub(super) fn chunk_load(
     let burners = burners_from_nbt(Game::native_chunk_data(chunk, "create"));
     let links = links_from_nbt(Game::native_chunk_data(chunk, "create"));
     let deployers = deployers_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let ranges: Vec<([i32; 3], i32)> =
+        match Game::native_chunk_data(chunk, "create").and_then(|d| d.get(&"chassis".into())) {
+            Some(horizon_world::nbt::Tag::IntArray(v)) => v
+                .chunks_exact(4)
+                .map(|c| ([c[0], c[1], c[2]], c[3].clamp(1, 16)))
+                .collect(),
+            _ => Vec::new(),
+        };
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.load_settings(dim, saved.into_iter());
@@ -143,6 +151,7 @@ pub(super) fn chunk_load(
         w.load_burners(dim, burners.into_iter());
         w.load_links(dim, links.into_iter());
         w.load_deployers(dim, deployers.into_iter());
+        w.dims[dim].chassis_range.extend(ranges);
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
                 && states::index(single).is_none()
@@ -555,7 +564,91 @@ fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
     if d2 > 8.0 * 8.0 {
         return;
     }
-    with_world(|w| w.scroll_motor(dim, [x, y, z], steps.clamp(-64, 64)));
+    let pos = [x, y, z];
+    let steps = steps.clamp(-64, 64);
+    let state = game.world.block(x, y, z).0;
+    let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
+    use create_engine::Block as B;
+    let value = match block {
+        Some(B::CreativeMotor) => {
+            with_world(|w| w.scroll_motor(dim, pos, steps));
+            return;
+        }
+        // `ChassisScrollValueBehaviour`: the whole group of chassis takes the range, 1 to 16.
+        Some(B::LinearChassis | B::SecondaryLinearChassis) => {
+            let group = chassis_group(game, pos);
+            let now = with_world(|w| w.dims[dim].chassis_range.get(&pos).copied())
+                .flatten()
+                .unwrap_or(create_engine::contraption::CHASSIS_RANGE);
+            let range = (now + steps).clamp(1, 16);
+            with_world(|w| w.set_chassis_range(dim, &group, range));
+            range
+        }
+        Some(B::BrassTunnel) => with_world(|w| {
+            let b = w.dims[dim].brass.get_mut(&pos)?;
+            b.mode = b.mode.scrolled(steps);
+            Some(b.mode.index() as i32)
+        })
+        .flatten()
+        .unwrap_or(0),
+        _ => return,
+    };
+    // The value back to the player (its value box shows it).
+    let mut m = Vec::with_capacity(16);
+    for v in [x, y, z, value] {
+        m.extend_from_slice(&v.to_le_bytes());
+    }
+    let _ = game.native_net_send_to_player(player, VALUE, &m);
+}
+
+/// Values set by the wheel, from the server to the player who set them.
+const VALUE: &str = "create:value";
+
+thread_local! {
+    /// Values of the value boxes this client has seen set, by block.
+    static VALUES: RefCell<HashMap<[i32; 3], i32>> = RefCell::new(HashMap::new());
+}
+
+fn values_from_server(d: &[u8]) {
+    if d.len() != 16 {
+        return;
+    }
+    let [x, y, z, v] = [0, 4, 8, 12].map(|i| i32::from_le_bytes(d[i..i + 4].try_into().unwrap()));
+    VALUES.with_borrow_mut(|m| m.insert([x, y, z], v));
+}
+
+/// `ChassisBlockEntity.collectChassisGroup`: the linear chassis joined to `pos`, of its kind and
+/// axis.
+fn chassis_group(game: &Game<'_>, pos: [i32; 3]) -> Vec<[i32; 3]> {
+    let kind = |p: [i32; 3]| {
+        let s = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(p[0], p[1], p[2]))?;
+        matches!(
+            s.name.as_str(),
+            "create:linear_chassis" | "create:secondary_linear_chassis"
+        )
+        .then(|| (s.name.clone(), s.properties.get("axis").cloned()))
+    };
+    let Some(own) = kind(pos) else {
+        return Vec::new();
+    };
+    let mut group = vec![pos];
+    let mut i = 0;
+    while i < group.len() && group.len() < 256 {
+        let p = group[i];
+        i += 1;
+        for d in Dir::ALL {
+            let o = d.offset();
+            let n = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
+            if !group.contains(&n) && kind(n).as_ref() == Some(&own) {
+                group.push(n);
+            }
+        }
+    }
+    group
 }
 
 /// `GoggleOverlayRenderer` for kinetic blocks: with goggles on the head, the block under the
@@ -570,8 +663,13 @@ pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch
 /// its label over the hotbar, centred, with the value and how to change it here (the wheel:
 /// Create 6's value board is not ported).
 fn value_tip(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
-    // Free when unused: no ray while no kinetic block has a speed here.
-    if CLIENT.with_borrow(|c| c.as_ref().is_none_or(|c| c.speeds.is_empty())) {
+    // Free when unused: no ray while no kinetic block has a speed here and no wrench is held.
+    let wrench = game
+        .inventory
+        .get(game.selected)
+        .and_then(|s| s.as_ref())
+        .is_some_and(|s| &*s.item == "create:wrench");
+    if !wrench && CLIENT.with_borrow(|c| c.as_ref().is_none_or(|c| c.speeds.is_empty())) {
         return;
     }
     let Some(hit) = game.pick() else {
@@ -583,21 +681,41 @@ fn value_tip(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
     if states::index(state.0).is_none() || !client_ensure(game) {
         return;
     }
-    let Some((facing, speed)) = CLIENT.with_borrow(|c| {
+    let Some((block, facing, speed)) = CLIENT.with_borrow(|c| {
         let c = c.as_ref()?;
         let (block, info) = c.table.get(state.0)?;
-        (block == create_engine::Block::CreativeMotor)
-            .then(|| (info.facing, c.speeds.get(&pos).map_or(0.0, |s| s[0])))
+        Some((block, info.facing, c.speeds.get(&pos).map_or(0.0, |s| s[0])))
     }) else {
         return;
     };
-    // The setting, from the speed the motor gives along its axis.
-    let setting = facing.map_or(speed, |f| {
-        create_engine::kinetics::convert_to_direction(speed, f)
-    });
+    use create_engine::Block as B;
+    let seen = VALUES.with_borrow(|m| m.get(&pos).copied());
+    let (label, value) = match block {
+        // The setting, from the speed the motor gives along its axis.
+        B::CreativeMotor => {
+            let setting = facing.map_or(speed, |f| {
+                create_engine::kinetics::convert_to_direction(speed, f)
+            });
+            ("Generated Speed in RPM", format!("{setting:.0}"))
+        }
+        // `ChassisScrollValueBehaviour` (with the wrench).
+        B::LinearChassis | B::SecondaryLinearChassis if wrench => (
+            "Range of Sticky Sides",
+            seen.unwrap_or(create_engine::contraption::CHASSIS_RANGE)
+                .to_string(),
+        ),
+        // `BrassTunnelBlockEntity.selectionMode`.
+        B::BrassTunnel => (
+            "Distribution Method",
+            create_engine::tunnel::Mode::ALL[seen.unwrap_or(0).clamp(0, 4) as usize]
+                .label()
+                .to_owned(),
+        ),
+        _ => return,
+    };
     let lines = [
-        ("Generated Speed in RPM".to_owned(), 0xFB_DC7D),
-        (format!("{setting:.0}"), 0xFF_FFFF),
+        (label.to_owned(), 0xFB_DC7D),
+        (value, 0xFF_FFFF),
         ("Scroll to change".to_owned(), 0xFF_FFFF),
     ];
     let mut y = batch.height - 75.0 - lines.len() as f32 * 12.0;
@@ -700,12 +818,23 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
     };
     let pos = hit.pos;
     let state = game.world.block(pos[0], pos[1], pos[2]);
-    let is_motor = CLIENT.with_borrow(|c| {
+    let wrench = game
+        .inventory
+        .get(game.selected)
+        .and_then(|s| s.as_ref())
+        .is_some_and(|s| &*s.item == "create:wrench");
+    // The motor's speed, a brass tunnel's mode, and (with the wrench, `requiresWrench`) a
+    // chassis' range.
+    let scrolls = CLIENT.with_borrow(|c| {
         c.as_ref()
             .and_then(|c| c.table.get(state.0))
-            .is_some_and(|(b, _)| b == create_engine::Block::CreativeMotor)
+            .is_some_and(|(b, _)| {
+                use create_engine::Block as B;
+                matches!(b, B::CreativeMotor | B::BrassTunnel)
+                    || wrench && matches!(b, B::LinearChassis | B::SecondaryLinearChassis)
+            })
     });
-    if !is_motor {
+    if !scrolls {
         return;
     }
     *claimed = true;
@@ -1037,6 +1166,20 @@ pub(super) fn chunk_data_save(
     let burners = with_world(|w| w.column_burners(dim, chunk[0], chunk[1])).unwrap_or_default();
     let links = with_world(|w| w.column_links(dim, chunk[0], chunk[1])).unwrap_or_default();
     let deployers = with_world(|w| w.column_deployers(dim, chunk[0], chunk[1])).unwrap_or_default();
+    // Chassis ranges set with the wrench: x, y, z, range each.
+    let ranges: Vec<i32> = with_world(|w| {
+        let mut v: Vec<([i32; 3], i32)> = w.dims[dim]
+            .chassis_range
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]))
+            .map(|(p, r)| (*p, *r))
+            .collect();
+        v.sort();
+        v.into_iter()
+            .flat_map(|(p, r)| [p[0], p[1], p[2], r])
+            .collect()
+    })
+    .unwrap_or_default();
     if settings.is_empty()
         && belts.is_empty()
         && tanks.is_empty()
@@ -1045,6 +1188,7 @@ pub(super) fn chunk_data_save(
         && burners.is_empty()
         && links.is_empty()
         && deployers.is_empty()
+        && ranges.is_empty()
         && trains.is_empty()
     {
         data.remove(&"create".into());
@@ -1072,6 +1216,9 @@ pub(super) fn chunk_data_save(
     }
     if !deployers.is_empty() {
         own.insert("deployers".into(), deployers_to_nbt(&deployers));
+    }
+    if !ranges.is_empty() {
+        own.insert("chassis".into(), horizon_world::nbt::Tag::IntArray(ranges));
     }
     if !burners.is_empty() {
         // x, y, z, fuel type, burn time left for each burner (`fuelLevel`, `burnTimeRemaining`).
@@ -1297,6 +1444,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
     }
     if channel == create_engine::link::CHANNEL {
         links_from_server(game, data);
+        return;
+    }
+    if channel == VALUE {
+        values_from_server(data);
         return;
     }
     if channel == create_engine::deployer::CHANNEL {
@@ -5905,7 +6056,7 @@ pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
 /// (then every `brassTunnelTimer` while some is left), the stack is split among the outputs
 /// beside and ahead of the segment: a belt or depot across each open side, the belt ahead.
 fn tick_brass(game: &mut Game<'_>, dim: usize) {
-    use create_engine::tunnel::{self, Mode};
+    use create_engine::tunnel;
     let Some(list) = with_world(|w| w.dims[dim].brass_running.clone()) else {
         return;
     };
@@ -5986,7 +6137,7 @@ fn tick_brass(game: &mut Game<'_>, dim: usize) {
             count,
             outputs.len(),
             b.previous_output,
-            Mode::Split,
+            b.mode,
             |i, n, simulate| {
                 let d = outputs[i];
                 let o = d.offset();
@@ -6806,7 +6957,10 @@ fn contraption_found(game: &Game<'_>, p: [i32; 3]) -> Option<create_engine::cont
                 .properties
                 .get("sticky_bottom")
                 .is_some_and(|v| v == "true"),
-            range: create_engine::contraption::CHASSIS_RANGE,
+            range: dimension_index(game.dim.id())
+                .and_then(|dim| with_world(|w| w.dims[dim].chassis_range.get(&p).copied()))
+                .flatten()
+                .unwrap_or(create_engine::contraption::CHASSIS_RANGE),
         }),
     })
 }
