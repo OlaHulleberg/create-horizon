@@ -1,0 +1,8 @@
+{
+  "template": "minecraft:stick",
+  "max_stack_size": 1,
+  "rarity": "uncommon",
+  "components": {
+    "minecraft:max_damage": 200
+  }
+}

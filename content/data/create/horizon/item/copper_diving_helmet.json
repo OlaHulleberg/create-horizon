@@ -1,0 +1,33 @@
+{
+  "template": "minecraft:copper_helmet",
+  "components": {
+    "minecraft:max_damage": 77,
+    "minecraft:enchantable": {
+      "value": 7
+    },
+    "minecraft:equippable": {
+      "slot": "head",
+      "equip_sound": "minecraft:item.armor.equip_gold",
+      "asset_id": "minecraft:copper"
+    },
+    "minecraft:attribute_modifiers": [
+      {
+        "type": "minecraft:armor",
+        "amount": 2.0,
+        "id": "minecraft:armor.helmet",
+        "operation": "add_value",
+        "slot": "head"
+      },
+      {
+        "type": "minecraft:armor_toughness",
+        "amount": 0.0,
+        "id": "minecraft:armor.helmet",
+        "operation": "add_value",
+        "slot": "head"
+      }
+    ],
+    "minecraft:enchantments": {
+      "minecraft:aqua_affinity": 1
+    }
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "template": "minecraft:netherite_block",
+  "properties": {
+    "hardness": 50.0,
+    "explosion_resistance": 1200.0,
+    "requires_tool": true,
+    "sounds": "minecraft:netherite_block"
+  },
+  "item": true,
+  "components": {
+    "minecraft:max_stack_size": 1,
+    "minecraft:equippable": {
+      "slot": "chest",
+      "equip_sound": "minecraft:item.armor.equip_netherite",
+      "asset_id": "minecraft:netherite"
+    },
+    "minecraft:attribute_modifiers": [
+      {
+        "type": "minecraft:armor",
+        "amount": 8.0,
+        "id": "minecraft:armor.chestplate",
+        "operation": "add_value",
+        "slot": "chest"
+      },
+      {
+        "type": "minecraft:armor_toughness",
+        "amount": 3.0,
+        "id": "minecraft:armor.chestplate",
+        "operation": "add_value",
+        "slot": "chest"
+      },
+      {
+        "type": "minecraft:knockback_resistance",
+        "amount": 0.10000000149011612,
+        "id": "minecraft:armor.chestplate",
+        "operation": "add_value",
+        "slot": "chest"
+      }
+    ],
+    "minecraft:enchantable": {
+      "value": 15
+    },
+    "minecraft:damage_resistant": {
+      "types": "#minecraft:is_fire"
+    }
+  },
+  "shapes": {
+    "property": "facing",
+    "values": {
+      "north": [
+        [
+          0.1875,
+          0.0,
+          0.1875,
+          0.8125,
+          0.75,
+          0.8125
+        ],
+        [
+          0.3125,
+          0.0,
+          0.3125,
+          0.6875,
+          1.0,
+          0.6875
+        ]
+      ],
+      "south": [
+        [
+          0.1875,
+          0.0,
+          0.1875,
+          0.8125,
+          0.75,
+          0.8125
+        ],
+        [
+          0.3125,
+          0.0,
+          0.3125,
+          0.6875,
+          1.0,
+          0.6875
+        ]
+      ],
+      "west": [
+        [
+          0.1875,
+          0.0,
+          0.1875,
+          0.8125,
+          0.75,
+          0.8125
+        ],
+        [
+          0.3125,
+          0.0,
+          0.3125,
+          0.6875,
+          1.0,
+          0.6875
+        ]
+      ],
+      "east": [
+        [
+          0.1875,
+          0.0,
+          0.1875,
+          0.8125,
+          0.75,
+          0.8125
+        ],
+        [
+          0.3125,
+          0.0,
+          0.3125,
+          0.6875,
+          1.0,
+          0.6875
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}

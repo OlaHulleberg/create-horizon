@@ -389,6 +389,25 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             own(&[("facing", facing)]),
         ),
         "water_wheel" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
+        // BacktankBlock (HorizontalKineticBlock, waterloggable): copper's or netherite's
+        // properties (waxed copper's template: it never weathers), AllShapes.BACKTANK (the tank
+        // and the six-voxel pole through it); the glue fills it and keeps its air.
+        "copper_backtank" | "netherite_backtank" => (
+            if b.name == "copper_backtank" {
+                "minecraft:waxed_copper_block"
+            } else {
+                "minecraft:netherite_block"
+            },
+            Some(by_property(
+                "facing",
+                &["north", "south", "west", "east"],
+                &[[3., 0., 3., 13., 12., 13.], SIX_VOXEL_POLE],
+            )),
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                ("waterlogged", bools),
+            ]),
+        ),
         // MechanicalPressBlock: a horizontal facing; AllShapes.MECHANICAL_PROCESSOR_SHAPE (a
         // block with a 8x8 hole down its middle, where the head goes).
         "mechanical_press" => (
@@ -1272,7 +1291,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     doc.insert("template".into(), json!(template));
     doc.insert("properties".into(), Value::Object(props));
     doc.insert("item".into(), json!(item));
-    if b.stack != 64 && *item {
+    if let Some(components) = crate::equipment::backtank_item(&b.name) {
+        // The backtank's block item is Create's BacktankItem too: worn on the chest.
+        doc.insert("components".into(), components);
+    } else if b.stack != 64 && *item {
         doc.insert(
             "components".into(),
             json!({ "minecraft:max_stack_size": b.stack }),
