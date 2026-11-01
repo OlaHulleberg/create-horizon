@@ -39,6 +39,9 @@ the server thread's smoothed tick time. Scenarios:
            chest below (phase 4)
   drills   32 drills at 16 rpm, each before a stone (broken during the settle; then each looks
            again every 10 ticks) (phase 3)
+  saws     32 saws facing up at 16 rpm, each given 64 andesite alloy to cut as the flight starts
+           (phase 3)
+  spouts   10 pumps filling spouts from pools, each over a depot of 16 empty buckets (phase 5)
   burners  a 32x32 floor of blaze burners with their blaze (1,024 passive burners, the head in the
            chunk mesh): no tick (phase 3)
   fans     32 encased fans at 16 rpm blowing through water over three depots each of 64 ice: 96
@@ -163,6 +166,28 @@ def build(ctl_bin, sock, scenario, center):
             command(ctl_bin, sock, f"setblock {x-2} {y-6} {zz} create:creative_motor[facing=east]", failures)
             command(ctl_bin, sock, f"setblock {x-1} {y-6} {zz} create:mechanical_drill[facing=east]", failures)
             command(ctl_bin, sock, f"setblock {x} {y-6} {zz} minecraft:stone", failures)
+    if scenario == "saws":
+        for row in range(32):
+            zz = z - 16 + row
+            command(ctl_bin, sock, f"setblock {x} {y-6} {zz-0} create:mechanical_saw[facing=up,axis_along_first=false]",
+                    failures) if row % 2 == 0 else None
+            if row % 2 == 0:
+                command(ctl_bin, sock, f"setblock {x} {y-6} {zz-1} create:creative_motor[facing=south]", failures)
+    if scenario == "spouts":
+        for row in range(10):
+            zz, x0 = z - 15 + 3 * row, x
+            command(ctl_bin, sock, f"fill {x0-7} {y-7} {zz-1} {x0+4} {y-7} {zz+2} stone", failures)
+            command(ctl_bin, sock, f"fill {x0-6} {y-6} {zz-1} {x0-2} {y-6} {zz+2} glass", failures)
+            command(ctl_bin, sock, f"fill {x0-5} {y-6} {zz} {x0-3} {y-6} {zz+1} water", failures)
+            command(ctl_bin, sock, f"fill {x0-2} {y-6} {zz} {x0-1} {y-6} {zz} create:fluid_pipe", failures)
+            command(ctl_bin, sock, f"setblock {x0} {y-6} {zz} create:mechanical_pump[facing=east]", failures)
+            command(ctl_bin, sock, f"fill {x0+1} {y-6} {zz} {x0+2} {y-6} {zz} create:fluid_pipe", failures)
+            command(ctl_bin, sock, f"setblock {x0+3} {y-6} {zz} create:spout", failures)
+            command(ctl_bin, sock, f"setblock {x0+3} {y-7} {zz} air", failures)
+            command(ctl_bin, sock, f"setblock {x0+3} {y-8} {zz} "
+                    'create:depot{Items:[{Slot:0b,id:"minecraft:bucket",count:16}]}', failures)
+            command(ctl_bin, sock, f"setblock {x0} {y-5} {zz} create:cogwheel[axis=x]", failures)
+            command(ctl_bin, sock, f"setblock {x0+1} {y-5} {zz} create:creative_motor[facing=west]", failures)
     if scenario == "pistons":
         for row in range(16):
             zz = z - 16 + 2 * row
@@ -304,7 +329,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
@@ -335,6 +360,10 @@ def run_once(args, scenario):
         ctl(ctl_bin, sock, "fly", str(x), str(y), str(z), str(x), str(y), str(z), "0.1", "40")
         ctl(ctl_bin, sock, "wait-ready")
         time.sleep(args.settle)
+        if scenario == "saws":
+            for row in range(0, 32, 2):
+                ctl(ctl_bin, sock, "command", f"summon minecraft:item {x+0.5} {y-5} {z-16+row+0.5} "
+                    "{Item:{id:'create:andesite_alloy',count:64},PickupDelay:32767}")
         if scenario == "pistons":
             for row in range(16):
                 ctl(ctl_bin, sock, "command", f"setblock {x-10} {y-5} {z-16+2*row} create:creative_motor[facing=down]")
@@ -370,6 +399,8 @@ def run_once(args, scenario):
         if scenario == "processing":
             # The work really ran: sheets in one depot's outputs.
             pressed = ctl(ctl_bin, sock, "command", f"data get block {x-8} {y-6} {z}").get("chat")
+        if scenario == "spouts":
+            pressed = ctl(ctl_bin, sock, "command", f"data get block {x+3} {y-8} {z-15}").get("chat")
         if scenario == "chutes":
             pressed = ctl(ctl_bin, sock, "command", f"data get block {x-12} {y-7} {z-12} Items").get("chat")
         if scenario == "mixers":
@@ -413,7 +444,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills"],
+                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
