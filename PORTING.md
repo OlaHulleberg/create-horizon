@@ -224,6 +224,14 @@ Brass tunnels splitting stacks cost nothing measurable (`benchmarks/create-p4b-*
 
 Signals cost no tick; frame p50 is 6% over the control, within budget and its run's spread (`benchmarks/create-p9s-*.json`). Headless proof: one straight track with stations at 0, 25 and 50 and signals at 15 and 35; a train assembled at the first and sent to the last stopped just before the signal at 15 while a second train stood assembled at 25 (after 15 s nothing at the last station; a screenshot shows it waiting by the signal); once the second was taken apart at its station the first went on and stood at the last (its bogey, slime and gold there). Engine tests: a red signal ahead, a green one, one beyond the stop, the other way; a train waits at the stop and keeps its destination.
 
+| Scenario (2026-11-01, Phase 6 value board, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1746 ± 6 | 0.525 / 1.222 | 2.982 ± 0.099 | baseline |
+| idle: Create content, no Create blocks (the board's client tick is one load while use is up) | 1774 ± 15 | 0.516 / 1.170 | 3.057 ± 0.063 | within noise of off |
+| kinetic | 1658 ± 15 | 0.557 / 1.160 | 3.040 ± 0.023 | tick ≤ off + 0.5 ms, frame p50 ≤ off + 10% |
+
+Create 6's value settings board (`board.rs`, after `ValueSettingsBoard`, `ValueSettingsClient`, `ValueSettingsScreen`): holding use on an active value box opens it on its sixth tick, starting on the block's setting the server reports; the wheel moves the pick; letting go sends it (`benchmarks/create-p6v-*.json`). Proven headless: a creative motor at 16 rpm, use held on its value box: the board "Generated Speed in RPM" with its two direction rows and "Release Right Button to Confirm" (screenshot), three wheel steps down picked 13, and on release the shafts turned at 13 rpm. Not yet: a free cursor to pick rows (the wheel moves along a row), the chassis board (wrench), the filter, speed controller, brass diode and valve boards, Create's sprites and sounds.
+
 | Scenario (2026-11-01, Phase 3 item entities from the bundle itself, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1917 ± 28 | 0.482 / 1.072 | 2.518 ± 0.119 | baseline |

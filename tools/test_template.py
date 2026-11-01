@@ -234,7 +234,7 @@ pub mod native_server {
     impl NativeCommand {
         pub fn op(usage: &str, level: u8) -> Self { Self { usage: usage.to_owned(), level } }
     }
-    pub struct NativeServerPlayer { pub uuid: u128, pub dimension: String, pub position: [f64; 3] }
+    pub struct NativeServerPlayer { pub uuid: u128, pub dimension: String, pub position: [f64; 3], pub game_mode: i32 }
 }
 pub mod native_hooks {
     use super::*;
@@ -310,7 +310,7 @@ pub mod native_hooks {
             let _ = (player, command, ran);
         }
         pub fn native_acting_player(&self) -> Option<NativeServerPlayer> {
-            Some(NativeServerPlayer { uuid: 7, dimension: "minecraft:overworld".into(), position: [0.5, 2.0, 0.5] })
+            Some(NativeServerPlayer { uuid: 7, dimension: "minecraft:overworld".into(), position: [0.5, 2.0, 0.5], game_mode: 1 })
         }
         pub fn native_server_players(&self) -> Vec<NativeServerPlayer> {
             self.native_acting_player().into_iter().collect()
@@ -351,6 +351,8 @@ pub mod native_hooks {
             let _ = (stack, pos, face, claimed);
         }
         pub fn aim(&self) -> Option<([f64; 3], [f64; 3])> { None }
+        pub fn may_build(&self) -> bool { true }
+        pub fn native_mapping(&mut self, name: &str) -> Option<(bool, String)> { let _ = name; None }
         pub fn native_use_item(&mut self, stack: &horizon_client::items::ItemStack, claimed: &mut bool) {
             let _ = (stack, claimed);
         }
@@ -403,7 +405,7 @@ pub mod native_hooks {
             true
         }
         pub fn pick(&self) -> Option<Hit> {
-            self.aim.map(|pos| Hit { pos, point: self.aim_point.unwrap_or(pos.map(|v| f64::from(v) + 0.5)) })
+            self.aim.map(|pos| Hit { pos, point: self.aim_point.unwrap_or(pos.map(|v| f64::from(v) + 0.5)), face: [0, 1, 0] })
         }
         pub fn with_level<R>(&mut self, f: impl FnOnce(&Behaviours, &mut GameLevel<'_>, &mut Ticks) -> R) -> R {
             let mut level = GameLevel { registry: self.pack.assets.registry };
@@ -438,7 +440,7 @@ impl World {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId { BlockStateId(*self.blocks.get(&[x, y, z]).unwrap_or(&0)) }
     pub fn loaded(&self, x: i32, z: i32) -> bool { let _ = (x, z); true }
 }
-pub struct Hit { pub pos: [i32; 3], pub point: [f64; 3] }
+pub struct Hit { pub pos: [i32; 3], pub point: [f64; 3], pub face: [i32; 3] }
 pub struct Player { pub exhaustion: f32 }
 impl Player { pub fn cause_food_exhaustion(&mut self, amount: f32) { self.exhaustion += amount; } }
 pub struct Game<'a> {
@@ -446,7 +448,7 @@ pub struct Game<'a> {
     pub sent: Vec<(u128, String, Vec<u8>)>, pub parts: Vec<(u32, [i32; 3], u8, f32)>,
     pub aim: Option<[i32; 3]>, pub aim_point: Option<[f64; 3]>, pub unsaved: Vec<[i32; 2]>,
     pub offhand: Option<horizon_client::items::ItemStack>,
-    pub dropped: Vec<horizon_client::entities::ItemEntity>,
+    pub dropped: Vec<horizon_client::entities::ItemEntity>, pub right: bool,
     pub creative: bool, pub player: Option<Player>, pub keys: std::collections::HashSet<winit::keyboard::KeyCode>,
     pub glides: Vec<(u32, [i32; 3], u8, f32, [f32; 3])>, pub hand: horizon_client::first_person::Hand, pub yaw: f32, pub pitch: f32,
     pub armor: [Option<horizon_client::items::ItemStack>; 4],
@@ -572,7 +574,7 @@ impl Behaviours {
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
         world: World { blocks: Default::default(), game_time: 0, block_entities: Default::default() }, sent: vec![], parts: vec![], aim: None, aim_point: None, unsaved: vec![],
         offhand: None,
-        dropped: Vec::new(),
+        dropped: Vec::new(), right: false,
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),
         glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0, pitch: 0.0, armor: [None, None, None, None],
         inventory: vec![Some(horizon_client::items::ItemStack { item: "minecraft:iron_ingot".into(), count: 5, damage: 0, extra: None })],
