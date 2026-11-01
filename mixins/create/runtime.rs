@@ -3,6 +3,7 @@
 // State lives on the server thread that fires the hooks (one per world).
 
 use super::Game;
+use super::create_trains::*;
 use super::native_lifecycle::WorldPhase;
 use create_engine::client::{self, Model, Update};
 use create_engine::kinetics::{Axis, Dir, Event};
@@ -13,12 +14,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 thread_local! {
-    static WORLD: RefCell<Option<CreateWorld>> = const { RefCell::new(None) };
+    pub(super) static WORLD: RefCell<Option<CreateWorld>> = const { RefCell::new(None) };
 }
 
 /// Builds the state table from the registry once (the content mod's states never change while the
 /// game runs). Returns false when Create's content isn't installed: every hook then stays a miss.
-fn ensure(registry: &BlockRegistry) -> bool {
+pub(super) fn ensure(registry: &BlockRegistry) -> bool {
     WORLD.with_borrow_mut(|w| {
         if w.is_some() {
             return true;
@@ -49,7 +50,7 @@ fn ensure(registry: &BlockRegistry) -> bool {
     })
 }
 
-fn with_world<R>(f: impl FnOnce(&mut CreateWorld) -> R) -> Option<R> {
+pub(super) fn with_world<R>(f: impl FnOnce(&mut CreateWorld) -> R) -> Option<R> {
     WORLD.with_borrow_mut(|w| w.as_mut().map(f))
 }
 
@@ -72,7 +73,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
     }
 }
 
-fn level_index(dimension: horizon_world::level::Dimension) -> usize {
+pub(super) fn level_index(dimension: horizon_world::level::Dimension) -> usize {
     match dimension {
         horizon_world::level::Dimension::Overworld => 0,
         horizon_world::level::Dimension::Nether => 1,
@@ -225,14 +226,14 @@ pub(super) fn chunk_unload(dimension: &str, chunk: &horizon_client::chunk::Chunk
     }
 }
 
-/// After a server level's tick: re-solve what changed there (nothing when nothing did), break
-/// the blocks Create would break, and tell the level's players what turns now.
 thread_local! {
     /// Commands a player's hook asked for, run at the next level tick (`native_run_command` only
     /// runs where no player's state is swapped in).
-    static LATER: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    pub(super) static LATER: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// After a server level's tick: re-solve what changed there (nothing when nothing did), break
+/// the blocks Create would break, and tell the level's players what turns now.
 pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     let Some(dim) = dimension_index(dimension) else {
         return;
@@ -365,7 +366,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     send(game, &players, &updates);
 }
 
-fn send(game: &mut Game<'_>, players: &[u128], updates: &[Update]) {
+pub(super) fn send(game: &mut Game<'_>, players: &[u128], updates: &[Update]) {
     if updates.is_empty() {
         return;
     }
@@ -487,13 +488,13 @@ pub(super) fn right_click_block(
 
 /// How many game ticks after a taken click its follow-ups (the item use, the off hand's click)
 /// may still arrive.
-const TAKEN_WINDOW: i64 = 10;
+pub(super) const TAKEN_WINDOW: i64 = 10;
 
 thread_local! {
     /// The player and game time of the last click a Create block took: for the item use and
     /// the off hand's click that follow it, each taken once.
-    static TAKEN_USE: std::cell::Cell<Option<(u128, i64)>> = const { std::cell::Cell::new(None) };
-    static TAKEN_OFF_HAND: std::cell::Cell<Option<(u128, i64)>> = const { std::cell::Cell::new(None) };
+    pub(super) static TAKEN_USE: std::cell::Cell<Option<(u128, i64)>> = const { std::cell::Cell::new(None) };
+    pub(super) static TAKEN_OFF_HAND: std::cell::Cell<Option<(u128, i64)>> = const { std::cell::Cell::new(None) };
 }
 
 /// The item use that follows a click a Create block took (the same tick, or the next).
@@ -520,7 +521,7 @@ pub(super) fn use_item(
 
 /// `ExperienceNuggetItem.use`: the stack (one when sneaking) thrown out from before the eyes as
 /// experience orbs, 3 points a nugget, and used up.
-fn use_nugget(game: &mut Game<'_>, count: u32) {
+pub(super) fn use_nugget(game: &mut Game<'_>, count: u32) {
     let Some((eye, look)) = game.aim() else {
         return;
     };
@@ -582,7 +583,7 @@ fn use_nugget(game: &mut Game<'_>, count: u32) {
 /// The item entities of the level `dimension` whose box touches `lo`..`hi`
 /// (`Level.getEntitiesOfClass(ItemEntity.class, box)`), on the server: `f` gets each one's id,
 /// stack, position and motion and may change the stack and the motion; one left empty is removed.
-fn items_in(
+pub(super) fn items_in(
     game: &mut Game<'_>,
     dimension: &str,
     lo: [f64; 3],
@@ -608,7 +609,12 @@ fn items_in(
     }
 }
 
-fn right_click_inner(game: &mut Game<'_>, pos: [i32; 3], face: [i32; 3], canceled: &mut bool) {
+pub(super) fn right_click_inner(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    face: [i32; 3],
+    canceled: &mut bool,
+) {
     if *canceled || states::index(game.world.block(pos[0], pos[1], pos[2]).0).is_none() {
         return;
     }
@@ -700,9 +706,9 @@ fn right_click_inner(game: &mut Game<'_>, pos: [i32; 3], face: [i32; 3], cancele
 
 /// A player scrolled on a block (`create:scroll`: position, steps); what a client sends is
 /// checked here: the player's own dimension, and the block within their reach.
-const SCROLL: &str = "create:scroll";
+pub(super) const SCROLL: &str = "create:scroll";
 
-fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
+pub(super) fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
     let [x, y, z, steps] = match data {
         d if d.len() == 16 => {
             [0, 4, 8, 12].map(|i| i32::from_le_bytes(d[i..i + 4].try_into().unwrap()))
@@ -765,14 +771,14 @@ fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
 }
 
 /// Values set by the wheel, from the server to the player who set them.
-const VALUE: &str = "create:value";
+pub(super) const VALUE: &str = "create:value";
 
 thread_local! {
     /// Values of the value boxes this client has seen set, by block.
-    static VALUES: RefCell<HashMap<[i32; 3], i32>> = RefCell::new(HashMap::new());
+    pub(super) static VALUES: RefCell<HashMap<[i32; 3], i32>> = RefCell::new(HashMap::new());
 }
 
-fn values_from_server(d: &[u8]) {
+pub(super) fn values_from_server(d: &[u8]) {
     if d.len() != 16 {
         return;
     }
@@ -782,7 +788,7 @@ fn values_from_server(d: &[u8]) {
 
 /// `ChassisBlockEntity.collectChassisGroup`: the linear chassis joined to `pos`, of its kind and
 /// axis.
-fn chassis_group(game: &Game<'_>, pos: [i32; 3]) -> Vec<[i32; 3]> {
+pub(super) fn chassis_group(game: &Game<'_>, pos: [i32; 3]) -> Vec<[i32; 3]> {
     let kind = |p: [i32; 3]| {
         let s = game
             .pack
@@ -825,7 +831,7 @@ pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch
 /// `ValueSettingsClient.render` for the creative motor's speed (`KineticScrollValueBehaviour`):
 /// its label over the hotbar, centred, with the value and how to change it here (the wheel:
 /// Create 6's value board is not ported).
-fn value_tip(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
+pub(super) fn value_tip(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
     // Free when unused: no ray while no kinetic block has a speed here and no wrench is held.
     let wrench = game
         .inventory
@@ -890,7 +896,7 @@ fn value_tip(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
 }
 
 /// `GoggleOverlayRenderer` for kinetic blocks.
-fn goggle_overlay(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
+pub(super) fn goggle_overlay(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
     // Hot: one compare on the head slot.
     if !game.armor[0]
         .as_ref()
@@ -1010,7 +1016,9 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
 }
 
 /// Settings saved with a column: `motors` holds x, y, z and speed for each motor.
-fn settings_from_nbt(data: Option<&horizon_world::nbt::Compound>) -> Vec<([i32; 3], i32)> {
+pub(super) fn settings_from_nbt(
+    data: Option<&horizon_world::nbt::Compound>,
+) -> Vec<([i32; 3], i32)> {
     let Some(horizon_world::nbt::Tag::IntArray(v)) = data.and_then(|d| d.get(&"motors".into()))
     else {
         return Vec::new();
@@ -1022,7 +1030,9 @@ fn settings_from_nbt(data: Option<&horizon_world::nbt::Compound>) -> Vec<([i32; 
 
 /// Belts' items as saved (`BeltInventory.write`): for each belt its controller (`pos`), each
 /// item's numbers (position and side offset as float bits, angle, count, locked) and its id.
-fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)]) -> horizon_world::nbt::Tag {
+pub(super) fn belts_to_nbt(
+    belts: &[([i32; 3], create_engine::belt::Inventory)],
+) -> horizon_world::nbt::Tag {
     use horizon_world::nbt::{Compound, Tag};
     Tag::List(
         belts
@@ -1066,7 +1076,9 @@ fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)]) -> horizon
 /// Crushing wheel controllers' contents (`ProcessingInventory`): each one's position, time left
 /// (float bits) and whether its recipe was applied, its stacks' ids and counts.
 /// `LinkBehaviour.write` (`FrequencyFirst`, `FrequencyLast`) and `Transmit`, per link.
-fn links_to_nbt(links: &[([i32; 3], create_engine::link::Key, i32)]) -> horizon_world::nbt::Tag {
+pub(super) fn links_to_nbt(
+    links: &[([i32; 3], create_engine::link::Key, i32)],
+) -> horizon_world::nbt::Tag {
     use horizon_world::nbt::{Compound, Tag};
     Tag::List(
         links
@@ -1086,7 +1098,7 @@ fn links_to_nbt(links: &[([i32; 3], create_engine::link::Key, i32)]) -> horizon_
 }
 
 /// `DeployerBlockEntity.write`: `State`, `Timer`, `Reach` and the held stack, per deployer.
-fn deployers_to_nbt(
+pub(super) fn deployers_to_nbt(
     list: &[([i32; 3], create_engine::deployer::Deployer)],
 ) -> horizon_world::nbt::Tag {
     use horizon_world::nbt::{Compound, Tag};
@@ -1114,7 +1126,7 @@ fn deployers_to_nbt(
     )
 }
 
-fn deployers_from_nbt(
+pub(super) fn deployers_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], create_engine::deployer::Deployer)> {
     use horizon_world::nbt::Tag;
@@ -1145,7 +1157,7 @@ fn deployers_from_nbt(
         .collect()
 }
 
-fn links_from_nbt(
+pub(super) fn links_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], (create_engine::link::Key, i32))> {
     use horizon_world::nbt::Tag;
@@ -1173,7 +1185,7 @@ fn links_from_nbt(
         .collect()
 }
 
-fn crushers_to_nbt(
+pub(super) fn crushers_to_nbt(
     crushers: &[([i32; 3], create_engine::crusher::Crusher)],
 ) -> horizon_world::nbt::Tag {
     use horizon_world::nbt::{Compound, Tag};
@@ -1211,7 +1223,7 @@ fn crushers_to_nbt(
     )
 }
 
-fn crushers_from_nbt(
+pub(super) fn crushers_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], create_engine::crusher::Crusher)> {
     use horizon_world::nbt::Tag;
@@ -1249,7 +1261,7 @@ fn crushers_from_nbt(
         .collect()
 }
 
-fn burners_from_nbt(
+pub(super) fn burners_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], create_engine::burner::Burner)> {
     let Some(horizon_world::nbt::Tag::IntArray(v)) = data.and_then(|d| d.get(&"burners".into()))
@@ -1267,7 +1279,7 @@ fn burners_from_nbt(
         .collect()
 }
 
-fn belts_from_nbt(
+pub(super) fn belts_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], create_engine::belt::Inventory)> {
     use horizon_world::nbt::Tag;
@@ -1463,7 +1475,7 @@ pub(super) fn chunk_data_save(
 }
 
 /// The client's side: the parts it shows, from the server's speeds.
-struct ClientParts {
+pub(super) struct ClientParts {
     table: StateTable,
     speeds: HashMap<[i32; 3], [f32; 2]>,
     models: HashMap<(u32, Model), u32>,
@@ -1473,10 +1485,10 @@ struct ClientParts {
 }
 
 thread_local! {
-    static CLIENT: RefCell<Option<ClientParts>> = const { RefCell::new(None) };
+    pub(super) static CLIENT: RefCell<Option<ClientParts>> = const { RefCell::new(None) };
 }
 
-fn axis_index(a: Axis) -> u8 {
+pub(super) fn axis_index(a: Axis) -> u8 {
     match a {
         Axis::X => 0,
         Axis::Y => 1,
@@ -1484,7 +1496,7 @@ fn axis_index(a: Axis) -> u8 {
     }
 }
 
-fn dir_name(d: Dir) -> &'static str {
+pub(super) fn dir_name(d: Dir) -> &'static str {
     match d {
         Dir::Down => "down",
         Dir::Up => "up",
@@ -1496,7 +1508,11 @@ fn dir_name(d: Dir) -> &'static str {
 }
 
 /// The state whose model a part is: the block's own, or Create's shaft / half shaft.
-fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Option<BlockStateId> {
+pub(super) fn model_state(
+    registry: &BlockRegistry,
+    own: BlockStateId,
+    model: Model,
+) -> Option<BlockStateId> {
     let find = |name: &str, key: &str, value: &str| {
         let default = registry.default_state(name)?;
         let mut s = registry.state(default)?.clone();
@@ -1527,7 +1543,7 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
 }
 
 /// The part model a draw needs: the block state's own or a partial's, posed for belts.
-fn part_model(
+pub(super) fn part_model(
     game: &mut Game<'_>,
     registry: &BlockRegistry,
     own: BlockStateId,
@@ -1566,7 +1582,7 @@ fn part_model(
 
 /// Shows the parts of the block at `pos` at its current speeds; false when the block there is
 /// not (yet) one that draws parts.
-fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> bool {
+pub(super) fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> bool {
     let state = game.world.block(pos[0], pos[1], pos[2]);
     let Some((block, info)) = c.table.get(state.0) else {
         return false;
@@ -1605,13 +1621,13 @@ fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> bool {
     true
 }
 
-fn hide(game: &mut Game<'_>, pos: [i32; 3]) {
+pub(super) fn hide(game: &mut Game<'_>, pos: [i32; 3]) {
     for slot in 0..client::SLOTS {
         game.native_part_clear(client::key(pos, slot));
     }
 }
 
-fn client_ensure(game: &Game<'_>) -> bool {
+pub(super) fn client_ensure(game: &Game<'_>) -> bool {
     CLIENT.with_borrow_mut(|c| {
         if c.is_some() {
             return true;
@@ -1756,7 +1772,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
 
 /// Create's recipes of the types its machines run, read once per world (and again on
 /// `/reload`, when the game's table changes): typed and indexed by input item.
-struct Recipes {
+pub(super) struct Recipes {
     /// Where the game's list of milling recipes was, and its length, when these were read:
     /// `/reload` builds a new table.
     table: (usize, usize),
@@ -1797,7 +1813,7 @@ impl Recipes {
 
 /// Reads Create's recipe books the first time a machine needs them in a world, and again after
 /// `/reload`. False when there are none (Create's data isn't installed).
-fn ensure_recipes(game: &Game<'_>) -> bool {
+pub(super) fn ensure_recipes(game: &Game<'_>) -> bool {
     let list = game.native_recipes_of_type("create:milling");
     let table = (list.as_ptr() as usize, list.len());
     if RECIPES.with_borrow(|r| r.as_ref().is_some_and(|r| r.table == table)) {
@@ -1834,13 +1850,13 @@ fn ensure_recipes(game: &Game<'_>) -> bool {
 }
 
 thread_local! {
-    static RECIPES: RefCell<Option<Recipes>> = const { RefCell::new(None) };
+    pub(super) static RECIPES: RefCell<Option<Recipes>> = const { RefCell::new(None) };
 }
 
 /// A vanilla cooking recipe type (`minecraft:smelting`) as a book: its one ingredient, its one
 /// result. These are the game's own table (vanilla's, the content mods' and the world's packs'),
 /// in file order; `native_recipes_of_type` serves only mods' own types.
-fn read_cooking(game: &Game<'_>, kind: &str) -> create_engine::processing::Book {
+pub(super) fn read_cooking(game: &Game<'_>, kind: &str) -> create_engine::processing::Book {
     use create_engine::processing::{Book, Output, Recipe};
     let recipes = game
         .recipes()
@@ -1864,7 +1880,7 @@ fn read_cooking(game: &Game<'_>, kind: &str) -> create_engine::processing::Book 
 /// A basin recipe type: item ingredients and results only (a fluid ingredient or result drops the
 /// recipe until fluids are ported), with its `heat_requirement`.
 /// A recipe's fluid (`FluidIngredient` or a result): its fluid by id or tag, and amount.
-fn recipe_fluid(json: &serde_json::Value) -> Option<(create_engine::tank::Fluid, u32)> {
+pub(super) fn recipe_fluid(json: &serde_json::Value) -> Option<(create_engine::tank::Fluid, u32)> {
     let amount = u32::try_from(json["amount"].as_u64()?).ok()?;
     let id = json["fluid"]
         .as_str()
@@ -1874,7 +1890,7 @@ fn recipe_fluid(json: &serde_json::Value) -> Option<(create_engine::tank::Fluid,
 }
 
 /// `create:emptying`: each item its fluid and what is left of it.
-fn read_emptying(game: &Game<'_>) -> Vec<(String, create_engine::drain::Emptying)> {
+pub(super) fn read_emptying(game: &Game<'_>) -> Vec<(String, create_engine::drain::Emptying)> {
     let mut out = Vec::new();
     for r in game.native_recipes_of_type("create:emptying") {
         let json = &*r.json;
@@ -1908,7 +1924,7 @@ fn read_emptying(game: &Game<'_>) -> Vec<(String, create_engine::drain::Emptying
 }
 
 /// `create:filling`: an item and a fluid, what it becomes.
-fn read_filling(game: &Game<'_>) -> Vec<create_engine::spout::Filling> {
+pub(super) fn read_filling(game: &Game<'_>) -> Vec<create_engine::spout::Filling> {
     let mut out = Vec::new();
     for r in game.native_recipes_of_type("create:filling") {
         let json = &*r.json;
@@ -1941,7 +1957,10 @@ fn read_filling(game: &Game<'_>) -> Vec<create_engine::spout::Filling> {
 
 /// `ItemApplicationRecipe`s: the item worked on, the one held, the results; `_manual_only`
 /// ones left out (`CAN_BE_AUTOMATED`).
-fn read_application(game: &Game<'_>, kind: &str) -> Vec<create_engine::deployer::Recipe> {
+pub(super) fn read_application(
+    game: &Game<'_>,
+    kind: &str,
+) -> Vec<create_engine::deployer::Recipe> {
     use create_engine::processing::Output;
     game.native_recipes_of_type(kind)
         .iter()
@@ -1977,7 +1996,7 @@ fn read_application(game: &Game<'_>, kind: &str) -> Vec<create_engine::deployer:
         .collect()
 }
 
-fn read_basin(game: &Game<'_>, kind: &str) -> Vec<create_engine::basin::Recipe> {
+pub(super) fn read_basin(game: &Game<'_>, kind: &str) -> Vec<create_engine::basin::Recipe> {
     use create_engine::basin::{HeatReq, Recipe};
     use create_engine::processing::Output;
     game.native_recipes_of_type(kind)
@@ -2021,7 +2040,7 @@ fn read_basin(game: &Game<'_>, kind: &str) -> Vec<create_engine::basin::Recipe> 
         .collect()
 }
 
-fn read_book(game: &Game<'_>, kind: &str) -> create_engine::processing::Book {
+pub(super) fn read_book(game: &Game<'_>, kind: &str) -> create_engine::processing::Book {
     use create_engine::processing::{Book, Output, Recipe};
     let recipes = game
         .native_recipes_of_type(kind)
@@ -2061,7 +2080,7 @@ fn read_book(game: &Game<'_>, kind: &str) -> create_engine::processing::Book {
 
 /// The millstones that turn: Create's `MillstoneBlockEntity.tick` on their slots (input 0,
 /// outputs 1 to 9). Millstones that don't turn cost nothing.
-fn tick_millstones(game: &mut Game<'_>, dim: usize) {
+pub(super) fn tick_millstones(game: &mut Game<'_>, dim: usize) {
     let turning = with_world(|w| w.turning_millstones(dim)).unwrap_or_default();
     if turning.is_empty() {
         return;
@@ -2267,7 +2286,7 @@ pub(super) fn block_entity_container(
 
 /// `MillstoneBlock.useItemOn` with an empty hand: the outputs go to the player (the input when
 /// there are none); with an item, the block's own use (closed: no menu opens).
-fn use_millstone(game: &mut Game<'_>, pos: [i32; 3], canceled: &mut bool) {
+pub(super) fn use_millstone(game: &mut Game<'_>, pos: [i32; 3], canceled: &mut bool) {
     *canceled = true;
     if game.native_held().is_some_and(|h| h.0 != "minecraft:air") {
         return;
@@ -2298,7 +2317,7 @@ fn use_millstone(game: &mut Game<'_>, pos: [i32; 3], canceled: &mut bool) {
 
 /// `WaterWheelBlockEntity.getFlowVectorAtPosition`: the fluid's flow, or a bubble column's
 /// push (up, or down when it drags down).
-fn flow_at(game: &Game<'_>, dimension: &str, at: [i32; 3]) -> [f64; 3] {
+pub(super) fn flow_at(game: &Game<'_>, dimension: &str, at: [i32; 3]) -> [f64; 3] {
     let state = game.world.block(at[0], at[1], at[2]);
     if let Some(s) = game.pack.assets.registry.state(state)
         && s.name == "minecraft:bubble_column"
@@ -2380,14 +2399,14 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
 
 /// `BeltHelper.isItemUpright`: items of `create:upright_on_belt` stand, unless also in
 /// `create:not_upright_on_belt`. (Fluid-holding items stand in Create too: not yet.)
-fn upright(game: &Game<'_>, item: &str) -> bool {
+pub(super) fn upright(game: &Game<'_>, item: &str) -> bool {
     let tags = &game.items().item_tags;
     let has = |t: &str| tags.get(t).is_some_and(|m| m.contains(item));
     has("create:upright_on_belt") && !has("create:not_upright_on_belt")
 }
 
 /// `TransportedItemStack`'s `R.nextInt(360)`: Create's shared random; any angle will do.
-fn random_angle(game: &Game<'_>, pos: [i32; 3]) -> i32 {
+pub(super) fn random_angle(game: &Game<'_>, pos: [i32; 3]) -> i32 {
     let mut x = (game.world.game_time as u64)
         ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ (pos[2] as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
@@ -2400,7 +2419,13 @@ fn random_angle(game: &Game<'_>, pos: [i32; 3]) -> i32 {
 
 /// `SharedDepotBlockMethods.onUse` on the depot's top: everything it holds goes to the
 /// player, then the stack in hand is put down, sliding in from the player's side.
-fn use_depot(game: &mut Game<'_>, dim: usize, pos: [i32; 3], face: [i32; 3], canceled: &mut bool) {
+pub(super) fn use_depot(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    face: [i32; 3],
+    canceled: &mut bool,
+) {
     if face != [0, 1, 0] {
         return;
     }
@@ -2499,7 +2524,7 @@ pub(super) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
 
 /// `DepotBehaviour.tick` for depots whose stack slides, then the depots whose contents
 /// changed go to the players of the level.
-fn tick_depots(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_depots(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let sliding = with_world(|w| w.dims[dim].sliding.clone()).unwrap_or_default();
     if !sliding.is_empty() {
         let standing: Vec<[i32; 3]> = sliding
@@ -2545,7 +2570,7 @@ fn tick_depots(game: &mut Game<'_>, dimension: &str, dim: usize) {
 }
 
 /// The stacks of the depot at `pos`, by slot.
-fn depot_items(game: &Game<'_>, pos: [i32; 3]) -> Vec<(u8, String, u8)> {
+pub(super) fn depot_items(game: &Game<'_>, pos: [i32; 3]) -> Vec<(u8, String, u8)> {
     match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
         Some(horizon_client::containers::BlockEntity::Mod(m)) => m
             .items
@@ -2561,7 +2586,7 @@ fn depot_items(game: &Game<'_>, pos: [i32; 3]) -> Vec<(u8, String, u8)> {
     }
 }
 
-fn send_depots(game: &mut Game<'_>, players: &[u128], dim: usize, depots: &[[i32; 3]]) {
+pub(super) fn send_depots(game: &mut Game<'_>, players: &[u128], dim: usize, depots: &[[i32; 3]]) {
     let contents: Vec<create_engine::depot::Contents> = depots
         .iter()
         .map(|&pos| {
@@ -2588,18 +2613,18 @@ fn send_depots(game: &mut Game<'_>, players: &[u128], dim: usize, depots: &[[i32
 /// The depots a client draws: their contents and the held stack's motion, which it slides
 /// itself, tick by tick, as the server does.
 #[derive(Default)]
-struct ClientDepots {
+pub(super) struct ClientDepots {
     shown: HashMap<[i32; 3], create_engine::depot::Contents>,
     sliding: Vec<[i32; 3]>,
 }
 
 thread_local! {
-    static DEPOTS: RefCell<ClientDepots> = RefCell::new(ClientDepots::default());
+    pub(super) static DEPOTS: RefCell<ClientDepots> = RefCell::new(ClientDepots::default());
 }
 
 /// A key for copy `copy` of the stack in `slot` of the depot at `pos`, apart from the kinetic
 /// parts' keys (a well-mixed hash of the three).
-fn depot_key(pos: [i32; 3], slot: u8, copy: u8) -> u64 {
+pub(super) fn depot_key(pos: [i32; 3], slot: u8, copy: u8) -> u64 {
     let mut x = client::key(pos, 0)
         ^ (u64::from(slot) << 8 | u64::from(copy)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -2607,9 +2632,9 @@ fn depot_key(pos: [i32; 3], slot: u8, copy: u8) -> u64 {
     x ^ (x >> 31) | 1 << 63
 }
 
-const COPIES: u8 = 4;
+pub(super) const COPIES: u8 = 4;
 
-fn hide_depot(game: &mut Game<'_>, pos: [i32; 3]) {
+pub(super) fn hide_depot(game: &mut Game<'_>, pos: [i32; 3]) {
     for slot in 0..create_engine::depot::SLOTS as u8 {
         for copy in 0..COPIES {
             game.native_part_clear(depot_key(pos, slot, copy));
@@ -2620,7 +2645,7 @@ fn hide_depot(game: &mut Game<'_>, pos: [i32; 3]) {
 /// Draws a depot's stacks as Create's `DepotRenderer` does: the held stack at its offset, turned
 /// by its angle; each output 0.35 out at 45° steps. `next` is where the held stack will be a
 /// tick from now, for the GPU to glide it there.
-fn show_depot(
+pub(super) fn show_depot(
     game: &mut Game<'_>,
     c: &create_engine::depot::Contents,
     next: Option<create_engine::depot::Held>,
@@ -2663,7 +2688,7 @@ fn show_depot(
 }
 
 /// Depots' contents from the server.
-fn depots_from_server(game: &mut Game<'_>, data: &[u8]) {
+pub(super) fn depots_from_server(game: &mut Game<'_>, data: &[u8]) {
     for c in create_engine::depot::decode(data) {
         let pos = c.pos;
         if c.stacks.is_empty() {
@@ -2690,7 +2715,7 @@ fn depots_from_server(game: &mut Game<'_>, data: &[u8]) {
 
 /// Each client tick: held stacks still sliding move on a tick (`DepotBehaviour.tick` on the
 /// client), drawn gliding to where they will be next.
-fn tick_client_depots(game: &mut Game<'_>) {
+pub(super) fn tick_client_depots(game: &mut Game<'_>) {
     let sliding = DEPOTS.with_borrow(|d| d.sliding.clone());
     for pos in sliding {
         let Some(mut c) = DEPOTS.with_borrow(|d| d.shown.get(&pos).cloned()) else {
@@ -2717,7 +2742,7 @@ fn tick_client_depots(game: &mut Game<'_>) {
 
 /// `BeltProcessingBehaviour.isBlocked`: a block with a collision shape between a depot and the
 /// press above it. (Funnels, which Create lets through, are not ported yet.)
-fn blocked(game: &Game<'_>, at: [i32; 3]) -> bool {
+pub(super) fn blocked(game: &Game<'_>, at: [i32; 3]) -> bool {
     let state = game.world.block(at[0], at[1], at[2]);
     game.res.behaviours().facts(state).flags
         & horizon_world::level::data::state_flags::COLLISION_EMPTY
@@ -2725,7 +2750,7 @@ fn blocked(game: &Game<'_>, at: [i32; 3]) -> bool {
 }
 
 /// The players of `dimension`.
-fn players_in(game: &Game<'_>, dimension: &str) -> Vec<u128> {
+pub(super) fn players_in(game: &Game<'_>, dimension: &str) -> Vec<u128> {
     game.native_server_players()
         .into_iter()
         .filter(|p| p.dimension == dimension)
@@ -2734,7 +2759,7 @@ fn players_in(game: &Game<'_>, dimension: &str) -> Vec<u128> {
 }
 
 /// The deployer two above `depot`, facing down, and its speed; None for anything else.
-fn deployer_above(
+pub(super) fn deployer_above(
     game: &Game<'_>,
     dim: usize,
     depot: [i32; 3],
@@ -2755,7 +2780,7 @@ fn deployer_above(
 
 /// `BeltDeployerCallbacks` for the depot at `depot`: true when a deployer above holds its stack
 /// (the depot asks again next tick).
-fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]) -> bool {
+pub(super) fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]) -> bool {
     use create_engine::deployer::{self, Depot};
     let Some((mut d, rpm)) = deployer_above(game, dim, depot) else {
         return false;
@@ -2847,7 +2872,7 @@ fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]) -> bool {
 
 /// Deployers mid-stroke (`DeployerBlockEntity.tick` without a fake player): the stroke runs;
 /// one back at rest has the depot below look at it again. Nothing runs without one.
-fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
     use create_engine::deployer::{State, Tick};
     // Deployers at rest holding something, turning, not over a depot or belt: `tick`'s
     // `WAITING` start (`shouldActivate`), else a look again `getTimerSpeed() × 10` later.
@@ -2952,7 +2977,7 @@ fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
 }
 
 /// A deployer's facing; None for any other block.
-fn deployer_facing(game: &Game<'_>, pos: [i32; 3]) -> Option<Dir> {
+pub(super) fn deployer_facing(game: &Game<'_>, pos: [i32; 3]) -> Option<Dir> {
     let state = game.world.block(pos[0], pos[1], pos[2]).0;
     with_world(|w| {
         w.table
@@ -2964,7 +2989,7 @@ fn deployer_facing(game: &Game<'_>, pos: [i32; 3]) -> Option<Dir> {
 }
 
 /// Whether the block at `p` can be replaced (air, a fluid, grass).
-fn game_free(game: &Game<'_>, p: [i32; 3]) -> bool {
+pub(super) fn game_free(game: &Game<'_>, p: [i32; 3]) -> bool {
     game.res
         .behaviours()
         .is_replaceable(game.world.block(p[0], p[1], p[2]))
@@ -2972,7 +2997,7 @@ fn game_free(game: &Game<'_>, p: [i32; 3]) -> bool {
 
 /// Where the block a deployer holds would go (`placement`), as a position; None when it holds
 /// no block, or nowhere fits.
-fn deployer_place_target(
+pub(super) fn deployer_place_target(
     game: &Game<'_>,
     dim: usize,
     pos: [i32; 3],
@@ -2998,7 +3023,7 @@ fn deployer_place_target(
 
 /// `shouldActivate` for a held item that is not a block: always, except a bucket of a fluid
 /// whose source is already in the block it reaches.
-fn deployer_uses(game: &Game<'_>, dim: usize, pos: [i32; 3], facing: Dir) -> bool {
+pub(super) fn deployer_uses(game: &Game<'_>, dim: usize, pos: [i32; 3], facing: Dir) -> bool {
     let Some((item, _)) =
         with_world(|w| w.dims[dim].deployers.get(&pos).and_then(|d| d.held.clone())).flatten()
     else {
@@ -3026,7 +3051,7 @@ fn deployer_uses(game: &Game<'_>, dim: usize, pos: [i32; 3], facing: Dir) -> boo
 /// `DeployerHandler.activate` for what is ported: a held block item is placed (its default
 /// state) where it fits, and one is used up; another item is used on the block it reaches the
 /// way a dispenser would (`dispenser::create_use`: buckets, bone meal, shears, flint and steel...).
-fn deployer_activate(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+pub(super) fn deployer_activate(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
     let Some(facing) = deployer_facing(game, pos) else {
         return;
     };
@@ -3063,7 +3088,7 @@ fn deployer_activate(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32
 
 /// A held item that is not a block, used on the block two ahead (`useOn` from the fake player):
 /// the hand keeps what is left of the stack (an emptied bucket, a filled one).
-fn deployer_use_item(game: &mut Game<'_>, dim: usize, pos: [i32; 3], facing: Dir) {
+pub(super) fn deployer_use_item(game: &mut Game<'_>, dim: usize, pos: [i32; 3], facing: Dir) {
     if !deployer_uses(game, dim, pos, facing) {
         return;
     }
@@ -3097,7 +3122,7 @@ fn deployer_use_item(game: &mut Game<'_>, dim: usize, pos: [i32; 3], facing: Dir
 }
 
 /// Deployers' strokes to `players`: where the hand is and how fast it moves, what it holds.
-fn send_deployers(game: &mut Game<'_>, players: &[u128], dim: usize, list: &[[i32; 3]]) {
+pub(super) fn send_deployers(game: &mut Game<'_>, players: &[u128], dim: usize, list: &[[i32; 3]]) {
     let mut shown = Vec::new();
     for &pos in list {
         let state = game.world.block(pos[0], pos[1], pos[2]).0;
@@ -3134,7 +3159,7 @@ fn send_deployers(game: &mut Game<'_>, players: &[u128], dim: usize, list: &[[i3
 
 /// `DeployerRenderer`: the pole and the hand (pointing, or holding) at the hand's offset, glided
 /// along the facing on the GPU between messages.
-fn deployers_from_server(game: &mut Game<'_>, data: &[u8]) {
+pub(super) fn deployers_from_server(game: &mut Game<'_>, data: &[u8]) {
     for s in create_engine::deployer::decode(data) {
         let pole = depot_key(s.pos, 110, 0);
         let hand = depot_key(s.pos, 111, 0);
@@ -3174,7 +3199,7 @@ fn deployers_from_server(game: &mut Game<'_>, data: &[u8]) {
 /// `AbstractChassisBlock.useItemOn` for a linear chassis: a slime ball on an end along its axis
 /// glues it (on a glued end: every end that may be glued); sneaking with an empty hand unglues
 /// it. An end against a chassis of its kind on its axis can't be glued (`glueAllowedOnSide`).
-fn use_chassis(
+pub(super) fn use_chassis(
     game: &mut Game<'_>,
     pos: [i32; 3],
     face: [i32; 3],
@@ -3243,7 +3268,13 @@ fn use_chassis(
 
 /// `DeployerBlock.useItemOn`: a click on its front half swaps the player's hand with the
 /// deployer's (plain stacks only here: components would be lost).
-fn use_deployer(game: &mut Game<'_>, dim: usize, pos: [i32; 3], facing: Dir, canceled: &mut bool) {
+pub(super) fn use_deployer(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    facing: Dir,
+    canceled: &mut bool,
+) {
     if game.native_held().is_some_and(|h| h.0 == "create:wrench") {
         return;
     }
@@ -3298,7 +3329,7 @@ fn use_deployer(game: &mut Game<'_>, dim: usize, pos: [i32; 3], facing: Dir, can
 
 /// Depots that ask their press, then running presses: `DepotBehaviour.tick` with
 /// `BeltPressingCallbacks`, then `PressingBehaviour.tick`. Nothing runs without either.
-fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
     use create_engine::press::{self, Step, Tick};
     let Some((work, running)) = with_world(|w| {
         let d = &mut w.dims[dim];
@@ -3422,7 +3453,7 @@ fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
 /// (the first held, centred; the rest in the outputs); otherwise the rest stays held and the
 /// results go to the outputs. What finds no room drops above the depot. Returns the held
 /// stack's motion after.
-fn press_on_depot(
+pub(super) fn press_on_depot(
     game: &mut Game<'_>,
     dim: usize,
     depot: [i32; 3],
@@ -3452,7 +3483,7 @@ fn press_on_depot(
 /// (all of it when it is one) becomes `results`: a single item is replaced by them (the first
 /// held, centred; the rest in the outputs); otherwise the rest stays held and the results go to
 /// the outputs. What finds no room drops above the depot. The held stack's motion after.
-fn results_on_depot(
+pub(super) fn results_on_depot(
     game: &mut Game<'_>,
     dim: usize,
     depot: [i32; 3],
@@ -3532,7 +3563,7 @@ fn results_on_depot(
 thread_local! {
     /// The face of the last block an item was used on, and when: `native_place_block` doesn't
     /// say which face was clicked, the use before it does.
-    static CLICKED: std::cell::Cell<Option<(i64, [i32; 3])>> = const { std::cell::Cell::new(None) };
+    pub(super) static CLICKED: std::cell::Cell<Option<(i64, [i32; 3])>> = const { std::cell::Cell::new(None) };
 }
 
 /// `getStateForPlacement` of Create's directional blocks: a block placed from an item turns to
@@ -3584,7 +3615,7 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
 /// `BlazeBurnerBlock.useItemOn`: flint and steel lights an empty burner (a lit burner, no blaze);
 /// fuel goes to the blaze (`tryInsert` with a player's overflow), one used up outside creative
 /// (a lava bucket leaves its bucket).
-fn use_burner(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut bool) {
+pub(super) fn use_burner(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut bool) {
     use create_engine::burner::Fuel;
     use create_engine::fan::Heat;
     let Some((held, _, plain)) = game.native_held() else {
@@ -3662,7 +3693,7 @@ fn use_burner(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut boo
 
 /// `BasinBlock.updateEntityAfterFallOn`: an item landing in a basin goes into its inputs as far
 /// as it fits (`insertItem`).
-fn basin_take(
+pub(super) fn basin_take(
     game: &mut Game<'_>,
     dim: usize,
     pos: [i32; 3],
@@ -3706,7 +3737,7 @@ fn basin_take(
 }
 
 /// A stack's limit (at most 64).
-fn stack_limit(game: &Game<'_>, item: &str) -> u8 {
+pub(super) fn stack_limit(game: &Game<'_>, item: &str) -> u8 {
     game.items()
         .get(item)
         .map_or(64, |x| x.max_stack)
@@ -3715,7 +3746,7 @@ fn stack_limit(game: &Game<'_>, item: &str) -> u8 {
 
 /// `ChuteBlockEntity` taking an item that landed on it (`canAcceptItem`: only while empty): the
 /// whole stack, at the top.
-fn chute_take(
+pub(super) fn chute_take(
     game: &mut Game<'_>,
     dim: usize,
     pos: [i32; 3],
@@ -3737,14 +3768,17 @@ fn chute_take(
     }
 }
 
-fn chute_stack(game: &Game<'_>, pos: [i32; 3]) -> Option<horizon_client::items::ItemStack> {
+pub(super) fn chute_stack(
+    game: &Game<'_>,
+    pos: [i32; 3],
+) -> Option<horizon_client::items::ItemStack> {
     match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
         Some(horizon_client::containers::BlockEntity::Mod(m)) => m.items.first().cloned().flatten(),
         _ => None,
     }
 }
 
-fn set_chute_stack(
+pub(super) fn set_chute_stack(
     game: &mut Game<'_>,
     pos: [i32; 3],
     stack: Option<horizon_client::items::ItemStack>,
@@ -3758,7 +3792,7 @@ fn set_chute_stack(
 /// Chutes holding a stack (`ChuteBlockEntity.tick` falling, `handleDownwardOutput`): into the
 /// container below (as a hopper puts in), else the chute below if it is empty, else out of the
 /// bottom when nothing solid is under it; it waits in the middle while the way is shut.
-fn tick_chutes(game: &mut Game<'_>, dim: usize) {
+pub(super) fn tick_chutes(game: &mut Game<'_>, dim: usize) {
     use create_engine::chute::{Fall, fall};
     let moving: Vec<([i32; 3], f32)> =
         with_world(|w| w.dims[dim].chutes.iter().map(|(p, v)| (*p, *v)).collect())
@@ -3837,7 +3871,7 @@ fn tick_chutes(game: &mut Game<'_>, dim: usize) {
 /// Turning drills (`BlockBreakingKineticBlockEntity.tick`): the block in front breaks in steps
 /// (`isBreakable`: not air, a fluid, unbreakable or `create:non_breakable`), dropping what it
 /// drops; a drill that broke one looks again at its next lazy tick (every 10 ticks).
-fn tick_drills(game: &mut Game<'_>, dim: usize) {
+pub(super) fn tick_drills(game: &mut Game<'_>, dim: usize) {
     let drills = with_world(|w| w.dims[dim].drilling.clone()).unwrap_or_default();
     if drills.is_empty() {
         return;
@@ -3886,7 +3920,7 @@ fn tick_drills(game: &mut Game<'_>, dim: usize) {
 }
 
 /// `SawBlockEntity.insertItem` for an item landing on a saw facing up, while it holds nothing.
-fn saw_take(
+pub(super) fn saw_take(
     game: &mut Game<'_>,
     dim: usize,
     pos: [i32; 3],
@@ -3914,7 +3948,7 @@ fn saw_take(
 
 /// Saws holding items (`SawBlockEntity.tick`): their cutting recipe in turn, applied near the
 /// end, the results thrown off the way the saw turns (onto a belt or depot there, else as items).
-fn tick_saws(game: &mut Game<'_>, dim: usize) {
+pub(super) fn tick_saws(game: &mut Game<'_>, dim: usize) {
     use create_engine::saw::Step;
     let saws: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].saws.keys().copied().collect()).unwrap_or_default();
@@ -3986,7 +4020,7 @@ fn tick_saws(game: &mut Game<'_>, dim: usize) {
 
 /// Spouts holding fluid (`SpoutBlockEntity.whenItemHeld` on the depot two below, `tick`): the
 /// held empty bucket is filled after the 20-tick cycle (at its 5th-last tick).
-fn tick_spouts(game: &mut Game<'_>, dim: usize) {
+pub(super) fn tick_spouts(game: &mut Game<'_>, dim: usize) {
     let spouts: Vec<([i32; 3], create_engine::spout::Spout)> = with_world(|w| {
         w.dims[dim]
             .spouts
@@ -4048,7 +4082,7 @@ fn tick_spouts(game: &mut Game<'_>, dim: usize) {
 /// Item drains holding items (`ItemDrainBlockEntity.tick`): a filled bucket is emptied into the
 /// tank each cycle while it has room; the empty bucket is thrown off on top; anything else is
 /// let go the same way.
-fn tick_drains(game: &mut Game<'_>, dim: usize) {
+pub(super) fn tick_drains(game: &mut Game<'_>, dim: usize) {
     let drains: Vec<[i32; 3]> = with_world(|w| {
         w.dims[dim]
             .drains
@@ -4094,7 +4128,7 @@ fn tick_drains(game: &mut Game<'_>, dim: usize) {
 
 /// Extracting funnels (`FunnelBlockEntity.activateExtractor`): every 8 ticks, while no item lies
 /// in front, a stack leaves the inventory behind and drops in front.
-fn tick_funnels(game: &mut Game<'_>, dim: usize) {
+pub(super) fn tick_funnels(game: &mut Game<'_>, dim: usize) {
     let funnels: Vec<[i32; 3]> = with_world(|w| {
         let d = &mut w.dims[dim];
         d.funnels
@@ -4170,7 +4204,7 @@ fn tick_funnels(game: &mut Game<'_>, dim: usize) {
 
 /// The heat under a basin (`BasinBlockEntity.getHeatLevelOf`): a blaze burner's, smouldering for
 /// a lit burner or another passive heater, else none.
-fn basin_heat(game: &Game<'_>, basin: [i32; 3]) -> create_engine::fan::Heat {
+pub(super) fn basin_heat(game: &Game<'_>, basin: [i32; 3]) -> create_engine::fan::Heat {
     use create_engine::fan::Heat;
     let state = game.world.block(basin[0], basin[1] - 1, basin[2]);
     if let Some(h) = with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.heat)).flatten() {
@@ -4195,7 +4229,10 @@ fn basin_heat(game: &Game<'_>, basin: [i32; 3]) -> create_engine::fan::Heat {
 }
 
 /// The slots of the basin at `pos`, all 18.
-fn basin_slots(game: &Game<'_>, pos: [i32; 3]) -> Option<Vec<create_engine::processing::Slot>> {
+pub(super) fn basin_slots(
+    game: &Game<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<create_engine::processing::Slot>> {
     match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
         Some(horizon_client::containers::BlockEntity::Mod(m)) => {
             let mut v: Vec<_> = m.items.iter().map(slot_of).collect();
@@ -4210,19 +4247,19 @@ fn basin_slots(game: &Game<'_>, pos: [i32; 3]) -> Option<Vec<create_engine::proc
 /// a recipe the basin can do), then the running ones' cycle (`tick`), mixing at the bottom
 /// (`applyBasinRecipe`) and going on with the same recipe while it still fits.
 /// Whether the block at `p` is a basin.
-fn basin_at(game: &Game<'_>, p: [i32; 3]) -> bool {
+pub(super) fn basin_at(game: &Game<'_>, p: [i32; 3]) -> bool {
     let s = game.world.block(p[0], p[1], p[2]).0;
     with_world(|w| w.table.get(s).map(|(b, _)| b)).flatten() == Some(create_engine::Block::Basin)
 }
 
 /// A basin's tanks (none: empty).
-fn basin_tanks(dim: usize, pos: [i32; 3]) -> create_engine::basin::Tanks {
+pub(super) fn basin_tanks(dim: usize, pos: [i32; 3]) -> create_engine::basin::Tanks {
     with_world(|w| w.dims[dim].basin_fluids.get(&pos).copied())
         .flatten()
         .unwrap_or_default()
 }
 
-fn tick_mixers(game: &mut Game<'_>, dim: usize) {
+pub(super) fn tick_mixers(game: &mut Game<'_>, dim: usize) {
     use create_engine::basin::{self, MixStep};
     let mut checks =
         with_world(|w| std::mem::take(&mut w.dims[dim].mixer_checks)).unwrap_or_default();
@@ -4375,7 +4412,7 @@ fn tick_mixers(game: &mut Game<'_>, dim: usize) {
 /// `MechanicalPressBlockEntity` as a basin operator (`updateBasin`): a turning press with a
 /// basin two below starts a cycle over it (`Mode.BASIN`) for the compacting recipe with the most
 /// ingredients the basin can do.
-fn press_on_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
+pub(super) fn press_on_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
     use create_engine::{basin, press};
     let Some(p) = with_world(|w| w.dims[dim].presses.get(&pos).copied()).flatten() else {
         return;
@@ -4420,7 +4457,7 @@ fn press_on_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
 }
 
 /// `tryProcessInBasin` at the head's lowest point: the press's compacting recipe on the basin.
-fn compact_in_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
+pub(super) fn compact_in_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
     use create_engine::basin;
     let Some(i) = with_world(|w| w.dims[dim].press_basin.get(&pos).copied()).flatten() else {
         return;
@@ -4466,7 +4503,7 @@ fn compact_in_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
 
 /// What a block is to the pipes (`FluidPropagator`): a pipe and its open sides, a pump and its
 /// facing, a tank, open space a pipe may end in, or neither.
-fn pipe_cell(game: &Game<'_>, p: [i32; 3]) -> create_engine::fluids::Cell {
+pub(super) fn pipe_cell(game: &Game<'_>, p: [i32; 3]) -> create_engine::fluids::Cell {
     use create_engine::Block;
     use create_engine::fluids::Cell;
     if !game.world.loaded(p[0], p[2]) {
@@ -4492,7 +4529,7 @@ fn pipe_cell(game: &Game<'_>, p: [i32; 3]) -> create_engine::fluids::Cell {
 }
 
 /// A pipe state's open sides (`Dir::bit`).
-fn pipe_sides_of(game: &Game<'_>, state: BlockStateId) -> u8 {
+pub(super) fn pipe_sides_of(game: &Game<'_>, state: BlockStateId) -> u8 {
     let Some(s) = game.pack.assets.registry.state(state) else {
         return 0;
     };
@@ -4503,7 +4540,12 @@ fn pipe_sides_of(game: &Game<'_>, state: BlockStateId) -> u8 {
 }
 
 /// `FluidPipeBlock.updateBlockState` for the pipe at `pos`, written when it changes.
-fn connect_pipe(game: &mut Game<'_>, dimension: &str, pos: [i32; 3], preferred: Option<Dir>) {
+pub(super) fn connect_pipe(
+    game: &mut Game<'_>,
+    dimension: &str,
+    pos: [i32; 3],
+    preferred: Option<Dir>,
+) {
     use create_engine::fluids;
     let state = game.world.block(pos[0], pos[1], pos[2]);
     let is_pipe = with_world(|w| w.table.get(state.0).map(|(b, _)| b)).flatten()
@@ -4544,7 +4586,7 @@ fn connect_pipe(game: &mut Game<'_>, dimension: &str, pos: [i32; 3], preferred: 
 /// Pipes and pumps: pipes that changed connect again; turning pumps find their ends when pipes
 /// changed (`distributePressureTo`) and carry fluid from the first end behind them to the
 /// first end in front that takes it, `max(1, pressure / 2)` mB a tick (`FluidNetwork`).
-fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
     use create_engine::fluids;
     use create_engine::tank::BUCKET;
     let mut checks =
@@ -4730,7 +4772,7 @@ fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
 
 /// Burning blaze burners (`BlazeBurnerBlockEntity.tick`): the fuel burns down; a changed heat is
 /// written to the block (`blaze`), which fans and basins read.
-fn tick_burners(game: &mut Game<'_>, dim: usize) {
+pub(super) fn tick_burners(game: &mut Game<'_>, dim: usize) {
     let changed = with_world(|w| {
         if w.dims[dim].burning.is_empty() {
             Vec::new()
@@ -4745,7 +4787,7 @@ fn tick_burners(game: &mut Game<'_>, dim: usize) {
 }
 
 /// A block state of `name` with `props` set (others at their defaults).
-fn state_with(
+pub(super) fn state_with(
     registry: &BlockRegistry,
     name: &str,
     props: &[(&str, &str)],
@@ -4760,7 +4802,7 @@ fn state_with(
 /// Crushing wheels: the controllers between wheels turning against each other
 /// (`CrushingWheelBlock.updateControllers`, after a wheel is placed, broken or changes speed),
 /// then the turning controllers' `tick`.
-fn tick_crushers(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_crushers(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let mut checks =
         with_world(|w| std::mem::take(&mut w.dims[dim].crusher_checks)).unwrap_or_default();
     checks.sort();
@@ -4777,7 +4819,7 @@ fn tick_crushers(game: &mut Game<'_>, dimension: &str, dim: usize) {
     }
 }
 
-fn fix_controllers(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+pub(super) fn fix_controllers(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
     use create_engine::{Block, crusher};
     let registry = game.pack.assets.registry;
     let at = |p: [i32; 3], side: Dir, n: i32| {
@@ -4855,7 +4897,7 @@ fn fix_controllers(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 
 }
 
 /// `CrushingWheelControllerBlockEntity.tick` (and the controller block's `entityInside`).
-fn tick_crusher(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+pub(super) fn tick_crusher(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
     use create_engine::{crusher, processing};
     let state = game.world.block(pos[0], pos[1], pos[2]);
     let Some(facing) = with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten()
@@ -4957,7 +4999,7 @@ fn tick_crusher(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3])
 /// Encased fans that turn (`EncasedFanBlockEntity.tick`): the current looked at again when due
 /// (`AirCurrent.rebuild`), then the depots and belts in it processed
 /// (`tickAffectedHandlers`). Stopped fans cost nothing.
-fn tick_fans(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_fans(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let fans = with_world(|w| w.fans_to_tick(dim)).unwrap_or_default();
     if fans.is_empty() {
         return;
@@ -5010,7 +5052,7 @@ fn tick_fans(game: &mut Game<'_>, dimension: &str, dim: usize) {
 /// in its box are pushed along the current, and processed by the type at their distance
 /// (`FanProcessing.applyProcessing`): the first result replaces the stack, the others are
 /// dropped beside it with its motion, none discards it.
-fn fan_on_items(
+pub(super) fn fan_on_items(
     game: &mut Game<'_>,
     dimension: &str,
     dim: usize,
@@ -5135,7 +5177,7 @@ fn fan_on_items(
 }
 
 /// `AirCurrent.rebuild` and `findAffectedHandlers` for the fan at `pos`.
-fn fan_current(
+pub(super) fn fan_current(
     game: &Game<'_>,
     dim: usize,
     pos: [i32; 3],
@@ -5199,7 +5241,7 @@ fn fan_current(
 
 /// `AirCurrent.findMaxDepth`: how far air gets into `shape` going `facing`, sampled at five
 /// points of the face; infinite where a sample finds a hole.
-fn max_depth(shape: &horizon_core::geometry::VoxelShape, facing: Dir) -> f32 {
+pub(super) fn max_depth(shape: &horizon_core::geometry::VoxelShape, facing: Dir) -> f32 {
     use horizon_core::geometry::Axis as A;
     let axis = match facing.axis() {
         Axis::X => A::X,
@@ -5235,7 +5277,7 @@ fn max_depth(shape: &horizon_core::geometry::VoxelShape, facing: Dir) -> f32 {
 
 /// `FanProcessingType.getAt` at a block: its fluid and the catalyst block tags with the state
 /// properties they check (a campfire's `lit`, a blaze burner's `blaze` and `flame_type`).
-fn catalyst_at(game: &Game<'_>, p: [i32; 3]) -> Option<create_engine::fan::Kind> {
+pub(super) fn catalyst_at(game: &Game<'_>, p: [i32; 3]) -> Option<create_engine::fan::Kind> {
     use create_engine::fan::{Catalyst, Heat, kind_at};
     use horizon_world::fluid::FluidKind;
     let b = game.res.behaviours();
@@ -5279,7 +5321,12 @@ fn catalyst_at(game: &Game<'_>, p: [i32; 3]) -> Option<create_engine::fan::Kind>
 /// `DepotBehaviour.applyToAllItems` with `FanProcessing.applyProcessing`: the held stack's
 /// progress, and when done, its results: the first held (centred), the rest in the outputs,
 /// what finds no room dropped; none, and the stack is gone.
-fn fan_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3], kind: create_engine::fan::Kind) {
+pub(super) fn fan_on_depot(
+    game: &mut Game<'_>,
+    dim: usize,
+    depot: [i32; 3],
+    kind: create_engine::fan::Kind,
+) {
     use create_engine::{fan, processing};
     let Some(Some(mut held)) = with_world(|w| w.dims[dim].depots.get(&depot).copied()).flatten()
     else {
@@ -5367,7 +5414,12 @@ fn fan_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3], kind: create_e
 
 /// `BeltBlockEntity.applyToAllItems` with `FanProcessing.applyProcessing`: the items over the
 /// segment at `at` (within .51 of its middle).
-fn fan_on_belt(game: &mut Game<'_>, dim: usize, at: [i32; 3], kind: create_engine::fan::Kind) {
+pub(super) fn fan_on_belt(
+    game: &mut Game<'_>,
+    dim: usize,
+    at: [i32; 3],
+    kind: create_engine::fan::Kind,
+) {
     use create_engine::{belt, fan, processing};
     let Some((c, index)) = with_world(|w| {
         let d = &w.dims[dim];
@@ -5446,12 +5498,19 @@ fn fan_on_belt(game: &mut Game<'_>, dim: usize, at: [i32; 3], kind: create_engin
 }
 
 /// A block entity slot as the processing rules see it.
-fn slot_of(s: &Option<horizon_client::items::ItemStack>) -> create_engine::processing::Slot {
+pub(super) fn slot_of(
+    s: &Option<horizon_client::items::ItemStack>,
+) -> create_engine::processing::Slot {
     s.as_ref()
         .map(|s| (s.item.to_string(), s.count.min(255) as u8))
 }
 
-fn send_presses(game: &mut Game<'_>, players: &[u128], dim: usize, presses: &[[i32; 3]]) {
+pub(super) fn send_presses(
+    game: &mut Game<'_>,
+    players: &[u128],
+    dim: usize,
+    presses: &[[i32; 3]],
+) {
     let all: Vec<([i32; 3], create_engine::press::Press)> = presses
         .iter()
         .map(|&pos| {
@@ -5471,16 +5530,21 @@ fn send_presses(game: &mut Game<'_>, players: &[u128], dim: usize, presses: &[[i
 /// Presses a client draws mid-cycle: their cycle, run on from the server's last word, the head
 /// waiting at its lowest point until the server says it pressed (as Create's client does).
 #[derive(Default)]
-struct ClientPresses {
+pub(super) struct ClientPresses {
     running: HashMap<[i32; 3], (create_engine::press::Press, bool)>,
 }
 
 thread_local! {
-    static PRESSES: RefCell<ClientPresses> = RefCell::new(ClientPresses::default());
+    pub(super) static PRESSES: RefCell<ClientPresses> = RefCell::new(ClientPresses::default());
 }
 
 /// Moves the press head at `pos` to where `p` has it, gliding to where it will be a tick on.
-fn draw_press_head(game: &mut Game<'_>, pos: [i32; 3], p: &create_engine::press::Press, next: f32) {
+pub(super) fn draw_press_head(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    p: &create_engine::press::Press,
+    next: f32,
+) {
     use create_engine::press::head_offset;
     let Some(model) = CLIENT.with_borrow(|c| {
         let c = c.as_ref()?;
@@ -5514,7 +5578,7 @@ fn draw_press_head(game: &mut Game<'_>, pos: [i32; 3], p: &create_engine::press:
 
 /// The client's next cycle tick for a press at `speed`: `PressingBehaviour.tick` on the client,
 /// which waits at the lowest point for the server.
-fn client_press_step(p: &create_engine::press::Press, speed: f32, waiting: bool) -> i32 {
+pub(super) fn client_press_step(p: &create_engine::press::Press, speed: f32, waiting: bool) -> i32 {
     use create_engine::press::CYCLE;
     if waiting && p.ticks >= CYCLE / 2 {
         return CYCLE / 2;
@@ -5526,7 +5590,7 @@ fn client_press_step(p: &create_engine::press::Press, speed: f32, waiting: bool)
     next
 }
 
-fn presses_from_server(game: &mut Game<'_>, data: &[u8]) {
+pub(super) fn presses_from_server(game: &mut Game<'_>, data: &[u8]) {
     use create_engine::press::CYCLE;
     for (pos, p) in create_engine::press::decode(data) {
         // At the lowest point the server has pressed: the head goes on up.
@@ -5544,7 +5608,7 @@ fn presses_from_server(game: &mut Game<'_>, data: &[u8]) {
     }
 }
 
-fn press_speed(pos: [i32; 3]) -> f32 {
+pub(super) fn press_speed(pos: [i32; 3]) -> f32 {
     CLIENT.with_borrow(|c| {
         c.as_ref()
             .and_then(|c| c.speeds.get(&pos))
@@ -5553,7 +5617,7 @@ fn press_speed(pos: [i32; 3]) -> f32 {
 }
 
 /// Each client tick: running presses move on a cycle step, drawn gliding to the next.
-fn tick_client_presses(game: &mut Game<'_>) {
+pub(super) fn tick_client_presses(game: &mut Game<'_>) {
     let running: Vec<([i32; 3], create_engine::press::Press, bool)> =
         PRESSES.with_borrow(|c| c.running.iter().map(|(k, v)| (*k, v.0, v.1)).collect());
     for (pos, mut p, waiting) in running {
@@ -5575,7 +5639,7 @@ fn tick_client_presses(game: &mut Game<'_>) {
 }
 
 /// The belt segment at `pos`: its controller, its index along the chain, and its state.
-fn belt_segment(
+pub(super) fn belt_segment(
     game: &Game<'_>,
     dim: usize,
     pos: [i32; 3],
@@ -5594,7 +5658,7 @@ fn belt_segment(
 
 /// `BeltBlock.useItemOn` with an empty main hand: every item within reach of the segment's
 /// centre goes to the player.
-fn use_belt(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut bool) {
+pub(super) fn use_belt(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut bool) {
     if game.native_held().is_some_and(|h| h.0 != "minecraft:air")
         || game.hand != horizon_client::first_person::Hand::Main
         || game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
@@ -5782,7 +5846,7 @@ pub(super) fn item_landed(
 
 /// `DirectBeltInputBehaviour.handleInsertion` at `next`, the item moving toward `side`: a
 /// depot or a belt there. What is left of it, None when nothing there takes items.
-fn insert_into(
+pub(super) fn insert_into(
     game: &mut Game<'_>,
     dim: usize,
     next: [i32; 3],
@@ -5860,7 +5924,7 @@ fn insert_into(
 }
 
 /// A belt's surroundings on the server: what lies past its end, and the press over a segment.
-struct BeltSide<'a, 'g> {
+pub(super) struct BeltSide<'a, 'g> {
     game: &'a mut Game<'g>,
     dim: usize,
     controller: [i32; 3],
@@ -6075,7 +6139,7 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
 }
 
 /// `BeltInventory.eject`: an item thrown off the end, forward and a little up.
-fn eject_from_belt(
+pub(super) fn eject_from_belt(
     game: &mut Game<'_>,
     controller: [i32; 3],
     seg: &create_engine::belt::Segment,
@@ -6109,7 +6173,7 @@ fn eject_from_belt(
 /// Belts: segments broken next to a broken one become shafts or air, a broken belt's items
 /// drop, then belts holding items move them (`BeltInventory.tick`); belts at rest or empty cost
 /// nothing.
-fn tick_belts(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_belts(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let (breaks, drops) = with_world(|w| {
         let d = &mut w.dims[dim];
         (
@@ -6195,7 +6259,7 @@ fn tick_belts(game: &mut Game<'_>, dimension: &str, dim: usize) {
     }
 }
 
-fn send_belts(game: &mut Game<'_>, players: &[u128], dim: usize, belts: &[[i32; 3]]) {
+pub(super) fn send_belts(game: &mut Game<'_>, players: &[u128], dim: usize, belts: &[[i32; 3]]) {
     let all: Vec<create_engine::belt::Contents> = belts
         .iter()
         .map(|&c| {
@@ -6248,14 +6312,14 @@ fn send_belts(game: &mut Game<'_>, players: &[u128], dim: usize, belts: &[[i32; 
 /// The belts a client draws: what the server last said, run on tick by tick, and what was
 /// uploaded for each item (so an item is uploaded again only when its motion changes).
 #[derive(Default)]
-struct ClientBelts {
+pub(super) struct ClientBelts {
     belts: HashMap<[i32; 3], (create_engine::belt::Contents, Vec<Shown>)>,
 }
 
 /// What was uploaded for an item: enough to tell, without looking anything up, whether it now
 /// moves or looks differently.
 #[derive(Clone, PartialEq)]
-struct Shown {
+pub(super) struct Shown {
     item: String,
     count: u8,
     angle: i32,
@@ -6265,12 +6329,12 @@ struct Shown {
 }
 
 thread_local! {
-    static BELTS: RefCell<ClientBelts> = RefCell::new(ClientBelts::default());
+    pub(super) static BELTS: RefCell<ClientBelts> = RefCell::new(ClientBelts::default());
     /// `isGui3d` by item id, looked up once.
-    static BLOCK_ITEMS: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
+    pub(super) static BLOCK_ITEMS: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
 }
 
-fn is_block_item(game: &Game<'_>, item: &str) -> bool {
+pub(super) fn is_block_item(game: &Game<'_>, item: &str) -> bool {
     if let Some(b) = BLOCK_ITEMS.with_borrow(|m| m.get(item).copied()) {
         return b;
     }
@@ -6280,14 +6344,14 @@ fn is_block_item(game: &Game<'_>, item: &str) -> bool {
 }
 
 /// A key for copy `copy` of item `index` on the belt at `controller`, apart from the others.
-fn belt_key(controller: [i32; 3], index: usize, copy: u8) -> u64 {
+pub(super) fn belt_key(controller: [i32; 3], index: usize, copy: u8) -> u64 {
     depot_key(controller, 200, copy) ^ (index as u64 + 1).wrapping_mul(0xD6E8_FEB8_6659_FD93)
         | 1 << 63
 }
 
 /// The client's belt surroundings: what the server said lies past the end; machines hold
 /// locked items, nothing else acts.
-struct ClientSide(create_engine::belt::Ending);
+pub(super) struct ClientSide(create_engine::belt::Ending);
 
 impl create_engine::belt::Surroundings for ClientSide {
     fn ending(&mut self) -> create_engine::belt::Ending {
@@ -6308,7 +6372,7 @@ impl create_engine::belt::Surroundings for ClientSide {
 
 /// Draws the items of a belt: each copy a GPU item part gliding at its belt's speed; uploads
 /// only what moves differently from before.
-fn draw_belt(
+pub(super) fn draw_belt(
     game: &mut Game<'_>,
     contents: &create_engine::belt::Contents,
     shown: &mut Vec<Shown>,
@@ -6406,7 +6470,7 @@ fn draw_belt(
     }
 }
 
-fn belts_from_server(game: &mut Game<'_>, data: &[u8]) {
+pub(super) fn belts_from_server(game: &mut Game<'_>, data: &[u8]) {
     for contents in create_engine::belt::decode(data) {
         let c = contents.controller;
         let old = BELTS.with_borrow_mut(|b| b.belts.remove(&c));
@@ -6425,7 +6489,7 @@ fn belts_from_server(game: &mut Game<'_>, data: &[u8]) {
     }
 }
 
-fn belt_rpm(controller: [i32; 3]) -> f32 {
+pub(super) fn belt_rpm(controller: [i32; 3]) -> f32 {
     CLIENT.with_borrow(|c| {
         c.as_ref()
             .and_then(|c| c.speeds.get(&controller))
@@ -6434,7 +6498,7 @@ fn belt_rpm(controller: [i32; 3]) -> f32 {
 }
 
 /// Each client tick: belts with items move them on (`BeltInventory.tick` on the client).
-fn tick_client_belts(game: &mut Game<'_>) {
+pub(super) fn tick_client_belts(game: &mut Game<'_>) {
     let busy: Vec<[i32; 3]> = BELTS.with_borrow(|b| {
         b.belts
             .iter()
@@ -6464,7 +6528,9 @@ fn tick_client_belts(game: &mut Game<'_>) {
 
 /// A latch's rules and state, from the state table: None for any other state. Read with
 /// `try_borrow`: the signal hooks ask from inside level updates the glue itself starts.
-fn latch_state(state: u32) -> Option<(create_engine::latch::Kind, create_engine::latch::Latch)> {
+pub(super) fn latch_state(
+    state: u32,
+) -> Option<(create_engine::latch::Kind, create_engine::latch::Latch)> {
     states::index(state)?;
     WORLD.with(|w| {
         let w = w.try_borrow().ok()?;
@@ -6533,7 +6599,7 @@ pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
 /// Brass tunnels holding a stack (`BrassTunnelBlockEntity.tick`): two ticks after it arrives
 /// (then every `brassTunnelTimer` while some is left), the stack is split among the outputs
 /// beside and ahead of the segment: a belt or depot across each open side, the belt ahead.
-fn tick_brass(game: &mut Game<'_>, dim: usize) {
+pub(super) fn tick_brass(game: &mut Game<'_>, dim: usize) {
     use create_engine::tunnel;
     let Some(list) = with_world(|w| w.dims[dim].brass_running.clone()) else {
         return;
@@ -6648,7 +6714,7 @@ fn tick_brass(game: &mut Game<'_>, dim: usize) {
 }
 
 /// An andesite tunnel's axis and shape; None for any other block.
-fn tunnel_state(
+pub(super) fn tunnel_state(
     state: u32,
 ) -> Option<(create_engine::kinetics::Axis, create_engine::tunnel::Shape)> {
     states::index(state)?;
@@ -6666,7 +6732,7 @@ fn tunnel_state(
 /// Andesite tunnels: those just placed case their belt (`BeltTunnelItem`); those whose
 /// surroundings changed break without a cased, flat belt below (`canSurvive`) or take the shape
 /// the belts and depots beside their segment give (`updateShape`, `getTunnelState`).
-fn tick_tunnels(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_tunnels(game: &mut Game<'_>, dimension: &str, dim: usize) {
     use create_engine::belt::Slope;
     use create_engine::kinetics::{Axis, Dir};
     let Some((new, kept, fresh)) = with_world(|w| {
@@ -6779,7 +6845,7 @@ fn tick_tunnels(game: &mut Game<'_>, dimension: &str, dim: usize) {
 }
 
 /// A redstone link's `facing`, `receiver` and `powered`; None for any other block.
-fn link_state(state: u32) -> Option<(Dir, bool, bool)> {
+pub(super) fn link_state(state: u32) -> Option<(Dir, bool, bool)> {
     states::index(state)?;
     WORLD.with(|w| {
         let w = w.try_borrow().ok()?;
@@ -6794,7 +6860,7 @@ fn link_state(state: u32) -> Option<(Dir, bool, bool)> {
 
 /// `RedstoneLinkBlock.getPower`: the strongest signal into it from each side, and into each
 /// side but its back as from above.
-fn link_power(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> i32 {
+pub(super) fn link_power(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> i32 {
     let mut power = 0;
     for d in Dir::ALL {
         let o = d.offset();
@@ -6813,7 +6879,7 @@ fn link_power(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> i32 {
 /// `updateTransmittedSignal`: a transmitter's `powered` and what it sends; one that lost the
 /// block behind it breaks), then the receivers whose network's signal changed (`tick`:
 /// `powered` follows it, the block and the one behind it update). Nothing runs without either.
-fn tick_links(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_links(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let Some((checks, shown)) = with_world(|w| {
         let d = &mut w.dims[dim];
         (
@@ -6892,7 +6958,7 @@ fn tick_links(game: &mut Game<'_>, dimension: &str, dim: usize) {
 }
 
 /// Links' frequencies to `players` (none: the link is gone, its items hidden).
-fn send_links(game: &mut Game<'_>, players: &[u128], dim: usize, links: &[[i32; 3]]) {
+pub(super) fn send_links(game: &mut Game<'_>, players: &[u128], dim: usize, links: &[[i32; 3]]) {
     let mut shown: Vec<create_engine::link::Shown> = Vec::new();
     for &pos in links {
         let state = game.world.block(pos[0], pos[1], pos[2]).0;
@@ -6912,7 +6978,7 @@ fn send_links(game: &mut Game<'_>, players: &[u128], dim: usize, links: &[[i32; 
 }
 
 /// `LinkRenderer`: each slot's item drawn in it, a part that is uploaded when it is tuned.
-fn links_from_server(game: &mut Game<'_>, data: &[u8]) {
+pub(super) fn links_from_server(game: &mut Game<'_>, data: &[u8]) {
     for (pos, facing, key) in create_engine::link::decode(data) {
         for (first, item) in [(true, &key.0), (false, &key.1)] {
             let part = depot_key(pos, if first { 100 } else { 101 }, 0);
@@ -6931,7 +6997,7 @@ fn links_from_server(game: &mut Game<'_>, data: &[u8]) {
 
 /// `RedstoneLinkBlock.toggleMode` (sneaking with an empty hand, or the wrench): transmitter to
 /// receiver and back, `powered` as its neighbours power it; its link changes sides on the way.
-fn toggle_link(game: &mut Game<'_>, dim: usize, pos: [i32; 3], receiver: bool) {
+pub(super) fn toggle_link(game: &mut Game<'_>, dim: usize, pos: [i32; 3], receiver: bool) {
     let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
     let powered = game.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, at));
     let registry = game.pack.assets.registry;
@@ -6955,7 +7021,7 @@ fn toggle_link(game: &mut Game<'_>, dim: usize, pos: [i32; 3], receiver: bool) {
 
 /// `LinkHandler.onBlockActivated`: the item in hand (none: empty) tunes the slot under the
 /// crosshair. Sneaking with an empty hand, or a wrench, toggles the link.
-fn use_link(
+pub(super) fn use_link(
     game: &mut Game<'_>,
     dim: usize,
     pos: [i32; 3],
@@ -7013,7 +7079,12 @@ pub(super) fn tick_block(state: BlockStateId, handled: &mut bool) {
 
 /// Sets a latch's new state (`setBlock(.., UPDATE_CLIENTS)`), then the blocks it powers read it
 /// again (`DiodeBlock.onPlace` -> `updateNeighborsInFront`).
-fn set_latch(game: &mut Game<'_>, dimension: &str, pos: [i32; 3], l: create_engine::latch::Latch) {
+pub(super) fn set_latch(
+    game: &mut Game<'_>,
+    dimension: &str,
+    pos: [i32; 3],
+    l: create_engine::latch::Latch,
+) {
     let registry = game.pack.assets.registry;
     let current = game.world.block(pos[0], pos[1], pos[2]);
     let Some(mut s) = registry.state(current).cloned() else {
@@ -7040,7 +7111,7 @@ fn set_latch(game: &mut Game<'_>, dimension: &str, pos: [i32; 3], l: create_engi
 
 /// `DiodeBlock.getInputSignal` > 0 at the latch's back, and a powered latch's
 /// `isPoweredOnSides`: a signal toward it, or redstone dust beside it with power.
-fn latch_inputs(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> (bool, bool) {
+pub(super) fn latch_inputs(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> (bool, bool) {
     let registry = game.pack.assets.registry;
     let wire = |game: &Game<'_>, p: [i32; 3]| {
         registry
@@ -7071,7 +7142,7 @@ fn latch_inputs(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> (bool, bool)
 
 /// Latches: their due ticks (`tick`), then the ones whose neighbours changed
 /// (`checkTickOnNeighbor`), which take a tick one game tick later. Nothing runs without either.
-fn tick_latches(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_latches(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let now = game.world.game_time;
     let Some((due, checks)) = with_world(|w| {
         let d = &mut w.dims[dim];
@@ -7183,7 +7254,7 @@ pub(super) fn use_item_on(
     }
 }
 
-fn tanks_from_nbt(
+pub(super) fn tanks_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], create_engine::tank::Tank)> {
     let Some(horizon_world::nbt::Tag::IntArray(v)) = data.and_then(|d| d.get(&"tanks".into()))
@@ -7206,7 +7277,7 @@ fn tanks_from_nbt(
 /// `FluidTankBlock.useItemOn` for a creative player (Create 6 leaves survival to spouts and
 /// drains): a filled bucket empties into the tank, an empty one takes a bucket's worth (and
 /// is given, filled, unless the player has one already), each only whole.
-fn use_tank(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut bool) {
+pub(super) fn use_tank(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut bool) {
     use create_engine::tank::Fluid;
     if !game.creative {
         return;
@@ -7242,7 +7313,7 @@ fn use_tank(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut bool)
     }
 }
 
-fn send_tank_changes(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn send_tank_changes(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let changed = with_world(|w| {
         let mut v = std::mem::take(&mut w.dims[dim].tank_changes);
         v.sort();
@@ -7257,7 +7328,7 @@ fn send_tank_changes(game: &mut Game<'_>, dimension: &str, dim: usize) {
     send_tanks(game, &players, dim, &changed);
 }
 
-fn send_tanks(game: &mut Game<'_>, players: &[u128], dim: usize, tanks: &[[i32; 3]]) {
+pub(super) fn send_tanks(game: &mut Game<'_>, players: &[u128], dim: usize, tanks: &[[i32; 3]]) {
     let all: Vec<([i32; 3], create_engine::tank::Tank)> = tanks
         .iter()
         .map(|&p| {
@@ -7278,7 +7349,7 @@ fn send_tanks(game: &mut Game<'_>, players: &[u128], dim: usize, tanks: &[[i32; 
 
 /// A tank's fluid on the client: `FluidTankRenderer`'s box, the fluid's still texture tinted
 /// (water by its default colour), one part a tank, uploaded when its contents change.
-fn tanks_from_server(game: &mut Game<'_>, data: &[u8]) {
+pub(super) fn tanks_from_server(game: &mut Game<'_>, data: &[u8]) {
     use create_engine::tank::Fluid;
     let registry = game.pack.assets.registry;
     for (pos, t) in create_engine::tank::decode(data) {
@@ -7311,7 +7382,7 @@ fn tanks_from_server(game: &mut Game<'_>, data: &[u8]) {
 
 /// `WindmillBearingBlock.useItemOn` with an empty hand, not sneaking: assembled sails come
 /// apart now; otherwise they assemble on the next tick (`assembleNextTick`).
-fn use_windmill(
+pub(super) fn use_windmill(
     game: &mut Game<'_>,
     dim: usize,
     pos: [i32; 3],
@@ -7344,7 +7415,7 @@ fn use_windmill(
 
 /// `ControlledContraptionEntity.disassemble` at angle 0 (a windmill turns back first): each
 /// block where it was, or dropped where something else took its place.
-fn put_back(
+pub(super) fn put_back(
     game: &mut Game<'_>,
     dimension: &str,
     bearing: [i32; 3],
@@ -7375,7 +7446,10 @@ fn put_back(
 
 /// Blocks Create can't move (unbreakable ones) and blocks whose block entity would be lost
 /// (moving block entities isn't ported: refused rather than emptied).
-fn contraption_found(game: &Game<'_>, p: [i32; 3]) -> Option<create_engine::contraption::Found> {
+pub(super) fn contraption_found(
+    game: &Game<'_>,
+    p: [i32; 3],
+) -> Option<create_engine::contraption::Found> {
     use create_engine::contraption::{Found, Sticky};
     let registry = game.pack.assets.registry;
     let id = game.world.block(p[0], p[1], p[2]);
@@ -7447,7 +7521,7 @@ fn contraption_found(game: &Game<'_>, p: [i32; 3]) -> Option<create_engine::cont
 /// Windmills: structures whose bearing broke go back; right-clicked bearings assemble their
 /// sails (`assemble`), the blocks leaving the world; clients see the changes. Nothing runs
 /// without either.
-fn tick_windmills(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_windmills(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let Some((orphans, queued)) = with_world(|w| {
         let d = &mut w.dims[dim];
         (
@@ -7514,7 +7588,7 @@ fn tick_windmills(game: &mut Game<'_>, dimension: &str, dim: usize) {
 /// turning what is in front of it (`assemble`); a turning one stopped puts it back turned to the
 /// nearest quarter turn (`disassemble`, `ROTATE_PLACE`); otherwise the angle runs on at the new
 /// speed. Nothing runs without a change.
-fn tick_bearings(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_bearings(game: &mut Game<'_>, dimension: &str, dim: usize) {
     use create_engine::contraption::{self, Turn};
     let Some(mut checks) = with_world(|w| std::mem::take(&mut w.dims[dim].bearing_checks)) else {
         return;
@@ -7595,7 +7669,7 @@ fn tick_bearings(game: &mut Game<'_>, dimension: &str, dim: usize) {
 /// `quarter`° about the bearing's axis through the block in front of it, its `facing` or `axis`
 /// turned with it (`rotateFacing`: `getClockWise(axis)`, `rotation.ordinal()` times); a state
 /// that has no such turned form stays as it was. A block whose place is taken drops.
-fn put_back_turned(
+pub(super) fn put_back_turned(
     game: &mut Game<'_>,
     dimension: &str,
     bearing: [i32; 3],
@@ -7671,7 +7745,10 @@ fn put_back_turned(
 }
 
 /// A gantry shaft's facing, part and power; None for any other block.
-fn gantry_shaft(game: &Game<'_>, p: [i32; 3]) -> Option<(Dir, create_engine::gantry::Part, bool)> {
+pub(super) fn gantry_shaft(
+    game: &Game<'_>,
+    p: [i32; 3],
+) -> Option<(Dir, create_engine::gantry::Part, bool)> {
     let s = game
         .pack
         .assets
@@ -7693,7 +7770,7 @@ fn gantry_shaft(game: &Game<'_>, p: [i32; 3]) -> Option<(Dir, create_engine::gan
 }
 
 /// `checkAttachedCarriageBlocks`: carriages beside the shaft facing away from it, off its axis.
-fn gantry_carriages_on(game: &Game<'_>, dim: usize, shaft: [i32; 3]) {
+pub(super) fn gantry_carriages_on(game: &Game<'_>, dim: usize, shaft: [i32; 3]) {
     let Some((facing, ..)) = gantry_shaft(game, shaft) else {
         return;
     };
@@ -7720,7 +7797,7 @@ fn gantry_carriages_on(game: &Game<'_>, dim: usize, shaft: [i32; 3]) {
 /// they may start from take their structure out of the world (`tryAssemble`); moving ones run
 /// along the shafts at their speed (`checkPinionShaft`) and go back into the world, at the
 /// nearest whole block, where they stop. Nothing runs without one of them.
-fn tick_gantries(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_gantries(game: &mut Game<'_>, dimension: &str, dim: usize) {
     use create_engine::gantry::{self, Moving, Shaft, Step};
     let Some((mut checks, mut queued, moving)) = with_world(|w| {
         let d = &mut w.dims[dim];
@@ -7872,7 +7949,7 @@ fn tick_gantries(game: &mut Game<'_>, dimension: &str, dim: usize) {
 /// A moving gantry to clients, as a piston's structure is (`create:piston`, keyed by where its
 /// carriage started): gliding along the shaft line from its offset at its speed; `gone` clears
 /// it.
-fn send_gantry(
+pub(super) fn send_gantry(
     game: &mut Game<'_>,
     dimension: &str,
     g: &create_engine::gantry::Moving,
@@ -7904,7 +7981,10 @@ fn send_gantry(
 }
 
 /// A mechanical crafter's facing and pointing; None for any other block.
-fn crafter_at(game: &Game<'_>, p: [i32; 3]) -> Option<(Dir, create_engine::crafter::Pointing)> {
+pub(super) fn crafter_at(
+    game: &Game<'_>,
+    p: [i32; 3],
+) -> Option<(Dir, create_engine::crafter::Pointing)> {
     let s = game
         .pack
         .assets
@@ -7924,7 +8004,7 @@ fn crafter_at(game: &Game<'_>, p: [i32; 3]) -> Option<(Dir, create_engine::craft
 }
 
 /// `RecipeGridHandler.getTargetingCrafter`: the crafter it points at, facing the same way.
-fn crafter_target(game: &Game<'_>, p: [i32; 3]) -> Option<[i32; 3]> {
+pub(super) fn crafter_target(game: &Game<'_>, p: [i32; 3]) -> Option<[i32; 3]> {
     let (f, pointing) = crafter_at(game, p)?;
     let o = create_engine::crafter::target(f, pointing).offset();
     let t = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
@@ -7932,7 +8012,7 @@ fn crafter_target(game: &Game<'_>, p: [i32; 3]) -> Option<[i32; 3]> {
 }
 
 /// `getPrecedingCrafters`: crafters beside it in its plane, facing the same way, pointing at it.
-fn crafters_preceding(game: &Game<'_>, p: [i32; 3]) -> Vec<[i32; 3]> {
+pub(super) fn crafters_preceding(game: &Game<'_>, p: [i32; 3]) -> Vec<[i32; 3]> {
     let Some((f, pointing)) = crafter_at(game, p) else {
         return Vec::new();
     };
@@ -7951,7 +8031,7 @@ fn crafters_preceding(game: &Game<'_>, p: [i32; 3]) -> Vec<[i32; 3]> {
 
 /// `getAllCraftersOfChainIf`: the chain through `root`, following targets and preceding
 /// crafters; None for a loop, or (unless `all`) when one of them fails `test`, or when all do.
-fn crafter_chain(
+pub(super) fn crafter_chain(
     game: &Game<'_>,
     root: [i32; 3],
     test: impl Fn(&Game<'_>, [i32; 3]) -> bool,
@@ -7986,7 +8066,7 @@ fn crafter_chain(
 }
 
 /// The item in a crafter's slot (`inventory`), if any.
-fn crafter_slot(game: &Game<'_>, p: [i32; 3]) -> Option<String> {
+pub(super) fn crafter_slot(game: &Game<'_>, p: [i32; 3]) -> Option<String> {
     match game.world.block_entities.get(&(p[0], p[1], p[2])) {
         Some(horizon_client::containers::BlockEntity::Mod(m)) => m
             .items
@@ -7999,7 +8079,7 @@ fn crafter_slot(game: &Game<'_>, p: [i32; 3]) -> Option<String> {
 
 /// `MechanicalCrafterBlock.useItemOn` on its front: an empty slot takes one of the item in hand;
 /// an empty hand takes the slot's item back.
-fn use_crafter(
+pub(super) fn use_crafter(
     game: &mut Game<'_>,
     dim: usize,
     pos: [i32; 3],
@@ -8053,7 +8133,10 @@ fn use_crafter(
 
 /// `RecipeGridHandler.tryToApplyRecipe`: a crafting recipe (the grid in a square of its larger
 /// side, up to 3), else a `create:mechanical_crafting` one.
-fn crafter_recipe(game: &Game<'_>, grid: &[((i32, i32), String)]) -> Option<(String, u8)> {
+pub(super) fn crafter_recipe(
+    game: &Game<'_>,
+    grid: &[((i32, i32), String)],
+) -> Option<(String, u8)> {
     let (w, h, cells) = create_engine::crafter::input(grid);
     let size = w.max(h);
     if (1..=3).contains(&size) {
@@ -8115,7 +8198,7 @@ fn crafter_recipe(game: &Game<'_>, grid: &[((i32, i32), String)]) -> Option<(Str
 /// `ejectWholeGrid`: every crafter of the chain throws out its grid in front of it and goes
 /// idle, then looks at its slot again (`lazyTick`). Its slot is left: Create's refuses items
 /// while it works, so an item a hopper put in meanwhile is the next round's.
-fn crafters_eject(game: &mut Game<'_>, dimension: &str, dim: usize, root: [i32; 3]) {
+pub(super) fn crafters_eject(game: &mut Game<'_>, dimension: &str, dim: usize, root: [i32; 3]) {
     let chain = crafter_chain(game, root, |_, _| true, true).unwrap_or_else(|| vec![root]);
     for p in chain {
         let grid = with_world(|w| {
@@ -8144,7 +8227,7 @@ fn crafters_eject(game: &mut Game<'_>, dimension: &str, dim: usize, root: [i32; 
 
 /// `tryInsert`: the result into the container it points at (as a hopper puts it in); without
 /// one, everything is thrown out.
-fn crafter_insert(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+pub(super) fn crafter_insert(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
     use create_engine::crafter::Phase;
     let Some((facing, pointing)) = crafter_at(game, pos) else {
         return;
@@ -8184,7 +8267,7 @@ fn crafter_insert(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3
 /// (`checkCompletedRecipe`, `begin`); those at work run `tick`'s phases: the grid assembles,
 /// is passed on to the crafter pointed at (`EXPORTING`, 1000), the last one crafts (2000) and
 /// puts the result out. Nothing runs without one of them.
-fn tick_crafters(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_crafters(game: &mut Game<'_>, dimension: &str, dim: usize) {
     use create_engine::crafter::{self, Phase};
     let Some((mut checks, drops, working)) = with_world(|w| {
         let d = &mut w.dims[dim];
@@ -8344,396 +8427,24 @@ fn tick_crafters(game: &mut Game<'_>, dimension: &str, dim: usize) {
     }
 }
 
-const CONTRAPTION_CHANNEL: &str = "create:contraption";
-const PISTON_CHANNEL: &str = "create:piston";
+pub(super) const CONTRAPTION_CHANNEL: &str = "create:contraption";
+pub(super) const PISTON_CHANNEL: &str = "create:piston";
 
 /// A block's world position on a piston's structure at `offset` blocks out.
-fn piston_world(anchor: [i32; 3], local: [i32; 3], facing: Dir, offset: i32) -> [i32; 3] {
+pub(super) fn piston_world(
+    anchor: [i32; 3],
+    local: [i32; 3],
+    facing: Dir,
+    offset: i32,
+) -> [i32; 3] {
     let o = facing.offset();
     [0, 1, 2].map(|a| anchor[a] + local[a] + o[a] * offset)
-}
-
-const TRAIN_CHANNEL: &str = "create:train";
-
-/// The straight track a station targets (`TrackTargetingBehaviour`): the track block beside it,
-/// and the line through it.
-fn station_track(
-    game: &Game<'_>,
-    pos: [i32; 3],
-) -> Option<([i32; 3], create_engine::trains::Line)> {
-    use create_engine::trains::Line;
-    let registry = game.pack.assets.registry;
-    let axis_at = |p: [i32; 3]| -> Option<Axis> {
-        let s = registry.state(game.world.block(p[0], p[1], p[2]))?;
-        if s.name != "create:track" {
-            return None;
-        }
-        match s.properties.get("shape").map(String::as_str) {
-            Some("zo") => Some(Axis::Z),
-            Some("xo") => Some(Axis::X),
-            _ => None,
-        }
-    };
-    for d in [Dir::North, Dir::South, Dir::West, Dir::East] {
-        let o = d.offset();
-        let t = [pos[0] + o[0], pos[1], pos[2] + o[2]];
-        if let Some(axis) = axis_at(t) {
-            return Some((t, Line::trace(t, axis, |p| axis_at(p) == Some(axis))));
-        }
-    }
-    None
-}
-
-/// The station's assembly (`StationBlockEntity.assemble` / `disassemble` from its screen):
-/// a train standing at it goes back into the world; else the bogeys on its track (a block above
-/// it) and what sticks to them become a train.
-fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
-    use create_engine::trains::{Line, Train};
-    let Some((target, line)) = station_track(game, pos) else {
-        return;
-    };
-    let here = Line::along(line.axis, target) as f64;
-    let dimension = game.dim.id().to_owned();
-    let stopped = with_world(|w| {
-        let d = &mut w.dims[dim];
-        let i = d.trains.iter().position(|t| {
-            t.train.line == line
-                && t.train.destination.is_none()
-                && ((t.train.position - here).abs() < 0.5
-                    // Still where it was assembled (its bogey beside this station).
-                    || (t.train.position == t.start && (t.start - here).abs() <= 2.0))
-        })?;
-        Some(d.trains.remove(i))
-    })
-    .flatten();
-    if let Some(t) = stopped {
-        let shift = (t.train.position - t.start).round() as i32;
-        let along = |p: [i32; 3]| {
-            let mut p = p;
-            match line.axis {
-                Axis::X => p[0] += shift,
-                Axis::Y => p[1] += shift,
-                Axis::Z => p[2] += shift,
-            }
-            p
-        };
-        for (l, s) in &t.blocks {
-            let p = along([t.origin[0] + l[0], t.origin[1] + l[1], t.origin[2] + l[2]]);
-            game.native_set_block(
-                &dimension,
-                p,
-                BlockStateId(*s),
-                super::native_hooks::flags::UPDATE_ALL,
-            );
-        }
-        send_train_clear(game, &dimension, t.id);
-        return;
-    }
-    // Bogeys along the track, one above it.
-    let step = |a: i32| match line.axis {
-        Axis::X => [a, target[1] + 1, target[2]],
-        Axis::Y => [target[0], a, target[2]],
-        Axis::Z => [target[0], target[1] + 1, a],
-    };
-    let bogeys: Vec<[i32; 3]> = (line.from..=line.to)
-        .map(step)
-        .filter(|p| {
-            let s = game.world.block(p[0], p[1], p[2]);
-            matches!(
-                with_world(|w| w.table.get(s.0).map(|(b, _)| b)).flatten(),
-                Some(create_engine::Block::SmallBogey | create_engine::Block::LargeBogey)
-            )
-        })
-        .collect();
-    let Some(&origin) = bogeys.first() else {
-        return;
-    };
-    // The bogeys and what is stuck to them (slime, honey; glue is not ported), not the track.
-    let track: Vec<[i32; 3]> = (line.from..=line.to)
-        .map(|a| [step(a)[0], target[1], step(a)[2]])
-        .collect();
-    let mut blocks: Vec<([i32; 3], u32)> = Vec::new();
-    for b in &bogeys {
-        // Down is the track, left out: only what sticks is taken.
-        let Ok(found) =
-            create_engine::piston::gather(*b, Dir::Down, &track, |p| contraption_found(game, p))
-        else {
-            return;
-        };
-        for (o, s) in found {
-            let l = [
-                b[0] + o[0] - origin[0],
-                b[1] + o[1] - origin[1],
-                b[2] + o[2] - origin[2],
-            ];
-            if !blocks.iter().any(|(x, _)| *x == l) {
-                blocks.push((l, s));
-            }
-        }
-    }
-    let air = BlockStateId(0);
-    for (l, _) in &blocks {
-        let p = [origin[0] + l[0], origin[1] + l[1], origin[2] + l[2]];
-        game.native_set_block(&dimension, p, air, super::native_hooks::flags::UPDATE_ALL);
-    }
-    let start = Line::along(line.axis, origin) as f64;
-    let id = with_world(|w| {
-        let d = &mut w.dims[dim];
-        let id = d.trains.iter().map(|t| t.id).max().unwrap_or(0) + 1;
-        d.trains.push(create_engine::world::TrainOnTrack {
-            train: Train {
-                line,
-                position: start,
-                speed: 0.0,
-                destination: None,
-            },
-            blocks,
-            origin,
-            start,
-            id,
-        });
-        id
-    })
-    .unwrap_or(0);
-    game.native_mark_chunk_unsaved(&dimension, [origin[0] >> 4, origin[2] >> 4]);
-    send_train(game, dim, [i32::MIN, 0, id as i32]);
-}
-
-/// `create_debug train <station>`: the train on that station's track heads for it. With a
-/// position of `[i32::MIN, 0, id]`, sends train `id` to clients as it is.
-fn send_train(game: &mut Game<'_>, dim: usize, station: [i32; 3]) -> String {
-    use create_engine::trains::Line;
-    let id = if station[0] == i32::MIN {
-        Some(station[2] as u32)
-    } else {
-        let Some((target, line)) = station_track(game, station) else {
-            return "no track beside that station".into();
-        };
-        let dest = Line::along(line.axis, target) as f64;
-        with_world(|w| {
-            let t = w.dims[dim]
-                .trains
-                .iter_mut()
-                .find(|t| t.train.line == line)?;
-            t.train.destination = Some(dest);
-            Some(t.id)
-        })
-        .flatten()
-    };
-    let Some(id) = id else {
-        return "no train on that track".into();
-    };
-    let Some(t) = with_world(|w| w.dims[dim].trains.iter().find(|t| t.id == id).cloned()).flatten()
-    else {
-        return "no such train".into();
-    };
-    let mut msg = Vec::new();
-    msg.extend_from_slice(&t.id.to_le_bytes());
-    for v in t.origin {
-        msg.extend_from_slice(&v.to_le_bytes());
-    }
-    msg.push(axis_index(t.train.line.axis));
-    msg.extend_from_slice(&((t.train.position - t.start) as f32).to_le_bytes());
-    msg.extend_from_slice(&(t.train.speed as f32).to_le_bytes());
-    let blocks = &t.blocks[..t.blocks.len().min((30_000 - 29) / 16)];
-    msg.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
-    for (o, s) in blocks {
-        for v in o {
-            msg.extend_from_slice(&v.to_le_bytes());
-        }
-        msg.extend_from_slice(&s.to_le_bytes());
-    }
-    let dimension = game.dim.id().to_owned();
-    for p in players_in(game, &dimension) {
-        let _ = game.native_net_send_to_player(p, TRAIN_CHANNEL, &msg);
-    }
-    format!(
-        "train {id} heading for {:.1}",
-        t.train.destination.unwrap_or(t.train.position)
-    )
-}
-
-fn send_train_clear(game: &mut Game<'_>, dimension: &str, id: u32) {
-    for p in players_in(game, dimension) {
-        let _ = game.native_net_send_to_player(p, TRAIN_CHANNEL, &id.to_le_bytes());
-    }
-}
-
-/// Trains running to a destination (`Train.tick`, `Navigation.tick`); clients get each one's
-/// motion when it starts, every ten ticks while its speed changes, and when it stops.
-fn tick_trains(game: &mut Game<'_>, _dimension: &str, dim: usize) {
-    use create_engine::trains::{Line, Run};
-    // Signals by the line they stand by and where along it (`TrackTargetingBehaviour`).
-    let signals: Vec<(Line, f64)> = with_world(|w| w.dims[dim].signals.clone())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|p| {
-            let (target, line) = station_track(game, p)?;
-            Some((line, f64::from(Line::along(line.axis, target))))
-        })
-        .collect();
-    // Each train's span along its line (its blocks where it is now).
-    let span = |t: &create_engine::world::TrainOnTrack| {
-        let shift = t.train.position - t.start;
-        let along = |o: [i32; 3]| {
-            f64::from(Line::along(
-                t.train.line.axis,
-                [t.origin[0] + o[0], t.origin[1] + o[1], t.origin[2] + o[2]],
-            ))
-        };
-        let lo = t
-            .blocks
-            .iter()
-            .map(|(o, _)| along(*o))
-            .fold(f64::INFINITY, f64::min);
-        let hi = t
-            .blocks
-            .iter()
-            .map(|(o, _)| along(*o))
-            .fold(f64::NEG_INFINITY, f64::max);
-        (lo + shift, hi + 1.0 + shift)
-    };
-    let running: Vec<(u32, Run, f64, (i32, i32), (i32, i32))> = with_world(|w| {
-        let spans: Vec<(u32, Line, (f64, f64))> = w.dims[dim]
-            .trains
-            .iter()
-            .map(|t| (t.id, t.train.line, span(t)))
-            .collect();
-        w.dims[dim]
-            .trains
-            .iter_mut()
-            .filter(|t| t.train.destination.is_some())
-            .map(|t| {
-                let before = t.train.speed;
-                let was = create_engine::world::CreateWorld::train_column(t);
-                // A red signal ahead: it waits before it (`Navigation`'s `waitingForSignal`).
-                let dest = t.train.destination.unwrap_or(t.train.position);
-                let dir = if dest < t.train.position { -1.0 } else { 1.0 };
-                let (lo, hi) = span(t);
-                let front = if dir > 0.0 { hi } else { lo };
-                let own: Vec<f64> = signals
-                    .iter()
-                    .filter(|(l, _)| *l == t.train.line)
-                    .map(|(_, s)| *s + 0.5)
-                    .collect();
-                let others: Vec<(f64, f64)> = spans
-                    .iter()
-                    .filter(|(id, l, _)| *id != t.id && *l == t.train.line)
-                    .map(|(_, _, s)| *s)
-                    .collect();
-                let stop = create_engine::trains::blocking_signal(
-                    front,
-                    dir,
-                    front + (dest - t.train.position),
-                    &own,
-                    &others,
-                )
-                .map(|s| t.train.position + (s - dir * 0.5 - front));
-                let run = t.train.tick_until(stop);
-                (
-                    t.id,
-                    run,
-                    (t.train.speed - before).abs(),
-                    was,
-                    create_engine::world::CreateWorld::train_column(t),
-                )
-            })
-            .collect()
-    })
-    .unwrap_or_default();
-    // Saved with the column it stands in: the one it left and the one it is in save again.
-    for (_, _, _, was, now) in &running {
-        if was != now {
-            game.native_mark_chunk_unsaved(_dimension, [was.0, was.1]);
-            game.native_mark_chunk_unsaved(_dimension, [now.0, now.1]);
-        }
-    }
-    let running: Vec<(u32, create_engine::trains::Run, f64)> = running
-        .into_iter()
-        .map(|(id, run, change, _, now)| {
-            if run == create_engine::trains::Run::Arrived {
-                game.native_mark_chunk_unsaved(_dimension, [now.0, now.1]);
-            }
-            (id, run, change)
-        })
-        .collect();
-    let tick = game.world.game_time;
-    for (id, run, change) in running {
-        let stopped = with_world(|w| {
-            w.dims[dim]
-                .trains
-                .iter()
-                .any(|t| t.id == id && t.train.speed == 0.0)
-        }) == Some(true);
-        if run == Run::Arrived || (change > 0.0 && (tick % 10 == 0 || stopped)) {
-            send_train(game, dim, [i32::MIN, 0, id as i32]);
-        }
-    }
-}
-
-thread_local! {
-    /// Trains a client draws, by id: their part model.
-    static TRAINS: RefCell<HashMap<u32, u32>> = RefCell::new(HashMap::new());
-}
-
-/// A train on the client: one part model gliding along its track at its speed from where it is
-/// now (`CarriageContraptionEntity`'s motion), until the next message.
-fn trains_from_server(game: &mut Game<'_>, d: &[u8]) {
-    let i = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
-    if d.len() < 4 {
-        return;
-    }
-    let id = u32::from_le_bytes(d[0..4].try_into().unwrap());
-    let key = depot_key([id as i32, 0, 0], 222, 0);
-    if d.len() < 29 {
-        if let Some(old) = TRAINS.with_borrow_mut(|t| t.remove(&id)) {
-            game.native_part_clear(key);
-            game.native_part_model_free(old);
-        }
-        return;
-    }
-    let origin = [i(&d[4..8]), i(&d[8..12]), i(&d[12..16])];
-    let axis = d[16].min(2) as usize;
-    let f = |b: &[u8]| f32::from_le_bytes(b.try_into().unwrap());
-    let (offset, speed) = (f(&d[17..21]), f(&d[21..25]));
-    let n = u32::from_le_bytes(d[25..29].try_into().unwrap()) as usize;
-    let model = match TRAINS.with_borrow(|t| t.get(&id).copied()) {
-        Some(m) => m,
-        None => {
-            let blocks: Vec<(BlockStateId, glam::Mat4)> = d[29..]
-                .chunks_exact(16)
-                .take(n)
-                .map(|r| {
-                    let o = glam::Vec3::new(
-                        i(&r[0..4]) as f32,
-                        i(&r[4..8]) as f32,
-                        i(&r[8..12]) as f32,
-                    );
-                    (
-                        BlockStateId(u32::from_le_bytes(r[12..16].try_into().unwrap())),
-                        glam::Mat4::from_translation(o),
-                    )
-                })
-                .collect();
-            let Some(m) = game.native_part_model_compound(&blocks) else {
-                return;
-            };
-            TRAINS.with_borrow_mut(|t| t.insert(id, m));
-            m
-        }
-    };
-    let mut at = [0.0f32; 4];
-    let mut v = [0.0f32; 3];
-    at[axis] = offset;
-    at[3] = game.native_parts_seconds();
-    v[axis] = speed * 20.0;
-    game.native_part_glide(key, model, origin, 0, 0.0, 0.0, at, v);
 }
 
 /// Mechanical pistons (`LinearActuatorBlockEntity.tick`): a speed change makes a still piston
 /// assemble or a moving one stop (`assembleNextTick`); moving ones slide `getMovementSpeed`
 /// a tick and are put back at their end (`tryDisassemble`). Clients glide the structure.
-fn tick_pistons(game: &mut Game<'_>, dimension: &str, dim: usize) {
+pub(super) fn tick_pistons(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let mut checks =
         with_world(|w| std::mem::take(&mut w.dims[dim].piston_checks)).unwrap_or_default();
     let moving: Vec<[i32; 3]> =
@@ -8774,7 +8485,13 @@ fn tick_pistons(game: &mut Game<'_>, dimension: &str, dim: usize) {
 }
 
 /// `MechanicalPistonBlockEntity.assemble`: the head, poles and structure leave the world.
-fn assemble_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], speed: f32) {
+pub(super) fn assemble_piston(
+    game: &mut Game<'_>,
+    dimension: &str,
+    dim: usize,
+    pos: [i32; 3],
+    speed: f32,
+) {
     use create_engine::piston::{self, PoleCell};
     let registry = game.pack.assets.registry;
     let state = game.world.block(pos[0], pos[1], pos[2]);
@@ -8870,7 +8587,7 @@ fn assemble_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 
 
 /// `tryDisassemble`: the structure goes back into the world at the nearest whole offset; the
 /// piston is extended unless all the way in.
-fn disassemble_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+pub(super) fn disassemble_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
     let Some(m) = with_world(|w| w.dims[dim].pistons.remove(&pos)).flatten() else {
         return;
     };
@@ -8909,7 +8626,7 @@ fn disassemble_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i3
 
 /// A moving piston for clients: piston, anchor, facing, offset now, blocks a tick, then each
 /// block (offset from the anchor at offset 0, state: 16 bytes). Just the position: it stopped.
-fn send_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+pub(super) fn send_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
     let Some(m) = with_world(|w| w.dims[dim].pistons.get(&pos).cloned()).flatten() else {
         return;
     };
@@ -8942,12 +8659,12 @@ fn send_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) 
 
 thread_local! {
     /// Pistons' moving structures a client draws: their part model.
-    static PISTONS: RefCell<HashMap<[i32; 3], u32>> = RefCell::new(HashMap::new());
+    pub(super) static PISTONS: RefCell<HashMap<[i32; 3], u32>> = RefCell::new(HashMap::new());
 }
 
 /// A piston's structure on the client: one part model gliding along the facing on the GPU from
 /// its offset now, at its speed (`ControlledContraptionEntity`'s motion).
-fn pistons_from_server(game: &mut Game<'_>, d: &[u8]) {
+pub(super) fn pistons_from_server(game: &mut Game<'_>, d: &[u8]) {
     let i = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
     if d.len() < 12 {
         return;
@@ -9001,7 +8718,12 @@ fn pistons_from_server(game: &mut Game<'_>, d: &[u8]) {
 
 /// A windmill's structure for clients: bearing, facing, then each block's offset and state (16
 /// bytes); none when it came apart.
-fn send_windmills(game: &mut Game<'_>, players: &[u128], dim: usize, bearings: &[[i32; 3]]) {
+pub(super) fn send_windmills(
+    game: &mut Game<'_>,
+    players: &[u128],
+    dim: usize,
+    bearings: &[[i32; 3]],
+) {
     for &pos in bearings {
         let w = with_world(|w| w.dims[dim].windmills.get(&pos).cloned()).flatten();
         let facing = with_world(|w| {
@@ -9039,10 +8761,10 @@ fn send_windmills(game: &mut Game<'_>, players: &[u128], dim: usize, bearings: &
 thread_local! {
     /// Structures a client draws, by bearing: their part model, the axis they turn on, and their
     /// angle at a clock time with the speed since, so a speed change turns on from where it is.
-    static CONTRAPTIONS: RefCell<HashMap<[i32; 3], (u32, Dir, f32, f32, f32)>> = RefCell::new(HashMap::new());
+    pub(super) static CONTRAPTIONS: RefCell<HashMap<[i32; 3], (u32, Dir, f32, f32, f32)>> = RefCell::new(HashMap::new());
 }
 
-fn contraptions_from_server(game: &mut Game<'_>, d: &[u8]) {
+pub(super) fn contraptions_from_server(game: &mut Game<'_>, d: &[u8]) {
     let i = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
     if d.len() < 17 {
         return;
@@ -9082,7 +8804,7 @@ fn contraptions_from_server(game: &mut Game<'_>, d: &[u8]) {
 }
 
 /// The structure turns with its bearing about the bearing's axis (through its centre).
-fn turn_contraption(game: &mut Game<'_>, pos: [i32; 3], rpm: f32) {
+pub(super) fn turn_contraption(game: &mut Game<'_>, pos: [i32; 3], rpm: f32) {
     let Some((model, facing, angle, at, old)) = CONTRAPTIONS.with_borrow(|c| c.get(&pos).copied())
     else {
         return;
@@ -9102,7 +8824,7 @@ fn turn_contraption(game: &mut Game<'_>, pos: [i32; 3], rpm: f32) {
 }
 
 /// The block states of windmills as text (`name[key=value,...]`), to save.
-fn state_text(registry: &BlockRegistry, id: u32) -> String {
+pub(super) fn state_text(registry: &BlockRegistry, id: u32) -> String {
     let Some(s) = registry.state(BlockStateId(id)) else {
         return "minecraft:air".into();
     };
@@ -9117,7 +8839,7 @@ fn state_text(registry: &BlockRegistry, id: u32) -> String {
     format!("{}[{}]", s.name, props.join(","))
 }
 
-fn state_of_text(registry: &BlockRegistry, text: &str) -> Option<u32> {
+pub(super) fn state_of_text(registry: &BlockRegistry, text: &str) -> Option<u32> {
     let (name, rest) = text.split_once('[').unwrap_or((text, ""));
     let default = registry.default_state(name)?;
     let mut s = registry.state(default)?.clone();
@@ -9132,129 +8854,7 @@ fn state_of_text(registry: &BlockRegistry, text: &str) -> Option<u32> {
     registry.id(&s).map(|i| i.0)
 }
 
-/// Trains as saved (`Train.write`, here with the column they stand in): their line, motion,
-/// first bogey and the blocks they carry.
-fn trains_to_nbt(
-    game: &Game<'_>,
-    all: &[create_engine::world::TrainOnTrack],
-) -> horizon_world::nbt::Tag {
-    use horizon_world::nbt::{Compound, Tag};
-    let registry = game.pack.assets.registry;
-    let f = |v: f64| (v as f32).to_bits() as i32;
-    Tag::List(
-        all.iter()
-            .map(|t| {
-                let l = t.train.line;
-                let mut c = Compound::new();
-                c.insert(
-                    "line".into(),
-                    Tag::IntArray(vec![
-                        i32::from(axis_index(l.axis)),
-                        l.fixed[0],
-                        l.fixed[1],
-                        l.fixed[2],
-                        l.from,
-                        l.to,
-                    ]),
-                );
-                c.insert(
-                    "motion".into(),
-                    Tag::IntArray(vec![
-                        f(t.train.position),
-                        f(t.train.speed),
-                        f(t.train.destination.unwrap_or(0.0)),
-                        i32::from(t.train.destination.is_some()),
-                        t.origin[0],
-                        t.origin[1],
-                        t.origin[2],
-                        f(t.start),
-                    ]),
-                );
-                c.insert(
-                    "blocks".into(),
-                    Tag::IntArray(t.blocks.iter().flat_map(|(o, _)| *o).collect()),
-                );
-                c.insert(
-                    "states".into(),
-                    Tag::List(
-                        t.blocks
-                            .iter()
-                            .map(|(_, s)| Tag::String(state_text(registry, *s).as_str().into()))
-                            .collect(),
-                    ),
-                );
-                Tag::Compound(c)
-            })
-            .collect(),
-    )
-}
-
-fn trains_from_nbt(
-    game: &Game<'_>,
-    data: Option<&horizon_world::nbt::Compound>,
-) -> Vec<create_engine::world::TrainOnTrack> {
-    use create_engine::trains::{Line, Train};
-    use horizon_world::nbt::Tag;
-    let registry = game.pack.assets.registry;
-    let Some(Tag::List(list)) = data.and_then(|d| d.get(&"trains".into())) else {
-        return Vec::new();
-    };
-    let f = |v: i32| f64::from(f32::from_bits(v as u32));
-    list.iter()
-        .filter_map(|c| {
-            let Tag::Compound(c) = c else { return None };
-            let (
-                Some(Tag::IntArray(l)),
-                Some(Tag::IntArray(m)),
-                Some(Tag::IntArray(o)),
-                Some(Tag::List(s)),
-            ) = (
-                c.get(&"line".into()),
-                c.get(&"motion".into()),
-                c.get(&"blocks".into()),
-                c.get(&"states".into()),
-            )
-            else {
-                return None;
-            };
-            if l.len() < 6 || m.len() < 8 {
-                return None;
-            }
-            let axis = [Axis::X, Axis::Y, Axis::Z][l[0].clamp(0, 2) as usize];
-            let line = Line {
-                axis,
-                fixed: [l[1], l[2], l[3]],
-                from: l[4],
-                to: l[5],
-            };
-            let blocks = o
-                .chunks_exact(3)
-                .zip(s)
-                .filter_map(|(o, s)| {
-                    let Tag::String(s) = s else { return None };
-                    Some((
-                        [o[0], o[1], o[2]],
-                        state_of_text(registry, &s.to_string_lossy())?,
-                    ))
-                })
-                .collect();
-            Some(create_engine::world::TrainOnTrack {
-                train: Train {
-                    line,
-                    position: f(m[0]),
-                    speed: f(m[1]),
-                    destination: (m[3] != 0).then(|| f(m[2])),
-                },
-                blocks,
-                origin: [m[4], m[5], m[6]],
-                start: f(m[7]),
-                id: 0,
-            })
-        })
-        .collect()
-}
-
-fn windmills_to_nbt(
+pub(super) fn windmills_to_nbt(
     game: &Game<'_>,
     all: &[([i32; 3], create_engine::world::Windmill)],
 ) -> horizon_world::nbt::Tag {
@@ -9296,7 +8896,7 @@ fn windmills_to_nbt(
     )
 }
 
-fn windmills_from_nbt(
+pub(super) fn windmills_from_nbt(
     game: &Game<'_>,
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], create_engine::world::Windmill)> {
