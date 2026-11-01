@@ -443,6 +443,16 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // SpoutBlock: a copper-propertied block, AllShapes.SPOUT approximated by its body.
+        "spout" => (
+            "minecraft:copper_block",
+            Some(by_property(
+                "waterlogged",
+                bools,
+                &[[1., 2., 1., 15., 14., 15.]],
+            )),
+            own(&[("waterlogged", bools)]),
+        ),
         // SawBlock (DirectionalAxisKineticBlock): facing, its shaft's axis, `flipped`; a full
         // block here, so items land on top of it.
         "mechanical_saw" => (

@@ -213,6 +213,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_chutes(game, dim);
     tick_drills(game, dim);
     tick_saws(game, dim);
+    tick_spouts(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -2648,6 +2649,58 @@ fn tick_saws(game: &mut Game<'_>, dim: usize) {
     }
 }
 
+/// Spouts holding fluid (`SpoutBlockEntity.whenItemHeld` on the depot two below, `tick`): the
+/// held empty bucket is filled after the 20-tick cycle (at its 5th-last tick).
+fn tick_spouts(game: &mut Game<'_>, dim: usize) {
+    let spouts: Vec<([i32; 3], create_engine::spout::Spout)> = with_world(|w| {
+        w.dims[dim]
+            .spouts
+            .iter()
+            .filter(|(_, s)| s.fluid.is_some() || s.processing >= 0)
+            .map(|(p, s)| (*p, *s))
+            .collect()
+    })
+    .unwrap_or_default();
+    for (pos, mut s) in spouts {
+        let depot = [pos[0], pos[1] - 2, pos[2]];
+        let on_depot = with_world(|w| w.dims[dim].depots.contains_key(&depot)).unwrap_or(false);
+        let held = on_depot
+            .then(|| depot_items(game, depot).into_iter().find(|x| x.0 == 0))
+            .flatten();
+        let fluid = s.fluid.map(|f| f.0);
+        if create_engine::spout::step(&mut s, held.as_ref().map(|h| h.1.as_str()))
+            && let (Some((_, item, count)), Some(fluid)) = (held, fluid)
+            && let Some(out) = create_engine::spout::filled(&item, fluid)
+        {
+            // `convertToAndLeaveHeld`: one is filled; the rest stays held, the filled one goes to
+            // the outputs.
+            game.native_with_mod_block_entity(depot, |be| {
+                be.items
+                    .resize(be.items.len().max(create_engine::depot::SLOTS), None);
+                let stack = |i: &str, n: u32| horizon_client::items::ItemStack {
+                    item: i.into(),
+                    count: n,
+                    damage: 0,
+                    extra: None,
+                };
+                if count <= 1 {
+                    be.items[0] = Some(stack(out, 1));
+                } else {
+                    be.items[0] = Some(stack(&item, u32::from(count) - 1));
+                    if let Some(slot) = be.items[create_engine::depot::OUTPUTS]
+                        .iter_mut()
+                        .find(|s| s.is_none())
+                    {
+                        *slot = Some(stack(out, 1));
+                    }
+                }
+            });
+            with_world(|w| w.depot_changed(dim, depot));
+        }
+        with_world(|w| w.dims[dim].spouts.insert(pos, s));
+    }
+}
+
 /// The heat under a basin (`BasinBlockEntity.getHeatLevelOf`): a blaze burner's, smouldering for
 /// a lit burner or another passive heater, else none.
 fn basin_heat(game: &Game<'_>, basin: [i32; 3]) -> create_engine::fan::Heat {
@@ -2923,7 +2976,7 @@ fn pipe_cell(game: &Game<'_>, p: [i32; 3]) -> create_engine::fluids::Cell {
         return match block {
             Block::FluidPipe => Cell::Pipe(pipe_sides_of(game, state)),
             Block::MechanicalPump => info.facing.map_or(Cell::Solid, Cell::Pump),
-            Block::FluidTank => Cell::Tank,
+            Block::FluidTank | Block::Spout => Cell::Tank,
             _ => Cell::Solid,
         };
     }
@@ -3065,10 +3118,13 @@ fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                     moved = if to.tank {
                         with_world(|w| {
                             let d = &mut w.dims[dim];
-                            let took = d
-                                .tanks
-                                .get_mut(&to.pos)
-                                .map_or(0, |t| t.fill_amount(fluid, n));
+                            let took = match d.spouts.get_mut(&to.pos) {
+                                Some(s) => create_engine::spout::fill(s, fluid, n),
+                                None => d
+                                    .tanks
+                                    .get_mut(&to.pos)
+                                    .map_or(0, |t| t.fill_amount(fluid, n)),
+                            };
                             if took > 0 {
                                 d.tank_changes.push(to.pos);
                             }
