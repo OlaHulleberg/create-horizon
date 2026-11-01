@@ -553,6 +553,15 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         ),
         // StationBlock: a full block of gold's properties (its track target is the glue's).
         "track_station" => ("minecraft:gold_block", None, None),
+        // SignalBlock: beside a track it splits it into sections; its type and redstone power.
+        "track_signal" => (
+            "minecraft:iron_block",
+            None,
+            own(&[
+                ("powered", bools),
+                ("type", &["entry_signal", "cross_signal"]),
+            ]),
+        ),
         // StandardBogeyBlock: on the track, along an axis; its wheels drawn by the train.
         "small_bogey" | "large_bogey" => (
             "minecraft:iron_block",

@@ -126,6 +126,57 @@ impl Train {
     }
 }
 
+/// `Navigation`'s signal check on a straight line: the nearest signal ahead of the train's
+/// `front` (moving `dir`, ±1) and short of where its front stops (`dest_front`) whose section
+/// beyond (to the next signal, or the line's end) another train's span (`others`, along the
+/// line) overlaps: the train must wait before it (`waitingForSignal`).
+pub fn blocking_signal(
+    front: f64,
+    dir: f64,
+    dest_front: f64,
+    signals: &[f64],
+    others: &[(f64, f64)],
+) -> Option<f64> {
+    let mut ahead: Vec<f64> = signals
+        .iter()
+        .copied()
+        .filter(|s| (s - front) * dir > 0.0 && (dest_front - s) * dir > 0.0)
+        .collect();
+    ahead.sort_by(|a, b| ((a - front) * dir).total_cmp(&((b - front) * dir)));
+    let s = *ahead.first()?;
+    // The section beyond it: up to the next signal that way.
+    let next = signals
+        .iter()
+        .copied()
+        .filter(|t| (t - s) * dir > 0.0)
+        .min_by(|a, b| ((a - s) * dir).total_cmp(&((b - s) * dir)));
+    let (lo, hi) = match next {
+        Some(t) => (s.min(t), s.max(t)),
+        None if dir > 0.0 => (s, f64::INFINITY),
+        None => (f64::NEG_INFINITY, s),
+    };
+    others.iter().any(|&(a, b)| a < hi && b > lo).then_some(s)
+}
+
+impl Train {
+    /// A tick that stops at `stop` (a position short of the destination, before a red signal)
+    /// without forgetting where it is going: true when it waits there.
+    pub fn tick_until(&mut self, stop: Option<f64>) -> Run {
+        let Some(stop) = stop else {
+            return self.tick();
+        };
+        let dest = self.destination;
+        self.destination = Some(stop);
+        let run = self.tick();
+        self.destination = dest;
+        if run == Run::Arrived {
+            self.speed = 0.0;
+            return Run::Still;
+        }
+        run
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +192,53 @@ mod tests {
             (0..=40).contains(&p[0]) && p[1] == 64 && p[2] == 0
         });
         assert_eq!(l, from_elsewhere);
+    }
+
+    #[test]
+    fn a_train_waits_at_a_red_signal_and_goes_on_when_it_clears() {
+        // Signals at 100 and 200; another train stands between 150 and 160.
+        assert_eq!(
+            blocking_signal(10.0, 1.0, 300.0, &[100.0, 200.0], &[(150.0, 160.0)]),
+            Some(100.0)
+        );
+        assert_eq!(
+            blocking_signal(10.0, 1.0, 300.0, &[100.0, 200.0], &[(250.0, 260.0)]),
+            None,
+            "a green signal"
+        );
+        assert_eq!(
+            blocking_signal(10.0, 1.0, 90.0, &[100.0, 200.0], &[(150.0, 160.0)]),
+            None,
+            "stops short of it anyway"
+        );
+        assert_eq!(
+            blocking_signal(300.0, -1.0, 0.0, &[100.0, 200.0], &[(150.0, 160.0)]),
+            Some(200.0),
+            "going the other way"
+        );
+        let line = Line {
+            axis: Axis::X,
+            fixed: [0, 64, 0],
+            from: 0,
+            to: 500,
+        };
+        let mut t = Train {
+            line,
+            position: 0.0,
+            speed: 0.0,
+            destination: Some(400.0),
+        };
+        for _ in 0..2000 {
+            t.tick_until(Some(98.0));
+        }
+        assert!(
+            (t.position - 98.0).abs() < 0.5,
+            "waits at the signal: {}",
+            t.position
+        );
+        assert_eq!(t.destination, Some(400.0), "still going there");
+        while t.tick() != Run::Arrived {}
+        assert!((t.position - 400.0).abs() < 0.5);
     }
 
     #[test]

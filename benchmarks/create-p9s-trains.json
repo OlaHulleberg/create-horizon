@@ -1,0 +1,98 @@
+{
+  "scenario": "trains",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    3.384765625,
+    2.33154296875,
+    1.85498046875
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 19344,
+      "frame_ms_p50": 0.5935479998588562,
+      "frame_ms_p99": 1.1071689128875732,
+      "fps": 1612.0,
+      "tick_ms": 5.075873851776123,
+      "tick_ms_max": 12.106361389160156,
+      "check": [
+        "train 12 heading for -500.0",
+        "train 11 heading for -500.0",
+        "train 10 heading for -500.0",
+        "train 9 heading for -500.0",
+        "train 8 heading for -500.0",
+        "train 7 heading for -500.0",
+        "train 6 heading for -500.0",
+        "train 5 heading for -500.0",
+        "train 4 heading for -500.0",
+        "train 3 heading for -500.0",
+        "train 2 heading for -500.0",
+        "train 1 heading for -500.0"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 19483,
+      "frame_ms_p50": 0.5883539915084839,
+      "frame_ms_p99": 1.1994969844818115,
+      "fps": 1623.5833333333333,
+      "tick_ms": 4.894607067108154,
+      "tick_ms_max": 12.080056190490724,
+      "check": [
+        "train 12 heading for -496.0",
+        "train 11 heading for -496.0",
+        "train 10 heading for -496.0",
+        "train 9 heading for -496.0",
+        "train 8 heading for -496.0",
+        "train 7 heading for -496.0",
+        "train 6 heading for -496.0",
+        "train 5 heading for -496.0",
+        "train 4 heading for -496.0",
+        "train 3 heading for -496.0",
+        "train 2 heading for -496.0",
+        "train 1 heading for -496.0"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 19769,
+      "frame_ms_p50": 0.5679540038108826,
+      "frame_ms_p99": 1.1595569849014282,
+      "fps": 1647.4166666666667,
+      "tick_ms": 5.045560359954834,
+      "tick_ms_max": 12.463716506958008,
+      "check": [
+        "train 12 heading for -497.0",
+        "train 11 heading for -497.0",
+        "train 10 heading for -497.0",
+        "train 9 heading for -497.0",
+        "train 8 heading for -497.0",
+        "train 7 heading for -497.0",
+        "train 6 heading for -497.0",
+        "train 5 heading for -497.0",
+        "train 4 heading for -497.0",
+        "train 3 heading for -497.0",
+        "train 2 heading for -497.0",
+        "train 1 heading for -497.0"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1627.6666666666667,
+    "frame_ms_p50": 0.5832853317260742,
+    "frame_ms_p99": 1.1554076274236043,
+    "tick_ms": 5.00534709294637,
+    "tick_ms_max": 12.216711362202963
+  },
+  "stdev": {
+    "fps": 18.057969924046823,
+    "frame_ms_p50": 0.013528918745350102,
+    "frame_ms_p99": 0.046303683187050866,
+    "tick_ms": 0.09709398507933653,
+    "tick_ms_max": 0.21431669795154812
+  }
+}
