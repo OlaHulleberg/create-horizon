@@ -36,6 +36,8 @@ pub struct StateInfo {
     pub sequence: u8,
     /// A steam engine's `face`.
     pub face: Option<crate::steam::Face>,
+    /// A train track's `shape`.
+    pub track: Option<crate::track::TrackShape>,
 }
 
 impl StateInfo {
@@ -70,7 +72,10 @@ impl StateInfo {
                 "receiver" => s.receiver = v == "true",
                 "inverted" => s.inverted = v == "true",
                 "activate" => s.activate = v == "true",
-                "shape" => s.tunnel = crate::tunnel::Shape::read(v),
+                "shape" => {
+                    s.tunnel = crate::tunnel::Shape::read(v);
+                    s.track = crate::track::TrackShape::read(v);
+                }
                 "part" => s.chain = crate::chain::Part::read(v),
                 "vertical" => s.vertical = v == "true",
                 "state" => s.sequence = v.parse().unwrap_or(0),
@@ -389,6 +394,7 @@ pub fn is_kinetic(block: Block) -> bool {
         vertical: false,
         sequence: 0,
         face: None,
+        track: None,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

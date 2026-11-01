@@ -231,8 +231,6 @@ pub struct Dimension {
     pub basin_fluids: HashMap<[i32; 3], crate::basin::Tanks>,
     /// Linear chassis ranges set with the wrench (`ChassisScrollValueBehaviour`; others 8).
     pub chassis_range: HashMap<[i32; 3], i32>,
-    /// Track signals (the line they stand by is found when trains look at them).
-    pub signals: Vec<[i32; 3]>,
     pub tunnels_new: Vec<[i32; 3]>,
     /// Mechanical mixers and their cycle, the running ones (the only ones that tick), and those
     /// to look at their basin again (`basinChecker`: placed, speed changed, basin changed).
@@ -251,8 +249,8 @@ pub struct Dimension {
     /// change), and the moving ones with what they carry (the only ones that tick).
     pub piston_checks: Vec<[i32; 3]>,
     pub pistons: HashMap<[i32; 3], Moving>,
-    /// Trains on this dimension's tracks.
-    pub trains: Vec<TrainOnTrack>,
+    /// Track, stations and signals, the graph built from them, and the trains on it.
+    pub railway: crate::trains::Railway,
     /// Chutes holding a stack: where it is (1 top, 0 bottom); the only ones that tick.
     pub chutes: HashMap<[i32; 3], f32>,
     /// Drills and their breaking, the turning ones (the only ones that tick).
@@ -288,16 +286,7 @@ pub struct Dimension {
     pub shaft_engine: HashMap<[i32; 3], [i32; 3]>,
 }
 
-/// An assembled train: its run, its blocks (offset from its first bogey, state), where that
-/// bogey was when assembled (its world position and the position along the line then).
-#[derive(Clone, Debug, PartialEq)]
-pub struct TrainOnTrack {
-    pub train: crate::trains::Train,
-    pub blocks: Vec<([i32; 3], u32)>,
-    pub origin: [i32; 3],
-    pub start: f64,
-    pub id: u32,
-}
+pub use crate::trains::TrainOnTrack;
 
 /// A piston's moving structure (`ControlledContraptionEntity` of a `PistonContraption`): its
 /// blocks (offset from the anchor at offset 0, state), how far it is out and can go.
@@ -375,6 +364,8 @@ fn has_state(block: Block) -> bool {
             | Block::AndesiteTunnel
             | Block::BrassTunnel
             | Block::TrackSignal
+            | Block::Track
+            | Block::TrackStation
             | Block::GantryShaft
             | Block::GantryCarriage
             | Block::MechanicalCrafter
@@ -566,8 +557,13 @@ impl CreateWorld {
             }
             d.brass.insert(pos, b);
         }
-        if block == Block::TrackSignal && !d.signals.contains(&pos) {
-            d.signals.push(pos);
+        match block {
+            Block::TrackSignal => d.railway.add_signal(pos),
+            Block::TrackStation => d.railway.add_station(pos),
+            Block::Track => d
+                .railway
+                .set_track(pos, info.track.unwrap_or(crate::track::TrackShape::Zo)),
+            _ => {}
         }
         if block == Block::GantryShaft {
             d.gantry_checks.push(pos);
@@ -778,6 +774,18 @@ impl CreateWorld {
             }
             self.tanks_touched(dim, true);
         }
+        // Track, a station or a signal gone (placed ones are added by `place`).
+        let rail = |s: u32| {
+            self.table
+                .get(s)
+                .map(|(b, _)| b)
+                .filter(|b| matches!(b, Block::Track | Block::TrackStation | Block::TrackSignal))
+        };
+        if let Some(b) = rail(old)
+            && rail(new) != Some(b)
+        {
+            self.dims[dim].railway.remove(pos);
+        }
         if is {
             let (was_block, is_block) = (
                 self.table.get(old).map(|(b, _)| b),
@@ -892,7 +900,6 @@ impl CreateWorld {
                 d.link_shown.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
-            d.signals.retain(|p| *p != pos);
             if d.basin_fluids.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
@@ -978,6 +985,8 @@ impl CreateWorld {
     /// A column left the level: its parts leave the network (their neighbours re-solve).
     pub fn column_unloaded(&mut self, dim: usize, cx: i32, cz: i32) {
         let d = &mut self.dims[dim];
+        // Its track leaves the graph; trains standing in it leave with it (saved with it).
+        d.railway.column_unloaded(cx, cz);
         if let Some(list) = d.columns.remove(&(cx, cz)) {
             for pos in list {
                 d.kinetics.remove(pos);
@@ -1017,9 +1026,6 @@ impl CreateWorld {
                 .retain(|(p, _)| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chain_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            // Trains standing in it leave with it (saved with it).
-            d.trains
-                .retain(|t| CreateWorld::train_column(t) != (cx, cz));
             d.pumping.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pipes_changed = true;
             d.mixing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1078,7 +1084,6 @@ impl CreateWorld {
             d.tunnel_fresh
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.signals.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.basin_fluids
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chassis_range
@@ -2207,38 +2212,21 @@ impl CreateWorld {
         out
     }
 
-    /// The column a train is in now: its first bogey's.
-    pub fn train_column(t: &TrainOnTrack) -> (i32, i32) {
-        let shift = (t.train.position - t.start).round() as i32;
-        let mut p = t.origin;
-        match t.train.line.axis {
-            crate::kinetics::Axis::X => p[0] += shift,
-            crate::kinetics::Axis::Y => p[1] += shift,
-            crate::kinetics::Axis::Z => p[2] += shift,
+    /// The trains in a column now (where their pivot bogey stands), to save with it: where
+    /// their points are by the graph's nodes.
+    pub fn column_trains(&mut self, dim: usize, cx: i32, cz: i32) -> Vec<TrainOnTrack> {
+        let r = &mut self.dims[dim].railway;
+        let mut out = Vec::new();
+        for t in r.trains.iter_mut().filter(|t| t.column == (cx, cz)) {
+            t.train.remember(&r.net);
+            out.push(t.clone());
         }
-        (p[0] >> 4, p[2] >> 4)
-    }
-
-    /// The trains in a column now, to save with it.
-    pub fn column_trains(&self, dim: usize, cx: i32, cz: i32) -> Vec<TrainOnTrack> {
-        self.dims[dim]
-            .trains
-            .iter()
-            .filter(|t| CreateWorld::train_column(t) == (cx, cz))
-            .cloned()
-            .collect()
+        out
     }
 
     /// Trains saved with a column that joined: each gets a fresh id.
     pub fn load_trains(&mut self, dim: usize, saved: Vec<TrainOnTrack>) -> Vec<u32> {
-        let d = &mut self.dims[dim];
-        let mut ids = Vec::new();
-        for mut t in saved {
-            t.id = d.trains.iter().map(|t| t.id).max().unwrap_or(0) + 1;
-            ids.push(t.id);
-            d.trains.push(t);
-        }
-        ids
+        self.dims[dim].railway.load_trains(saved)
     }
 
     /// Tanks saved with a column (by controller), for when their controllers are found.

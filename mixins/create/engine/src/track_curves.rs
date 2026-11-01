@@ -61,6 +61,8 @@ impl Saved {
 pub struct Curves {
     pub at: HashMap<[i32; 3], Vec<Connection>>,
     pub changed: Vec<[i32; 3]>,
+    /// Counts every change, for the track graph to know it must be built again.
+    pub revision: u64,
 }
 
 impl Curves {
@@ -85,6 +87,7 @@ impl Curves {
         }
         self.changed.push(s.from);
         self.changed.push(s.to);
+        self.revision += 1;
     }
 
     /// The track at `pos` is gone (`TrackBlockEntity.removeInboundConnections`): its curves
@@ -103,6 +106,7 @@ impl Curves {
             }
         }
         self.changed.push(pos);
+        self.revision += 1;
         self.changed.extend(&others);
         others
     }
