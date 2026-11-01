@@ -174,6 +174,7 @@ pub struct Dimension {
     pub deployers: HashMap<[i32; 3], crate::deployer::Deployer>,
     pub deploying: Vec<[i32; 3]>,
     deployer_saved: HashMap<[i32; 3], crate::deployer::Deployer>,
+    brass_saved: HashMap<[i32; 3], crate::tunnel::Brass>,
     pub deployer_changes: Vec<[i32; 3]>,
     pub deployer_drops: Vec<([i32; 3], (String, u8))>,
     /// Gantry shafts whose place in their line may have changed (`updateShape`), carriages to try
@@ -411,8 +412,13 @@ impl CreateWorld {
         if block == Block::AndesiteTunnel || block == Block::BrassTunnel {
             d.tunnel_fresh.push(pos);
         }
-        if block == Block::BrassTunnel {
-            d.brass.entry(pos).or_default();
+        if block == Block::BrassTunnel && !d.brass.contains_key(&pos) {
+            // `read`: what it held and its mode, saved with the column.
+            let b = d.brass_saved.remove(&pos).unwrap_or_default();
+            if b.stack.is_some() {
+                d.brass_running.push(pos);
+            }
+            d.brass.insert(pos, b);
         }
         if block == Block::TrackSignal && !d.signals.contains(&pos) {
             d.signals.push(pos);
@@ -801,6 +807,8 @@ impl CreateWorld {
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.bearing_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.brass_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.deployer_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tunnel_checks
@@ -1432,6 +1440,35 @@ impl CreateWorld {
         dd.deployers.insert(pos, d);
         dd.deployer_changes.push(pos);
         dd.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+    }
+
+    pub fn load_brass(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], crate::tunnel::Brass)>,
+    ) {
+        self.dims[dim].brass_saved.extend(saved);
+    }
+
+    /// The brass tunnels of a column holding a stack or not splitting (`stackToDistribute`,
+    /// `selectionMode`), to save.
+    pub fn column_brass(
+        &self,
+        dim: usize,
+        cx: i32,
+        cz: i32,
+    ) -> Vec<([i32; 3], crate::tunnel::Brass)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .brass
+            .iter()
+            .filter(|(p, b)| {
+                (p[0] >> 4, p[2] >> 4) == (cx, cz)
+                    && (b.stack.is_some() || b.mode != crate::tunnel::Mode::Split)
+            })
+            .map(|(p, b)| (*p, b.clone()))
+            .collect();
+        out.sort_by_key(|e| e.0);
+        out
     }
 
     pub fn load_deployers(

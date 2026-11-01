@@ -132,6 +132,35 @@ pub(super) fn chunk_load(
     let burners = burners_from_nbt(Game::native_chunk_data(chunk, "create"));
     let links = links_from_nbt(Game::native_chunk_data(chunk, "create"));
     let deployers = deployers_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let brass: Vec<([i32; 3], create_engine::tunnel::Brass)> = {
+        use horizon_world::nbt::Tag;
+        match Game::native_chunk_data(chunk, "create").and_then(|d| d.get(&"brass".into())) {
+            Some(Tag::Compound(c)) => match (c.get(&"nums".into()), c.get(&"items".into())) {
+                (Some(Tag::IntArray(nums)), Some(Tag::List(items))) => nums
+                    .chunks_exact(6)
+                    .zip(items)
+                    .map(|(v, item)| {
+                        let item = match item {
+                            Tag::String(s) => s.to_string_lossy(),
+                            _ => String::new(),
+                        };
+                        let n = v[5].clamp(0, 64) as u8;
+                        (
+                            [v[0], v[1], v[2]],
+                            create_engine::tunnel::Brass {
+                                stack: (!item.is_empty() && n > 0).then_some((item, n)),
+                                entered_from: Dir::ALL.get(v[4].clamp(0, 6) as usize).copied(),
+                                mode: create_engine::tunnel::Mode::ALL[v[3].clamp(0, 4) as usize],
+                                ..Default::default()
+                            },
+                        )
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
+    };
     let basins: Vec<([i32; 3], create_engine::basin::Tanks)> =
         match Game::native_chunk_data(chunk, "create").and_then(|d| d.get(&"basins".into())) {
             Some(horizon_world::nbt::Tag::IntArray(v)) => v
@@ -171,6 +200,7 @@ pub(super) fn chunk_load(
         w.load_burners(dim, burners.into_iter());
         w.load_links(dim, links.into_iter());
         w.load_deployers(dim, deployers.into_iter());
+        w.load_brass(dim, brass.into_iter());
         w.dims[dim].chassis_range.extend(ranges);
         w.dims[dim].basin_fluids.extend(basins);
         for (i, section) in chunk.sections.iter().enumerate() {
@@ -608,7 +638,9 @@ fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
         Some(B::BrassTunnel) => with_world(|w| {
             let b = w.dims[dim].brass.get_mut(&pos)?;
             b.mode = b.mode.scrolled(steps);
-            Some(b.mode.index() as i32)
+            let i = b.mode.index() as i32;
+            w.mark_unsaved(dim, pos);
+            Some(i)
         })
         .flatten()
         .unwrap_or(0),
@@ -1187,6 +1219,7 @@ pub(super) fn chunk_data_save(
     let burners = with_world(|w| w.column_burners(dim, chunk[0], chunk[1])).unwrap_or_default();
     let links = with_world(|w| w.column_links(dim, chunk[0], chunk[1])).unwrap_or_default();
     let deployers = with_world(|w| w.column_deployers(dim, chunk[0], chunk[1])).unwrap_or_default();
+    let brass = with_world(|w| w.column_brass(dim, chunk[0], chunk[1])).unwrap_or_default();
     // Basins' tanks: x, y, z, then fluid (255: none) and amount for each of the four.
     let basins: Vec<i32> = with_world(|w| {
         let mut v: Vec<([i32; 3], create_engine::basin::Tanks)> = w.dims[dim]
@@ -1232,6 +1265,7 @@ pub(super) fn chunk_data_save(
         && deployers.is_empty()
         && ranges.is_empty()
         && basins.is_empty()
+        && brass.is_empty()
         && trains.is_empty()
     {
         data.remove(&"create".into());
@@ -1262,6 +1296,28 @@ pub(super) fn chunk_data_save(
     }
     if !ranges.is_empty() {
         own.insert("chassis".into(), horizon_world::nbt::Tag::IntArray(ranges));
+    }
+    if !brass.is_empty() {
+        // x, y, z, mode, side it came in by (6: none), count, then the item ids.
+        use horizon_world::nbt::Tag;
+        let mut nums = Vec::new();
+        let mut items = Vec::new();
+        for (p, b) in &brass {
+            let (item, n) = b.stack.clone().unwrap_or_default();
+            nums.extend([
+                p[0],
+                p[1],
+                p[2],
+                b.mode.index() as i32,
+                b.entered_from.map_or(6, |d| d as i32),
+                i32::from(n),
+            ]);
+            items.push(Tag::String(item.as_str().into()));
+        }
+        let mut c = horizon_world::nbt::Compound::new();
+        c.insert("nums".into(), Tag::IntArray(nums));
+        c.insert("items".into(), Tag::List(items));
+        own.insert("brass".into(), Tag::Compound(c));
     }
     if !basins.is_empty() {
         own.insert("basins".into(), horizon_world::nbt::Tag::IntArray(basins));
@@ -5717,6 +5773,7 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
                 if !d.brass_running.contains(&t) {
                     d.brass_running.push(t);
                 }
+                w.mark_unsaved(dim, t);
                 Some(true)
             })
             .flatten();
@@ -6401,6 +6458,7 @@ fn tick_brass(game: &mut Game<'_>, dim: usize) {
         b.previous_output = (b.previous_output + 1) % outputs.len().max(1);
         b.progress = -1;
         save(&b);
+        with_world(|w| w.mark_unsaved(dim, t));
     }
 }
 
