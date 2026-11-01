@@ -1,0 +1,24 @@
+{
+  "template": "minecraft:iron_block",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:andesite"
+  },
+  "item": true,
+  "state_properties": {
+    "facing": [
+      "up",
+      "down",
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}

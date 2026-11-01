@@ -9,6 +9,7 @@ pub mod client;
 pub mod contraption;
 pub mod crusher;
 pub mod depot;
+pub mod drill;
 pub mod fan;
 pub mod fluids;
 pub mod generated;

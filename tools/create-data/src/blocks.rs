@@ -443,6 +443,13 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // DrillBlock (DirectionalKineticBlock): any facing, a full block of iron's
+        // properties here (Create's is a casing with the head out front).
+        "mechanical_drill" => (
+            "minecraft:iron_block",
+            None,
+            own(&[("facing", facing), ("waterlogged", bools)]),
+        ),
         // ChuteBlock: a barrel's template for its one slot; gold's properties; its facing
         // (down, or a diagonal's), `shape` and waterlogging; a full block here, so items land on
         // top of it.
@@ -642,7 +649,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 23] = [
+pub const PARTIALS: [(&str, &str, &str); 24] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -720,6 +727,12 @@ pub const PARTIALS: [(&str, &str, &str); 23] = [
     ),
     // PumpRenderer: the cog, turned to the pump's facing (`partialFacing`, as the shaft half).
     ("part_pump_cog", "create:block/mechanical_pump/cog", "south"),
+    // DrillRenderer: the head, `partialFacing` as the shaft half.
+    (
+        "part_drill_head",
+        "create:block/mechanical_drill/head",
+        "south",
+    ),
     ("part_fluid_water", "create:block/part_fluid_water", "up"),
     ("part_fluid_lava", "create:block/part_fluid_lava", "up"),
 ];

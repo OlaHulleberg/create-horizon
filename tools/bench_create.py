@@ -37,6 +37,8 @@ the server thread's smoothed tick time. Scenarios:
   presses  its control: the same presses, no goggles
   chutes   16 columns of 8 chutes, each fed by a hopper of 64 iron above and emptying into a
            chest below (phase 4)
+  drills   32 drills at 16 rpm, each before a stone (broken during the settle; then each looks
+           again every 10 ticks) (phase 3)
   burners  a 32x32 floor of blaze burners with their blaze (1,024 passive burners, the head in the
            chunk mesh): no tick (phase 3)
   fans     32 encased fans at 16 rpm blowing through water over three depots each of 64 ice: 96
@@ -155,6 +157,12 @@ def build(ctl_bin, sock, scenario, center):
             command(ctl_bin, sock, f"fill {xx} {y-6} {zz} {xx} {y+1} {zz} create:chute", failures)
             command(ctl_bin, sock, f"setblock {xx} {y+2} {zz} minecraft:hopper[facing=down]"
                     '{Items:[{Slot:0b,id:"minecraft:iron_ingot",count:64}]}', failures)
+    if scenario == "drills":
+        for row in range(32):
+            zz = z - 16 + row
+            command(ctl_bin, sock, f"setblock {x-2} {y-6} {zz} create:creative_motor[facing=east]", failures)
+            command(ctl_bin, sock, f"setblock {x-1} {y-6} {zz} create:mechanical_drill[facing=east]", failures)
+            command(ctl_bin, sock, f"setblock {x} {y-6} {zz} minecraft:stone", failures)
     if scenario == "pistons":
         for row in range(16):
             zz = z - 16 + 2 * row
@@ -296,7 +304,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
@@ -405,7 +413,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes"],
+                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

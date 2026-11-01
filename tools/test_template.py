@@ -404,7 +404,7 @@ pub struct Dim;
 impl Dim { pub fn id(&self) -> &str { "minecraft:overworld" } }
 pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
 pub struct Behaviours;
-pub struct Facts { pub flags: u32 }
+pub struct Facts { pub flags: u32, pub hardness: f32 }
 #[derive(Clone, Copy)] pub struct BlockId(pub u16);
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
@@ -412,11 +412,12 @@ impl Behaviours {
     /// Air (state 0) and water (state 20) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
         let empty = state.0 == 0 || state.0 == 20;
-        Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 } }
+        Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
     pub fn tag(&self, name: &str) -> Option<&BlockSet> { let _ = name; None }
     pub fn is_replaceable(&self, state: BlockStateId) -> bool { state.0 == 0 }
+    pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
     /// State 20 is a water source.

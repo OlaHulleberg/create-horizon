@@ -219,6 +219,10 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 one(Part::shaft(axis))
             })
         }
+        // DrillBlock (DirectionalKineticBlock): a shaft out of its back.
+        Block::MechanicalDrill => s
+            .facing
+            .map_or([None, None], |f| one(Part::half(f.opposite()))),
         // PumpBlock: a small cog on its facing's axis, no shaft.
         Block::MechanicalPump => s.facing.map_or([None, None], |f| {
             one(Part {
