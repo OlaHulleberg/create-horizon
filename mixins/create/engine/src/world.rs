@@ -274,6 +274,10 @@ pub struct Dimension {
     pub boilers: HashMap<[i32; 3], SteamBoiler>,
     /// Tanks whose engines are counted again (`FluidTankBlockEntity.updateBoilerState`).
     pub boiler_checks: Vec<[i32; 3]>,
+    /// Boilers whose heat is read again (`needsHeatLevelUpdate`).
+    pub boiler_heat_checks: Vec<[i32; 3]>,
+    /// Scratch for the boilers sampling their supply this tick, kept to not allocate.
+    pub boiler_sampled: Vec<[i32; 3]>,
     /// Where engines placed or removed have their shaft: it becomes a powered shaft or a plain
     /// one again (`SteamEngineBlock.onPlace`, `PoweredShaftBlock.tick`).
     pub engine_shafts: Vec<[i32; 3]>,
@@ -1075,6 +1079,8 @@ impl CreateWorld {
             d.tanks.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.boilers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.boiler_checks
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.boiler_heat_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.engine_shafts
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -2299,8 +2305,10 @@ impl CreateWorld {
     /// Something under the boiler at `tank` changed: its heat is read again
     /// (`updateBoilerTemperature`, only for an active boiler).
     fn boiler_heat_changed(&mut self, dim: usize, tank: [i32; 3]) {
-        if let Some(b) = self.dims[dim].boilers.get_mut(&tank) {
+        let d = &mut self.dims[dim];
+        if let Some(b) = d.boilers.get_mut(&tank) {
             b.data.needs_heat_level_update = true;
+            d.boiler_heat_checks.push(tank);
         }
     }
 
@@ -2342,6 +2350,7 @@ impl CreateWorld {
                 b.data.attached_engines = engines.len() as i32;
                 b.data.needs_heat_level_update = true;
                 b.engines.clone_from(&engines);
+                d.boiler_heat_checks.push(tank);
             }
             for e in old.into_iter().filter(|e| !engines.contains(e)) {
                 self.stop_engine(dim, e);
@@ -2351,14 +2360,19 @@ impl CreateWorld {
 
     /// Boilers whose heat must be read again: their tanks (one block each, so the heater is the
     /// block under it).
-    pub fn take_heat_checks(&self, dim: usize) -> Vec<[i32; 3]> {
-        let mut v: Vec<[i32; 3]> = self.dims[dim]
-            .boilers
-            .iter()
-            .filter(|(_, b)| b.data.needs_heat_level_update)
-            .map(|(p, _)| *p)
-            .collect();
+    pub fn take_heat_checks(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        let d = &mut self.dims[dim];
+        if d.boiler_heat_checks.is_empty() {
+            return Vec::new();
+        }
+        let mut v = std::mem::take(&mut d.boiler_heat_checks);
         v.sort();
+        v.dedup();
+        v.retain(|p| {
+            d.boilers
+                .get(p)
+                .is_some_and(|b| b.data.needs_heat_level_update)
+        });
         v
     }
 
@@ -2379,15 +2393,17 @@ impl CreateWorld {
         if d.boilers.is_empty() {
             return;
         }
-        let mut sampled = Vec::new();
+        let mut sampled = std::mem::take(&mut d.boiler_sampled);
         for (tank, b) in d.boilers.iter_mut() {
             if b.data.tick(crate::tank::CAPACITY, false) {
                 sampled.push(*tank);
             }
         }
-        for tank in sampled {
+        for &tank in &sampled {
             self.drive_engines(dim, tank);
         }
+        sampled.clear();
+        self.dims[dim].boiler_sampled = sampled;
     }
 
     /// Water pumped into the tank at `tank`: a boiler takes it all as supply
@@ -2413,11 +2429,19 @@ impl CreateWorld {
     /// powered shaft in front of it, unless another engine does (`canBePoweredBy`), at the
     /// boiler's efficiency.
     fn drive_engines(&mut self, dim: usize, tank: [i32; 3]) {
-        let Some(b) = self.dims[dim].boilers.get(&tank).cloned() else {
+        let Some(b) = self.dims[dim].boilers.get(&tank) else {
             return;
         };
         let efficiency = b.data.engine_efficiency(b.size).clamp(0.0, 1.0);
-        for engine in b.engines {
+        for i in 0..b.engines.len() {
+            // By index: driving a shaft does not touch the boilers, and nothing is cloned.
+            let Some(&engine) = self.dims[dim]
+                .boilers
+                .get(&tank)
+                .and_then(|b| b.engines.get(i))
+            else {
+                break;
+            };
             let Some((Block::SteamEngine, info)) = self.dims[dim]
                 .states
                 .get(&engine)

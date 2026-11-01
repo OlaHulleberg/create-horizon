@@ -531,7 +531,22 @@ pub(super) fn use_tank(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled:
     let Some(mut t) = with_world(|w| w.dims[dim].tanks.get(&pos).copied()).flatten() else {
         return;
     };
-    let changed = if let Some(f) = Fluid::of_bucket(&held) {
+    // A boiler's handler is the boiler's (`FluidTankBlockEntity.getFluidCapability`,
+    // `BoilerFluidHandler`): a water bucket becomes supply, other buckets are refused and an
+    // empty one gets nothing, all still used up (`useItemOn` returns SUCCESS).
+    let bucket = Fluid::of_bucket(&held);
+    if bucket.is_some() || held == "minecraft:bucket" {
+        let boiler = with_world(|w| match bucket {
+            Some(f) => w.fill_boiler(dim, pos, f, create_engine::tank::BUCKET).is_some(),
+            None => w.is_boiler(dim, pos),
+        })
+        .unwrap_or(false);
+        if boiler {
+            *canceled = true;
+            return;
+        }
+    }
+    let changed = if let Some(f) = bucket {
         t.fill(f)
     } else if held == "minecraft:bucket" {
         match t.drain() {
