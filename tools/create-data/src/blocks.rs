@@ -614,6 +614,23 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             Some(by_facing(&CRANK)),
             own(&[("facing", facing), ("waterlogged", bools)]),
         ),
+        // RedstoneLinkBlock (`SharedProperties::wooden`): a tablet on the block behind it,
+        // AllShapes.REDSTONE_BRIDGE (VERTICAL_TABLET_SHAPE facing south, the square tablet up or
+        // down); the glue gives its signal, network and survival.
+        "redstone_link" => {
+            let side = |b: Px| json!([b.map(|v| v / 16.0)]);
+            (
+                "minecraft:stripped_spruce_wood",
+                Some(json!({ "property": "facing", "values": {
+                    "south": side([3., 1., -1., 13., 15., 3.]),
+                    "north": side([3., 1., 13., 13., 15., 17.]),
+                    "east": side([-1., 1., 3., 3., 15., 13.]),
+                    "west": side([13., 1., 3., 17., 15., 13.]),
+                    "up": side([2., -1., 2., 14., 3., 14.]),
+                    "down": side([2., 13., 2., 14., 17., 14.]) } })),
+                own(&[("facing", facing), ("powered", bools), ("receiver", bools)]),
+            )
+        }
         _ => return None,
     };
     // KineticBlock.getRenderShape: shafts and cogs are all moving parts; casings, gearboxes and

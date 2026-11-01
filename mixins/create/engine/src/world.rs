@@ -154,6 +154,15 @@ pub struct Dimension {
     pub burners: HashMap<[i32; 3], crate::burner::Burner>,
     pub burning: Vec<[i32; 3]>,
     burner_saved: HashMap<[i32; 3], crate::burner::Burner>,
+    /// Redstone links and their networks; the saved frequencies and input of links not placed
+    /// yet; links whose input to read again (placed, a neighbour changed, toggled); receivers
+    /// whose signal changed (their block and its neighbours to update).
+    pub links: crate::link::Links,
+    link_saved: HashMap<[i32; 3], (crate::link::Key, i32)>,
+    pub link_checks: Vec<[i32; 3]>,
+    pub link_changes: Vec<[i32; 3]>,
+    /// Links whose frequencies clients should see again (tuned, loaded, gone).
+    pub link_shown: Vec<[i32; 3]>,
     /// Mechanical mixers and their cycle, the running ones (the only ones that tick), and those
     /// to look at their basin again (`basinChecker`: placed, speed changed, basin changed).
     pub mixers: HashMap<[i32; 3], crate::basin::Mixer>,
@@ -265,6 +274,7 @@ fn has_state(block: Block) -> bool {
             | Block::Belt
             | Block::PoweredLatch
             | Block::PoweredToggleLatch
+            | Block::RedstoneLink
             | Block::FluidTank
             | Block::WindmillBearing
     )
@@ -341,6 +351,29 @@ impl CreateWorld {
         }
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
+        }
+        if block == Block::RedstoneLink {
+            if d.links.links.contains_key(&pos) {
+                // Toggled (`receiver` changed) or its `powered` set: the same frequencies.
+                let changed = d.links.set_receiver(pos, info.receiver);
+                d.link_changes.extend(changed);
+            } else {
+                // `LinkBehaviour.initialize`, with what was saved (`read`).
+                let (key, transmit) = d.link_saved.remove(&pos).unwrap_or_default();
+                let link = crate::link::Link {
+                    key,
+                    receiver: info.receiver,
+                    transmit,
+                    received: 0,
+                };
+                if link.key != crate::link::Key::default() {
+                    d.link_shown.push(pos);
+                }
+                let changed = d.links.add(pos, link);
+                d.link_changes.extend(changed);
+            }
+            // `onPlace` / the scheduled tick: its input is read.
+            d.link_checks.push(pos);
         }
         if block == Block::CrushingWheel {
             d.crusher_checks.push(pos);
@@ -520,6 +553,12 @@ impl CreateWorld {
                 // `onBasinRemoved`: a mixer over it stops.
                 d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
             }
+            if d.links.links.contains_key(&pos) {
+                let changed = d.links.remove(pos);
+                d.link_changes.extend(changed);
+                d.link_shown.push(pos);
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if d.burners.remove(&pos).is_some() {
                 d.burning.retain(|p| *p != pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
@@ -609,6 +648,24 @@ impl CreateWorld {
             d.burning.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burner_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.link_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            // `LinkBehaviour.unload`: its links leave their networks.
+            let gone: Vec<[i32; 3]> = d
+                .links
+                .links
+                .keys()
+                .filter(|p| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+                .copied()
+                .collect();
+            for p in gone {
+                let changed = d.links.remove(p);
+                d.link_changes.extend(changed);
+            }
+            d.link_checks.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.link_changes
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.link_shown.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.running_crushers
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crusher_saved
@@ -854,6 +911,7 @@ impl CreateWorld {
             Some(b) if follows_power(b) => self.dims[dim].redstone.push(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(b) if latch_kind(b).is_some() => self.dims[dim].latch_checks.push(pos),
+            Some(Block::RedstoneLink) => self.dims[dim].link_checks.push(pos),
             _ => {}
         }
     }
@@ -1171,6 +1229,52 @@ impl CreateWorld {
             d.unsaved.push((p[0] >> 4, p[2] >> 4));
         }
         changed
+    }
+
+    /// A transmitter's input read (`transmit`): its receivers' new signals are queued, the column
+    /// saved when it changed.
+    pub fn link_transmit(&mut self, dim: usize, pos: [i32; 3], power: i32) {
+        let d = &mut self.dims[dim];
+        if d.links.links.get(&pos).is_some_and(|l| l.transmit != power) {
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+        let changed = d.links.transmit(pos, power);
+        d.link_changes.extend(changed);
+    }
+
+    /// A slot tuned (`setFrequency`).
+    pub fn link_frequency(&mut self, dim: usize, pos: [i32; 3], first: bool, item: &str) {
+        let d = &mut self.dims[dim];
+        let changed = d.links.set_frequency(pos, first, item);
+        d.link_changes.extend(changed);
+        d.link_shown.push(pos);
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+    }
+
+    pub fn load_links(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], (crate::link::Key, i32))>,
+    ) {
+        self.dims[dim].link_saved.extend(saved);
+    }
+
+    /// The links of a column (`LinkBehaviour.write`: frequencies; `Transmit`), to save.
+    pub fn column_links(
+        &self,
+        dim: usize,
+        cx: i32,
+        cz: i32,
+    ) -> Vec<([i32; 3], crate::link::Key, i32)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .links
+            .links
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+            .map(|(p, l)| (*p, l.key.clone(), l.transmit))
+            .collect();
+        out.sort_by_key(|e| e.0);
+        out
     }
 
     pub fn load_burners(
