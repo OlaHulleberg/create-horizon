@@ -21,6 +21,7 @@ pub mod place;
 pub mod press;
 pub mod processing;
 pub mod saw;
+pub mod spout;
 pub mod states;
 pub mod tank;
 pub mod trains;

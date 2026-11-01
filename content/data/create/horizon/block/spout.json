@@ -1,0 +1,41 @@
+{
+  "template": "minecraft:copper_block",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:copper_block"
+  },
+  "item": true,
+  "shapes": {
+    "property": "waterlogged",
+    "values": {
+      "false": [
+        [
+          0.0625,
+          0.125,
+          0.0625,
+          0.9375,
+          0.875,
+          0.9375
+        ]
+      ],
+      "true": [
+        [
+          0.0625,
+          0.125,
+          0.0625,
+          0.9375,
+          0.875,
+          0.9375
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}

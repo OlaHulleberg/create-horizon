@@ -180,6 +180,8 @@ pub struct Dimension {
     pub drilling: Vec<[i32; 3]>,
     /// Saws holding items (the only ones that tick) and their processing.
     pub saws: HashMap<[i32; 3], crate::saw::Saw>,
+    /// Spouts and their tank and cycle; those holding fluid tick.
+    pub spouts: HashMap<[i32; 3], crate::spout::Spout>,
 }
 
 /// An assembled train: its run, its blocks (offset from its first bogey, state), where that
@@ -247,6 +249,7 @@ fn has_state(block: Block) -> bool {
     matches!(
         block,
         Block::Depot
+            | Block::Spout
             | Block::Chute
             | Block::FluidPipe
             | Block::Basin
@@ -337,7 +340,7 @@ impl CreateWorld {
         }
         if matches!(
             block,
-            Block::FluidPipe | Block::MechanicalPump | Block::FluidTank
+            Block::FluidPipe | Block::MechanicalPump | Block::FluidTank | Block::Spout
         ) {
             // `FluidPropagator.propagateChangedPipe`: the pipe and its neighbours connect again,
             // pumps find their ends again.
@@ -348,6 +351,9 @@ impl CreateWorld {
                 d.pipe_checks
                     .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
             }
+        }
+        if block == Block::Spout {
+            d.spouts.entry(pos).or_default();
         }
         if block == Block::MechanicalDrill {
             d.drills.entry(pos).or_default();
@@ -464,7 +470,7 @@ impl CreateWorld {
             if let Some((b, _)) = self.table.get(old)
                 && matches!(
                     b,
-                    Block::FluidPipe | Block::MechanicalPump | Block::FluidTank
+                    Block::FluidPipe | Block::MechanicalPump | Block::FluidTank | Block::Spout
                 )
             {
                 d.pipes_changed = true;
@@ -479,6 +485,7 @@ impl CreateWorld {
             }
             d.chutes.remove(&pos);
             d.saws.remove(&pos);
+            d.spouts.remove(&pos);
             if d.drills.remove(&pos).is_some() {
                 d.drilling.retain(|p| *p != pos);
             }
@@ -561,6 +568,7 @@ impl CreateWorld {
             d.mixers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chutes.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.saws.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.spouts.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
