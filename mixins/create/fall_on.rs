@@ -5,5 +5,5 @@ fn update_entity_after_fall_on(
     stack: &mut horizon_client::items::ItemStack,
     at: [f64; 3],
 ) {
-    crate::game::create::item_landed(game, pos, stack, at);
+    crate::game::create_logistics::item_landed(game, pos, stack, at);
 }
