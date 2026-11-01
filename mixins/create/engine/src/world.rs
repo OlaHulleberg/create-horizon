@@ -1392,14 +1392,13 @@ impl CreateWorld {
         steps
     }
 
-    /// The speed the sequenced gearshift at `pos` is turned at (its block entity's: the half
-    /// turned, which the other turns at the modifier times), after a solve changed it.
+    /// The speed the sequenced gearshift at `pos` is turned at (its block entity's theoretical
+    /// `speed`: the half turned, which the other turns at the modifier times) and whether it is
+    /// overstressed, after a solve changed either.
     fn sequencer_speed(&mut self, dim: usize, pos: [i32; 3]) {
         let d = &self.dims[dim];
-        let (a, b) = (
-            d.kinetics.speed(pos, 0).unwrap_or(0.0),
-            d.kinetics.speed(pos, 1).unwrap_or(0.0),
-        );
+        let (a, overstressed) = d.kinetics.theoretical(pos, 0).unwrap_or((0.0, false));
+        let b = d.kinetics.theoretical(pos, 1).map_or(0.0, |(b, _)| b);
         let m = f32::from(d.settings.get(&pos).map_or(0, |s| s.sequence));
         let speed = if m == 0.0 {
             if a != 0.0 { a } else { b }
@@ -1411,7 +1410,7 @@ impl CreateWorld {
         let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
             return;
         };
-        if let Some(step) = s.speed_changed(speed) {
+        if let Some(step) = s.speed_changed(speed, overstressed) {
             self.dims[dim].sequencer_steps.push((pos, step));
         }
         self.sequencer_stepped(dim, pos);
