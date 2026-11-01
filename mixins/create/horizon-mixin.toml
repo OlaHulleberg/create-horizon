@@ -312,3 +312,11 @@ bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "batch" },
 ]
+
+
+# The deployer's item uses: a module beside the dispenser, which reaches its private behaviours.
+[[module]]
+id = "deployer-use"
+file = "crates/horizon-client/src/game/dispenser.rs"
+name = "create_use"
+source = "deployer_use.rs"

@@ -3052,7 +3052,7 @@ fn deployer_use_item(game: &mut Game<'_>, dim: usize, pos: [i32; 3], facing: Dir
     let o = facing.offset();
     let before = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
     let face = horizon_core::geometry::Direction::ALL[facing as usize];
-    let Some(left) = game.native_use_item_at(before, face, stack) else {
+    let Some(left) = super::dispenser::create_use::use_item_at(game, before, face, stack) else {
         return;
     };
     let held = left.map(|s| (s.item.to_string(), s.count.min(64) as u8));
