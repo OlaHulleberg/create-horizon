@@ -1,0 +1,71 @@
+{
+  "scenario": "deployers",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    2.39794921875,
+    2.451171875,
+    1.99755859375
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 22329,
+      "frame_ms_p50": 0.4922659695148468,
+      "frame_ms_p99": 1.324733018875122,
+      "fps": 1860.75,
+      "tick_ms": 2.6504292488098145,
+      "tick_ms_max": 6.212139129638672,
+      "cpu_ms_p50": 0.3562300205230713,
+      "gpu_ms_p50": 0.43997395038604736,
+      "check": [
+        "-538, 92, 64 has the following block data: [{count: 54, Slot: 0b, id: \"create:shaft\"}, {count: 10, Slot: 1b, id: \"create:cogwheel\"}]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 20745,
+      "frame_ms_p50": 0.5549850463867188,
+      "frame_ms_p99": 1.1588879823684692,
+      "fps": 1728.75,
+      "tick_ms": 2.7906789779663086,
+      "tick_ms_max": 5.8983612060546875,
+      "cpu_ms_p50": 0.5161659717559814,
+      "gpu_ms_p50": 0.4272916615009308,
+      "check": [
+        "-540, 87, 72 has the following block data: [{count: 54, Slot: 0b, id: \"create:shaft\"}, {count: 10, Slot: 1b, id: \"create:cogwheel\"}]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 22542,
+      "frame_ms_p50": 0.4886464923620224,
+      "frame_ms_p99": 1.2984840869903564,
+      "fps": 1878.5,
+      "tick_ms": 2.6473710536956787,
+      "tick_ms_max": 6.595640182495117,
+      "cpu_ms_p50": 0.36126449704170227,
+      "gpu_ms_p50": 0.4351562261581421,
+      "check": [
+        "-540, 91, 66 has the following block data: [{count: 54, Slot: 0b, id: \"create:shaft\"}, {count: 10, Slot: 1b, id: \"create:cogwheel\"}]"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1822.6666666666667,
+    "frame_ms_p50": 0.5119658360878626,
+    "frame_ms_p99": 1.2607016960779827,
+    "tick_ms": 2.696159760157267,
+    "tick_ms_max": 6.235380172729492
+  },
+  "stdev": {
+    "fps": 81.81699599309017,
+    "frame_ms_p50": 0.03729965810524085,
+    "frame_ms_p99": 0.08914469042385433,
+    "tick_ms": 0.08187032454292446,
+    "tick_ms_max": 0.3492199912797309
+  }
+}

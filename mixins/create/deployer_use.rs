@@ -1,6 +1,7 @@
 // The deployer's fake player (`DeployerHandler.activate`) where it needs the dispenser's private
 // behaviours and entity lookups: an item used on the block it reaches, and its punch at the
 // entities there. Create's rules are in `create_engine::deployer`.
+use crate::game::create::*;
 use create_engine::deployer::{self, Use};
 use create_engine::kinetics::Dir;
 use horizon_client::items::ItemStack;
@@ -315,4 +316,174 @@ fn others_at(game: &crate::game::Game<'_>, p: (i32, i32, i32)) -> usize {
         .chain(game.crystals.iter().map(|c| standing(c.position, 2.0, 2.0)));
     boxes.filter(|b| super::overlaps(*b, block)).count()
         + game.others.iter().filter(|o| inside(o.position)).count()
+}
+
+/// `DeployerHandler.tryHarvestBlock` for the block at `at` a punch with `stack` broke:
+/// `onDestroyedByPlayer` (`playerWillDestroy`, the break particles, the block's fluid left in its
+/// place, as a waterlogged slab leaves its water), then, when `harvest` (`canHarvestBlock`), its
+/// loot drawn with that tool (`Block.getDrops(.., player, prevHeldItem)`) and `spawnAfterBreak(..,
+/// true)`: experience, an infested block's silverfish (held stacks carry no silk touch here). The
+/// drops land where the block was; Create puts them in the deployer.
+pub(crate) fn deployer_harvest(
+    game: &mut crate::game::Game<'_>,
+    dimension: &str,
+    at: [i32; 3],
+    stack: &horizon_client::items::ItemStack,
+    harvest: bool,
+) {
+    // As `native_set_block`: only the server's level of this dimension.
+    if (game.serving.is_none() && game.options.dedicated.is_none()) || dimension != game.dim.id() {
+        return;
+    }
+    let state = game.world.block(at[0], at[1], at[2]);
+    let name = game.res.facts().get(state).name.clone();
+    // The block entity as it was, for what the drops copy from it.
+    let key = (at[0], at[1], at[2]);
+    if let Some(entity) = game.world.block_entities.get(&key).cloned() {
+        let custom = game.world.block_names.get(&key).cloned();
+        game.pending.record(at, &entity, &name, custom);
+    } else if let Some(tag) = super::super::spill::saved_entity(&game.world, at) {
+        game.pending.record_saved(at, &tag);
+    }
+    let removed = game.with_level(|b, level, ticks| {
+        b.player_destroy_block(
+            level,
+            ticks,
+            horizon_core::position::BlockPos::new(at[0], at[1], at[2]),
+            false,
+            harvest,
+        )
+    });
+    if removed && harvest {
+        for loot in game.block_loot_at(at, state, Some(stack)) {
+            if &*loot.item != "minecraft:air" {
+                game.pop_resource(at, loot);
+            }
+        }
+        let center = at.map(|v| f64::from(v) + 0.5);
+        if name.starts_with("minecraft:infested_") && game.ui.rules.bool("block_drops") {
+            let feet = [center[0], f64::from(at[1]), center[2]];
+            if let Some(id) = game.spawn_mob("minecraft:silverfish", feet, false) {
+                game.mob_poof(id);
+            }
+        }
+        let xp = game.block_experience(&name);
+        if xp > 0 {
+            game.spawn_orbs(center, xp);
+        }
+    }
+    game.pending.clear(at);
+    let _ = game.process_level_events();
+}
+
+/// `Level.destroyBlockProgress` for a deployer's fake player: the cracks at `at` (0..=9, else
+/// none) for the host and the players near it.
+pub(crate) fn deployer_crack(
+    game: &mut crate::game::Game<'_>,
+    breaker: i32,
+    at: [i32; 3],
+    stage: i32,
+) {
+    game.destroy_block_progress(breaker, at, stage);
+    if let Some(host) = game.lan.as_ref() {
+        use horizon_protocol::packets::play::{BlockDestruction, Clientbound};
+        host.hub.broadcast_near(
+            at.map(f64::from),
+            64.0,
+            &Clientbound::BlockDestruction(BlockDestruction {
+                id: breaker,
+                pos: at,
+                progress: if (0..10).contains(&stage) {
+                    stage as u8
+                } else {
+                    255
+                },
+            }),
+            None,
+        );
+    }
+}
+
+/// `DeployerHandler.activateInner` in `Mode.PUNCH`: an entity in the block it reaches takes the
+/// hit (`create_use::punch_entity_at`); else, with a held stack, the block there breaks in
+/// strokes (`Deployer::punch`), the fake player's cracks on it, a fire in front of it goes out;
+/// a broken block goes as `deployer_harvest` says.
+pub(crate) fn deployer_punch(
+    game: &mut crate::game::Game<'_>,
+    dimension: &str,
+    dim: usize,
+    pos: [i32; 3],
+    facing: Dir,
+) {
+    use create_engine::deployer::{self, Punch};
+    let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten() else {
+        return;
+    };
+    let at = deployer::clicked(pos, facing);
+    let held = d.held.as_ref().map(|h| h.0.clone());
+    let bonus = held
+        .as_deref()
+        .and_then(|h| game.items().get(h))
+        .map_or(0.0, |i| i.attack_damage);
+    let (from, _) = deployer::ray(pos, facing);
+    let damage = deployer::attack_damage(bonus);
+    if punch_entity_at(game, at, from, damage) {
+        return;
+    }
+    let breaker = deployer::breaker_id(pos);
+    // `getShape(..).isEmpty()`: nothing to punch, and the breaking is forgotten.
+    if game.outline_boxes(at).is_empty() {
+        if d.breaking.take().is_some() {
+            with_world(|w| w.set_deployer(dim, pos, d));
+        }
+        return;
+    }
+    // `BlockHelper.extinguishFire`: fire on the face toward the deployer goes out.
+    let o = deployer::clicked_face(facing).offset();
+    let front = [at[0] + o[0], at[1] + o[1], at[2] + o[2]];
+    let registry = game.pack.assets.registry;
+    let fire = registry
+        .state(game.world.block(front[0], front[1], front[2]))
+        .is_some_and(|s| s.name == "minecraft:fire");
+    if fire {
+        game.level_event_at(1009, front, 0);
+        if let Some(air) = registry.default_state("minecraft:air") {
+            game.native_set_block(
+                dimension,
+                front,
+                air,
+                crate::game::native_hooks::flags::UPDATE_ALL,
+            );
+        }
+        return;
+    }
+    let Some(held) = held else {
+        return;
+    };
+    let state = game.world.block(at[0], at[1], at[2]);
+    let facts = game.res.facts().get(state);
+    let (name, hardness, requires_tool) = (facts.name.clone(), facts.hardness, facts.requires_tool);
+    let stack = horizon_client::items::ItemStack::new(held.as_str(), 1);
+    let harvest = !requires_tool || game.items().correct_for_drops(Some(&stack), &name);
+    let per_hit = deployer::destroy_progress(deployer::Dig {
+        hardness,
+        tool_speed: game.items().mining_speed(Some(&stack), &name),
+        // Held stacks carry no enchantments here.
+        efficiency: 0.0,
+        harvest,
+    });
+    // `level.playSound(.., getHitSound(), NEUTRAL, .25, 1)`.
+    let hit = game.res.facts().get(state).sounds.hit.clone();
+    game.audio
+        .play(&hit, Some(at.map(|v| f64::from(v) + 0.5)), 0.25, 1.0);
+    let punched = d.punch(at, per_hit);
+    with_world(|w| w.set_deployer(dim, pos, d));
+    match punched {
+        Punch::Broken => {
+            deployer_crack(game, breaker, at, -1);
+            deployer_harvest(game, dimension, at, &stack, harvest);
+        }
+        Punch::Crack(Some(stage)) => deployer_crack(game, breaker, at, stage),
+        Punch::Crack(None) | Punch::Stop => {}
+    }
 }

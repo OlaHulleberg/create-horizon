@@ -224,6 +224,16 @@ Brass tunnels splitting stacks cost nothing measurable (`benchmarks/create-p4b-*
 
 Signals cost no tick; frame p50 is 6% over the control, within budget and its run's spread (`benchmarks/create-p9s-*.json`). Headless proof: one straight track with stations at 0, 25 and 50 and signals at 15 and 35; a train assembled at the first and sent to the last stopped just before the signal at 15 while a second train stood assembled at 25 (after 15 s nothing at the last station; a screenshot shows it waiting by the signal); once the second was taken apart at its station the first went on and stood at the last (its bogey, slime and gold there). Engine tests: a red signal ahead, a green one, one beyond the stop, the other way; a train waits at the stop and keeps its destination.
 
+| Scenario (2026-11-01, Phase 3 deployer as a fake player, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1792 ± 24 | 0.513 / 1.149 | 3.199 ± 0.134 | baseline |
+| waterchurn (control) | 1619 ± 35 | 0.474 / 1.301 | 3.726 ± 0.046 | control |
+| deployeruse | 2035 ± 73 | 0.460 / 1.027 | 3.374 ± 0.082 | tick ≤ control + 0.25 ms, frame p50 ≤ control + 10% |
+| deployerstroke | 2041 ± 76 | 0.457 / 0.994 | 2.768 ± 0.096 | frame p50 ≤ off + 10% |
+| deployers (over depots) | 1823 ± 82 | 0.512 / 1.261 | 2.696 ± 0.082 | frame p50 ≤ off + 10% |
+
+The deployer as Create's fake player (`deployer.rs` modes, reach, item uses, punch progress and attack damage; `deployer_use.rs`, the bundle's module beside Horizon's dispenser, entity and loot code): an axe strips or scrapes, a hoe tills, a shovel makes a path, a spawn egg spawns its mob (used up), and in punch mode (the wrench on its front toggles it) it hits an entity in the block it reaches or breaks that block in strokes, with cracks and the held tool's loot, a fire in front put out (`benchmarks/create-p3dplayer-*.json`). Proven headless: five deployers at 16 rpm facing east: dirt → farmland, oak log → stripped oak log, grass → dirt path, one pig from one egg, and stone under a pickaxe in punch mode cracked, then broke within 12 s dropping cobblestone (screenshot of the punching hand and cracks). Not yet: drops into the deployer's own inventory, tool durability and enchantments, the punched mob retaliating (Horizon names no fake player as attacker), the block's own use (levers, doors), item uses on entities. The test fixture compiles a stand-in (`tools/fixture/deployer_use.rs`) for modules that reach deep into Horizon; the real one is compiled against Horizon.
+
 | Scenario (2026-11-01, Phase 6 value board, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1746 ± 6 | 0.525 / 1.222 | 2.982 ± 0.099 | baseline |
