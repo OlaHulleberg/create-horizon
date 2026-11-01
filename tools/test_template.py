@@ -521,6 +521,12 @@ thread_local! {
     pub static SIGNALS: std::cell::RefCell<std::collections::HashSet<[i32; 3]>> = Default::default();
 }
 impl Behaviours {
+    pub fn neighbor_changed_at(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos, block: BlockId) {
+        let _ = (level, ticks, pos, block);
+    }
+    pub fn update_neighbors_at_except(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos, block: BlockId, skip: horizon_core::geometry::Direction) {
+        let _ = (level, ticks, pos, block, skip);
+    }
     pub fn has_neighbor_signal(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos) -> bool {
         let _ = (level, ticks, pos);
         true
