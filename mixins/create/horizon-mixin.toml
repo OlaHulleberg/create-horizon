@@ -357,7 +357,8 @@ file = "crates/horizon-client/src/game/machines.rs"
 name = "create_extract"
 source = "funnel_extract.rs"
 
-# The deployer's item uses: a module beside the dispenser, which reaches its private behaviours.
+# The deployer's fake player: a module beside the dispenser, which reaches its private behaviours
+# (item uses, spawn eggs) and its entity lookup (punching).
 [[module]]
 id = "deployer-use"
 file = "crates/horizon-client/src/game/dispenser.rs"
