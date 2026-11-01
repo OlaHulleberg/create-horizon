@@ -301,6 +301,7 @@ pub mod native_hooks {
         pub fn native_use_item_on(&mut self, stack: &horizon_client::items::ItemStack, pos: [i32; 3], face: [i32; 3], claimed: &mut bool) {
             let _ = (stack, pos, face, claimed);
         }
+        pub fn aim(&self) -> Option<([f64; 3], [f64; 3])> { None }
         pub fn native_use_item(&mut self, stack: &horizon_client::items::ItemStack, claimed: &mut bool) {
             let _ = (stack, claimed);
         }

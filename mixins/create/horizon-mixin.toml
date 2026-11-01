@@ -286,6 +286,7 @@ kind = "HEAD"
 helper = "use_item.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
   { name = "claimed", ty = "&mut bool", value = "claimed" },
 ]
 
