@@ -306,6 +306,11 @@ pub mod native_hooks {
             let _ = (at, rgb, shadow);
             batch.drawn.push(text.to_owned());
         }
+        pub fn native_extract_item(&mut self, pos: [i32; 3], face: horizon_core::geometry::Direction, max: u32)
+            -> Option<horizon_client::items::ItemStack> {
+            let _ = (pos, face, max);
+            None
+        }
         pub fn native_insert_item(&mut self, pos: [i32; 3], face: horizon_core::geometry::Direction,
                                   stack: horizon_client::items::ItemStack) -> Option<horizon_client::items::ItemStack> {
             let _ = (pos, face);

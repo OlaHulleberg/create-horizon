@@ -215,6 +215,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_saws(game, dim);
     tick_spouts(game, dim);
     tick_drains(game, dim);
+    tick_funnels(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -2743,6 +2744,77 @@ fn tick_drains(game: &mut Game<'_>, dim: usize) {
     }
 }
 
+/// Extracting funnels (`FunnelBlockEntity.activateExtractor`): every 8 ticks, while no item lies
+/// in front, a stack leaves the inventory behind and drops in front.
+fn tick_funnels(game: &mut Game<'_>, dim: usize) {
+    let funnels: Vec<[i32; 3]> = with_world(|w| {
+        let d = &mut w.dims[dim];
+        d.funnels
+            .iter_mut()
+            .filter_map(|(p, cooldown)| {
+                if *cooldown == u32::MAX {
+                    return None;
+                }
+                if *cooldown > 0 {
+                    *cooldown -= 1;
+                    return None;
+                }
+                Some(*p)
+            })
+            .collect()
+    })
+    .unwrap_or_default();
+    for pos in funnels {
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let Some(s) = game.pack.assets.registry.state(state) else {
+            continue;
+        };
+        if s.properties.get("extracting").is_none_or(|v| v != "true")
+            || s.properties.get("powered").is_some_and(|v| v == "true")
+        {
+            // Inserting or paused: dormant until its state changes.
+            with_world(|w| w.dims[dim].funnels.insert(pos, u32::MAX));
+            continue;
+        }
+        let Some(facing) =
+            with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten()
+        else {
+            continue;
+        };
+        let (at, v) = create_engine::funnel::output(pos, facing);
+        // Something still in front: wait (`lastObserved`, the overflow area).
+        let mut blocked = false;
+        let dimension = game.dim.id().to_owned();
+        game.native_items_in(
+            &dimension,
+            [at[0] - 0.5, at[1] - 0.5, at[2] - 0.5],
+            [at[0] + 0.5, at[1] + 0.5, at[2] + 0.5],
+            |_, _, _, _| {
+                blocked = true;
+            },
+        );
+        if blocked {
+            continue;
+        }
+        let o = facing.offset();
+        let behind = [pos[0] - o[0], pos[1] - o[1], pos[2] - o[2]];
+        let face = horizon_core::geometry::Direction::ALL[facing as usize];
+        let Some(stack) = game.native_extract_item(behind, face, create_engine::funnel::AMOUNT)
+        else {
+            continue;
+        };
+        game.native_run_command(&format!(
+            "summon minecraft:item {} {} {} {{Item:{{id:'{}',count:{}}},Motion:[{}d,{}d,{}d]}}",
+            at[0], at[1], at[2], stack.item, stack.count, v[0], v[1], v[2]
+        ));
+        with_world(|w| {
+            w.dims[dim]
+                .funnels
+                .insert(pos, create_engine::funnel::EXTRACTION_COOLDOWN)
+        });
+    }
+}
+
 /// The heat under a basin (`BasinBlockEntity.getHeatLevelOf`): a blaze burner's, smouldering for
 /// a lit burner or another passive heater, else none.
 fn basin_heat(game: &Game<'_>, basin: [i32; 3]) -> create_engine::fan::Heat {
@@ -4171,6 +4243,10 @@ pub(super) fn item_landed(
         (_, Some(b @ create_engine::Block::Chute)) => (pos, b),
         (_, Some(b @ create_engine::Block::MechanicalSaw)) => (pos, b),
         (_, Some(b @ create_engine::Block::ItemDrain)) => (pos, b),
+        (
+            _,
+            Some(b @ (create_engine::Block::AndesiteFunnel | create_engine::Block::BrassFunnel)),
+        ) => (pos, b),
         _ => return,
     };
     if stack.extra.is_some() {
@@ -4187,6 +4263,31 @@ pub(super) fn item_landed(
     }
     if block == create_engine::Block::MechanicalSaw {
         saw_take(game, dim, spot, stack);
+        return;
+    }
+    if matches!(
+        block,
+        create_engine::Block::AndesiteFunnel | create_engine::Block::BrassFunnel
+    ) {
+        // FunnelBlock.entityInside, inserting: into the inventory it is on, as much as fits.
+        let state = game.world.block(spot[0], spot[1], spot[2]);
+        let Some(s) = game.pack.assets.registry.state(state) else {
+            return;
+        };
+        let extracting = s.properties.get("extracting").is_some_and(|v| v == "true");
+        let powered = s.properties.get("powered").is_some_and(|v| v == "true");
+        let facing = with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten();
+        if extracting || powered {
+            return;
+        }
+        let Some(facing) = facing else {
+            return;
+        };
+        let o = facing.offset();
+        let behind = [spot[0] - o[0], spot[1] - o[1], spot[2] - o[2]];
+        let face = horizon_core::geometry::Direction::ALL[facing as usize];
+        let left = game.native_insert_item(behind, face, stack.clone());
+        stack.count = left.map_or(0, |l| l.count);
         return;
     }
     if block == create_engine::Block::ItemDrain {
