@@ -435,6 +435,61 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             )),
             None,
         ),
+        // ArmBlock (KineticBlock, ICogWheel; `SharedProperties::softMetal`): `ceiling` when
+        // placed against a block's underside; AllShapes.MECHANICAL_ARM / MECHANICAL_ARM_CEILING.
+        // Its arm and cog are parts.
+        "mechanical_arm" => {
+            let px = |b: &[Px]| -> Value {
+                json!(b.iter().map(|b| b.map(|v| v / 16.0)).collect::<Vec<_>>())
+            };
+            (
+                "minecraft:gold_block",
+                Some(json!({ "property": "ceiling", "values": {
+                    "false": px(&[
+                        [2., 0., 2., 14., 10., 14.],
+                        [3., 0., 3., 13., 14., 13.],
+                        [0., 0., 0., 16., 6., 16.],
+                    ]),
+                    "true": px(&[
+                        [2., 6., 2., 14., 16., 14.],
+                        [3., 2., 3., 13., 16., 13.],
+                        [0., 10., 0., 16., 16., 16.],
+                    ]) } })),
+                own(&[("ceiling", bools)]),
+            )
+        }
+        // EjectorBlock (HorizontalKineticBlock, stone's properties): a depot on a plate, so the
+        // barrel's template for its slots; its horizontal facing and waterlogging;
+        // AllShapes.CASING_13PX. Its plate and shaft are parts.
+        "weighted_ejector" => (
+            "minecraft:barrel",
+            Some(by_property(
+                "facing",
+                &["north", "south", "west", "east"],
+                &[[0., 0., 0., 16., 13., 16.]],
+            )),
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                ("waterlogged", bools),
+            ]),
+        ),
+        // BeltFunnelBlock: a funnel over a belt (placed by the glue in place of a horizontal
+        // funnel above one), its facing, `powered`, `shape` and waterlogging, iron's properties
+        // as the funnels'; no item of its own (it drops its funnel). Content shapes select by one
+        // property: AllShapes.BELT_FUNNEL_RETRACTED for every shape, turned to its facing.
+        "andesite_belt_funnel" | "brass_belt_funnel" => (
+            "minecraft:iron_block",
+            Some(by_horizontal(&[
+                [2., -2., 14., 14., 14., 18.],
+                [0., -5., 8., 16., 16., 14.],
+            ])),
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                ("powered", bools),
+                ("shape", &["retracted", "extended", "pushing", "pulling"]),
+                ("waterlogged", bools),
+            ]),
+        ),
         // DepotBlock: its stacks are a block entity's slots, so the barrel's template too.
         // AllShapes.CASING_13PX.
         "depot" => (
@@ -986,6 +1041,8 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 | "powered_shaft"
                 | "rope"
                 | "pulley_magnet"
+                | "andesite_belt_funnel"
+                | "brass_belt_funnel"
         ),
     })
 }
@@ -1061,7 +1118,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 37] = [
+pub const PARTIALS: [(&str, &str, &str); 45] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -1193,6 +1250,41 @@ pub const PARTIALS: [(&str, &str, &str); 37] = [
         "part_track_segment_right",
         "create:block/track/segment_right",
         "south",
+    ),
+    // ArmRenderer's pieces (centred on the block's middle as Create draws them), posed by the
+    // glue from their `up` state; the cog turns as a kinetic part.
+    ("part_arm_cog", "create:block/mechanical_arm/cog", "up"),
+    ("part_arm_base", "create:block/mechanical_arm/base", "up"),
+    (
+        "part_arm_lower_body",
+        "create:block/mechanical_arm/lower_body",
+        "up",
+    ),
+    (
+        "part_arm_upper_body",
+        "create:block/mechanical_arm/upper_body",
+        "up",
+    ),
+    (
+        "part_arm_claw_base",
+        "create:block/mechanical_arm/claw_base",
+        "up",
+    ),
+    (
+        "part_arm_upper_claw_grip",
+        "create:block/mechanical_arm/upper_claw_grip",
+        "up",
+    ),
+    (
+        "part_arm_lower_claw_grip",
+        "create:block/mechanical_arm/lower_claw_grip",
+        "up",
+    ),
+    // EjectorRenderer's plate (`EJECTOR_TOP`), posed by the glue about its hinge.
+    (
+        "part_ejector_top",
+        "create:block/weighted_ejector/top",
+        "up",
     ),
 ];
 

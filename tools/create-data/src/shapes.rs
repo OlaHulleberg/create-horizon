@@ -105,6 +105,38 @@ pub fn by_facing(boxes: &[Px]) -> Value {
     json!({ "property": "facing", "values": values })
 }
 
+/// A `shapes` object selecting by a horizontal `facing`, from boxes written facing north
+/// (`VoxelShaper.forHorizontal(NORTH)`), turned about the block's centre.
+pub fn by_horizontal(boxes: &[Px]) -> Value {
+    let turn = |b: &Px, f: &str| -> Px {
+        let (x0, z0, x1, z1) = (b[0], b[2], b[3], b[5]);
+        let (a, c) = match f {
+            "east" => ([16. - z0, x0], [16. - z1, x1]),
+            "south" => ([16. - x0, 16. - z0], [16. - x1, 16. - z1]),
+            "west" => ([z0, 16. - x0], [z1, 16. - x1]),
+            _ => ([x0, z0], [x1, z1]),
+        };
+        [
+            a[0].min(c[0]),
+            b[1],
+            a[1].min(c[1]),
+            a[0].max(c[0]),
+            b[4],
+            a[1].max(c[1]),
+        ]
+    };
+    let values: serde_json::Map<String, Value> = ["north", "south", "west", "east"]
+        .iter()
+        .map(|f| {
+            (
+                f.to_string(),
+                json!(boxes.iter().map(|b| units(turn(b, f))).collect::<Vec<_>>()),
+            )
+        })
+        .collect();
+    json!({ "property": "facing", "values": values })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +149,9 @@ mod tests {
         assert_eq!(to_facing(MOTOR_BLOCK, "north"), [3., 3., 2., 13., 13., 16.]);
         assert_eq!(to_facing(MOTOR_BLOCK, "east"), [0., 3., 3., 14., 13., 13.]);
         assert_eq!(to_facing(MOTOR_BLOCK, "down"), [3., 2., 3., 13., 16., 13.]);
+        // A belt funnel facing north has its body to the south; facing east, to the west.
+        let v = by_horizontal(&[[0., -5., 8., 16., 16., 14.]]);
+        let east: Vec<f64> = serde_json::from_value(v["values"]["east"][0].clone()).unwrap();
+        assert_eq!(east, [2. / 16., -5. / 16., 0., 8. / 16., 1., 1.]);
     }
 }
