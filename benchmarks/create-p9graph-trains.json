@@ -1,0 +1,156 @@
+{
+  "scenario": "trains",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    2.0771484375,
+    2.31787109375,
+    2.2900390625
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 21174,
+      "frame_ms_p50": 0.5083310008049011,
+      "frame_ms_p99": 1.1667680740356443,
+      "fps": 1764.5,
+      "tick_ms": 2.79133677482605,
+      "tick_ms_max": 8.049386978149414,
+      "cpu_ms_p50": 0.39243897795677185,
+      "gpu_ms_p50": 0.4534895718097687,
+      "check": [
+        "train 12 heading for the station, 52.0 blocks along the track",
+        "train 11 heading for the station, 52.0 blocks along the track",
+        "train 10 heading for the station, 52.0 blocks along the track",
+        "train 9 heading for the station, 52.0 blocks along the track",
+        "train 8 heading for the station, 52.0 blocks along the track",
+        "train 7 heading for the station, 52.0 blocks along the track",
+        "train 6 heading for the station, 52.0 blocks along the track",
+        "train 5 heading for the station, 52.0 blocks along the track",
+        "train 4 heading for the station, 52.0 blocks along the track",
+        "train 3 heading for the station, 52.0 blocks along the track",
+        "train 2 heading for the station, 52.0 blocks along the track",
+        "train 1 heading for the station, 52.0 blocks along the track"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 19805,
+      "frame_ms_p50": 0.5760740041732788,
+      "frame_ms_p99": 1.1263679265975952,
+      "fps": 1650.4166666666667,
+      "tick_ms": 2.8438656330108643,
+      "tick_ms_max": 8.184181213378906,
+      "cpu_ms_p50": 0.5356950163841248,
+      "gpu_ms_p50": 0.4547916650772095,
+      "check": [
+        "train 12 heading for the station, 52.0 blocks along the track",
+        "train 11 heading for the station, 52.0 blocks along the track",
+        "train 10 heading for the station, 52.0 blocks along the track",
+        "train 9 heading for the station, 52.0 blocks along the track",
+        "train 8 heading for the station, 52.0 blocks along the track",
+        "train 7 heading for the station, 52.0 blocks along the track",
+        "train 6 heading for the station, 52.0 blocks along the track",
+        "train 5 heading for the station, 52.0 blocks along the track",
+        "train 4 heading for the station, 52.0 blocks along the track",
+        "train 3 heading for the station, 52.0 blocks along the track",
+        "train 2 heading for the station, 52.0 blocks along the track",
+        "train 1 heading for the station, 52.0 blocks along the track"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 20458,
+      "frame_ms_p50": 0.5502399802207947,
+      "frame_ms_p99": 1.150668025016785,
+      "fps": 1704.8333333333333,
+      "tick_ms": 2.781930685043335,
+      "tick_ms_max": 7.194848537445068,
+      "cpu_ms_p50": 0.4266834855079651,
+      "gpu_ms_p50": 0.4611979126930237,
+      "check": [
+        "train 12 heading for the station, 52.0 blocks along the track",
+        "train 11 heading for the station, 52.0 blocks along the track",
+        "train 10 heading for the station, 52.0 blocks along the track",
+        "train 9 heading for the station, 52.0 blocks along the track",
+        "train 8 heading for the station, 52.0 blocks along the track",
+        "train 7 heading for the station, 52.0 blocks along the track",
+        "train 6 heading for the station, 52.0 blocks along the track",
+        "train 5 heading for the station, 52.0 blocks along the track",
+        "train 4 heading for the station, 52.0 blocks along the track",
+        "train 3 heading for the station, 52.0 blocks along the track",
+        "train 2 heading for the station, 52.0 blocks along the track",
+        "train 1 heading for the station, 52.0 blocks along the track"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 21035,
+      "frame_ms_p50": 0.5063560009002686,
+      "frame_ms_p99": 1.2943639755249023,
+      "fps": 1752.9166666666667,
+      "tick_ms": 2.7240326404571533,
+      "tick_ms_max": 8.780027389526367,
+      "cpu_ms_p50": 0.45028701424598694,
+      "gpu_ms_p50": 0.45130208134651184,
+      "check": [
+        "train 12 heading for the station, 52.0 blocks along the track",
+        "train 11 heading for the station, 52.0 blocks along the track",
+        "train 10 heading for the station, 52.0 blocks along the track",
+        "train 9 heading for the station, 52.0 blocks along the track",
+        "train 8 heading for the station, 52.0 blocks along the track",
+        "train 7 heading for the station, 52.0 blocks along the track",
+        "train 6 heading for the station, 52.0 blocks along the track",
+        "train 5 heading for the station, 52.0 blocks along the track",
+        "train 4 heading for the station, 52.0 blocks along the track",
+        "train 3 heading for the station, 52.0 blocks along the track",
+        "train 2 heading for the station, 52.0 blocks along the track",
+        "train 1 heading for the station, 52.0 blocks along the track"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 20592,
+      "frame_ms_p50": 0.5232049822807312,
+      "frame_ms_p99": 1.2022570371627808,
+      "fps": 1716.0,
+      "tick_ms": 2.778843879699707,
+      "tick_ms_max": 7.346798896789551,
+      "cpu_ms_p50": 0.40627850592136383,
+      "gpu_ms_p50": 0.4678645730018616,
+      "check": [
+        "train 12 heading for the station, 52.0 blocks along the track",
+        "train 11 heading for the station, 52.0 blocks along the track",
+        "train 10 heading for the station, 52.0 blocks along the track",
+        "train 9 heading for the station, 52.0 blocks along the track",
+        "train 8 heading for the station, 52.0 blocks along the track",
+        "train 7 heading for the station, 52.0 blocks along the track",
+        "train 6 heading for the station, 52.0 blocks along the track",
+        "train 5 heading for the station, 52.0 blocks along the track",
+        "train 4 heading for the station, 52.0 blocks along the track",
+        "train 3 heading for the station, 52.0 blocks along the track",
+        "train 2 heading for the station, 52.0 blocks along the track",
+        "train 1 heading for the station, 52.0 blocks along the track"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1717.7333333333333,
+    "frame_ms_p50": 0.5328411936759949,
+    "frame_ms_p99": 1.1880850076675415,
+    "tick_ms": 2.784001922607422,
+    "tick_ms_max": 7.9110486030578615
+  },
+  "stdev": {
+    "fps": 45.071987173606814,
+    "frame_ms_p50": 0.029861619337057815,
+    "frame_ms_p99": 0.06549714836309273,
+    "tick_ms": 0.04261652881699646,
+    "tick_ms_max": 0.6481094284886773
+  }
+}
