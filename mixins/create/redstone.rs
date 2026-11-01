@@ -577,7 +577,7 @@ pub(super) fn tick_diodes(game: &mut Game<'_>, dimension: &str, dim: usize) {
 }
 
 /// `Level.hasNeighborSignal` at `pos`.
-fn neighbor_signal(game: &mut Game<'_>, pos: [i32; 3]) -> bool {
+pub(super) fn neighbor_signal(game: &mut Game<'_>, pos: [i32; 3]) -> bool {
     let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
     game.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, at))
 }
