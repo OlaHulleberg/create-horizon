@@ -54,6 +54,7 @@ def write_fixture(original, root):
         ('use_item_on', "horizon_client::game::native_hooks::Game<'_>::native_use_item_on"),
         ('use_item', "horizon_client::game::native_hooks::Game<'_>::native_use_item"),
         ('place_block', "horizon_client::game::native_hooks::Game<'_>::native_place_block"),
+        ('hud', "horizon_client::game::native_hooks::Game<'_>::native_hud"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -143,6 +144,9 @@ pub mod crafting {
     pub struct Ingredient(pub std::collections::HashSet<String>, pub Vec<String>);
     pub struct Cooking { pub id: String, pub kind: String, pub ingredient: Ingredient, pub result: crate::items::ItemStack }
     #[derive(Default)] pub struct Recipes { pub cooking: Vec<Cooking> }
+}
+pub mod hud {
+    pub struct HudBatch { pub width: f32, pub height: f32, pub drawn: Vec<String> }
 }
 pub mod text {
     pub struct Text(pub String);
@@ -293,6 +297,15 @@ pub mod native_hooks {
         pub fn native_use_item(&mut self, stack: &horizon_client::items::ItemStack, claimed: &mut bool) {
             let _ = (stack, claimed);
         }
+        pub fn native_hud(&mut self, batch: &mut horizon_client::hud::HudBatch) { let _ = batch; }
+        pub fn native_text_width(&self, text: &str) -> f32 { text.len() as f32 * 6.0 }
+        pub fn native_fill(&self, batch: &mut horizon_client::hud::HudBatch, rect: [f32; 4], argb: u32) {
+            let _ = (batch, rect, argb);
+        }
+        pub fn native_text(&self, batch: &mut horizon_client::hud::HudBatch, text: &str, at: [f32; 2], rgb: u32, shadow: bool) {
+            let _ = (at, rgb, shadow);
+            batch.drawn.push(text.to_owned());
+        }
         pub fn native_items_in(&mut self, dimension: &str, min: [f64; 3], max: [f64; 3],
                                f: impl FnMut(u32, &mut horizon_client::items::ItemStack, [f64; 3], &mut [f64; 3])) {
             let _ = (dimension, min, max, f);
@@ -374,6 +387,7 @@ pub struct Game<'a> {
     pub aim: Option<[i32; 3]>, pub unsaved: Vec<[i32; 2]>,
     pub creative: bool, pub player: Option<Player>, pub keys: std::collections::HashSet<winit::keyboard::KeyCode>,
     pub glides: Vec<(u32, [i32; 3], u8, f32, [f32; 3])>, pub hand: horizon_client::first_person::Hand, pub yaw: f32, pub pitch: f32,
+    pub armor: [Option<horizon_client::items::ItemStack>; 4],
     pub inventory: Vec<Option<horizon_client::items::ItemStack>>, pub selected: usize, pub dim: Dim,
     pub res: Res, pub custom_recipes: std::collections::HashMap<String, Vec<horizon_client::crafting::CustomRecipe>>,
     pub cooking: horizon_client::crafting::Recipes,
@@ -486,7 +500,7 @@ impl Behaviours {
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
         world: World { blocks: Default::default(), game_time: 0, block_entities: Default::default() }, sent: vec![], parts: vec![], aim: None, unsaved: vec![],
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),
-        glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0, pitch: 0.0,
+        glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0, pitch: 0.0, armor: [None, None, None, None],
         inventory: vec![Some(horizon_client::items::ItemStack { item: "minecraft:iron_ingot".into(), count: 5, damage: 0, extra: None })],
         selected: 0, dim: Dim, res: Res, custom_recipes: Default::default(), cooking: Default::default() };
     // data/create/recipe/pressing/iron_ingot.json
@@ -739,6 +753,14 @@ impl Behaviours {
     assert_eq!(game.said.last().map(String::as_str), Some("set [72, 0, 72] facing=south"));
     game.native_place_block(&stack, [70, 0, 75], BlockStateId(19));
     assert!(!game.said.iter().any(|l| l.starts_with("set [70, 0, 75]")), "already facing away from the shaft");
+    // Goggles on: the creative motor at (0, 0, 0) under the crosshair tells its capacity.
+    let mut batch = horizon_client::hud::HudBatch { width: 320.0, height: 240.0, drawn: vec![] };
+    game.native_hud(&mut batch);
+    assert!(batch.drawn.is_empty(), "nothing without goggles");
+    game.armor[0] = Some(horizon_client::items::ItemStack { item: "create:goggles".into(), count: 1, damage: 0, extra: None });
+    game.aim = Some([0, 0, 0]);
+    game.native_hud(&mut batch);
+    assert_eq!(batch.drawn.first().map(|s| s.trim()), Some("Generator Stats:"), "{:?}", batch.drawn);
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

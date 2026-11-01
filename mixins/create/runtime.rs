@@ -477,6 +477,90 @@ fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
     with_world(|w| w.scroll_motor(dim, [x, y, z], steps.clamp(-64, 64)));
 }
 
+/// `GoggleOverlayRenderer` for kinetic blocks: with goggles on the head, the block under the
+/// crosshair tells its stress (`KineticBlockEntity.addToGoggleTooltip`: impact × speed;
+/// `GeneratingKineticBlockEntity`: capacity × speed), in a tooltip right of the crosshair.
+pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
+    // Hot: one compare on the head slot.
+    if !game.armor[0]
+        .as_ref()
+        .is_some_and(|s| &*s.item == "create:goggles")
+    {
+        return;
+    }
+    if !client_ensure(game) {
+        return;
+    }
+    let Some(hit) = game.pick() else {
+        return;
+    };
+    let pos = hit.pos;
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    let Some((impact, capacity, speed)) = CLIENT.with_borrow(|c| {
+        let c = c.as_ref()?;
+        let (block, info) = c.table.get(state.0)?;
+        let [part, _] = create_engine::parts::parts(block, info, &Default::default());
+        let part = part?;
+        let speed = c.speeds.get(&pos).map_or(0.0, |s| s[0]);
+        Some((part.impact, part.capacity, speed))
+    }) else {
+        return;
+    };
+    // Create's tooltip: a header, then each stat indented by four spaces and its value by one more.
+    let mut lines: Vec<(String, u32)> = Vec::new();
+    // LangNumberFormat: grouped thousands, at most two decimals (en_us).
+    let number = |v: f32| {
+        let text = format!("{:.2}", v);
+        let text = text.trim_end_matches('0').trim_end_matches('.');
+        let (int, frac) = text.split_once('.').unwrap_or((text, ""));
+        let mut grouped = String::new();
+        for (i, c) in int.chars().enumerate() {
+            if i > 0 && (int.len() - i) % 3 == 0 {
+                grouped.push(',');
+            }
+            grouped.push(c);
+        }
+        if frac.is_empty() {
+            grouped
+        } else {
+            format!("{grouped}.{frac}")
+        }
+    };
+    if impact != 0.0 {
+        lines.push(("    Kinetic Stats:".into(), 0xFFFFFF));
+        lines.push(("    Kinetic Stress Impact:".into(), 0xAAAAAA));
+        lines.push((
+            format!("     {}su at current speed", number(impact * speed.abs())),
+            0x55FFFF,
+        ));
+    }
+    if capacity != 0.0 {
+        lines.push(("    Generator Stats:".into(), 0xFFFFFF));
+        lines.push(("    Kinetic Stress Capacity:".into(), 0xAAAAAA));
+        lines.push((
+            format!("     {}su at current speed", number(capacity * speed.abs())),
+            0x55FFFF,
+        ));
+    }
+    if lines.is_empty() {
+        return;
+    }
+    // RemovedGuiUtils.drawHoveringText at (width / 2 + 20, height / 2): vanilla's tooltip box.
+    let w = lines
+        .iter()
+        .map(|l| game.native_text_width(&l.0))
+        .fold(0.0f32, f32::max);
+    let h = lines.len() as f32 * 10.0 - 2.0;
+    let x = (batch.width / 2.0 + 20.0).min(batch.width - w - 20.0) + 4.0;
+    let y = (batch.height / 2.0).min(batch.height - h - 20.0) + 4.0;
+    game.native_fill(batch, [x - 3.0, y - 4.0, w + 6.0, h + 8.0], 0xF010_0010);
+    game.native_fill(batch, [x - 3.0, y - 3.0, w + 6.0, 1.0], 0x5050_00FF);
+    game.native_fill(batch, [x - 3.0, y + h + 2.0, w + 6.0, 1.0], 0x5028_007F);
+    for (i, (text, rgb)) in lines.iter().enumerate() {
+        game.native_text(batch, text, [x, y + i as f32 * 10.0], *rgb, true);
+    }
+}
+
 /// The mouse wheel on the client: a creative motor under the crosshair takes it.
 pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
     if *claimed || !client_ensure(game) {
