@@ -403,8 +403,8 @@ impl TrackShape {
     }
 
     /// `ITrackBlock.getNearestTrackAxis` signed as its callers sign it: the axis nearest the
-    /// look (either way, a later one winning a tie), pointing back toward the player (negated
-    /// when the look runs along its horizontal part).
+    /// look (either way, a later one winning a tie), pointing along the look, away from the player
+    /// (negated when the look runs against its horizontal part).
     pub fn nearest_axis(self, look: Vec3) -> Vec3 {
         let mut best = ZERO;
         let mut best_diff = f64::MAX;
