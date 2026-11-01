@@ -443,6 +443,8 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // ItemDrainBlock: a full block here, so items land on top of it.
+        "item_drain" => ("minecraft:iron_block", None, None),
         // SpoutBlock: a copper-propertied block, AllShapes.SPOUT approximated by its body.
         "spout" => (
             "minecraft:copper_block",

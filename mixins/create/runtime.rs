@@ -214,6 +214,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_drills(game, dim);
     tick_saws(game, dim);
     tick_spouts(game, dim);
+    tick_drains(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -2701,6 +2702,47 @@ fn tick_spouts(game: &mut Game<'_>, dim: usize) {
     }
 }
 
+/// Item drains holding items (`ItemDrainBlockEntity.tick`): a filled bucket is emptied into the
+/// tank each cycle while it has room; the empty bucket is thrown off on top; anything else is
+/// let go the same way.
+fn tick_drains(game: &mut Game<'_>, dim: usize) {
+    let drains: Vec<[i32; 3]> = with_world(|w| {
+        w.dims[dim]
+            .drains
+            .iter()
+            .filter(|(_, d)| d.held.is_some())
+            .map(|(p, _)| *p)
+            .collect()
+    })
+    .unwrap_or_default();
+    for pos in drains {
+        let Some(out) = with_world(|w| {
+            let d = w.dims[dim].drains.get_mut(&pos)?;
+            let held = d.held.clone();
+            if held
+                .as_ref()
+                .is_some_and(|h| create_engine::drain::contents(&h.0).is_none())
+            {
+                d.held = None;
+                return held.map(|h| (h.0, h.1));
+            }
+            create_engine::drain::tick(d).then(|| ("minecraft:bucket".to_owned(), 1))
+        })
+        .flatten() else {
+            continue;
+        };
+        let (x, y, z) = (
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 1.0,
+            f64::from(pos[2]) + 0.5,
+        );
+        game.native_run_command(&format!(
+            "summon minecraft:item {x} {y} {z} {{Item:{{id:'{}',count:{}}},PickupDelay:20}}",
+            out.0, out.1
+        ));
+    }
+}
+
 /// The heat under a basin (`BasinBlockEntity.getHeatLevelOf`): a blaze burner's, smouldering for
 /// a lit burner or another passive heater, else none.
 fn basin_heat(game: &Game<'_>, basin: [i32; 3]) -> create_engine::fan::Heat {
@@ -2976,7 +3018,7 @@ fn pipe_cell(game: &Game<'_>, p: [i32; 3]) -> create_engine::fluids::Cell {
         return match block {
             Block::FluidPipe => Cell::Pipe(pipe_sides_of(game, state)),
             Block::MechanicalPump => info.facing.map_or(Cell::Solid, Cell::Pump),
-            Block::FluidTank | Block::Spout => Cell::Tank,
+            Block::FluidTank | Block::Spout | Block::ItemDrain => Cell::Tank,
             _ => Cell::Solid,
         };
     }
@@ -3073,7 +3115,17 @@ fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
         if let (Some(from), false) = (pump.pull.first().copied(), pump.push.is_empty()) {
             let amount = fluids::transfer_speed(from.pressure);
             // What the source can give this tick.
-            let offer = if from.tank {
+            let drained_from_drain = from.tank
+                && with_world(|w| w.dims[dim].drains.contains_key(&from.pos)).unwrap_or(false);
+            let offer = if drained_from_drain {
+                with_world(|w| {
+                    w.dims[dim]
+                        .drains
+                        .get(&from.pos)
+                        .and_then(|d| d.fluid.map(|(f, n)| (f, n.min(amount))))
+                })
+                .flatten()
+            } else if from.tank {
                 with_world(|w| {
                     w.dims[dim]
                         .tanks
@@ -3168,7 +3220,13 @@ fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                     }
                 }
                 if moved > 0 {
-                    if from.tank {
+                    if drained_from_drain {
+                        with_world(|w| {
+                            if let Some(d) = w.dims[dim].drains.get_mut(&from.pos) {
+                                create_engine::drain::drain(d, moved);
+                            }
+                        });
+                    } else if from.tank {
                         with_world(|w| {
                             let d = &mut w.dims[dim];
                             if let Some(t) = d.tanks.get_mut(&from.pos) {
@@ -4112,6 +4170,7 @@ pub(super) fn item_landed(
         (Some(b @ create_engine::Block::Basin), _) => (own, b),
         (_, Some(b @ create_engine::Block::Chute)) => (pos, b),
         (_, Some(b @ create_engine::Block::MechanicalSaw)) => (pos, b),
+        (_, Some(b @ create_engine::Block::ItemDrain)) => (pos, b),
         _ => return,
     };
     if stack.extra.is_some() {
@@ -4128,6 +4187,22 @@ pub(super) fn item_landed(
     }
     if block == create_engine::Block::MechanicalSaw {
         saw_take(game, dim, spot, stack);
+        return;
+    }
+    if block == create_engine::Block::ItemDrain {
+        // ItemDrainBlockEntity's insertion: a stack it can hold, while it holds nothing.
+        let took = with_world(|w| {
+            let d = w.dims[dim].drains.entry(spot).or_default();
+            if d.held.is_some() {
+                return false;
+            }
+            d.held = Some((stack.item.to_string(), stack.count.min(64) as u8));
+            true
+        })
+        .unwrap_or(false);
+        if took {
+            stack.count = stack.count.saturating_sub(64);
+        }
         return;
     }
     let max = game
