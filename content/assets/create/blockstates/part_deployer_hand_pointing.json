@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/deployer/hand_pointing",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/deployer/hand_pointing",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/deployer/hand_pointing"
+    },
+    "facing=west": {
+      "model": "create:block/deployer/hand_pointing",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/deployer/hand_pointing",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/deployer/hand_pointing",
+      "x": 270
+    }
+  }
+}

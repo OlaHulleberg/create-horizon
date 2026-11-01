@@ -212,19 +212,20 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             .map_or([None, None], |f| one(Part::shaft(f.axis()))),
         // MechanicalPistonBlock (DirectionalAxisKineticBlock.getRotationAxis): a shaft across
         // its facing, on the first or second other axis.
-        Block::MechanicalPiston | Block::StickyMechanicalPiston | Block::MechanicalSaw => {
-            s.facing.map_or([None, None], |f| {
-                let axis = match (f.axis(), s.along_first) {
-                    (Axis::X, true) => Axis::Y,
-                    (Axis::X, false) => Axis::Z,
-                    (Axis::Y, true) => Axis::X,
-                    (Axis::Y, false) => Axis::Z,
-                    (Axis::Z, true) => Axis::X,
-                    (Axis::Z, false) => Axis::Y,
-                };
-                one(Part::shaft(axis))
-            })
-        }
+        Block::MechanicalPiston
+        | Block::StickyMechanicalPiston
+        | Block::MechanicalSaw
+        | Block::Deployer => s.facing.map_or([None, None], |f| {
+            let axis = match (f.axis(), s.along_first) {
+                (Axis::X, true) => Axis::Y,
+                (Axis::X, false) => Axis::Z,
+                (Axis::Y, true) => Axis::X,
+                (Axis::Y, false) => Axis::Z,
+                (Axis::Z, true) => Axis::X,
+                (Axis::Z, false) => Axis::Y,
+            };
+            one(Part::shaft(axis))
+        }),
         // DrillBlock (DirectionalKineticBlock): a shaft out of its back.
         Block::MechanicalDrill => s
             .facing
