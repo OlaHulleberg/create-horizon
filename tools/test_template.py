@@ -453,7 +453,7 @@ pub struct Game<'a> {
     pub sent: Vec<(u128, String, Vec<u8>)>, pub parts: Vec<(u32, [i32; 3], u8, f32)>,
     pub aim: Option<[i32; 3]>, pub aim_point: Option<[f64; 3]>, pub unsaved: Vec<[i32; 2]>,
     pub offhand: Option<horizon_client::items::ItemStack>,
-    pub dropped: Vec<horizon_client::entities::ItemEntity>, pub right: bool,
+    pub dropped: Vec<horizon_client::entities::ItemEntity>, pub right: bool, pub audio: Audio,
     pub creative: bool, pub player: Option<Player>, pub keys: std::collections::HashSet<winit::keyboard::KeyCode>,
     pub glides: Vec<(u32, [i32; 3], u8, f32, [f32; 3])>, pub hand: horizon_client::first_person::Hand, pub yaw: f32, pub pitch: f32,
     pub armor: [Option<horizon_client::items::ItemStack>; 4],
@@ -464,6 +464,8 @@ pub struct Game<'a> {
 impl Game<'_> {
     pub fn recipes(&self) -> &horizon_client::crafting::Recipes { &self.cooking }
 }
+pub struct Audio;
+impl Audio { pub fn play(&mut self, event: &str, at: Option<[f64; 3]>, volume: f32, pitch: f32) { let _ = (event, at, volume, pitch); } }
 pub struct Dim;
 impl Dim { pub fn id(&self) -> &str { "minecraft:overworld" } }
 pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
@@ -583,7 +585,7 @@ impl Behaviours {
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
         world: World { blocks: Default::default(), game_time: 0, block_entities: Default::default() }, sent: vec![], parts: vec![], aim: None, aim_point: None, unsaved: vec![],
         offhand: None,
-        dropped: Vec::new(), right: false,
+        dropped: Vec::new(), right: false, audio: Audio,
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),
         glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0, pitch: 0.0, armor: [None, None, None, None],
         inventory: vec![Some(horizon_client::items::ItemStack { item: "minecraft:iron_ingot".into(), count: 5, damage: 0, extra: None })],

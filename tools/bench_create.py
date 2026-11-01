@@ -19,6 +19,7 @@ the server thread's smoothed tick time. Scenarios:
   redstone 32 observer clocks, each driving a chain of 16 toggle latches (a binary counter): 512
            latches switching (phase 7)
   repeaters  the control for redstone: the same chains of vanilla repeaters
+  diodes   the same chains of Create's pulse extenders (512 brass diodes passing the clocks' pulses on)
   tunnels  the logistics belts with 21 andesite tunnels over each (segments 10 to 30, windowed
            straight tunnels): five stacks dropped on the first 9 segments of each pass under them (phase 4)
   belts9   the control for tunnels: the same belts and stacks, no tunnels
@@ -316,9 +317,9 @@ def build(ctl_bin, sock, scenario, center):
                 ctl(ctl_bin, sock, "command",
                     f"summon minecraft:item {xx + 0.5} {y - 5} {z - 24 + s + 0.5} "
                     "{Item:{id:'minecraft:iron_ingot',count:8}}")
-    if scenario in ("redstone", "repeaters"):
-        diode = ("create:powered_toggle_latch[facing=west]" if scenario == "redstone"
-                 else "minecraft:repeater[facing=west]")
+    if scenario in ("redstone", "repeaters", "diodes"):
+        diode = {"redstone": "create:powered_toggle_latch[facing=west]",
+                 "diodes": "create:pulse_extender[facing=west]"}.get(scenario, "minecraft:repeater[facing=west]")
         for row in range(32):
             zz = z - 31 + 2 * row
             command(ctl_bin, sock, f"fill {x-17} {y-7} {zz} {x+2} {y-7} {zz} minecraft:stone", failures)
@@ -592,7 +593,7 @@ def run_once(args, scenario):
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
-                    "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "curves": 32, "curvetracks": 32, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
+                    "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "curves": 32, "curvetracks": 32, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "diodes": 512, "links": 64,
                     "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
@@ -774,7 +775,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
+                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
