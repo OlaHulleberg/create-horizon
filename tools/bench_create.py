@@ -38,6 +38,8 @@ the server thread's smoothed tick time. Scenarios:
            5 stacks of 8 iron dropped on the first 9 segments: each stack split among the
            depots and the belt ahead (phase 4)
   brassbelts  the control for brass: the same belts, depots and stacks, no tunnels
+  signals  the trains scene with two track signals by each track (green: no other train on it):
+           each train looks for red signals ahead every tick (phase 9)
   links    32 observer clocks, each pulsing a redstone link 16 blocks from a receiving one that
            lights a lamp; all untuned, so one network of 64 links changes at every pulse (phase 7)
   contraptions  16 windmills (17 sails each, a cross) assembled and turning: 16 structures drawn as
@@ -164,7 +166,7 @@ def build(ctl_bin, sock, scenario, center):
             command(ctl_bin, sock, f"setblock {x0+3} {y-6} {zz} create:fluid_tank", failures)
             command(ctl_bin, sock, f"setblock {x0} {y-5} {zz} create:cogwheel[axis=x]", failures)
             command(ctl_bin, sock, f"setblock {x0+1} {y-5} {zz} create:creative_motor[facing=west]", failures)
-    if scenario == "trains":
+    if scenario in ("trains", "signals"):
         for row in range(12):
             zz = z - 24 + 4 * row
             command(ctl_bin, sock, f"fill {x-28} {y-6} {zz} {x+28} {y-6} {zz} create:track[shape=xo]", failures)
@@ -173,6 +175,9 @@ def build(ctl_bin, sock, scenario, center):
             command(ctl_bin, sock, f"setblock {x-26} {y-5} {zz} create:small_bogey[axis=x]", failures)
             command(ctl_bin, sock, f"setblock {x-26} {y-4} {zz} minecraft:slime_block", failures)
             command(ctl_bin, sock, f"setblock {x-26} {y-3} {zz} minecraft:gold_block", failures)
+            if scenario == "signals":
+                command(ctl_bin, sock, f"setblock {x-10} {y-6} {zz-1} create:track_signal", failures)
+                command(ctl_bin, sock, f"setblock {x+10} {y-6} {zz-1} create:track_signal", failures)
     if scenario in ("goggles", "presses"):
         # A floor of presses just under the flight, in reach of the crosshair: the overlay shows
         # the one looked at (not counted: the count looks lower).
@@ -487,7 +492,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "deployers": 48, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
@@ -507,7 +512,7 @@ def run_once(args, scenario):
             for row in range(30):
                 ctl(ctl_bin, sock, "command", f"summon minecraft:item {x-0.5} {y-2} {z-30+2*row+0.5} "
                     "{Item:{id:'minecraft:gravel',count:16},PickupDelay:32767}")
-        if scenario == "trains":
+        if scenario in ("trains", "signals"):
             for row in range(12):
                 ctl(ctl_bin, sock, "chat", f"/create_debug assemble {x-27} {y-6} {z-24+4*row-1}")
         if scenario == "deployers":
@@ -538,7 +543,7 @@ def run_once(args, scenario):
                 ctl(ctl_bin, sock, "command", f"setblock {x-10} {y-5} {z-16+2*row} create:creative_motor[facing=down]")
         if scenario == "goggles":
             ctl(ctl_bin, sock, "command", "item replace entity @p armor.head with create:goggles")
-        if scenario == "trains":
+        if scenario in ("trains", "signals"):
             turning = [ctl(ctl_bin, sock, "chat", f"/create_debug train {x+27} {y-6} {z-24+4*row-1}")
                        for row in range(12)]
             time.sleep(0.5)
@@ -637,7 +642,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "bearings", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
+                                          "logistics", "tunnels", "belts9", "deployers", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

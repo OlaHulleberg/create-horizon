@@ -7766,7 +7766,9 @@ fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
         let i = d.trains.iter().position(|t| {
             t.train.line == line
                 && t.train.destination.is_none()
-                && (t.train.position - here).abs() < 0.5
+                && ((t.train.position - here).abs() < 0.5
+                    // Still where it was assembled (its bogey beside this station).
+                    || (t.train.position == t.start && (t.start - here).abs() <= 2.0))
         })?;
         Some(d.trains.remove(i))
     })
@@ -7927,8 +7929,43 @@ fn send_train_clear(game: &mut Game<'_>, dimension: &str, id: u32) {
 /// Trains running to a destination (`Train.tick`, `Navigation.tick`); clients get each one's
 /// motion when it starts, every ten ticks while its speed changes, and when it stops.
 fn tick_trains(game: &mut Game<'_>, _dimension: &str, dim: usize) {
-    use create_engine::trains::Run;
+    use create_engine::trains::{Line, Run};
+    // Signals by the line they stand by and where along it (`TrackTargetingBehaviour`).
+    let signals: Vec<(Line, f64)> = with_world(|w| w.dims[dim].signals.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| {
+            let (target, line) = station_track(game, p)?;
+            Some((line, f64::from(Line::along(line.axis, target))))
+        })
+        .collect();
+    // Each train's span along its line (its blocks where it is now).
+    let span = |t: &create_engine::world::TrainOnTrack| {
+        let shift = t.train.position - t.start;
+        let along = |o: [i32; 3]| {
+            f64::from(Line::along(
+                t.train.line.axis,
+                [t.origin[0] + o[0], t.origin[1] + o[1], t.origin[2] + o[2]],
+            ))
+        };
+        let lo = t
+            .blocks
+            .iter()
+            .map(|(o, _)| along(*o))
+            .fold(f64::INFINITY, f64::min);
+        let hi = t
+            .blocks
+            .iter()
+            .map(|(o, _)| along(*o))
+            .fold(f64::NEG_INFINITY, f64::max);
+        (lo + shift, hi + 1.0 + shift)
+    };
     let running: Vec<(u32, Run, f64, (i32, i32), (i32, i32))> = with_world(|w| {
+        let spans: Vec<(u32, Line, (f64, f64))> = w.dims[dim]
+            .trains
+            .iter()
+            .map(|t| (t.id, t.train.line, span(t)))
+            .collect();
         w.dims[dim]
             .trains
             .iter_mut()
@@ -7936,7 +7973,30 @@ fn tick_trains(game: &mut Game<'_>, _dimension: &str, dim: usize) {
             .map(|t| {
                 let before = t.train.speed;
                 let was = create_engine::world::CreateWorld::train_column(t);
-                let run = t.train.tick();
+                // A red signal ahead: it waits before it (`Navigation`'s `waitingForSignal`).
+                let dest = t.train.destination.unwrap_or(t.train.position);
+                let dir = if dest < t.train.position { -1.0 } else { 1.0 };
+                let (lo, hi) = span(t);
+                let front = if dir > 0.0 { hi } else { lo };
+                let own: Vec<f64> = signals
+                    .iter()
+                    .filter(|(l, _)| *l == t.train.line)
+                    .map(|(_, s)| *s + 0.5)
+                    .collect();
+                let others: Vec<(f64, f64)> = spans
+                    .iter()
+                    .filter(|(id, l, _)| *id != t.id && *l == t.train.line)
+                    .map(|(_, _, s)| *s)
+                    .collect();
+                let stop = create_engine::trains::blocking_signal(
+                    front,
+                    dir,
+                    front + (dest - t.train.position),
+                    &own,
+                    &others,
+                )
+                .map(|s| t.train.position + (s - dir * 0.5 - front));
+                let run = t.train.tick_until(stop);
                 (
                     t.id,
                     run,
@@ -7966,7 +8026,13 @@ fn tick_trains(game: &mut Game<'_>, _dimension: &str, dim: usize) {
         .collect();
     let tick = game.world.game_time;
     for (id, run, change) in running {
-        if run == Run::Arrived || (change > 0.0 && tick % 10 == 0) {
+        let stopped = with_world(|w| {
+            w.dims[dim]
+                .trains
+                .iter()
+                .any(|t| t.id == id && t.train.speed == 0.0)
+        }) == Some(true);
+        if run == Run::Arrived || (change > 0.0 && (tick % 10 == 0 || stopped)) {
             send_train(game, dim, [i32::MIN, 0, id as i32]);
         }
     }

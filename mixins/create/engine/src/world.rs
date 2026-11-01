@@ -194,6 +194,8 @@ pub struct Dimension {
     /// that tick).
     pub brass: HashMap<[i32; 3], crate::tunnel::Brass>,
     pub brass_running: Vec<[i32; 3]>,
+    /// Track signals (the line they stand by is found when trains look at them).
+    pub signals: Vec<[i32; 3]>,
     pub tunnels_new: Vec<[i32; 3]>,
     /// Mechanical mixers and their cycle, the running ones (the only ones that tick), and those
     /// to look at their basin again (`basinChecker`: placed, speed changed, basin changed).
@@ -311,6 +313,7 @@ fn has_state(block: Block) -> bool {
             | Block::RedstoneLink
             | Block::AndesiteTunnel
             | Block::BrassTunnel
+            | Block::TrackSignal
             | Block::GantryShaft
             | Block::GantryCarriage
             | Block::MechanicalCrafter
@@ -406,6 +409,9 @@ impl CreateWorld {
         }
         if block == Block::BrassTunnel {
             d.brass.entry(pos).or_default();
+        }
+        if block == Block::TrackSignal && !d.signals.contains(&pos) {
+            d.signals.push(pos);
         }
         if block == Block::GantryShaft {
             d.gantry_checks.push(pos);
@@ -644,6 +650,7 @@ impl CreateWorld {
                 d.link_shown.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
+            d.signals.retain(|p| *p != pos);
             if let Some(b) = d.brass.remove(&pos) {
                 d.brass_running.retain(|p| *p != pos);
                 // What it held drops (`BrassTunnelBlockEntity.destroy`).
@@ -792,6 +799,7 @@ impl CreateWorld {
             d.tunnel_fresh
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.signals.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass_running
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.running_crushers
