@@ -405,6 +405,8 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         "encased_fan" => ("minecraft:andesite", None, own(&[("facing", facing)])),
         // WindmillBearingBlock (BearingBlock): any facing, a full block.
         "windmill_bearing" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
+        // MechanicalBearingBlock (BearingBlock): as the windmill bearing.
+        "mechanical_bearing" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
         // SailBlock: a thin plane on any facing (AllShapes.SAIL / SAIL_FRAME, forDirectional
         // from up), wood's template with scaffolding's sounds.
         "sail_frame" => (
@@ -743,7 +745,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 27] = [
+pub const PARTIALS: [(&str, &str, &str); 28] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -797,6 +799,7 @@ pub const PARTIALS: [(&str, &str, &str); 27] = [
         "create:block/bearing/top_wooden",
         "up",
     ),
+    ("part_bearing_top", "create:block/bearing/top", "up"),
     // CachedBuffers.partialFacing, as the shaft half.
     (
         "part_fan_propeller",

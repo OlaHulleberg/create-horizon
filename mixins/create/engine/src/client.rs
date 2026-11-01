@@ -30,6 +30,8 @@ pub enum Model {
     /// A windmill bearing's wooden top (`AllPartialModels.BEARING_TOP_WOODEN`), turned to its
     /// facing, turning with its sails.
     BearingTop(Dir),
+    /// A mechanical bearing's top (`BEARING_TOP`), the windmill's being wooden.
+    BearingTopMetal(Dir),
     /// The encased fan's propeller (`AllPartialModels.ENCASED_FAN_INNER`), turned to a face.
     FanPropeller(Dir),
     /// The mixer's shaftless cog, and its pole and head at rest (`MechanicalMixerRenderer`).
@@ -175,14 +177,18 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
             })
             .unwrap_or_default(),
         // BearingRenderer: the shaft half out of its back and its top, both turning with it.
-        Block::WindmillBearing => s
+        Block::WindmillBearing | Block::MechanicalBearing => s
             .facing
             .map(|f| {
                 vec![
                     half(0, f.opposite(), speeds[0]),
                     Draw {
                         slot: 1,
-                        model: Model::BearingTop(f),
+                        model: if block == Block::WindmillBearing {
+                            Model::BearingTop(f)
+                        } else {
+                            Model::BearingTopMetal(f)
+                        },
                         axis: f.axis(),
                         rpm: speeds[0],
                         phase: 0.0,

@@ -67,6 +67,17 @@ pub fn gather_windmill(
     facing: Dir,
     at: impl Fn([i32; 3]) -> Option<Found>,
 ) -> Result<Gathered, Refused> {
+    gather_bearing(bearing, facing, MIN_SAILS, at)
+}
+
+/// `BearingContraption.assemble` for any bearing: a windmill needs `min_sails` (a mechanical
+/// bearing none).
+pub fn gather_bearing(
+    bearing: [i32; 3],
+    facing: Dir,
+    min_sails: u32,
+    at: impl Fn([i32; 3]) -> Option<Found>,
+) -> Result<Gathered, Refused> {
     let start = add(bearing, facing.offset());
     let mut frontier = VecDeque::from([start]);
     let mut visited: HashSet<[i32; 3]> = HashSet::new();
@@ -116,7 +127,7 @@ pub fn gather_windmill(
             return Err(Refused::TooLarge);
         }
     }
-    if sails < MIN_SAILS {
+    if sails < min_sails {
         return Err(Refused::NotEnoughSails(sails));
     }
     if blocks.is_empty() {
@@ -132,9 +143,105 @@ pub fn windmill_speed(sails: u32, clockwise: bool) -> f32 {
     if clockwise { rpm } else { -rpm }
 }
 
+/// A mechanical bearing's turning (`MechanicalBearingBlockEntity.angle`): the angle at game time
+/// `since` and the speed since then; the angle at any later tick follows without ticking.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Turn {
+    pub angle: f32,
+    pub since: i64,
+    pub rpm: f32,
+}
+
+impl Turn {
+    /// `angle += convertToAngular(speed)` (`speed × 0.3`° a tick) each tick, `% 360`.
+    pub fn angle_at(&self, now: i64) -> f32 {
+        (self.angle + self.rpm * 0.3 * (now - self.since) as f32) % 360.0
+    }
+
+    /// The speed changed at `now`.
+    pub fn rebase(&mut self, now: i64, rpm: f32) {
+        self.angle = self.angle_at(now);
+        self.since = now;
+        self.rpm = rpm;
+    }
+}
+
+/// `StructureTransform`'s angle: the nearest quarter turn (`Math.round(angle / 90) × 90`, in
+/// -90..270).
+pub fn quarter(angle: f32) -> i32 {
+    let mut a = ((angle / 90.0 + 0.5).floor() as i32 * 90) % 360;
+    if a < -90 {
+        a += 360;
+    }
+    a
+}
+
+/// `StructureTransform.rotation.ordinal()`: how many `getClockWise(axis)` turns a facing takes.
+pub fn clockwise_turns(quarter: i32) -> u8 {
+    match quarter {
+        -90 | 270 => 1,
+        180 => 2,
+        90 => 3,
+        _ => 0,
+    }
+}
+
+/// `VecHelper.rotate` by a quarter-turn angle about `axis`, exact for whole blocks.
+pub fn rotate(v: [i32; 3], quarter: i32, axis: crate::kinetics::Axis) -> [i32; 3] {
+    use crate::kinetics::Axis;
+    let (s, c) = match quarter.rem_euclid(360) {
+        90 => (1, 0),
+        180 => (0, -1),
+        270 => (-1, 0),
+        _ => (0, 1),
+    };
+    let [x, y, z] = v;
+    match axis {
+        Axis::X => [x, y * c - z * s, z * c + y * s],
+        Axis::Y => [x * c + z * s, y, z * c - x * s],
+        Axis::Z => [x * c - y * s, y * c + x * s, z],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stopped_bearing_snaps_to_the_nearest_quarter_turn() {
+        use crate::kinetics::Axis;
+        let mut t = Turn {
+            angle: 0.0,
+            since: 0,
+            rpm: 16.0,
+        };
+        // 16 rpm: 4.8° a tick; after 20 ticks 96°.
+        assert!((t.angle_at(20) - 96.0).abs() < 1e-3);
+        t.rebase(20, -16.0);
+        assert!((t.angle_at(30) - 48.0).abs() < 1e-3);
+        assert_eq!(
+            (
+                quarter(96.0),
+                quarter(44.0),
+                quarter(-100.0),
+                quarter(200.0)
+            ),
+            (90, 0, -90, 180)
+        );
+        assert_eq!(
+            (
+                clockwise_turns(90),
+                clockwise_turns(-90),
+                clockwise_turns(180)
+            ),
+            (3, 1, 2)
+        );
+        // East of an up-facing bearing's anchor, a quarter turn about y goes north
+        // (counterclockwise from above).
+        assert_eq!(rotate([1, 0, 0], 90, Axis::Y), [0, 0, -1]);
+        assert_eq!(rotate([0, 1, 0], 90, Axis::X), [0, 0, 1]);
+        assert_eq!(rotate([2, 1, 0], 180, Axis::Z), [-2, -1, 0]);
+    }
 
     fn sail() -> Found {
         Found {

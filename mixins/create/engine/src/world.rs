@@ -176,6 +176,8 @@ pub struct Dimension {
     deployer_saved: HashMap<[i32; 3], crate::deployer::Deployer>,
     pub deployer_changes: Vec<[i32; 3]>,
     pub deployer_drops: Vec<([i32; 3], (String, u8))>,
+    /// Mechanical bearings whose speed changed (`assembleNextTick`).
+    pub bearing_checks: Vec<[i32; 3]>,
     pub tunnel_fresh: Vec<[i32; 3]>,
     pub tunnels_new: Vec<[i32; 3]>,
     /// Mechanical mixers and their cycle, the running ones (the only ones that tick), and those
@@ -251,6 +253,8 @@ pub struct Windmill {
     pub blocks: Vec<([i32; 3], u32)>,
     pub sails: u32,
     pub clockwise: bool,
+    /// A mechanical bearing's turning; None for a windmill (which generates instead).
+    pub bearing: Option<crate::contraption::Turn>,
 }
 
 /// An encased fan (`EncasedFanBlockEntity`): its facing, speed and air current, and the depots
@@ -464,6 +468,15 @@ impl CreateWorld {
             let fan = d.fans.entry(pos).or_default();
             fan.facing = info.facing;
             fan.rebuild = true;
+        }
+        if block == Block::MechanicalBearing
+            && !d.windmills.contains_key(&pos)
+            && let Some(w) = d.windmill_saved.remove(&pos)
+        {
+            d.windmills.insert(pos, w);
+            d.windmill_changes.push(pos);
+            // Its speed is looked at again (`onSpeedChanged`).
+            d.bearing_checks.push(pos);
         }
         if block == Block::WindmillBearing
             && !d.windmills.contains_key(&pos)
@@ -713,6 +726,8 @@ impl CreateWorld {
             d.deployers
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.deploying.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.bearing_checks
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.deployer_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tunnel_checks
@@ -1181,6 +1196,15 @@ impl CreateWorld {
     }
 
     /// A windmill's sails were assembled (`assemble`): it generates from the next solve on.
+    /// A mechanical bearing assembled what is in front of it: it turns at the network's speed,
+    /// generating nothing.
+    pub fn bearing_assembled(&mut self, dim: usize, pos: [i32; 3], w: Windmill) {
+        let d = &mut self.dims[dim];
+        d.windmills.insert(pos, w);
+        d.windmill_changes.push(pos);
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+    }
+
     pub fn windmill_assembled(&mut self, dim: usize, pos: [i32; 3], state: u32, w: Windmill) {
         let speed = crate::contraption::windmill_speed(w.sails, w.clockwise);
         let d = &mut self.dims[dim];
@@ -1210,6 +1234,9 @@ impl CreateWorld {
         let w = d.windmills.remove(&pos)?;
         d.windmill_changes.push(pos);
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        if w.bearing.is_some() {
+            return Some(w);
+        }
         let old = d.settings.get(&pos).copied().unwrap_or_default();
         self.set_settings(
             dim,
