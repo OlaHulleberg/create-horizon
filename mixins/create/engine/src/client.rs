@@ -46,6 +46,8 @@ pub enum Model {
     /// dial (`GAUGE_DIAL`), turned to that face; the dial's needle is posed by the glue.
     GaugeHead(Dir, crate::gauge::Kind),
     GaugeDial(Dir),
+    /// The mechanical arm's cog (`AllPartialModels.ARM_COG`), on the y axis.
+    ArmCog,
 }
 
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
@@ -344,6 +346,20 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
         Block::CrushingWheel => s.axis.map(|a| vec![own(a, Model::Own)]).unwrap_or_default(),
         // MillstoneRenderer: the inner stone turns on the y axis.
         Block::Millstone => vec![own(Axis::Y, Model::MillstoneCog)],
+        // ArmRenderer.getRotatedModel: its cog turns on the y axis (the arm is drawn apart).
+        Block::MechanicalArm => vec![own(Axis::Y, Model::ArmCog)],
+        // EjectorRenderer (ShaftRenderer): a shaft across its facing.
+        Block::WeightedEjector => s
+            .facing
+            .map(|f| {
+                let a = if f.axis() == Axis::X {
+                    Axis::Z
+                } else {
+                    Axis::X
+                };
+                vec![own(a, Model::Shaft(a))]
+            })
+            .unwrap_or_default(),
         // WaterWheelVisual: the wheel, turning on its axis.
         Block::WaterWheel => s
             .facing

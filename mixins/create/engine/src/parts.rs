@@ -44,6 +44,10 @@ pub struct StateInfo {
     pub waterlogged: bool,
     /// An elevator contact's `calling`.
     pub calling: bool,
+    /// A mechanical arm's `ceiling`; a funnel's `extracting`; a belt funnel's `shape`.
+    pub ceiling: bool,
+    pub extracting: bool,
+    pub belt_funnel: Option<crate::funnel::BeltShape>,
 }
 
 impl StateInfo {
@@ -77,6 +81,8 @@ impl StateInfo {
                 "large" => s.large = v == "true",
                 "waterlogged" => s.waterlogged = v == "true",
                 "calling" => s.calling = v == "true",
+                "ceiling" => s.ceiling = v == "true",
+                "extracting" => s.extracting = v == "true",
                 "powering" => s.powering = v == "true",
                 "receiver" => s.receiver = v == "true",
                 "inverted" => s.inverted = v == "true",
@@ -84,6 +90,7 @@ impl StateInfo {
                 "shape" => {
                     s.tunnel = crate::tunnel::Shape::read(v);
                     s.track = crate::track::TrackShape::read(v);
+                    s.belt_funnel = crate::funnel::BeltShape::read(v);
                 }
                 "part" => s.chain = crate::chain::Part::read(v),
                 "vertical" => s.vertical = v == "true",
@@ -379,6 +386,21 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::shaft(f.axis())
             })
         }),
+        // ArmBlock (ICogWheel): a small cog on the y axis, no shaft.
+        Block::MechanicalArm => one(Part {
+            shafts: 0,
+            ..Part::cog(Axis::Y, false)
+        }),
+        // EjectorBlock (HorizontalKineticBlock): turns on the axis across its facing, shafts at
+        // both ends (`getRotationAxis`: the facing turned clockwise).
+        Block::WeightedEjector => s.facing.map_or([None, None], |f| {
+            let axis = if f.axis() == Axis::X {
+                Axis::Z
+            } else {
+                Axis::X
+            };
+            one(Part::shaft(axis))
+        }),
         _ => [None, None],
     }
 }
@@ -421,6 +443,9 @@ pub fn is_kinetic(block: Block) -> bool {
         large: false,
         waterlogged: false,
         calling: false,
+        ceiling: false,
+        extracting: false,
+        belt_funnel: None,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

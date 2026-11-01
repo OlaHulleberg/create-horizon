@@ -80,7 +80,7 @@ pub struct Dimension {
     /// The state of each kinetic block, by position.
     states: HashMap<[i32; 3], u32>,
     /// Columns whose saved data changed, to mark unsaved when the dimension is in place.
-    pub(crate) unsaved: Vec<(i32, i32)>,
+    pub unsaved: Vec<(i32, i32)>,
     /// Hand cranks being turned: ticks left (`HandCrankBlockEntity.inUse`). Empty at rest, so
     /// cranks cost nothing per tick unless turned.
     cranks: HashMap<[i32; 3], u8>,
@@ -270,8 +270,30 @@ pub struct Dimension {
     pub spouts: HashMap<[i32; 3], crate::spout::Spout>,
     /// Item drains, their held stack and tank; those holding items tick.
     pub drains: HashMap<[i32; 3], crate::drain::Drain>,
-    /// Funnels and their extraction cooldown.
-    pub funnels: HashMap<[i32; 3], u32>,
+    /// Funnels and belt funnels and the game tick each looks again at (`extractionCooldown`; 0
+    /// now, `u64::MAX` dormant until its state changes), and those times in order: only due
+    /// funnels do anything.
+    pub funnels: HashMap<[i32; 3], u64>,
+    pub funnel_timers: crate::funnel::Timers,
+    /// Funnels whose block below changed (`updateShape`): a horizontal funnel over a belt becomes
+    /// a belt funnel, a belt funnel off its belt a funnel again, and a belt funnel's shape
+    /// follows the belt.
+    pub funnel_shapes: Vec<[i32; 3]>,
+    /// Mechanical arms: their points, phase and held stack, the awake ones and what wakes them;
+    /// what removed ones held.
+    pub arms: crate::arm::Arms,
+    pub arm_drops: Vec<([i32; 3], String, u8)>,
+    /// Arms and weighted ejectors whose redstone input is read again (placed, a neighbour
+    /// changed: `redstoneUpdate`, `updateSignal`).
+    pub arm_signals: Vec<[i32; 3]>,
+    /// Weighted ejectors (their launcher, plate and stacks in flight; the stacks on them are
+    /// their depot's), those that tick, what was saved for those not placed yet, those clients
+    /// must see again, and stacks in flight of removed ones to drop (position, motion, item).
+    pub ejectors: HashMap<[i32; 3], crate::ejector::Ejector>,
+    pub ejecting: Vec<[i32; 3]>,
+    pub ejector_saved: HashMap<[i32; 3], crate::ejector::Ejector>,
+    pub ejector_changes: Vec<[i32; 3]>,
+    pub ejector_drops: Vec<([f64; 3], [f64; 3], String, u8)>,
     /// Speedometers and stressometers and what clients were last told, and those clients must
     /// be told of again (their needle moved after a solve).
     pub gauges: HashMap<[i32; 3], crate::gauge::Gauge>,
@@ -357,6 +379,8 @@ fn has_state(block: Block) -> bool {
         Block::Depot
             | Block::AndesiteFunnel
             | Block::BrassFunnel
+            | Block::AndesiteBeltFunnel
+            | Block::BrassBeltFunnel
             | Block::ItemDrain
             | Block::Spout
             | Block::Chute
@@ -657,9 +681,37 @@ impl CreateWorld {
         {
             d.vaults.placed(pos, axis, info.large);
         }
-        if matches!(block, Block::AndesiteFunnel | Block::BrassFunnel) {
-            // Placed or changed (extracting, powered): looked at again.
+        if matches!(
+            block,
+            Block::AndesiteFunnel
+                | Block::BrassFunnel
+                | Block::AndesiteBeltFunnel
+                | Block::BrassBeltFunnel
+        ) {
+            // Placed or changed (extracting, powered, shape): looked at again.
             d.funnels.insert(pos, 0);
+            d.funnel_timers.at(0, pos);
+        }
+        if block == Block::MechanicalArm {
+            d.arms.placed(pos, info.ceiling);
+            d.arm_signals.push(pos);
+        }
+        if block == Block::WeightedEjector {
+            if !d.ejectors.contains_key(&pos) {
+                let e = d.ejector_saved.remove(&pos).unwrap_or_default();
+                d.ejectors.insert(pos, e);
+                d.ejector_changes.push(pos);
+                // `initialize`: `updateSignal`.
+                d.arm_signals.push(pos);
+            }
+            if !d.ejecting.contains(&pos) {
+                d.ejecting.push(pos);
+            }
+            // Its stacks are a depot's.
+            if let std::collections::hash_map::Entry::Vacant(v) = d.depots.entry(pos) {
+                v.insert(None);
+                d.depot_changes.push(pos);
+            }
         }
         if block == Block::ItemDrain {
             d.drains.entry(pos).or_default();
@@ -939,6 +991,22 @@ impl CreateWorld {
             d.spouts.remove(&pos);
             d.drains.remove(&pos);
             d.funnels.remove(&pos);
+            if let Some((item, n)) = d.arms.removed(pos) {
+                // `ArmBlockEntity.destroy`: its held stack drops.
+                d.arm_drops.push((pos, item, n));
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
+            if let Some(mut e) = d.ejectors.remove(&pos) {
+                d.ejecting.retain(|p| *p != pos);
+                d.ejector_changes.push(pos);
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+                // `destroy` -> `dropFlyingItems`.
+                if let Some(f) = self.table.get(old).and_then(|(_, i)| i.facing) {
+                    for (at, v, fl) in e.drop_flying(pos, f) {
+                        d.ejector_drops.push((at, v, fl.item, fl.count));
+                    }
+                }
+            }
             if d.drills.remove(&pos).is_some() {
                 d.drilling.retain(|p| *p != pos);
             }
@@ -1074,6 +1142,9 @@ impl CreateWorld {
             d.spouts.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drains.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.funnels.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.arms.column_unloaded(cx, cz);
+            d.ejectors.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.ejecting.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chute_pulls.column_unloaded(cx, cz);
             d.chute_filters
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1511,6 +1582,15 @@ impl CreateWorld {
             }
             Some(Block::GantryShaft) => self.dims[dim].gantry_checks.push(pos),
             Some(Block::Chute) => self.dims[dim].chute_pulls.wake(pos),
+            Some(Block::MechanicalArm | Block::WeightedEjector) => {
+                self.dims[dim].arm_signals.push(pos)
+            }
+            Some(
+                Block::AndesiteFunnel
+                | Block::BrassFunnel
+                | Block::AndesiteBeltFunnel
+                | Block::BrassBeltFunnel,
+            ) => self.dims[dim].funnel_shapes.push(pos),
             // `FluidTankBlock.updateShape`: what lies under a boiler may heat it differently.
             Some(Block::FluidTank) => self.boiler_heat_changed(dim, pos),
             // `BeltBlock.updateShape`: the tunnel over a belt follows its neighbours.
