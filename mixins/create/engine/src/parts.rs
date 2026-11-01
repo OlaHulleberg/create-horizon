@@ -206,7 +206,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             .map_or([None, None], |f| one(Part::shaft(f.axis()))),
         // MechanicalPistonBlock (DirectionalAxisKineticBlock.getRotationAxis): a shaft across
         // its facing, on the first or second other axis.
-        Block::MechanicalPiston | Block::StickyMechanicalPiston => {
+        Block::MechanicalPiston | Block::StickyMechanicalPiston | Block::MechanicalSaw => {
             s.facing.map_or([None, None], |f| {
                 let axis = match (f.axis(), s.along_first) {
                     (Axis::X, true) => Axis::Y,

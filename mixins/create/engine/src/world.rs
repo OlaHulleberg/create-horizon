@@ -178,6 +178,8 @@ pub struct Dimension {
     /// Drills and their breaking, the turning ones (the only ones that tick).
     pub drills: HashMap<[i32; 3], crate::drill::Breaker>,
     pub drilling: Vec<[i32; 3]>,
+    /// Saws holding items (the only ones that tick) and their processing.
+    pub saws: HashMap<[i32; 3], crate::saw::Saw>,
 }
 
 /// An assembled train: its run, its blocks (offset from its first bogey, state), where that
@@ -476,6 +478,7 @@ impl CreateWorld {
                 d.pumping.retain(|p| *p != pos);
             }
             d.chutes.remove(&pos);
+            d.saws.remove(&pos);
             if d.drills.remove(&pos).is_some() {
                 d.drilling.retain(|p| *p != pos);
             }
@@ -557,6 +560,7 @@ impl CreateWorld {
             d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chutes.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.saws.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
