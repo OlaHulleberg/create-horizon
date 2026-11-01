@@ -238,6 +238,14 @@ running).
   to the size of Horizon's per-state JSON tables; making an unused content mod cost nothing at startup needs Horizon to
   cache those tables decoded (binary) or load them lazily. Ticks and frames with Create installed and unused are within
   noise of mods off (see the idle rows).
+  Re-measured 2026-11-01 on `4ff4fa8c8` (headless, BMG G21, warm, `--world`, render distance 8, two runs each): launch to
+  ready 2.49 s without, 3.0 s with Create installed and unused (first launch 2.9 / 6.6 s: the overlay is built once);
+  Horizon's own `load core tables` 0.33 / 0.64 s, `first frame after` 365 / 482 ms. DEBUG timers on each core step
+  (removed): registry 70 / 130 ms, then in parallel the gameplay tables 255 / 435 ms (block facts from
+  `gameplay-facts.json` 175 / 300 ms of them) and the render tables 258 / 370 ms. A decoded block-facts snapshot would
+  leave the render tables (models, atlas) as the longest step, about 170 ms over mods off: the cost of an installed,
+  unused content mod is its state count in every per-state table, and only binary caches of all of them remove it.
+  No Create code runs at startup but the one registry scan (`ensure`), and none per tick or frame without its blocks.
 
 - Horizon pin: `feat/create-hooks` at `aea7ed878` (NATIVE_HOOKS_API 47). History: first `0a96593cf`, two commits on 9d979ca: gap 2
   (`a83a4b380`, content blocks with their own `state_properties`) and gap 8 (`0a96593cf`, hook points API 41:
