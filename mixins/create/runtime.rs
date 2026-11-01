@@ -225,6 +225,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_drains(game, dim);
     tick_funnels(game, dim);
     tick_tunnels(game, dimension, dim);
+    tick_brass(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -5151,6 +5152,85 @@ pub(super) fn item_landed(
     }
 }
 
+/// `DirectBeltInputBehaviour.handleInsertion` at `next`, the item moving toward `side`: a
+/// depot or a belt there. What is left of it, None when nothing there takes items.
+fn insert_into(
+    game: &mut Game<'_>,
+    dim: usize,
+    next: [i32; 3],
+    side: create_engine::kinetics::Dir,
+    item: &create_engine::belt::Item,
+) -> Option<u8> {
+    let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
+    if is_depot {
+        // DepotBehaviour.tryInsertingFromSide: only into an empty depot.
+        if !depot_items(game, next).is_empty() {
+            return Some(item.count);
+        }
+        let put = horizon_client::items::ItemStack {
+            item: item.item.as_str().into(),
+            count: u32::from(item.count),
+            damage: 0,
+            extra: None,
+        };
+        game.native_with_mod_block_entity(next, |be| {
+            be.items
+                .resize(be.items.len().max(create_engine::depot::SLOTS), None);
+            be.items[0] = Some(put);
+        })?;
+        let held = create_engine::depot::Held {
+            position: 0.0,
+            from: create_engine::depot::Side::from_dir(side),
+            angle: item.angle,
+            side_offset: item.side_offset,
+            locked: false,
+            fan: item.fan,
+        };
+        with_world(|w| w.depot_put(dim, next, Some(held)));
+        return Some(0);
+    }
+    // BeltBlockEntity.tryInsertingFromSide on the next belt.
+    let (c2, index, seg2) = belt_segment(game, dim, next)?;
+    if !seg2.transports() {
+        return None;
+    }
+    let rpm2 = with_world(|w| w.speed(dim, c2)).flatten().unwrap_or(0.0);
+    let speed2 = create_engine::belt::direction_aware_speed(rpm2, seg2.facing);
+    with_world(|w| {
+        let b = w.dims[dim].belts.get_mut(&c2)?;
+        let movement2 = create_engine::belt::movement_facing(rpm2, b.segment.facing);
+        if rpm2 == 0.0
+            || movement2 == side.opposite()
+            || !b.items.can_insert_at_from_side(index, side, movement2)
+        {
+            return Some(item.count);
+        }
+        let mut moved = item.clone();
+        moved.locked = false;
+        moved.position = index as f32 + 0.5 - speed2.signum() / 16.0;
+        if movement2 != side {
+            moved.side_offset = if side.positive() { 0.675 } else { -0.675 };
+            if side.axis() == create_engine::kinetics::Axis::X {
+                moved.side_offset = -moved.side_offset;
+            }
+        } else {
+            // A smoother hand-over from the belt behind it.
+            let extra = 0.26;
+            moved.position = if speed2 > 0.0 {
+                index as f32 - extra
+            } else {
+                index as f32 + 1.0 + extra
+            };
+        }
+        moved.inserted_at = index;
+        moved.inserted_from = Some(side);
+        b.items.add(moved);
+        w.dims[dim].belt_changes.push(c2);
+        Some(0)
+    })
+    .flatten()
+}
+
 /// A belt's surroundings on the server: what lies past its end, and the press over a segment.
 struct BeltSide<'a, 'g> {
     game: &'a mut Game<'g>,
@@ -5184,75 +5264,7 @@ impl BeltSide<'_, '_> {
         side: create_engine::kinetics::Dir,
         item: &create_engine::belt::Item,
     ) -> Option<u8> {
-        let dim = self.dim;
-        let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
-        if is_depot {
-            // DepotBehaviour.tryInsertingFromSide: only into an empty depot.
-            if !depot_items(self.game, next).is_empty() {
-                return Some(item.count);
-            }
-            let put = horizon_client::items::ItemStack {
-                item: item.item.as_str().into(),
-                count: u32::from(item.count),
-                damage: 0,
-                extra: None,
-            };
-            self.game.native_with_mod_block_entity(next, |be| {
-                be.items
-                    .resize(be.items.len().max(create_engine::depot::SLOTS), None);
-                be.items[0] = Some(put);
-            })?;
-            let held = create_engine::depot::Held {
-                position: 0.0,
-                from: create_engine::depot::Side::from_dir(side),
-                angle: item.angle,
-                side_offset: item.side_offset,
-                locked: false,
-                fan: item.fan,
-            };
-            with_world(|w| w.depot_put(dim, next, Some(held)));
-            return Some(0);
-        }
-        // BeltBlockEntity.tryInsertingFromSide on the next belt.
-        let (c2, index, seg2) = belt_segment(self.game, dim, next)?;
-        if !seg2.transports() {
-            return None;
-        }
-        let rpm2 = with_world(|w| w.speed(dim, c2)).flatten().unwrap_or(0.0);
-        let speed2 = create_engine::belt::direction_aware_speed(rpm2, seg2.facing);
-        with_world(|w| {
-            let b = w.dims[dim].belts.get_mut(&c2)?;
-            let movement2 = create_engine::belt::movement_facing(rpm2, b.segment.facing);
-            if rpm2 == 0.0
-                || movement2 == side.opposite()
-                || !b.items.can_insert_at_from_side(index, side, movement2)
-            {
-                return Some(item.count);
-            }
-            let mut moved = item.clone();
-            moved.locked = false;
-            moved.position = index as f32 + 0.5 - speed2.signum() / 16.0;
-            if movement2 != side {
-                moved.side_offset = if side.positive() { 0.675 } else { -0.675 };
-                if side.axis() == create_engine::kinetics::Axis::X {
-                    moved.side_offset = -moved.side_offset;
-                }
-            } else {
-                // A smoother hand-over from the belt behind it.
-                let extra = 0.26;
-                moved.position = if speed2 > 0.0 {
-                    index as f32 - extra
-                } else {
-                    index as f32 + 1.0 + extra
-                };
-            }
-            moved.inserted_at = index;
-            moved.inserted_from = Some(side);
-            b.items.add(moved);
-            w.dims[dim].belt_changes.push(c2);
-            Some(0)
-        })
-        .flatten()
+        insert_into(self.game, self.dim, next, side, item)
     }
 }
 
@@ -5297,6 +5309,35 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
             return false;
         };
         let movement = self.movement();
+        let dim = self.dim;
+        // A brass tunnel that distributes (`hasDistributionBehaviour`: an open side across its
+        // axis) takes the whole stack while it holds none, and holds back the next.
+        if with_world(|w| w.dims[dim].brass.contains_key(&t)) == Some(true) {
+            if !shape.junction() {
+                return false;
+            }
+            let took = with_world(|w| {
+                let d = &mut w.dims[dim];
+                let b = d.brass.get_mut(&t)?;
+                if b.stack.is_some() {
+                    return Some(false);
+                }
+                // `setStackToDistribute`.
+                b.stack = Some((item.item.clone(), item.count));
+                b.entered_from = Some(movement.opposite());
+                b.progress = -1;
+                b.new_item = true;
+                if !d.brass_running.contains(&t) {
+                    d.brass_running.push(t);
+                }
+                Some(true)
+            })
+            .flatten();
+            if took == Some(true) {
+                item.count = 0;
+            }
+            return true;
+        }
         if !create_engine::tunnel::splits(axis, shape, movement, item.count) {
             return false;
         }
@@ -5860,6 +5901,122 @@ pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
     }
 }
 
+/// Brass tunnels holding a stack (`BrassTunnelBlockEntity.tick`): two ticks after it arrives
+/// (then every `brassTunnelTimer` while some is left), the stack is split among the outputs
+/// beside and ahead of the segment: a belt or depot across each open side, the belt ahead.
+fn tick_brass(game: &mut Game<'_>, dim: usize) {
+    use create_engine::tunnel::{self, Mode};
+    let Some(list) = with_world(|w| w.dims[dim].brass_running.clone()) else {
+        return;
+    };
+    for t in list {
+        let Some(mut b) = with_world(|w| w.dims[dim].brass.get(&t).cloned()).flatten() else {
+            with_world(|w| w.dims[dim].brass_running.retain(|p| *p != t));
+            continue;
+        };
+        let below = [t[0], t[1] - 1, t[2]];
+        if b.progress > 0 {
+            b.progress -= 1;
+        }
+        let belt = belt_segment(game, dim, below);
+        let rpm = belt
+            .as_ref()
+            .and_then(|(c, ..)| with_world(|w| w.speed(dim, *c)).flatten())
+            .unwrap_or(0.0);
+        let save = |b: &tunnel::Brass| {
+            with_world(|w| {
+                let d = &mut w.dims[dim];
+                if let Some(x) = d.brass.get_mut(&t) {
+                    *x = b.clone();
+                }
+                if b.stack.is_none() {
+                    d.brass_running.retain(|p| *p != t);
+                }
+            });
+        };
+        let (Some((_, _, seg)), Some((item, count))) = (belt, b.stack.clone()) else {
+            save(&b);
+            continue;
+        };
+        if rpm == 0.0 {
+            save(&b);
+            continue;
+        }
+        let movement = create_engine::belt::movement_facing(rpm, seg.facing);
+        let Some((axis, shape)) = tunnel_state(game.world.block(t[0], t[1], t[2]).0) else {
+            continue;
+        };
+        // `addValidOutputsOf`: the sides across first, then ahead; never back.
+        let open = tunnel::sides(axis, shape);
+        let order = [Dir::South, Dir::West, Dir::North, Dir::East];
+        let outputs: Vec<Dir> = order
+            .iter()
+            .filter(|d| d.axis() != movement.axis())
+            .chain(order.iter().filter(|d| **d == movement))
+            .copied()
+            .filter(|d| open.contains(d) && Some(*d) != b.entered_from)
+            .filter(|d| {
+                let o = d.offset();
+                let p = [below[0] + o[0], below[1], below[2] + o[2]];
+                with_world(|w| {
+                    w.dims[dim].depots.contains_key(&p) || w.dims[dim].belt_of.contains_key(&p)
+                }) == Some(true)
+            })
+            .collect();
+        if b.progress == -1 {
+            if outputs.is_empty() {
+                save(&b);
+                continue;
+            }
+            if b.new_item {
+                b.new_item = false;
+                b.progress = 2;
+            } else {
+                b.progress = tunnel::BRASS_TIMER;
+                save(&b);
+                continue;
+            }
+        }
+        if b.progress != 0 {
+            save(&b);
+            continue;
+        }
+        // `insertIntoTunnel`: a depot takes a stack while empty, a belt one it has room for.
+        let left = tunnel::distribute(
+            count,
+            outputs.len(),
+            b.previous_output,
+            Mode::Split,
+            |i, n, simulate| {
+                let d = outputs[i];
+                let o = d.offset();
+                let p = [below[0] + o[0], below[1], below[2] + o[2]];
+                if simulate {
+                    let depot = with_world(|w| w.dims[dim].depots.contains_key(&p)) == Some(true);
+                    if depot && !depot_items(game, p).is_empty() {
+                        return Some(n);
+                    }
+                    return Some(0);
+                }
+                insert_into(
+                    game,
+                    dim,
+                    p,
+                    d,
+                    &create_engine::belt::Item::new(&item, n, 180, false),
+                )
+            },
+        );
+        b.stack = (left > 0).then(|| (item.clone(), left));
+        if b.stack.is_none() {
+            b.entered_from = None;
+        }
+        b.previous_output = (b.previous_output + 1) % outputs.len().max(1);
+        b.progress = -1;
+        save(&b);
+    }
+}
+
 /// An andesite tunnel's axis and shape; None for any other block.
 fn tunnel_state(
     state: u32,
@@ -5868,7 +6025,11 @@ fn tunnel_state(
     WORLD.with(|w| {
         let w = w.try_borrow().ok()?;
         let (block, info) = w.as_ref()?.table.get(state)?;
-        (block == create_engine::Block::AndesiteTunnel).then_some((info.axis?, info.tunnel?))
+        matches!(
+            block,
+            create_engine::Block::AndesiteTunnel | create_engine::Block::BrassTunnel
+        )
+        .then_some((info.axis?, info.tunnel?))
     })
 }
 
