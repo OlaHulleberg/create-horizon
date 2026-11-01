@@ -122,6 +122,17 @@ one amount between two ends (`benchmarks/create-p5-pumps-*.json`). The scenario 
 Twelve trains running cost 0.14 ms of tick and 7% of frame p50 with their 684 track blocks in view
 (`benchmarks/create-p9-trains-*.json`); each run's check reads the twelve replies ("train N heading for ...").
 
+| Scenario (2026-11-01, Phases 6 and 8, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1807 ± 41 | 0.529 / 1.118 | 4.513 ± 0.040 | baseline |
+| pistons: 16 pistons of 8 poles pushing a stone, started as the flight starts (16 gliding structures) | 1730 ± 42 | 0.551 / 1.116 | 4.462 ± 0.046 | tick ≤ off + 0.25 ms, frame p50 ≤ off + 10% |
+| presses: 4,096 presses at 16 rpm and a floor of 841 more under the flight (control for goggles) | 1699 ± 27 | 0.563 / 1.102 | 4.507 ± 0.177 | control |
+| goggles: the same with Engineer's Goggles worn, the overlay drawn for the press under the crosshair | 1728 ± 30 | 0.550 / 1.105 | 4.536 ± 0.049 | frame p50 ≤ control + 5% |
+
+Moving pistons cost no tick and 4% of frame p50 (one gliding part each, uploaded when it starts); the goggle overlay
+costs nothing measurable (`benchmarks/create-p68-*.json`; a screenshot of a goggles run shows the overlay over a
+press: "Kinetic Stats: ... 0su at current speed").
+
 Under load the presses and depots cost 0.21 ms of server tick (about 0.8 µs per machine per tick) and 0.05 ms of
 frame time (256 heads glided per tick, 256 stacks, 256 turning shafts); the check in each run reads one depot after the
 flight (64 iron → 57 iron + 7 sheets). A first set of three runs had one run at 231 fps with 33 ms p99 frames
