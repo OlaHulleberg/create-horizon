@@ -8,6 +8,7 @@ pub mod chute;
 pub mod client;
 pub mod contraption;
 pub mod crusher;
+pub mod deployer;
 pub mod depot;
 pub mod drain;
 pub mod drill;

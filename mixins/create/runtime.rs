@@ -131,6 +131,7 @@ pub(super) fn chunk_load(
     let trains = trains_from_nbt(game, Game::native_chunk_data(chunk, "create"));
     let burners = burners_from_nbt(Game::native_chunk_data(chunk, "create"));
     let links = links_from_nbt(Game::native_chunk_data(chunk, "create"));
+    let deployers = deployers_from_nbt(Game::native_chunk_data(chunk, "create"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.load_settings(dim, saved.into_iter());
@@ -141,6 +142,7 @@ pub(super) fn chunk_load(
         w.load_trains(dim, trains);
         w.load_burners(dim, burners.into_iter());
         w.load_links(dim, links.into_iter());
+        w.load_deployers(dim, deployers.into_iter());
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
                 && states::index(single).is_none()
@@ -223,6 +225,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
+    tick_deployers(game, dimension, dim);
     send_tank_changes(game, dimension, dim);
     let mut events = Vec::new();
     with_world(|w| w.settle_belts(dim));
@@ -348,6 +351,9 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     })
     .unwrap_or_default();
     send_links(game, &[player], dim, &links);
+    let deployers: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].deployers.keys().copied().collect()).unwrap_or_default();
+    send_deployers(game, &[player], dim, &deployers);
     let trains: Vec<u32> =
         with_world(|w| w.dims[dim].trains.iter().map(|t| t.id).collect()).unwrap_or_default();
     for id in trains {
@@ -436,6 +442,12 @@ fn right_click_inner(game: &mut Game<'_>, pos: [i32; 3], face: [i32; 3], cancele
     }
     if block == Some(create_engine::Block::Depot) {
         use_depot(game, dim, pos, face, canceled);
+        return;
+    }
+    if block == Some(create_engine::Block::Deployer) {
+        if let Some(f) = with_world(|w| w.table.get(state).and_then(|(_, i)| i.facing)).flatten() {
+            use_deployer(game, dim, pos, f, canceled);
+        }
         return;
     }
     if block == Some(create_engine::Block::Belt) {
@@ -752,6 +764,66 @@ fn links_to_nbt(links: &[([i32; 3], create_engine::link::Key, i32)]) -> horizon_
     )
 }
 
+/// `DeployerBlockEntity.write`: `State`, `Timer`, `Reach` and the held stack, per deployer.
+fn deployers_to_nbt(
+    list: &[([i32; 3], create_engine::deployer::Deployer)],
+) -> horizon_world::nbt::Tag {
+    use horizon_world::nbt::{Compound, Tag};
+    Tag::List(
+        list.iter()
+            .map(|(p, d)| {
+                let mut b = Compound::new();
+                let (item, n) = d.held.clone().unwrap_or_default();
+                b.insert(
+                    "pos".into(),
+                    Tag::IntArray(vec![
+                        p[0],
+                        p[1],
+                        p[2],
+                        i32::from(d.state.index()),
+                        d.timer,
+                        d.reach.to_bits() as i32,
+                        i32::from(n),
+                    ]),
+                );
+                b.insert("HeldItem".into(), Tag::String(item.as_str().into()));
+                Tag::Compound(b)
+            })
+            .collect(),
+    )
+}
+
+fn deployers_from_nbt(
+    data: Option<&horizon_world::nbt::Compound>,
+) -> Vec<([i32; 3], create_engine::deployer::Deployer)> {
+    use horizon_world::nbt::Tag;
+    let Some(Tag::List(list)) = data.and_then(|d| d.get(&"deployers".into())) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|b| {
+            let Tag::Compound(b) = b else { return None };
+            let Some(Tag::IntArray(v)) = b.get(&"pos".into()) else {
+                return None;
+            };
+            let item = match b.get(&"HeldItem".into()) {
+                Some(Tag::String(s)) => s.to_string_lossy(),
+                _ => String::new(),
+            };
+            let n = (*v.get(6)?).clamp(0, 64) as u8;
+            Some((
+                [*v.first()?, *v.get(1)?, *v.get(2)?],
+                create_engine::deployer::Deployer {
+                    state: create_engine::deployer::State::from_index(*v.get(3)? as u8),
+                    timer: *v.get(4)?,
+                    reach: f32::from_bits(*v.get(5)? as u32),
+                    held: (!item.is_empty() && n > 0).then_some((item, n)),
+                },
+            ))
+        })
+        .collect()
+}
+
 fn links_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<([i32; 3], (create_engine::link::Key, i32))> {
@@ -935,6 +1007,7 @@ pub(super) fn chunk_data_save(
     let trains = with_world(|w| w.column_trains(dim, chunk[0], chunk[1])).unwrap_or_default();
     let burners = with_world(|w| w.column_burners(dim, chunk[0], chunk[1])).unwrap_or_default();
     let links = with_world(|w| w.column_links(dim, chunk[0], chunk[1])).unwrap_or_default();
+    let deployers = with_world(|w| w.column_deployers(dim, chunk[0], chunk[1])).unwrap_or_default();
     if settings.is_empty()
         && belts.is_empty()
         && tanks.is_empty()
@@ -942,6 +1015,7 @@ pub(super) fn chunk_data_save(
         && crushers.is_empty()
         && burners.is_empty()
         && links.is_empty()
+        && deployers.is_empty()
         && trains.is_empty()
     {
         data.remove(&"create".into());
@@ -966,6 +1040,9 @@ pub(super) fn chunk_data_save(
     }
     if !links.is_empty() {
         own.insert("links".into(), links_to_nbt(&links));
+    }
+    if !deployers.is_empty() {
+        own.insert("deployers".into(), deployers_to_nbt(&deployers));
     }
     if !burners.is_empty() {
         // x, y, z, fuel type, burn time left for each burner (`fuelLevel`, `burnTimeRemaining`).
@@ -1192,6 +1269,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         links_from_server(game, data);
         return;
     }
+    if channel == create_engine::deployer::CHANNEL {
+        deployers_from_server(game, data);
+        return;
+    }
     if channel == create_engine::press::CHANNEL {
         presses_from_server(game, data);
         return;
@@ -1301,6 +1382,8 @@ struct Recipes {
     smoking: create_engine::processing::Book,
     smelting: create_engine::processing::Book,
     blasting: create_engine::processing::Book,
+    /// The deployer's: `create:deploying`, then `create:item_application` (automatable ones).
+    deploying: Vec<create_engine::deployer::Recipe>,
 }
 
 impl Recipes {
@@ -1342,6 +1425,10 @@ fn ensure_recipes(game: &Game<'_>) -> bool {
             smoking: read_cooking(game, "minecraft:smoking"),
             smelting: read_cooking(game, "minecraft:smelting"),
             blasting: read_cooking(game, "minecraft:blasting"),
+            deploying: ["create:deploying", "create:item_application"]
+                .into_iter()
+                .flat_map(|k| read_application(game, k))
+                .collect(),
         })
     });
     true
@@ -1377,6 +1464,44 @@ fn read_cooking(game: &Game<'_>, kind: &str) -> create_engine::processing::Book 
 
 /// A basin recipe type: item ingredients and results only (a fluid ingredient or result drops the
 /// recipe until fluids are ported), with its `heat_requirement`.
+/// `ItemApplicationRecipe`s: the item worked on, the one held, the results; `_manual_only`
+/// ones left out (`CAN_BE_AUTOMATED`).
+fn read_application(game: &Game<'_>, kind: &str) -> Vec<create_engine::deployer::Recipe> {
+    use create_engine::processing::Output;
+    game.native_recipes_of_type(kind)
+        .iter()
+        .filter(|r| !r.id.ends_with("_manual_only"))
+        .filter_map(|r| {
+            let json = &*r.json;
+            let mut ingredients = json["ingredients"].as_array()?.iter().map(|i| {
+                game.native_recipe_ingredient(i)
+                    .map(|ing| ing.1.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            });
+            let target = ingredients.next()??;
+            let tool = ingredients.next()??;
+            let results = json["results"]
+                .as_array()?
+                .iter()
+                .map(|o| {
+                    let stack = game.native_recipe_result(o)?;
+                    Some(Output {
+                        item: stack.item.to_string(),
+                        count: stack.count.min(255) as u8,
+                        chance: o["chance"].as_f64().unwrap_or(1.0) as f32,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(create_engine::deployer::Recipe {
+                id: r.id.clone(),
+                target,
+                tool,
+                results,
+                keep_held: json["keep_held_item"].as_bool().unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
 fn read_basin(game: &Game<'_>, kind: &str) -> Vec<create_engine::basin::Recipe> {
     use create_engine::basin::{HeatReq, Recipe};
     use create_engine::processing::Output;
@@ -2107,6 +2232,295 @@ fn players_in(game: &Game<'_>, dimension: &str) -> Vec<u128> {
         .collect()
 }
 
+/// The deployer two above `depot`, facing down, and its speed; None for anything else.
+fn deployer_above(
+    game: &Game<'_>,
+    dim: usize,
+    depot: [i32; 3],
+) -> Option<(create_engine::deployer::Deployer, f32)> {
+    let above = [depot[0], depot[1] + 2, depot[2]];
+    let state = game.world.block(above[0], above[1], above[2]).0;
+    states::index(state)?;
+    with_world(|w| {
+        let (block, info) = w.table.get(state)?;
+        if block != create_engine::Block::Deployer || info.facing != Some(Dir::Down) {
+            return None;
+        }
+        let d = w.dims[dim].deployers.get(&above)?.clone();
+        Some((d, w.speed(dim, above).unwrap_or(0.0)))
+    })
+    .flatten()
+}
+
+/// `BeltDeployerCallbacks` for the depot at `depot`: true when a deployer above holds its stack
+/// (the depot asks again next tick).
+fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]) -> bool {
+    use create_engine::deployer::{self, Depot};
+    let Some((mut d, rpm)) = deployer_above(game, dim, depot) else {
+        return false;
+    };
+    let above = [depot[0], depot[1] + 2, depot[2]];
+    let Some(mut held) =
+        with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten()
+    else {
+        return false;
+    };
+    if held.sliding() && held.position < 0.5 - 1.0 / 16.0 {
+        return false;
+    }
+    let Some((_, item, count)) = depot_items(game, depot).into_iter().find(|s| s.0 == 0) else {
+        return false;
+    };
+    if !ensure_recipes(game) {
+        return false;
+    }
+    let tool = d.held.as_ref().map(|h| h.0.clone()).unwrap_or_default();
+    let recipe = RECIPES.with_borrow(|r| {
+        r.as_ref()
+            .and_then(|r| deployer::find(&r.deploying, &item, &tool).cloned())
+    });
+    let step = deployer::on_depot(&d, rpm, held.locked, recipe.is_some());
+    let hold = match step {
+        Depot::Pass => {
+            held.locked = false;
+            false
+        }
+        Depot::Hold => {
+            held.locked = true;
+            true
+        }
+        Depot::Start => {
+            // The ray from the deployer's face to the block two ahead (`start`).
+            let state = game.world.block(depot[0], depot[1], depot[2]);
+            let top = game
+                .res
+                .facts()
+                .get(state)
+                .outline
+                .iter()
+                .map(|b| b[4])
+                .fold(0.0, f64::max);
+            d.start((1.0 - top) as f32);
+            held.locked = true;
+            with_world(|w| {
+                let dd = &mut w.dims[dim];
+                dd.deployers.insert(above, d.clone());
+                if !dd.deploying.contains(&above) {
+                    dd.deploying.push(above);
+                }
+                dd.deployer_changes.push(above);
+            });
+            true
+        }
+        Depot::Apply => {
+            let Some(r) = recipe else {
+                return false;
+            };
+            // `RecipeApplier.applyRecipeOn` on one of the stack, `getMaxOutputCount` 4.
+            let seed = game.world.game_time as u64 ^ (depot[0] as u64).wrapping_mul(0x9E37_79B9);
+            let p = create_engine::processing::Recipe {
+                id: r.id.clone(),
+                ingredients: Vec::new(),
+                results: r.results.clone(),
+                time: 0,
+            };
+            let results: Vec<(String, u8)> =
+                create_engine::processing::roll(&p, &mut create_engine::processing::Rng::new(seed))
+                    .into_iter()
+                    .take(4)
+                    .collect();
+            held = results_on_depot(game, dim, depot, count, held, results);
+            held.locked = true;
+            deployer::use_held(&mut d.held, &r);
+            with_world(|w| w.set_deployer(dim, above, d.clone()));
+            true
+        }
+    };
+    with_world(|w| {
+        if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
+            *h = h.map(|_| held);
+        }
+    });
+    hold
+}
+
+/// Deployers mid-stroke (`DeployerBlockEntity.tick` without a fake player): the stroke runs;
+/// one back at rest has the depot below look at it again. Nothing runs without one.
+fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    use create_engine::deployer::{State, Tick};
+    let Some(list) = with_world(|w| w.dims[dim].deploying.clone()) else {
+        return;
+    };
+    for pos in list {
+        with_world(|w| {
+            let rpm = w.speed(dim, pos).unwrap_or(0.0);
+            let d = &mut w.dims[dim];
+            let Some(dp) = d.deployers.get_mut(&pos) else {
+                d.deploying.retain(|p| *p != pos);
+                return;
+            };
+            if dp.tick(rpm) == Tick::Changed {
+                d.deployer_changes.push(pos);
+                if dp.state == State::Waiting {
+                    d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
+                }
+            }
+            if !dp.busy() {
+                d.deploying.retain(|p| *p != pos);
+            }
+        });
+    }
+    let Some((changes, drops)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        let mut c = std::mem::take(&mut d.deployer_changes);
+        c.sort();
+        c.dedup();
+        (c, std::mem::take(&mut d.deployer_drops))
+    }) else {
+        return;
+    };
+    for (pos, (item, n)) in drops {
+        game.native_run_command(&format!(
+            "execute in {dimension} run summon minecraft:item {}.5 {}.5 {}.5 {{Item:{{id:'{item}',count:{n}}}}}",
+            pos[0], pos[1], pos[2]
+        ));
+    }
+    if !changes.is_empty() {
+        let players = players_in(game, dimension);
+        send_deployers(game, &players, dim, &changes);
+    }
+}
+
+/// Deployers' strokes to `players`: where the hand is and how fast it moves, what it holds.
+fn send_deployers(game: &mut Game<'_>, players: &[u128], dim: usize, list: &[[i32; 3]]) {
+    let mut shown = Vec::new();
+    for &pos in list {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let facing = with_world(|w| w.table.get(state).and_then(|(_, i)| i.facing)).flatten();
+        let rpm = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        let d = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten();
+        shown.push(match (facing, d) {
+            (Some(f), Some(d)) => {
+                let (at, v) = d.hand(rpm);
+                create_engine::deployer::Shown {
+                    pos,
+                    facing: f,
+                    at,
+                    per_tick: v,
+                    held: d.held.map(|h| h.0),
+                }
+            }
+            _ => create_engine::deployer::Shown {
+                pos,
+                facing: Dir::Up,
+                at: f32::NAN,
+                per_tick: 0.0,
+                held: None,
+            },
+        });
+    }
+    for chunk in shown.chunks(64) {
+        let m = create_engine::deployer::encode(chunk);
+        for &p in players {
+            let _ = game.native_net_send_to_player(p, create_engine::deployer::CHANNEL, &m);
+        }
+    }
+}
+
+/// `DeployerRenderer`: the pole and the hand (pointing, or holding) at the hand's offset, glided
+/// along the facing on the GPU between messages.
+fn deployers_from_server(game: &mut Game<'_>, data: &[u8]) {
+    for s in create_engine::deployer::decode(data) {
+        let pole = depot_key(s.pos, 110, 0);
+        let hand = depot_key(s.pos, 111, 0);
+        game.native_part_clear(pole);
+        game.native_part_clear(hand);
+        if s.at.is_nan() {
+            continue;
+        }
+        let o = s.facing.offset().map(|v| v as f32);
+        let now = game.native_parts_seconds();
+        let offset = [o[0] * s.at, o[1] * s.at, o[2] * s.at, now];
+        let v = [
+            o[0] * s.per_tick * 20.0,
+            o[1] * s.per_tick * 20.0,
+            o[2] * s.per_tick * 20.0,
+        ];
+        let facing = dir_name(s.facing);
+        let hand_block = if s.held.is_some() {
+            "create:part_deployer_hand_holding"
+        } else {
+            "create:part_deployer_hand_pointing"
+        };
+        for (key, block) in [(pole, "create:part_deployer_pole"), (hand, hand_block)] {
+            let registry = game.pack.assets.registry;
+            let id = registry.default_state(block).and_then(|d| {
+                let mut st = registry.state(d)?.clone();
+                st.properties.insert("facing".to_owned(), facing.to_owned());
+                registry.id(&st)
+            });
+            if let Some(model) = id.and_then(|id| game.native_part_model(id)) {
+                game.native_part_glide(key, model, s.pos, 0, 0.0, 0.0, offset, v);
+            }
+        }
+    }
+}
+
+/// `DeployerBlock.useItemOn`: a click on its front half swaps the player's hand with the
+/// deployer's (plain stacks only here: components would be lost).
+fn use_deployer(game: &mut Game<'_>, dim: usize, pos: [i32; 3], facing: Dir, canceled: &mut bool) {
+    if game.native_held().is_some_and(|h| h.0 == "create:wrench") {
+        return;
+    }
+    let Some(hit) = game.pick() else {
+        return;
+    };
+    // The hit along the facing from the back face: less than .75 is the back's own use.
+    let o = facing.offset();
+    let along = (0..3)
+        .map(|i| {
+            (hit.point[i] - (f64::from(pos[i]) + 0.5 - 0.5 * f64::from(o[i]))) * f64::from(o[i])
+        })
+        .sum::<f64>();
+    if along.abs() < 0.75 {
+        return;
+    }
+    *canceled = true;
+    if game.hand != horizon_client::first_person::Hand::Main {
+        return;
+    }
+    let hand = game.inventory.get(game.selected).cloned().flatten();
+    if hand
+        .as_ref()
+        .is_some_and(|s| s.extra.is_some() || s.damage != 0)
+    {
+        return;
+    }
+    let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten() else {
+        return;
+    };
+    if d.held.is_none() && hand.is_none() {
+        return;
+    }
+    let back = d
+        .held
+        .take()
+        .map(|(item, n)| horizon_client::items::ItemStack {
+            item: item.as_str().into(),
+            count: u32::from(n),
+            damage: 0,
+            extra: None,
+        });
+    d.held = hand.map(|s| (s.item.to_string(), s.count.min(64) as u8));
+    if let Some(slot) = game.inventory.get_mut(game.selected) {
+        *slot = back;
+    }
+    with_world(|w| {
+        w.set_deployer(dim, pos, d);
+        w.dims[dim].depot_work.push([pos[0], pos[1] - 2, pos[2]]);
+    });
+}
+
 /// Depots that ask their press, then running presses: `DepotBehaviour.tick` with
 /// `BeltPressingCallbacks`, then `PressingBehaviour.tick`. Nothing runs without either.
 fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
@@ -2132,6 +2546,10 @@ fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let mut keep = Vec::new();
     for depot in work {
         let above = [depot[0], depot[1] + 2, depot[2]];
+        if deployer_on_depot(game, dim, depot) {
+            keep.push(depot);
+            continue;
+        }
         let Some(mut p) = with_world(|w| w.dims[dim].presses.get(&above).copied()).flatten() else {
             continue;
         };
@@ -2252,6 +2670,22 @@ fn press_on_depot(
     let Some(results) = results else {
         return held;
     };
+    results_on_depot(game, dim, depot, count, held, results)
+}
+
+/// A processing result on a depot's held stack (`handleProcessingOnItem`): one of the stack
+/// (all of it when it is one) becomes `results`: a single item is replaced by them (the first
+/// held, centred; the rest in the outputs); otherwise the rest stays held and the results go to
+/// the outputs. What finds no room drops above the depot. The held stack's motion after.
+fn results_on_depot(
+    game: &mut Game<'_>,
+    dim: usize,
+    depot: [i32; 3],
+    count: u8,
+    held: create_engine::depot::Held,
+    results: Vec<(String, u8)>,
+) -> create_engine::depot::Held {
+    use create_engine::processing;
     let limits: Vec<u8> = results
         .iter()
         .map(|(i, _)| game.items().get(i).map_or(64, |x| x.max_stack).clamp(1, 64) as u8)

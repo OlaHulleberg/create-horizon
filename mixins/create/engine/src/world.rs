@@ -168,6 +168,14 @@ pub struct Dimension {
     /// (`updateTunnel`, `getStateForPlacement`: the new shape at once); those just placed
     /// (their belt gets a casing).
     pub tunnel_checks: Vec<[i32; 3]>,
+    /// Deployers and their cycle and held stack, those mid-stroke or waiting out their pause
+    /// (the only ones that tick), what was saved for those not placed yet, and those whose
+    /// stroke clients must see again.
+    pub deployers: HashMap<[i32; 3], crate::deployer::Deployer>,
+    pub deploying: Vec<[i32; 3]>,
+    deployer_saved: HashMap<[i32; 3], crate::deployer::Deployer>,
+    pub deployer_changes: Vec<[i32; 3]>,
+    pub deployer_drops: Vec<([i32; 3], (String, u8))>,
     pub tunnel_fresh: Vec<[i32; 3]>,
     pub tunnels_new: Vec<[i32; 3]>,
     /// Mechanical mixers and their cycle, the running ones (the only ones that tick), and those
@@ -359,6 +367,16 @@ impl CreateWorld {
         }
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
+        }
+        if block == Block::Deployer && !d.deployers.contains_key(&pos) {
+            let saved = d.deployer_saved.remove(&pos).unwrap_or_default();
+            if saved.busy() {
+                d.deploying.push(pos);
+            }
+            d.deployers.insert(pos, saved);
+            d.deployer_changes.push(pos);
+            // A depot below may have work for it.
+            d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
         }
         if block == Block::AndesiteTunnel {
             d.tunnel_fresh.push(pos);
@@ -576,6 +594,15 @@ impl CreateWorld {
                 d.link_shown.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
+            if let Some(dp) = d.deployers.remove(&pos) {
+                d.deploying.retain(|p| *p != pos);
+                d.deployer_changes.push(pos);
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+                if let Some(held) = dp.held {
+                    // `IBE.onRemove`: its held stack drops.
+                    d.deployer_drops.push((pos, held));
+                }
+            }
             if d.burners.remove(&pos).is_some() {
                 d.burning.retain(|p| *p != pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
@@ -683,6 +710,11 @@ impl CreateWorld {
             d.link_changes
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.link_shown.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.deployers
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.deploying.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.deployer_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tunnel_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tunnels_new.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1276,6 +1308,39 @@ impl CreateWorld {
         d.link_changes.extend(changed);
         d.link_shown.push(pos);
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+    }
+
+    /// A deployer's held stack or stroke changed: clients see it, its column is saved.
+    pub fn set_deployer(&mut self, dim: usize, pos: [i32; 3], d: crate::deployer::Deployer) {
+        let dd = &mut self.dims[dim];
+        dd.deployers.insert(pos, d);
+        dd.deployer_changes.push(pos);
+        dd.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+    }
+
+    pub fn load_deployers(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], crate::deployer::Deployer)>,
+    ) {
+        self.dims[dim].deployer_saved.extend(saved);
+    }
+
+    /// The deployers of a column (`State`, `Timer`, `Reach`, the held stack), to save.
+    pub fn column_deployers(
+        &self,
+        dim: usize,
+        cx: i32,
+        cz: i32,
+    ) -> Vec<([i32; 3], crate::deployer::Deployer)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .deployers
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+            .map(|(p, d)| (*p, d.clone()))
+            .collect();
+        out.sort_by_key(|e| e.0);
+        out
     }
 
     pub fn load_links(

@@ -479,6 +479,16 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 ("waterlogged", bools),
             ]),
         ),
+        // DeployerBlock (DirectionalAxisKineticBlock): AllShapes.DEPLOYER_INTERACTION (the 12 px
+        // casing and its pole through the block) to its facing, stone's properties.
+        "deployer" => (
+            "minecraft:stone",
+            Some(by_facing(&[
+                [0., 0., 0., 16., 12., 16.],
+                [5., 0., 5., 11., 16., 11.],
+            ])),
+            own(&[("axis_along_first", bools), ("facing", facing)]),
+        ),
         // DrillBlock (DirectionalKineticBlock): any facing, a full block of iron's
         // properties here (Create's is a casing with the head out front).
         "mechanical_drill" => (
@@ -733,7 +743,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 24] = [
+pub const PARTIALS: [(&str, &str, &str); 27] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -815,6 +825,19 @@ pub const PARTIALS: [(&str, &str, &str); 24] = [
     (
         "part_drill_head",
         "create:block/mechanical_drill/head",
+        "south",
+    ),
+    // DeployerRenderer: the pole and the hand (pointing empty, holding an item), turned by
+    // `horizontalAngle` and 270/90° up and down, as the shaft half.
+    ("part_deployer_pole", "create:block/deployer/pole", "south"),
+    (
+        "part_deployer_hand_pointing",
+        "create:block/deployer/hand_pointing",
+        "south",
+    ),
+    (
+        "part_deployer_hand_holding",
+        "create:block/deployer/hand_holding",
         "south",
     ),
     ("part_fluid_water", "create:block/part_fluid_water", "up"),

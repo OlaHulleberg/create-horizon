@@ -435,11 +435,14 @@ impl Behaviours {
     }
 }
 pub struct Res;
-pub struct BlockFacts { pub sturdy_full: u8 }
+pub struct BlockFacts { pub sturdy_full: u8, pub outline: std::sync::Arc<[[f64; 6]]> }
 pub struct AllFacts;
 impl AllFacts {
     /// Stone (state 1) is sturdy on every face; nothing else is.
-    pub fn get(&self, state: BlockStateId) -> BlockFacts { BlockFacts { sturdy_full: if state.0 == 1 { 63 } else { 0 } } }
+    pub fn get(&self, state: BlockStateId) -> BlockFacts { BlockFacts {
+        sturdy_full: if state.0 == 1 { 63 } else { 0 },
+        outline: if state.0 == 0 { std::sync::Arc::from([]) } else { std::sync::Arc::from([[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]) },
+    } }
 }
 pub struct Providers;
 impl Providers {
