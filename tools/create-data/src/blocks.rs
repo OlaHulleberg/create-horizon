@@ -443,6 +443,20 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // BasinBlock: a barrel's template for its 18 slots (inputs 0–8, outputs 9–17), stone's
+        // properties, netherite's sounds; AllShapes.BASIN_COLLISION_SHAPE (a floor at 5/16
+        // inside a rim).
+        "basin" => (
+            "minecraft:barrel",
+            Some(by_property(
+                "facing",
+                &["down", "north", "south", "west", "east"],
+                &BASIN,
+            )),
+            own(&[("facing", &["down", "north", "south", "west", "east"])]),
+        ),
+        // MechanicalMixerBlock: a casing of stone's properties; its cog and head are parts.
+        "mechanical_mixer" => ("minecraft:andesite", None, None),
         // BlazeBurnerBlock: its heat level and horizontal facing, gold's properties
         // (SharedProperties.softMetal), AllShapes.HEATER_BLOCK_SHAPE; drawn by our multipart
         // blockstate (`blaze_burner_states`). LitBlazeBurnerBlock: its flame instead.
@@ -511,6 +525,17 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
     })
 }
 
+/// AllShapes.BASIN_COLLISION_SHAPE: shape(0, 2, 0, 16, 13, 16) less (2, 5, 2, 14, 16, 14), and
+/// the foot (2, 0, 2, 14, 2, 14).
+const BASIN: [[f64; 6]; 6] = [
+    [0., 2., 0., 16., 5., 16.],
+    [0., 5., 0., 2., 13., 16.],
+    [14., 5., 0., 16., 13., 16.],
+    [2., 5., 0., 14., 13., 2.],
+    [2., 5., 14., 14., 13., 16.],
+    [2., 0., 2., 14., 2., 14.],
+];
+
 /// `BlazeBurnerBlock.HEAT_LEVEL` (`blaze`), in order.
 pub const HEATS: &[&str] = &["none", "smouldering", "fading", "kindled", "seething"];
 
@@ -546,7 +571,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 19] = [
+pub const PARTIALS: [(&str, &str, &str); 22] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -605,6 +630,22 @@ pub const PARTIALS: [(&str, &str, &str); 19] = [
         "part_fan_propeller",
         "create:block/encased_fan/propeller",
         "south",
+    ),
+    // MechanicalMixerRenderer: a shaftless cog, the pole and the head, posed by the glue.
+    (
+        "part_cogwheel_shaftless",
+        "create:block/cogwheel_shaftless",
+        "up",
+    ),
+    (
+        "part_mixer_pole",
+        "create:block/mechanical_mixer/pole",
+        "up",
+    ),
+    (
+        "part_mixer_head",
+        "create:block/mechanical_mixer/head",
+        "up",
     ),
     ("part_fluid_water", "create:block/part_fluid_water", "up"),
     ("part_fluid_lava", "create:block/part_fluid_lava", "up"),

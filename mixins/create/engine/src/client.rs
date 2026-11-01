@@ -32,6 +32,10 @@ pub enum Model {
     BearingTop(Dir),
     /// The encased fan's propeller (`AllPartialModels.ENCASED_FAN_INNER`), turned to a face.
     FanPropeller(Dir),
+    /// The mixer's shaftless cog, and its pole and head at rest (`MechanicalMixerRenderer`).
+    ShaftlessCog,
+    MixerPole,
+    MixerHead,
 }
 
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
@@ -199,6 +203,25 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 ]
             })
             .unwrap_or_default(),
+        // MechanicalMixerRenderer: the cog turns with the mixer, the head at half its speed
+        // while idle; the pole doesn't turn.
+        Block::MechanicalMixer => vec![
+            own(Axis::Y, Model::ShaftlessCog),
+            Draw {
+                slot: 1,
+                model: Model::MixerPole,
+                axis: Axis::Y,
+                rpm: 0.0,
+                phase: 0.0,
+            },
+            Draw {
+                slot: 2,
+                model: Model::MixerHead,
+                axis: Axis::Y,
+                rpm: speeds[0] / 2.0,
+                phase: 0.0,
+            },
+        ],
         // CrushingWheelBlock: its whole model turns on its axis (`ENTITYBLOCK_ANIMATED`).
         Block::CrushingWheel => s.axis.map(|a| vec![own(a, Model::Own)]).unwrap_or_default(),
         // MillstoneRenderer: the inner stone turns on the y axis.

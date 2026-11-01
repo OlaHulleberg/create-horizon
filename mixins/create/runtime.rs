@@ -204,6 +204,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_fans(game, dimension, dim);
     tick_crushers(game, dimension, dim);
     tick_burners(game, dim);
+    tick_mixers(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -822,6 +823,8 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
         Model::Belt(..) | Model::BeltPulley(_) => None,
         Model::BearingTop(d) => find("create:part_bearing_top_wooden", "facing", dir_name(d)),
         Model::FanPropeller(d) => find("create:part_fan_propeller", "facing", dir_name(d)),
+        Model::ShaftlessCog => find("create:part_cogwheel_shaftless", "facing", "up"),
+        Model::MixerPole | Model::MixerHead => None,
     }
 }
 
@@ -847,6 +850,17 @@ fn part_model(
         Model::BeltPulley(seg) => {
             let state = partial("create:part_belt_pulley")?;
             game.native_part_model_posed(state, belt::pulley_pose(&seg))
+        }
+        // The pole and head at rest: `getRenderedHeadOffset` is 7/16 when not running.
+        Model::MixerPole | Model::MixerHead => {
+            let name = if model == Model::MixerPole {
+                "create:part_mixer_pole"
+            } else {
+                "create:part_mixer_head"
+            };
+            let state = partial(name)?;
+            let down = glam::Mat4::from_translation(glam::Vec3::new(0.0, -7.0 / 16.0, 0.0));
+            game.native_part_model_posed(state, down)
         }
         _ => model_state(registry, own, model).and_then(|s| game.native_part_model(s)),
     }
@@ -1031,6 +1045,8 @@ struct Recipes {
     milling: create_engine::processing::Book,
     pressing: create_engine::processing::Book,
     crushing: create_engine::processing::Book,
+    /// Create's mixing recipes made of items only (fluids are gap 5).
+    mixing: Vec<create_engine::basin::Recipe>,
     /// The fan's: Create's washing and haunting, vanilla's cooking.
     splashing: create_engine::processing::Book,
     haunting: create_engine::processing::Book,
@@ -1070,6 +1086,7 @@ fn ensure_recipes(game: &Game<'_>) -> bool {
             milling,
             pressing,
             crushing: read_book(game, "create:crushing"),
+            mixing: read_basin(game, "create:mixing"),
             splashing: read_book(game, "create:splashing"),
             haunting: read_book(game, "create:haunting"),
             smoking: read_cooking(game, "minecraft:smoking"),
@@ -1106,6 +1123,49 @@ fn read_cooking(game: &Game<'_>, kind: &str) -> create_engine::processing::Book 
         })
         .collect();
     Book::new(recipes)
+}
+
+/// A basin recipe type: item ingredients and results only (a fluid ingredient or result drops the
+/// recipe until fluids are ported), with its `heat_requirement`.
+fn read_basin(game: &Game<'_>, kind: &str) -> Vec<create_engine::basin::Recipe> {
+    use create_engine::basin::{HeatReq, Recipe};
+    use create_engine::processing::Output;
+    game.native_recipes_of_type(kind)
+        .iter()
+        .filter_map(|r| {
+            let json = &*r.json;
+            let ingredients = json["ingredients"]
+                .as_array()?
+                .iter()
+                .map(|i| {
+                    game.native_recipe_ingredient(i)
+                        .map(|ing| ing.1.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let results = json["results"]
+                .as_array()?
+                .iter()
+                .map(|o| {
+                    if o.get("amount").is_some() {
+                        return None;
+                    }
+                    let stack = game.native_recipe_result(o)?;
+                    Some(Output {
+                        item: stack.item.to_string(),
+                        count: stack.count.min(255) as u8,
+                        chance: o["chance"].as_f64().unwrap_or(1.0) as f32,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(Recipe {
+                id: r.id.clone(),
+                ingredients,
+                results,
+                time: json["processing_time"].as_i64().unwrap_or(0) as i32,
+                heat: HeatReq::read(json["heat_requirement"].as_str()),
+            })
+        })
+        .collect()
 }
 
 fn read_book(game: &Game<'_>, kind: &str) -> create_engine::processing::Book {
@@ -1263,7 +1323,7 @@ pub(super) fn block_entity(
     block: &str,
     entity: &mut Option<(String, horizon_world::nbt::Compound)>,
 ) {
-    if entity.is_none() && matches!(block, "create:millstone" | "create:depot") {
+    if entity.is_none() && matches!(block, "create:millstone" | "create:depot" | "create:basin") {
         *entity = Some((block.into(), horizon_world::nbt::Compound::new()));
     }
 }
@@ -1288,6 +1348,20 @@ pub(super) fn block_entity_container(
             outputs: all,
             menu: None,
             only_when_empty: true,
+        });
+        return;
+    }
+    if block == "create:basin" {
+        // The basin's inventories: hoppers put into the nine inputs and take from the nine
+        // outputs.
+        let all: Vec<usize> = (0..create_engine::basin::SLOTS).collect();
+        *container = Some(horizon_client::containers::ModContainer {
+            slots: create_engine::basin::SLOTS,
+            faces: std::array::from_fn(|_| all.clone()),
+            inputs: create_engine::basin::INPUTS.collect(),
+            outputs: create_engine::basin::OUTPUTS.collect(),
+            menu: None,
+            only_when_empty: false,
         });
         return;
     }
@@ -1458,6 +1532,13 @@ pub(super) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
     let Some(dim) = dimension_index(game.dim.id()) else {
         return;
     };
+    // A basin's contents changed: the mixer over it looks again.
+    if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
+        == Some(create_engine::Block::Basin)
+    {
+        with_world(|w| w.dims[dim].mixer_checks.push([pos[0], pos[1] + 2, pos[2]]));
+        return;
+    }
     // Outer: the world is open; inner: a depot is there (its held stack's motion, if any).
     let Some(had) = with_world(|w| w.dims[dim].depots.get(&pos).copied()).flatten() else {
         return;
@@ -2040,6 +2121,238 @@ fn use_burner(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled: &mut boo
         game.native_take_items(&held, 1);
         if let Some(r) = remainder {
             game.native_give_items(&r, 1);
+        }
+    }
+}
+
+/// `BasinBlock.updateEntityAfterFallOn`: an item landing in a basin goes into its inputs as far
+/// as it fits (`insertItem`).
+fn basin_take(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    stack: &mut horizon_client::items::ItemStack,
+) {
+    let max = game
+        .items()
+        .get(&stack.item)
+        .map_or(64, |x| x.max_stack)
+        .clamp(1, 64) as u8;
+    let item = stack.item.to_string();
+    let count = stack.count.min(255) as u8;
+    let left = game
+        .native_with_mod_block_entity(pos, |be| {
+            be.items
+                .resize(be.items.len().max(create_engine::basin::SLOTS), None);
+            let mut inputs: Vec<create_engine::processing::Slot> = be.items
+                [create_engine::basin::INPUTS]
+                .iter()
+                .map(slot_of)
+                .collect();
+            let left = create_engine::processing::insert_stacked(&mut inputs, &item, count, max);
+            for (slot, s) in be.items[create_engine::basin::INPUTS]
+                .iter_mut()
+                .zip(inputs)
+            {
+                *slot = s.map(|(i, n)| horizon_client::items::ItemStack {
+                    item: i.as_str().into(),
+                    count: u32::from(n),
+                    damage: 0,
+                    extra: None,
+                });
+            }
+            left
+        })
+        .unwrap_or(count);
+    if left != count {
+        stack.count = u32::from(left);
+        with_world(|w| w.dims[dim].mixer_checks.push([pos[0], pos[1] + 2, pos[2]]));
+    }
+}
+
+/// A stack's limit (at most 64).
+fn stack_limit(game: &Game<'_>, item: &str) -> u8 {
+    game.items()
+        .get(item)
+        .map_or(64, |x| x.max_stack)
+        .clamp(1, 64) as u8
+}
+
+/// The heat under a basin (`BasinBlockEntity.getHeatLevelOf`): a blaze burner's, smouldering for
+/// a lit burner or another passive heater, else none.
+fn basin_heat(game: &Game<'_>, basin: [i32; 3]) -> create_engine::fan::Heat {
+    use create_engine::fan::Heat;
+    let state = game.world.block(basin[0], basin[1] - 1, basin[2]);
+    if let Some(h) = with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.heat)).flatten() {
+        return h;
+    }
+    let b = game.res.behaviours();
+    if b.tag("create:passive_boiler_heaters")
+        .is_some_and(|t| t.contains(b.block(state)))
+    {
+        // BlockHelper.isNotUnheated: an unlit campfire is no heater.
+        let lit = game
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("lit").cloned());
+        if lit.as_deref() != Some("false") {
+            return Heat::Smouldering;
+        }
+    }
+    Heat::None
+}
+
+/// The slots of the basin at `pos`, all 18.
+fn basin_slots(game: &Game<'_>, pos: [i32; 3]) -> Option<Vec<create_engine::processing::Slot>> {
+    match game.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+        Some(horizon_client::containers::BlockEntity::Mod(m)) => {
+            let mut v: Vec<_> = m.items.iter().map(slot_of).collect();
+            v.resize(create_engine::basin::SLOTS, None);
+            Some(v)
+        }
+        _ => None,
+    }
+}
+
+/// Mechanical mixers: those asked to look at their basin (`updateBasin`: turning, not running,
+/// a recipe the basin can do), then the running ones' cycle (`tick`), mixing at the bottom
+/// (`applyBasinRecipe`) and going on with the same recipe while it still fits.
+fn tick_mixers(game: &mut Game<'_>, dim: usize) {
+    use create_engine::basin::{self, MixStep};
+    let mut checks =
+        with_world(|w| std::mem::take(&mut w.dims[dim].mixer_checks)).unwrap_or_default();
+    let running = with_world(|w| w.dims[dim].mixing.clone()).unwrap_or_default();
+    if checks.is_empty() && running.is_empty() {
+        return;
+    }
+    if !ensure_recipes(game) {
+        return;
+    }
+    for pos in running {
+        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        let Some(mut m) = with_world(|w| w.dims[dim].mixers.get(&pos).copied()).flatten() else {
+            continue;
+        };
+        let time = RECIPES.with_borrow(|r| {
+            r.as_ref()
+                .and_then(|r| m.recipe.and_then(|i| r.mixing.get(i)).map(|x| x.time))
+                .unwrap_or(0)
+        });
+        let basin_pos = [pos[0], pos[1] - 2, pos[2]];
+        match m.tick(speed, time) {
+            MixStep::None => {}
+            MixStep::Done => checks.push(pos),
+            MixStep::Apply => {
+                let heat = basin_heat(game, basin_pos);
+                let mut rng = create_engine::processing::Rng::new(
+                    game.world.game_time as u64
+                        ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9)
+                        ^ (pos[2] as u64) << 20,
+                );
+                if let (Some(mut slots), Some(i)) = (basin_slots(game, basin_pos), m.recipe) {
+                    let limit = |i: &str| stack_limit(game, i);
+                    let done = RECIPES.with_borrow(|r| {
+                        r.as_ref()
+                            .and_then(|r| r.mixing.get(i))
+                            .is_some_and(|recipe| {
+                                basin::apply(&mut slots, recipe, heat, &limit, &mut rng, false)
+                            })
+                    });
+                    if done {
+                        let again = RECIPES.with_borrow(|r| {
+                            r.as_ref()
+                                .and_then(|r| r.mixing.get(i))
+                                .is_some_and(|recipe| {
+                                    basin::apply(
+                                        &mut slots.clone(),
+                                        recipe,
+                                        heat,
+                                        &limit,
+                                        &mut rng,
+                                        true,
+                                    )
+                                })
+                        });
+                        game.native_with_mod_block_entity(basin_pos, |be| {
+                            be.items = slots
+                                .iter()
+                                .map(|s| {
+                                    s.as_ref().map(|(i, n)| horizon_client::items::ItemStack {
+                                        item: i.as_str().into(),
+                                        count: u32::from(*n),
+                                        damage: 0,
+                                        extra: None,
+                                    })
+                                })
+                                .collect();
+                        });
+                        // `continueWithPreviousRecipe`: stays down for the next one.
+                        if again {
+                            m.running_ticks = 20;
+                        }
+                    }
+                }
+            }
+        }
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            d.mixers.insert(pos, m);
+            if !m.running {
+                d.mixing.retain(|p| *p != pos);
+            }
+        });
+    }
+    checks.sort();
+    checks.dedup();
+    for pos in checks {
+        let Some(mut m) = with_world(|w| w.dims[dim].mixers.get(&pos).copied()).flatten() else {
+            continue;
+        };
+        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        let basin_pos = [pos[0], pos[1] - 2, pos[2]];
+        let is_basin = {
+            let s = game.world.block(basin_pos[0], basin_pos[1], basin_pos[2]);
+            with_world(|w| w.table.get(s.0).map(|(b, _)| b)).flatten()
+                == Some(create_engine::Block::Basin)
+        };
+        if !is_basin {
+            // `onBasinRemoved`.
+            if m.running {
+                m.running = false;
+                m.running_ticks = 0;
+                with_world(|w| {
+                    w.dims[dim].mixers.insert(pos, m);
+                    w.dims[dim].mixing.retain(|p| *p != pos);
+                });
+            }
+            continue;
+        }
+        if speed == 0.0 || m.running {
+            continue;
+        }
+        let Some(slots) = basin_slots(game, basin_pos) else {
+            continue;
+        };
+        let heat = basin_heat(game, basin_pos);
+        let limit = |i: &str| stack_limit(game, i);
+        let found = RECIPES.with_borrow(|r| {
+            r.as_ref().and_then(|r| {
+                basin::matching(&r.mixing, &slots, heat, &limit)
+                    .first()
+                    .copied()
+            })
+        });
+        if let Some(i) = found {
+            m.start(i);
+            with_world(|w| {
+                let d = &mut w.dims[dim];
+                d.mixers.insert(pos, m);
+                if !d.mixing.contains(&pos) {
+                    d.mixing.push(pos);
+                }
+            });
         }
     }
 }
@@ -2964,10 +3277,15 @@ pub(super) fn item_landed(
         (Some(b @ create_engine::Block::Belt), _) => (own, b),
         (_, Some(b @ create_engine::Block::Belt)) => (pos, b),
         (_, Some(b @ create_engine::Block::Depot)) => (pos, b),
+        (Some(b @ create_engine::Block::Basin), _) => (own, b),
         _ => return,
     };
     if stack.extra.is_some() {
         // Stacks with components keep them only as entities, for now.
+        return;
+    }
+    if block == create_engine::Block::Basin {
+        basin_take(game, dim, spot, stack);
         return;
     }
     let max = game

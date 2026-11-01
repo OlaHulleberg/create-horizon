@@ -1,0 +1,30 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/cogwheel_shaftless",
+      "x": 90
+    },
+    "facing=east": {
+      "model": "create:block/cogwheel_shaftless",
+      "x": 90,
+      "y": 90
+    },
+    "facing=south": {
+      "model": "create:block/cogwheel_shaftless",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create:block/cogwheel_shaftless",
+      "x": 90,
+      "y": 270
+    },
+    "facing=up": {
+      "model": "create:block/cogwheel_shaftless"
+    },
+    "facing=down": {
+      "model": "create:block/cogwheel_shaftless",
+      "x": 180
+    }
+  }
+}
