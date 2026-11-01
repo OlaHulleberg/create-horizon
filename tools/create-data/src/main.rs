@@ -8,6 +8,7 @@
 
 mod blocks;
 mod common_tags;
+mod equipment;
 mod java;
 mod prepare;
 mod shapes;
@@ -242,6 +243,14 @@ fn compile(create: &Path, out: &Path) {
             });
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
+        } else if let Some(doc) = equipment::item(name) {
+            // Diving gear, the extendo grip and sand paper: Create's numbers as components.
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
+        } else if facts.class.as_deref() == Some("BacktankBlockItem") {
+            // `*_backtank_placeable`: Create's hidden block item; the backtank's own item places
+            // its block here.
+            continue;
         } else if name == "wrench" {
             // WrenchItem: `stacksTo(1)`; its use is the native mod's.
             let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });

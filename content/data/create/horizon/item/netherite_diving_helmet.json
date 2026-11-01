@@ -1,0 +1,8 @@
+{
+  "template": "minecraft:netherite_helmet",
+  "components": {
+    "minecraft:enchantments": {
+      "minecraft:aqua_affinity": 1
+    }
+  }
+}
