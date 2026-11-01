@@ -372,6 +372,19 @@ north side) was clicked with a gold ingot (DEBUG log of the hit, removed), then 
 gold, the vault kept the 64 iron; powered again it stops (`powered=true`). Unfiltered, it passes everything at once,
 as Create's empty filter does.
 
+| Scenario (2026-11-01, Phase 6 equipment, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1696 | 0.492 / 2.065 | 2.607 ± 0.277 | baseline |
+| idle: Create content (with the equipment's `player_tick`, `destroy_block`, `hurt_enemy` hooks), no Create blocks | 1853 | 0.484 / 1.112 | 2.454 ± 0.100 | within noise of off |
+
+The player hooks keep Create free when unused (`benchmarks/create-p6equip-*.json`; off had one slow run). Proven
+headless: a copper backtank under a creative motor (-16 rpm) gained 19 air in about 15 s (16 rpm: 1 air per 17 ticks);
+right-clicked with an empty hand in survival it left the world and was worn with
+`custom_data {"create:backtank_air": 19}`. Wearing a tank of 900 air, a copper diving helmet and boots in survival,
+teleported into a pool 4 deep: after 10 s `Air` was still 300 and the tank held 889 (1 a second), the boots held the
+player on the floor (screenshot); the helmet taken off, `Air` fell to 139 in 8 s. Block interaction range: 4.5, 7.5
+with an extendo grip, 9.5 with two (`singleRange` 3, `doubleRange` 5).
+
 Chutes moving items cost no measurable tick; 6% of frame p50 with 128 chutes, 16 hoppers and 16 chests in view
 (`benchmarks/create-p4-chutes-*.json`); each run's check reads one chest: 64 iron.
 
