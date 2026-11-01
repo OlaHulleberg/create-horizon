@@ -170,13 +170,14 @@ pub struct Dimension {
     pub tunnel_checks: Vec<[i32; 3]>,
     /// Deployers and their cycle and held stack, those mid-stroke or waiting out their pause
     /// (the only ones that tick), what was saved for those not placed yet, and those whose
-    /// stroke clients must see again.
+    /// stroke clients must see again; the cracks of removed ones (deployer, block) to clear.
     pub deployers: HashMap<[i32; 3], crate::deployer::Deployer>,
     pub deploying: Vec<[i32; 3]>,
     deployer_saved: HashMap<[i32; 3], crate::deployer::Deployer>,
     brass_saved: HashMap<[i32; 3], crate::tunnel::Brass>,
     pub deployer_changes: Vec<[i32; 3]>,
     pub deployer_drops: Vec<([i32; 3], (String, u8))>,
+    pub deployer_cracks: Vec<([i32; 3], [i32; 3])>,
     /// Gantry shafts whose place in their line may have changed (`updateShape`), carriages to try
     /// to start (`queueAssembly`), and the moving gantries.
     pub gantry_checks: Vec<[i32; 3]>,
@@ -689,6 +690,10 @@ impl CreateWorld {
                 if let Some(held) = dp.held {
                     // `IBE.onRemove`: its held stack drops.
                     d.deployer_drops.push((pos, held));
+                }
+                // `DeployerFakePlayer.remove` (`discardPlayer`): its cracks go.
+                if let Some((at, _)) = dp.breaking {
+                    d.deployer_cracks.push((pos, at));
                 }
             }
             if d.burners.remove(&pos).is_some() {
@@ -1862,6 +1867,33 @@ mod tests {
         w.block_changed(0, [2, 64, 1], 0, 2);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [2, 64, 1]), Some(256.0));
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_removed_deployer_clears_its_cracks() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
+            "create:deployer",
+            vec![("axis_along_first", "false"), ("facing", "down")],
+        )];
+        states::set_range(10, 1);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (pos, at) = ([0, 64, 0], [0, 62, 0]);
+        w.block_changed(0, pos, 0, 10);
+        let mut d = w.dims[0].deployers[&pos].clone();
+        d.breaking = Some((at, 0.5));
+        w.set_deployer(0, pos, d);
+        w.block_changed(0, pos, 10, 0);
+        assert_eq!(w.dims[0].deployer_cracks, [(pos, at)]);
+        // One that broke nothing leaves none.
+        w.dims[0].deployer_cracks.clear();
+        w.block_changed(0, pos, 0, 10);
+        w.block_changed(0, pos, 10, 0);
+        assert!(w.dims[0].deployer_cracks.is_empty());
         states::clear_range();
     }
 
