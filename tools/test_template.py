@@ -774,7 +774,7 @@ impl Behaviours {
     game.native_chunk_data_save("minecraft:overworld", [3, 3], &mut data);
     let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create".into()) else { panic!("no create data") };
     assert!(own.contains_key(&"windmills".into()));
-    assert!(game.sent.iter().any(|m| m.1 == "create:contraption" && m.2.len() == 17 + 8 * 16));
+    assert!(game.sent.iter().any(|m| m.1 == "create:contraption" && m.2.len() == 17 + 8 * 16 + 4));
     game.world.game_time += 5;
     let mut canceled = false;
     game.native_right_click_block([50, 0, 50], [0, 0, -1], &mut canceled);

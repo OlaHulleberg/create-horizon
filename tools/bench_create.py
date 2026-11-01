@@ -24,6 +24,8 @@ the server thread's smoothed tick time. Scenarios:
   belts9   the control for tunnels: the same belts and stacks, no tunnels
   deployers  16 deployers at 16 rpm facing down over depots, each given 64 oak planks by a
            player's click and 64 shafts on its depot: 16 deployers making cogwheels (phase 3)
+  bearings 16 mechanical bearings facing up at 16 rpm, each turning a slime block with four
+           stones stuck to it (16 structures drawn as one GPU part each, phase 8)
   links    32 observer clocks, each pulsing a redstone link 16 blocks from a receiving one that
            lights a lamp; all untuned, so one network of 64 links changes at every pulse (phase 7)
   contraptions  16 windmills (17 sails each, a cross) assembled and turning: 16 structures drawn as
@@ -311,6 +313,14 @@ def build(ctl_bin, sock, scenario, center):
                     failures)
             command(ctl_bin, sock, f"setblock {xx} {y-5} {z-1} create:creative_motor[facing=south]", failures)
         command(ctl_bin, sock, f"fill {x-16} {y-8} {z-2} {x+17} {y-8} {z+3} minecraft:stone", failures)
+    if scenario == "bearings":
+        for i in range(16):
+            bx, bz = x - 15 + 10 * (i % 4), z - 15 + 10 * (i // 4)
+            command(ctl_bin, sock, f"setblock {bx} {y-6} {bz} create:mechanical_bearing[facing=up]", failures)
+            command(ctl_bin, sock, f"setblock {bx} {y-5} {bz} minecraft:slime_block", failures)
+            for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                command(ctl_bin, sock, f"setblock {bx+dx} {y-5} {bz+dz} minecraft:stone", failures)
+            command(ctl_bin, sock, f"setblock {bx} {y-7} {bz} create:creative_motor[facing=up]", failures)
     if scenario == "contraptions":
         for i in range(16):
             bx, bz = x - 15 + 10 * (i % 4), z - 15 + 10 * (i // 4)
@@ -414,7 +424,7 @@ def run_once(args, scenario):
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
-                    "processing": 528, "deployers": 48, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
+                    "processing": 528, "deployers": 48, "bearings": 32, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
                     "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
@@ -490,6 +500,11 @@ def run_once(args, scenario):
             chain = ctl(ctl_bin, sock, "blocks", str(x - 14), str(y - 6), str(z - 31), str(x + 1), str(y - 6),
                         str(z - 31)).get("blocks", [])
             pressed = [first, "".join("1" if key in b[3] else "0" for b in sorted(chain))]
+        if scenario == "bearings":
+            # The structures are out of the world, turning: no slime block left in place.
+            found = ctl(ctl_bin, sock, "blocks", str(x - 16), str(y - 5), str(z - 16), str(x + 16), str(y - 5),
+                        str(z + 16)).get("counts", {})
+            pressed = found
         if scenario == "deployers":
             pressed = ctl(ctl_bin, sock, "command", f"data get block {x-15} {y-7} {z} Items").get("chat")
         if scenario == "links":
@@ -549,7 +564,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
+                                          "logistics", "tunnels", "belts9", "deployers", "bearings", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

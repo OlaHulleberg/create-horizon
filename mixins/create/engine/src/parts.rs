@@ -206,6 +206,10 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::half(f.opposite())
             })
         }),
+        // MechanicalBearingBlock: a shaft out of its back, turning what it carries.
+        Block::MechanicalBearing => s
+            .facing
+            .map_or([None, None], |f| one(Part::half(f.opposite()))),
         // MechanicalPressBlock: turns on its horizontal facing's axis, shafts at both ends.
         Block::MechanicalPress => s
             .facing

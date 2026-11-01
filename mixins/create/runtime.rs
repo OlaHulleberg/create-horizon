@@ -206,6 +206,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     }
     tick_latches(game, dimension, dim);
     tick_links(game, dimension, dim);
+    tick_bearings(game, dimension, dim);
     tick_windmills(game, dimension, dim);
     tick_millstones(game, dim);
     tick_fans(game, dimension, dim);
@@ -257,6 +258,15 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
             Event::Speed {
                 pos, sub, speed, ..
             } => {
+                // `MechanicalBearingBlockEntity.onSpeedChanged`: `assembleNextTick`.
+                let state = game.world.block(pos[0], pos[1], pos[2]).0;
+                with_world(|w| {
+                    if w.table.get(state).map(|(b, _)| b)
+                        == Some(create_engine::Block::MechanicalBearing)
+                    {
+                        w.dims[dim].bearing_checks.push(pos);
+                    }
+                });
                 // A press that starts turning looks at the depot below it again.
                 with_world(|w| {
                     if w.dims[dim].presses.contains_key(&pos) {
@@ -1129,6 +1139,7 @@ fn model_state(registry: &BlockRegistry, own: BlockStateId, model: Model) -> Opt
         Model::PressHead(d) => find("create:part_press_head", "facing", dir_name(d)),
         Model::Belt(..) | Model::BeltPulley(_) => None,
         Model::BearingTop(d) => find("create:part_bearing_top_wooden", "facing", dir_name(d)),
+        Model::BearingTopMetal(d) => find("create:part_bearing_top", "facing", dir_name(d)),
         Model::FanPropeller(d) => find("create:part_fan_propeller", "facing", dir_name(d)),
         Model::ShaftlessCog => find("create:part_cogwheel_shaftless", "facing", "up"),
         Model::PumpCog(d) => find("create:part_pump_cog", "facing", dir_name(d)),
@@ -6455,6 +6466,7 @@ fn tick_windmills(game: &mut Game<'_>, dimension: &str, dim: usize) {
             blocks,
             sails,
             clockwise: true,
+            bearing: None,
         };
         with_world(|world| world.windmill_assembled(dim, pos, state, w));
     }
@@ -6468,6 +6480,166 @@ fn tick_windmills(game: &mut Game<'_>, dimension: &str, dim: usize) {
     if !changed.is_empty() {
         let players = players_in(game, dimension);
         send_windmills(game, &players, dim, &changed);
+    }
+}
+
+/// Mechanical bearings whose speed changed (`tick` after `onSpeedChanged`): a still one starts
+/// turning what is in front of it (`assemble`); a turning one stopped puts it back turned to the
+/// nearest quarter turn (`disassemble`, `ROTATE_PLACE`); otherwise the angle runs on at the new
+/// speed. Nothing runs without a change.
+fn tick_bearings(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    use create_engine::contraption::{self, Turn};
+    let Some(mut checks) = with_world(|w| std::mem::take(&mut w.dims[dim].bearing_checks)) else {
+        return;
+    };
+    if checks.is_empty() {
+        return;
+    }
+    checks.sort();
+    checks.dedup();
+    let now = game.world.game_time;
+    for pos in checks {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let facing = with_world(|w| {
+            w.table
+                .get(state)
+                .filter(|(b, _)| *b == create_engine::Block::MechanicalBearing)
+                .and_then(|(_, i)| i.facing)
+        })
+        .flatten();
+        let Some(facing) = facing else {
+            continue;
+        };
+        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        let running = with_world(|w| w.dims[dim].windmills.get(&pos).map(|m| m.bearing)).flatten();
+        match running {
+            Some(Some(turn)) if speed == 0.0 => {
+                let quarter = contraption::quarter(turn.angle_at(now));
+                if let Some(w) = with_world(|w| w.windmill_disassembled(dim, pos, state)).flatten()
+                {
+                    put_back_turned(game, dimension, pos, facing, quarter, &w);
+                }
+            }
+            Some(Some(mut turn)) => {
+                turn.rebase(now, speed);
+                with_world(|w| {
+                    if let Some(m) = w.dims[dim].windmills.get_mut(&pos) {
+                        m.bearing = Some(turn);
+                    }
+                    w.dims[dim].windmill_changes.push(pos);
+                });
+            }
+            Some(None) => {}
+            None if speed != 0.0 => {
+                let gathered =
+                    contraption::gather_bearing(pos, facing, 0, |p| contraption_found(game, p));
+                let Ok((blocks, sails)) = gathered else {
+                    continue;
+                };
+                if let Some(air) = game.pack.assets.registry.default_state("minecraft:air") {
+                    for (o, _) in &blocks {
+                        let p = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+                        game.native_set_block(
+                            dimension,
+                            p,
+                            air,
+                            super::native_hooks::flags::UPDATE_CLIENTS,
+                        );
+                    }
+                }
+                let w = create_engine::world::Windmill {
+                    blocks,
+                    sails,
+                    clockwise: true,
+                    bearing: Some(Turn {
+                        angle: 0.0,
+                        since: now,
+                        rpm: speed,
+                    }),
+                };
+                with_world(|world| world.bearing_assembled(dim, pos, w));
+            }
+            None => {}
+        }
+    }
+}
+
+/// `ControlledContraptionEntity.disassemble` with its `StructureTransform`: each block turned
+/// `quarter`° about the bearing's axis through the block in front of it, its `facing` or `axis`
+/// turned with it (`rotateFacing`: `getClockWise(axis)`, `rotation.ordinal()` times); a state
+/// that has no such turned form stays as it was. A block whose place is taken drops.
+fn put_back_turned(
+    game: &mut Game<'_>,
+    dimension: &str,
+    bearing: [i32; 3],
+    facing: Dir,
+    quarter: i32,
+    w: &create_engine::world::Windmill,
+) {
+    use create_engine::contraption;
+    let axis = facing.axis();
+    let turns = contraption::clockwise_turns(quarter);
+    let registry = game.pack.assets.registry;
+    let f = facing.offset();
+    let anchor = [bearing[0] + f[0], bearing[1] + f[1], bearing[2] + f[2]];
+    let turned: Vec<([i32; 3], u32)> = w
+        .blocks
+        .iter()
+        .map(|(o, state)| {
+            let local = [o[0] - f[0], o[1] - f[1], o[2] - f[2]];
+            let r = contraption::rotate(local, quarter, axis);
+            let p = [anchor[0] + r[0], anchor[1] + r[1], anchor[2] + r[2]];
+            let mut id = *state;
+            if turns > 0
+                && let Some(mut s) = registry.state(BlockStateId(*state)).cloned()
+            {
+                let turn_dir =
+                    |d: Dir| (0..turns).fold(d, |d, _| create_engine::wrench::clockwise(d, axis));
+                if let Some(d) = s
+                    .properties
+                    .get("facing")
+                    .and_then(|v| Dir::ALL.into_iter().find(|d| dir_name(*d) == v))
+                {
+                    s.properties
+                        .insert("facing".into(), dir_name(turn_dir(d)).into());
+                } else if let Some(a) = s.properties.get("axis").cloned() {
+                    let d = match a.as_str() {
+                        "x" => Dir::East,
+                        "y" => Dir::Up,
+                        _ => Dir::South,
+                    };
+                    let name = match turn_dir(d).axis() {
+                        Axis::X => "x",
+                        Axis::Y => "y",
+                        Axis::Z => "z",
+                    };
+                    s.properties.insert("axis".into(), name.into());
+                }
+                if let Some(t) = registry.id(&s) {
+                    id = t.0;
+                }
+            }
+            (p, id)
+        })
+        .collect();
+    for (p, id) in turned {
+        let here = game.world.block(p[0], p[1], p[2]);
+        let free = registry
+            .state(here)
+            .is_some_and(|s| s.name == "minecraft:air" || s.name == "minecraft:cave_air");
+        if free {
+            game.native_set_block(
+                dimension,
+                p,
+                BlockStateId(id),
+                super::native_hooks::flags::UPDATE_ALL,
+            );
+        } else if let Some(s) = registry.state(BlockStateId(id)) {
+            game.native_run_command(&format!(
+                "execute in {dimension} run summon minecraft:item {}.5 {}.5 {}.5 {{Item:{{id:'{}',count:1}}}}",
+                p[0], p[1], p[2], s.name
+            ));
+        }
     }
 }
 
@@ -7077,6 +7249,7 @@ fn send_windmills(game: &mut Game<'_>, players: &[u128], dim: usize, bearings: &
             m.extend_from_slice(&v.to_le_bytes());
         }
         m.push(facing as u8);
+        let w_turn = w.as_ref().and_then(|w| w.bearing);
         let blocks = w.map(|w| w.blocks).unwrap_or_default();
         let blocks = &blocks[..blocks.len().min((30_000 - 17) / 16)];
         m.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
@@ -7086,6 +7259,10 @@ fn send_windmills(game: &mut Game<'_>, players: &[u128], dim: usize, bearings: &
             }
             m.extend_from_slice(&s.to_le_bytes());
         }
+        // Its angle now (a windmill starts at 0), for the client to turn on from.
+        let now = game.world.game_time;
+        let angle = w_turn.map_or(0.0, |t| t.angle_at(now));
+        m.extend_from_slice(&angle.to_le_bytes());
         for &p in players {
             let _ = game.native_net_send_to_player(p, CONTRAPTION_CHANNEL, &m);
         }
@@ -7093,8 +7270,9 @@ fn send_windmills(game: &mut Game<'_>, players: &[u128], dim: usize, bearings: &
 }
 
 thread_local! {
-    /// Structures a client draws, by bearing: their part model and the axis they turn on.
-    static CONTRAPTIONS: RefCell<HashMap<[i32; 3], (u32, Dir)>> = RefCell::new(HashMap::new());
+    /// Structures a client draws, by bearing: their part model, the axis they turn on, and their
+    /// angle at a clock time with the speed since, so a speed change turns on from where it is.
+    static CONTRAPTIONS: RefCell<HashMap<[i32; 3], (u32, Dir, f32, f32, f32)>> = RefCell::new(HashMap::new());
 }
 
 fn contraptions_from_server(game: &mut Game<'_>, d: &[u8]) {
@@ -7106,7 +7284,7 @@ fn contraptions_from_server(game: &mut Game<'_>, d: &[u8]) {
     let facing = Dir::ALL[usize::from(d[12].min(5))];
     let n = u32::from_le_bytes(d[13..17].try_into().unwrap()) as usize;
     let key = depot_key(pos, 220, 0);
-    if let Some((old, _)) = CONTRAPTIONS.with_borrow_mut(|c| c.remove(&pos)) {
+    if let Some((old, ..)) = CONTRAPTIONS.with_borrow_mut(|c| c.remove(&pos)) {
         game.native_part_clear(key);
         game.native_part_model_free(old);
     }
@@ -7127,23 +7305,32 @@ fn contraptions_from_server(game: &mut Game<'_>, d: &[u8]) {
     let Some(model) = game.native_part_model_compound(&blocks) else {
         return;
     };
-    CONTRAPTIONS.with_borrow_mut(|c| c.insert(pos, (model, facing)));
+    let angle = d
+        .get(17 + 16 * n..21 + 16 * n)
+        .map_or(0.0, |b| f32::from_le_bytes(b.try_into().unwrap()));
+    let now = game.native_parts_seconds();
     let rpm = press_speed(pos);
+    CONTRAPTIONS.with_borrow_mut(|c| c.insert(pos, (model, facing, angle, now, rpm)));
     turn_contraption(game, pos, rpm);
 }
 
 /// The structure turns with its bearing about the bearing's axis (through its centre).
 fn turn_contraption(game: &mut Game<'_>, pos: [i32; 3], rpm: f32) {
-    let Some((model, facing)) = CONTRAPTIONS.with_borrow(|c| c.get(&pos).copied()) else {
+    let Some((model, facing, angle, at, old)) = CONTRAPTIONS.with_borrow(|c| c.get(&pos).copied())
+    else {
         return;
     };
+    // Where it is now at its old speed (6° a second per rpm), then on from there.
+    let now = game.native_parts_seconds();
+    let here = (angle + old * 6.0 * (now - at)) % 360.0;
+    CONTRAPTIONS.with_borrow_mut(|c| c.insert(pos, (model, facing, here, now, rpm)));
     game.native_part_set(
         depot_key(pos, 220, 0),
         model,
         pos,
         axis_index(facing.axis()),
         rpm,
-        0.0,
+        (here - rpm * 6.0 * now) % 360.0,
     );
 }
 
@@ -7324,9 +7511,17 @@ fn windmills_to_nbt(
                             .collect(),
                     ),
                 );
+                // A mechanical bearing's `Angle` (now) and that it is one.
+                let now = game.world.game_time;
+                let angle = w.bearing.map_or(0.0, |t| t.angle_at(now));
                 c.insert(
                     "sails".into(),
-                    Tag::IntArray(vec![w.sails as i32, i32::from(w.clockwise)]),
+                    Tag::IntArray(vec![
+                        w.sails as i32,
+                        i32::from(w.clockwise),
+                        angle.to_bits() as i32,
+                        i32::from(w.bearing.is_some()),
+                    ]),
                 );
                 Tag::Compound(c)
             })
@@ -7375,6 +7570,11 @@ fn windmills_from_nbt(
                     blocks,
                     sails: (*sails.first()?).max(0) as u32,
                     clockwise: sails.get(1) != Some(&0),
+                    bearing: (sails.get(3) == Some(&1)).then(|| create_engine::contraption::Turn {
+                        angle: f32::from_bits(sails.get(2).copied().unwrap_or(0) as u32),
+                        since: game.world.game_time,
+                        rpm: 0.0,
+                    }),
                 },
             ))
         })
