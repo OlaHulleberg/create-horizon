@@ -47,11 +47,14 @@ pub(super) fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
         let (yaw, _) = create_engine::trains::yaw_pitch(front, t.heading);
         let quarter = ((yaw / 90.0).round() as i32 * 90).rem_euclid(360);
         for (o, s) in &t.blocks {
-            // The block's corner from the pivot (the track under the bogey), in half blocks.
-            let c = [2 * o[0] - 1, 2 * o[1] + 2, 2 * o[2] - 1];
-            let r = create_engine::contraption::rotate(c, quarter, Axis::Y);
-            let p: [i32; 3] =
-                std::array::from_fn(|k| (pivot[k] + f64::from(r[k]) / 2.0).round() as i32);
+            // The block's centre from the pivot (the middle of the track under the bogey), turned
+            // about it; its height from the track's top.
+            let r = create_engine::contraption::rotate([o[0], 0, o[2]], quarter, Axis::Y);
+            let p = [
+                (pivot[0] + f64::from(r[0])).floor() as i32,
+                (pivot[1] + f64::from(o[1]) + 1.0).round() as i32,
+                (pivot[2] + f64::from(r[2])).floor() as i32,
+            ];
             let state = turned_state(game, *s, quarter, Axis::Y);
             game.native_set_block(
                 &dimension,
