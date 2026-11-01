@@ -204,6 +204,39 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 v
             })
             .unwrap_or_default(),
+        // BearingRenderer for a clockwork bearing: the shaft half turning with it, its top
+        // still (the hour hand turns it while the clock runs: the glue draws it with the hand).
+        Block::ClockworkBearing => s
+            .facing
+            .map(|f| {
+                vec![
+                    half(0, f.opposite(), speeds[0]),
+                    Draw {
+                        slot: 1,
+                        model: Model::BearingTopMetal(f),
+                        axis: f.axis(),
+                        rpm: 0.0,
+                        phase: 0.0,
+                    },
+                ]
+            })
+            .unwrap_or_default(),
+        // AbstractPulleyRenderer, ElevatorPulleyRenderer: a shaft through the pulley.
+        Block::RopePulley => s
+            .axis
+            .map(|a| vec![own(a, Model::Shaft(a))])
+            .unwrap_or_default(),
+        Block::ElevatorPulley => s
+            .facing
+            .map(|f| {
+                let a = if f.axis() == Axis::X {
+                    Axis::Z
+                } else {
+                    Axis::X
+                };
+                vec![own(a, Model::Shaft(a))]
+            })
+            .unwrap_or_default(),
         // BearingRenderer: the shaft half out of its back and its top, both turning with it.
         Block::WindmillBearing | Block::MechanicalBearing => s
             .facing

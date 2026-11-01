@@ -99,7 +99,14 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
         _ => nearest.opposite(),
     };
     Some(match block {
-        Block::WindmillBearing | Block::WaterWheel => directional(preferred(false, shaft)),
+        Block::WindmillBearing
+        | Block::WaterWheel
+        | Block::MechanicalBearing
+        | Block::ClockworkBearing => directional(preferred(false, shaft)),
+        // HorizontalKineticBlock (the elevator pulley): facing the player.
+        Block::ElevatorPulley => horizontal_direction(ctx.yaw).opposite(),
+        // WrenchableDirectionalBlock (the elevator contact): toward the player's view.
+        Block::ElevatorContact => nearest,
         // CreativeMotorBlock: toward the shaft it found, not away.
         Block::CreativeMotor => match preferred(false, shaft) {
             Some(p) if !ctx.sneaking => p,
@@ -153,6 +160,12 @@ pub fn axis(
             };
             Some((axis, false))
         }
+        // HorizontalAxisKineticBlock (the rope pulley): the axis of the shafts beside it, else
+        // across the player's facing.
+        Block::RopePulley => Some((
+            preferred(true, &shaft).map_or(across(facing), |d| d.axis()),
+            false,
+        )),
         // ChainDriveBlock: the view's axis when sneaking, else the axis of the shafts around it
         // (`getPreferredAxis`), else the view's.
         Block::EncasedChainDrive | Block::AdjustableChainGearshift => {
@@ -179,6 +192,18 @@ pub fn axis(
         }
         _ => None,
     }
+}
+
+/// `RedstoneContactBlock.getStateForPlacement`: away from the player's view, or onto the
+/// clicked face when sneaking or when a contact there faces back; powered when the contact it
+/// faces faces back (`valid`: `hasValidContact` toward a side).
+pub fn redstone_contact(ctx: Context, valid: impl Fn(Dir) -> bool) -> (Dir, bool) {
+    let mut facing = ordered_by_nearest(ctx.yaw, ctx.pitch)[0].opposite();
+    let place = ctx.clicked_face.opposite();
+    if ctx.sneaking || valid(place) {
+        facing = place;
+    }
+    (facing, valid(facing))
 }
 
 fn is_sail(block: Block) -> bool {
