@@ -4,6 +4,8 @@
 //! its value (`ValueSettingsBehaviour.setValueSettings`). Layout numbers are GUI pixels; text
 //! widths come from the game's font.
 
+use crate::kinetics::{Axis, Dir};
+
 /// `ValueSettingsBehaviour.ValueSettings`: a row of the board and a column on it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
@@ -406,9 +408,17 @@ pub fn chassis_settings(range: i32) -> Settings {
     }
 }
 
-/// `ChassisScrollValueBehaviour.setValueSettings`, within `between(1, max_range)`.
-pub fn chassis_value(s: Settings, max_range: i32) -> i32 {
-    (s.value + 1).clamp(1, max_range)
+/// `ChassisScrollValueBehaviour.setValueSettings` on a chassis whose range is `current`, within
+/// `between(1, max_range)`; None when nothing is set. The base
+/// `ScrollValueBehaviour.setValueSettings` compares the range picked (`value + 1`) with the
+/// overridden `getValueSettings` (`current - 1`), so picking the range one below the current one
+/// does nothing.
+pub fn chassis_value(s: Settings, current: i32, max_range: i32) -> Option<i32> {
+    let picked = Settings {
+        row: s.row,
+        value: s.value + 1,
+    };
+    (picked != chassis_settings(current)).then(|| picked.value.clamp(1, max_range))
 }
 
 /// The chassis board's formatter.
@@ -416,9 +426,61 @@ pub fn chassis_text(s: Settings) -> String {
     number(s.value + 1)
 }
 
-/// `ScrollOptionBehaviour`: the option picked, within `between(0, options - 1)`.
-pub fn option_value(s: Settings, options: i32) -> i32 {
-    s.value.clamp(0, options - 1)
+/// `ScrollOptionBehaviour` set to `s` while on option `current`, within `between(0, options - 1)`;
+/// None when it is the current one (`ScrollValueBehaviour.setValueSettings` returns early).
+pub fn option_value(s: Settings, current: i32, options: i32) -> Option<i32> {
+    let now = Settings {
+        row: 0,
+        value: current,
+    };
+    (s != now).then(|| s.value.clamp(0, options - 1))
+}
+
+/// `ValueBoxTransform.Sided.getLocalOffset`: the slot at `south` (in the block, for the south
+/// side) turned to `side` (`rotateCentered` by `horizontalAngle(side)` about Y, then by
+/// `verticalAngle(side)` about X).
+pub fn sided_offset(south: [f64; 3], side: Dir) -> [f64; 3] {
+    let y_rot: f64 = match side {
+        Dir::South | Dir::Up | Dir::Down => 0.0,
+        Dir::West => -90.0,
+        Dir::North => 180.0,
+        Dir::East => -270.0,
+    };
+    let x_rot: f64 = match side {
+        Dir::Up => -90.0,
+        Dir::Down => 90.0,
+        _ => 0.0,
+    };
+    let [x, y, z] = [south[0] - 0.5, south[1] - 0.5, south[2] - 0.5];
+    let (s, c) = y_rot.to_radians().sin_cos();
+    let (x, z) = (x * c + z * s, z * c - x * s);
+    let (s, c) = x_rot.to_radians().sin_cos();
+    let (y, z) = (y * c - z * s, z * c + y * s);
+    [x + 0.5, y + 0.5, z + 0.5]
+}
+
+/// `ValueBoxTransform.testHit`: the hit, in the block, within half the box's scale (.5) of its
+/// slot.
+pub fn hits_box(slot: [f64; 3], local: [f64; 3]) -> bool {
+    let d2: f64 = (0..3).map(|i| (local[i] - slot[i]).powi(2)).sum();
+    d2.sqrt() < 0.5 / 2.0
+}
+
+/// `CreativeMotorBlockEntity.MotorValueBox` on `side` of a motor facing `facing`: 12.5 px out on
+/// a side off the motor's axis (not the bottom of a sideways motor), a pixel back from its
+/// facing; None on a side without one (`isSideActive`).
+pub fn motor_slot(facing: Dir, side: Dir) -> Option<[f64; 3]> {
+    if facing.axis() != Axis::Y && side == Dir::Down || side.axis() == facing.axis() {
+        return None;
+    }
+    let o = sided_offset([0.5, 0.5, 12.5 / 16.0], side);
+    let n = facing.offset();
+    Some([0, 1, 2].map(|i| o[i] - f64::from(n[i]) / 16.0))
+}
+
+/// `BrassTunnelModeSlot` (a `CenteredSideValueBoxTransform`): 15.5 px out, on the top only.
+pub fn tunnel_mode_slot(side: Dir) -> Option<[f64; 3]> {
+    (side == Dir::Up).then(|| sided_offset([0.5, 0.5, 15.5 / 16.0], side))
 }
 
 /// `BrassDiodeScrollValueBehaviour.getValueSettings`: a delay in ticks as ticks (up to 60),
@@ -557,9 +619,15 @@ mod tests {
         assert_eq!(kinetic_value(Settings { row: 1, value: 300 }, 256), 256);
         assert_eq!(kinetic_text(Settings { row: 0, value: 0 }), "1\u{27f3}");
         assert_eq!(chassis_settings(16), Settings { row: 0, value: 15 });
-        assert_eq!(chassis_value(Settings { row: 0, value: 15 }, 16), 16);
+        let range = |value| Settings { row: 0, value };
+        assert_eq!(chassis_value(range(15), 4, 16), Some(16));
+        assert_eq!(chassis_value(range(0), 4, 16), Some(1));
+        assert_eq!(chassis_value(range(3), 4, 16), Some(4));
+        // Create compares range + 1 with current - 1: range 3 on a chassis at 4 does nothing.
+        assert_eq!(chassis_value(range(2), 4, 16), None);
         assert_eq!(chassis_text(Settings { row: 0, value: 0 }), "1");
-        assert_eq!(option_value(Settings { row: 0, value: 9 }, 5), 4);
+        assert_eq!(option_value(Settings { row: 0, value: 9 }, 0, 7), Some(6));
+        assert_eq!(option_value(Settings { row: 0, value: 2 }, 2, 7), None);
         assert_eq!(diode_settings(40), Settings { row: 0, value: 40 });
         assert_eq!(diode_settings(100), Settings { row: 1, value: 5 });
         assert_eq!(diode_settings(2400), Settings { row: 2, value: 2 });
@@ -591,6 +659,32 @@ mod tests {
         assert_eq!(shade(20.0), 0x5010_1010);
         assert!((MOTOR.pitch(0) - 1.15).abs() < 1e-6 && (MOTOR.pitch(256) - 1.5).abs() < 1e-6);
         assert_eq!(Layout::cursor([50.5, 5.0], 12), [43, -2, 15]);
+    }
+
+    #[test]
+    fn value_boxes_sit_on_their_sides() {
+        let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9);
+        let px = |x: f64, y: f64, z: f64| [x / 16.0, y / 16.0, z / 16.0];
+        // The south location turned onto each face.
+        let south = px(8.0, 8.0, 12.5);
+        assert!(near(sided_offset(south, Dir::South), south));
+        assert!(near(sided_offset(south, Dir::North), px(8.0, 8.0, 3.5)));
+        assert!(near(sided_offset(south, Dir::West), px(3.5, 8.0, 8.0)));
+        assert!(near(sided_offset(south, Dir::East), px(12.5, 8.0, 8.0)));
+        assert!(near(sided_offset(south, Dir::Up), px(8.0, 12.5, 8.0)));
+        assert!(near(sided_offset(south, Dir::Down), px(8.0, 3.5, 8.0)));
+        // A motor facing north: boxes on top and the sides, a pixel toward its back.
+        let top = motor_slot(Dir::North, Dir::Up).unwrap();
+        assert!(near(top, px(8.0, 12.5, 9.0)));
+        assert_eq!(motor_slot(Dir::North, Dir::Down), None);
+        assert_eq!(motor_slot(Dir::North, Dir::South), None);
+        assert!(motor_slot(Dir::Up, Dir::East).is_some());
+        assert_eq!(motor_slot(Dir::Up, Dir::Down), None);
+        assert!(hits_box(top, px(8.0, 12.5, 12.9)));
+        assert!(!hits_box(top, px(8.0, 12.5, 13.0)));
+        // A brass tunnel's mode is picked on its top.
+        assert!(near(tunnel_mode_slot(Dir::Up).unwrap(), px(8.0, 15.5, 8.0)));
+        assert_eq!(tunnel_mode_slot(Dir::East), None);
     }
 
     #[test]
