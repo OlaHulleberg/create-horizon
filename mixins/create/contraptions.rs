@@ -399,10 +399,45 @@ pub(super) fn tick_bearings(game: &mut Game<'_>, dimension: &str, dim: usize) {
     }
 }
 
-/// `ControlledContraptionEntity.disassemble` with its `StructureTransform`: each block turned
-/// `quarter`° about the bearing's axis through the block in front of it, its `facing` or `axis`
+/// A block state turned `quarter`° about `axis` (`StructureTransform`): its `facing` or `axis`
 /// turned with it (`rotateFacing`: `getClockWise(axis)`, `rotation.ordinal()` times); a state
-/// that has no such turned form stays as it was. A block whose place is taken drops.
+/// that has no such turned form stays as it was.
+pub(super) fn turned_state(game: &Game<'_>, state: u32, quarter: i32, axis: Axis) -> u32 {
+    let turns = create_engine::contraption::clockwise_turns(quarter);
+    if turns == 0 {
+        return state;
+    }
+    let registry = game.pack.assets.registry;
+    let Some(mut s) = registry.state(BlockStateId(state)).cloned() else {
+        return state;
+    };
+    let turn_dir = |d: Dir| (0..turns).fold(d, |d, _| create_engine::wrench::clockwise(d, axis));
+    if let Some(d) = s
+        .properties
+        .get("facing")
+        .and_then(|v| Dir::ALL.into_iter().find(|d| dir_name(*d) == v))
+    {
+        s.properties
+            .insert("facing".into(), dir_name(turn_dir(d)).into());
+    } else if let Some(a) = s.properties.get("axis").cloned() {
+        let d = match a.as_str() {
+            "x" => Dir::East,
+            "y" => Dir::Up,
+            _ => Dir::South,
+        };
+        let name = match turn_dir(d).axis() {
+            Axis::X => "x",
+            Axis::Y => "y",
+            Axis::Z => "z",
+        };
+        s.properties.insert("axis".into(), name.into());
+    }
+    registry.id(&s).map_or(state, |t| t.0)
+}
+
+/// `ControlledContraptionEntity.disassemble` with its `StructureTransform`: each block turned
+/// `quarter`° about the bearing's axis through the block in front of it ([`turned_state`]). A
+/// block whose place is taken drops.
 pub(super) fn put_back_turned(
     game: &mut Game<'_>,
     dimension: &str,
@@ -413,7 +448,6 @@ pub(super) fn put_back_turned(
 ) {
     use create_engine::contraption;
     let axis = facing.axis();
-    let turns = contraption::clockwise_turns(quarter);
     let registry = game.pack.assets.registry;
     let f = facing.offset();
     let anchor = [bearing[0] + f[0], bearing[1] + f[1], bearing[2] + f[2]];
@@ -424,37 +458,7 @@ pub(super) fn put_back_turned(
             let local = [o[0] - f[0], o[1] - f[1], o[2] - f[2]];
             let r = contraption::rotate(local, quarter, axis);
             let p = [anchor[0] + r[0], anchor[1] + r[1], anchor[2] + r[2]];
-            let mut id = *state;
-            if turns > 0
-                && let Some(mut s) = registry.state(BlockStateId(*state)).cloned()
-            {
-                let turn_dir =
-                    |d: Dir| (0..turns).fold(d, |d, _| create_engine::wrench::clockwise(d, axis));
-                if let Some(d) = s
-                    .properties
-                    .get("facing")
-                    .and_then(|v| Dir::ALL.into_iter().find(|d| dir_name(*d) == v))
-                {
-                    s.properties
-                        .insert("facing".into(), dir_name(turn_dir(d)).into());
-                } else if let Some(a) = s.properties.get("axis").cloned() {
-                    let d = match a.as_str() {
-                        "x" => Dir::East,
-                        "y" => Dir::Up,
-                        _ => Dir::South,
-                    };
-                    let name = match turn_dir(d).axis() {
-                        Axis::X => "x",
-                        Axis::Y => "y",
-                        Axis::Z => "z",
-                    };
-                    s.properties.insert("axis".into(), name.into());
-                }
-                if let Some(t) = registry.id(&s) {
-                    id = t.0;
-                }
-            }
-            (p, id)
+            (p, turned_state(game, *state, quarter, axis))
         })
         .collect();
     for (p, id) in turned {
