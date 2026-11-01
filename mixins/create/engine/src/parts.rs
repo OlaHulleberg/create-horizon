@@ -24,6 +24,8 @@ pub struct StateInfo {
     pub heat: Option<crate::fan::Heat>,
     /// A redstone link's `receiver`.
     pub receiver: bool,
+    /// A belt tunnel's `shape`.
+    pub tunnel: Option<crate::tunnel::Shape>,
 }
 
 impl StateInfo {
@@ -56,6 +58,7 @@ impl StateInfo {
                 "powered" => s.powered = v == "true",
                 "powering" => s.powering = v == "true",
                 "receiver" => s.receiver = v == "true",
+                "shape" => s.tunnel = crate::tunnel::Shape::read(v),
                 "powered_side" => s.powered_side = v == "true",
                 "top_shaft" => s.top_shaft = v == "true",
                 "bottom_shaft" => s.bottom_shaft = v == "true",
@@ -269,6 +272,7 @@ pub fn is_kinetic(block: Block) -> bool {
         heat: None,
         along_first: false,
         receiver: false,
+        tunnel: None,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

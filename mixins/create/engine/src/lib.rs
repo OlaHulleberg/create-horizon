@@ -28,6 +28,7 @@ pub mod spout;
 pub mod states;
 pub mod tank;
 pub mod trains;
+pub mod tunnel;
 pub mod waterwheel;
 pub mod world;
 pub mod wrench;
