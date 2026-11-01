@@ -1,0 +1,65 @@
+{
+  "template": "minecraft:copper_block",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:copper_block"
+  },
+  "item": true,
+  "shapes": {
+    "property": "north",
+    "values": {
+      "false": [
+        [
+          0.25,
+          0.25,
+          0.25,
+          0.75,
+          0.75,
+          0.75
+        ]
+      ],
+      "true": [
+        [
+          0.25,
+          0.25,
+          0.25,
+          0.75,
+          0.75,
+          0.75
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "down": [
+      "false",
+      "true"
+    ],
+    "east": [
+      "false",
+      "true"
+    ],
+    "north": [
+      "false",
+      "true"
+    ],
+    "south": [
+      "false",
+      "true"
+    ],
+    "up": [
+      "false",
+      "true"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ],
+    "west": [
+      "false",
+      "true"
+    ]
+  }
+}

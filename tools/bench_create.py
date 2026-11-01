@@ -25,6 +25,8 @@ the server thread's smoothed tick time. Scenarios:
            stack of 16 gravel: 30 controllers crushing (phase 3)
   mixers   32 basins of 64 andesite and 64 iron nuggets under mechanical mixers at 16 rpm (each
            driven by a cog on a motor): 32 mixers making andesite alloy (phase 3)
+  pumps    10 mechanical pumps at 16 rpm, each pulling water from an infinite pool through pipes
+           into a fluid tank (phase 5)
   burners  a 32x32 floor of blaze burners with their blaze (1,024 passive burners, the head in the
            chunk mesh): no tick (phase 3)
   fans     32 encased fans at 16 rpm blowing through water over three depots each of 64 ice: 96
@@ -108,6 +110,18 @@ def build(ctl_bin, sock, scenario, center):
                 command(ctl_bin, sock, f"setblock {x0} {y-4} {zz} create:mechanical_mixer", failures)
                 command(ctl_bin, sock, f"setblock {x0+1} {y-4} {zz} create:cogwheel[axis=y]", failures)
                 command(ctl_bin, sock, f"setblock {x0+1} {y-5} {zz} create:creative_motor[facing=up]", failures)
+    if scenario == "pumps":
+        for row in range(10):
+            zz, x0 = z - 15 + 3 * row, x
+            command(ctl_bin, sock, f"fill {x0-7} {y-7} {zz-1} {x0+4} {y-7} {zz+2} stone", failures)
+            command(ctl_bin, sock, f"fill {x0-6} {y-6} {zz-1} {x0-2} {y-6} {zz+2} glass", failures)
+            command(ctl_bin, sock, f"fill {x0-5} {y-6} {zz} {x0-3} {y-6} {zz+1} water", failures)
+            command(ctl_bin, sock, f"fill {x0-2} {y-6} {zz} {x0-1} {y-6} {zz} create:fluid_pipe", failures)
+            command(ctl_bin, sock, f"setblock {x0} {y-6} {zz} create:mechanical_pump[facing=east]", failures)
+            command(ctl_bin, sock, f"fill {x0+1} {y-6} {zz} {x0+2} {y-6} {zz} create:fluid_pipe", failures)
+            command(ctl_bin, sock, f"setblock {x0+3} {y-6} {zz} create:fluid_tank", failures)
+            command(ctl_bin, sock, f"setblock {x0} {y-5} {zz} create:cogwheel[axis=x]", failures)
+            command(ctl_bin, sock, f"setblock {x0+1} {y-5} {zz} create:creative_motor[facing=west]", failures)
     if scenario == "burners":
         command(ctl_bin, sock, f"fill {x-16} {y-5} {z-16} {x+15} {y-5} {z+15} "
                 "create:blaze_burner[blaze=smouldering,facing=south]", failures)
@@ -241,7 +255,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "logistics": 32 * 48 + 32, "redstone": 512,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
@@ -335,7 +349,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers"],
+                                          "logistics", "redstone", "repeaters", "contraptions", "fans", "crushers", "burners", "mixers", "pumps"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

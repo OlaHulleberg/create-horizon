@@ -443,6 +443,27 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // FluidPipeBlock: a side open where it connects (the glue sets them,
+        // `updateBlockState`); copper's properties; the core as its shape.
+        "fluid_pipe" => (
+            "minecraft:copper_block",
+            Some(by_property("north", bools, &[[4., 4., 4., 12., 12., 12.]])),
+            own(&[
+                ("down", bools),
+                ("east", bools),
+                ("north", bools),
+                ("south", bools),
+                ("up", bools),
+                ("waterlogged", bools),
+                ("west", bools),
+            ]),
+        ),
+        // PumpBlock: any facing, AllShapes.PUMP; copper's properties.
+        "mechanical_pump" => (
+            "minecraft:copper_block",
+            Some(by_facing(&[[2., 0., 2., 14., 16., 14.]])),
+            own(&[("facing", facing), ("waterlogged", bools)]),
+        ),
         // BasinBlock: a barrel's template for its 18 slots (inputs 0–8, outputs 9–17), stone's
         // properties, netherite's sounds; AllShapes.BASIN_COLLISION_SHAPE (a floor at 5/16
         // inside a rim).
@@ -571,7 +592,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 22] = [
+pub const PARTIALS: [(&str, &str, &str); 23] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -647,6 +668,8 @@ pub const PARTIALS: [(&str, &str, &str); 22] = [
         "create:block/mechanical_mixer/head",
         "up",
     ),
+    // PumpRenderer: the cog, turned to the pump's facing (`partialFacing`, as the shaft half).
+    ("part_pump_cog", "create:block/mechanical_pump/cog", "south"),
     ("part_fluid_water", "create:block/part_fluid_water", "up"),
     ("part_fluid_lava", "create:block/part_fluid_lava", "up"),
 ];
