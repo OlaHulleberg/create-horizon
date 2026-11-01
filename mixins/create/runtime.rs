@@ -198,8 +198,11 @@ pub(super) fn chunk_load(
                 .collect(),
             _ => Vec::new(),
         };
+    let (vaults, filters) = vaults_from_nbt(Game::native_chunk_data(chunk, "create"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
+        w.dims[dim].vaults.load(vaults.into_iter());
+        w.dims[dim].chute_filters.extend(filters);
         w.load_settings(dim, saved.into_iter());
         w.load_belt_items(dim, belts.into_iter());
         w.load_tanks(dim, tanks.into_iter());
@@ -316,6 +319,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_pistons(game, dimension, dim);
     tick_trains(game, dimension, dim);
     sync_curves(game, dimension, dim);
+    tick_vaults(game, dim);
     tick_chutes(game, dim);
     tick_drills(game, dim);
     tick_saws(game, dim);
@@ -741,6 +745,10 @@ pub(super) fn right_click_inner(
     }
     if block == Some(create_engine::Block::Depot) {
         use_depot(game, dim, pos, face, canceled);
+        return;
+    }
+    if block == Some(create_engine::Block::SmartChute) {
+        use_smart_chute(game, dim, pos, face, canceled);
         return;
     }
     if matches!(
@@ -2002,7 +2010,21 @@ pub(super) fn chunk_data_save(
             .collect()
     })
     .unwrap_or_default();
+    let vaults = with_world(|w| w.dims[dim].vaults.column(chunk[0], chunk[1])).unwrap_or_default();
+    let filters: Vec<([i32; 3], String)> = with_world(|w| {
+        let mut v: Vec<([i32; 3], String)> = w.dims[dim]
+            .chute_filters
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]))
+            .map(|(p, f)| (*p, f.clone()))
+            .collect();
+        v.sort();
+        v
+    })
+    .unwrap_or_default();
     if settings.is_empty()
+        && vaults.is_empty()
+        && filters.is_empty()
         && belts.is_empty()
         && tanks.is_empty()
         && windmills.is_empty()
@@ -2022,6 +2044,7 @@ pub(super) fn chunk_data_save(
         return;
     }
     let mut own = horizon_world::nbt::Compound::new();
+    vaults_to_nbt(&mut own, &vaults, &filters);
     if !settings.is_empty() {
         let motors: Vec<i32> = settings
             .iter()
@@ -2762,6 +2785,8 @@ pub(super) fn block_entity(
                 | "create:depot"
                 | "create:basin"
                 | "create:chute"
+                | "create:smart_chute"
+                | "create:item_vault"
                 | "create:mechanical_crafter"
         )
     {
@@ -2799,6 +2824,35 @@ pub(super) fn block_entity_container(
             faces: std::array::from_fn(|_| vec![0]),
             inputs: vec![0],
             outputs: vec![],
+            menu: None,
+            only_when_empty: true,
+        });
+        return;
+    }
+    if block == "create:item_vault" {
+        // ItemVaultBlockEntity's ItemStackHandler (`vaultCapacity` stacks): in and out through
+        // any face. Hoppers and comparators see this block's own slots; Create's funnels and
+        // chutes the whole vault's (`insert_vault`, `extract_vault`).
+        let all: Vec<usize> = (0..create_engine::vault::SLOTS).collect();
+        *container = Some(horizon_client::containers::ModContainer {
+            slots: create_engine::vault::SLOTS,
+            faces: std::array::from_fn(|_| all.clone()),
+            inputs: all.clone(),
+            outputs: all,
+            menu: None,
+            only_when_empty: false,
+        });
+        return;
+    }
+    if block == "create:smart_chute" {
+        // ChuteItemHandler of a smart chute: hoppers below take its stack; nothing is put in
+        // from outside, as a hopper here could not ask its filter (`canAcceptItem`): it takes
+        // from the hopper above itself (`handleInputFromAbove`).
+        *container = Some(horizon_client::containers::ModContainer {
+            slots: 1,
+            faces: std::array::from_fn(|_| vec![0]),
+            inputs: vec![],
+            outputs: vec![0],
             menu: None,
             only_when_empty: true,
         });
@@ -2976,6 +3030,8 @@ pub(super) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
     let Some(dim) = dimension_index(game.dim.id()) else {
         return;
     };
+    // Chutes asleep under this container (or under its vault) look into it again.
+    with_world(|w| w.container_changed(dim, pos));
     // An item put into a crafter: its chain may start (`insertItem` -> `checkCompletedRecipe`).
     if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
         == Some(create_engine::Block::MechanicalCrafter)
@@ -2984,9 +3040,10 @@ pub(super) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
         return;
     }
     // A chute was given a stack (a hopper above): it falls from the top.
-    if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
-        == Some(create_engine::Block::Chute)
-    {
+    if matches!(
+        with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten(),
+        Some(create_engine::Block::Chute | create_engine::Block::SmartChute)
+    ) {
         with_world(|w| {
             w.dims[dim].chutes.entry(pos).or_insert(1.0);
         });
@@ -3054,6 +3111,32 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
     let block = with_world(|w| w.table.get(state.0).map(|(b, _)| b)).flatten();
     if block == Some(create_engine::Block::SteamEngine) {
         place_engine(game, pos, state);
+        return;
+    }
+    if block == Some(create_engine::Block::ItemVault) {
+        // ItemVaultBlock.getStateForPlacement: the axis of the vault it was placed against
+        // unless sneaking, else the player's horizontal facing's.
+        let o = clicked_face.offset();
+        let on = game
+            .world
+            .block(pos[0] - o[0], pos[1] - o[1], pos[2] - o[2])
+            .0;
+        let preferred = with_world(|w| {
+            w.table
+                .get(on)
+                .filter(|(b, _)| *b == create_engine::Block::ItemVault)
+                .and_then(|(_, i)| i.axis)
+        })
+        .flatten();
+        let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+        let axis = match preferred {
+            Some(a) if !sneaking => a,
+            _ => create_engine::place::horizontal_direction(game.yaw).axis(),
+        };
+        let now = with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.axis)).flatten();
+        if now != Some(axis) {
+            game.native_set_block_property(pos, "axis", if axis == Axis::X { "x" } else { "z" });
+        }
         return;
     }
     if block == Some(create_engine::Block::FluidPipe) {

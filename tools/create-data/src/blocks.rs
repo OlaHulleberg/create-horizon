@@ -670,6 +670,20 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 ("waterlogged", bools),
             ]),
         ),
+        // SmartChuteBlock: the chute's barrel template for its one slot, a full block; only
+        // `powered`, true by default (`registerDefaultState`), the glue sets it from redstone.
+        "smart_chute" => (
+            "minecraft:barrel",
+            None,
+            own(&[("powered", &["true", "false"])]),
+        ),
+        // ItemVaultBlock: a barrel's template for its 20 slots (`vaultCapacity`), a full block;
+        // its horizontal axis (x by default) and `large`, set by the glue as vaults form.
+        "item_vault" => (
+            "minecraft:barrel",
+            None,
+            own(&[("axis", &["x", "z"]), ("large", bools)]),
+        ),
         // StationBlock: a full block of gold's properties (its track target is the glue's).
         "track_station" => ("minecraft:gold_block", None, None),
         // SignalBlock: beside a track it splits it into sections; its type and redstone power.
