@@ -33,6 +33,8 @@ the server thread's smoothed tick time. Scenarios:
   honey    16 honey sources (Create's fluid, gap 5) set once and left to spread: against waterstill
   curvetracks 32 track blocks in pairs, a quarter turn apart (control for curves)
   curves   the same pairs joined by 16 curved tracks placed with the track item (GPU parts)
+  gauges   the kinetic rows with speedometers and stressometers in place of shafts (4,032 gauges whose
+           needles settle and are drawn still)
   deployers  16 deployers at 16 rpm facing down over depots, each given 64 oak planks by a
            player's click and 64 shafts on its depot: 16 deployers making cogwheels (phase 3)
   bearings 16 mechanical bearings facing up at 16 rpm, each turning a slime block with four
@@ -134,6 +136,13 @@ def build(ctl_bin, sock, scenario, center):
         for i, name in enumerate(STATIC_BLOCKS):
             x0 = x - 16 + i * 4
             command(ctl_bin, sock, f"fill {x0} {y-5} {z-16} {x0+3} {y-5} {z+15} create:{name}", failures)
+    if scenario == "gauges":
+        for row in range(64):
+            zz = z - 32 + row
+            gauge = "speedometer" if row % 2 == 0 else "stressometer"
+            command(ctl_bin, sock, f"setblock {x-32} {y-6} {zz} create:creative_motor[facing=east]", failures)
+            command(ctl_bin, sock, f"fill {x-31} {y-6} {zz} {x+31} {y-6} {zz} "
+                    f"create:{gauge}[facing=up,axis_along_first=true]", failures)
     if scenario in ("kinetic", "chains", "goggles", "presses"):
         # `chains`, the control: the same layout in vanilla blocks (the shaft's template, an iron chain).
         motor, shaft = {
@@ -593,7 +602,7 @@ def run_once(args, scenario):
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
-                    "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "curves": 32, "curvetracks": 32, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "diodes": 512, "links": 64,
+                    "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "curves": 32, "curvetracks": 32, "gauges": 64 * 64, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "diodes": 512, "links": 64,
                     "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
@@ -775,7 +784,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
+                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "gauges", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

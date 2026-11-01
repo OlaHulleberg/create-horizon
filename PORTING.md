@@ -224,6 +224,13 @@ Brass tunnels splitting stacks cost nothing measurable (`benchmarks/create-p4b-*
 
 Signals cost no tick; frame p50 is 6% over the control, within budget and its run's spread (`benchmarks/create-p9s-*.json`). Headless proof: one straight track with stations at 0, 25 and 50 and signals at 15 and 35; a train assembled at the first and sent to the last stopped just before the signal at 15 while a second train stood assembled at 25 (after 15 s nothing at the last station; a screenshot shows it waiting by the signal); once the second was taken apart at its station the first went on and stood at the last (its bogey, slime and gold there). Engine tests: a red signal ahead, a green one, one beyond the stop, the other way; a train waits at the stop and keeps its destination.
 
+| Scenario (2026-11-01, Phase 2 gauges, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| kinetic: 64 motors × 63 shafts (control) | 1624 ± 13 | 0.570 / 1.204 (cpu 0.382, gpu 0.514) | 2.902 ± 0.063 | control |
+| gauges: the same rows of speedometers and stressometers (4,032 gauges) | 1260 ± 16 | 0.736 / 1.541 (cpu 0.425, gpu 0.678) | 2.982 ± 0.082 | frame CPU ≤ control + 10%, tick ≤ control + 0.25 ms; GPU: the draw of their heads and needles |
+
+The speedometer and stressometer (`gauge.rs`, after `GaugeBlock`, `SpeedGaugeBlockEntity`, `StressGaugeBlockEntity`, `GaugeRenderer`): they pass rotation as a shaft does, and their needles turn to Create's dial values, read only for gauges in a network that solved, glided on the GPU and drawn still once settled (`benchmarks/create-p2gauges-*.json`: frame CPU and tick as the control; the GPU's extra 0.17 ms is drawing a head and needle on each dial face of 4,032 gauges, where a shaft is one part). Proven headless: a motor at 16 rpm through a speedometer and a stressometer into a press: the speedometer's needle low, then swung up to about 45° at 46 rpm, the stressometer's needle near its start (a press draws little of a creative motor's capacity) (screenshots).
+
 | Scenario (2026-11-01, Phase 7 brass diodes, `--no-mobs`, 5 runs, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1792 ± 16 | 0.513 / 1.135 | 3.119 ± 0.145 | baseline |
