@@ -131,8 +131,7 @@ pub fn splits(axis: Axis, shape: Shape, movement: Dir, count: u8) -> bool {
     count > 1 && shape.junction() && movement.axis() == axis
 }
 
-/// `BrassTunnelBlockEntity.SelectionMode` (the value box that picks it is not ported: tunnels
-/// split).
+/// `BrassTunnelBlockEntity.SelectionMode`, picked by the wheel or the value board.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     #[default]
@@ -173,6 +172,34 @@ impl Mode {
         let i = (self.index() as i32 + steps).clamp(0, Mode::ALL.len() as i32 - 1);
         Mode::ALL[i as usize]
     }
+
+    /// The mode at `SelectionMode` ordinal `i`; None for `RANDOMIZE`, `SYNCHRONIZE` (not ported)
+    /// or past the end.
+    pub fn from_option(i: i32) -> Option<Mode> {
+        Mode::ALL.get(usize::try_from(i).ok()?).copied()
+    }
+}
+
+/// The names of all of Create's `SelectionMode`s in order (`create.tunnel.selection_mode.*`):
+/// the value board shows all seven, as Create's does.
+pub const OPTIONS: [&str; 7] = [
+    "Split",
+    "Forced Split",
+    "Round Robin",
+    "Forced Round Robin",
+    "Prefer Nearest",
+    "Randomize",
+    "Synchronize Inputs",
+];
+
+/// `BrassTunnelBlockEntity.hasDistributionBehaviour` (its mode's value box is active only then)
+/// for a tunnel that is not connected to others (`connectedLeft`/`Right` are not ported): a flap
+/// on a side across its axis (`updateTunnelConnections`), which a tunnel beside it (`tunnel(d)`)
+/// occludes. The extended belt funnel that also occludes one is not modelled.
+pub fn distributes(axis: Axis, shape: Shape, tunnel: impl Fn(Dir) -> bool) -> bool {
+    sides(axis, shape)
+        .into_iter()
+        .any(|d| d.axis() != axis && !tunnel(d))
 }
 
 /// A brass tunnel's typed state: the stack it holds to hand out, the side it came in through,
@@ -374,6 +401,13 @@ mod tests {
             updated(closed, (Axis::Z, Shape::Cross)),
             (Axis::Z, Shape::Cross)
         );
+        // Brass tunnels distribute with an open side across their axis not against a tunnel.
+        assert!(distributes(Axis::X, Shape::TLeft, |_| false));
+        assert!(!distributes(Axis::X, Shape::TLeft, |d| d == Dir::South));
+        assert!(!distributes(Axis::X, Shape::Window, |_| false));
+        assert_eq!(Mode::from_option(4), Some(Mode::PreferNearest));
+        assert_eq!((Mode::from_option(5), Mode::from_option(-1)), (None, None));
+        assert_eq!(OPTIONS[Mode::RoundRobin.index()], Mode::RoundRobin.label());
         // Junctions split stacks moving along them.
         assert!(splits(Axis::X, Shape::Cross, Dir::East, 2));
         assert!(!splits(Axis::X, Shape::Cross, Dir::East, 1));
