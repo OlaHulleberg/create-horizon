@@ -1,0 +1,51 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:andesite"
+  },
+  "item": false,
+  "shapes": {
+    "property": "waterlogged",
+    "values": {
+      "false": [
+        [
+          0.1875,
+          -0.1875,
+          0.1875,
+          0.8125,
+          0.125,
+          0.8125
+        ],
+        [
+          0.375,
+          0.0,
+          0.375,
+          0.625,
+          1.0,
+          0.625
+        ]
+      ],
+      "true": [
+        [
+          0.1875,
+          -0.1875,
+          0.1875,
+          0.8125,
+          0.125,
+          0.8125
+        ],
+        [
+          0.375,
+          0.0,
+          0.375,
+          0.625,
+          1.0,
+          0.625
+        ]
+      ]
+    }
+  }
+}

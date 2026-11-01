@@ -42,6 +42,8 @@ pub struct StateInfo {
     pub large: bool,
     /// `waterlogged` (a backtank fills only out of water).
     pub waterlogged: bool,
+    /// An elevator contact's `calling`.
+    pub calling: bool,
 }
 
 impl StateInfo {
@@ -74,6 +76,7 @@ impl StateInfo {
                 "powered" => s.powered = v == "true",
                 "large" => s.large = v == "true",
                 "waterlogged" => s.waterlogged = v == "true",
+                "calling" => s.calling = v == "true",
                 "powering" => s.powering = v == "true",
                 "receiver" => s.receiver = v == "true",
                 "inverted" => s.inverted = v == "true",
@@ -316,10 +319,22 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         Block::GantryShaft => s
             .facing
             .map_or([None, None], |f| one(Part::shaft(f.axis()))),
-        // MechanicalBearingBlock: a shaft out of its back, turning what it carries.
-        Block::MechanicalBearing => s
+        // MechanicalBearingBlock and ClockworkBearingBlock (BearingBlock): a shaft out of its
+        // back, turning what it carries.
+        Block::MechanicalBearing | Block::ClockworkBearing => s
             .facing
             .map_or([None, None], |f| one(Part::half(f.opposite()))),
+        // PulleyBlock (HorizontalAxisKineticBlock): shafts at both ends of its axis.
+        Block::RopePulley => s.axis.map_or([None, None], |a| one(Part::shaft(a))),
+        // ElevatorPulleyBlock (HorizontalKineticBlock): shafts across its facing
+        // (`getRotationAxis`: the facing turned clockwise).
+        Block::ElevatorPulley => s.facing.map_or([None, None], |f| {
+            one(Part::shaft(if f.axis() == Axis::X {
+                Axis::Z
+            } else {
+                Axis::X
+            }))
+        }),
         // MechanicalPressBlock: turns on its horizontal facing's axis, shafts at both ends.
         Block::MechanicalPress => s
             .facing
@@ -405,6 +420,7 @@ pub fn is_kinetic(block: Block) -> bool {
         track: None,
         large: false,
         waterlogged: false,
+        calling: false,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

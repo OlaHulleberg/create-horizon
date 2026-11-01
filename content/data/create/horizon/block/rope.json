@@ -1,0 +1,34 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 0.0,
+    "explosion_resistance": 0.0,
+    "sounds": "minecraft:white_wool"
+  },
+  "item": false,
+  "shapes": {
+    "property": "waterlogged",
+    "values": {
+      "false": [
+        [
+          0.375,
+          0.0,
+          0.375,
+          0.625,
+          1.0,
+          0.625
+        ]
+      ],
+      "true": [
+        [
+          0.375,
+          0.0,
+          0.375,
+          0.625,
+          1.0,
+          0.625
+        ]
+      ]
+    }
+  }
+}

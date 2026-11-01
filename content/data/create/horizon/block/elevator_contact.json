@@ -1,0 +1,33 @@
+{
+  "template": "minecraft:glowstone",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:gold_block",
+    "light": 0
+  },
+  "item": true,
+  "state_properties": {
+    "calling": [
+      "false",
+      "true"
+    ],
+    "facing": [
+      "south",
+      "up",
+      "down",
+      "north",
+      "west",
+      "east"
+    ],
+    "powered": [
+      "false",
+      "true"
+    ],
+    "powering": [
+      "false",
+      "true"
+    ]
+  }
+}

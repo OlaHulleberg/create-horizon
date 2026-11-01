@@ -582,6 +582,76 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         ),
         // MechanicalBearingBlock (BearingBlock): as the windmill bearing.
         "mechanical_bearing" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
+        // ClockworkBearingBlock (BearingBlock): as the mechanical bearing.
+        "clockwork_bearing" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
+        // PulleyBlock (HorizontalAxisKineticBlock, stone's properties, `noOcclusion`): a full
+        // block on a horizontal axis; glass's template hides nothing behind it.
+        "rope_pulley" => ("minecraft:glass", None, own(&[("axis", &["x", "z"])])),
+        // PulleyBlock.RopeBlock: AllShapes.FOUR_VOXEL_POLE upright, waterlogged as it is placed
+        // (in water); no item (`dropOther` none: only a pulley places it).
+        "rope" => (
+            "minecraft:heavy_core",
+            Some(by_property(
+                "waterlogged",
+                bools,
+                &[[6., 0., 6., 10., 16., 10.]],
+            )),
+            None,
+        ),
+        // PulleyBlock.MagnetBlock: AllShapes.PULLEY_MAGNET (its plate reaching 3 px into the
+        // block below, and the pole), stone's properties.
+        "pulley_magnet" => (
+            "minecraft:heavy_core",
+            Some(by_property(
+                "waterlogged",
+                bools,
+                &[[3., -3., 3., 13., 2., 13.], [6., 0., 6., 10., 16., 10.]],
+            )),
+            None,
+        ),
+        // ElevatorPulleyBlock (HorizontalKineticBlock, `SharedProperties::softMetal`):
+        // AllShapes.ELEVATOR_PULLEY (two walls across its shaft and the box between them).
+        "elevator_pulley" => {
+            let px = |b: &[Px]| -> Value {
+                json!(b.iter().map(|b| b.map(|v| v / 16.0)).collect::<Vec<_>>())
+            };
+            let along_x = px(&[
+                [0., 0., 0., 16., 16., 2.],
+                [0., 0., 14., 16., 16., 16.],
+                [2., 0., 2., 14., 14., 14.],
+            ]);
+            let along_z = px(&[
+                [0., 0., 0., 2., 16., 16.],
+                [14., 0., 0., 16., 16., 16.],
+                [2., 0., 2., 14., 14., 14.],
+            ]);
+            (
+                "minecraft:gold_block",
+                Some(json!({ "property": "facing", "values": {
+                    "east": along_x, "west": along_x, "north": along_z, "south": along_z } })),
+                own(&[("facing", &["north", "south", "west", "east"])]),
+            )
+        }
+        // RedstoneContactBlock (WrenchableDirectionalBlock, stone's properties): its facing and
+        // `powered`; not a redstone conductor (`shouldCheckWeakPower` false), so glowstone's
+        // template without its light, as the rose quartz lamp; the glue gives its signal.
+        "redstone_contact" => (
+            "minecraft:glowstone",
+            None,
+            own(&[("facing", facing), ("powered", bools)]),
+        ),
+        // ElevatorContactBlock (`SharedProperties::softMetal`): facing (south by default),
+        // `calling`, `powered`, `powering`; the redstone contact's template.
+        "elevator_contact" => (
+            "minecraft:glowstone",
+            None,
+            own(&[
+                ("calling", bools),
+                ("facing", &["south", "up", "down", "north", "west", "east"]),
+                ("powered", bools),
+                ("powering", bools),
+            ]),
+        ),
         // SailBlock: a thin plane on any facing (AllShapes.SAIL / SAIL_FRAME, forDirectional
         // from up), wood's template with scaffolding's sounds.
         "sail_frame" => (
@@ -910,7 +980,12 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         animated,
         item: !matches!(
             b.name.as_str(),
-            "belt" | "crushing_wheel_controller" | "minecart_anchor" | "powered_shaft"
+            "belt"
+                | "crushing_wheel_controller"
+                | "minecart_anchor"
+                | "powered_shaft"
+                | "rope"
+                | "pulley_magnet"
         ),
     })
 }
@@ -1286,6 +1361,11 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     if b.name == "rose_quartz_lamp" {
         props.insert("light".into(), json!(0));
         props.insert("map_color".into(), json!(42));
+    }
+    // Contacts on glowstone's template: no light of their own (an elevator contact's 10 while
+    // powering is per state).
+    if matches!(b.name.as_str(), "redstone_contact" | "elevator_contact") {
+        props.insert("light".into(), json!(0));
     }
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));
