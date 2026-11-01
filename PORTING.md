@@ -23,7 +23,17 @@ Target: a horizon-mixins native bundle in `horizon/`, plus new hook points upstr
 
 - `mixins/create/engine` (`create-engine`): Create's rules as plain Rust with no game types, staged into Horizon's
   workspace as a bundle crate (horizon-mixins 0.6 `[[crate]]`); its tests also run there (`horizon.py test`).
-- `mixins/create/runtime.rs`: the glue module `crate::game::create`, per-world state on the server thread.
+- Glue, one bundle module per subsystem, siblings in Horizon's `game.rs` that reach each other's items (`pub(super)`,
+  glob imports): `runtime.rs` (`create`: the hook entry points every helper file calls, per-world state, client parts,
+  recipes), `trains.rs`, `contraptions.rs`, `processing.rs`, `fluids.rs`, `logistics.rs`, `redstone.rs`. Modules a
+  bundle places beside Horizon's private code reach it without Horizon helpers: `deployer_use.rs` in
+  `game/dispenser.rs`, `funnel_extract.rs` in `game/machines.rs`.
+- Where things go (the rules for anyone porting a feature): Create's Java under `/workspace/Create/src` is the spec;
+  its rules, numbers and formulas go in a `create-engine` module with unit tests; the glue goes in its subsystem's
+  bundle module; hot hooks start with the one-range state test and do no string compares or allocations when they
+  miss; nothing ticks for blocks with nothing to do; Horizon itself is not changed for one mod's needs (a module
+  beside Horizon's code first; a general hook only where no mod could add it, kept as Horizon's maintainers plan
+  hooks in `docs/native-hooks-neoforge.md`); no Java runs.
 - Content: Horizon content-mod layer, namespace `create`. `create-data compile` writes the block/item declarations
   (`content/`, committed: our own files) and `engine/src/generated.rs` (one `Block` enum over all 643 blocks, sorted as
   Horizon registers them). `create-data prepare <jar|folders>` writes the playable content mod: declarations + Create's
