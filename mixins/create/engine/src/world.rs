@@ -1250,12 +1250,17 @@ impl CreateWorld {
             {
                 d.piston_checks.push(pos);
             }
-            if let Event::Speed { pos, .. } = *e
+            // A new block's first report (still) is no speed change for a clock that isn't
+            // running: Create's `onSpeedChanged` doesn't come, so it doesn't assemble.
+            if let Event::Speed { pos, speed, .. } = *e
                 && let Some(b) = d.states.get(&pos).and_then(|&s| self.table.get(s))
                 && matches!(
                     b.0,
                     Block::ClockworkBearing | Block::RopePulley | Block::ElevatorPulley
                 )
+                && !(b.0 == Block::ClockworkBearing
+                    && speed == 0.0
+                    && !d.lifts.clocks.contains_key(&pos))
             {
                 d.lifts.speed_changed(pos, b.0);
             }

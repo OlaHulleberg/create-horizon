@@ -1815,7 +1815,11 @@ fn tick_contacts(game: &mut Game<'_>, dimension: &str, dim: usize) {
                         call_contact(game, dimension, dim, pos, facing);
                     }
                 }
-                if info.powering != valid {
+                // `updateShape` (the block it faces changed): a contact an elevator lit keeps
+                // its light through other neighbour changes.
+                let held =
+                    with_world(|w| w.dims[dim].lifts.contact_held.contains(&pos)) == Some(true);
+                if info.powering != valid && !(info.powering && held) {
                     with_world(|w| w.dims[dim].lifts.schedule(pos, now));
                 }
             }
@@ -1833,6 +1837,14 @@ fn tick_contacts(game: &mut Game<'_>, dimension: &str, dim: usize) {
             || info
                 .facing
                 .is_some_and(|f| contact_faces_back(game, pos, f));
+        with_world(|w| {
+            let held = &mut w.dims[dim].lifts.contact_held;
+            if lit {
+                held.insert(pos);
+            } else {
+                held.remove(&pos);
+            }
+        });
         if info.powering || should {
             set_flags(game, dimension, pos, &[("powering", should)], clients);
         }
