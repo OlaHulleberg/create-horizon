@@ -172,6 +172,30 @@ pub mod chunk {
     impl Chunk { pub fn min_y(&self) -> i32 { 0 } }
 }
 ''',
+        # The hopper's private container rules, where the funnels' extraction module goes.
+        'crates/horizon-client/src/game/machines.rs': '''
+use super::Game;
+use crate::items::ItemStack;
+use horizon_core::geometry::Direction;
+type Pos = (i32, i32, i32);
+struct View;
+impl View {
+    fn slots_for_face(&self, face: Option<Direction>) -> Vec<usize> { let _ = face; Vec::new() }
+}
+struct Containers;
+impl Containers {
+    fn view(&self, pos: Pos, blocked_chests: bool) -> Option<View> { let _ = (pos, blocked_chests); None }
+    fn get(&self, view: &View, slot: usize) -> Option<&ItemStack> { let _ = (view, slot); None }
+    fn can_take(&self, view: &View, slot: usize, stack: &ItemStack, face: Direction) -> bool {
+        let _ = (view, slot, stack, face); false
+    }
+}
+impl Game<'_> {
+    fn containers(&self) -> Containers { Containers }
+    fn slot_mut_at(&mut self, view: &View, slot: usize) -> Option<&mut Option<ItemStack>> { let _ = (view, slot); None }
+    fn view_changed(&mut self, view: &View) { let _ = view; }
+}
+''',
         # The dispenser's private behaviours, where the deployer's item-use module goes.
         'crates/horizon-client/src/game/dispenser.rs': '''
 use super::Game;
@@ -193,6 +217,7 @@ impl Game<'_> {
 ''',
         'crates/horizon-client/src/game.rs': '''
 mod dispenser;
+mod machines;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
 use horizon_world::level::Dimension as LevelDimension;
 use horizon_core::position::BlockPos;
@@ -333,11 +358,6 @@ pub mod native_hooks {
         pub fn native_text(&self, batch: &mut horizon_client::hud::HudBatch, text: &str, at: [f32; 2], rgb: u32, shadow: bool) {
             let _ = (at, rgb, shadow);
             batch.drawn.push(text.to_owned());
-        }
-        pub fn native_extract_item(&mut self, pos: [i32; 3], face: horizon_core::geometry::Direction, max: u32)
-            -> Option<horizon_client::items::ItemStack> {
-            let _ = (pos, face, max);
-            None
         }
         pub fn native_insert_item(&mut self, pos: [i32; 3], face: horizon_core::geometry::Direction,
                                   stack: horizon_client::items::ItemStack) -> Option<horizon_client::items::ItemStack> {
