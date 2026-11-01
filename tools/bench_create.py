@@ -30,6 +30,8 @@ the server thread's smoothed tick time. Scenarios:
            deployers' hands reach from, fired every 4 s (a deployer at 16 rpm: 80 ticks a use)
   waterstill the same 16 water sources set once and left to spread: the water sheet's own drawing
   honey    16 honey sources (Create's fluid, gap 5) set once and left to spread: against waterstill
+  curvetracks 32 track blocks in pairs, a quarter turn apart (control for curves)
+  curves   the same pairs joined by 16 curved tracks placed with the track item (GPU parts)
   deployers  16 deployers at 16 rpm facing down over depots, each given 64 oak planks by a
            player's click and 64 shafts on its depot: 16 deployers making cogwheels (phase 3)
   bearings 16 mechanical bearings facing up at 16 rpm, each turning a slime block with four
@@ -343,6 +345,13 @@ def build(ctl_bin, sock, scenario, center):
                     failures)
             command(ctl_bin, sock, f"setblock {xx} {y-5} {z-1} create:creative_motor[facing=south]", failures)
         command(ctl_bin, sock, f"fill {x-16} {y-8} {z-2} {x+17} {y-8} {z+3} minecraft:stone", failures)
+    if scenario in ("curves", "curvetracks"):
+        command(ctl_bin, sock, f"fill {x-22} {y-7} {z-22} {x+22} {y-7} {z+22} minecraft:stone", failures)
+        for gx in range(4):
+            for gz in range(4):
+                x0, z0 = x - 20 + 10 * gx, z - 20 + 10 * gz
+                command(ctl_bin, sock, f"setblock {x0} {y-6} {z0} create:track[shape=xo]", failures)
+                command(ctl_bin, sock, f"setblock {x0+8} {y-6} {z0+8} create:track[shape=zo]", failures)
     if scenario in ("deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey"):
         # Wide enough that the water (7 blocks of flow) never pours off onto plants below: their
         # drops would be drawn as item entities.
@@ -515,6 +524,32 @@ while time.time() < end:
 """
 
 
+def arm_curves(ctl_bin, sock, center):
+    """Joins each pair of `curves` with the track item, as a player clicks (first the east-west
+    track looking east, then the north-south one looking south); returns how many were joined."""
+    x, y, z = center
+    ctl(ctl_bin, sock, "command", "item replace entity @p hotbar.0 with create:track 64")
+    ctl(ctl_bin, sock, "select", "1")
+    for gx in range(4):
+        for gz in range(4):
+            x0, z0 = x - 20 + 10 * gx, z - 20 + 10 * gz
+            for (px, pz, lx, lz) in ((x0 - 1.5, z0 + 0.5, x0 + 0.5, z0 + 0.5),
+                                     (x0 + 8.5, z0 + 6.5, x0 + 8.5, z0 + 8.5)):
+                ctl(ctl_bin, sock, "tp", str(px), str(y - 6), str(pz))
+                time.sleep(0.3)
+                ctl(ctl_bin, sock, "look-at", str(lx), str(y - 6 + 0.06), str(lz))
+                time.sleep(0.2)
+                ctl(ctl_bin, sock, "use-item")
+                time.sleep(0.3)
+    joined = 0
+    for gx in range(4):
+        for gz in range(4):
+            x0, z0 = x - 20 + 10 * gx, z - 20 + 10 * gz
+            b = ctl(ctl_bin, sock, "blocks", str(x0), str(y - 6), str(z0), str(x0), str(y - 6), str(z0))
+            joined += sum(1 for e in b.get("blocks", []) if "turn=true" in e[3])
+    return joined
+
+
 def count_create(ctl_bin, sock, center):
     """Create blocks the scene really holds, counted in 16-row bands: one `blocks` reply lists at
     most 4,096 blocks."""
@@ -557,7 +592,7 @@ def run_once(args, scenario):
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
-                    "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
+                    "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "curves": 32, "curvetracks": 32, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
                     "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
@@ -585,6 +620,10 @@ def run_once(args, scenario):
             armed = arm_deployers(ctl_bin, sock, center)
             if armed != 16:
                 raise SystemExit(f"only {armed} of 16 deployers took their planks")
+        if scenario == "curves":
+            joined = arm_curves(ctl_bin, sock, center)
+            if joined != 16:
+                raise SystemExit(f"only {joined} of 16 curves were joined")
         if scenario in ("deployeruse", "deployerstroke"):
             item = "minecraft:water_bucket" if scenario == "deployeruse" else "minecraft:stick"
             armed = arm_deployers_east(ctl_bin, sock, center, item)
@@ -735,7 +774,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
+                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
