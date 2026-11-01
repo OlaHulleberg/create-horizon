@@ -1,0 +1,7 @@
+{
+  "template": "minecraft:stick",
+  "rarity": "uncommon",
+  "components": {
+    "minecraft:enchantment_glint_override": true
+  }
+}

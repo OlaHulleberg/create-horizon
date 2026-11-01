@@ -227,10 +227,21 @@ pub(super) fn chunk_unload(dimension: &str, chunk: &horizon_client::chunk::Chunk
 
 /// After a server level's tick: re-solve what changed there (nothing when nothing did), break
 /// the blocks Create would break, and tell the level's players what turns now.
+thread_local! {
+    /// Commands a player's hook asked for, run at the next level tick (`native_run_command` only
+    /// runs where no player's state is swapped in).
+    static LATER: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     let Some(dim) = dimension_index(dimension) else {
         return;
     };
+    if LATER.with(|l| !l.borrow().is_empty()) {
+        for line in LATER.with(|l| std::mem::take(&mut *l.borrow_mut())) {
+            game.native_run_command(&line);
+        }
+    }
     with_world(|w| w.tick_cranks(dim));
     // Water wheels whose surroundings changed, and one in 60 of the others each tick.
     let tick = game.world.game_time as u64;
@@ -486,7 +497,16 @@ thread_local! {
 }
 
 /// The item use that follows a click a Create block took (the same tick, or the next).
-pub(super) fn use_item(game: &mut Game<'_>, claimed: &mut bool) {
+pub(super) fn use_item(
+    game: &mut Game<'_>,
+    stack: &horizon_client::items::ItemStack,
+    claimed: &mut bool,
+) {
+    if &*stack.item == "create:experience_nugget" {
+        use_nugget(game, stack.count);
+        *claimed = true;
+        return;
+    }
     let Some((player, at)) = TAKEN_USE.with(|t| t.get()) else {
         return;
     };
@@ -495,6 +515,67 @@ pub(super) fn use_item(game: &mut Game<'_>, claimed: &mut bool) {
     if me == player && (at..=at + TAKEN_WINDOW).contains(&now) {
         *claimed = true;
         TAKEN_USE.with(|t| t.set(None));
+    }
+}
+
+/// `ExperienceNuggetItem.use`: the stack (one when sneaking) thrown out from before the eyes as
+/// experience orbs, 3 points a nugget, and used up.
+fn use_nugget(game: &mut Game<'_>, count: u32) {
+    let Some((eye, look)) = game.aim() else {
+        return;
+    };
+    let Some(dimension) = game.native_acting_player().map(|p| p.dimension) else {
+        return;
+    };
+    let sneaking = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+    let used = if sneaking { 1 } else { count };
+    // `look × rotate((-.75, 0, 0), -yRot, Y)`: to the side of the view.
+    let yaw = f64::from(game.yaw).to_radians();
+    let side = [-0.75 * yaw.cos(), 0.0, -0.75 * yaw.sin()];
+    let cross = [
+        look[1] * side[2] - look[2] * side[1],
+        look[2] * side[0] - look[0] * side[2],
+        look[0] * side[1] - look[1] * side[0],
+    ];
+    let at = [
+        eye[0] + look[0] * 0.5 + cross[0],
+        eye[1] + look[1] * 0.5 + cross[1],
+        eye[2] + look[2] * 0.5 + cross[2],
+    ];
+    // `offsetRandomly(ZERO, level.random, 1).normalize()`: a scatter; any draw will do.
+    let mut seed = game.world.game_time as u64 ^ 0x9e37_79b9_7f4a_7c15;
+    let mut draw = || {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((seed >> 40) as f64 / (1u64 << 24) as f64 - 0.5) * 2.0
+    };
+    for value in create_engine::nugget::orbs(used) {
+        let o = [draw(), draw(), draw()];
+        let n = (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt().max(1e-9);
+        let m = [
+            look[0] * 0.2 + o[0] / n * 0.1,
+            look[1] * 0.2 + 0.2 + o[1] / n * 0.1,
+            look[2] * 0.2 + o[2] / n * 0.1,
+        ];
+        // Commands don't run inside a player's hook: the orbs appear at the next level tick.
+        LATER.with(|l| {
+            l.borrow_mut().push(format!(
+                "execute in {dimension} run summon minecraft:experience_orb {} {} {} {{Value:{value}s,Motion:[{}d,{}d,{}d]}}",
+                at[0], at[1], at[2], m[0], m[1], m[2]
+            ))
+        });
+    }
+    let slot = if game.hand == horizon_client::first_person::Hand::Off {
+        &mut game.offhand
+    } else {
+        &mut game.inventory[game.selected]
+    };
+    if let Some(s) = slot.as_mut() {
+        s.count = s.count.saturating_sub(used);
+        if s.count == 0 {
+            *slot = None;
+        }
     }
 }
 

@@ -200,6 +200,16 @@ fn compile(create: &Path, out: &Path) {
             });
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
+        } else if name == "experience_nugget" {
+            // ExperienceNuggetItem: uncommon, always glinting (`isFoil`); its use (orbs) is the
+            // native mod's.
+            let doc = json!({
+                "template": "minecraft:stick",
+                "rarity": "uncommon",
+                "components": { "minecraft:enchantment_glint_override": true }
+            });
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
         } else if name == "builders_tea" {
             // BuildersTeaItem: 16 a stack, drunk over 42 ticks (`UseAnim.DRINK`), always edible,
             // 1 nutrition at .6 (1.2 saturation), Haste I for 3 minutes without particles or

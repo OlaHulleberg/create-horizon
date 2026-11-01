@@ -21,6 +21,7 @@ pub mod generated;
 pub mod kinetics;
 pub mod latch;
 pub mod link;
+pub mod nugget;
 pub mod parts;
 pub mod piston;
 pub mod place;
