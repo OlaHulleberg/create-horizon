@@ -490,7 +490,9 @@ pub(super) fn tick_diodes(game: &mut Game<'_>, dimension: &str, dim: usize) {
             next.push((pos, now + diode::BLOCK_DELAY));
         }
     }
-    if running {
+    // `ServerLevel.tick` runs block ticks before block entities: a diode just `powered` above
+    // (and so now running) ticks in this game tick too.
+    if running || with_world(|w| !w.dims[dim].diode_running.is_empty()) == Some(true) {
         for (pos, powering) in with_world(|w| w.tick_diodes(dim)).unwrap_or_default() {
             // `setBlockAndUpdate`, then `DiodeBlock.onPlace` -> `updateNeighborsInFront`.
             if set_flags(
@@ -504,14 +506,23 @@ pub(super) fn tick_diodes(game: &mut Game<'_>, dimension: &str, dim: usize) {
             }
         }
     }
+    // The diodes with a block tick scheduled (`hasScheduledTick`), gathered once.
+    let mut pending: std::collections::HashSet<[i32; 3]> = if checks.is_empty() {
+        Default::default()
+    } else {
+        with_world(|w| w.dims[dim].diode_ticks.iter().map(|t| t.0).collect()).unwrap_or_default()
+    };
+    if !checks.is_empty() {
+        pending.extend(next.iter().map(|t| t.0));
+    }
     for (pos, delay) in checks {
         let state = game.world.block(pos[0], pos[1], pos[2]).0;
         let Some((_, s)) = diode_state(state) else {
             continue;
         };
-        let pending = next.iter().any(|t: &([i32; 3], i64)| t.0 == pos)
-            || with_world(|w| w.dims[dim].diode_ticks.iter().any(|t| t.0 == pos)) == Some(true);
-        if !pending && diode::needs_tick(s.powered, powered_from(game, pos, s.facing)) {
+        if !pending.contains(&pos) && diode::needs_tick(s.powered, powered_from(game, pos, s.facing))
+        {
+            pending.insert(pos);
             next.push((pos, now + delay));
         }
     }

@@ -914,7 +914,7 @@ pub(super) fn values_from_server(d: &[u8]) {
 
 /// A pick on a value board (`ValueSettingsPacket`: position, row, column), a board's question
 /// for the current setting (the position alone), or a short click on a value box (position and
-/// a zero), from the client.
+/// whether a wrench is in hand), from the client.
 pub(super) const VALUE_SETTINGS: &str = "create:value_settings";
 
 /// `ValueSettingsPacket.applySettings` (`BlockEntityConfigurationPacket.handle`: no spectator or
@@ -922,16 +922,18 @@ pub(super) const VALUE_SETTINGS: &str = "create:value_settings";
 /// back either way, as the client's board starts on it.
 pub(super) fn value_settings_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
     let word = |i: usize| i32::from_le_bytes(data[i..i + 4].try_into().unwrap());
+    // A short click's last word: whether the main hand holds a wrench (a guest's hand is the
+    // client's to see).
     let ([x, y, z], pick, short) = match data.len() {
-        12 => ([0, 4, 8].map(word), None, false),
-        16 => ([0, 4, 8].map(word), None, true),
+        12 => ([0, 4, 8].map(word), None, None),
+        16 => ([0, 4, 8].map(word), None, Some(word(12) != 0)),
         20 => (
             [0, 4, 8].map(word),
             Some(create_engine::board::Settings {
                 row: word(12),
                 value: word(16),
             }),
-            false,
+            None,
         ),
         _ => return,
     };
@@ -981,10 +983,13 @@ pub(super) fn value_settings_from_client(game: &mut Game<'_>, player: u128, data
             }
             w.dims[dim].brass.get(&pos).map(|b| b.mode.index() as i32)
         }),
-        // `BrassDiodeScrollValueBehaviour`: `onShortInteract` toggles the diode;
-        // `setValueSettings` sets its delay.
+        // `BrassDiodeScrollValueBehaviour`: `onShortInteract` toggles the diode (`toggle`: not
+        // with a wrench; sneaking and no building were never a short click); `setValueSettings`
+        // sets its delay.
         Some(B::PulseRepeater | B::PulseExtender | B::PulseTimer) => {
-            if short && let Some((_, s)) = diode_state(state) {
+            if short == Some(false)
+                && let Some((_, s)) = diode_state(state)
+            {
                 toggle_diode(game, &p.dimension, pos, s.inverted);
             }
             with_world(|w| {
@@ -1251,11 +1256,17 @@ pub(super) fn tick_value_board(game: &mut Game<'_>) {
                 BOARD.with_borrow_mut(|b| *b = Some(open));
             }
         }
-        // A short click: `onShortInteract` on the server (`ValueSettingsPacket` with its hand).
+        // A short click: `onShortInteract` on the server (`ValueSettingsPacket` with its hand:
+        // whether it holds a wrench).
         Some((pos, _, create_engine::board::Step::Short)) => {
             HOLD.with_borrow_mut(|h| *h = None);
+            let wrench = game
+                .inventory
+                .get(game.selected)
+                .and_then(|s| s.as_ref())
+                .is_some_and(|s| &*s.item == "create:wrench");
             let mut data = Vec::with_capacity(16);
-            for v in [pos[0], pos[1], pos[2], 0] {
+            for v in [pos[0], pos[1], pos[2], i32::from(wrench)] {
                 data.extend_from_slice(&v.to_le_bytes());
             }
             let _ = game.native_net_send_to_server(VALUE_SETTINGS, &data);

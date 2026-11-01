@@ -77,7 +77,8 @@ pub fn toggle_pitch(inverted: bool) -> f32 {
 }
 
 /// A diode's block entity (`BrassDiodeBlockEntity`): `state` and the delay (`maxState`), with
-/// the block's `powered` and `powering` as it last was, which its tick reads.
+/// the block's `powered` and `powering` as it last was, which its tick reads; and whether the
+/// world lists it among the diodes that tick (no rule reads that).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Diode {
     pub kind: Kind,
@@ -85,6 +86,7 @@ pub struct Diode {
     pub max: i32,
     pub powered: bool,
     pub powering: bool,
+    pub running: bool,
 }
 
 impl Diode {
@@ -95,6 +97,7 @@ impl Diode {
             max: kind.default_delay(),
             powered: false,
             powering: false,
+            running: false,
         }
     }
 
