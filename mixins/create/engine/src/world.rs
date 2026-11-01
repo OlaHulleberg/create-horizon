@@ -471,6 +471,8 @@ impl CreateWorld {
             // Else its block changed (`powered`, `powering`, `inverted`), which its tick reads.
             if d.diodes.get(&pos).is_none_or(|x| x.kind != kind) {
                 let mut x = crate::diode::Diode::new(kind);
+                // Another diode replaced here: still listed if it was.
+                x.running = d.diodes.get(&pos).is_some_and(|x| x.running);
                 if let Some((state, max)) = d.diode_saved.remove(&pos) {
                     x.set_delay(max);
                     x.state = state.clamp(0, x.max);
@@ -481,7 +483,8 @@ impl CreateWorld {
             if let Some(x) = d.diodes.get_mut(&pos) {
                 x.powered = info.powered;
                 x.powering = info.powering;
-                if !x.idle() && !d.diode_running.contains(&pos) {
+                if !x.running && !x.idle() {
+                    x.running = true;
                     d.diode_running.push(pos);
                 }
             }
@@ -1896,7 +1899,9 @@ impl CreateWorld {
     fn diode_removed(&mut self, dim: usize, pos: [i32; 3]) {
         let d = &mut self.dims[dim];
         if let Some(x) = d.diodes.remove(&pos) {
-            d.diode_running.retain(|p| *p != pos);
+            if x.running {
+                d.diode_running.retain(|p| *p != pos);
+            }
             if x.state != 0 || x.max != x.kind.default_delay() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
@@ -1917,7 +1922,8 @@ impl CreateWorld {
             if let Some(p) = x.tick() {
                 out.push((*pos, p));
             }
-            !x.idle()
+            x.running = !x.idle();
+            x.running
         });
         out
     }
@@ -1928,7 +1934,8 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         let x = d.diodes.get_mut(&pos)?;
         if x.set_delay(value) {
-            if !x.idle() && !d.diode_running.contains(&pos) {
+            if !x.running && !x.idle() {
+                x.running = true;
                 d.diode_running.push(pos);
             }
             d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
@@ -2674,6 +2681,13 @@ mod tests {
         // A timer at rest still runs.
         w.block_changed(0, p, 0, timer);
         assert_eq!(w.dims[0].diode_running, [p]);
+        // Listed once however often its block changes; broken, unlisted.
+        w.block_changed(0, p, timer, timer);
+        assert_eq!(w.set_diode_delay(0, p, 7), Some(7));
+        assert_eq!(w.dims[0].diode_running, [p]);
+        assert!(w.dims[0].diodes[&p].running);
+        w.block_changed(0, p, timer, 0);
+        assert!(w.dims[0].diode_running.is_empty());
         // A lamp placed is looked at; a lamp is known by position for the signal hook.
         w.block_changed(0, [1, 64, 0], 0, lamp);
         assert_eq!(w.dims[0].lamp_placed, [[1, 64, 0]]);
