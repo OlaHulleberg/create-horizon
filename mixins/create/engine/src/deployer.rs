@@ -2,7 +2,8 @@
 //! `DeployerApplicationRecipe`, `ItemApplicationRecipe`): it holds one stack, and facing down
 //! over a depot whose item a `create:deploying` or `create:item_application` recipe takes with
 //! the held item, it reaches down, applies it and draws back, using up the held item unless the
-//! recipe keeps it. Its other uses (placing, clicking and punching as a fake player) are gap 6.
+//! recipe keeps it. Placing blocks and using items on blocks are in the glue (`deployer_activate`);
+//! punching and uses that need a whole fake player are gap 6.
 
 use crate::kinetics::Dir;
 use crate::processing::Output;

@@ -318,6 +318,11 @@ pub mod native_hooks {
             let _ = (pos, face, max);
             None
         }
+        pub fn native_use_item_at(&mut self, pos: [i32; 3], face: horizon_core::geometry::Direction,
+                                  stack: horizon_client::items::ItemStack) -> Option<Option<horizon_client::items::ItemStack>> {
+            let _ = (pos, face, stack);
+            None
+        }
         pub fn native_insert_item(&mut self, pos: [i32; 3], face: horizon_core::geometry::Direction,
                                   stack: horizon_client::items::ItemStack) -> Option<horizon_client::items::ItemStack> {
             let _ = (pos, face);

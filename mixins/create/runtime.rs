@@ -2764,7 +2764,13 @@ fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
         if over_depot {
             continue;
         }
-        let place = deployer_place_target(game, dim, pos, facing);
+        let place = deployer_place_target(game, dim, pos, facing).or_else(|| {
+            deployer_uses(game, dim, pos, facing).then_some([
+                pos[0] + o[0],
+                pos[1] + o[1],
+                pos[2] + o[2],
+            ])
+        });
         with_world(|w| {
             let d = &mut w.dims[dim];
             let Some(dp) = d.deployers.get_mut(&pos) else {
@@ -2880,13 +2886,42 @@ fn deployer_place_target(
         .map(|at_reached| if at_reached { reached } else { before })
 }
 
+/// `shouldActivate` for a held item that is not a block: always, except a bucket of a fluid
+/// whose source is already in the block it reaches.
+fn deployer_uses(game: &Game<'_>, dim: usize, pos: [i32; 3], facing: Dir) -> bool {
+    let Some((item, _)) =
+        with_world(|w| w.dims[dim].deployers.get(&pos).and_then(|d| d.held.clone())).flatten()
+    else {
+        return false;
+    };
+    if game.items().get(&item).is_some_and(|i| i.block.is_some()) {
+        return false;
+    }
+    let o = facing.offset();
+    let reached = game
+        .world
+        .block(pos[0] + o[0] * 2, pos[1] + o[1] * 2, pos[2] + o[2] * 2);
+    let fluid = match item.as_str() {
+        "minecraft:water_bucket" => "minecraft:water",
+        "minecraft:lava_bucket" => "minecraft:lava",
+        _ => return true,
+    };
+    game.pack
+        .assets
+        .registry
+        .state(reached)
+        .is_none_or(|s| s.name != fluid || s.properties.get("level").is_some_and(|l| l != "0"))
+}
+
 /// `DeployerHandler.activate` for what is ported: a held block item is placed (its default
-/// state) where it fits, and one is used up.
+/// state) where it fits, and one is used up; another item is used on the block it reaches the
+/// way a dispenser would (`native_use_item_at`: buckets, bone meal, shears, flint and steel...).
 fn deployer_activate(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
     let Some(facing) = deployer_facing(game, pos) else {
         return;
     };
     let Some(target) = deployer_place_target(game, dim, pos, facing) else {
+        deployer_use_item(game, dim, pos, facing);
         return;
     };
     let Some((item, _)) =
@@ -2912,6 +2947,41 @@ fn deployer_activate(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32
                 }
             }
             w.set_deployer(dim, pos, d);
+        }
+    });
+}
+
+/// A held item that is not a block, used on the block two ahead (`useOn` from the fake player):
+/// the hand keeps what is left of the stack (an emptied bucket, a filled one).
+fn deployer_use_item(game: &mut Game<'_>, dim: usize, pos: [i32; 3], facing: Dir) {
+    if !deployer_uses(game, dim, pos, facing) {
+        return;
+    }
+    let Some((item, count)) =
+        with_world(|w| w.dims[dim].deployers.get(&pos).and_then(|d| d.held.clone())).flatten()
+    else {
+        return;
+    };
+    let stack = horizon_client::items::ItemStack {
+        item: item.as_str().into(),
+        count: u32::from(count),
+        damage: 0,
+        extra: None,
+    };
+    let o = facing.offset();
+    let before = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+    let face = horizon_core::geometry::Direction::ALL[facing as usize];
+    let Some(left) = game.native_use_item_at(before, face, stack) else {
+        return;
+    };
+    let held = left.map(|s| (s.item.to_string(), s.count.min(64) as u8));
+    with_world(|w| {
+        if let Some(mut d) = w.dims[dim].deployers.get(&pos).cloned() {
+            if d.held != held {
+                d.held = held;
+                w.dims[dim].deployer_changes.push(pos);
+                w.set_deployer(dim, pos, d);
+            }
         }
     });
 }
