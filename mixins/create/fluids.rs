@@ -537,7 +537,9 @@ pub(super) fn use_tank(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled:
     let bucket = Fluid::of_bucket(&held);
     if bucket.is_some() || held == "minecraft:bucket" {
         let boiler = with_world(|w| match bucket {
-            Some(f) => w.fill_boiler(dim, pos, f, create_engine::tank::BUCKET).is_some(),
+            Some(f) => w
+                .fill_boiler(dim, pos, f, create_engine::tank::BUCKET)
+                .is_some(),
             None => w.is_boiler(dim, pos),
         })
         .unwrap_or(false);
