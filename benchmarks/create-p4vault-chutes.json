@@ -1,0 +1,101 @@
+{
+  "scenario": "chutes",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    2.2802734375,
+    2.37841796875,
+    2.44140625
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 21605,
+      "frame_ms_p50": 0.5095860362052917,
+      "frame_ms_p99": 1.1190179586410522,
+      "fps": 1800.4166666666667,
+      "tick_ms": 2.766829252243042,
+      "tick_ms_max": 8.07385540008545,
+      "cpu_ms_p50": 0.3634699881076813,
+      "gpu_ms_p50": 0.4475520849227905,
+      "check": [
+        "-539, 92, 56 has the following block data: [{count: 64, Slot: 0b, id: \"minecraft:iron_ingot\"}]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 22013,
+      "frame_ms_p50": 0.4979660212993622,
+      "frame_ms_p99": 1.2326960563659668,
+      "fps": 1834.4166666666667,
+      "tick_ms": 2.775665760040283,
+      "tick_ms_max": 8.01689338684082,
+      "cpu_ms_p50": 0.35627099871635437,
+      "gpu_ms_p50": 0.4371874928474426,
+      "check": [
+        "-535, 91, 53 has the following block data: [{count: 64, Slot: 0b, id: \"minecraft:iron_ingot\"}]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 21819,
+      "frame_ms_p50": 0.49780601263046265,
+      "frame_ms_p99": 1.116008996963501,
+      "fps": 1818.25,
+      "tick_ms": 2.7601397037506104,
+      "tick_ms_max": 8.016794204711914,
+      "cpu_ms_p50": 0.3928889930248261,
+      "gpu_ms_p50": 0.43567708134651184,
+      "check": [
+        "-532, 89, 54 has the following block data: [{count: 64, Slot: 0b, id: \"minecraft:iron_ingot\"}]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 21382,
+      "frame_ms_p50": 0.5048009753227234,
+      "frame_ms_p99": 1.1010290384292605,
+      "fps": 1781.8333333333333,
+      "tick_ms": 2.8254623413085938,
+      "tick_ms_max": 7.740001678466797,
+      "cpu_ms_p50": 0.4258735030889511,
+      "gpu_ms_p50": 0.44317707419395447,
+      "check": [
+        "-539, 92, 52 has the following block data: [{count: 64, Slot: 0b, id: \"minecraft:iron_ingot\"}]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 21958,
+      "frame_ms_p50": 0.4959210157394409,
+      "frame_ms_p99": 1.3143930435180664,
+      "fps": 1829.8333333333333,
+      "tick_ms": 2.71700119972229,
+      "tick_ms_max": 8.324507713317871,
+      "cpu_ms_p50": 0.3594200015068054,
+      "gpu_ms_p50": 0.4351041615009308,
+      "check": [
+        "-535, 89, 55 has the following block data: [{count: 64, Slot: 0b, id: \"minecraft:iron_ingot\"}]"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1812.95,
+    "frame_ms_p50": 0.5012160122394562,
+    "frame_ms_p99": 1.1766290187835693,
+    "tick_ms": 2.7690196514129637,
+    "tick_ms_max": 8.03441047668457
+  },
+  "stdev": {
+    "fps": 21.790399899446054,
+    "frame_ms_p50": 0.005769245788581326,
+    "frame_ms_p99": 0.09331615286231969,
+    "tick_ms": 0.03879277844472173,
+    "tick_ms_max": 0.20796996816080246
+  }
+}
