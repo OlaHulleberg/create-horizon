@@ -172,7 +172,27 @@ pub mod chunk {
     impl Chunk { pub fn min_y(&self) -> i32 { 0 } }
 }
 ''',
+        # The dispenser's private behaviours, where the deployer's item-use module goes.
+        'crates/horizon-client/src/game/dispenser.rs': '''
+use super::Game;
+use crate::items::ItemStack;
+use horizon_core::geometry::Direction;
+type Pos = (i32, i32, i32);
+type Dispensed = (Option<ItemStack>, i32);
+impl Game<'_> {
+    fn dispense_empty_bucket(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Result<Dispensed, ()> { let _ = (pos, facing); Ok((Some(stack), 0)) }
+    fn dispense_filled_bucket(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Result<Dispensed, ()> { let _ = (pos, facing); Ok((Some(stack), 0)) }
+    fn dispense_flint_and_steel(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Result<Dispensed, ()> { let _ = (pos, facing); Ok((Some(stack), 0)) }
+    fn dispense_bone_meal(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Result<Dispensed, ()> { let _ = (pos, facing); Ok((Some(stack), 0)) }
+    fn dispense_glass_bottle(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Result<Dispensed, ()> { let _ = (pos, facing); Ok((Some(stack), 0)) }
+    fn dispense_glowstone(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Result<Dispensed, ()> { let _ = (pos, facing); Ok((Some(stack), 0)) }
+    fn dispense_shears(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Result<Dispensed, ()> { let _ = (pos, facing); Ok((Some(stack), 0)) }
+    fn dispense_honeycomb(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Result<Dispensed, ()> { let _ = (pos, facing); Ok((Some(stack), 0)) }
+    fn dispense_brush(&mut self, pos: Pos, facing: Direction, stack: ItemStack) -> Dispensed { let _ = (pos, facing); (Some(stack), 0) }
+}
+''',
         'crates/horizon-client/src/game.rs': '''
+mod dispenser;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
 use horizon_world::level::Dimension as LevelDimension;
 use horizon_core::position::BlockPos;
@@ -317,11 +337,6 @@ pub mod native_hooks {
         pub fn native_extract_item(&mut self, pos: [i32; 3], face: horizon_core::geometry::Direction, max: u32)
             -> Option<horizon_client::items::ItemStack> {
             let _ = (pos, face, max);
-            None
-        }
-        pub fn native_use_item_at(&mut self, pos: [i32; 3], face: horizon_core::geometry::Direction,
-                                  stack: horizon_client::items::ItemStack) -> Option<Option<horizon_client::items::ItemStack>> {
-            let _ = (pos, face, stack);
             None
         }
         pub fn native_insert_item(&mut self, pos: [i32; 3], face: horizon_core::geometry::Direction,

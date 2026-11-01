@@ -2996,7 +2996,7 @@ fn deployer_uses(game: &Game<'_>, dim: usize, pos: [i32; 3], facing: Dir) -> boo
 
 /// `DeployerHandler.activate` for what is ported: a held block item is placed (its default
 /// state) where it fits, and one is used up; another item is used on the block it reaches the
-/// way a dispenser would (`native_use_item_at`: buckets, bone meal, shears, flint and steel...).
+/// way a dispenser would (`dispenser::create_use`: buckets, bone meal, shears, flint and steel...).
 fn deployer_activate(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
     let Some(facing) = deployer_facing(game, pos) else {
         return;
