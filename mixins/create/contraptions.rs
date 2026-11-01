@@ -2,6 +2,7 @@
 // moving blocks as one, and their save data. A sibling of the `create` module (`runtime.rs`).
 use super::Game;
 use super::create::*;
+use super::create_processing::*;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::world::dimension_index;
 use horizon_world::registry::BlockStateId;

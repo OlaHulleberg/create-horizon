@@ -14,6 +14,12 @@ name = "create"
 source = "runtime.rs"
 
 [[module]]
+id = "processing"
+file = "crates/horizon-client/src/game.rs"
+name = "create_processing"
+source = "processing.rs"
+
+[[module]]
 id = "contraptions"
 file = "crates/horizon-client/src/game.rs"
 name = "create_contraptions"
