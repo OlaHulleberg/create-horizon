@@ -36,6 +36,7 @@ pub mod spout;
 pub mod states;
 pub mod tank;
 pub mod track;
+pub mod track_render;
 pub mod trains;
 pub mod tunnel;
 pub mod waterwheel;
