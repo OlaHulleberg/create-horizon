@@ -97,11 +97,28 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
             .facing
             .map(|f| vec![own(f.axis(), Model::Own)])
             .unwrap_or_default(),
-        Block::AndesiteEncasedShaft | Block::BrassEncasedShaft | Block::MetalGirderEncasedShaft => {
-            s.axis
-                .map(|a| vec![own(a, Model::Shaft(a))])
-                .unwrap_or_default()
-        }
+        // SingleAxisRotatingVisual.shaft: encased shafts, chain drives and the speed controller
+        // (its bracket over a cog is not drawn).
+        Block::AndesiteEncasedShaft
+        | Block::BrassEncasedShaft
+        | Block::MetalGirderEncasedShaft
+        | Block::EncasedChainDrive
+        | Block::AdjustableChainGearshift
+        | Block::RotationSpeedController => s
+            .axis
+            .map(|a| vec![own(a, Model::Shaft(a))])
+            .unwrap_or_default(),
+        // SplitShaftVisual: a sequenced gearshift's halves, on y when vertical.
+        Block::SequencedGearshift => s
+            .axis
+            .map(|a| {
+                let a = if s.vertical { Axis::Y } else { a };
+                vec![
+                    half(0, Dir::from_axis(a, false), speeds[0]),
+                    half(1, Dir::from_axis(a, true), speeds[1]),
+                ]
+            })
+            .unwrap_or_default(),
         Block::Gearbox => s
             .axis
             .map(|a| {

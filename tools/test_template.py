@@ -523,6 +523,10 @@ impl Behaviours {
         let _ = (level, ticks, pos);
         true
     }
+    pub fn best_neighbor_signal(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos) -> i32 {
+        let _ = (level, ticks, pos);
+        15
+    }
     pub fn signal(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos,
                   direction: horizon_core::geometry::Direction) -> i32 {
         let _ = (level, ticks, direction);

@@ -2,7 +2,7 @@
 //! cog type, generated speed and stress, decoded once per state when a world opens.
 
 use crate::Block;
-use crate::kinetics::{Axis, Dir, Part, convert_to_direction};
+use crate::kinetics::{Axis, Chain, Couple, Dir, Part, convert_to_direction};
 
 /// What the kinetic rules read of one block state, decoded from its property strings once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -26,6 +26,11 @@ pub struct StateInfo {
     pub receiver: bool,
     /// A belt tunnel's `shape`.
     pub tunnel: Option<crate::tunnel::Shape>,
+    /// An encased chain drive's `part`.
+    pub chain: Option<crate::chain::Part>,
+    /// A sequenced gearshift's `vertical` and `state` (0 idle, else its instruction + 1).
+    pub vertical: bool,
+    pub sequence: u8,
 }
 
 impl StateInfo {
@@ -59,6 +64,9 @@ impl StateInfo {
                 "powering" => s.powering = v == "true",
                 "receiver" => s.receiver = v == "true",
                 "shape" => s.tunnel = crate::tunnel::Shape::read(v),
+                "part" => s.chain = crate::chain::Part::read(v),
+                "vertical" => s.vertical = v == "true",
+                "state" => s.sequence = v.parse().unwrap_or(0),
                 "powered_side" => s.powered_side = v == "true",
                 "top_shaft" => s.top_shaft = v == "true",
                 "bottom_shaft" => s.bottom_shaft = v == "true",
@@ -84,7 +92,8 @@ impl StateInfo {
 /// The block's settings a part needs that its state does not hold (a block entity's).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
-    /// A creative motor's speed setting (CreativeMotorBlockEntity.DEFAULT_SPEED is 16).
+    /// A creative motor's speed setting (CreativeMotorBlockEntity.DEFAULT_SPEED is 16), or a
+    /// rotation speed controller's target (SpeedControllerBlockEntity.DEFAULT_SPEED, 16 too).
     pub motor_rpm: f32,
     /// A hand crank being turned: 1, -1 backwards (sneaking), 0 at rest.
     pub crank: i8,
@@ -94,6 +103,10 @@ pub struct Settings {
     pub belt: Option<[i32; 3]>,
     /// A windmill bearing's generated speed while its sails turn (0 at rest).
     pub windmill: f32,
+    /// An adjustable chain gearshift's redstone signal (`ChainGearshiftBlockEntity.signal`).
+    pub signal: i8,
+    /// A sequenced gearshift's far half's speed modifier (`getModifier`: 0 idle).
+    pub sequence: i8,
 }
 
 impl Default for Settings {
@@ -104,6 +117,8 @@ impl Default for Settings {
             flow: 0,
             belt: None,
             windmill: 0.0,
+            signal: 0,
+            sequence: 0,
         }
     }
 }
@@ -158,6 +173,53 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             let first = Part::half(Dir::from_axis(a, false));
             let second = Part {
                 link: Some(link),
+                ..Part::half(Dir::from_axis(a, true))
+            };
+            [Some(with_stress(first)), Some(with_stress(second))]
+        }),
+        // ChainDriveBlock: shafts at both ends of its axis, and its chain to the drives beside it
+        // (`areBlocksConnected`), turning it at the adjustable gearshift's modifier for its
+        // signal (`ChainGearshiftBlockEntity.getModifier`).
+        Block::EncasedChainDrive | Block::AdjustableChainGearshift => {
+            s.axis.map_or([None, None], |a| {
+                let d = crate::chain::Drive {
+                    axis: a,
+                    part: s.chain.unwrap_or_default(),
+                    along_first: s.along_first,
+                };
+                let (positive, negative) = d.goes_on();
+                let modifier = if block == Block::AdjustableChainGearshift {
+                    crate::chain::modifier_for_signal(i32::from(settings.signal))
+                } else {
+                    1.0
+                };
+                one(Part {
+                    chain: Some(Chain {
+                        along: d.connection_axis(),
+                        positive,
+                        negative,
+                        modifier,
+                    }),
+                    ..Part::shaft(a)
+                })
+            })
+        }
+        // SpeedControllerBlock (HorizontalAxisKineticBlock): shafts at both ends of its axis; the
+        // large cog above it turns at its target.
+        Block::RotationSpeedController => s.axis.map_or([None, None], |a| {
+            one(Part {
+                couple: Some(Couple::Controller(settings.motor_rpm)),
+                ..Part::shaft(a)
+            })
+        }),
+        // SequencedGearshiftBlock: a split shaft on its horizontal axis, or vertical; the half
+        // away from the one turned turns at the running instruction's modifier
+        // (`SequencedGearshiftBlockEntity.getRotationSpeedModifier`), still while idle.
+        Block::SequencedGearshift => s.axis.map_or([None, None], |a| {
+            let a = if s.vertical { Axis::Y } else { a };
+            let first = Part::half(Dir::from_axis(a, false));
+            let second = Part {
+                couple: Some(Couple::Relay(f32::from(settings.sequence))),
                 ..Part::half(Dir::from_axis(a, true))
             };
             [Some(with_stress(first)), Some(with_stress(second))]
@@ -290,6 +352,9 @@ pub fn is_kinetic(block: Block) -> bool {
         along_first: false,
         receiver: false,
         tunnel: None,
+        chain: None,
+        vertical: false,
+        sequence: 0,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

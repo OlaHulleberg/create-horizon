@@ -294,6 +294,54 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             None,
             own(&[("axis", axis), ("powered", bools)]),
         ),
+        // ChainDriveBlock (RotatedPillarKineticBlock, stone's properties): its axis, the axis
+        // its chain runs along and its place in the chain (`none` the default), set by the glue
+        // (`updateShape`); ChainGearshiftBlock adds `powered`.
+        "encased_chain_drive" => (
+            "minecraft:quartz_pillar",
+            None,
+            own(&[
+                ("axis", axis),
+                ("axis_along_first", bools),
+                ("part", &["none", "start", "middle", "end"]),
+            ]),
+        ),
+        "adjustable_chain_gearshift" => (
+            "minecraft:quartz_pillar",
+            None,
+            own(&[
+                ("axis", axis),
+                ("axis_along_first", bools),
+                ("part", &["none", "start", "middle", "end"]),
+                ("powered", bools),
+            ]),
+        ),
+        // SequencedGearshiftBlock (HorizontalAxisKineticBlock, stone's properties): its
+        // horizontal axis or `vertical`, and `state` (0 idle, else the instruction running + 1).
+        "sequenced_gearshift" => (
+            "minecraft:andesite",
+            None,
+            own(&[
+                ("axis", &["x", "z"]),
+                ("state", &["0", "1", "2", "3", "4", "5"]),
+                ("vertical", bools),
+            ]),
+        ),
+        // SpeedControllerBlock (HorizontalAxisKineticBlock, `SharedProperties::softMetal`):
+        // AllShapes.SPEED_CONTROLLER.
+        "rotation_speed_controller" => (
+            "minecraft:gold_block",
+            Some(by_property(
+                "axis",
+                &["x", "z"],
+                &[
+                    [0., 0., 0., 16., 4., 16.],
+                    [1., 1., 1., 15., 13., 15.],
+                    [0., 8., 0., 16., 14., 16.],
+                ],
+            )),
+            own(&[("axis", &["x", "z"])]),
+        ),
         "andesite_encased_cogwheel"
         | "brass_encased_cogwheel"
         | "andesite_encased_large_cogwheel"

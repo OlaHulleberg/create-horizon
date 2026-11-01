@@ -1,0 +1,28 @@
+{
+  "template": "minecraft:andesite",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:andesite"
+  },
+  "item": true,
+  "state_properties": {
+    "axis": [
+      "x",
+      "z"
+    ],
+    "state": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+    ],
+    "vertical": [
+      "false",
+      "true"
+    ]
+  }
+}
