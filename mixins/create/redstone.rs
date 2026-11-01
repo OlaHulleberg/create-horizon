@@ -520,7 +520,8 @@ pub(super) fn tick_diodes(game: &mut Game<'_>, dimension: &str, dim: usize) {
         let Some((_, s)) = diode_state(state) else {
             continue;
         };
-        if !pending.contains(&pos) && diode::needs_tick(s.powered, powered_from(game, pos, s.facing))
+        if !pending.contains(&pos)
+            && diode::needs_tick(s.powered, powered_from(game, pos, s.facing))
         {
             pending.insert(pos);
             next.push((pos, now + delay));
