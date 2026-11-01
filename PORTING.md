@@ -357,6 +357,21 @@ Deployers using items cost nothing measurable against vanilla dispensers doing t
 | off: no content mod | 1832 ± 125 | 0.519 / 1.120 | 4.498 ± 0.078 | baseline |
 | chutes: 16 columns of 8 chutes from hoppers of 64 iron into chests | 1711 ± 66 | 0.549 / 1.035 | 4.450 ± 0.094 | tick ≤ off + 0.25 ms, frame p50 ≤ off + 10% |
 
+| Scenario (2026-11-01, Phase 4 item vault and smart chute, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1866 | 0.484 / 1.105 | 2.494 ± 0.115 | baseline |
+| hoppers (control): the chutes' 16 hoppers and chests, the iron already in the chests | 1880 | 0.480 / 1.082 | 2.725 ± 0.090 | control |
+| chutes: the same 16 columns of 8 chutes, now also pulling from the inventory above | 1813 | 0.501 / 1.177 | 2.769 ± 0.039 | tick ≤ control + 0.25 ms, frame p50 ≤ control + 10% |
+
+Against off the chutes measured +0.28 ms, over the old budget; the new control shows vanilla's hoppers and chests are
++0.23 ms of it and the chutes +0.044 (`benchmarks/create-p4vault-*.json`). A DEBUG timer (removed) put the chutes'
+pulls at 4 µs a tick: 2 looks a tick (16 empty chutes under hoppers, every `RETRY` 8 ticks). Proven headless: a 2x2x3
+vault (`axis=z`) placed by one fill; a chute on one of its blocks under a chest of 64 iron and 20 gold: both in the
+controller's slots 0 and 1. A smart chute under it, powered by a redstone block while its filter slot (11 px up on its
+north side) was clicked with a gold ingot (DEBUG log of the hit, removed), then unpowered: the chest below got the 20
+gold, the vault kept the 64 iron; powered again it stops (`powered=true`). Unfiltered, it passes everything at once,
+as Create's empty filter does.
+
 Chutes moving items cost no measurable tick; 6% of frame p50 with 128 chutes, 16 hoppers and 16 chests in view
 (`benchmarks/create-p4-chutes-*.json`); each run's check reads one chest: 64 iron.
 
