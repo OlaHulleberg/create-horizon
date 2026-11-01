@@ -443,6 +443,18 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // SawBlock (DirectionalAxisKineticBlock): facing, its shaft's axis, `flipped`; a full
+        // block here, so items land on top of it.
+        "mechanical_saw" => (
+            "minecraft:iron_block",
+            None,
+            own(&[
+                ("axis_along_first", bools),
+                ("facing", facing),
+                ("flipped", bools),
+                ("waterlogged", bools),
+            ]),
+        ),
         // DrillBlock (DirectionalKineticBlock): any facing, a full block of iron's
         // properties here (Create's is a casing with the head out front).
         "mechanical_drill" => (

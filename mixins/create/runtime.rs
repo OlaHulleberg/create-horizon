@@ -212,6 +212,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_trains(game, dimension, dim);
     tick_chutes(game, dim);
     tick_drills(game, dim);
+    tick_saws(game, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -1161,6 +1162,8 @@ struct Recipes {
     milling: create_engine::processing::Book,
     pressing: create_engine::processing::Book,
     crushing: create_engine::processing::Book,
+    /// Create's cutting recipes (the saw).
+    cutting: create_engine::processing::Book,
     /// Create's mixing recipes made of items only (fluids are gap 5).
     mixing: Vec<create_engine::basin::Recipe>,
     /// Create's compacting recipes (a press over a basin), items only.
@@ -1205,6 +1208,7 @@ fn ensure_recipes(game: &Game<'_>) -> bool {
             pressing,
             crushing: read_book(game, "create:crushing"),
             mixing: read_basin(game, "create:mixing"),
+            cutting: read_book(game, "create:cutting"),
             compacting: read_basin(game, "create:compacting"),
             splashing: read_book(game, "create:splashing"),
             haunting: read_book(game, "create:haunting"),
@@ -2542,6 +2546,105 @@ fn tick_drills(game: &mut Game<'_>, dim: usize) {
                 at[0], at[1], at[2]
             ));
         }
+    }
+}
+
+/// `SawBlockEntity.insertItem` for an item landing on a saw facing up, while it holds nothing.
+fn saw_take(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    stack: &mut horizon_client::items::ItemStack,
+) {
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    if with_world(|w| w.table.get(state.0).and_then(|(_, i)| i.facing)).flatten() != Some(Dir::Up) {
+        return;
+    }
+    let took = with_world(|w| {
+        let s = w.dims[dim].saws.entry(pos).or_default();
+        if !s.slots.is_empty() {
+            return false;
+        }
+        s.slots = vec![(stack.item.to_string(), stack.count.min(64) as u8)];
+        s.remaining = -1.0;
+        s.applied = false;
+        true
+    })
+    .unwrap_or(false);
+    if took {
+        stack.count = stack.count.saturating_sub(64);
+    }
+}
+
+/// Saws holding items (`SawBlockEntity.tick`): their cutting recipe in turn, applied near the
+/// end, the results thrown off the way the saw turns (onto a belt or depot there, else as items).
+fn tick_saws(game: &mut Game<'_>, dim: usize) {
+    use create_engine::saw::Step;
+    let saws: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].saws.keys().copied().collect()).unwrap_or_default();
+    if saws.is_empty() || !ensure_recipes(game) {
+        return;
+    }
+    for pos in saws {
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let Some(along_first) =
+            with_world(|w| w.table.get(state.0).map(|(_, i)| i.along_first)).flatten()
+        else {
+            continue;
+        };
+        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        let Some(mut saw) = with_world(|w| w.dims[dim].saws.get(&pos).cloned()).flatten() else {
+            continue;
+        };
+        let item = saw.slots.first().map(|s| s.0.clone()).unwrap_or_default();
+        match saw.tick(speed) {
+            Step::Wait => {}
+            Step::Start => RECIPES.with_borrow(|r| {
+                let Some(r) = r.as_ref() else { return };
+                let list: Vec<&create_engine::processing::Recipe> = r
+                    .cutting
+                    .matching(&item)
+                    .into_iter()
+                    .map(|i| r.cutting.get(i))
+                    .collect();
+                saw.start(&list);
+            }),
+            Step::Apply => {
+                let mut rng = create_engine::processing::Rng::new(
+                    game.world.game_time as u64
+                        ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9)
+                        ^ (pos[2] as u64) << 20,
+                );
+                RECIPES.with_borrow(|r| {
+                    let Some(r) = r.as_ref() else { return };
+                    let list = r.cutting.matching(&item);
+                    let recipe = list.get(saw.index).map(|&i| r.cutting.get(i));
+                    saw.apply(recipe, |i: &str| stack_limit(game, i), &mut rng);
+                });
+            }
+            Step::Out => {
+                let m = create_engine::saw::movement(along_first, speed);
+                let (x, y, z) = (
+                    f64::from(pos[0]) + 0.5 + f64::from(m[0]) * 0.5,
+                    f64::from(pos[1]) + 1.0,
+                    f64::from(pos[2]) + 0.5 + f64::from(m[2]) * 0.5,
+                );
+                let (vx, vz) = (f64::from(m[0]) * 0.0625, f64::from(m[2]) * 0.0625);
+                for (item, count) in &saw.slots {
+                    game.native_run_command(&format!(
+                        "summon minecraft:item {x} {y} {z} {{Item:{{id:'{item}',count:{count}}},Motion:[{vx}d,0.125d,{vz}d]}}"
+                    ));
+                }
+                saw.clear();
+            }
+        }
+        with_world(|w| {
+            if saw.slots.is_empty() {
+                w.dims[dim].saws.remove(&pos);
+            } else {
+                w.dims[dim].saws.insert(pos, saw);
+            }
+        });
     }
 }
 
@@ -3952,6 +4055,7 @@ pub(super) fn item_landed(
         (_, Some(b @ create_engine::Block::Depot)) => (pos, b),
         (Some(b @ create_engine::Block::Basin), _) => (own, b),
         (_, Some(b @ create_engine::Block::Chute)) => (pos, b),
+        (_, Some(b @ create_engine::Block::MechanicalSaw)) => (pos, b),
         _ => return,
     };
     if stack.extra.is_some() {
@@ -3964,6 +4068,10 @@ pub(super) fn item_landed(
     }
     if block == create_engine::Block::Chute {
         chute_take(game, dim, spot, stack);
+        return;
+    }
+    if block == create_engine::Block::MechanicalSaw {
+        saw_take(game, dim, spot, stack);
         return;
     }
     let max = game

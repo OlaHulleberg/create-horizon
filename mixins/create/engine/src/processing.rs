@@ -51,6 +51,16 @@ impl Book {
             .find(|&i| self.recipes[i as usize].ingredients.len() == 1)
     }
 
+    /// Every single-ingredient recipe the item fits, in data order (`firstIngredientMatches`).
+    pub fn matching(&self, item: &str) -> Vec<u32> {
+        self.by_item.get(item).map_or_else(Vec::new, |v| {
+            v.iter()
+                .copied()
+                .filter(|&i| self.recipes[i as usize].ingredients.len() == 1)
+                .collect()
+        })
+    }
+
     pub fn get(&self, id: u32) -> &Recipe {
         &self.recipes[id as usize]
     }
