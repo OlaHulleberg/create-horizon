@@ -1,0 +1,12 @@
+{
+  "block": "create:chocolate",
+  "bucket": "create:chocolate_bucket",
+  "tick_delay": 25,
+  "drop_off": 2,
+  "slope_find_distance": 3,
+  "lava_source": "minecraft:obsidian",
+  "lava_flowing": "create:scoria",
+  "still_texture": "create:block/fluid/chocolate_still",
+  "flowing_texture": "create:block/fluid/chocolate_flow",
+  "tint": 16777215
+}

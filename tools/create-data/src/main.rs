@@ -256,6 +256,10 @@ fn compile(create: &Path, out: &Path) {
         }
     }
 
+    for (name, doc) in blocks::fluid_declarations() {
+        write(&decl_dir.join(format!("fluid/{name}.json")), &pretty(&doc));
+    }
+
     // AllFluids' buckets (registered with their fluids, not in the item list): held by the
     // native mod's tanks, spouts and drains; their fluid has no block in the world yet (gap 5),
     // so they place nothing.
