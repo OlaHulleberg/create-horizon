@@ -766,12 +766,18 @@ impl Behaviours {
     assert!(!game.said.iter().any(|l| l.starts_with("set [70, 0, 75]")), "already facing away from the shaft");
     // Goggles on: the creative motor at (0, 0, 0) under the crosshair tells its capacity.
     let mut batch = horizon_client::hud::HudBatch { width: 320.0, height: 240.0, drawn: vec![] };
+    game.aim = None;
     game.native_hud(&mut batch);
-    assert!(batch.drawn.is_empty(), "nothing without goggles");
-    game.armor[0] = Some(horizon_client::items::ItemStack { item: "create:goggles".into(), count: 1, damage: 0, extra: None });
+    assert!(batch.drawn.is_empty(), "nothing without goggles or a value box in sight");
+    // The motor's value box: its label over the hotbar, without goggles.
     game.aim = Some([0, 0, 0]);
     game.native_hud(&mut batch);
-    assert_eq!(batch.drawn.first().map(|s| s.trim()), Some("Generator Stats:"), "{:?}", batch.drawn);
+    assert_eq!(batch.drawn.first().map(|s| s.trim()), Some("Generated Speed in RPM"), "{:?}", batch.drawn);
+    assert!(!batch.drawn.iter().any(|s| s.trim() == "Generator Stats:"), "no stats without goggles");
+    batch.drawn.clear();
+    game.armor[0] = Some(horizon_client::items::ItemStack { item: "create:goggles".into(), count: 1, damage: 0, extra: None });
+    game.native_hud(&mut batch);
+    assert!(batch.drawn.iter().any(|s| s.trim() == "Generator Stats:"), "{:?}", batch.drawn);
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);
