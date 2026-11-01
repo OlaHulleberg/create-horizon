@@ -1,0 +1,23 @@
+{
+  "template": "minecraft:glass",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:andesite"
+  },
+  "item": false,
+  "shapes": {
+    "property": "axis",
+    "values": {
+      "x": [],
+      "z": []
+    }
+  },
+  "state_properties": {
+    "axis": [
+      "x",
+      "z"
+    ]
+  }
+}
