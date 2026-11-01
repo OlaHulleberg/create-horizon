@@ -306,14 +306,61 @@ pub(super) fn stack_limit(game: &Game<'_>, item: &str) -> u8 {
         .clamp(1, 64) as u8
 }
 
-/// `ChuteBlockEntity` taking an item that landed on it (`canAcceptItem`: only while empty): the
-/// whole stack, at the top.
+/// `ChuteBlockEntity.canAcceptItem` for the chute or smart chute `block` at `pos` (its state
+/// `powered`): a smart chute also not while powered and only what its filter passes
+/// (`SmartChuteBlockEntity.canAcceptItem`). Emptiness is the caller's.
+pub(super) fn chute_accepts(
+    dim: usize,
+    pos: [i32; 3],
+    block: create_engine::Block,
+    powered: bool,
+    item: &str,
+) -> bool {
+    match block {
+        create_engine::Block::Chute => true,
+        create_engine::Block::SmartChute => {
+            !powered
+                && with_world(|w| {
+                    create_engine::chute::passes(
+                        w.dims[dim].chute_filters.get(&pos).map(String::as_str),
+                        item,
+                    )
+                })
+                .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+/// The chute or smart chute at `pos`, with whether it is powered.
+pub(super) fn chute_at(game: &Game<'_>, pos: [i32; 3]) -> Option<(create_engine::Block, bool)> {
+    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    states::index(state)?;
+    with_world(|w| {
+        let (b, i) = w.table.get(state)?;
+        matches!(
+            b,
+            create_engine::Block::Chute | create_engine::Block::SmartChute
+        )
+        .then_some((b, i.powered))
+    })
+    .flatten()
+}
+
+/// `ChuteBlockEntity` taking an item that landed on it (`canAcceptItem`: only while empty; a
+/// smart chute's filter and power): the whole stack, at the top.
 pub(super) fn chute_take(
     game: &mut Game<'_>,
     dim: usize,
     pos: [i32; 3],
     stack: &mut horizon_client::items::ItemStack,
 ) {
+    let Some((block, powered)) = chute_at(game, pos) else {
+        return;
+    };
+    if !chute_accepts(dim, pos, block, powered, &stack.item) {
+        return;
+    }
     let taken = game
         .native_with_mod_block_entity(pos, |be| {
             be.items.resize(be.items.len().max(1), None);
@@ -352,8 +399,11 @@ pub(super) fn set_chute_stack(
 }
 
 /// Chutes holding a stack (`ChuteBlockEntity.tick` falling, `handleDownwardOutput`): into the
-/// container below (as a hopper puts in), else the chute below if it is empty, else out of the
-/// bottom when nothing solid is under it; it waits in the middle while the way is shut.
+/// container below (as a hopper puts in; a vault's whole inventory as Create's chute stacks it),
+/// else the chute below if it is empty (and a smart chute's filter passes it), else out of the
+/// bottom when nothing solid is under it; it waits in the middle while the way is shut, or while
+/// a smart chute is powered (`canActivate`). Then the empty chutes that may take from the
+/// inventory above them do.
 pub(super) fn tick_chutes(game: &mut Game<'_>, dim: usize) {
     use create_engine::chute::{Fall, fall};
     let moving: Vec<([i32; 3], f32)> =
@@ -361,31 +411,43 @@ pub(super) fn tick_chutes(game: &mut Game<'_>, dim: usize) {
             .unwrap_or_default();
     for (pos, position) in moving {
         let Some(stack) = chute_stack(game, pos) else {
-            with_world(|w| w.dims[dim].chutes.remove(&pos));
+            with_world(|w| {
+                w.dims[dim].chutes.remove(&pos);
+                // Emptied (a hopper below took it): it may take from above again.
+                w.dims[dim].chute_pulls.wake(pos);
+            });
             continue;
         };
+        let active = !matches!(chute_at(game, pos), Some((_, true)));
+        if !active && position <= 0.5 {
+            // A powered smart chute holds its stack in the middle; it ticks again once its
+            // `powered` changes.
+            with_world(|w| w.dims[dim].chutes.remove(&pos));
+            continue;
+        }
         let below = [pos[0], pos[1] - 1, pos[2]];
-        let below_state = game.world.block(below[0], below[1], below[2]);
-        let below_chute = with_world(|w| w.table.get(below_state.0).map(|(b, _)| b)).flatten()
-            == Some(create_engine::Block::Chute);
-        let container = !below_chute
+        let below_chute = chute_at(game, below);
+        let container = below_chute.is_none()
             && game
                 .world
                 .block_entities
                 .contains_key(&(below[0], below[1], below[2]));
-        let can = if below_chute {
-            chute_stack(game, below).is_none()
+        let can = if !active {
+            false
+        } else if let Some((b, powered)) = below_chute {
+            chute_stack(game, below).is_none() && chute_accepts(dim, below, b, powered, &stack.item)
         } else if container {
             true
         } else {
             // Block.canSupportRigidBlock: nothing to drop onto.
+            let below_state = game.world.block(below[0], below[1], below[2]);
             game.res.behaviours().facts(below_state).flags
                 & horizon_world::level::data::state_flags::COLLISION_EMPTY
                 != 0
         };
         let next = match fall(position, can) {
             Fall::At(p) => Some(p),
-            Fall::Out if below_chute => {
+            Fall::Out if below_chute.is_some() => {
                 set_chute_stack(game, below, Some(stack));
                 set_chute_stack(game, pos, None);
                 with_world(|w| w.dims[dim].chutes.insert(below, 1.0));
@@ -393,9 +455,14 @@ pub(super) fn tick_chutes(game: &mut Game<'_>, dim: usize) {
             }
             Fall::Out if container => {
                 let count = stack.count;
-                let left = game
-                    .native_insert_item(below, horizon_core::geometry::Direction::Up, stack.clone())
-                    .filter(|s| s.count > 0);
+                let left = insert_item(
+                    game,
+                    dim,
+                    below,
+                    horizon_core::geometry::Direction::Up,
+                    stack.clone(),
+                )
+                .filter(|s| s.count > 0);
                 if left.as_ref().is_some_and(|l| l.count == count) {
                     Some(0.5)
                 } else {
@@ -425,9 +492,390 @@ pub(super) fn tick_chutes(game: &mut Game<'_>, dim: usize) {
             }
             None => {
                 w.dims[dim].chutes.remove(&pos);
+                w.dims[dim].chute_pulls.wake(pos);
             }
         });
     }
+    tick_chute_pulls(game, dim);
+}
+
+/// `ChuteBlockEntity.handleInputFromAbove` for the empty chutes due to look: up to 16 of the
+/// first item of the inventory above (a smart chute: up to 64 of what its filter passes, and
+/// nothing while powered) start falling from the top. One that finds nothing sleeps until a
+/// container of Create's says it changed (`invVersionTracker`), or looks again `RETRY` ticks
+/// later under another container; with no container above it waits for a neighbour change.
+pub(super) fn tick_chute_pulls(game: &mut Game<'_>, dim: usize) {
+    let time = game.world.game_time;
+    let due = with_world(|w| w.dims[dim].chute_pulls.take_due(time)).unwrap_or_default();
+    for pos in due {
+        let Some((block, powered)) = chute_at(game, pos) else {
+            continue;
+        };
+        if powered || chute_stack(game, pos).is_some() {
+            // Powered: it looks again when that changes; holding a stack: when it is empty.
+            continue;
+        }
+        let above = [pos[0], pos[1] + 1, pos[2]];
+        let tells = match game
+            .world
+            .block_entities
+            .get(&(above[0], above[1], above[2]))
+        {
+            None => continue,
+            Some(e) => matches!(e, horizon_client::containers::BlockEntity::Mod(_)),
+        };
+        // `grabCapability(UP)`: a chute above hands its items down itself.
+        if chute_at(game, above).is_some() {
+            continue;
+        }
+        let smart = block == create_engine::Block::SmartChute;
+        let filter = smart
+            .then(|| with_world(|w| w.dims[dim].chute_filters.get(&pos).cloned()).flatten())
+            .flatten();
+        let amount = if smart {
+            create_engine::chute::SMART_AMOUNT
+        } else {
+            create_engine::chute::CHUTE_AMOUNT
+        };
+        let test = |item: &str| create_engine::chute::passes(filter.as_deref(), item);
+        let taken = match vault_at(game, dim, above) {
+            Some(parts) => extract_vault(game, &parts, test, amount),
+            None => super::machines::create_extract::extract_matching(
+                game,
+                above,
+                horizon_core::geometry::Direction::Down,
+                |s| test(&s.item),
+                amount,
+            ),
+        };
+        match taken {
+            Some(stack) => {
+                set_chute_stack(game, pos, Some(stack));
+                with_world(|w| w.dims[dim].chutes.insert(pos, 1.0));
+            }
+            None => {
+                with_world(|w| {
+                    let p = &mut w.dims[dim].chute_pulls;
+                    if tells {
+                        p.sleep(pos);
+                    } else {
+                        p.retry(pos, time);
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// Two stacks Create would merge (`isSameItemSameComponents`).
+pub(super) fn same_stack(
+    a: &horizon_client::items::ItemStack,
+    b: &horizon_client::items::ItemStack,
+) -> bool {
+    a.item == b.item && a.damage == b.damage && a.extra == b.extra
+}
+
+/// A stack compared as Create compares stacks, for the engine's extraction.
+struct StackKey<'a>(&'a horizon_client::items::ItemStack);
+
+impl PartialEq for StackKey<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        same_stack(self.0, other.0)
+    }
+}
+
+/// The blocks whose slots make up the item vault at `pos`, in order, if one is there. A miss
+/// is a state test.
+pub(super) fn vault_at(game: &Game<'_>, dim: usize, pos: [i32; 3]) -> Option<Vec<[i32; 3]>> {
+    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    states::index(state)?;
+    with_world(|w| {
+        (w.table.get(state)?.0 == create_engine::Block::ItemVault)
+            .then(|| w.dims[dim].vaults.inventory(pos))
+            .flatten()
+    })
+    .flatten()
+}
+
+/// The slots of vault blocks, in order (each `vault::SLOTS` long).
+fn vault_slots(
+    game: &Game<'_>,
+    parts: &[[i32; 3]],
+) -> Vec<Option<horizon_client::items::ItemStack>> {
+    let mut out = Vec::with_capacity(parts.len() * create_engine::vault::SLOTS);
+    for p in parts {
+        let items = match game.world.block_entities.get(&(p[0], p[1], p[2])) {
+            Some(horizon_client::containers::BlockEntity::Mod(m)) => m.items.as_slice(),
+            _ => &[],
+        };
+        for i in 0..create_engine::vault::SLOTS {
+            out.push(items.get(i).cloned().flatten());
+        }
+    }
+    out
+}
+
+/// Sets the slots of the vault blocks holding a `touched` slot to `now` (as `vault_slots` gave
+/// them): each such block's contents change once.
+fn set_vault_slots(
+    game: &mut Game<'_>,
+    parts: &[[i32; 3]],
+    now: Vec<Option<horizon_client::items::ItemStack>>,
+    touched: &[usize],
+) {
+    let n = create_engine::vault::SLOTS;
+    for (i, p) in parts.iter().enumerate() {
+        if !touched.iter().any(|t| t / n == i) {
+            continue;
+        }
+        let slots = &now[i * n..(i + 1) * n];
+        game.native_with_mod_block_entity(*p, |be| {
+            be.items.resize(be.items.len().max(n), None);
+            be.items[..n].clone_from_slice(slots);
+        });
+    }
+}
+
+/// `stack` into the item vault made of `parts` (`ItemHandlerHelper.insertItemStacked`, as
+/// Create's chutes and funnels insert): onto the same items first, then into empty slots, 64 to a
+/// slot at most. What did not fit.
+pub(super) fn insert_vault(
+    game: &mut Game<'_>,
+    parts: &[[i32; 3]],
+    stack: horizon_client::items::ItemStack,
+) -> Option<horizon_client::items::ItemStack> {
+    let mut slots = vault_slots(game, parts);
+    let view: Vec<Option<(bool, u32)>> = slots
+        .iter()
+        .map(|s| s.as_ref().map(|s| (same_stack(s, &stack), s.count)))
+        .collect();
+    let limit = u32::from(stack_limit(game, &stack.item));
+    let plan = create_engine::vault::insert_stacked(&view, stack.count, limit);
+    let mut left = stack.count;
+    let mut touched = Vec::with_capacity(plan.len());
+    for &(i, n) in &plan {
+        left -= n;
+        touched.push(i);
+        match &mut slots[i] {
+            Some(s) => s.count += n,
+            slot => {
+                *slot = Some(horizon_client::items::ItemStack {
+                    count: n,
+                    ..stack.clone()
+                })
+            }
+        }
+    }
+    set_vault_slots(game, parts, slots, &touched);
+    (left > 0).then_some(horizon_client::items::ItemStack {
+        count: left,
+        ..stack
+    })
+}
+
+/// Up to `amount` of the first item `test` passes from the item vault made of `parts`
+/// (`ItemHelper.extract`, up to): gathered from its slots in order.
+pub(super) fn extract_vault(
+    game: &mut Game<'_>,
+    parts: &[[i32; 3]],
+    test: impl Fn(&str) -> bool,
+    amount: u32,
+) -> Option<horizon_client::items::ItemStack> {
+    let mut slots = vault_slots(game, parts);
+    let plan = {
+        let keys: Vec<Option<(StackKey<'_>, u32, u32)>> = slots
+            .iter()
+            .map(|s| {
+                s.as_ref()
+                    .map(|s| (StackKey(s), s.count, u32::from(stack_limit(game, &s.item))))
+            })
+            .collect();
+        create_engine::chute::extract(&keys, |k| test(&k.0.item), false, amount)
+    };
+    let &(first, _) = plan.first()?;
+    let mut out = slots[first].clone()?;
+    out.count = 0;
+    let mut touched = Vec::with_capacity(plan.len());
+    for &(i, n) in &plan {
+        touched.push(i);
+        out.count += n;
+        if let Some(s) = &mut slots[i] {
+            s.count -= n;
+            if s.count == 0 {
+                slots[i] = None;
+            }
+        }
+    }
+    set_vault_slots(game, parts, slots, &touched);
+    Some(out)
+}
+
+/// Puts `stack` into the container at `pos` through its side `face`: an item vault's whole
+/// inventory, else as a hopper would (`native_insert_item`). What did not fit.
+pub(super) fn insert_item(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    face: horizon_core::geometry::Direction,
+    stack: horizon_client::items::ItemStack,
+) -> Option<horizon_client::items::ItemStack> {
+    match vault_at(game, dim, pos) {
+        Some(parts) => insert_vault(game, &parts, stack),
+        None => game.native_insert_item(pos, face, stack),
+    }
+}
+
+/// A player's click on a smart chute's filter slot (`FilteringBehaviour.onShortInteract` through
+/// `ValueSettingsInputHandler`): on a side, not sneaking, at the slot 11 px up; the held item
+/// becomes its filter, an empty hand clears it (no filter items or counts yet).
+pub(super) fn use_smart_chute(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    face: [i32; 3],
+    canceled: &mut bool,
+) {
+    if !may_use_value_box(game) {
+        return;
+    }
+    let (Some(side), Some(hit)) = (Dir::from_offset(face), game.pick()) else {
+        return;
+    };
+    let local = [0, 1, 2].map(|i| hit.point[i] - f64::from(pos[i]));
+    let Some(slot) = create_engine::chute::filter_slot(side) else {
+        return;
+    };
+    if !create_engine::board::hits_box(slot, local) {
+        return;
+    }
+    let held = game.native_held().map(|h| h.0);
+    // `canShortInteract`: a wrench or a mechanical arm is used on the block instead.
+    if held
+        .as_deref()
+        .is_some_and(|h| matches!(h, "create:wrench" | "create:mechanical_arm"))
+    {
+        return;
+    }
+    *canceled = true;
+    with_world(|w| w.set_chute_filter(dim, pos, held));
+    let center = pos.map(|v| f64::from(v) + 0.5);
+    game.audio.play(
+        "minecraft:entity.item_frame.add_item",
+        Some(center),
+        0.25,
+        0.1,
+    );
+}
+
+/// Item vaults whose blocks changed form or split (`updateConnectivity`), and their blocks
+/// show it (`large`). Nothing when no vault block changed.
+pub(super) fn tick_vaults(game: &mut Game<'_>, dim: usize) {
+    let large = with_world(|w| w.tick_vaults(dim)).unwrap_or_default();
+    for (pos, l) in large {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let vault = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
+            == Some(create_engine::Block::ItemVault);
+        if vault {
+            game.native_set_block_property_with(
+                pos,
+                "large",
+                if l { "true" } else { "false" },
+                super::native_hooks::flags::UPDATE_CLIENTS,
+            );
+        }
+    }
+}
+
+/// Vault blocks' parts (`ItemVaultBlockEntity.write`: `Controller`, `Size`, `Length`,
+/// `Uninitialized`) and smart chutes' filters saved with a column: `vaults` holds x, y, z, the
+/// controller's x, y, z, width, length and 1 when it still looks for its vault, for each block;
+/// `chute_filters` the positions and the item ids.
+pub(super) fn vaults_to_nbt(
+    own: &mut horizon_world::nbt::Compound,
+    vaults: &[([i32; 3], create_engine::vault::Part)],
+    filters: &[([i32; 3], String)],
+) {
+    use horizon_world::nbt::Tag;
+    if !vaults.is_empty() {
+        let v = vaults
+            .iter()
+            .flat_map(|(p, x)| {
+                let c = x.controller.unwrap_or(*p);
+                [
+                    p[0],
+                    p[1],
+                    p[2],
+                    c[0],
+                    c[1],
+                    c[2],
+                    x.width,
+                    x.length,
+                    i32::from(x.dirty),
+                ]
+            })
+            .collect();
+        own.insert("vaults".into(), Tag::IntArray(v));
+    }
+    if !filters.is_empty() {
+        let mut c = horizon_world::nbt::Compound::new();
+        let pos = filters.iter().flat_map(|(p, _)| *p).collect();
+        let items = filters
+            .iter()
+            .map(|(_, i)| Tag::String(i.as_str().into()))
+            .collect();
+        c.insert("pos".into(), Tag::IntArray(pos));
+        c.insert("items".into(), Tag::List(items));
+        own.insert("chute_filters".into(), Tag::Compound(c));
+    }
+}
+
+/// What `vaults_to_nbt` wrote.
+#[allow(clippy::type_complexity)]
+pub(super) fn vaults_from_nbt(
+    data: Option<&horizon_world::nbt::Compound>,
+) -> (
+    Vec<([i32; 3], create_engine::vault::Part)>,
+    Vec<([i32; 3], String)>,
+) {
+    use horizon_world::nbt::Tag;
+    let Some(data) = data else {
+        return Default::default();
+    };
+    let vaults = match data.get(&"vaults".into()) {
+        Some(Tag::IntArray(v)) => v
+            .chunks_exact(9)
+            .map(|c| {
+                let pos = [c[0], c[1], c[2]];
+                let controller = [c[3], c[4], c[5]];
+                let part = create_engine::vault::Part {
+                    // The block's own state gives its axis and `large` when it is found.
+                    axis: create_engine::kinetics::Axis::X,
+                    controller: (controller != pos).then_some(controller),
+                    width: c[6].clamp(1, create_engine::vault::MAX_WIDTH),
+                    length: c[7].clamp(1, create_engine::vault::max_length(3)),
+                    dirty: c[8] != 0,
+                    large: false,
+                };
+                (pos, part)
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let filters = match data.get(&"chute_filters".into()) {
+        Some(Tag::Compound(c)) => match (c.get(&"pos".into()), c.get(&"items".into())) {
+            (Some(Tag::IntArray(pos)), Some(Tag::List(items))) => pos
+                .chunks_exact(3)
+                .zip(items)
+                .filter_map(|(p, i)| match i {
+                    Tag::String(s) => Some(([p[0], p[1], p[2]], s.to_string_lossy())),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    (vaults, filters)
 }
 
 /// Extracting funnels (`FunnelBlockEntity.activateExtractor`): every 8 ticks, while no item lies
@@ -486,12 +934,17 @@ pub(super) fn tick_funnels(game: &mut Game<'_>, dim: usize) {
         let o = facing.offset();
         let behind = [pos[0] - o[0], pos[1] - o[1], pos[2] - o[2]];
         let face = horizon_core::geometry::Direction::ALL[facing as usize];
-        let Some(stack) = super::machines::create_extract::extract_item(
-            game,
-            behind,
-            face,
-            create_engine::funnel::AMOUNT,
-        ) else {
+        // A vault behind it gives up to a stack of its first item (`ItemHelper.extract`).
+        let taken = match vault_at(game, dim, behind) {
+            Some(parts) => extract_vault(game, &parts, |_| true, create_engine::funnel::AMOUNT),
+            None => super::machines::create_extract::extract_item(
+                game,
+                behind,
+                face,
+                create_engine::funnel::AMOUNT,
+            ),
+        };
+        let Some(stack) = taken else {
             continue;
         };
         game.native_run_command(&format!(
@@ -589,7 +1042,7 @@ pub(super) fn item_landed(
         (_, Some(b @ create_engine::Block::Belt)) => (pos, b),
         (_, Some(b @ create_engine::Block::Depot)) => (pos, b),
         (Some(b @ create_engine::Block::Basin), _) => (own, b),
-        (_, Some(b @ create_engine::Block::Chute)) => (pos, b),
+        (_, Some(b @ (create_engine::Block::Chute | create_engine::Block::SmartChute))) => (pos, b),
         (_, Some(b @ create_engine::Block::MechanicalSaw)) => (pos, b),
         (_, Some(b @ create_engine::Block::ItemDrain)) => (pos, b),
         (
@@ -606,7 +1059,10 @@ pub(super) fn item_landed(
         basin_take(game, dim, spot, stack);
         return;
     }
-    if block == create_engine::Block::Chute {
+    if matches!(
+        block,
+        create_engine::Block::Chute | create_engine::Block::SmartChute
+    ) {
         chute_take(game, dim, spot, stack);
         return;
     }
@@ -635,7 +1091,7 @@ pub(super) fn item_landed(
         let o = facing.offset();
         let behind = [spot[0] - o[0], spot[1] - o[1], spot[2] - o[2]];
         let face = horizon_core::geometry::Direction::ALL[facing as usize];
-        let left = game.native_insert_item(behind, face, stack.clone());
+        let left = insert_item(game, dim, behind, face, stack.clone());
         stack.count = left.map_or(0, |l| l.count);
         return;
     }

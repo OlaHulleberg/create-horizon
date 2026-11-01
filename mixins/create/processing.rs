@@ -2659,7 +2659,7 @@ pub(super) fn crafter_insert(game: &mut Game<'_>, dimension: &str, dim: usize, p
     for (at, item) in grid {
         let stack = horizon_client::items::ItemStack::new(&item, 1);
         let face = horizon_core::geometry::Direction::ALL[dir.opposite() as usize];
-        if game.native_insert_item(t, face, stack).is_some() {
+        if insert_item(game, dim, t, face, stack).is_some() {
             left.push((at, item));
         }
     }
