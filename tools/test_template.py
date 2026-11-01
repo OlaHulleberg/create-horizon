@@ -125,6 +125,10 @@ pub mod registry {
 // The game's module reaches the lib as `horizon_client`, as Horizon's binary does.
 extern crate self as horizon_client;
 pub mod game;
+pub mod entities {
+    pub struct V { pub x: f64, pub y: f64, pub z: f64 }
+    pub struct ItemEntity { pub id: u32, pub stack: crate::items::ItemStack, pub position: V, pub velocity: V }
+}
 pub mod items {
     #[derive(Clone)] pub struct ItemStack { pub item: std::sync::Arc<str>, pub count: u32, pub damage: u32, pub extra: Option<Box<()>> }
     impl ItemStack {
@@ -364,10 +368,6 @@ pub mod native_hooks {
             let _ = (pos, face);
             Some(stack)
         }
-        pub fn native_items_in(&mut self, dimension: &str, min: [f64; 3], max: [f64; 3],
-                               f: impl FnMut(u32, &mut horizon_client::items::ItemStack, [f64; 3], &mut [f64; 3])) {
-            let _ = (dimension, min, max, f);
-        }
         pub fn native_place_block(&mut self, stack: &horizon_client::items::ItemStack, pos: [i32; 3], state: BlockStateId) {
             let _ = (stack, pos, state);
         }
@@ -446,6 +446,7 @@ pub struct Game<'a> {
     pub sent: Vec<(u128, String, Vec<u8>)>, pub parts: Vec<(u32, [i32; 3], u8, f32)>,
     pub aim: Option<[i32; 3]>, pub aim_point: Option<[f64; 3]>, pub unsaved: Vec<[i32; 2]>,
     pub offhand: Option<horizon_client::items::ItemStack>,
+    pub dropped: Vec<horizon_client::entities::ItemEntity>,
     pub creative: bool, pub player: Option<Player>, pub keys: std::collections::HashSet<winit::keyboard::KeyCode>,
     pub glides: Vec<(u32, [i32; 3], u8, f32, [f32; 3])>, pub hand: horizon_client::first_person::Hand, pub yaw: f32, pub pitch: f32,
     pub armor: [Option<horizon_client::items::ItemStack>; 4],
@@ -571,6 +572,7 @@ impl Behaviours {
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
         world: World { blocks: Default::default(), game_time: 0, block_entities: Default::default() }, sent: vec![], parts: vec![], aim: None, aim_point: None, unsaved: vec![],
         offhand: None,
+        dropped: Vec::new(),
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),
         glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0, pitch: 0.0, armor: [None, None, None, None],
         inventory: vec![Some(horizon_client::items::ItemStack { item: "minecraft:iron_ingot".into(), count: 5, damage: 0, extra: None })],

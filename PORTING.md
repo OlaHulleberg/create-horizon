@@ -214,6 +214,14 @@ Brass tunnels splitting stacks cost nothing measurable (`benchmarks/create-p4b-*
 
 Signals cost no tick; frame p50 is 6% over the control, within budget and its run's spread (`benchmarks/create-p9s-*.json`). Headless proof: one straight track with stations at 0, 25 and 50 and signals at 15 and 35; a train assembled at the first and sent to the last stopped just before the signal at 15 while a second train stood assembled at 25 (after 15 s nothing at the last station; a screenshot shows it waiting by the signal); once the second was taken apart at its station the first went on and stood at the last (its bogey, slime and gold there). Engine tests: a red signal ahead, a green one, one beyond the stop, the other way; a train waits at the stop and keeps its destination.
 
+| Scenario (2026-11-01, Phase 3 item entities from the bundle itself, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1917 ± 28 | 0.482 / 1.072 | 2.518 ± 0.119 | baseline |
+| fans | 1867 ± 27 | 0.491 / 1.076 | 2.836 ± 0.134 | tick ≤ off + 0.5 ms, frame p50 ≤ off + 15% |
+| crushers | 1803 ± 21 | 0.504 / 1.163 | 2.879 ± 0.071 | tick ≤ off + 0.5 ms, frame p50 ≤ off + 15% |
+
+Fans, crushing wheels and belts find item entities in the bundle itself (`items_in` over the level's dropped items, the box test in `belt::item_touches`), not through Horizon's API 52 helper; re-proven headless (ice blown through a fan's water became packed ice; gravel in a wheel gap gave sand and flint) and within budget (`benchmarks/create-p3i-*.json`; the crushers' check lists clay, flint and sand under the wheels). Crushing 16 gravel at 16 rpm takes ~36 s (`log2(16)` slows it), so these runs need the 25 s settle: with the default 3 s the check comes back empty (traced with DEBUG logs, not a fault).
+
 | Scenario (2026-11-01, Phase 4 funnels from the bundle's own module, `--no-mobs`, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1769 ± 9 | 0.522 / 1.213 | 2.999 ± 0.110 | baseline |
