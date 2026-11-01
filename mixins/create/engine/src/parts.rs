@@ -206,6 +206,11 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::half(f.opposite())
             })
         }),
+        // GantryShaftBlock (DirectionalKineticBlock): turns on its facing's axis, shafts at both
+        // ends.
+        Block::GantryShaft => s
+            .facing
+            .map_or([None, None], |f| one(Part::shaft(f.axis()))),
         // MechanicalBearingBlock: a shaft out of its back, turning what it carries.
         Block::MechanicalBearing => s
             .facing

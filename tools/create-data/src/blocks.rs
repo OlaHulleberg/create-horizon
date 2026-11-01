@@ -405,6 +405,23 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         "encased_fan" => ("minecraft:andesite", None, own(&[("facing", facing)])),
         // WindmillBearingBlock (BearingBlock): any facing, a full block.
         "windmill_bearing" => ("minecraft:iron_block", None, own(&[("facing", facing)])),
+        // GantryShaftBlock (DirectionalKineticBlock): AllShapes.EIGHT_VOXEL_POLE on its facing's
+        // axis, stone's properties; its place in the line and redstone power.
+        "gantry_shaft" => (
+            "minecraft:stone",
+            Some(by_facing(&[[4., 0., 4., 12., 16., 12.]])),
+            own(&[
+                ("facing", facing),
+                ("part", &["start", "middle", "end", "single"]),
+                ("powered", bools),
+            ]),
+        ),
+        // GantryCarriageBlock (DirectionalAxisKineticBlock): a full block of stone's properties.
+        "gantry_carriage" => (
+            "minecraft:stone",
+            None,
+            own(&[("axis_along_first", bools), ("facing", facing)]),
+        ),
         // LinearChassisBlock (`SharedProperties::wooden`): a pillar on its axis, glued ends.
         "linear_chassis" | "secondary_linear_chassis" => (
             "minecraft:stripped_spruce_wood",
@@ -697,6 +714,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             | "hand_crank"
             | "belt"
             | "crushing_wheel"
+            | "gantry_shaft"
     );
     Some(Decision::Declared {
         template,

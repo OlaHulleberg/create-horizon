@@ -206,6 +206,63 @@ pub fn gather_bearing(
     Ok((blocks, sails))
 }
 
+/// `GantryContraption.assemble` (`searchMovedStructure` from the carriage, `moveGantryPinion`):
+/// the carriage, the block in front of it and what holds on to them, never the shaft it rides
+/// on (`isAnchoringBlockAt`); a chassis reaches along the way it moves. Offsets from the carriage.
+pub fn gather_gantry(
+    carriage: [i32; 3],
+    facing: Dir,
+    moving: Dir,
+    at: impl Fn([i32; 3]) -> Option<Found>,
+) -> Result<Vec<([i32; 3], u32)>, Refused> {
+    let shaft = add(carriage, facing.opposite().offset());
+    let mut frontier = VecDeque::from([carriage, add(carriage, facing.offset())]);
+    let mut visited: HashSet<[i32; 3]> = HashSet::new();
+    let mut blocks = Vec::new();
+    while let Some(pos) = frontier.pop_front() {
+        if pos == shaft || !visited.insert(pos) {
+            continue;
+        }
+        let Some(found) = at(pos) else {
+            continue;
+        };
+        if !found.movable {
+            return Err(Refused::Unmovable(pos));
+        }
+        if let Some(c) = found.chassis {
+            for p in chassis_reach(pos, c, Some(moving), &at) {
+                if !visited.contains(&p) && p != shaft {
+                    frontier.push_back(p);
+                }
+            }
+        }
+        for d in Dir::ALL {
+            let next = add(pos, d.offset());
+            if visited.contains(&next) || next == shaft {
+                continue;
+            }
+            let Some(other) = at(next) else {
+                continue;
+            };
+            if other.movable && (sticks(&found, &other) || attached_towards(&other, d.opposite())) {
+                frontier.push_back(next);
+            }
+        }
+        blocks.push((
+            [
+                pos[0] - carriage[0],
+                pos[1] - carriage[1],
+                pos[2] - carriage[2],
+            ],
+            found.state,
+        ));
+        if blocks.len() > MAX_BLOCKS {
+            return Err(Refused::TooLarge);
+        }
+    }
+    Ok(blocks)
+}
+
 /// `WindmillBearingBlockEntity.getGeneratedSpeed`: a sail per 8 gives an rpm, 1 to 16,
 /// clockwise positive.
 pub fn windmill_speed(sails: u32, clockwise: bool) -> f32 {

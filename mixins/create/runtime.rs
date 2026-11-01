@@ -207,6 +207,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_latches(game, dimension, dim);
     tick_links(game, dimension, dim);
     tick_bearings(game, dimension, dim);
+    tick_gantries(game, dimension, dim);
     tick_windmills(game, dimension, dim);
     tick_millstones(game, dim);
     tick_fans(game, dimension, dim);
@@ -260,13 +261,14 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
             } => {
                 // `MechanicalBearingBlockEntity.onSpeedChanged`: `assembleNextTick`.
                 let state = game.world.block(pos[0], pos[1], pos[2]).0;
-                with_world(|w| {
-                    if w.table.get(state).map(|(b, _)| b)
-                        == Some(create_engine::Block::MechanicalBearing)
-                    {
-                        w.dims[dim].bearing_checks.push(pos);
-                    }
-                });
+                let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
+                if block == Some(create_engine::Block::MechanicalBearing) {
+                    with_world(|w| w.dims[dim].bearing_checks.push(pos));
+                }
+                // `GantryShaftBlockEntity.onSpeedChanged`: the carriages on it try to start.
+                if block == Some(create_engine::Block::GantryShaft) {
+                    gantry_carriages_on(game, dim, pos);
+                }
                 // A press that starts turning looks at the depot below it again.
                 with_world(|w| {
                     if w.dims[dim].presses.contains_key(&pos) {
@@ -6736,6 +6738,239 @@ fn put_back_turned(
                 p[0], p[1], p[2], s.name
             ));
         }
+    }
+}
+
+/// A gantry shaft's facing, part and power; None for any other block.
+fn gantry_shaft(game: &Game<'_>, p: [i32; 3]) -> Option<(Dir, create_engine::gantry::Part, bool)> {
+    let s = game
+        .pack
+        .assets
+        .registry
+        .state(game.world.block(p[0], p[1], p[2]))?;
+    if s.name != "create:gantry_shaft" {
+        return None;
+    }
+    let facing = s
+        .properties
+        .get("facing")
+        .and_then(|v| Dir::ALL.into_iter().find(|d| dir_name(*d) == v))?;
+    let part = create_engine::gantry::Part::read(s.properties.get("part")?)?;
+    Some((
+        facing,
+        part,
+        s.properties.get("powered").is_some_and(|v| v == "true"),
+    ))
+}
+
+/// `checkAttachedCarriageBlocks`: carriages beside the shaft facing away from it, off its axis.
+fn gantry_carriages_on(game: &Game<'_>, dim: usize, shaft: [i32; 3]) {
+    let Some((facing, ..)) = gantry_shaft(game, shaft) else {
+        return;
+    };
+    let registry = game.pack.assets.registry;
+    for d in Dir::ALL {
+        if d.axis() == facing.axis() {
+            continue;
+        }
+        let o = d.offset();
+        let c = [shaft[0] + o[0], shaft[1] + o[1], shaft[2] + o[2]];
+        let carriage = registry
+            .state(game.world.block(c[0], c[1], c[2]))
+            .is_some_and(|s| {
+                s.name == "create:gantry_carriage"
+                    && s.properties.get("facing").map(String::as_str) == Some(dir_name(d))
+            });
+        if carriage {
+            with_world(|w| w.dims[dim].gantry_assemble.push(c));
+        }
+    }
+}
+
+/// Gantries: shafts take their place in their line (`updateShape`); queued carriages on a shaft
+/// they may start from take their structure out of the world (`tryAssemble`); moving ones run
+/// along the shafts at their speed (`checkPinionShaft`) and go back into the world, at the
+/// nearest whole block, where they stop. Nothing runs without one of them.
+fn tick_gantries(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    use create_engine::gantry::{self, Moving, Shaft, Step};
+    let Some((mut checks, mut queued, moving)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        (
+            std::mem::take(&mut d.gantry_checks),
+            std::mem::take(&mut d.gantry_assemble),
+            !d.gantries.is_empty(),
+        )
+    }) else {
+        return;
+    };
+    if checks.is_empty() && queued.is_empty() && !moving {
+        return;
+    }
+    checks.sort();
+    checks.dedup();
+    for pos in checks {
+        let Some((facing, part, _)) = gantry_shaft(game, pos) else {
+            continue;
+        };
+        let along = |d: Dir| {
+            let o = d.offset();
+            gantry_shaft(game, [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]])
+                .is_some_and(|(f, ..)| f == facing)
+        };
+        let now = gantry::Part::of(along(facing), along(facing.opposite()));
+        if now != part {
+            game.native_set_block_property_with(
+                pos,
+                "part",
+                now.name(),
+                super::native_hooks::flags::UPDATE_ALL,
+            );
+        }
+    }
+    queued.sort();
+    queued.dedup();
+    for c in queued {
+        let state = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(c[0], c[1], c[2]));
+        let Some(cf) = state
+            .filter(|s| s.name == "create:gantry_carriage")
+            .and_then(|s| s.properties.get("facing"))
+            .and_then(|v| Dir::ALL.into_iter().find(|d| dir_name(*d) == v))
+        else {
+            continue;
+        };
+        let b = cf.opposite().offset();
+        let shaft = [c[0] + b[0], c[1] + b[1], c[2] + b[2]];
+        let Some((sf, part, powered)) = gantry_shaft(game, shaft) else {
+            continue;
+        };
+        let rpm = with_world(|w| w.speed(dim, shaft)).flatten().unwrap_or(0.0);
+        let v = gantry::pinion_speed(rpm);
+        if !gantry::can_assemble_on(part, powered, v) {
+            continue;
+        }
+        let moving_dir = if v > 0.0 { sf } else { sf.opposite() };
+        let gathered = create_engine::contraption::gather_gantry(c, cf, moving_dir, |p| {
+            contraption_found(game, p)
+        });
+        let Ok(blocks) = gathered else {
+            continue;
+        };
+        if let Some(air) = game.pack.assets.registry.default_state("minecraft:air") {
+            for (o, _) in &blocks {
+                let p = [c[0] + o[0], c[1] + o[1], c[2] + o[2]];
+                game.native_set_block(
+                    dimension,
+                    p,
+                    air,
+                    super::native_hooks::flags::UPDATE_CLIENTS,
+                );
+            }
+        }
+        with_world(|w| {
+            w.dims[dim].gantries.push(Moving {
+                start: c,
+                carriage_facing: cf,
+                shaft_facing: sf,
+                offset: 0.0,
+                per_tick: 0.0,
+                blocks,
+            })
+        });
+    }
+    let list = with_world(|w| std::mem::take(&mut w.dims[dim].gantries)).unwrap_or_default();
+    let mut keep = Vec::new();
+    for mut g in list {
+        let sp = g.shaft_pos();
+        let shaft = gantry_shaft(game, sp).map(|(facing, part, powered)| Shaft {
+            facing,
+            part,
+            powered,
+            speed: with_world(|w| w.speed(dim, sp)).flatten().unwrap_or(0.0),
+        });
+        match g.step(shaft) {
+            Step::Move(v) => {
+                if v != g.per_tick {
+                    g.per_tick = v;
+                    send_gantry(game, dimension, &g, false);
+                }
+                g.offset += v;
+                keep.push(g);
+            }
+            Step::Stop => {
+                // `disassemble` at `BlockPos.containing(anchor + .5)`.
+                let at = g.carriage();
+                let shift = [at[0] - g.start[0], at[1] - g.start[1], at[2] - g.start[2]];
+                let registry = game.pack.assets.registry;
+                for (o, id) in &g.blocks {
+                    let p = [
+                        g.start[0] + o[0] + shift[0],
+                        g.start[1] + o[1] + shift[1],
+                        g.start[2] + o[2] + shift[2],
+                    ];
+                    let here = game.world.block(p[0], p[1], p[2]);
+                    let free = registry.state(here).is_some_and(|s| {
+                        s.name == "minecraft:air" || s.name == "minecraft:cave_air"
+                    });
+                    if free {
+                        game.native_set_block(
+                            dimension,
+                            p,
+                            BlockStateId(*id),
+                            super::native_hooks::flags::UPDATE_ALL,
+                        );
+                    } else if let Some(s) = registry.state(BlockStateId(*id)) {
+                        game.native_run_command(&format!(
+                            "execute in {dimension} run summon minecraft:item {}.5 {}.5 {}.5 {{Item:{{id:'{}',count:1}}}}",
+                            p[0], p[1], p[2], s.name
+                        ));
+                    }
+                }
+                send_gantry(game, dimension, &g, true);
+            }
+        }
+    }
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        keep.extend(std::mem::take(&mut d.gantries));
+        d.gantries = keep;
+    });
+}
+
+/// A moving gantry to clients, as a piston's structure is (`create:piston`, keyed by where its
+/// carriage started): gliding along the shaft line from its offset at its speed; `gone` clears
+/// it.
+fn send_gantry(
+    game: &mut Game<'_>,
+    dimension: &str,
+    g: &create_engine::gantry::Moving,
+    gone: bool,
+) {
+    let mut msg = Vec::new();
+    for v in g.start {
+        msg.extend_from_slice(&v.to_le_bytes());
+    }
+    if !gone {
+        for v in g.start {
+            msg.extend_from_slice(&v.to_le_bytes());
+        }
+        msg.push(g.shaft_facing as u8);
+        msg.extend_from_slice(&g.offset.to_le_bytes());
+        msg.extend_from_slice(&g.per_tick.to_le_bytes());
+        let blocks = &g.blocks[..g.blocks.len().min((30_000 - 33) / 16)];
+        msg.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+        for (o, s) in blocks {
+            for v in o {
+                msg.extend_from_slice(&v.to_le_bytes());
+            }
+            msg.extend_from_slice(&s.to_le_bytes());
+        }
+    }
+    for p in players_in(game, dimension) {
+        let _ = game.native_net_send_to_player(p, PISTON_CHANNEL, &msg);
     }
 }
 

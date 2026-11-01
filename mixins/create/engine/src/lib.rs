@@ -15,6 +15,7 @@ pub mod drill;
 pub mod fan;
 pub mod fluids;
 pub mod funnel;
+pub mod gantry;
 pub mod generated;
 pub mod kinetics;
 pub mod latch;
