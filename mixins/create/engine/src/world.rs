@@ -182,6 +182,8 @@ pub struct Dimension {
     pub saws: HashMap<[i32; 3], crate::saw::Saw>,
     /// Spouts and their tank and cycle; those holding fluid tick.
     pub spouts: HashMap<[i32; 3], crate::spout::Spout>,
+    /// Item drains, their held stack and tank; those holding items tick.
+    pub drains: HashMap<[i32; 3], crate::drain::Drain>,
 }
 
 /// An assembled train: its run, its blocks (offset from its first bogey, state), where that
@@ -249,6 +251,7 @@ fn has_state(block: Block) -> bool {
     matches!(
         block,
         Block::Depot
+            | Block::ItemDrain
             | Block::Spout
             | Block::Chute
             | Block::FluidPipe
@@ -340,7 +343,11 @@ impl CreateWorld {
         }
         if matches!(
             block,
-            Block::FluidPipe | Block::MechanicalPump | Block::FluidTank | Block::Spout
+            Block::FluidPipe
+                | Block::MechanicalPump
+                | Block::FluidTank
+                | Block::Spout
+                | Block::ItemDrain
         ) {
             // `FluidPropagator.propagateChangedPipe`: the pipe and its neighbours connect again,
             // pumps find their ends again.
@@ -351,6 +358,9 @@ impl CreateWorld {
                 d.pipe_checks
                     .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
             }
+        }
+        if block == Block::ItemDrain {
+            d.drains.entry(pos).or_default();
         }
         if block == Block::Spout {
             d.spouts.entry(pos).or_default();
@@ -470,7 +480,11 @@ impl CreateWorld {
             if let Some((b, _)) = self.table.get(old)
                 && matches!(
                     b,
-                    Block::FluidPipe | Block::MechanicalPump | Block::FluidTank | Block::Spout
+                    Block::FluidPipe
+                        | Block::MechanicalPump
+                        | Block::FluidTank
+                        | Block::Spout
+                        | Block::ItemDrain
                 )
             {
                 d.pipes_changed = true;
@@ -486,6 +500,7 @@ impl CreateWorld {
             d.chutes.remove(&pos);
             d.saws.remove(&pos);
             d.spouts.remove(&pos);
+            d.drains.remove(&pos);
             if d.drills.remove(&pos).is_some() {
                 d.drilling.retain(|p| *p != pos);
             }
@@ -569,6 +584,7 @@ impl CreateWorld {
             d.chutes.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.saws.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.spouts.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.drains.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
