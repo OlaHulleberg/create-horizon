@@ -385,6 +385,23 @@ teleported into a pool 4 deep: after 10 s `Air` was still 300 and the tank held 
 player on the floor (screenshot); the helmet taken off, `Air` fell to 139 in 8 s. Block interaction range: 4.5, 7.5
 with an extendo grip, 9.5 with two (`singleRange` 3, `doubleRange` 5).
 
+| Scenario (2026-11-01, Phase 8 clockwork bearings, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| clockbase (control): 16 clockwork bearings on creative motors, nothing in front | 1875 | 0.480 / 1.234 | 2.678 ± 0.052 | control |
+| clocks: the same with an hour hand of 3 sails and a minute hand of 4 each (112 sails lifted) | 1848 | 0.489 / 1.104 | 2.701 ± 0.066 | tick ≤ control + 0.2 ms, frame p50 ≤ control + 10% |
+
+Running clocks cost 0.023 ms of tick and 2% of frame p50 (`benchmarks/create-p8lifts-*.json`; the scene counts 32 Create
+blocks a second after building, so all 112 sails had left the world). Proven headless: a clockwork bearing facing north
+with 3 sails in front and 4 beyond, a creative motor added: all 7 left the world (DEBUG log: hour 3, minute 4), the
+hands pointed down at time 1500 and swung toward 1 o'clock after `time set 7000` (screenshots); the motor removed, all
+7 back. It first assembled when placed, before its sails, with speed 0 (DEBUG log): a new block's first speed report
+counted as `onSpeedChanged`, which Create doesn't call for a still block; fixed. A rope pulley at +16 rpm lowered a gold
+block 5 to the floor with a magnet and 4 ropes above it; turned the other way it came back with no rope left. An
+elevator pulley (16 rpm) over a slime block and a redstone contact, floors at +6 and +2, clicked from a platform: the car
+left the world and +6 lit; a redstone block at +2 called it: +2 `calling,powered,powering` and +6 dark for as long as
+it stood there; clicked again: the car back at +2. The arrived floor first went dark a tick after lighting (DEBUG log:
+its own neighbour update re-checked it; Create re-checks only when the block it faces changes); fixed.
+
 Chutes moving items cost no measurable tick; 6% of frame p50 with 128 chutes, 16 hoppers and 16 chests in view
 (`benchmarks/create-p4-chutes-*.json`); each run's check reads one chest: 64 iron.
 
