@@ -17,6 +17,7 @@ pub mod depot;
 pub mod diode;
 pub mod drain;
 pub mod drill;
+pub mod equipment;
 pub mod fan;
 pub mod fluids;
 pub mod funnel;

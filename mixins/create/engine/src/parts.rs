@@ -40,6 +40,8 @@ pub struct StateInfo {
     pub track: Option<crate::track::TrackShape>,
     /// An item vault's `large`.
     pub large: bool,
+    /// `waterlogged` (a backtank fills only out of water).
+    pub waterlogged: bool,
 }
 
 impl StateInfo {
@@ -71,6 +73,7 @@ impl StateInfo {
                 }
                 "powered" => s.powered = v == "true",
                 "large" => s.large = v == "true",
+                "waterlogged" => s.waterlogged = v == "true",
                 "powering" => s.powering = v == "true",
                 "receiver" => s.receiver = v == "true",
                 "inverted" => s.inverted = v == "true",
@@ -271,6 +274,8 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::half(f.opposite())
             })
         }),
+        // BacktankBlock (HorizontalKineticBlock): turns on y, its shaft out of its top.
+        Block::CopperBacktank | Block::NetheriteBacktank => one(Part::half(Dir::Up)),
         // MillstoneBlock: a small cog on the y axis with a shaft below.
         Block::Millstone => one(Part {
             shafts: Dir::Down.bit(),
@@ -399,6 +404,7 @@ pub fn is_kinetic(block: Block) -> bool {
         face: None,
         track: None,
         large: false,
+        waterlogged: false,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

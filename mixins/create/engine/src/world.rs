@@ -290,6 +290,9 @@ pub struct Dimension {
     pub engine_shafts: Vec<[i32; 3]>,
     /// Powered shafts and the engine driving each (`PoweredShaftBlockEntity.enginePos`).
     pub shaft_engine: HashMap<[i32; 3], [i32; 3]>,
+    /// Backtanks and their air (`BacktankBlockEntity`); the saved ones not placed yet.
+    pub backtanks: HashMap<[i32; 3], crate::equipment::Backtank>,
+    backtank_saved: HashMap<[i32; 3], crate::equipment::Backtank>,
 }
 
 pub use crate::trains::TrainOnTrack;
@@ -499,6 +502,12 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
+        }
+        if matches!(block, Block::CopperBacktank | Block::NetheriteBacktank)
+            && !d.backtanks.contains_key(&pos)
+        {
+            let saved = d.backtank_saved.remove(&pos).unwrap_or_default();
+            d.backtanks.insert(pos, saved);
         }
         if block == Block::SequencedGearshift {
             d.sequencers.entry(pos).or_default();
@@ -885,6 +894,7 @@ impl CreateWorld {
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
             d.presses.remove(&pos);
+            d.backtanks.remove(&pos);
             self.diode_removed(dim, pos);
             let d = &mut self.dims[dim];
             if d.gauges.remove(&pos).is_some() {
@@ -1032,6 +1042,10 @@ impl CreateWorld {
             }
             d.wheels.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.millstones
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.backtanks
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.backtank_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.depots.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -2786,6 +2800,61 @@ impl CreateWorld {
 
     pub fn speed(&self, dim: usize, pos: [i32; 3]) -> Option<f32> {
         self.dims[dim].kinetics.speed(pos, 0)
+    }
+
+    /// Backtanks saved with a column (`BacktankBlockEntity.read`): those already placed take
+    /// their air now, the others when their block is found.
+    pub fn load_backtanks(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], crate::equipment::Backtank)>,
+    ) {
+        let d = &mut self.dims[dim];
+        for (pos, b) in saved {
+            match d.backtanks.get_mut(&pos) {
+                Some(placed) => *placed = b,
+                None => {
+                    d.backtank_saved.insert(pos, b);
+                }
+            }
+        }
+    }
+
+    /// The backtanks of a column holding air or waiting, to save, sorted by position.
+    pub fn column_backtanks(
+        &self,
+        dim: usize,
+        cx: i32,
+        cz: i32,
+    ) -> Vec<([i32; 3], crate::equipment::Backtank)> {
+        let mut v: Vec<_> = self.dims[dim]
+            .backtanks
+            .iter()
+            .filter(|(p, b)| (p[0] >> 4, p[2] >> 4) == (cx, cz) && **b != Default::default())
+            .map(|(p, b)| (*p, *b))
+            .collect();
+        v.sort_by_key(|e| e.0);
+        v
+    }
+
+    /// The backtanks whose tick does something (turning, dry, waiting or not full), with their
+    /// speed: the only ones ticked.
+    pub fn filling_backtanks(&self, dim: usize) -> Vec<([i32; 3], f32)> {
+        let d = &self.dims[dim];
+        d.backtanks
+            .iter()
+            .filter_map(|(p, b)| {
+                let speed = d.kinetics.speed(*p, 0)?;
+                let state = *d.states.get(p)?;
+                let waterlogged = self.table.get(state)?.1.waterlogged;
+                b.ticks(speed, waterlogged).then_some((*p, speed))
+            })
+            .collect()
+    }
+
+    /// A backtank's air changed: its column saves again.
+    pub fn backtank_changed(&mut self, dim: usize, pos: [i32; 3]) {
+        self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }
 }
 
