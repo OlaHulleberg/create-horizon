@@ -73,6 +73,9 @@ pub struct Lifts {
     pub contact_checks: Vec<[i32; 3]>,
     pub contact_ticks: Vec<([i32; 3], i64)>,
     pub contact_lit: HashSet<[i32; 3]>,
+    /// Contacts lit by an elevator that stopped at them: they stay lit until their next
+    /// activation (Create re-checks a contact only when the block it faces changes).
+    pub contact_held: HashSet<[i32; 3]>,
     /// Structures whose block broke, to put back; blocks clients must see again.
     pub orphans: Vec<([i32; 3], Held)>,
     pub changes: Vec<[i32; 3]>,
@@ -282,6 +285,7 @@ impl Lifts {
         self.contact_checks.retain(away);
         self.contact_ticks.retain(|t| away(&t.0));
         self.contact_lit.retain(away);
+        self.contact_held.retain(away);
         // A column's contacts all lie in one column of blocks: they come back with it.
         self.columns.retain(|k, c| {
             if (k.x >> 4, k.z >> 4) == (cx, cz) {
