@@ -38,6 +38,8 @@ pub struct StateInfo {
     pub face: Option<crate::steam::Face>,
     /// A train track's `shape`.
     pub track: Option<crate::track::TrackShape>,
+    /// An item vault's `large`.
+    pub large: bool,
 }
 
 impl StateInfo {
@@ -68,6 +70,7 @@ impl StateInfo {
                     }
                 }
                 "powered" => s.powered = v == "true",
+                "large" => s.large = v == "true",
                 "powering" => s.powering = v == "true",
                 "receiver" => s.receiver = v == "true",
                 "inverted" => s.inverted = v == "true",
@@ -395,6 +398,7 @@ pub fn is_kinetic(block: Block) -> bool {
         sequence: 0,
         face: None,
         track: None,
+        large: false,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

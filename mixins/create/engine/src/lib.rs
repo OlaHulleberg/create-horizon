@@ -47,6 +47,7 @@ pub mod track_curves;
 pub mod track_render;
 pub mod trains;
 pub mod tunnel;
+pub mod vault;
 pub mod waterwheel;
 pub mod world;
 pub mod wrench;

@@ -80,7 +80,7 @@ pub struct Dimension {
     /// The state of each kinetic block, by position.
     states: HashMap<[i32; 3], u32>,
     /// Columns whose saved data changed, to mark unsaved when the dimension is in place.
-    unsaved: Vec<(i32, i32)>,
+    pub(crate) unsaved: Vec<(i32, i32)>,
     /// Hand cranks being turned: ticks left (`HandCrankBlockEntity.inUse`). Empty at rest, so
     /// cranks cost nothing per tick unless turned.
     cranks: HashMap<[i32; 3], u8>,
@@ -253,6 +253,12 @@ pub struct Dimension {
     pub railway: crate::trains::Railway,
     /// Chutes holding a stack: where it is (1 top, 0 bottom); the only ones that tick.
     pub chutes: HashMap<[i32; 3], f32>,
+    /// Empty chutes that may take from the inventory above them.
+    pub chute_pulls: crate::chute::Pulls,
+    /// Smart chutes' filters (an item id), saved with their column.
+    pub chute_filters: HashMap<[i32; 3], String>,
+    /// Item vault blocks and the vaults they form.
+    pub vaults: crate::vault::Vaults,
     /// Drills and their breaking, the turning ones (the only ones that tick).
     pub drills: HashMap<[i32; 3], crate::drill::Breaker>,
     pub drilling: Vec<[i32; 3]>,
@@ -349,6 +355,8 @@ fn has_state(block: Block) -> bool {
             | Block::ItemDrain
             | Block::Spout
             | Block::Chute
+            | Block::SmartChute
+            | Block::ItemVault
             | Block::FluidPipe
             | Block::Basin
             | Block::BlazeBurner
@@ -438,7 +446,11 @@ pub struct BeltBreak {
 fn follows_power(block: Block) -> bool {
     matches!(
         block,
-        Block::Clutch | Block::Gearshift | Block::GantryShaft | Block::AdjustableChainGearshift
+        Block::Clutch
+            | Block::Gearshift
+            | Block::GantryShaft
+            | Block::AdjustableChainGearshift
+            | Block::SmartChute
     )
 }
 
@@ -620,6 +632,17 @@ impl CreateWorld {
                     .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
             }
         }
+        if matches!(block, Block::Chute | Block::SmartChute) {
+            // Placed, loaded or changed (powered): it may take from the inventory above it, and
+            // a stack it holds (a powered smart chute's, kept in the middle) moves on.
+            d.chute_pulls.wake(pos);
+            d.chutes.entry(pos).or_insert(0.5);
+        }
+        if block == Block::ItemVault
+            && let Some(axis) = info.axis
+        {
+            d.vaults.placed(pos, axis, info.large);
+        }
         if matches!(block, Block::AndesiteFunnel | Block::BrassFunnel) {
             // Placed or changed (extracting, powered): looked at again.
             d.funnels.insert(pos, 0);
@@ -785,6 +808,20 @@ impl CreateWorld {
             && rail(new) != Some(b)
         {
             self.dims[dim].railway.remove(pos);
+        }
+        let kind = |s: u32| self.table.get(s).map(|(b, _)| b);
+        if kind(old) == Some(Block::ItemVault) && kind(new) != Some(Block::ItemVault) {
+            // `ItemVaultBlock.onRemove`: its vault splits.
+            self.dims[dim].vaults.removed(pos);
+        }
+        if matches!(kind(old), Some(Block::Chute | Block::SmartChute))
+            && !matches!(kind(new), Some(Block::Chute | Block::SmartChute))
+        {
+            let d = &mut self.dims[dim];
+            d.chute_pulls.forget(pos);
+            if d.chute_filters.remove(&pos).is_some() {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
         }
         if is {
             let (was_block, is_block) = (
@@ -1014,6 +1051,10 @@ impl CreateWorld {
             d.spouts.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drains.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.funnels.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.chute_pulls.column_unloaded(cx, cz);
+            d.chute_filters
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.vaults.column_unloaded(cx, cz);
             d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1405,6 +1446,10 @@ impl CreateWorld {
         match self.table.get(state).map(|(b, _)| b) {
             Some(b) if follows_power(b) => {
                 self.dims[dim].redstone.push(pos);
+                if b == Block::SmartChute {
+                    // Something above it may have become an inventory.
+                    self.dims[dim].chute_pulls.wake(pos);
+                }
                 if b == Block::GantryShaft {
                     self.dims[dim].gantry_checks.push(pos);
                 }
@@ -1425,6 +1470,7 @@ impl CreateWorld {
                 self.dims[dim].tunnel_checks.push(pos)
             }
             Some(Block::GantryShaft) => self.dims[dim].gantry_checks.push(pos),
+            Some(Block::Chute) => self.dims[dim].chute_pulls.wake(pos),
             // `FluidTankBlock.updateShape`: what lies under a boiler may heat it differently.
             Some(Block::FluidTank) => self.boiler_heat_changed(dim, pos),
             // `BeltBlock.updateShape`: the tunnel over a belt follows its neighbours.
