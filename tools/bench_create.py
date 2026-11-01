@@ -28,6 +28,9 @@ the server thread's smoothed tick time. Scenarios:
            stones stuck to it (16 structures drawn as one GPU part each, phase 8)
   chassis  the pistons scene pushing a linear chassis glued on top under 3 stones in place of each
            stone (16 structures of 4 blocks gliding, phase 8)
+  gantries 16 lines of 30 gantry shafts at 16 rpm, a carriage on each carrying a slime block and a
+           stone, started as the flight starts (16 structures gliding, phase 8)
+  gantryshafts  the control for gantries: the same shaft lines turning, no carriages
   links    32 observer clocks, each pulsing a redstone link 16 blocks from a receiving one that
            lights a lamp; all untuned, so one network of 64 links changes at every pulse (phase 7)
   contraptions  16 windmills (17 sails each, a cross) assembled and turning: 16 structures drawn as
@@ -320,6 +323,16 @@ def build(ctl_bin, sock, scenario, center):
                     failures)
             command(ctl_bin, sock, f"setblock {xx} {y-5} {z-1} create:creative_motor[facing=south]", failures)
         command(ctl_bin, sock, f"fill {x-16} {y-8} {z-2} {x+17} {y-8} {z+3} minecraft:stone", failures)
+    if scenario in ("gantries", "gantryshafts"):
+        for row in range(16):
+            zz = z - 16 + 2 * row
+            command(ctl_bin, sock, f"fill {x-15} {y-7} {zz} {x+14} {y-7} {zz} create:gantry_shaft[facing=east]",
+                    failures)
+            if scenario == "gantryshafts":
+                continue
+            command(ctl_bin, sock, f"setblock {x-15} {y-6} {zz} create:gantry_carriage[facing=up]", failures)
+            command(ctl_bin, sock, f"setblock {x-15} {y-5} {zz} minecraft:slime_block", failures)
+            command(ctl_bin, sock, f"setblock {x-15} {y-4} {zz} minecraft:stone", failures)
     if scenario == "bearings":
         for i in range(16):
             bx, bz = x - 15 + 10 * (i % 4), z - 15 + 10 * (i // 4)
@@ -431,7 +444,7 @@ def run_once(args, scenario):
         spawn = ctl(ctl_bin, sock, "state")["player"]["position"]
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
-                    "processing": 528, "deployers": 48, "bearings": 32, "chassis": 16 * 10, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
+                    "processing": 528, "deployers": 48, "bearings": 32, "chassis": 16 * 10, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "links": 64,
                     "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
@@ -475,6 +488,9 @@ def run_once(args, scenario):
             for row in range(0, 32, 2):
                 ctl(ctl_bin, sock, "command", f"summon minecraft:item {x+0.5} {y-5} {z-16+row+0.5} "
                     "{Item:{id:'create:andesite_alloy',count:64},PickupDelay:32767}")
+        if scenario in ("gantries", "gantryshafts"):
+            for row in range(16):
+                ctl(ctl_bin, sock, "command", f"setblock {x+15} {y-7} {z-16+2*row} create:creative_motor[facing=west]")
         if scenario in ("pistons", "chassis"):
             for row in range(16):
                 ctl(ctl_bin, sock, "command", f"setblock {x-10} {y-5} {z-16+2*row} create:creative_motor[facing=down]")
@@ -507,6 +523,10 @@ def run_once(args, scenario):
             chain = ctl(ctl_bin, sock, "blocks", str(x - 14), str(y - 6), str(z - 31), str(x + 1), str(y - 6),
                         str(z - 31)).get("blocks", [])
             pressed = [first, "".join("1" if key in b[3] else "0" for b in sorted(chain))]
+        if scenario == "gantries":
+            # The carriages are moving: none left where they started.
+            pressed = ctl(ctl_bin, sock, "blocks", str(x - 15), str(y - 6), str(z - 16), str(x - 15), str(y - 4),
+                          str(z + 14)).get("counts", {})
         if scenario == "bearings":
             # The structures are out of the world, turning: no slime block left in place.
             found = ctl(ctl_bin, sock, "blocks", str(x - 16), str(y - 5), str(z - 16), str(x + 16), str(y - 5),
@@ -571,7 +591,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "bearings", "chassis", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
+                                          "logistics", "tunnels", "belts9", "deployers", "bearings", "chassis", "gantries", "gantryshafts", "redstone", "repeaters", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

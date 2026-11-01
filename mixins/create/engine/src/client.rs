@@ -92,6 +92,11 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
         Block::Shaft | Block::PoweredShaft | Block::Cogwheel | Block::LargeCogwheel => {
             s.axis.map(|a| vec![own(a, Model::Own)]).unwrap_or_default()
         }
+        // KineticBlockEntityRenderer: the gantry shaft's own model turning on its facing's axis.
+        Block::GantryShaft => s
+            .facing
+            .map(|f| vec![own(f.axis(), Model::Own)])
+            .unwrap_or_default(),
         Block::AndesiteEncasedShaft | Block::BrassEncasedShaft | Block::MetalGirderEncasedShaft => {
             s.axis
                 .map(|a| vec![own(a, Model::Shaft(a))])

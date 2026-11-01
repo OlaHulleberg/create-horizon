@@ -176,6 +176,11 @@ pub struct Dimension {
     deployer_saved: HashMap<[i32; 3], crate::deployer::Deployer>,
     pub deployer_changes: Vec<[i32; 3]>,
     pub deployer_drops: Vec<([i32; 3], (String, u8))>,
+    /// Gantry shafts whose place in their line may have changed (`updateShape`), carriages to try
+    /// to start (`queueAssembly`), and the moving gantries.
+    pub gantry_checks: Vec<[i32; 3]>,
+    pub gantry_assemble: Vec<[i32; 3]>,
+    pub gantries: Vec<crate::gantry::Moving>,
     /// Mechanical bearings whose speed changed (`assembleNextTick`).
     pub bearing_checks: Vec<[i32; 3]>,
     pub tunnel_fresh: Vec<[i32; 3]>,
@@ -295,6 +300,8 @@ fn has_state(block: Block) -> bool {
             | Block::PoweredToggleLatch
             | Block::RedstoneLink
             | Block::AndesiteTunnel
+            | Block::GantryShaft
+            | Block::GantryCarriage
             | Block::FluidTank
             | Block::WindmillBearing
     )
@@ -327,7 +334,7 @@ pub struct BeltBreak {
 
 /// Blocks that follow redstone power (`powered`): Create's split shafts.
 fn follows_power(block: Block) -> bool {
-    matches!(block, Block::Clutch | Block::Gearshift)
+    matches!(block, Block::Clutch | Block::Gearshift | Block::GantryShaft)
 }
 
 /// Create's state for the open world: three vanilla dimensions, by index.
@@ -384,6 +391,13 @@ impl CreateWorld {
         }
         if block == Block::AndesiteTunnel {
             d.tunnel_fresh.push(pos);
+        }
+        if block == Block::GantryShaft {
+            d.gantry_checks.push(pos);
+        }
+        if block == Block::GantryCarriage {
+            // `checkValidGantryShaft` when it is placed.
+            d.gantry_assemble.push(pos);
         }
         if block == Block::RedstoneLink {
             if d.links.links.contains_key(&pos) {
@@ -977,11 +991,17 @@ impl CreateWorld {
             return;
         }
         match self.table.get(state).map(|(b, _)| b) {
-            Some(b) if follows_power(b) => self.dims[dim].redstone.push(pos),
+            Some(b) if follows_power(b) => {
+                self.dims[dim].redstone.push(pos);
+                if b == Block::GantryShaft {
+                    self.dims[dim].gantry_checks.push(pos);
+                }
+            }
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(b) if latch_kind(b).is_some() => self.dims[dim].latch_checks.push(pos),
             Some(Block::RedstoneLink) => self.dims[dim].link_checks.push(pos),
             Some(Block::AndesiteTunnel) => self.dims[dim].tunnel_checks.push(pos),
+            Some(Block::GantryShaft) => self.dims[dim].gantry_checks.push(pos),
             // `BeltBlock.updateShape`: the tunnel over a belt follows its neighbours.
             Some(Block::Belt) => self.dims[dim]
                 .tunnel_fresh
