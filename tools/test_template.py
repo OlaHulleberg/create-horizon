@@ -130,9 +130,9 @@ pub mod items {
     impl ItemStack {
         pub fn new(item: &str, count: u32) -> ItemStack { ItemStack { item: item.into(), count, damage: 0, extra: None } }
     }
-    pub struct ItemInfo { pub max_stack: u32, pub fire_resistant: bool, pub remainder: Option<String> }
+    pub struct ItemInfo { pub max_stack: u32, pub fire_resistant: bool, pub remainder: Option<String> , pub block: Option<horizon_world::registry::BlockStateId> }
     pub struct Items { pub item_tags: std::collections::HashMap<String, std::collections::HashSet<String>> }
-    impl Items { pub fn get(&self, item: &str) -> Option<ItemInfo> { let _ = item; Some(ItemInfo { max_stack: 64, fire_resistant: false, remainder: None }) } }
+    impl Items { pub fn get(&self, item: &str) -> Option<ItemInfo> { let _ = item; Some(ItemInfo { max_stack: 64, fire_resistant: false, remainder: None, block: None }) } }
 }
 pub mod containers {
     pub struct ModBlockEntity { pub items: Vec<Option<crate::items::ItemStack>> }
