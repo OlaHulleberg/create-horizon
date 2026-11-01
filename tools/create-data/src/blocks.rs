@@ -443,6 +443,22 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("shape", &shapes), ("turn", bools), ("waterlogged", bools)]),
             )
         }
+        // ChuteBlock: a barrel's template for its one slot; gold's properties; its facing
+        // (down, or a diagonal's), `shape` and waterlogging; a full block here, so items land on
+        // top of it.
+        "chute" => (
+            "minecraft:barrel",
+            Some(by_property(
+                "facing",
+                &["down", "north", "south", "west", "east"],
+                &[[0., 0., 0., 16., 16., 16.]],
+            )),
+            own(&[
+                ("facing", &["down", "north", "south", "west", "east"]),
+                ("shape", &["normal", "window", "encased", "intersection"]),
+                ("waterlogged", bools),
+            ]),
+        ),
         // StationBlock: a full block of gold's properties (its track target is the glue's).
         "track_station" => ("minecraft:gold_block", None, None),
         // StandardBogeyBlock: on the track, along an axis; its wheels drawn by the train.

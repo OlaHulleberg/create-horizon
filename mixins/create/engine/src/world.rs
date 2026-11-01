@@ -173,6 +173,8 @@ pub struct Dimension {
     pub pistons: HashMap<[i32; 3], Moving>,
     /// Trains on this dimension's tracks.
     pub trains: Vec<TrainOnTrack>,
+    /// Chutes holding a stack: where it is (1 top, 0 bottom); the only ones that tick.
+    pub chutes: HashMap<[i32; 3], f32>,
 }
 
 /// An assembled train: its run, its blocks (offset from its first bogey, state), where that
@@ -240,6 +242,7 @@ fn has_state(block: Block) -> bool {
     matches!(
         block,
         Block::Depot
+            | Block::Chute
             | Block::FluidPipe
             | Block::Basin
             | Block::BlazeBurner
@@ -466,6 +469,7 @@ impl CreateWorld {
             if d.pumps.remove(&pos).is_some() {
                 d.pumping.retain(|p| *p != pos);
             }
+            d.chutes.remove(&pos);
             if d.mixers.remove(&pos).is_some() {
                 d.mixing.retain(|p| *p != pos);
             }
@@ -543,6 +547,7 @@ impl CreateWorld {
             d.crushers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.chutes.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             // Trains standing in it leave with it (saved with it).
             d.trains
