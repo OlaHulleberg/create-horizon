@@ -54,6 +54,8 @@ pub fn timer_speed(rpm: f32) -> i32 {
 pub enum Tick {
     None,
     Changed,
+    /// At the bottom of the stroke (`activate`): it draws back from here.
+    Activate,
 }
 
 impl Deployer {
@@ -81,7 +83,7 @@ impl Deployer {
             State::Expanding => {
                 self.state = State::Retracting;
                 self.timer = 1000;
-                Tick::Changed
+                Tick::Activate
             }
             State::Retracting => {
                 self.state = State::Waiting;
@@ -89,6 +91,11 @@ impl Deployer {
                 Tick::Changed
             }
         }
+    }
+
+    /// `timer = getTimerSpeed() * 10`: nothing to do yet, look again later.
+    pub fn wait(&mut self, rpm: f32) {
+        self.timer = timer_speed(rpm) * 10;
     }
 
     /// Whether it ticks at all: a stroke under way or a wait running down.
@@ -168,6 +175,26 @@ pub fn on_depot(d: &Deployer, rpm: f32, locked: bool, fits: bool) -> Depot {
         return Depot::Start;
     }
     Depot::Hold
+}
+
+/// Where a block the deployer holds goes (`BlockItem.useOn` from `DeployerHandler`): the block
+/// it reaches (two ahead) when that can be replaced, else the space before it; None when
+/// neither can, or the block there already is the held one (`shouldActivate`).
+pub fn placement(
+    reached_replaceable: bool,
+    before_replaceable: bool,
+    reached_is_held: bool,
+) -> Option<bool> {
+    if reached_is_held {
+        return None;
+    }
+    if reached_replaceable {
+        Some(true)
+    } else if before_replaceable {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// The held stack after a recipe used it (`keepHeldItem`, else one less; damage is not

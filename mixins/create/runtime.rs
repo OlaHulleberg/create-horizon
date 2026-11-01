@@ -2634,18 +2634,66 @@ fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]) -> bool {
 /// one back at rest has the depot below look at it again. Nothing runs without one.
 fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
     use create_engine::deployer::{State, Tick};
+    // Deployers at rest holding something, turning, not over a depot or belt: `tick`'s
+    // `WAITING` start (`shouldActivate`), else a look again `getTimerSpeed() × 10` later.
+    let idle: Vec<([i32; 3], f32)> = with_world(|w| {
+        let d = &w.dims[dim];
+        d.deployers
+            .iter()
+            .filter(|(p, dp)| dp.held.is_some() && !dp.busy() && !d.deploying.contains(p))
+            .map(|(p, _)| (*p, w.speed(dim, *p).unwrap_or(0.0)))
+            .filter(|(_, rpm)| *rpm != 0.0)
+            .collect()
+    })
+    .unwrap_or_default();
+    for (pos, rpm) in idle {
+        let Some(facing) = deployer_facing(game, pos) else {
+            continue;
+        };
+        let o = facing.offset();
+        let below = [pos[0] + o[0] * 2, pos[1] + o[1] * 2, pos[2] + o[2] * 2];
+        let over_depot = facing == Dir::Down
+            && with_world(|w| {
+                w.dims[dim].depots.contains_key(&below) || w.dims[dim].belt_of.contains_key(&below)
+            }) == Some(true);
+        if over_depot {
+            continue;
+        }
+        let place = deployer_place_target(game, dim, pos, facing);
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            let Some(dp) = d.deployers.get_mut(&pos) else {
+                return;
+            };
+            match place {
+                Some(_) => {
+                    // `start`: the ray toward the block two ahead sets its reach.
+                    let reach = if game_free(game, [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]) {
+                        0.75
+                    } else {
+                        0.0
+                    };
+                    dp.start(reach);
+                    d.deployer_changes.push(pos);
+                }
+                None => dp.wait(rpm),
+            }
+            d.deploying.push(pos);
+        });
+    }
     let Some(list) = with_world(|w| w.dims[dim].deploying.clone()) else {
         return;
     };
     for pos in list {
-        with_world(|w| {
+        let activated = with_world(|w| {
             let rpm = w.speed(dim, pos).unwrap_or(0.0);
             let d = &mut w.dims[dim];
             let Some(dp) = d.deployers.get_mut(&pos) else {
                 d.deploying.retain(|p| *p != pos);
-                return;
+                return false;
             };
-            if dp.tick(rpm) == Tick::Changed {
+            let tick = dp.tick(rpm);
+            if tick != Tick::None {
                 d.deployer_changes.push(pos);
                 if dp.state == State::Waiting {
                     d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
@@ -2654,7 +2702,12 @@ fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
             if !dp.busy() {
                 d.deploying.retain(|p| *p != pos);
             }
-        });
+            tick == Tick::Activate
+        })
+        .unwrap_or(false);
+        if activated {
+            deployer_activate(game, dimension, dim, pos);
+        }
     }
     let Some((changes, drops)) = with_world(|w| {
         let d = &mut w.dims[dim];
@@ -2675,6 +2728,87 @@ fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
         let players = players_in(game, dimension);
         send_deployers(game, &players, dim, &changes);
     }
+}
+
+/// A deployer's facing; None for any other block.
+fn deployer_facing(game: &Game<'_>, pos: [i32; 3]) -> Option<Dir> {
+    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    with_world(|w| {
+        w.table
+            .get(state)
+            .filter(|(b, _)| *b == create_engine::Block::Deployer)
+            .and_then(|(_, i)| i.facing)
+    })
+    .flatten()
+}
+
+/// Whether the block at `p` can be replaced (air, a fluid, grass).
+fn game_free(game: &Game<'_>, p: [i32; 3]) -> bool {
+    game.res
+        .behaviours()
+        .is_replaceable(game.world.block(p[0], p[1], p[2]))
+}
+
+/// Where the block a deployer holds would go (`placement`), as a position; None when it holds
+/// no block, or nowhere fits.
+fn deployer_place_target(
+    game: &Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    facing: Dir,
+) -> Option<[i32; 3]> {
+    let held =
+        with_world(|w| w.dims[dim].deployers.get(&pos).and_then(|d| d.held.clone())).flatten()?;
+    // A block item (`BlockItem.getBlock`): the block it places.
+    let placed = game.items().get(&held.0)?.block?;
+    let o = facing.offset();
+    let reached = [pos[0] + o[0] * 2, pos[1] + o[1] * 2, pos[2] + o[2] * 2];
+    let before = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+    let is_held = game
+        .pack
+        .assets
+        .registry
+        .state(game.world.block(reached[0], reached[1], reached[2]))
+        .zip(game.pack.assets.registry.state(placed))
+        .is_some_and(|(s, p)| s.name == p.name);
+    create_engine::deployer::placement(game_free(game, reached), game_free(game, before), is_held)
+        .map(|at_reached| if at_reached { reached } else { before })
+}
+
+/// `DeployerHandler.activate` for what is ported: a held block item is placed (its default
+/// state) where it fits, and one is used up.
+fn deployer_activate(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+    let Some(facing) = deployer_facing(game, pos) else {
+        return;
+    };
+    let Some(target) = deployer_place_target(game, dim, pos, facing) else {
+        return;
+    };
+    let Some((item, _)) =
+        with_world(|w| w.dims[dim].deployers.get(&pos).and_then(|d| d.held.clone())).flatten()
+    else {
+        return;
+    };
+    let Some(state) = game.items().get(&item).and_then(|i| i.block) else {
+        return;
+    };
+    game.native_set_block(
+        dimension,
+        target,
+        state,
+        super::native_hooks::flags::UPDATE_ALL,
+    );
+    with_world(|w| {
+        if let Some(mut d) = w.dims[dim].deployers.get(&pos).cloned() {
+            if let Some((_, n)) = d.held.as_mut() {
+                *n -= 1;
+                if *n == 0 {
+                    d.held = None;
+                }
+            }
+            w.set_deployer(dim, pos, d);
+        }
+    });
 }
 
 /// Deployers' strokes to `players`: where the hand is and how fast it moves, what it holds.
