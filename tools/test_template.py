@@ -189,9 +189,12 @@ use super::Game;
 use crate::items::ItemStack;
 use horizon_core::geometry::Direction;
 type Pos = (i32, i32, i32);
-struct View;
+#[allow(dead_code)]
+enum Kind { Hopper, Furnace, Brewing, Mod, Composter(u8) }
+struct View { kind: Kind }
 impl View {
     fn slots_for_face(&self, face: Option<Direction>) -> Vec<usize> { let _ = face; Vec::new() }
+    fn len(&self) -> usize { 0 }
 }
 struct Containers;
 impl Containers {
@@ -200,6 +203,8 @@ impl Containers {
     fn can_take(&self, view: &View, slot: usize, stack: &ItemStack, face: Direction) -> bool {
         let _ = (view, slot, stack, face); false
     }
+    fn can_place(&self, view: &View, slot: usize, stack: &ItemStack) -> bool { let _ = (view, slot, stack); false }
+    fn max_stack(&self, stack: &ItemStack) -> u32 { let _ = stack; 64 }
 }
 impl Game<'_> {
     fn containers(&self) -> Containers { Containers }
@@ -668,7 +673,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 6);
+    assert_eq!(commands.len(), 10);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);

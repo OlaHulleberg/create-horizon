@@ -96,3 +96,46 @@ pub(crate) fn extract_matching(
     game.view_changed(&view);
     Some(out)
 }
+
+// How much of `stack` the container at `pos` would take through its side `face`, as a hopper
+// puts in (`insertItem` simulated: `IItemHandler`'s `simulate`), without changing it. None when
+// there is no container there.
+pub(crate) fn insert_room(
+    game: &crate::game::Game<'_>,
+    pos: [i32; 3],
+    face: horizon_core::geometry::Direction,
+    stack: &horizon_client::items::ItemStack,
+) -> Option<u32> {
+    let view = game.containers().view((pos[0], pos[1], pos[2]), false)?;
+    if let super::Kind::Composter(_) = view.kind {
+        return Some(0);
+    }
+    let c = game.containers();
+    let slots = if matches!(
+        view.kind,
+        super::Kind::Furnace | super::Kind::Brewing | super::Kind::Mod
+    ) {
+        view.slots_for_face(Some(face))
+    } else {
+        (0..view.len()).collect()
+    };
+    let max = c.max_stack(stack);
+    let mut left = stack.count;
+    for slot in slots {
+        if left == 0 {
+            break;
+        }
+        if !c.can_place(&view, slot, stack) {
+            continue;
+        }
+        match c.get(&view, slot) {
+            // An empty slot takes the whole stack (`tryMoveInItem`).
+            None => left = 0,
+            Some(current) if current.count <= max && Key(current) == Key(stack) => {
+                left -= left.min(max.saturating_sub(current.count));
+            }
+            Some(_) => {}
+        }
+    }
+    Some(stack.count - left)
+}

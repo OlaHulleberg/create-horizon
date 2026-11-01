@@ -26,6 +26,12 @@ name = "create_logistics"
 source = "logistics.rs"
 
 [[module]]
+id = "arms"
+file = "crates/horizon-client/src/game.rs"
+name = "create_arms"
+source = "arms.rs"
+
+[[module]]
 id = "fluids"
 file = "crates/horizon-client/src/game.rs"
 name = "create_fluids"
