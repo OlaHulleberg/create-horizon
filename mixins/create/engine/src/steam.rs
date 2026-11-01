@@ -59,6 +59,15 @@ impl Boiler {
         self.attached_engines > 0
     }
 
+    /// `clear`: a tank split off or formed again starts without supply, heat or engines.
+    pub fn clear(&mut self) {
+        self.water_supply = 0.0;
+        self.active_heat = 0;
+        self.passive_heat = false;
+        self.attached_engines = 0;
+        self.supply_over_time = [0.0; 10];
+    }
+
     /// `updateTemperature`: the heat of each block under the boiler (`BoilerHeater.findHeat`);
     /// true when it changed.
     pub fn update_temperature(&mut self, heats: impl IntoIterator<Item = i32>) -> bool {

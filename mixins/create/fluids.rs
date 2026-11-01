@@ -253,10 +253,8 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                     if w.is_boiler(dim, from.pos) {
                         return None;
                     }
-                    w.dims[dim]
-                        .tanks
-                        .get(&from.pos)
-                        .and_then(|t| t.fluid.map(|f| (f, t.amount.min(amount))))
+                    w.tank(dim, from.pos)
+                        .and_then(|(_, m)| m.tank.fluid.map(|f| (f, m.tank.amount.min(amount))))
                 })
                 .flatten()
             } else {
@@ -308,18 +306,11 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                             if let Some(took) = w.fill_boiler(dim, to.pos, fluid, n) {
                                 return took;
                             }
-                            let d = &mut w.dims[dim];
-                            let took = match d.spouts.get_mut(&to.pos) {
+                            // A tank block fills its tank (by its controller).
+                            match w.dims[dim].spouts.get_mut(&to.pos) {
                                 Some(s) => create_engine::spout::fill(s, fluid, n),
-                                None => d
-                                    .tanks
-                                    .get_mut(&to.pos)
-                                    .map_or(0, |t| t.fill_amount(fluid, n)),
-                            };
-                            if took > 0 {
-                                d.tank_changes.push(to.pos);
+                                None => w.fill_tank(dim, to.pos, fluid, n),
                             }
-                            took
                         })
                         .unwrap_or(0)
                     } else {
@@ -373,13 +364,7 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                             }
                         });
                     } else if from.tank {
-                        with_world(|w| {
-                            let d = &mut w.dims[dim];
-                            if let Some(t) = d.tanks.get_mut(&from.pos) {
-                                t.drain_amount(moved);
-                                d.tank_changes.push(from.pos);
-                            }
-                        });
+                        with_world(|w| w.drain_tank(dim, from.pos, moved));
                     } else if let Some((f, left)) = pump.buffer {
                         pump.buffer = (left > moved).then_some((f, left - moved));
                     }
@@ -424,10 +409,14 @@ pub(super) fn tick_boilers(game: &mut Game<'_>, dimension: &str, dim: usize) {
             game.native_set_block(dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
         }
     }
-    for tank in with_world(|w| w.take_heat_checks(dim)).unwrap_or_default() {
-        // One-block tanks: the one block under it.
-        let heat = boiler_heater(game, [tank[0], tank[1] - 1, tank[2]]);
-        with_world(|w| w.set_boiler_heat(dim, tank, &[heat]));
+    for (tank, width) in with_world(|w| w.take_heat_checks(dim)).unwrap_or_default() {
+        // `updateTemperature`: every block under the tank's bottom layer.
+        let w = i32::from(width);
+        let heats: Vec<i32> = (0..w)
+            .flat_map(|x| (0..w).map(move |z| (x, z)))
+            .map(|(x, z)| boiler_heater(game, [tank[0] + x, tank[1] - 1, tank[2] + z]))
+            .collect();
+        with_world(|w| w.set_boiler_heat(dim, tank, &heats));
     }
     with_world(|w| w.tick_boilers(dim));
 }
@@ -497,24 +486,44 @@ pub(super) fn place_engine(game: &mut Game<'_>, pos: [i32; 3], state: BlockState
     }
 }
 
+/// Tanks saved with a column: `tank_multis` holds x, y, z, fluid, amount, width, height,
+/// windows for each controller; `tanks` (before multiblock tanks) x, y, z, fluid, amount for
+/// one-block tanks.
 pub(super) fn tanks_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
-) -> Vec<([i32; 3], create_engine::tank::Tank)> {
-    let Some(horizon_world::nbt::Tag::IntArray(v)) = data.and_then(|d| d.get(&"tanks".into()))
-    else {
-        return Vec::new();
+) -> Vec<([i32; 3], create_engine::tank::Multi)> {
+    use create_engine::tank::{Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
+    use horizon_world::nbt::Tag;
+    let tank = |c: &[i32]| Tank {
+        fluid: Fluid::from_index(c[3].clamp(0, 255) as u8),
+        amount: c[4].max(0) as u32,
     };
-    v.chunks_exact(5)
-        .map(|c| {
+    let mut out = Vec::new();
+    if let Some(Tag::IntArray(v)) = data.and_then(|d| d.get(&"tank_multis".into())) {
+        out.extend(v.chunks_exact(8).map(|c| {
             (
                 [c[0], c[1], c[2]],
-                create_engine::tank::Tank {
-                    fluid: create_engine::tank::Fluid::from_index(c[3].clamp(0, 255) as u8),
-                    amount: c[4].max(0) as u32,
+                Multi {
+                    tank: tank(c),
+                    width: c[5].clamp(1, MAX_WIDTH) as u8,
+                    height: c[6].clamp(1, MAX_HEIGHT) as u8,
+                    window: c[7] != 0,
                 },
             )
-        })
-        .collect()
+        }));
+    }
+    if let Some(Tag::IntArray(v)) = data.and_then(|d| d.get(&"tanks".into())) {
+        out.extend(v.chunks_exact(5).map(|c| {
+            (
+                [c[0], c[1], c[2]],
+                Multi {
+                    tank: tank(c),
+                    ..Multi::default()
+                },
+            )
+        }));
+    }
+    out
 }
 
 /// `FluidTankBlock.useItemOn` for a creative player (Create 6 leaves survival to spouts and
@@ -528,9 +537,10 @@ pub(super) fn use_tank(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled:
     let Some((held, _, _)) = game.native_held() else {
         return;
     };
-    let Some(mut t) = with_world(|w| w.dims[dim].tanks.get(&pos).copied()).flatten() else {
+    let Some((_, multi)) = with_world(|w| w.tank(dim, pos)).flatten() else {
         return;
     };
+    let mut t = multi.tank;
     // A boiler's handler is the boiler's (`FluidTankBlockEntity.getFluidCapability`,
     // `BoilerFluidHandler`): a water bucket becomes supply, other buckets are refused and an
     // empty one gets nothing, all still used up (`useItemOn` returns SUCCESS).
@@ -549,7 +559,7 @@ pub(super) fn use_tank(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled:
         }
     }
     let changed = if let Some(f) = bucket {
-        t.fill(f)
+        t.fill(f, multi.capacity())
     } else if held == "minecraft:bucket" {
         match t.drain() {
             Some(f) => {
@@ -565,11 +575,7 @@ pub(super) fn use_tank(game: &mut Game<'_>, dim: usize, pos: [i32; 3], canceled:
     };
     *canceled = true;
     if changed {
-        with_world(|w| {
-            w.dims[dim].tanks.insert(pos, t);
-            w.dims[dim].tank_changes.push(pos);
-            w.mark_unsaved(dim, pos);
-        });
+        with_world(|w| w.set_tank(dim, pos, t));
     }
 }
 
@@ -589,17 +595,14 @@ pub(super) fn send_tank_changes(game: &mut Game<'_>, dimension: &str, dim: usize
 }
 
 pub(super) fn send_tanks(game: &mut Game<'_>, players: &[u128], dim: usize, tanks: &[[i32; 3]]) {
-    let all: Vec<([i32; 3], create_engine::tank::Tank)> = tanks
-        .iter()
-        .map(|&p| {
-            (
-                p,
-                with_world(|w| w.dims[dim].tanks.get(&p).copied())
-                    .flatten()
-                    .unwrap_or_default(),
-            )
-        })
-        .collect();
+    // A controller's tank; none for a block that is no controller (anymore).
+    let all: Vec<([i32; 3], Option<create_engine::tank::Multi>)> = with_world(|w| {
+        tanks
+            .iter()
+            .map(|&p| (p, w.dims[dim].tanks.multis.get(&p).copied()))
+            .collect()
+    })
+    .unwrap_or_default();
     for m in create_engine::tank::encode(&all) {
         for &p in players {
             let _ = game.native_net_send_to_player(p, create_engine::tank::CHANNEL, &m);
@@ -607,18 +610,19 @@ pub(super) fn send_tanks(game: &mut Game<'_>, players: &[u128], dim: usize, tank
     }
 }
 
-/// A tank's fluid on the client: `FluidTankRenderer`'s box, the fluid's still texture tinted
-/// (water by its default colour), one part a tank, uploaded when its contents change.
+/// A tank's fluid on the client: `FluidTankRenderer`'s box over the whole tank from its
+/// controller, the fluid's still texture tinted (water by its default colour), one part a tank,
+/// uploaded when its contents or size change.
 pub(super) fn tanks_from_server(game: &mut Game<'_>, data: &[u8]) {
     use create_engine::tank::Fluid;
     let registry = game.pack.assets.registry;
-    for (pos, t) in create_engine::tank::decode(data) {
+    for (pos, m) in create_engine::tank::decode(data) {
         let key = depot_key(pos, 210, 0);
-        let Some((min, max)) = create_engine::tank::fluid_box(&t) else {
+        let Some((min, max)) = m.as_ref().and_then(create_engine::tank::fluid_box) else {
             game.native_part_clear(key);
             continue;
         };
-        let (name, tint) = match t.fluid {
+        let (name, tint) = match m.and_then(|m| m.tank.fluid) {
             Some(Fluid::Water) => ("create:part_fluid_water", Some(0x3F_76E4)),
             Some(Fluid::Honey) => ("create:part_fluid_honey", None),
             Some(Fluid::Chocolate) => ("create:part_fluid_chocolate", None),
@@ -636,6 +640,46 @@ pub(super) fn tanks_from_server(game: &mut Game<'_>, data: &[u8]) {
             * glam::Mat4::from_scale(glam::Vec3::from_array(max) - glam::Vec3::from_array(min));
         if let Some(model) = game.native_part_model_tinted(state, pose, tint) {
             game.native_part_set(key, model, pos, 1, 0.0, 0.0);
+        }
+    }
+}
+
+/// Tank blocks whose tank formed, split or became a boiler take its `top`, `bottom` and window
+/// `shape` (`notifyMultiUpdated`, `setWindows`, `removeController`), with clients told and no
+/// neighbour updates as Create sets them.
+pub(super) fn tick_tank_states(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let changed = with_world(|w| w.take_tank_states(dim)).unwrap_or_default();
+    for pos in changed {
+        if !game.world.loaded(pos[0], pos[2]) {
+            continue;
+        }
+        let Some(want) = with_world(|w| w.tank_shape(dim, pos)).flatten() else {
+            continue;
+        };
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let is_tank = with_world(|w| w.table.get(state.0).map(|(b, _)| b)).flatten()
+            == Some(create_engine::Block::FluidTank);
+        if !is_tank {
+            continue;
+        }
+        let Some(mut s) = game.pack.assets.registry.state(state).cloned() else {
+            continue;
+        };
+        let flag = |b: bool| if b { "true" } else { "false" };
+        s.properties.insert("top".into(), flag(want.top).into());
+        s.properties
+            .insert("bottom".into(), flag(want.bottom).into());
+        s.properties
+            .insert("shape".into(), want.shape.name().into());
+        if let Some(id) = game.pack.assets.registry.id(&s)
+            && id != state
+        {
+            game.native_set_block(
+                dimension,
+                pos,
+                id,
+                super::native_hooks::flags::UPDATE_CLIENTS,
+            );
         }
     }
 }

@@ -310,6 +310,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_mixers(game, dim);
     tick_pipes(game, dimension, dim);
     tick_boilers(game, dimension, dim);
+    tick_tank_states(game, dimension, dim);
     tick_pistons(game, dimension, dim);
     tick_trains(game, dimension, dim);
     sync_curves(game, dimension, dim);
@@ -512,7 +513,7 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
         with_world(|w| w.dims[dim].belts.keys().copied().collect()).unwrap_or_default();
     send_belts(game, &[player], dim, &belts);
     let tanks: Vec<[i32; 3]> =
-        with_world(|w| w.dims[dim].tanks.keys().copied().collect()).unwrap_or_default();
+        with_world(|w| w.dims[dim].tanks.multis.keys().copied().collect()).unwrap_or_default();
     send_tanks(game, &[player], dim, &tanks);
     let windmills: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].windmills.keys().copied().collect()).unwrap_or_default();
@@ -2087,20 +2088,24 @@ pub(super) fn chunk_data_save(
         own.insert("burners".into(), horizon_world::nbt::Tag::IntArray(v));
     }
     if !tanks.is_empty() {
-        // x, y, z, fluid, amount for each tank (`FluidTankBlockEntity`'s `TankContent`).
+        // x, y, z, fluid, amount, width, height, windows for each controller
+        // (`FluidTankBlockEntity`'s `TankContent`, `Size`, `Height`, `Window`).
         let v = tanks
             .iter()
-            .flat_map(|(p, t)| {
+            .flat_map(|(p, m)| {
                 [
                     p[0],
                     p[1],
                     p[2],
-                    i32::from(t.fluid.map_or(255, |f| f.index())),
-                    t.amount as i32,
+                    i32::from(m.tank.fluid.map_or(255, |f| f.index())),
+                    m.tank.amount as i32,
+                    i32::from(m.width),
+                    i32::from(m.height),
+                    i32::from(m.window),
                 ]
             })
             .collect();
-        own.insert("tanks".into(), horizon_world::nbt::Tag::IntArray(v));
+        own.insert("tank_multis".into(), horizon_world::nbt::Tag::IntArray(v));
     }
     if !windmills.is_empty() {
         own.insert("windmills".into(), windmills_to_nbt(game, &windmills));
