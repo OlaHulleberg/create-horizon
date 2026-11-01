@@ -390,6 +390,10 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
         scroll_from_client(game, player, data);
         return;
     }
+    if channel == VALUE_SETTINGS {
+        value_settings_from_client(game, player, data);
+        return;
+    }
     if channel != client::CHANNEL || data != b"sync" {
         return;
     }
@@ -791,17 +795,299 @@ pub(super) fn values_from_server(d: &[u8]) {
     VALUES.with_borrow_mut(|m| m.insert([x, y, z], v));
 }
 
+/// A pick on a value board (`ValueSettingsPacket`: position, row, column), from the client.
+pub(super) const VALUE_SETTINGS: &str = "create:value_settings";
+
+/// `ValueSettingsPacket.applySettings`, checked as `scroll_from_client` checks a scroll.
+pub(super) fn value_settings_from_client(game: &mut Game<'_>, player: u128, data: &[u8]) {
+    let [x, y, z, row, value] = match data {
+        d if d.len() == 20 => {
+            [0, 4, 8, 12, 16].map(|i| i32::from_le_bytes(d[i..i + 4].try_into().unwrap()))
+        }
+        _ => return,
+    };
+    let Some(p) = game
+        .native_server_players()
+        .into_iter()
+        .find(|p| p.uuid == player)
+    else {
+        return;
+    };
+    let Some(dim) = dimension_index(&p.dimension) else {
+        return;
+    };
+    let center = [f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5];
+    let d2: f64 = (0..3).map(|i| (p.position[i] - center[i]).powi(2)).sum();
+    if d2 > 8.0 * 8.0 {
+        return;
+    }
+    let pos = [x, y, z];
+    let pick = create_engine::board::Settings { row, value };
+    let state = game.world.block(x, y, z).0;
+    let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
+    use create_engine::Block as B;
+    use create_engine::tunnel::Mode;
+    let value = match block {
+        Some(B::CreativeMotor) => {
+            with_world(|w| w.board_motor(dim, pos, pick));
+            return;
+        }
+        Some(B::BrassTunnel) => with_world(|w| {
+            let b = w.dims[dim].brass.get_mut(&pos)?;
+            let i = create_engine::board::option_value(pick, Mode::ALL.len() as i32);
+            b.mode = Mode::ALL[i as usize];
+            w.mark_unsaved(dim, pos);
+            Some(i)
+        })
+        .flatten()
+        .unwrap_or(0),
+        _ => return,
+    };
+    // The value back to the player (its value box shows it).
+    let mut m = Vec::with_capacity(16);
+    for v in [x, y, z, value] {
+        m.extend_from_slice(&v.to_le_bytes());
+    }
+    let _ = game.native_net_send_to_player(player, VALUE, &m);
+}
+
+/// A value board open on this client (`ValueSettingsScreen`).
+pub(super) struct OpenBoard {
+    pub(super) pos: [i32; 3],
+    pub(super) board: create_engine::board::Board,
+    /// The pick under the cursor: the wheel moves it, as there is no free cursor while playing.
+    pub(super) pick: create_engine::board::Settings,
+    pub(super) ticks: u32,
+}
+
+thread_local! {
+    /// The use press held on a block (`ValueSettingsClient.interactHeldPos`, `interactHeldTicks`).
+    pub(super) static HOLD: RefCell<Option<([i32; 3], create_engine::board::Hold)>> =
+        const { RefCell::new(None) };
+    pub(super) static BOARD: RefCell<Option<OpenBoard>> = const { RefCell::new(None) };
+}
+
+/// The board of the value box at `pos` with its current pick: the creative motor's speed and a
+/// brass tunnel's mode (the chassis' board needs the wrench, whose use turns the block here).
+pub(super) fn board_of(game: &Game<'_>, pos: [i32; 3]) -> Option<OpenBoard> {
+    use create_engine::Block as B;
+    use create_engine::board;
+    let state = game.world.block(pos[0], pos[1], pos[2]);
+    states::index(state.0)?;
+    let (block, facing, speed) = CLIENT.with_borrow(|c| {
+        let c = c.as_ref()?;
+        let (block, info) = c.table.get(state.0)?;
+        Some((block, info.facing, c.speeds.get(&pos).map_or(0.0, |s| s[0])))
+    })?;
+    let (board, pick) = match block {
+        B::CreativeMotor => {
+            let setting = facing.map_or(speed, |f| {
+                create_engine::kinetics::convert_to_direction(speed, f)
+            });
+            (board::MOTOR, board::kinetic_settings(setting as i32))
+        }
+        // `BrassTunnelBlockEntity.selectionMode` (`logistics.when_multiple_outputs_available`),
+        // over the modes ported.
+        B::BrassTunnel => (
+            board::options(
+                "Distribution Method",
+                create_engine::tunnel::Mode::ALL.len() as i32,
+            ),
+            board::Settings {
+                row: 0,
+                value: VALUES.with_borrow(|m| m.get(&pos).copied()).unwrap_or(0),
+            },
+        ),
+        _ => return None,
+    };
+    Some(OpenBoard {
+        pos,
+        board,
+        pick,
+        ticks: 0,
+    })
+}
+
+/// `ValueSettingsClient.tick` and the board's release (`ValueSettingsScreen.saveAndClose`): use
+/// held on a value box with an empty hand opens its board on the sixth tick; letting go of use
+/// sends the pick.
+pub(super) fn tick_value_board(game: &mut Game<'_>) {
+    let down = game.native_mapping("key.use").is_some_and(|m| m.0);
+    let released = BOARD.with_borrow_mut(|b| {
+        let open = b.as_mut()?;
+        open.ticks += 1;
+        if down { None } else { b.take() }
+    });
+    if let Some(open) = released {
+        let mut data = Vec::with_capacity(20);
+        for v in [
+            open.pos[0],
+            open.pos[1],
+            open.pos[2],
+            open.pick.row,
+            open.pick.value,
+        ] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        let _ = game.native_net_send_to_server(VALUE_SETTINGS, &data);
+        return;
+    }
+    // Hot: nothing while use is up or a board is open.
+    if !down || BOARD.with_borrow(Option::is_some) {
+        HOLD.with_borrow_mut(|h| *h = None);
+        return;
+    }
+    let empty = game
+        .inventory
+        .get(game.selected)
+        .and_then(|s| s.as_ref())
+        .is_none();
+    let Some(pos) = game.pick().map(|h| h.pos).filter(|_| empty) else {
+        HOLD.with_borrow_mut(|h| *h = None);
+        return;
+    };
+    let step = HOLD.with_borrow_mut(|h| {
+        if h.is_none_or(|(at, _)| at != pos) {
+            *h = Some((pos, Default::default()));
+        }
+        h.as_mut().map(|(_, hold)| hold.tick(true))
+    });
+    if step != Some(create_engine::board::Step::Open) {
+        return;
+    }
+    HOLD.with_borrow_mut(|h| *h = None);
+    if let Some(open) = board_of(game, pos) {
+        BOARD.with_borrow_mut(|b| *b = Some(open));
+    }
+}
+
+/// `ValueSettingsScreen.mouseScrolled` on the open board: a column a step, a milestone with
+/// sneak held (for shift). Whether a board took the wheel.
+pub(super) fn scroll_board(game: &mut Game<'_>, steps: f32) -> bool {
+    if BOARD.with_borrow(Option::is_none) {
+        return false;
+    }
+    if steps == 0.0 {
+        return true;
+    }
+    let shift = game.native_mapping("key.sneak").is_some_and(|m| m.0);
+    BOARD.with_borrow_mut(|b| {
+        if let Some(open) = b.as_mut()
+            && let Some(column) = open.board.scrolled(open.pick, steps > 0.0, shift)
+        {
+            open.pick.value = column;
+        }
+    });
+    true
+}
+
+/// `ValueSettingsScreen.renderWindow`, with plain fills where Create draws its GUI sprites
+/// (`AllGuiTextures.VALUE_SETTINGS_*`, from the player's jar). Whether a board is open.
+pub(super) fn value_board(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) -> bool {
+    use create_engine::board::{self, Layout, Settings};
+    use create_engine::tunnel::Mode;
+    let Some((b, pick, ticks)) =
+        BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.pick, o.ticks)))
+    else {
+        return false;
+    };
+    let label = b
+        .rows
+        .iter()
+        .map(|r| game.native_text_width(r) as i32)
+        .max()
+        .unwrap_or(0);
+    let l = Layout::new(b, label, [batch.width as i32, batch.height as i32]);
+    let key = game
+        .native_mapping("key.use")
+        .map_or_else(|| "Use".to_owned(), |m| m.1);
+    let tip = board::release_to_confirm(&key);
+    let text = |s: Settings| {
+        if b.icons {
+            Mode::ALL[s.value.clamp(0, Mode::ALL.len() as i32 - 1) as usize]
+                .label()
+                .to_owned()
+        } else {
+            board::kinetic_text(s)
+        }
+    };
+    let mut fattest =
+        (game.native_text_width(&tip) as i32).max(game.native_text_width(b.title) as i32);
+    if b.icons {
+        for value in 0..=b.max {
+            let w = game.native_text_width(&text(Settings { row: 0, value }));
+            fattest = fattest.max(w as i32);
+        }
+    }
+    let f = |v: i32| v as f32;
+    let centred =
+        |game: &Game<'_>, text: &str, x: i32| f(x - game.native_text_width(text) as i32 / 2);
+    let open = ticks as f32;
+    game.native_fill(
+        batch,
+        [0.0, 0.0, batch.width, batch.height],
+        board::shade(open),
+    );
+    let fr = l.frame(fattest, open);
+    game.native_fill(
+        batch,
+        [f(fr.x), f(fr.y), f(fr.width), f(fr.height)],
+        0xE02A_1E14,
+    );
+    if fr.text {
+        let at = [centred(game, b.title, fr.text_x), f(fr.title_y)];
+        game.native_text(batch, b.title, at, 0xDD_DDDD, false);
+        let at = [centred(game, &tip, fr.text_x), f(fr.tip_y)];
+        game.native_text(batch, &tip, at, 0xDD_DDDD, false);
+    }
+    for (i, row) in b.rows.iter().enumerate() {
+        let y = l.top + i as i32 * 11;
+        if !b.icons {
+            game.native_fill(
+                batch,
+                [f(l.left - 4), f(y), f(l.label + 8), 11.0],
+                0xFFC8_A864,
+            );
+            let bar = [f(l.bar_x()), f(y + 1), f(b.bar_width()), 8.0];
+            game.native_fill(batch, bar, 0xFF8A_6A3A);
+            game.native_text(batch, row, [f(l.left), f(y + 1)], 0x44_2000, false);
+        }
+        for x in l.milestones() {
+            let mark = [f(x), f(y + 1), f(b.milestone_size()), 8.0];
+            game.native_fill(batch, mark, 0xFF44_2000);
+        }
+    }
+    let label = text(pick);
+    let width = if b.icons {
+        16
+    } else {
+        game.native_text_width(&label) as i32
+    };
+    let [x, y, w] = Layout::cursor(l.coordinate(pick.row, pick.value), width);
+    game.native_fill(batch, [f(x - 3), f(y), f(w + 6), 14.0], 0xFFFB_DC7D);
+    if !b.icons {
+        game.native_text(batch, &label, [f(x + 2), f(y + 3)], 0x44_2000, false);
+    } else if fr.text {
+        let at = [centred(game, &label, fr.text_x), f(fr.option_y)];
+        game.native_text(batch, &label, at, 0xFB_DC7D, false);
+    }
+    true
+}
+
 /// `GoggleOverlayRenderer` for kinetic blocks: with goggles on the head, the block under the
 /// crosshair tells its stress (`KineticBlockEntity.addToGoggleTooltip`: impact × speed;
 /// `GeneratingKineticBlockEntity`: capacity × speed), in a tooltip right of the crosshair.
 pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
+    if value_board(game, batch) {
+        return;
+    }
     value_tip(game, batch);
     goggle_overlay(game, batch);
 }
 
 /// `ValueSettingsClient.render` for the creative motor's speed (`KineticScrollValueBehaviour`):
-/// its label over the hotbar, centred, with the value and how to change it here (the wheel:
-/// Create 6's value board is not ported).
+/// its label over the hotbar, centred, with the value and how to change it here (the wheel;
+/// holding use opens Create 6's value board, `value_board`).
 pub(super) fn value_tip(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
     // Free when unused: no ray while no kinetic block has a speed here and no wrench is held.
     let wrench = game
@@ -951,6 +1237,10 @@ pub(super) fn goggle_overlay(game: &mut Game<'_>, batch: &mut horizon_client::hu
 /// The mouse wheel on the client: a creative motor under the crosshair takes it.
 pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
     if *claimed || !client_ensure(game) {
+        return;
+    }
+    if scroll_board(game, steps) {
+        *claimed = true;
         return;
     }
     let Some(hit) = game.pick() else {
@@ -1720,6 +2010,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
     if !client_ensure(game) {
         return;
     }
+    tick_value_board(game);
     let Some(mut c) = CLIENT.with_borrow_mut(Option::take) else {
         return;
     };
