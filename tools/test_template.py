@@ -651,7 +651,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 3);
+    assert_eq!(commands.len(), 6);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);

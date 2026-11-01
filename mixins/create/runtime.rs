@@ -135,6 +135,7 @@ pub(super) fn chunk_load(
     let windmills = windmills_from_nbt(game, Game::native_chunk_data(chunk, "create"));
     let crushers = crushers_from_nbt(Game::native_chunk_data(chunk, "create"));
     let trains = trains_from_nbt(game, Game::native_chunk_data(chunk, "create"));
+    let names = station_names_from_nbt(Game::native_chunk_data(chunk, "create"));
     let burners = burners_from_nbt(Game::native_chunk_data(chunk, "create"));
     let links = links_from_nbt(Game::native_chunk_data(chunk, "create"));
     let curves = curves_from_nbt(Game::native_chunk_data(chunk, "create"));
@@ -205,6 +206,7 @@ pub(super) fn chunk_load(
         w.load_windmills(dim, windmills.into_iter());
         w.load_crushers(dim, crushers.into_iter());
         w.load_trains(dim, trains);
+        w.dims[dim].railway.load_names(names.into_iter());
         w.load_burners(dim, burners.into_iter());
         w.load_links(dim, links.into_iter());
         for c in curves {
@@ -542,10 +544,9 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
         with_world(|w| w.dims[dim].deployers.keys().copied().collect()).unwrap_or_default();
     send_deployers(game, &[player], dim, &deployers);
     let trains: Vec<u32> =
-        with_world(|w| w.dims[dim].trains.iter().map(|t| t.id).collect()).unwrap_or_default();
-    for id in trains {
-        send_train(game, dim, [i32::MIN, 0, id as i32]);
-    }
+        with_world(|w| w.dims[dim].railway.trains.iter().map(|t| t.id).collect())
+            .unwrap_or_default();
+    send_trains(game, dim, &trains, true);
 }
 
 /// A player right-clicks a block (`HandCrankBlock.useItemOn`): a hand crank turns for 10 ticks,
@@ -1957,6 +1958,8 @@ pub(super) fn chunk_data_save(
     let windmills = with_world(|w| w.column_windmills(dim, chunk[0], chunk[1])).unwrap_or_default();
     let crushers = with_world(|w| w.column_crushers(dim, chunk[0], chunk[1])).unwrap_or_default();
     let trains = with_world(|w| w.column_trains(dim, chunk[0], chunk[1])).unwrap_or_default();
+    let names =
+        with_world(|w| w.dims[dim].railway.column_names(chunk[0], chunk[1])).unwrap_or_default();
     let burners = with_world(|w| w.column_burners(dim, chunk[0], chunk[1])).unwrap_or_default();
     let links = with_world(|w| w.column_links(dim, chunk[0], chunk[1])).unwrap_or_default();
     let curves =
@@ -2012,6 +2015,7 @@ pub(super) fn chunk_data_save(
         && basins.is_empty()
         && brass.is_empty()
         && trains.is_empty()
+        && names.is_empty()
         && curves.is_empty()
     {
         data.remove(&"create".into());
@@ -2033,6 +2037,9 @@ pub(super) fn chunk_data_save(
     }
     if !trains.is_empty() {
         own.insert("trains".into(), trains_to_nbt(game, &trains));
+    }
+    if !names.is_empty() {
+        own.insert("station_names".into(), station_names_to_nbt(&names));
     }
     if !links.is_empty() {
         own.insert("links".into(), links_to_nbt(&links));
@@ -2867,15 +2874,35 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
         "create_debug assemble <pos:block_pos>",
         2,
     ));
+    // A schedule (the schedule item), a station's name (its screen) and a curve between two
+    // tracks (the track item's two clicks), for tests.
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug schedule <pos:block_pos> <entries:text>",
+        2,
+    ));
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug station_name <pos:block_pos> <name:text>",
+        2,
+    ));
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug curve <from:block_pos> <to:block_pos>",
+        2,
+    ));
 }
 
 pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool) {
     let train = command.strip_prefix("create_debug train ");
     let assemble = command.strip_prefix("create_debug assemble ");
+    let schedule = command.strip_prefix("create_debug schedule ");
+    let name = command.strip_prefix("create_debug station_name ");
+    let curve = command.strip_prefix("create_debug curve ");
     let Some(rest) = command
         .strip_prefix("create_debug speed ")
         .or(train)
         .or(assemble)
+        .or(schedule)
+        .or(name)
+        .or(curve)
     else {
         return;
     };
@@ -2891,10 +2918,30 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
         .split_whitespace()
         .enumerate()
         .filter_map(|(n, t)| match t.strip_prefix('~') {
-            Some(off) => Some(here?.get(n)?.floor() as i32 + off.parse::<i32>().unwrap_or(0)),
+            Some(off) => Some(here?.get(n % 3)?.floor() as i32 + off.parse::<i32>().unwrap_or(0)),
             None => t.parse().ok(),
         })
         .collect();
+    if schedule.is_some() || name.is_some() {
+        let tokens: Vec<&str> = rest.split_whitespace().collect();
+        let text = tokens.get(3..).map(|t| t.join(" ")).unwrap_or_default();
+        let line = match (parts.get(0..3), schedule.is_some()) {
+            (Some(&[x, y, z]), true) => schedule_train(dim, [x, y, z], &text),
+            (Some(&[x, y, z]), false) => name_station(dim, [x, y, z], &text),
+            (_, true) => "usage: create_debug schedule <x> <y> <z> <station[@seconds]>...".into(),
+            (_, false) => "usage: create_debug station_name <x> <y> <z> <name>".into(),
+        };
+        game.native_feedback(horizon_client::text::Text::literal(line));
+        return;
+    }
+    if curve.is_some() {
+        let line = match parts.as_slice() {
+            [a, b, c, x, y, z] => debug_curve(game, dim, [*a, *b, *c], [*x, *y, *z]),
+            _ => "usage: create_debug curve <x> <y> <z> <x> <y> <z>".into(),
+        };
+        game.native_feedback(horizon_client::text::Text::literal(line));
+        return;
+    }
     if assemble.is_some() {
         if let [x, y, z] = parts.as_slice() {
             use_station(game, dim, [*x, *y, *z]);
