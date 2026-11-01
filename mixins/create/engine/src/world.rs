@@ -163,6 +163,13 @@ pub struct Dimension {
     pub link_changes: Vec<[i32; 3]>,
     /// Links whose frequencies clients should see again (tuned, loaded, gone).
     pub link_shown: Vec<[i32; 3]>,
+    /// Andesite tunnels to shape again: after their own neighbour changed (`updateShape`, a
+    /// state that still fits is kept), and after their belt's did or they were placed
+    /// (`updateTunnel`, `getStateForPlacement`: the new shape at once); those just placed
+    /// (their belt gets a casing).
+    pub tunnel_checks: Vec<[i32; 3]>,
+    pub tunnel_fresh: Vec<[i32; 3]>,
+    pub tunnels_new: Vec<[i32; 3]>,
     /// Mechanical mixers and their cycle, the running ones (the only ones that tick), and those
     /// to look at their basin again (`basinChecker`: placed, speed changed, basin changed).
     pub mixers: HashMap<[i32; 3], crate::basin::Mixer>,
@@ -275,6 +282,7 @@ fn has_state(block: Block) -> bool {
             | Block::PoweredLatch
             | Block::PoweredToggleLatch
             | Block::RedstoneLink
+            | Block::AndesiteTunnel
             | Block::FluidTank
             | Block::WindmillBearing
     )
@@ -351,6 +359,9 @@ impl CreateWorld {
         }
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
+        }
+        if block == Block::AndesiteTunnel {
+            d.tunnel_fresh.push(pos);
         }
         if block == Block::RedstoneLink {
             if d.links.links.contains_key(&pos) {
@@ -496,6 +507,12 @@ impl CreateWorld {
             {
                 // ClutchBlock.getStateForPlacement: powered as placed.
                 self.dims[dim].redstone.push(pos);
+            }
+            if self.table.get(new).map(|(b, _)| b) == Some(Block::AndesiteTunnel)
+                && self.table.get(old).map(|(b, _)| b) != Some(Block::AndesiteTunnel)
+            {
+                // `BeltTunnelItem`: the belt below is cased.
+                self.dims[dim].tunnels_new.push(pos);
             }
             if self.table.get(new).map(|(b, _)| b) == Some(Block::Millstone) {
                 self.dims[dim].millstones.entry(pos).or_default();
@@ -666,6 +683,11 @@ impl CreateWorld {
             d.link_changes
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.link_shown.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.tunnel_checks
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.tunnels_new.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.tunnel_fresh
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.running_crushers
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crusher_saved
@@ -912,6 +934,11 @@ impl CreateWorld {
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(b) if latch_kind(b).is_some() => self.dims[dim].latch_checks.push(pos),
             Some(Block::RedstoneLink) => self.dims[dim].link_checks.push(pos),
+            Some(Block::AndesiteTunnel) => self.dims[dim].tunnel_checks.push(pos),
+            // `BeltBlock.updateShape`: the tunnel over a belt follows its neighbours.
+            Some(Block::Belt) => self.dims[dim]
+                .tunnel_fresh
+                .push([pos[0], pos[1] + 1, pos[2]]),
             _ => {}
         }
     }

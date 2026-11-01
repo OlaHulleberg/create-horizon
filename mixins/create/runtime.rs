@@ -219,6 +219,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_spouts(game, dim);
     tick_drains(game, dim);
     tick_funnels(game, dim);
+    tick_tunnels(game, dimension, dim);
     tick_depots(game, dimension, dim);
     tick_belts(game, dimension, dim);
     tick_presses(game, dimension, dim);
@@ -4518,31 +4519,15 @@ impl BeltSide<'_, '_> {
     fn movement(&self) -> create_engine::kinetics::Dir {
         create_engine::belt::movement_facing(self.rpm, self.segment.facing)
     }
-}
 
-impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
-    fn ending(&mut self) -> create_engine::belt::Ending {
-        use create_engine::belt::Ending;
-        let next = self.past_end();
-        let has = |w: &mut CreateWorld| {
-            let d = &w.dims[self.dim];
-            d.depots.contains_key(&next) || d.belt_of.contains_key(&next)
-        };
-        if with_world(has) == Some(true) {
-            return Ending::Insert;
-        }
-        // BlockHelper.hasBlockSolidSide toward the belt.
-        let state = self.game.world.block(next[0], next[1], next[2]);
-        let face = self.movement().opposite() as u8;
-        if self.game.res.facts().get(state).sturdy_full & (1 << face) != 0 {
-            return Ending::Blocked;
-        }
-        Ending::Eject
-    }
-
-    fn insert(&mut self, item: &create_engine::belt::Item) -> Option<u8> {
-        let next = self.past_end();
-        let side = self.movement();
+    /// `DirectBeltInputBehaviour.handleInsertion` at `next`, the item moving toward `side`: a
+    /// depot or a belt there. What is left of it, None when nothing there takes items.
+    fn insert_at(
+        &mut self,
+        next: [i32; 3],
+        side: create_engine::kinetics::Dir,
+        item: &create_engine::belt::Item,
+    ) -> Option<u8> {
         let dim = self.dim;
         let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
         if is_depot {
@@ -4612,6 +4597,78 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
             Some(0)
         })
         .flatten()
+    }
+}
+
+impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
+    fn ending(&mut self) -> create_engine::belt::Ending {
+        use create_engine::belt::Ending;
+        let next = self.past_end();
+        let has = |w: &mut CreateWorld| {
+            let d = &w.dims[self.dim];
+            d.depots.contains_key(&next) || d.belt_of.contains_key(&next)
+        };
+        if with_world(has) == Some(true) {
+            return Ending::Insert;
+        }
+        // BlockHelper.hasBlockSolidSide toward the belt.
+        let state = self.game.world.block(next[0], next[1], next[2]);
+        let face = self.movement().opposite() as u8;
+        if self.game.res.facts().get(state).sturdy_full & (1 << face) != 0 {
+            return Ending::Blocked;
+        }
+        Ending::Eject
+    }
+
+    fn insert(&mut self, item: &create_engine::belt::Item) -> Option<u8> {
+        let (next, side) = (self.past_end(), self.movement());
+        self.insert_at(next, side, item)
+    }
+
+    fn tunnel(&mut self, segment: i32, item: &mut create_engine::belt::Item) -> bool {
+        use create_engine::belt::Slope;
+        if self.segment.slope != Slope::Horizontal {
+            return false;
+        }
+        let at = create_engine::belt::position_for_offset(
+            self.controller,
+            &self.segment,
+            self.length,
+            segment,
+        );
+        let t = [at[0], at[1] + 1, at[2]];
+        let Some((axis, shape)) = tunnel_state(self.game.world.block(t[0], t[1], t[2]).0) else {
+            return false;
+        };
+        let movement = self.movement();
+        if !create_engine::tunnel::splits(axis, shape, movement, item.count) {
+            return false;
+        }
+        for d in create_engine::tunnel::sides(axis, shape) {
+            if d.axis() == axis {
+                continue;
+            }
+            // A flap: not where another tunnel continues it.
+            let o = d.offset();
+            if tunnel_state(self.game.world.block(t[0] + o[0], t[1], t[2] + o[2]).0).is_some() {
+                continue;
+            }
+            let out = [at[0] + o[0], at[1], at[2] + o[2]];
+            let one = create_engine::belt::Item {
+                count: 1,
+                ..item.clone()
+            };
+            match self.insert_at(out, d, &one) {
+                None => continue,
+                Some(0) => {}
+                Some(_) => return true,
+            }
+            item.count -= 1;
+            if item.count <= 1 {
+                break;
+            }
+        }
+        false
     }
 
     fn process(
@@ -5144,6 +5201,133 @@ pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
         || link_state(state.0).is_some_and(|(_, receiver, powered)| receiver && powered)
     {
         *source = true;
+    }
+}
+
+/// An andesite tunnel's axis and shape; None for any other block.
+fn tunnel_state(
+    state: u32,
+) -> Option<(create_engine::kinetics::Axis, create_engine::tunnel::Shape)> {
+    states::index(state)?;
+    WORLD.with(|w| {
+        let w = w.try_borrow().ok()?;
+        let (block, info) = w.as_ref()?.table.get(state)?;
+        (block == create_engine::Block::AndesiteTunnel).then_some((info.axis?, info.tunnel?))
+    })
+}
+
+/// Andesite tunnels: those just placed case their belt (`BeltTunnelItem`); those whose
+/// surroundings changed break without a cased, flat belt below (`canSurvive`) or take the shape
+/// the belts and depots beside their segment give (`updateShape`, `getTunnelState`).
+fn tick_tunnels(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    use create_engine::belt::Slope;
+    use create_engine::kinetics::{Axis, Dir};
+    let Some((new, kept, fresh)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        (
+            std::mem::take(&mut d.tunnels_new),
+            std::mem::take(&mut d.tunnel_checks),
+            std::mem::take(&mut d.tunnel_fresh),
+        )
+    }) else {
+        return;
+    };
+    if new.is_empty() && kept.is_empty() && fresh.is_empty() {
+        return;
+    }
+    let belt_below = |game: &Game<'_>, p: [i32; 3]| {
+        let state = game.world.block(p[0], p[1] - 1, p[2]).0;
+        with_world(|w| w.table.get(state).and_then(|(_, i)| i.belt)).flatten()
+    };
+    let cased = |game: &Game<'_>, p: [i32; 3]| {
+        game.pack
+            .assets
+            .registry
+            .state(game.world.block(p[0], p[1] - 1, p[2]))
+            .is_some_and(|s| s.properties.get("casing").is_some_and(|v| v == "true"))
+    };
+    for pos in new {
+        if tunnel_state(game.world.block(pos[0], pos[1], pos[2]).0).is_none() {
+            continue;
+        }
+        if belt_below(game, pos).is_some_and(|s| s.slope == Slope::Horizontal) && !cased(game, pos)
+        {
+            game.native_set_block_property_with(
+                [pos[0], pos[1] - 1, pos[2]],
+                "casing",
+                "true",
+                super::native_hooks::flags::UPDATE_ALL,
+            );
+        }
+    }
+    let mut checks: Vec<([i32; 3], bool)> = fresh
+        .into_iter()
+        .map(|p| (p, true))
+        .chain(kept.into_iter().map(|p| (p, false)))
+        .collect();
+    // A fresh look wins over a kept one for the same tunnel.
+    checks.sort_by_key(|c| (c.0, !c.1));
+    checks.dedup_by_key(|c| c.0);
+    for (pos, at_once) in checks {
+        let Some(now) = tunnel_state(game.world.block(pos[0], pos[1], pos[2]).0) else {
+            continue;
+        };
+        let seg = belt_below(game, pos).filter(|s| s.slope == Slope::Horizontal);
+        let Some(seg) = seg.filter(|_| cased(game, pos)) else {
+            game.native_run_command(&format!(
+                "execute in {dimension} run setblock {} {} {} air destroy",
+                pos[0], pos[1], pos[2]
+            ));
+            continue;
+        };
+        let axis = seg.facing.axis();
+        // `hasValidOutput` beside the belt segment: a belt across it, or a depot.
+        let output = |game: &Game<'_>, side: Dir| {
+            let o = side.offset();
+            let p = [pos[0] + o[0], pos[1] - 1, pos[2] + o[2]];
+            let state = game.world.block(p[0], p[1], p[2]).0;
+            with_world(|w| match w.table.get(state) {
+                Some((create_engine::Block::Depot, _)) => true,
+                Some((_, i)) => i.belt.is_some_and(|b| b.facing.axis() == side.axis()),
+                None => false,
+            })
+            .unwrap_or(false)
+        };
+        let left = create_engine::tunnel::left(axis);
+        let (on_left, on_right) = (output(game, left), output(game, left.opposite()));
+        // `canHaveWindow`: tunnels on both ends.
+        let fw = if axis == Axis::X {
+            Dir::East
+        } else {
+            Dir::South
+        };
+        let window = [fw, fw.opposite()].into_iter().all(|d| {
+            let o = d.offset();
+            tunnel_state(game.world.block(pos[0] + o[0], pos[1], pos[2] + o[2]).0).is_some()
+        });
+        let fresh = (
+            axis,
+            create_engine::tunnel::shape_for(on_left, on_right, window),
+        );
+        let (axis2, shape2) = if at_once {
+            fresh
+        } else {
+            create_engine::tunnel::updated(now, fresh)
+        };
+        if (axis2, shape2) == now {
+            continue;
+        }
+        let registry = game.pack.assets.registry;
+        let current = game.world.block(pos[0], pos[1], pos[2]);
+        let Some(mut s) = registry.state(current).cloned() else {
+            continue;
+        };
+        let axis_name = if axis2 == Axis::X { "x" } else { "z" };
+        s.properties.insert("axis".into(), axis_name.into());
+        s.properties.insert("shape".into(), shape2.name().into());
+        if let Some(id) = registry.id(&s) {
+            game.native_set_block(dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+        }
     }
 }
 

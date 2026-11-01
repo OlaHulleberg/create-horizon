@@ -614,6 +614,37 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             Some(by_facing(&CRANK)),
             own(&[("facing", facing), ("waterlogged", bools)]),
         ),
+        // BeltTunnelBlock (andesite): its own `axis` (HORIZONTAL_AXIS) and shape. Content shapes select by one
+        // property, so every state takes the cross's boxes (BeltTunnelShapes, all four sides
+        // open: a closed side's lower wall is missing).
+        "andesite_tunnel" => {
+            let boxes: Vec<Value> = [
+                [2., -5., 2., 14., 16., 14.],
+                [0., -5., 0., 2., 16., 2.],
+                [14., -5., 0., 16., 16., 2.],
+                [0., -5., 14., 2., 16., 16.],
+                [14., -5., 14., 16., 16., 16.],
+                [2., 10., 0., 14., 16., 2.],
+                [2., 10., 14., 14., 16., 16.],
+                [0., 10., 2., 2., 16., 14.],
+                [14., 10., 2., 16., 16., 14.],
+            ]
+            .iter()
+            .map(|b: &Px| json!(b.map(|v| v / 16.0)))
+            .collect();
+            (
+                "minecraft:polished_andesite",
+                Some(json!({ "property": "axis", "values": {
+                    "x": boxes, "z": boxes } })),
+                own(&[
+                    ("axis", &["x", "z"]),
+                    (
+                        "shape",
+                        &["straight", "window", "closed", "t_left", "t_right", "cross"],
+                    ),
+                ]),
+            )
+        }
         // RedstoneLinkBlock (`SharedProperties::wooden`): a tablet on the block behind it,
         // AllShapes.REDSTONE_BRIDGE (VERTICAL_TABLET_SHAPE facing south, the square tablet up or
         // down); the glue gives its signal, network and survival.

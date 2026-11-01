@@ -495,6 +495,13 @@ pub trait Surroundings {
     /// `handleReceivedItem` (not `locked`) or `handleHeldItem` (`locked`). None when there is no
     /// machine there, or something blocks it (`isBlocked`, received only).
     fn process(&mut self, segment: i32, item: &mut Item, locked: bool) -> Option<Process>;
+    /// `BeltTunnelInteractionHandler.flapTunnelsAndCheckIfStuck`: `item` enters segment
+    /// `segment` (-1 past the start); a tunnel over it may take some of it. True when it must
+    /// wait where it is.
+    fn tunnel(&mut self, segment: i32, item: &mut Item) -> bool {
+        let _ = (segment, item);
+        false
+    }
 }
 
 /// What a tick did that the game must act on.
@@ -704,6 +711,23 @@ impl Inventory {
                 front = Some(self.items[i].position);
                 i += 1;
                 continue;
+            }
+            // Belt tunnels, when the item enters another segment.
+            let mut upcoming = next as i32;
+            if !positive && next == 0.0 {
+                upcoming = -1;
+            }
+            if current as i32 != upcoming {
+                let before = self.items[i].count;
+                let stuck = world.tunnel(upcoming, &mut self.items[i]);
+                if self.items[i].count != before {
+                    out.changed = true;
+                }
+                if stuck {
+                    front = Some(self.items[i].position);
+                    i += 1;
+                    continue;
+                }
             }
             let item = &mut self.items[i];
             item.position += limited;
@@ -1080,6 +1104,65 @@ mod tests {
         }
         assert_eq!(ejected.len(), 2, "both thrown off the end");
         assert!(inv.items.is_empty());
+    }
+
+    #[test]
+    fn a_tunnel_takes_part_of_a_stack_as_it_enters_its_segment() {
+        // A junction over segment 2 hands one to each of two sides (keeping one on the belt);
+        // once its outputs are full the next stack waits before it.
+        struct Tunnel {
+            entered: Vec<i32>,
+            room: u8,
+        }
+        impl Surroundings for Tunnel {
+            fn ending(&mut self) -> Ending {
+                Ending::Blocked
+            }
+            fn insert(&mut self, _: &Item) -> Option<u8> {
+                None
+            }
+            fn process(&mut self, _: i32, _: &mut Item, _: bool) -> Option<Process> {
+                None
+            }
+            fn tunnel(&mut self, segment: i32, item: &mut Item) -> bool {
+                self.entered.push(segment);
+                if segment != 2 {
+                    return false;
+                }
+                for _ in 0..2 {
+                    if item.count <= 1 {
+                        break;
+                    }
+                    if self.room == 0 {
+                        return true;
+                    }
+                    self.room -= 1;
+                    item.count -= 1;
+                }
+                false
+            }
+        }
+        let mut inv = Inventory::default();
+        inv.add(Item::new("a", 5, 180, false));
+        let mut world = Tunnel {
+            entered: vec![],
+            room: 2,
+        };
+        for _ in 0..40 {
+            inv.tick(4, movement_speed(96.0), true, &mut world);
+        }
+        assert_eq!(
+            world.entered,
+            vec![1, 2, 3],
+            "asked once per segment entered"
+        );
+        assert_eq!(inv.items[0].count, 3);
+        let mut inv = Inventory::default();
+        inv.add(Item::new("b", 5, 180, false));
+        for _ in 0..40 {
+            inv.tick(4, movement_speed(96.0), true, &mut world);
+        }
+        assert!(inv.items[0].position < 2.0, "waits before the full tunnel");
     }
 
     #[test]
