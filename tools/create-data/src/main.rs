@@ -160,6 +160,78 @@ fn compile(create: &Path, out: &Path) {
             });
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
+        } else if facts.class.as_deref() == Some("TagDependentIngredientItem") {
+            // Crushed ores: plain ingredients (Create hides them from creative when their metal's
+            // tag is empty; they are registered either way). `compatCrushedOre` builds its names
+            // (`"crushed_raw_" + metal`): those are read from the generated item models.
+            let names = if name.ends_with('_') {
+                let mut found: Vec<String> =
+                    fs::read_dir(generated.join("assets/create/models/item"))
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .filter_map(|e| {
+                            e.file_name()
+                                .to_str()?
+                                .strip_suffix(".json")
+                                .map(str::to_owned)
+                        })
+                        .filter(|n| n.starts_with(name.as_str()) && !item_java.contains_key(n))
+                        .collect();
+                found.sort();
+                found
+            } else {
+                vec![name.clone()]
+            };
+            for name in names {
+                let doc = json!({ "template": "minecraft:stick" });
+                write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+                items.push(name);
+            }
+        } else if matches!(
+            facts.class.as_deref(),
+            Some("ShadowSteelItem" | "RefinedRadianceItem" | "ChromaticCompoundItem")
+        ) {
+            // `rarity(UNCOMMON)` ingredients; their item entities' floating and light-driven
+            // changes are the native mod's (not yet).
+            let doc = json!({
+                "template": "minecraft:stick",
+                "rarity": "uncommon"
+            });
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
+        } else if name == "builders_tea" {
+            // BuildersTeaItem: 16 a stack, drunk over 42 ticks (`UseAnim.DRINK`), always edible,
+            // 1 nutrition at .6 (1.2 saturation), Haste I for 3 minutes without particles or
+            // icon, leaving a glass bottle.
+            let doc = json!({
+                "template": "minecraft:honey_bottle",
+                "max_stack_size": 16,
+                "components": {
+                    "minecraft:food": { "nutrition": 1, "saturation": 1.2, "can_always_eat": true },
+                    "minecraft:consumable": {
+                        "consume_seconds": 2.1,
+                        "animation": "drink",
+                        "sound": "minecraft:entity.generic.drink",
+                        "has_consume_particles": false,
+                        "on_consume_effects": [{
+                            "type": "minecraft:apply_effects",
+                            "effects": [{
+                                "id": "minecraft:haste",
+                                "duration": 3600,
+                                "amplifier": 0,
+                                "ambient": false,
+                                "show_particles": false,
+                                "show_icon": false
+                            }],
+                            "probability": 1.0
+                        }]
+                    },
+                    "minecraft:use_remainder": { "id": "minecraft:glass_bottle", "count": 1 }
+                }
+            });
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
         } else if name == "wrench" {
             // WrenchItem: `stacksTo(1)`; its use is the native mod's.
             let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
