@@ -158,6 +158,8 @@ pub struct Dimension {
     /// yet; links whose input to read again (placed, a neighbour changed, toggled); receivers
     /// whose signal changed (their block and its neighbours to update).
     pub links: crate::link::Links,
+    /// Curved track at its track blocks (`TrackBlockEntity.connections`).
+    pub track_curves: crate::track_curves::Curves,
     link_saved: HashMap<[i32; 3], (crate::link::Key, i32)>,
     pub link_checks: Vec<[i32; 3]>,
     pub link_changes: Vec<[i32; 3]>,
@@ -578,6 +580,12 @@ impl CreateWorld {
     /// range tests that miss for every non-Create block.
     #[inline]
     pub fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        // A track that is gone takes its curves (`TrackBlockEntity.removeInboundConnections`).
+        let track = |s: u32| self.table.get(s).is_some_and(|(b, _)| b == Block::Track);
+        if track(old) && !track(new) && self.dims[dim].track_curves.at.contains_key(&pos) {
+            self.dims[dim].track_curves.remove_at(pos);
+            self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
         let (was, is) = (self.table.is_kinetic(old), self.table.is_kinetic(new));
         if !was && !is {
             return;

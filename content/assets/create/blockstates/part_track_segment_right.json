@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/track/segment_right",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/track/segment_right",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/track/segment_right"
+    },
+    "facing=west": {
+      "model": "create:block/track/segment_right",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/track/segment_right",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/track/segment_right",
+      "x": 270
+    }
+  }
+}
