@@ -208,6 +208,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_links(game, dimension, dim);
     tick_bearings(game, dimension, dim);
     tick_gantries(game, dimension, dim);
+    tick_crafters(game, dimension, dim);
     tick_windmills(game, dimension, dim);
     tick_millstones(game, dim);
     tick_fans(game, dimension, dim);
@@ -268,6 +269,10 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
                 // `GantryShaftBlockEntity.onSpeedChanged`: the carriages on it try to start.
                 if block == Some(create_engine::Block::GantryShaft) {
                     gantry_carriages_on(game, dim, pos);
+                }
+                // A crafter that starts turning looks at its items (`lazyTick`).
+                if block == Some(create_engine::Block::MechanicalCrafter) {
+                    with_world(|w| w.dims[dim].crafter_checks.push(pos));
                 }
                 // A press that starts turning looks at the depot below it again.
                 with_world(|w| {
@@ -461,6 +466,10 @@ fn right_click_inner(game: &mut Game<'_>, pos: [i32; 3], face: [i32; 3], cancele
         Some(create_engine::Block::LinearChassis | create_engine::Block::SecondaryLinearChassis)
     ) {
         use_chassis(game, pos, face, back, canceled);
+        return;
+    }
+    if block == Some(create_engine::Block::MechanicalCrafter) {
+        use_crafter(game, dim, pos, face, canceled);
         return;
     }
     if block == Some(create_engine::Block::Deployer) {
@@ -1721,7 +1730,11 @@ pub(super) fn block_entity(
     if entity.is_none()
         && matches!(
             block,
-            "create:millstone" | "create:depot" | "create:basin" | "create:chute"
+            "create:millstone"
+                | "create:depot"
+                | "create:basin"
+                | "create:chute"
+                | "create:mechanical_crafter"
         )
     {
         *entity = Some((block.into(), horizon_world::nbt::Compound::new()));
@@ -1746,6 +1759,18 @@ pub(super) fn block_entity_container(
             faces: std::array::from_fn(|_| all.clone()),
             inputs: vec![0],
             outputs: all,
+            menu: None,
+            only_when_empty: true,
+        });
+        return;
+    }
+    if block == "create:mechanical_crafter" {
+        // MechanicalCrafterBlockEntity.Inventory: one item, put in while it is empty.
+        *container = Some(horizon_client::containers::ModContainer {
+            slots: 1,
+            faces: std::array::from_fn(|_| vec![0]),
+            inputs: vec![0],
+            outputs: vec![],
             menu: None,
             only_when_empty: true,
         });
@@ -1974,6 +1999,13 @@ pub(super) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
     let Some(dim) = dimension_index(game.dim.id()) else {
         return;
     };
+    // An item put into a crafter: its chain may start (`insertItem` -> `checkCompletedRecipe`).
+    if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
+        == Some(create_engine::Block::MechanicalCrafter)
+    {
+        with_world(|w| w.dims[dim].crafter_checks.push(pos));
+        return;
+    }
     // A chute was given a stack (a hopper above): it falls from the top.
     if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
         == Some(create_engine::Block::Chute)
@@ -6971,6 +7003,447 @@ fn send_gantry(
     }
     for p in players_in(game, dimension) {
         let _ = game.native_net_send_to_player(p, PISTON_CHANNEL, &msg);
+    }
+}
+
+/// A mechanical crafter's facing and pointing; None for any other block.
+fn crafter_at(game: &Game<'_>, p: [i32; 3]) -> Option<(Dir, create_engine::crafter::Pointing)> {
+    let s = game
+        .pack
+        .assets
+        .registry
+        .state(game.world.block(p[0], p[1], p[2]))?;
+    if s.name != "create:mechanical_crafter" {
+        return None;
+    }
+    let facing = s
+        .properties
+        .get("facing")
+        .and_then(|v| Dir::ALL.into_iter().find(|d| dir_name(*d) == v))?;
+    Some((
+        facing,
+        create_engine::crafter::Pointing::read(s.properties.get("pointing")?)?,
+    ))
+}
+
+/// `RecipeGridHandler.getTargetingCrafter`: the crafter it points at, facing the same way.
+fn crafter_target(game: &Game<'_>, p: [i32; 3]) -> Option<[i32; 3]> {
+    let (f, pointing) = crafter_at(game, p)?;
+    let o = create_engine::crafter::target(f, pointing).offset();
+    let t = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
+    (crafter_at(game, t)?.0 == f).then_some(t)
+}
+
+/// `getPrecedingCrafters`: crafters beside it in its plane, facing the same way, pointing at it.
+fn crafters_preceding(game: &Game<'_>, p: [i32; 3]) -> Vec<[i32; 3]> {
+    let Some((f, pointing)) = crafter_at(game, p) else {
+        return Vec::new();
+    };
+    let own = create_engine::crafter::target(f, pointing);
+    Dir::ALL
+        .into_iter()
+        .filter(|d| d.axis() != f.axis() && *d != own)
+        .filter_map(|d| {
+            let o = d.offset();
+            let n = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
+            let (nf, np) = crafter_at(game, n)?;
+            (nf == f && create_engine::crafter::target(nf, np) == d.opposite()).then_some(n)
+        })
+        .collect()
+}
+
+/// `getAllCraftersOfChainIf`: the chain through `root`, following targets and preceding
+/// crafters; None for a loop, or (unless `all`) when one of them fails `test`, or when all do.
+fn crafter_chain(
+    game: &Game<'_>,
+    root: [i32; 3],
+    test: impl Fn(&Game<'_>, [i32; 3]) -> bool,
+    all: bool,
+) -> Option<Vec<[i32; 3]>> {
+    let mut frontier = vec![(root, None)];
+    let mut chain: Vec<[i32; 3]> = Vec::new();
+    let (mut empty, mut all_empty) = (false, true);
+    while !frontier.is_empty() {
+        let (current, last) = frontier.remove(0);
+        if chain.contains(&current) {
+            return None;
+        }
+        if test(game, current) {
+            all_empty = false;
+        } else {
+            empty = true;
+        }
+        chain.push(current);
+        if let Some(t) = crafter_target(game, current)
+            && Some(t) != last
+        {
+            frontier.push((t, Some(current)));
+        }
+        for p in crafters_preceding(game, current) {
+            if Some(p) != last {
+                frontier.push((p, Some(current)));
+            }
+        }
+    }
+    (!(empty && !all || all_empty)).then_some(chain)
+}
+
+/// The item in a crafter's slot (`inventory`), if any.
+fn crafter_slot(game: &Game<'_>, p: [i32; 3]) -> Option<String> {
+    match game.world.block_entities.get(&(p[0], p[1], p[2])) {
+        Some(horizon_client::containers::BlockEntity::Mod(m)) => m
+            .items
+            .first()
+            .and_then(|s| s.as_ref())
+            .map(|s| s.item.to_string()),
+        _ => None,
+    }
+}
+
+/// `MechanicalCrafterBlock.useItemOn` on its front: an empty slot takes one of the item in hand;
+/// an empty hand takes the slot's item back.
+fn use_crafter(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    face: [i32; 3],
+    canceled: &mut bool,
+) {
+    let Some((facing, _)) = crafter_at(game, pos) else {
+        return;
+    };
+    if face != facing.offset() || game.hand != horizon_client::first_person::Hand::Main {
+        return;
+    }
+    let idle = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.phase)).flatten()
+        == Some(create_engine::crafter::Phase::Idle);
+    let held = game.inventory.get(game.selected).cloned().flatten();
+    let slot = crafter_slot(game, pos);
+    match (held, slot) {
+        (Some(h), None) if idle && h.extra.is_none() && h.damage == 0 => {
+            *canceled = true;
+            let one = horizon_client::items::ItemStack {
+                count: 1,
+                ..h.clone()
+            };
+            if game
+                .native_with_mod_block_entity(pos, |be| {
+                    be.items.resize(be.items.len().max(1), None);
+                    be.items[0] = Some(one);
+                })
+                .is_some()
+                && let Some(Some(s)) = game.inventory.get_mut(game.selected)
+            {
+                s.count -= 1;
+                if s.count == 0 {
+                    game.inventory[game.selected] = None;
+                }
+            }
+            with_world(|w| w.dims[dim].crafter_checks.push(pos));
+        }
+        (None, Some(item)) => {
+            *canceled = true;
+            game.native_with_mod_block_entity(pos, |be| {
+                if let Some(s) = be.items.first_mut() {
+                    *s = None;
+                }
+            });
+            game.native_give_items(&item, 1);
+        }
+        _ => {}
+    }
+}
+
+/// `RecipeGridHandler.tryToApplyRecipe`: a crafting recipe (the grid in a square of its larger
+/// side, up to 3), else a `create:mechanical_crafting` one.
+fn crafter_recipe(game: &Game<'_>, grid: &[((i32, i32), String)]) -> Option<(String, u8)> {
+    let (w, h, cells) = create_engine::crafter::input(grid);
+    let size = w.max(h);
+    if (1..=3).contains(&size) {
+        let mut square: Vec<Option<horizon_client::items::ItemStack>> = vec![None; size * size];
+        for r in 0..h {
+            for c in 0..w {
+                square[r * size + c] = cells[r * w + c]
+                    .as_ref()
+                    .map(|i| horizon_client::items::ItemStack::new(i, 1));
+            }
+        }
+        if let Some(out) = game.recipes().craft(&square, size) {
+            return Some((out.item.to_string(), out.count.min(64) as u8));
+        }
+    }
+    game.native_recipes_of_type("create:mechanical_crafting")
+        .iter()
+        .filter_map(|r| {
+            let json = &*r.json;
+            let pattern: Vec<&str> = json["pattern"]
+                .as_array()?
+                .iter()
+                .filter_map(|l| l.as_str())
+                .collect();
+            let height = pattern.len();
+            let width = pattern.iter().map(|l| l.chars().count()).max()?;
+            let mut cells = Vec::with_capacity(width * height);
+            for line in &pattern {
+                let chars: Vec<char> = line.chars().collect();
+                for c in 0..width {
+                    let ch = chars.get(c).copied().unwrap_or(' ');
+                    cells.push(if ch == ' ' {
+                        None
+                    } else {
+                        let key = &json["key"][ch.to_string()];
+                        Some(
+                            game.native_recipe_ingredient(key)?
+                                .1
+                                .iter()
+                                .map(|s| s.to_string())
+                                .collect(),
+                        )
+                    });
+                }
+            }
+            let out = game.native_recipe_result(&json["result"])?;
+            Some(create_engine::crafter::Shaped {
+                width,
+                height,
+                cells,
+                mirrored: json["accept_mirrored"].as_bool().unwrap_or(true),
+                result: (out.item.to_string(), out.count.min(64) as u8),
+            })
+        })
+        .find(|s| s.matches(w, h, &cells))
+        .map(|s| s.result)
+}
+
+/// `ejectWholeGrid`: every crafter of the chain throws out its grid in front of it and goes
+/// idle, then looks at its slot again (`lazyTick`). Its slot is left: Create's refuses items
+/// while it works, so an item a hopper put in meanwhile is the next round's.
+fn crafters_eject(game: &mut Game<'_>, dimension: &str, dim: usize, root: [i32; 3]) {
+    let chain = crafter_chain(game, root, |_, _| true, true).unwrap_or_else(|| vec![root]);
+    for p in chain {
+        let grid = with_world(|w| {
+            let d = &mut w.dims[dim];
+            d.crafting.retain(|q| *q != p);
+            d.crafters.get_mut(&p).map(|c| {
+                c.phase = create_engine::crafter::Phase::Idle;
+                std::mem::take(&mut c.grid)
+            })
+        })
+        .flatten()
+        .unwrap_or_default();
+        let items: Vec<String> = grid.into_iter().map(|(_, i)| i).collect();
+        with_world(|w| w.dims[dim].crafter_checks.push(p));
+        let f = crafter_at(game, p).map_or([0, 0, 0], |(f, _)| f.offset());
+        for item in items {
+            game.native_run_command(&format!(
+                "execute in {dimension} run summon minecraft:item {} {} {} {{Item:{{id:'{item}',count:1}}}}",
+                p[0] as f64 + 0.5 + f[0] as f64 * 0.75,
+                p[1] as f64 + 0.5 + f[1] as f64 * 0.75,
+                p[2] as f64 + 0.5 + f[2] as f64 * 0.75
+            ));
+        }
+    }
+}
+
+/// `tryInsert`: the result into the container it points at (as a hopper puts it in); without
+/// one, everything is thrown out.
+fn crafter_insert(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3]) {
+    use create_engine::crafter::Phase;
+    let Some((facing, pointing)) = crafter_at(game, pos) else {
+        return;
+    };
+    let dir = create_engine::crafter::target(facing, pointing);
+    let o = dir.offset();
+    let t = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+    if !game.world.block_entities.contains_key(&(t[0], t[1], t[2])) {
+        crafters_eject(game, dimension, dim, pos);
+        return;
+    }
+    let grid = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.grid.clone()))
+        .flatten()
+        .unwrap_or_default();
+    let mut left = Vec::new();
+    for (at, item) in grid {
+        let stack = horizon_client::items::ItemStack::new(&item, 1);
+        let face = horizon_core::geometry::Direction::ALL[dir.opposite() as usize];
+        if game.native_insert_item(t, face, stack).is_some() {
+            left.push((at, item));
+        }
+    }
+    let done = left.is_empty();
+    with_world(|w| {
+        if let Some(c) = w.dims[dim].crafters.get_mut(&pos) {
+            c.phase = Phase::Inserting;
+            c.grid = left;
+        }
+    });
+    // All of it out: the whole chain goes idle (`ejectWholeGrid` of empty grids).
+    if done {
+        crafters_eject(game, dimension, dim, pos);
+    }
+}
+
+/// Mechanical crafters: those looked at start their chain when every one holds an item
+/// (`checkCompletedRecipe`, `begin`); those at work run `tick`'s phases: the grid assembles,
+/// is passed on to the crafter pointed at (`EXPORTING`, 1000), the last one crafts (2000) and
+/// puts the result out. Nothing runs without one of them.
+fn tick_crafters(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    use create_engine::crafter::{self, Phase};
+    let Some((mut checks, drops, working)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        (
+            std::mem::take(&mut d.crafter_checks),
+            std::mem::take(&mut d.crafter_drops),
+            d.crafting.clone(),
+        )
+    }) else {
+        return;
+    };
+    for (p, item) in drops {
+        game.native_run_command(&format!(
+            "execute in {dimension} run summon minecraft:item {}.5 {}.5 {}.5 {{Item:{{id:'{item}',count:1}}}}",
+            p[0], p[1], p[2]
+        ));
+    }
+    if checks.is_empty() && working.is_empty() {
+        return;
+    }
+    checks.sort();
+    checks.dedup();
+    for pos in checks {
+        let idle = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.phase)).flatten()
+            == Some(Phase::Idle);
+        let rpm = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        if !idle || rpm == 0.0 || crafter_slot(game, pos).is_none() {
+            continue;
+        }
+        let Some(chain) = crafter_chain(game, pos, |g, p| crafter_slot(g, p).is_some(), false)
+        else {
+            continue;
+        };
+        for p in chain {
+            let item = crafter_slot(game, p);
+            game.native_with_mod_block_entity(p, |be| {
+                if let Some(x) = be.items.first_mut() {
+                    *x = None;
+                }
+            });
+            let first = crafters_preceding(game, p).is_empty();
+            with_world(|w| {
+                let d = &mut w.dims[dim];
+                let c = d.crafters.entry(p).or_default();
+                c.grid = item.into_iter().map(|i| ((0, 0), i)).collect();
+                c.phase = if first {
+                    Phase::Assembling
+                } else {
+                    Phase::Accepting
+                };
+                c.count_down = 1;
+                if !d.crafting.contains(&p) {
+                    d.crafting.push(p);
+                }
+            });
+        }
+    }
+    let working = with_world(|w| w.dims[dim].crafting.clone()).unwrap_or_default();
+    for pos in working {
+        let rpm = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        let speed = crafter::count_down_speed(rpm);
+        let Some(c) = with_world(|w| w.dims[dim].crafters.get(&pos).cloned()).flatten() else {
+            continue;
+        };
+        let mut cd = c.count_down;
+        match c.phase {
+            Phase::Assembling | Phase::Exporting | Phase::Crafting => {
+                cd -= speed;
+                with_world(|w| {
+                    if let Some(x) = w.dims[dim].crafters.get_mut(&pos) {
+                        x.count_down = cd.max(0);
+                    }
+                });
+                if cd >= 0 {
+                    continue;
+                }
+            }
+            Phase::Inserting => {
+                crafter_insert(game, dimension, dim, pos);
+                continue;
+            }
+            _ => continue,
+        }
+        match c.phase {
+            Phase::Assembling => {
+                if crafter_target(game, pos).is_some() {
+                    let empty = c.grid.is_empty();
+                    with_world(|w| {
+                        if let Some(x) = w.dims[dim].crafters.get_mut(&pos) {
+                            x.phase = Phase::Exporting;
+                            x.count_down = if empty { 0 } else { 1000 };
+                        }
+                    });
+                    continue;
+                }
+                match crafter_recipe(game, &c.grid) {
+                    Some((item, n)) => with_world(|w| {
+                        if let Some(x) = w.dims[dim].crafters.get_mut(&pos) {
+                            x.grid = (0..n).map(|i| ((i32::from(i), 0), item.clone())).collect();
+                            x.phase = Phase::Crafting;
+                            x.count_down = 2000;
+                        }
+                    })
+                    .unwrap_or(()),
+                    None => crafters_eject(game, dimension, dim, pos),
+                }
+            }
+            Phase::Exporting => {
+                let Some(t) = crafter_target(game, pos) else {
+                    crafters_eject(game, dimension, dim, pos);
+                    continue;
+                };
+                let Some((_, pointing)) = crafter_at(game, pos) else {
+                    continue;
+                };
+                let (ox, oy) = pointing.merge_offset();
+                with_world(|w| {
+                    let d = &mut w.dims[dim];
+                    let grid = d.crafters.get_mut(&pos).map(|x| {
+                        x.phase = Phase::Waiting;
+                        x.count_down = 0;
+                        std::mem::take(&mut x.grid)
+                    });
+                    if let Some(tc) = d.crafters.get_mut(&t) {
+                        tc.grid.extend(
+                            grid.unwrap_or_default()
+                                .into_iter()
+                                .map(|((x, y), i)| ((x + ox, y + oy), i)),
+                        );
+                    }
+                });
+                // `continueIfAllPrecedingFinished` on the target.
+                let preceding = crafters_preceding(game, t);
+                let all = with_world(|w| {
+                    preceding.iter().all(|p| {
+                        w.dims[dim].crafters.get(p).map(|c| c.phase) == Some(Phase::Waiting)
+                    })
+                })
+                .unwrap_or(false);
+                if all {
+                    with_world(|w| {
+                        let d = &mut w.dims[dim];
+                        // They wait (taking nothing in) until the chain is done.
+                        for p in &preceding {
+                            d.crafting.retain(|q| q != p);
+                        }
+                        if let Some(x) = d.crafters.get_mut(&t) {
+                            x.phase = Phase::Assembling;
+                            x.count_down = 1;
+                        }
+                    });
+                }
+            }
+            Phase::Crafting => crafter_insert(game, dimension, dim, pos),
+            _ => {}
+        }
     }
 }
 

@@ -206,6 +206,13 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::half(f.opposite())
             })
         }),
+        // MechanicalCrafterBlock (ICogWheel): a small cog on its facing's axis, no shaft.
+        Block::MechanicalCrafter => s.facing.map_or([None, None], |f| {
+            one(Part {
+                shafts: 0,
+                ..Part::cog(f.axis(), false)
+            })
+        }),
         // GantryShaftBlock (DirectionalKineticBlock): turns on its facing's axis, shafts at both
         // ends.
         Block::GantryShaft => s

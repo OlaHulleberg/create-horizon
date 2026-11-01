@@ -7,6 +7,7 @@ pub mod burner;
 pub mod chute;
 pub mod client;
 pub mod contraption;
+pub mod crafter;
 pub mod crusher;
 pub mod deployer;
 pub mod depot;
