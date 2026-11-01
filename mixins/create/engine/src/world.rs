@@ -269,6 +269,16 @@ pub struct Dimension {
     pub gauge_changes: Vec<[i32; 3]>,
     /// Scratch for the gauges a solve looked at, kept to avoid allocating per solve.
     pub gauges_touched: Vec<[i32; 3]>,
+    /// Boilers: tanks with steam engines on them (`BoilerData.isActive`), with those engines.
+    /// Only they tick.
+    pub boilers: HashMap<[i32; 3], SteamBoiler>,
+    /// Tanks whose engines are counted again (`FluidTankBlockEntity.updateBoilerState`).
+    pub boiler_checks: Vec<[i32; 3]>,
+    /// Where engines placed or removed have their shaft: it becomes a powered shaft or a plain
+    /// one again (`SteamEngineBlock.onPlace`, `PoweredShaftBlock.tick`).
+    pub engine_shafts: Vec<[i32; 3]>,
+    /// Powered shafts and the engine driving each (`PoweredShaftBlockEntity.enginePos`).
+    pub shaft_engine: HashMap<[i32; 3], [i32; 3]>,
 }
 
 /// An assembled train: its run, its blocks (offset from its first bogey, state), where that
@@ -363,7 +373,26 @@ fn has_state(block: Block) -> bool {
             | Block::MechanicalCrafter
             | Block::FluidTank
             | Block::WindmillBearing
+            | Block::SteamEngine
     )
+}
+
+/// A boiler (`FluidTankBlockEntity.boiler`): its data, the engines on it and its tank's size.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SteamBoiler {
+    pub data: crate::steam::Boiler,
+    pub engines: Vec<[i32; 3]>,
+    /// `getTotalTankSize`.
+    pub size: i32,
+}
+
+/// The size of a boiler (`FluidTankBlockEntity.getTotalTankSize`): tanks are one block until
+/// multiblock tanks (`ConnectivityHandler`) are ported, too small for a boiler level.
+pub const BOILER_SIZE: i32 = 1;
+
+/// The way a steam engine's state points (`SteamEngineBlock.getFacing`).
+fn engine_facing(info: &StateInfo) -> Option<crate::kinetics::Dir> {
+    Some(crate::steam::connected_direction(info.face?, info.facing?))
 }
 
 /// Create's latches, by block.
@@ -456,9 +485,10 @@ impl CreateWorld {
     }
 
     fn place(&mut self, dim: usize, pos: [i32; 3], state: u32) {
-        let Some((block, info)) = self.table.get(state) else {
+        let Some((block, &info)) = self.table.get(state) else {
             return;
         };
+        let info = &info;
         let d = &mut self.dims[dim];
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
@@ -655,7 +685,31 @@ impl CreateWorld {
                 },
             );
         }
+        let engine = (block == Block::SteamEngine)
+            .then(|| engine_facing(info))
+            .flatten();
+        // An engine turned or replaced leaves its old tank and shaft first.
+        if let Some(old) = self.engine_of(self.dims[dim].states.get(&pos).copied())
+            && Some(old) != engine
+        {
+            self.engine_removed(dim, pos, old);
+        }
+        if let Some(c) = engine {
+            // `onPlace`: its tank's boiler counts it, its shaft is powered.
+            let d = &mut self.dims[dim];
+            let o = c.opposite().offset();
+            d.boiler_checks
+                .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
+            d.engine_shafts.push(crate::steam::shaft_pos(pos, c));
+        }
+        if block == Block::BlazeBurner {
+            // A burner's heat changed under a boiler (`FluidTankBlock.updateShape`).
+            self.boiler_heat_changed(dim, [pos[0], pos[1] + 1, pos[2]]);
+        }
         let d = &mut self.dims[dim];
+        if block == Block::FluidTank {
+            d.boiler_checks.push(pos);
+        }
         if block == Block::FluidTank && !d.tanks.contains_key(&pos) {
             let t = d.tank_saved.remove(&pos).unwrap_or_default();
             d.tanks.insert(pos, t);
@@ -745,7 +799,18 @@ impl CreateWorld {
             }
             self.place(dim, pos, new);
         } else {
+            if let Some(c) = self.engine_of(Some(old)) {
+                self.engine_removed(dim, pos, c);
+            }
+            match self.table.get(old).map(|(b, _)| b) {
+                Some(Block::FluidTank) => self.dims[dim].boiler_checks.push(pos),
+                Some(Block::BlazeBurner) => {
+                    self.boiler_heat_changed(dim, [pos[0], pos[1] + 1, pos[2]])
+                }
+                _ => {}
+            }
             let d = &mut self.dims[dim];
+            d.shaft_engine.remove(&pos);
             d.kinetics.remove(pos);
             d.states.remove(&pos);
             d.cranks.remove(&pos);
@@ -1008,6 +1073,13 @@ impl CreateWorld {
             d.running_fans
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tanks.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.boilers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.boiler_checks
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.engine_shafts
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.shaft_engine
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.windmills
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             // A belt reaching into the column stops being whole until it is back.
@@ -1325,6 +1397,8 @@ impl CreateWorld {
                 self.dims[dim].tunnel_checks.push(pos)
             }
             Some(Block::GantryShaft) => self.dims[dim].gantry_checks.push(pos),
+            // `FluidTankBlock.updateShape`: what lies under a boiler may heat it differently.
+            Some(Block::FluidTank) => self.boiler_heat_changed(dim, pos),
             // `BeltBlock.updateShape`: the tunnel over a belt follows its neighbours.
             Some(Block::Belt) => self.dims[dim]
                 .tunnel_fresh
@@ -2165,6 +2239,264 @@ impl CreateWorld {
         out
     }
 
+    /// The way the steam engine of `state` points (`SteamEngineBlock.getFacing`), if it is one.
+    fn engine_of(&self, state: Option<u32>) -> Option<crate::kinetics::Dir> {
+        match self.table.get(state?)? {
+            (Block::SteamEngine, info) => engine_facing(info),
+            _ => None,
+        }
+    }
+
+    /// The way the steam engine at `pos` points, if there is one.
+    pub fn engine_at(&self, dim: usize, pos: [i32; 3]) -> Option<crate::kinetics::Dir> {
+        self.engine_of(self.dims[dim].states.get(&pos).copied())
+    }
+
+    /// `SteamEngineBlock.onRemove` (or turned away): its tank's boiler counts again, its shaft is
+    /// looked at, and it stops driving it (`PoweredShaftBlockEntity.remove`).
+    fn engine_removed(&mut self, dim: usize, pos: [i32; 3], connected: crate::kinetics::Dir) {
+        let d = &mut self.dims[dim];
+        let o = connected.opposite().offset();
+        d.boiler_checks
+            .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
+        d.engine_shafts
+            .push(crate::steam::shaft_pos(pos, connected));
+        self.stop_engine(dim, pos);
+    }
+
+    /// The shaft the engine at `engine` drives, if any, is let go and stops.
+    fn stop_engine(&mut self, dim: usize, engine: [i32; 3]) {
+        let d = &mut self.dims[dim];
+        let Some(shaft) = d
+            .shaft_engine
+            .iter()
+            .find(|(_, e)| **e == engine)
+            .map(|(s, _)| *s)
+        else {
+            return;
+        };
+        d.shaft_engine.remove(&shaft);
+        let stopped = crate::steam::Output {
+            direction: 0,
+            efficiency: 0.0,
+        };
+        self.set_shaft_output(dim, shaft, stopped);
+    }
+
+    /// A powered shaft's engine output, re-placed when it changed (`PoweredShaftBlockEntity
+    /// .update`: `updateGeneratedRotation`).
+    fn set_shaft_output(&mut self, dim: usize, shaft: [i32; 3], out: crate::steam::Output) {
+        let d = &mut self.dims[dim];
+        let Some(&state) = d.states.get(&shaft) else {
+            return;
+        };
+        let old = d.settings.get(&shaft).copied().unwrap_or_default();
+        if old.steam.differs(&out) {
+            self.set_settings(dim, shaft, state, Settings { steam: out, ..old });
+        }
+    }
+
+    /// Something under the boiler at `tank` changed: its heat is read again
+    /// (`updateBoilerTemperature`, only for an active boiler).
+    fn boiler_heat_changed(&mut self, dim: usize, tank: [i32; 3]) {
+        if let Some(b) = self.dims[dim].boilers.get_mut(&tank) {
+            b.data.needs_heat_level_update = true;
+        }
+    }
+
+    /// `updateBoilerState` for the tanks to look at: the engines on each counted
+    /// (`BoilerData.evaluate`); a tank without engines is no boiler, and engines no longer on one
+    /// stop their shafts.
+    pub fn evaluate_boilers(&mut self, dim: usize) {
+        if self.dims[dim].boiler_checks.is_empty() {
+            return;
+        }
+        let mut checks = std::mem::take(&mut self.dims[dim].boiler_checks);
+        checks.sort();
+        checks.dedup();
+        for tank in checks {
+            let is_tank = self.dims[dim]
+                .states
+                .get(&tank)
+                .and_then(|s| self.table.get(*s))
+                .is_some_and(|(b, _)| b == Block::FluidTank);
+            let engines = if is_tank {
+                crate::steam::attached_engines([tank], |p| self.engine_at(dim, p))
+            } else {
+                Vec::new()
+            };
+            let d = &mut self.dims[dim];
+            let old = d
+                .boilers
+                .get(&tank)
+                .map(|b| b.engines.clone())
+                .unwrap_or_default();
+            if engines.is_empty() {
+                // `BoilerData.clear` with the tank gone, or no engine left.
+                d.boilers.remove(&tank);
+            } else {
+                let b = d.boilers.entry(tank).or_insert_with(|| SteamBoiler {
+                    size: BOILER_SIZE,
+                    ..SteamBoiler::default()
+                });
+                b.data.attached_engines = engines.len() as i32;
+                b.data.needs_heat_level_update = true;
+                b.engines.clone_from(&engines);
+            }
+            for e in old.into_iter().filter(|e| !engines.contains(e)) {
+                self.stop_engine(dim, e);
+            }
+        }
+    }
+
+    /// Boilers whose heat must be read again: their tanks (one block each, so the heater is the
+    /// block under it).
+    pub fn take_heat_checks(&self, dim: usize) -> Vec<[i32; 3]> {
+        let mut v: Vec<[i32; 3]> = self.dims[dim]
+            .boilers
+            .iter()
+            .filter(|(_, b)| b.data.needs_heat_level_update)
+            .map(|(p, _)| *p)
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The heat of each block under the boiler at `tank` (`updateTemperature`); its engines
+    /// follow.
+    pub fn set_boiler_heat(&mut self, dim: usize, tank: [i32; 3], heats: &[i32]) {
+        let Some(b) = self.dims[dim].boilers.get_mut(&tank) else {
+            return;
+        };
+        b.data.update_temperature(heats.iter().copied());
+        self.drive_engines(dim, tank);
+    }
+
+    /// One tick of the boilers (`BoilerData.tick`): each samples its water supply every 5 ticks,
+    /// and its engines follow. Tanks without engines are not here.
+    pub fn tick_boilers(&mut self, dim: usize) {
+        let d = &mut self.dims[dim];
+        if d.boilers.is_empty() {
+            return;
+        }
+        let mut sampled = Vec::new();
+        for (tank, b) in d.boilers.iter_mut() {
+            if b.data.tick(crate::tank::CAPACITY, false) {
+                sampled.push(*tank);
+            }
+        }
+        for tank in sampled {
+            self.drive_engines(dim, tank);
+        }
+    }
+
+    /// Water pumped into the tank at `tank`: a boiler takes it all as supply
+    /// (`BoilerFluidHandler.fill`); None when the tank is no boiler.
+    pub fn fill_boiler(
+        &mut self,
+        dim: usize,
+        tank: [i32; 3],
+        fluid: crate::tank::Fluid,
+        amount: u32,
+    ) -> Option<u32> {
+        let b = self.dims[dim].boilers.get_mut(&tank)?;
+        Some(b.data.fill(fluid == crate::tank::Fluid::Water, amount))
+    }
+
+    /// Whether the tank at `tank` is a boiler (its fluid handler is the boiler's: nothing can be
+    /// drawn from it).
+    pub fn is_boiler(&self, dim: usize, tank: [i32; 3]) -> bool {
+        self.dims[dim].boilers.contains_key(&tank)
+    }
+
+    /// `SteamEngineBlockEntity.tick` for the engines of the boiler at `tank`: each drives the
+    /// powered shaft in front of it, unless another engine does (`canBePoweredBy`), at the
+    /// boiler's efficiency.
+    fn drive_engines(&mut self, dim: usize, tank: [i32; 3]) {
+        let Some(b) = self.dims[dim].boilers.get(&tank).cloned() else {
+            return;
+        };
+        let efficiency = b.data.engine_efficiency(b.size).clamp(0.0, 1.0);
+        for engine in b.engines {
+            let Some((Block::SteamEngine, info)) = self.dims[dim]
+                .states
+                .get(&engine)
+                .and_then(|s| self.table.get(*s))
+            else {
+                continue;
+            };
+            let (Some(connected), Some(facing)) = (engine_facing(info), info.facing) else {
+                continue;
+            };
+            let shaft = crate::steam::shaft_pos(engine, connected);
+            let Some((Block::PoweredShaft, shaft_info)) = self.dims[dim]
+                .states
+                .get(&shaft)
+                .and_then(|s| self.table.get(*s))
+            else {
+                continue;
+            };
+            let Some(axis) = shaft_info.axis else {
+                continue;
+            };
+            let d = &mut self.dims[dim];
+            if d.shaft_engine.get(&shaft).is_some_and(|e| *e != engine) {
+                continue;
+            }
+            d.shaft_engine.insert(shaft, engine);
+            // The scroll option (`movementDirection`) is not ported: clockwise.
+            let direction =
+                crate::steam::conveyed_direction(efficiency, connected, facing, axis, false);
+            self.set_shaft_output(
+                dim,
+                shaft,
+                crate::steam::Output {
+                    direction,
+                    efficiency,
+                },
+            );
+        }
+    }
+
+    /// Shafts in front of engines that changed: `(position, powered)` for each that becomes a
+    /// powered shaft (`SteamEngineBlock.onPlace`: `PoweredShaftBlock.getEquivalent`) or a plain
+    /// one again (`PoweredShaftBlock.tick` when not `stillValid`).
+    pub fn shaft_changes(&mut self, dim: usize) -> Vec<([i32; 3], bool)> {
+        if self.dims[dim].engine_shafts.is_empty() {
+            return Vec::new();
+        }
+        let mut checks = std::mem::take(&mut self.dims[dim].engine_shafts);
+        checks.sort();
+        checks.dedup();
+        let mut out = Vec::new();
+        for p in checks {
+            let Some((block, info)) = self.dims[dim]
+                .states
+                .get(&p)
+                .and_then(|s| self.table.get(*s))
+            else {
+                continue;
+            };
+            let Some(axis) = info.axis else {
+                continue;
+            };
+            let valid = crate::steam::still_valid(p, axis, |q| self.engine_at(dim, q));
+            match block {
+                Block::Shaft if valid => out.push((p, true)),
+                Block::PoweredShaft if !valid => {
+                    let d = &mut self.dims[dim];
+                    d.shaft_engine.remove(&p);
+                    if let Some(s) = d.settings.get_mut(&p) {
+                        s.steam = crate::steam::Output::default();
+                    }
+                    out.push((p, false));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
     /// The column of `pos` must be saved again (its belt's items moved).
     pub fn mark_unsaved(&mut self, dim: usize, pos: [i32; 3]) {
         self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
@@ -2568,6 +2900,87 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "stopped after 10 ticks");
         assert!(!w.turn_crank(0, [1, 0, 0], false), "a shaft is no crank");
+        states::clear_range();
+    }
+
+    #[test]
+    fn an_engine_on_a_boiler_powers_the_shaft_in_front() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:fluid_tank",
+                vec![("bottom", "true"), ("top", "true")],
+            ),
+            (
+                "create:steam_engine",
+                vec![
+                    ("face", "wall"),
+                    ("facing", "south"),
+                    ("waterlogged", "false"),
+                ],
+            ),
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:powered_shaft", vec![("axis", "x")]),
+            ("create:blaze_burner", vec![("blaze", "seething")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (tank, engine, shaft) = ([0, 0, 0], [0, 0, 1], [0, 0, 3]);
+        w.block_changed(0, [0, -1, 0], 0, 14);
+        w.block_changed(0, tank, 0, 10);
+        w.block_changed(0, shaft, 0, 12);
+        // On the tank's south side, pointing south: its shaft two blocks on.
+        w.block_changed(0, engine, 0, 11);
+        assert_eq!(w.engine_at(0, engine), Some(crate::kinetics::Dir::South));
+        w.evaluate_boilers(0);
+        assert_eq!(w.dims[0].boilers[&tank].engines, vec![engine]);
+        assert_eq!(w.shaft_changes(0), vec![(shaft, true)]);
+        w.block_changed(0, shaft, 12, 13);
+        assert_eq!(w.take_heat_checks(0), vec![tank]);
+        w.set_boiler_heat(0, tank, &[2]);
+        assert!(w.take_heat_checks(0).is_empty());
+        w.tick(0, &mut Vec::new());
+        assert_eq!(
+            w.speed(0, shaft),
+            Some(0.0),
+            "a one-block tank is too small to boil"
+        );
+        assert_eq!(w.dims[0].shaft_engine.get(&shaft), Some(&engine));
+        // As a 2x2x2 tank, a seething burner and 20 mB a tick: level 2, full efficiency.
+        w.dims[0].boilers.get_mut(&tank).unwrap().size = 8;
+        assert_eq!(
+            w.fill_boiler(0, tank, crate::tank::Fluid::Water, 100),
+            Some(100)
+        );
+        assert_eq!(
+            w.fill_boiler(0, tank, crate::tank::Fluid::Lava, 100),
+            Some(0)
+        );
+        assert_eq!(
+            w.fill_boiler(0, [5, 0, 0], crate::tank::Fluid::Water, 1),
+            None
+        );
+        w.tick_boilers(0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft), Some(64.0));
+        // The burner goes out: the engine stops.
+        w.block_changed(0, [0, -1, 0], 14, 0);
+        assert_eq!(w.take_heat_checks(0), vec![tank]);
+        w.set_boiler_heat(0, tank, &[]);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft), Some(0.0));
+        w.set_boiler_heat(0, tank, &[2]);
+        // Broken: the boiler goes, the shaft is a plain one again.
+        w.block_changed(0, engine, 11, 0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft), Some(0.0));
+        w.evaluate_boilers(0);
+        assert!(w.dims[0].boilers.is_empty());
+        assert_eq!(w.shaft_changes(0), vec![(shaft, false)]);
+        assert!(w.dims[0].shaft_engine.is_empty());
         states::clear_range();
     }
 

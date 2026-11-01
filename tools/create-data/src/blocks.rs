@@ -271,11 +271,40 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
     let bools: &[&str] = &["false", "true"];
     let facing: &[&str] = &["up", "down", "north", "south", "west", "east"];
     let (template, shapes, own) = match b.name.as_str() {
-        "shaft" | "powered_shaft" => (
+        "shaft" => (
             "minecraft:iron_chain",
             Some(by_axis(&[SIX_VOXEL_POLE])),
             None,
         ),
+        // PoweredShaftBlock: AllShapes.EIGHT_VOXEL_POLE, stone's properties; put in place of a
+        // shaft by the steam engine two blocks behind it (the glue), no item of its own.
+        "powered_shaft" => (
+            "minecraft:iron_chain",
+            Some(by_axis(&[[4., 0., 4., 12., 16., 12.]])),
+            None,
+        ),
+        // SteamEngineBlock (FaceAttachedHorizontalDirectionalBlock): on the floor, a wall or the
+        // ceiling of a tank, copper's properties; its placement on a tank is the glue's. Content
+        // shapes select by one property: AllShapes.STEAM_ENGINE / STEAM_ENGINE_CEILING's base
+        // and column by `face` (their cross-piece turns with `facing`), a full block on a wall
+        // (STEAM_ENGINE_WALL turns with `facing`). Defaults first: FLOOR, NORTH.
+        "steam_engine" => {
+            let px = |b: &[Px]| -> Value {
+                json!(b.iter().map(|b| b.map(|v| v / 16.0)).collect::<Vec<_>>())
+            };
+            (
+                "minecraft:copper_block",
+                Some(json!({ "property": "face", "values": {
+                    "floor": px(&[[1., 0., 1., 15., 3., 15.], [3., 0., 3., 13., 15., 13.]]),
+                    "ceiling": px(&[[1., 13., 1., 15., 16., 15.], [3., 1., 3., 13., 16., 13.]]),
+                    "wall": px(&[[0., 0., 0., 16., 16., 16.]]) } })),
+                own(&[
+                    ("face", &["floor", "wall", "ceiling"]),
+                    ("facing", &["north", "south", "west", "east"]),
+                    ("waterlogged", bools),
+                ]),
+            )
+        }
         "cogwheel" => (
             "minecraft:iron_chain",
             Some(by_axis(&[SMALL_GEAR, SIX_VOXEL_POLE])),
@@ -848,7 +877,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         animated,
         item: !matches!(
             b.name.as_str(),
-            "belt" | "crushing_wheel_controller" | "minecart_anchor"
+            "belt" | "crushing_wheel_controller" | "minecart_anchor" | "powered_shaft"
         ),
     })
 }

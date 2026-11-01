@@ -1,0 +1,78 @@
+{
+  "template": "minecraft:copper_block",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:copper_block"
+  },
+  "item": true,
+  "shapes": {
+    "property": "face",
+    "values": {
+      "floor": [
+        [
+          0.0625,
+          0.0,
+          0.0625,
+          0.9375,
+          0.1875,
+          0.9375
+        ],
+        [
+          0.1875,
+          0.0,
+          0.1875,
+          0.8125,
+          0.9375,
+          0.8125
+        ]
+      ],
+      "ceiling": [
+        [
+          0.0625,
+          0.8125,
+          0.0625,
+          0.9375,
+          1.0,
+          0.9375
+        ],
+        [
+          0.1875,
+          0.0625,
+          0.1875,
+          0.8125,
+          1.0,
+          0.8125
+        ]
+      ],
+      "wall": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "face": [
+      "floor",
+      "wall",
+      "ceiling"
+    ],
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}

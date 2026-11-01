@@ -309,6 +309,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_burners(game, dim);
     tick_mixers(game, dim);
     tick_pipes(game, dimension, dim);
+    tick_boilers(game, dimension, dim);
     tick_pistons(game, dimension, dim);
     tick_trains(game, dimension, dim);
     sync_curves(game, dimension, dim);
@@ -2998,9 +2999,12 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
         .filter(|c| c.0 == game.world.game_time)
         .and_then(|c| Dir::from_offset(c.1))
         .unwrap_or(Dir::Up);
-    if with_world(|w| w.table.get(state.0).map(|(b, _)| b)).flatten()
-        == Some(create_engine::Block::FluidPipe)
-    {
+    let block = with_world(|w| w.table.get(state.0).map(|(b, _)| b)).flatten();
+    if block == Some(create_engine::Block::SteamEngine) {
+        place_engine(game, pos, state);
+        return;
+    }
+    if block == Some(create_engine::Block::FluidPipe) {
         // FluidPipeBlock.getStateForPlacement: straight toward the player's view when nothing is
         // around.
         let looking = create_engine::place::ordered_by_nearest(game.yaw, game.pitch)[0];
