@@ -1,0 +1,107 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:netherite_block"
+  },
+  "item": true,
+  "shapes": {
+    "property": "facing",
+    "values": {
+      "north": [
+        [
+          0.0,
+          0.0,
+          0.375,
+          1.0,
+          1.0,
+          1.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.25,
+          1.0,
+          0.125,
+          1.0
+        ]
+      ],
+      "south": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          0.625
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.125,
+          0.75
+        ]
+      ],
+      "west": [
+        [
+          0.375,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        [
+          0.25,
+          0.0,
+          0.0,
+          1.0,
+          0.125,
+          1.0
+        ]
+      ],
+      "east": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.625,
+          1.0,
+          1.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.75,
+          0.125,
+          1.0
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "open": [
+      "false",
+      "true"
+    ],
+    "virtual": [
+      "false",
+      "true"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}

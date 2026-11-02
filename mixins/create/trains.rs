@@ -1,6 +1,9 @@
-// Create's trains in the game: stations, tracks, the trains running between them over the track
-// graph and their save data, over the engine's `trains` and `network`. A sibling of the `create`
-// module (`runtime.rs`).
+// Create's trains in the game: stations, tracks, signals, the trains running between them over
+// the track graph and their save data, over the engine's `trains` and `network`. A sibling of
+// the `create` module (`runtime.rs`).
+//
+// Riding is not ported: Horizon has no entity a player can mount (`Entity.startRiding`, gap 3),
+// so a train's controls can't be taken by a player; `/create_debug drive` holds them instead.
 use super::Game;
 use super::create::*;
 use super::create_contraptions::*;
@@ -12,6 +15,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 pub(super) const TRAIN_CHANNEL: &str = create_engine::trains::CHANNEL;
+pub(super) const SIGNAL_CHANNEL: &str = create_engine::trains::SIGNAL_CHANNEL;
 
 /// The graph as the world has it now (built again only if track changed).
 fn railway_ready(dim: usize) {
@@ -21,13 +25,43 @@ fn railway_ready(dim: usize) {
     });
 }
 
-/// The station's assembly (`StationBlockEntity.assemble` / `disassemble` from its screen):
-/// a train standing at it goes back into the world (turned as it stands, to the nearest
-/// quarter); else the bogeys on its track (a block above it) and what sticks to them become a
-/// train, standing on the track graph.
-pub(super) fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
+/// The size of the bogey whose block state is `state`, if it is one.
+fn bogey_size(state: BlockStateId) -> Option<create_engine::trains::BogeySize> {
+    use create_engine::trains::BogeySize;
+    match with_world(|w| w.table.get(state.0).map(|(b, _)| b)).flatten()? {
+        create_engine::Block::SmallBogey => Some(BogeySize::Small),
+        create_engine::Block::LargeBogey => Some(BogeySize::Large),
+        _ => None,
+    }
+}
+
+/// Tells the acting player why the station can't assemble (`AssemblyException`, shown on the
+/// station's screen in Create), and gives the line back.
+fn assembly_failed(game: &mut Game<'_>, e: create_engine::trains::AssemblyError) -> String {
+    let key = format!("create.train_assembly.{}", e.key());
+    let args: Vec<horizon_client::text::Text> = e
+        .args()
+        .into_iter()
+        .map(horizon_client::text::Text::literal)
+        .collect();
+    if let Some(p) = game.native_acting_player() {
+        game.native_action_bar(p.uuid, horizon_client::text::Text::translate(&key, &args));
+    }
+    format!("can't assemble: {key} {}", e.args().join(" "))
+}
+
+/// The station's assembly (`StationBlockEntity.assemble` / `disassemble` from its screen): a
+/// train standing at it goes back into the world, each carriage where it stands (turned to its
+/// quarter; `canDisassemble`: only level and square to the grid); else the bogeys along its
+/// track and what each carries become carriages of a train on the track graph, by Create's
+/// rules. The station's track runs on toward its assembly direction: the way whose first track
+/// block has a bogey on it (Create's frontmost bogey at the station; the direction Create takes
+/// from the click that targets the track). A line for the command.
+pub(super) fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) -> Option<String> {
     use create_engine::schedule::Runtime;
-    use create_engine::trains::{Train, TrainOnTrack};
+    use create_engine::trains::{
+        AssemblyError, MAX_ASSEMBLY_LENGTH, MAX_BOGEY_COUNT, Structure, Train, TrainOnTrack, layout,
+    };
     railway_ready(dim);
     let dimension = game.dim.id().to_owned();
     let stopped = with_world(|w| {
@@ -38,125 +72,176 @@ pub(super) fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
                 && t.train.speed == 0.0
                 && t.train.at_station == Some(pos)
         })?;
+        let t = &r.trains[i];
+        let g = &r.net.graph;
+        let poses: Vec<_> = (0..t.train.carriages.len())
+            .map(|c| t.train.carriage_pose(g, c))
+            .collect();
+        // `canDisassemble`.
+        let square = poses.iter().all(|(_, front)| {
+            let (yaw, pitch) = create_engine::trains::yaw_pitch(*front, t.heading);
+            pitch.abs() < 1.0e-3 && ((yaw.rem_euclid(90.0) + 1.0e-3) % 90.0) < 2.0e-3
+        });
+        if !square {
+            return Some(Err(()));
+        }
         let t = r.trains.remove(i);
-        let (pivot, front) = t.train.pose(&r.net.graph, t.pivot);
-        Some((t, pivot, front))
+        Some(Ok((t, poses)))
     })
     .flatten();
-    if let Some((t, pivot, front)) = stopped {
-        let (yaw, _) = create_engine::trains::yaw_pitch(front, t.heading);
-        let quarter = ((yaw / 90.0).round() as i32 * 90).rem_euclid(360);
-        for (o, s) in &t.blocks {
-            // The block's centre from the pivot (the middle of the track under the bogey), turned
-            // about it; its height from the track's top.
-            let r = create_engine::contraption::rotate([o[0], 0, o[2]], quarter, Axis::Y);
-            let p = [
-                (pivot[0] + f64::from(r[0])).floor() as i32,
-                (pivot[1] + f64::from(o[1]) + 1.0).round() as i32,
-                (pivot[2] + f64::from(r[2])).floor() as i32,
-            ];
-            let state = turned_state(game, *s, quarter, Axis::Y);
-            game.native_set_block(
-                &dimension,
-                p,
-                BlockStateId(state),
-                super::native_hooks::flags::UPDATE_ALL,
-            );
+    match stopped {
+        Some(Err(())) => return Some("the train can't be disassembled here".into()),
+        Some(Ok((t, poses))) => {
+            for (car, (pivot, front)) in t.cars.iter().zip(poses) {
+                let (yaw, _) = create_engine::trains::yaw_pitch(front, t.heading);
+                let quarter = ((yaw / 90.0).round() as i32 * 90).rem_euclid(360);
+                for (o, s) in car {
+                    // The block's centre from the pivot (the middle of the track under the
+                    // carriage's leading bogey), turned about it; its height from the track.
+                    let r = create_engine::contraption::rotate([o[0], 0, o[2]], quarter, Axis::Y);
+                    let p = [
+                        (pivot[0] + f64::from(r[0])).floor() as i32,
+                        (pivot[1] + f64::from(o[1]) + 1.0).round() as i32,
+                        (pivot[2] + f64::from(r[2])).floor() as i32,
+                    ];
+                    let state = turned_state(game, *s, quarter, Axis::Y);
+                    game.native_set_block(
+                        &dimension,
+                        p,
+                        BlockStateId(state),
+                        super::native_hooks::flags::UPDATE_ALL,
+                    );
+                }
+            }
+            game.native_mark_chunk_unsaved(&dimension, [t.column.0, t.column.1]);
+            send_train_clear(game, &dimension, t.id);
+            return Some(format!("train {} disassembled", t.id));
         }
-        game.native_mark_chunk_unsaved(&dimension, [t.column.0, t.column.1]);
-        send_train_clear(game, &dimension, t.id);
-        return;
+        None => {}
     }
-    // The straight track the station looks at, as far as it runs straight.
-    let Some((target, shape, tracks)) = with_world(|w| {
+    // The straight track the station looks at, and which way along it the train is.
+    let (target, shape) = with_world(|w| {
         let r = &w.dims[dim].railway;
         let target = create_engine::network::target_track(&r.tracks, pos)?;
-        let shape = r.tracks[&target];
-        let step = if shape == create_engine::track::TrackShape::Xo {
-            [1, 0, 0]
-        } else {
-            [0, 0, 1]
-        };
-        let mut line = vec![target];
-        for sign in [-1, 1] {
-            let mut p = target;
-            loop {
-                p = [p[0] + sign * step[0], p[1], p[2] + sign * step[2]];
-                if r.tracks.get(&p) != Some(&shape) {
-                    break;
-                }
-                line.push(p);
-            }
-        }
-        line.sort_unstable();
-        Some((target, shape, line))
+        Some((target, r.tracks[&target]))
     })
-    .flatten() else {
-        return;
+    .flatten()?;
+    let along = if shape == create_engine::track::TrackShape::Xo {
+        [1, 0, 0]
+    } else {
+        [0, 0, 1]
     };
-    let _ = target;
-    // Bogeys along the track, one above it, lowest first.
-    let bogeys: Vec<[i32; 3]> = tracks
-        .iter()
-        .map(|t| [t[0], t[1] + 1, t[2]])
-        .filter(|p| {
-            let s = game.world.block(p[0], p[1], p[2]);
-            matches!(
-                with_world(|w| w.table.get(s.0).map(|(b, _)| b)).flatten(),
-                Some(create_engine::Block::SmallBogey | create_engine::Block::LargeBogey)
-            )
-        })
-        .collect();
-    let Some(&origin) = bogeys.first() else {
-        return;
-    };
-    // The bogeys and what is stuck to them (slime, honey; glue is not ported), not the track.
-    let mut blocks: Vec<([i32; 3], u32)> = Vec::new();
-    for b in &bogeys {
-        // Down is the track, left out: only what sticks is taken.
-        let Ok(found) =
-            create_engine::piston::gather(*b, Dir::Down, &tracks, |p| contraption_found(game, p))
-        else {
-            return;
-        };
-        for (o, s) in found {
-            let l = [
-                b[0] + o[0] - origin[0],
-                b[1] + o[1] - origin[1],
-                b[2] + o[2] - origin[2],
-            ];
-            if !blocks.iter().any(|(x, _)| *x == l) {
-                blocks.push((l, s));
-            }
+    let bogey_at =
+        |game: &Game<'_>, p: [i32; 3]| bogey_size(game.world.block(p[0], p[1] + 1, p[2]));
+    let direction = [1, -1]
+        .into_iter()
+        .map(|s| [along[0] * s, 0, along[2] * s])
+        .find(|d| bogey_at(game, [target[0] + d[0], target[1], target[2] + d[2]]).is_some())
+        .unwrap_or(along);
+    // `refreshAssemblyInfo`: the track on from the station's, while it runs the same way; a
+    // bogey above it at each place counts.
+    let mut run = Vec::new();
+    let mut found: Vec<(i32, [i32; 3], create_engine::trains::BogeySize)> = Vec::new();
+    for i in 0..MAX_ASSEMBLY_LENGTH - 1 {
+        let p = [
+            target[0] + direction[0] * (i + 1),
+            target[1],
+            target[2] + direction[2] * (i + 1),
+        ];
+        if with_world(|w| w.dims[dim].railway.tracks.get(&p) != Some(&shape)) != Some(false) {
+            break;
+        }
+        run.push(p);
+        if found.len() < MAX_BOGEY_COUNT
+            && let Some(size) = bogey_at(game, p)
+        {
+            found.push((i, [p[0], p[1] + 1, p[2]], size));
         }
     }
-    // Its front is the far end along the track's axis: the bogeys front first.
-    let heading = if shape == create_engine::track::TrackShape::Xo {
-        [1, 0]
-    } else {
-        [0, 1]
+    let locations: Vec<i32> = found.iter().map(|b| b.0).collect();
+    let dir_name = match direction {
+        [1, _, 0] => "east",
+        [-1, _, 0] => "west",
+        [0, _, 1] => "south",
+        _ => "north",
     };
-    let front = [f64::from(heading[0]), 0.0, f64::from(heading[1])];
-    let under: Vec<[i32; 3]> = bogeys
+    // Each carriage's structure from its first bogey (`CarriageContraption.assemble`): what
+    // sticks to it, not the track.
+    let mut gathered: HashMap<usize, Vec<([i32; 3], u32)>> = HashMap::new();
+    let mut refused = false;
+    let laid = layout(&locations, |i| {
+        let b = found[i].1;
+        let Ok(blocks) =
+            create_engine::piston::gather(b, Dir::Down, &run, |p| contraption_found(game, p))
+        else {
+            refused = true;
+            return Structure::default();
+        };
+        let registry = game.pack.assets.registry;
+        let mut s = Structure {
+            blocks: blocks.len(),
+            ..Structure::default()
+        };
+        for (o, state) in &blocks {
+            let p = [b[0] + o[0], b[1] + o[1], b[2] + o[2]];
+            if let Some(k) = found.iter().find(|f| f.1 == p) {
+                s.bogeys.push(k.0);
+            }
+            // `CarriageContraption.capture`: train controls by their facing.
+            if let Some(st) = registry.state(BlockStateId(*state))
+                && st.name == "create:controls"
+                && let Some(f) = st.properties.get("facing")
+            {
+                let across = match direction[0] {
+                    0 => matches!(f.as_str(), "east" | "west"),
+                    _ => matches!(f.as_str(), "north" | "south"),
+                };
+                if across {
+                    s.sideways = true;
+                } else if f == dir_name {
+                    s.forward = true;
+                } else {
+                    s.backward = true;
+                }
+            }
+        }
+        gathered.insert(i, blocks);
+        s
+    });
+    let laid = match laid {
+        Ok(_) if refused => return Some("can't assemble: something on it can't move".into()),
+        Ok(l) => l,
+        Err(e) => return Some(assembly_failed(game, e)),
+    };
+    let sizes: Vec<_> = found.iter().map(|b| b.2).collect();
+    let dir = [f64::from(direction[0]), 0.0, f64::from(direction[2])];
+    // The end of the station's track block toward the assembly direction.
+    let origin = [
+        f64::from(target[0]) + 0.5 + dir[0] * 0.5,
+        f64::from(target[1]),
+        f64::from(target[2]) + 0.5 + dir[2] * 0.5,
+    ];
+    let cars: Vec<Vec<([i32; 3], u32)>> = laid
+        .carriages
         .iter()
-        .rev()
-        .map(|b| [b[0], b[1] - 1, b[2]])
+        .map(|c| gathered.remove(&c.first).unwrap_or_default())
         .collect();
-    let Some(id) = with_world(|w| {
+    let heading = [-direction[0], -direction[2]];
+    let origin_block = found.first().map_or(target, |f| f.1);
+    let made = with_world(|w| {
         let r = &mut w.dims[dim].railway;
-        let mut train = Train::on_bogeys(&r.net, &under, front)?;
+        let mut train = Train::assembled(&r.net, origin, dir, &laid, &sizes)?;
         train.at_station = Some(pos);
         let id = r.next_id();
         let mut t = TrainOnTrack {
             id,
             train,
-            blocks: blocks.clone(),
-            pivot: under.len() - 1,
+            cars: cars.clone(),
             heading,
             schedule: None,
             runtime: Runtime::new(),
             idle: 0,
-            column: (origin[0] >> 4, origin[2] >> 4),
+            column: (origin_block[0] >> 4, origin_block[2] >> 4),
             sent_tick: 0,
             sent_edge: usize::MAX,
             fresh: true,
@@ -165,16 +250,25 @@ pub(super) fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
         r.trains.push(t);
         Some(id)
     })
-    .flatten() else {
-        return;
+    .flatten();
+    let Some(id) = made else {
+        return Some(assembly_failed(game, AssemblyError::NoBogeys));
     };
     let air = BlockStateId(0);
-    for (l, _) in &blocks {
-        let p = [origin[0] + l[0], origin[1] + l[1], origin[2] + l[2]];
-        game.native_set_block(&dimension, p, air, super::native_hooks::flags::UPDATE_ALL);
+    for (c, car) in laid.carriages.iter().zip(&cars) {
+        let b = found[c.first].1;
+        for (o, _) in car {
+            let p = [b[0] + o[0], b[1] + o[1], b[2] + o[2]];
+            game.native_set_block(&dimension, p, air, super::native_hooks::flags::UPDATE_ALL);
+            game.native_mark_chunk_unsaved(&dimension, [p[0] >> 4, p[2] >> 4]);
+        }
     }
-    game.native_mark_chunk_unsaved(&dimension, [origin[0] >> 4, origin[2] >> 4]);
     send_trains(game, dim, &[id], true);
+    Some(format!(
+        "train {id} assembled: {} carriages on {} bogeys",
+        laid.carriages.len(),
+        sizes.len()
+    ))
 }
 
 /// The train nearest `pos` that stands on the graph, if any.
@@ -199,7 +293,7 @@ fn nearest_train(dim: usize, pos: [i32; 3], at_station_first: bool) -> Option<us
             .enumerate()
             .filter(|(_, t)| t.train.bound)
             .map(|(i, t)| {
-                let (p, _) = t.train.pose(&r.net.graph, t.pivot);
+                let p = t.position(&r.net);
                 let d = (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2);
                 (i, d)
             })
@@ -227,7 +321,7 @@ pub(super) fn send_train(game: &mut Game<'_>, dim: usize, station: [i32; 3]) -> 
             .enumerate()
             .filter(|(_, t)| t.train.bound)
             .map(|(i, t)| {
-                let (p, _) = t.train.pose(&r.net.graph, t.pivot);
+                let p = t.position(&r.net);
                 (i, (p[0] - c[0]).powi(2) + (p[2] - c[2]).powi(2))
             })
             .collect();
@@ -282,6 +376,7 @@ pub(super) fn schedule_train(dim: usize, station: [i32; 3], entries: &str) -> St
             cyclic: true,
         });
         t.runtime = Runtime::new();
+        t.train.manual = None;
         format!("train {} runs {}", t.id, names.join(" → "))
     })
     .unwrap_or_default()
@@ -302,6 +397,83 @@ pub(super) fn name_station(dim: usize, station: [i32; 3], name: &str) -> String 
         }
     })
     .unwrap_or_default()
+}
+
+/// `/create_debug drive <train> <throttle> [left|right|straight]`: holds train `<train>`'s
+/// controls as a player riding it would (`ControlsHandler` sending `ControlsInputPacket`,
+/// `CarriageContraptionEntity.control`): the throttle from -1 (back, at a quarter speed) to 1
+/// (forward), 0 to let go; the steering at junctions. Standing in for riding the train, which
+/// Horizon can't do yet (`Entity.startRiding`).
+pub(super) fn train_command(game: &mut Game<'_>, command: &str) -> bool {
+    use create_engine::trains::Manual;
+    let usage = "usage: create_debug drive <train> <throttle -1..1> [left|right|straight]";
+    if let Some(rest) = command.strip_prefix("create_debug assemble ") {
+        let dim = game
+            .native_acting_player()
+            .and_then(|p| dimension_index(&p.dimension))
+            .unwrap_or(0);
+        let here = game.native_acting_player().map(|p| p.position);
+        let parts: Vec<i32> = rest
+            .split_whitespace()
+            .enumerate()
+            .filter_map(|(n, t)| match t.strip_prefix('~') {
+                Some(off) => {
+                    Some(here?.get(n % 3)?.floor() as i32 + off.parse::<i32>().unwrap_or(0))
+                }
+                None => t.parse().ok(),
+            })
+            .collect();
+        let line = match parts.as_slice() {
+            [x, y, z] => use_station(game, dim, [*x, *y, *z])
+                .unwrap_or_else(|| "no station with track beside it there".into()),
+            _ => "usage: create_debug assemble <x> <y> <z>".into(),
+        };
+        game.native_feedback(horizon_client::text::Text::literal(line));
+        return true;
+    }
+    let Some(rest) = command.strip_prefix("create_debug drive ") else {
+        return false;
+    };
+    let dim = game
+        .native_acting_player()
+        .and_then(|p| dimension_index(&p.dimension))
+        .unwrap_or(0);
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    let (Some(id), Some(throttle)) = (
+        words.first().and_then(|w| w.parse::<u32>().ok()),
+        words.get(1).and_then(|w| w.parse::<f64>().ok()),
+    ) else {
+        game.native_feedback(horizon_client::text::Text::literal(usage));
+        return true;
+    };
+    let steer = match words.get(2).copied() {
+        None | Some("straight" | "none" | "0") => 0,
+        Some("left" | "1") => 1,
+        Some("right" | "-1") => -1,
+        Some(_) => {
+            game.native_feedback(horizon_client::text::Text::literal(usage));
+            return true;
+        }
+    };
+    let throttle = if throttle.is_finite() {
+        throttle.clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
+    let done = with_world(|w| {
+        w.dims[dim]
+            .railway
+            .drive(id, Manual { throttle, steer })
+            .is_some()
+    }) == Some(true);
+    let line = if done {
+        send_trains(game, dim, &[id], false);
+        format!("train {id}: throttle {throttle}, steering {steer}")
+    } else {
+        format!("no train {id}")
+    };
+    game.native_feedback(horizon_client::text::Text::literal(line));
+    true
 }
 
 /// Sends trains `ids` to the players in this dimension as they are (with their blocks when
@@ -343,25 +515,73 @@ pub(super) fn send_train_clear(game: &mut Game<'_>, dimension: &str, id: u32) {
     }
 }
 
+/// Signal lights for clients: each block, then 0 dark, 1 red, 2 gone.
+pub(super) fn send_signal_lights(
+    game: &mut Game<'_>,
+    players: &[u128],
+    lights: &[([i32; 3], Option<bool>)],
+) {
+    if lights.is_empty() || players.is_empty() {
+        return;
+    }
+    let mut data = Vec::with_capacity(lights.len() * 13);
+    for (p, red) in lights {
+        for v in p {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        data.push(match red {
+            Some(false) => 0,
+            Some(true) => 1,
+            None => 2,
+        });
+    }
+    for &p in players {
+        let _ = game.native_net_send_to_player(p, SIGNAL_CHANNEL, &data);
+    }
+}
+
+/// Every signal light in a dimension, for a player who joins it.
+pub(super) fn sync_signal_lights(game: &mut Game<'_>, player: u128, dim: usize) {
+    let lights: Vec<([i32; 3], Option<bool>)> = with_world(|w| {
+        let mut v: Vec<_> = w.dims[dim]
+            .railway
+            .lights
+            .iter()
+            .map(|(p, r)| (*p, Some(*r)))
+            .collect();
+        v.sort();
+        v
+    })
+    .unwrap_or_default();
+    send_signal_lights(game, &[player], &lights);
+}
+
 thread_local! {
     /// Scratch for a tick's train events, kept to not allocate.
     static EVENTS: RefCell<Vec<create_engine::trains::Event>> = const { RefCell::new(Vec::new()) };
 }
 
-/// The trains (`Train.tick`, `Navigation.tick`, `ScheduleRuntime.tick`): nothing without
-/// trains; the graph is built again first if track changed. Clients are told of a train when it
-/// starts, stops or arrives, every few ticks on a curve, as it passes onto another edge, and every
-/// ten ticks while its speed changes; trains found on the graph again (loaded) are sent whole.
+/// The trains (`Train.tick`, `Navigation.tick`, `ScheduleRuntime.tick`) and signals
+/// (`SignalBoundary.tickState`): nothing without trains unless track or a signal changed; the
+/// graph is built again first if track changed. Clients are told of a train when it starts,
+/// stops or arrives, every few ticks on a curve, as it passes onto another edge, and every ten
+/// ticks while its speed changes; trains found on the graph again (loaded) are sent whole;
+/// signal lights only when one turns red or back.
 pub(super) fn tick_trains(game: &mut Game<'_>, dimension: &str, dim: usize) {
-    if with_world(|w| w.dims[dim].railway.trains.is_empty()) != Some(false) {
+    if with_world(|w| {
+        let d = &w.dims[dim];
+        d.railway.idle(&d.track_curves)
+    }) != Some(false)
+    {
         return;
     }
     let tick = game.world.game_time.max(0) as u64;
     let mut events = EVENTS.take();
-    let (due, fresh) = with_world(|w| {
+    let (due, fresh, lights) = with_world(|w| {
         let d = &mut w.dims[dim];
         d.railway.ensure(&d.track_curves);
         d.railway.tick(&mut events);
+        let lights = std::mem::take(&mut d.railway.lights_changed);
         let r = &d.railway;
         let due: Vec<u32> = events
             .iter()
@@ -379,7 +599,7 @@ pub(super) fn tick_trains(game: &mut Game<'_>, dimension: &str, dim: usize) {
             .filter(|t| t.fresh && t.train.bound)
             .map(|t| t.id)
             .collect();
-        (due, fresh)
+        (due, fresh, lights)
     })
     .unwrap_or_default();
     // Saved with the column it stands in: the one it left and the one it is in save again.
@@ -396,133 +616,365 @@ pub(super) fn tick_trains(game: &mut Game<'_>, dimension: &str, dim: usize) {
     if !due.is_empty() {
         send_trains(game, dim, &due, false);
     }
+    if !lights.is_empty() {
+        let players = players_in(game, dimension);
+        send_signal_lights(game, &players, &lights);
+    }
 }
 
-/// A train a client draws: its blocks (as assembled, from its pivot bogey), the way it faced
-/// then, and its part models by pitch (baked when a new pitch is needed).
+/// Signal lights on the client (`SignalRenderer`): Create's `indicator_on` partial while a
+/// signal is red, `indicator_off` otherwise, as a still part set only when it changes.
+pub(super) fn signals_from_server(game: &mut Game<'_>, d: &[u8]) {
+    let registry = game.pack.assets.registry;
+    let part = |name: &str| {
+        let s = registry.default_state(name)?;
+        let mut st = registry.state(s)?.clone();
+        st.properties.insert("facing".to_owned(), "up".to_owned());
+        registry.id(&st)
+    };
+    let (Some(on), Some(off)) = (
+        part("create:part_signal_indicator_on"),
+        part("create:part_signal_indicator_off"),
+    ) else {
+        return;
+    };
+    for r in d.chunks_exact(13) {
+        let i = |k: usize| i32::from_le_bytes([r[k], r[k + 1], r[k + 2], r[k + 3]]);
+        let pos = [i(0), i(4), i(8)];
+        let key = depot_key(pos, 252, 0);
+        let state = match r[12] {
+            0 => off,
+            1 => on,
+            _ => {
+                game.native_part_clear(key);
+                continue;
+            }
+        };
+        if let Some(model) = game.native_part_model(state) {
+            game.native_part_set(key, model, pos, 0, 0.0, 0.0);
+        }
+    }
+}
+
+/// A train a client draws: each carriage's blocks (as assembled, from its leading bogey), the
+/// way it faced then, its part models by carriage and pitch (baked when a new pitch is needed),
+/// and each bogey's wheels as last set (their axis, rpm and phase), so they turn on smoothly.
 struct ClientTrain {
-    blocks: Vec<([i32; 3], u32)>,
+    cars: Vec<Vec<([i32; 3], u32)>>,
     heading: [i32; 2],
-    models: Vec<(i32, u32)>,
+    models: Vec<(usize, i32, u32)>,
+    bogeys: usize,
+    wheels: Vec<Option<(u8, f32, f32)>>,
 }
 
 thread_local! {
     /// Trains a client draws, by id.
     static TRAINS: RefCell<HashMap<u32, ClientTrain>> = RefCell::new(HashMap::new());
+    /// Bogey frames with their wheels (drawn on curves, where the wheels don't turn), by size
+    /// and pitch bucket: baked once.
+    static BOGEY_MODELS: RefCell<HashMap<(bool, i32, [i32; 2]), u32>> = RefCell::new(HashMap::new());
 }
 
 /// Pitch steps a client bakes a train's model at, degrees.
 const PITCH_STEP: f32 = 3.0;
 
-/// A train on the client (`CarriageContraptionEntity`'s motion): one part model, tilted to its
-/// pitch in the model, turned to its yaw about its pivot (the track under its pivot bogey) and
-/// gliding at its velocity while turning at its yaw rate, on the GPU until the next message.
+/// A train's part keys: carriage `c`'s, and bogey `b`'s frame (`k` 0) and wheels (1, 2).
+fn car_key(id: u32, c: usize) -> u64 {
+    depot_key([id as i32, i32::MIN, c as i32], 222, 0)
+}
+fn bogey_key(id: u32, b: usize, k: u8) -> u64 {
+    depot_key([id as i32, i32::MIN, b as i32], 250, k)
+}
+
+fn clear_client_train(game: &mut Game<'_>, id: u32, old: ClientTrain) {
+    for c in 0..old.cars.len() {
+        game.native_part_clear(car_key(id, c));
+    }
+    for b in 0..old.bogeys {
+        for k in 0..3 {
+            game.native_part_clear(bogey_key(id, b, k));
+        }
+    }
+    for (_, _, model) in old.models {
+        game.native_part_model_free(model);
+    }
+}
+
+/// The part's block and its offset from the block's centre, for a point in the world.
+fn placed(at: [f64; 3], now: f32) -> ([i32; 3], [f32; 4]) {
+    let block: [i32; 3] = std::array::from_fn(|k| at[k].floor() as i32);
+    (
+        block,
+        [
+            (at[0] - f64::from(block[0]) - 0.5) as f32,
+            (at[1] - f64::from(block[1]) - 0.5) as f32,
+            (at[2] - f64::from(block[2]) - 0.5) as f32,
+            now,
+        ],
+    )
+}
+
+/// A train on the client (`CarriageContraptionEntity`'s motion, `CarriageContraptionVisual`):
+/// each carriage one part model, tilted to its pitch in the model, turned to its yaw about its
+/// pivot (the track under its leading bogey) and gliding at its velocity while turning at its
+/// yaw rate, on the GPU until the next message; each bogey its frame (Create's partial for its
+/// size) the same way about its anchor, and its wheels (`StandardBogeyVisual`) turning about
+/// their axle as they roll while the bogey runs square to the grid (one turning axis per part:
+/// on a curve they ride with the frame, still).
 pub(super) fn trains_from_server(game: &mut Game<'_>, d: &[u8]) {
-    use create_engine::trains::Motion;
+    use create_engine::trains::{BogeySize, Motion};
     let m = match Motion::decode(d) {
         Ok(m) => m,
         Err(id) => {
             if let Some(id) = id
                 && let Some(old) = TRAINS.with_borrow_mut(|t| t.remove(&id))
             {
-                game.native_part_clear(depot_key([id as i32, 0, 0], 222, 0));
-                for (_, model) in old.models {
-                    game.native_part_model_free(model);
-                }
+                clear_client_train(game, id, old);
             }
             return;
         }
     };
-    let key = depot_key([m.id as i32, 0, 0], 222, 0);
-    if let Some(blocks) = m.blocks {
+    if let Some(cars) = m.blocks.clone() {
         let old = TRAINS.with_borrow_mut(|t| {
             t.insert(
                 m.id,
                 ClientTrain {
-                    blocks,
+                    cars,
                     heading: m.heading,
                     models: Vec::new(),
+                    bogeys: m.bogeys.len(),
+                    wheels: vec![None; m.bogeys.len()],
                 },
             )
         });
         if let Some(old) = old {
-            for (_, model) in old.models {
-                game.native_part_model_free(model);
-            }
+            clear_client_train(game, m.id, old);
         }
     }
-    let bucket = (m.pitch / PITCH_STEP).round() as i32;
-    let Some(known) = TRAINS.with_borrow(|t| {
-        t.get(&m.id).map(|c| {
-            (
-                c.models.iter().find(|(b, _)| *b == bucket).map(|(_, x)| *x),
-                c.heading,
-            )
-        })
-    }) else {
+    let Some(heading) = TRAINS.with_borrow(|t| t.get(&m.id).map(|c| c.heading)) else {
         return;
     };
-    let model = match known.0 {
-        Some(model) => model,
-        None => {
-            // The model about its pivot at the centre of its part block: each block's corner
-            // half a block back and up one from the track, tilted about the train's side.
-            let h = glam::Vec3::new(known.1[0] as f32, 0.0, known.1[1] as f32);
-            let side = h.cross(glam::Vec3::Y).normalize_or(glam::Vec3::X);
-            let tilt = glam::Mat4::from_translation(glam::Vec3::splat(0.5))
-                * glam::Mat4::from_axis_angle(side, (bucket as f32 * PITCH_STEP).to_radians())
-                * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
-            let blocks: Vec<(BlockStateId, glam::Mat4)> = TRAINS.with_borrow(|t| {
-                t.get(&m.id).map_or_else(Vec::new, |c| {
-                    c.blocks
-                        .iter()
-                        .map(|(o, s)| {
-                            let at = glam::Vec3::new(o[0] as f32, o[1] as f32 + 1.5, o[2] as f32);
-                            (BlockStateId(*s), tilt * glam::Mat4::from_translation(at))
+    let now = game.native_parts_seconds();
+    let h = glam::Vec3::new(heading[0] as f32, 0.0, heading[1] as f32);
+    let side = h.cross(glam::Vec3::Y).normalize_or(glam::Vec3::X);
+    let tilt = |pitch: f32| glam::Mat4::from_axis_angle(side, pitch.to_radians());
+    for (c, pose) in m.cars.iter().enumerate() {
+        let bucket = (pose.pitch / PITCH_STEP).round() as i32;
+        let known = TRAINS.with_borrow(|t| {
+            t.get(&m.id).and_then(|ct| {
+                ct.models
+                    .iter()
+                    .find(|(k, b, _)| *k == c && *b == bucket)
+                    .map(|x| x.2)
+            })
+        });
+        let model = match known {
+            Some(model) => model,
+            None => {
+                // The model about its pivot at the centre of its part block: each block's corner
+                // half a block back and up one from the track, tilted about the train's side.
+                let pose_m = glam::Mat4::from_translation(glam::Vec3::splat(0.5))
+                    * tilt(bucket as f32 * PITCH_STEP)
+                    * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
+                let blocks: Vec<(BlockStateId, glam::Mat4)> = TRAINS.with_borrow(|t| {
+                    t.get(&m.id)
+                        .and_then(|ct| ct.cars.get(c))
+                        .map_or_else(Vec::new, |car| {
+                            car.iter()
+                                .map(|(o, s)| {
+                                    let at = glam::Vec3::new(
+                                        o[0] as f32,
+                                        o[1] as f32 + 1.5,
+                                        o[2] as f32,
+                                    );
+                                    (BlockStateId(*s), pose_m * glam::Mat4::from_translation(at))
+                                })
+                                .collect()
                         })
-                        .collect()
-                })
-            });
-            let Some(model) = game.native_part_model_compound(&blocks) else {
-                return;
-            };
+                });
+                let Some(model) = game.native_part_model_compound(&blocks) else {
+                    continue;
+                };
+                TRAINS.with_borrow_mut(|t| {
+                    if let Some(ct) = t.get_mut(&m.id) {
+                        ct.models.push((c, bucket, model));
+                    }
+                });
+                model
+            }
+        };
+        let (block, offset) = placed(pose.at, now);
+        // The yaw turns on from `yaw` now at `yaw_rate`: the part's phase is its angle at time 0.
+        let phase = (pose.yaw - pose.yaw_rate * now).rem_euclid(360.0);
+        game.native_part_glide(
+            car_key(m.id, c),
+            model,
+            block,
+            1,
+            pose.yaw_rate / 6.0,
+            phase,
+            offset,
+            pose.velocity,
+        );
+    }
+    // Bogeys: the partials as hidden blocks of the content mod, from their unturned state.
+    let registry = game.pack.assets.registry;
+    let part = |name: &str| {
+        let s = registry.default_state(name)?;
+        let mut st = registry.state(s)?.clone();
+        st.properties.insert("facing".to_owned(), "up".to_owned());
+        registry.id(&st)
+    };
+    let (Some(small_frame), Some(small_wheel), Some(large_frame), Some(large_wheel)) = (
+        part("create:part_bogey_frame"),
+        part("create:part_bogey_wheel"),
+        part("create:part_bogey_drive"),
+        part("create:part_bogey_drive_wheel"),
+    ) else {
+        return;
+    };
+    // The heading's turn about up: the partials run along z.
+    let face = glam::Mat4::from_rotation_y((heading[0] as f32).atan2(heading[1] as f32));
+    for (b, (size, pose)) in m.bogeys.iter().enumerate() {
+        let large = *size == BogeySize::Large;
+        let (frame_state, wheel_state) = if large {
+            (large_frame, large_wheel)
+        } else {
+            (small_frame, small_wheel)
+        };
+        // `StandardBogeyVisual`: the wheels 12 px up, a block before and behind the anchor; the
+        // large bogey's one drive wheel a block up.
+        let wheel_at: &[[f32; 3]] = if large {
+            &[[0.0, 1.0, 0.0]]
+        } else {
+            &[[0.0, 0.75, -1.0], [0.0, 0.75, 1.0]]
+        };
+        let bucket = (pose.pitch / PITCH_STEP).round() as i32;
+        let pitch_m = tilt(bucket as f32 * PITCH_STEP);
+        let centre = glam::Mat4::from_translation(glam::Vec3::splat(0.5));
+        // The bogey's direction now (from the heading turned by its yaw), and whether it runs
+        // square to the grid, still turning.
+        let absolute = (heading[0] as f32).atan2(heading[1] as f32) + pose.yaw.to_radians();
+        let (s, c) = absolute.sin_cos();
+        let square = pose.yaw_rate == 0.0 && (s.abs() < 0.01 || c.abs() < 0.01);
+        let frame = if square {
+            game.native_part_model_posed(frame_state, centre * pitch_m * face)
+        } else {
+            let cache = (large, bucket, heading);
+            match BOGEY_MODELS.with_borrow(|m| m.get(&cache).copied()) {
+                Some(model) => Some(model),
+                None => {
+                    let mut parts = vec![(frame_state, centre * pitch_m * face)];
+                    for w in wheel_at {
+                        parts.push((
+                            wheel_state,
+                            centre
+                                * pitch_m
+                                * face
+                                * glam::Mat4::from_translation(glam::Vec3::from_array(*w)),
+                        ));
+                    }
+                    let model = game.native_part_model_compound(&parts);
+                    if let Some(model) = model {
+                        BOGEY_MODELS.with_borrow_mut(|m| m.insert(cache, model));
+                    }
+                    model
+                }
+            }
+        };
+        let (block, offset) = placed(pose.at, now);
+        let phase = (pose.yaw - pose.yaw_rate * now).rem_euclid(360.0);
+        if let Some(frame) = frame {
+            game.native_part_glide(
+                bogey_key(m.id, b, 0),
+                frame,
+                block,
+                1,
+                pose.yaw_rate / 6.0,
+                phase,
+                offset,
+                pose.velocity,
+            );
+        }
+        if !square {
+            for k in 0..2 {
+                game.native_part_clear(bogey_key(m.id, b, k + 1));
+            }
             TRAINS.with_borrow_mut(|t| {
-                if let Some(c) = t.get_mut(&m.id) {
-                    c.models.push((bucket, model));
+                if let Some(w) = t.get_mut(&m.id).and_then(|ct| ct.wheels.get_mut(b)) {
+                    *w = None;
                 }
             });
-            model
+            continue;
         }
-    };
-    let block: [i32; 3] = std::array::from_fn(|k| m.pivot[k].floor() as i32);
-    let now = game.native_parts_seconds();
-    let offset = [
-        (m.pivot[0] - f64::from(block[0]) - 0.5) as f32,
-        (m.pivot[1] - f64::from(block[1]) - 0.5) as f32,
-        (m.pivot[2] - f64::from(block[2]) - 0.5) as f32,
-        now,
-    ];
-    // The yaw turns on from `yaw` now at `yaw_rate`: the part's phase is its angle at time 0.
-    let phase = (m.yaw - m.yaw_rate * now).rem_euclid(360.0);
-    game.native_part_glide(
-        key,
-        model,
-        block,
-        1,
-        m.yaw_rate / 6.0,
-        phase,
-        offset,
-        m.velocity,
-    );
+        // Rolling: about z (axis 2) while running along x, about x (axis 0) along z; positive
+        // counterclockwise looking down the axis.
+        let v = pose.velocity;
+        let radius = size.wheel_radius() as f32;
+        let per_rad = 60.0 / std::f32::consts::TAU;
+        let (axis, rpm) = if c.abs() < 0.01 {
+            (2u8, -v[0] / radius * per_rad)
+        } else {
+            (0u8, v[2] / radius * per_rad)
+        };
+        // Square to the grid: the wheels' pose by the quarter it runs along.
+        let quarter =
+            (absolute / std::f32::consts::FRAC_PI_2).round() * std::f32::consts::FRAC_PI_2;
+        let world = glam::Mat4::from_rotation_y(pose.yaw.to_radians()) * pitch_m * face;
+        let last = TRAINS.with_borrow(|t| {
+            t.get(&m.id)
+                .and_then(|ct| ct.wheels.get(b).copied())
+                .flatten()
+        });
+        // Turning on from where they are: the angle now stays.
+        let angle_now = match last {
+            Some((a, r, p)) if a == axis => p + r * 6.0 * now,
+            _ => 0.0,
+        };
+        let wheel_phase = (angle_now - rpm * 6.0 * now).rem_euclid(360.0);
+        TRAINS.with_borrow_mut(|t| {
+            if let Some(w) = t.get_mut(&m.id).and_then(|ct| ct.wheels.get_mut(b)) {
+                *w = Some((axis, rpm, wheel_phase));
+            }
+        });
+        let Some(wheel) = game
+            .native_part_model_posed(wheel_state, centre * glam::Mat4::from_rotation_y(quarter))
+        else {
+            continue;
+        };
+        for (k, w) in wheel_at.iter().enumerate() {
+            let o = world.transform_vector3(glam::Vec3::from_array(*w));
+            let at = [
+                pose.at[0] + f64::from(o.x),
+                pose.at[1] + f64::from(o.y),
+                pose.at[2] + f64::from(o.z),
+            ];
+            let (block, offset) = placed(at, now);
+            game.native_part_glide(
+                bogey_key(m.id, b, k as u8 + 1),
+                wheel,
+                block,
+                axis,
+                rpm,
+                wheel_phase,
+                offset,
+                pose.velocity,
+            );
+        }
+        if wheel_at.len() == 1 {
+            game.native_part_clear(bogey_key(m.id, b, 2));
+        }
+    }
 }
 
-/// Trains as saved (`Train.write`, here with the column their pivot bogey stands in): their
-/// points by the graph's nodes (and where they were), motion, destination, schedule, the
-/// blocks they carry and the way they faced when assembled.
+/// Trains as saved (`Train.write`, here with the column their first carriage stands in): their
+/// points by the graph's nodes (and where they were), bogeys, carriages and their spacing,
+/// motion, destination, schedule, each carriage's blocks and the way it faced when assembled.
 pub(super) fn trains_to_nbt(
     game: &Game<'_>,
     all: &[create_engine::world::TrainOnTrack],
 ) -> horizon_world::nbt::Tag {
+    use create_engine::trains::BogeySize;
     use horizon_world::nbt::{Compound, Tag};
     let registry = game.pack.assets.registry;
     let f = |v: f64| (v as f32).to_bits() as i32;
@@ -551,10 +1003,31 @@ pub(super) fn trains_to_nbt(
                             .collect(),
                     ),
                 );
+                c.insert(
+                    "bogeys".into(),
+                    Tag::IntArray(
+                        t.train
+                            .bogeys
+                            .iter()
+                            .map(|b| i32::from(*b == BogeySize::Large))
+                            .collect(),
+                    ),
+                );
+                c.insert(
+                    "carriages".into(),
+                    Tag::IntArray(
+                        t.train
+                            .carriages
+                            .iter()
+                            .flat_map(|s| [s.first as i32, i32::from(s.two), s.bogey_spacing])
+                            .collect(),
+                    ),
+                );
+                c.insert("spacing".into(), Tag::IntArray(t.train.spacing.clone()));
                 let nav = t.train.nav.as_ref().map(|n| n.station);
                 let mut motion = vec![
                     f(t.train.speed),
-                    t.pivot as i32,
+                    i32::from(t.train.double_ended),
                     t.heading[0],
                     t.heading[1],
                     i32::from(t.train.at_station.is_some()),
@@ -565,15 +1038,30 @@ pub(super) fn trains_to_nbt(
                 motion.push(i32::from(t.train.nav.as_ref().is_some_and(|n| n.behind)));
                 c.insert("motion".into(), Tag::IntArray(motion));
                 c.insert(
-                    "blocks".into(),
-                    Tag::IntArray(t.blocks.iter().flat_map(|(o, _)| *o).collect()),
-                );
-                c.insert(
-                    "states".into(),
+                    "cars".into(),
                     Tag::List(
-                        t.blocks
+                        t.cars
                             .iter()
-                            .map(|(_, s)| Tag::String(state_text(registry, *s).as_str().into()))
+                            .map(|car| {
+                                let mut k = Compound::new();
+                                k.insert(
+                                    "blocks".into(),
+                                    Tag::IntArray(car.iter().flat_map(|(o, _)| *o).collect()),
+                                );
+                                k.insert(
+                                    "states".into(),
+                                    Tag::List(
+                                        car.iter()
+                                            .map(|(_, s)| {
+                                                Tag::String(
+                                                    state_text(registry, *s).as_str().into(),
+                                                )
+                                            })
+                                            .collect(),
+                                    ),
+                                );
+                                Tag::Compound(k)
+                            })
                             .collect(),
                     ),
                 );
@@ -656,36 +1144,38 @@ fn conditions_from_ints(v: &[i32]) -> Vec<Vec<create_engine::schedule::Condition
     out
 }
 
+/// Trains saved with a column (`trains_to_nbt`); saves from before carriages (one block list,
+/// no `carriages`) are dropped.
 pub(super) fn trains_from_nbt(
     game: &Game<'_>,
     data: Option<&horizon_world::nbt::Compound>,
 ) -> Vec<create_engine::world::TrainOnTrack> {
     use create_engine::schedule::{Entry, Runtime, Schedule, State};
-    use create_engine::trains::{Nav, Placed, Train, TrainOnTrack};
+    use create_engine::trains::{BogeySize, CarriageShape, Nav, Placed, Train, TrainOnTrack};
     use horizon_world::nbt::Tag;
     let registry = game.pack.assets.registry;
     let Some(Tag::List(list)) = data.and_then(|d| d.get(&"trains".into())) else {
         return Vec::new();
     };
     let f = |v: i32| f64::from(f32::from_bits(v as u32));
+    let ints = |c: &horizon_world::nbt::Compound, k: &str| match c.get(&k.into()) {
+        Some(Tag::IntArray(v)) => Some(v.clone()),
+        _ => None,
+    };
     list.iter()
         .filter_map(|c| {
             let Tag::Compound(c) = c else { return None };
-            let (
-                Some(Tag::IntArray(p)),
-                Some(Tag::IntArray(m)),
-                Some(Tag::IntArray(o)),
-                Some(Tag::List(s)),
-            ) = (
-                c.get(&"points".into()),
-                c.get(&"motion".into()),
-                c.get(&"blocks".into()),
-                c.get(&"states".into()),
-            )
-            else {
+            let (Some(p), Some(m), Some(b), Some(k), Some(sp), Some(Tag::List(cars))) = (
+                ints(c, "points"),
+                ints(c, "motion"),
+                ints(c, "bogeys"),
+                ints(c, "carriages"),
+                ints(c, "spacing"),
+                c.get(&"cars".into()),
+            ) else {
                 return None;
             };
-            if m.len() < 14 || p.len() < 20 {
+            if m.len() < 14 || p.len() < 20 || p.len() != b.len() * 20 {
                 return None;
             }
             let placed: Vec<Placed> = p
@@ -697,15 +1187,42 @@ pub(super) fn trains_from_nbt(
                     at: [f(v[7]), f(v[8]), f(v[9])],
                 })
                 .collect();
-            let blocks = o
+            let carriages: Vec<CarriageShape> = k
                 .chunks_exact(3)
-                .zip(s)
-                .filter_map(|(o, s)| {
-                    let Tag::String(s) = s else { return None };
-                    Some((
-                        [o[0], o[1], o[2]],
-                        state_of_text(registry, &s.to_string_lossy())?,
-                    ))
+                .map(|v| CarriageShape {
+                    first: v[0].max(0) as usize,
+                    two: v[1] != 0,
+                    bogey_spacing: v[2],
+                })
+                .collect();
+            if carriages.is_empty()
+                || carriages
+                    .iter()
+                    .any(|s| s.first + usize::from(s.two) >= b.len())
+            {
+                return None;
+            }
+            let cars: Vec<Vec<([i32; 3], u32)>> = cars
+                .iter()
+                .map(|car| {
+                    let Tag::Compound(car) = car else {
+                        return Vec::new();
+                    };
+                    let (Some(Tag::IntArray(o)), Some(Tag::List(s))) =
+                        (car.get(&"blocks".into()), car.get(&"states".into()))
+                    else {
+                        return Vec::new();
+                    };
+                    o.chunks_exact(3)
+                        .zip(s)
+                        .filter_map(|(o, s)| {
+                            let Tag::String(s) = s else { return None };
+                            Some((
+                                [o[0], o[1], o[2]],
+                                state_of_text(registry, &s.to_string_lossy())?,
+                            ))
+                        })
+                        .collect()
                 })
                 .collect();
             let schedule = match c.get(&"schedule".into()) {
@@ -765,14 +1282,28 @@ pub(super) fn trains_from_nbt(
                 id: 0,
                 train: Train {
                     points: Vec::new(),
+                    bogeys: b
+                        .iter()
+                        .map(|&l| {
+                            if l != 0 {
+                                BogeySize::Large
+                            } else {
+                                BogeySize::Small
+                            }
+                        })
+                        .collect(),
+                    carriages,
+                    spacing: sp,
+                    double_ended: m[1] != 0,
                     speed: f(m[0]),
                     nav,
                     at_station: (m[4] != 0).then(|| at(5)),
+                    manual: None,
+                    reserved: Vec::new(),
                     placed,
                     bound: false,
                 },
-                blocks,
-                pivot: m[1].max(0) as usize,
+                cars,
                 heading: [m[2], m[3]],
                 schedule,
                 runtime,
@@ -786,7 +1317,6 @@ pub(super) fn trains_from_nbt(
         .collect()
 }
 
-/// Station names saved with a column (`GlobalStation.name`).
 pub(super) fn station_names_to_nbt(list: &[([i32; 3], String)]) -> horizon_world::nbt::Tag {
     use horizon_world::nbt::{Compound, Tag};
     Tag::List(
