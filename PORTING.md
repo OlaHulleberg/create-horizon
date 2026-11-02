@@ -743,6 +743,16 @@ measurable server tick, 0.014 ms of frame time for the 16.
 Equipment (the wrench) and the fluid tank do no work per tick: their cost is the idle row above (content on, nothing
 running).
 
+Create over LAN (2026-11-02, Horizon `fe554b8d7`, two headless games on BMG G21, both with Create's content): a host
+opened a creative world to LAN (`horizon-ctl lan open 0 commands`), a guest started on the title screen joined
+(`connect 127.0.0.1:<port>`). The guest's client drew the host's Create blocks (creative motor, shafts at 16 rpm, hand
+crank, seat, copycat panel); a guest's click turned the hand crank (the host read 32 rpm, as for its own click); oak
+planks the guest used on a copycat panel became its material on the server (`/create_debug copycat` on the host) and
+were drawn on the guest's client; a guest's click on a seat sat it at the seat's y − 0.1875 on both its client and the
+server (`/data get entity Guest Pos`). DEBUG logs on the click path (removed) showed three first-run failures were the
+script's: the guest out of reach (5.8 blocks), the host standing in the guest's line of sight, and the guest holding
+wheat seeds it had picked up. Not covered yet: a guest on trains, carts and contraptions, and two guests at once.
+
 ### Blocked / open
 
 - Startup with Create's content installed (warm, `perf_bench`, render distance 12, 3 runs): title screen 748 ± 9 ms
