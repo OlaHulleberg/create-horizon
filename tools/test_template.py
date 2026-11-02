@@ -717,7 +717,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 12);
+    assert_eq!(commands.len(), 14);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -1111,6 +1111,14 @@ impl Behaviours {
     game.native_screen("create:red_toolbox", &mut screen);
     let screen = screen.expect("a toolbox lays its screen out");
     assert_eq!((screen.slots.len(), screen.slots[31], screen.slots[32]), (36, Some([143.0, 72.0]), None));
+    // The threshold switch's thresholds and a lever's, observer's or switch's state by command.
+    let mut ran = false;
+    game.native_perform_command(&player, "create_debug threshold 1 0 0 64 128", &mut ran);
+    assert!(ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("no threshold switch there"));
+    game.native_perform_command(&player, "create_debug redstone_state 1 0 0", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str),
+        Some("no analog lever, smart observer or threshold switch there"));
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

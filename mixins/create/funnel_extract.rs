@@ -139,3 +139,37 @@ pub(crate) fn insert_room(
     }
     Some(stack.count - left)
 }
+
+// Whether the block at `pos` is a container a machine can reach (an item handler): what Create's
+// smart observer and threshold switch turn to when placed.
+pub(crate) fn is_container(game: &crate::game::Game<'_>, pos: [i32; 3]) -> bool {
+    game.containers()
+        .view((pos[0], pos[1], pos[2]), false)
+        .is_some()
+}
+
+// Every slot of the container at `pos`, whatever its sides (`bypassSidedness`): each one's item,
+// count and largest stack there (`min(maxStackSize, getSlotLimit)`). None when there is none.
+pub(crate) fn container_slots(
+    game: &crate::game::Game<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<create_engine::observe::Slot>> {
+    let view = game.containers().view((pos[0], pos[1], pos[2]), false)?;
+    let c = game.containers();
+    Some(
+        (0..view.len())
+            .map(|slot| match c.get(&view, slot) {
+                Some(s) => create_engine::observe::Slot {
+                    item: Some(s.item.to_string()),
+                    count: s.count,
+                    max_stack: c.max_stack(s),
+                },
+                None => create_engine::observe::Slot {
+                    item: None,
+                    count: 0,
+                    max_stack: 64,
+                },
+            })
+            .collect(),
+    )
+}
