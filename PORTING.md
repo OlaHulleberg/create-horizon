@@ -475,6 +475,11 @@ ticker's stock read "from 1 links: 64 minecraft:iron_ingot, 10 minecraft:gold_in
 chest; a gauge set to keep 10 gold for "Home" read level 5, not satisfied. Networks are summed only when asked
 (no per-tick work).
 
+Train and contraption blocks, proven headless: a track observer beside a straight line, a one-bogey train with
+controls sent past it: the observer went `powered=true` as the train passed (2 of 40 quarter-second samples, as
+Create's 8-tick hold while over it and 3 after) and dark again; a train trapdoor clicked went `open=true`; four
+controller rails along z with a redstone block beside the first all read `power=15` (within Create's 8).
+
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
 vault: a hopper put one iron ingot in, the observer went `powered=true` and the lamp behind it lit; a threshold switch
