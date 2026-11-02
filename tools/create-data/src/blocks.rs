@@ -201,6 +201,9 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
     if let Some(d) = fluid_blocks(b) {
         return d;
     }
+    if let Some(d) = copycats(b) {
+        return d;
+    }
     // AllFluids' `standardFluid` blocks: `LiquidBlock`s, water's states; how they flow is
     // their fluid declaration's (`fluid_declarations`).
     if matches!(n, "honey" | "chocolate") {
@@ -1953,6 +1956,80 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
     None
 }
 
+/// Create's copycats (`content/decoration/copycat`, `BuilderTransformers.copycat`:
+/// `SharedProperties::softMetal`, gold's sounds and tool): the panel (`CopycatPanelBlock`: facing,
+/// up by default, waterlogged; AllShapes.CASING_3PX) and the step (`CopycatStepBlock`: half,
+/// facing, south by default, waterlogged; AllShapes.STEP_BOTTOM / STEP_TOP) on the heavy core's
+/// template, drawn by the glue as their material cut to their shape (`dynamic_model`); the
+/// copycat base (the material shown without one) and the copycat bars (`WrenchableDirectionalBlock`,
+/// the model a panel of bars shows), neither with an item.
+fn copycats(b: &CreateBlock) -> Option<Decision> {
+    use crate::shapes::*;
+    let bools = ["false", "true"];
+    let own = |props: &[(&str, &[&str])]| -> Value {
+        let mut m = Map::new();
+        for (k, v) in props {
+            m.insert((*k).into(), json!(v));
+        }
+        Value::Object(m)
+    };
+    let declared = |template, shapes, own, item| Decision::Declared {
+        template,
+        sounds: Some("minecraft:gold_block"),
+        requires_tool: Some(true),
+        shapes,
+        own,
+        animated: false,
+        item,
+    };
+    Some(match b.name.as_str() {
+        "copycat_panel" => declared(
+            "minecraft:heavy_core",
+            Some(by_facing(&[[0., 0., 0., 16., 3., 16.]])),
+            Some(own(&[
+                ("facing", &["up", "down", "north", "south", "west", "east"]),
+                ("waterlogged", &bools),
+            ])),
+            true,
+        ),
+        // A step's shape is chosen by its facing and its half, and a declaration selects by one
+        // property: by `half`, the union of Create's steps of every facing (a slab), held 1/256
+        // off the block's side so that, as Create's `noOcclusion` copycats, it hides no
+        // neighbour's face beside the half the step leaves open. The step itself is drawn exact.
+        "copycat_step" => declared(
+            "minecraft:heavy_core",
+            Some(by_property_values(
+                "half",
+                &[
+                    ("bottom", &[[0., 1. / 16., 0., 16., 8., 16.]]),
+                    ("top", &[[0., 8., 0., 16., 15. + 15. / 16., 16.]]),
+                ],
+            )),
+            Some(own(&[
+                ("facing", &["south", "north", "west", "east"]),
+                ("half", &["bottom", "top"]),
+                ("waterlogged", &bools),
+            ])),
+            true,
+        ),
+        "copycat_base" => declared("minecraft:gold_block", None, None, false),
+        // No `initialProperties`: a plain block's (stone's sounds, no tool).
+        "copycat_bars" => Decision::Declared {
+            template: "minecraft:stone",
+            sounds: Some("minecraft:stone"),
+            requires_tool: Some(false),
+            shapes: None,
+            own: Some(own(&[(
+                "facing",
+                &["down", "up", "north", "south", "west", "east"],
+            )])),
+            animated: false,
+            item: false,
+        },
+        _ => return None,
+    })
+}
+
 /// Phase 5's fluid blocks with state of their own (`AllBlocks`: all `SharedProperties
 /// ::copperMetal`, copper's sounds, pickaxe): valves, smart, glass and encased pipes, the hose
 /// pulley, the creative fluid tank, steam whistles and their extensions. Their behaviour is the
@@ -2570,10 +2647,6 @@ fn later_phase(b: &CreateBlock) -> Option<String> {
         "TransparentBlock",
         "RotatedPillarBlock",
     ];
-    // Copycats need custom models (gap 2).
-    if b.name.starts_with("copycat") {
-        return Some("copycats need custom models (gap 2)".into());
-    }
     (!decorative.contains(&class)).then(|| format!("{class}: ported with its subsystem"))
 }
 
@@ -2672,6 +2745,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     // AllBlocks' nixie tubes: `lightLevel($ -> 5)`.
     if b.name == "nixie_tube" || dyed(&b.name, "nixie_tube").is_some() {
         props.insert("light".into(), json!(5));
+    }
+    // Copycats draw their material through the glue (`CopycatModel`'s `ModelData`).
+    if matches!(b.name.as_str(), "copycat_panel" | "copycat_step") {
+        props.insert("dynamic_model".into(), json!(true));
     }
     // Comparators read the block (`hasAnalogOutputSignal`), through the glue's answer.
     if analog_output(&b.name) {
@@ -2924,22 +3001,31 @@ mod tests {
         let doc = declare("blue_nixie_tube", (3.0, 6.0, 1));
         assert_eq!(doc["item"], false);
         assert!(doc.get("components").is_none());
-        // Copycats stay pending.
-        let b = CreateBlock {
-            name: "copycat_step".into(),
-            props: Props::new(),
-            hardness: 1.0,
-            blast_resistance: 1.0,
-            stack: 64,
-            java: JavaFacts {
-                class: Some("CopycatStepBlock".into()),
-                ..JavaFacts::default()
-            },
-        };
+        // Copycats: drawn by the glue (`dynamic_model`), Create's states and defaults.
+        let doc = declare("copycat_step", (3.0, 6.0, 64));
+        assert_eq!(doc["properties"]["dynamic_model"], true);
         assert_eq!(
-            decide(&b, &BTreeMap::new()),
-            Decision::Pending("copycats need custom models (gap 2)".into())
+            states_and_default(&doc),
+            (
+                16,
+                vec![
+                    ("facing".into(), "south".into()),
+                    ("half".into(), "bottom".into()),
+                    ("waterlogged".into(), "false".into())
+                ]
+            )
         );
+        assert_eq!(doc["shapes"]["values"]["top"][0][4], 1.0 - 1.0 / 256.0);
+        let doc = declare("copycat_panel", (3.0, 6.0, 64));
+        assert_eq!(doc["properties"]["dynamic_model"], true);
+        assert_eq!(states_and_default(&doc).0, 12);
+        assert_eq!(
+            doc["shapes"]["values"]["north"][0],
+            json!([0.0, 0.0, 0.8125, 1.0, 1.0, 1.0])
+        );
+        let doc = declare("copycat_bars", (0.0, 0.0, 1));
+        assert_eq!(doc["item"], false);
+        assert!(doc["properties"].get("dynamic_model").is_none());
     }
 
     /// With Create's generated data beside the port: every valve handle, sliding door, toolbox,

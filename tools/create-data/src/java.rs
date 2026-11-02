@@ -97,6 +97,87 @@ pub fn read_all(java_root: &Path) -> BTreeMap<String, JavaFacts> {
     out
 }
 
+/// The blocks of `names` that have a block entity (`EntityBlock`): every block an
+/// `AllBlockEntityTypes` registration names (`validBlock(s)`, a dyed family's `toArray()`, the
+/// tracks of `validBlocksDeferred`), its `AllBlocks` constants resolved to their block names.
+pub fn block_entity_blocks(
+    java_root: &Path,
+    names: &[String],
+) -> std::collections::BTreeSet<String> {
+    let base = java_root.join("com/simibubi/create");
+    let blocks = fs::read_to_string(base.join("AllBlocks.java")).unwrap_or_default();
+    let types = fs::read_to_string(base.join("AllBlockEntityTypes.java")).unwrap_or_default();
+    // Each constant's block names, from its declaration to the next one.
+    let mut constants: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let decls: Vec<usize> = blocks
+        .match_indices("public static final ")
+        .map(|(i, _)| i)
+        .collect();
+    for (k, &at) in decls.iter().enumerate() {
+        let body = &blocks[at..decls.get(k + 1).copied().unwrap_or(blocks.len())];
+        let Some(eq) = body.find(" =") else { continue };
+        let Some(constant) = body[..eq].rsplit(' ').next() else {
+            continue;
+        };
+        let found = if body.contains("DyedBlockList<") {
+            // `colourName + "_toolbox"`: every dyed block of that family, and a block the
+            // family returns for a colour (`return ORANGE_NIXIE_TUBE`).
+            let mut v: Vec<String> = ident_after(body, "colourName + \"_")
+                .map(|family| {
+                    names
+                        .iter()
+                        .filter(|n| {
+                            n.strip_suffix(family)
+                                .and_then(|c| c.strip_suffix('_'))
+                                .is_some_and(|c| crate::blocks::DYES.contains(&c))
+                        })
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Some(other) = ident_after(body, "return ")
+                .filter(|c| c.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+            {
+                v.push(format!("={other}"));
+            }
+            v
+        } else {
+            body.find(".block(\"")
+                .map(|i| {
+                    let rest = &body[i + 8..];
+                    vec![rest[..rest.find('"').unwrap_or(0)].to_string()]
+                })
+                .unwrap_or_default()
+        };
+        constants.insert(constant.to_string(), found);
+    }
+    let resolve = |c: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        for n in constants.get(c).into_iter().flatten() {
+            match n.strip_prefix('=') {
+                Some(other) => out.extend(constants.get(other).into_iter().flatten().cloned()),
+                None => out.push(n.clone()),
+            }
+        }
+        out
+    };
+    let mut out = std::collections::BTreeSet::new();
+    for chain in types.split(".blockEntity(\"").skip(1) {
+        let chain = &chain[..chain.find(".register()").unwrap_or(chain.len())];
+        let mut rest = chain;
+        while let Some(i) = rest.find("AllBlocks.") {
+            let c = ident_after(&rest[i..], "AllBlocks.").unwrap_or("");
+            out.extend(resolve(c));
+            rest = &rest[i + 10..];
+        }
+        if chain.contains("validBlocksDeferred(TrackMaterial::allBlocks)") {
+            out.insert("track".to_string());
+        }
+    }
+    out.retain(|n| names.contains(n));
+    out
+}
+
 pub fn collect(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;

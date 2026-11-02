@@ -355,6 +355,21 @@ capabilities = [\"registries\"]\n",
     for b in &all {
         writeln!(rs, "        Block::{},", camel(&b.name)).unwrap();
     }
+    let names: Vec<String> = all.iter().map(|b| b.name.clone()).collect();
+    let entities = java::block_entity_blocks(&java_root, &names);
+    rs.push_str(
+        "    ];\n\n    /// The blocks with a block entity (`EntityBlock`: the blocks `AllBlockEntityTypes`\n    \
+         /// registers one for), sorted.\n",
+    );
+    writeln!(
+        rs,
+        "    pub const WITH_ENTITY: [Block; {}] = [",
+        entities.len()
+    )
+    .unwrap();
+    for n in &entities {
+        writeln!(rs, "        Block::{},", camel(n)).unwrap();
+    }
     rs.push_str(
         "    ];\n\n    /// The block named `name` (without `create:`); a binary search, done once per state\n    \
          /// when a world opens, never in a tick.\n    \
@@ -362,7 +377,10 @@ capabilities = [\"registries\"]\n",
          Self::NAMES.binary_search(&name).ok().map(|i| Self::ALL[i])\n    }\n\n    \
          pub fn name(self) -> &'static str {\n        Self::NAMES[self as usize]\n    }\n\n    \
          pub fn impact(self) -> f32 {\n        Self::IMPACT[self as usize]\n    }\n\n    \
-         pub fn capacity(self) -> f32 {\n        Self::CAPACITY[self as usize]\n    }\n}\n",
+         pub fn capacity(self) -> f32 {\n        Self::CAPACITY[self as usize]\n    }\n\n    \
+         /// Whether Create gives the block a block entity.\n    \
+         pub fn has_block_entity(self) -> bool {\n        \
+         Self::WITH_ENTITY.binary_search(&self).is_ok()\n    }\n}\n",
     );
     let generated = out.join("mixins/create/engine/src/generated.rs");
     write(&generated, rs.as_bytes());
