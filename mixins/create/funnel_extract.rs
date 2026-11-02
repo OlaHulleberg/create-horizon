@@ -173,3 +173,68 @@ pub(crate) fn container_slots(
             .collect(),
     )
 }
+
+// The slots of the container at `pos` a machine reaches through its side `face`, in order: each
+// slot's index and its stack when a hopper could take it from there (`extractItem` simulated),
+// for Create's packager. None when there is no container.
+pub(crate) fn takeable_slots(
+    game: &crate::game::Game<'_>,
+    pos: [i32; 3],
+    face: horizon_core::geometry::Direction,
+) -> Option<Vec<(usize, Option<horizon_client::items::ItemStack>)>> {
+    let view = game.containers().view((pos[0], pos[1], pos[2]), false)?;
+    let c = game.containers();
+    Some(
+        view.slots_for_face(Some(face))
+            .into_iter()
+            .map(|slot| {
+                let stack = c
+                    .get(&view, slot)
+                    .filter(|s| c.can_take(&view, slot, s, face))
+                    .cloned();
+                (slot, stack)
+            })
+            .collect(),
+    )
+}
+
+// Up to `n` from slot `slot` of the container at `pos` (`extractItem(slot, n)`).
+pub(crate) fn take_from_slot(
+    game: &mut crate::game::Game<'_>,
+    pos: [i32; 3],
+    slot: usize,
+    n: u32,
+) -> Option<horizon_client::items::ItemStack> {
+    let view = game.containers().view((pos[0], pos[1], pos[2]), false)?;
+    let current = game.slot_mut_at(&view, slot)?;
+    let held = current.as_mut()?;
+    let n = held.count.min(n);
+    if n == 0 {
+        return None;
+    }
+    let out = horizon_client::items::ItemStack {
+        count: n,
+        ..held.clone()
+    };
+    held.count -= n;
+    if held.count == 0 {
+        *current = None;
+    }
+    game.view_changed(&view);
+    Some(out)
+}
+
+// Every slot of the container at `pos` with its stack, for a package's contents to be fitted
+// into (`DefaultUnpackingHandler`'s simulation). None when there is no container.
+pub(crate) fn all_slots(
+    game: &crate::game::Game<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<Option<horizon_client::items::ItemStack>>> {
+    let view = game.containers().view((pos[0], pos[1], pos[2]), false)?;
+    let c = game.containers();
+    Some(
+        (0..view.len())
+            .map(|slot| c.get(&view, slot).cloned())
+            .collect(),
+    )
+}

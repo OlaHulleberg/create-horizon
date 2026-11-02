@@ -77,6 +77,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
             WORLD.with_borrow_mut(|w| *w = None);
             RECIPES.with_borrow_mut(|r| *r = None);
             super::create_actors::forget();
+            super::create_packages::forget();
             states::clear_range();
         }
     }
@@ -102,7 +103,9 @@ pub(super) fn block_changed(
     if states::index(old.0).is_none() && states::index(new.0).is_none() {
         return;
     }
-    with_world(|w| w.block_changed(level_index(dimension), [pos.x, pos.y, pos.z], old.0, new.0));
+    let (dim, at) = (level_index(dimension), [pos.x, pos.y, pos.z]);
+    super::create_packages::block_changed(dim, at, old.0, new.0);
+    with_world(|w| w.block_changed(dim, at, old.0, new.0));
 }
 
 /// A neighbour of a block changed on the server. Hot: one range test, then return, for any block
@@ -116,7 +119,9 @@ pub(super) fn neighbor_changed(
     if states::index(state.0).is_none() {
         return;
     }
-    with_world(|w| w.neighbor_changed(level_index(dimension), [pos.x, pos.y, pos.z], state.0));
+    let (dim, at) = (level_index(dimension), [pos.x, pos.y, pos.z]);
+    super::create_packages::neighbor_changed(dim, at, state.0);
+    with_world(|w| w.neighbor_changed(dim, at, state.0));
 }
 
 /// A column joined a server level: find its Create blocks. Sections whose palette holds one
@@ -401,6 +406,8 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
                 }
                 // An arm or an ejector moves at its new speed.
                 wake_on_speed(dim, pos);
+                // A chain conveyor's packages move at its new speed.
+                super::create_packages::speed_changed(dim, pos, speed);
                 // A crafter that starts turning looks at its items (`lazyTick`).
                 if block == Some(create_engine::Block::MechanicalCrafter) {
                     with_world(|w| w.dims[dim].crafter_checks.push(pos));
@@ -761,9 +768,10 @@ pub(super) fn right_click_inner(
     let back = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
     let state = game.world.block(pos[0], pos[1], pos[2]).0;
     let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
-    // Valve handles, sliding doors, toolboxes, postboxes.
+    // Packagers; valve handles, sliding doors, toolboxes, postboxes.
     if let Some(b) = block
-        && use_block(game, dim, pos, b, BlockStateId(state), back, canceled)
+        && (super::create_packages::use_block(game, dim, pos, b, canceled)
+            || use_block(game, dim, pos, b, BlockStateId(state), back, canceled))
     {
         return;
     }

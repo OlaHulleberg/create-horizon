@@ -99,6 +99,11 @@ pub mod nbt {
     impl From<&str> for JavaString { fn from(s: &str) -> Self { JavaString(s.to_owned()) } }
     impl JavaString { pub fn to_string_lossy(&self) -> String { self.0.clone() } }
     pub type Compound = std::collections::BTreeMap<JavaString, Tag>;
+    impl Tag {
+        pub fn compound(entries: impl IntoIterator<Item = (impl Into<JavaString>, Tag)>) -> Self {
+            Tag::Compound(entries.into_iter().map(|(k, v)| (k.into(), v)).collect())
+        }
+    }
 }
 pub mod level {
     #[derive(Clone, Copy)] pub enum Dimension { Overworld, Nether, End }
@@ -505,9 +510,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 36) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 40) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 36;
+        let empty = state.0 == 0 || state.0 == 40;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -516,10 +521,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 36 is a water source.
+    /// State 40 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 36 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 40 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -649,7 +654,16 @@ impl Behaviours {
             ("double_face".to_owned(), "floor".to_owned()), ("facing".to_owned(), "north".to_owned()),
             ("waterlogged".to_owned(), "false".to_owned())]) });
     }
-    // 36: a water source; 37: a target block at power 7.
+    // 36, 37: a packager facing east, unpowered and powered; 38: a frogport; 39: a chain
+    // conveyor.
+    for powered in ["false", "true"] {
+        states.push(BlockState { name: "create:packager".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), "east".to_owned()), ("linked".to_owned(), "false".to_owned()),
+            ("powered".to_owned(), powered.to_owned())]) });
+    }
+    states.push(BlockState { name: "create:package_frogport".into(), properties: props("waterlogged", "false") });
+    states.push(BlockState { name: "create:chain_conveyor".into(), properties: props("waterlogged", "false") });
+    // 40: a water source; 41: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
@@ -717,7 +731,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 16);
+    assert_eq!(commands.len(), 21);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -920,7 +934,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 36), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 40), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1009,7 +1023,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 37);
+    game.world.blocks.insert([79, 0, 80], 41);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1137,6 +1151,65 @@ impl Behaviours {
     // Controls on a contraption that isn't there.
     game.native_perform_command(&player, "create_debug controls 0 90 0 all", &mut ran);
     assert_eq!(game.said.last().map(String::as_str), Some("no moving contraption at 0 90 0"));
+    // Packages: a packager at (300, 0, 300) facing east with a postbox behind it and a frogport
+    // on it; two chain conveyors (302, 1, 300) and (306, 1, 300), the first under a motor
+    // facing down; a second frogport by the far conveyor takes "Mine".
+    let level = GameLevel { registry };
+    for (pos, state) in [([299, 0, 300], 30), ([300, 0, 300], 36), ([300, 1, 300], 38),
+                         ([302, 1, 300], 39), ([306, 1, 300], 39), ([302, 2, 300], 23), ([306, 1, 302], 38)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] },
+            BlockStateId(0), BlockStateId(state));
+    }
+    game.native_level_tick_post("minecraft:overworld");
+    for (line, said) in [
+        ("create_debug chain 302 1 300 306 1 300", "chain [302, 1, 300] - [306, 1, 300]"),
+        ("create_debug address 300 0 300 Mine", "packager address \\"Mine\\""),
+        ("create_debug address 306 1 302 Mine", "port filter \\"Mine\\""),
+        ("create_debug address 299 0 300 Home", "port filter \\"Home\\""),
+        ("create_debug frogport 300 1 300 302 1 300 0", "frogport on [302, 1, 300] at 0 None"),
+        ("create_debug frogport 306 1 302 306 1 300 0", "frogport on [306, 1, 300] at 0 None"),
+    ] {
+        game.native_perform_command(&player, line, &mut ran);
+        assert_eq!(game.said.last().map(String::as_str), Some(said), "{line}");
+    }
+    // A package in the postbox (not for it), then the postbox gives out anything.
+    let package = horizon_client::items::ItemStack::new("create:cardboard_package_10x8", 1);
+    assert!(matches!(create_packages::automation_insert(&mut game, 0, [299, 0, 300], package), Ok(None)));
+    game.native_perform_command(&player, "create_debug address 299 0 300 *", &mut ran);
+    for _ in 0..2 { game.native_level_tick_post("minecraft:overworld"); }
+    game.native_perform_command(&player, "create_debug packages 306 1 300", &mut ran);
+    let said = game.said.last().cloned().unwrap_or_default();
+    assert!(said.contains("connections=[[-4, 0, 0]]") && !said.contains("speed=0 ") && said.contains("Mine:0->[0, 0, 0]"), "{said}");
+    // A pulse: the packager packs the package behind it, addressed "Mine"; out after 20 ticks,
+    // the frogport on it sends it along the chain to the frogport taking "Mine".
+    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 300, y: 0, z: 300 }, BlockStateId(36));
+    game.native_level_tick_post("minecraft:overworld");
+    game.native_perform_command(&player, "create_debug packages 300 0 300", &mut ran);
+    let said = game.said.last().cloned().unwrap_or_default();
+    assert!(said.contains("animation=19") && said.contains("to \\"Mine\\""), "{said}");
+    let mut drawn = false;
+    for _ in 0..400 {
+        game.native_level_tick_post("minecraft:overworld");
+        for m in game.sent.iter().filter(|m| m.1 == "create:chain") {
+            drawn |= m.2.len() > 14;
+        }
+    }
+    game.native_perform_command(&player, "create_debug packages 306 1 302", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some(
+        "frogport filter=\\"Mine\\" target=Some(([306, 1, 300], 0.0, None)) animating=false items=[create:cardboard_package_10x8 to \\"Mine\\"]"));
+    assert!(drawn, "the package was sent to clients on the chain");
+    // As a client: a package on a chain is drawn as an item part.
+    let message = game.sent.iter().filter(|m| m.1 == "create:chain" && m.2.len() > 14).last().unwrap().2.clone();
+    let (parts, glides) = (game.parts.len(), game.glides.len());
+    game.native_net_from_server("create:chain", &message);
+    assert!(game.parts.len() + game.glides.len() > parts + glides);
+    // Saved with their columns.
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [18, 18], &mut data);
+    let Some(horizon_world::nbt::Tag::Compound(saved)) = data.get(&"create_packages".into()) else { panic!("{data:?}") };
+    let Some(horizon_world::nbt::Tag::List(ports)) = saved.get(&"ports".into()) else { panic!() };
+    assert_eq!(ports.len(), 2, "the postbox and the first frogport");
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

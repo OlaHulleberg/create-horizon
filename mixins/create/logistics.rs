@@ -727,6 +727,11 @@ pub(super) fn insert_item(
     face: horizon_core::geometry::Direction,
     stack: horizon_client::items::ItemStack,
 ) -> Option<horizon_client::items::ItemStack> {
+    // A packager unpacks what it is given; a port takes packages not for it.
+    let stack = match super::create_packages::automation_insert(game, dim, pos, stack) {
+        Ok(left) => return left,
+        Err(stack) => stack,
+    };
     match vault_at(game, dim, pos) {
         Some(parts) => insert_vault(game, &parts, stack),
         None => game.native_insert_item(pos, face, stack),
@@ -742,6 +747,9 @@ pub(super) fn insert_room(
     face: horizon_core::geometry::Direction,
     stack: &horizon_client::items::ItemStack,
 ) -> Option<u32> {
+    if let Some(room) = super::create_packages::automation_room(game, dim, pos, stack) {
+        return Some(room);
+    }
     match vault_at(game, dim, pos) {
         Some(parts) => {
             let slots = vault_slots(game, &parts);
@@ -1112,6 +1120,10 @@ fn take_from_behind(
     face: horizon_core::geometry::Direction,
     max: u32,
 ) -> Option<horizon_client::items::ItemStack> {
+    // A packager's box once it is out; a port's packages for it.
+    if let Some(taken) = super::create_packages::automation_take(game, dim, behind) {
+        return taken;
+    }
     match vault_at(game, dim, behind) {
         Some(parts) => extract_vault(game, &parts, |_| true, max),
         None => super::machines::create_extract::extract_item(game, behind, face, max),

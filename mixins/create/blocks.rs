@@ -233,7 +233,12 @@ pub(super) fn tick_postboxes(game: &mut Game<'_>, dimension: &str, dim: usize) {
         };
         let title =
             horizon_client::text::Text::translate(&format!("block.create.{}", block.name()), &[]);
-        let Some(window) = game.native_open_menu(uuid, 2, title, vec![None; 18]) else {
+        let Some(window) = game.native_open_menu(
+            uuid,
+            2,
+            title,
+            super::create_packages::port_stacks(dim, pos),
+        ) else {
             continue;
         };
         let Some((first, left)) = with_world(|w| w.postboxes.opened(uuid, window, dim, pos)) else {

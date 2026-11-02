@@ -79,6 +79,24 @@ impl<P> Port<P> {
         self.animating
     }
 
+    /// Whether it holds a package not for it (one `tryPullingFrom(inventory)` would send).
+    pub fn has_outgoing(&self) -> bool {
+        let filter = self.filter_string();
+        self.items
+            .iter()
+            .flatten()
+            .any(|b| filter.is_none_or(|f| !match_address(&b.address, f)))
+    }
+
+    /// Its slots' stacks.
+    pub fn stacks(&self) -> Vec<Option<P>>
+    where
+        P: Clone,
+    {
+        let slot = |s: &Option<Parcel<P>>| s.as_ref().map(|b| b.stack.clone());
+        self.items.iter().map(slot).collect()
+    }
+
     /// `isBackedUp`.
     pub fn backed_up(&self) -> bool {
         self.items.iter().all(Option::is_some)
@@ -166,7 +184,7 @@ pub enum PortStep<P> {
 /// A dimension's packagers, ports and chain conveyors.
 #[derive(Clone, Debug)]
 pub struct Packaging<P> {
-    pub packagers: HashMap<[i32; 3], Packager<P>>,
+    pub packagers: HashMap<[i32; 3], Packager<Parcel<P>>>,
     pub ports: HashMap<[i32; 3], Port<P>>,
     pub chains: Chains<P>,
     /// Packagers that tick (animating, cooling down, powered).
@@ -216,7 +234,7 @@ impl<P: Clone> Packaging<P> {
     }
 
     /// The packager at `pos`, made when missing.
-    pub fn packager(&mut self, pos: [i32; 3]) -> &mut Packager<P> {
+    pub fn packager(&mut self, pos: [i32; 3]) -> &mut Packager<Parcel<P>> {
         self.packagers.entry(pos).or_default()
     }
 
