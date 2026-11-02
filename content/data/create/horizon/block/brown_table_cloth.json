@@ -2,7 +2,15 @@
   "template": "minecraft:white_carpet",
   "properties": {
     "hardness": 0.1,
-    "explosion_resistance": 0.1
+    "explosion_resistance": 0.1,
+    "requires_tool": false,
+    "sounds": "minecraft:white_wool"
   },
-  "item": true
+  "item": true,
+  "state_properties": {
+    "entity": [
+      "false",
+      "true"
+    ]
+  }
 }

@@ -263,6 +263,16 @@ fn compile(create: &Path, out: &Path) {
             let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
+        } else if matches!(
+            facts.class.as_deref(),
+            Some("VerticalGearboxItem" | "BlazeBurnerBlockItem")
+        ) {
+            // VerticalGearboxItem (a gearbox on a vertical axis) and the empty blaze burner
+            // (`BlazeBurnerBlockItem.empty`): block items of blocks that have their own item, so
+            // plain items here whose placing (and the burner's capture) is the native mod's.
+            let doc = json!({ "template": "minecraft:stick" });
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
         } else if name == "wrench" {
             // WrenchItem: `stacksTo(1)`; its use is the native mod's.
             let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });

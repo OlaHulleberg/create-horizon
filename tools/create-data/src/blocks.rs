@@ -1101,6 +1101,58 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 own(&[("facing", facing), ("powered", bools), ("receiver", bools)]),
             )
         }
+        // FlywheelBlock (RotatedPillarKineticBlock, `SharedProperties::softMetal`, `noOcclusion`):
+        // AllShapes.LARGE_GEAR on its axis; the wheel and its shaft are drawn turning.
+        "flywheel" => (
+            "minecraft:iron_chain",
+            Some(by_axis(&[LARGE_GEAR, SIX_VOXEL_POLE])),
+            own(&[("axis", &["y", "x", "z"])]),
+        ),
+        // TurntableBlock (KineticBlock, `SharedProperties::wooden`): no properties of its own, so
+        // no declared shape (content shapes select by a property): a full block, not
+        // AllShapes.TURNTABLE_SHAPE. Its plate is drawn turning.
+        "turntable" => ("minecraft:oak_planks", None, None),
+        // LargeWaterWheelBlock (RotatedPillarKineticBlock, `SharedProperties::wooden`,
+        // `noOcclusion`): its axis (y first) and `extension`; glass's template hides nothing
+        // beside it (the wheel is drawn as a part, not in the chunk mesh).
+        "large_water_wheel" => (
+            "minecraft:glass",
+            None,
+            own(&[("axis", &["y", "x", "z"]), ("extension", bools)]),
+        ),
+        // WaterWheelStructuralBlock (DirectionalBlock, `noOcclusion`, RenderShape.INVISIBLE):
+        // placed around a large wheel by the glue, pointing at it; no item.
+        "water_wheel_structure" => (
+            "minecraft:glass",
+            None,
+            own(&[("facing", &["down", "up", "north", "south", "west", "east"])]),
+        ),
+        // GirderEncasedShaftBlock (HorizontalAxisKineticBlock, `SharedProperties::softMetal`,
+        // netherite's sounds): AllShapes.GIRDER_BEAM_SHAFT (the beam across its axis and the
+        // shaft along it); `top`/`bottom` as the girder's; no item (a shaft on a girder).
+        "metal_girder_encased_shaft" => {
+            let along = |a: &str| -> Vec<Value> {
+                let (beam, shaft): (Px, Px) = if a == "x" {
+                    ([4., 2., 0., 12., 14., 16.], [0., 5., 5., 16., 11., 11.])
+                } else {
+                    ([0., 2., 4., 16., 14., 12.], [5., 5., 0., 11., 11., 16.])
+                };
+                [beam, shaft]
+                    .iter()
+                    .map(|b| json!(b.map(|v| v / 16.0)))
+                    .collect()
+            };
+            (
+                "minecraft:iron_chain",
+                Some(json!({ "property": "axis", "values": { "x": along("x"), "z": along("z") } })),
+                own(&[
+                    ("axis", &["x", "z"]),
+                    ("bottom", bools),
+                    ("top", bools),
+                    ("waterlogged", bools),
+                ]),
+            )
+        }
         _ => return None,
     };
     // KineticBlock.getRenderShape: shafts and cogs are all moving parts; casings, gearboxes and
@@ -1115,6 +1167,9 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             | "belt"
             | "crushing_wheel"
             | "gantry_shaft"
+            | "flywheel"
+            | "turntable"
+            | "large_water_wheel"
     );
     Some(Decision::Declared {
         template,
@@ -1133,6 +1188,8 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 | "pulley_magnet"
                 | "andesite_belt_funnel"
                 | "brass_belt_funnel"
+                | "water_wheel_structure"
+                | "metal_girder_encased_shaft"
         ),
     })
 }
@@ -1402,6 +1459,215 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
                 ("waterlogged", bools),
             ]),
             n == "nixie_tube",
+        ));
+    }
+    let facing: &[&str] = &["down", "up", "north", "south", "west", "east"];
+    // GirderBlock (`SharedProperties::softMetal`, netherite's sounds): `axis` (y by default),
+    // `bottom`, `top`, `x`, `z` set by the glue as Create's `updateState`. Content shapes select
+    // by one property: by `x`, AllShapes.GIRDER_CROSS when it runs along x (also for a lone x
+    // beam), else GIRDER_BEAM along z and EIGHT_VOXEL_POLE (also for a lone pole).
+    if n == "metal_girder" {
+        let beam_x = [0., 2., 4., 16., 14., 12.];
+        let beam_z = [4., 2., 0., 12., 14., 16.];
+        return Some(declared(
+            "minecraft:iron_chain",
+            "minecraft:netherite_block",
+            true,
+            Some(json!({ "property": "x", "values": {
+                "true": px(&[beam_x, beam_z, [3., 0., 3., 13., 16., 13.]]),
+                "false": px(&[beam_z, [4., 0., 4., 12., 16., 12.]]) } })),
+            own(&[
+                ("axis", &["y", "x", "z"]),
+                ("bottom", bools),
+                ("top", bools),
+                ("waterlogged", bools),
+                ("x", bools),
+                ("z", bools),
+            ]),
+            true,
+        ));
+    }
+    // BracketBlock (WrenchableDirectionalBlock): never placed on its own (`BracketBlockItem`
+    // puts it on a shaft, cog or pipe); its states are the bracket models the glue draws.
+    if n == "metal_bracket" || n == "wooden_bracket" {
+        let metal = n == "metal_bracket";
+        return Some(declared(
+            "minecraft:heavy_core",
+            if metal {
+                "minecraft:netherite_block"
+            } else {
+                "minecraft:scaffolding"
+            },
+            metal,
+            None,
+            own(&[
+                ("axis_along_first", bools),
+                ("facing", facing),
+                ("type", &["pipe", "cog", "shaft"]),
+            ]),
+            true,
+        ));
+    }
+    // RadialChassisBlock (AbstractChassisBlock: a pillar, `SharedProperties::wooden`): its axis
+    // (y by default) and four glued sides.
+    if n == "radial_chassis" {
+        return Some(declared(
+            "minecraft:stripped_spruce_wood",
+            "minecraft:stripped_spruce_wood",
+            false,
+            None,
+            own(&[
+                ("axis", &["y", "x", "z"]),
+                ("sticky_east", bools),
+                ("sticky_north", bools),
+                ("sticky_south", bools),
+                ("sticky_west", bools),
+            ]),
+            true,
+        ));
+    }
+    // CreativeCrateBlock (CrateBlock: WrenchableDirectionalBlock, `SharedProperties::stone`):
+    // AllShapes.CRATE_BLOCK_SHAPE whatever its facing; its supply is the glue's.
+    if n == "creative_crate" {
+        return Some(declared(
+            "minecraft:andesite",
+            "minecraft:stone",
+            true,
+            Some(by_property(
+                "facing",
+                facing,
+                &[[1., 0., 1., 15., 14., 15.]],
+            )),
+            own(&[("facing", facing)]),
+            true,
+        ));
+    }
+    // PlacardBlock (FaceAttachedHorizontalDirectionalBlock, `SharedProperties::copperMetal`):
+    // the lever's template gives its placement, survival and signal (15 while `powered`, strong
+    // into the block it hangs on: Create's `getSignal` / `getDirectSignal`); the lever's shapes.
+    // FLOOR, NORTH by default.
+    if n == "placard" {
+        return Some(declared(
+            "minecraft:lever",
+            "minecraft:copper_block",
+            true,
+            None,
+            own(&[
+                ("face", &["floor", "wall", "ceiling"]),
+                ("facing", horizontal),
+                ("powered", bools),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ));
+    }
+    // ClipboardBlock (FaceAttachedHorizontalDirectionalBlock, `SharedProperties::wooden`): the
+    // lever's placement and survival; `written` from the item's pages.
+    if n == "clipboard" {
+        return Some(declared(
+            "minecraft:lever",
+            "minecraft:stripped_spruce_wood",
+            false,
+            None,
+            own(&[
+                ("face", &["floor", "wall", "ceiling"]),
+                ("facing", horizontal),
+                ("waterlogged", bools),
+                ("written", bools),
+            ]),
+            true,
+        ));
+    }
+    // DeskBellBlock (WrenchableDirectionalBlock, UP by default): AllShapes.DESK_BELL to its
+    // facing; its signal is the glue's.
+    if n == "desk_bell" {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:stone",
+            false,
+            Some(by_facing(&[
+                [3., 0., 3., 13., 3., 13.],
+                [4., 0., 4., 12., 9., 12.],
+            ])),
+            own(&[
+                ("facing", &["up", "down", "north", "south", "west", "east"]),
+                ("powered", bools),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ));
+    }
+    // HauntedBellBlock and PeculiarBellBlock (AbstractBellBlock extends vanilla's BellBlock,
+    // `BuilderTransformers.bell`: soft metal, anvil sounds): the bell's template (ringing on a
+    // hit or a rising signal, its block entity), with the bell's own properties.
+    if n == "haunted_bell" || n == "peculiar_bell" {
+        return Some(declared(
+            "minecraft:bell",
+            "minecraft:anvil",
+            true,
+            None,
+            own(&[
+                (
+                    "attachment",
+                    &["floor", "ceiling", "single_wall", "double_wall"],
+                ),
+                ("facing", horizontal),
+                ("powered", bools),
+            ]),
+            true,
+        ));
+    }
+    // TableClothBlock (`BuilderTransformers.tableCloth`): `entity` (a shop's block entity, false
+    // by default); the carpet's template is its collision (TABLE_CLOTH_OCCLUSION). Dyed ones are
+    // wool, the andesite one stone, brass and copper metal.
+    if n.ends_with("_table_cloth") {
+        let (sounds, tool) = match n {
+            "andesite_table_cloth" => ("minecraft:andesite", true),
+            "brass_table_cloth" => ("minecraft:gold_block", true),
+            "copper_table_cloth" => ("minecraft:copper_block", true),
+            _ => ("minecraft:white_wool", false),
+        };
+        return Some(declared(
+            "minecraft:white_carpet",
+            sounds,
+            tool,
+            None,
+            own(&[("entity", bools)]),
+            true,
+        ));
+    }
+    // CardboardBlock (`initialProperties(MUSHROOM_STEM)`, chiseled bookshelf sounds): its
+    // horizontal axis, from the player's facing (the glue).
+    if n == "cardboard_block" || n == "bound_cardboard_block" {
+        return Some(declared(
+            "minecraft:oak_planks",
+            "minecraft:chiseled_bookshelf",
+            false,
+            None,
+            own(&[("axis", &["x", "z"])]),
+            true,
+        ));
+    }
+    // ItemHatchBlock (HorizontalDirectionalBlock, `SharedProperties::softMetal`, netherite's
+    // sounds): `facing` toward the inventory, `open` for 10 ticks after a deposit;
+    // AllShapes.ITEM_HATCH against that inventory.
+    if n == "item_hatch" {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:netherite_block",
+            true,
+            Some(by_horizontal(&[
+                [1., 0., 0., 15., 16., 2.],
+                [2., 2., 0., 14., 13., 3.8],
+                [2., 4., 0., 14., 11., 5.8],
+                [2., 6., 0., 14., 9., 7.8],
+            ])),
+            own(&[
+                ("facing", horizontal),
+                ("open", bools),
+                ("waterlogged", bools),
+            ]),
+            true,
         ));
     }
     None
@@ -1900,7 +2166,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     if *animated {
         props.insert("render_shape".into(), json!("entityblock_animated"));
     }
-    if b.name == "crushing_wheel_controller" {
+    if matches!(
+        b.name.as_str(),
+        "crushing_wheel_controller" | "water_wheel_structure"
+    ) {
         props.insert("render_shape".into(), json!("invisible"));
     }
     // AllBlocks.ROSE_QUARTZ_LAMP: `mapColor(TERRACOTTA_PINK)` (MapColor id 42); its light by
@@ -2132,6 +2401,64 @@ mod tests {
         assert_eq!(states["toolbox"], (16, 128));
         assert_eq!(states["postbox"], (16, 256));
         assert_eq!(states["nixie_tube"], (16, 512));
+    }
+
+    /// The decorative and kinetic blocks ported with their glue: Create's states and defaults.
+    #[test]
+    fn decorative_and_kinetic_blocks_take_create_s_states() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let generated = root.join("src/generated/resources");
+        if !generated.is_dir() {
+            return;
+        }
+        let java = crate::java::read_all(&root.join("src/main/java"));
+        let all = read_blocks(&generated, &java);
+        let doc = |n: &str| {
+            let b = all.iter().find(|b| b.name == n).unwrap();
+            let d = decide(b, &BTreeMap::new());
+            declaration(b, &d).unwrap_or_else(|| panic!("{n}: {d:?}"))
+        };
+        let expect = [
+            // GirderBlock: X, Z, TOP, BOTTOM, AXIS (y), WATERLOGGED.
+            ("metal_girder", 96, vec![("axis", "y"), ("x", "false")]),
+            ("metal_girder_encased_shaft", 16, vec![("axis", "x")]),
+            ("metal_bracket", 36, vec![("type", "pipe")]),
+            ("radial_chassis", 48, vec![("axis", "y")]),
+            (
+                "large_water_wheel",
+                6,
+                vec![("axis", "y"), ("extension", "false")],
+            ),
+            ("water_wheel_structure", 6, vec![("facing", "down")]),
+            ("flywheel", 3, vec![("axis", "y")]),
+            ("placard", 48, vec![("face", "floor"), ("facing", "north")]),
+            (
+                "desk_bell",
+                24,
+                vec![("facing", "up"), ("powered", "false")],
+            ),
+            ("peculiar_bell", 32, vec![("attachment", "floor")]),
+            ("clipboard", 48, vec![("written", "false")]),
+            ("item_hatch", 16, vec![("open", "false")]),
+            ("white_table_cloth", 2, vec![("entity", "false")]),
+            ("cardboard_block", 2, vec![("axis", "x")]),
+            ("creative_crate", 6, vec![("facing", "down")]),
+        ];
+        for (n, count, defaults) in expect {
+            let d = doc(n);
+            let (c, def) = states_and_default(&d);
+            assert_eq!(c, count, "{n}");
+            for (k, v) in defaults {
+                assert!(def.contains(&(k.to_owned(), v.to_owned())), "{n}: {k}");
+            }
+        }
+        assert_eq!(
+            doc("turntable")["properties"]["render_shape"],
+            "entityblock_animated"
+        );
+        assert_eq!(doc("water_wheel_structure")["item"], false);
+        assert_eq!(doc("metal_girder_encased_shaft")["item"], false);
+        assert_eq!(doc("haunted_bell")["template"], "minecraft:bell");
     }
 
     /// With Create's Java beside the port: the classes answering `hasAnalogOutputSignal` are the

@@ -1,0 +1,86 @@
+{
+  "template": "minecraft:iron_chain",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:netherite_block"
+  },
+  "item": true,
+  "shapes": {
+    "property": "x",
+    "values": {
+      "true": [
+        [
+          0.0,
+          0.125,
+          0.25,
+          1.0,
+          0.875,
+          0.75
+        ],
+        [
+          0.25,
+          0.125,
+          0.0,
+          0.75,
+          0.875,
+          1.0
+        ],
+        [
+          0.1875,
+          0.0,
+          0.1875,
+          0.8125,
+          1.0,
+          0.8125
+        ]
+      ],
+      "false": [
+        [
+          0.25,
+          0.125,
+          0.0,
+          0.75,
+          0.875,
+          1.0
+        ],
+        [
+          0.25,
+          0.0,
+          0.25,
+          0.75,
+          1.0,
+          0.75
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "axis": [
+      "y",
+      "x",
+      "z"
+    ],
+    "bottom": [
+      "false",
+      "true"
+    ],
+    "top": [
+      "false",
+      "true"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ],
+    "x": [
+      "false",
+      "true"
+    ],
+    "z": [
+      "false",
+      "true"
+    ]
+  }
+}
