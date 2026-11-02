@@ -365,6 +365,8 @@ pub struct Slot<K> {
     pub count: u32,
     pub max: u32,
     pub bulky: bool,
+    /// A package (`instanceof PackageItem`): sent as it is, not boxed.
+    pub package: bool,
 }
 
 /// What `attemptToSend` (no request) takes: `(slot, count)` from the inventory in order, the
@@ -424,8 +426,10 @@ pub fn pack<K: PartialEq>(slots: &[Option<Slot<K>>]) -> Option<Packed> {
                     None => out.taken.push((i, transferred)),
                 }
             }
-            if s.bulky {
+            if s.package {
                 out.package = Some(i);
+            }
+            if s.bulky {
                 break 'outer;
             }
         }
@@ -573,7 +577,8 @@ mod tests {
             key,
             count,
             max: if key == "egg" { 16 } else { 64 },
-            bulky: key == "package",
+            bulky: key == "package" || key == "shulker",
+            package: key == "package",
         })
     }
 
@@ -621,6 +626,9 @@ mod tests {
         let p = pack(&[slot("iron", 4), slot("package", 1)]).unwrap();
         assert_eq!(p.package, None);
         assert_eq!(p.taken, vec![(0, 4)]);
+        // A shulker box goes alone, boxed.
+        let p = pack(&[slot("shulker", 1), slot("iron", 4)]).unwrap();
+        assert_eq!((p.package, p.contents[0]), (None, Some((0, 1))));
     }
 
     fn target(stack: Option<(&'static str, u32)>) -> Target<&'static str> {

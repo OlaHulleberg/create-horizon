@@ -70,6 +70,7 @@ pub mod sequencer;
 pub mod spout;
 pub mod states;
 pub mod steam;
+pub mod stock;
 pub mod symmetry;
 pub mod tank;
 pub mod toolbox;

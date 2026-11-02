@@ -26,6 +26,11 @@ pub struct Packager<P> {
     pub held: Option<P>,
     /// `signBasedAddress` (set by `/create_debug address`, standing in for an adjacent sign).
     pub address: String,
+    /// `queuedExitingPackages`: boxes made for an order (or by a re-packager) waiting their
+    /// turn, each with how many of it.
+    pub queue: std::collections::VecDeque<(P, u32)>,
+    /// A re-packager (`RepackagerBlockEntity`).
+    pub repackager: bool,
     lazy: u32,
 }
 
@@ -39,6 +44,8 @@ impl<P> Default for Packager<P> {
             sliding: None,
             held: None,
             address: String::new(),
+            queue: std::collections::VecDeque::new(),
+            repackager: false,
             lazy: LAZY_RATE,
         }
     }
@@ -55,10 +62,28 @@ pub struct Step {
     pub done: bool,
 }
 
-impl<P> Packager<P> {
-    /// Whether it needs ticks.
+impl<P: Clone> Packager<P> {
+    /// Whether it needs ticks (a queue waits without ticking while a box is held).
     pub fn active(&self) -> bool {
-        self.animation_ticks > 0 || self.button_cooldown > 0 || self.powered
+        self.animation_ticks > 0
+            || self.button_cooldown > 0
+            || self.powered
+            || (!self.queue.is_empty() && self.held.is_none() && self.sliding.is_none())
+    }
+
+    /// `attemptToSend(requests)`'s end: a box made for an order slides out now, or waits in the
+    /// queue while one is held or animating.
+    pub fn send_or_queue(&mut self, box_: P) {
+        if self.held.is_some() || self.sliding.is_some() || self.animation_ticks != 0 {
+            self.queue.push_back((box_, 1));
+        } else {
+            self.send(box_);
+        }
+    }
+
+    /// `isTooBusyFor`.
+    pub fn too_busy(&self, kind: crate::stock::RequestType) -> bool {
+        self.queue.len() >= kind.busy_at()
     }
 
     /// `attemptToSend(null)`'s guard: nothing held, not animating, not cooling down.
@@ -134,6 +159,20 @@ impl<P> Packager<P> {
             self.button_cooldown -= 1;
         }
         if self.animation_ticks == 0 {
+            // The next queued box slides out once nothing is held.
+            if self.held.is_none()
+                && self.sliding.is_none()
+                && let Some((b, n)) = self.queue.front_mut()
+            {
+                let next = b.clone();
+                // `entry.count--`, gone at 0 or below (a count of 0 still sends one, as Create).
+                if *n <= 1 {
+                    self.queue.pop_front();
+                } else {
+                    *n -= 1;
+                }
+                self.send(next);
+            }
             return step;
         }
         self.animation_ticks -= 1;
@@ -195,6 +234,35 @@ mod tests {
         assert!(p.can_send());
         p.powered = false;
         assert!(!p.active(), "idle once unpowered");
+    }
+
+    #[test]
+    fn queued_boxes_leave_one_after_another() {
+        let mut p = Packager::<&str>::default();
+        p.send_or_queue("a");
+        p.send_or_queue("b");
+        p.queue.push_back(("c", 2));
+        assert_eq!(p.queue.len(), 2);
+        assert!(!p.too_busy(crate::stock::RequestType::Player));
+        let mut out = Vec::new();
+        for _ in 0..200 {
+            if p.tick().done {
+                out.push(p.take().unwrap());
+            }
+        }
+        assert_eq!(out, ["a", "b", "c", "c"]);
+        assert!(!p.active());
+        // A held box keeps the queue waiting, without ticks.
+        p.send_or_queue("d");
+        for _ in 0..CYCLE {
+            p.tick();
+        }
+        p.send_or_queue("e");
+        assert!(!p.active(), "held, nothing to tick");
+        assert_eq!(p.take(), Some("d"));
+        assert!(p.active());
+        p.queue.extend((0..10).map(|_| ("x", 1)));
+        assert!(p.too_busy(crate::stock::RequestType::Restock));
     }
 
     #[test]

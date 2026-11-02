@@ -22,6 +22,8 @@ pub fn has_analog_output(b: Block) -> bool {
             | Block::Basin
             | Block::PackageFrogport
             | Block::Packager
+            | Block::Repackager
+            | Block::RedstoneRequester
             | Block::ItemDrain
             | Block::Spout
             | Block::FluidTank

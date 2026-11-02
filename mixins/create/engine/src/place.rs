@@ -138,6 +138,9 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
         // the player.
         Block::CuckooClock | Block::MysteriousCuckooClock => preferred(true, shaft)
             .map_or_else(|| horizontal_direction(ctx.yaw).opposite(), Dir::opposite),
+        // StockTickerBlock: facing the player; sneaking, away.
+        Block::StockTicker if ctx.sneaking => horizontal_direction(ctx.yaw),
+        Block::StockTicker => horizontal_direction(ctx.yaw).opposite(),
         // BacktankBlock (HorizontalKineticBlock): facing the player.
         Block::CopperBacktank | Block::NetheriteBacktank => {
             horizontal_direction(ctx.yaw).opposite()
@@ -214,6 +217,8 @@ pub fn axis(
                 (axis, false)
             })
         }
+        // RedstoneRequesterBlock: the axis of the player's horizontal facing.
+        Block::RedstoneRequester => Some((facing, false)),
         _ => None,
     }
 }
@@ -478,5 +483,18 @@ mod tests {
             Some((Axis::Z, false))
         );
         assert_eq!(axis(Block::Shaft, ctx(0.0, 0.0, false), none, None), None);
+        // Requesters along the player's facing; tickers facing the player.
+        assert_eq!(
+            axis(Block::RedstoneRequester, ctx(90.0, 0.0, false), none, None),
+            Some((Axis::X, false))
+        );
+        assert_eq!(
+            facing(Block::StockTicker, ctx(0.0, 0.0, false), none),
+            Some(Dir::North)
+        );
+        assert_eq!(
+            facing(Block::StockTicker, ctx(0.0, 0.0, true), none),
+            Some(Dir::South)
+        );
     }
 }
