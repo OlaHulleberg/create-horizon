@@ -1684,9 +1684,301 @@ pub fn nixie_texts(
     out
 }
 
+/// One string `FlapDisplayRenderer` draws: its pose from the controller's corner in font pixels
+/// (as `TubeText`), its ARGB colour and whether it glows (full bright).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlapText {
+    pub pose: glam::Mat4,
+    pub text: String,
+    pub color: u32,
+    pub full_bright: bool,
+}
+
+/// `FlapDisplayBlockEntity.getLineColor`: a dyed line's bright colour, else the flaps' cream.
+pub fn line_color(colour: Option<u8>) -> u32 {
+    colour
+        .and_then(|c| crate::dye::DyeColor::ALL.get(usize::from(c)).copied())
+        .map_or(0xFF_D3C6BA, |c| dye_colors(c).0 | 0xFF00_0000)
+}
+
+/// A board's lines as `FlapDisplayRenderer.renderSafe` draws them from its controller facing
+/// `facing`, `x_size` blocks wide: each line centred across the board, 16 px under the last; its
+/// sections one after another (`size`, then 8 px for a gap, else 1); a section of separate flaps
+/// draws each character centred in its flap (7 px, 9 wide), a single flap its text as one string.
+/// A line's colour (`line_color`) is drawn at alpha .85, .975 and full bright when it glows.
+/// Flaps still spinning (`FlapDisplayRenderOutput.accept`) show their cycle's characters, the
+/// half-turned `-` and `_`, dimmed to .75; a single flap cycles its options every 3 ticks. `ticks`
+/// is the client's tick count (the time a spinning flap is at: Create's frame time, taken at the
+/// tick), `running` whether the board turns fast enough to animate (stopped flaps hold still).
+/// `options` are each cycle's flap options (`Cycle::ALL` order); `width` the font's width of a
+/// string. Spaces draw nothing.
+#[allow(clippy::too_many_arguments)]
+pub fn board_texts(
+    facing: Dir,
+    x_size: i32,
+    lines: &[(String, Vec<ShownSection>)],
+    colour: &[Option<u8>],
+    glowing: &[bool],
+    options: &[Vec<String>],
+    running: bool,
+    ticks: i64,
+    width: impl Fn(&str) -> f32,
+) -> Vec<FlapText> {
+    use glam::{Mat4, Vec3};
+    let t = |x: f32, y: f32, z: f32| Mat4::from_translation(Vec3::new(x, y, z));
+    let scale = 1.0 / 32.0;
+    // center, rotateY, uncenter, back 3 px; up a block and out to the front; to font pixels.
+    let base = t(0.5, 0.5, 0.5)
+        * Mat4::from_rotation_y(horizontal_angle(facing).to_radians())
+        * t(-0.5, -0.5, -0.5)
+        * t(0.0, 0.0, -3.0 / 16.0)
+        * t(0.0, 1.0, 1.0)
+        * Mat4::from_scale(Vec3::new(scale, -scale, scale))
+        * t(0.0, 0.0, 0.5);
+    let (paused_ticks, time) = if running {
+        (ticks, ticks as f32)
+    } else {
+        (0, 0.0)
+    };
+    let channel =
+        |c: u32, s: u32, dim: f32| ((((c >> s) & 255) as f32 / 255.0 * dim) * 255.0) as u32;
+    let mut out = Vec::new();
+    for (j, (_, sections)) in lines.iter().enumerate() {
+        let base_color = line_color(colour.get(j).copied().flatten());
+        let glows = glowing.get(j).copied().unwrap_or(false);
+        let alpha = ((if glows { 0.975f32 } else { 0.85 }) * 255.0) as u32;
+        let color = |dim: f32| {
+            alpha << 24
+                | channel(base_color, 16, dim) << 16
+                | channel(base_color, 8, dim) << 8
+                | channel(base_color, 0, dim)
+        };
+        let gap = |s: &ShownSection| s.section.size + if s.section.has_gap { 8.0 } else { 1.0 };
+        let w: f32 = sections.iter().map(gap).sum();
+        let mut at =
+            base * t(0.0, 16.0 * j as f32, 0.0) * t(x_size as f32 * 16.0 - w / 2.0 + 1.0, 4.5, 0.0);
+        for (i, s) in sections.iter().enumerate() {
+            let cycle = options
+                .get(s.section.cycle as usize)
+                .map_or(&[][..], Vec::as_slice);
+            let spinning = |k: usize| s.spinning.get(k).copied().unwrap_or(false);
+            let mut push = |x: f32, text: String, dim: f32| {
+                out.push(FlapText {
+                    pose: at * t(x, 0.0, 0.0),
+                    text,
+                    color: color(dim),
+                    full_bright: glows,
+                })
+            };
+            if !s.section.single_flap {
+                let standard = if s.section.wide {
+                    WIDE_MONOSPACE
+                } else {
+                    MONOSPACE
+                };
+                for (k, c) in s.shown.chars().enumerate() {
+                    let (glyph, dim) = if spinning(k) && !cycle.is_empty() {
+                        let speed = if s.spinning_ticks > 5 && s.spinning_ticks < 20 {
+                            1.75
+                        } else {
+                            2.5
+                        };
+                        let turn = time / speed + k as f32 * 16.83 + j as f32 * 0.75;
+                        let partial = turn % 1.0;
+                        let flap = cycle[turn as usize % cycle.len()]
+                            .chars()
+                            .next()
+                            .unwrap_or(' ');
+                        let glyph = if !running || partial <= 0.5 {
+                            flap
+                        } else if partial > 0.75 {
+                            '_'
+                        } else {
+                            '-'
+                        };
+                        (glyph, 0.75)
+                    } else {
+                        (c, 1.0)
+                    };
+                    if glyph == ' ' {
+                        continue;
+                    }
+                    let g = glyph.to_string();
+                    let gw = width(&g);
+                    push(k as f32 * standard + (standard - gw) / 2.0, g, dim);
+                }
+            } else if spinning(0) && !cycle.is_empty() {
+                // `cyclingOptions[(ticks / 3 + i * 13) % length]`, each glyph swapped for a dash
+                // or a dot by its width two ticks in three, dimmed then.
+                let text = &cycle[(ticks.max(0) as usize / 3 + i * 13) % cycle.len()];
+                let mut x = 0.0;
+                for c in text.chars() {
+                    let gw = width(&c.to_string());
+                    let phase = paused_ticks.rem_euclid(3);
+                    let glyph = match phase {
+                        0 if gw == 6.0 => '-',
+                        0 if gw == 1.0 => '\'',
+                        2 if gw == 6.0 => '_',
+                        2 if gw == 1.0 => '.',
+                        _ => c,
+                    };
+                    if glyph != ' ' {
+                        push(x, glyph.to_string(), if phase == 1 { 1.0 } else { 0.75 });
+                    }
+                    x += gw;
+                }
+            } else if !s.shown.trim().is_empty() {
+                push(0.0, s.shown.clone(), 1.0);
+            }
+            at *= t(gap(s), 0.0, 0.0);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn shown(section: Section, text: &str) -> ShownSection {
+        let mut s = section;
+        s.text = Some(text.into());
+        ShownSection::new(s, 4)
+    }
+
+    #[test]
+    fn boards_draw_their_flaps_as_flap_display_renderer_does() {
+        let at = |m: glam::Mat4| m.transform_point3(glam::Vec3::ZERO);
+        let near = |a: glam::Vec3, b: [f32; 3]| (a - glam::Vec3::from(b)).length() < 1e-5;
+        let options: Vec<Vec<String>> =
+            Cycle::ALL.iter().map(|c| c.options(&Lang::EN_US)).collect();
+        // A board one block wide facing south: four flaps (28 px); "AB" settled, two lines.
+        let line = |t: &str| {
+            (
+                "Default".to_owned(),
+                vec![shown(Section::new(28.0, Cycle::Alphabet, false, false), t)],
+            )
+        };
+        let lines = vec![line("ab"), line("C")];
+        let texts = board_texts(
+            Dir::South,
+            1,
+            &lines,
+            &[None, Some(14)],
+            &[false, true],
+            &options,
+            true,
+            100,
+            |_| 5.0,
+        );
+        let chars: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(
+            chars,
+            ["A", "B", "C"],
+            "upper case, spaces drawn as nothing"
+        );
+        // Centred: 16 - (28 + 1) / 2 + 1 = 2.5 px in, each character in the middle of its 7 px
+        // flap (a glyph 5 wide: 1 px in); 4.5 px down; 1/32 a block a px, in front of the face.
+        let z = 1.0 - 3.0 / 16.0 + 0.5 / 32.0;
+        assert!(
+            near(at(texts[0].pose), [3.5 / 32.0, 1.0 - 4.5 / 32.0, z]),
+            "{}",
+            at(texts[0].pose)
+        );
+        assert!(near(at(texts[1].pose), [10.5 / 32.0, 1.0 - 4.5 / 32.0, z]));
+        // The second line 16 px lower.
+        assert!(near(at(texts[2].pose), [3.5 / 32.0, 1.0 - 20.5 / 32.0, z]));
+        // Cream at .85, or a red dye's bright colour at .975, full bright, for a glowing line.
+        assert_eq!((texts[0].color >> 24, texts[0].full_bright), (216, false));
+        let rgb = |c: u32| [(c >> 16) & 255, (c >> 8) & 255, c & 255];
+        for (got, want) in rgb(texts[0].color).into_iter().zip(rgb(0xD3C6BA)) {
+            assert!(got.abs_diff(want) <= 1, "{:x}", texts[0].color);
+        }
+        assert_eq!((texts[2].color >> 24, texts[2].full_bright), (248, true));
+        for (got, want) in rgb(texts[2].color).into_iter().zip(rgb(0xB13937)) {
+            assert!(got.abs_diff(want) <= 1, "{:x}", texts[2].color);
+        }
+        // Facing north the board turns half round: the text runs from the east side.
+        let north = board_texts(Dir::North, 1, &lines, &[], &[], &options, true, 0, |_| 5.0);
+        assert!(
+            near(
+                at(north[0].pose),
+                [1.0 - 3.5 / 32.0, 1.0 - 4.5 / 32.0, 1.0 - z]
+            ),
+            "{}",
+            at(north[0].pose)
+        );
+        // Sections side by side: a 14 px one with a gap, then a single flap with its text as one
+        // string: the line is 14 + 8 + 14 + 1 wide.
+        let two = vec![(
+            "Labeled".to_owned(),
+            vec![
+                shown(Section::new(14.0, Cycle::Alphabet, false, true), "x"),
+                shown(Section::new(14.0, Cycle::Instant, true, false), "Hi there"),
+            ],
+        )];
+        let texts = board_texts(Dir::South, 1, &two, &[], &[], &options, true, 0, |_| 6.0);
+        assert_eq!(texts.len(), 2);
+        assert_eq!(texts[1].text, "Hi there");
+        let start = 16.0 - 37.0 / 2.0 + 1.0;
+        assert!(near(
+            at(texts[0].pose),
+            [(start + 0.5) / 32.0, 1.0 - 4.5 / 32.0, z]
+        ));
+        assert!(near(
+            at(texts[1].pose),
+            [(start + 22.0) / 32.0, 1.0 - 4.5 / 32.0, z]
+        ));
+    }
+
+    #[test]
+    fn spinning_flaps_show_their_cycle_dimmed() {
+        let options: Vec<Vec<String>> =
+            Cycle::ALL.iter().map(|c| c.options(&Lang::EN_US)).collect();
+        // "A" turning to "B" (a transition): its first flap spins.
+        let mut s = shown(Section::new(7.0, Cycle::Alphabet, false, false), "A");
+        s.section.set_text("B");
+        s.refresh(true);
+        assert!(s.spinning[0]);
+        let lines = vec![("Default".to_owned(), vec![s])];
+        let draw = |running: bool, ticks: i64| {
+            board_texts(
+                Dir::South,
+                1,
+                &lines,
+                &[],
+                &[],
+                &options,
+                running,
+                ticks,
+                |_| 5.0,
+            )
+        };
+        // Running at tick 5: two turns of 2.5 ticks, the third option (the first is a blank),
+        // dimmed to .75.
+        let third = options[0][2].chars().next().unwrap().to_string();
+        let t = draw(true, 5);
+        assert_eq!(t[0].text, third);
+        assert!(((t[0].color >> 16) & 255) < 0xD3 * 3 / 4 + 1);
+        // At tick 0, the blank: nothing drawn.
+        assert!(draw(true, 0).is_empty());
+        // At tick 2 the flap is 0.8 of the way round its turn: `_`.
+        assert_eq!(draw(true, 2)[0].text, "_");
+        // At tick 4, 0.6 of the way round: `-`.
+        assert_eq!(draw(true, 4)[0].text, "-");
+        // Stopped: the flap holds its first option (the blank) whatever the tick.
+        assert!(draw(false, 2).is_empty() && draw(false, 5).is_empty());
+        // Settled, it shows its text.
+        let mut done = lines.clone();
+        done[0].1[0].spinning[0] = false;
+        let t = board_texts(Dir::South, 1, &done, &[], &[], &options, true, 2, |_| 5.0);
+        assert_eq!(t[0].text, "B");
+        assert!(
+            ((t[0].color >> 16) & 255) >= 0xD2,
+            "not dimmed: {:x}",
+            t[0].color
+        );
+    }
 
     #[test]
     fn nixie_tubes_draw_each_character_four_times_in_their_tube() {
