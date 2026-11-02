@@ -412,6 +412,17 @@ tube in a row: the first tube holds "1" "5", the second blank (`display_state`);
 hook, see Blocked). A first try with `target[power=7]` read 0: vanilla's `TargetBlock.onPlace` resets a placed target
 to 0, so that was right.
 
+Nixie tube text is drawn (Horizon API 55 `native_text_set`, `87bd99fc7`, and `b5201f492`: text is drawn with back
+faces culled, as vanilla's text render type, so a tube's mirrored back copy shows from behind only; at first both
+copies showed from the front and overlapped). `display::nixie_texts` is `NixieTubeRenderer.renderSafe`/`drawTube`:
+each tube's character front and mirrored back with their shadows, in the tube's dye colours (`DyeHelper`), full
+bright; the per-frame flicker is left out. Clients draw a tube again only when its characters change (the server's
+message) and clear it when it is forgotten. The client reads the tube's name and properties from its block registry:
+the server's world table isn't there (a DEBUG log showed every lookup empty at first). The tube's glass and bases are
+drawn too: `create-data prepare` flattens NeoForge's `neoforge:composite` models (nixie tube, display link, stock link)
+into one vanilla elements list. Proven headless: a lever-powered link wrote "15" across two orange tubes, drawn as Create
+draws it (screenshot); the lever off, "0"; the tube holding it broken, its text gone.
+
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
 vault: a hopper put one iron ingot in, the observer went `powered=true` and the lamp behind it lit; a threshold switch

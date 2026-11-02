@@ -2567,6 +2567,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
     tick_client_displays(game);
     tick_client_lifts(game);
     tick_client_arms(game);
+    draw_client_nixies(game);
     tick_client_presses(game);
     tick_client_belts(game);
     if !client_ensure(game) {

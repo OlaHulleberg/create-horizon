@@ -121,6 +121,53 @@ pub fn convert_recipe(mut doc: Value) -> Option<Value> {
 /// A 1.21.1 loot table as 26.3 writes it, the form Horizon reads: a condition names its kind in
 /// `type` (1.21.1: `condition`), a function in `type` (1.21.1: `function`), and a pool's or
 /// entry's functions are its `modifier` list (1.21.1: `functions`).
+/// NeoForge's `neoforge:composite` model loader (the nixie tube, display and stock links): its
+/// children's elements, in order, become the model's own, their textures joined under the
+/// model's, which vanilla's baker reads. A child's `render_type` has no vanilla form and goes.
+pub fn flatten_composite(doc: &mut Value) {
+    let Some(obj) = doc.as_object_mut() else {
+        return;
+    };
+    if obj.get("loader").and_then(Value::as_str) != Some("neoforge:composite") {
+        return;
+    }
+    obj.remove("loader");
+    let children = obj.remove("children");
+    let mut elements = Vec::new();
+    let mut textures = obj
+        .get("textures")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let order: Option<Vec<String>> = obj.remove("item_render_order").and_then(|o| {
+        o.as_array().map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+    });
+    if let Some(Value::Object(children)) = children {
+        let names: Vec<String> = order.unwrap_or_else(|| children.keys().cloned().collect());
+        for name in names {
+            let Some(child) = children.get(&name).and_then(Value::as_object) else {
+                continue;
+            };
+            if let Some(Value::Object(t)) = child.get("textures") {
+                for (k, v) in t {
+                    textures.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+            }
+            if let Some(Value::Array(e)) = child.get("elements") {
+                elements.extend(e.iter().cloned());
+            }
+        }
+    }
+    if !textures.is_empty() {
+        obj.insert("textures".into(), Value::Object(textures));
+    }
+    obj.insert("elements".into(), Value::Array(elements));
+}
+
 pub fn convert_loot(v: &mut Value) {
     match v {
         Value::Object(o) => {
@@ -231,6 +278,15 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
                 }
                 None => skipped += 1,
             }
+        } else if path.starts_with("assets/create/models/")
+            && path.ends_with(".json")
+            && bytes.windows(18).any(|w| w == b"neoforge:composite")
+        {
+            let mut doc: Value =
+                serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
+            flatten_composite(&mut doc);
+            put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
+            copied += 1;
         } else if path.starts_with("data/create/loot_table/") {
             let mut doc: Value =
                 serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
@@ -349,6 +405,30 @@ mod tests {
             "minecraft:random_chance"
         );
         assert!(pool["entries"][0].get("functions").is_none());
+    }
+
+    #[test]
+    fn flattens_composite_models() {
+        let mut m = serde_json::json!({
+            "loader": "neoforge:composite", "parent": "block/block",
+            "textures": {"particle": "create:block/a"},
+            "children": {
+                "glass": {"render_type": "minecraft:translucent", "textures": {"1": "create:block/g"},
+                          "elements": [{"from": [0, 0, 0], "to": [1, 1, 1]}]},
+                "base": {"textures": {"0": "create:block/b"},
+                         "elements": [{"from": [2, 2, 2], "to": [3, 3, 3]}, {"from": [4, 4, 4], "to": [5, 5, 5]}]}
+            }
+        });
+        flatten_composite(&mut m);
+        assert!(m.get("loader").is_none() && m.get("children").is_none());
+        assert_eq!(m["elements"].as_array().unwrap().len(), 3);
+        assert_eq!(m["textures"]["0"], "create:block/b");
+        assert_eq!(m["textures"]["1"], "create:block/g");
+        assert_eq!(m["textures"]["particle"], "create:block/a");
+        // Anything else stays as it was.
+        let mut plain = serde_json::json!({"parent": "block/cube_all"});
+        flatten_composite(&mut plain);
+        assert_eq!(plain, serde_json::json!({"parent": "block/cube_all"}));
     }
 
     #[test]

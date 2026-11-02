@@ -1557,9 +1557,155 @@ pub fn decode(data: &[u8]) -> Vec<Shown> {
     out
 }
 
+/// One string `NixieTubeRenderer` draws: its pose from the block's corner in font pixels (x
+/// right, y down, a glyph 8 high, as `Font.drawInBatch` takes the pose stack), and its colour.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TubeText {
+    pub pose: glam::Mat4,
+    pub text: String,
+    pub color: u32,
+}
+
+/// `DyeHelper.getDyeColors`: a dye's bright and dark colours.
+pub fn dye_colors(c: crate::dye::DyeColor) -> (u32, u32) {
+    use crate::dye::DyeColor::*;
+    match c {
+        Black => (0x45403B, 0x21201F),
+        Red => (0xB13937, 0x632737),
+        Green => (0x208A46, 0x1D6045),
+        Brown => (0xAC855C, 0x68533E),
+        Blue => (0x5391E1, 0x504B90),
+        Gray => (0x5D666F, 0x313538),
+        LightGray => (0x95969B, 0x707070),
+        Purple => (0x9F54AE, 0x63366C),
+        Cyan => (0x3EABB4, 0x3C7872),
+        Pink => (0xD5A8CB, 0xB86B95),
+        Lime => (0xA3DF55, 0x4FB16F),
+        Yellow => (0xE6D756, 0xE9AC29),
+        LightBlue => (0x69CED2, 0x508AA5),
+        Orange => (0xEE9246, 0xD94927),
+        Magenta => (0xF062B0, 0xC04488),
+        White => (0xEDEAE5, 0xBBB6B0),
+    }
+}
+
+/// Catnip's `Color.mixColors`: each channel `a + (b - a) * w`.
+fn mix_colors(a: u32, b: u32, w: f32) -> u32 {
+    let ch = |c: u32, s: u32| ((c >> s) & 255) as f32;
+    [16, 8, 0].into_iter().fold(0, |out, s| {
+        let v = ch(a, s) + (ch(b, s) - ch(a, s)) * w;
+        out | ((v as i32).clamp(0, 255) as u32) << s
+    })
+}
+
+/// Catnip's `AngleHelper.horizontalAngle`.
+fn horizontal_angle(d: Dir) -> f32 {
+    let y = match d {
+        Dir::South => 0.0,
+        Dir::West => 90.0,
+        Dir::North => 180.0,
+        Dir::East => 270.0,
+        _ => return 0.0,
+    };
+    if d.axis() == crate::kinetics::Axis::X {
+        -y
+    } else {
+        y
+    }
+}
+
+/// `NixieTubeRenderer.renderSafe` without a signal: each tube's character (`left` 4 px to its
+/// left, `right` 4 px right) drawn front and back with their shadows (`drawTube`), full bright.
+/// `width` is the font's width of a string. The flicker (`random.nextFloat() / 4` of the way to
+/// the dark colour every frame) is left out: the text holds its bright colour.
+pub fn nixie_texts(
+    face: Face,
+    facing: Dir,
+    colour: crate::dye::DyeColor,
+    left: &str,
+    right: &str,
+    width: impl Fn(&str) -> f32,
+) -> Vec<TubeText> {
+    use Face as DoubleFace;
+    use glam::{Mat4, Vec3};
+    let y_rot = horizontal_angle(facing) - 90.0
+        + if face == DoubleFace::WallReversed {
+            180.0
+        } else {
+            0.0
+        };
+    let x_rot: f32 = match face {
+        DoubleFace::Wall => -90.0,
+        DoubleFace::WallReversed => 90.0,
+        _ => 0.0,
+    };
+    // center, rotateY, rotateZ, uncenter, then center again.
+    let base = Mat4::from_translation(Vec3::splat(0.5))
+        * Mat4::from_rotation_y(y_rot.to_radians())
+        * Mat4::from_rotation_z(x_rot.to_radians());
+    let height = if face == DoubleFace::Ceiling {
+        5.0
+    } else {
+        3.0
+    };
+    let scale = 1.0 / 20.0;
+    let (bright, dark) = dye_colors(colour);
+    let shadow = 0.5;
+    let mut out = Vec::new();
+    for (dx, c) in [(-4.0 / 16.0, left), (4.0 / 16.0, right)] {
+        let tube = base
+            * Mat4::from_translation(Vec3::new(dx, 0.0, 0.0))
+            * Mat4::from_scale(Vec3::new(scale, -scale, scale));
+        let w = width(c);
+        let lift = Mat4::from_translation(Vec3::new((w - shadow) / -2.0, -height, 0.0));
+        let front = tube * lift;
+        out.push(TubeText {
+            pose: front,
+            text: c.to_owned(),
+            color: bright,
+        });
+        out.push(TubeText {
+            pose: front * Mat4::from_translation(Vec3::new(shadow, shadow, -1.0 / 16.0)),
+            text: c.to_owned(),
+            color: dark,
+        });
+        let back = tube * Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * lift;
+        out.push(TubeText {
+            pose: back,
+            text: c.to_owned(),
+            color: dark,
+        });
+        out.push(TubeText {
+            pose: back * Mat4::from_translation(Vec3::new(-shadow, shadow, -1.0 / 16.0)),
+            text: c.to_owned(),
+            color: mix_colors(dark, 0, 0.35),
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nixie_tubes_draw_each_character_four_times_in_their_tube() {
+        use crate::dye::DyeColor;
+        let t = nixie_texts(Face::Floor, Dir::North, DyeColor::Orange, "1", "5", |_| 5.0);
+        assert_eq!(t.len(), 8);
+        assert_eq!((t[0].text.as_str(), t[0].color), ("1", 0xEE9246));
+        assert_eq!((t[1].color, t[2].color), (0xD94927, 0xD94927));
+        assert_eq!(t[3].color, mix_colors(0xD94927, 0, 0.35));
+        assert_eq!(t[4].text, "5");
+        // On the floor facing north the tubes' x turns onto z: the two lie along z, 8 px apart.
+        let at = |m: glam::Mat4| m.transform_point3(glam::Vec3::ZERO);
+        let (a, b) = (at(t[0].pose), at(t[4].pose));
+        assert!((a.x - b.x).abs() < 1e-5, "{a} {b}");
+        assert!(((a.z - b.z).abs() - 0.5).abs() < 1e-5, "{a} {b}");
+        // 3 font px above the centre, at 1/20 a block a px.
+        assert!((a.y - (0.5 + 3.0 / 20.0)).abs() < 1e-5, "{a}");
+        assert_eq!(mix_colors(0xFF0000, 0, 0.5), 0x7F0000);
+    }
 
     const BOARD: Stats = Stats {
         rows: 2,
