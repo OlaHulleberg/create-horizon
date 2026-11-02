@@ -182,6 +182,30 @@ pub fn is_nixie_tube(block: Block) -> bool {
     NIXIE_TUBES.contains(&block)
 }
 
+/// `AllBlocks.SEATS`, by colour.
+pub const SEATS: [Block; 16] = [
+    Block::WhiteSeat,
+    Block::OrangeSeat,
+    Block::MagentaSeat,
+    Block::LightBlueSeat,
+    Block::YellowSeat,
+    Block::LimeSeat,
+    Block::PinkSeat,
+    Block::GraySeat,
+    Block::LightGraySeat,
+    Block::CyanSeat,
+    Block::PurpleSeat,
+    Block::BlueSeat,
+    Block::BrownSeat,
+    Block::GreenSeat,
+    Block::RedSeat,
+    Block::BlackSeat,
+];
+
+pub fn is_seat(block: Block) -> bool {
+    SEATS.contains(&block)
+}
+
 /// Create's sliding doors (`SlidingDoorBlock`).
 pub fn is_sliding_door(block: Block) -> bool {
     matches!(
@@ -202,6 +226,8 @@ pub fn recoloured(block: Block, colour: DyeColor) -> Option<Block> {
         (&VALVE_HANDLES, colour_in(&VALVE_HANDLES, block))
     } else if is_toolbox(block) {
         (&TOOLBOXES, colour_in(&TOOLBOXES, block))
+    } else if is_seat(block) {
+        (&SEATS, colour_in(&SEATS, block))
     } else {
         return None;
     };
@@ -255,7 +281,15 @@ mod tests {
                 format!("{}_nixie_tube", c.name())
             };
             assert_eq!(NIXIE_TUBES[c as usize].name(), nixie);
+            assert_eq!(SEATS[c as usize].name(), format!("{}_seat", c.name()));
         }
+        // SeatBlock.useItemOn: `color != this.color`, the same family in the dye's colour.
+        assert_eq!(
+            recoloured(Block::WhiteSeat, DyeColor::Lime),
+            Some(Block::LimeSeat)
+        );
+        assert_eq!(recoloured(Block::LimeSeat, DyeColor::Lime), None);
+        assert!(is_seat(Block::BlackSeat) && !is_seat(Block::BlackToolbox));
         assert!(is_sliding_door(Block::TrainDoor));
         assert!(!is_sliding_door(Block::TrainTrapdoor));
     }

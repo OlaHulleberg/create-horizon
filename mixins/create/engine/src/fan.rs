@@ -258,11 +258,11 @@ pub fn aligned_distance(pos: [f64; 3], fan: [i32; 3], facing: Dir) -> f64 {
     (pos[a] - face).abs()
 }
 
-/// `tickAffectedEntities`' push on an item: its new motion, `flow` the way the air goes,
-/// `distance` from the fan's centre.
+/// `tickAffectedEntities`' push on an entity that isn't sneaking (an item, a mob, a player): its
+/// new motion, `flow` the way the air goes, `distance` from the fan's centre.
 pub fn push(flow: Dir, speed: f32, max: f32, distance: f64, motion: [f64; 3]) -> [f64; 3] {
     let o = flow.offset();
-    // An item never sneaks: 512.
+    // `sneakModifier`: 512 (4096 for a sneaking entity).
     let acceleration = (f64::from(speed.abs()) / 512.0 / (distance / f64::from(max))) as f32;
     let mut out = motion;
     for a in 0..3 {

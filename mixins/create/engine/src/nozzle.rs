@@ -11,11 +11,12 @@ pub const LAZY_RATE: i32 = 5;
 /// `lazyTick`: more pulled entities than this blow up (`level.explode`, power 2) and vanish.
 pub const MAX_PULLED: usize = 256;
 
-/// An entity the nozzle acts on (`pushingEntities`): item entities and mobs, by entity id.
+/// An entity the nozzle acts on (`pushingEntities`): item entities and every other entity
+/// (mobs, players, minecarts, boats, armor stands), by entity id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     Item(u32),
-    Mob(u32),
+    Entity(u32),
 }
 
 impl Target {
@@ -279,13 +280,13 @@ mod tests {
         let mut n = Nozzle::new(Dir::Up);
         n.range = 10.0;
         n.look_at(pos, Target::Item(1), [0.5, 5.5, 0.5], || true);
-        n.look_at(pos, Target::Mob(2), [0.5, 5.5, 0.5], || true);
-        n.look_at(pos, Target::Mob(2), [0.5, 5.5, 0.5], || true);
-        assert_eq!(n.entities, vec![Target::Item(1), Target::Mob(2)]);
+        n.look_at(pos, Target::Entity(2), [0.5, 5.5, 0.5], || true);
+        n.look_at(pos, Target::Entity(2), [0.5, 5.5, 0.5], || true);
+        assert_eq!(n.entities, vec![Target::Item(1), Target::Entity(2)]);
         // Hidden now: let go; out of range: kept as it is (`tick` lets go of it).
         n.look_at(pos, Target::Item(1), [0.5, 5.5, 0.5], || false);
-        n.look_at(pos, Target::Mob(2), [0.5, 15.5, 0.5], || false);
-        assert_eq!(n.entities, vec![Target::Mob(2)]);
+        n.look_at(pos, Target::Entity(2), [0.5, 15.5, 0.5], || false);
+        assert_eq!(n.entities, vec![Target::Entity(2)]);
         assert!(overloaded(false, 257) && !overloaded(false, 256) && !overloaded(true, 300));
     }
 }
