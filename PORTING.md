@@ -441,6 +441,18 @@ slot changed by `/data merge` sends no wake (the menu does), and in the tick aft
 
 Create installed and unused still costs nothing per tick or frame (`benchmarks/create-p8schem-*.json`).
 
+Comparators reading Create's blocks (API 56) and display board text (API 55), proven headless (comparators read
+through redstone wire on their output side, asked of the server with `execute if block`): a 2-block item vault, empty,
+then fed 5 stacks by a hopper on one block: after 40 s the comparators west of it and east of it both read 1 (the whole
+vault: about 100 iron over its 40 slots; the block's own 20 would give 2), and a comparator put south of the fed block
+afterwards read 1 too; a kindled blaze burner 2, seething 3; a depot holding 32 iron 8; a sequenced gearshift placed
+with `state=3` reads 0, as its state, which the port resets to 0 when placed. The east comparator first seemed to read 2:
+its wire touched the wire of the burner's comparator, and wires join (the seething burner's 3 reached it as 2); a
+temporary DEBUG commit in Horizon, removed, showed the comparator itself putting out 1. A display link behind a
+speedometer bound to a 3-wide display board turned through a cogwheel beside it (a board has no shaft:
+`KineticBlock.hasShaftTowards` is false, so a motor behind it gave 0 rpm, as in Create): the board read
+`Labeled_Number ["Speed ", "16 RPM"]` and showed "SPEED 16 RPM" on its flaps (screenshot).
+
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
 vault: a hopper put one iron ingot in, the observer went `powered=true` and the lamp behind it lit; a threshold switch
