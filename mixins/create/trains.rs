@@ -1179,10 +1179,6 @@ pub(super) fn trains_to_nbt(
     use horizon_world::nbt::{Compound, Tag};
     let registry = game.pack.assets.registry;
     let f = |v: f64| (v as f32).to_bits() as i32;
-    let pos = |p: Option<[i32; 3]>| {
-        let p = p.unwrap_or([0; 3]);
-        [p[0], p[1], p[2]]
-    };
     Tag::List(
         all.iter()
             .map(|t| {
@@ -1225,19 +1221,15 @@ pub(super) fn trains_to_nbt(
                     ),
                 );
                 c.insert("spacing".into(), Tag::IntArray(t.train.spacing.clone()));
-                let nav = t.train.nav.as_ref().map(|n| n.station);
-                let mut motion = vec![
-                    f(t.train.speed),
-                    i32::from(t.train.double_ended),
-                    t.heading[0],
-                    t.heading[1],
-                    i32::from(t.train.at_station.is_some()),
-                ];
-                motion.extend(pos(t.train.at_station));
-                motion.push(i32::from(nav.is_some()));
-                motion.extend(pos(nav));
-                motion.push(i32::from(t.train.nav.as_ref().is_some_and(|n| n.behind)));
-                c.insert("motion".into(), Tag::IntArray(motion));
+                let motion = create_engine::trains::SavedMotion {
+                    speed: t.train.speed,
+                    double_ended: t.train.double_ended,
+                    heading: t.heading,
+                    at_station: t.train.at_station,
+                    nav: t.train.nav.as_ref().map(|n| n.station),
+                    behind: t.train.nav.as_ref().is_some_and(|n| n.behind),
+                };
+                c.insert("motion".into(), Tag::IntArray(motion.encode()));
                 c.insert(
                     "cars".into(),
                     Tag::List(
@@ -1376,7 +1368,10 @@ pub(super) fn trains_from_nbt(
             ) else {
                 return None;
             };
-            if m.len() < 14 || p.len() < 20 || p.len() != b.len() * 20 {
+            let Some(m) = create_engine::trains::SavedMotion::decode(&m) else {
+                return None;
+            };
+            if p.len() < 20 || p.len() != b.len() * 20 {
                 return None;
             }
             let placed: Vec<Placed> = p
@@ -1469,13 +1464,12 @@ pub(super) fn trains_from_nbt(
                         .map_or_else(Vec::new, |e| vec![(0, 0); e.conditions.len()]);
                 }
             }
-            let at = |k: usize| [m[k], m[k + 1], m[k + 2]];
             // A train in transit without a schedule keeps its destination.
-            let nav = (m[9] != 0 && schedule.is_none()).then(|| Nav {
-                station: at(10),
+            let nav = m.nav.filter(|_| schedule.is_none()).map(|station| Nav {
+                station,
                 distance: f64::MAX,
                 path: Vec::new(),
-                behind: m[13] != 0,
+                behind: m.behind,
                 signal: None,
                 ticks_waiting: 0,
             });
@@ -1495,17 +1489,17 @@ pub(super) fn trains_from_nbt(
                         .collect(),
                     carriages,
                     spacing: sp,
-                    double_ended: m[1] != 0,
-                    speed: f(m[0]),
+                    double_ended: m.double_ended,
+                    speed: m.speed,
                     nav,
-                    at_station: (m[4] != 0).then(|| at(5)),
+                    at_station: m.at_station,
                     manual: None,
                     reserved: Vec::new(),
                     placed,
                     bound: false,
                 },
                 cars,
-                heading: [m[2], m[3]],
+                heading: m.heading,
                 schedule,
                 runtime,
                 idle: 0,
