@@ -776,6 +776,8 @@ running).
   the models and finish first. What is left is about 0.55 s for 25,349 more block states: the registry and the baked
   models per state, ~70 ms before `load_core` and the first frame. Closing it needs Horizon to snapshot its registry and
   baked models decoded, as it does the block facts (`e4f3833ae`): a general Horizon change, not one the mod can make.
+  **Decided (2026-11-02):** accepted as the cost of loading an installed content mod, as in any loader; Horizon keeps
+  no extra caches for it. Ticks and frames with Create installed and unused stay at parity with mods off.
 
 - Horizon pin: `feat/create-hooks` at `fe554b8d7` (NATIVE_HOOKS_API 66: `native_interaction_key_mapping_triggered`, NeoForge's `InputEvent.InteractionKeyMappingTriggered`, one commit on `feat/create-hooks` `da38364c1`, API 65); before, `feat/create-hooks` at `abfc4d272` (NATIVE_HOOKS_API 58: API 57 key input, API 58 world saved data with level load and save; before `b5201f492`, API 56: API 55 world text, API 56 comparators; before `e4f3833ae`, API 53; earlier `aea7ed878`, API 47). History: first `0a96593cf`, two commits on 9d979ca: gap 2
   (`a83a4b380`, content blocks with their own `state_properties`) and gap 8 (`0a96593cf`, hook points API 41:
