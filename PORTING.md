@@ -451,7 +451,9 @@ its wire touched the wire of the burner's comparator, and wires join (the seethi
 temporary DEBUG commit in Horizon, removed, showed the comparator itself putting out 1. A display link behind a
 speedometer bound to a 3-wide display board turned through a cogwheel beside it (a board has no shaft:
 `KineticBlock.hasShaftTowards` is false, so a motor behind it gave 0 rpm, as in Create): the board read
-`Labeled_Number ["Speed ", "16 RPM"]` and showed "SPEED 16 RPM" on its flaps (screenshot).
+`Labeled_Number ["Speed ", "16 RPM"]` and showed "SPEED 16 RPM" on its flaps (screenshot). With the comparator hook and the text API in, Create installed and unused still costs
+nothing (`benchmarks/create-p7comp-*.json`): off tick 2.576 ± 0.201 ms, frame p50 0.484 ms; idle 2.542 ± 0.149 ms,
+0.484 ms.
 
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
