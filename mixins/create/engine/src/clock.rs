@@ -259,6 +259,7 @@ mod tests {
                     sticky,
                     movable: true,
                     chassis: None,
+                    ..Default::default()
                 })
             };
             match p {

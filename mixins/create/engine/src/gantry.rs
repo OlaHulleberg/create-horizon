@@ -70,6 +70,8 @@ pub struct Moving {
     pub offset: f32,
     pub per_tick: f32,
     pub blocks: Vec<([i32; 3], u32)>,
+    /// Its actors, glue and turned-off actor kinds.
+    pub carried: crate::actors::Carried,
 }
 
 /// The shaft under a moving carriage, as `checkPinionShaft` reads it.
@@ -157,6 +159,7 @@ mod tests {
             offset: 0.0,
             per_tick: 0.0,
             blocks: vec![],
+            carried: Default::default(),
         };
         let shaft_at = |i: i32| Shaft {
             facing: Dir::East,

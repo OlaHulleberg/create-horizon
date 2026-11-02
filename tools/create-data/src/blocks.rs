@@ -1226,6 +1226,36 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
             true,
         ));
     }
+    // StickerBlock (WrenchableDirectionalBlock, `SharedProperties::stone`): its facing (`any()`
+    // is down), `powered` and `extended`, a full block; the glue flips `extended` on each
+    // rising signal and contraptions take the block an extended one faces.
+    if n == "sticker" {
+        return Some(declared(
+            "minecraft:andesite",
+            "minecraft:stone",
+            true,
+            None,
+            own(&[
+                ("extended", bools),
+                ("facing", &["down", "up", "north", "south", "west", "east"]),
+                ("powered", bools),
+            ]),
+            true,
+        ));
+    }
+    // HarvesterBlock and PloughBlock (AttachedActorBlock, `SharedProperties::stone`): a
+    // horizontal facing and waterlogging, AllShapes.HARVESTER_BASE (written facing south, the
+    // plate against the block behind) turned to it; their behaviour is on contraptions.
+    if n == "mechanical_harvester" || n == "mechanical_plough" {
+        return Some(declared(
+            "minecraft:andesite",
+            "minecraft:stone",
+            true,
+            Some(by_horizontal(&[[0., 2., 13., 16., 14., 16.]])),
+            own(&[("facing", horizontal), ("waterlogged", bools)]),
+            true,
+        ));
+    }
     // ToolboxBlock (`SharedProperties::wooden`, wood sounds): a container whose menu opens on use,
     // so the barrel's template; AllShapes.TOOLBOX turned to its facing.
     if dyed(n, "toolbox").is_some() {

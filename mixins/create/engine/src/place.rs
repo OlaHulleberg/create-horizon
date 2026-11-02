@@ -146,6 +146,18 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
         Block::RedstoneLink => ctx.clicked_face,
         // SailBlock (WrenchableDirectionalBlock): away from the player's view.
         b if is_sail(b) => nearest.opposite(),
+        // StickerBlock: away from the player's view; sneaking, toward it.
+        Block::Sticker if ctx.sneaking => nearest,
+        Block::Sticker => nearest.opposite(),
+        // AttachedActorBlock (harvester, plough): on a wall's clicked face, else facing the
+        // player.
+        Block::MechanicalHarvester | Block::MechanicalPlough => {
+            if ctx.clicked_face.axis() == crate::kinetics::Axis::Y {
+                horizontal_direction(ctx.yaw).opposite()
+            } else {
+                ctx.clicked_face
+            }
+        }
         _ => return None,
     })
 }

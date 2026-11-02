@@ -1,0 +1,28 @@
+{
+  "template": "minecraft:andesite",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:stone"
+  },
+  "item": true,
+  "state_properties": {
+    "extended": [
+      "false",
+      "true"
+    ],
+    "facing": [
+      "down",
+      "up",
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "powered": [
+      "false",
+      "true"
+    ]
+  }
+}

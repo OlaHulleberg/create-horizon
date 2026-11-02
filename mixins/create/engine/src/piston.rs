@@ -137,6 +137,11 @@ pub fn gather(
                 }
             }
         }
+        if let Some(p) = crate::contraption::sticker_target(pos, &found)
+            .filter(|p| !visited.contains(p) && !exclude.contains(p))
+        {
+            frontier.push_back(p);
+        }
         for d in Dir::ALL {
             let next = add(pos, d, 1);
             if visited.contains(&next) || exclude.contains(&next) {
@@ -152,7 +157,7 @@ pub fn gather(
                 continue;
             }
             let stick = found.sticky.is_some() || other.sticky.is_some();
-            if stick || d == forced {
+            if stick || d == forced || crate::contraption::glued_toward(&found, d) {
                 frontier.push_back(next);
             }
         }
@@ -198,6 +203,57 @@ mod tests {
     }
 
     #[test]
+    fn glued_faces_and_an_extended_sticker_take_their_neighbours() {
+        use crate::glue::{Glue, glued_faces};
+        // Pushed east from x 1: stone at x 1, a stone glued on top of it (y 1), a loose stone
+        // north of it, and an extended sticker at x 2 facing up holding a block at (2, 1, 0).
+        let glue = [Glue::span([1, 0, 0], [1, 1, 0])];
+        let at = |p: [i32; 3]| -> Option<Found> {
+            let stone = Found {
+                state: 1,
+                movable: true,
+                glued: glued_faces(&glue, p),
+                ..Default::default()
+            };
+            match p {
+                [1, 0, 0] | [1, 1, 0] | [1, 0, -1] | [2, 1, 0] => Some(stone),
+                [2, 0, 0] => Some(Found {
+                    state: 2,
+                    sticker: Some(Dir::Up),
+                    ..stone
+                }),
+                _ => None,
+            }
+        };
+        let mut got = gather([1, 0, 0], Dir::East, &[], at).unwrap();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ([0, 0, 0], 1),
+                ([0, 1, 0], 1),
+                ([1, 0, 0], 2),
+                ([1, 1, 0], 1)
+            ],
+            "the glued and stuck blocks come, the loose one stays"
+        );
+        // A sticker facing bedrock refuses the move.
+        let stuck = |p: [i32; 3]| match p {
+            [1, 0, 0] => Some(Found {
+                movable: true,
+                sticker: Some(Dir::Up),
+                ..Default::default()
+            }),
+            [1, 1, 0] => Some(Found::default()),
+            _ => None,
+        };
+        assert_eq!(
+            gather([1, 0, 0], Dir::East, &[], stuck),
+            Err(Refused::Unmovable([1, 1, 0]))
+        );
+    }
+
+    #[test]
     fn it_pushes_what_is_ahead_and_moves_at_its_speed() {
         let stone = |p: [i32; 3]| {
             (p[0] >= 1 && p[0] <= 2 && p[1] == 0 && p[2] == 0).then_some(Found {
@@ -206,6 +262,7 @@ mod tests {
                 sticky: None,
                 movable: true,
                 chassis: None,
+                ..Default::default()
             })
         };
         let got = gather([1, 0, 0], Dir::East, &[], stone).unwrap();

@@ -193,6 +193,7 @@ mod tests {
             sticky: None,
             movable: true,
             chassis: None,
+            ..Default::default()
         })
     }
 
