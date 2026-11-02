@@ -259,6 +259,8 @@ pub struct Dimension {
     pub pistons: HashMap<[i32; 3], Moving>,
     /// Clockwork bearings, rope pulleys, elevators and their contacts (`lifts.rs`).
     pub lifts: crate::lifts::Lifts,
+    /// Display links, the nixie tubes and display boards they write to (`display.rs`).
+    pub displays: crate::display::Displays,
     /// Track, stations and signals, the graph built from them, and the trains on it.
     pub railway: crate::trains::Railway,
     /// Chutes holding a stack: where it is (1 top, 0 bottom); the only ones that tick.
@@ -419,7 +421,9 @@ fn has_state(block: Block) -> bool {
             | Block::SteamEngine
             | Block::ElevatorContact
             | Block::RedstoneContact
-    )
+            | Block::DisplayLink
+            | Block::DisplayBoard
+    ) || crate::display::is_nixie(block)
 }
 
 /// A boiler (`FluidTankBlockEntity.boiler` of a controller): its data, the engines on its tank
@@ -540,6 +544,7 @@ impl CreateWorld {
         let info = &info;
         let d = &mut self.dims[dim];
         d.lifts.placed(pos, block, info);
+        d.displays.placed(pos, block);
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
         }
@@ -877,6 +882,14 @@ impl CreateWorld {
         self.dims[dim]
             .lifts
             .changed(pos, self.table.get(old), self.table.get(new));
+        if let Some((gone, _)) = self.table.get(old)
+            && Some(gone) != self.table.get(new).map(|(b, _)| b)
+        {
+            let d = &mut self.dims[dim];
+            if d.displays.removed(pos, gone) {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
+        }
         // `FluidTankBlock.onPlace` / `onRemove`: tanks form or split (a tank's own state
         // changes don't).
         let tank = |s: u32| {
@@ -1139,6 +1152,7 @@ impl CreateWorld {
         // Its track leaves the graph; trains standing in it leave with it (saved with it).
         d.railway.column_unloaded(cx, cz);
         d.lifts.column_unloaded(cx, cz);
+        d.displays.column_unloaded(cx, cz);
         if let Some(list) = d.columns.remove(&(cx, cz)) {
             for pos in list {
                 d.kinetics.remove(pos);
@@ -1659,6 +1673,7 @@ impl CreateWorld {
                 self.dims[dim].lifts.contact_checks.push(pos)
             }
             Some(Block::RedstoneLink) => self.dims[dim].link_checks.push(pos),
+            Some(Block::DisplayLink) => self.dims[dim].displays.checks.push(pos),
             Some(Block::AndesiteTunnel | Block::BrassTunnel) => {
                 self.dims[dim].tunnel_checks.push(pos)
             }

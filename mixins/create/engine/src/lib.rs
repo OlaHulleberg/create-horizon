@@ -18,6 +18,7 @@ pub mod deployer;
 pub mod depot;
 pub mod diode;
 pub mod door;
+pub mod display;
 pub mod drain;
 pub mod drill;
 pub mod dye;
