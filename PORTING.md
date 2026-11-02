@@ -4,6 +4,27 @@ Source of truth for behaviour: this repo's Java tree (`src/`, branch `main`, Neo
 Target: a horizon-mixins native bundle in `horizon/`, plus new hook points upstreamed to Horizon on
 `/workspace/horizon` branch `feat/create-hooks` (based on `9d979ca`, `NATIVE_HOOKS_API` 40).
 
+## At a glance: every subsystem on 9d979ca (2026-11-02)
+
+Each row points at its in-game proof (headless, BMG G21) and its benchmark (`tools/bench_create.py`, `benchmarks/`);
+the phase table below has the detail, and "Blocked / open" what isn't done. Numbers come from each subsystem's own
+benchmark table, measured against that session's own off or control run; compare within a table, not across.
+
+| Subsystem | Proven in game | Benchmark under load (frame p50 / tick) | Budget | Open |
+|---|---|---|---|---|
+| Kinetics | motors, shafts, cogs, gauges, stress, turntables, seats, belts' drive | 4,096 GPU-turned shafts: 0.528 ms / 3.970 ms vs chains 0.502 / 4.167 | frame ≤ control + 10 %, tick ≤ off + 0.25 ms: met | flywheel lag |
+| Processing | presses, mixers, crushers, fans, saws, drills, deployers, crafters, burners | 256 presses on depots: 0.547 / 4.357 ms | tick ≤ off + 0.5 ms, frame ≤ off + 15 %: met (its table's off) | |
+| Logistics | belts, funnels, tunnels, chutes, vaults, arms, packages, stock | 32 belts × 48 with 672 stacks: 0.604 / 4.132 ms | tick ≤ off + 0.5 ms: met (its table's off) | hoppers into creative crates |
+| Fluids | pipes, pumps, tanks, boilers, spouts, drains, honey and chocolate blocks | 10 pumps into tanks: 0.510 / 4.380 ms | tick ≤ off + 0.25 ms, frame ≤ off + 10 %: met | |
+| Equipment | wrench, goggles, backtank and diving gear, toolboxes, value boxes and boards | hooks loaded, nothing worn: tick 2.454 vs off 2.607 ms | free when unused: met | clipboard editing screen |
+| Redstone | links, latches, diodes, observers, comparators, display links and boards, nixie text | latch chains: 3.852 ms tick (over at first, within after the fix in its section) | tick ≤ control + 0.3 ms: met | |
+| Contraptions | pistons, bearings, gantries, chassis, glue, actors, minecart contraptions, couplings, schematics | 16 windmills: 0.524 / 3.972 ms; carts 2.289 vs 2.280 ms | tick ≤ off + 0.25 ms: met | two-cart pitch, hard step vs blocks |
+| Trains | track and curves, stations, signals, assembly, schedules, riding, driving, HUD, saves, LAN | 12 trains: 0.543 / 4.660 ms; driven 2.051 vs 2.051 ms | tick ≤ off + 0.5 ms: met | carriage collision, HUD arrow |
+| Create unused | — | idle 0.500 / 4.011 ms vs off 0.530 / 4.047 | within noise of off: met (ticks, frames) | +0.55 s warm start, accepted 2026-11-02 |
+
+Checks on every merged feature: fmt, clippy `-D warnings`, `cargo test --workspace`, `tools/test_template.py`,
+`tools/test_stage.py`, `tools/horizon.py stage/check/test/build --horizon /workspace/horizon`.
+
 ## Status (updated with every commit)
 
 | Phase | State | Verified | Measured |
