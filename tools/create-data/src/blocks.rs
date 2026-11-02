@@ -566,6 +566,30 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             None,
             own(&[("activate", bools), ("powered", bools), ("powering", bools)]),
         ),
+        // DisplayLinkBlock (WrenchableDirectionalBlock, `SharedProperties::softMetal`): on the
+        // clicked face, `powered` by its neighbours; AllShapes.DATA_GATHERER to its facing. Not
+        // a full block, so no redstone conductor: glowstone's template without its light.
+        "display_link" => (
+            "minecraft:glowstone",
+            Some(by_facing(&[
+                [1., 0., 1., 15., 6., 15.],
+                [3., 5., 3., 13., 9., 13.],
+            ])),
+            own(&[("facing", facing), ("powered", bools)]),
+        ),
+        // FlapDisplayBlock (HorizontalKineticBlock, `SharedProperties::softMetal`): its facing,
+        // joined to the boards above and below it, waterlogged; AllShapes.FLAP_DISPLAY. Its
+        // cog turns on its facing's axis.
+        "display_board" => (
+            "minecraft:gold_block",
+            Some(by_horizontal(&[[0., 0., 3., 16., 16., 13.]])),
+            own(&[
+                ("down", bools),
+                ("facing", &["north", "south", "west", "east"]),
+                ("up", bools),
+                ("waterlogged", bools),
+            ]),
+        ),
         // FluidTankBlock: `noOcclusion`, see-through windows: glass's template (no random
         // ticks, nothing hidden behind it), copper's sounds. Defaults first: TOP, BOTTOM, WINDOW.
         "fluid_tank" => (
@@ -1626,7 +1650,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     }
     // Contacts on glowstone's template: no light of their own (an elevator contact's 10 while
     // powering is per state).
-    if matches!(b.name.as_str(), "redstone_contact" | "elevator_contact") {
+    if matches!(
+        b.name.as_str(),
+        "redstone_contact" | "elevator_contact" | "display_link"
+    ) {
         props.insert("light".into(), json!(0));
     }
     // AllBlocks' nixie tubes: `lightLevel($ -> 5)`.
