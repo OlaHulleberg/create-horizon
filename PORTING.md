@@ -540,8 +540,7 @@ running).
   (mods off 2.5 s, unchanged: its core tables are bound by the render tables, 258 ms). The rest of the gap is the render
   tables (model states, atlas) and the item and pack tables, still read from JSON for every state.
   Re-measured 2026-11-02 (headless, BMG G21, render distance 8, the same game folder kept so its
-  `.horizon-cache/mod-content` overlay is warm; 65,033 block states with Create: the gap 2 blocks, vaults, arms,
-  display boards and the rest added about 3,000): launch to ready 1.48 s without, 2.2 s with Create installed and unused;
+  `.horizon-cache/mod-content` overlay is warm; 65,033 block states with Create): launch to ready 1.48 s without, 2.2 s with Create installed and unused;
   the first launch after the content changed 4.75 s (the overlay and `load core tables` 2.5 s, built once). The gap grows
   with the state count, as above: it stays open until Horizon caches its per-state render tables decoded.
 
