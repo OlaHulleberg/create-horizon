@@ -1,8 +1,8 @@
 //! Create's controller rail (`ControllerRailBlock`): a straight rail whose `power` (0-15) is
 //! the strongest signal next to it, else the signal reached along the controller rails it is
 //! lined up with (`calculatePower`), and which sets a minecart passing it to that share of the
-//! cart's top speed in the way it points (`onMinecartPass`). Horizon has no hook for a minecart
-//! passing a mod's rail, so the last rule waits in `cart_motion`.
+//! cart's top speed in the way it points (`onMinecartPass`, `cart_motion`, which the glue runs
+//! for each cart on one).
 
 use crate::kinetics::Dir;
 

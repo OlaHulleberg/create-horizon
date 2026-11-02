@@ -428,6 +428,8 @@ pub struct Fan {
     /// `entitySearchCooldown` and the item entities its last search caught (`caughtEntities`).
     pub search_cooldown: u8,
     pub caught: Vec<u32>,
+    /// The other entities it caught (mobs, players, carts...), pushed by entity id.
+    pub others: Vec<u32>,
 }
 
 /// Blocks that keep state of their own here but are not kinetic: depots.
