@@ -8,7 +8,10 @@
 //!
 //! Stations and signals become points on the edges of the track beside them (`EdgePointStorage`,
 //! `TrackTargetingBehaviour`), and signals split the graph into sections (`SignalEdgeGroup`,
-//! `SignalPropagator`): the track between signals, joined through nodes.
+//! `SignalPropagator`): the track between signals, joined through nodes. Signal blocks beside the
+//! same track block are one boundary (`SignalBoundary`, `canMerge`) with two sides, one for each
+//! way a train runs past it; a block stands for the trains that have it on their right (the side
+//! Create takes from the click that targets the track, as this port has no targeting item yet).
 
 use crate::bezier::{Curve, Vec3};
 use crate::graph::{Graph, Point};
@@ -66,7 +69,7 @@ pub fn key_position(k: Key) -> Vec3 {
 }
 
 /// A place on the graph: an edge and how far along it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Location {
     pub edge: usize,
     pub position: f64,
@@ -77,6 +80,35 @@ pub struct Location {
 pub enum Mark {
     Station(usize),
     Signal(usize),
+}
+
+/// What a signal block is (`SignalBlock.TYPE`): an entry signal holds trains while the section
+/// beyond is occupied; a cross signal while any section of the chain beyond it up to the next
+/// entry signal is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SignalType {
+    #[default]
+    Entry,
+    Cross,
+}
+
+/// A signal boundary (`SignalBoundary`): where it stands (on the piece's even edge), and for each
+/// side, the signal blocks standing for the trains running that way (side 0: along the even
+/// edge, side 1: along its reverse) and the side's type (`types`: its first block's), and the
+/// signals ending the chain a cross signal looks down (`collectChainedSignals`: boundary and
+/// side, leaving the section beyond).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Boundary {
+    pub at: Location,
+    pub blocks: [Vec<[i32; 3]>; 2],
+    pub types: [SignalType; 2],
+    pub chain: [Vec<(usize, usize)>; 2],
+}
+
+/// The side of a boundary a train running along `edge` passes it from.
+#[inline]
+pub fn side_of(edge: usize) -> usize {
+    edge & 1
 }
 
 /// A piece of track between two places: a track block's run (its block), a crossing's half, or
@@ -96,9 +128,10 @@ pub struct Network {
     pub keys: Vec<Key>,
     /// Straight track blocks: the edge they lie on and how far along it their centre is.
     pub blocks: HashMap<[i32; 3], Location>,
-    /// Stations and signals bound to the graph: their block and where on it.
+    /// Stations bound to the graph: their block and where on it.
     pub stations: Vec<([i32; 3], Location)>,
-    pub signals: Vec<([i32; 3], Location)>,
+    /// Signal boundaries (`SignalBoundary`), each where its track block's centre is.
+    pub signals: Vec<Boundary>,
     /// Per edge, what stands on it, by how far along it.
     pub marks: Vec<Vec<(f64, Mark)>>,
     /// Signal sections: each piece of track's first slot (its stretches between signals are
@@ -149,7 +182,7 @@ impl Network {
         tracks: &HashMap<[i32; 3], TrackShape>,
         curves: &Curves,
         stations: &[[i32; 3]],
-        signals: &[[i32; 3]],
+        signals: &[([i32; 3], SignalType)],
     ) -> Network {
         let mut segments: Vec<Segment> = Vec::new();
         let mut positions: Vec<[i32; 3]> = tracks.keys().copied().collect();
@@ -290,17 +323,58 @@ impl Network {
                 net.mark(*loc, mark);
             }
         }
-        for &pos in signals {
-            if let Some(loc) = target_track(tracks, pos).and_then(|t| net.blocks.get(&t)) {
-                let mark = Mark::Signal(net.signals.len());
-                net.signals.push((pos, *loc));
-                net.mark(*loc, mark);
+        let mut signals: Vec<([i32; 3], SignalType)> = signals.to_vec();
+        signals.sort_unstable_by_key(|s| s.0);
+        for &(pos, kind) in &signals {
+            let Some(track) = target_track(tracks, pos) else {
+                continue;
+            };
+            let Some(&loc) = net.blocks.get(&track) else {
+                continue;
+            };
+            // On the piece's even edge, facing its way.
+            let at = if loc.edge.is_multiple_of(2) {
+                loc
+            } else {
+                Location {
+                    edge: loc.edge ^ 1,
+                    position: net.graph.length(loc.edge) - loc.position,
+                }
+            };
+            let d = net.graph.direction(at.edge, true);
+            let right = [-d[2], 0.0, d[0]];
+            let beside = [
+                f64::from(pos[0] - track[0]),
+                0.0,
+                f64::from(pos[2] - track[2]),
+            ];
+            let side = usize::from(dot(right, beside) < 0.0);
+            let b =
+                match net.signals.iter().position(|b| {
+                    b.at.edge == at.edge && (b.at.position - at.position).abs() < 1.0e-6
+                }) {
+                    Some(b) => b,
+                    None => {
+                        net.signals.push(Boundary {
+                            at,
+                            ..Boundary::default()
+                        });
+                        net.mark(at, Mark::Signal(net.signals.len() - 1));
+                        net.signals.len() - 1
+                    }
+                };
+            let boundary = &mut net.signals[b];
+            // `blockEntityAdded`: the side takes its first block's type.
+            if boundary.blocks[side].is_empty() {
+                boundary.types[side] = kind;
             }
+            boundary.blocks[side].push(pos);
         }
         for m in &mut net.marks {
             m.sort_by(|a, b| a.0.total_cmp(&b.0));
         }
         net.sections();
+        net.chains();
         net
     }
 
@@ -390,6 +464,43 @@ impl Network {
             })
             .count();
         self.section_of[self.slot_base[u] + k]
+    }
+
+    /// The section a train enters passing boundary `b` from `side` (`getGroup`).
+    pub fn beyond(&self, b: usize, side: usize) -> usize {
+        let at = self.signals[b].at;
+        if side == 0 {
+            self.section(at.edge, at.position)
+        } else {
+            self.section(at.edge ^ 1, self.graph.length(at.edge) - at.position)
+        }
+    }
+
+    /// `SignalPropagator.collectChainedSignals` for every cross signal side: the boundaries a
+    /// train leaves the section beyond it by (and the side it passes them from), once per build.
+    fn chains(&mut self) {
+        for b in 0..self.signals.len() {
+            for side in 0..2 {
+                if self.signals[b].types[side] != SignalType::Cross
+                    || self.signals[b].blocks[side].is_empty()
+                {
+                    continue;
+                }
+                let inside = self.beyond(b, side);
+                let mut chain = Vec::new();
+                for o in 0..self.signals.len() {
+                    for k in 0..2 {
+                        if (o, k) == (b, 1 - side) {
+                            continue;
+                        }
+                        if self.beyond(o, 1 - k) == inside && self.beyond(o, k) != inside {
+                            chain.push((o, k));
+                        }
+                    }
+                }
+                self.signals[b].chain[side] = chain;
+            }
+        }
     }
 
     /// The point on the track nearest `at` (within half a block) facing along `direction`, on
@@ -590,7 +701,10 @@ mod tests {
             &t,
             &Curves::default(),
             &[[12, 64, 1]],
-            &[[5, 64, 1], [10, 64, -1]],
+            &[
+                ([5, 64, 1], SignalType::Entry),
+                ([10, 64, -1], SignalType::Entry),
+            ],
         );
         assert_eq!(n.signals.len(), 2);
         assert_eq!(n.stations.len(), 1);
@@ -604,5 +718,65 @@ mod tests {
         let p = n.locate([7.25, 64.0, 0.5], [-1.0, 0.0, 0.0]).unwrap();
         assert_eq!(p.edge, Graph::reverse(e));
         assert!((p.position - 7.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_signal_stands_for_the_trains_that_have_it_on_their_right() {
+        let mut t = HashMap::new();
+        line(&mut t, [0, 64, 0], [1, 0, 0], 20, TrackShape::Xo);
+        // South of the track at x = 5: for trains running east; north at x = 10: west; both
+        // sides at x = 15 (one boundary, a cross signal for the trains running west).
+        let n = Network::build(
+            &t,
+            &Curves::default(),
+            &[],
+            &[
+                ([5, 64, 1], SignalType::Entry),
+                ([10, 64, -1], SignalType::Entry),
+                ([15, 64, 1], SignalType::Entry),
+                ([15, 64, -1], SignalType::Cross),
+            ],
+        );
+        assert_eq!(n.signals.len(), 3, "the two at x = 15 are one boundary");
+        let east = n.blocks[&[0, 64, 0]].edge;
+        let east_side = side_of(east);
+        let at = |x: f64| {
+            n.signals
+                .iter()
+                .find(|b| {
+                    let p = if b.at.edge == east {
+                        b.at.position
+                    } else {
+                        20.0 - b.at.position
+                    };
+                    (p - x).abs() < 1e-6
+                })
+                .unwrap()
+        };
+        assert_eq!(at(5.5).blocks[east_side], [[5, 64, 1]]);
+        assert!(at(5.5).blocks[1 - east_side].is_empty());
+        assert_eq!(at(10.5).blocks[1 - east_side], [[10, 64, -1]]);
+        assert!(at(10.5).blocks[east_side].is_empty());
+        let both = at(15.5);
+        assert_eq!(both.types[east_side], SignalType::Entry);
+        assert_eq!(both.types[1 - east_side], SignalType::Cross);
+        // The cross signal (westbound at x = 15) looks down its section to the boundary at
+        // x = 10, passed westward.
+        let b15 = n
+            .signals
+            .iter()
+            .position(|b| std::ptr::eq(b, both))
+            .unwrap();
+        let b10 = n
+            .signals
+            .iter()
+            .position(|b| std::ptr::eq(b, at(10.5)))
+            .unwrap();
+        assert_eq!(both.chain[1 - east_side], [(b10, 1 - east_side)]);
+        assert!(
+            both.chain[east_side].is_empty(),
+            "an entry side has no chain"
+        );
+        assert_ne!(n.beyond(b15, east_side), n.beyond(b15, 1 - east_side));
     }
 }

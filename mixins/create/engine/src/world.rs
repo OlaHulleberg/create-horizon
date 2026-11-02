@@ -507,6 +507,7 @@ fn follows_power(block: Block) -> bool {
             | Block::GantryShaft
             | Block::AdjustableChainGearshift
             | Block::SmartChute
+            | Block::TrackSignal
     )
 }
 
@@ -648,7 +649,18 @@ impl CreateWorld {
             d.brass.insert(pos, b);
         }
         match block {
-            Block::TrackSignal => d.railway.add_signal(pos),
+            Block::TrackSignal => {
+                let kind = if info.cross_signal {
+                    crate::network::SignalType::Cross
+                } else {
+                    crate::network::SignalType::Entry
+                };
+                // `SignalBlock.getStateForPlacement`: its power is read when it is placed.
+                if !d.railway.signals.contains_key(&pos) {
+                    d.redstone.push(pos);
+                }
+                d.railway.add_signal(pos, kind, info.powered);
+            }
             Block::TrackStation => d.railway.add_station(pos),
             Block::Track => d
                 .railway
@@ -3318,6 +3330,49 @@ mod tests {
         );
         assert_eq!(w.powered(11), Some(true));
         assert_eq!(w.powered(12), None);
+        states::clear_range();
+    }
+
+    #[test]
+    fn train_signals_follow_redstone_and_their_type() {
+        use crate::network::SignalType;
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:track_signal",
+                vec![("powered", "false"), ("type", "entry_signal")],
+            ),
+            (
+                "create:track_signal",
+                vec![("powered", "true"), ("type", "entry_signal")],
+            ),
+            (
+                "create:track_signal",
+                vec![("powered", "false"), ("type", "cross_signal")],
+            ),
+        ];
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        assert_eq!(w.take_redstone(0), [[0, 0, 0]], "placed: its power is read");
+        let s = w.dims[0].railway.signals[&[0, 0, 0]];
+        assert_eq!((s.kind, s.powered), (SignalType::Entry, false));
+        w.block_changed(0, [0, 0, 0], 10, 11);
+        assert!(w.take_redstone(0).is_empty());
+        assert!(w.dims[0].railway.signals[&[0, 0, 0]].powered);
+        w.neighbor_changed(0, [0, 0, 0], 11);
+        assert_eq!(w.take_redstone(0), [[0, 0, 0]], "a neighbour changed");
+        assert_eq!(w.powered(11), Some(true));
+        w.block_changed(0, [0, 0, 0], 11, 12);
+        assert_eq!(
+            w.dims[0].railway.signals[&[0, 0, 0]].kind,
+            SignalType::Cross
+        );
+        w.block_changed(0, [0, 0, 0], 12, 0);
+        assert!(w.dims[0].railway.signals.is_empty());
         states::clear_range();
     }
 

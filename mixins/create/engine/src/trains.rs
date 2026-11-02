@@ -1,14 +1,17 @@
 //! Create's trains on the track graph (`Train`, `Carriage`, `CarriageBogey`, `Navigation`,
-//! `TravellingPoint`, `ScheduleRuntime`'s driving): a train's bogeys stand on the graph as two
-//! wheel points each; it finds its way to a station with Create's search (`findPathTo`, its
-//! penalties for stations, trains and red signals passed), drives there with Create's speed
-//! control (top speed, acceleration, braking distance, the slow approach, slowing for curves,
-//! waiting before a signal whose section another train holds) and stops with its front just past
-//! the station. A schedule sends it from station to station.
+//! `TravellingPoint`, `ScheduleRuntime`'s driving, `StationBlockEntity.assemble`): a train is
+//! carriages on one or two bogeys each, every bogey two wheel points on the graph; carriages keep
+//! their spacing by Create's coupling stress, bogeys their wheel spacing by theirs. It finds its
+//! way to a station with Create's search (`findPathTo`, its penalties for stations, trains, red
+//! and redstone-red signals, never the wrong way past a one-sided signal), drives there with
+//! Create's speed control (top speed, acceleration, braking distance, the slow approach, slowing
+//! for curves, waiting before an entry signal whose section is held or a cross signal whose chain
+//! is, reserving the sections it is about to enter) and stops with its front just past the
+//! station. A schedule sends it from station to station; a player's controls drive it by hand.
 
 use crate::bezier::Vec3;
 use crate::graph::{Graph, Point};
-use crate::network::{Key, Mark, Network, key_position};
+use crate::network::{Key, Mark, Network, SignalType, key_position, side_of};
 use crate::schedule::{Order, Runtime, Schedule, station_matches};
 use crate::track::TrackShape;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -18,8 +21,13 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 pub const TOP_SPEED: f64 = 28.0 / 20.0;
 pub const TURN_TOP_SPEED: f64 = 14.0 / 20.0;
 pub const ACCELERATION: f64 = 3.0 / 400.0;
-/// `StandardBogeyBlock.getWheelPointSpacing`.
+/// `manualTrainSpeedModifier`: a train driven by hand runs at 75% of a scheduled one's speed.
+pub const MANUAL_SPEED: f64 = 0.75;
+/// `StandardBogeyBlock.getWheelPointSpacing` (both sizes).
 pub const WHEEL_SPACING: f64 = 2.0;
+/// `maxAssemblyLength` and `maxBogeyCount`.
+pub const MAX_ASSEMBLY_LENGTH: i32 = 128;
+pub const MAX_BOGEY_COUNT: usize = 20;
 /// `Train.Penalties`.
 pub const STATION: i32 = 50;
 pub const STATION_WITH_TRAIN: i32 = 300;
@@ -28,6 +36,7 @@ pub const ARRIVING_TRAIN: i32 = 50;
 pub const WAITING_TRAIN: i32 = 50;
 pub const ANY_TRAIN: i32 = 25;
 pub const RED_SIGNAL: i32 = 25;
+pub const REDSTONE_RED_SIGNAL: i32 = 400;
 /// GlobalStation's name until one is given.
 pub const DEFAULT_STATION_NAME: &str = "Track Station";
 
@@ -44,6 +53,36 @@ fn mid(a: Vec3, b: Vec3) -> Vec3 {
 fn length(a: Vec3) -> f64 {
     (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
 }
+fn distance(a: Vec3, b: Vec3) -> f64 {
+    length(sub(a, b))
+}
+
+/// `BogeySizes`: a standard bogey's size, by its block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BogeySize {
+    #[default]
+    Small,
+    Large,
+}
+
+impl BogeySize {
+    /// `StandardBogeyBlock.getWheelRadius`.
+    pub fn wheel_radius(self) -> f64 {
+        match self {
+            BogeySize::Small => 6.5 / 16.0,
+            BogeySize::Large => 12.5 / 16.0,
+        }
+    }
+}
+
+/// A carriage (`Carriage`): its first bogey (by index into the train's bogeys), whether it
+/// stands on a second one right behind it, and how far apart the two are (`bogeySpacing`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct CarriageShape {
+    pub first: usize,
+    pub two: bool,
+    pub bogey_spacing: i32,
+}
 
 /// Where a train is going (`Navigation`): the station, how far its leading point still has to
 /// go, the edges to take at junctions on the way (`currentPath`), whether it backs there
@@ -58,6 +97,15 @@ pub struct Nav {
     pub ticks_waiting: i32,
 }
 
+/// A player's hold on a train's controls (`CarriageContraptionEntity.control`): the throttle
+/// (the forward or back key, scaled by the train's throttle; 0 lets go) and the steering at
+/// junctions (1 left, -1 right).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Manual {
+    pub throttle: f64,
+    pub steer: i8,
+}
+
 /// A point as saved and found again when the graph is built anew: its edge by its nodes, how
 /// far along, and where it was in the world.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -69,14 +117,23 @@ pub struct Placed {
 }
 
 /// A train's motion: its wheel points (two per bogey, the front bogey's first, all facing its
-/// front), its speed (blocks a tick, positive toward its front), where it is going and the
-/// station it stands at.
+/// front), its bogeys and carriages and the spacing between carriages (`carriageSpacing`), its
+/// speed (blocks a tick, positive toward its front), where it is going and the station it
+/// stands at.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Train {
     pub points: Vec<Point>,
+    pub bogeys: Vec<BogeySize>,
+    pub carriages: Vec<CarriageShape>,
+    pub spacing: Vec<i32>,
+    /// Controls face both ways (`doubleEnded`): it may drive backwards to a station.
+    pub double_ended: bool,
     pub speed: f64,
     pub nav: Option<Nav>,
     pub at_station: Option<[i32; 3]>,
+    pub manual: Option<Manual>,
+    /// Sections it holds ahead of a cross signal (`reservedSignalBlocks`).
+    pub reserved: Vec<usize>,
     /// The points by their nodes, to find them on a graph built anew; `bound` while `points`
     /// are on the current graph.
     pub placed: Vec<Placed>,
@@ -103,23 +160,37 @@ pub struct Found {
     pub behind: bool,
 }
 
-/// Which trains stand in each signal section (two distinct ones are enough to tell whether
-/// another train than the one asking does).
+/// The signal sections in a tick (`SignalEdgeGroup`): which trains stand in each (two distinct
+/// ones are enough to tell whether another train than the one asking does), the boundary each is
+/// reserved for this tick (`reserved`, cleared every tick as Create's `GlobalRailwayManager.tick`
+/// does), and each boundary side held red by redstone (`isForcedRed`).
 #[derive(Clone, Debug, Default)]
 pub struct Occupancy {
     slots: Vec<[u32; 2]>,
+    reserved: Vec<Option<usize>>,
+    pub forced: Vec<[bool; 2]>,
 }
 
 impl Occupancy {
     pub fn fill(&mut self, net: &Network, trains: &[TrainOnTrack]) {
         self.slots.clear();
         self.slots.resize(net.section_slots(), [0, 0]);
+        self.reserved.clear();
+        self.reserved.resize(net.section_slots(), None);
         if net.signals.is_empty() {
             return;
         }
         for t in trains.iter().filter(|t| t.train.bound) {
-            for p in &t.train.points {
-                let s = &mut self.slots[net.section(p.edge, p.position)];
+            let sections = t
+                .train
+                .points
+                .iter()
+                .map(|p| net.section(p.edge, p.position))
+                .chain(t.train.reserved.iter().copied());
+            for k in sections {
+                let Some(s) = self.slots.get_mut(k) else {
+                    continue;
+                };
                 if s[0] == 0 || s[0] == t.id {
                     s[0] = t.id;
                 } else if s[1] == 0 {
@@ -129,11 +200,35 @@ impl Occupancy {
         }
     }
 
-    /// `SignalEdgeGroup.isOccupiedUnless(train)`.
+    /// `SignalEdgeGroup.isOccupiedUnless(train)`: reserved, or held by another train.
     pub fn occupied_unless(&self, section: usize, me: u32) -> bool {
-        self.slots
-            .get(section)
-            .is_some_and(|s| (s[0] != 0 && s[0] != me) || (s[1] != 0 && s[1] != me))
+        self.reserved.get(section).is_some_and(Option::is_some)
+            || self
+                .slots
+                .get(section)
+                .is_some_and(|s| (s[0] != 0 && s[0] != me) || (s[1] != 0 && s[1] != me))
+    }
+
+    /// `SignalEdgeGroup.isOccupiedUnless(boundary)`: any train in it, or reserved through
+    /// another boundary.
+    pub fn occupied_unless_boundary(&self, section: usize, boundary: usize) -> bool {
+        self.slots.get(section).is_some_and(|s| s[0] != 0)
+            || self
+                .reserved
+                .get(section)
+                .is_some_and(|r| r.is_some_and(|r| r != boundary))
+    }
+
+    /// `signalEdgeGroup.reserved = signal`.
+    pub fn reserve(&mut self, section: usize, boundary: usize) {
+        if let Some(r) = self.reserved.get_mut(section) {
+            *r = Some(boundary);
+        }
+    }
+
+    /// `isForcedRed(side)`: a signal block of that side is powered.
+    pub fn forced_red(&self, boundary: usize, side: usize) -> bool {
+        self.forced.get(boundary).is_some_and(|f| f[side])
     }
 }
 
@@ -185,10 +280,50 @@ fn follow(g: &Graph, target: usize, candidates: &[usize]) -> usize {
     0
 }
 
-/// What lies ahead of a navigating train (`Navigation.tick`'s signal scout).
-struct Scouted {
-    signal: Option<f64>,
-    curve: Option<f64>,
+/// `TravellingPoint.steer(direction, up)`: at a junction, the way whose start lies closest to
+/// the side asked for (`targetDot`: -1 left, 0 straight on, 1 right) of the edge it leaves.
+fn steer(g: &Graph, from: usize, steer: i8, candidates: &[usize]) -> usize {
+    let target = -f64::from(steer.signum());
+    let t = g.direction(from, false);
+    // `trajectory.cross(up)` with up = (0, 1, 0).
+    let normal = [-t[2], 0.0, t[0]];
+    let mut best = 0;
+    let mut closest = f64::MAX;
+    for (i, &c) in candidates.iter().enumerate() {
+        let d = g.direction(c, true);
+        let dot = normal[0] * d[0] + normal[2] * d[2];
+        let diff = (target - dot).abs();
+        if diff > closest {
+            continue;
+        }
+        closest = diff;
+        best = i;
+    }
+    best
+}
+
+/// How the train's front point chooses at junctions: along a path (`navigateOptions`), or by the
+/// controls' steering (`steer`).
+pub enum Control<'a> {
+    Path(&'a mut Vec<usize>),
+    Steer(i8),
+}
+
+impl Control<'_> {
+    fn select(&mut self, g: &Graph, from: usize, c: &[usize]) -> usize {
+        match self {
+            Control::Path(path) => {
+                if let Some(&want) = path.first()
+                    && let Some(i) = c.iter().position(|&e| e == want)
+                {
+                    path.remove(0);
+                    return i;
+                }
+                0
+            }
+            Control::Steer(s) => steer(g, from, *s, c),
+        }
+    }
 }
 
 /// The search frontier (`Navigation.FrontierEntry`), cheapest first.
@@ -226,6 +361,33 @@ pub struct SearchContext<'a> {
     pub ticks_waiting: i32,
 }
 
+/// The penalty a signal boundary passed along `edge` adds to a search (`Navigation.search`), or
+/// None when no train may pass it that way (`canNavigateVia`: no signal block on that side).
+fn signal_penalty(
+    net: &Network,
+    cx: &SearchContext,
+    b: usize,
+    edge: usize,
+    weight: &mut i32,
+) -> Option<i32> {
+    let side = side_of(edge);
+    if net.signals[b].blocks[side].is_empty() {
+        return None;
+    }
+    if cx.occupancy.forced_red(b, side) {
+        return Some(REDSTONE_RED_SIGNAL);
+    }
+    if cx
+        .occupancy
+        .occupied_unless_boundary(net.beyond(b, side), b)
+    {
+        let p = *weight;
+        *weight /= 2;
+        return Some(p);
+    }
+    Some(0)
+}
+
 /// `Navigation.search` from `start` (facing the way it goes) for the first of `targets`
 /// (station indices) it reaches, by distance plus penalties plus the octile distance left.
 pub fn search(net: &Network, start: Point, targets: &[usize], cx: &SearchContext) -> Option<Found> {
@@ -239,14 +401,8 @@ pub fn search(net: &Network, start: Point, targets: &[usize], cx: &SearchContext
             continue;
         }
         match mark {
-            Mark::Signal(_) => {
-                if cx
-                    .occupancy
-                    .occupied_unless(net.section(initial, pos), cx.me)
-                {
-                    penalty += signal_weight;
-                    signal_weight /= 2;
-                }
+            Mark::Signal(b) => {
+                penalty += signal_penalty(net, cx, b, initial, &mut signal_weight)?;
             }
             Mark::Station(i) => {
                 let present = cx.present.get(&net.stations[i].0).copied();
@@ -312,16 +468,17 @@ pub fn search(net: &Network, start: Point, targets: &[usize], cx: &SearchContext
             }
         }
         let next: Vec<usize> = g.onward(e);
-        for &n in &next {
+        'next: for &n in &next {
             let mut penalty = entry.penalty + cx.penalties.get(&n).copied().unwrap_or(0);
             let distance = entry.distance + g.length(n);
             let mut has_destination = false;
-            for &(pos, mark) in &net.marks[n] {
+            for &(_, mark) in &net.marks[n] {
                 match mark {
-                    Mark::Signal(_) => {
-                        if cx.occupancy.occupied_unless(net.section(n, pos), cx.me) {
-                            penalty += signal_weight;
-                            signal_weight /= 2;
+                    Mark::Signal(b) => {
+                        match signal_penalty(net, cx, b, n, &mut signal_weight) {
+                            Some(p) => penalty += p,
+                            // `continue Search`: not this way.
+                            None => continue 'next,
                         }
                     }
                     Mark::Station(i) => {
@@ -378,14 +535,204 @@ pub fn search(net: &Network, start: Point, targets: &[usize], cx: &SearchContext
     None
 }
 
+/// What lies ahead of a navigating train (`Navigation.tick`'s signal scout): the signal it must
+/// wait at (its distance), and the nearest curve.
+struct Scouted {
+    signal: Option<f64>,
+    curve: Option<f64>,
+}
+
+/// Why a station can't assemble a train (`AssemblyException`), by Create's message key
+/// (`create.train_assembly.<key>`) and its arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssemblyError {
+    FrontmostBogeyAtStation,
+    BogeysTooClose(usize, usize),
+    NothingAttached(usize),
+    TooManyBogeys(usize),
+    SidewaysControls,
+    NotConnectedInOrder,
+    NoControls,
+    NoBogeys,
+}
+
+impl AssemblyError {
+    pub fn key(self) -> &'static str {
+        match self {
+            AssemblyError::FrontmostBogeyAtStation => "frontmost_bogey_at_station",
+            AssemblyError::BogeysTooClose(..) => "bogeys_too_close",
+            AssemblyError::NothingAttached(_) => "nothing_attached",
+            AssemblyError::TooManyBogeys(_) => "too_many_bogeys",
+            AssemblyError::SidewaysControls => "sideways_controls",
+            AssemblyError::NotConnectedInOrder => "not_connected_in_order",
+            AssemblyError::NoControls => "no_controls",
+            AssemblyError::NoBogeys => "no_bogeys",
+        }
+    }
+
+    /// The message's arguments.
+    pub fn args(self) -> Vec<String> {
+        match self {
+            AssemblyError::BogeysTooClose(a, b) => vec![a.to_string(), b.to_string()],
+            AssemblyError::NothingAttached(n) | AssemblyError::TooManyBogeys(n) => {
+                vec![n.to_string()]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// What a carriage's structure holds (`CarriageContraption.assemble` from one bogey): how many
+/// blocks, the bogeys in it (their places along the station's track), and its train controls
+/// facing the assembly direction (forward), against it (backward) or across (sideways).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Structure {
+    pub blocks: usize,
+    pub bogeys: Vec<i32>,
+    pub forward: bool,
+    pub backward: bool,
+    pub sideways: bool,
+}
+
+/// A train's layout as a station assembles it (`StationBlockEntity.assemble`): its carriages,
+/// the spacing between them, where each wheel point goes (blocks from the end of the station's
+/// track toward the assembly direction), and whether it can be driven both ways.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Layout {
+    pub carriages: Vec<CarriageShape>,
+    pub spacing: Vec<i32>,
+    pub offsets: Vec<f64>,
+    pub double_ended: bool,
+}
+
+/// `StationBlockEntity.assemble`'s rules over the bogeys found along the station's track
+/// (`refreshAssemblyInfo`: their places, 0 the block next to the station's, nearest first),
+/// with `structure(i)` gathering what bogey `i` carries: the frontmost bogey stands at the
+/// station, bogeys are at least 3 apart, a carriage holds more than its bogey, one or two bogeys
+/// (the second the next one along), no controls sideways, and some controls face forward.
+pub fn layout(
+    bogeys: &[i32],
+    mut structure: impl FnMut(usize) -> Structure,
+) -> Result<Layout, AssemblyError> {
+    if bogeys.first() != Some(&0) {
+        return Err(AssemblyError::FrontmostBogeyAtStation);
+    }
+    let mut offsets = Vec::with_capacity(bogeys.len() * 2);
+    let mut previous = -100;
+    for (i, &loc) in bogeys.iter().enumerate() {
+        if loc - previous < 3 {
+            return Err(AssemblyError::BogeysTooClose(i, i + 1));
+        }
+        offsets.push(f64::from(loc) + 0.5 - WHEEL_SPACING / 2.0);
+        offsets.push(f64::from(loc) + 0.5 + WHEEL_SPACING / 2.0);
+        previous = loc;
+    }
+    if offsets.is_empty() {
+        return Err(AssemblyError::NoBogeys);
+    }
+    let mut carriages = Vec::new();
+    let mut spacing = Vec::new();
+    let (mut forward, mut backward) = (false, false);
+    let mut i = 0;
+    while i < bogeys.len() {
+        if i > 0 {
+            spacing.push(bogeys[i] - bogeys[i - 1]);
+        }
+        let s = structure(i);
+        let count = s.bogeys.len().max(1);
+        if s.blocks <= 1 {
+            return Err(AssemblyError::NothingAttached(i + 1));
+        }
+        if count > 2 {
+            return Err(AssemblyError::TooManyBogeys(count));
+        }
+        if s.sideways {
+            return Err(AssemblyError::SidewaysControls);
+        }
+        forward |= s.forward;
+        backward |= s.backward;
+        let second = s.bogeys.iter().copied().find(|&b| b != bogeys[i]);
+        let shape = match second {
+            Some(b) => {
+                if i == bogeys.len() - 1 || b != bogeys[i + 1] {
+                    return Err(AssemblyError::NotConnectedInOrder);
+                }
+                let shape = CarriageShape {
+                    first: i,
+                    two: true,
+                    bogey_spacing: bogeys[i + 1] - bogeys[i],
+                };
+                i += 1;
+                shape
+            }
+            None => CarriageShape {
+                first: i,
+                two: false,
+                bogey_spacing: 0,
+            },
+        };
+        carriages.push(shape);
+        i += 1;
+    }
+    if !forward {
+        return Err(AssemblyError::NoControls);
+    }
+    Ok(Layout {
+        carriages,
+        spacing,
+        offsets,
+        double_ended: backward,
+    })
+}
+
 impl Train {
-    /// A train whose bogeys stand on the track blocks `under` (front first), facing `front`
-    /// (a unit along the track): each bogey's wheels a wheel spacing apart about its block's
-    /// centre (`CarriageBogey`'s points). None when a wheel would be off the track.
+    /// A train of `layout` assembled at a station whose track ends at `origin` (the end of the
+    /// station's track block toward `direction`, the assembly direction, a unit along x or z):
+    /// each wheel point its offset along `direction` from there, facing back toward the station
+    /// (its front). None when a point would be off the track.
+    pub fn assembled(
+        net: &Network,
+        origin: Vec3,
+        direction: Vec3,
+        layout: &Layout,
+        sizes: &[BogeySize],
+    ) -> Option<Train> {
+        let back = [-direction[0], -direction[1], -direction[2]];
+        let mut points = Vec::with_capacity(layout.offsets.len());
+        for &o in &layout.offsets {
+            let at = [
+                origin[0] + direction[0] * o,
+                origin[1] + direction[1] * o,
+                origin[2] + direction[2] * o,
+            ];
+            points.push(net.locate(at, back)?);
+        }
+        let mut t = Train {
+            points,
+            bogeys: sizes.to_vec(),
+            carriages: layout.carriages.clone(),
+            spacing: layout.spacing.clone(),
+            double_ended: layout.double_ended,
+            speed: 0.0,
+            nav: None,
+            at_station: None,
+            manual: None,
+            reserved: Vec::new(),
+            placed: Vec::new(),
+            bound: true,
+        };
+        t.remember(net);
+        Some(t)
+    }
+
+    /// A train of single-bogey carriages on the track blocks `under` (front first), facing
+    /// `front` (a unit along the track), driven both ways: each bogey's wheels a wheel spacing
+    /// apart about its block's centre. None when a wheel would be off the track.
     pub fn on_bogeys(net: &Network, under: &[[i32; 3]], front: Vec3) -> Option<Train> {
         let g = &net.graph;
         let mut points = Vec::with_capacity(under.len() * 2);
-        for b in under {
+        let mut spacing = Vec::new();
+        for (i, b) in under.iter().enumerate() {
             let loc = net.blocks.get(b)?;
             let centre = Point {
                 edge: loc.edge,
@@ -396,19 +743,35 @@ impl Train {
             let p = net.locate(at, front)?;
             let mut lead = p;
             let mut trail = p;
-            lead.travel_signed(g, WHEEL_SPACING / 2.0, |_| 0);
-            trail.travel_signed(g, -WHEEL_SPACING / 2.0, |_| 0);
+            lead.travel_signed(g, WHEEL_SPACING / 2.0, |_, _| 0);
+            trail.travel_signed(g, -WHEEL_SPACING / 2.0, |_, _| 0);
             if lead.blocked || trail.blocked {
                 return None;
             }
             points.push(lead);
             points.push(trail);
+            if i > 0 {
+                let a = under[i - 1];
+                spacing.push((a[0] - b[0]).abs() + (a[2] - b[2]).abs());
+            }
         }
         let mut t = Train {
             points,
+            bogeys: vec![BogeySize::Small; under.len()],
+            carriages: (0..under.len())
+                .map(|first| CarriageShape {
+                    first,
+                    two: false,
+                    bogey_spacing: 0,
+                })
+                .collect(),
+            spacing,
+            double_ended: true,
             speed: 0.0,
             nav: None,
             at_station: None,
+            manual: None,
+            reserved: Vec::new(),
             placed: Vec::new(),
             bound: true,
         };
@@ -467,7 +830,7 @@ impl Train {
             }
         }
         self.points = points;
-        self.bound = !self.points.is_empty();
+        self.bound = !self.points.is_empty() && self.points.len() == self.bogeys.len() * 2;
         self.bound
     }
 
@@ -485,97 +848,280 @@ impl Train {
         mid(self.points[2 * i].at(g), self.points[2 * i + 1].at(g))
     }
 
-    /// The pose of the carriage (`alignEntity`): the anchor of bogey `pivot`, and its front's
-    /// direction from its rotation anchors (its two bogeys, or one bogey's wheels).
-    pub fn pose(&self, g: &Graph, pivot: usize) -> (Vec3, Vec3) {
-        let bogeys = self.points.len() / 2;
-        let (a, b) = if bogeys >= 2 {
-            (self.anchor(g, 0), self.anchor(g, bogeys - 1))
-        } else {
-            (self.points[0].at(g), self.points[1].at(g))
-        };
-        let d = sub(a, b);
-        let l = length(d);
-        let heading = if l < 1.0e-6 {
-            [1.0, 0.0, 0.0]
-        } else {
-            [d[0] / l, d[1] / l, d[2] / l]
-        };
-        (self.anchor(g, pivot.min(bogeys.saturating_sub(1))), heading)
+    /// Carriage `c`'s last bogey (`trailingBogey`).
+    pub fn last_bogey(&self, c: usize) -> usize {
+        let s = self.carriages[c];
+        s.first + usize::from(s.two)
     }
 
-    /// Moves every point `distance` along (`Carriage.travel`): the leading one follows `path`
-    /// at junctions (`navigateOptions`), each other the point ahead of it. The distance moved
-    /// and whether the track ended.
-    pub fn travel(&mut self, g: &Graph, distance: f64, path: &mut Vec<usize>) -> (f64, bool) {
-        let n = self.points.len();
-        if n == 0 || distance == 0.0 {
-            return (0.0, false);
-        }
-        let forward = distance > 0.0;
-        let order = |k: usize| if forward { k } else { n - 1 - k };
-        let lead = order(0);
-        let moved = self.points[lead].travel_signed(g, distance, |c| {
-            if let Some(&want) = path.first()
-                && let Some(i) = c.iter().position(|&e| e == want)
-            {
-                path.remove(0);
-                return i;
+    /// Carriage `c`'s leading and trailing points (`getLeadingPoint`, `getTrailingPoint`).
+    fn ends(&self, c: usize) -> (usize, usize) {
+        (2 * self.carriages[c].first, 2 * self.last_bogey(c) + 1)
+    }
+
+    /// The pose of carriage `c` (`alignEntity`): its leading bogey's anchor (`positionAnchor`),
+    /// and its front's direction from its rotation anchors (its two bogeys' anchors, or its one
+    /// bogey's wheels).
+    pub fn carriage_pose(&self, g: &Graph, c: usize) -> (Vec3, Vec3) {
+        let s = self.carriages[c];
+        let (a, b) = if s.two {
+            (self.anchor(g, s.first), self.anchor(g, s.first + 1))
+        } else {
+            (
+                self.points[2 * s.first].at(g),
+                self.points[2 * s.first + 1].at(g),
+            )
+        };
+        (self.anchor(g, s.first), unit(sub(a, b)))
+    }
+
+    /// Bogey `b`'s anchor and the way its wheels line up (front first).
+    pub fn bogey_pose(&self, g: &Graph, b: usize) -> (Vec3, Vec3) {
+        let (a, c) = (self.points[2 * b].at(g), self.points[2 * b + 1].at(g));
+        (mid(a, c), unit(sub(a, c)))
+    }
+
+    /// Carriage `c`'s travel (`Carriage.travel`): each wheel of each bogey (from the back when
+    /// running backwards) moves what the one before it moved, corrected by its bogey's stress
+    /// (`getStress`: wheel spacing less how far apart its wheels are) and the carriage's (bogey
+    /// spacing less how far apart its anchors are), so the wheels and bogeys keep their
+    /// distance; the front wheel the way of the carriage ahead (or the train's control), the
+    /// back wheel the way of the carriage behind. The distance its last wheel moved.
+    fn carriage_travel(
+        &mut self,
+        g: &Graph,
+        c: usize,
+        distance: f64,
+        ahead: Option<usize>,
+        behind: Option<usize>,
+        control: &mut Control,
+    ) -> (f64, bool) {
+        let shape = self.carriages[c];
+        let mut blocked = false;
+        let two = shape.two;
+        let stress = if two {
+            f64::from(shape.bogey_spacing)
+                - distance_between(self.anchor(g, shape.first), self.anchor(g, shape.first + 1))
+        } else {
+            0.0
+        };
+        let mut moved = distance;
+        let from_back = distance < 0.0;
+        for first_bogey in [true, false] {
+            if !first_bogey && !two {
+                continue;
             }
-            0
-        });
-        let blocked = self.points[lead].blocked;
-        for k in 1..n {
-            let (i, ahead) = (order(k), order(k - 1));
-            let target = if forward {
-                self.points[ahead].edge
+            let actually_first = !two || (first_bogey ^ from_back);
+            let b = if actually_first {
+                shape.first
             } else {
-                Graph::reverse(self.points[ahead].edge)
+                shape.first + 1
             };
-            self.points[i].travel_signed(g, moved, |c| follow(g, target, c));
+            let bogey_correction = stress * if actually_first { 0.5 } else { -0.5 };
+            let bogey_stress = WHEEL_SPACING
+                - distance_between(self.points[2 * b].at(g), self.points[2 * b + 1].at(g));
+            for first_wheel in [true, false] {
+                let actually_first_wheel = first_wheel ^ from_back;
+                let p = if actually_first_wheel {
+                    2 * b
+                } else {
+                    2 * b + 1
+                };
+                let prev = if !actually_first_wheel {
+                    Some(2 * b)
+                } else if !actually_first && two {
+                    Some(2 * shape.first + 1)
+                } else {
+                    None
+                };
+                let next = if actually_first_wheel {
+                    Some(2 * b + 1)
+                } else if actually_first && two {
+                    Some(2 * (shape.first + 1))
+                } else {
+                    None
+                };
+                let correction = bogey_stress * if actually_first_wheel { 0.5 } else { -0.5 };
+                let to_move = moved + correction + bogey_correction;
+                let lead = if to_move > 0.0 {
+                    prev.or(ahead)
+                } else {
+                    next.or(behind)
+                };
+                let target = lead.map(|k| {
+                    if to_move > 0.0 {
+                        self.points[k].edge
+                    } else {
+                        Graph::reverse(self.points[k].edge)
+                    }
+                });
+                let point = &mut self.points[p];
+                moved = point.travel_signed(g, to_move, |from, cands| match target {
+                    Some(t) => follow(g, t, cands),
+                    None => control.select(g, from, cands),
+                });
+                blocked |= point.blocked;
+            }
         }
         (moved, blocked)
     }
 
-    /// `Navigation.tick`'s scout: from the leading point along the path, the nearest signal
-    /// within `scan` whose section beyond is held by another train, and the nearest curve.
-    fn scout(&self, net: &Network, occ: &Occupancy, me: u32, nav: &Nav, scan: f64) -> Scouted {
+    /// Moves the train `distance` along (`Train.tick`'s carriage loop): each carriage (from the
+    /// back when running backwards) moves the distance the first moved, plus the coupling
+    /// stress to the carriages beside it (spacing less how far apart their facing anchors
+    /// are), halved toward the front and an eighth toward the back (three quarters and none when
+    /// `approaching` a station). The distance moved and whether the track ended.
+    pub fn travel(
+        &mut self,
+        g: &Graph,
+        distance: f64,
+        control: &mut Control,
+        approaching: bool,
+    ) -> (f64, bool) {
+        let n = self.carriages.len();
+        if self.points.is_empty() || n == 0 || distance == 0.0 {
+            return (0.0, false);
+        }
+        let stress: Vec<f64> = (1..n)
+            .map(|i| {
+                let lead = self.anchor(g, self.carriages[i].first);
+                let trail = self.anchor(g, self.last_bogey(i - 1));
+                f64::from(self.spacing.get(i - 1).copied().unwrap_or(0))
+                    - distance_between(lead, trail)
+            })
+            .collect();
+        let (leading_mod, trailing_mod) = if approaching {
+            (0.75, 0.0)
+        } else {
+            (0.5, 0.125)
+        };
+        let from_back = distance < 0.0;
+        let mut distance = distance;
+        let mut blocked = false;
+        let mut first_moved = 0.0;
+        for index in 0..n {
+            let i = if from_back { n - 1 - index } else { index };
+            let leading_stress = if i == 0 {
+                0.0
+            } else {
+                stress[i - 1] * -(if from_back { trailing_mod } else { leading_mod })
+            };
+            let trailing_stress = if i == n - 1 {
+                0.0
+            } else {
+                stress[i] * if from_back { leading_mod } else { trailing_mod }
+            };
+            let ahead = (i > 0).then(|| self.ends(i - 1).1);
+            let behind = (i + 1 < n).then(|| self.ends(i + 1).0);
+            let (moved, stopped) = self.carriage_travel(
+                g,
+                i,
+                distance + leading_stress + trailing_stress,
+                ahead,
+                behind,
+                control,
+            );
+            blocked |= stopped;
+            if index == 0 {
+                distance = moved;
+                first_moved = moved;
+            }
+        }
+        (first_moved, blocked)
+    }
+
+    /// `Navigation.tick`'s scout: from the leading point along the path, the signals ahead
+    /// within the braking distance (`scan`). An entry signal whose section another train holds
+    /// (or redstone holds red) stops it; a free one within reach is reserved for it. A cross
+    /// signal starts a chain of sections up to the next entry signal: the train waits at the
+    /// cross signal while any of them is held, and reserves them all when none is.
+    fn scout(&mut self, net: &Network, occ: &mut Occupancy, me: u32, nav: &Nav) -> Scouted {
         let g = &net.graph;
         let lead = self.leading(g, !nav.behind);
-        // On a curve already: it counts from here (`edgeTraversedFrom` on the first edge).
-        let mut out = Scouted {
-            signal: None,
-            curve: slows(g, lead.edge).then_some(0.0),
+        let braking = self.speed * self.speed / (2.0 * ACCELERATION);
+        let no_flicker = braking + 3.0 - braking % 3.0;
+        let look_ahead = if self.at_station.is_some() { 4.5 } else { 0.0 };
+        // `Mth.clamp(value, min, max)`.
+        let scan = if no_flicker < look_ahead {
+            look_ahead
+        } else {
+            no_flicker.min(nav.distance)
         };
+        let manual = self.manual.is_some_and(|m| m.throttle != 0.0);
+        // On a curve already: it counts from here (`edgeTraversedFrom` on the first edge).
+        let mut curve = slows(g, lead.edge).then_some(0.0);
+        let mut waiting: Option<f64> = None;
+        let mut tracking: Option<f64> = None;
+        let mut chain: Vec<(usize, usize)> = Vec::new();
+        self.reserved.clear();
         let (mut edge, mut base, mut cursor) = (lead.edge, -lead.position, 0);
         let limit = nav.distance + 50.0;
         let mut first = true;
-        loop {
+        'walk: loop {
             for &(pos, mark) in &net.marks[edge] {
                 if first && pos <= lead.position {
                     continue;
                 }
                 let d = base + pos;
                 match mark {
-                    Mark::Signal(_) => {
-                        if d > scan {
-                            return out;
+                    Mark::Signal(b) => {
+                        if tracking.is_none() && d > scan {
+                            break 'walk;
                         }
-                        if occ.occupied_unless(net.section(edge, pos), me) {
-                            out.signal = Some(d);
-                            return out;
+                        let side = side_of(edge);
+                        let entering = net.beyond(b, side);
+                        let cross = net.signals[b].types[side] == SignalType::Cross;
+                        let occupied = !manual
+                            && (occ.forced_red(b, side) || occ.occupied_unless(entering, me));
+                        match tracking {
+                            None => {
+                                if cross {
+                                    tracking = Some(d);
+                                    chain.push((entering, b));
+                                }
+                                if occupied {
+                                    waiting = Some(d);
+                                    if !cross {
+                                        break 'walk;
+                                    }
+                                }
+                                if !occupied
+                                    && !cross
+                                    && d < waiting.unwrap_or(f64::MAX) + 0.25
+                                    && d < no_flicker
+                                {
+                                    occ.reserve(entering, b);
+                                }
+                            }
+                            Some(start) => {
+                                chain.push((entering, b));
+                                if occupied {
+                                    waiting = Some(start);
+                                    if !cross {
+                                        break 'walk;
+                                    }
+                                }
+                                if !cross {
+                                    if d < waiting.unwrap_or(f64::MAX) + 0.25 {
+                                        tracking = None;
+                                        self.reserve_chain(occ, &mut chain);
+                                    } else {
+                                        break 'walk;
+                                    }
+                                }
+                            }
                         }
                     }
                     Mark::Station(i) => {
                         if net.stations[i].0 == nav.station {
-                            return out;
+                            break 'walk;
                         }
                     }
                 }
             }
             base += g.length(edge);
             if base > limit {
-                return out;
+                break;
             }
             let mut next = None;
             let mut count = 0;
@@ -589,28 +1135,111 @@ impl Train {
                 }
             }
             let Some(n) = next else {
-                return out;
+                break;
             };
             if count > 1 && nav.path.get(cursor) == Some(&n) {
                 cursor += 1;
             }
-            if out.curve.is_none() && slows(g, n) {
-                out.curve = Some(base.max(0.0));
+            if curve.is_none() && slows(g, n) {
+                curve = Some(base.max(0.0));
             }
             edge = n;
             first = false;
         }
+        if tracking.is_some() && waiting.is_none() {
+            self.reserve_chain(occ, &mut chain);
+        }
+        Scouted {
+            signal: waiting,
+            curve,
+        }
     }
 
-    /// `Train.tick` with `Navigation.tick`: the speed toward the destination, then the move.
-    /// Arrived when its leading point passes the station.
-    pub fn tick(&mut self, net: &Network, occ: &Occupancy, me: u32) -> Run {
+    /// `reserveChain`: the train holds the chain's sections, each reserved through its signal.
+    fn reserve_chain(&mut self, occ: &mut Occupancy, chain: &mut Vec<(usize, usize)>) {
+        for (section, b) in chain.drain(..) {
+            self.reserved.push(section);
+            occ.reserve(section, b);
+        }
+    }
+
+    /// `frontSignalListener`: a signal the front passed reserves the section beyond for it.
+    fn passed(net: &Network, occ: &mut Occupancy, before: Point, after: Point) {
+        let mut on = |edge: usize, from: f64, to: f64| {
+            for &(pos, mark) in &net.marks[edge] {
+                if let Mark::Signal(b) = mark
+                    && pos > from
+                    && pos <= to
+                {
+                    occ.reserve(net.beyond(b, side_of(edge)), b);
+                }
+            }
+        };
+        if before.edge == after.edge {
+            on(after.edge, before.position, after.position);
+        } else {
+            on(before.edge, before.position, f64::MAX);
+            on(after.edge, f64::MIN, after.position);
+        }
+    }
+
+    /// The controls held (`CarriageContraptionEntity.control`): toward the throttle's way at
+    /// 75% of top speed scaled by the throttle, the turning speed on a curve, a quarter of it
+    /// backwards, braking twice as hard against the way it runs; it leaves the station.
+    fn drive(&mut self, g: &Graph, m: Manual) {
+        let way = m.throttle.signum();
+        let mut top = TOP_SPEED * MANUAL_SPEED;
+        let capped = top * m.throttle.abs().min(1.0);
+        let (lead, trail) = (self.points[0], self.points[self.points.len() - 1]);
+        if g.edges[lead.edge].turn.is_some() || g.edges[trail.edge].turn.is_some() {
+            top = TURN_TOP_SPEED;
+        }
+        if way < 0.0 {
+            top /= 4.0;
+        }
+        let target = top.min(capped) * way;
+        let countering = (way - self.speed.signum()).abs() > 1.5;
+        self.at_station = None;
+        let rate = if countering { 2.0 } else { 1.0 } * ACCELERATION;
+        if (target - self.speed).abs() >= 1.0e-5 {
+            self.speed = if self.speed < target {
+                (self.speed + rate).min(target)
+            } else {
+                (self.speed - rate).max(target)
+            };
+        }
+    }
+
+    /// `Train.tick` with `Navigation.tick`: by hand while its controls are held, else the speed
+    /// toward the destination, else coasting to a stop; then the move. Arrived when its leading
+    /// point passes the station.
+    pub fn tick(&mut self, net: &Network, occ: &mut Occupancy, me: u32) -> Run {
         if !self.bound {
             return Run::Still;
         }
         let g = &net.graph;
+        let steer = self.manual.map_or(0, |m| m.steer);
+        if let Some(m) = self.manual.filter(|m| m.throttle != 0.0) {
+            // The controls cancel its navigation.
+            self.nav = None;
+            self.reserved.clear();
+            self.drive(g, m);
+            let before = self.leading(g, self.speed >= 0.0);
+            let (_, blocked) = self.travel(g, self.speed, &mut Control::Steer(steer), false);
+            Self::passed(net, occ, before, self.leading(g, self.speed >= 0.0));
+            if blocked {
+                self.speed = 0.0;
+                return Run::Blocked;
+            }
+            return if self.speed == 0.0 {
+                Run::Still
+            } else {
+                Run::Moving
+            };
+        }
         let Some(mut nav) = self.nav.take() else {
             // `tickPassiveSlowdown`.
+            self.reserved.clear();
             if self.speed == 0.0 {
                 return Run::Still;
             }
@@ -619,7 +1248,7 @@ impl Train {
             } else {
                 (self.speed + ACCELERATION).min(0.0)
             };
-            let (_, blocked) = self.travel(g, self.speed, &mut Vec::new());
+            let (_, blocked) = self.travel(g, self.speed, &mut Control::Steer(steer), false);
             if blocked {
                 self.speed = 0.0;
                 return Run::Blocked;
@@ -629,14 +1258,7 @@ impl Train {
         let dir = if nav.behind { -1.0 } else { 1.0 };
         let braking = self.speed * self.speed / (2.0 * ACCELERATION);
         let look_ahead = if self.at_station.is_some() { 4.5 } else { 0.0 };
-        let no_flicker = braking + 3.0 - braking % 3.0;
-        // `Mth.clamp(value, min, max)`.
-        let scan = if no_flicker < look_ahead {
-            look_ahead
-        } else {
-            no_flicker.min(nav.distance)
-        };
-        let seen = self.scout(net, occ, me, &nav, scan);
+        let seen = self.scout(net, occ, me, &nav);
         nav.signal = seen.signal;
         // Stops half a block short of a signal it waits at.
         let stop = seen.signal.map(|d| d - 0.5);
@@ -692,15 +1314,25 @@ impl Train {
                 }
             }
         }
-        let (moved, blocked) = self.travel(g, self.speed, &mut nav.path);
+        let approaching = nav.distance < 5.0;
+        let before = self.leading(g, !nav.behind);
+        let (moved, blocked) = self.travel(
+            g,
+            self.speed,
+            &mut Control::Path(&mut nav.path),
+            approaching,
+        );
+        Self::passed(net, occ, before, self.leading(g, !nav.behind));
         nav.distance -= moved * dir;
         if nav.distance <= 0.0 {
             self.speed = 0.0;
             self.at_station = Some(nav.station);
+            self.reserved.clear();
             return Run::Arrived;
         }
         if blocked {
             self.speed = 0.0;
+            self.reserved.clear();
             return Run::Blocked;
         }
         self.nav = Some(nav);
@@ -708,11 +1340,15 @@ impl Train {
     }
 
     /// `Navigation.findPathTo`: searched ahead of its front and behind its back (not back
-    /// out of a path it is already running), the cheaper one.
+    /// out of a path it is already running, and behind only when it has controls facing
+    /// backwards, `doubleEnded`), the cheaper one.
     pub fn find_path(&self, net: &Network, targets: &[usize], cx: &SearchContext) -> Option<Found> {
         let g = &net.graph;
         let mut found: [Option<Found>; 2] = [None, None];
         for (k, forward) in [true, false].into_iter().enumerate() {
+            if !forward && !self.double_ended {
+                continue;
+            }
             if let Some(nav) = &self.nav
                 && nav.behind == forward
             {
@@ -736,6 +1372,7 @@ impl Train {
 
     /// `startNavigation`.
     pub fn start(&mut self, net: &Network, found: Found) {
+        self.manual = None;
         self.nav = Some(Nav {
             station: net.stations[found.station].0,
             distance: found.distance.abs(),
@@ -747,15 +1384,30 @@ impl Train {
     }
 }
 
-/// An assembled train: its motion, its blocks (offset from the block of bogey `pivot`, state),
-/// the way its front faced when assembled (a unit along x or z), its schedule, and the column
-/// it is saved with.
+fn distance_between(a: Vec3, b: Vec3) -> f64 {
+    distance(a, b)
+}
+
+fn unit(d: Vec3) -> Vec3 {
+    let l = length(d);
+    if l < 1.0e-6 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [d[0] / l, d[1] / l, d[2] / l]
+    }
+}
+
+/// A carriage's blocks: offsets from its leading bogey's block, and states.
+pub type CarBlocks = Vec<([i32; 3], u32)>;
+
+/// An assembled train: its motion, each carriage's blocks (offset from its leading bogey's
+/// block, state), the way its front faced when assembled (a unit along x or z), its schedule,
+/// and the column it is saved with.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrainOnTrack {
     pub id: u32,
     pub train: Train,
-    pub blocks: Vec<([i32; 3], u32)>,
-    pub pivot: usize,
+    pub cars: Vec<CarBlocks>,
     pub heading: [i32; 2],
     pub schedule: Option<Schedule>,
     pub runtime: Runtime,
@@ -786,14 +1438,23 @@ impl TrainOnTrack {
         ANY_TRAIN
     }
 
-    /// The column its pivot bogey stands in.
-    pub fn column_on(&self, net: &Network) -> (i32, i32) {
-        let at = if self.train.bound {
-            self.train.pose(&net.graph, self.pivot).0
+    /// Where its first carriage is (its leading bogey's anchor).
+    pub fn position(&self, net: &Network) -> Vec3 {
+        if self.train.bound {
+            self.train.carriage_pose(&net.graph, 0).0
         } else {
-            let k = (2 * self.pivot).min(self.train.placed.len().saturating_sub(1));
-            self.train.placed.get(k).map_or([0.0; 3], |p| p.at)
-        };
+            let p = &self.train.placed;
+            match (p.first(), p.get(1)) {
+                (Some(a), Some(b)) => mid(a.at, b.at),
+                (Some(a), None) => a.at,
+                _ => [0.0; 3],
+            }
+        }
+    }
+
+    /// The column its first carriage stands in.
+    pub fn column_on(&self, net: &Network) -> (i32, i32) {
+        let at = self.position(net);
         ((at[0].floor() as i32) >> 4, (at[2].floor() as i32) >> 4)
     }
 }
@@ -814,8 +1475,9 @@ pub struct Event {
 /// chord, turning at a steady rate, in between).
 pub const CURVE_UPDATE_TICKS: u64 = 2;
 
-/// The mod message channel for trains, server to client.
+/// The mod message channels: trains and signal lights, server to client.
 pub const CHANNEL: &str = "create:train";
+pub const SIGNAL_CHANNEL: &str = "create:signal";
 
 /// `CarriageContraptionEntity`'s yaw and pitch, degrees: the turn about up from the way the
 /// train faced when assembled (`heading`, a unit along x or z) to `front`, counterclockwise
@@ -828,53 +1490,90 @@ pub fn yaw_pitch(front: Vec3, heading: [i32; 2]) -> (f64, f64) {
     (yaw, front[1].atan2(flat).to_degrees())
 }
 
-/// A train's motion as clients get it: where its pivot is, its velocity (blocks a second) and
-/// yaw rate (degrees a second) until the next update, its yaw and pitch, the way it faced when
-/// assembled, and its blocks (only when clients must learn them).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Motion {
-    pub id: u32,
-    pub pivot: Vec3,
+/// A carriage's or a bogey's motion as clients get it: where it is (a carriage's pivot, its
+/// leading bogey's anchor; a bogey's anchor), its velocity (blocks a second) and yaw rate
+/// (degrees a second) until the next update, and its yaw and pitch from the train's heading.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Pose {
+    pub at: Vec3,
     pub velocity: [f32; 3],
     pub yaw: f32,
     pub yaw_rate: f32,
     pub pitch: f32,
+}
+
+/// A train's motion as clients get it: each carriage's pose, each bogey's size and pose, the
+/// way it faced when assembled, and each carriage's blocks (only when clients must learn them).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Motion {
+    pub id: u32,
     pub heading: [i32; 2],
-    pub blocks: Option<Vec<([i32; 3], u32)>>,
+    pub cars: Vec<Pose>,
+    pub bogeys: Vec<(BogeySize, Pose)>,
+    pub blocks: Option<Vec<CarBlocks>>,
 }
 
 const HEADINGS: [[i32; 2]; 4] = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+/// Blocks a message carries at most (a message stays under 32 KiB).
+const MAX_SENT_BLOCKS: usize = 1800;
+
+fn put_pose(out: &mut Vec<u8>, p: &Pose) {
+    for v in p.at {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in p.velocity.into_iter().chain([p.yaw, p.yaw_rate, p.pitch]) {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+}
+
+fn get_pose(d: &[u8], k: usize) -> Option<Pose> {
+    let r = d.get(k..k + 48)?;
+    let float = |i: usize| f64::from_le_bytes(r[i..i + 8].try_into().unwrap_or([0; 8]));
+    let single = |i: usize| f32::from_le_bytes(r[i..i + 4].try_into().unwrap_or([0; 4]));
+    Some(Pose {
+        at: [float(0), float(8), float(16)],
+        velocity: [single(24), single(28), single(32)],
+        yaw: single(36),
+        yaw_rate: single(40),
+        pitch: single(44),
+    })
+}
 
 impl Motion {
-    /// The message: id, pivot, velocity, yaw, yaw rate, pitch (f32s), heading, then the block
-    /// count and blocks if any. A message of the id alone clears the train.
+    /// The message: id, heading, carriage and bogey counts, whether blocks follow; each
+    /// carriage's pose; each bogey's size and pose; then each carriage's block count and
+    /// blocks. A message of the id alone clears the train.
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(48 + self.blocks.as_ref().map_or(0, |b| 4 + b.len() * 16));
+        let mut out = Vec::with_capacity(8 + 48 * self.cars.len() + 49 * self.bogeys.len());
         out.extend_from_slice(&self.id.to_le_bytes());
-        for v in self.pivot {
-            out.extend_from_slice(&v.to_le_bytes());
-        }
-        for v in self
-            .velocity
-            .into_iter()
-            .chain([self.yaw, self.yaw_rate, self.pitch])
-        {
-            out.extend_from_slice(&v.to_le_bytes());
-        }
         out.push(
             HEADINGS
                 .iter()
                 .position(|h| *h == self.heading)
                 .unwrap_or(0) as u8,
         );
-        if let Some(blocks) = &self.blocks {
-            let n = blocks.len().min(30_000 / 16);
-            out.extend_from_slice(&(n as u32).to_le_bytes());
-            for (o, s) in &blocks[..n] {
-                for v in o {
-                    out.extend_from_slice(&v.to_le_bytes());
+        out.push(self.cars.len().min(255) as u8);
+        out.push(self.bogeys.len().min(255) as u8);
+        out.push(u8::from(self.blocks.is_some()));
+        for c in self.cars.iter().take(255) {
+            put_pose(&mut out, c);
+        }
+        for (size, p) in self.bogeys.iter().take(255) {
+            out.push(u8::from(*size == BogeySize::Large));
+            put_pose(&mut out, p);
+        }
+        if let Some(cars) = &self.blocks {
+            let mut left = MAX_SENT_BLOCKS;
+            for car in cars.iter().take(self.cars.len().min(255)) {
+                let n = car.len().min(left);
+                left -= n;
+                out.extend_from_slice(&(n as u32).to_le_bytes());
+                for (o, s) in &car[..n] {
+                    for v in o {
+                        out.extend_from_slice(&v.to_le_bytes());
+                    }
+                    out.extend_from_slice(&s.to_le_bytes());
                 }
-                out.extend_from_slice(&s.to_le_bytes());
             }
         }
         out
@@ -882,38 +1581,54 @@ impl Motion {
 
     /// The motion in a message, or the id of a train to clear.
     pub fn decode(d: &[u8]) -> Result<Motion, Option<u32>> {
-        let word = |k: usize| -> [u8; 4] { [d[k], d[k + 1], d[k + 2], d[k + 3]] };
-        if d.len() < 4 {
+        let word = |k: usize| -> Option<[u8; 4]> { d.get(k..k + 4)?.try_into().ok() };
+        let Some(id) = word(0).map(u32::from_le_bytes) else {
             return Err(None);
-        }
-        let id = u32::from_le_bytes(word(0));
-        if d.len() < 4 + 24 + 24 + 1 {
+        };
+        if d.len() < 8 {
             return Err(Some(id));
         }
-        let float = |k: usize| f64::from_le_bytes(d[k..k + 8].try_into().unwrap_or([0; 8]));
-        let single = |k: usize| f32::from_le_bytes(word(k));
-        let pivot = [float(4), float(12), float(20)];
-        let f: [f32; 6] = std::array::from_fn(|i| single(28 + 4 * i));
-        let heading = HEADINGS[usize::from(d[52]).min(3)];
-        let blocks = (d.len() >= 57).then(|| {
-            let n = u32::from_le_bytes(word(53)) as usize;
-            d[57..]
-                .chunks_exact(16)
-                .take(n)
-                .map(|r| {
-                    let i = |k: usize| i32::from_le_bytes([r[k], r[k + 1], r[k + 2], r[k + 3]]);
-                    ([i(0), i(4), i(8)], i(12) as u32)
-                })
-                .collect()
-        });
+        let heading = HEADINGS[usize::from(d[4]).min(3)];
+        let (n_cars, n_bogeys, with_blocks) = (usize::from(d[5]), usize::from(d[6]), d[7] != 0);
+        let mut k = 8;
+        let mut cars = Vec::with_capacity(n_cars);
+        for _ in 0..n_cars {
+            cars.push(get_pose(d, k).ok_or(Some(id))?);
+            k += 48;
+        }
+        let mut bogeys = Vec::with_capacity(n_bogeys);
+        for _ in 0..n_bogeys {
+            let size = if *d.get(k).ok_or(Some(id))? != 0 {
+                BogeySize::Large
+            } else {
+                BogeySize::Small
+            };
+            bogeys.push((size, get_pose(d, k + 1).ok_or(Some(id))?));
+            k += 49;
+        }
+        let blocks = if with_blocks {
+            let mut all = Vec::with_capacity(n_cars);
+            for _ in 0..n_cars {
+                let n = word(k).map_or(0, u32::from_le_bytes) as usize;
+                k += 4;
+                let mut car = Vec::with_capacity(n.min(MAX_SENT_BLOCKS));
+                for _ in 0..n {
+                    let Some(r) = d.get(k..k + 16) else { break };
+                    let i = |j: usize| i32::from_le_bytes([r[j], r[j + 1], r[j + 2], r[j + 3]]);
+                    car.push(([i(0), i(4), i(8)], i(12) as u32));
+                    k += 16;
+                }
+                all.push(car);
+            }
+            Some(all)
+        } else {
+            None
+        };
         Ok(Motion {
             id,
-            pivot,
-            velocity: [f[0], f[1], f[2]],
-            yaw: f[3],
-            yaw_rate: f[4],
-            pitch: f[5],
             heading,
+            cars,
+            bogeys,
             blocks,
         })
     }
@@ -921,11 +1636,10 @@ impl Motion {
 
 impl TrainOnTrack {
     /// Its motion now and as it will be `ticks` later at this speed along its path, for
-    /// clients to draw in between.
+    /// clients to draw in between: each carriage turning about its pivot, each bogey about
+    /// its anchor.
     pub fn motion(&self, net: &Network, ticks: u64, full: bool) -> Motion {
         let g = &net.graph;
-        let (pivot, front) = self.train.pose(g, self.pivot);
-        let (yaw, pitch) = yaw_pitch(front, self.heading);
         let mut ahead = self.train.clone();
         let mut path = ahead
             .nav
@@ -933,20 +1647,43 @@ impl TrainOnTrack {
             .map(|n| n.path.clone())
             .unwrap_or_default();
         let distance = self.train.speed * ticks as f64;
-        ahead.travel(g, distance, &mut path);
-        let (then, front_then) = ahead.pose(g, self.pivot);
-        let (yaw_then, _) = yaw_pitch(front_then, self.heading);
+        let steer = self.train.manual.map_or(0, |m| m.steer);
+        let mut control = if self.train.nav.is_some() {
+            Control::Path(&mut path)
+        } else {
+            Control::Steer(steer)
+        };
+        ahead.travel(g, distance, &mut control, false);
         let seconds = ticks as f64 / 20.0;
-        let turn = (yaw_then - yaw + 540.0).rem_euclid(360.0) - 180.0;
+        let pose = |(now, front): (Vec3, Vec3), (then, front_then): (Vec3, Vec3)| {
+            let (yaw, pitch) = yaw_pitch(front, self.heading);
+            let (yaw_then, _) = yaw_pitch(front_then, self.heading);
+            let turn = (yaw_then - yaw + 540.0).rem_euclid(360.0) - 180.0;
+            Pose {
+                at: now,
+                velocity: std::array::from_fn(|k| ((then[k] - now[k]) / seconds) as f32),
+                yaw: yaw as f32,
+                yaw_rate: (turn / seconds) as f32,
+                pitch: pitch as f32,
+            }
+        };
+        let cars = (0..self.train.carriages.len())
+            .map(|c| pose(self.train.carriage_pose(g, c), ahead.carriage_pose(g, c)))
+            .collect();
+        let bogeys = (0..self.train.bogeys.len())
+            .map(|b| {
+                (
+                    self.train.bogeys[b],
+                    pose(self.train.bogey_pose(g, b), ahead.bogey_pose(g, b)),
+                )
+            })
+            .collect();
         Motion {
             id: self.id,
-            pivot,
-            velocity: std::array::from_fn(|k| ((then[k] - pivot[k]) / seconds) as f32),
-            yaw: yaw as f32,
-            yaw_rate: (turn / seconds) as f32,
-            pitch: pitch as f32,
             heading: self.heading,
-            blocks: full.then(|| self.blocks.clone()),
+            cars,
+            bogeys,
+            blocks: full.then(|| self.cars.clone()),
         }
     }
 
@@ -970,19 +1707,51 @@ impl TrainOnTrack {
     }
 }
 
+/// A signal side's state (`SignalBlockEntity.SignalState`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SignalState {
+    Red,
+    Yellow,
+    Green,
+    #[default]
+    Invalid,
+}
+
+impl SignalState {
+    /// `isRedLight` (an invalid signal's short blink is left out: it is drawn dark).
+    pub fn red_light(self) -> bool {
+        self == SignalState::Red
+    }
+}
+
+/// A signal block as the world has it: its type and whether redstone powers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct SignalBlock {
+    pub kind: SignalType,
+    pub powered: bool,
+}
+
 /// A dimension's railway: its track, stations (with their names) and signals as the world has
-/// them, the graph built from them (again only when they or the curves change), and its trains.
+/// them, the graph built from them (again only when they or the curves change), its trains and
+/// its signals' states (worked out after the trains move, and when signals change).
 #[derive(Debug, Default)]
 pub struct Railway {
     pub tracks: HashMap<[i32; 3], TrackShape>,
     pub stations: HashMap<[i32; 3], String>,
-    pub signals: Vec<[i32; 3]>,
+    pub signals: HashMap<[i32; 3], SignalBlock>,
     /// Names saved with a column, waiting for their station block.
     pub saved_names: HashMap<[i32; 3], String>,
     pub trains: Vec<TrainOnTrack>,
     pub net: Network,
     pub occupancy: Occupancy,
+    /// Each boundary side's state (`cachedStates`), and each signal block's light as clients
+    /// were last told (red or not); `lights_changed` holds the blocks to tell them of (None: the
+    /// signal is gone).
+    pub states: Vec<[SignalState; 2]>,
+    pub lights: HashMap<[i32; 3], bool>,
+    pub lights_changed: Vec<([i32; 3], Option<bool>)>,
     dirty: bool,
+    signals_dirty: bool,
     curves_seen: u64,
 }
 
@@ -1004,21 +1773,44 @@ impl Railway {
         }
     }
 
-    pub fn add_signal(&mut self, pos: [i32; 3]) {
-        if !self.signals.contains(&pos) {
-            self.signals.push(pos);
-            self.dirty = true;
+    /// A signal block placed or changed: a new one or a new type builds the graph again; power
+    /// only turns its side red or back (`updateBlockEntityPower`).
+    pub fn add_signal(&mut self, pos: [i32; 3], kind: SignalType, powered: bool) {
+        let block = SignalBlock { kind, powered };
+        match self.signals.insert(pos, block) {
+            Some(old) if old == block => {}
+            Some(old) if old.kind == kind => {
+                self.refresh_forced();
+                self.signals_dirty = true;
+            }
+            _ => self.dirty = true,
         }
+    }
+
+    /// Which boundary sides redstone holds red, from their blocks' power.
+    fn refresh_forced(&mut self) {
+        let signals = &self.signals;
+        self.occupancy.forced = self
+            .net
+            .signals
+            .iter()
+            .map(|b| {
+                std::array::from_fn(|side| {
+                    b.blocks[side]
+                        .iter()
+                        .any(|p| signals.get(p).is_some_and(|s| s.powered))
+                })
+            })
+            .collect();
     }
 
     /// A track, station or signal at `pos` is gone.
     pub fn remove(&mut self, pos: [i32; 3]) {
-        let before = self.signals.len();
-        self.signals.retain(|p| *p != pos);
-        if self.tracks.remove(&pos).is_some()
-            || self.stations.remove(&pos).is_some()
-            || self.signals.len() != before
-        {
+        let signal = self.signals.remove(&pos).is_some();
+        if signal && self.lights.remove(&pos).is_some() {
+            self.lights_changed.push((pos, None));
+        }
+        if self.tracks.remove(&pos).is_some() || self.stations.remove(&pos).is_some() || signal {
             self.dirty = true;
         }
     }
@@ -1030,7 +1822,15 @@ impl Railway {
         let (t, s, g) = (self.tracks.len(), self.stations.len(), self.signals.len());
         self.tracks.retain(|p, _| out(p));
         self.stations.retain(|p, _| out(p));
-        self.signals.retain(out);
+        self.signals.retain(|p, _| out(p));
+        let gone = &mut self.lights_changed;
+        self.lights.retain(|p, _| {
+            let keep = out(p);
+            if !keep {
+                gone.push((*p, None));
+            }
+            keep
+        });
         self.saved_names.retain(|p, _| out(p));
         self.trains.retain(|t| t.column != (cx, cz));
         if (t, s, g) != (self.tracks.len(), self.stations.len(), self.signals.len()) {
@@ -1092,9 +1892,15 @@ impl Railway {
         }
         let mut stations: Vec<[i32; 3]> = self.stations.keys().copied().collect();
         stations.sort_unstable();
-        self.net = Network::build(&self.tracks, curves, &stations, &self.signals);
+        let signals: Vec<([i32; 3], SignalType)> =
+            self.signals.iter().map(|(p, s)| (*p, s.kind)).collect();
+        self.net = Network::build(&self.tracks, curves, &stations, &signals);
         self.dirty = false;
+        self.signals_dirty = true;
         self.curves_seen = curves.revision;
+        self.states = vec![[SignalState::Invalid; 2]; self.net.signals.len()];
+        self.refresh_forced();
+        self.occupancy.fill(&self.net, &[]);
         for i in 0..self.trains.len() {
             let was = self.trains[i].train.bound;
             let bound = self.trains[i].train.bind(&self.net);
@@ -1142,7 +1948,6 @@ impl Railway {
             return false;
         }
         let me = self.trains[i].id;
-        let g = &self.net.graph;
         // Other trains weigh on the edges their ends stand on.
         let mut penalties: HashMap<usize, i32> = HashMap::new();
         let mut present: HashMap<[i32; 3], u32> = HashMap::new();
@@ -1173,7 +1978,6 @@ impl Railway {
                 .as_ref()
                 .map_or(0, |n| n.ticks_waiting),
         };
-        let _ = g;
         match self.trains[i].train.find_path(&self.net, targets, &cx) {
             Some(found) => {
                 self.trains[i].train.start(&self.net, found);
@@ -1183,13 +1987,87 @@ impl Railway {
         }
     }
 
-    /// A tick of every train: schedules give orders, navigating trains drive, the others coast
-    /// to a stop. Nothing is done without trains.
+    /// `SignalBoundary.tickState`: each side with signal blocks is red while redstone holds it
+    /// or the section beyond is held (by a train, or reserved through another signal), invalid
+    /// when both sides lead into one section; else an entry signal is green and a cross signal
+    /// takes its chain's states (`resolveSignalChain`: all free green, all red red, else
+    /// yellow). The blocks whose light changed are kept for clients.
+    fn tick_signal_states(&mut self) {
+        let net = &self.net;
+        for b in 0..net.signals.len() {
+            for side in 0..2 {
+                let boundary = &net.signals[b];
+                if boundary.blocks[side].is_empty() {
+                    continue;
+                }
+                let group = net.beyond(b, side);
+                let state = if group == net.beyond(b, 1 - side) {
+                    SignalState::Invalid
+                } else if self.occupancy.forced_red(b, side)
+                    || self.occupancy.occupied_unless_boundary(group, b)
+                {
+                    SignalState::Red
+                } else if boundary.types[side] != SignalType::Cross {
+                    SignalState::Green
+                } else {
+                    let (mut all_free, mut none_free) = (true, true);
+                    for &(o, k) in &boundary.chain[side] {
+                        if net.signals[o].blocks[k].is_empty() {
+                            continue;
+                        }
+                        let s = self.states[o][k];
+                        all_free &= matches!(s, SignalState::Green | SignalState::Invalid);
+                        none_free &= s == SignalState::Red;
+                    }
+                    if all_free {
+                        SignalState::Green
+                    } else if none_free {
+                        SignalState::Red
+                    } else {
+                        SignalState::Yellow
+                    }
+                };
+                self.states[b][side] = state;
+                for &p in &boundary.blocks[side] {
+                    let red = state.red_light();
+                    if self.lights.insert(p, red) != Some(red) {
+                        self.lights_changed.push((p, Some(red)));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether a tick has nothing to do: no trains, no signal changed, and nothing for clients;
+    /// with signals, track or curves changed builds the graph (once) for their states.
+    pub fn idle(&self, curves: &crate::track_curves::Curves) -> bool {
+        self.trains.is_empty()
+            && !self.signals_dirty
+            && self.lights_changed.is_empty()
+            && (self.signals.is_empty() || (!self.dirty && curves.revision == self.curves_seen))
+    }
+
+    /// The controls held on train `id` (`/create_debug drive`, standing in for a player riding
+    /// it): None when there is no such train.
+    pub fn drive(&mut self, id: u32, manual: Manual) -> Option<()> {
+        let t = self.trains.iter_mut().find(|t| t.id == id)?;
+        t.train.manual = Some(manual);
+        if manual.throttle != 0.0 && t.train.nav.is_some() {
+            t.train.nav = None;
+            t.runtime.interrupted();
+        }
+        Some(())
+    }
+
+    /// A tick of every train: schedules give orders, navigating trains drive, those whose
+    /// controls are held drive by hand, the others coast to a stop; then the signals' states.
+    /// Nothing is done without trains unless a signal changed.
     pub fn tick(&mut self, events: &mut Vec<Event>) {
         events.clear();
-        if self.trains.is_empty() {
+        if self.trains.is_empty() && !self.signals_dirty {
             return;
         }
+        self.signals_dirty = false;
         self.occupancy.fill(&self.net, &self.trains);
         for i in 0..self.trains.len() {
             if !self.trains[i].train.bound {
@@ -1222,7 +2100,7 @@ impl Railway {
         for i in 0..self.trains.len() {
             let t = &mut self.trains[i];
             let was = t.train.speed;
-            let run = t.train.tick(&self.net, &self.occupancy, t.id);
+            let run = t.train.tick(&self.net, &mut self.occupancy, t.id);
             match run {
                 Run::Arrived => {
                     t.idle = 0;
@@ -1246,12 +2124,14 @@ impl Railway {
                 });
             }
         }
+        self.tick_signal_states();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::SignalType;
     use crate::schedule::{Condition, Entry, SECONDS};
     use crate::track_curves::{Curves, Saved};
 
@@ -1306,8 +2186,7 @@ mod tests {
         r.trains.push(TrainOnTrack {
             id,
             train,
-            blocks: Vec::new(),
-            pivot: 0,
+            cars: vec![Vec::new(); under.len()],
             heading: [1, 0],
             schedule: None,
             runtime: Runtime::new(),
@@ -1363,7 +2242,7 @@ mod tests {
             "stops within half a block: {front:?}"
         );
         // Facing south now: the pose turned a quarter.
-        let (_, heading) = t.pose(&r.net.graph, 0);
+        let (_, heading) = t.carriage_pose(&r.net.graph, 0);
         assert!(heading[2] > 0.99, "{heading:?}");
         assert!(top <= TOP_SPEED + 1e-9);
         assert!(
@@ -1463,7 +2342,7 @@ mod tests {
         for (p, s) in t {
             r.set_track(p, s);
         }
-        r.add_signal([100, 64, 1]);
+        r.add_signal([100, 64, 1], SignalType::Entry, false);
         r.add_station([180, 64, 1]);
         r.ensure(&Curves::default());
         let a = assemble(&mut r, &[[10, 64, 0]], [1.0, 0.0, 0.0]);
@@ -1579,10 +2458,12 @@ mod tests {
         r.add_station([11, 64, 40]);
         r.ensure(&l_curves());
         let i = assemble(&mut r, &[[-30, 64, 0]], [1.0, 0.0, 0.0]);
-        r.trains[i].blocks = vec![([0, 0, 0], 7), ([0, 1, 0], 9)];
+        r.trains[i].cars = vec![vec![([0, 0, 0], 7), ([0, 1, 0], 9)]];
         let m = r.trains[i].motion(&r.net, 2, true);
-        assert_eq!((m.yaw, m.yaw_rate, m.pitch), (0.0, 0.0, 0.0));
-        assert!((m.pivot[0] + 29.5).abs() < 1e-6 && m.pivot[2] == 0.5);
+        let c = m.cars[0];
+        assert_eq!((c.yaw, c.yaw_rate, c.pitch), (0.0, 0.0, 0.0));
+        assert!((c.at[0] + 29.5).abs() < 1e-6 && c.at[2] == 0.5);
+        assert_eq!(m.bogeys.len(), 1);
         assert_eq!(Motion::decode(&m.encode()), Ok(m.clone()));
         let moving = Motion { blocks: None, ..m };
         assert_eq!(Motion::decode(&moving.encode()), Ok(moving));
@@ -1599,12 +2480,516 @@ mod tests {
         }
         r.tick(&mut events);
         let m = r.trains[i].motion(&r.net, 2, false);
-        assert!(m.yaw < 0.0 && m.yaw > -90.0, "{}", m.yaw);
-        assert!(m.yaw_rate < 0.0, "{}", m.yaw_rate);
+        let c = m.cars[0];
+        assert!(c.yaw < 0.0 && c.yaw > -90.0, "{}", c.yaw);
+        assert!(c.yaw_rate < 0.0, "{}", c.yaw_rate);
         assert!(r.trains[i].due(&r.net, 1000, &events[0]));
         // East along x is yaw 0; facing south is a quarter turn clockwise.
         assert_eq!(yaw_pitch([0.0, 0.0, 1.0], [1, 0]).0, -90.0);
         let (_, pitch) = yaw_pitch([0.0, 1.0, 1.0], [0, 1]);
         assert!((pitch - 45.0).abs() < 1e-9);
+    }
+
+    /// A straight run of track along x from x = 0 to `n - 1` at z = 0.
+    fn straight(n: i32) -> Railway {
+        let mut r = Railway::default();
+        let mut t = HashMap::new();
+        line(&mut t, [0, 64, 0], [1, 0, 0], n, TrackShape::Xo);
+        for (p, s) in t {
+            r.set_track(p, s);
+        }
+        r
+    }
+
+    fn structure(blocks: usize, bogeys: &[i32], forward: bool) -> Structure {
+        Structure {
+            blocks,
+            bogeys: bogeys.to_vec(),
+            forward,
+            ..Structure::default()
+        }
+    }
+
+    /// Bogeys at 0, 3, 8 and 13 along a station's track: the first two carry one carriage (two
+    /// bogeys), the others one each; controls in the first face forward.
+    fn three_carriage_layout() -> Layout {
+        layout(&[0, 3, 8, 13], |i| match i {
+            0 => structure(6, &[0, 3], true),
+            2 => structure(3, &[8], false),
+            _ => structure(2, &[13], false),
+        })
+        .expect("assembles")
+    }
+
+    fn push(r: &mut Railway, train: Train) -> usize {
+        let id = r.next_id();
+        let cars = vec![Vec::new(); train.carriages.len()];
+        r.trains.push(TrainOnTrack {
+            id,
+            train,
+            cars,
+            heading: [1, 0],
+            schedule: None,
+            runtime: Runtime::new(),
+            idle: 0,
+            column: (0, 0),
+            sent_tick: 0,
+            sent_edge: 0,
+            fresh: true,
+        });
+        r.trains.len() - 1
+    }
+
+    #[test]
+    fn a_station_assembles_carriages_by_create_s_rules() {
+        // The frontmost bogey stands right beside the station's track block; bogeys at least
+        // three apart.
+        let any = |_: usize| structure(5, &[], true);
+        assert_eq!(
+            layout(&[1, 5], any),
+            Err(AssemblyError::FrontmostBogeyAtStation)
+        );
+        assert_eq!(
+            layout(&[], any),
+            Err(AssemblyError::FrontmostBogeyAtStation)
+        );
+        assert_eq!(
+            layout(&[0, 2], any),
+            Err(AssemblyError::BogeysTooClose(1, 2))
+        );
+        // A bogey alone is nothing attached; three bogeys in one structure are too many; the
+        // second must be the next bogey; controls across the track are refused; some must face
+        // the way it was assembled.
+        assert_eq!(
+            layout(&[0], |_| structure(1, &[0], true)),
+            Err(AssemblyError::NothingAttached(1))
+        );
+        assert_eq!(
+            layout(&[0, 3, 6], |_| structure(9, &[0, 3, 6], true)),
+            Err(AssemblyError::TooManyBogeys(3))
+        );
+        assert_eq!(
+            layout(&[0, 3, 6], |_| structure(9, &[0, 6], true)),
+            Err(AssemblyError::NotConnectedInOrder)
+        );
+        assert_eq!(
+            layout(&[0], |_| Structure {
+                sideways: true,
+                ..structure(4, &[0], true)
+            }),
+            Err(AssemblyError::SidewaysControls)
+        );
+        assert_eq!(
+            layout(&[0, 4], |_| structure(4, &[], false)),
+            Err(AssemblyError::NoControls)
+        );
+        let both = layout(&[0], |_| Structure {
+            backward: true,
+            ..structure(4, &[0], true)
+        })
+        .unwrap();
+        assert!(both.double_ended, "controls facing back drive it backwards");
+        assert_eq!(AssemblyError::BogeysTooClose(1, 2).args(), ["1", "2"]);
+
+        let l = three_carriage_layout();
+        assert_eq!(
+            l.carriages,
+            vec![
+                CarriageShape {
+                    first: 0,
+                    two: true,
+                    bogey_spacing: 3
+                },
+                CarriageShape {
+                    first: 2,
+                    two: false,
+                    bogey_spacing: 0
+                },
+                CarriageShape {
+                    first: 3,
+                    two: false,
+                    bogey_spacing: 0
+                },
+            ]
+        );
+        // `carriageSpacing`: from each carriage's last bogey to the next one's first.
+        assert_eq!(l.spacing, vec![5, 5]);
+        assert_eq!(l.offsets[..4], [-0.5, 1.5, 2.5, 4.5]);
+        assert!(!l.double_ended);
+
+        // On the track, the station's track block at x = 30, assembled toward -x: the wheels
+        // where Create puts them (front toward the station), the anchors as far apart as the
+        // bogeys were.
+        let mut r = straight(40);
+        r.ensure(&Curves::default());
+        let sizes = [
+            BogeySize::Small,
+            BogeySize::Large,
+            BogeySize::Small,
+            BogeySize::Small,
+        ];
+        let t = Train::assembled(&r.net, [30.0, 64.0, 0.5], [-1.0, 0.0, 0.0], &l, &sizes)
+            .expect("on the track");
+        let g = &r.net.graph;
+        let xs: Vec<f64> = t.points.iter().map(|p| p.at(g)[0]).collect();
+        assert_eq!(xs, [30.5, 28.5, 27.5, 25.5, 22.5, 20.5, 17.5, 15.5]);
+        assert!(t.points.iter().all(|p| p.at(g)[2] == 0.5));
+        let (pivot, front) = t.carriage_pose(g, 0);
+        assert!(front[0] > 0.99 && pivot[0] == 29.5);
+        let d = |a: usize, b: usize| distance(t.anchor(g, a), t.anchor(g, b));
+        assert!((d(0, 1) - 3.0).abs() < 1e-9);
+        assert!((d(1, 2) - 5.0).abs() < 1e-9);
+        assert!((d(2, 3) - 5.0).abs() < 1e-9);
+        assert_eq!(BogeySize::Large.wheel_radius(), 12.5 / 16.0);
+        // Off the end of the track: no train.
+        assert!(Train::assembled(&r.net, [8.0, 64.0, 0.5], [-1.0, 0.0, 0.0], &l, &sizes).is_none());
+    }
+
+    #[test]
+    fn carriages_follow_a_curve_without_drifting_apart() {
+        let mut r = l_shape();
+        r.add_station([11, 64, 40]);
+        r.ensure(&l_curves());
+        // Three carriages on the x straight, assembled toward -x from x = -10: front east.
+        let train = Train::assembled(
+            &r.net,
+            [-10.0, 64.0, 0.5],
+            [-1.0, 0.0, 0.0],
+            &three_carriage_layout(),
+            &[BogeySize::Small; 4],
+        )
+        .unwrap();
+        let i = push(&mut r, train);
+        let south = r.station_index([11, 64, 40]).unwrap();
+        assert!(r.navigate(i, &[south]));
+        let mut events = Vec::new();
+        let (mut worst_coupling, mut worst_bogey, mut worst_wheels) = (0.0f64, 0.0f64, 0.0f64);
+        let mut most_on_curve = 0;
+        for _ in 0..3000 {
+            r.tick(&mut events);
+            let t = &r.trains[i].train;
+            let g = &r.net.graph;
+            let d = |a: usize, b: usize| distance(t.anchor(g, a), t.anchor(g, b));
+            // Straight-line distances, as Create measures them.
+            worst_bogey = worst_bogey.max((d(0, 1) - 3.0).abs());
+            worst_coupling = worst_coupling
+                .max((d(1, 2) - 5.0).abs())
+                .max((d(2, 3) - 5.0).abs());
+            for b in 0..4 {
+                let w = distance(t.points[2 * b].at(g), t.points[2 * b + 1].at(g));
+                worst_wheels = worst_wheels.max((w - WHEEL_SPACING).abs());
+            }
+            most_on_curve = most_on_curve.max(
+                t.points
+                    .iter()
+                    .filter(|p| g.edges[p.edge].turn.is_some())
+                    .count(),
+            );
+            if events.iter().any(|e| e.run == Run::Arrived) {
+                break;
+            }
+        }
+        let t = &r.trains[i].train;
+        assert_eq!(t.at_station, Some([11, 64, 40]), "arrived");
+        assert!(
+            most_on_curve >= 4,
+            "it ran through the turn: {most_on_curve}"
+        );
+        assert!(
+            worst_bogey < 0.15,
+            "bogeys kept their spacing: {worst_bogey}"
+        );
+        assert!(
+            worst_coupling < 0.25,
+            "carriages kept theirs: {worst_coupling}"
+        );
+        assert!(worst_wheels < 0.05, "wheels kept theirs: {worst_wheels}");
+        // All of it on the south straight now, every carriage facing south.
+        let g = &r.net.graph;
+        for c in 0..3 {
+            let (at, front) = t.carriage_pose(g, c);
+            assert!((at[0] - 10.5).abs() < 1e-6, "{at:?}");
+            assert!(front[2] > 0.999, "{front:?}");
+        }
+        let d = |a: usize, b: usize| distance(t.anchor(g, a), t.anchor(g, b));
+        assert!((d(0, 1) - 3.0).abs() < 0.05 && (d(2, 3) - 5.0).abs() < 0.05);
+        // Each carriage and bogey is its own part for clients.
+        let m = r.trains[i].motion(&r.net, 2, true);
+        assert_eq!((m.cars.len(), m.bogeys.len()), (3, 4));
+        assert_eq!(Motion::decode(&m.encode()), Ok(m));
+    }
+
+    /// A long line with an entry signal at x = 100 (south side: eastbound), a station at
+    /// x = 280, a train at x = 10.
+    fn signalled() -> (Railway, usize) {
+        let mut r = straight(300);
+        r.add_signal([100, 64, 1], SignalType::Entry, false);
+        r.add_station([280, 64, 1]);
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[10, 64, 0]], [1.0, 0.0, 0.0]);
+        (r, a)
+    }
+
+    fn search_from(r: &Railway, i: usize, station: usize) -> Option<Found> {
+        let none = HashMap::new();
+        let present = HashMap::new();
+        let cx = SearchContext {
+            me: r.trains[i].id,
+            penalties: &none,
+            present: &present,
+            occupancy: &r.occupancy,
+            ticks_waiting: 0,
+        };
+        search(
+            &r.net,
+            r.trains[i].train.leading(&r.net.graph, true),
+            &[station],
+            &cx,
+        )
+    }
+
+    #[test]
+    fn a_signal_only_lets_trains_through_from_its_side() {
+        // The station lies west of a signal standing for eastbound trains only: no way there
+        // from the east.
+        let mut r = straight(300);
+        r.add_signal([100, 64, 1], SignalType::Entry, false);
+        r.add_station([20, 64, 1]);
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[200, 64, 0]], [-1.0, 0.0, 0.0]);
+        r.trains[a].train.double_ended = false;
+        let west = r.station_index([20, 64, 1]).unwrap();
+        assert!(
+            !r.navigate(a, &[west]),
+            "the wrong way past a one-sided signal"
+        );
+        // A signal block on the other side too: one boundary, both ways.
+        r.add_signal([100, 64, -1], SignalType::Entry, false);
+        r.ensure(&Curves::default());
+        assert_eq!(r.net.signals.len(), 1);
+        assert!(r.navigate(a, &[west]));
+        // An eastbound train passes the first one.
+        let (mut r, a) = signalled();
+        let station = r.station_index([280, 64, 1]).unwrap();
+        assert!(r.navigate(a, &[station]));
+    }
+
+    #[test]
+    fn redstone_holds_a_signal_red() {
+        let (mut r, a) = signalled();
+        let station = r.station_index([280, 64, 1]).unwrap();
+        let mut events = Vec::new();
+        r.tick(&mut events);
+        assert_eq!(r.lights.get(&[100, 64, 1]), Some(&false), "green: dark");
+        let free = search_from(&r, a, station).unwrap();
+        // Powered: red, and a search weighs it as Create does (`REDSTONE_RED_SIGNAL`).
+        r.add_signal([100, 64, 1], SignalType::Entry, true);
+        let red = search_from(&r, a, station).unwrap();
+        assert_eq!(red.cost - free.cost, f64::from(REDSTONE_RED_SIGNAL));
+        r.lights_changed.clear();
+        r.tick(&mut events);
+        assert_eq!(r.lights_changed, [([100, 64, 1], Some(true))]);
+        assert!(r.navigate(a, &[station]));
+        for _ in 0..1500 {
+            r.tick(&mut events);
+        }
+        let front = r.trains[a].train.points[0].at(&r.net.graph);
+        assert!(
+            front[0] < 100.5 && front[0] > 99.0,
+            "waits at the red signal: {front:?}"
+        );
+        // Power off: it goes on, the light goes dark.
+        r.lights_changed.clear();
+        r.add_signal([100, 64, 1], SignalType::Entry, false);
+        r.tick(&mut events);
+        assert_eq!(r.lights_changed, [([100, 64, 1], Some(false))]);
+        for _ in 0..1500 {
+            r.tick(&mut events);
+            if events.iter().any(|e| e.run == Run::Arrived) {
+                break;
+            }
+        }
+        assert_eq!(r.trains[a].train.at_station, Some([280, 64, 1]));
+    }
+
+    #[test]
+    fn signals_without_trains_work_once_per_change() {
+        let mut r = straight(40);
+        let curves = Curves::default();
+        assert!(r.idle(&curves), "no track work without signals or trains");
+        r.add_signal([10, 64, 1], SignalType::Entry, false);
+        assert!(!r.idle(&curves), "a new signal: the graph and its state");
+        r.ensure(&curves);
+        let mut events = Vec::new();
+        r.tick(&mut events);
+        assert_eq!(r.lights_changed, [([10, 64, 1], Some(false))]);
+        r.lights_changed.clear();
+        assert!(r.idle(&curves), "then nothing per tick");
+        r.add_signal([10, 64, 1], SignalType::Entry, true);
+        assert!(!r.idle(&curves));
+        r.ensure(&curves);
+        r.tick(&mut events);
+        assert_eq!(r.lights_changed, [([10, 64, 1], Some(true))]);
+        r.lights_changed.clear();
+        r.remove([10, 64, 1]);
+        assert_eq!(
+            r.lights_changed,
+            [([10, 64, 1], None)],
+            "clients drop its light"
+        );
+    }
+
+    #[test]
+    fn a_cross_signal_waits_for_its_whole_chain() {
+        // Eastbound: a signal at x = 100, entry signals at x = 150 and 200; another train stands
+        // between 150 and 200. Behind an entry signal at 100 the train runs on to wait at 150;
+        // behind a cross signal it waits at 100 for the chain up to 200 to be free.
+        for (kind, waits_at) in [(SignalType::Entry, 150.5), (SignalType::Cross, 100.5)] {
+            let mut r = straight(300);
+            r.add_signal([100, 64, 1], kind, false);
+            r.add_signal([150, 64, 1], SignalType::Entry, false);
+            r.add_signal([200, 64, 1], SignalType::Entry, false);
+            r.add_station([280, 64, 1]);
+            r.ensure(&Curves::default());
+            let a = assemble(&mut r, &[[10, 64, 0]], [1.0, 0.0, 0.0]);
+            let b = assemble(&mut r, &[[175, 64, 0]], [1.0, 0.0, 0.0]);
+            let station = r.station_index([280, 64, 1]).unwrap();
+            assert!(r.navigate(a, &[station]));
+            let mut events = Vec::new();
+            for _ in 0..1500 {
+                r.tick(&mut events);
+            }
+            let front = r.trains[a].train.points[0].at(&r.net.graph);
+            assert!(
+                front[0] < waits_at && front[0] > waits_at - 1.5,
+                "{kind:?}: waits before x = {waits_at}: {front:?}"
+            );
+            assert!(
+                r.lights[&[150, 64, 1]],
+                "the section beyond 150 is held: red"
+            );
+            if kind == SignalType::Cross {
+                assert!(r.lights[&[100, 64, 1]], "its chain is held: red");
+            }
+            // The other train leaves: it goes on.
+            r.trains.remove(b);
+            for _ in 0..2000 {
+                r.tick(&mut events);
+                if events.iter().any(|e| e.run == Run::Arrived) {
+                    break;
+                }
+            }
+            assert_eq!(r.trains[0].train.at_station, Some([280, 64, 1]));
+        }
+    }
+
+    #[test]
+    fn a_train_reserves_the_section_it_is_about_to_enter() {
+        // Two branches join at x = 3 into the west straight: one along x from the east, the
+        // L's turn from the south. Each has a signal before the junction for the trains running
+        // toward it; the shared section beyond holds a station.
+        let mut r = l_shape();
+        let mut t = HashMap::new();
+        line(&mut t, [3, 64, 0], [1, 0, 0], 38, TrackShape::Xo);
+        for (p, s) in t {
+            r.set_track(p, s);
+        }
+        r.add_signal([10, 64, -1], SignalType::Entry, false);
+        r.add_signal([11, 64, 20], SignalType::Entry, false);
+        r.add_station([-30, 64, 1]);
+        r.ensure(&l_curves());
+        let a = assemble(&mut r, &[[20, 64, 0]], [-1.0, 0.0, 0.0]);
+        let b = assemble(&mut r, &[[10, 64, 45]], [0.0, 0.0, -1.0]);
+        let (ida, idb) = (r.trains[a].id, r.trains[b].id);
+        let station = r.station_index([-30, 64, 1]).unwrap();
+        assert!(r.navigate(a, &[station]));
+        assert!(r.navigate(b, &[station]));
+        let shared = r.net.section(r.net.blocks[&[0, 64, 0]].edge, 1.0);
+        let mut events = Vec::new();
+        let mut reserved_seen = false;
+        for _ in 0..2000 {
+            r.tick(&mut events);
+            let inside = |i: usize| {
+                r.trains[i]
+                    .train
+                    .points
+                    .iter()
+                    .any(|p| r.net.section(p.edge, p.position) == shared)
+            };
+            assert!(
+                !(inside(a) && inside(b)),
+                "never both in the shared section"
+            );
+            if !inside(a) && !inside(b) && r.occupancy.occupied_unless(shared, idb) {
+                reserved_seen = true;
+                assert!(
+                    r.occupancy.occupied_unless(shared, ida),
+                    "reserved: held for everyone until the tick ends"
+                );
+            }
+        }
+        assert!(reserved_seen, "the first train reserved the shared section");
+        assert_eq!(r.trains[a].train.at_station, Some([-30, 64, 1]));
+        let front = r.trains[b].train.points[0].at(&r.net.graph);
+        assert!(
+            front[2] > 20.5 && front[2] < 22.0,
+            "the second waits at its signal: {front:?}"
+        );
+    }
+
+    #[test]
+    fn controls_drive_and_steer_a_train_by_hand() {
+        // The junction: the x straight on east past the turn, the turn to the south (right).
+        for (steer, south) in [(0, false), (-1, true)] {
+            let mut r = l_shape();
+            let mut t = HashMap::new();
+            line(&mut t, [3, 64, 0], [1, 0, 0], 38, TrackShape::Xo);
+            for (p, s) in t {
+                r.set_track(p, s);
+            }
+            r.ensure(&l_curves());
+            let a = assemble(&mut r, &[[-20, 64, 0]], [1.0, 0.0, 0.0]);
+            let id = r.trains[a].id;
+            r.drive(
+                id,
+                Manual {
+                    throttle: 1.0,
+                    steer,
+                },
+            )
+            .unwrap();
+            let mut events = Vec::new();
+            let mut top = 0.0f64;
+            for _ in 0..70 {
+                r.tick(&mut events);
+                top = top.max(r.trains[a].train.speed);
+            }
+            assert!(top <= TOP_SPEED * MANUAL_SPEED + 1e-9, "{top}");
+            assert!(top > 0.4, "{top}");
+            // Let go: it coasts to a stop.
+            r.drive(
+                id,
+                Manual {
+                    throttle: 0.0,
+                    steer,
+                },
+            )
+            .unwrap();
+            for _ in 0..400 {
+                r.tick(&mut events);
+            }
+            let t = &r.trains[a].train;
+            assert_eq!(t.speed, 0.0);
+            let front = t.points[0].at(&r.net.graph);
+            if south {
+                assert!(
+                    front[2] > 8.0 && (front[0] - 10.5).abs() < 1e-6,
+                    "{front:?}"
+                );
+            } else {
+                assert!(front[0] > 12.0 && front[2] == 0.5, "{front:?}");
+            }
+        }
+        assert!(Railway::default().drive(9, Manual::default()).is_none());
     }
 }
