@@ -42,6 +42,70 @@ pub struct Chassis {
     pub sticky_top: bool,
     pub sticky_bottom: bool,
     pub range: i32,
+    /// A radial chassis (`RadialChassisBlock`): its glued sides (a `Dir::bit` each, across its
+    /// axis) instead of glued ends.
+    pub radial: Option<u8>,
+}
+
+/// `RadialChassisBlock.getGlueableSide`: the `sticky_*` property a face of a radial chassis on
+/// `axis` glues (none along its axis).
+pub fn radial_side(axis: crate::kinetics::Axis, face: Dir) -> Option<&'static str> {
+    use crate::kinetics::Axis;
+    Some(match (axis, face) {
+        (Axis::X, Dir::North) => "sticky_west",
+        (Axis::X, Dir::South) => "sticky_east",
+        (Axis::X, Dir::Up) => "sticky_north",
+        (Axis::X, Dir::Down) => "sticky_south",
+        (Axis::Y, Dir::North) => "sticky_north",
+        (Axis::Y, Dir::South) => "sticky_south",
+        (Axis::Y, Dir::East) => "sticky_east",
+        (Axis::Y, Dir::West) => "sticky_west",
+        (Axis::Z, Dir::Up) => "sticky_north",
+        (Axis::Z, Dir::Down) => "sticky_south",
+        (Axis::Z, Dir::East) => "sticky_east",
+        (Axis::Z, Dir::West) => "sticky_west",
+        _ => return None,
+    })
+}
+
+/// `ChassisBlockEntity.getIncludedBlockPositionsRadial`: from each glued side, the blocks in the
+/// chassis' plane reached through blocks that need moving, closer than its range and a half.
+fn radial_reach(
+    pos: [i32; 3],
+    c: Chassis,
+    sides: u8,
+    at: &impl Fn([i32; 3]) -> Option<Found>,
+) -> Vec<[i32; 3]> {
+    let mut out = Vec::new();
+    let limit = (f64::from(c.range) + 0.5).powi(2);
+    for facing in Dir::ALL {
+        if facing.axis() == c.axis || sides & facing.bit() == 0 {
+            continue;
+        }
+        let mut frontier = VecDeque::from([add(pos, facing.offset())]);
+        let mut visited = HashSet::new();
+        while let Some(p) = frontier.pop_front() {
+            if visited.contains(&p) {
+                continue;
+            }
+            let d: [i32; 3] = std::array::from_fn(|i| p[i] - pos[i]);
+            let dist = f64::from(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            if dist >= limit || at(p).is_none() {
+                continue;
+            }
+            visited.insert(p);
+            if p != pos && !out.contains(&p) {
+                out.push(p);
+            }
+            for offset in Dir::ALL {
+                if offset.axis() == c.axis {
+                    continue;
+                }
+                frontier.push_back(add(p, offset.offset()));
+            }
+        }
+    }
+    out
 }
 
 /// `ChassisBlockEntity`'s range when not set (`maxChassisRange / 2`).
@@ -57,12 +121,35 @@ pub fn chassis_reach(
     forced: Option<Dir>,
     at: &impl Fn([i32; 3]) -> Option<Found>,
 ) -> Vec<[i32; 3]> {
+    // `addAttachedChasses` for a radial chassis: the radial chassis on its axis either side.
+    if let Some(sides) = c.radial {
+        let mut out = radial_reach(pos, c, sides, at);
+        for positive in [true, false] {
+            let d = Dir::ALL
+                .into_iter()
+                .find(|d| d.axis() == c.axis && d.positive() == positive)
+                .unwrap_or(Dir::Up);
+            let next = add(pos, d.offset());
+            if let Some(Found {
+                chassis: Some(o), ..
+            }) = at(next)
+                && o.radial.is_some()
+                && o.axis == c.axis
+                && !out.contains(&next)
+            {
+                out.push(next);
+            }
+        }
+        let _ = forced;
+        return out;
+    }
     let mut out = Vec::new();
     for d in Dir::ALL {
         let next = add(pos, d.offset());
         if let Some(Found {
             chassis: Some(o), ..
         }) = at(next)
+            && o.radial.is_none()
             && o.secondary == c.secondary
             && o.axis == c.axis
         {
@@ -419,6 +506,7 @@ mod tests {
             sticky_top: true,
             sticky_bottom: false,
             range: CHASSIS_RANGE,
+            radial: None,
         };
         let at = |p: [i32; 3]| -> Option<Found> {
             if p[0] != 0 || p[2] != 0 || !(-1..=4).contains(&p[1]) {
@@ -445,6 +533,40 @@ mod tests {
             ..chassis
         };
         assert!(!chassis_reach([0, 0, 0], range, None, &at).contains(&[0, 3, 0]));
+    }
+
+    #[test]
+    fn a_radial_chassis_carries_its_glued_sides_within_its_radius() {
+        use crate::kinetics::Axis;
+        // A radial chassis on y glued on its east side; a 5x5 floor of stone around it at its
+        // height and one stone above it; range 2.
+        let chassis = Chassis {
+            secondary: false,
+            axis: Axis::Y,
+            sticky_top: false,
+            sticky_bottom: false,
+            range: 2,
+            radial: Some(Dir::East.bit()),
+        };
+        let at = |p: [i32; 3]| {
+            let floor = p[1] == 0 && p[0].abs() <= 3 && p[2].abs() <= 3;
+            (floor || p == [0, 1, 0]).then(|| Found {
+                state: 1,
+                movable: true,
+                chassis: (p == [0, 0, 0]).then_some(chassis),
+                ..Found::default()
+            })
+        };
+        let reach = chassis_reach([0, 0, 0], chassis, None, &at);
+        assert!(reach.contains(&[1, 0, 0]) && reach.contains(&[2, 0, 0]));
+        // Through the plane round the chassis, within 2.5 of it.
+        assert!(reach.contains(&[-2, 0, 0]) && reach.contains(&[1, 0, 2]));
+        assert!(!reach.contains(&[2, 0, 2]), "2.83 away");
+        assert!(!reach.contains(&[3, 0, 0]));
+        assert!(!reach.contains(&[0, 1, 0]), "not along its axis");
+        assert!(!reach.contains(&[0, 0, 0]));
+        assert_eq!(radial_side(Axis::X, Dir::Up), Some("sticky_north"));
+        assert_eq!(radial_side(Axis::Z, Dir::North), None);
     }
 
     fn sail() -> Found {

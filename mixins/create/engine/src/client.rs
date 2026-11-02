@@ -367,6 +367,27 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
             })
             .unwrap_or_default(),
         // WaterWheelVisual: the wheel, turning on its axis.
+        // WaterWheelRenderer (large): the block's own model turning on its axis.
+        // KineticBlockEntityRenderer: the turntable's own model on y.
+        Block::LargeWaterWheel => s.axis.map(|a| vec![own(a, Model::Own)]).unwrap_or_default(),
+        Block::Turntable => vec![own(Axis::Y, Model::Own)],
+        // FlywheelRenderer: Create's shaft on its axis, and the wheel (its own model) turning
+        // from angle 0 (`FlywheelBlockEntity.angle`).
+        Block::Flywheel => s
+            .axis
+            .map(|a| {
+                vec![
+                    own(a, Model::Shaft(a)),
+                    Draw {
+                        slot: 1,
+                        model: Model::Own,
+                        axis: a,
+                        rpm: speeds[0],
+                        phase: 0.0,
+                    },
+                ]
+            })
+            .unwrap_or_default(),
         Block::WaterWheel => s
             .facing
             .map(|f| vec![own(f.axis(), Model::WaterWheel(f))])

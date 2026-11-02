@@ -1,0 +1,77 @@
+{
+  "template": "minecraft:iron_chain",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:gold_block",
+    "render_shape": "entityblock_animated"
+  },
+  "item": true,
+  "shapes": {
+    "property": "axis",
+    "values": {
+      "x": [
+        [
+          0.375,
+          0.0,
+          0.0,
+          0.625,
+          1.0,
+          1.0
+        ],
+        [
+          0.0,
+          0.3125,
+          0.3125,
+          1.0,
+          0.6875,
+          0.6875
+        ]
+      ],
+      "y": [
+        [
+          0.0,
+          0.375,
+          0.0,
+          1.0,
+          0.625,
+          1.0
+        ],
+        [
+          0.3125,
+          0.0,
+          0.3125,
+          0.6875,
+          1.0,
+          0.6875
+        ]
+      ],
+      "z": [
+        [
+          0.0,
+          0.0,
+          0.375,
+          1.0,
+          1.0,
+          0.625
+        ],
+        [
+          0.3125,
+          0.3125,
+          0.0,
+          0.6875,
+          0.6875,
+          1.0
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "axis": [
+      "y",
+      "x",
+      "z"
+    ]
+  }
+}

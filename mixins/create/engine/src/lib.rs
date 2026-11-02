@@ -19,6 +19,7 @@ pub mod contraption;
 pub mod crafter;
 pub mod crusher;
 pub mod cuckoo;
+pub mod decor;
 pub mod deployer;
 pub mod depot;
 pub mod diode;

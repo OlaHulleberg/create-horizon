@@ -1,0 +1,28 @@
+{
+  "template": "minecraft:bell",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:anvil"
+  },
+  "item": true,
+  "state_properties": {
+    "attachment": [
+      "floor",
+      "ceiling",
+      "single_wall",
+      "double_wall"
+    ],
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "powered": [
+      "false",
+      "true"
+    ]
+  }
+}

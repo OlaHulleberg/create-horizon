@@ -1,0 +1,29 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 0.0,
+    "explosion_resistance": 0.0,
+    "requires_tool": true,
+    "sounds": "minecraft:netherite_block"
+  },
+  "item": true,
+  "state_properties": {
+    "axis_along_first": [
+      "false",
+      "true"
+    ],
+    "facing": [
+      "down",
+      "up",
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "type": [
+      "pipe",
+      "cog",
+      "shaft"
+    ]
+  }
+}

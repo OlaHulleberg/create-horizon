@@ -1,0 +1,16 @@
+{
+  "template": "minecraft:white_carpet",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:andesite"
+  },
+  "item": true,
+  "state_properties": {
+    "entity": [
+      "false",
+      "true"
+    ]
+  }
+}

@@ -421,6 +421,18 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         Block::EncasedFan => s
             .facing
             .map_or([None, None], |f| one(Part::half(f.opposite()))),
+        // LargeWaterWheelBlock (RotatedPillarKineticBlock): shafts at both ends of its axis;
+        // `LargeWaterWheelBlockEntity.getSize` 2 halves its speed.
+        Block::LargeWaterWheel => s.axis.map_or([None, None], |a| {
+            one(Part {
+                generated: crate::waterwheel::generated_speed(i32::from(settings.flow), 2),
+                ..Part::shaft(a)
+            })
+        }),
+        // FlywheelBlock (RotatedPillarKineticBlock): shafts at both ends of its axis, no stress.
+        Block::Flywheel => s.axis.map_or([None, None], |a| one(Part::shaft(a))),
+        // TurntableBlock (KineticBlock): on the y axis, a shaft only below (`hasShaftTowards`).
+        Block::Turntable => one(Part::half(Dir::Down)),
         Block::WaterWheel => s.facing.map_or([None, None], |f| {
             // WaterWheelBlock.hasShaftTowards: both ends of its axis.
             one(Part {
@@ -582,6 +594,46 @@ mod tests {
         k.solve(&mut e);
         assert_eq!(k.speed([1, 0, 0], 0), Some(32.0));
         assert!(e.iter().all(|x| !matches!(x, Event::Break { .. })));
+    }
+
+    #[test]
+    fn flywheels_turntables_and_large_wheels_are_create_s_parts() {
+        // A motor facing up under a turntable turns it; a flywheel passes rotation on along its
+        // axis at no cost; a large wheel's flow gives half a small wheel's speed.
+        let mut k = Kinetics::new();
+        let motor = info(&[("facing", "up")]);
+        k.set(
+            [0, -1, 0],
+            0,
+            parts(Block::CreativeMotor, &motor, &Settings::default())[0].unwrap(),
+        );
+        let t = parts(Block::Turntable, &info(&[]), &Settings::default())[0].unwrap();
+        assert_eq!((t.axis, t.impact), (Axis::Y, 4.0));
+        k.set([0, 0, 0], 0, t);
+        k.solve(&mut Vec::new());
+        assert_eq!(k.speed([0, 0, 0], 0), Some(16.0));
+        // Nothing passes out of its top.
+        k.set(
+            [0, 1, 0],
+            0,
+            parts(Block::Shaft, &info(&[("axis", "y")]), &Settings::default())[0].unwrap(),
+        );
+        k.solve(&mut Vec::new());
+        assert_eq!(k.speed([0, 1, 0], 0), Some(0.0));
+        let f = parts(
+            Block::Flywheel,
+            &info(&[("axis", "x")]),
+            &Settings::default(),
+        )[0]
+        .unwrap();
+        assert_eq!((f.axis, f.impact, f.capacity), (Axis::X, 0.0, 0.0));
+        let flowing = Settings {
+            flow: -1,
+            ..Settings::default()
+        };
+        let w = parts(Block::LargeWaterWheel, &info(&[("axis", "z")]), &flowing)[0].unwrap();
+        assert_eq!((w.axis, w.generated, w.capacity), (Axis::Z, -4.0, 128.0));
+        assert!(is_kinetic(Block::LargeWaterWheel) && is_kinetic(Block::Turntable));
     }
 
     #[test]

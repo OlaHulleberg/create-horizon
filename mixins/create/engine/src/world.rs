@@ -98,6 +98,13 @@ pub struct Dimension {
     wheels: Vec<[i32; 3]>,
     /// Water wheels to look at now: placed, or a neighbour changed.
     wheel_checks: Vec<[i32; 3]>,
+    /// Large water wheels placed or whose neighbour changed: their structure and `extension`
+    /// are looked at after the tick (`LargeWaterWheelBlock.onPlace`'s scheduled tick,
+    /// `updateShape`); large wheels removed (with their axis), whose structure goes; structure
+    /// blocks removed (with the way they pointed), whose wheel breaks.
+    pub large_wheel_checks: Vec<[i32; 3]>,
+    pub large_wheels_gone: Vec<([i32; 3], crate::kinetics::Axis)>,
+    pub wheel_structures_gone: Vec<([i32; 3], crate::kinetics::Dir)>,
     /// Blocks whose redstone power may have changed (a clutch or gearshift that was placed or
     /// whose neighbour changed), checked after the level's tick.
     redstone: Vec<[i32; 3]>,
@@ -440,6 +447,7 @@ fn has_state(block: Block) -> bool {
             | Block::DisplayLink
             | Block::DisplayBoard
             | Block::AnalogLever
+            | Block::WaterWheelStructure
             | Block::ContentObserver
             | Block::StockpileSwitch
             | Block::Sticker
@@ -866,6 +874,12 @@ impl CreateWorld {
             self.tanks_touched(dim, false);
         }
         let d = &mut self.dims[dim];
+        // A wheel loaded with its column looks at its flow (`lazyTick`); placed ones are listed
+        // by `block_changed`.
+        if matches!(block, Block::WaterWheel | Block::LargeWaterWheel) && !d.wheels.contains(&pos) {
+            d.wheels.push(pos);
+            d.wheel_checks.push(pos);
+        }
         if block == Block::Belt && !d.belt_of.contains_key(&pos) {
             d.belt_dirty.push(pos);
         }
@@ -1029,10 +1043,31 @@ impl CreateWorld {
                 self.dims[dim].wheels.push(pos);
                 self.dims[dim].wheel_checks.push(pos);
             }
+            if self.table.get(new).map(|(b, _)| b) == Some(Block::LargeWaterWheel)
+                && self.table.get(old).map(|(b, _)| b) != Some(Block::LargeWaterWheel)
+            {
+                let d = &mut self.dims[dim];
+                d.wheels.push(pos);
+                d.wheel_checks.push(pos);
+                d.large_wheel_checks.push(pos);
+            }
             self.place(dim, pos, new);
         } else {
             if let Some(c) = self.engine_of(Some(old)) {
                 self.engine_removed(dim, pos, c);
+            }
+            match self.table.get(old) {
+                Some((Block::LargeWaterWheel, i)) => {
+                    if let Some(a) = i.axis {
+                        self.dims[dim].large_wheels_gone.push((pos, a));
+                    }
+                }
+                Some((Block::WaterWheelStructure, i)) => {
+                    if let Some(f) = i.facing {
+                        self.dims[dim].wheel_structures_gone.push((pos, f));
+                    }
+                }
+                _ => {}
             }
             match self.table.get(old).map(|(b, _)| b) {
                 Some(Block::FluidTank) => self.dims[dim].boiler_checks.push(pos),
@@ -1725,6 +1760,13 @@ impl CreateWorld {
             Some(Block::EncasedChainDrive) => self.dims[dim].chain_checks.push(pos),
             Some(Block::SequencedGearshift) => self.dims[dim].sequencer_checks.push(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
+            Some(Block::LargeWaterWheel) => self.dims[dim].large_wheel_checks.push(pos),
+            // `WaterWheelStructuralBlock.updateShape`: its wheel looks at its flow again.
+            Some(Block::WaterWheelStructure) => {
+                if let Some(master) = self.wheel_master(dim, pos, state) {
+                    self.dims[dim].wheel_checks.push(master);
+                }
+            }
             Some(b) if latch_kind(b).is_some() => self.dims[dim].latch_checks.push(pos),
             Some(b) if diode_kind(b).is_some() => self.dims[dim]
                 .diode_checks
@@ -1769,7 +1811,7 @@ impl CreateWorld {
         &mut self,
         dim: usize,
         tick: u64,
-    ) -> Vec<([i32; 3], crate::kinetics::Axis)> {
+    ) -> Vec<([i32; 3], crate::kinetics::Axis, bool)> {
         let d = &mut self.dims[dim];
         let mut list = std::mem::take(&mut d.wheel_checks);
         list.extend(d.wheels.iter().filter(|p| {
@@ -1782,9 +1824,32 @@ impl CreateWorld {
             .filter_map(|p| {
                 let state = *self.dims[dim].states.get(&p)?;
                 let (block, info) = self.table.get(state)?;
-                (block == Block::WaterWheel).then_some((p, info.facing?.axis()))
+                match block {
+                    Block::WaterWheel => Some((p, info.facing?.axis(), false)),
+                    Block::LargeWaterWheel => Some((p, info.axis?, true)),
+                    _ => None,
+                }
             })
             .collect()
+    }
+
+    /// `WaterWheelStructuralBlock.getMaster` of the structure block `state` at `pos`: the block
+    /// it points at, through another structure block; Some only when that is a large wheel.
+    pub fn wheel_master(&self, dim: usize, pos: [i32; 3], state: u32) -> Option<[i32; 3]> {
+        let (mut at, mut state) = (pos, state);
+        for _ in 0..2 {
+            let (block, info) = self.table.get(state)?;
+            if block != Block::WaterWheelStructure {
+                return None;
+            }
+            let o = info.facing?.offset();
+            at = [at[0] + o[0], at[1] + o[1], at[2] + o[2]];
+            state = *self.dims[dim].states.get(&at)?;
+            if self.table.get(state).map(|(b, _)| b) == Some(Block::LargeWaterWheel) {
+                return Some(at);
+            }
+        }
+        None
     }
 
     /// Millstones that turn: the only ones that do anything this tick (Create's tick returns at
