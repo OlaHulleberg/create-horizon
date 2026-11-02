@@ -573,7 +573,10 @@ showed it never came); aiming at the rail's surface placed it.
 16 carried contraptions cost no measurable tick time (−0.015 ms, inside the spread: a `native_minecart` lookup, the
 orientation and a drift test each a tick, a message only when a cart's glide drifts, on the loops' corners) and
 3.5% of frame time at p50 (16 more part models drawn), within budget (`benchmarks/create-p8m-*.json`). The scenario
-checks that all 16 carts carry their structure and move before measuring.
+checks that all 16 carts carry their structure and move before measuring. Re-run after merging onto `port/horizon` (all checks green: 481
+engine tests, template, stage/check/test/build): the same proof gave the same results (4 blocks assembled and put back
+at the unpowered assembler, the item picked up and placed facing north, the coupling 3.000 apart over 22.5 blocks and
+after a reload, then removed by the wrench).
 
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
