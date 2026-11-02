@@ -338,7 +338,9 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             })
         }),
         // MechanicalCrafterBlock (ICogWheel): a small cog on its facing's axis, no shaft.
-        Block::MechanicalCrafter => s.facing.map_or([None, None], |f| {
+        // FlapDisplayBlock (HorizontalKineticBlock, ICogWheel): a small cog on its facing's axis
+        // (`getRotationAxis`), no shaft; no stress (`setNoImpact`).
+        Block::MechanicalCrafter | Block::DisplayBoard => s.facing.map_or([None, None], |f| {
             one(Part {
                 shafts: 0,
                 ..Part::cog(f.axis(), false)
