@@ -34,8 +34,12 @@ pub struct StateInfo {
     /// A sequenced gearshift's `vertical` and `state` (0 idle, else its instruction + 1).
     pub vertical: bool,
     pub sequence: u8,
-    /// A steam engine's `face`.
+    /// A steam engine's or an analog lever's `face`.
     pub face: Option<crate::steam::Face>,
+    /// A smart observer's or a threshold switch's `target` (`DirectedDirectionalBlock.TARGET`).
+    pub target: Option<crate::steam::Face>,
+    /// A threshold switch's `level` (0 to 5).
+    pub level: u8,
     /// A train track's `shape`.
     pub track: Option<crate::track::TrackShape>,
     /// An item vault's `large`.
@@ -102,6 +106,8 @@ impl StateInfo {
                 "vertical" => s.vertical = v == "true",
                 "state" => s.sequence = v.parse().unwrap_or(0),
                 "face" => s.face = crate::steam::Face::read(v),
+                "target" => s.target = crate::steam::Face::read(v),
+                "level" => s.level = v.parse().unwrap_or(0),
                 "powered_side" => s.powered_side = v == "true",
                 "top_shaft" => s.top_shaft = v == "true",
                 "bottom_shaft" => s.bottom_shaft = v == "true",
@@ -382,6 +388,11 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         | Block::Stressometer => s.facing.map_or([None, None], |f| {
             one(Part::shaft(directional_axis(f, s.along_first)))
         }),
+        // CuckooClockBlock (HorizontalKineticBlock): a shaft out of its back
+        // (`hasShaftTowards`), on its facing's axis.
+        Block::CuckooClock | Block::MysteriousCuckooClock => s
+            .facing
+            .map_or([None, None], |f| one(Part::half(f.opposite()))),
         // DrillBlock (DirectionalKineticBlock): a shaft out of its back.
         Block::MechanicalDrill => s
             .facing
@@ -464,6 +475,8 @@ pub fn is_kinetic(block: Block) -> bool {
         vertical: false,
         sequence: 0,
         face: None,
+        target: None,
+        level: 0,
         track: None,
         large: false,
         waterlogged: false,
