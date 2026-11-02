@@ -176,6 +176,13 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_items_body"
 source = "items_body.rs"
 
+# Linked controllers and lectern controllers.
+[[module]]
+id = "controller"
+file = "crates/horizon-client/src/game.rs"
+name = "create_controller"
+source = "controller.rs"
+
 # Pure logic and the tables create-data compiles from Create's MIT data.
 [[crate]]
 id = "engine"
@@ -604,3 +611,38 @@ id = "deployer-use"
 file = "crates/horizon-client/src/game/dispenser.rs"
 name = "create_use"
 source = "deployer_use.rs"
+
+[[injection]]
+id = "input-key"
+hook = "input_key"
+hook_version = 1
+kind = "HEAD"
+helper = "input_key.rs"
+bindings = [
+  { name = "key", ty = "&str", value = "key" },
+  { name = "action", ty = "horizon_client::debug_keys::KeyAction", value = "action" },
+  { name = "screen", ty = "bool", value = "screen" },
+  { name = "consumed", ty = "&mut bool", value = "consumed" },
+]
+
+[[injection]]
+id = "level-load"
+hook = "level_load"
+hook_version = 1
+kind = "HEAD"
+helper = "level_load.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "dimension", ty = "&str", value = "dimension" },
+]
+
+[[injection]]
+id = "level-save"
+hook = "level_save"
+hook_version = 1
+kind = "HEAD"
+helper = "level_save.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "dimension", ty = "&str", value = "dimension" },
+]

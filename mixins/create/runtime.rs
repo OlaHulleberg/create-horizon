@@ -80,6 +80,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
             super::create_packages::forget();
             super::create_schematics::forget();
             super::create_decor::forget();
+            super::create_controller::forget();
             states::clear_range();
         }
     }
@@ -109,6 +110,7 @@ pub(super) fn block_changed(
     super::create_packages::block_changed(dim, at, old.0, new.0);
     super::create_schematics::block_changed(dim, at, old.0, new.0);
     super::create_decor::block_changed(dim, at, old.0, new.0);
+    super::create_controller::block_changed(dim, at, old.0, new.0);
     with_world(|w| w.block_changed(dim, at, old.0, new.0));
 }
 
@@ -334,6 +336,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_controller_rails(game, dim);
     tick_diodes(game, dimension, dim);
     tick_lamps(game, dimension, dim);
+    super::create_controller::level_tick(game, dimension, dim);
     tick_links(game, dimension, dim);
     tick_displays(game, dimension, dim);
     tick_bearings(game, dimension, dim);
@@ -788,6 +791,11 @@ pub(super) fn right_click_inner(
     let back = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
     let state = game.world.block(pos[0], pos[1], pos[2]).0;
     let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
+    // A lectern holding a linked controller.
+    if block == Some(create_engine::Block::LecternController) {
+        super::create_controller::use_lectern(game, dim, pos, back, canceled);
+        return;
+    }
     // Placards, clipboards, bells, the creative crate, the item hatch, table cloths.
     if super::create_decor::use_block(game, dim, pos, face, canceled) {
         return;
@@ -4186,6 +4194,8 @@ pub(super) fn analog_level(
                     .iter()
                     .any(|t| t.train.at_station == Some(pos)),
             )),
+            // `LecternControllerBlock.getAnalogOutputSignal`: always 15.
+            Block::LecternController => Typed::Level(15),
             // `ControllerRailBlock.getAnalogOutputSignal`: its power.
             Block::ControllerRail => Typed::Level(i32::from(info.power)),
             // `PortableStorageInterfaceBlock`: 15 while connected.

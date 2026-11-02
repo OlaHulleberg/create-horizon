@@ -1,7 +1,9 @@
 // Create's stock logistics in the game: stock links joining packagers into logistics networks,
 // stock tickers, redstone requesters and factory gauges. A sibling of `create_packages`
 // (packagers pack and send what is ordered); the rules are `create_engine::stock`'s. State is
-// typed, per dimension, on the server thread and saved with its column as `create_stock`.
+// typed, per dimension, on the server thread and saved with its column as `create_stock`; the
+// networks themselves (their links loaded or not, promises and owners: Create's
+// `LogisticsNetworkSavedData`) in the world's saved data (API 58), written only when changed.
 // Nothing here ticks: a network's stock is summed when something asks for it (a ticker's dump,
 // an order, a requester's pulse, a gauge's look) and kept for Create's cache times (one tick for
 // orders, 20 for gauges); gauges are looked at on their interval only.
@@ -14,8 +16,8 @@ use create_engine::Block;
 use create_engine::kinetics::Dir;
 use create_engine::steam::Face;
 use create_engine::stock::{
-    self as st, GaugeStep, Network, Order, OrderData, Panel, Promises, RequestType, Requester,
-    Source, Summary, Trigger,
+    self as st, GaugeStep, LevelNetworks, Network, Order, OrderData, Ownership, Panel, Promises,
+    RequestType, Requester, SavedNetwork, Source, Summary, Trigger,
 };
 use create_engine::world::dimension_index;
 use horizon_client::items::ItemStack;
@@ -135,6 +137,12 @@ struct Net {
 
 thread_local! {
     static STOCK: RefCell<Option<Box<[Net; 3]>>> = const { RefCell::new(None) };
+    /// `LogisticsNetwork.owner` and `locked`, by network (`GlobalLogisticsManager`'s, for every
+    /// dimension).
+    static OWNERS: RefCell<HashMap<Network, Ownership>> = RefCell::new(HashMap::new());
+    /// `LogisticsNetworkSavedData.setDirty`: a network's links, promises or owner changed since
+    /// the world was last saved.
+    static DIRTY: Cell<bool> = const { Cell::new(false) };
     /// `LogisticsManager.r` and friends: order ids and picks.
     static RNG: Cell<u64> = const { Cell::new(0x2545_f491_4f6c_dd1d) };
 }
@@ -150,6 +158,13 @@ fn present() -> bool {
 /// The world closed.
 pub(super) fn forget() {
     STOCK.with_borrow_mut(|s| *s = None);
+    OWNERS.with_borrow_mut(HashMap::clear);
+    DIRTY.set(false);
+}
+
+/// `GlobalLogisticsManager.markDirty`.
+fn mark_dirty() {
+    DIRTY.set(true);
 }
 
 /// `Random.nextInt()` stand-in.
@@ -270,8 +285,11 @@ pub(super) fn block_moved(
     is: Option<Block>,
 ) {
     match was {
+        // `linkRemoved`.
         Some(Block::StockLink) => with(dim, |n| {
-            n.links.remove(&pos);
+            if n.links.remove(&pos).is_some_and(|l| l.network.is_some()) {
+                mark_dirty();
+            }
         }),
         Some(Block::StockTicker) => with(dim, |n| {
             n.tickers.remove(&pos);
@@ -522,8 +540,12 @@ fn packager_stock(
                     return;
                 };
                 if let Some(p) = n.promises.get_mut(&net) {
+                    let before = p.list.clone();
                     for (k, a) in &arrived {
                         p.arrived(k, *a);
+                    }
+                    if p.list != before {
+                        mark_dirty();
                     }
                 }
             }),
@@ -737,9 +759,14 @@ fn look_gauge(game: &mut Game<'_>, dim: usize, pos: [i32; 3], now: u64) {
         panel.restocker_promises.total(&item, expiry, now)
     } else {
         with(dim, |n| {
-            n.promises
-                .get_mut(&panel.network)
-                .map_or(0, |p| p.total(&item, expiry, now))
+            n.promises.get_mut(&panel.network).map_or(0, |p| {
+                let before = p.list.len();
+                let total = p.total(&item, expiry, now);
+                if p.list.len() != before {
+                    mark_dirty();
+                }
+                total
+            })
         })
     };
     let step = panel.look(max, in_storage, promised, unloaded);
@@ -853,6 +880,7 @@ fn request_inputs(game: &mut Game<'_>, dim: usize, pos: [i32; 3], panel: &Panel<
                 .or_default()
                 .add(item, panel.recipe_output, now)
         });
+        mark_dirty();
     }
     let _ = pos;
 }
@@ -962,6 +990,18 @@ fn set_network(
     }
     let net = st::network_id(&text);
     let block = block_at(game, pos);
+    // `linkAdded`: a link joining a network; the first player to link one owns it.
+    if block == Some(Block::StockLink) && with(dim, |n| n.links.contains_key(&pos)) {
+        if let Some(p) = game.native_acting_player() {
+            OWNERS.with_borrow_mut(|o| {
+                let o = o.entry(net).or_default();
+                if o.owner.is_none() {
+                    o.owner = Some(p.uuid);
+                }
+            });
+        }
+        mark_dirty();
+    }
     let set = with(dim, |n| {
         let set = match block {
             Some(Block::StockLink) => n.links.get_mut(&pos).map(|l| l.network = Some(net)),
@@ -1556,4 +1596,183 @@ pub(super) fn chunk_unload(dimension: &str, chunk: &horizon_client::chunk::Chunk
         n.due.retain(|p, _| !inside(p));
         n.last.retain(|p, _| !inside(p));
     });
+}
+
+/// The world's saved data holding the networks (`data/create/logistics_networks.dat`).
+const SAVED: (&str, &str) = ("create", "logistics_networks");
+
+fn uuid_tag(id: u128) -> Tag {
+    Tag::IntArray(st::network_ints(id).to_vec())
+}
+
+/// `GlobalLogisticsManager.levelLoaded` (the overworld's `LevelEvent.Load`): the networks back
+/// from the world's saved data. Their links count as unloaded until their columns load.
+pub(super) fn level_load(game: &mut Game<'_>, dimension: &str) {
+    // A world without Create's content reads nothing.
+    if dimension != "minecraft:overworld" || !ensure(game.pack.assets.registry) {
+        return;
+    }
+    let now = game.world.game_time.max(0) as u64;
+    let Some(data) = game.native_saved_data(SAVED.0, SAVED.1) else {
+        return;
+    };
+    let Some(Tag::List(list)) = data.get(&"LogisticsNetworks".into()) else {
+        return;
+    };
+    let compounds = |t: Option<&Tag>| -> Vec<Compound> {
+        match t {
+            Some(Tag::List(l)) => l
+                .iter()
+                .filter_map(|t| match t {
+                    Tag::Compound(c) => Some(c.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    let mut saved: Vec<SavedNetwork<Key>> = Vec::new();
+    for t in list {
+        let Tag::Compound(c) = t else { continue };
+        let Some(id) = st::network_from_ints(&ints(c.get(&"Id".into()))) else {
+            continue;
+        };
+        let links = compounds(c.get(&"Links".into()))
+            .iter()
+            .filter_map(|l| {
+                let p = ints(l.get(&"Pos".into()));
+                let pos: [i32; 3] = p.as_slice().try_into().ok()?;
+                let dim = match l.get(&"Dim".into()) {
+                    Some(Tag::String(d)) => dimension_index(&d.to_string_lossy())?,
+                    _ => 0,
+                };
+                Some((dim, pos))
+            })
+            .collect();
+        let promises = match c.get(&"Promises".into()) {
+            Some(Tag::Compound(q)) => compounds(q.get(&"List".into())),
+            _ => Vec::new(),
+        };
+        let promises = promises
+            .iter()
+            .filter_map(|e| {
+                let age = ints(e.get(&"ticks_existed".into())).first().copied()?;
+                let Some(Tag::Compound(big)) = e.get(&"promised_stack".into()) else {
+                    return None;
+                };
+                let stack = big.get(&"item_stack".into()).and_then(body::from_nbt)?;
+                let count = ints(big.get(&"count".into())).first().copied()?;
+                Some((Key::of(&stack), count.max(0) as u32, age.max(0) as u64))
+            })
+            .collect();
+        let ownership = Ownership {
+            owner: st::network_from_ints(&ints(c.get(&"Owner".into()))),
+            locked: ints(c.get(&"Locked".into())).first() == Some(&1),
+        };
+        saved.push(SavedNetwork {
+            id,
+            links,
+            promises,
+            ownership,
+        });
+    }
+    let (levels, owners) = st::load_networks(&saved, 3, now);
+    for (dim, level) in levels.into_iter().enumerate() {
+        with(dim, |n| {
+            for (pos, net) in level.links {
+                n.unloaded.entry(net).or_default().push(pos);
+            }
+            n.promises.extend(level.promises);
+        });
+    }
+    OWNERS.with_borrow_mut(|o| *o = owners);
+    DIRTY.set(false);
+}
+
+/// The networks as `LogisticsNetworkSavedData.save` writes them, every level's links (loaded
+/// or not) and promises.
+fn networks_tag(now: u64) -> Tag {
+    let levels: Vec<LevelNetworks<Key>> = (0..3)
+        .map(|dim| {
+            with(dim, |n| {
+                let mut links: Vec<([i32; 3], Network)> = n
+                    .links
+                    .iter()
+                    .filter_map(|(p, l)| Some((*p, l.network?)))
+                    .collect();
+                for (net, list) in &n.unloaded {
+                    links.extend(list.iter().map(|p| (*p, *net)));
+                }
+                let promises = n.promises.iter().map(|(k, p)| (*k, p.clone())).collect();
+                LevelNetworks { links, promises }
+            })
+        })
+        .collect();
+    let owners = OWNERS.with_borrow(Clone::clone);
+    let names = [
+        "minecraft:overworld",
+        "minecraft:the_nether",
+        "minecraft:the_end",
+    ];
+    let list = st::save_networks(&levels, &owners, now)
+        .into_iter()
+        .map(|n| {
+            let links = n
+                .links
+                .iter()
+                .map(|(dim, pos)| {
+                    let mut c = vec![("Pos", Tag::IntArray(pos.to_vec()))];
+                    if *dim != 0 {
+                        c.push(("Dim", Tag::String(names[*dim].into())));
+                    }
+                    Tag::compound(c)
+                })
+                .collect();
+            let promises = n
+                .promises
+                .iter()
+                .map(|(k, count, age)| {
+                    Tag::compound([
+                        ("ticks_existed", Tag::IntArray(vec![*age as i32])),
+                        (
+                            "promised_stack",
+                            Tag::compound([
+                                ("item_stack", body::to_nbt(&k.0)),
+                                ("count", Tag::IntArray(vec![*count as i32])),
+                            ]),
+                        ),
+                    ])
+                })
+                .collect();
+            let mut c = vec![
+                ("Id", uuid_tag(n.id)),
+                ("Promises", Tag::compound([("List", Tag::List(promises))])),
+                ("Links", Tag::List(links)),
+                ("Locked", Tag::IntArray(vec![i32::from(n.ownership.locked)])),
+            ];
+            if let Some(owner) = n.ownership.owner {
+                c.push(("Owner", uuid_tag(owner)));
+            }
+            Tag::compound(c)
+        })
+        .collect();
+    Tag::List(list)
+}
+
+/// The overworld's `LevelEvent.Save`: the networks into the world's saved data, only when they
+/// changed since the last save (`setDirty`).
+pub(super) fn level_save(game: &mut Game<'_>, dimension: &str) {
+    if dimension != "minecraft:overworld" || !DIRTY.get() {
+        return;
+    }
+    let now = game.world.game_time.max(0) as u64;
+    let networks = networks_tag(now);
+    let Some(data) = game.native_saved_data(SAVED.0, SAVED.1) else {
+        return;
+    };
+    data.clear();
+    data.insert("LogisticsNetworks".into(), networks);
+    if game.native_set_saved_data_dirty(SAVED.0, SAVED.1) {
+        DIRTY.set(false);
+    }
 }
