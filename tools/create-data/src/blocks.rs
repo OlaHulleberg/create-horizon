@@ -1798,6 +1798,26 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
             true,
         ));
     }
+    // NozzleBlock (WrenchableDirectionalBlock: FACING alone, no default of its own, so `down`
+    // first), stone's properties: on the clicked face of an encased fan's front (the glue's
+    // placement and survival); AllShapes.NOZZLE to its facing (its base, and the rim at the top
+    // with `erase(3, 13, 3, 13, 15, 13)` as four boxes).
+    if n == "nozzle" {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:stone",
+            true,
+            Some(by_facing(&[
+                [2., 0., 2., 14., 13., 14.],
+                [1., 13., 1., 15., 15., 3.],
+                [1., 13., 13., 15., 15., 15.],
+                [1., 13., 3., 3., 15., 13.],
+                [13., 13., 3., 15., 15., 13.],
+            ])),
+            own(&[("facing", &["down", "up", "north", "south", "west", "east"])]),
+            true,
+        ));
+    }
     // DeskBellBlock (WrenchableDirectionalBlock, UP by default): AllShapes.DESK_BELL to its
     // facing; its signal is the glue's.
     if n == "desk_bell" {
