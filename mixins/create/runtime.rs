@@ -2846,6 +2846,7 @@ pub(super) fn block_entity(
             block,
             "create:millstone"
                 | "create:depot"
+                | "create:weighted_ejector"
                 | "create:basin"
                 | "create:chute"
                 | "create:smart_chute"
@@ -2866,9 +2867,9 @@ pub(super) fn block_entity_container(
     if container.is_some() {
         return;
     }
-    if block == "create:depot" {
-        // DepotItemHandler: in only to the held slot while the depot holds nothing; out of
-        // every slot; through any face.
+    if block == "create:depot" || block == "create:weighted_ejector" {
+        // DepotItemHandler (the ejector's `DepotBehaviour` too): in only to the held slot while
+        // the depot holds nothing; out of every slot; through any face.
         let all: Vec<usize> = (0..create_engine::depot::SLOTS).collect();
         *container = Some(horizon_client::containers::ModContainer {
             slots: create_engine::depot::SLOTS,
