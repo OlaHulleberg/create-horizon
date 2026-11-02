@@ -58,6 +58,8 @@ pub mod processing;
 pub mod pulley;
 pub mod saw;
 pub mod schedule;
+pub mod schematic;
+pub mod schematicannon;
 pub mod sequencer;
 pub mod spout;
 pub mod states;
