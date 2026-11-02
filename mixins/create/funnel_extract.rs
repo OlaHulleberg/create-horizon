@@ -57,7 +57,7 @@ pub(crate) fn extract_matching(
     game: &mut crate::game::Game<'_>,
     pos: [i32; 3],
     face: horizon_core::geometry::Direction,
-    test: impl Fn(&horizon_client::items::ItemStack) -> bool,
+    test: impl Fn(&crate::game::Game<'_>, &horizon_client::items::ItemStack) -> bool,
     amount: u32,
 ) -> Option<horizon_client::items::ItemStack> {
     let view = game.containers().view((pos[0], pos[1], pos[2]), false)?;
@@ -69,7 +69,7 @@ pub(crate) fn extract_matching(
             .iter()
             .map(|&slot| {
                 let stack = c.get(&view, slot)?;
-                if !c.can_take(&view, slot, stack, face) || !test(stack) {
+                if !c.can_take(&view, slot, stack, face) || !test(game, stack) {
                     return None;
                 }
                 let max = items.get(&stack.item).map_or(64, |i| i.max_stack).max(1);

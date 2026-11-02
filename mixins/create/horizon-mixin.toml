@@ -153,6 +153,22 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_equipment_body"
 source = "equipment_body.rs"
 
+# Filters, the wand of symmetry, the worldshaper, super glue, tree fertilizer and the schedule.
+[[module]]
+id = "items"
+file = "crates/horizon-client/src/game.rs"
+name = "create_items"
+source = "items.rs"
+
+# What those items read and write of stacks and players beyond the hook helpers (their settings
+# in `minecraft:custom_data`, item facts for attribute filters); the template test swaps it for
+# `tools/fixture/items_body.rs`.
+[[module]]
+id = "items-body"
+file = "crates/horizon-client/src/game.rs"
+name = "create_items_body"
+source = "items_body.rs"
+
 # Pure logic and the tables create-data compiles from Create's MIT data.
 [[crate]]
 id = "engine"
@@ -550,6 +566,20 @@ bindings = [
   { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
   { name = "entity", ty = "u32", value = "entity" },
   { name = "kind", ty = "&str", value = "kind" },
+]
+
+[[injection]]
+id = "attack-entity"
+hook = "attack_entity"
+hook_version = 1
+kind = "HEAD"
+helper = "attack.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "entity", ty = "i32", value = "entity" },
+  { name = "kind", ty = "&str", value = "kind" },
+  { name = "pos", ty = "[f64; 3]", value = "pos" },
+  { name = "canceled", ty = "&mut bool", value = "canceled" },
 ]
 
 

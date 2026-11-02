@@ -10,6 +10,7 @@
 //! Between looks their result is the same as Create's: an inventory whose version did not
 //! change keeps the observer on (`sustainSignal`) and the switch's level as it was.
 
+use crate::filter::{Filter, Passes};
 use crate::kinetics::Dir;
 use crate::steam::Face;
 use crate::tank::Fluid;
@@ -131,28 +132,29 @@ pub struct Seen {
 }
 
 /// `SmartObserverBlockEntity.tick`'s finding: activate for `n` ticks, or nothing.
-pub fn observe(filter: Option<&str>, seen: &Seen) -> Option<u8> {
-    if let (Some(f), Some(item)) = (filter, seen.block_item.as_deref())
-        && f == item
+pub fn observe(filter: impl Passes, seen: &Seen) -> Option<u8> {
+    if let Some(item) = seen.block_item.as_deref()
+        && filter.filtered()
+        && filter.item(item)
     {
         return Some(BLOCK_DELAY);
     }
     if let Some(items) = &seen.transported {
         return items
             .iter()
-            .any(|i| passes(filter, i))
+            .any(|i| filter.item(i))
             .then_some(DEFAULT_DELAY);
     }
     if let Some((slots, _)) = &seen.inventory
         && slots
             .iter()
-            .any(|s| s.count > 0 && s.item.as_deref().is_some_and(|i| passes(filter, i)))
+            .any(|s| s.count > 0 && s.item.as_deref().is_some_and(|i| filter.item(i)))
     {
         return Some(DEFAULT_DELAY);
     }
     if let Some((Some(fluid), amount, _)) = seen.tank
         && amount > 0
-        && passes_fluid(filter, fluid)
+        && filter.fluid(fluid)
     {
         return Some(DEFAULT_DELAY);
     }
@@ -161,7 +163,7 @@ pub fn observe(filter: Option<&str>, seen: &Seen) -> Option<u8> {
 
 /// `ThresholdSwitchBlockEntity.updateCurrentLevel`'s reading of an item and a fluid handler:
 /// (min, level, max), None when the target has neither.
-pub fn fill_level(filter: Option<&str>, seen: &Seen) -> Option<(i32, i32, i32)> {
+pub fn fill_level(filter: impl Passes, seen: &Seen) -> Option<(i32, i32, i32)> {
     if seen.inventory.is_none() && seen.tank.is_none() {
         return None;
     }
@@ -177,7 +179,7 @@ pub fn fill_level(filter: Option<&str>, seen: &Seen) -> Option<(i32, i32, i32)> 
                 continue;
             }
             max += i64::from(space);
-            if s.item.as_deref().is_none_or(|i| passes(filter, i)) {
+            if s.item.as_deref().is_none_or(|i| filter.item(i)) {
                 level += i64::from(s.count);
             }
         }
@@ -188,7 +190,7 @@ pub fn fill_level(filter: Option<&str>, seen: &Seen) -> Option<(i32, i32, i32)> 
         max += i64::from(capacity);
         // `filtering.test(FluidStack.EMPTY)` passes only without a filter, and adds nothing.
         if let Some(f) = fluid
-            && passes_fluid(filter, f)
+            && filter.fluid(f)
         {
             level += i64::from(amount);
         }
@@ -201,7 +203,7 @@ pub fn fill_level(filter: Option<&str>, seen: &Seen) -> Option<(i32, i32, i32)> 
 /// off.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Observer {
-    pub filter: Option<String>,
+    pub filter: Option<Filter>,
     /// Its last look found something (with its `activate(n)`): it stays on until a look finds
     /// nothing (`sustainSignal`, or the same finding each tick), with no timer meanwhile.
     pub sustained: Option<u8>,
@@ -244,7 +246,7 @@ pub struct Switch {
     pub off_below: i32,
     pub inverted: bool,
     pub in_stacks: bool,
-    pub filter: Option<String>,
+    pub filter: Option<Filter>,
     pub min: i32,
     pub level: i32,
     pub max: i32,
@@ -379,6 +381,8 @@ pub struct Detectors {
     pub switch_ticks: BTreeSet<(i64, [i32; 3])>,
     saved_observers: HashMap<[i32; 3], Observer>,
     saved_switches: HashMap<[i32; 3], Switch>,
+    /// Filter items of detectors that were broken, for the glue to drop.
+    pub dropped: Vec<([i32; 3], Filter)>,
 }
 
 impl Detectors {
@@ -427,7 +431,8 @@ impl Detectors {
         }
     }
 
-    /// A detector gone: true when it had state worth saving.
+    /// A detector gone: true when it had state worth saving. A filter item it held is in
+    /// `dropped` (`FilteringBehaviour.destroy`).
     pub fn removed(&mut self, pos: [i32; 3]) -> bool {
         self.unwatch(pos);
         let observer = self.observers.remove(&pos);
@@ -436,7 +441,14 @@ impl Detectors {
         }
         let switch = self.switches.remove(&pos);
         self.switch_ticks.retain(|(_, p)| *p != pos);
-        observer.is_some_and(|o| o.filter.is_some()) || switch.is_some()
+        let saved = observer.as_ref().is_some_and(|o| o.filter.is_some()) || switch.is_some();
+        let filter = observer
+            .and_then(|o| o.filter)
+            .or_else(|| switch.and_then(|s| s.filter));
+        if let Some(f) = filter.filter(Filter::is_filter_item) {
+            self.dropped.push((pos, f));
+        }
+        saved
     }
 
     /// The contents of the blocks `at` changed: the detectors looking at them look again.
@@ -559,23 +571,29 @@ impl Detectors {
 
     /// A filter set by a click (none: cleared): the detector looks again
     /// (`withCallback`: `invVersionTracker.reset`, `updateCurrentLevel`).
-    pub fn set_filter(&mut self, pos: [i32; 3], item: Option<String>) -> bool {
-        if let Some(o) = self.observers.get_mut(&pos) {
-            o.filter = item;
+    /// The filter it held before is in the `Ok`; `Err` gives the filter back when there is no
+    /// detector at `pos`.
+    pub fn set_filter(
+        &mut self,
+        pos: [i32; 3],
+        filter: Option<Filter>,
+    ) -> Result<Option<Filter>, Option<Filter>> {
+        let old = if let Some(o) = self.observers.get_mut(&pos) {
+            std::mem::replace(&mut o.filter, filter)
         } else if let Some(s) = self.switches.get_mut(&pos) {
-            s.filter = item;
+            std::mem::replace(&mut s.filter, filter)
         } else {
-            return false;
-        }
+            return Err(filter);
+        };
         self.checks.push(pos);
-        true
+        Ok(old)
     }
 
-    pub fn filter(&self, pos: [i32; 3]) -> Option<&str> {
+    pub fn filter(&self, pos: [i32; 3]) -> Option<&Filter> {
         self.observers
             .get(&pos)
-            .and_then(|o| o.filter.as_deref())
-            .or_else(|| self.switches.get(&pos).and_then(|s| s.filter.as_deref()))
+            .and_then(|o| o.filter.as_ref())
+            .or_else(|| self.switches.get(&pos).and_then(|s| s.filter.as_ref()))
     }
 
     /// Saved block entities, for the detectors found later.
@@ -702,7 +720,7 @@ mod tests {
         };
         assert_eq!(observe(iron, &block), Some(BLOCK_DELAY));
         // No filter: the block alone is nothing.
-        assert_eq!(observe(None, &block), None);
+        assert_eq!(observe(None::<&str>, &block), None);
         let belt = Seen {
             transported: Some(vec!["minecraft:dirt".into()]),
             inventory: Some((vec![slot("minecraft:iron_ingot", 1)], 64)),
@@ -710,7 +728,7 @@ mod tests {
         };
         // A belt or depot is looked at no further than its items.
         assert_eq!(observe(iron, &belt), None);
-        assert_eq!(observe(None, &belt), Some(DEFAULT_DELAY));
+        assert_eq!(observe(None::<&str>, &belt), Some(DEFAULT_DELAY));
         let chest = Seen {
             inventory: Some((vec![empty(), slot("minecraft:iron_ingot", 3)], 64)),
             ..Seen::default()
@@ -721,14 +739,14 @@ mod tests {
             tank: Some((Some(Fluid::Water), 500, 8000)),
             ..Seen::default()
         };
-        assert_eq!(observe(None, &tank), Some(DEFAULT_DELAY));
+        assert_eq!(observe(None::<&str>, &tank), Some(DEFAULT_DELAY));
         assert_eq!(
             observe(Some("minecraft:water_bucket"), &tank),
             Some(DEFAULT_DELAY)
         );
         assert_eq!(observe(Some("minecraft:lava_bucket"), &tank), None);
         assert_eq!(observe(iron, &tank), None);
-        assert_eq!(observe(None, &Seen::default()), None);
+        assert_eq!(observe(None::<&str>, &Seen::default()), None);
     }
 
     #[test]
@@ -775,9 +793,18 @@ mod tests {
         assert!(d.take_checks(23).is_empty());
         d.watch(a, Watch::Belt, 23);
         assert!(d.belt_watch.contains(&a));
-        assert!(d.set_filter(a, Some("minecraft:dirt".into())));
-        assert_eq!(d.filter(a), Some("minecraft:dirt"));
+        assert_eq!(
+            d.set_filter(a, Some(Filter::item("minecraft:dirt"))),
+            Ok(None)
+        );
+        assert_eq!(d.filter(a), Some(&Filter::item("minecraft:dirt")));
         assert!(d.removed(a));
+        // A plain item is a ghost copy: nothing to drop.
+        assert!(d.dropped.is_empty());
+        d.placed(a, false, [0, 63, 0]);
+        let _ = d.set_filter(a, Some(Filter::item(crate::filter::FILTER)));
+        assert!(d.removed(a));
+        assert_eq!(d.dropped.len(), 1);
         assert!(d.belt_watch.is_empty());
         let (o, s) = d.column(0, 0);
         assert!(o.is_empty());
@@ -796,13 +823,13 @@ mod tests {
             inventory: Some((slots.clone(), 64)),
             ..Seen::default()
         };
-        assert_eq!(fill_level(None, &chest), Some((0, 128, 1728)));
+        assert_eq!(fill_level(None::<&str>, &chest), Some((0, 128, 1728)));
         assert_eq!(
             fill_level(Some("minecraft:dirt"), &chest),
             Some((0, 0, 1728))
         );
         let mut s = Switch::default();
-        let u = s.update_level(fill_level(None, &chest));
+        let u = s.update_level(fill_level(None::<&str>, &chest));
         // At 128 (onWhenAbove 128): on; level 1 + 128/1728 * 4 = 1.
         assert_eq!(
             u,
@@ -819,7 +846,7 @@ mod tests {
         // 100 left: still on (off at or below 64).
         slots[5] = slot("minecraft:cobblestone", 36);
         let u = s.update_level(fill_level(
-            None,
+            None::<&str>,
             &Seen {
                 inventory: Some((slots.clone(), 64)),
                 ..Seen::default()
@@ -828,7 +855,7 @@ mod tests {
         assert!(!u.update && s.state);
         slots[0] = empty();
         let u = s.update_level(fill_level(
-            None,
+            None::<&str>,
             &Seen {
                 inventory: Some((slots.clone(), 64)),
                 ..Seen::default()
@@ -846,7 +873,10 @@ mod tests {
             ..Seen::default()
         };
         let mut t = Switch::default();
-        assert_eq!(t.update_level(fill_level(None, &tank)).display, Some(5));
+        assert_eq!(
+            t.update_level(fill_level(None::<&str>, &tank)).display,
+            Some(5)
+        );
         assert_eq!(
             fill_level(Some("minecraft:water_bucket"), &tank),
             Some((0, 0, 8000))
@@ -861,7 +891,7 @@ mod tests {
             }
         );
         assert_eq!(t.update_level(None), LevelUpdate::default());
-        assert_eq!(fill_level(None, &Seen::default()), None);
+        assert_eq!(fill_level(None::<&str>, &Seen::default()), None);
         assert_eq!(observer_signal(true, Dir::Down, Dir::Up), 0);
         assert_eq!(observer_signal(true, Dir::Down, Dir::North), 15);
     }

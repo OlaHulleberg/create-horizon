@@ -124,15 +124,22 @@ impl Pulls {
 impl crate::world::CreateWorld {
     /// `FilteringBehaviour.setFilter` on the smart chute at `pos` (None clears it); its column is
     /// saved.
-    pub fn set_chute_filter(&mut self, dim: usize, pos: [i32; 3], item: Option<String>) {
+    /// The filter it held before is returned.
+    pub fn set_chute_filter(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        filter: Option<crate::filter::Filter>,
+    ) -> Option<crate::filter::Filter> {
         let d = &mut self.dims[dim];
-        match item {
-            Some(i) => d.chute_filters.insert(pos, i),
+        let old = match filter {
+            Some(f) => d.chute_filters.insert(pos, f),
             None => d.chute_filters.remove(&pos),
         };
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         // `withCallback(invVersionTracker.reset)`: it looks at its inventory again.
         d.chute_pulls.wake(pos);
+        old
     }
 
     /// The contents of the container at `pos` changed: chutes asleep under it (or under another

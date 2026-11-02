@@ -9,5 +9,6 @@ fn world_lifecycle(
         crate::game::native_lifecycle::WorldPhase::WorldOpenReady
     ) {
         crate::game::create_equipment::world_closed();
+        crate::game::create_items::world_closed();
     }
 }

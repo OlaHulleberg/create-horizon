@@ -283,8 +283,10 @@ pub struct Dimension {
     pub chutes: HashMap<[i32; 3], f32>,
     /// Empty chutes that may take from the inventory above them.
     pub chute_pulls: crate::chute::Pulls,
-    /// Smart chutes' filters (an item id), saved with their column.
-    pub chute_filters: HashMap<[i32; 3], String>,
+    /// Smart chutes' filters, saved with their column.
+    pub chute_filters: HashMap<[i32; 3], crate::filter::Filter>,
+    /// Filter items whose block was broken (`FilteringBehaviour.destroy`): the glue drops them.
+    pub dropped_filters: Vec<([i32; 3], crate::filter::Filter)>,
     /// Item vault blocks and the vaults they form.
     pub vaults: crate::vault::Vaults,
     /// Drills and their breaking, the turning ones (the only ones that tick).
@@ -1052,8 +1054,11 @@ impl CreateWorld {
         {
             let d = &mut self.dims[dim];
             d.chute_pulls.forget(pos);
-            if d.chute_filters.remove(&pos).is_some() {
+            if let Some(f) = d.chute_filters.remove(&pos) {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+                if f.is_filter_item() {
+                    d.dropped_filters.push((pos, f));
+                }
             }
         }
         if is {

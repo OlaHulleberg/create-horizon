@@ -314,21 +314,19 @@ pub(super) fn stack_limit(game: &Game<'_>, item: &str) -> u8 {
 /// `powered`): a smart chute also not while powered and only what its filter passes
 /// (`SmartChuteBlockEntity.canAcceptItem`). Emptiness is the caller's.
 pub(super) fn chute_accepts(
+    game: &Game<'_>,
     dim: usize,
     pos: [i32; 3],
     block: create_engine::Block,
     powered: bool,
-    item: &str,
+    stack: &horizon_client::items::ItemStack,
 ) -> bool {
     match block {
         create_engine::Block::Chute => true,
         create_engine::Block::SmartChute => {
             !powered
                 && with_world(|w| {
-                    create_engine::chute::passes(
-                        w.dims[dim].chute_filters.get(&pos).map(String::as_str),
-                        item,
-                    )
+                    super::create_items::passes(game, w.dims[dim].chute_filters.get(&pos), stack)
                 })
                 .unwrap_or(false)
         }
@@ -362,7 +360,7 @@ pub(super) fn chute_take(
     let Some((block, powered)) = chute_at(game, pos) else {
         return;
     };
-    if !chute_accepts(dim, pos, block, powered, &stack.item) {
+    if !chute_accepts(game, dim, pos, block, powered, stack) {
         return;
     }
     let taken = game
@@ -443,7 +441,8 @@ pub(super) fn tick_chutes(game: &mut Game<'_>, dim: usize) {
         let can = if !active {
             false
         } else if let Some((b, powered)) = below_chute {
-            chute_stack(game, below).is_none() && chute_accepts(dim, below, b, powered, &stack.item)
+            chute_stack(game, below).is_none()
+                && chute_accepts(game, dim, below, b, powered, &stack)
         } else if container {
             true
         } else {
@@ -548,7 +547,9 @@ pub(super) fn tick_chute_pulls(game: &mut Game<'_>, dim: usize) {
         } else {
             create_engine::chute::CHUTE_AMOUNT
         };
-        let test = |item: &str| create_engine::chute::passes(filter.as_deref(), item);
+        let test = |game: &Game<'_>, s: &horizon_client::items::ItemStack| {
+            super::create_items::passes(game, filter.as_ref(), s)
+        };
         let taken = match vault_at(game, dim, above) {
             _ if supply.is_some() => {
                 super::create_decor::crate_extract(game, supply.flatten().as_deref(), test, amount)
@@ -558,7 +559,7 @@ pub(super) fn tick_chute_pulls(game: &mut Game<'_>, dim: usize) {
                 game,
                 above,
                 horizon_core::geometry::Direction::Down,
-                |s| test(&s.item),
+                test,
                 amount,
             ),
         };
@@ -692,7 +693,7 @@ pub(super) fn insert_vault(
 pub(super) fn extract_vault(
     game: &mut Game<'_>,
     parts: &[[i32; 3]],
-    test: impl Fn(&str) -> bool,
+    test: impl Fn(&Game<'_>, &horizon_client::items::ItemStack) -> bool,
     amount: u32,
 ) -> Option<horizon_client::items::ItemStack> {
     let mut slots = vault_slots(game, parts);
@@ -704,7 +705,7 @@ pub(super) fn extract_vault(
                     .map(|s| (StackKey(s), s.count, u32::from(stack_limit(game, &s.item))))
             })
             .collect();
-        create_engine::chute::extract(&keys, |k| test(&k.0.item), false, amount)
+        create_engine::chute::extract(&keys, |k| test(game, k.0), false, amount)
     };
     let &(first, _) = plan.first()?;
     let mut out = slots[first].clone()?;
@@ -780,7 +781,8 @@ pub(super) fn insert_room(
 
 /// A player's click on a smart chute's filter slot (`FilteringBehaviour.onShortInteract` through
 /// `ValueSettingsInputHandler`): on a side, not sneaking, at the slot 11 px up; the held item
-/// becomes its filter, an empty hand clears it (no filter items or counts yet).
+/// becomes its filter (a filter item taken from the hand, the one it held given back), an empty
+/// hand clears it (no counts yet).
 pub(super) fn use_smart_chute(
     game: &mut Game<'_>,
     dim: usize,
@@ -810,14 +812,9 @@ pub(super) fn use_smart_chute(
         return;
     }
     *canceled = true;
-    with_world(|w| w.set_chute_filter(dim, pos, held));
-    let center = pos.map(|v| f64::from(v) + 0.5);
-    game.audio.play(
-        "minecraft:entity.item_frame.add_item",
-        Some(center),
-        0.25,
-        0.1,
-    );
+    let filter = super::create_items::take_filter(game);
+    let old = with_world(|w| w.set_chute_filter(dim, pos, filter)).flatten();
+    super::create_items::return_filter(game, pos, old);
 }
 
 /// Item vaults whose blocks changed form or split (`updateConnectivity`), and their blocks
@@ -842,11 +839,12 @@ pub(super) fn tick_vaults(game: &mut Game<'_>, dim: usize) {
 /// Vault blocks' parts (`ItemVaultBlockEntity.write`: `Controller`, `Size`, `Length`,
 /// `Uninitialized`) and smart chutes' filters saved with a column: `vaults` holds x, y, z, the
 /// controller's x, y, z, width, length and 1 when it still looks for its vault, for each block;
-/// `chute_filters` the positions and the item ids.
+/// `chute_filters` the positions and the filter stacks (an item id in saves from before filter
+/// items).
 pub(super) fn vaults_to_nbt(
     own: &mut horizon_world::nbt::Compound,
     vaults: &[([i32; 3], create_engine::vault::Part)],
-    filters: &[([i32; 3], String)],
+    filters: &[([i32; 3], create_engine::filter::Filter)],
 ) {
     use horizon_world::nbt::Tag;
     if !vaults.is_empty() {
@@ -874,7 +872,7 @@ pub(super) fn vaults_to_nbt(
         let pos = filters.iter().flat_map(|(p, _)| *p).collect();
         let items = filters
             .iter()
-            .map(|(_, i)| Tag::String(i.as_str().into()))
+            .map(|(_, f)| super::create_items::filter_to_nbt(f))
             .collect();
         c.insert("pos".into(), Tag::IntArray(pos));
         c.insert("items".into(), Tag::List(items));
@@ -888,7 +886,7 @@ pub(super) fn vaults_from_nbt(
     data: Option<&horizon_world::nbt::Compound>,
 ) -> (
     Vec<([i32; 3], create_engine::vault::Part)>,
-    Vec<([i32; 3], String)>,
+    Vec<([i32; 3], create_engine::filter::Filter)>,
 ) {
     use horizon_world::nbt::Tag;
     let Some(data) = data else {
@@ -919,9 +917,8 @@ pub(super) fn vaults_from_nbt(
             (Some(Tag::IntArray(pos)), Some(Tag::List(items))) => pos
                 .chunks_exact(3)
                 .zip(items)
-                .filter_map(|(p, i)| match i {
-                    Tag::String(s) => Some(([p[0], p[1], p[2]], s.to_string_lossy())),
-                    _ => None,
+                .filter_map(|(p, i)| {
+                    Some(([p[0], p[1], p[2]], super::create_items::filter_from_nbt(i)?))
                 })
                 .collect(),
             _ => Vec::new(),
@@ -1142,7 +1139,7 @@ fn take_from_behind(
         return super::create_decor::crate_extract(game, supply.as_deref(), |_| true, max);
     }
     match vault_at(game, dim, behind) {
-        Some(parts) => extract_vault(game, &parts, |_| true, max),
+        Some(parts) => extract_vault(game, &parts, |_, _| true, max),
         None => super::machines::create_extract::extract_item(game, behind, face, max),
     }
 }

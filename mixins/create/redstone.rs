@@ -798,17 +798,18 @@ pub(super) fn use_detector(
         };
     if on_slot {
         *canceled = true;
-        with_world(|w| {
-            w.dims[dim].detectors.set_filter(pos, held);
+        let filter = super::create_items::take_filter(game);
+        let old = with_world(|w| {
             w.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            w.dims[dim].detectors.set_filter(pos, filter)
         });
-        let center = pos.map(|v| f64::from(v) + 0.5);
-        game.audio.play(
-            "minecraft:entity.item_frame.add_item",
-            Some(center),
-            0.25,
-            0.1,
-        );
+        let old = match old {
+            Some(Ok(old)) => old,
+            // No detector there: the filter taken goes back.
+            Some(Err(back)) => back,
+            None => None,
+        };
+        super::create_items::return_filter(game, pos, old);
         return;
     }
     // ThresholdSwitchBlock.useItemOn: SUCCESS (the screen, on the client).
@@ -1003,11 +1004,15 @@ fn look(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], now: i6
         return;
     };
     let target = observe::target_pos(pos, t, f);
-    let filter = with_world(|w| w.dims[dim].detectors.filter(pos).map(str::to_owned)).flatten();
+    let filter = with_world(|w| w.dims[dim].detectors.filter(pos).cloned()).flatten();
+    let passes = super::create_items::Detector {
+        game,
+        filter: filter.as_ref(),
+    };
     match block {
         Block::ContentObserver => {
             let (seen, watch) = seen_at(game, dim, target, filter.is_some());
-            let found = observe::observe(filter.as_deref(), &seen);
+            let found = observe::observe(&passes, &seen);
             let effect = with_world(|w| {
                 let d = &mut w.dims[dim].detectors;
                 d.watch(pos, watch, now);
@@ -1028,7 +1033,7 @@ fn look(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], now: i6
         }
         Block::StockpileSwitch => {
             let (seen, watch) = seen_at(game, dim, target, false);
-            let reading = observe::fill_level(filter.as_deref(), &seen);
+            let reading = observe::fill_level(&passes, &seen);
             // A belt is no inventory: the switch looks at it as at any other block.
             let watch = if watch == observe::Watch::Belt {
                 observe::Watch::Notified
@@ -1235,7 +1240,9 @@ fn redstone_state(d: &create_engine::world::Dimension, pos: [i32; 3], now: i64) 
     if let Some(o) = d.detectors.observers.get(&pos) {
         return format!(
             "smart observer: filter {}, target {:?}, sees {}, off {}",
-            o.filter.as_deref().unwrap_or("none"),
+            o.filter
+                .as_ref()
+                .map_or("none".into(), create_engine::filter::Filter::describe),
             d.detectors.target_of.get(&pos),
             o.sustained.is_some(),
             o.off_at
@@ -1254,7 +1261,9 @@ fn redstone_state(d: &create_engine::world::Dimension, pos: [i32; 3], now: i64) 
             s.state,
             s.inverted,
             s.powered,
-            s.filter.as_deref().unwrap_or("none")
+            s.filter
+                .as_ref()
+                .map_or("none".into(), create_engine::filter::Filter::describe)
         );
     }
     "no analog lever, smart observer or threshold switch there".into()
@@ -1424,7 +1433,10 @@ pub(super) fn redstone_chunk_save(
         data.remove(&"create_redstone".into());
         return;
     }
-    let s = |v: Option<&str>| Tag::String(v.unwrap_or("").into());
+    // A filter's stack, or "" for none.
+    let s = |v: Option<&create_engine::filter::Filter>| {
+        v.map_or(Tag::String("".into()), super::create_items::filter_to_nbt)
+    };
     let mut own = Compound::new();
     if !levers.is_empty() {
         let v = levers
@@ -1448,7 +1460,7 @@ pub(super) fn redstone_chunk_save(
         c.insert("nums".into(), Tag::IntArray(nums));
         let filters = observers
             .iter()
-            .map(|(_, o)| s(o.filter.as_deref()))
+            .map(|(_, o)| s(o.filter.as_ref()))
             .collect();
         c.insert("filters".into(), Tag::List(filters));
         own.insert("observers".into(), Tag::Compound(c));
@@ -1476,10 +1488,7 @@ pub(super) fn redstone_chunk_save(
             })
             .collect();
         c.insert("nums".into(), Tag::IntArray(nums));
-        let filters = switches
-            .iter()
-            .map(|(_, x)| s(x.filter.as_deref()))
-            .collect();
+        let filters = switches.iter().map(|(_, x)| s(x.filter.as_ref())).collect();
         c.insert("filters".into(), Tag::List(filters));
         own.insert("switches".into(), Tag::Compound(c));
     }
@@ -1494,7 +1503,8 @@ pub(super) fn redstone_from_nbt(dim: usize, now: i64, data: Option<&horizon_worl
     let Some(data) = data else {
         return;
     };
-    let part = |key: &str| -> Option<(Vec<i32>, Vec<Option<String>>)> {
+    #[allow(clippy::type_complexity)]
+    let part = |key: &str| -> Option<(Vec<i32>, Vec<Option<create_engine::filter::Filter>>)> {
         let Some(Tag::Compound(c)) = data.get(&key.into()) else {
             return None;
         };
@@ -1503,13 +1513,7 @@ pub(super) fn redstone_from_nbt(dim: usize, now: i64, data: Option<&horizon_worl
             _ => return None,
         };
         let filters = match c.get(&"filters".into()) {
-            Some(Tag::List(l)) => l
-                .iter()
-                .map(|t| match t {
-                    Tag::String(s) => Some(s.to_string_lossy()).filter(|s| !s.is_empty()),
-                    _ => None,
-                })
-                .collect(),
+            Some(Tag::List(l)) => l.iter().map(super::create_items::filter_from_nbt).collect(),
             _ => Vec::new(),
         };
         Some((nums, filters))

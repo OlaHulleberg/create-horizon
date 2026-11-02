@@ -1,4 +1,5 @@
-// An item used on a block: Create's wrench turns or picks up Create's blocks.
+// An item used on a block: Create's wrench turns or picks up Create's blocks; the wand of
+// symmetry moves its mirror; tree fertilizer grows a sapling.
 fn use_item_on(
     game: &mut crate::game::Game<'_>,
     stack: &horizon_client::items::ItemStack,
@@ -7,4 +8,7 @@ fn use_item_on(
     claimed: &mut bool,
 ) {
     crate::game::create::use_item_on(game, stack, pos, face, claimed);
+    if !*claimed {
+        crate::game::create_items::use_item_on(game, stack, pos, face, claimed);
+    }
 }
