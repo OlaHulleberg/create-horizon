@@ -552,7 +552,13 @@ pub(super) fn tick_chute_pulls(game: &mut Game<'_>, dim: usize) {
         };
         let taken = match vault_at(game, dim, above) {
             _ if supply.is_some() => {
-                super::create_decor::crate_extract(game, supply.flatten().as_deref(), test, amount)
+                // The crate's supply is a plain item: the filter tests one of it.
+                super::create_decor::crate_extract(
+                    game,
+                    supply.flatten().as_deref(),
+                    |id| test(game, &horizon_client::items::ItemStack::new(id, 1)),
+                    amount,
+                )
             }
             Some(parts) => extract_vault(game, &parts, test, amount),
             None => super::machines::create_extract::extract_matching(

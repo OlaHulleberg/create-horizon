@@ -64,7 +64,6 @@ def write_fixture(original, root):
         ('left_click_block', "horizon_client::game::native_hooks::Game<'_>::native_left_click_block"),
         ('screen', "horizon_client::game::native_hooks::Game<'_>::native_screen"),
         ('menu_closed', "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"),
-        ('left_click_block', "horizon_client::game::native_hooks::Game<'_>::native_left_click_block"),
         ('interact_entity', "horizon_client::game::native_hooks::Game<'_>::native_interact_entity"),
     ]
     files = {
@@ -431,9 +430,6 @@ pub mod native_hooks {
         }
         pub fn native_hurt_enemy(&mut self, stack: &horizon_client::items::ItemStack, entity: u32, kind: &str) {
             let _ = (stack, entity, kind);
-        }
-        pub fn native_left_click_block(&mut self, pos: [i32; 3], face: [i32; 3], state: BlockStateId, canceled: &mut bool) {
-            let _ = (pos, face, state, canceled);
         }
         pub fn native_attack_entity(&mut self, entity: i32, kind: &str, pos: [f64; 3], canceled: &mut bool) {
             let _ = (entity, kind, pos, canceled);
