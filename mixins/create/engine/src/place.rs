@@ -134,6 +134,10 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
         Block::MechanicalPress => {
             preferred(true, shaft).unwrap_or_else(|| horizontal_direction(ctx.yaw).opposite())
         }
+        // CuckooClockBlock.getStateForPlacement: its back to a shaft beside it, else facing
+        // the player.
+        Block::CuckooClock | Block::MysteriousCuckooClock => preferred(true, shaft)
+            .map_or_else(|| horizontal_direction(ctx.yaw).opposite(), Dir::opposite),
         // BacktankBlock (HorizontalKineticBlock): facing the player.
         Block::CopperBacktank | Block::NetheriteBacktank => {
             horizontal_direction(ctx.yaw).opposite()

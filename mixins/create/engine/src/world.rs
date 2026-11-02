@@ -261,6 +261,9 @@ pub struct Dimension {
     pub lifts: crate::lifts::Lifts,
     /// Display links, the nixie tubes and display boards they write to (`display.rs`).
     pub displays: crate::display::Displays,
+    /// Analog levers (`lever.rs`), smart observers and threshold switches (`observe.rs`).
+    pub levers: crate::lever::Levers,
+    pub detectors: crate::observe::Detectors,
     /// Track, stations and signals, the graph built from them, and the trains on it.
     pub railway: crate::trains::Railway,
     /// Chutes holding a stack: where it is (1 top, 0 bottom); the only ones that tick.
@@ -423,6 +426,9 @@ fn has_state(block: Block) -> bool {
             | Block::RedstoneContact
             | Block::DisplayLink
             | Block::DisplayBoard
+            | Block::AnalogLever
+            | Block::ContentObserver
+            | Block::StockpileSwitch
     ) || crate::display::is_nixie(block)
 }
 
@@ -545,6 +551,17 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         d.lifts.placed(pos, block, info);
         d.displays.placed(pos, block);
+        match block {
+            Block::AnalogLever => d.levers.placed(pos),
+            Block::ContentObserver | Block::StockpileSwitch => {
+                if let (Some(t), Some(f)) = (info.target, info.facing) {
+                    let target = crate::observe::target_pos(pos, t, f);
+                    d.detectors
+                        .placed(pos, block == Block::StockpileSwitch, target);
+                }
+            }
+            _ => {}
+        }
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
         }
@@ -889,6 +906,14 @@ impl CreateWorld {
             if d.displays.removed(pos, gone) {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
+            let had = match gone {
+                Block::AnalogLever => d.levers.removed(pos),
+                Block::ContentObserver | Block::StockpileSwitch => d.detectors.removed(pos),
+                _ => false,
+            };
+            if had {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
         }
         // `FluidTankBlock.onPlace` / `onRemove`: tanks form or split (a tank's own state
         // changes don't).
@@ -1153,6 +1178,8 @@ impl CreateWorld {
         d.railway.column_unloaded(cx, cz);
         d.lifts.column_unloaded(cx, cz);
         d.displays.column_unloaded(cx, cz);
+        d.levers.column_unloaded(cx, cz);
+        d.detectors.column_unloaded(cx, cz);
         if let Some(list) = d.columns.remove(&(cx, cz)) {
             for pos in list {
                 d.kinetics.remove(pos);
@@ -1674,6 +1701,9 @@ impl CreateWorld {
             }
             Some(Block::RedstoneLink) => self.dims[dim].link_checks.push(pos),
             Some(Block::DisplayLink) => self.dims[dim].displays.checks.push(pos),
+            Some(Block::ContentObserver | Block::StockpileSwitch) => {
+                self.dims[dim].detectors.neighbor_changed(pos)
+            }
             Some(Block::AndesiteTunnel | Block::BrassTunnel) => {
                 self.dims[dim].tunnel_checks.push(pos)
             }
@@ -2210,6 +2240,36 @@ impl CreateWorld {
 
     /// A transmitter's input read (`transmit`): its receivers' new signals are queued, the column
     /// saved when it changed.
+    /// The slots of the block at `pos` changed: the detectors looking at it (or at another
+    /// block of its vault) look again. One test when no detector is in the dimension.
+    pub fn detectors_contents_changed(&mut self, dim: usize, pos: [i32; 3]) {
+        let d = &mut self.dims[dim];
+        if d.detectors.watching.is_empty() {
+            return;
+        }
+        match d.vaults.inventory(pos) {
+            Some(parts) => d.detectors.contents_changed(parts),
+            None => d.detectors.contents_changed([pos]),
+        }
+    }
+
+    /// Tanks whose contents changed this tick (`tank_changes`, read, not taken): the detectors
+    /// looking at any of their blocks look again.
+    pub fn detectors_tanks_changed(&mut self, dim: usize) {
+        let d = &mut self.dims[dim];
+        if d.detectors.watching.is_empty() || d.tank_changes.is_empty() {
+            return;
+        }
+        for c in &d.tank_changes {
+            match d.tanks.multis.get(c) {
+                Some(m) => d
+                    .detectors
+                    .contents_changed(crate::tank::blocks(*c, m.width, m.height)),
+                None => d.detectors.contents_changed([*c]),
+            }
+        }
+    }
+
     pub fn link_transmit(&mut self, dim: usize, pos: [i32; 3], power: i32) {
         let d = &mut self.dims[dim];
         if d.links.links.get(&pos).is_some_and(|l| l.transmit != power) {
@@ -3873,6 +3933,66 @@ mod tests {
         assert_eq!(w.block_at(0, [1, 64, 0]), Some(Block::RoseQuartzLamp));
         w.neighbor_changed(0, [1, 64, 0], lamp);
         assert_eq!(w.dims[0].lamp_checks, [[1, 64, 0]]);
+        states::clear_range();
+    }
+
+    #[test]
+    fn levers_and_detectors_are_kept_by_position_and_told_of_their_targets() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:analog_lever",
+                vec![("face", "floor"), ("facing", "north")],
+            ),
+            (
+                "create:content_observer",
+                vec![("facing", "east"), ("powered", "false"), ("target", "wall")],
+            ),
+            (
+                "create:content_observer",
+                vec![("facing", "east"), ("powered", "true"), ("target", "wall")],
+            ),
+            (
+                "create:stockpile_switch",
+                vec![("facing", "north"), ("level", "0"), ("target", "floor")],
+            ),
+            ("create:fluid_tank", vec![]),
+            ("create:cuckoo_clock", vec![("facing", "north")]),
+        ];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let (lever, observer, powered, switch, tank, clock) = (2, 3, 4, 5, 6, 7);
+        let (l, o, s) = ([0, 64, 0], [3, 64, 0], [8, 65, 0]);
+        w.block_changed(0, l, 0, lever);
+        assert_eq!(w.dims[0].levers.click(l, false, 0), Some(1));
+        w.block_changed(0, o, 0, observer);
+        w.block_changed(0, s, 0, switch);
+        let d = &mut w.dims[0].detectors;
+        assert_eq!(d.target_of[&o], [4, 64, 0]);
+        assert_eq!(d.target_of[&s], [8, 64, 0]);
+        assert_eq!(d.take_checks(0), [o, s]);
+        // Its own `powered` changing is no reason to look again.
+        w.block_changed(0, o, observer, powered);
+        assert!(w.dims[0].detectors.take_checks(1).is_empty());
+        // A tank under the switch: its contents changing reaches the switch.
+        w.block_changed(0, [8, 64, 0], 0, tank);
+        w.dims[0].tank_changes.push([8, 64, 0]);
+        w.detectors_tanks_changed(0);
+        w.detectors_contents_changed(0, [4, 64, 0]);
+        assert_eq!(w.dims[0].detectors.take_checks(2), [o, s]);
+        w.neighbor_changed(0, o, powered);
+        assert_eq!(w.dims[0].detectors.take_checks(3), [o]);
+        // A cuckoo clock turns on a shaft out of its back.
+        w.block_changed(0, [20, 64, 0], 0, clock);
+        assert!(w.has_shaft_towards(0, [20, 64, 0], crate::kinetics::Dir::South));
+        assert!(!w.has_shaft_towards(0, [20, 64, 0], crate::kinetics::Dir::North));
+        // Gone: their state goes, the lever with a signal updating its neighbours.
+        w.block_changed(0, l, lever, 0);
+        w.block_changed(0, o, powered, 0);
+        assert_eq!(w.dims[0].levers.removed, [l]);
+        assert!(!w.dims[0].detectors.target_of.contains_key(&o));
+        assert!(w.dims[0].detectors.target_of.contains_key(&s));
         states::clear_range();
     }
 }

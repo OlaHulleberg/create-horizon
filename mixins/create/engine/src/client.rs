@@ -295,6 +295,12 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 phase: 0.0,
             },
         ],
+        // CuckooClockRenderer (a KineticBlockEntityRenderer): the shaft half behind; its hands
+        // are the glue's (slots `CUCKOO_HAND_SLOT` on), turned by the day time.
+        Block::CuckooClock | Block::MysteriousCuckooClock => s
+            .facing
+            .map(|f| vec![half(0, f.opposite(), speeds[0])])
+            .unwrap_or_default(),
         // DrillRenderer: the shaft half behind, the head turning with it in front.
         Block::MechanicalDrill => s
             .facing
@@ -458,6 +464,9 @@ pub const PRESS_HEAD_SLOT: u8 = 1;
 
 /// A gauge's first dial slot (its second dial is the next).
 pub const GAUGE_DIAL_SLOT: u8 = 3;
+
+/// A cuckoo clock's hour hand's slot (its minute hand is the next).
+pub const CUCKOO_HAND_SLOT: u8 = 1;
 
 /// Slots a block may use, to clear them all.
 pub const SLOTS: u8 = 8;
