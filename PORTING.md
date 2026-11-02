@@ -455,6 +455,19 @@ speedometer bound to a 3-wide display board turned through a cogwheel beside it 
 nothing (`benchmarks/create-p7comp-*.json`): off tick 2.576 ± 0.201 ms, frame p50 0.484 ms; idle 2.542 ± 0.149 ms,
 0.484 ms.
 
+Decorative and kinetic blocks, the remaining fluid blocks and the handheld items, proven headless: a flywheel on a
+creative motor turned at 16 rpm; a creative crate given stone by a click on its top filled the chest under its chute a
+stack at a time; a desk bell clicked went `powered=true` and let go within 1.5 s; a steam whistle on a fluid tank over
+a kindled burner, powered by a redstone block, read `sounding true`; a creative fluid tank clicked with a lava bucket
+gave lava; a wand of symmetry set to a plane copied a gold block placed 2 east of the mirror to 2 west; a list filter set
+to deny dirt, put in a smart chute's filter slot (DEBUG log of the click, removed) while the chute was held by redstone,
+let the 16 stone of the chest above through and kept its 16 dirt (a first try placed the chute before its redstone, and
+it took both in the tick before it read its power, as Create's does); a handheld worldshaper set to a radius-2 sphere
+filled 81 stone blocks. Create installed and unused, again (`benchmarks/create-p6items-*.json`): off tick 2.029 ±
+0.036 ms, frame p50 0.472 ms; idle 1.994 ± 0.117 ms, 0.480 ms. These two runs are faster than the earlier ones: five
+headless games left running by earlier proofs were found and stopped first, so earlier rows were measured beside them
+(each with its own control in the same session, so their comparisons stand).
+
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
 vault: a hopper put one iron ingot in, the observer went `powered=true` and the lamp behind it lit; a threshold switch
