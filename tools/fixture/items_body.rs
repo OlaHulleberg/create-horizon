@@ -17,6 +17,7 @@ struct Data {
     shaper: Option<(ws::Settings, Option<String>)>,
     schedule: Option<Vec<(String, i32)>>,
     belt_first: Option<[i32; 3]>,
+    controller: Vec<String>,
 }
 
 thread_local! {
@@ -111,6 +112,14 @@ pub(super) fn belt_first_shaft(stack: &ItemStack) -> Option<[i32; 3]> {
 
 pub(super) fn set_belt_first_shaft(stack: &mut ItemStack, pos: Option<[i32; 3]>) {
     edit(stack, |d| d.belt_first = pos);
+}
+
+pub(super) fn controller_items(stack: &ItemStack) -> Vec<String> {
+    data(stack).controller
+}
+
+pub(super) fn set_controller_items(stack: &mut ItemStack, items: &[String]) {
+    edit(stack, |d| d.controller = items.to_vec());
 }
 
 /// Into the first empty inventory slot.

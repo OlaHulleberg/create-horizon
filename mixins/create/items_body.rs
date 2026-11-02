@@ -406,6 +406,31 @@ pub(super) fn set_belt_first_shaft(stack: &mut ItemStack, pos: Option<[i32; 3]>)
     );
 }
 
+/// A linked controller's frequency items (`LINKED_CONTROLLER_ITEMS`, two a button), by id; ""
+/// for an empty slot.
+pub(super) fn controller_items(stack: &ItemStack) -> Vec<String> {
+    match get(custom(stack), create_engine::controller::ITEMS_KEY) {
+        Some(Tag::List(l)) => l
+            .iter()
+            .map(|t| text(Some(t)).unwrap_or_default())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `set(LINKED_CONTROLLER_ITEMS)`: none when every slot is empty.
+pub(super) fn set_controller_items(stack: &mut ItemStack, items: &[String]) {
+    let value = items.iter().any(|i| !i.is_empty()).then(|| {
+        Tag::List(
+            items
+                .iter()
+                .map(|i| Tag::String(i.as_str().into()))
+                .collect(),
+        )
+    });
+    set_custom(stack, vec![(create_engine::controller::ITEMS_KEY, value)]);
+}
+
 /// `Inventory.placeItemBackInInventory`: into the inventory, the rest dropped at the player.
 pub(super) fn give_back(game: &mut Game<'_>, stack: ItemStack) {
     if let Some(rest) = game.give(stack)

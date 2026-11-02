@@ -65,6 +65,9 @@ def write_fixture(original, root):
         ('screen', "horizon_client::game::native_hooks::Game<'_>::native_screen"),
         ('menu_closed', "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"),
         ('interact_entity', "horizon_client::game::native_hooks::Game<'_>::native_interact_entity"),
+        ('input_key', "horizon_client::game::native_hooks::Game<'_>::native_input_key"),
+        ('level_load', "horizon_client::game::native_hooks::Game<'_>::native_level_load"),
+        ('level_save', "horizon_client::game::native_hooks::Game<'_>::native_level_save"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -163,6 +166,9 @@ pub mod containers {
 }
 pub mod first_person {
     #[derive(Clone, Copy, PartialEq)] pub enum Hand { Main, Off }
+}
+pub mod debug_keys {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum KeyAction { Press, Repeat, Release }
 }
 pub mod crafting {
     pub struct CustomRecipe { pub id: String, pub json: std::sync::Arc<serde_json::Value> }
@@ -355,7 +361,7 @@ pub mod native_hooks {
             let _ = (player, command, ran);
         }
         pub fn native_acting_player(&self) -> Option<NativeServerPlayer> {
-            Some(NativeServerPlayer { uuid: 7, name: "Alex".into(), dimension: "minecraft:overworld".into(), position: [0.5, 2.0, 0.5], game_mode: 1 })
+            Some(NativeServerPlayer { uuid: 7, name: "Alex".into(), dimension: "minecraft:overworld".into(), position: super::PLAYER_AT.with(|p| p.get()), game_mode: 1 })
         }
         pub fn native_server_players(&self) -> Vec<NativeServerPlayer> {
             self.native_acting_player().into_iter().collect()
@@ -487,6 +493,22 @@ pub mod native_hooks {
             let _ = (pos, stack, at);
         }
         pub fn native_wheel(&mut self, steps: f32, claimed: &mut bool) { let _ = (steps, claimed); }
+        pub fn native_input_key(&mut self, key: &str, action: horizon_client::debug_keys::KeyAction, modifiers: u8,
+                                screen: bool, consumed: &mut bool) {
+            let _ = (key, action, modifiers, screen, consumed);
+        }
+        /// The keys the test holds down.
+        pub fn native_is_key_down(&self, key: &str) -> bool { super::KEYS_DOWN.with_borrow(|k| k.contains(key)) }
+        pub fn native_level_load(&mut self, dimension: &str) { let _ = dimension; }
+        pub fn native_level_save(&mut self, dimension: &str) { let _ = dimension; }
+        /// The fixture's world data, by `mod_id/name`; what was marked dirty is recorded.
+        pub fn native_saved_data(&mut self, mod_id: &str, name: &str) -> Option<&mut horizon_world::nbt::Compound> {
+            Some(self.saved.entry(format!("{mod_id}/{name}")).or_default())
+        }
+        pub fn native_set_saved_data_dirty(&mut self, mod_id: &str, name: &str) -> bool {
+            self.saved_dirty.push(format!("{mod_id}/{name}"));
+            true
+        }
         pub fn native_chunk_data_save(&self, dimension: &str, chunk: [i32; 2], data: &mut horizon_world::nbt::Compound) {
             let _ = (dimension, chunk, data);
         }
@@ -561,6 +583,7 @@ pub struct Game<'a> {
     pub inventory: Vec<Option<horizon_client::items::ItemStack>>, pub selected: usize, pub dim: Dim,
     pub res: Res, pub custom_recipes: std::collections::HashMap<String, Vec<horizon_client::crafting::CustomRecipe>>,
     pub cooking: horizon_client::crafting::Recipes,
+    pub saved: std::collections::HashMap<String, horizon_world::nbt::Compound>, pub saved_dirty: Vec<String>,
 }
 impl Game<'_> {
     pub fn recipes(&self) -> &horizon_client::crafting::Recipes { &self.cooking }
@@ -581,9 +604,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 65) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 66) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 65;
+        let empty = state.0 == 0 || state.0 == 66;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -592,10 +615,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 65 is a water source.
+    /// State 66 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 65 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 66 { FluidKind::Water } else { FluidKind::Empty })
     }
     /// `Block.updateFromNeighbourShapes`: the fixture's states keep their shape.
     pub fn update_from_neighbour_shapes(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos,
@@ -635,6 +658,9 @@ thread_local! {
     pub static MOBS: std::cell::RefCell<Vec<(u32, [f64; 3], [f64; 3])>> = Default::default();
     /// Blocks giving a signal of 15 toward every side, for the latch test.
     pub static SIGNALS: std::cell::RefCell<std::collections::HashSet<[i32; 3]>> = Default::default();
+    /// Where the acting player stands, and the keys held down (`native_is_key_down`).
+    pub static PLAYER_AT: std::cell::Cell<[f64; 3]> = const { std::cell::Cell::new([0.5, 2.0, 0.5]) };
+    pub static KEYS_DOWN: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
 }
 impl Behaviours {
     pub fn neighbor_changed_at(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos, block: BlockId) {
@@ -811,9 +837,16 @@ impl Behaviours {
         ("facing".to_owned(), "south".to_owned()), ("slope".to_owned(), "horizontal".to_owned()),
         ("part".to_owned(), "pulley".to_owned()), ("casing".to_owned(), "false".to_owned()),
         ("waterlogged".to_owned(), "false".to_owned())]) });
-    // 65: a water source; 66: a target block at power 7.
+    // 65: a lectern controller facing north.
+    states.push(BlockState { name: "create:lectern_controller".into(), properties: BTreeMap::from([
+        ("facing".to_owned(), "north".to_owned()), ("has_book".to_owned(), "true".to_owned()),
+        ("powered".to_owned(), "false".to_owned())]) });
+    // 66: a water source; 67: a target block at power 7; 68: a lectern facing north, no book.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
+    states.push(BlockState { name: "minecraft:lectern".into(), properties: BTreeMap::from([
+        ("facing".to_owned(), "north".to_owned()), ("has_book".to_owned(), "false".to_owned()),
+        ("powered".to_owned(), "false".to_owned())]) });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
@@ -823,7 +856,8 @@ impl Behaviours {
         creative: false, player: Some(Player { exhaustion: 0.0 }), keys: Default::default(),
         glides: vec![], hand: horizon_client::first_person::Hand::Main, yaw: 180.0, pitch: 0.0, armor: [None, None, None, None],
         inventory: vec![Some(horizon_client::items::ItemStack { item: "minecraft:iron_ingot".into(), count: 5, damage: 0, extra: None })],
-        selected: 0, dim: Dim, res: Res, custom_recipes: Default::default(), cooking: Default::default() };
+        selected: 0, dim: Dim, res: Res, custom_recipes: Default::default(), cooking: Default::default(),
+        saved: Default::default(), saved_dirty: Vec::new() };
     // data/create/recipe/pressing/iron_ingot.json
     game.custom_recipes.insert("create:pressing".into(), vec![horizon_client::crafting::CustomRecipe {
         id: "create:pressing/iron_ingot".into(),
@@ -881,7 +915,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 40);
+    assert_eq!(commands.len(), 41);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -1089,7 +1123,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 65), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 66), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1178,7 +1212,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 66);
+    game.world.blocks.insert([79, 0, 80], 67);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1837,6 +1871,178 @@ impl Behaviours {
     game.native_use_item_on(&connector, [1105, 0, 1120], [0, 1, 0], &mut claimed);
     assert_eq!(game.world.blocks.get(&[1102, 0, 1120]), None, "along their axis: no belt");
     assert_eq!(game.inventory[0].as_ref().map(|s| s.count), Some(1));
+    // Linked controllers. Messages between the client and server halves on `create:controller`
+    // are handed over as the network would (to player 7, and from the client as player 7).
+    fn relay(game: &mut Game<'_>, from: usize, to_server: bool) {
+        let who = if to_server { 0 } else { 7 };
+        let messages: Vec<Vec<u8>> = game.sent[from..].iter()
+            .filter(|m| m.0 == who && m.1 == "create:controller").map(|m| m.2.clone()).collect();
+        for m in messages {
+            if to_server { game.native_net_from_client(7, "create:controller", &m); }
+            else { game.native_net_from_server("create:controller", &m); }
+        }
+    }
+    // The client's tick, its packets to the server, the player's tick, the level's tick.
+    fn controller_tick(game: &mut Game<'_>) {
+        let from = game.sent.len();
+        game.native_tick();
+        relay(game, from, true);
+        game.native_player_tick();
+        game.native_level_tick_post("minecraft:overworld");
+    }
+    let key = |game: &mut Game<'_>, name: &str, action: horizon_client::debug_keys::KeyAction| {
+        KEYS_DOWN.with_borrow_mut(|k| {
+            if action == horizon_client::debug_keys::KeyAction::Release { k.remove(name); } else { k.insert(name.to_owned()); }
+        });
+        let mut consumed = false;
+        game.native_input_key(name, action, 0, false, &mut consumed);
+        consumed
+    };
+    use horizon_client::debug_keys::KeyAction::{Press, Release};
+    // What the receiver gives (its block here stays as placed; its signal is the network's).
+    let rx = |level: &GameLevel<'_>| {
+        let mut signal = 0;
+        level.native_block_signal(LevelDimension::Overworld, BlockPos { x: 1200, y: 0, z: 1200 }, BlockStateId(21),
+            horizon_core::geometry::Direction::East, false, &mut signal);
+        signal
+    };
+    // A receiving redstone link facing up at (1200, 0, 1200), tuned to the iron ingot by a click on
+    // its first slot.
+    game.keys.clear();
+    game.selected = 0;
+    game.hand = horizon_client::first_person::Hand::Main;
+    game.world.blocks.insert([1200, -1, 1200], 1);
+    game.world.blocks.insert([1200, 0, 1200], 21);
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1200, y: 0, z: 1200 }, BlockStateId(0), BlockStateId(21));
+    game.native_level_tick_post("minecraft:overworld");
+    game.inventory[0] = Some(ItemStack::new("minecraft:iron_ingot", 1));
+    game.aim = Some([1200, 0, 1200]);
+    game.aim_point = Some([1200.5, 3.01 / 16.0, 1200.0 + 10.5 / 16.0]);
+    let mut canceled = false;
+    game.native_right_click_block([1200, 0, 1200], [0, 1, 0], &mut canceled);
+    assert!(canceled, "the link's slot took the iron");
+    game.aim_point = None;
+    // The controller used on the link: its client binds the next button pressed, W (consumed),
+    // to the link's frequency, in the player's tick.
+    let controller = ItemStack::new("create:linked_controller", 1);
+    game.inventory[0] = Some(controller.clone());
+    let from = game.sent.len();
+    let mut claimed = false;
+    game.native_use_item_on(&controller, [1200, 0, 1200], [0, 1, 0], &mut claimed);
+    assert!(claimed);
+    relay(&mut game, from, false);
+    assert!(key(&mut game, "key.keyboard.w", Press), "bind mode takes W");
+    let mark = game.said.len();
+    controller_tick(&mut game);
+    assert!(game.said[mark..].iter().any(|l| l == "create.linked_controller.key_bound"), "bound: {:?}", &game.said[mark..]);
+    assert!(!key(&mut game, "key.keyboard.w", Release));
+    // The screen's stand-in: space (button 4) on the gold ingot.
+    let mut ran = false;
+    game.native_perform_command(&player, "create_debug controller 4 gold_ingot", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("controller button 4: minecraft:gold_ingot + "));
+    // Its use (in the air) toggles it on the client. W is consumed, E is not; W held powers the
+    // receiver (the player within the links' 256 blocks), renewed every 5 ticks past the 30-tick
+    // timeout; released, it is off a tick later.
+    PLAYER_AT.set([1203.5, 0.0, 1203.5]);
+    game.world.game_time += 20;
+    let from = game.sent.len();
+    let mut claimed = false;
+    game.native_use_item(&controller, &mut claimed);
+    relay(&mut game, from, false);
+    assert!(key(&mut game, "key.keyboard.w", Press), "the active controller takes W");
+    assert!(!key(&mut game, "key.keyboard.e", Press), "and leaves E");
+    let mark = game.said.len();
+    controller_tick(&mut game);
+    assert!(game.said[mark..].iter().any(|l| l == "set [1200, 0, 1200] powered=true"), "held: {:?}", &game.said[mark..]);
+    let mark = game.said.len();
+    assert_eq!(rx(&level), 15);
+    for _ in 0..40 { controller_tick(&mut game); }
+    assert_eq!(rx(&level), 15, "held");
+    assert!(!key(&mut game, "key.keyboard.w", Release));
+    controller_tick(&mut game);
+    assert_eq!(rx(&level), 0, "released");
+    // Toggled off: W reaches the game again.
+    let from = game.sent.len();
+    game.native_use_item(&controller, &mut claimed);
+    relay(&mut game, from, false);
+    assert!(!key(&mut game, "key.keyboard.w", Press));
+    key(&mut game, "key.keyboard.w", Release);
+    // The controller on a lectern (1210, 0, 1200): a lectern controller, read by comparators as
+    // 15. Used by a player at it, W powers the receiver from the lectern's controller; walking
+    // away stops it; sneaking takes the lectern's controller off (dropped) and leaves a lectern.
+    game.world.blocks.insert([1210, 0, 1200], 68);
+    let mut claimed = false;
+    game.native_use_item_on(&controller, [1210, 0, 1200], [0, 1, 0], &mut claimed);
+    assert!(claimed);
+    assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&65));
+    assert!(game.inventory[0].is_none(), "the controller went on the lectern");
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1210, y: 0, z: 1200 }, BlockStateId(68), BlockStateId(65));
+    assert_eq!(comparator(&game, [1210, 0, 1200], 65), 15);
+    PLAYER_AT.set([1210.5, 0.0, 1201.2]);
+    let from = game.sent.len();
+    let mut canceled = false;
+    game.native_right_click_block([1210, 0, 1200], [0, 1, 0], &mut canceled);
+    assert!(canceled, "the lectern is used");
+    relay(&mut game, from, false);
+    assert!(key(&mut game, "key.keyboard.w", Press));
+    let mark = game.said.len();
+    controller_tick(&mut game);
+    assert!(game.said[mark..].iter().any(|l| l == "set [1200, 0, 1200] powered=true"), "lectern: {:?}", &game.said[mark..]);
+    assert_eq!(rx(&level), 15);
+    key(&mut game, "key.keyboard.w", Release);
+    controller_tick(&mut game);
+    assert_eq!(rx(&level), 0);
+    PLAYER_AT.set([1230.5, 0.0, 1200.5]);
+    let from = game.sent.len();
+    game.native_level_tick_post("minecraft:overworld");
+    relay(&mut game, from, false);
+    assert!(game.sent[from..].iter().any(|m| m.0 == 7 && m.1 == "create:controller"), "the user left");
+    assert!(!key(&mut game, "key.keyboard.w", Press), "the client is idle");
+    key(&mut game, "key.keyboard.w", Release);
+    PLAYER_AT.set([1210.5, 0.0, 1201.2]);
+    game.keys.insert(winit::keyboard::KeyCode::ShiftLeft);
+    let mut canceled = false;
+    game.native_right_click_block([1210, 0, 1200], [0, 1, 0], &mut canceled);
+    game.keys.clear();
+    assert!(canceled);
+    assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&68), "a lectern again");
+    assert!(create_contraption_body::DROPPED.with_borrow(|d| d.iter().any(|x| x.1 == "create:linked_controller")));
+    PLAYER_AT.set([0.5, 2.0, 0.5]);
+    // Logistics networks across restarts: the world's save writes network "Base" (its link at
+    // (1000, 1, 1000), owned by the player who linked it) to `data/create/logistics_networks.dat`
+    // once; unchanged, a later save writes nothing. Forgotten and read back as after a restart,
+    // its link counts as unloaded; a second link joining it saves both, the owner kept.
+    use horizon_world::nbt::Tag;
+    let networks = |game: &Game<'_>| -> Vec<horizon_world::nbt::Compound> {
+        match game.saved.get("create/logistics_networks").and_then(|d| d.get(&"LogisticsNetworks".into())) {
+            Some(Tag::List(l)) => l.iter().filter_map(|t| match t { Tag::Compound(c) => Some(c.clone()), _ => None }).collect(),
+            _ => Vec::new(),
+        }
+    };
+    let links = |c: &horizon_world::nbt::Compound| match c.get(&"Links".into()) { Some(Tag::List(l)) => l.len(), _ => 0 };
+    game.native_level_save("minecraft:overworld");
+    assert_eq!(game.saved_dirty, vec!["create/logistics_networks".to_owned()]);
+    let saved = networks(&game);
+    assert_eq!(saved.len(), 1, "{saved:?}");
+    assert_eq!(links(&saved[0]), 1);
+    assert_eq!(saved[0].get(&"Owner".into()), Some(&Tag::IntArray(vec![0, 0, 0, 7])));
+    game.native_level_save("minecraft:overworld");
+    assert_eq!(game.saved_dirty.len(), 1, "unchanged: not written");
+    create_stock::forget();
+    game.native_level_load("minecraft:overworld");
+    game.native_level_save("minecraft:overworld");
+    assert_eq!(game.saved_dirty.len(), 1, "read back: unchanged");
+    game.world.blocks.insert([1300, 1, 1300], 54);
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1300, y: 1, z: 1300 }, BlockStateId(0), BlockStateId(54));
+    game.native_level_tick_post("minecraft:overworld");
+    game.native_perform_command(&player, "create_debug network 1300 1 1300 Base", &mut ran);
+    assert!(game.said.last().is_some_and(|l| l.starts_with("network ")), "{:?}", game.said.last());
+    game.native_level_save("minecraft:overworld");
+    assert_eq!(game.saved_dirty.len(), 2);
+    let saved = networks(&game);
+    assert_eq!(saved.len(), 1);
+    assert_eq!(links(&saved[0]), 2, "the unloaded link and the new one");
+    assert_eq!(saved[0].get(&"Owner".into()), Some(&Tag::IntArray(vec![0, 0, 0, 7])));
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);
