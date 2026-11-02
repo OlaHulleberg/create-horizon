@@ -4,7 +4,7 @@ version = "0.1.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "b5201f492eb718a2638fe4ffa47a7b01270b7b89"
+horizon_revision = "abfc4d272da39b31140c8afc25ca9863160e2036"
 
 # Game glue: per-world state on the server thread, translating hooks into engine calls.
 [[module]]
