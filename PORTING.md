@@ -399,6 +399,19 @@ hopper of iron over a red toolbox filled its first compartment; a click opened i
 its item on a wall took `double_face=wall,facing=south`. These blocks do nothing per tick (doors only while sliding);
 Create idle stays free (see the equipment budget).
 
+| Scenario (2026-11-02, Phase 7 display links, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| displaybase (control): 16 speedometers on creative motors, a display link behind each, a sign two on, unbound | 1862 | 0.482 / 1.274 | 2.703 ± 0.099 | control |
+| displays: the same, each link bound to its sign (`Label=Speed`, read every 100 ticks) | 1859 | 0.482 / 1.265 | 2.625 ± 0.092 | tick ≤ control + 0.1 ms, frame p50 ≤ control + 5% |
+
+Bound links cost nothing measurable (`benchmarks/create-p7display-*.json`; the in-run check reads "Speed 16 RPM" on the
+first sign). Proven headless: a display link behind a speedometer on a creative motor, bound by `/create_debug
+display_link` to an oak sign with `Label=Speed`: after the motor was scrolled from 16 to 32 rpm the sign read
+"Speed 32 RPM". A link on a target block under a powered lever (direct signal 15), bound to an orange and a white nixie
+tube in a row: the first tube holds "1" "5", the second blank (`display_state`); the text is not drawn (no text
+hook, see Blocked). A first try with `target[power=7]` read 0: vanilla's `TargetBlock.onPlace` resets a placed target
+to 0, so that was right.
+
 | Scenario (2026-11-01, Phase 6 equipment, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1696 | 0.492 / 2.065 | 2.607 ± 0.277 | baseline |

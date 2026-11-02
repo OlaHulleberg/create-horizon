@@ -230,6 +230,17 @@ def build(ctl_bin, sock, scenario, center):
             command(ctl_bin, sock, f"setblock {xx} {y-6} {zz+2} create:mechanical_arm[ceiling=false]", failures)
             command(ctl_bin, sock, f"setblock {xx} {y-6} {zz+1} create:cogwheel[axis=y]", failures)
             command(ctl_bin, sock, f"setblock {xx} {y-7} {zz+1} create:creative_motor[facing=up]", failures)
+    if scenario in ("displays", "displaybase"):
+        # 16 speedometers on creative motors, each with a display link behind it and a sign two
+        # blocks on; "displays" binds each link to its sign (it rewrites it every 100 ticks).
+        for i in range(16):
+            xx, zz = x - 15 + 2 * i, z + 4
+            command(ctl_bin, sock, f"setblock {xx} {y-6} {zz-1} create:creative_motor[facing=south]", failures)
+            command(ctl_bin, sock, f"setblock {xx} {y-6} {zz} create:speedometer[facing=up,axis_along_first=false]",
+                    failures)
+            command(ctl_bin, sock, f"setblock {xx} {y-6} {zz+1} create:display_link[facing=south,powered=false]",
+                    failures)
+            command(ctl_bin, sock, f"setblock {xx} {y-6} {zz+3} minecraft:oak_sign[rotation=8]", failures)
     if scenario in ("trains", "signals"):
         for row in range(12):
             zz = z - 24 + 4 * row
@@ -654,7 +665,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "curves": 32, "curvetracks": 32, "gauges": 64 * 64, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "diodes": 512, "links": 64,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8, "boilers": 10 * 17, "tanks": 10 * 16, "hoppers": 0, "clocks": 16 * 2, "clockbase": 16 * 2, "arms": 8 * 6, "armbase": 8 * 6}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8, "boilers": 10 * 17, "tanks": 10 * 16, "hoppers": 0, "clocks": 16 * 2, "clockbase": 16 * 2, "arms": 8 * 6, "armbase": 8 * 6, "displays": 16 * 3, "displaybase": 16 * 3}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
@@ -674,6 +685,10 @@ def run_once(args, scenario):
             for row in range(30):
                 ctl(ctl_bin, sock, "command", f"summon minecraft:item {x-0.5} {y-2} {z-30+2*row+0.5} "
                     "{Item:{id:'minecraft:gravel',count:16},PickupDelay:32767}")
+        if scenario == "displays":
+            for i in range(16):
+                xx, zz = x - 15 + 2 * i, z + 4
+                ctl(ctl_bin, sock, "chat", f"/create_debug display_link {xx} {y-6} {zz+1} {xx} {y-6} {zz+3} Label=Speed")
         if scenario in ("arms", "armbase"):
             for i in range(8):
                 xx, zz = x - 16 + 6 * (i % 4), z - 8 + 8 * (i // 4)
@@ -792,6 +807,8 @@ def run_once(args, scenario):
             time.sleep(0.5)
             pressed = [sum(1 for b in found if b[3].startswith("create:powered_shaft")),
                        ctl(ctl_bin, sock, "messages", "1").get("chat")]
+        if scenario in ("displays", "displaybase"):
+            pressed = ctl(ctl_bin, sock, "command", f"data get block {x-15} {y-6} {z+7} front_text.messages").get("chat")
         if scenario in ("arms", "armbase"):
             xx, zz = x - 16, z - 8
             ctl(ctl_bin, sock, "chat", f"/create_debug arm_state {xx} {y-6} {zz}")
@@ -857,7 +874,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "gauges", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains", "boilers", "tanks", "hoppers", "clocks", "clockbase", "arms", "armbase"],
+                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "gauges", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains", "boilers", "tanks", "hoppers", "clocks", "clockbase", "arms", "armbase", "displays", "displaybase"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
