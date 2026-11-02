@@ -372,6 +372,22 @@ north side) was clicked with a gold ingot (DEBUG log of the hit, removed), then 
 gold, the vault kept the 64 iron; powered again it stops (`powered=true`). Unfiltered, it passes everything at once,
 as Create's empty filter does.
 
+| Scenario (2026-11-02, Phase 4 mechanical arms, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| armbase (control): 8 pairs of arms between two depots on a cogwheel and motor, 16 iron on each first depot, no points | 1851 | 0.486 / 1.147 | 2.799 ± 0.083 | control |
+| arms: the same, one arm of each pair carrying A to B and the other B to A, for ever | 1856 | 0.486 / 1.118 | 2.762 ± 0.107 | tick ≤ control + 0.2 ms, frame p50 ≤ control + 10% |
+
+Sixteen arms at work cost nothing measurable (`benchmarks/create-p4arms-*.json`; the in-run check reads the first arm
+in `SearchOutputs` holding 16 iron). Proven headless: an arm turned by a cogwheel beside it (an arm has no shaft:
+`KineticBlock.hasShaftTowards` is false, so a motor under it gives 0 rpm, as in Create), a depot of 16 iron 2 east and
+an empty one 2 west, points set by `/create_debug arm`: MoveToInput, SearchOutputs holding 16 iron, MoveToOutput, then
+the west depot held the 16 and the east one none (screenshot of the arm reaching). A weighted ejector facing north on a
+motor, target a depot 4 ahead: charged, 3 gold dropped on it landed on the target depot (screenshot of the stack in
+flight). It first took nothing: `create:weighted_ejector` had no block entity to hold its depot slots (`data get block`:
+not a block entity); fixed. An andesite funnel facing west over a belt running south, a chest behind it: after a
+neighbour update (Create switches in `updateShape`) it became `andesite_belt_funnel[shape=pulling]` and the 8 iron put
+on the belt ended in the chest.
+
 | Scenario (2026-11-01, Phase 6 equipment, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1696 | 0.492 / 2.065 | 2.607 ± 0.277 | baseline |

@@ -1,0 +1,101 @@
+{
+  "scenario": "arms",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    2.69775390625,
+    2.5478515625,
+    2.2431640625
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 21900,
+      "frame_ms_p50": 0.490446001291275,
+      "frame_ms_p99": 1.2629550695419312,
+      "fps": 1825.0,
+      "tick_ms": 2.8120477199554443,
+      "tick_ms_max": 8.086453437805176,
+      "cpu_ms_p50": 0.36201000213623047,
+      "gpu_ms_p50": 0.4388020634651184,
+      "check": [
+        "mechanical arm at -536 93 46: SearchOutputs target -1 progress 0.328 held 16 minecraft:iron_ingot powered false"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 22557,
+      "frame_ms_p50": 0.4791570007801056,
+      "frame_ms_p99": 1.0933500528335571,
+      "fps": 1879.75,
+      "tick_ms": 2.829237937927246,
+      "tick_ms_max": 7.758148670196533,
+      "cpu_ms_p50": 0.373199999332428,
+      "gpu_ms_p50": 0.4268229007720947,
+      "check": [
+        "mechanical arm at -551 89 46: SearchOutputs target -1 progress 0.484 held 16 minecraft:iron_ingot powered false"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 22411,
+      "frame_ms_p50": 0.4862169921398163,
+      "frame_ms_p99": 1.0964990854263306,
+      "fps": 1867.5833333333333,
+      "tick_ms": 2.571028709411621,
+      "tick_ms_max": 7.308897972106934,
+      "cpu_ms_p50": 0.3480300009250641,
+      "gpu_ms_p50": 0.43406248092651367,
+      "check": [
+        "mechanical arm at -535 90 58: SearchOutputs target -1 progress 0.328 held 16 minecraft:iron_ingot powered false"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 22515,
+      "frame_ms_p50": 0.4809369742870331,
+      "frame_ms_p99": 1.0568599700927734,
+      "fps": 1876.25,
+      "tick_ms": 2.801149368286133,
+      "tick_ms_max": 8.541362762451172,
+      "cpu_ms_p50": 0.3630300164222718,
+      "gpu_ms_p50": 0.4274999797344208,
+      "check": [
+        "mechanical arm at -536 88 61: SearchOutputs target -1 progress 0.328 held 16 minecraft:iron_ingot powered false"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 22001,
+      "frame_ms_p50": 0.4915960133075714,
+      "frame_ms_p99": 1.0827600955963137,
+      "fps": 1833.4166666666667,
+      "tick_ms": 2.794935941696167,
+      "tick_ms_max": 7.808529376983643,
+      "cpu_ms_p50": 0.3832390010356903,
+      "gpu_ms_p50": 0.4390104115009308,
+      "check": [
+        "mechanical arm at -536 90 64: SearchOutputs target -1 progress 0.328 held 16 minecraft:iron_ingot powered false"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1856.4,
+    "frame_ms_p50": 0.4856705963611603,
+    "frame_ms_p99": 1.1184848546981812,
+    "tick_ms": 2.761679935455322,
+    "tick_ms_max": 7.900678443908691
+  },
+  "stdev": {
+    "fps": 25.389493671376897,
+    "frame_ms_p50": 0.005546343658585198,
+    "frame_ms_p99": 0.08225062326171838,
+    "tick_ms": 0.10736932229982013,
+    "tick_ms_max": 0.45387196931485774
+  }
+}
