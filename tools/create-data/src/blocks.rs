@@ -566,6 +566,46 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             None,
             own(&[("activate", bools), ("powered", bools), ("powering", bools)]),
         ),
+        // AnalogLeverBlock (FaceAttachedHorizontalDirectionalBlock, `initialProperties(LEVER)`):
+        // the lever's shape, placement and survival; its own states without `powered` (its
+        // block entity's state is the signal, the glue's), the state definition's first state
+        // its default (FLOOR, NORTH).
+        "analog_lever" => (
+            "minecraft:lever",
+            None,
+            own(&[
+                ("face", &["floor", "wall", "ceiling"]),
+                ("facing", &["north", "south", "west", "east"]),
+            ]),
+        ),
+        // SmartObserverBlock and ThresholdSwitchBlock (DirectedDirectionalBlock,
+        // `SharedProperties::stone`, no redstone conductor): full blocks facing their target,
+        // TARGET WALL by default; glowstone's template without its light, as the contacts.
+        "content_observer" => (
+            "minecraft:glowstone",
+            None,
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                ("powered", bools),
+                ("target", &["wall", "floor", "ceiling"]),
+            ]),
+        ),
+        "stockpile_switch" => (
+            "minecraft:glowstone",
+            None,
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                ("level", &["0", "1", "2", "3", "4", "5"]),
+                ("target", &["wall", "floor", "ceiling"]),
+            ]),
+        ),
+        // CuckooClockBlock (HorizontalKineticBlock, `SharedProperties::wooden`): AllShapes
+        // .CUCKOO_CLOCK, a shaft out of its back; the hands are parts.
+        "cuckoo_clock" | "mysterious_cuckoo_clock" => (
+            "minecraft:stripped_spruce_wood",
+            Some(by_horizontal(&[[1., 0., 1., 15., 19., 15.]])),
+            own(&[("facing", &["north", "south", "west", "east"])]),
+        ),
         // DisplayLinkBlock (WrenchableDirectionalBlock, `SharedProperties::softMetal`): on the
         // clicked face, `powered` by its neighbours; AllShapes.DATA_GATHERER to its facing. Not
         // a full block, so no redstone conductor: glowstone's template without its light.
@@ -1312,7 +1352,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 45] = [
+pub const PARTIALS: [(&str, &str, &str); 48] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -1472,6 +1512,23 @@ pub const PARTIALS: [(&str, &str, &str); 45] = [
     (
         "part_arm_lower_claw_grip",
         "create:block/mechanical_arm/lower_claw_grip",
+        "up",
+    ),
+    // AnalogLeverRenderer's handle and CuckooClockRenderer's hands, posed by the glue from
+    // their `up` state (the model as written).
+    (
+        "part_analog_lever_handle",
+        "create:block/analog_lever/handle",
+        "up",
+    ),
+    (
+        "part_cuckoo_hour_hand",
+        "create:block/cuckoo_clock/hour_hand",
+        "up",
+    ),
+    (
+        "part_cuckoo_minute_hand",
+        "create:block/cuckoo_clock/minute_hand",
         "up",
     ),
     // EjectorRenderer's plate (`EJECTOR_TOP`), posed by the glue about its hinge.
@@ -1652,7 +1709,11 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     // powering is per state).
     if matches!(
         b.name.as_str(),
-        "redstone_contact" | "elevator_contact" | "display_link"
+        "redstone_contact"
+            | "elevator_contact"
+            | "display_link"
+            | "content_observer"
+            | "stockpile_switch"
     ) {
         props.insert("light".into(), json!(0));
     }

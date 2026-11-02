@@ -1,0 +1,61 @@
+{
+  "template": "minecraft:stripped_spruce_wood",
+  "properties": {
+    "hardness": 2.0,
+    "explosion_resistance": 2.0
+  },
+  "item": true,
+  "shapes": {
+    "property": "facing",
+    "values": {
+      "north": [
+        [
+          0.0625,
+          0.0,
+          0.0625,
+          0.9375,
+          1.1875,
+          0.9375
+        ]
+      ],
+      "south": [
+        [
+          0.0625,
+          0.0,
+          0.0625,
+          0.9375,
+          1.1875,
+          0.9375
+        ]
+      ],
+      "west": [
+        [
+          0.0625,
+          0.0,
+          0.0625,
+          0.9375,
+          1.1875,
+          0.9375
+        ]
+      ],
+      "east": [
+        [
+          0.0625,
+          0.0,
+          0.0625,
+          0.9375,
+          1.1875,
+          0.9375
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ]
+  }
+}
