@@ -1,0 +1,37 @@
+{
+  "template": "minecraft:leather_boots",
+  "components": {
+    "minecraft:max_damage": 52,
+    "minecraft:enchantable": {
+      "value": 4
+    },
+    "minecraft:repairable": {
+      "items": "create:cardboard"
+    },
+    "minecraft:equippable": {
+      "slot": "feet",
+      "equip_sound": "minecraft:item.armor.equip_leather",
+      "asset_id": "create:cardboard"
+    },
+    "minecraft:attribute_modifiers": [
+      {
+        "type": "minecraft:armor",
+        "amount": 1.0,
+        "id": "minecraft:armor.boots",
+        "operation": "add_value",
+        "slot": "feet"
+      },
+      {
+        "type": "minecraft:armor_toughness",
+        "amount": 0.0,
+        "id": "minecraft:armor.boots",
+        "operation": "add_value",
+        "slot": "feet"
+      }
+    ],
+    "minecraft:cooking_fuel": {
+      "burn_time": 1000,
+      "speed_multiplier": "minecraft:cooking/speed_default"
+    }
+  }
+}

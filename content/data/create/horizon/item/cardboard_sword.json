@@ -1,0 +1,33 @@
+{
+  "template": "minecraft:wooden_sword",
+  "max_stack_size": 1,
+  "components": {
+    "minecraft:max_damage": 1,
+    "minecraft:enchantable": {
+      "value": 1
+    },
+    "minecraft:repairable": {
+      "items": "create:cardboard"
+    },
+    "minecraft:attribute_modifiers": [
+      {
+        "type": "minecraft:attack_damage",
+        "amount": 5.0,
+        "id": "minecraft:base_attack_damage",
+        "operation": "add_value",
+        "slot": "mainhand"
+      },
+      {
+        "type": "minecraft:attack_speed",
+        "amount": 1.0,
+        "id": "minecraft:base_attack_speed",
+        "operation": "add_value",
+        "slot": "mainhand"
+      }
+    ],
+    "minecraft:cooking_fuel": {
+      "burn_time": 1000,
+      "speed_multiplier": "minecraft:cooking/speed_default"
+    }
+  }
+}
