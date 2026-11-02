@@ -427,7 +427,11 @@ pub(super) fn latch_inputs(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> (
 /// (`checkTickOnNeighbor`), which take a tick one game tick later. Nothing runs without either.
 /// The controller rail at `pos`, if one is there.
 fn controller_rail(game: &Game<'_>, pos: [i32; 3]) -> Option<create_engine::rail::Rail> {
-    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    rail_of(game.world.block(pos[0], pos[1], pos[2]).0)
+}
+
+/// A controller rail's state: its shape, way and power.
+fn rail_of(state: u32) -> Option<create_engine::rail::Rail> {
     states::index(state)?;
     with_world(|w| {
         let (b, info) = w.table.get(state)?;
@@ -438,6 +442,28 @@ fn controller_rail(game: &Game<'_>, pos: [i32; 3]) -> Option<create_engine::rail
         })
     })
     .flatten()
+}
+
+/// `ControllerRailBlock.onMinecartPass`: a cart on a controller rail going its way (or still) is
+/// set to `power / 15` of the top speed with the rail along it; one going against it, or on an
+/// unpowered rail, is pulled to the rail's centre (`decelerateCart`). The top speed is the rail's
+/// default (`getRailMaxSpeed`, 0.4); a furnace cart's push (`xPush`, `zPush`) has no writer.
+pub(super) fn minecart_pass(
+    pos: [i32; 3],
+    state: BlockStateId,
+    cart: &mut super::native_minecarts::NativeMinecart,
+) {
+    let Some(rail) = rail_of(state.0) else {
+        return;
+    };
+    let (motion, _push) = create_engine::rail::cart_motion(
+        rail,
+        pos,
+        cart.pos,
+        cart.velocity,
+        create_engine::cart::RAIL_MAX_SPEED,
+    );
+    cart.velocity = motion;
 }
 
 /// What `calculatePower` reads: the strongest signal beside a block, and controller rails.

@@ -183,6 +183,13 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_controller"
 source = "controller.rs"
 
+# Seats and turntables: what they do to the entities on them.
+[[module]]
+id = "seats"
+file = "crates/horizon-client/src/game.rs"
+name = "create_seats"
+source = "seats.rs"
+
 # Pure logic and the tables create-data compiles from Create's MIT data.
 [[crate]]
 id = "engine"
@@ -645,4 +652,43 @@ helper = "level_save.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "dimension", ty = "&str", value = "dimension" },
+]
+
+[[injection]]
+id = "entity-inside"
+hook = "entity_inside"
+hook_version = 1
+kind = "HEAD"
+helper = "entity_inside.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "dimension", ty = "&str", value = "dimension" },
+  { name = "pos", ty = "horizon_core::position::BlockPos", value = "pos" },
+  { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
+  { name = "entity", ty = "&crate::game::native_entities::NativeEntity", value = "entity" },
+]
+
+[[injection]]
+id = "minecart-pass"
+hook = "minecart_pass"
+hook_version = 1
+kind = "HEAD"
+helper = "minecart_pass.rs"
+bindings = [
+  { name = "pos", ty = "horizon_core::position::BlockPos", value = "pos" },
+  { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
+  { name = "cart", ty = "&mut crate::game::native_minecarts::NativeMinecart", value = "cart" },
+]
+
+[[injection]]
+id = "entity-mount"
+hook = "entity_mount"
+hook_version = 1
+kind = "HEAD"
+helper = "entity_mount.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "dimension", ty = "&str", value = "dimension" },
+  { name = "vehicle", ty = "u32", value = "vehicle" },
+  { name = "mounting", ty = "bool", value = "mounting" },
 ]

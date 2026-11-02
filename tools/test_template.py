@@ -68,6 +68,9 @@ def write_fixture(original, root):
         ('input_key', "horizon_client::game::native_hooks::Game<'_>::native_input_key"),
         ('level_load', "horizon_client::game::native_hooks::Game<'_>::native_level_load"),
         ('level_save', "horizon_client::game::native_hooks::Game<'_>::native_level_save"),
+        ('entity_inside', "horizon_client::game::native_hooks::Game<'_>::native_entity_inside"),
+        ('minecart_pass', "horizon_client::game::native_hooks::Game<'_>::native_minecart_pass"),
+        ('entity_mount', "horizon_client::game::native_hooks::Game<'_>::native_entity_mount"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -265,6 +268,18 @@ pub mod native_text {
     /// API 55's text line; the stand-in records what a mod set.
     pub struct TextLine { pub pose: glam::Mat4, pub text: String, pub color: u32, pub outline: u32, pub full_bright: bool }
 }
+pub mod native_entities {
+    /// API 60's entity as a native mod reads it.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct NativeEntity { pub id: u32, pub kind: String, pub pos: [f64; 3], pub velocity: [f64; 3], pub yaw: f32,
+                              pub on_ground: bool, pub vehicle: Option<u32>, pub min: [f64; 3], pub max: [f64; 3] }
+}
+pub mod native_minecarts {
+    /// API 62's minecart as a native mod reads it.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct NativeMinecart { pub id: u32, pub uuid: u128, pub kind: &'static str, pub pos: [f64; 3], pub velocity: [f64; 3],
+                                pub yaw: f32, pub riders: Vec<u32>, pub ridden: bool }
+}
 pub mod native_server {
     pub struct NativeCommand { pub usage: String, pub level: u8 }
     impl NativeCommand {
@@ -440,24 +455,106 @@ pub mod native_hooks {
         pub fn native_attack_entity(&mut self, entity: i32, kind: &str, pos: [f64; 3], canceled: &mut bool) {
             let _ = (entity, kind, pos, canceled);
         }
-        pub fn native_mobs(&self, dimension: &str) -> Vec<NativeMob> {
+        /// Entity 9 is a living mob (a cow), as is each of `ENTITIES` but players, items and shulkers' kin
+        /// that aren't mobs here.
+        pub fn native_mob(&self, dimension: &str, id: u32) -> Option<()> {
             let _ = dimension;
-            MOBS.with_borrow(|m| m.iter().map(|&(id, pos, _)| NativeMob { id, pos }).collect())
+            let mob = ENTITIES.with_borrow(|list| { list.iter().any(|e| e.id == id && e.kind != "minecraft:player" && e.kind != "minecraft:item") });
+            (id == 9 || mob).then_some(())
         }
-        pub fn native_push_mob(&mut self, dimension: &str, id: u32, velocity: [f64; 3]) -> bool {
+        pub fn native_entity_inside(&mut self, dimension: &str, pos: BlockPos, state: BlockStateId,
+                                    entity: &super::native_entities::NativeEntity) {
+            let _ = (dimension, pos, state, entity);
+        }
+        pub fn native_minecart_pass(&mut self, dimension: &str, pos: BlockPos, state: BlockStateId,
+                                    cart: &mut super::native_minecarts::NativeMinecart) {
+            let _ = (dimension, pos, state, cart);
+        }
+        pub fn native_entity_mount(&mut self, dimension: &str, rider: u32, vehicle: u32, mounting: bool, canceled: &mut bool) {
+            let _ = (dimension, rider, vehicle, mounting, canceled);
+        }
+        /// The fixture's entities (`ENTITIES`), their boxes 0.6 wide and 1.8 high at their feet.
+        pub fn native_entity(&self, dimension: &str, id: u32) -> Option<super::native_entities::NativeEntity> {
             let _ = dimension;
-            MOBS.with_borrow_mut(|mobs| {
-                for m in mobs.iter_mut() {
-                    if m.0 == id {
-                        for a in 0..3 { m.2[a] += velocity[a]; }
-                        return true;
-                    }
-                }
-                false
+            ENTITIES.with_borrow(|list| list.iter().find(|e| e.id == id).cloned()).map(boxed)
+        }
+        pub fn native_entities_in(&self, dimension: &str, min: [f64; 3], max: [f64; 3]) -> Vec<super::native_entities::NativeEntity> {
+            let _ = dimension;
+            ENTITIES.with_borrow(|list| { list.iter().cloned().map(boxed)
+                .filter(|e| (0..3).all(|a| e.min[a] < max[a] && e.max[a] > min[a])).collect() })
+        }
+        pub fn native_set_delta_movement(&mut self, dimension: &str, id: u32, velocity: [f64; 3]) -> bool {
+            let _ = dimension;
+            ENTITIES.with_borrow_mut(|list| { list.iter_mut().find(|e| e.id == id).map(|e| e.velocity = velocity).is_some() })
+        }
+        /// Recorded in `FALLS_RESET`.
+        pub fn native_reset_fall_distance(&mut self, dimension: &str, id: u32) -> bool {
+            let _ = dimension;
+            FALLS_RESET.with_borrow_mut(|f| f.push(id));
+            true
+        }
+        pub fn native_set_yaw(&mut self, dimension: &str, id: u32, yaw: f32) -> bool {
+            let _ = dimension;
+            ENTITIES.with_borrow_mut(|list| { list.iter_mut().find(|e| e.id == id).map(|e| e.yaw = yaw).is_some() })
+        }
+        /// Seats (`SEAT_ENTITIES`) from id 5000; a player rides 0.6 below one, any other its own
+        /// attachment (0 here) below; getting off puts a rider where the seat is.
+        pub fn native_spawn_seat(&mut self, dimension: &str, pos: [f64; 3], yaw: f32) -> Option<u32> {
+            let _ = (dimension, yaw);
+            Some(SEAT_ENTITIES.with_borrow_mut(|s| {
+                let id = 5000 + s.len() as u32;
+                s.push((id, pos, true));
+                id
+            }))
+        }
+        pub fn native_move_seat(&mut self, dimension: &str, id: u32, pos: [f64; 3], yaw: f32) -> bool {
+            let _ = (dimension, yaw);
+            SEAT_ENTITIES.with_borrow_mut(|s| s.iter_mut().find(|s| s.0 == id && s.2).map(|s| s.1 = pos).is_some())
+        }
+        pub fn native_remove_seat(&mut self, dimension: &str, id: u32) -> bool {
+            if !SEAT_ENTITIES.with_borrow(|s| s.iter().any(|s| s.0 == id && s.2)) {
+                return false;
+            }
+            for rider in self.native_passengers(dimension, id) {
+                self.native_stop_riding(dimension, rider);
+            }
+            SEAT_ENTITIES.with_borrow_mut(|s| s.iter_mut().filter(|s| s.0 == id).for_each(|s| s.2 = false));
+            true
+        }
+        pub fn native_start_riding(&mut self, dimension: &str, rider: u32, vehicle: u32) -> bool {
+            let _ = dimension;
+            let Some(at) = SEAT_ENTITIES.with_borrow(|s| s.iter().find(|s| s.0 == vehicle && s.2).map(|s| s.1)) else {
+                return false;
+            };
+            ENTITIES.with_borrow_mut(|e| {
+                let Some(e) = e.iter_mut().find(|e| e.id == rider && e.vehicle.is_none()) else { return false };
+                let below = if e.kind == "minecraft:player" { 0.6 } else { 0.0 };
+                e.vehicle = Some(vehicle);
+                e.pos = [at[0], at[1] - below, at[2]];
+                e.velocity = [0.0; 3];
+                true
             })
         }
-        /// Entity 9 is a living mob (a cow).
-        pub fn native_mob(&self, dimension: &str, id: u32) -> Option<()> { let _ = dimension; (id == 9).then_some(()) }
+        pub fn native_stop_riding(&mut self, dimension: &str, rider: u32) -> bool {
+            let _ = dimension;
+            ENTITIES.with_borrow_mut(|e| {
+                let Some(e) = e.iter_mut().find(|e| e.id == rider) else { return false };
+                let Some(v) = e.vehicle.take() else { return false };
+                if let Some(at) = SEAT_ENTITIES.with_borrow(|s| s.iter().find(|s| s.0 == v).map(|s| s.1)) {
+                    e.pos = at;
+                }
+                true
+            })
+        }
+        /// Players first, then the others.
+        pub fn native_passengers(&self, dimension: &str, vehicle: u32) -> Vec<u32> {
+            let _ = dimension;
+            ENTITIES.with_borrow(|e| {
+                let on: Vec<_> = e.iter().filter(|e| e.vehicle == Some(vehicle)).collect();
+                on.iter().filter(|e| e.kind == "minecraft:player").chain(on.iter().filter(|e| e.kind != "minecraft:player"))
+                    .map(|e| e.id).collect()
+            })
+        }
         pub fn native_text_width(&self, text: &str) -> f32 { text.len() as f32 * 6.0 }
         pub fn native_fill(&self, batch: &mut horizon_client::hud::HudBatch, rect: [f32; 4], argb: u32) {
             let _ = (batch, rect, argb);
@@ -567,8 +664,17 @@ impl World {
     pub fn loaded(&self, x: i32, z: i32) -> bool { let _ = (x, z); true }
 }
 pub struct Hit { pub pos: [i32; 3], pub point: [f64; 3], pub face: [i32; 3] }
-/// API 37's mob as the nozzle reads it.
-pub struct NativeMob { pub id: u32, pub pos: [f64; 3] }
+/// An entity of the fixture with its box: 0.6 wide, 1.8 high, at its feet.
+pub fn boxed(mut e: native_entities::NativeEntity) -> native_entities::NativeEntity {
+    e.min = [e.pos[0] - 0.3, e.pos[1], e.pos[2] - 0.3];
+    e.max = [e.pos[0] + 0.3, e.pos[1] + 1.8, e.pos[2] + 0.3];
+    e
+}
+/// A fixture entity of `kind` standing at `pos`.
+pub fn fixture_entity(id: u32, kind: &str, pos: [f64; 3]) -> native_entities::NativeEntity {
+    boxed(native_entities::NativeEntity { id, kind: kind.into(), pos, velocity: [0.0; 3], yaw: 0.0, on_ground: true,
+                                          vehicle: None, min: [0.0; 3], max: [0.0; 3] })
+}
 pub struct Player { pub exhaustion: f32 }
 impl Player { pub fn cause_food_exhaustion(&mut self, amount: f32) { self.exhaustion += amount; } }
 pub struct Game<'a> {
@@ -604,9 +710,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 66) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 71) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 66;
+        let empty = state.0 == 0 || state.0 == 71;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -615,10 +721,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 66 is a water source.
+    /// State 71 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 66 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 71 { FluidKind::Water } else { FluidKind::Empty })
     }
     /// `Block.updateFromNeighbourShapes`: the fixture's states keep their shape.
     pub fn update_from_neighbour_shapes(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos,
@@ -654,8 +760,11 @@ pub struct Ticks;
 thread_local! {
     /// The world text set and cleared (API 55), as `set [x, y, z] a|b` and `clear`.
     pub static TEXTS: std::cell::RefCell<Vec<String>> = Default::default();
-    /// The level's mobs (id, position, motion), for the nozzle.
-    pub static MOBS: std::cell::RefCell<Vec<(u32, [f64; 3], [f64; 3])>> = Default::default();
+    /// The level's entities (API 60), the entities whose fall was reset, and the seats spawned
+    /// (id, position, still there).
+    pub static ENTITIES: std::cell::RefCell<Vec<native_entities::NativeEntity>> = Default::default();
+    pub static FALLS_RESET: std::cell::RefCell<Vec<u32>> = Default::default();
+    pub static SEAT_ENTITIES: std::cell::RefCell<Vec<(u32, [f64; 3], bool)>> = Default::default();
     /// Blocks giving a signal of 15 toward every side, for the latch test.
     pub static SIGNALS: std::cell::RefCell<std::collections::HashSet<[i32; 3]>> = Default::default();
     /// Where the acting player stands, and the keys held down (`native_is_key_down`).
@@ -682,6 +791,145 @@ impl Behaviours {
         let _ = (level, ticks, direction);
         if SIGNALS.with_borrow(|s| s.contains(&[pos.x, pos.y, pos.z])) { 15 } else { 0 }
     }
+}
+/// Seats, turntables, a fan pushing a player and a controller rail, at x and z 1400 and up.
+#[cfg(test)]
+fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
+    use horizon_client::items::ItemStack;
+    let dim = "minecraft:overworld";
+    let place = |game: &mut Game<'_>, pos: [i32; 3], state: u32| {
+        let old = game.world.blocks.insert(pos, state).unwrap_or(0);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] },
+            BlockStateId(old), BlockStateId(state));
+    };
+    let get = |id: u32| ENTITIES.with_borrow(|list| list.iter().find(|e| e.id == id).cloned().unwrap());
+    let set = |id: u32, change: &dyn Fn(&mut native_entities::NativeEntity)| {
+        ENTITIES.with_borrow_mut(|list| list.iter_mut().filter(|e| e.id == id).for_each(|e| change(e)))
+    };
+    let seat_of = |id: u32| SEAT_ENTITIES.with_borrow(|s| s.iter().find(|s| s.0 == id).copied().unwrap());
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    let click = |game: &mut Game<'_>, pos: [i32; 3]| {
+        let mut canceled = false;
+        game.native_right_click_block(pos, [0, 1, 0], &mut canceled);
+        canceled
+    };
+    game.keys.clear();
+    game.selected = 0;
+    game.hand = horizon_client::first_person::Hand::Main;
+    game.inventory[0] = None;
+    // Seats are Create's 16 dyed blocks.
+    assert!(create_engine::dye::SEATS.iter().all(|b| b.name().ends_with("_seat")));
+    // A white seat at (1400, 0, 1400) clicked by the player beside it: at the level's tick they
+    // sit on a seat at its middle, 1/16 above the top of Create's 0.35 high seat entity, their
+    // feet its 0.6 below; a second click (a player sits there) passes.
+    place(game, [1400, 0, 1400], 66);
+    ENTITIES.with_borrow_mut(|e| e.push(fixture_entity(7, "minecraft:player", [1400.5, 0.0, 1401.5])));
+    PLAYER_AT.set([1400.5, 0.0, 1401.5]);
+    assert!(click(game, [1400, 0, 1400]), "the click is the seat's");
+    game.native_level_tick_post(dim);
+    let seat = get(7).vehicle.expect("the player sat down");
+    let (_, at, there) = seat_of(seat);
+    assert!(there && at[0] == 1400.5 && at[2] == 1400.5, "{at:?}");
+    assert!(close(at[1], 0.0625 + f64::from(0.35f32)), "{at:?}");
+    assert!(close(get(7).pos[1], at[1] - 0.6));
+    assert!(!click(game, [1400, 0, 1400]), "a player sits there: passed");
+    // Sneaking off: the seat goes to Create's dismount point (its box's top, half a block up) so
+    // the player gets off there; riderless, it goes at the next tick.
+    let mut canceled = false;
+    game.native_entity_mount(dim, 7, seat, false, &mut canceled);
+    assert!(!canceled);
+    game.native_stop_riding(dim, 7);
+    assert!(close(get(7).pos[1], 0.675), "{:?}", get(7).pos);
+    game.native_level_tick_post(dim);
+    assert!(!seat_of(seat).2, "riderless: gone");
+    // A pig landing on a seat at (1410, 0, 1410) sits, a shulker on another doesn't; sneaking, the
+    // player's click passes.
+    place(game, [1410, 0, 1410], 66);
+    place(game, [1412, 0, 1410], 66);
+    ENTITIES.with_borrow_mut(|e| {
+        e.push(fixture_entity(50, "minecraft:pig", [1410.5, 0.5, 1410.5]));
+        e.push(fixture_entity(51, "minecraft:shulker", [1412.5, 0.5, 1410.5]));
+    });
+    game.native_entity_inside(dim, BlockPos { x: 1410, y: 0, z: 1410 }, BlockStateId(66), &get(50));
+    game.native_entity_inside(dim, BlockPos { x: 1412, y: 0, z: 1410 }, BlockStateId(66), &get(51));
+    let seat = get(50).vehicle.expect("the pig sat down");
+    assert!(close(seat_of(seat).1[1], 0.0625 + f64::from(0.35f32)));
+    assert_eq!(get(51).vehicle, None, "shulkers don't sit");
+    game.keys.insert(winit::keyboard::KeyCode::ShiftLeft);
+    assert!(!click(game, [1412, 0, 1410]));
+    game.keys.clear();
+    // A red dye recolours the pig's seat; it keeps its pig.
+    game.inventory[0] = Some(ItemStack::new("minecraft:red_dye", 1));
+    assert!(click(game, [1410, 0, 1410]));
+    assert_eq!(game.world.blocks.get(&[1410, 0, 1410]), Some(&67));
+    game.inventory[0] = None;
+    game.native_level_tick_post(dim);
+    assert_eq!(get(50).vehicle, Some(seat));
+    // The player's click takes the seat from the pig.
+    set(7, &|e| e.pos = [1410.5, 0.0, 1411.5]);
+    PLAYER_AT.set([1410.5, 0.0, 1411.5]);
+    assert!(click(game, [1410, 0, 1410]));
+    game.native_level_tick_post(dim);
+    assert_eq!(get(7).vehicle, Some(seat));
+    assert_eq!(get(50).vehicle, None);
+    // Broken, the seat lets the player off at Create's dismount point and goes.
+    place(game, [1410, 0, 1410], 0);
+    game.native_level_tick_post(dim);
+    assert_eq!(get(7).vehicle, None);
+    assert!(close(get(7).pos[1], 0.675) && !seat_of(seat).2);
+    ENTITIES.with_borrow_mut(Vec::clear);
+    // A turntable at (1420, 0, 1420) on a creative motor facing up: a pig standing on it turns by
+    // 3/10 of its speed a tick (not while jumping); a player at its middle by 2/3 of it, halved
+    // over a tick's frames; a player on its edge is carried round it.
+    place(game, [1420, -1, 1420], 69);
+    place(game, [1420, 0, 1420], 68);
+    game.native_level_tick_post(dim);
+    game.native_level_tick_post(dim);
+    let table = BlockPos { x: 1420, y: 0, z: 1420 };
+    ENTITIES.with_borrow_mut(|e| {
+        e.push(fixture_entity(52, "minecraft:pig", [1420.5, 0.5, 1420.5]));
+        e.push(fixture_entity(7, "minecraft:player", [1420.5, 0.5, 1420.5]));
+    });
+    game.native_entity_inside(dim, table, BlockStateId(68), &get(52));
+    let turned = get(52).yaw;
+    assert!(close(f64::from(turned.abs()), f64::from(create_engine::turntable::mob_turn(16.0))), "{turned}");
+    set(52, &|e| e.velocity = [0.0, 0.42, 0.0]);
+    game.native_entity_inside(dim, table, BlockStateId(68), &get(52));
+    assert_eq!(get(52).yaw, turned, "jumping: not turned");
+    game.native_entity_inside(dim, table, BlockStateId(68), &get(7));
+    let player = get(7).yaw;
+    assert!(close(f64::from(player.abs()), 16.0 / 3.0) && player.signum() == turned.signum(), "{player}");
+    assert_eq!(get(7).velocity, [0.0; 3], "its middle on the turntable: not carried");
+    set(7, &|e| { e.pos = [1421.2, 0.5, 1420.5]; e.yaw = 0.0; });
+    game.native_entity_inside(dim, table, BlockStateId(68), &get(7));
+    let v = get(7).velocity;
+    let expected = create_engine::turntable::carry([1420, 0, 1420], [1421.2, 0.5, 1420.5], -turned);
+    assert!(v != [0.0; 3] && (0..3).all(|a| close(v[a], expected[a])), "{v:?} {expected:?}");
+    assert_eq!(get(7).yaw, 0.0, "off its middle: not turned");
+    ENTITIES.with_borrow_mut(Vec::clear);
+    // An encased fan facing east at (1431, 0, 1430), its motor behind: a player in its current
+    // is pushed along x only and forgets their fall.
+    place(game, [1430, 0, 1430], 3);
+    place(game, [1431, 0, 1430], 19);
+    ENTITIES.with_borrow_mut(|e| e.push(fixture_entity(7, "minecraft:player", [1434.5, 0.0, 1430.5])));
+    FALLS_RESET.with_borrow_mut(Vec::clear);
+    for _ in 0..8 { game.native_level_tick_post(dim); }
+    let v = get(7).velocity;
+    assert!(v[0] != 0.0 && v[1] == 0.0 && v[2] == 0.0, "{v:?}");
+    assert!(FALLS_RESET.with_borrow(|f| f.contains(&7)));
+    ENTITIES.with_borrow_mut(Vec::clear);
+    // A controller rail along x at power 15 pointing west, (1440, 0, 1440): a still cart leaves
+    // west at the rail's top speed; one going east, against it, is pulled to the rail's centre.
+    place(game, [1440, 0, 1440], 70);
+    let mut cart = native_minecarts::NativeMinecart { id: 90, uuid: 1, kind: "minecraft:minecart",
+        pos: [1440.5, 0.0625, 1440.5], velocity: [0.0; 3], yaw: 0.0, riders: vec![], ridden: false };
+    let rail = BlockPos { x: 1440, y: 0, z: 1440 };
+    game.native_minecart_pass(dim, rail, BlockStateId(70), &mut cart);
+    assert_eq!(cart.velocity, [-0.4, 0.0, 0.0]);
+    cart.pos[0] = 1440.9;
+    cart.velocity = [0.2, 0.0, 0.0];
+    game.native_minecart_pass(dim, rail, BlockStateId(70), &mut cart);
+    assert!(close(cart.velocity[0], -0.4 / 16.0) && cart.velocity[1] == 0.0, "{:?}", cart.velocity);
 }
 #[test] fn every_hook_reaches_the_engine() {
     use horizon_world::registry::BlockState;
@@ -841,7 +1089,17 @@ impl Behaviours {
     states.push(BlockState { name: "create:lectern_controller".into(), properties: BTreeMap::from([
         ("facing".to_owned(), "north".to_owned()), ("has_book".to_owned(), "true".to_owned()),
         ("powered".to_owned(), "false".to_owned())]) });
-    // 66: a water source; 67: a target block at power 7; 68: a lectern facing north, no book.
+    // 66, 67: a white and a red seat; 68: a turntable; 69: a creative motor facing up; 70: a
+    // controller rail along x at power 15, pointing west.
+    for colour in ["white", "red"] {
+        states.push(BlockState { name: format!("create:{colour}_seat"), properties: props("waterlogged", "false") });
+    }
+    states.push(BlockState { name: "create:turntable".into(), properties: props("axis", "y") });
+    states.push(BlockState { name: "create:creative_motor".into(), properties: props("facing", "up") });
+    states.push(BlockState { name: "create:controller_rail".into(), properties: BTreeMap::from([
+        ("backwards".to_owned(), "false".to_owned()), ("power".to_owned(), "15".to_owned()),
+        ("shape".to_owned(), "east_west".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
+    // 71: a water source; 72: a target block at power 7; 73: a lectern facing north, no book.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     states.push(BlockState { name: "minecraft:lectern".into(), properties: BTreeMap::from([
@@ -1123,7 +1381,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 66), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 71), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1212,7 +1470,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 67);
+    game.world.blocks.insert([79, 0, 80], 72);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1815,9 +2073,9 @@ impl Behaviours {
         assert!(matches!(saved.get(&key.into()), Some(horizon_world::nbt::Tag::List(l)) if l.len() == 1), "{key}");
     }
     // A nozzle on the front of a fan facing east at (1101, 0, 1100), its motor behind: placed
-    // there from its item it stays (anywhere else it is refused); a mob 1.75 blocks east of it is
-    // caught at its search (every sixth tick) and pushed or pulled along x only. With the fan
-    // gone the nozzle breaks.
+    // there from its item it stays (anywhere else it is refused); a zombie 1.75 blocks east of it is
+    // caught at its search (every sixth tick) and pushed or pulled along x only, its fall
+    // forgotten. With the fan gone the nozzle breaks.
     for (pos, state) in [([1100, 0, 1100], 3), ([1101, 0, 1100], 19)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1837,10 +2095,12 @@ impl Behaviours {
     game.native_place_block(&nozzle, [1102, 0, 1100], BlockStateId(63));
     assert_eq!(game.world.blocks.get(&[1102, 0, 1100]), Some(&63), "on the fan's front");
     level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1102, y: 0, z: 1100 }, BlockStateId(0), BlockStateId(63));
-    MOBS.with_borrow_mut(|m| m.push((41, [1104.25, 0.5, 1100.5], [0.0; 3])));
+    ENTITIES.with_borrow_mut(|e| e.push(fixture_entity(41, "minecraft:zombie", [1104.25, 0.5, 1100.5])));
     for _ in 0..8 { game.native_level_tick_post("minecraft:overworld"); }
-    let pushed = MOBS.with_borrow(|m| m[0].2);
+    let pushed = ENTITIES.with_borrow(|e| e[0].velocity);
     assert!(pushed[0] != 0.0 && pushed[1] == 0.0 && pushed[2] == 0.0, "{pushed:?}");
+    assert!(FALLS_RESET.with_borrow(|f| f.contains(&41)));
+    ENTITIES.with_borrow_mut(Vec::clear);
     game.world.blocks.insert([1101, 0, 1100], 1);
     level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1101, y: 0, z: 1100 }, BlockStateId(19), BlockStateId(1));
     level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 1102, y: 0, z: 1100 }, BlockStateId(63));
@@ -1970,13 +2230,13 @@ impl Behaviours {
     // The controller on a lectern (1210, 0, 1200): a lectern controller, read by comparators as
     // 15. Used by a player at it, W powers the receiver from the lectern's controller; walking
     // away stops it; sneaking takes the lectern's controller off (dropped) and leaves a lectern.
-    game.world.blocks.insert([1210, 0, 1200], 68);
+    game.world.blocks.insert([1210, 0, 1200], 73);
     let mut claimed = false;
     game.native_use_item_on(&controller, [1210, 0, 1200], [0, 1, 0], &mut claimed);
     assert!(claimed);
     assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&65));
     assert!(game.inventory[0].is_none(), "the controller went on the lectern");
-    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1210, y: 0, z: 1200 }, BlockStateId(68), BlockStateId(65));
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1210, y: 0, z: 1200 }, BlockStateId(73), BlockStateId(65));
     assert_eq!(comparator(&game, [1210, 0, 1200], 65), 15);
     PLAYER_AT.set([1210.5, 0.0, 1201.2]);
     let from = game.sent.len();
@@ -2005,9 +2265,10 @@ impl Behaviours {
     game.native_right_click_block([1210, 0, 1200], [0, 1, 0], &mut canceled);
     game.keys.clear();
     assert!(canceled);
-    assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&68), "a lectern again");
+    assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&73), "a lectern again");
     assert!(create_contraption_body::DROPPED.with_borrow(|d| d.iter().any(|x| x.1 == "create:linked_controller")));
     PLAYER_AT.set([0.5, 2.0, 0.5]);
+    seats_turntables_fans_and_rails(&mut game, &level);
     // Logistics networks across restarts: the world's save writes network "Base" (its link at
     // (1000, 1, 1000), owned by the player who linked it) to `data/create/logistics_networks.dat`
     // once; unchanged, a later save writes nothing. Forgotten and read back as after a restart,
