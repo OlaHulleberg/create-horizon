@@ -819,7 +819,7 @@ running).
   (`board_texts`) draw their text through `native_text_set`, set again only when what they show changes; signs
   written by display links are vanilla's and draw themselves. Comparators (was blocked; done with API 56): see
   Phase 7.
-- Entities, rails and riding (were blocked; done with Horizon API 60 to 64, pinned at `8d9e491eb`): seats
+- Entities, rails and riding (were blocked; done with Horizon API 60 to 65, pinned at `da38364c1`): seats
   (`native_entity_inside`, `native_spawn_seat`, `native_start_riding`, `native_entity_mount`), turntables turning
   and carrying what stands on them (`native_set_yaw`, `native_set_delta_movement`), the encased fan and the nozzle
   pushing every entity and resetting its fall, the controller rail as a rail (`rail`, `native_minecart_pass`).
