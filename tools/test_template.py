@@ -1726,7 +1726,7 @@ impl Behaviours {
     // its comparator reads 15.
     game.native_perform_command(&player, "create_debug requester 1004 0 1000 Home all gold_ingot 5", &mut ran);
     assert_eq!(game.said.last().map(String::as_str), Some("requester to \\"Home\\""));
-    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 1004, y: 0, z: 1000 }, BlockStateId(61));
+    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 1004, y: 0, z: 1000 }, BlockStateId(56));
     game.native_level_tick_post("minecraft:overworld");
     game.native_perform_command(&player, "create_debug packages 1000 0 1000", &mut ran);
     assert!(game.said.last().is_some_and(|l| l.contains("queued=1")), "{:?}", game.said.last());
