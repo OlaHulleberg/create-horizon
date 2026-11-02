@@ -62,6 +62,8 @@ def write_fixture(original, root):
         ('hurt_enemy', "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy"),
         ('screen', "horizon_client::game::native_hooks::Game<'_>::native_screen"),
         ('menu_closed', "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"),
+        ('left_click_block', "horizon_client::game::native_hooks::Game<'_>::native_left_click_block"),
+        ('interact_entity', "horizon_client::game::native_hooks::Game<'_>::native_interact_entity"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -412,6 +414,19 @@ pub mod native_hooks {
         pub fn native_destroy_block(&mut self, pos: [i32; 3], state: BlockStateId, canceled: &mut bool) {
             let _ = (pos, state, canceled);
         }
+        pub fn native_left_click_block(&mut self, pos: [i32; 3], face: [i32; 3], state: BlockStateId, canceled: &mut bool) {
+            let _ = (pos, face, state, canceled);
+        }
+        pub fn native_interact_entity(&mut self, entity: i32, kind: &str,
+                                      stack: Option<&horizon_client::items::ItemStack>, claimed: &mut bool) {
+            let _ = (entity, kind, stack, claimed);
+        }
+        /// The fixture records the mobs a native mod removed.
+        pub fn native_remove_mob(&mut self, dimension: &str, id: u32) -> bool {
+            let _ = dimension;
+            self.said.push(format!("removed mob {id}"));
+            true
+        }
         pub fn native_hurt_enemy(&mut self, stack: &horizon_client::items::ItemStack, entity: u32, kind: &str) {
             let _ = (stack, entity, kind);
         }
@@ -542,9 +557,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 45) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 49) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 45;
+        let empty = state.0 == 0 || state.0 == 49;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -553,10 +568,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 45 is a water source.
+    /// State 49 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 45 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 49 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -710,7 +725,16 @@ impl Behaviours {
     states.push(BlockState { name: "create:display_board".into(), properties: BTreeMap::from([
         ("down".to_owned(), "false".to_owned()), ("facing".to_owned(), "south".to_owned()),
         ("up".to_owned(), "false".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
-    // 45: a water source; 46: a target block at power 7.
+    // 45: a flywheel on x; 46, 47: a desk bell facing up, at rest and pressed; 48: a creative
+    // crate.
+    states.push(BlockState { name: "create:flywheel".into(), properties: props("axis", "x") });
+    for powered in ["false", "true"] {
+        states.push(BlockState { name: "create:desk_bell".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), "up".to_owned()), ("powered".to_owned(), powered.to_owned()),
+            ("waterlogged".to_owned(), "false".to_owned())]) });
+    }
+    states.push(BlockState { name: "create:creative_crate".into(), properties: props("facing", "down") });
+    // 49: a water source; 50: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
@@ -988,7 +1012,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 45), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 49), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1077,7 +1101,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 46);
+    game.world.blocks.insert([79, 0, 80], 50);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1399,6 +1423,50 @@ impl Behaviours {
     game.native_net_from_server("create:display", &create_engine::display::encode(&[forget]));
     game.native_tick();
     assert_eq!(TEXTS.with_borrow(|t| t.last().cloned()).as_deref(), Some("clear"));
+    // A motor facing east at (700, 0, 700) turns a flywheel on x beside it: no stress, 16 rpm.
+    for (pos, state) in [([700, 0, 700], 3), ([701, 0, 700], 45)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
+    }
+    game.native_level_tick_post("minecraft:overworld");
+    assert_eq!(create::with_world(|w| w.speed(0, [701, 0, 700])), Some(Some(16.0)), "the flywheel turns");
+    // A desk bell at (704, 0, 700): a click with an empty hand presses it (`powered`), it powers
+    // the block below strongly while pressed, and lets go 20 ticks later.
+    game.world.blocks.insert([704, 0, 700], 46);
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 704, y: 0, z: 700 }, BlockStateId(0), BlockStateId(46));
+    game.inventory[0] = None;
+    let mut canceled = false;
+    game.native_right_click_block([704, 0, 700], [0, 1, 0], &mut canceled);
+    assert!(canceled, "the bell takes the click");
+    assert!(game.said.iter().any(|l| l == "set [704, 0, 700] powered=true"));
+    let mut signal = 0;
+    level.native_block_signal(LevelDimension::Overworld, BlockPos { x: 704, y: 0, z: 700 }, BlockStateId(47),
+        horizon_core::geometry::Direction::Down, true, &mut signal);
+    assert_eq!(signal, 15, "strong into the block below");
+    let mut side = 0;
+    level.native_block_signal(LevelDimension::Overworld, BlockPos { x: 704, y: 0, z: 700 }, BlockStateId(47),
+        horizon_core::geometry::Direction::North, true, &mut side);
+    assert_eq!(side, 0, "not strong sideways");
+    game.world.game_time += 20;
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(game.said.iter().any(|l| l == "set [704, 0, 700] powered=false"), "let go after 20 ticks");
+    // A creative crate at (706, 0, 700): stone clicked on its top is its supply; it takes
+    // whatever is put in and gives stone, a stack at a time.
+    game.world.blocks.insert([706, 0, 700], 48);
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 706, y: 0, z: 700 }, BlockStateId(0), BlockStateId(48));
+    game.inventory[0] = Some(horizon_client::items::ItemStack::new("minecraft:stone", 1));
+    game.aim = Some([706, 0, 700]);
+    game.aim_point = Some([706.5, 0.875, 700.5]);
+    let mut canceled = false;
+    game.native_right_click_block([706, 0, 700], [0, 1, 0], &mut canceled);
+    assert!(canceled);
+    assert_eq!(create_decor::crate_supply(&game, 0, [706, 0, 700]), Some(Some("minecraft:stone".to_owned())));
+    let room = create_logistics::insert_room(&game, 0, [706, 0, 700], horizon_core::geometry::Direction::Up,
+        &horizon_client::items::ItemStack::new("minecraft:dirt", 40));
+    assert_eq!(room, Some(40), "it takes everything");
+    let taken = create_decor::crate_extract(&game, Some("minecraft:stone"), |_| true, 64);
+    assert_eq!(taken.map(|s| (s.item.to_string(), s.count)), Some(("minecraft:stone".to_owned(), 64)));
+    game.aim = None;
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

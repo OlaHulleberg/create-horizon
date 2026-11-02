@@ -9,4 +9,5 @@ fn place_block(
     crate::game::create::place_block(game, pos, state);
     crate::game::create_schematics::place_block(game, pos, state);
     crate::game::create_equipment::place_block(game, stack, pos, state);
+    crate::game::create_decor::place_block(game, stack, pos, state);
 }
