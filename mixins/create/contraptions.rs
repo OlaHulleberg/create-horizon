@@ -2,6 +2,7 @@
 // moving blocks as one, and their save data. A sibling of the `create` module (`runtime.rs`).
 use super::Game;
 use super::create::*;
+use super::create_actors as actors;
 use super::create_logistics::*;
 use super::create_processing::*;
 use super::create_redstone::*;
@@ -219,7 +220,8 @@ pub(super) fn contraption_found(
             | "minecraft:repeating_command_block"
             | "minecraft:structure_block"
             | "minecraft:jigsaw"
-    ) || game.world.block_entities.contains_key(&(p[0], p[1], p[2]));
+    ) || (game.world.block_entities.contains_key(&(p[0], p[1], p[2]))
+        && !actors::carries_storage(game, p));
     Some(Found {
         state: id.0,
         sail_facing,
@@ -228,6 +230,8 @@ pub(super) fn contraption_found(
             "minecraft:honey_block" => Some(Sticky::Honey),
             _ => None,
         },
+        glued: dimension_index(game.dim.id()).map_or(0, |dim| actors::glued_at(dim, p)),
+        sticker: actors::sticker_facing(game, id),
         movable: !unmovable,
         // LinearChassisBlock: its kind, axis and glued ends.
         chassis: matches!(
@@ -605,6 +609,7 @@ pub(super) fn tick_gantries(game: &mut Game<'_>, dimension: &str, dim: usize) {
         let Ok(blocks) = gathered else {
             continue;
         };
+        let carried = actors::carry(game, dimension, dim, c, c, &blocks, |p| p == shaft);
         if let Some(air) = game.pack.assets.registry.default_state("minecraft:air") {
             for (o, _) in &blocks {
                 let p = [c[0] + o[0], c[1] + o[1], c[2] + o[2]];
@@ -624,12 +629,29 @@ pub(super) fn tick_gantries(game: &mut Game<'_>, dimension: &str, dim: usize) {
                 offset: 0.0,
                 per_tick: 0.0,
                 blocks,
+                carried,
             })
         });
     }
     let list = with_world(|w| std::mem::take(&mut w.dims[dim].gantries)).unwrap_or_default();
     let mut keep = Vec::new();
     for mut g in list {
+        // Its actors first; while one stalls, the gantry holds (`isStalled`).
+        if !g.carried.actors.is_empty() {
+            let o = g.shaft_facing.offset();
+            let at =
+                [0, 1, 2].map(|a| f64::from(g.start[a]) + f64::from(o[a]) * f64::from(g.offset));
+            let stalled = actors::tick_actors(game, dimension, dim, g.start, &mut g.carried, at);
+            g.carried.stalled = stalled;
+            if stalled {
+                if g.per_tick != 0.0 {
+                    g.per_tick = 0.0;
+                    send_gantry(game, dimension, &g, false);
+                }
+                keep.push(g);
+                continue;
+            }
+        }
         let sp = g.shaft_pos();
         let shaft = gantry_shaft(game, sp).map(|(facing, part, powered)| Shaft {
             facing,
@@ -675,6 +697,7 @@ pub(super) fn tick_gantries(game: &mut Game<'_>, dimension: &str, dim: usize) {
                         ));
                     }
                 }
+                actors::release(game, dimension, dim, g.start, at, &mut g.carried);
                 send_gantry(game, dimension, &g, true);
             }
         }
@@ -765,9 +788,14 @@ pub(super) fn tick_pistons(game: &mut Game<'_>, dimension: &str, dim: usize) {
         else {
             continue;
         };
+        // Its actors first (the contraption entity ticks before the piston's block entity);
+        // while one stalls, the piston holds (`isStalled`).
+        let stalled = tick_piston_actors(game, dimension, dim, pos, facing);
         let end = with_world(|w| {
             let m = w.dims[dim].pistons.get_mut(&pos)?;
-            m.offset += create_engine::piston::movement(speed, facing, m.offset, m.range);
+            if !stalled {
+                m.offset += create_engine::piston::movement(speed, facing, m.offset, m.range);
+            }
             Some(m.offset <= 0.0 || m.offset >= m.range as f32)
         })
         .flatten();
@@ -775,6 +803,44 @@ pub(super) fn tick_pistons(game: &mut Game<'_>, dimension: &str, dim: usize) {
             disassemble_piston(game, dimension, dim, pos);
         }
     }
+}
+
+/// A moving piston's actors at its offset now; clients hear when it stalls or moves on. Only
+/// pistons carrying actors do anything.
+fn tick_piston_actors(
+    game: &mut Game<'_>,
+    dimension: &str,
+    dim: usize,
+    pos: [i32; 3],
+    facing: Dir,
+) -> bool {
+    let Some((mut carried, anchor, offset)) = with_world(|w| {
+        let m = w.dims[dim].pistons.get_mut(&pos)?;
+        if m.carried.actors.is_empty() {
+            return None;
+        }
+        Some((std::mem::take(&mut m.carried), m.anchor, m.offset))
+    })
+    .flatten() else {
+        return false;
+    };
+    let o = facing.offset();
+    let at = [0, 1, 2].map(|a| f64::from(anchor[a]) + f64::from(o[a]) * f64::from(offset));
+    let stalled = actors::tick_actors(game, dimension, dim, pos, &mut carried, at);
+    let changed = stalled != carried.stalled;
+    carried.stalled = stalled;
+    let back = with_world(|w| match w.dims[dim].pistons.get_mut(&pos) {
+        Some(m) => {
+            m.carried = carried;
+            true
+        }
+        None => false,
+    })
+    .unwrap_or(false);
+    if back && changed {
+        send_piston(game, dimension, dim, pos);
+    }
+    stalled
 }
 
 /// `MechanicalPistonBlockEntity.assemble`: the head, poles and structure leave the world.
@@ -855,7 +921,15 @@ pub(super) fn assemble_piston(
     for (off, s) in &structure {
         blocks.push(([0, 1, 2].map(|a| off[a] - o[a] * c.progress), *s));
     }
-    // Off the world: everything but the piston itself.
+    // What rides with it (actors, storage, glue; offsets as the blocks', from the anchor at
+    // offset 0), then off the world: everything but the piston.
+    let origin = piston_world(c.anchor, [0; 3], facing, c.progress);
+    let local: Vec<([i32; 3], u32)> = blocks
+        .iter()
+        .filter(|(l, _)| piston_world(c.anchor, *l, facing, c.progress) != pos)
+        .copied()
+        .collect();
+    let carried = actors::carry(game, dimension, dim, pos, origin, &local, |p| p == pos);
     let air = BlockStateId(0);
     for (l, _) in &blocks {
         let p = piston_world(c.anchor, *l, facing, c.progress);
@@ -872,6 +946,7 @@ pub(super) fn assemble_piston(
                 blocks,
                 offset: c.progress as f32,
                 range: c.range,
+                carried,
             },
         )
     });
@@ -889,6 +964,7 @@ pub(super) fn disassemble_piston(game: &mut Game<'_>, dimension: &str, dim: usiz
     else {
         return;
     };
+    let mut m = m;
     let grid = m.offset.round() as i32;
     for (l, s) in &m.blocks {
         let p = piston_world(m.anchor, *l, facing, grid);
@@ -907,6 +983,9 @@ pub(super) fn disassemble_piston(game: &mut Game<'_>, dimension: &str, dim: usiz
         "state",
         if grid > 0 { "extended" } else { "retracted" },
     );
+    let o = facing.offset();
+    let origin = [0, 1, 2].map(|a| m.anchor[a] + o[a] * grid);
+    actors::release(game, dimension, dim, pos, origin, &mut m.carried);
     let players = players_in(game, dimension);
     let mut msg = Vec::new();
     for v in pos {
@@ -929,7 +1008,12 @@ pub(super) fn send_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos:
         return;
     };
     let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
-    let per_tick = create_engine::piston::movement(speed, facing, m.offset, m.range);
+    // A stalled contraption holds still (`ContraptionStallPacket`).
+    let per_tick = if m.carried.stalled {
+        0.0
+    } else {
+        create_engine::piston::movement(speed, facing, m.offset, m.range)
+    };
     let mut msg = Vec::new();
     for v in pos.iter().chain(m.anchor.iter()) {
         msg.extend_from_slice(&v.to_le_bytes());

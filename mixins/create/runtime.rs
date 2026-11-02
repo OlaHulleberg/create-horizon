@@ -76,6 +76,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
         | WorldPhase::WorldCloseFailed => {
             WORLD.with_borrow_mut(|w| *w = None);
             RECIPES.with_borrow_mut(|r| *r = None);
+            super::create_actors::forget();
             states::clear_range();
         }
     }
@@ -145,6 +146,7 @@ pub(super) fn chunk_load(
     let diodes = diodes_from_nbt(Game::native_chunk_data(chunk, "create"));
     let deployers = deployers_from_nbt(Game::native_chunk_data(chunk, "create"));
     let lifts = lifts_from_nbt(game, Game::native_chunk_data(chunk, "create_lifts"));
+    super::create_actors::glue_chunk_load(dim, Game::native_chunk_data(chunk, "create_glue"));
     let brass: Vec<([i32; 3], create_engine::tunnel::Brass)> = {
         use horizon_world::nbt::Tag;
         match Game::native_chunk_data(chunk, "create").and_then(|d| d.get(&"brass".into())) {
@@ -248,6 +250,7 @@ pub(super) fn chunk_load(
 pub(super) fn chunk_unload(dimension: &str, chunk: &horizon_client::chunk::Chunk) {
     if let Some(dim) = dimension_index(dimension) {
         with_world(|w| w.column_unloaded(dim, chunk.x, chunk.z));
+        super::create_actors::glue_chunk_unload(dim, [chunk.x, chunk.z]);
     }
 }
 
@@ -328,6 +331,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_pipes(game, dimension, dim);
     tick_boilers(game, dimension, dim);
     tick_tank_states(game, dimension, dim);
+    super::create_actors::tick_stickers(game, dim);
     tick_pistons(game, dimension, dim);
     tick_lifts(game, dimension, dim);
     tick_trains(game, dimension, dim);
@@ -2028,6 +2032,7 @@ pub(super) fn chunk_data_save(
         return;
     };
     lifts_chunk_save(game, dim, chunk, data);
+    super::create_actors::glue_chunk_save(dim, chunk, data);
     displays_chunk_save(dim, chunk, data);
     redstone_chunk_save(game, dim, chunk, data);
     let settings = with_world(|w| w.column_settings(dim, chunk[0], chunk[1])).unwrap_or_default();
@@ -3137,10 +3142,23 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
         "create_debug redstone_state <pos:block_pos>",
         2,
     ));
+    // Super glue between two corners (the glue item's selection), and a click on contraption
+    // controls riding the contraption at a piston or gantry carriage, for tests.
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug glue <from:block_pos> <to:block_pos>",
+        2,
+    ));
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug controls <pos:block_pos> <filter:text>",
+        2,
+    ));
 }
 
 pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool) {
-    if display_command(game, command) || redstone_command(game, command) {
+    if display_command(game, command)
+        || redstone_command(game, command)
+        || super::create_actors::contraption_command(game, command)
+    {
         *ran = true;
         return;
     }

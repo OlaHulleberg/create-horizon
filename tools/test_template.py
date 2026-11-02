@@ -717,7 +717,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 14);
+    assert_eq!(commands.len(), 16);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -1119,6 +1119,24 @@ impl Behaviours {
     game.native_perform_command(&player, "create_debug redstone_state 1 0 0", &mut ran);
     assert_eq!(game.said.last().map(String::as_str),
         Some("no analog lever, smart observer or threshold switch there"));
+    // Super glue from (90, 0, 90) to (91, 0, 90) over two stones: saved with its column; none
+    // over a gap.
+    game.world.blocks.insert([90, 0, 90], 1);
+    game.world.blocks.insert([91, 0, 90], 1);
+    let mut ran = false;
+    game.native_perform_command(&player, "create_debug glue 90 0 90 91 0 90", &mut ran);
+    assert!(ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("glued 80 0 80 to 81 0 80"));
+    game.native_perform_command(&player, "create_debug glue 90 0 90 93 0 90", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("glue: the corners don't hold together"));
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [5, 5], &mut data);
+    let glue = horizon_world::nbt::Tag::Compound([("areas".into(),
+        horizon_world::nbt::Tag::IntArray(vec![90, 0, 90, 91, 0, 90]))].into_iter().collect());
+    assert_eq!(data.get(&"create_glue".into()), Some(&glue));
+    // Controls on a contraption that isn't there.
+    game.native_perform_command(&player, "create_debug controls 0 90 0 all", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("no moving contraption at 0 90 0"));
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

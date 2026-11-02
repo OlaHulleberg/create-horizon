@@ -63,6 +63,22 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_contraptions"
 source = "contraptions.rs"
 
+# Glue, stickers, actors, mounted storage and contraption controls on moving contraptions.
+[[module]]
+id = "actors"
+file = "crates/horizon-client/src/game.rs"
+name = "create_actors"
+source = "contraption_actors.rs"
+
+# What contraptions reach of the game beyond the hook helpers (storage block entities, a block
+# broken with its drops handed back); the template test swaps it for
+# `tools/fixture/contraption_body.rs`.
+[[module]]
+id = "contraption-body"
+file = "crates/horizon-client/src/game.rs"
+name = "create_contraption_body"
+source = "contraption_body.rs"
+
 [[module]]
 id = "trains"
 file = "crates/horizon-client/src/game.rs"
