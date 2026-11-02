@@ -199,6 +199,8 @@ pub struct Packaging<P> {
     pub redstone: Vec<[i32; 3]>,
     /// Columns whose saved state changed.
     pub unsaved: Vec<(i32, i32)>,
+    /// Packagers and ports whose contents or animation changed (what comparators read).
+    pub changed: Vec<[i32; 3]>,
 }
 
 impl<P> Default for Packaging<P> {
@@ -213,6 +215,7 @@ impl<P> Default for Packaging<P> {
             retry: Vec::new(),
             redstone: Vec::new(),
             unsaved: Vec::new(),
+            changed: Vec::new(),
         }
     }
 }
@@ -231,6 +234,7 @@ pub enum Out<P> {
 impl<P: Clone> Packaging<P> {
     pub fn touch(&mut self, pos: [i32; 3]) {
         self.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        self.changed.push(pos);
     }
 
     /// The packager at `pos`, made when missing.
@@ -432,6 +436,7 @@ impl<P: Clone> Packaging<P> {
                 // `wakeTheFrogs`: a frogport on top may take the box.
                 self.wake.push([pos[0], pos[1] + 1, pos[2]]);
                 self.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+                self.changed.push(pos);
             }
             if p.active() {
                 i += 1;

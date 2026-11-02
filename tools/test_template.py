@@ -50,6 +50,7 @@ def write_fixture(original, root):
         ('update_entity_after_fall_on',
          "horizon_client::game::native_hooks::Game<'_>::native_update_entity_after_fall_on"),
         ('block_signal', "horizon_client::game::native_hooks::GameLevel<'_>::native_block_signal"),
+        ('analog_output_signal', "horizon_client::game::native_hooks::GameLevel<'_>::native_analog_output_signal"),
         ('is_signal_source', "horizon_client::game::native_hooks::GameLevel<'_>::native_is_signal_source"),
         ('tick_block', "horizon_client::game::native_hooks::GameLevel<'_>::native_tick_block"),
         ('use_item_on', "horizon_client::game::native_hooks::Game<'_>::native_use_item_on"),
@@ -280,6 +281,10 @@ pub mod native_hooks {
                                    face: horizon_core::geometry::Direction, direct: bool, signal: &mut i32) {
             let _ = (dimension, pos, state, face, direct, signal);
         }
+        pub fn native_analog_output_signal(&self, dimension: LevelDimension, pos: BlockPos, state: BlockStateId,
+                                           direction: horizon_core::geometry::Direction, signal: &mut i32) {
+            let _ = (dimension, pos, state, direction, signal);
+        }
         pub fn native_is_signal_source(&self, state: BlockStateId, source: &mut bool) { let _ = (state, source); }
         pub fn native_tick_block(&mut self, ticks: &mut Ticks, dimension: LevelDimension, pos: BlockPos,
                                  state: BlockStateId, handled: &mut bool) {
@@ -456,7 +461,7 @@ pub mod native_hooks {
             self.aim.map(|pos| Hit { pos, point: self.aim_point.unwrap_or(pos.map(|v| f64::from(v) + 0.5)), face: [0, 1, 0] })
         }
         pub fn with_level<R>(&mut self, f: impl FnOnce(&Behaviours, &mut GameLevel<'_>, &mut Ticks) -> R) -> R {
-            let mut level = GameLevel { registry: self.pack.assets.registry };
+            let mut level = GameLevel { registry: self.pack.assets.registry, world: &self.world, items: fixture_items() };
             f(&Behaviours, &mut level, &mut Ticks)
         }
         pub fn native_set_block_property_with(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
@@ -468,6 +473,12 @@ pub mod native_hooks {
         pub fn native_set_block(&mut self, dimension: &str, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool {
             let _ = (dimension, flags);
             self.world.blocks.insert(pos, state.0);
+            true
+        }
+        /// The fixture records which blocks' comparators were told to read again.
+        pub fn native_update_neighbour_for_output_signal(&mut self, dimension: &str, pos: [i32; 3]) -> bool {
+            let _ = dimension;
+            self.said.push(format!("comparators {pos:?}"));
             true
         }
         pub fn native_update_signal_neighbors(&mut self, dimension: &str, pos: [i32; 3]) -> bool {
@@ -514,16 +525,21 @@ pub struct Audio;
 impl Audio { pub fn play(&mut self, event: &str, at: Option<[f64; 3]>, volume: f32, pitch: f32) { let _ = (event, at, volume, pitch); } }
 pub struct Dim;
 impl Dim { pub fn id(&self) -> &str { "minecraft:overworld" } }
-pub struct GameLevel<'a> { pub registry: &'a BlockRegistry }
+pub struct GameLevel<'a> { pub registry: &'a BlockRegistry, pub world: &'a World, pub items: &'a horizon_client::items::Items }
+/// The item table GameLevel lends comparators (every item stacks to 64).
+pub fn fixture_items() -> &'static horizon_client::items::Items {
+    static ITEMS: std::sync::OnceLock<horizon_client::items::Items> = std::sync::OnceLock::new();
+    ITEMS.get_or_init(|| horizon_client::items::Items { item_tags: Default::default() })
+}
 pub struct Behaviours;
 pub struct Facts { pub flags: u32, pub hardness: f32 }
 #[derive(Clone, Copy)] pub struct BlockId(pub u16);
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 43) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 44) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 43;
+        let empty = state.0 == 0 || state.0 == 44;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -532,10 +548,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 43 is a water source.
+    /// State 44 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 43 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 44 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -680,7 +696,10 @@ impl Behaviours {
     states.push(BlockState { name: "create:schematic_table".into(), properties: props("facing", "north") });
     states.push(BlockState { name: "create:item_vault".into(), properties: BTreeMap::from([
         ("axis".to_owned(), "x".to_owned()), ("large".to_owned(), "false".to_owned())]) });
-    // 43: a water source; 44: a target block at power 7.
+    // 43: a kindled blaze burner facing north.
+    states.push(BlockState { name: "create:blaze_burner".into(), properties: BTreeMap::from([
+        ("blaze".to_owned(), "kindled".to_owned()), ("facing".to_owned(), "north".to_owned())]) });
+    // 44: a water source; 45: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
@@ -717,7 +736,9 @@ impl Behaviours {
         blocks: horizon_client::chunk::Blocks(blocks) })] };
     game.native_chunk_load("minecraft:overworld", &chunk);
     // A shaft placed later at (2, 0, 0), through the hot hook.
-    let level = GameLevel { registry };
+    // Hooks that don't look at the world's blocks are given an empty one.
+    let nowhere: &'static World = Box::leak(Box::new(World { blocks: Default::default(), game_time: 0, day_time: 0, block_entities: Default::default(), shape: LevelShape { min_y: -64, height: 384 } }));
+    let level = GameLevel { registry, world: nowhere, items: fixture_items() };
     level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 2, y: 0, z: 0 }, BlockStateId(0), BlockStateId(2));
     game.native_level_tick_post("minecraft:overworld");
     // The solve went to the level's player; as their client, it shows the parts.
@@ -834,7 +855,7 @@ impl Behaviours {
     game.native_level_tick_post("minecraft:overworld");
     let on = game.world.blocks[&[20, 0, 20]];
     assert_eq!(on, 13, "powered and powering");
-    let mut level = GameLevel { registry };
+    let mut level = GameLevel { registry, world: nowhere, items: fixture_items() };
     let read = |level: &GameLevel<'_>, face| {
         let mut signal = 0;
         level.native_block_signal(LevelDimension::Overworld, BlockPos { x: 20, y: 0, z: 20 }, BlockStateId(on), face, false, &mut signal);
@@ -956,7 +977,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 43), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 44), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1045,7 +1066,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 44);
+    game.world.blocks.insert([79, 0, 80], 45);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1176,7 +1197,7 @@ impl Behaviours {
     // Packages: a packager at (300, 0, 300) facing east with a postbox behind it and a frogport
     // on it; two chain conveyors (302, 1, 300) and (306, 1, 300), the first under a motor
     // facing down; a second frogport by the far conveyor takes "Mine".
-    let level = GameLevel { registry };
+    let level = GameLevel { registry, world: nowhere, items: fixture_items() };
     for (pos, state) in [([299, 0, 300], 30), ([300, 0, 300], 36), ([300, 1, 300], 38),
                          ([302, 1, 300], 39), ([306, 1, 300], 39), ([302, 2, 300], 23), ([306, 1, 302], 38)] {
         game.world.blocks.insert(pos, state);
@@ -1308,6 +1329,48 @@ impl Behaviours {
     let mut data = horizon_world::nbt::Compound::new();
     game.native_chunk_data_save("minecraft:overworld", [25, 25], &mut data);
     assert!(data.contains_key(&"create_schematics".into()), "the cannon is saved with its column");
+    // Comparators: a vault of two blocks at (500, 0, 500) and (501, 0, 500) along x, ten stacks
+    // of iron put into the second: after the level's tick comparators by both blocks read again,
+    // and both read the whole vault's 40 slots (floor(10 / 40 * 14) + 1 = 4, not its own 8).
+    for x in [500, 501] {
+        game.world.block_entities.insert((x, 0, 500), Mod(ModBlockEntity { items: vec![None; 20] }));
+        game.world.blocks.insert([x, 0, 500], 42);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x, y: 0, z: 500 }, BlockStateId(0), BlockStateId(42));
+    }
+    game.native_level_tick_post("minecraft:overworld");
+    if let Some(Mod(m)) = game.world.block_entities.get_mut(&(501, 0, 500)) {
+        for slot in &mut m.items[..10] { *slot = Some(ItemStack::new("minecraft:iron_ingot", 64)); }
+    }
+    game.native_contents_changed([501, 0, 500]);
+    let before = game.said.len();
+    game.native_level_tick_post("minecraft:overworld");
+    let told: Vec<&String> = game.said[before..].iter().filter(|l| l.starts_with("comparators")).collect();
+    assert_eq!(told, ["comparators [500, 0, 500]", "comparators [501, 0, 500]"]);
+    // Nothing changed: nobody is told again.
+    let before = game.said.len();
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(!game.said[before..].iter().any(|l| l.starts_with("comparators")));
+    // A depot at (504, 0, 500) holding 32 iron: floor(32 / 64 * 14) + 1 = 8.
+    game.world.block_entities.insert((504, 0, 500), Mod(ModBlockEntity {
+        items: vec![Some(ItemStack::new("minecraft:iron_ingot", 32))] }));
+    game.world.blocks.insert([504, 0, 500], 4);
+    let comparator = |game: &Game<'_>, pos: [i32; 3], state: u32| {
+        let level = GameLevel { registry, world: &game.world, items: fixture_items() };
+        let mut signal = -1;
+        level.native_analog_output_signal(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] },
+            BlockStateId(state), horizon_core::geometry::Direction::North, &mut signal);
+        signal
+    };
+    assert_eq!(comparator(&game, [500, 0, 500], 42), 4, "the whole vault");
+    assert_eq!(comparator(&game, [501, 0, 500], 42), 4);
+    assert_eq!(comparator(&game, [504, 0, 500], 4), 8, "the depot");
+    // The tank at (40, 0, 40) holds a bucket of 8: floor(1/8 * 14 + 1) = 2; its comparators were
+    // told when it was filled.
+    assert_eq!(comparator(&game, [40, 0, 40], 15), 2, "the tank");
+    assert!(game.said.iter().any(|l| l == "comparators [40, 0, 40]"));
+    // A kindled blaze burner reads 2 (`HeatLevel.ordinal() - 1`); stone keeps vanilla's answer.
+    assert_eq!(comparator(&game, [506, 0, 500], 43), 2, "the burner");
+    assert_eq!(comparator(&game, [508, 0, 500], 1), -1, "not Create's");
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

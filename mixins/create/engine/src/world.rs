@@ -317,6 +317,13 @@ pub struct Dimension {
     pub gauge_changes: Vec<[i32; 3]>,
     /// Scratch for the gauges a solve looked at, kept to avoid allocating per solve.
     pub gauges_touched: Vec<[i32; 3]>,
+    /// Blocks whose comparator output may have changed (a vault's or tank's block stands for
+    /// the whole vault or tank): read again after the level's tick, comparators told when it
+    /// moved (`setChanged`, `updateNeighbourForOutputSignal`). Nothing runs while empty.
+    pub analog_checks: Vec<[i32; 3]>,
+    /// The output comparators were last told of, for blocks whose contents change every tick
+    /// while worked (fluid tanks, spouts, item drains): told again only when it moves.
+    pub analog_levels: HashMap<[i32; 3], u8>,
     /// Boilers: tanks with steam engines on them (`BoilerData.isActive`), with those engines.
     /// Only they tick.
     pub boilers: HashMap<[i32; 3], SteamBoiler>,
@@ -889,6 +896,10 @@ impl CreateWorld {
     /// range tests that miss for every non-Create block.
     #[inline]
     pub fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        // Another block: what comparators were told of the old one no longer holds.
+        if !self.dims[dim].analog_levels.is_empty() {
+            self.dims[dim].analog_levels.remove(&pos);
+        }
         // A track that is gone takes its curves (`TrackBlockEntity.removeInboundConnections`).
         let track = |s: u32| self.table.get(s).is_some_and(|(b, _)| b == Block::Track);
         if track(old) && !track(new) && self.dims[dim].track_curves.at.contains_key(&pos) {
@@ -1199,6 +1210,10 @@ impl CreateWorld {
         d.displays.column_unloaded(cx, cz);
         d.levers.column_unloaded(cx, cz);
         d.detectors.column_unloaded(cx, cz);
+        if !d.analog_levels.is_empty() {
+            d.analog_levels
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+        }
         if let Some(list) = d.columns.remove(&(cx, cz)) {
             for pos in list {
                 d.kinetics.remove(pos);
@@ -3138,6 +3153,19 @@ impl CreateWorld {
     /// A backtank's air changed: its column saves again.
     pub fn backtank_changed(&mut self, dim: usize, pos: [i32; 3]) {
         self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
+    }
+
+    /// The blocks comparators read the same output from as the block at `pos`: a vault's
+    /// (`ItemVaultBlockEntity.updateComparators`) or a fluid tank's blocks, else the block.
+    pub fn analog_unit(&self, dim: usize, pos: [i32; 3]) -> Vec<[i32; 3]> {
+        let d = &self.dims[dim];
+        if let Some(parts) = d.vaults.inventory(pos) {
+            return parts;
+        }
+        if let Some((c, m)) = d.tanks.get(pos) {
+            return crate::tank::blocks(c, m.width, m.height).collect();
+        }
+        vec![pos]
     }
 }
 

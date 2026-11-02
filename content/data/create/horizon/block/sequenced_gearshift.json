@@ -4,7 +4,8 @@
     "hardness": 1.5,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:andesite"
+    "sounds": "minecraft:andesite",
+    "analog_output": true
   },
   "item": true,
   "state_properties": {

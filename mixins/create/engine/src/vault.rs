@@ -413,6 +413,8 @@ impl crate::world::CreateWorld {
         if !d.vaults.changed.is_empty() {
             for p in d.vaults.changed.drain(..) {
                 d.unsaved.push((p[0] >> 4, p[2] >> 4));
+                // A vault formed or split: what its blocks hold together changed.
+                d.analog_checks.push(p);
             }
         }
         std::mem::take(&mut d.vaults.large)

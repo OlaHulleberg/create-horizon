@@ -60,6 +60,8 @@ pub struct StateInfo {
     pub hinge_right: bool,
     /// A train signal's `type` is `cross_signal`.
     pub cross_signal: bool,
+    /// A lit blaze burner's `flame_type` is `soul`.
+    pub soul: bool,
 }
 
 impl StateInfo {
@@ -118,6 +120,7 @@ impl StateInfo {
                 "half" => s.upper = v == "upper",
                 "hinge" => s.hinge_right = v == "right",
                 "type" => s.cross_signal = v == "cross_signal",
+                "flame_type" => s.soul = v == "soul",
                 "axis_along_first" => s.along_first = v == "true",
                 "blaze" => {
                     use crate::fan::Heat;
@@ -495,6 +498,7 @@ pub fn is_kinetic(block: Block) -> bool {
         upper: false,
         hinge_right: false,
         cross_signal: false,
+        soul: false,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

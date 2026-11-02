@@ -97,7 +97,7 @@ pub fn read_all(java_root: &Path) -> BTreeMap<String, JavaFacts> {
     out
 }
 
-fn collect(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+pub fn collect(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };

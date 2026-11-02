@@ -1839,6 +1839,41 @@ fn later_phase(b: &CreateBlock) -> Option<String> {
     (!decorative.contains(&class)).then(|| format!("{class}: ported with its subsystem"))
 }
 
+/// Create's blocks of this port whose class answers `hasAnalogOutputSignal` with true (Create
+/// 6.0.11: `ItemVaultBlock`, `ToolboxBlock`, `DepotBlock`, `EjectorBlock`, `BasinBlock`,
+/// `FrogportBlock`, `PostboxBlock`, `PackagerBlock`, `ItemDrainBlock`, `SpoutBlock`,
+/// `FluidTankBlock`, `BacktankBlock`, `GaugeBlock`, `SequencedGearshiftBlock`,
+/// `BlazeBurnerBlock`, `LitBlazeBurnerBlock`, `SignalBlock`, `StationBlock`); the glue answers
+/// for each (`create_engine::comparator::has_analog_output`). Portable storage interfaces, the
+/// controller rail, the redstone requester, the creative fluid tank and the lectern controller
+/// have one too and are not declared.
+pub const ANALOG_OUTPUT: [&str; 18] = [
+    "item_vault",
+    "depot",
+    "weighted_ejector",
+    "basin",
+    "package_frogport",
+    "packager",
+    "item_drain",
+    "spout",
+    "fluid_tank",
+    "copper_backtank",
+    "netherite_backtank",
+    "speedometer",
+    "stressometer",
+    "sequenced_gearshift",
+    "blaze_burner",
+    "lit_blaze_burner",
+    "track_signal",
+    "track_station",
+];
+
+fn analog_output(name: &str) -> bool {
+    ANALOG_OUTPUT.contains(&name)
+        || dyed(name, "toolbox").is_some()
+        || dyed(name, "postbox").is_some()
+}
+
 /// The declaration file for a declared block.
 pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     let Decision::Declared {
@@ -1889,6 +1924,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     // AllBlocks' nixie tubes: `lightLevel($ -> 5)`.
     if b.name == "nixie_tube" || dyed(&b.name, "nixie_tube").is_some() {
         props.insert("light".into(), json!(5));
+    }
+    // Comparators read the block (`hasAnalogOutputSignal`), through the glue's answer.
+    if analog_output(&b.name) {
+        props.insert("analog_output".into(), json!(true));
     }
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));
@@ -2093,6 +2132,69 @@ mod tests {
         assert_eq!(states["toolbox"], (16, 128));
         assert_eq!(states["postbox"], (16, 256));
         assert_eq!(states["nixie_tube"], (16, 512));
+    }
+
+    /// With Create's Java beside the port: the classes answering `hasAnalogOutputSignal` are the
+    /// ones `ANALOG_OUTPUT` names (and five not ported), and each of those blocks declared here
+    /// says `analog_output`.
+    #[test]
+    fn comparators_read_the_blocks_create_gives_an_analog_output() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let java_root = root.join("src/main/java");
+        let generated = root.join("src/generated/resources");
+        if !java_root.is_dir() || !generated.is_dir() {
+            return;
+        }
+        let mut files = Vec::new();
+        crate::java::collect(&java_root, &mut files);
+        let mut classes: Vec<String> = files
+            .iter()
+            .filter(|f| {
+                std::fs::read_to_string(f)
+                    .is_ok_and(|t| t.contains("boolean hasAnalogOutputSignal("))
+            })
+            .map(|f| f.file_stem().unwrap().to_string_lossy().into_owned())
+            .collect();
+        classes.sort();
+        assert_eq!(
+            classes,
+            [
+                "BacktankBlock",
+                "BasinBlock",
+                "BlazeBurnerBlock",
+                "ControllerRailBlock",
+                "DepotBlock",
+                "EjectorBlock",
+                "FluidTankBlock",
+                "FrogportBlock",
+                "GaugeBlock",
+                "ItemDrainBlock",
+                "ItemVaultBlock",
+                "LitBlazeBurnerBlock",
+                "PackagerBlock",
+                "PortableStorageInterfaceBlock",
+                "PostboxBlock",
+                "RedstoneRequesterBlock",
+                "SequencedGearshiftBlock",
+                "SignalBlock",
+                "SpoutBlock",
+                "StationBlock",
+                "ToolboxBlock",
+            ]
+        );
+        let java = crate::java::read_all(&java_root);
+        let all = read_blocks(&generated, &java);
+        let mut declared = 0;
+        for b in &all {
+            let Some(doc) = declaration(b, &decide(b, &BTreeMap::new())) else {
+                continue;
+            };
+            let says = doc["properties"]["analog_output"] == true;
+            assert_eq!(says, analog_output(&b.name), "{}", b.name);
+            declared += usize::from(says);
+        }
+        // 18 blocks, 16 toolboxes and 16 postboxes.
+        assert_eq!(declared, 18 + 16 + 16);
     }
 
     #[test]
