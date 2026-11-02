@@ -1293,10 +1293,13 @@ pub(super) struct ClientBoard {
     pub(super) lines: Vec<(String, Vec<display::ShownSection>)>,
     pub(super) colour: Vec<Option<u8>>,
     pub(super) glowing: Vec<bool>,
+    /// Whether it turns fast enough for its flaps to move (`isSpeedRequirementFulfilled`), as
+    /// last drawn.
+    pub(super) running: bool,
 }
 
-/// What clients know of tubes and boards. No hook draws text in the world yet: this is the
-/// state a `BlockEntityRenderer` would draw (`NixieTubeRenderer`, `FlapDisplayRenderer`).
+/// What clients know of tubes and boards, and the text they last drew of each (API 55: as
+/// `NixieTubeRenderer` and `FlapDisplayRenderer` draw it).
 #[derive(Default)]
 pub(super) struct ClientDisplays {
     pub(super) nixies: HashMap<[i32; 3], (String, String)>,
@@ -1305,6 +1308,10 @@ pub(super) struct ClientDisplays {
     pub(super) boards: HashMap<[i32; 3], ClientBoard>,
     /// Boards with flaps still turning.
     pub(super) active: Vec<[i32; 3]>,
+    /// Boards (controllers) whose text or a flap's character may have changed: drawn again.
+    pub(super) boards_changed: Vec<[i32; 3]>,
+    /// The board text each controller last set.
+    pub(super) boards_drawn: HashMap<[i32; 3], Vec<display::FlapText>>,
     pub(super) rng: Option<create_engine::processing::Rng>,
 }
 
@@ -1406,12 +1413,15 @@ pub(super) fn displays_from_server(data: &[u8]) {
                     {
                         c.active.push(pos);
                     }
+                    c.boards_changed.push(pos);
                 }
                 Shown::Forget { pos } => {
                     if c.nixies.remove(&pos).is_some() {
                         c.nixies_changed.push(pos);
                     }
-                    c.boards.remove(&pos);
+                    if c.boards.remove(&pos).is_some() {
+                        c.boards_changed.push(pos);
+                    }
                     c.active.retain(|p| *p != pos);
                 }
             }
@@ -1431,7 +1441,17 @@ pub(super) fn tick_client_displays(game: &mut Game<'_>) {
         let speed = CLIENT
             .with_borrow(|c| c.as_ref().and_then(|c| c.speeds.get(&pos).map(|s| s[0])))
             .unwrap_or(0.0);
-        if speed.abs() < create_engine::gauge::MEDIUM_SPEED {
+        let running = speed.abs() >= create_engine::gauge::MEDIUM_SPEED;
+        // Spinning flaps stop where they are and start again with the board (drawn once each).
+        DISPLAYS.with_borrow_mut(|d| {
+            if let Some(b) = d.boards.get_mut(&pos)
+                && b.running != running
+            {
+                b.running = running;
+                d.boards_changed.push(pos);
+            }
+        });
+        if !running {
             keep.push(pos);
             continue;
         }
@@ -1465,6 +1485,8 @@ pub(super) fn tick_client_displays(game: &mut Game<'_>) {
             let settled = b.lines.iter().all(|l| l.1.iter().all(|s| s.settled()));
             let size = (b.x_size, b.y_size);
             d.rng = Some(rng);
+            // Its flaps turned (or came to rest): the characters shown may differ.
+            d.boards_changed.push(pos);
             (flaps, settled, size)
         });
         if !settled {
@@ -1532,5 +1554,73 @@ pub(super) fn draw_client_nixies(game: &mut Game<'_>) {
             })
             .collect();
         game.native_text_set(key, pos, &lines);
+    }
+}
+
+/// `FlapDisplayRenderer` on a client: the boards whose text or flaps changed are laid out again
+/// from their controller (`display::board_texts`) and set through Horizon's world text (API 55)
+/// only when what they show differs from what was set; a board no longer there is cleared.
+pub(super) fn draw_client_boards(game: &mut Game<'_>) {
+    let mut changed = DISPLAYS.with_borrow_mut(|c| std::mem::take(&mut c.boards_changed));
+    if changed.is_empty() {
+        return;
+    }
+    changed.sort_unstable();
+    changed.dedup();
+    let lang_fn = |k: &str| lang_get(k);
+    let lang = Lang {
+        resolve: Some(&lang_fn),
+    };
+    let options: Vec<Vec<String>> = display::Cycle::ALL
+        .iter()
+        .map(|c| c.options(&lang))
+        .collect();
+    let ticks = game.world.game_time;
+    for pos in changed {
+        let key = super::create_logistics::depot_key(pos, 224, 0);
+        let board = DISPLAYS.with_borrow(|c| c.boards.get(&pos).cloned());
+        // The client has no server world table: the board's facing from the registry.
+        let facing = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(pos[0], pos[1], pos[2]))
+            .filter(|s| s.name == "create:display_board")
+            .and_then(|s| {
+                let f = s.properties.get("facing")?;
+                Dir::ALL.into_iter().find(|d| dir_name(*d) == f.as_str())
+            });
+        let (Some(b), Some(facing)) = (board, facing) else {
+            if DISPLAYS.with_borrow_mut(|c| c.boards_drawn.remove(&pos).is_some()) {
+                game.native_text_clear(key);
+            }
+            continue;
+        };
+        let texts = display::board_texts(
+            facing,
+            b.x_size,
+            &b.lines,
+            &b.colour,
+            &b.glowing,
+            &options,
+            b.running,
+            ticks,
+            |s| game.native_text_width(s),
+        );
+        if DISPLAYS.with_borrow(|c| c.boards_drawn.get(&pos) == Some(&texts)) {
+            continue;
+        }
+        let lines: Vec<super::native_text::TextLine> = texts
+            .iter()
+            .map(|t| super::native_text::TextLine {
+                pose: t.pose,
+                text: t.text.clone(),
+                color: t.color,
+                outline: 0,
+                full_bright: t.full_bright,
+            })
+            .collect();
+        game.native_text_set(key, pos, &lines);
+        DISPLAYS.with_borrow_mut(|c| c.boards_drawn.insert(pos, texts));
     }
 }

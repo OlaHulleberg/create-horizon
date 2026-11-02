@@ -377,9 +377,14 @@ pub mod native_hooks {
         }
         pub fn native_part_clear(&mut self, key: u64) { let _ = key; }
         pub fn native_text_set(&mut self, key: u64, pos: [i32; 3], lines: &[super::native_text::TextLine]) {
-            let _ = (key, pos, lines);
+            let _ = key;
+            let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+            super::TEXTS.with_borrow_mut(|t| t.push(format!("set {pos:?} {}", texts.join("|"))));
         }
-        pub fn native_text_clear(&mut self, key: u64) { let _ = key; }
+        pub fn native_text_clear(&mut self, key: u64) {
+            let _ = key;
+            super::TEXTS.with_borrow_mut(|t| t.push("clear".to_owned()));
+        }
         pub fn native_parts_seconds(&self) -> f32 { 1.0 }
         pub fn native_part_item_model(&mut self, item: &str, pose: glam::Mat4) -> Option<u32> {
             let _ = pose;
@@ -537,9 +542,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 44) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 45) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 44;
+        let empty = state.0 == 0 || state.0 == 45;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -548,10 +553,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 44 is a water source.
+    /// State 45 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 44 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 45 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -579,6 +584,8 @@ impl Res {
 }
 pub struct Ticks;
 thread_local! {
+    /// The world text set and cleared (API 55), as `set [x, y, z] a|b` and `clear`.
+    pub static TEXTS: std::cell::RefCell<Vec<String>> = Default::default();
     /// Blocks giving a signal of 15 toward every side, for the latch test.
     pub static SIGNALS: std::cell::RefCell<std::collections::HashSet<[i32; 3]>> = Default::default();
 }
@@ -699,7 +706,11 @@ impl Behaviours {
     // 43: a kindled blaze burner facing north.
     states.push(BlockState { name: "create:blaze_burner".into(), properties: BTreeMap::from([
         ("blaze".to_owned(), "kindled".to_owned()), ("facing".to_owned(), "north".to_owned())]) });
-    // 44: a water source; 45: a target block at power 7.
+    // 44: a display board facing south.
+    states.push(BlockState { name: "create:display_board".into(), properties: BTreeMap::from([
+        ("down".to_owned(), "false".to_owned()), ("facing".to_owned(), "south".to_owned()),
+        ("up".to_owned(), "false".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
+    // 45: a water source; 46: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
@@ -977,7 +988,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 44), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 45), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1066,7 +1077,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 45);
+    game.world.blocks.insert([79, 0, 80], 46);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1371,6 +1382,23 @@ impl Behaviours {
     // A kindled blaze burner reads 2 (`HeatLevel.ordinal() - 1`); stone keeps vanilla's answer.
     assert_eq!(comparator(&game, [506, 0, 500], 43), 2, "the burner");
     assert_eq!(comparator(&game, [508, 0, 500], 1), -1, "not Create's");
+    // A display board at (510, 0, 500), one block wide, as a client is told of it: its first line
+    // "hi" draws as its two flaps' characters; the next tick, with nothing changed, sets nothing;
+    // forgotten, its text is cleared.
+    game.world.blocks.insert([510, 0, 500], 44);
+    let mut first = create_engine::display::Layout::new(4);
+    first.sections[0].text = Some("hi".into());
+    let board = create_engine::display::Shown::Board { pos: [510, 0, 500], x_size: 1, y_size: 1,
+        lines: vec![first, create_engine::display::Layout::new(4)], colour: vec![None, None], glowing: vec![false, false] };
+    game.native_net_from_server("create:display", &create_engine::display::encode(&[board]));
+    game.native_tick();
+    assert_eq!(TEXTS.with_borrow(|t| t.clone()), ["set [510, 0, 500] H|I"]);
+    game.native_tick();
+    assert_eq!(TEXTS.with_borrow(Vec::len), 1, "unchanged: not set again");
+    let forget = create_engine::display::Shown::Forget { pos: [510, 0, 500] };
+    game.native_net_from_server("create:display", &create_engine::display::encode(&[forget]));
+    game.native_tick();
+    assert_eq!(TEXTS.with_borrow(|t| t.last().cloned()).as_deref(), Some("clear"));
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);
