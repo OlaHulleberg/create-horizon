@@ -766,6 +766,16 @@ running).
   `.horizon-cache/mod-content` overlay is warm; 65,033 block states with Create): launch to ready 1.48 s without, 2.2 s with Create installed and unused;
   the first launch after the content changed 4.75 s (the overlay and `load core tables` 2.5 s, built once). The gap grows
   with the state count, as above: it stays open until Horizon caches its per-state render tables decoded.
+  Re-measured 2026-11-02 after all subsystems (643 blocks, Horizon `fe554b8d7`, headless BMG G21, render distance 8,
+  warm, 2 x 3 runs): launch to ready 1.44 to 1.47 s without, 1.99 to 2.04 s with Create installed and unused (outliers
+  to 2.3 / 3.0 s both ways); the first launch after the content changed 4.8 to 5.7 s (the overlay, built once). DEBUG
+  timers in Horizon's `load_core` and `RenderAssets::load_with` (removed) on the critical path, without / with Create:
+  registry 76 / 140 ms; then block models baked 129 / 239 ms (`models::prepare_with_models`), sprites finished +23 /
+  +37 ms, item renderer 55 / 69 ms; core tables 0.32 / 0.61 s; the sprite cache (18 / 22 ms) and parsed models (16 /
+  32 ms) are already cheap, the block facts are snapshotted, and the gameplay, collision and visibility tables run beside
+  the models and finish first. What is left is about 0.55 s for 25,349 more block states: the registry and the baked
+  models per state, ~70 ms before `load_core` and the first frame. Closing it needs Horizon to snapshot its registry and
+  baked models decoded, as it does the block facts (`e4f3833ae`): a general Horizon change, not one the mod can make.
 
 - Horizon pin: `feat/create-hooks` at `fe554b8d7` (NATIVE_HOOKS_API 66: `native_interaction_key_mapping_triggered`, NeoForge's `InputEvent.InteractionKeyMappingTriggered`, one commit on `feat/create-hooks` `da38364c1`, API 65); before, `feat/create-hooks` at `abfc4d272` (NATIVE_HOOKS_API 58: API 57 key input, API 58 world saved data with level load and save; before `b5201f492`, API 56: API 55 world text, API 56 comparators; before `e4f3833ae`, API 53; earlier `aea7ed878`, API 47). History: first `0a96593cf`, two commits on 9d979ca: gap 2
   (`a83a4b380`, content blocks with their own `state_properties`) and gap 8 (`0a96593cf`, hook points API 41:
