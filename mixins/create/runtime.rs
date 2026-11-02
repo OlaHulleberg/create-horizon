@@ -78,6 +78,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
             RECIPES.with_borrow_mut(|r| *r = None);
             super::create_actors::forget();
             super::create_packages::forget();
+            super::create_schematics::forget();
             states::clear_range();
         }
     }
@@ -105,6 +106,7 @@ pub(super) fn block_changed(
     }
     let (dim, at) = (level_index(dimension), [pos.x, pos.y, pos.z]);
     super::create_packages::block_changed(dim, at, old.0, new.0);
+    super::create_schematics::block_changed(dim, at, old.0, new.0);
     with_world(|w| w.block_changed(dim, at, old.0, new.0));
 }
 
@@ -121,6 +123,7 @@ pub(super) fn neighbor_changed(
     }
     let (dim, at) = (level_index(dimension), [pos.x, pos.y, pos.z]);
     super::create_packages::neighbor_changed(dim, at, state.0);
+    super::create_schematics::neighbor_changed(dim, at, state.0);
     with_world(|w| w.neighbor_changed(dim, at, state.0));
 }
 

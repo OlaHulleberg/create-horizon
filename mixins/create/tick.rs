@@ -3,4 +3,5 @@
 fn tick(game: &mut crate::game::Game<'_>) {
     crate::game::create::client_tick(game);
     crate::game::create_equipment::client_tick(game);
+    crate::game::create_schematics::client_tick(game);
 }

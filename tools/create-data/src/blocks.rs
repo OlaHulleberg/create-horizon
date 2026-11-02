@@ -895,6 +895,29 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             None,
             own(&[("axis", &["x", "z"]), ("large", bools)]),
         ),
+        // SchematicannonBlock: its five slots are a block entity's, so the barrel's template
+        // (dispenser's properties); AllShapes.SCHEMATICANNON_SHAPE. Its barrel is drawn by the
+        // glue (`part_schematicannon_*`).
+        "schematicannon" => (
+            "minecraft:barrel",
+            Some(by_property(
+                "open",
+                &["false", "true"],
+                &[[1., 0., 1., 15., 8., 15.], [0.5, 8., 0.5, 15.5, 11., 15.5]],
+            )),
+            None,
+        ),
+        // SchematicTableBlock (HorizontalDirectionalBlock): its two slots a block entity's (the
+        // barrel's template), `facing` north first; AllShapes.SCHEMATICS_TABLE (symmetric, so
+        // as written for north).
+        "schematic_table" => (
+            "minecraft:barrel",
+            Some(by_horizontal(&[
+                [4., 0., 4., 12., 12., 12.],
+                [0., 11., 2., 16., 14., 14.],
+            ])),
+            own(&[("facing", &["north", "south", "west", "east"])]),
+        ),
         // StationBlock: a full block of gold's properties (its track target is the glue's).
         "track_station" => ("minecraft:gold_block", None, None),
         // SignalBlock: beside a track it splits it into sections; its type and redstone power.
@@ -1455,7 +1478,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 54] = [
+pub const PARTIALS: [(&str, &str, &str); 56] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -1670,6 +1693,17 @@ pub const PARTIALS: [(&str, &str, &str); 54] = [
     (
         "part_ejector_top",
         "create:block/weighted_ejector/top",
+        "up",
+    ),
+    // SchematicannonRenderer's connector and pipe, turned by the glue to the barrel's aim.
+    (
+        "part_schematicannon_connector",
+        "create:block/schematicannon/connector",
+        "up",
+    ),
+    (
+        "part_schematicannon_pipe",
+        "create:block/schematicannon/pipe",
         "up",
     ),
 ];

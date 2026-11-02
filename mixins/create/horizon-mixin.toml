@@ -94,6 +94,23 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_contraption_body"
 source = "contraption_body.rs"
 
+# The schematic and quill's saves, the schematic table, deployed schematics and the
+# schematicannon.
+[[module]]
+id = "schematics"
+file = "crates/horizon-client/src/game.rs"
+name = "create_schematics"
+source = "schematics.rs"
+
+# What schematics read and write of the game beyond the hook helpers (files in `schematics/`,
+# a schematic's data on its stack, a block's item); the template test swaps it for
+# `tools/fixture/schematic_body.rs`.
+[[module]]
+id = "schematic-body"
+file = "crates/horizon-client/src/game.rs"
+name = "create_schematic_body"
+source = "schematic_body.rs"
+
 [[module]]
 id = "trains"
 file = "crates/horizon-client/src/game.rs"

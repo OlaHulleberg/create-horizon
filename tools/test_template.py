@@ -107,7 +107,10 @@ pub mod nbt {
 }
 pub mod level {
     #[derive(Clone, Copy)] pub enum Dimension { Overworld, Nether, End }
-    pub mod data { pub mod state_flags { pub const COLLISION_EMPTY: u32 = 1 << 5; } }
+    pub mod data { pub mod state_flags {
+        pub const CONDUCTOR: u32 = 1 << 2; pub const COLLISION_EMPTY: u32 = 1 << 5;
+        pub const SOLID_RENDER: u32 = 1 << 9; pub const BLOCK_ENTITY: u32 = 1 << 11; pub const FULL_COLLISION: u32 = 1 << 14;
+    } }
 }
 pub mod registry {
     use std::collections::BTreeMap;
@@ -518,9 +521,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 40) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 43) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 40;
+        let empty = state.0 == 0 || state.0 == 43;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -529,10 +532,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 40 is a water source.
+    /// State 43 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 40 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 43 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -671,7 +674,13 @@ impl Behaviours {
     }
     states.push(BlockState { name: "create:package_frogport".into(), properties: props("waterlogged", "false") });
     states.push(BlockState { name: "create:chain_conveyor".into(), properties: props("waterlogged", "false") });
-    // 40: a water source; 41: a target block at power 7.
+    // 40: a schematicannon; 41: a schematic table facing north; 42: an item vault along x.
+    states.push(BlockState { name: "create:schematicannon".into(), properties: BTreeMap::from([
+        ("facing".to_owned(), "north".to_owned()), ("open".to_owned(), "false".to_owned())]) });
+    states.push(BlockState { name: "create:schematic_table".into(), properties: props("facing", "north") });
+    states.push(BlockState { name: "create:item_vault".into(), properties: BTreeMap::from([
+        ("axis".to_owned(), "x".to_owned()), ("large".to_owned(), "false".to_owned())]) });
+    // 43: a water source; 44: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
@@ -739,7 +748,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 22);
+    assert_eq!(commands.len(), 26);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -947,7 +956,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 40), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 43), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1036,7 +1045,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 41);
+    game.world.blocks.insert([79, 0, 80], 44);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1223,6 +1232,82 @@ impl Behaviours {
     let Some(horizon_world::nbt::Tag::Compound(saved)) = data.get(&"create_packages".into()) else { panic!("{data:?}") };
     let Some(horizon_world::nbt::Tag::List(ports)) = saved.get(&"ports".into()) else { panic!() };
     assert_eq!(ports.len(), 2, "the postbox and the first frogport");
+    // Schematics: two stones at (400, 0, 400) and (401, 0, 400) saved by the schematic and quill
+    // (the air above left out), uploaded at a table at (404, 0, 400) into a written schematic,
+    // deployed at (410, 0, 400) and printed by a cannon at (406, 0, 400) from the vault east of
+    // it, burning the gunpowder in its slot.
+    use horizon_client::containers::{BlockEntity::Mod, ModBlockEntity};
+    use horizon_client::items::ItemStack;
+    game.world.game_time = 5000;
+    game.world.blocks.insert([400, 0, 400], 1);
+    game.world.blocks.insert([401, 0, 400], 1);
+    game.native_perform_command(&player, "create_debug schematic save 400 0 400 401 1 400 Hut", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("Saved as hut.nbt"));
+    let saved = create_schematic_body::FILES.with_borrow(|f| f.get("hut.nbt").cloned()).expect("saved");
+    let hut = create_engine::schematic::Structure::from_nbt(&saved).unwrap();
+    assert_eq!((hut.size, hut.blocks.len(), hut.palette.len()), ([2, 2, 1], 2, 1));
+    game.native_perform_command(&player, "create_debug schematic save 400 0 400 401 1 400 Hut", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("Saved as hut_1.nbt"), "a free name");
+    game.world.blocks.insert([404, 0, 400], 41);
+    game.world.block_entities.insert((404, 0, 400), Mod(ModBlockEntity {
+        items: vec![Some(ItemStack::new("create:empty_schematic", 1)), None, None, None, None] }));
+    game.native_perform_command(&player, "create_debug schematic upload 404 0 400 hut", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("uploaded hut.nbt: 2x2x1"));
+    let written = match game.world.block_entities.get_mut(&(404, 0, 400)) {
+        Some(Mod(m)) => { assert!(m.items[0].is_none(), "the blank was used"); m.items[1].take() }
+        _ => None,
+    };
+    assert_eq!(written.as_ref().map(|s| &*s.item), Some("create:schematic"));
+    game.inventory[0] = written;
+    game.selected = 0;
+    game.native_perform_command(&player, "create_debug schematic deploy hut 410 0 400", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("deployed hut.nbt at 410 0 400 NONE NONE"));
+    let schematic = game.inventory[0].take();
+    game.world.block_entities.insert((407, 0, 400), Mod(ModBlockEntity {
+        items: vec![Some(ItemStack::new("minecraft:stone", 64))] }));
+    game.world.block_entities.insert((406, 0, 400), Mod(ModBlockEntity {
+        items: vec![schematic, None, None, None, Some(ItemStack::new("minecraft:gunpowder", 1))] }));
+    for (pos, state) in [([407, 0, 400], 42), ([406, 0, 400], 40)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] },
+            BlockStateId(0), BlockStateId(state));
+    }
+    game.world.game_time += 1;
+    game.native_level_tick_post("minecraft:overworld");
+    game.native_perform_command(&player, "create_debug schematicannon 406 0 400", &mut ran);
+    let said = game.said.last().cloned().unwrap_or_default();
+    assert!(said.starts_with("schematicannon 406 0 400: PAUSED ready fuel=400 placed=0/2 target=Some([409, 0, 400])"), "{said}");
+    game.native_perform_command(&player, "create_debug schematicannon 406 0 400 play", &mut ran);
+    assert!(game.said.last().is_some_and(|l| l.contains("RUNNING running")));
+    let mut shots = Vec::new();
+    for _ in 0..40 {
+        game.world.game_time += 1;
+        let before = game.said.len();
+        game.native_level_tick_post("minecraft:overworld");
+        if game.said[before..].iter().any(|l| l.contains("entity.generic.explode")) {
+            shots.push(game.world.game_time - 5001);
+        }
+    }
+    // A shot every schematicannonDelay + 1 ticks; each block lands 11 ticks after.
+    assert_eq!(shots, vec![1, 12]);
+    assert_eq!((game.world.blocks.get(&[410, 0, 400]), game.world.blocks.get(&[411, 0, 400])), (Some(&1), Some(&1)));
+    assert!(game.said.iter().any(|l| l.contains("note_block.bell")), "it dings when done");
+    game.native_perform_command(&player, "create_debug schematicannon 406 0 400", &mut ran);
+    let said = game.said.last().cloned().unwrap_or_default();
+    assert!(said.starts_with("schematicannon 406 0 400: STOPPED finished fuel=398 placed=0/0 target=None"), "{said}");
+    let Some(Mod(vault)) = game.world.block_entities.get(&(407, 0, 400)) else { panic!() };
+    assert_eq!(vault.items[0].as_ref().map(|s| s.count), Some(62), "two stones taken");
+    let Some(Mod(cannon)) = game.world.block_entities.get(&(406, 0, 400)) else { panic!() };
+    assert!(cannon.items[0].is_none() && cannon.items[4].is_none());
+    assert_eq!(cannon.items[1].as_ref().map(|s| (&*s.item, s.count)), Some(("create:empty_schematic", 1)));
+    // Clients were told where the barrel pointed, and that it rests again.
+    let aims: Vec<create_engine::schematicannon::Aim> = game.sent.iter().filter(|m| m.1 == "create:schematicannon")
+        .flat_map(|m| create_engine::schematicannon::decode(&m.2)).collect();
+    assert!(aims.iter().any(|a| matches!(a, create_engine::schematicannon::Aim::Set { target: Some([411, 0, 400]), .. })));
+    assert!(matches!(aims.last(), Some(create_engine::schematicannon::Aim::Set { target: None, .. })));
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [25, 25], &mut data);
+    assert!(data.contains_key(&"create_schematics".into()), "the cannon is saved with its column");
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

@@ -1,0 +1,30 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/schematicannon/connector",
+      "x": 90
+    },
+    "facing=east": {
+      "model": "create:block/schematicannon/connector",
+      "x": 90,
+      "y": 90
+    },
+    "facing=south": {
+      "model": "create:block/schematicannon/connector",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create:block/schematicannon/connector",
+      "x": 90,
+      "y": 270
+    },
+    "facing=up": {
+      "model": "create:block/schematicannon/connector"
+    },
+    "facing=down": {
+      "model": "create:block/schematicannon/connector",
+      "x": 180
+    }
+  }
+}
