@@ -152,13 +152,13 @@ pub struct Point {
 
 impl Point {
     /// `TravellingPoint.travel`, forward: moves `distance` along, on to the next edge at an end
-    /// (`select` chooses among several, given the candidates), stopping at a dead end. The
-    /// distance it really travelled.
+    /// (`select` chooses among several, given the edge it leaves and the candidates), stopping
+    /// at a dead end. The distance it really travelled.
     pub fn travel(
         &mut self,
         g: &Graph,
         distance: f64,
-        mut select: impl FnMut(&[usize]) -> usize,
+        mut select: impl FnMut(usize, &[usize]) -> usize,
     ) -> f64 {
         self.blocked = false;
         let length = g.length(self.edge);
@@ -184,7 +184,7 @@ impl Point {
             let next = if targets.len() == 1 {
                 targets[0]
             } else {
-                targets[select(&targets).min(targets.len() - 1)]
+                targets[select(self.edge, &targets).min(targets.len() - 1)]
             };
             self.edge = next;
             self.position -= length;
@@ -209,7 +209,7 @@ impl Point {
         &mut self,
         g: &Graph,
         distance: f64,
-        select: impl FnMut(&[usize]) -> usize,
+        select: impl FnMut(usize, &[usize]) -> usize,
     ) -> f64 {
         if distance >= 0.0 {
             return self.travel(g, distance, select);
@@ -276,7 +276,7 @@ mod tests {
         };
         let mut moved = 0.0;
         for _ in 0..40 {
-            moved += p.travel(&g, 0.8, |c| c.iter().position(|&e| e == turn).unwrap());
+            moved += p.travel(&g, 0.8, |_, c| c.iter().position(|&e| e == turn).unwrap());
         }
         assert!((moved - 32.0).abs() < 1e-6, "{moved}");
         let at = p.at(&g);
@@ -288,7 +288,8 @@ mod tests {
             position: 0.0,
             blocked: false,
         };
-        let straight = |c: &[usize]| c.iter().position(|&e| g.edges[e].turn.is_none()).unwrap();
+        let straight =
+            |_: usize, c: &[usize]| c.iter().position(|&e| g.edges[e].turn.is_none()).unwrap();
         let mut travelled = 0.0;
         for _ in 0..40 {
             travelled += q.travel(&g, 1.0, straight);

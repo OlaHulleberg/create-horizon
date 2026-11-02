@@ -58,6 +58,8 @@ pub struct StateInfo {
     pub visible: bool,
     pub upper: bool,
     pub hinge_right: bool,
+    /// A train signal's `type` is `cross_signal`.
+    pub cross_signal: bool,
 }
 
 impl StateInfo {
@@ -115,6 +117,7 @@ impl StateInfo {
                 "visible" => s.visible = v == "true",
                 "half" => s.upper = v == "upper",
                 "hinge" => s.hinge_right = v == "right",
+                "type" => s.cross_signal = v == "cross_signal",
                 "axis_along_first" => s.along_first = v == "true",
                 "blaze" => {
                     use crate::fan::Heat;
@@ -491,6 +494,7 @@ pub fn is_kinetic(block: Block) -> bool {
         visible: false,
         upper: false,
         hinge_right: false,
+        cross_signal: false,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }
