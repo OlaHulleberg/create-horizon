@@ -59,6 +59,8 @@ def write_fixture(original, root):
         ('player_tick', "horizon_client::game::native_hooks::Game<'_>::native_player_tick"),
         ('destroy_block', "horizon_client::game::native_hooks::Game<'_>::native_destroy_block"),
         ('hurt_enemy', "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy"),
+        ('screen', "horizon_client::game::native_hooks::Game<'_>::native_screen"),
+        ('menu_closed', "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -251,6 +253,8 @@ pub mod native_server {
 pub mod native_hooks {
     use super::*;
     pub mod flags { pub const UPDATE_CLIENTS: i32 = 2; pub const UPDATE_ALL: i32 = 3; }
+    pub struct NativeScreen { pub width: f32, pub height: f32, pub slots: Vec<Option<[f32; 2]>>,
+                              pub inventory_y: f32, pub inventory_x: f32, pub own_labels: bool }
     use native_lifecycle::WorldPhase;
     use native_server::{NativeCommand, NativeServerPlayer};
     impl GameLevel<'_> {
@@ -275,6 +279,15 @@ pub mod native_hooks {
             let _ = (pos, face, canceled);
         }
         pub fn spectator(&self) -> bool { false }
+        pub fn native_screen(&self, block: &str, screen: &mut Option<NativeScreen>) { let _ = (block, screen); }
+        pub fn native_menu_closed(&mut self, uuid: u128, window: i32) { let _ = (uuid, window); }
+        /// The fixture's menus: window 1 for any player, its title said.
+        pub fn native_open_menu(&mut self, uuid: u128, rows: u8, title: horizon_client::text::Text,
+                                items: Vec<Option<horizon_client::items::ItemStack>>) -> Option<i32> {
+            let _ = (uuid, rows, items);
+            self.said.push(format!("menu {}", title.0));
+            Some(1)
+        }
         pub fn native_block_entity(&mut self, block: &str, entity: &mut Option<(String, horizon_world::nbt::Compound)>) {
             let _ = (block, entity);
         }
@@ -492,9 +505,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 24) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 32) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 24;
+        let empty = state.0 == 0 || state.0 == 32;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -503,10 +516,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 24 is a water source.
+    /// State 32 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 24 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 32 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -606,7 +619,26 @@ impl Behaviours {
     states.push(BlockState { name: "create:copper_backtank".into(), properties: BTreeMap::from([
         ("facing".to_owned(), "north".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
     states.push(BlockState { name: "create:creative_motor".into(), properties: props("facing", "down") });
-    // 24: a water source.
+    // 24: a red valve handle facing west, 25: a black one.
+    for colour in ["red", "black"] {
+        states.push(BlockState { name: format!("create:{colour}_valve_handle"), properties: BTreeMap::from([
+            ("facing".to_owned(), "west".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
+    }
+    // 26..29: a train door's lower half facing north, hinge left: closed, open and hidden,
+    // closed and hidden (sliding shut), open and visible (as the template opens it).
+    for (open, visible) in [("false", "true"), ("true", "false"), ("false", "false"), ("true", "true")] {
+        states.push(BlockState { name: "create:train_door".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), "north".to_owned()), ("half".to_owned(), "lower".to_owned()),
+            ("hinge".to_owned(), "left".to_owned()), ("open".to_owned(), open.to_owned()),
+            ("powered".to_owned(), "false".to_owned()), ("visible".to_owned(), visible.to_owned())]) });
+    }
+    // 30, 31: a white postbox facing north, shut and open.
+    for open in ["false", "true"] {
+        states.push(BlockState { name: "create:white_postbox".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), "north".to_owned()), ("open".to_owned(), open.to_owned()),
+            ("waterlogged".to_owned(), "false".to_owned())]) });
+    }
+    // 32: a water source.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
@@ -876,7 +908,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 24), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 32), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -962,6 +994,75 @@ impl Behaviours {
     game.inventory[0] = None;
     game.native_player_tick();
     assert!(create_equipment_body::REACH.with_borrow(Vec::is_empty), "the reach goes with the grip");
+    // A red valve handle at (70, 0, 70): a click turns it at 32 RPM; a black dye recolours it.
+    let at = |p: [i32; 3]| BlockPos { x: p[0], y: p[1], z: p[2] };
+    game.world.blocks.insert([70, 0, 70], 24);
+    level.native_block_changed(LevelDimension::Overworld, at([70, 0, 70]), BlockStateId(0), BlockStateId(24));
+    let mut canceled = false;
+    game.native_right_click_block([70, 0, 70], [1, 0, 0], &mut canceled);
+    assert!(canceled, "a valve handle takes the click");
+    game.native_level_tick_post("minecraft:overworld");
+    let mut ran = false;
+    game.native_perform_command(&player, "create_debug speed 70 0 70", &mut ran);
+    assert!(game.said.last().is_some_and(|l| l.contains("32")), "turning: {:?}", game.said.last());
+    game.inventory[0] = Some(horizon_client::items::ItemStack::new("minecraft:black_dye", 1));
+    let mut canceled = false;
+    game.native_right_click_block([70, 0, 70], [1, 0, 0], &mut canceled);
+    assert!(canceled);
+    assert_eq!(game.world.blocks.get(&[70, 0, 70]), Some(&25), "dyed black, still facing west");
+    game.inventory[0] = None;
+    // A train door at (72, 0, 70): a click opens it hidden, with an iron door's sound; a second
+    // closes it, and once its panel has slid shut it shows again.
+    game.world.blocks.insert([72, 0, 70], 26);
+    level.native_block_changed(LevelDimension::Overworld, at([72, 0, 70]), BlockStateId(0), BlockStateId(26));
+    let mut canceled = false;
+    game.native_right_click_block([72, 0, 70], [0, 0, 1], &mut canceled);
+    assert!(canceled);
+    assert_eq!(game.world.blocks.get(&[72, 0, 70]), Some(&27), "open, hidden");
+    assert!(game.said.last().is_some_and(|l| l.contains("block.iron_door.open")));
+    level.native_block_changed(LevelDimension::Overworld, at([72, 0, 70]), BlockStateId(26), BlockStateId(27));
+    game.native_level_tick_post("minecraft:overworld");
+    let mut canceled = false;
+    game.native_right_click_block([72, 0, 70], [0, 0, 1], &mut canceled);
+    assert_eq!(game.world.blocks.get(&[72, 0, 70]), Some(&28), "closed, still sliding");
+    level.native_block_changed(LevelDimension::Overworld, at([72, 0, 70]), BlockStateId(27), BlockStateId(28));
+    let mut shown = None;
+    for t in 1..=12 {
+        game.native_level_tick_post("minecraft:overworld");
+        if game.world.blocks.get(&[72, 0, 70]) == Some(&26) { shown = Some(t); break; }
+    }
+    assert_eq!(shown, Some(2), "slid one step open, back in one, settled the next");
+    assert!(game.said.last().is_some_and(|l| l.contains("block.iron_door.close") && l.ends_with(" 0.5 1")));
+    // Opened by redstone (the template sets `open` only): hidden after the level's tick.
+    game.world.blocks.insert([72, 0, 70], 29);
+    level.native_block_changed(LevelDimension::Overworld, at([72, 0, 70]), BlockStateId(26), BlockStateId(29));
+    game.native_level_tick_post("minecraft:overworld");
+    assert_eq!(game.world.blocks.get(&[72, 0, 70]), Some(&27));
+    // A postbox at (74, 0, 70): a click opens its menu at the level's tick, and it opens; once
+    // the menu closes, it shuts.
+    game.world.blocks.insert([74, 0, 70], 30);
+    let mut canceled = false;
+    game.native_right_click_block([74, 0, 70], [0, 0, 1], &mut canceled);
+    assert!(canceled);
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(game.said.iter().any(|l| l == "menu block.create.white_postbox"));
+    assert!(game.said.iter().any(|l| l == "set [74, 0, 70] open=true"));
+    assert!(game.said.last().is_some_and(|l| l.contains("block.barrel.open")));
+    game.native_menu_closed(7, 1);
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(game.said.iter().any(|l| l == "set [74, 0, 70] open=false"));
+    // A toolbox: a container of 36 slots with a four-row menu, its screen showing Create's 32.
+    let mut entity = None;
+    game.native_block_entity("create:red_toolbox", &mut entity);
+    assert!(entity.is_some());
+    let mut container = None;
+    game.native_block_entity_container("create:red_toolbox", &mut container);
+    assert!(container.as_ref().is_some_and(|c| c.slots == 36 && c.inputs.len() == 32
+        && c.menu.as_deref() == Some("minecraft:generic_9x4")));
+    let mut screen = None;
+    game.native_screen("create:red_toolbox", &mut screen);
+    let screen = screen.expect("a toolbox lays its screen out");
+    assert_eq!((screen.slots.len(), screen.slots[31], screen.slots[32]), (36, Some([143.0, 72.0]), None));
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

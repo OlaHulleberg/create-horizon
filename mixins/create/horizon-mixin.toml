@@ -56,6 +56,12 @@ name = "create_trains"
 source = "trains.rs"
 
 [[module]]
+id = "blocks"
+file = "crates/horizon-client/src/game.rs"
+name = "create_blocks"
+source = "blocks.rs"
+
+[[module]]
 id = "equipment"
 file = "crates/horizon-client/src/game.rs"
 name = "create_equipment"
@@ -257,6 +263,28 @@ helper = "block_entity_container.rs"
 bindings = [
   { name = "block", ty = "&str", value = "block" },
   { name = "container", ty = "&mut Option<horizon_client::containers::ModContainer>", value = "container" },
+]
+
+[[injection]]
+id = "screen"
+hook = "screen"
+hook_version = 1
+kind = "HEAD"
+helper = "screen.rs"
+bindings = [
+  { name = "block", ty = "&str", value = "block" },
+  { name = "screen", ty = "&mut Option<crate::game::native_hooks::NativeScreen>", value = "screen" },
+]
+
+[[injection]]
+id = "menu-closed"
+hook = "menu_closed"
+hook_version = 1
+kind = "HEAD"
+helper = "menu_closed.rs"
+bindings = [
+  { name = "uuid", ty = "u128", value = "uuid" },
+  { name = "window", ty = "i32", value = "window" },
 ]
 
 [[injection]]

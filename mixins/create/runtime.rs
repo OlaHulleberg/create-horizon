@@ -4,6 +4,7 @@
 
 use super::Game;
 use super::create_arms::*;
+use super::create_blocks::*;
 use super::create_contraptions::*;
 use super::create_fluids::*;
 use super::create_logistics::*;
@@ -264,6 +265,8 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
         }
     }
     with_world(|w| w.tick_cranks(dim));
+    tick_doors(game, dimension, dim);
+    tick_postboxes(game, dimension, dim);
     // Water wheels whose surroundings changed, and one in 60 of the others each tick.
     let tick = game.world.game_time as u64;
     for (pos, axis) in with_world(|w| w.take_wheel_checks(dim, tick)).unwrap_or_default() {
@@ -744,6 +747,12 @@ pub(super) fn right_click_inner(
     let back = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
     let state = game.world.block(pos[0], pos[1], pos[2]).0;
     let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
+    // Valve handles, sliding doors, toolboxes, postboxes.
+    if let Some(b) = block
+        && use_block(game, dim, pos, b, BlockStateId(state), back, canceled)
+    {
+        return;
+    }
     if block == Some(create_engine::Block::Millstone) {
         use_millstone(game, pos, canceled);
         return;
@@ -2853,9 +2862,37 @@ pub(super) fn block_entity(
                 | "create:item_vault"
                 | "create:mechanical_crafter"
         )
+        || is_toolbox(block)
     {
         *entity = Some((block.into(), horizon_world::nbt::Compound::new()));
     }
+}
+
+/// Whether `block` (`create:red_toolbox`) is a toolbox: a binary search, when a block entity or
+/// a menu is made, never in a tick.
+fn is_toolbox(block: &str) -> bool {
+    block
+        .strip_prefix("create:")
+        .and_then(create_engine::Block::from_name)
+        .is_some_and(create_engine::dye::is_toolbox)
+}
+
+/// A menu opens for `block`: a toolbox's screen shows its eight compartments as columns of four
+/// stacks, the container's four slots past Create's 32 hidden (the server's menu leaves them out
+/// too).
+pub(super) fn screen(block: &str, screen: &mut Option<super::native_hooks::NativeScreen>) {
+    use create_engine::toolbox;
+    if screen.is_some() || !is_toolbox(block) {
+        return;
+    }
+    *screen = Some(super::native_hooks::NativeScreen {
+        width: toolbox::SCREEN_WIDTH,
+        height: toolbox::SCREEN_HEIGHT,
+        slots: (0..toolbox::SLOTS).map(toolbox::slot_position).collect(),
+        inventory_y: toolbox::INVENTORY_Y,
+        inventory_x: toolbox::INVENTORY_X,
+        own_labels: false,
+    });
 }
 
 /// The millstone's slots (`MillstoneInventoryHandler`): hoppers put into the input (0) and take
@@ -2865,6 +2902,21 @@ pub(super) fn block_entity_container(
     container: &mut Option<horizon_client::containers::ModContainer>,
 ) {
     if container.is_some() {
+        return;
+    }
+    if is_toolbox(block) {
+        // ToolboxInventory: 32 slots (8 compartments of 4 stacks), in and out through any face;
+        // a four-row grid menu, whose last four slots are hidden. Create's rule of one item per
+        // compartment needs a per-slot insert check mod containers don't have yet.
+        let stored: Vec<usize> = (0..create_engine::toolbox::STORED).collect();
+        *container = Some(horizon_client::containers::ModContainer {
+            slots: create_engine::toolbox::SLOTS,
+            faces: std::array::from_fn(|_| stored.clone()),
+            inputs: stored.clone(),
+            outputs: stored,
+            menu: Some(create_engine::toolbox::MENU.into()),
+            only_when_empty: false,
+        });
         return;
     }
     if block == "create:depot" || block == "create:weighted_ejector" {
@@ -3278,6 +3330,37 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
         if now != Some(axis) {
             game.native_set_block_property(pos, "axis", if axis == Axis::X { "x" } else { "z" });
         }
+        return;
+    }
+    if block.is_some_and(create_engine::dye::is_nixie_tube) {
+        // NixieTubeBlock.getStateForPlacement: its face from the clicked face, its facing from
+        // the player (waterlogging is the template's).
+        let ctx = create_engine::place::Context {
+            yaw: game.yaw,
+            pitch: game.pitch,
+            sneaking: game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft),
+            clicked_face,
+        };
+        let (face, facing) = create_engine::place::nixie(ctx);
+        let Some(id) = game
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .cloned()
+            .and_then(|mut s| {
+                s.properties
+                    .insert("double_face".into(), face.name().into());
+                s.properties
+                    .insert("facing".into(), dir_name(facing).into());
+                game.pack.assets.registry.id(&s)
+            })
+            .filter(|id| *id != state)
+        else {
+            return;
+        };
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
         return;
     }
     if block == Some(create_engine::Block::FluidPipe) {
