@@ -628,6 +628,7 @@ against the wall. Proof script: `scratchpad/carts/proof.sh` of the session (not 
 | cartbase: 16 loops of rail (10 by 6) with 4 powered rails each, a plain minecart running round each | 2030 ± 118 | 0.471 / 0.959 | 2.796 ± 0.288 | control |
 | carts: a powered cart assembler in one powered rail's place, each cart carrying its 3-block structure round (now counted as ridden, API 68) | 2073 ± 61 | 0.468 / 0.903 | 2.579 ± 0.143 | tick ≤ control + 0.25 ms, frame p50 ≤ control + 10% |
 | cartfuel: the same loops, furnace minecarts each picking up a chest of 64 coal: the chest's items ride, the furnace fed from them, its motion set each tick | 2071 ± 24 | 0.466 / 0.968 | 2.406 ± 0.098 | same |
+Re-run after merging onto `port/horizon` (Horizon `69bd0296c`, all checks green: 493 engine tests, template, test_stage, stage/check/test/build; 3 runs each, `--no-mobs`, 25 s settle): cartbase 2.280 ± 0.060 ms tick, 0.471 ms frame p50; carts 2.289 ± 0.070, 0.469; cartfuel 2.287 ± 0.071, 0.452; each run's check found every cart carrying its structure and moving.
 
 Both within budget (`benchmarks/create-p8f-*.json`): 16 carried contraptions, with storage and furnace fuel or
 without, cost no measurable tick or frame time against the plain carts (the control's tick is the highest of the three
