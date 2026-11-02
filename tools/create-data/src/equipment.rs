@@ -104,8 +104,94 @@ pub fn item(name: &str) -> Option<Value> {
                 "minecraft:enchantable": { "value": 1 }
             }
         }),
-        _ => return None,
+        // Filters (`FilterItem.regular`, `.attribute`, `.address`), the schedule and the
+        // crafting blueprint: plain items whose settings the native mod keeps in
+        // `minecraft:custom_data`; the blueprint's frame entity is gap 3.
+        "filter" | "attribute_filter" | "package_filter" | "schedule" | "crafting_blueprint"
+        | "tree_fertilizer" => json!({ "template": "minecraft:stick" }),
+        // ShoppingListItem, LinkedControllerItem: `stacksTo(1)`.
+        "shopping_list" | "linked_controller" => {
+            json!({ "template": "minecraft:stick", "max_stack_size": 1 })
+        }
+        // SuperGlueItem: `stacksTo(1).durability(99)`.
+        "super_glue" => json!({
+            "template": "minecraft:stick",
+            "max_stack_size": 1,
+            "components": { "minecraft:max_damage": 99 }
+        }),
+        // SymmetryWandItem: `stacksTo(1)`, uncommon.
+        "wand_of_symmetry" => json!({
+            "template": "minecraft:stick",
+            "max_stack_size": 1,
+            "rarity": "uncommon"
+        }),
+        // WorldshaperItem: `ZapperItem` stacks to 1, epic.
+        "handheld_worldshaper" => json!({
+            "template": "minecraft:stick",
+            "max_stack_size": 1,
+            "rarity": "epic"
+        }),
+        // PotatoCannonItem: `durability(100)` (one to a stack), a projectile weapon's
+        // enchantability 1 (`ProjectileWeaponItem.getEnchantmentValue`).
+        "potato_cannon" => json!({
+            "template": "minecraft:stick",
+            "max_stack_size": 1,
+            "components": {
+                "minecraft:max_damage": 100,
+                "minecraft:enchantable": { "value": 1 }
+            }
+        }),
+        // CARDBOARD_SWORD: `AllToolMaterials.CARDBOARD` (1 use, +2 damage, enchantability 1,
+        // repaired with cardboard), `SwordItem.createAttributes(CARDBOARD, 3, 1)`: 3 + 2 attack
+        // damage and +1 attack speed; one to a stack, burns 1000 ticks.
+        "cardboard_sword" => json!({
+            "template": "minecraft:wooden_sword",
+            "max_stack_size": 1,
+            "components": {
+                "minecraft:max_damage": 1,
+                "minecraft:enchantable": { "value": 1 },
+                "minecraft:repairable": { "items": "create:cardboard" },
+                "minecraft:attribute_modifiers": [
+                    { "type": "minecraft:attack_damage", "amount": 5.0,
+                      "id": "minecraft:base_attack_damage", "operation": "add_value",
+                      "slot": "mainhand" },
+                    { "type": "minecraft:attack_speed", "amount": 1.0,
+                      "id": "minecraft:base_attack_speed", "operation": "add_value",
+                      "slot": "mainhand" }
+                ],
+                "minecraft:cooking_fuel": { "burn_time": 1000,
+                                            "speed_multiplier": "minecraft:cooking/speed_default" }
+            }
+        }),
+        _ => return cardboard_armor(name),
     })
+}
+
+/// `AllArmorMaterials.CARDBOARD` (defence 1 each, enchantability 4, leather's equip sound, no
+/// toughness, repaired with cardboard) on `Type.getDurability(4)` (11, 16, 15, 13 × 4); each
+/// piece burns 1000 ticks. Its stealth (`CardboardArmorHandler`) is the native mod's.
+fn cardboard_armor(name: &str) -> Option<Value> {
+    let (piece, slot, durability) = match name {
+        "cardboard_helmet" => ("helmet", "head", 44),
+        "cardboard_chestplate" => ("chestplate", "chest", 64),
+        "cardboard_leggings" => ("leggings", "legs", 60),
+        "cardboard_boots" => ("boots", "feet", 52),
+        _ => return None,
+    };
+    Some(json!({
+        "template": format!("minecraft:leather_{piece}"),
+        "components": {
+            "minecraft:max_damage": durability,
+            "minecraft:enchantable": { "value": 4 },
+            "minecraft:repairable": { "items": "create:cardboard" },
+            "minecraft:equippable": { "slot": slot,
+                                      "equip_sound": "minecraft:item.armor.equip_leather",
+                                      "asset_id": "create:cardboard" },
+            "minecraft:attribute_modifiers": armor(slot, piece, 1.0, 0.0, 0.0),
+            "minecraft:cooking_fuel": { "burn_time": 1000,
+                                        "speed_multiplier": "minecraft:cooking/speed_default" }
+        }
+    }))
 }
 
 #[cfg(test)]
@@ -134,5 +220,31 @@ mod tests {
             200
         );
         assert!(item("wrench").is_none());
+    }
+
+    #[test]
+    fn handheld_items_take_create_s_numbers() {
+        assert_eq!(
+            item("super_glue").unwrap()["components"]["minecraft:max_damage"],
+            99
+        );
+        assert_eq!(item("wand_of_symmetry").unwrap()["rarity"], "uncommon");
+        assert_eq!(item("handheld_worldshaper").unwrap()["rarity"], "epic");
+        assert_eq!(
+            item("potato_cannon").unwrap()["components"]["minecraft:max_damage"],
+            100
+        );
+        let sword = item("cardboard_sword").unwrap();
+        assert_eq!(
+            sword["components"]["minecraft:attribute_modifiers"][0]["amount"],
+            5.0
+        );
+        let chest = item("cardboard_chestplate").unwrap();
+        assert_eq!(chest["components"]["minecraft:max_damage"], 64);
+        assert_eq!(
+            chest["components"]["minecraft:equippable"]["asset_id"],
+            "create:cardboard"
+        );
+        assert_eq!(item("filter").unwrap()["template"], "minecraft:stick");
     }
 }
