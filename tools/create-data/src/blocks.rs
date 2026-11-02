@@ -218,6 +218,24 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
     if let Some(reason) = later_phase(b) {
         return Decision::Pending(reason);
     }
+    // SeatBlock (waterlogged): AllShapes.SEAT, the cushion's half block (Create collides mobs
+    // with 6 px of it and players with 3; one shape here). Mobs landing on it sit
+    // (`entity_inside`).
+    if dyed(n, "seat").is_some() {
+        return Decision::Declared {
+            template: "minecraft:heavy_core",
+            sounds,
+            requires_tool: requires_tool(b),
+            shapes: Some(crate::shapes::by_property(
+                "waterlogged",
+                &["false", "true"],
+                &[[0., 0., 0., 16., 8., 16.]],
+            )),
+            own: None,
+            animated: false,
+            item: true,
+        };
+    }
     match keys.as_slice() {
         [] => {
             if has(n, &["window", "framed_glass", "tiled_glass"]) {
@@ -1111,10 +1129,19 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             Some(by_axis(&[LARGE_GEAR, SIX_VOXEL_POLE])),
             own(&[("axis", &["y", "x", "z"])]),
         ),
-        // TurntableBlock (KineticBlock, `SharedProperties::wooden`): no properties of its own, so
-        // no declared shape (content shapes select by a property): a full block, not
-        // AllShapes.TURNTABLE_SHAPE. Its plate is drawn turning.
-        "turntable" => ("minecraft:oak_planks", None, None),
+        // TurntableBlock (KineticBlock, `SharedProperties::wooden`): AllShapes.TURNTABLE_SHAPE,
+        // which content shapes select by a property: `axis`, its one value `y` (its rotation
+        // axis; one state, as Create's). Its plate is drawn turning; what stands on it is turned
+        // (`entityInside`, `entity_inside`).
+        "turntable" => (
+            "minecraft:oak_planks",
+            Some(by_property(
+                "axis",
+                &["y"],
+                &[[1., 4., 1., 15., 8., 15.], [5., 0., 5., 11., 4., 11.]],
+            )),
+            own(&[("axis", &["y"])]),
+        ),
         // LargeWaterWheelBlock (RotatedPillarKineticBlock, `SharedProperties::wooden`,
         // `noOcclusion`): its axis (y first) and `extension`; glass's template hides nothing
         // beside it (the wheel is drawn as a part, not in the chunk mesh).
@@ -1642,12 +1669,10 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
         });
     }
     // ControllerRailBlock (BaseRailBlock, `initialProperties(POWERED_RAIL)`): straight rail
-    // shapes, `power`, `backwards`, waterlogging. Horizon's rail code drives only vanilla's
-    // rails, so not a rail template: a thin block whose placement and power are the glue's.
-    // BaseRailBlock's shapes: 2 px flat, half a block on a slope.
+    // shapes, `power`, `backwards`, waterlogging. The powered rail's template: a rail to
+    // minecarts (`properties.rail`, along `shape`), its shapes (2 px flat, half a block on a
+    // slope, no collision) and survival; its placement and power are the glue's.
     if n == "controller_rail" {
-        let flat = px(&[[0., 0., 0., 16., 2., 16.]]);
-        let slope = px(&[[0., 0., 0., 16., 8., 16.]]);
         let shapes: &[&str] = &[
             "north_south",
             "east_west",
@@ -1656,24 +1681,13 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
             "ascending_north",
             "ascending_south",
         ];
-        let values: Map<String, Value> = shapes
-            .iter()
-            .map(|s| {
-                let b = if s.starts_with("ascending") {
-                    slope.clone()
-                } else {
-                    flat.clone()
-                };
-                (s.to_string(), b)
-            })
-            .collect();
         let powers: Vec<String> = (0..16).map(|i| i.to_string()).collect();
         let powers: Vec<&str> = powers.iter().map(String::as_str).collect();
         return Some(declared(
-            "minecraft:heavy_core",
+            "minecraft:powered_rail",
             "minecraft:iron_block",
             false,
-            Some(json!({ "property": "shape", "values": values })),
+            None,
             own(&[
                 ("backwards", bools),
                 ("power", &powers),
@@ -2663,6 +2677,16 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     if analog_output(&b.name) {
         props.insert("analog_output".into(), json!(true));
     }
+    // `BlockBehaviour.entityInside`: seats seat the mobs that land on them, turntables turn what
+    // stands on them (`native_entity_inside`).
+    if b.name == "turntable" || dyed(&b.name, "seat").is_some() {
+        props.insert("entity_inside".into(), json!(true));
+    }
+    // ControllerRailBlock (BaseRailBlock): a rail to minecarts, which it pushes
+    // (`onMinecartPass`, `native_minecart_pass`).
+    if b.name == "controller_rail" {
+        props.insert("rail".into(), json!(true));
+    }
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));
     doc.insert("properties".into(), Value::Object(props));
@@ -3001,6 +3025,14 @@ mod tests {
             doc("turntable")["properties"]["render_shape"],
             "entityblock_animated"
         );
+        // What stands on turntables and lands on seats is heard; carts run on controller rails.
+        assert_eq!(doc("turntable")["properties"]["entity_inside"], true);
+        assert_eq!(states_and_default(&doc("turntable")).0, 1);
+        assert_eq!(doc("lime_seat")["properties"]["entity_inside"], true);
+        assert_eq!(doc("lime_seat")["shapes"]["values"]["false"][0][4], 0.5);
+        assert_eq!(doc("controller_rail")["properties"]["rail"], true);
+        assert_eq!(doc("controller_rail")["template"], "minecraft:powered_rail");
+        assert!(doc("shaft")["properties"].get("entity_inside").is_none());
         assert_eq!(doc("water_wheel_structure")["item"], false);
         assert_eq!(doc("metal_girder_encased_shaft")["item"], false);
         assert_eq!(doc("haunted_bell")["template"], "minecraft:bell");
