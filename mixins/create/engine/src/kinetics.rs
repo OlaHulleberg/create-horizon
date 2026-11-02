@@ -381,6 +381,9 @@ pub struct Kinetics {
     free: Vec<u32>,
     /// Nodes at a position: index 0, and a split shaft's second half at 1.
     at: HashMap<[i32; 3], [u32; 2]>,
+    /// Parts joined to parts beyond their neighbours at ratio 1 (chain conveyors' chains,
+    /// `ChainConveyorBlockEntity.propagateRotationTo`): both sides list each other.
+    far: HashMap<[i32; 3], Vec<[i32; 3]>>,
     dirty: Vec<u32>,
     /// Positions whose parts left since the last `take_removed`.
     removed: Vec<[i32; 3]>,
@@ -470,6 +473,11 @@ impl Kinetics {
         let Some(ids) = self.at.remove(&pos) else {
             return;
         };
+        for p in self.far.get(&pos).into_iter().flatten() {
+            if let Some(n) = self.at.get(p) {
+                self.dirty.extend(n.iter().copied().filter(|&i| i != NONE));
+            }
+        }
         for id in ids.into_iter().filter(|&i| i != NONE) {
             let part = self.nodes[id as usize].part;
             for o in neighbour_offsets(&part) {
@@ -573,6 +581,34 @@ impl Kinetics {
                     out.push((m, r));
                 }
             }
+        }
+        if n.sub == 0
+            && let Some(far) = self.far.get(&pos)
+        {
+            for p in far {
+                let joined = self.far.get(p).is_some_and(|b| b.contains(&pos));
+                if let Some(&[m, _]) = self.at.get(p)
+                    && m != NONE
+                    && joined
+                {
+                    out.push((m, 1.0));
+                }
+            }
+        }
+    }
+
+    /// The parts at `pos` and at each of `to` turn together (ratio 1) where both list each
+    /// other; the networks of all of them solve again.
+    pub fn set_far(&mut self, pos: [i32; 3], to: Vec<[i32; 3]>) {
+        let old = self.far.remove(&pos).unwrap_or_default();
+        for p in old.iter().chain(&to).chain(std::iter::once(&pos)) {
+            if let Some(ids) = self.at.get(p) {
+                self.dirty
+                    .extend(ids.iter().copied().filter(|&i| i != NONE));
+            }
+        }
+        if !to.is_empty() {
+            self.far.insert(pos, to);
         }
     }
 
