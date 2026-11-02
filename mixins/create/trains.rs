@@ -384,6 +384,31 @@ pub(super) fn schedule_train(dim: usize, station: [i32; 3], entries: &str) -> St
     .unwrap_or_default()
 }
 
+/// `ScheduleItem.handScheduleTo` for the train standing at `station` (a conductor's click,
+/// without the conductor): refused while it runs a schedule or for one without stops, else it
+/// runs `entries` as `schedule_train` sets them.
+pub(super) fn hand_schedule(
+    dim: usize,
+    station: [i32; 3],
+    entries: &str,
+) -> Result<String, &'static str> {
+    railway_ready(dim);
+    let found = with_world(|w| {
+        let r = &w.dims[dim].railway;
+        r.trains
+            .iter()
+            .find(|t| t.train.at_station == Some(station))
+            .map(|t| t.schedule.is_some())
+    })
+    .flatten();
+    match found {
+        None => Err("no train at that station"),
+        Some(true) => Err("create.schedule.remove_with_empty_hand"),
+        Some(false) if entries.trim().is_empty() => Err("create.schedule.no_stops"),
+        Some(false) => Ok(schedule_train(dim, station, entries)),
+    }
+}
+
 /// `create_debug station_name <station> <name>`: names a station (its screen's name box).
 pub(super) fn name_station(dim: usize, station: [i32; 3], name: &str) -> String {
     let name = name.trim();

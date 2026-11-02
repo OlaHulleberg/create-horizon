@@ -60,6 +60,8 @@ def write_fixture(original, root):
         ('player_tick', "horizon_client::game::native_hooks::Game<'_>::native_player_tick"),
         ('destroy_block', "horizon_client::game::native_hooks::Game<'_>::native_destroy_block"),
         ('hurt_enemy', "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy"),
+        ('attack_entity', "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"),
+        ('left_click_block', "horizon_client::game::native_hooks::Game<'_>::native_left_click_block"),
         ('screen', "horizon_client::game::native_hooks::Game<'_>::native_screen"),
         ('menu_closed', "horizon_client::game::native_hooks::Game<'_>::native_menu_closed"),
         ('left_click_block', "horizon_client::game::native_hooks::Game<'_>::native_left_click_block"),
@@ -430,6 +432,14 @@ pub mod native_hooks {
         pub fn native_hurt_enemy(&mut self, stack: &horizon_client::items::ItemStack, entity: u32, kind: &str) {
             let _ = (stack, entity, kind);
         }
+        pub fn native_left_click_block(&mut self, pos: [i32; 3], face: [i32; 3], state: BlockStateId, canceled: &mut bool) {
+            let _ = (pos, face, state, canceled);
+        }
+        pub fn native_attack_entity(&mut self, entity: i32, kind: &str, pos: [f64; 3], canceled: &mut bool) {
+            let _ = (entity, kind, pos, canceled);
+        }
+        /// Entity 9 is a living mob (a cow).
+        pub fn native_mob(&self, dimension: &str, id: u32) -> Option<()> { let _ = dimension; (id == 9).then_some(()) }
         pub fn native_text_width(&self, text: &str) -> f32 { text.len() as f32 * 6.0 }
         pub fn native_fill(&self, batch: &mut horizon_client::hud::HudBatch, rect: [f32; 4], argb: u32) {
             let _ = (batch, rect, argb);
@@ -557,9 +567,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 53) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 54) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 53;
+        let empty = state.0 == 0 || state.0 == 54;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -568,10 +578,16 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 53 is a water source.
+    /// State 54 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 53 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 54 { FluidKind::Water } else { FluidKind::Empty })
+    }
+    /// `Block.updateFromNeighbourShapes`: the fixture's states keep their shape.
+    pub fn update_from_neighbour_shapes(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos,
+                                        state: BlockStateId) -> BlockStateId {
+        let _ = (level, ticks, pos);
+        state
     }
 }
 pub struct Res;
@@ -746,7 +762,9 @@ impl Behaviours {
     states.push(BlockState { name: "create:creative_fluid_tank".into(), properties: BTreeMap::from([
         ("bottom".to_owned(), "true".to_owned()), ("shape".to_owned(), "window".to_owned()), ("top".to_owned(), "true".to_owned())]) });
     states.push(BlockState { name: "create:hose_pulley".into(), properties: props("facing", "south") });
-    // 53: a water source; 54: a target block at power 7.
+    // 53: a smart chute, unpowered.
+    states.push(BlockState { name: "create:smart_chute".into(), properties: props("powered", "false") });
+    // 54: a water source; 55: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
@@ -816,7 +834,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 27);
+    assert_eq!(commands.len(), 32);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -1024,7 +1042,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 53), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 54), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1113,7 +1131,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 54);
+    game.world.blocks.insert([79, 0, 80], 55);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1553,6 +1571,72 @@ impl Behaviours {
     game.native_perform_command(&player, "create_debug fluid_state 640 0 600", &mut ran);
     assert_eq!(game.said.last().map(String::as_str), Some("valve at 640 0 600: pointer 1.00 toward 1"));
     assert!(game.said.iter().any(|l| l == "set [640, 0, 600] enabled=true"), "{:?}", game.said);
+    // Filters: a list filter set to deny dirt by its screen's command, put into a smart chute's
+    // filter slot at (800, 0, 800) (its south side, 11 px up): taken from the hand, it lets stone
+    // in and keeps dirt out; an empty hand clears the slot and the filter comes back.
+    let item = |id: &str| horizon_client::items::ItemStack { item: id.into(), count: 1, damage: 0, extra: None };
+    let chute = [800, 0, 800];
+    game.world.blocks.insert(chute, 53);
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 800, y: 0, z: 800 }, BlockStateId(0), BlockStateId(53));
+    game.inventory = vec![Some(item("create:filter")), None, None, None];
+    game.selected = 0;
+    let mut ran = false;
+    game.native_perform_command(&player, "create_debug filter hand list deny dirt", &mut ran);
+    assert!(ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("filter: deny list of 1 items"));
+    game.aim = Some(chute);
+    game.aim_point = Some([800.5, 11.0 / 16.0, 800.0 + 15.5 / 16.0]);
+    let mut canceled = false;
+    game.native_right_click_block(chute, [0, 0, 1], &mut canceled);
+    assert!(canceled, "the filter slot takes the click");
+    assert!(game.inventory[0].is_none(), "the filter item left the hand");
+    let accepts = |game: &Game<'_>, id: &str| create_logistics::chute_accepts(
+        game, 0, chute, create_engine::Block::SmartChute, false, &item(id));
+    assert!(accepts(&game, "minecraft:stone") && !accepts(&game, "minecraft:dirt"));
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [50, 50], &mut data);
+    assert!(format!("{data:?}").contains("create:filter"), "saved with its column: {data:?}");
+    let mut canceled = false;
+    game.native_right_click_block(chute, [0, 0, 1], &mut canceled);
+    assert!(accepts(&game, "minecraft:dirt"), "cleared");
+    assert_eq!(game.inventory.iter().flatten().filter(|s| &*s.item == "create:filter").count(), 1, "given back");
+    game.aim = None;
+    game.aim_point = None;
+    // An attribute filter's command refuses what the port can't read.
+    game.inventory[1] = Some(item("create:attribute_filter"));
+    game.native_perform_command(&player, "create_debug filter 1 attribute any placeable !has_color=red", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("filter: the has_color attribute is not ported"));
+    game.native_perform_command(&player, "create_debug filter 1 attribute all placeable added_by=minecraft", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("filter: whitelist_conj of 2 attributes"));
+    let attribute = create_items::filter_of(game.inventory[1].as_ref().unwrap());
+    assert!(create_items::passes(&game, Some(&attribute), &item("minecraft:stone")));
+    assert!(!create_items::passes(&game, Some(&attribute), &item("minecraft:dirt")));
+    // A wand of symmetry in the hotbar, its mirror a plane across x at (810, 0, 810): stone placed
+    // at (812, 0, 811) appears at (808, 0, 811); broken there, its image breaks too.
+    game.inventory[2] = Some(item("create:wand_of_symmetry"));
+    game.native_perform_command(&player, "create_debug symmetry 2 810 0 810 plane 1", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("symmetry: plane at 810 0 810 orientation 1"));
+    game.world.blocks.insert([812, 0, 811], 1);
+    game.native_place_block(&item("minecraft:stone"), [812, 0, 811], BlockStateId(1));
+    assert_eq!(game.world.blocks.get(&[808, 0, 811]), Some(&1), "mirrored");
+    assert!(game.world.blocks.get(&[812, 0, 809]).is_none(), "a plane across x only");
+    // Settings for the worldshaper and the schedule's stops, by command.
+    game.inventory[3] = Some(item("create:handheld_worldshaper"));
+    game.native_perform_command(&player, "create_debug worldshaper 3 sphere 2 fill attached block=minecraft:stone", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("worldshaper: sphere [2] fill attached solid with minecraft:stone"));
+    game.inventory[0] = Some(item("create:schedule"));
+    game.native_perform_command(&player, "create_debug schedule_item hand A@5 B", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("schedule: 2 stops"));
+    game.native_perform_command(&player, "create_debug hand_schedule 800 0 800", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("no train at that station"));
+    // A cardboard sword hurts no cow; an arthropod is hit as usual.
+    game.inventory[0] = Some(item("create:cardboard_sword"));
+    let mut canceled = false;
+    game.native_attack_entity(9, "minecraft:cow", [0.0; 3], &mut canceled);
+    assert!(canceled);
+    let mut canceled = false;
+    game.native_attack_entity(9, "minecraft:spider", [0.0; 3], &mut canceled);
+    assert!(!canceled);
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

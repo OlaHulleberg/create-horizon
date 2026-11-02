@@ -308,7 +308,7 @@ impl arm::World for ArmWorld<'_, '_> {
                     return count;
                 };
                 if chute_stack(game, pos).is_some()
-                    || !chute_accepts(dim, pos, block, powered, item)
+                    || !chute_accepts(game, dim, pos, block, powered, &stack_of(item, 1))
                 {
                     return count;
                 }

@@ -293,7 +293,8 @@ impl World<'_, '_> {
                         .sum();
                     have.min(max)
                 } else {
-                    extract_vault(self.game, &parts, |i| i == item, max).map_or(0, |s| s.count)
+                    extract_vault(self.game, &parts, |_, s| &*s.item == item, max)
+                        .map_or(0, |s| s.count)
                 }
             }
             Inv::Native(at, face) => {

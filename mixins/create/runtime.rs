@@ -2128,14 +2128,14 @@ pub(super) fn chunk_data_save(
     })
     .unwrap_or_default();
     let vaults = with_world(|w| w.dims[dim].vaults.column(chunk[0], chunk[1])).unwrap_or_default();
-    let filters: Vec<([i32; 3], String)> = with_world(|w| {
-        let mut v: Vec<([i32; 3], String)> = w.dims[dim]
+    let filters: Vec<([i32; 3], create_engine::filter::Filter)> = with_world(|w| {
+        let mut v: Vec<([i32; 3], create_engine::filter::Filter)> = w.dims[dim]
             .chute_filters
             .iter()
             .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]))
             .map(|(p, f)| (*p, f.clone()))
             .collect();
-        v.sort();
+        v.sort_by_key(|e| e.0);
         v
     })
     .unwrap_or_default();
