@@ -1369,6 +1369,78 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
             true,
         ));
     }
+    // RepackagerBlock (PackagerBlock without `linked`): facing and `powered`, a full block.
+    if n == "repackager" {
+        let full = [[0., 0., 0., 16., 16., 16.]];
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:netherite_block",
+            true,
+            Some(by_property("powered", bools, &full)),
+            own(&[
+                ("facing", &["down", "up", "north", "south", "west", "east"]),
+                ("powered", bools),
+            ]),
+            true,
+        ));
+    }
+    // PackagerLinkBlock and FactoryPanelBlock (FaceAttachedHorizontalDirectionalBlock: FLOOR,
+    // NORTH by default; `powered`, `waterlogged`): the grindstone's template places them on the
+    // clicked face and keeps them there whatever is behind (Create's link survives anywhere, the
+    // gauge on any face with a collision shape), and gives no signal (the link's `powered` is
+    // its input; the gauge's is never set). Their shapes follow two properties (AllShapes.
+    // STOCK_LINK, the panels'), which one property can't select: the template's are kept.
+    if n == "stock_link" || n == "factory_gauge" {
+        return Some(declared(
+            "minecraft:grindstone",
+            if n == "stock_link" {
+                "minecraft:netherite_block"
+            } else {
+                "minecraft:copper_block"
+            },
+            true,
+            None,
+            own(&[
+                ("face", &["floor", "wall", "ceiling"]),
+                ("facing", horizontal),
+                ("powered", bools),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ));
+    }
+    // StockTickerBlock (HorizontalDirectionalBlock, `softMetal`, glass sounds):
+    // AllShapes.STOCK_TICKER whatever its facing.
+    if n == "stock_ticker" {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:glass",
+            true,
+            Some(by_property(
+                "facing",
+                horizontal,
+                &[[1., 0., 1., 15., 4., 15.], [2., 0., 2., 14., 16., 14.]],
+            )),
+            own(&[("facing", horizontal)]),
+            true,
+        ));
+    }
+    // RedstoneRequesterBlock (`SharedProperties::stone`, netherite's sounds): `powered` and its
+    // horizontal `axis`, a full block.
+    if n == "redstone_requester" {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:netherite_block",
+            true,
+            Some(by_property(
+                "axis",
+                &["x", "z"],
+                &[[0., 0., 0., 16., 16., 16.]],
+            )),
+            own(&[("axis", &["x", "z"]), ("powered", bools)]),
+            true,
+        ));
+    }
     // FrogportBlock (`SharedProperties::softMetal`, netherite's sounds): no properties of its
     // own, so heavy core's waterlogging carries AllShapes.PACKAGE_PORT. Its packages, filter and
     // chain are the native mod's.
@@ -2302,19 +2374,21 @@ fn later_phase(b: &CreateBlock) -> Option<String> {
 
 /// Create's blocks of this port whose class answers `hasAnalogOutputSignal` with true (Create
 /// 6.0.11: `ItemVaultBlock`, `ToolboxBlock`, `DepotBlock`, `EjectorBlock`, `BasinBlock`,
-/// `FrogportBlock`, `PostboxBlock`, `PackagerBlock`, `ItemDrainBlock`, `SpoutBlock`,
-/// `FluidTankBlock`, `BacktankBlock`, `GaugeBlock`, `SequencedGearshiftBlock`,
-/// `BlazeBurnerBlock`, `LitBlazeBurnerBlock`, `SignalBlock`, `StationBlock`); the glue answers
-/// for each (`create_engine::comparator::has_analog_output`). Portable storage interfaces, the
-/// controller rail, the redstone requester and the lectern controller have one too and are not
-/// declared.
-pub const ANALOG_OUTPUT: [&str; 19] = [
+/// `FrogportBlock`, `PostboxBlock`, `PackagerBlock` (and the re-packager, its subclass),
+/// `RedstoneRequesterBlock`, `ItemDrainBlock`, `SpoutBlock`, `FluidTankBlock`, `BacktankBlock`,
+/// `GaugeBlock`, `SequencedGearshiftBlock`, `BlazeBurnerBlock`, `LitBlazeBurnerBlock`,
+/// `SignalBlock`, `StationBlock`); the glue answers for each
+/// (`create_engine::comparator::has_analog_output`). Portable storage interfaces, the
+/// controller rail and the lectern controller have one too and are not declared.
+pub const ANALOG_OUTPUT: [&str; 21] = [
     "item_vault",
     "depot",
     "weighted_ejector",
     "basin",
     "package_frogport",
     "packager",
+    "repackager",
+    "redstone_requester",
     "item_drain",
     "spout",
     "fluid_tank",
@@ -2738,7 +2812,7 @@ mod tests {
     }
 
     /// With Create's Java beside the port: the classes answering `hasAnalogOutputSignal` are the
-    /// ones `ANALOG_OUTPUT` names (and five not ported), and each of those blocks declared here
+    /// ones `ANALOG_OUTPUT` names (and four not ported), and each of those blocks declared here
     /// says `analog_output`.
     #[test]
     fn comparators_read_the_blocks_create_gives_an_analog_output() {
@@ -2796,8 +2870,8 @@ mod tests {
             assert_eq!(says, analog_output(&b.name), "{}", b.name);
             declared += usize::from(says);
         }
-        // 19 blocks, 16 toolboxes and 16 postboxes.
-        assert_eq!(declared, 19 + 16 + 16);
+        // 21 blocks, 16 toolboxes and 16 postboxes.
+        assert_eq!(declared, 21 + 16 + 16);
     }
 
     #[test]

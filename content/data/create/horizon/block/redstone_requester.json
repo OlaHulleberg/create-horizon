@@ -1,0 +1,46 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:netherite_block",
+    "analog_output": true
+  },
+  "item": true,
+  "shapes": {
+    "property": "axis",
+    "values": {
+      "x": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      ],
+      "z": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "axis": [
+      "x",
+      "z"
+    ],
+    "powered": [
+      "false",
+      "true"
+    ]
+  }
+}
