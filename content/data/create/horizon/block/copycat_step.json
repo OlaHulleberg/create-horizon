@@ -1,0 +1,52 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:gold_block",
+    "dynamic_model": true
+  },
+  "item": true,
+  "shapes": {
+    "property": "half",
+    "values": {
+      "bottom": [
+        [
+          0.0,
+          0.00390625,
+          0.0,
+          1.0,
+          0.5,
+          1.0
+        ]
+      ],
+      "top": [
+        [
+          0.0,
+          0.5,
+          0.0,
+          1.0,
+          0.99609375,
+          1.0
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "facing": [
+      "south",
+      "north",
+      "west",
+      "east"
+    ],
+    "half": [
+      "bottom",
+      "top"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}
