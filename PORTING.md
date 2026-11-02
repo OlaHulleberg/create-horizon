@@ -389,6 +389,16 @@ not a block entity); fixed. An andesite funnel facing west over a belt running s
 neighbour update (Create switches in `updateShape`) it became `andesite_belt_funnel[shape=pulling]` and the 8 iron put
 on the belt ended in the chest.
 
+Own-state blocks (gap 2 through Horizon's `state_properties`), proven headless: a red valve handle under a shaft,
+clicked and held: each use turned the shaft at 32 rpm for 7 ticks, refused while turning or cooling down, then again
+(DEBUG log of each use and the shaft's speed, removed); a black dye recoloured it to `black_valve_handle` with its
+properties. Two train doors, hinges left and right: a click opened both (`open=true,visible=false`); a redstone block
+powered them, removed it closed them and `visible` came back within a second (Create: once the slide settles). A
+hopper of iron over a red toolbox filled its first compartment; a click opened its 8×4 grid with the iron in it
+(screenshot). A red postbox read `open=true` while its menu was open and `false` once closed. A nixie tube placed from
+its item on a wall took `double_face=wall,facing=south`. These blocks do nothing per tick (doors only while sliding);
+Create idle stays free (see the equipment budget).
+
 | Scenario (2026-11-01, Phase 6 equipment, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1696 | 0.492 / 2.065 | 2.607 ± 0.277 | baseline |
