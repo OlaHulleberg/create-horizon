@@ -134,6 +134,9 @@ pub struct Train {
     pub nav: Option<Nav>,
     pub at_station: Option<[i32; 3]>,
     pub manual: Option<Manual>,
+    /// The share of its top speed a driver may take (`throttle`, set by the HUD's wheel in
+    /// 1/18 steps; 1 at first).
+    pub throttle: f64,
     /// Sections it holds ahead of a cross signal (`reservedSignalBlocks`).
     pub reserved: Vec<usize>,
     /// The points by their nodes, to find them on a graph built anew; `bound` while `points`
@@ -721,6 +724,7 @@ impl Train {
             nav: None,
             at_station: None,
             manual: None,
+            throttle: 1.0,
             reserved: Vec::new(),
             placed: Vec::new(),
             bound: true,
@@ -775,6 +779,7 @@ impl Train {
             nav: None,
             at_station: None,
             manual: None,
+            throttle: 1.0,
             reserved: Vec::new(),
             placed: Vec::new(),
             bound: true,
@@ -1189,12 +1194,13 @@ impl Train {
     }
 
     /// The controls held (`CarriageContraptionEntity.control`): toward the throttle's way at
-    /// 75% of top speed scaled by the throttle, the turning speed on a curve, a quarter of it
-    /// backwards, braking twice as hard against the way it runs; it leaves the station.
+    /// 75% of top speed scaled by the throttle and the train's (`cappedTopSpeed`), the turning
+    /// speed on a curve, a quarter of it backwards, braking twice as hard against the way it
+    /// runs; it leaves the station.
     fn drive(&mut self, g: &Graph, m: Manual) {
         let way = m.throttle.signum();
         let mut top = TOP_SPEED * MANUAL_SPEED;
-        let capped = top * m.throttle.abs().min(1.0);
+        let capped = top * m.throttle.abs().min(1.0) * self.throttle;
         let (lead, trail) = (self.points[0], self.points[self.points.len() - 1]);
         if g.edges[lead.edge].turn.is_some() || g.edges[trail.edge].turn.is_some() {
             top = TURN_TOP_SPEED;
@@ -2480,8 +2486,9 @@ impl Railway {
 
 /// A saved train's motion (`Train.write`): its speed, whether its controls face both ways, its
 /// heading, the station it stands at and the station it is bound for, with whether it reached
-/// it backwards (`behind`). Saved as 13 ints: speed (f32 bits), double-ended, heading (2), at a
-/// station (flag, then 3), bound for one (flag, then 3), behind.
+/// it backwards (`behind`), and its throttle (`Throttle`). Saved as 14 ints: speed (f32 bits),
+/// double-ended, heading (2), at a station (flag, then 3), bound for one (flag, then 3), behind,
+/// throttle (f32 bits; a save of 13 without it reads as full throttle).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SavedMotion {
     pub speed: f64,
@@ -2490,6 +2497,7 @@ pub struct SavedMotion {
     pub at_station: Option<[i32; 3]>,
     pub nav: Option<[i32; 3]>,
     pub behind: bool,
+    pub throttle: f64,
 }
 
 impl SavedMotion {
@@ -2506,10 +2514,11 @@ impl SavedMotion {
         v.push(i32::from(self.nav.is_some()));
         v.extend(pos(self.nav));
         v.push(i32::from(self.behind));
+        v.push((self.throttle as f32).to_bits() as i32);
         v
     }
 
-    /// None for fewer than the 13 ints `encode` writes.
+    /// None for fewer than 13 ints (`encode` writes 14; the 14th came with the throttle).
     pub fn decode(m: &[i32]) -> Option<Self> {
         if m.len() < 13 {
             return None;
@@ -2522,6 +2531,9 @@ impl SavedMotion {
             at_station: (m[4] != 0).then(|| at(5)),
             nav: (m[8] != 0).then(|| at(9)),
             behind: m[12] != 0,
+            throttle: m
+                .get(13)
+                .map_or(1.0, |&t| f64::from(f32::from_bits(t as u32))),
         })
     }
 }
@@ -2544,6 +2556,7 @@ mod tests {
                 at_station: Some([3, 64, -2]),
                 nav: None,
                 behind: false,
+                throttle: 1.0,
             },
             SavedMotion {
                 speed: 1.25,
@@ -2552,11 +2565,15 @@ mod tests {
                 at_station: None,
                 nav: Some([-40, 70, 12]),
                 behind: true,
+                throttle: 0.5,
             },
         ] {
             let ints = m.encode();
-            assert_eq!(ints.len(), 13);
+            assert_eq!(ints.len(), 14);
             assert_eq!(SavedMotion::decode(&ints), Some(m));
+            // Saved before the throttle: full throttle.
+            let old = SavedMotion::decode(&ints[..13]).unwrap();
+            assert_eq!(old.throttle, 1.0);
         }
         assert_eq!(SavedMotion::decode(&[0; 12]), None);
     }
@@ -3419,6 +3436,25 @@ mod tests {
             }
         }
         assert!(Railway::default().drive(9, Manual::default()).is_none());
+    }
+
+    #[test]
+    fn the_hud_s_throttle_caps_the_speed_by_hand() {
+        use crate::train_controls::{Driving, FORWARD};
+        let mut r = straight(600);
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[8, 64, 0]], [1.0, 0.0, 0.0]);
+        let id = r.trains[a].id;
+        assert!(r.start_controlling(id));
+        // 9/18 (`TrainHUD.onScroll` steps): half the speed by hand (`cappedTopSpeed`).
+        r.trains[a].train.throttle = crate::train_hud::throttle(9);
+        let (mut d, mut events) = (Driving::default(), Vec::new());
+        for _ in 0..200 {
+            r.control(id, 1 << FORWARD, false, &mut d);
+            r.tick(&mut events);
+        }
+        let top = TOP_SPEED * MANUAL_SPEED;
+        assert!((r.trains[a].train.speed - top / 2.0).abs() < 1e-9);
     }
 
     #[test]

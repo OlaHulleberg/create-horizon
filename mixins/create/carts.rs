@@ -1938,6 +1938,18 @@ pub(super) fn from_server(game: &mut Game<'_>, d: &[u8]) {
     );
 }
 
+/// A player joined dimension `dim` (the client's `sync`, as Create's entities are sent to a
+/// player who starts tracking them): its contraptions on carts go out with their blocks at the
+/// next tick, and its players' couplings are drawn again, to every player there.
+pub(super) fn sync(dim: usize) {
+    CARTS.with_borrow_mut(|c| {
+        for on in c.mounted.values_mut().filter(|on| on.dim == dim) {
+            on.fresh = true;
+        }
+        c.drawn.retain(|k, _| k.0 != dim);
+    });
+}
+
 /// Out of a world: the client forgets what it drew.
 pub(super) fn client_reset() {
     CLIENT.with_borrow_mut(HashMap::clear);

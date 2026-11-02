@@ -330,13 +330,30 @@ fn nearest_train(dim: usize, pos: [i32; 3], at_station_first: bool) -> Option<us
     .flatten()
 }
 
-/// `create_debug train <station>`: the nearest train that can reach that station heads there
-/// (`findPathTo` over the graph); a test driver standing in for schedules and the screen.
+/// What `create_debug train` did: a train set off (its id, how far along the track), or one
+/// stood there already.
+enum Sent {
+    Heading(u32, f64),
+    There(u32),
+}
+
+/// `create_debug train <station>`: a train standing at that station is there already
+/// (`ScheduleRuntime.tick`: a path to `getCurrentStation()` arrives at once); else the nearest
+/// train that can reach it heads there (`findPathTo` over the graph: ahead of its front, or
+/// behind its back when its controls face both ways); a test driver standing in for schedules
+/// and the screen.
 pub(super) fn send_train(game: &mut Game<'_>, dim: usize, station: [i32; 3]) -> String {
     railway_ready(dim);
     let found = with_world(|w| {
         let r = &mut w.dims[dim].railway;
         let s = r.station_index(station)?;
+        if let Some(t) = r
+            .trains
+            .iter()
+            .find(|t| t.train.bound && t.train.at_station == Some(station))
+        {
+            return Some(Sent::There(t.id));
+        }
         let c = [
             f64::from(station[0]) + 0.5,
             f64::from(station[1]),
@@ -356,16 +373,17 @@ pub(super) fn send_train(game: &mut Game<'_>, dim: usize, station: [i32; 3]) -> 
         order.into_iter().find_map(|(i, _)| {
             r.navigate(i, &[s]).then(|| {
                 let t = &r.trains[i];
-                (t.id, t.train.nav.as_ref().map_or(0.0, |n| n.distance))
+                Sent::Heading(t.id, t.train.nav.as_ref().map_or(0.0, |n| n.distance))
             })
         })
     })
     .flatten();
     match found {
-        Some((id, distance)) => {
+        Some(Sent::Heading(id, distance)) => {
             send_trains(game, dim, &[id], false);
             format!("train {id} heading for the station, {distance:.1} blocks along the track")
         }
+        Some(Sent::There(id)) => format!("train {id} is at that station already"),
         None => "no train can reach that station (no track beside it, or no path)".into(),
     }
 }
@@ -1228,6 +1246,7 @@ pub(super) fn trains_to_nbt(
                     at_station: t.train.at_station,
                     nav: t.train.nav.as_ref().map(|n| n.station),
                     behind: t.train.nav.as_ref().is_some_and(|n| n.behind),
+                    throttle: t.train.throttle,
                 };
                 c.insert("motion".into(), Tag::IntArray(motion.encode()));
                 c.insert(
@@ -1494,6 +1513,7 @@ pub(super) fn trains_from_nbt(
                     nav,
                     at_station: m.at_station,
                     manual: None,
+                    throttle: m.throttle,
                     reserved: Vec::new(),
                     placed,
                     bound: false,

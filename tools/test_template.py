@@ -203,8 +203,14 @@ pub mod hud {
     pub struct HudBatch { pub width: f32, pub height: f32, pub drawn: Vec<String> }
 }
 pub mod text {
+    #[derive(Clone)]
     pub struct Text(pub String);
+    pub struct Style { pub color: Option<u32> }
+    pub struct Span { pub text: String, pub style: Style }
+    pub struct Spans { pub spans: Vec<Span> }
     impl Text {
+        pub fn plain(&self) -> String { self.0.clone() }
+        pub fn resolved(&self) -> Spans { Spans { spans: vec![Span { text: self.0.clone(), style: Style { color: None } }] } }
         pub fn literal(s: impl Into<String>) -> Self { Text(s.into()) }
         pub fn translate(key: &str, args: &[Text]) -> Self { let _ = args; Text(key.into()) }
         pub fn colored(s: impl Into<String>, color: u32) -> Self { let _ = color; Text(s.into()) }
@@ -636,6 +642,12 @@ pub mod native_hooks {
             })
         }
         pub fn native_text_width(&self, text: &str) -> f32 { text.len() as f32 * 6.0 }
+        pub fn native_sprite_size(&self, name: &str) -> Option<[f32; 2]> { let _ = name; None }
+        pub fn native_sprite(&self, batch: &mut horizon_client::hud::HudBatch, name: &str, src: [f32; 4], dst: [f32; 4]) -> bool {
+            let _ = (src, dst);
+            batch.drawn.push(name.to_owned());
+            true
+        }
         pub fn native_fill(&self, batch: &mut horizon_client::hud::HudBatch, rect: [f32; 4], argb: u32) {
             let _ = (batch, rect, argb);
         }

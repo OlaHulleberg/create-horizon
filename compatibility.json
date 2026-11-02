@@ -1,13 +1,13 @@
 {
-  "horizon_revision": "69bd0296c309403ce0093fef4ec40beaf3e98180",
+  "horizon_revision": "a8f22bb4d49781af8920ab401d5e423cddd7dc47",
   "source_sha256": {
-    "crates/horizon-client/src/game.rs": "0ee5a76e14e13f4449b0f267ca1cdc7d9fb674005b6b2b99ad2eae45640f0db9",
-    "crates/horizon-client/src/game/native_hooks.rs": "fbc89955a01db73f4bbda5c3d751074a3035d383138fd9e0ba5e9653507c48a9"
+    "crates/horizon-client/src/game.rs": "0a985bfe57ea51e56568a58e73287745e94ab53333e9eaa9a1fe3ea4e0d6b6fc",
+    "crates/horizon-client/src/game/native_hooks.rs": "7e954640568035e39c98ee41382d1606abb3847b339066c9813a65d960ab3e9b"
   },
   "horizon_repository": "https://github.com/OlaHulleberg/horizon",
   "horizon_mixins_repository": "https://github.com/horizon-rust/horizon-mixins",
   "horizon_mixins_revision": "d9c83d7096b7ea5b83678da2efdfd6161f74997e",
   "mixin_schema": 6,
   "horizon_base": "9d979caa48a3bb58203319b9ea044db58c38e0d8",
-  "horizon_branch": "feat/create-hooks"
+  "horizon_branch": "feat/create-hooks-trains"
 }
