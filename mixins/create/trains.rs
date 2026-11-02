@@ -817,6 +817,11 @@ struct ClientTrain {
     since: f32,
 }
 
+/// Whether this client draws any train (a click has carriages to look at).
+pub(super) fn client_draws_trains() -> bool {
+    !TRAINS.with_borrow(HashMap::is_empty)
+}
+
 /// `ContraptionHandlerClient.rightClickingOnContraptionsGetsHandledLocally`'s search: the
 /// carriage block of the trains this client draws that the segment from `origin` to `target`
 /// hits first (`rayTraceContraption`, each carriage posed where it glides now, each block by

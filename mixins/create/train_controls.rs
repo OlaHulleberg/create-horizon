@@ -100,7 +100,10 @@ pub(super) fn interaction(
     canceled: &mut bool,
     swing: &mut bool,
 ) {
-    if button != horizon_client::interaction_input::Button::Use || *canceled {
+    if button != horizon_client::interaction_input::Button::Use
+        || *canceled
+        || !super::create_trains::client_draws_trains()
+    {
         return;
     }
     let Some((eye, look)) = game.aim() else {

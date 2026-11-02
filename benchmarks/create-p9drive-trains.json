@@ -1,0 +1,104 @@
+{
+  "scenario": "trains",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    2.11083984375,
+    1.57421875,
+    1.4287109375
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 22966,
+      "frame_ms_p50": 0.5155204832553864,
+      "frame_ms_p99": 0.8473970293998718,
+      "fps": 1913.8333333333333,
+      "tick_ms": 2.1120293140411377,
+      "tick_ms_max": 5.260767459869385,
+      "cpu_ms_p50": 0.3951440006494522,
+      "gpu_ms_p50": 0.4613020718097687,
+      "check": [
+        "train 12 heading for the station, 53.0 blocks along the track",
+        "train 11 heading for the station, 53.0 blocks along the track",
+        "train 10 heading for the station, 53.0 blocks along the track",
+        "train 9 heading for the station, 53.0 blocks along the track",
+        "train 8 heading for the station, 53.0 blocks along the track",
+        "train 7 heading for the station, 53.0 blocks along the track",
+        "train 6 heading for the station, 53.0 blocks along the track",
+        "train 5 heading for the station, 53.0 blocks along the track",
+        "train 4 heading for the station, 53.0 blocks along the track",
+        "train 3 heading for the station, 53.0 blocks along the track",
+        "train 2 heading for the station, 53.0 blocks along the track",
+        "train 1 heading for the station, 53.0 blocks along the track"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 22484,
+      "frame_ms_p50": 0.5257805287837982,
+      "frame_ms_p99": 0.8668760061264038,
+      "fps": 1873.6666666666667,
+      "tick_ms": 2.1502797603607178,
+      "tick_ms_max": 4.676096439361572,
+      "cpu_ms_p50": 0.4395880103111267,
+      "gpu_ms_p50": 0.4702604115009308,
+      "check": [
+        "train 12 heading for the station, 53.0 blocks along the track",
+        "train 11 heading for the station, 53.0 blocks along the track",
+        "train 10 heading for the station, 53.0 blocks along the track",
+        "train 9 heading for the station, 53.0 blocks along the track",
+        "train 8 heading for the station, 53.0 blocks along the track",
+        "train 7 heading for the station, 53.0 blocks along the track",
+        "train 6 heading for the station, 53.0 blocks along the track",
+        "train 5 heading for the station, 53.0 blocks along the track",
+        "train 4 heading for the station, 53.0 blocks along the track",
+        "train 3 heading for the station, 53.0 blocks along the track",
+        "train 2 heading for the station, 53.0 blocks along the track",
+        "train 1 heading for the station, 53.0 blocks along the track"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 22562,
+      "frame_ms_p50": 0.52480548620224,
+      "frame_ms_p99": 0.8575759530067444,
+      "fps": 1880.1666666666667,
+      "tick_ms": 2.1576764583587646,
+      "tick_ms_max": 7.008125305175781,
+      "cpu_ms_p50": 0.39619849622249603,
+      "gpu_ms_p50": 0.47057291865348816,
+      "check": [
+        "train 12 heading for the station, 53.0 blocks along the track",
+        "train 11 heading for the station, 53.0 blocks along the track",
+        "train 10 heading for the station, 53.0 blocks along the track",
+        "train 9 heading for the station, 53.0 blocks along the track",
+        "train 8 heading for the station, 53.0 blocks along the track",
+        "train 7 heading for the station, 53.0 blocks along the track",
+        "train 6 heading for the station, 53.0 blocks along the track",
+        "train 5 heading for the station, 53.0 blocks along the track",
+        "train 4 heading for the station, 53.0 blocks along the track",
+        "train 3 heading for the station, 53.0 blocks along the track",
+        "train 2 heading for the station, 53.0 blocks along the track",
+        "train 1 heading for the station, 53.0 blocks along the track"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1889.2222222222222,
+    "frame_ms_p50": 0.5220354994138082,
+    "frame_ms_p99": 0.8572829961776733,
+    "tick_ms": 2.1399951775868735,
+    "tick_ms_max": 5.648329734802246
+  },
+  "stdev": {
+    "fps": 21.56020854705698,
+    "frame_ms_p50": 0.005663192886290924,
+    "frame_ms_p99": 0.009742792277164087,
+    "tick_ms": 0.024499896493916224,
+    "tick_ms_max": 1.2133602290585543
+  }
+}
