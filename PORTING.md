@@ -424,6 +424,23 @@ drawn too: `create-data prepare` flattens NeoForge's `neoforge:composite` models
 into one vanilla elements list. Proven headless: a lever-powered link wrote "15" across two orange tubes, drawn as Create
 draws it (screenshot); the lever off, "0"; the tube holding it broken, its text gone.
 
+Schematics, proven headless: oak planks, a gold block beside them and glass on the planks saved by
+`/create_debug schematic save` ("Saved as hut.nbt"); a schematic table given an empty schematic (`/data merge`)
+uploaded it ("uploaded hut.nbt: 2x2x1": its output holds `create:schematic` with `File`, `Owner`, `Bounds`); that item
+in hand, deployed turned `clockwise_90` 10 blocks east; put into a schematicannon with 2 gunpowder (`/data merge`), a
+chest of planks, gold and glass beside it: woken it read `PAUSED ready fuel=400 placed=0/3`, played it printed the three
+blocks turned (planks at +10, gold at +10/+1, glass over the planks), took one of each from the chest and ended
+`STOPPED finished fuel=397` (screenshot of the barrel raised and both huts). A cannon reads its slots only when woken: a
+slot changed by `/data merge` sends no wake (the menu does), and in the tick after the merge its slots still read empty
+(DEBUG log, removed), so a wake that early loads nothing; the debug `pause` wakes it.
+
+| Scenario (2026-11-02, after schematics, display text, packages and carriages, `--no-mobs`, 25 s settle) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1868 | 0.481 / 1.210 | 2.522 ± 0.079 | baseline |
+| idle: Create content, no Create blocks | 1841 | 0.486 / 1.258 | 2.464 ± 0.103 | within noise of off |
+
+Create installed and unused still costs nothing per tick or frame (`benchmarks/create-p8schem-*.json`).
+
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
 vault: a hopper put one iron ingot in, the observer went `powered=true` and the lamp behind it lit; a threshold switch
