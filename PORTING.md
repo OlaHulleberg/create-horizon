@@ -155,9 +155,9 @@ place match: the bogey's wheels are not drawn yet, so it looks lifted.
 | driven: the same, the first train's seat taken by the player, who takes its controls and holds W through the flight (11 sent) | 1905 | 0.517 / 0.866 | 1.971 ± 0.051 | tick ≤ trains + 0.25 ms, frame p50 ≤ trains + 10% |
 
 A player riding and driving one of the twelve trains costs -0.169 ms of tick and -1.0% of frame p50 against the twelve sent by command, inside the budget (`benchmarks/create-p9drive-*.json`): the driven train runs by hand instead of navigating, and reaches the end of its line (blocked, still driven each tick: `control` and the search for a station ahead) about 6 s into the 12 s flight; each driven run's check reads the rider back at the far end of the
-Re-run after merging onto `port/horizon` (all checks green: 490 engine tests, template, test_stage, stage/check/test/build; 3 runs each): trains 2.051 ± 0.109 ms tick, 0.528 ms frame p50; driven 2.051 ± 0.033 ms, 0.513 ms; in every driven run the seated player took the controls (the action bar said so) and rode from x −27.5 to x +27.0.
 first line, still on the seat ("rider at x +27.0, y -3.60": the seat block's bottom less 0.6), and the eleven
 replies of the others.
+Re-run after merging onto `port/horizon` (all checks green: 490 engine tests, template, test_stage, stage/check/test/build; 3 runs each): trains 2.051 ± 0.109 ms tick, 0.528 ms frame p50; driven 2.051 ± 0.033 ms, 0.513 ms; in every driven run the seated player took the controls (the action bar said so) and rode from x −27.5 to x +27.0.
 
 | Scenario (2026-11-01, Phase 5 boilers, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
