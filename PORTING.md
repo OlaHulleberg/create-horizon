@@ -174,6 +174,7 @@ train) and was at y 101.4 (the seat's 102.0 - 0.6) before and after, again on th
 single player server wrote no player file (no `Pos`, the player back at spawn on every relaunch), fixed in Horizon.
 Open: `/create_debug train <station>` says `no train can reach that station` after the reload where it said `heading for
 the station` before (the train stands where it was; cause not looked into).
+Re-run after merging (all checks green, BMG G21, one game home kept): a pig on a white seat at y 78.4125 and the player on a red seat at 77.8125 before `save`; after quit and relaunch both at the same heights, and sneaking put the player off at 78.5.
 
 Trains across a save, fixed 2026-11-02: every saved train was dropped on load. The column save wrote 13 motion ints and
 the load wanted 14, reading the destination from one int on (both since `aa0c193`); found with DEBUG logs on the column
