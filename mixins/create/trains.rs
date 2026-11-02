@@ -491,7 +491,14 @@ pub(super) fn train_command(game: &mut Game<'_>, command: &str) -> bool {
     let done = with_world(|w| {
         w.dims[dim]
             .railway
-            .drive(id, Manual { throttle, steer })
+            .drive(
+                id,
+                Manual {
+                    throttle,
+                    steer,
+                    inverted: false,
+                },
+            )
             .is_some()
     }) == Some(true);
     let line = if done {
