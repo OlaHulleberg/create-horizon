@@ -433,6 +433,32 @@ chest back 8 blocks out, the chest holding the 2 cobblestone.
 
 Sixteen drilling contraptions cost 0.077 ms of tick over plain pistons (`benchmarks/create-p8actors-*.json`).
 
+Train carriages and signals, proven headless: a straight of 86 tracks, two stations 60 apart, small bogeys at +1, +4
+and +9 and a large one at +14, slime over +1..+4 with controls on it, slime and gold at +9, slime and iron at +14, an
+entry signal halfway held red by a redstone block: `/create_debug assemble` answered "train 1 assembled: 3 carriages
+on 4 bogeys" and every block left the world; sent to the far station, the train stood at the signal 12 s later
+(screenshot: bogey frames, wheels and the first carriage) and went on once the redstone was taken away; at the far
+station `assemble` put back all 13 blocks 60 blocks west in the same layout.
+
+Package logistics, proven headless: a chest of 16 iron behind a packager addressed "Mine", a frogport on it hooked to a
+chain conveyor (16 rpm) chained to a second one 4 away, a frogport filtered "Mine" on that over a chest: a redstone
+pulse packed the iron, the frogport sent the package along the chain (screenshot of the box on the chain), the second
+conveyor's routes read `Mine:0->[0, 0, 0]`, and the second chest held `create:cardboard_package_10x12` addressed
+"Mine" with the 16 iron inside; the first chest was empty.
+
+| Scenario (2026-11-02, Phase 9 carriages and Phase 4 packages, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1880 | 0.479 / 1.245 | 2.458 ± 0.085 | baseline |
+| trains: 12 lines of 57 tracks, a one-bogey train with controls on each, all sent across | 1725 | 0.527 / 1.197 | 2.790 ± 0.042 | tick ≤ off + 0.5 ms, frame p50 ≤ off + 15% |
+| conveyorbase (control): 16 pairs of chain conveyors on creative motors, unchained | 1850 | 0.484 / 1.303 | 2.675 ± 0.065 | control |
+| conveyors: the same pairs chained | 1865 | 0.480 / 1.198 | 2.725 ± 0.058 | tick ≤ control + 0.1 ms, frame p50 ≤ control + 5% |
+
+`benchmarks/create-p9carriages-*.json`, `benchmarks/create-p4packages-*.json`. The trains scene first assembled nothing:
+Create's assembly needs controls (`train_assembly.no_controls`), facing the way the train was assembled, and a train's
+front bogey stands by its station with the rest behind it, so an eastbound train now stands west of its station with
+controls facing west (found by probing one row: facing east was refused a path east, facing west with the train east of
+the station was refused for want of controls).
+
 | Scenario (2026-11-01, Phase 6 equipment, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1696 | 0.492 / 2.065 | 2.607 ± 0.277 | baseline |
