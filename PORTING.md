@@ -480,6 +480,12 @@ controls sent past it: the observer went `powered=true` as the train passed (2 o
 Create's 8-tick hold while over it and 3 after) and dark again; a train trapdoor clicked went `open=true`; four
 controller rails along z with a redstone block beside the first all read `power=15` (within Create's 8).
 
+Nozzle and belt connector, proven headless: in survival, a belt connector (4) clicked on two shafts along x three
+blocks apart in z laid `belt[facing=south]` start, middle, middle, end and left 3 connectors; a nozzle placed from its
+item on the east face of an encased fan turned at 16 rpm took `facing=east`, and a cow summoned a block in front of it
+was pushed out along +x and stopped about 4 blocks from the nozzle (range 3 at 16 rpm; it catches within half its
+range: a cow first put 3 blocks out was, rightly, never caught); the fan replaced by stone, the nozzle broke.
+
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
 vault: a hopper put one iron ingot in, the observer went `powered=true` and the lamp behind it lit; a threshold switch
