@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compile the real bundle on a tiny source fixture; no Horizon/assets required."""
 import json
+import re
 import shutil
 from pathlib import Path
 import subprocess
@@ -2716,8 +2717,24 @@ fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
     (original/'rust-toolchain.toml').write_bytes((root/'rust-toolchain.toml').read_bytes())
 
 
+# The argument kinds Horizon's native commands take (`native_server.rs`, `fn parser`): a usage
+# with any other kind is left out at load, with only a warning in the log.
+COMMAND_KINDS = {'word', 'text', 'integer', 'number', 'boolean', 'player', 'item', 'block_pos'}
+
+
+def command_kinds(root):
+    bad = []
+    for path in sorted((root/'mixins/create').glob('*.rs')):
+        for usage in re.findall(r'"create_debug[^"]*"|"create[a-z_]*\s[^"]*<[^"]*"', path.read_text()):
+            for kind in re.findall(r'[<\[][a-z_]+:([a-z_]+)[>\]]', usage):
+                if kind not in COMMAND_KINDS:
+                    bad.append(f'{path.name}: {usage}: {kind}')
+    assert not bad, bad
+
+
 def main():
     root = horizon.ROOT
+    command_kinds(root)
     (root/'target').mkdir(exist_ok=True)
     run(['cargo', 'build', '--locked', '--offline', '-p', 'horizon-mixins-cli'], cwd=horizon.MIXINS)
     cli = horizon.MIXINS/'target/debug/horizon-mixins'

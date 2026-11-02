@@ -756,7 +756,7 @@ pub(super) fn chunk_unload(dimension: &str, chunk: &horizon_client::chunk::Chunk
 /// `create_debug copycat <x> <y> <z>`: what a copycat holds, for a headless proof.
 pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeCommand>) {
     commands.push(super::native_server::NativeCommand::op(
-        "create_debug copycat <x:int> <y:int> <z:int>",
+        "create_debug copycat <x:integer> <y:integer> <z:integer>",
         2,
     ));
 }
