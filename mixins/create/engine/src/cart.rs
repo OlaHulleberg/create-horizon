@@ -3,8 +3,7 @@
 //! (`onMinecartPass` → `assembleNextTick`) or sets it down, by the rail it stands in for and its
 //! power; a powered one sends the cart on, an unpowered powered rail brakes it.
 //!
-//! Only the rules are here: Horizon has no hook where a minecart passes a mod's rail, and no
-//! entity a contraption could ride on a cart (PORTING.md, "8 Contraptions").
+//! The glue (`carts.rs`) runs them for each cart on an assembler (`native_minecart_pass`).
 
 use crate::kinetics::{Axis, Dir};
 
@@ -47,6 +46,11 @@ impl RailType {
             RailType::ActivatorRail => "minecraft:activator_rail",
             RailType::ControllerRail => "create:controller_rail",
         }
+    }
+
+    /// The `rail_type` property's value read back.
+    pub fn read(v: &str) -> Option<RailType> {
+        RailType::ALL.into_iter().find(|t| t.name() == v)
     }
 
     pub fn from_item(item: &str) -> Option<RailType> {
@@ -139,6 +143,68 @@ pub fn horizontal_direction(rail_axis: Axis, backwards: bool) -> Dir {
     } else {
         pointing
     }
+}
+
+/// `CartAssemblerBlock.onWrenched` (`rotate(CLOCKWISE_90)`, the controller rail's turn): the
+/// rail turns to the other axis; turning from north-south to east-west flips `backwards`.
+/// `east_west` is the shape now; the shape and `backwards` after.
+pub fn wrenched(east_west: bool, backwards: bool) -> (bool, bool) {
+    if east_west {
+        (false, backwards)
+    } else {
+        (true, !backwards)
+    }
+}
+
+/// `CartAssemblerBlockItem.tryPlaceAssembler`: the rail a click replaces, by block name (its
+/// type) and shape (only a straight flat one: east-west or north-south); `backwards` from a
+/// controller rail, else whether the player faces a positive way. The assembler's `rail_type`,
+/// whether it runs east-west, and `backwards`.
+pub fn placed_on(
+    rail: &str,
+    shape: &str,
+    rail_backwards: Option<bool>,
+    facing: Dir,
+) -> Option<(RailType, bool, bool)> {
+    let kind = RailType::from_item(rail)?;
+    let east_west = match shape {
+        "east_west" => true,
+        "north_south" => false,
+        _ => return None,
+    };
+    Some((
+        kind,
+        east_west,
+        rail_backwards.unwrap_or_else(|| facing.positive()),
+    ))
+}
+
+/// `CartAssemblerBlock.canAssembleTo`: rideable, furnace and chest minecarts.
+pub fn can_assemble_to(kind: &str) -> bool {
+    matches!(
+        kind,
+        "minecraft:minecart" | "minecraft:furnace_minecart" | "minecraft:chest_minecart"
+    )
+}
+
+/// `MinecartContraptionItem.create`: the item a cart of `kind` with a contraption becomes.
+pub fn contraption_item(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "minecraft:minecart" => "create:minecart_contraption",
+        "minecraft:furnace_minecart" => "create:furnace_minecart_contraption",
+        "minecraft:chest_minecart" => "create:chest_minecart_contraption",
+        _ => return None,
+    })
+}
+
+/// The cart a contraption item places (`minecartType`).
+pub fn item_cart(item: &str) -> Option<&'static str> {
+    Some(match item {
+        "create:minecart_contraption" => "minecraft:minecart",
+        "create:furnace_minecart_contraption" => "minecraft:furnace_minecart",
+        "create:chest_minecart_contraption" => "minecraft:chest_minecart",
+        _ => return None,
+    })
 }
 
 /// The cart's new motion after `tryAssemble`, if the action sets one: `motion` is the cart's,
@@ -278,6 +344,39 @@ mod tests {
         );
         assert_eq!(brake, Some([-0.02, 0.0, 0.0]));
         assert_eq!(horizontal_direction(Axis::Z, true), Dir::South);
+    }
+
+    #[test]
+    fn its_item_replaces_straight_rails_and_the_wrench_turns_it() {
+        assert_eq!(
+            placed_on("minecraft:rail", "east_west", None, Dir::East),
+            Some((RailType::Regular, true, true))
+        );
+        assert_eq!(
+            placed_on(
+                "create:controller_rail",
+                "north_south",
+                Some(false),
+                Dir::East
+            ),
+            Some((RailType::ControllerRail, false, false))
+        );
+        assert_eq!(
+            placed_on("minecraft:rail", "north_east", None, Dir::East),
+            None
+        );
+        assert_eq!(
+            placed_on("minecraft:stone", "east_west", None, Dir::East),
+            None
+        );
+        assert_eq!(wrenched(true, false), (false, false));
+        assert_eq!(wrenched(false, false), (true, true));
+        assert!(can_assemble_to("minecraft:chest_minecart"));
+        assert!(!can_assemble_to("minecraft:hopper_minecart"));
+        assert_eq!(
+            item_cart(contraption_item("minecraft:furnace_minecart").unwrap()),
+            Some("minecraft:furnace_minecart")
+        );
     }
 
     #[test]
