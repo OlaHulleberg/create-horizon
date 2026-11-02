@@ -431,6 +431,22 @@ pub(super) fn set_controller_items(stack: &mut ItemStack, items: &[String]) {
     set_custom(stack, vec![(create_engine::controller::ITEMS_KEY, value)]);
 }
 
+/// A minecart contraption item's contraption (`MINECRAFT_CONTRAPTION_DATA`, a compound).
+pub(super) fn minecart_contraption(stack: &ItemStack) -> Option<Compound> {
+    match get(custom(stack), create_engine::mounted::DATA_KEY) {
+        Some(Tag::Compound(c)) => Some(c.clone()),
+        _ => None,
+    }
+}
+
+/// `set(MINECRAFT_CONTRAPTION_DATA)`.
+pub(super) fn set_minecart_contraption(stack: &mut ItemStack, data: Compound) {
+    set_custom(
+        stack,
+        vec![(create_engine::mounted::DATA_KEY, Some(Tag::Compound(data)))],
+    );
+}
+
 /// `Inventory.placeItemBackInInventory`: into the inventory, the rest dropped at the player.
 pub(super) fn give_back(game: &mut Game<'_>, stack: ItemStack) {
     if let Some(rest) = game.give(stack)
