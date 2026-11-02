@@ -98,12 +98,14 @@ pub struct Nav {
 }
 
 /// A player's hold on a train's controls (`CarriageContraptionEntity.control`): the throttle
-/// (the forward or back key, scaled by the train's throttle; 0 lets go) and the steering at
-/// junctions (1 left, -1 right).
+/// (the forward or back key, scaled by the train's throttle; 0 lets go), the steering at
+/// junctions (1 left, -1 right), and whether the controls face the train's back (`inverted`:
+/// driven toward its back at full speed, toward its front at a quarter).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Manual {
     pub throttle: f64,
     pub steer: i8,
+    pub inverted: bool,
 }
 
 /// A point as saved and found again when the graph is built anew: its edge by its nodes, how
@@ -1197,7 +1199,8 @@ impl Train {
         if g.edges[lead.edge].turn.is_some() || g.edges[trail.edge].turn.is_some() {
             top = TURN_TOP_SPEED;
         }
-        if way < 0.0 {
+        // `slow`: driven against the way the controls face.
+        if m.inverted ^ (way < 0.0) {
             top /= 4.0;
         }
         let target = top.min(capped) * way;
@@ -2165,6 +2168,213 @@ impl Railway {
         Some(())
     }
 
+    /// `CarriageContraptionEntity.startControlling`: a player takes train `id`'s controls; its
+    /// schedule pauses (`manualControls`) and its navigation is cancelled. False when there is
+    /// no such train on the graph (Create's `carriage == null`; trains don't derail here).
+    pub fn start_controlling(&mut self, id: u32) -> bool {
+        let Some(t) = self.trains.iter_mut().find(|t| t.id == id && t.train.bound) else {
+            return false;
+        };
+        t.train.nav = None;
+        t.train.reserved.clear();
+        t.runtime.paused = true;
+        true
+    }
+
+    /// The controls of train `id` let go (`ControlsServerHandler` dropped its keys): it runs
+    /// on by itself again, coasting or navigating.
+    pub fn release(&mut self, id: u32) {
+        if let Some(t) = self.trains.iter_mut().find(|t| t.id == id) {
+            t.train.manual = None;
+        }
+    }
+
+    /// `CarriageContraptionEntity.control` for train `id`, after the player's checks: the keys
+    /// held (`train_controls` bits) on controls facing its back or not. Space at a station
+    /// tells its name; driving off it, the station departed; without a station, space follows
+    /// the navigation to the station ahead (`findNearestApproachable`, started by space and
+    /// kept only while space is held) with its progress, else the station ahead is offered;
+    /// then the throttle and steering by hand. None when there is no such train (the controls
+    /// are let go).
+    pub fn control(
+        &mut self,
+        id: u32,
+        held: u8,
+        inverted: bool,
+        driving: &mut crate::train_controls::Driving,
+    ) -> Option<crate::train_controls::Prompt> {
+        use crate::train_controls::{BACK, FORWARD, JUMP, LEFT, Prompt, RIGHT};
+        let i = self
+            .trains
+            .iter()
+            .position(|t| t.id == id && t.train.bound)?;
+        let has = |k: u8| held & (1 << k) != 0;
+        let mut speed = i32::from(has(FORWARD)) - i32::from(has(BACK));
+        let mut steer = i8::from(has(LEFT)) - i8::from(has(RIGHT));
+        if inverted {
+            speed = -speed;
+            steer = -steer;
+        }
+        let space = has(JUMP);
+        let name = |r: &Railway, p: [i32; 3]| {
+            r.stations
+                .get(&p)
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_STATION_NAME.to_owned())
+        };
+        let station = self.trains[i].train.at_station;
+        if let Some(p) = station
+            && space
+        {
+            return Some(Prompt::Arrived(name(self, p)));
+        }
+        let mut prompt = Prompt::None;
+        if let Some(p) = station
+            && speed != 0
+        {
+            driving.station_message = false;
+            prompt = Prompt::Departing(name(self, p));
+        }
+        if station.is_none() {
+            if let Some(nav) = &self.trains[i].train.nav {
+                if space {
+                    let f = nav.distance / driving.nav_total.max(1.0e-9);
+                    let progress = ((1.0 - (1.0 - f) * (1.0 - f)).clamp(0.0, 1.0) * 30.0) as u8;
+                    self.trains[i].train.manual = None;
+                    return Some(Prompt::Progress(progress));
+                }
+                self.trains[i].train.nav = None;
+            }
+            let t = &self.trains[i].train;
+            let directed = if speed != 0 {
+                f64::from(speed)
+            } else {
+                t.speed
+            };
+            let forward = !t.double_ended
+                || if directed != 0.0 {
+                    directed > 0.0
+                } else {
+                    !inverted
+                };
+            match self.nearest_approachable(i, forward) {
+                Some(s) if space => {
+                    self.trains[i].train.manual = None;
+                    if self.navigate(i, &[s]) {
+                        driving.nav_total = self.trains[i]
+                            .train
+                            .nav
+                            .as_ref()
+                            .map_or(0.0, |n| n.distance);
+                    }
+                    return Some(Prompt::None);
+                }
+                Some(s) => {
+                    driving.station_message = true;
+                    prompt = Prompt::Approach(name(self, self.net.stations[s].0));
+                }
+                None if driving.station_message => {
+                    driving.station_message = false;
+                    prompt = Prompt::Clear;
+                }
+                None => {}
+            }
+        }
+        let t = &mut self.trains[i];
+        t.train.manual = Some(Manual {
+            throttle: f64::from(speed),
+            steer,
+            inverted,
+        });
+        if speed != 0 {
+            t.train.nav = None;
+            t.train.reserved.clear();
+        }
+        Some(prompt)
+    }
+
+    /// `Navigation.findNearestApproachable`: the nearest station ahead of train `i` (from its
+    /// front, or its back when not `forward`) further than three quarters of its braking
+    /// distance and within 32 blocks or one and a half braking distances, no other train
+    /// standing at it; never past a signal from a side without blocks (`canNavigateVia`).
+    pub fn nearest_approachable(&self, i: usize, forward: bool) -> Option<usize> {
+        let t = &self.trains[i];
+        let g = &self.net.graph;
+        let braking = t.train.speed * t.train.speed / (2.0 * ACCELERATION);
+        let (min, max) = (0.75 * braking, (1.5 * braking).max(32.0));
+        let start = t.train.leading(g, forward);
+        let other_at = |s: usize| {
+            let p = self.net.stations[s].0;
+            self.trains
+                .iter()
+                .any(|o| o.id != t.id && o.train.at_station == Some(p))
+        };
+        let initial = start.edge;
+        let to_end = g.length(initial) - start.position;
+        for &(pos, mark) in &self.net.marks[initial] {
+            if pos < start.position {
+                continue;
+            }
+            match mark {
+                Mark::Signal(b) if self.net.signals[b].blocks[side_of(initial)].is_empty() => {
+                    return None;
+                }
+                Mark::Station(s)
+                    if to_end >= min && pos - start.position >= min && !other_at(s) =>
+                {
+                    return Some(s);
+                }
+                _ => {}
+            }
+        }
+        let mut frontier = BinaryHeap::new();
+        frontier.push(Frontier {
+            key: to_end,
+            distance: to_end,
+            penalty: 0,
+            has_destination: false,
+            edge: initial,
+        });
+        let mut visited: HashSet<usize> = HashSet::new();
+        while let Some(entry) = frontier.pop() {
+            if !visited.insert(entry.edge) || entry.distance > max {
+                continue;
+            }
+            let e = entry.edge;
+            if entry.has_destination {
+                let len = g.length(e);
+                for &(pos, mark) in &self.net.marks[e] {
+                    let Mark::Station(s) = mark else { continue };
+                    if entry.distance >= min && entry.distance - (len - pos) >= min && !other_at(s)
+                    {
+                        return Some(s);
+                    }
+                }
+            }
+            'next: for n in g.onward_iter(e) {
+                let mut has_destination = false;
+                for &(_, mark) in &self.net.marks[n] {
+                    match mark {
+                        Mark::Signal(b) if self.net.signals[b].blocks[side_of(n)].is_empty() => {
+                            continue 'next;
+                        }
+                        Mark::Station(_) => has_destination = true,
+                        _ => {}
+                    }
+                }
+                let distance = entry.distance + g.length(n);
+                frontier.push(Frontier {
+                    key: distance,
+                    distance,
+                    penalty: 0,
+                    has_destination,
+                    edge: n,
+                });
+            }
+        }
+        None
+    }
+
     /// A tick of every train: schedules give orders, navigating trains drive, those whose
     /// controls are held drive by hand, the others coast to a stop; then the signals' states.
     /// Nothing is done without trains unless a signal changed.
@@ -3095,6 +3305,7 @@ mod tests {
                 Manual {
                     throttle: 1.0,
                     steer,
+                    inverted: false,
                 },
             )
             .unwrap();
@@ -3112,6 +3323,7 @@ mod tests {
                 Manual {
                     throttle: 0.0,
                     steer,
+                    inverted: false,
                 },
             )
             .unwrap();
@@ -3131,6 +3343,97 @@ mod tests {
             }
         }
         assert!(Railway::default().drive(9, Manual::default()).is_none());
+    }
+
+    #[test]
+    fn a_player_s_keys_drive_the_train_as_create_s_controls() {
+        use crate::train_controls::{BACK, Driving, FORWARD, JUMP, Prompt};
+        let w = 1 << FORWARD;
+        // A straight line, a station at x 10 (where the train stands) and one at x 500.
+        let mut r = straight(600);
+        r.add_station([10, 64, 1]);
+        r.add_station([500, 64, 1]);
+        r.stations.insert([10, 64, 1], "Home".into());
+        r.stations.insert([500, 64, 1], "Far".into());
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[8, 64, 0]], [1.0, 0.0, 0.0]);
+        let id = r.trains[a].id;
+        r.trains[a].train.at_station = Some([10, 64, 1]);
+        r.trains[a].schedule = Some(Schedule {
+            entries: Vec::new(),
+            cyclic: false,
+        });
+        assert!(r.start_controlling(id));
+        assert!(r.trains[a].runtime.paused, "the schedule pauses");
+        let mut d = Driving::default();
+        // Space at the station names it; W departs from it.
+        assert_eq!(
+            r.control(id, 1 << JUMP, false, &mut d),
+            Some(Prompt::Arrived("Home".into()))
+        );
+        assert_eq!(
+            r.control(id, w, false, &mut d),
+            Some(Prompt::Departing("Home".into()))
+        );
+        // Held: it speeds up at 3 m/s² to 75% of top speed.
+        let mut events = Vec::new();
+        let mut speeds = Vec::new();
+        for _ in 0..200 {
+            r.control(id, w, false, &mut d);
+            r.tick(&mut events);
+            speeds.push(r.trains[a].train.speed);
+        }
+        assert!(
+            (speeds[9] - 10.0 * ACCELERATION).abs() < 1e-9,
+            "{}",
+            speeds[9]
+        );
+        assert!((speeds[199] - TOP_SPEED * MANUAL_SPEED).abs() < 1e-9);
+        // Controls facing its back: W drives it backwards, braking twice as hard against its
+        // motion first; S forward at a quarter of the speed.
+        let top = TOP_SPEED * MANUAL_SPEED;
+        r.control(id, w, true, &mut d);
+        r.tick(&mut events);
+        assert!((r.trains[a].train.speed - (top - 2.0 * ACCELERATION)).abs() < 1e-9);
+        for _ in 0..200 {
+            r.control(id, 1 << BACK, true, &mut d);
+            r.tick(&mut events);
+        }
+        assert!((r.trains[a].train.speed - top / 4.0).abs() < 1e-9);
+        // Let go: it coasts to a stop.
+        r.release(id);
+        for _ in 0..200 {
+            r.tick(&mut events);
+        }
+        assert_eq!(r.trains[a].train.speed, 0.0);
+        // Within one and a half braking distances of the far station (to the end of its edge),
+        // it is offered; space then drives there by itself while space is held, telling the
+        // progress, and stops at it.
+        while r.trains[a].train.points[0].at(&r.net.graph)[0] < 410.0 {
+            r.control(id, w, false, &mut d);
+            r.tick(&mut events);
+        }
+        assert_eq!(
+            r.control(id, 0, false, &mut d),
+            Some(Prompt::Approach("Far".into()))
+        );
+        r.tick(&mut events);
+        assert_eq!(r.control(id, 1 << JUMP, false, &mut d), Some(Prompt::None));
+        assert!(r.trains[a].train.nav.is_some());
+        let mut progress = Vec::new();
+        for _ in 0..1000 {
+            if let Some(Prompt::Progress(p)) = r.control(id, 1 << JUMP, false, &mut d) {
+                progress.push(p);
+            }
+            r.tick(&mut events);
+            if r.trains[a].train.at_station.is_some() {
+                break;
+            }
+        }
+        assert_eq!(r.trains[a].train.at_station, Some([500, 64, 1]));
+        assert!(progress.windows(2).all(|p| p[1] <= p[0]), "{progress:?}");
+        // A train that is gone lets the controls go.
+        assert!(r.control(9, 0, false, &mut d).is_none(), "no such train");
     }
 
     #[test]
