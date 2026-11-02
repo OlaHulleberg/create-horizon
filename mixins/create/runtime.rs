@@ -587,6 +587,7 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
         with_world(|w| w.dims[dim].railway.trains.iter().map(|t| t.id).collect())
             .unwrap_or_default();
     send_trains(game, dim, &trains, true);
+    sync_signal_lights(game, player, dim);
 }
 
 /// A player right-clicks a block (`HandCrankBlock.useItemOn`): a hand crank turns for 10 ticks,
@@ -2503,6 +2504,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         trains_from_server(game, data);
         return;
     }
+    if channel == SIGNAL_CHANNEL {
+        signals_from_server(game, data);
+        return;
+    }
     if channel == LIFT_CHANNEL {
         lifts_from_server(game, data);
         return;
@@ -3098,6 +3103,11 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
         "create_debug assemble <pos:block_pos>",
         2,
     ));
+    // A train's controls held (riding it is not possible yet: `Entity.startRiding`), for tests.
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug drive <controls:text>",
+        2,
+    ));
     // A schedule (the schedule item), a station's name (its screen) and a curve between two
     // tracks (the track item's two clicks), for tests.
     commands.push(super::native_server::NativeCommand::op(
@@ -3166,12 +3176,12 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
     if display_command(game, command)
         || redstone_command(game, command)
         || super::create_actors::contraption_command(game, command)
+        || train_command(game, command)
     {
         *ran = true;
         return;
     }
     let train = command.strip_prefix("create_debug train ");
-    let assemble = command.strip_prefix("create_debug assemble ");
     let schedule = command.strip_prefix("create_debug schedule ");
     let name = command.strip_prefix("create_debug station_name ");
     let curve = command.strip_prefix("create_debug curve ");
@@ -3182,7 +3192,6 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
     let Some(rest) = command
         .strip_prefix("create_debug speed ")
         .or(train)
-        .or(assemble)
         .or(schedule)
         .or(name)
         .or(curve)
@@ -3269,12 +3278,6 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
             _ => "usage: create_debug curve <x> <y> <z> <x> <y> <z>".into(),
         };
         game.native_feedback(horizon_client::text::Text::literal(line));
-        return;
-    }
-    if assemble.is_some() {
-        if let [x, y, z] = parts.as_slice() {
-            use_station(game, dim, [*x, *y, *z]);
-        }
         return;
     }
     if train.is_some() {

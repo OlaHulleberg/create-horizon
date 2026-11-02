@@ -731,12 +731,17 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 21);
+    assert_eq!(commands.len(), 22);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
     assert!(ran);
     assert_eq!(game.said.last().map(String::as_str), Some("create speed at 2 0 0: 17 rpm"), "after the scroll");
+    // A train's controls held by command (riding is not possible): no such train yet.
+    let mut ran = false;
+    game.native_perform_command(&player, "create_debug drive 9 1 left", &mut ran);
+    assert!(ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("no train 9"));
     // A depot at (5, 0, 0): its block entity, its slots, then a player facing north puts iron
     // on it; the server sends its contents and the client glides the stack in.
     let mut entity = None;

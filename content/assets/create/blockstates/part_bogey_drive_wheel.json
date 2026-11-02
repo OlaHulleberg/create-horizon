@@ -1,0 +1,30 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/track/bogey/bogey_drive_wheel",
+      "x": 90
+    },
+    "facing=east": {
+      "model": "create:block/track/bogey/bogey_drive_wheel",
+      "x": 90,
+      "y": 90
+    },
+    "facing=south": {
+      "model": "create:block/track/bogey/bogey_drive_wheel",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create:block/track/bogey/bogey_drive_wheel",
+      "x": 90,
+      "y": 270
+    },
+    "facing=up": {
+      "model": "create:block/track/bogey/bogey_drive_wheel"
+    },
+    "facing=down": {
+      "model": "create:block/track/bogey/bogey_drive_wheel",
+      "x": 180
+    }
+  }
+}

@@ -1336,6 +1336,27 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
             true,
         ));
     }
+    // ControlsBlock (`SharedProperties::softMetal`, netherite sounds, pickaxe): facing (toward
+    // whoever placed it), `open` (on a moving contraption), `virtual`, waterlogged; AllShapes
+    // .CONTROLS. A train assembled with it is driven by `/create_debug drive` (riding is gap 3).
+    if n == "controls" {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:netherite_block",
+            true,
+            Some(by_horizontal(&[
+                [0., 0., 6., 16., 16., 16.],
+                [0., 0., 4., 16., 2., 16.],
+            ])),
+            own(&[
+                ("facing", horizontal),
+                ("open", bools),
+                ("virtual", bools),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ));
+    }
     // NixieTubeBlock (DoubleFaceAttachedBlock, `SharedProperties::softMetal`, light 5): its face
     // (`double_face`, floor by default), facing and waterlogging. Only the orange one
     // (`nixie_tube`) has an item. Shapes by facing: AllShapes.NIXIE_TUBE on the floor, along
@@ -1434,7 +1455,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 48] = [
+pub const PARTIALS: [(&str, &str, &str); 54] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -1557,6 +1578,38 @@ pub const PARTIALS: [(&str, &str, &str); 48] = [
     // A curved track's pieces (`TrackMaterial.TrackModelHolder`), placed by their own transforms
     // (`BezierConnection.SegmentAngles`): drawn as they are, from their south-facing state.
     ("part_track_tie", "create:block/track/tie", "south"),
+    // StandardBogeyVisual's frames and wheels (OBJ models centred on the bogey's anchor, along
+    // z), and SignalRenderer's indicator lights: posed by the glue from their `up` state.
+    (
+        "part_bogey_frame",
+        "create:block/track/bogey/bogey_frame",
+        "up",
+    ),
+    (
+        "part_bogey_wheel",
+        "create:block/track/bogey/bogey_wheel",
+        "up",
+    ),
+    (
+        "part_bogey_drive",
+        "create:block/track/bogey/bogey_drive",
+        "up",
+    ),
+    (
+        "part_bogey_drive_wheel",
+        "create:block/track/bogey/bogey_drive_wheel",
+        "up",
+    ),
+    (
+        "part_signal_indicator_on",
+        "create:block/track_signal/indicator_on",
+        "up",
+    ),
+    (
+        "part_signal_indicator_off",
+        "create:block/track_signal/indicator_off",
+        "up",
+    ),
     (
         "part_track_segment_left",
         "create:block/track/segment_left",
