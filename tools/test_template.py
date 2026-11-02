@@ -71,6 +71,8 @@ def write_fixture(original, root):
         ('entity_inside', "horizon_client::game::native_hooks::Game<'_>::native_entity_inside"),
         ('minecart_pass', "horizon_client::game::native_hooks::Game<'_>::native_minecart_pass"),
         ('entity_mount', "horizon_client::game::native_hooks::Game<'_>::native_entity_mount"),
+        ('interaction_key_mapping_triggered',
+         "horizon_client::game::native_hooks::Game<'_>::native_interaction_key_mapping_triggered"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -179,6 +181,9 @@ pub mod mesher {
         pub fn new(state: BlockStateId) -> Self { Self { state, faces: [None; 6], boxes: Vec::new() } }
     }
 }
+pub mod interaction_input {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum Button { Attack, Use, Pick }
+}
 pub mod debug_keys {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum KeyAction { Press, Repeat, Release }
 }
@@ -200,6 +205,8 @@ pub mod text {
     impl Text {
         pub fn literal(s: impl Into<String>) -> Self { Text(s.into()) }
         pub fn translate(key: &str, args: &[Text]) -> Self { let _ = args; Text(key.into()) }
+        pub fn colored(s: impl Into<String>, color: u32) -> Self { let _ = color; Text(s.into()) }
+        pub fn append(self, other: Text) -> Self { Text(self.0 + &other.0) }
     }
 }
 pub mod chunk {
@@ -647,6 +654,11 @@ pub mod native_hooks {
                                 screen: bool, consumed: &mut bool) {
             let _ = (key, action, modifiers, screen, consumed);
         }
+        pub fn native_interaction_key_mapping_triggered(&mut self, button: horizon_client::interaction_input::Button,
+                                                        hand: horizon_client::first_person::Hand,
+                                                        canceled: &mut bool, swing: &mut bool) {
+            let _ = (button, hand, canceled, swing);
+        }
         /// The keys the test holds down.
         pub fn native_is_key_down(&self, key: &str) -> bool { super::KEYS_DOWN.with_borrow(|k| k.contains(key)) }
         pub fn native_level_load(&mut self, dimension: &str) { let _ = dimension; }
@@ -987,6 +999,53 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     cart.velocity = [0.2, 0.0, 0.0];
     game.native_minecart_pass(dim, rail, BlockStateId(70), &mut cart);
     assert!(close(cart.velocity[0], -0.4 / 16.0) && cart.velocity[1] == 0.0, "{:?}", cart.velocity);
+}
+/// A train's controls on the client: a use click with no train drawn is the game's; once the
+/// server gives the player a carriage's controls, W is kept from the game and goes to the server
+/// as Create's `ControlsInputPacket` (kept alive every 5 ticks); let go, the key goes up there
+/// and W walks again. On the server, words about a train that isn't there do nothing.
+#[cfg(test)]
+fn train_controls(game: &mut Game<'_>) {
+    use create_engine::train_controls::{CHANNEL, Target, ToClient, ToServer};
+    use horizon_client::debug_keys::KeyAction::{Press, Release};
+    use horizon_client::interaction_input::Button;
+    let (mut canceled, mut swing) = (false, true);
+    game.native_interaction_key_mapping_triggered(Button::Use, horizon_client::first_person::Hand::Main,
+                                                  &mut canceled, &mut swing);
+    assert!(!canceled && swing, "no carriage: the game's click");
+    let key = |game: &mut Game<'_>, action| {
+        let mut consumed = false;
+        game.native_input_key("key.keyboard.w", action, 0, false, &mut consumed);
+        consumed
+    };
+    assert!(!key(game, Press), "not controlling: W walks");
+    let at = Target { train: 4, car: 0, local: [0, 1, 0] };
+    game.native_net_from_server(CHANNEL, &ToClient::Start(at).encode());
+    assert!(key(game, Press), "controlling: W is the train's");
+    KEYS_DOWN.with_borrow_mut(|k| k.insert("key.keyboard.w".to_owned()));
+    let sent = |game: &Game<'_>, from: usize| -> Vec<ToServer> {
+        game.sent[from..].iter().filter(|m| m.1 == CHANNEL).filter_map(|m| ToServer::decode(&m.2)).collect()
+    };
+    let from = game.sent.len();
+    for _ in 0..6 {
+        game.native_tick();
+    }
+    let input = |keys, press| ToServer::Input { target: at, keys, press, stop: false };
+    assert_eq!(sent(game, from), [input(1, true), input(1, true)]);
+    let from = game.sent.len();
+    game.native_net_from_server(CHANNEL, &ToClient::Stop.encode());
+    assert_eq!(sent(game, from), [input(1, false)]);
+    KEYS_DOWN.with_borrow_mut(|k| k.remove("key.keyboard.w"));
+    key(game, Release);
+    assert!(!key(game, Press), "let go: W walks again");
+    key(game, Release);
+    // The server: keys and a click for train 4, which isn't there.
+    let from = game.sent.len();
+    for m in [input(1, true), ToServer::Click { target: at, wrench: false }] {
+        game.native_net_from_client(7, CHANNEL, &m.encode());
+    }
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(sent(game, from).is_empty() && game.sent[from..].iter().all(|m| m.1 != CHANNEL));
 }
 /// Cart assemblers, contraptions on carts, their items, saves and couplings, at x 1500 and up.
 #[cfg(test)]
@@ -2516,6 +2575,7 @@ fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
     PLAYER_AT.set([0.5, 2.0, 0.5]);
     seats_turntables_fans_and_rails(&mut game, &level);
     minecart_contraptions(&mut game, &level);
+    train_controls(&mut game);
     // Logistics networks across restarts: the world's save writes network "Base" (its link at
     // (1000, 1, 1000), owned by the player who linked it) to `data/create/logistics_networks.dat`
     // once; unchanged, a later save writes nothing. Forgotten and read back as after a restart,

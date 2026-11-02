@@ -2,8 +2,8 @@
 // the track graph and their save data, over the engine's `trains` and `network`. A sibling of
 // the `create` module (`runtime.rs`).
 //
-// Riding is not ported: Horizon has no entity a player can mount (`Entity.startRiding`, gap 3),
-// so a train's controls can't be taken by a player; `/create_debug drive` holds them instead.
+// Riding a carriage's seats and driving by its controls are `train_controls.rs`
+// (`create_train_controls`); `/create_debug drive` holds a train's controls by command.
 use super::Game;
 use super::create::*;
 use super::create_contraptions::*;
@@ -95,7 +95,9 @@ pub(super) fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) -> Opt
     match stopped {
         Some(Err(())) => return Some("the train can't be disassembled here".into()),
         Some(Ok((t, poses))) => {
-            for (car, (pivot, front)) in t.cars.iter().zip(poses) {
+            // Its seat blocks: where each went, for their riders.
+            let mut seats = Vec::new();
+            for (c, (car, (pivot, front))) in t.cars.iter().zip(poses).enumerate() {
                 let (yaw, _) = create_engine::trains::yaw_pitch(front, t.heading);
                 let quarter = ((yaw / 90.0).round() as i32 * 90).rem_euclid(360);
                 for (o, s) in car {
@@ -114,9 +116,17 @@ pub(super) fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) -> Opt
                         BlockStateId(state),
                         super::native_hooks::flags::UPDATE_ALL,
                     );
+                    if states::index(*s).is_some()
+                        && with_world(|w| w.table.get(*s).map(|(b, _)| b))
+                            .flatten()
+                            .is_some_and(create_engine::dye::is_seat)
+                    {
+                        seats.push((c as u16, *o, p));
+                    }
                 }
             }
             game.native_mark_chunk_unsaved(&dimension, [t.column.0, t.column.1]);
+            super::create_train_controls::disassembled(game, dim, t.id, &seats);
             send_train_clear(game, &dimension, t.id);
             return Some(format!("train {} disassembled", t.id));
         }
@@ -257,6 +267,20 @@ pub(super) fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) -> Opt
     let Some(id) = made else {
         return Some(assembly_failed(game, AssemblyError::NoBogeys));
     };
+    // `moveSeat`: whoever sits on a seat block it takes rides that carriage seat.
+    let mut seats = Vec::new();
+    for (n, (c, car)) in laid.carriages.iter().zip(&cars).enumerate() {
+        let b = found[c.first].1;
+        for (o, s) in car {
+            if with_world(|w| w.table.get(*s).map(|(b, _)| b))
+                .flatten()
+                .is_some_and(create_engine::dye::is_seat)
+            {
+                seats.push((n as u16, *o, [b[0] + o[0], b[1] + o[1], b[2] + o[2]]));
+            }
+        }
+    }
+    super::create_train_controls::assembled(dim, id, &seats);
     let air = BlockStateId(0);
     for (c, car) in laid.carriages.iter().zip(&cars) {
         let b = found[c.first].1;
@@ -788,6 +812,48 @@ struct ClientTrain {
     models: Vec<(usize, i32, u32)>,
     bogeys: usize,
     wheels: Vec<Option<(u8, f32, f32)>>,
+    /// Each carriage's last pose and when it came (parts seconds), for clicks on it.
+    poses: Vec<create_engine::trains::Pose>,
+    since: f32,
+}
+
+/// `ContraptionHandlerClient.rightClickingOnContraptionsGetsHandledLocally`'s search: the
+/// carriage block of the trains this client draws that the segment from `origin` to `target`
+/// hits first (`rayTraceContraption`, each carriage posed where it glides now, each block by
+/// its outline), with how far along. Nothing to look at without trains.
+pub(super) fn client_carriage_hit(
+    game: &Game<'_>,
+    origin: [f64; 3],
+    target: [f64; 3],
+) -> Option<(create_engine::train_controls::Target, f64)> {
+    use create_engine::train_controls::{Frame, Target, ray_trace};
+    if TRAINS.with_borrow(HashMap::is_empty) {
+        return None;
+    }
+    let now = game.native_parts_seconds();
+    let facts = game.res.facts();
+    TRAINS.with_borrow(|trains| {
+        let mut best: Option<(Target, f64)> = None;
+        for (&train, t) in trains {
+            let dt = f64::from(now - t.since);
+            for (c, (pose, blocks)) in t.poses.iter().zip(&t.cars).enumerate() {
+                let frame = Frame {
+                    pivot: std::array::from_fn(|k| pose.at[k] + f64::from(pose.velocity[k]) * dt),
+                    yaw: f64::from(pose.yaw) + f64::from(pose.yaw_rate) * dt,
+                    pitch: f64::from(pose.pitch),
+                    heading: t.heading,
+                };
+                let shape = |s: u32| facts.get(BlockStateId(s)).outline.clone();
+                if let Some((local, along)) = ray_trace(&frame, blocks, origin, target, shape)
+                    && best.is_none_or(|(_, b)| along < b)
+                {
+                    let car = c as u16;
+                    best = Some((Target { train, car, local }, along));
+                }
+            }
+        }
+        best
+    })
 }
 
 thread_local! {
@@ -867,6 +933,8 @@ pub(super) fn trains_from_server(game: &mut Game<'_>, d: &[u8]) {
                     models: Vec::new(),
                     bogeys: m.bogeys.len(),
                     wheels: vec![None; m.bogeys.len()],
+                    poses: Vec::new(),
+                    since: 0.0,
                 },
             )
         });
@@ -874,10 +942,15 @@ pub(super) fn trains_from_server(game: &mut Game<'_>, d: &[u8]) {
             clear_client_train(game, m.id, old);
         }
     }
-    let Some(heading) = TRAINS.with_borrow(|t| t.get(&m.id).map(|c| c.heading)) else {
+    let now = game.native_parts_seconds();
+    let Some(heading) = TRAINS.with_borrow_mut(|t| {
+        let ct = t.get_mut(&m.id)?;
+        ct.poses.clone_from(&m.cars);
+        ct.since = now;
+        Some(ct.heading)
+    }) else {
         return;
     };
-    let now = game.native_parts_seconds();
     let h = glam::Vec3::new(heading[0] as f32, 0.0, heading[1] as f32);
     let side = h.cross(glam::Vec3::Y).normalize_or(glam::Vec3::X);
     let tilt = |pitch: f32| glam::Mat4::from_axis_angle(side, pitch.to_radians());
