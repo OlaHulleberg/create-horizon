@@ -1,0 +1,101 @@
+{
+  "scenario": "displays",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.57373046875,
+    1.998046875,
+    2.681640625
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 22032,
+      "frame_ms_p50": 0.48542650043964386,
+      "frame_ms_p99": 1.3809410333633425,
+      "fps": 1836.0,
+      "tick_ms": 2.586557626724243,
+      "tick_ms_max": 8.1085786819458,
+      "cpu_ms_p50": 0.3351854979991913,
+      "gpu_ms_p50": 0.43171873688697815,
+      "check": [
+        "-539, 91, 74 has the following block data: [\"Speed 16 RPM\", \"\", \"\", \"\"]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 22566,
+      "frame_ms_p50": 0.47983649373054504,
+      "frame_ms_p99": 1.1622180938720703,
+      "fps": 1880.5,
+      "tick_ms": 2.7313270568847656,
+      "tick_ms_max": 8.745355606079102,
+      "cpu_ms_p50": 0.3356109857559204,
+      "gpu_ms_p50": 0.4267187416553498,
+      "check": [
+        "-533, 91, 71 has the following block data: [\"Speed 16 RPM\", \"\", \"\", \"\"]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 21823,
+      "frame_ms_p50": 0.493696004152298,
+      "frame_ms_p99": 1.1790668964385986,
+      "fps": 1818.5833333333333,
+      "tick_ms": 2.4953322410583496,
+      "tick_ms_max": 4.454609394073486,
+      "cpu_ms_p50": 0.3403500020503998,
+      "gpu_ms_p50": 0.4411458373069763,
+      "check": [
+        "-533, 93, 69 has the following block data: [\"Speed 16 RPM\", \"\", \"\", \"\"]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 23177,
+      "frame_ms_p50": 0.4616570174694062,
+      "frame_ms_p99": 1.2096459865570068,
+      "fps": 1931.4166666666667,
+      "tick_ms": 2.6205837726593018,
+      "tick_ms_max": 7.123404502868652,
+      "cpu_ms_p50": 0.3484399914741516,
+      "gpu_ms_p50": 0.4079687297344208,
+      "check": [
+        "-536, 88, 75 has the following block data: [\"Speed 16 RPM\", \"\", \"\", \"\"]"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 48,
+      "frames": 21914,
+      "frame_ms_p50": 0.4901160001754761,
+      "frame_ms_p99": 1.3942019939422607,
+      "fps": 1826.1666666666667,
+      "tick_ms": 2.6925837993621826,
+      "tick_ms_max": 7.496026039123535,
+      "cpu_ms_p50": 0.33695098757743835,
+      "gpu_ms_p50": 0.437812477350235,
+      "check": [
+        "-538, 93, 71 has the following block data: [\"Speed 16 RPM\", \"\", \"\", \"\"]"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1858.5333333333333,
+    "frame_ms_p50": 0.48214640319347385,
+    "frame_ms_p99": 1.2652148008346558,
+    "tick_ms": 2.6252768993377686,
+    "tick_ms_max": 7.185594844818115
+  },
+  "stdev": {
+    "fps": 47.29130322914684,
+    "frame_ms_p50": 0.012577931123444925,
+    "frame_ms_p99": 0.11307954399255307,
+    "tick_ms": 0.09244414047376795,
+    "tick_ms_max": 1.6464560040566618
+  }
+}
