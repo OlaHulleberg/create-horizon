@@ -486,6 +486,16 @@ item on the east face of an encased fan turned at 16 rpm took `facing=east`, and
 was pushed out along +x and stopped about 4 blocks from the nozzle (range 3 at 16 rpm; it catches within half its
 range: a cow first put 3 blocks out was, rightly, never caught); the fan replaced by stone, the nozzle broke.
 
+Linked controller and saved stock networks (Horizon API 57, 58), proven headless: a linked controller turned on by a
+use, W held through `horizon-ctl key w down`: an untuned redstone link (the empty frequency, as Create's) went
+`powered=true` and its lamp lit, the player did not move (W consumed: the same position before and while held), the
+link stayed powered 3 s more (keep-alives) and went off when W was let go. A first run walked the player: `horizon-ctl
+key` did not pass the new hook (Horizon `4f54ca2a8` routes it as the window's keys). A stock link put on a network, the
+world saved through `horizon-ctl save-all`: `saves/BB/data/create/logistics_networks.dat` written (192 bytes) once, not
+again by two more saves with nothing changed (DEBUG logs in Horizon and the glue, removed). A typed `/save-all`
+command does nothing in single player (only dedicated and LAN servers have it), which a first try ran into. Pinned to
+Horizon `4f54ca2a8` (API 63: also entity motion, mod blocks entities stand in, mod rails and seats, not yet used).
+
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
 vault: a hopper put one iron ingot in, the observer went `powered=true` and the lamp behind it lit; a threshold switch
