@@ -18,6 +18,7 @@ pub mod clock;
 pub mod comparator;
 pub mod contraption;
 pub mod controller;
+pub mod copycat;
 pub mod crafter;
 pub mod crusher;
 pub mod cuckoo;
