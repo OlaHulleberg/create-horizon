@@ -51,12 +51,14 @@ pub struct Boiler {
     /// mB a tick (`waterSupply`).
     pub water_supply: f32,
     pub attached_engines: i32,
+    /// Steam whistles on the tank (`attachedWhistles`).
+    pub attached_whistles: i32,
 }
 
 impl Boiler {
-    /// `isActive` (whistles are not ported).
+    /// `isActive`: engines or whistles on it.
     pub fn is_active(&self) -> bool {
-        self.attached_engines > 0
+        self.attached_engines > 0 || self.attached_whistles > 0
     }
 
     /// `clear`: a tank split off or formed again starts without supply, heat or engines.
@@ -65,6 +67,7 @@ impl Boiler {
         self.active_heat = 0;
         self.passive_heat = false;
         self.attached_engines = 0;
+        self.attached_whistles = 0;
         self.supply_over_time = [0.0; 10];
     }
 
@@ -241,6 +244,15 @@ pub fn still_valid(
         let engine = shaft_pos(shaft, d);
         engine_at(engine).is_some_and(|c| c == d.opposite() && is_shaft_valid(c, axis))
     })
+}
+
+/// `BoilerData.evaluate` for the tank blocks `blocks`: the whistles attached to them
+/// (`whistle_at` gives a whistle's attached direction).
+pub fn attached_whistles(
+    blocks: impl IntoIterator<Item = [i32; 3]>,
+    whistle_at: impl Fn([i32; 3]) -> Option<Dir>,
+) -> Vec<[i32; 3]> {
+    attached_engines(blocks, |p| whistle_at(p).map(Dir::opposite))
 }
 
 /// `BoilerData.evaluate` for the tank blocks `blocks`: the engines on them pointing away.

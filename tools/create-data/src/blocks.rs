@@ -198,6 +198,9 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
     if let Some(d) = own_states(b) {
         return d;
     }
+    if let Some(d) = fluid_blocks(b) {
+        return d;
+    }
     // AllFluids' `standardFluid` blocks: `LiquidBlock`s, water's states; how they flow is
     // their fluid declaration's (`fluid_declarations`).
     if matches!(n, "honey" | "chocolate") {
@@ -1673,6 +1676,172 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
     None
 }
 
+/// Phase 5's fluid blocks with state of their own (`AllBlocks`: all `SharedProperties
+/// ::copperMetal`, copper's sounds, pickaxe): valves, smart, glass and encased pipes, the hose
+/// pulley, the creative fluid tank, steam whistles and their extensions. Their behaviour is the
+/// glue's; Create's shapes selected by one property.
+fn fluid_blocks(b: &CreateBlock) -> Option<Decision> {
+    use crate::shapes::*;
+    let own = |props: &[(&str, &[&str])]| -> Value {
+        let mut m = Map::new();
+        for (k, v) in props {
+            m.insert((*k).into(), json!(v));
+        }
+        Value::Object(m)
+    };
+    let bools: &[&str] = &["false", "true"];
+    let facing: &[&str] = &["down", "up", "north", "south", "west", "east"];
+    let horizontal: &[&str] = &["north", "south", "west", "east"];
+    let sizes: &[&str] = &["medium", "small", "large"];
+    let declared = |template: &'static str, shapes: Option<Value>, own: Value, item: bool| {
+        Decision::Declared {
+            template,
+            sounds: Some("minecraft:copper_block"),
+            requires_tool: Some(true),
+            shapes,
+            own: Some(own),
+            animated: false,
+            item,
+        }
+    };
+    Some(match b.name.as_str() {
+        // FluidValveBlock (DirectionalAxisKineticBlock, waterlogged): AllShapes.FLUID_VALVE's
+        // middle (its pole runs along the pipe axis, which facing and `axis_along_first` set
+        // together: one property can't select it). Not a full block: heavy core's template.
+        "fluid_valve" => declared(
+            "minecraft:heavy_core",
+            Some(by_property(
+                "facing",
+                facing,
+                &[[2., 2., 2., 14., 14., 14.]],
+            )),
+            own(&[
+                ("axis_along_first", bools),
+                ("enabled", bools),
+                ("facing", facing),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ),
+        // SmartFluidPipeBlock (FaceAttachedHorizontalDirectionalBlock, waterlogged): the middle
+        // of AllShapes.SMART_FLUID_PIPE_* (floor first, north).
+        "smart_fluid_pipe" => declared(
+            "minecraft:heavy_core",
+            Some(by_property(
+                "face",
+                &["floor", "wall", "ceiling"],
+                &[[3., 3., 3., 13., 13., 13.]],
+            )),
+            own(&[
+                ("face", &["floor", "wall", "ceiling"]),
+                ("facing", horizontal),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ),
+        // GlassFluidPipeBlock (AxisPipeBlock: a RotatedPillarBlock, y by default; `alt`,
+        // waterlogged; `noOcclusion`): AllShapes.EIGHT_VOXEL_POLE. No item: a wrench makes it
+        // from a pipe.
+        "glass_fluid_pipe" => declared(
+            "minecraft:heavy_core",
+            Some(by_axis(&[[4., 0., 4., 12., 16., 12.]])),
+            own(&[
+                ("alt", bools),
+                ("axis", &["y", "x", "z"]),
+                ("waterlogged", bools),
+            ]),
+            false,
+        ),
+        // EncasedPipeBlock: a copper casing (a full block) open on the sides its pipe had. No
+        // item: copper casing on a pipe makes it.
+        "encased_fluid_pipe" => declared(
+            "minecraft:copper_block",
+            None,
+            own(&[
+                ("down", bools),
+                ("east", bools),
+                ("north", bools),
+                ("south", bools),
+                ("up", bools),
+                ("west", bools),
+            ]),
+            false,
+        ),
+        // HosePulleyBlock (HorizontalKineticBlock, `noOcclusion`): a full block of glass's
+        // template (nothing hidden behind it).
+        "hose_pulley" => declared(
+            "minecraft:glass",
+            None,
+            own(&[("facing", horizontal)]),
+            true,
+        ),
+        // FluidTankBlock.creative: the fluid tank's states and template.
+        "creative_fluid_tank" => declared(
+            "minecraft:glass",
+            None,
+            own(&[
+                ("bottom", &["true", "false"]),
+                (
+                    "shape",
+                    &[
+                        "window",
+                        "plain",
+                        "window_nw",
+                        "window_sw",
+                        "window_ne",
+                        "window_se",
+                    ],
+                ),
+                ("top", &["true", "false"]),
+            ]),
+            true,
+        ),
+        // WhistleBlock: HORIZONTAL_FACING, `powered`, `size` (medium by default), `wall`;
+        // AllShapes.WHISTLE_*_FLOOR by size (a wall whistle's base turns with its facing too).
+        "steam_whistle" => {
+            let floor =
+                |pole: Px| vec![pole, [1., 0., 1., 15., 3., 15.], [5., 0., 5., 11., 8., 11.]];
+            let px = |boxes: Vec<Px>| -> Value {
+                json!(
+                    boxes
+                        .iter()
+                        .map(|b| b.map(|v| v / 16.0))
+                        .collect::<Vec<_>>()
+                )
+            };
+            declared(
+                "minecraft:heavy_core",
+                Some(json!({ "property": "size", "values": {
+                    "small": px(floor([4., 3., 4., 12., 16., 12.])),
+                    "medium": px(floor([3., 3., 3., 13., 16., 13.])),
+                    "large": px(floor([2., 3., 2., 14., 16., 14.])) } })),
+                own(&[
+                    ("facing", horizontal),
+                    ("powered", bools),
+                    ("size", sizes),
+                    ("wall", bools),
+                ]),
+                true,
+            )
+        }
+        // WhistleExtenderBlock: `shape` (single by default) and `size`; AllShapes
+        // .WHISTLE_EXTENDER_MEDIUM_* by shape. No item: a whistle used on its whistle adds it.
+        "steam_whistle_extension" => declared(
+            "minecraft:heavy_core",
+            Some(json!({ "property": "shape", "values": {
+                "single": [[3. / 16., 0., 3. / 16., 13. / 16., 10. / 16., 13. / 16.]],
+                "double": [[3. / 16., 0., 3. / 16., 13. / 16., 18. / 16., 13. / 16.]],
+                "double_connected": [[3. / 16., 0., 3. / 16., 13. / 16., 1., 13. / 16.]] } })),
+            own(&[
+                ("shape", &["single", "double", "double_connected"]),
+                ("size", sizes),
+            ]),
+            false,
+        ),
+        _ => return None,
+    })
+}
+
 /// AllShapes.BASIN_COLLISION_SHAPE: shape(0, 2, 0, 16, 13, 16) less (2, 5, 2, 14, 16, 14), and
 /// the foot (2, 0, 2, 14, 2, 14).
 const BASIN: [[f64; 6]; 6] = [
@@ -1744,7 +1913,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 56] = [
+pub const PARTIALS: [(&str, &str, &str); 62] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -1972,6 +2141,32 @@ pub const PARTIALS: [(&str, &str, &str); 56] = [
         "create:block/schematicannon/pipe",
         "up",
     ),
+    // FluidValveRenderer's pointer, posed by the glue from its `up` state and turned about the
+    // valve's facing.
+    (
+        "part_fluid_valve_pointer",
+        "create:block/fluid_valve/pointer",
+        "up",
+    ),
+    // HosePulleyRenderer's coil (`partialFacing`, as the shaft half), and the hose's pieces
+    // drawn down to its end from their `up` state (`AbstractPulleyRenderer.renderAt`).
+    (
+        "part_hose_coil",
+        "create:block/hose_pulley/hose_coil",
+        "south",
+    ),
+    (
+        "part_hose_magnet",
+        "create:block/hose_pulley/pulley_magnet",
+        "up",
+    ),
+    ("part_hose_rope", "create:block/hose_pulley/rope", "up"),
+    ("part_hose_half", "create:block/hose_pulley/rope_half", "up"),
+    (
+        "part_hose_half_magnet",
+        "create:block/hose_pulley/rope_half_magnet",
+        "up",
+    ),
 ];
 
 /// The unit-cube models of `part_fluid_*`: every face the fluid's still texture, water's
@@ -2111,9 +2306,9 @@ fn later_phase(b: &CreateBlock) -> Option<String> {
 /// `FluidTankBlock`, `BacktankBlock`, `GaugeBlock`, `SequencedGearshiftBlock`,
 /// `BlazeBurnerBlock`, `LitBlazeBurnerBlock`, `SignalBlock`, `StationBlock`); the glue answers
 /// for each (`create_engine::comparator::has_analog_output`). Portable storage interfaces, the
-/// controller rail, the redstone requester, the creative fluid tank and the lectern controller
-/// have one too and are not declared.
-pub const ANALOG_OUTPUT: [&str; 18] = [
+/// controller rail, the redstone requester and the lectern controller have one too and are not
+/// declared.
+pub const ANALOG_OUTPUT: [&str; 19] = [
     "item_vault",
     "depot",
     "weighted_ejector",
@@ -2123,6 +2318,7 @@ pub const ANALOG_OUTPUT: [&str; 18] = [
     "item_drain",
     "spout",
     "fluid_tank",
+    "creative_fluid_tank",
     "copper_backtank",
     "netherite_backtank",
     "speedometer",
@@ -2274,6 +2470,86 @@ mod tests {
         p.iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn fluid_blocks_have_create_states_and_defaults() {
+        type Expect<'a> = (&'a str, usize, &'a [(&'a str, &'a str)], bool);
+        let expect: [Expect; 8] = [
+            (
+                "fluid_valve",
+                48,
+                &[
+                    ("axis_along_first", "false"),
+                    ("enabled", "false"),
+                    ("facing", "down"),
+                    ("waterlogged", "false"),
+                ],
+                true,
+            ),
+            (
+                "smart_fluid_pipe",
+                24,
+                &[
+                    ("face", "floor"),
+                    ("facing", "north"),
+                    ("waterlogged", "false"),
+                ],
+                true,
+            ),
+            (
+                "glass_fluid_pipe",
+                12,
+                &[("alt", "false"), ("axis", "y"), ("waterlogged", "false")],
+                false,
+            ),
+            (
+                "encased_fluid_pipe",
+                64,
+                &[
+                    ("down", "false"),
+                    ("east", "false"),
+                    ("north", "false"),
+                    ("south", "false"),
+                    ("up", "false"),
+                    ("west", "false"),
+                ],
+                false,
+            ),
+            ("hose_pulley", 4, &[("facing", "north")], true),
+            (
+                "creative_fluid_tank",
+                24,
+                &[("bottom", "true"), ("shape", "window"), ("top", "true")],
+                true,
+            ),
+            (
+                "steam_whistle",
+                48,
+                &[
+                    ("facing", "north"),
+                    ("powered", "false"),
+                    ("size", "medium"),
+                    ("wall", "false"),
+                ],
+                true,
+            ),
+            (
+                "steam_whistle_extension",
+                9,
+                &[("shape", "single"), ("size", "medium")],
+                false,
+            ),
+        ];
+        for (name, count, default, item) in expect {
+            let doc = declare(name, (3.0, 6.0, 64));
+            assert_eq!(
+                doc["properties"]["sounds"], "minecraft:copper_block",
+                "{name}"
+            );
+            assert_eq!(states_and_default(&doc), (count, pairs(default)), "{name}");
+            assert_eq!(doc["item"], item, "{name}");
+        }
     }
 
     #[test]
@@ -2520,8 +2796,8 @@ mod tests {
             assert_eq!(says, analog_output(&b.name), "{}", b.name);
             declared += usize::from(says);
         }
-        // 18 blocks, 16 toolboxes and 16 postboxes.
-        assert_eq!(declared, 18 + 16 + 16);
+        // 19 blocks, 16 toolboxes and 16 postboxes.
+        assert_eq!(declared, 19 + 16 + 16);
     }
 
     #[test]

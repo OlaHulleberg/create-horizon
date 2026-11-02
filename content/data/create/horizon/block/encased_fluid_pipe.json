@@ -1,0 +1,36 @@
+{
+  "template": "minecraft:copper_block",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:copper_block"
+  },
+  "item": false,
+  "state_properties": {
+    "down": [
+      "false",
+      "true"
+    ],
+    "east": [
+      "false",
+      "true"
+    ],
+    "north": [
+      "false",
+      "true"
+    ],
+    "south": [
+      "false",
+      "true"
+    ],
+    "up": [
+      "false",
+      "true"
+    ],
+    "west": [
+      "false",
+      "true"
+    ]
+  }
+}

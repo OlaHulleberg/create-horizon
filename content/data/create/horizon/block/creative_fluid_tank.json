@@ -1,0 +1,29 @@
+{
+  "template": "minecraft:glass",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:copper_block",
+    "analog_output": true
+  },
+  "item": true,
+  "state_properties": {
+    "bottom": [
+      "true",
+      "false"
+    ],
+    "shape": [
+      "window",
+      "plain",
+      "window_nw",
+      "window_sw",
+      "window_ne",
+      "window_se"
+    ],
+    "top": [
+      "true",
+      "false"
+    ]
+  }
+}
