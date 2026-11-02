@@ -1126,7 +1126,7 @@ impl Behaviours {
     let mut ran = false;
     game.native_perform_command(&player, "create_debug glue 90 0 90 91 0 90", &mut ran);
     assert!(ran);
-    assert_eq!(game.said.last().map(String::as_str), Some("glued 80 0 80 to 81 0 80"));
+    assert_eq!(game.said.last().map(String::as_str), Some("glued 90 0 90 to 91 0 90"));
     game.native_perform_command(&player, "create_debug glue 90 0 90 93 0 90", &mut ran);
     assert_eq!(game.said.last().map(String::as_str), Some("glue: the corners don't hold together"));
     let mut data = horizon_world::nbt::Compound::new();
