@@ -3,9 +3,9 @@
 // down (`SeatBlock`), and the seat stand-in goes once it has no rider or its block is gone
 // (`SeatEntity.tick`); a turning turntable turns what stands on it (`TurntableBlock.entityInside`,
 // `TurntableHandler`). The rules are `create_engine::seat`'s and `create_engine::turntable`'s.
-// Seats aren't saved (nor are the game's stand-ins): a mob that sat stands on its seat when the
-// world opens again and sits back down. Nothing is looked at each tick without a seat in use or a
-// click waiting.
+// The game's stand-ins save with their riders as Create's `SeatEntity` does (API 67): one that
+// comes back is taken back by the seat block it stands on, or handed to the carriages. Nothing is
+// looked at each tick without a seat in use, a click or a stand-in that came back waiting.
 use super::Game;
 use super::create::*;
 use super::native_entities::NativeEntity;
@@ -35,12 +35,48 @@ struct Sit {
 thread_local! {
     static SEATS: RefCell<HashMap<(usize, [i32; 3]), Seat>> = RefCell::new(HashMap::new());
     static SITS: RefCell<Vec<Sit>> = const { RefCell::new(Vec::new()) };
+    /// Stand-ins that came back from a save (dimension, id, position), for the level's tick.
+    static LOADED: RefCell<Vec<(usize, u32, [f64; 3])>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The world closed: its seats went with it.
 pub(super) fn forget() {
     SEATS.with_borrow_mut(HashMap::clear);
     SITS.with_borrow_mut(Vec::clear);
+    LOADED.with_borrow_mut(Vec::clear);
+}
+
+/// A seat stand-in came back from a save (`native_seat_loaded`), its riders on it: taken back
+/// at the level's next tick, when the player whose file held it is on it too.
+pub(super) fn seat_loaded(dimension: &str, seat: u32, pos: [f64; 3]) {
+    if let Some(dim) = dimension_index(dimension) {
+        LOADED.with_borrow_mut(|l| l.push((dim, seat, pos)));
+    }
+}
+
+/// The stand-ins that came back: one in a seat block no other stand-in holds is that seat's
+/// again (Create's `SeatEntity` is the block's by where it stands); any other may be a carriage's.
+fn take_back(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let loaded: Vec<(usize, u32, [f64; 3])> = LOADED.with_borrow_mut(|l| {
+        let (here, rest) = std::mem::take(l).into_iter().partition(|l| l.0 == dim);
+        *l = rest;
+        here
+    });
+    for (_, id, at) in loaded {
+        let pos = at.map(|v| v.floor() as i32);
+        let free = block_of(game.world.block(pos[0], pos[1], pos[2]).0).is_some_and(dye::is_seat)
+            && !SEATS.with_borrow(|s| s.contains_key(&(dim, pos)));
+        if !free {
+            super::create_train_controls::seat_loaded(dim, id, at);
+            continue;
+        }
+        // A seat's riders are players or mobs.
+        let riders = game.native_passengers(dimension, id);
+        let player = riders
+            .iter()
+            .any(|&r| game.native_mob(dimension, r).is_none());
+        SEATS.with_borrow_mut(|s| s.insert((dim, pos), Seat { id, player }));
+    }
 }
 
 fn block_of(state: u32) -> Option<Block> {
@@ -181,12 +217,16 @@ fn remove_seat(game: &mut Game<'_>, dimension: &str, pos: [i32; 3], id: u32) {
 /// first), then each seat in use goes when it has no rider or its block isn't a seat any more
 /// (`SeatEntity.tick`).
 pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
-    if SEATS.with_borrow(HashMap::is_empty) && SITS.with_borrow(Vec::is_empty) {
+    if SEATS.with_borrow(HashMap::is_empty)
+        && SITS.with_borrow(Vec::is_empty)
+        && LOADED.with_borrow(Vec::is_empty)
+    {
         return;
     }
     let Some(dim) = dimension_index(dimension) else {
         return;
     };
+    take_back(game, dimension, dim);
     let sits: Vec<Sit> = SITS.with_borrow_mut(|s| {
         let (here, rest) = std::mem::take(s).into_iter().partition(|s| s.dim == dim);
         *s = rest;

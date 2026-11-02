@@ -74,6 +74,7 @@ def write_fixture(original, root):
         ('entity_mount', "horizon_client::game::native_hooks::Game<'_>::native_entity_mount"),
         ('interaction_key_mapping_triggered',
          "horizon_client::game::native_hooks::Game<'_>::native_interaction_key_mapping_triggered"),
+        ('seat_loaded', "horizon_client::game::native_hooks::Game<'_>::native_seat_loaded"),
     ]
     files = {
         'Cargo.toml': ('[workspace]\nmembers = ["crates/horizon-core", "crates/horizon-world", '
@@ -496,6 +497,9 @@ pub mod native_hooks {
         }
         pub fn native_entity_mount(&mut self, dimension: &str, rider: u32, vehicle: u32, mounting: bool, canceled: &mut bool) {
             let _ = (dimension, rider, vehicle, mounting, canceled);
+        }
+        pub fn native_seat_loaded(&mut self, dimension: &str, seat: u32, pos: [f64; 3]) {
+            let _ = (dimension, seat, pos);
         }
         /// The fixture's entities (`ENTITIES`), their boxes 0.6 wide and 1.8 high at their feet.
         pub fn native_entity(&self, dimension: &str, id: u32) -> Option<super::native_entities::NativeEntity> {
@@ -947,6 +951,35 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     game.native_level_tick_post(dim);
     assert_eq!(get(7).vehicle, None);
     assert!(close(get(7).pos[1], 0.675) && !seat_of(seat).2);
+    ENTITIES.with_borrow_mut(Vec::clear);
+    // Saved and loaded again (API 67): the world's seats are forgotten and the stand-ins come
+    // back under new ids, their riders on them. A pig's in the seat block at (1414, 0, 1410) is
+    // that seat's again (broken, it lets the pig off and goes); a ridden one in no seat block
+    // waits for its carriage; a riderless one in none goes.
+    place(game, [1414, 0, 1410], 66);
+    create_seats::forget();
+    let spawn = |game: &mut Game<'_>, at: [f64; 3]| game.native_spawn_seat(dim, at, 0.0).unwrap();
+    let back = spawn(game, create_engine::seat::seat_at([1414, 0, 1410], "minecraft:pig"));
+    let lone = spawn(game, [1416.5, 3.0, 1410.5]);
+    let empty = spawn(game, [1418.5, 3.0, 1410.5]);
+    ENTITIES.with_borrow_mut(|e| {
+        e.push(fixture_entity(53, "minecraft:pig", [1414.5, 0.5, 1410.5]));
+        e.push(fixture_entity(54, "minecraft:pig", [1416.5, 3.0, 1410.5]));
+    });
+    assert!(game.native_start_riding(dim, 53, back) && game.native_start_riding(dim, 54, lone));
+    for id in [back, lone, empty] {
+        game.native_seat_loaded(dim, id, seat_of(id).1);
+    }
+    game.native_level_tick_post(dim);
+    game.native_level_tick_post(dim);
+    assert!(seat_of(back).2 && seat_of(lone).2, "taken back, or waiting for its carriage");
+    assert!(!seat_of(empty).2, "riderless and no carriage's: gone");
+    assert_eq!(get(54).vehicle, Some(lone));
+    place(game, [1414, 0, 1410], 0);
+    game.native_level_tick_post(dim);
+    assert_eq!(get(53).vehicle, None);
+    assert!(!seat_of(back).2, "the seat block's again");
+    create_train_controls::forget();
     ENTITIES.with_borrow_mut(Vec::clear);
     // A turntable at (1420, 0, 1420) on a creative motor facing up: a pig standing on it turns by
     // 3/10 of its speed a tick (not while jumping); a player at its middle by 2/3 of it, halved

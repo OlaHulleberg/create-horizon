@@ -4,7 +4,7 @@ version = "0.1.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "fe554b8d72366e170c9d4737071d14b1dff0168e"
+horizon_revision = "8f32779f944681674f28c883e87764791bff2e25"
 
 # Game glue: per-world state on the server thread, translating hooks into engine calls.
 [[module]]
@@ -722,6 +722,18 @@ bindings = [
   { name = "vehicle", ty = "u32", value = "vehicle" },
   { name = "mounting", ty = "bool", value = "mounting" },
   { name = "canceled", ty = "&mut bool", value = "canceled" },
+]
+
+[[injection]]
+id = "seat-loaded"
+hook = "seat_loaded"
+hook_version = 1
+kind = "HEAD"
+helper = "seat_loaded.rs"
+bindings = [
+  { name = "dimension", ty = "&str", value = "dimension" },
+  { name = "seat", ty = "u32", value = "seat" },
+  { name = "pos", ty = "[f64; 3]", value = "pos" },
 ]
 
 [[injection]]
