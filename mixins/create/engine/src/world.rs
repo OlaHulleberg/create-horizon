@@ -84,6 +84,14 @@ pub struct Dimension {
     /// Hand cranks being turned: ticks left (`HandCrankBlockEntity.inUse`). Empty at rest, so
     /// cranks cost nothing per tick unless turned.
     cranks: HashMap<[i32; 3], u8>,
+    /// Valve handles that stopped and wait out their `cooldown` before they turn again; ticked
+    /// only while not empty.
+    valve_cooldowns: HashMap<[i32; 3], u8>,
+    /// Sliding doors whose `open` changed (position, open before), for the glue to apply
+    /// Create's rules after the tick; and the lower halves whose panel still slides
+    /// (`SlidingDoorBlockEntity.animation`), the only doors that tick.
+    pub door_changes: Vec<([i32; 3], bool)>,
+    pub doors: HashMap<[i32; 3], crate::door::Slide>,
     /// Millstones and their state (`MillstoneBlockEntity.timer`, last recipe).
     pub millstones: HashMap<[i32; 3], crate::processing::Millstone>,
     /// Water wheels, to look at their flow every 60 ticks (`lazyTick`), staggered by position.
@@ -502,6 +510,8 @@ fn is_chain_drive(block: Block) -> bool {
 pub struct CreateWorld {
     pub table: StateTable,
     pub dims: [Dimension; 3],
+    /// Postboxes whose menus players have open.
+    pub postboxes: crate::postbox::Postboxes,
 }
 
 /// `minecraft:overworld` 0, `minecraft:the_nether` 1, `minecraft:the_end` 2.
@@ -519,6 +529,7 @@ impl CreateWorld {
         CreateWorld {
             table,
             dims: Default::default(),
+            postboxes: Default::default(),
         }
     }
 
@@ -843,6 +854,22 @@ impl CreateWorld {
             self.dims[dim].track_curves.remove_at(pos);
             self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
         }
+        // A sliding door opened or closed (or was placed): Create's rules after the tick.
+        if let Some((b, n)) = self.table.get(new)
+            && crate::dye::is_sliding_door(b)
+        {
+            let was = self
+                .table
+                .get(old)
+                .filter(|(o, _)| *o == b)
+                .map(|(_, o)| o.open);
+            // A door placed closed has nothing to do.
+            if was != Some(n.open) && (was.is_some() || n.open) {
+                self.dims[dim]
+                    .door_changes
+                    .push((pos, was.unwrap_or(false)));
+            }
+        }
         let (was, is) = (self.table.is_kinetic(old), self.table.is_kinetic(new));
         if !was && !is {
             return;
@@ -951,6 +978,7 @@ impl CreateWorld {
             d.kinetics.remove(pos);
             d.states.remove(&pos);
             d.cranks.remove(&pos);
+            d.valve_cooldowns.remove(&pos);
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
             d.presses.remove(&pos);
@@ -1116,6 +1144,7 @@ impl CreateWorld {
                 d.kinetics.remove(pos);
                 d.states.remove(&pos);
                 d.cranks.remove(&pos);
+                d.valve_cooldowns.remove(&pos);
             }
             d.wheels.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.millstones
@@ -1510,8 +1539,61 @@ impl CreateWorld {
         true
     }
 
-    /// One tick of the cranks being turned: those whose time ran out stop.
+    /// A player uses the valve handle at `pos` (`ValveHandleBlockEntity.activate`): not while
+    /// something else turns it (`getTheoreticalSpeed`), while it turns or for its cooldown;
+    /// else it turns at 32 RPM, for as many ticks as its angle takes and two more, backwards when
+    /// `back` (sneaking), then waits 4 ticks. The angle is Create's default (45°: the value box
+    /// that sets it isn't here). False when it doesn't turn or there is no valve handle there.
+    pub fn use_valve(&mut self, dim: usize, pos: [i32; 3], back: bool) -> bool {
+        let Some(&state) = self.dims[dim].states.get(&pos) else {
+            return false;
+        };
+        if !self
+            .table
+            .get(state)
+            .is_some_and(|(b, _)| crate::dye::is_valve_handle(b))
+        {
+            return false;
+        }
+        let d = &mut self.dims[dim];
+        let turning = d
+            .kinetics
+            .theoretical(pos, 0)
+            .is_some_and(|(speed, _)| speed != 0.0);
+        if turning || d.cranks.contains_key(&pos) || d.valve_cooldowns.contains_key(&pos) {
+            return false;
+        }
+        let value = crate::valve::DEFAULT_ANGLE;
+        d.cranks.insert(pos, crate::valve::use_ticks(value));
+        d.valve_cooldowns.insert(pos, crate::valve::COOLDOWN);
+        let crank = if crate::valve::clockwise(value, back) {
+            -1
+        } else {
+            1
+        };
+        let old = d.settings.get(&pos).copied().unwrap_or_default();
+        self.set_settings(dim, pos, state, Settings { crank, ..old });
+        true
+    }
+
+    /// One tick of the cranks being turned: those whose time ran out stop; valve handles that
+    /// stopped count their cooldown down (`ValveHandleBlockEntity.tick`, after the crank's).
     pub fn tick_cranks(&mut self, dim: usize) {
+        if self.dims[dim].cranks.is_empty() && self.dims[dim].valve_cooldowns.is_empty() {
+            return;
+        }
+        self.tick_turning_cranks(dim);
+        let d = &mut self.dims[dim];
+        let cranks = &d.cranks;
+        d.valve_cooldowns.retain(|pos, left| {
+            if !cranks.contains_key(pos) {
+                *left -= 1;
+            }
+            *left > 0
+        });
+    }
+
+    fn tick_turning_cranks(&mut self, dim: usize) {
         if self.dims[dim].cranks.is_empty() {
             return;
         }
@@ -3283,6 +3365,106 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "stopped after 10 ticks");
         assert!(!w.turn_crank(0, [1, 0, 0], false), "a shaft is no crank");
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_valve_handle_turns_by_its_angle_then_cools_down() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:red_valve_handle",
+                vec![("facing", "west"), ("waterlogged", "false")],
+            ),
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:creative_motor", vec![("facing", "west")]),
+        ];
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, [1, 0, 0], 0, 11);
+        w.tick(0, &mut Vec::new());
+        assert!(w.use_valve(0, [0, 0, 0], false));
+        assert!(!w.use_valve(0, [0, 0, 0], false), "not while it turns");
+        w.tick(0, &mut Vec::new());
+        // HandCrankBlockEntity.getGeneratedSpeed: 32 in its facing's direction.
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(-32.0));
+        // Every valve handle has the copper one's capacity (8 su/RPM).
+        assert_eq!(
+            w.dims[0].kinetics.network([1, 0, 0], 0).map(|n| n.2),
+            Some(8.0 * 32.0)
+        );
+        for _ in 0..6 {
+            w.tick_cranks(0);
+        }
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(-32.0), "45° takes 5 ticks, +2");
+        w.tick_cranks(0);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "stopped after 7");
+        // The cooldown: 4, counted from the tick it stopped.
+        for _ in 0..3 {
+            assert!(!w.use_valve(0, [0, 0, 0], true), "cooling down");
+            w.tick_cranks(0);
+        }
+        assert!(w.use_valve(0, [0, 0, 0], true), "turns again, backwards");
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(32.0));
+        for _ in 0..7 {
+            w.tick_cranks(0);
+        }
+        // Something else turning it: a motor at the shaft's far end.
+        for _ in 0..4 {
+            w.tick_cranks(0);
+        }
+        w.block_changed(0, [2, 0, 0], 0, 12);
+        w.tick(0, &mut Vec::new());
+        assert_ne!(w.speed(0, [1, 0, 0]), Some(0.0));
+        assert!(
+            !w.use_valve(0, [0, 0, 0], false),
+            "driven by another source"
+        );
+        assert!(!w.use_valve(0, [1, 0, 0], false), "a shaft is no valve");
+        states::clear_range();
+    }
+
+    #[test]
+    fn sliding_doors_that_open_or_close_are_noted() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let door = |open: &'static str| {
+            (
+                "create:train_door",
+                vec![
+                    ("facing", "north"),
+                    ("half", "lower"),
+                    ("hinge", "left"),
+                    ("open", open),
+                    ("powered", "false"),
+                    ("visible", "true"),
+                ],
+            )
+        };
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![door("false"), door("true")];
+        states::set_range(10, 2);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, [0, 0, 0], 10, 11);
+        w.block_changed(0, [0, 0, 0], 11, 11);
+        w.block_changed(0, [0, 0, 0], 11, 0);
+        w.block_changed(0, [5, 0, 0], 0, 11);
+        assert_eq!(
+            w.dims[0].door_changes,
+            vec![([0, 0, 0], false), ([5, 0, 0], false)],
+            "opened, and placed open (powered); placed closed, the same state and removal \
+             are not changes"
+        );
+        assert!(w.dims[0].kinetics.is_empty(), "a door is no kinetic block");
         states::clear_range();
     }
 

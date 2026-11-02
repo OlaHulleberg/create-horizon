@@ -48,6 +48,12 @@ pub struct StateInfo {
     pub ceiling: bool,
     pub extracting: bool,
     pub belt_funnel: Option<crate::funnel::BeltShape>,
+    /// A door's or a postbox's `open`, a sliding door's `visible`, `half` (upper) and `hinge`
+    /// (right).
+    pub open: bool,
+    pub visible: bool,
+    pub upper: bool,
+    pub hinge_right: bool,
 }
 
 impl StateInfo {
@@ -99,6 +105,10 @@ impl StateInfo {
                 "powered_side" => s.powered_side = v == "true",
                 "top_shaft" => s.top_shaft = v == "true",
                 "bottom_shaft" => s.bottom_shaft = v == "true",
+                "open" => s.open = v == "true",
+                "visible" => s.visible = v == "true",
+                "half" => s.upper = v == "upper",
+                "hinge" => s.hinge_right = v == "right",
                 "axis_along_first" => s.along_first = v == "true",
                 "blaze" => {
                     use crate::fan::Heat;
@@ -284,6 +294,19 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::half(f.opposite())
             })
         }),
+        // ValveHandleBlock (a HandCrankBlock turning at 32 too); every valve handle's stress is
+        // the copper one's (`getStressConfigKey`).
+        b if crate::dye::is_valve_handle(b) => s.facing.map_or([None, None], |f| {
+            [
+                Some(Part {
+                    generated: convert_to_direction(f32::from(settings.crank) * CRANK_RPM, f),
+                    impact: Block::CopperValveHandle.impact(),
+                    capacity: Block::CopperValveHandle.capacity(),
+                    ..Part::half(f.opposite())
+                }),
+                None,
+            ]
+        }),
         // BacktankBlock (HorizontalKineticBlock): turns on y, its shaft out of its top.
         Block::CopperBacktank | Block::NetheriteBacktank => one(Part::half(Dir::Up)),
         // MillstoneBlock: a small cog on the y axis with a shaft below.
@@ -446,6 +469,10 @@ pub fn is_kinetic(block: Block) -> bool {
         ceiling: false,
         extracting: false,
         belt_funnel: None,
+        open: false,
+        visible: false,
+        upper: false,
+        hinge_right: false,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }
