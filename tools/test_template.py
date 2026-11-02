@@ -505,9 +505,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 32) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 36) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 32;
+        let empty = state.0 == 0 || state.0 == 36;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -516,10 +516,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 32 is a water source.
+    /// State 36 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 32 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 36 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -638,8 +638,20 @@ impl Behaviours {
             ("facing".to_owned(), "north".to_owned()), ("open".to_owned(), open.to_owned()),
             ("waterlogged".to_owned(), "false".to_owned())]) });
     }
-    // 32: a water source.
+    // 32, 33: a display link facing east, unpowered and powered; 34, 35: an orange and a white
+    // nixie tube on the floor facing north.
+    for powered in ["false", "true"] {
+        states.push(BlockState { name: "create:display_link".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), "east".to_owned()), ("powered".to_owned(), powered.to_owned())]) });
+    }
+    for name in ["create:nixie_tube", "create:white_nixie_tube"] {
+        states.push(BlockState { name: name.into(), properties: BTreeMap::from([
+            ("double_face".to_owned(), "floor".to_owned()), ("facing".to_owned(), "north".to_owned()),
+            ("waterlogged".to_owned(), "false".to_owned())]) });
+    }
+    // 36: a water source; 37: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
+    states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
@@ -705,7 +717,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 10);
+    assert_eq!(commands.len(), 12);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -908,7 +920,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 32), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 36), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -994,6 +1006,42 @@ impl Behaviours {
     game.inventory[0] = None;
     game.native_player_tick();
     assert!(create_equipment_body::REACH.with_borrow(Vec::is_empty), "the reach goes with the grip");
+    // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
+    // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
+    // the debug command it writes "7" across the row at once, the left tube (south) first.
+    game.world.blocks.insert([79, 0, 80], 37);
+    for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
+    }
+    game.native_level_tick_post("minecraft:overworld");
+    let before = game.sent.len();
+    let mut ran = false;
+    game.native_perform_command(&me, "create_debug display_link 80 0 80 80 0 84", &mut ran);
+    assert!(ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("Successfully bound to targeted position: Redstone Power"));
+    let shown: Vec<create_engine::display::Shown> = game.sent[before..].iter()
+        .filter(|m| m.1 == "create:display").flat_map(|m| create_engine::display::decode(&m.2)).collect();
+    assert_eq!(shown, vec![
+        create_engine::display::Shown::Nixie { pos: [80, 0, 84], text: Some("7".into()), index: 1, redstone: 0 },
+        create_engine::display::Shown::Nixie { pos: [80, 0, 85], text: Some("7".into()), index: 0, redstone: 0 },
+    ]);
+    game.native_perform_command(&me, "create_debug display_state 80 0 85", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some(r#"nixie tube at 80 0 85: text "7", index 0, shows "7" " ""#));
+    // Nothing changed: 100 ticks on it reads again and sends nothing.
+    let before = game.sent.len();
+    for _ in 0..100 { game.world.game_time += 1; game.native_level_tick_post("minecraft:overworld"); }
+    assert!(!game.sent[before..].iter().any(|m| m.1 == "create:display"));
+    // A signal beside it powers it.
+    SIGNALS.with_borrow_mut(|s| s.insert([81, 0, 80]));
+    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 80, y: 0, z: 80 }, BlockStateId(32));
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(game.said.iter().any(|l| l == "set [80, 0, 80] powered=true"), "{:?}", game.said);
+    // Saved with its column: the link and both tubes.
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [5, 5], &mut data);
+    let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create_display".into()) else { panic!("no display data") };
+    assert!(own.contains_key(&"links".into()) && own.contains_key(&"nixies".into()), "{own:?}");
     // A red valve handle at (70, 0, 70): a click turns it at 32 RPM; a black dye recolours it.
     let at = |p: [i32; 3]| BlockPos { x: p[0], y: p[1], z: p[2] };
     game.world.blocks.insert([70, 0, 70], 24);

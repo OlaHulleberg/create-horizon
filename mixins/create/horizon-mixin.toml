@@ -20,6 +20,20 @@ name = "create_redstone"
 source = "redstone.rs"
 
 [[module]]
+id = "display"
+file = "crates/horizon-client/src/game.rs"
+name = "create_display"
+source = "display.rs"
+
+# What the display links read of the game beyond the hook helpers (its language, signs' lines);
+# the template test swaps it for `tools/fixture/display_body.rs`.
+[[module]]
+id = "display-body"
+file = "crates/horizon-client/src/game.rs"
+name = "create_display_body"
+source = "display_body.rs"
+
+[[module]]
 id = "logistics"
 file = "crates/horizon-client/src/game.rs"
 name = "create_logistics"

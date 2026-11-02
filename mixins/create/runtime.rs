@@ -6,6 +6,7 @@ use super::Game;
 use super::create_arms::*;
 use super::create_blocks::*;
 use super::create_contraptions::*;
+use super::create_display::*;
 use super::create_fluids::*;
 use super::create_logistics::*;
 use super::create_processing::*;
@@ -204,6 +205,7 @@ pub(super) fn chunk_load(
     let (vaults, filters) = vaults_from_nbt(Game::native_chunk_data(chunk, "create"));
     load_lifts(dim, lifts);
     arms_from_nbt(dim, Game::native_chunk_data(chunk, "create"));
+    displays_from_nbt(dim, Game::native_chunk_data(chunk, "create_display"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.dims[dim].vaults.load(vaults.into_iter());
@@ -311,6 +313,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_diodes(game, dimension, dim);
     tick_lamps(game, dimension, dim);
     tick_links(game, dimension, dim);
+    tick_displays(game, dimension, dim);
     tick_bearings(game, dimension, dim);
     tick_gantries(game, dimension, dim);
     tick_crafters(game, dimension, dim);
@@ -562,6 +565,7 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
         with_world(|w| w.dims[dim].deployers.keys().copied().collect()).unwrap_or_default();
     send_deployers(game, &[player], dim, &deployers);
     sync_arms(game, player, dim);
+    sync_displays(game, player, dim);
     let trains: Vec<u32> =
         with_world(|w| w.dims[dim].railway.trains.iter().map(|t| t.id).collect())
             .unwrap_or_default();
@@ -2009,6 +2013,7 @@ pub(super) fn chunk_data_save(
         return;
     };
     lifts_chunk_save(game, dim, chunk, data);
+    displays_chunk_save(dim, chunk, data);
     let settings = with_world(|w| w.column_settings(dim, chunk[0], chunk[1])).unwrap_or_default();
     let belts = with_world(|w| w.column_belts(dim, chunk[0], chunk[1])).unwrap_or_default();
     let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
@@ -2421,6 +2426,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         links_from_server(game, data);
         return;
     }
+    if channel == create_engine::display::CHANNEL {
+        displays_from_server(data);
+        return;
+    }
     if channel == create_engine::track_curves::CHANNEL {
         curves_from_server(game, data);
         return;
@@ -2504,9 +2513,11 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         GAUGES.with_borrow_mut(|g| *g = ClientGauges::default());
         reset_client_lifts();
         ARMS.with_borrow_mut(|a| *a = ClientArms::default());
+        reset_client_displays();
         return;
     }
     tick_client_depots(game);
+    tick_client_displays(game);
     tick_client_lifts(game);
     tick_client_arms(game);
     tick_client_presses(game);
@@ -3076,9 +3087,23 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
         "create_debug ejector_state <pos:block_pos>",
         2,
     ));
+    // A display link's target (the display link item's selection) and its screen's source and
+    // settings, and what a link, nixie tube or display board holds, for tests.
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug display_link <pos:block_pos> <target:text>",
+        2,
+    ));
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug display_state <pos:block_pos>",
+        2,
+    ));
 }
 
 pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool) {
+    if display_command(game, command) {
+        *ran = true;
+        return;
+    }
     let train = command.strip_prefix("create_debug train ");
     let assemble = command.strip_prefix("create_debug assemble ");
     let schedule = command.strip_prefix("create_debug schedule ");
@@ -3298,6 +3323,11 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
         .and_then(|c| Dir::from_offset(c.1))
         .unwrap_or(Dir::Up);
     let block = with_world(|w| w.table.get(state.0).map(|(b, _)| b)).flatten();
+    if let Some(b) = block
+        && place_display(game, pos, b, clicked_face)
+    {
+        return;
+    }
     if block == Some(create_engine::Block::SteamEngine) {
         place_engine(game, pos, state);
         return;
