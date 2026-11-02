@@ -28,6 +28,9 @@ pub struct Link {
 pub struct Links {
     pub links: HashMap<[i32; 3], Link>,
     nets: HashMap<Key, Vec<[i32; 3]>>,
+    /// Transmitters with no block (`IRedstoneLinkable`s: a held linked controller's
+    /// `ManualFrequencyEntry`), by id: where, their network and strength.
+    virtuals: HashMap<u64, ([i32; 3], Key, i32)>,
 }
 
 /// `Vec3i.closerThan(other, linkRange)`.
@@ -120,6 +123,36 @@ impl Links {
         changed
     }
 
+    /// `addToNetwork` of a transmitter with no block at `pos`, sending 15: the receivers whose
+    /// signal changed.
+    pub fn add_virtual(&mut self, id: u64, pos: [i32; 3], key: Key) -> Vec<[i32; 3]> {
+        self.virtuals.insert(id, (pos, key.clone(), 15));
+        self.update(pos, &key)
+    }
+
+    /// Moves a transmitter with no block (`updatePosition`: its network is not looked at).
+    pub fn move_virtual(&mut self, id: u64, pos: [i32; 3]) {
+        if let Some(v) = self.virtuals.get_mut(&id) {
+            v.0 = pos;
+        }
+    }
+
+    /// What a transmitter with no block sends (`getTransmittedStrength`), read at the network's
+    /// next look.
+    pub fn set_virtual_strength(&mut self, id: u64, strength: i32) {
+        if let Some(v) = self.virtuals.get_mut(&id) {
+            v.2 = strength;
+        }
+    }
+
+    /// `removeFromNetwork` of a transmitter with no block: the receivers whose signal changed.
+    pub fn remove_virtual(&mut self, id: u64) -> Vec<[i32; 3]> {
+        match self.virtuals.remove(&id) {
+            Some((pos, key, _)) => self.update(pos, &key),
+            None => Vec::new(),
+        }
+    }
+
     /// `updateNetworkOf(actor)`: the strongest transmitter within range of the actor, given to
     /// the actor (if it listens) and every receiver within its range. The receivers whose signal
     /// changed.
@@ -137,6 +170,11 @@ impl Links {
                 && !l.receiver
             {
                 power = power.max(l.transmit);
+            }
+        }
+        for (p, k, strength) in self.virtuals.values() {
+            if power < 15 && k == key && within_range(actor, *p) {
+                power = power.max(*strength);
             }
         }
         let mut changed = Vec::new();

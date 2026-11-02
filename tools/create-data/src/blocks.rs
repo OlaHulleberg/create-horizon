@@ -1425,6 +1425,32 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
             true,
         ));
     }
+    // LecternControllerBlock (LecternBlock, `initialProperties(LECTERN)`, no item: a lectern
+    // holding a linked controller): the lectern's states (`has_book` true by default), its base
+    // and post (`LecternBlock.SHAPE_COMMON`) and a block for its sloped top; the glue answers its
+    // clicks and comparators.
+    if n == "lectern_controller" {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:lectern",
+            false,
+            Some(by_property(
+                "facing",
+                horizontal,
+                &[
+                    [0., 0., 0., 16., 2., 16.],
+                    [4., 2., 4., 12., 14., 12.],
+                    [0., 12., 0., 16., 15., 16.],
+                ],
+            )),
+            own(&[
+                ("facing", horizontal),
+                ("has_book", &["true", "false"]),
+                ("powered", bools),
+            ]),
+            false,
+        ));
+    }
     // RedstoneRequesterBlock (`SharedProperties::stone`, netherite's sounds): `powered` and its
     // horizontal `axis`, a full block.
     if n == "redstone_requester" {
@@ -2544,8 +2570,8 @@ fn later_phase(b: &CreateBlock) -> Option<String> {
 /// `GaugeBlock`, `SequencedGearshiftBlock`, `BlazeBurnerBlock`, `LitBlazeBurnerBlock`,
 /// `SignalBlock`, `StationBlock`); the glue answers for each
 /// (`create_engine::comparator::has_analog_output`), with the portable storage interfaces and
-/// the controller rail. The lectern controller has one too and is not declared.
-pub const ANALOG_OUTPUT: [&str; 24] = [
+/// the controller rail, and the lectern controller (`LecternBlock`'s, which it answers with 15).
+pub const ANALOG_OUTPUT: [&str; 25] = [
     "item_vault",
     "depot",
     "weighted_ejector",
@@ -2570,6 +2596,7 @@ pub const ANALOG_OUTPUT: [&str; 24] = [
     "controller_rail",
     "portable_storage_interface",
     "portable_fluid_interface",
+    "lectern_controller",
 ];
 
 fn analog_output(name: &str) -> bool {
@@ -3038,8 +3065,8 @@ mod tests {
             assert_eq!(says, analog_output(&b.name), "{}", b.name);
             declared += usize::from(says);
         }
-        // 24 blocks, 16 toolboxes and 16 postboxes.
-        assert_eq!(declared, 24 + 16 + 16);
+        // 25 blocks, 16 toolboxes and 16 postboxes.
+        assert_eq!(declared, 25 + 16 + 16);
     }
 
     #[test]

@@ -14,7 +14,7 @@
 
 use crate::package::{Packed, SLOTS, Slot};
 use std::cell::Cell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 /// `BigItemStack.INF`: a creative crate's count.
@@ -938,6 +938,123 @@ pub fn consolidate<K: Clone + PartialEq>(
     Some(out)
 }
 
+/// `LogisticsNetwork.owner` and `locked` (`GlobalLogisticsManager.linkAdded`: the first player
+/// to link a block owns the network).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Ownership {
+    pub owner: Option<u128>,
+    pub locked: bool,
+}
+
+/// A logistics network as `LogisticsNetworkSavedData` keeps it across restarts
+/// (`LogisticsNetwork.write`): its links (`totalLinks`, loaded or not), its gauges' promises
+/// (`panelPromises`: item, count and `ticksExisted`) and its owner.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedNetwork<K> {
+    pub id: Network,
+    /// Dimension index and position.
+    pub links: Vec<(usize, [i32; 3])>,
+    pub promises: Vec<(K, u32, u64)>,
+    pub ownership: Ownership,
+}
+
+/// What a level knows of the networks: its stock links' networks (loaded and unloaded) and
+/// the promises it keeps for them (each promise holding the tick it was made).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LevelNetworks<K> {
+    pub links: Vec<([i32; 3], Network)>,
+    pub promises: Vec<(Network, Promises<K>)>,
+}
+
+impl<K> Default for LevelNetworks<K> {
+    fn default() -> Self {
+        LevelNetworks {
+            links: Vec::new(),
+            promises: Vec::new(),
+        }
+    }
+}
+
+/// The networks to save at tick `now`: every network with a link in any level (Create drops
+/// one whose last link is gone, `linkRemoved`), by id, its links by level and position, its
+/// promises from every level with their age.
+pub fn save_networks<K: Clone>(
+    levels: &[LevelNetworks<K>],
+    owners: &HashMap<Network, Ownership>,
+    now: u64,
+) -> Vec<SavedNetwork<K>> {
+    let mut by_id: HashMap<Network, SavedNetwork<K>> = HashMap::new();
+    for (dim, level) in levels.iter().enumerate() {
+        for (pos, net) in &level.links {
+            let n = by_id.entry(*net).or_insert_with(|| SavedNetwork {
+                id: *net,
+                links: Vec::new(),
+                promises: Vec::new(),
+                ownership: owners.get(net).copied().unwrap_or_default(),
+            });
+            if !n.links.contains(&(dim, *pos)) {
+                n.links.push((dim, *pos));
+            }
+        }
+    }
+    for level in levels {
+        for (net, p) in &level.promises {
+            if let Some(n) = by_id.get_mut(net) {
+                n.promises.extend(
+                    p.list
+                        .iter()
+                        .map(|(k, c, at)| (k.clone(), *c, now.saturating_sub(*at))),
+                );
+            }
+        }
+    }
+    let mut out: Vec<SavedNetwork<K>> = by_id.into_values().collect();
+    out.sort_by_key(|n| n.id);
+    for n in &mut out {
+        n.links.sort_unstable();
+    }
+    out
+}
+
+/// The saved networks read back at tick `now` (`LogisticsNetworkSavedData.load`): each level's
+/// links (all unloaded until their columns load) and promises (kept by the level of the
+/// network's first link, the overworld for none), and the owners.
+pub fn load_networks<K: Clone>(
+    saved: &[SavedNetwork<K>],
+    levels: usize,
+    now: u64,
+) -> (Vec<LevelNetworks<K>>, HashMap<Network, Ownership>) {
+    let mut out: Vec<LevelNetworks<K>> = (0..levels).map(|_| LevelNetworks::default()).collect();
+    let mut owners = HashMap::new();
+    for n in saved {
+        for (dim, pos) in &n.links {
+            if let Some(level) = out.get_mut(*dim) {
+                level.links.push((*pos, n.id));
+            }
+        }
+        if n.ownership != Ownership::default() {
+            owners.insert(n.id, n.ownership);
+        }
+        if n.promises.is_empty() {
+            continue;
+        }
+        let dim = n
+            .links
+            .first()
+            .map_or(0, |l| l.0)
+            .min(levels.saturating_sub(1));
+        let list = n
+            .promises
+            .iter()
+            .map(|(k, c, age)| (k.clone(), *c, now.saturating_sub(*age)))
+            .collect();
+        if let Some(level) = out.get_mut(dim) {
+            level.promises.push((n.id, Promises { list }));
+        }
+    }
+    (out, owners)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1298,5 +1415,50 @@ mod tests {
         assert_eq!(network_from_ints(&network_ints(id)), Some(id));
         assert_eq!(network_id("Mine"), network_id("Mine"));
         assert_ne!(network_id("Mine"), network_id("Farm"));
+    }
+
+    #[test]
+    fn networks_save_and_load_round_trip() {
+        let (a, b) = (network_id("Base"), network_id("Mine"));
+        let mut promises = Promises::default();
+        promises.add("iron", 10, 900);
+        promises.add("gold", 3, 990);
+        let levels = vec![
+            LevelNetworks {
+                links: vec![([1, 2, 3], a), ([0, 0, 0], a), ([1, 2, 3], a)],
+                promises: vec![(a, promises), (network_id("Gone"), Promises::default())],
+            },
+            LevelNetworks {
+                links: vec![([5, 5, 5], b)],
+                promises: vec![],
+            },
+            LevelNetworks::default(),
+        ];
+        let owners = HashMap::from([(
+            a,
+            Ownership {
+                owner: Some(7),
+                locked: true,
+            },
+        )]);
+        let saved = save_networks(&levels, &owners, 1000);
+        assert_eq!(saved.len(), 2, "networks without links are not kept");
+        let base = saved.iter().find(|n| n.id == a).unwrap();
+        assert_eq!(base.links, vec![(0, [0, 0, 0]), (0, [1, 2, 3])]);
+        assert_eq!(base.promises, vec![("iron", 10, 100), ("gold", 3, 10)]);
+        assert_eq!(base.ownership.owner, Some(7));
+        // Read back after a restart at tick 1000 (the game time is saved too): the same
+        // links, promises of the same age, the same owner; saved again, the same networks.
+        let (back, owners_back) = load_networks(&saved, 3, 1000);
+        assert_eq!(owners_back, owners);
+        assert_eq!(back[1].links, vec![([5, 5, 5], b)]);
+        assert_eq!(
+            back[0].promises[0].1.list,
+            vec![("iron", 10, 900), ("gold", 3, 990)]
+        );
+        assert_eq!(save_networks(&back, &owners_back, 1000), saved);
+        // Ages count on from the save.
+        let (later, _) = load_networks(&saved, 3, 5000);
+        assert_eq!(later[0].promises[0].1.list[0].2, 4900);
     }
 }

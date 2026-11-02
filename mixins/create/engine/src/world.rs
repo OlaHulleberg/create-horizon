@@ -213,6 +213,10 @@ pub struct Dimension {
     pub link_changes: Vec<[i32; 3]>,
     /// Links whose frequencies clients should see again (tuned, loaded, gone).
     pub link_shown: Vec<[i32; 3]>,
+    /// Frequencies held down on linked controllers (`LinkedControllerServerHandler`), and the
+    /// lecterns holding a controller.
+    pub controllers: crate::controller::Server,
+    pub lecterns: HashMap<[i32; 3], crate::controller::Lectern>,
     /// Andesite tunnels to shape again: after their own neighbour changed (`updateShape`, a
     /// state that still fits is kept), and after their belt's did or they were placed
     /// (`updateTunnel`, `getStateForPlacement`: the new shape at once); those just placed
@@ -2545,6 +2549,34 @@ impl CreateWorld {
         }
         let changed = d.links.transmit(pos, power);
         d.link_changes.extend(changed);
+    }
+
+    /// A player's controller buttons' frequencies pressed or released at `pos`
+    /// (`receivePressed`): receivers whose signal changed update in the level's tick.
+    pub fn controller_input(
+        &mut self,
+        dim: usize,
+        player: u128,
+        pos: [i32; 3],
+        keys: &[crate::link::Key],
+        pressed: bool,
+    ) {
+        let d = &mut self.dims[dim];
+        let changed = d
+            .controllers
+            .receive(&mut d.links, player, pos, keys, pressed);
+        d.link_changes.extend(changed);
+    }
+
+    /// `LinkedControllerServerHandler.tick` of a level; whether any frequency is still held.
+    pub fn tick_controllers(&mut self, dim: usize) -> bool {
+        let d = &mut self.dims[dim];
+        if d.controllers.is_empty() {
+            return false;
+        }
+        let changed = d.controllers.tick(&mut d.links);
+        d.link_changes.extend(changed);
+        !d.controllers.is_empty()
     }
 
     /// A slot tuned (`setFrequency`).

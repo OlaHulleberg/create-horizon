@@ -11,8 +11,8 @@ pub use crate::equipment::fraction_to_redstone_level;
 /// `FrogportBlock`, `PostboxBlock`, `PackagerBlock`, `ItemDrainBlock`, `SpoutBlock`,
 /// `FluidTankBlock`, `BacktankBlock`, `GaugeBlock`, `SequencedGearshiftBlock`,
 /// `BlazeBurnerBlock`, `LitBlazeBurnerBlock`, `SignalBlock`, `StationBlock`,
-/// `PortableStorageInterfaceBlock` (15 while connected) and `ControllerRailBlock` (its power).
-/// (Create's redstone requester and lectern controller have one too, and are not ported.)
+/// `PortableStorageInterfaceBlock` (15 while connected), `ControllerRailBlock` (its power) and
+/// `LecternControllerBlock` (15, `LecternBlock`'s output answered by Create).
 pub fn has_analog_output(b: Block) -> bool {
     matches!(
         b,
@@ -40,6 +40,7 @@ pub fn has_analog_output(b: Block) -> bool {
             | Block::PortableStorageInterface
             | Block::PortableFluidInterface
             | Block::ControllerRail
+            | Block::LecternController
     ) || crate::dye::is_toolbox(b)
         || crate::dye::is_postbox(b)
 }
