@@ -248,6 +248,10 @@ use horizon_client::chunk::Chunk;
 pub mod native_lifecycle {
     pub enum WorldPhase { WorldOpenReady, WorldOpenFailed, WorldCloseFinal, WorldCloseFailed }
 }
+pub mod native_text {
+    /// API 55's text line; the stand-in records what a mod set.
+    pub struct TextLine { pub pose: glam::Mat4, pub text: String, pub color: u32, pub outline: u32, pub full_bright: bool }
+}
 pub mod native_server {
     pub struct NativeCommand { pub usage: String, pub level: u8 }
     impl NativeCommand {
@@ -364,6 +368,10 @@ pub mod native_hooks {
             self.parts.push((model, block, axis, rpm));
         }
         pub fn native_part_clear(&mut self, key: u64) { let _ = key; }
+        pub fn native_text_set(&mut self, key: u64, pos: [i32; 3], lines: &[super::native_text::TextLine]) {
+            let _ = (key, pos, lines);
+        }
+        pub fn native_text_clear(&mut self, key: u64) { let _ = key; }
         pub fn native_parts_seconds(&self) -> f32 { 1.0 }
         pub fn native_part_item_model(&mut self, item: &str, pose: glam::Mat4) -> Option<u32> {
             let _ = pose;

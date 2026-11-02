@@ -1300,6 +1300,8 @@ pub(super) struct ClientBoard {
 #[derive(Default)]
 pub(super) struct ClientDisplays {
     pub(super) nixies: HashMap<[i32; 3], (String, String)>,
+    /// Tubes whose characters changed since they were last drawn.
+    pub(super) nixies_changed: Vec<[i32; 3]>,
     pub(super) boards: HashMap<[i32; 3], ClientBoard>,
     /// Boards with flaps still turning.
     pub(super) active: Vec<[i32; 3]>,
@@ -1339,6 +1341,7 @@ pub(super) fn displays_from_server(data: &[u8]) {
                         redstone,
                     };
                     c.nixies.insert(pos, n.displayed());
+                    c.nixies_changed.push(pos);
                 }
                 Shown::Board {
                     pos,
@@ -1405,7 +1408,9 @@ pub(super) fn displays_from_server(data: &[u8]) {
                     }
                 }
                 Shown::Forget { pos } => {
-                    c.nixies.remove(&pos);
+                    if c.nixies.remove(&pos).is_some() {
+                        c.nixies_changed.push(pos);
+                    }
                     c.boards.remove(&pos);
                     c.active.retain(|p| *p != pos);
                 }
@@ -1484,4 +1489,48 @@ pub(super) fn tick_client_displays(game: &mut Game<'_>) {
             .play("minecraft:block.calcite.hit", Some(middle), 0.35 * bg, 1.95);
     }
     DISPLAYS.with_borrow_mut(|d| d.active = keep);
+}
+
+/// `NixieTubeRenderer` on a client: the tubes whose characters changed are drawn again through
+/// Horizon's world text (API 55); a tube no longer there has its text cleared.
+pub(super) fn draw_client_nixies(game: &mut Game<'_>) {
+    let changed = DISPLAYS.with_borrow_mut(|c| std::mem::take(&mut c.nixies_changed));
+    for pos in changed {
+        let key = super::create_logistics::depot_key(pos, 223, 0);
+        let shown = DISPLAYS.with_borrow(|c| c.nixies.get(&pos).cloned());
+        // The client has no server world table: the tube's name and properties from the registry.
+        let tube = game
+            .pack
+            .assets
+            .registry
+            .state(game.world.block(pos[0], pos[1], pos[2]))
+            .and_then(|s| {
+                let i = create_engine::dye::NIXIE_TUBES
+                    .iter()
+                    .position(|b| s.name.strip_prefix("create:") == Some(b.name()))?;
+                let face = Face::read(s.properties.get("double_face")?)?;
+                let facing = Dir::ALL.into_iter().find(|d| {
+                    Some(dir_name(*d)) == s.properties.get("facing").map(String::as_str)
+                })?;
+                Some((create_engine::dye::DyeColor::ALL[i], face, facing))
+            });
+        let (Some((left, right)), Some((colour, face, facing))) = (shown, tube) else {
+            game.native_text_clear(key);
+            continue;
+        };
+        let lines: Vec<super::native_text::TextLine> =
+            display::nixie_texts(face, facing, colour, &left, &right, |s| {
+                game.native_text_width(s)
+            })
+            .into_iter()
+            .map(|t| super::native_text::TextLine {
+                pose: t.pose,
+                text: t.text,
+                color: 0xFF00_0000 | t.color,
+                outline: 0,
+                full_bright: true,
+            })
+            .collect();
+        game.native_text_set(key, pos, &lines);
+    }
 }
