@@ -1,0 +1,23 @@
+{
+  "template": "minecraft:structure_void",
+  "properties": {
+    "hardness": 0.0,
+    "explosion_resistance": 0.0,
+    "sounds": "minecraft:stone",
+    "render_shape": "invisible"
+  },
+  "item": false,
+  "shapes": {
+    "property": "waterlogged",
+    "values": {
+      "false": [],
+      "true": []
+    }
+  },
+  "state_properties": {
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}
