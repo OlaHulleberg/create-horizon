@@ -434,6 +434,22 @@ pub mod native_hooks {
         pub fn native_attack_entity(&mut self, entity: i32, kind: &str, pos: [f64; 3], canceled: &mut bool) {
             let _ = (entity, kind, pos, canceled);
         }
+        pub fn native_mobs(&self, dimension: &str) -> Vec<NativeMob> {
+            let _ = dimension;
+            MOBS.with_borrow(|m| m.iter().map(|&(id, pos, _)| NativeMob { id, pos }).collect())
+        }
+        pub fn native_push_mob(&mut self, dimension: &str, id: u32, velocity: [f64; 3]) -> bool {
+            let _ = dimension;
+            MOBS.with_borrow_mut(|mobs| {
+                for m in mobs.iter_mut() {
+                    if m.0 == id {
+                        for a in 0..3 { m.2[a] += velocity[a]; }
+                        return true;
+                    }
+                }
+                false
+            })
+        }
         /// Entity 9 is a living mob (a cow).
         pub fn native_mob(&self, dimension: &str, id: u32) -> Option<()> { let _ = dimension; (id == 9).then_some(()) }
         pub fn native_text_width(&self, text: &str) -> f32 { text.len() as f32 * 6.0 }
@@ -529,6 +545,8 @@ impl World {
     pub fn loaded(&self, x: i32, z: i32) -> bool { let _ = (x, z); true }
 }
 pub struct Hit { pub pos: [i32; 3], pub point: [f64; 3], pub face: [i32; 3] }
+/// API 37's mob as the nozzle reads it.
+pub struct NativeMob { pub id: u32, pub pos: [f64; 3] }
 pub struct Player { pub exhaustion: f32 }
 impl Player { pub fn cause_food_exhaustion(&mut self, amount: f32) { self.exhaustion += amount; } }
 pub struct Game<'a> {
@@ -563,9 +581,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 63) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 65) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 63;
+        let empty = state.0 == 0 || state.0 == 65;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -574,10 +592,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 63 is a water source.
+    /// State 65 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 63 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 65 { FluidKind::Water } else { FluidKind::Empty })
     }
     /// `Block.updateFromNeighbourShapes`: the fixture's states keep their shape.
     pub fn update_from_neighbour_shapes(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos,
@@ -613,6 +631,8 @@ pub struct Ticks;
 thread_local! {
     /// The world text set and cleared (API 55), as `set [x, y, z] a|b` and `clear`.
     pub static TEXTS: std::cell::RefCell<Vec<String>> = Default::default();
+    /// The level's mobs (id, position, motion), for the nozzle.
+    pub static MOBS: std::cell::RefCell<Vec<(u32, [f64; 3], [f64; 3])>> = Default::default();
     /// Blocks giving a signal of 15 toward every side, for the latch test.
     pub static SIGNALS: std::cell::RefCell<std::collections::HashSet<[i32; 3]>> = Default::default();
 }
@@ -785,7 +805,13 @@ impl Behaviours {
     states.push(BlockState { name: "create:mechanical_roller".into(), properties: BTreeMap::from([
         ("facing".to_owned(), "north".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
     states.push(BlockState { name: "create:track_observer".into(), properties: props("powered", "true") });
-    // 63: a water source; 64: a target block at power 7.
+    // 63: a nozzle facing east; 64: a belt going south's pulley.
+    states.push(BlockState { name: "create:nozzle".into(), properties: props("facing", "east") });
+    states.push(BlockState { name: "create:belt".into(), properties: BTreeMap::from([
+        ("facing".to_owned(), "south".to_owned()), ("slope".to_owned(), "horizontal".to_owned()),
+        ("part".to_owned(), "pulley".to_owned()), ("casing".to_owned(), "false".to_owned()),
+        ("waterlogged".to_owned(), "false".to_owned())]) });
+    // 65: a water source; 66: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
@@ -1063,7 +1089,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 63), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 65), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1152,7 +1178,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 64);
+    game.world.blocks.insert([79, 0, 80], 66);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1754,6 +1780,63 @@ impl Behaviours {
     for key in ["links", "tickers", "requesters", "gauges"] {
         assert!(matches!(saved.get(&key.into()), Some(horizon_world::nbt::Tag::List(l)) if l.len() == 1), "{key}");
     }
+    // A nozzle on the front of a fan facing east at (1101, 0, 1100), its motor behind: placed
+    // there from its item it stays (anywhere else it is refused); a mob 1.75 blocks east of it is
+    // caught at its search (every sixth tick) and pushed or pulled along x only. With the fan
+    // gone the nozzle breaks.
+    for (pos, state) in [([1100, 0, 1100], 3), ([1101, 0, 1100], 19)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
+    }
+    game.keys.clear();
+    game.selected = 0;
+    game.hand = horizon_client::first_person::Hand::Main;
+    let nozzle = ItemStack::new("create:nozzle", 1);
+    let mut claimed = false;
+    game.native_use_item_on(&nozzle, [1101, 0, 1130], [1, 0, 0], &mut claimed);
+    game.world.blocks.insert([1102, 0, 1130], 63);
+    game.native_place_block(&nozzle, [1102, 0, 1130], BlockStateId(63));
+    assert_eq!(game.world.blocks.get(&[1102, 0, 1130]), Some(&0), "no fan behind: refused");
+    let mut claimed = false;
+    game.native_use_item_on(&nozzle, [1101, 0, 1100], [1, 0, 0], &mut claimed);
+    game.world.blocks.insert([1102, 0, 1100], 63);
+    game.native_place_block(&nozzle, [1102, 0, 1100], BlockStateId(63));
+    assert_eq!(game.world.blocks.get(&[1102, 0, 1100]), Some(&63), "on the fan's front");
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1102, y: 0, z: 1100 }, BlockStateId(0), BlockStateId(63));
+    MOBS.with_borrow_mut(|m| m.push((41, [1104.25, 0.5, 1100.5], [0.0; 3])));
+    for _ in 0..8 { game.native_level_tick_post("minecraft:overworld"); }
+    let pushed = MOBS.with_borrow(|m| m[0].2);
+    assert!(pushed[0] != 0.0 && pushed[1] == 0.0 && pushed[2] == 0.0, "{pushed:?}");
+    game.world.blocks.insert([1101, 0, 1100], 1);
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1101, y: 0, z: 1100 }, BlockStateId(19), BlockStateId(1));
+    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 1102, y: 0, z: 1100 }, BlockStateId(63));
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(game.said.iter().any(|l| l == "execute in minecraft:overworld run setblock 1102 0 1100 air destroy"));
+    // The belt connector: shafts along x at (1100, 0, 1110), (1100, 0, 1112) and (1100, 0, 1113);
+    // clicked at the first and the last, a belt runs south between them (its middle shaft a
+    // pulley) and one connector is used. Shafts in a line along their own axis refuse.
+    for z in [1110, 1112, 1113, 1120] {
+        game.world.blocks.insert([1100, 0, z], 2);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1100, y: 0, z }, BlockStateId(0), BlockStateId(2));
+    }
+    game.world.blocks.insert([1105, 0, 1120], 2);
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1105, y: 0, z: 1120 }, BlockStateId(0), BlockStateId(2));
+    let connector = ItemStack::new("create:belt_connector", 2);
+    game.inventory[0] = Some(connector.clone());
+    let mut claimed = false;
+    game.native_use_item_on(&connector, [1100, 0, 1110], [0, 1, 0], &mut claimed);
+    assert!(claimed);
+    let mut claimed = false;
+    game.native_use_item_on(&connector, [1100, 0, 1113], [0, 1, 0], &mut claimed);
+    let row: Vec<u32> = (1110..=1113).map(|z| game.world.blocks.get(&[1100, 0, z]).copied().unwrap_or(0)).collect();
+    assert_eq!(row, vec![6, 7, 64, 8], "start, middle, pulley, end");
+    assert_eq!(game.inventory[0].as_ref().map(|s| s.count), Some(1));
+    let mut claimed = false;
+    game.native_use_item_on(&connector, [1100, 0, 1120], [0, 1, 0], &mut claimed);
+    let mut claimed = false;
+    game.native_use_item_on(&connector, [1105, 0, 1120], [0, 1, 0], &mut claimed);
+    assert_eq!(game.world.blocks.get(&[1102, 0, 1120]), None, "along their axis: no belt");
+    assert_eq!(game.inventory[0].as_ref().map(|s| s.count), Some(1));
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

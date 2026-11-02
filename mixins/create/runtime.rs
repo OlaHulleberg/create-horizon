@@ -4344,6 +4344,10 @@ pub(super) fn use_item_on(
         }
         return;
     }
+    // `NozzleBlock.onWrenched`: FAIL (it is only picked up).
+    if block == create_engine::Block::Nozzle {
+        return;
+    }
     if block == create_engine::Block::Deployer
         && let Some(dim) = dimension_index(&dimension)
         && wrench_deployer(game, dim, pos)
