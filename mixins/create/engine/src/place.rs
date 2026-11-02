@@ -117,11 +117,19 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
             let p = preferred(false, shaft).unwrap_or(nearest);
             if ctx.sneaking { p } else { p.opposite() }
         }
-        // HandCrankBlock: on the clicked face, or away from the shaft it found.
-        Block::HandCrank => match preferred(false, shaft) {
-            Some(p) if !ctx.sneaking => p.opposite(),
-            _ => ctx.clicked_face,
-        },
+        // HandCrankBlock (and ValveHandleBlock): on the clicked face, or away from the shaft it
+        // found.
+        b if b == Block::HandCrank || crate::dye::is_valve_handle(b) => {
+            match preferred(false, shaft) {
+                Some(p) if !ctx.sneaking => p.opposite(),
+                _ => ctx.clicked_face,
+            }
+        }
+        // ToolboxBlock and PostboxBlock: facing the player
+        // (`getHorizontalDirection().getOpposite()`).
+        b if crate::dye::is_toolbox(b) || crate::dye::is_postbox(b) => {
+            horizontal_direction(ctx.yaw).opposite()
+        }
         // MechanicalPressBlock: along a shaft beside it, else facing the player.
         Block::MechanicalPress => {
             preferred(true, shaft).unwrap_or_else(|| horizontal_direction(ctx.yaw).opposite())
@@ -204,6 +212,76 @@ pub fn redstone_contact(ctx: Context, valid: impl Fn(Dir) -> bool) -> (Dir, bool
         facing = place;
     }
     (facing, valid(facing))
+}
+
+/// `DoubleFaceAttachedBlock.DoubleAttachFace`: where a nixie tube hangs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DoubleFace {
+    Floor,
+    Wall,
+    WallReversed,
+    Ceiling,
+}
+
+impl DoubleFace {
+    pub fn name(self) -> &'static str {
+        match self {
+            DoubleFace::Floor => "floor",
+            DoubleFace::Wall => "wall",
+            DoubleFace::WallReversed => "wall_reversed",
+            DoubleFace::Ceiling => "ceiling",
+        }
+    }
+}
+
+/// `Direction.getClockWise` of a horizontal direction.
+fn clockwise(d: Dir) -> Dir {
+    match d {
+        Dir::North => Dir::East,
+        Dir::East => Dir::South,
+        Dir::South => Dir::West,
+        Dir::West => Dir::North,
+        other => other,
+    }
+}
+
+/// `Entity.calculateViewVector`: the player's look as a vector (`getLookAngle`).
+pub fn look_angle(yaw: f32, pitch: f32) -> [f64; 3] {
+    let f = pitch * (std::f32::consts::PI / 180.0);
+    let g = -yaw * (std::f32::consts::PI / 180.0);
+    let (h, i, j, k) = (mth_cos(g), mth_sin(g), mth_cos(f), mth_sin(f));
+    [f64::from(i * j), f64::from(-k), f64::from(h * j)]
+}
+
+/// `NixieTubeBlock.getStateForPlacement` over `DoubleFaceAttachedBlock`'s: the first of the
+/// nearest looking directions (`BlockPlaceContext.getNearestLookingDirections` puts the clicked
+/// face's opposite first; a nixie tube survives anywhere) gives its face. Up or down: on the
+/// ceiling or the floor, facing the player's horizontal direction turned clockwise; else on the
+/// wall it was clicked on, reversed when the look points against the wall's clockwise side.
+pub fn nixie(ctx: Context) -> (DoubleFace, Dir) {
+    let direction = ctx.clicked_face.opposite();
+    match direction {
+        Dir::Up | Dir::Down => {
+            let face = if direction == Dir::Up {
+                DoubleFace::Ceiling
+            } else {
+                DoubleFace::Floor
+            };
+            (face, clockwise(horizontal_direction(ctx.yaw)))
+        }
+        d => {
+            let n = clockwise(d).offset();
+            let look = look_angle(ctx.yaw, ctx.pitch);
+            let dot =
+                look[0] * f64::from(n[0]) + look[1] * f64::from(n[1]) + look[2] * f64::from(n[2]);
+            let face = if dot < 0.0 {
+                DoubleFace::WallReversed
+            } else {
+                DoubleFace::Wall
+            };
+            (face, d.opposite())
+        }
+    }
 }
 
 fn is_sail(block: Block) -> bool {
@@ -300,6 +378,53 @@ mod tests {
             Some(Dir::North)
         );
         assert_eq!(facing(Block::Shaft, ctx(0.0, 0.0, false), none), None);
+        // A valve handle as a crank; toolboxes and postboxes face the player.
+        assert_eq!(
+            facing(Block::CopperValveHandle, ctx(0.0, 0.0, false), none),
+            Some(Dir::Up)
+        );
+        assert_eq!(
+            facing(Block::RedValveHandle, ctx(0.0, 0.0, false), west),
+            Some(Dir::East)
+        );
+        assert_eq!(
+            facing(Block::BlackToolbox, ctx(90.0, 0.0, false), none),
+            Some(Dir::East)
+        );
+        assert_eq!(
+            facing(Block::WhitePostbox, ctx(0.0, 30.0, false), none),
+            Some(Dir::North)
+        );
+    }
+
+    #[test]
+    fn nixie_tubes_hang_as_create_places_them() {
+        let on = |face: Dir, yaw: f32, pitch: f32| {
+            nixie(Context {
+                yaw,
+                pitch,
+                sneaking: false,
+                clicked_face: face,
+            })
+        };
+        // On a floor, looking south: south turned clockwise, west.
+        assert_eq!(on(Dir::Up, 0.0, 45.0), (DoubleFace::Floor, Dir::West));
+        // Under a ceiling, looking east (yaw -90): east turned clockwise, south.
+        assert_eq!(
+            on(Dir::Down, -90.0, -45.0),
+            (DoubleFace::Ceiling, Dir::South)
+        );
+        // On the south face of a block, looking north: facing south. The wall's clockwise
+        // side is east (north's clockwise): a look a little east of north (yaw -170) points
+        // along it, a little west (yaw 170) against it.
+        assert_eq!(on(Dir::South, -170.0, 0.0), (DoubleFace::Wall, Dir::South));
+        assert_eq!(
+            on(Dir::South, 170.0, 0.0),
+            (DoubleFace::WallReversed, Dir::South)
+        );
+        // The look itself: yaw 0, pitch 0 is south.
+        let l = look_angle(0.0, 0.0);
+        assert!(l[0].abs() < 1e-6 && l[1].abs() < 1e-6 && (l[2] - 1.0).abs() < 1e-6);
     }
 
     #[test]
