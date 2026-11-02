@@ -183,6 +183,10 @@ pub struct Dimension {
     /// Encased fans, and the ones turning: only those tick.
     pub fans: HashMap<[i32; 3], Fan>,
     pub running_fans: Vec<[i32; 3]>,
+    /// Nozzles (`NozzleBlockEntity`): they act only while the fan behind them ticks; those whose
+    /// neighbour changed look at their fan after the tick (`neighborChanged`, `canSurvive`).
+    pub nozzles: HashMap<[i32; 3], crate::nozzle::Nozzle>,
+    pub nozzle_checks: Vec<[i32; 3]>,
     /// Item entities' fan progress (Create keeps it in their persistent data), by entity id; kept
     /// while they are in a current.
     pub item_fan: HashMap<u32, crate::fan::Progress>,
@@ -474,6 +478,7 @@ fn has_state(block: Block) -> bool {
             | Block::ContraptionControls
             | Block::MechanicalRoller
             | Block::ControllerRail
+            | Block::Nozzle
     ) || crate::display::is_nixie(block)
         || is_plumbing(block)
 }
@@ -892,6 +897,14 @@ impl CreateWorld {
         if block == Block::CrushingWheelController && !d.crushers.contains_key(&pos) {
             let c = d.crusher_saved.remove(&pos).unwrap_or_default();
             d.crushers.insert(pos, (c, 0.0));
+        }
+        if block == Block::Nozzle
+            && let Some(facing) = info.facing
+        {
+            d.nozzles
+                .entry(pos)
+                .or_insert_with(|| crate::nozzle::Nozzle::new(facing))
+                .facing = facing;
         }
         if block == Block::EncasedFan {
             // Placed, loaded or turned by a wrench: its current is looked at again.
@@ -1322,6 +1335,7 @@ impl CreateWorld {
             if d.fans.remove(&pos).is_some() {
                 d.running_fans.retain(|p| *p != pos);
             }
+            d.nozzles.remove(&pos);
             if let Some(w) = d.windmills.remove(&pos) {
                 d.windmill_orphans.push((pos, w));
                 d.windmill_changes.push(pos);
@@ -1396,6 +1410,7 @@ impl CreateWorld {
                 keep
             });
             d.fans.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.nozzles.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crushers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1919,6 +1934,7 @@ impl CreateWorld {
                 .diode_checks
                 .push((pos, crate::diode::BLOCK_DELAY)),
             Some(Block::RoseQuartzLamp) => self.dims[dim].lamp_checks.push(pos),
+            Some(Block::Nozzle) => self.dims[dim].nozzle_checks.push(pos),
             Some(Block::Sticker) => self.dims[dim].sticker_checks.push(pos),
             Some(Block::PortableStorageInterface | Block::PortableFluidInterface) => {
                 self.dims[dim].psi_checks.push(pos)
