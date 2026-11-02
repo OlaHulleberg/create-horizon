@@ -77,7 +77,8 @@ fn main() {
         expected.content.as_mut().unwrap().1 = payload.items;
         assert!(
             canonical(&[Item::Mod(module)]) == canonical(&[Item::Mod(expected)]),
-            "support module differs from planned source"
+            "support module {} differs from planned source",
+            m["name"]
         );
     }
     for (file, tree) in trees {

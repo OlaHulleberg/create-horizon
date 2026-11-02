@@ -47,6 +47,13 @@ pub struct Stats {
     pub end: [f64; 3],
 }
 
+/// A routing table entry: the port's filter, its distance in hops, and the connection toward
+/// it (zero: round this wheel).
+pub type Route = (String, u32, [i32; 3]);
+
+/// Saved packages: where each was and what it is.
+pub type Positioned<P> = Vec<(f32, Parcel<P>)>;
+
 /// `ConnectedPort`: a frogport's place on this conveyor (round the wheel, or along the chain to
 /// `connection`) and its filter.
 #[derive(Clone, Debug, PartialEq)]
@@ -72,7 +79,7 @@ pub struct Conveyor<P> {
     pub travel_ports: Vec<([i32; 3], PortLink)>,
     /// The routing table: (filter, distance, next connection; zero stays on the wheel), by
     /// distance.
-    routes: Vec<(String, u32, [i32; 3])>,
+    routes: Vec<Route>,
 }
 
 /// What a tick asks of the frogports and the world.
@@ -258,7 +265,7 @@ impl<P> Conveyor<P> {
     }
 
     /// The routing table, nearest first: (filter, distance, next connection).
-    pub fn routes(&self) -> &[(String, u32, [i32; 3])] {
+    pub fn routes(&self) -> &[Route] {
         &self.routes
     }
 }
@@ -323,8 +330,8 @@ impl<P: Clone> Chains<P> {
     pub fn load_packages(
         &mut self,
         pos: [i32; 3],
-        looping: Vec<(f32, Parcel<P>)>,
-        travelling: Vec<([i32; 3], Vec<(f32, Parcel<P>)>)>,
+        looping: Positioned<P>,
+        travelling: Vec<([i32; 3], Positioned<P>)>,
     ) {
         let mut ids = || {
             self.next_id = self.next_id.wrapping_add(1);
@@ -641,7 +648,7 @@ impl<P: Clone> Chains<P> {
             }
         }
         let positions: Vec<[i32; 3]> = keys.into_iter().copied().collect();
-        let mut tables: HashMap<[i32; 3], Vec<(String, u32, [i32; 3])>> =
+        let mut tables: HashMap<[i32; 3], Vec<Route>> =
             positions.iter().map(|p| (*p, Vec::new())).collect();
         let mut filters: Vec<String> = Vec::new();
         for s in &sources {
@@ -657,8 +664,8 @@ impl<P: Clone> Chains<P> {
                 sources.iter().filter(|s| &s.1 == filter).collect();
             starts.sort_by_key(|s| s.2);
             for s in starts {
-                if !best.contains_key(&s.0) {
-                    best.insert(s.0, (s.2, s.3));
+                if let std::collections::hash_map::Entry::Vacant(e) = best.entry(s.0) {
+                    e.insert((s.2, s.3));
                     queue.push_back(s.0);
                 }
             }
@@ -912,6 +919,141 @@ pub fn package_position<P>(
     }
 }
 
+/// The server's packages on a conveyor, for clients.
+pub const CHANNEL: &str = "create:chain";
+
+/// A package as clients draw it (`ChainConveyorRenderer`): round the wheel at `angle` degrees
+/// turning at `degrees` a second, or hanging at `at` (9 px below the chain, its physics' target)
+/// and gliding at `velocity` blocks a second, `yaw` along the chain.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Drawn {
+    pub id: u32,
+    pub item: String,
+    pub looping: bool,
+    pub angle: f32,
+    pub degrees: f32,
+    pub at: [f32; 3],
+    pub velocity: [f32; 3],
+    pub yaw: f32,
+}
+
+impl<P> Chains<P> {
+    /// What clients draw of the conveyor at `pos` now, with `item` naming each package's item.
+    pub fn drawn(&self, pos: [i32; 3], item: impl Fn(&P) -> String) -> Vec<Drawn> {
+        let Some(c) = self.conveyors.get(&pos) else {
+            return Vec::new();
+        };
+        let speed = c.speed / 360.0;
+        let degrees = (speed / (std::f32::consts::PI * RADIUS)) * 360.0 * 20.0;
+        let mut out: Vec<Drawn> = c
+            .looping
+            .iter()
+            .map(|b| Drawn {
+                id: b.id,
+                item: item(&b.parcel.stack),
+                looping: true,
+                angle: b.position,
+                degrees,
+                at: [0.0; 3],
+                velocity: [0.0; 3],
+                yaw: wrap_angle(b.position) + if c.reversed { 180.0 } else { 0.0 },
+            })
+            .collect();
+        for (k, list) in &c.travelling {
+            let Some(s) = c.stats(*k) else { continue };
+            let d = [
+                s.end[0] - s.start[0],
+                s.end[1] - s.start[1],
+                s.end[2] - s.start[2],
+            ];
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-9);
+            let yaw = (mth_atan2(d[0] / l, d[2] / l) as f32 * RAD_TO_DEG) - 90.0;
+            for b in list {
+                let p = package_position(pos, c, b.position, Some(*k));
+                let v = if b.position < s.length {
+                    (speed.abs() * 20.0) as f64 / l
+                } else {
+                    0.0
+                };
+                out.push(Drawn {
+                    id: b.id,
+                    item: item(&b.parcel.stack),
+                    looping: false,
+                    angle: 0.0,
+                    degrees: 0.0,
+                    at: [p[0] as f32, (p[1] - 9.0 / 16.0) as f32, p[2] as f32],
+                    velocity: [(d[0] * v) as f32, (d[1] * v) as f32, (d[2] * v) as f32],
+                    yaw,
+                });
+            }
+        }
+        out
+    }
+}
+
+/// One conveyor's packages on the wire: x, y, z, a count, then each package.
+pub fn encode(pos: [i32; 3], drawn: &[Drawn]) -> Vec<u8> {
+    let mut b = Vec::new();
+    for v in pos {
+        b.extend(v.to_le_bytes());
+    }
+    b.extend((drawn.len().min(u16::MAX as usize) as u16).to_le_bytes());
+    for d in drawn.iter().take(u16::MAX as usize) {
+        b.extend(d.id.to_le_bytes());
+        b.push(u8::from(d.looping));
+        let item = d.item.as_bytes();
+        b.extend((item.len().min(255) as u8).to_le_bytes());
+        b.extend(&item[..item.len().min(255)]);
+        for f in [d.angle, d.degrees, d.yaw]
+            .into_iter()
+            .chain(d.at)
+            .chain(d.velocity)
+        {
+            b.extend(f.to_le_bytes());
+        }
+    }
+    b
+}
+
+pub fn decode(data: &[u8]) -> Option<([i32; 3], Vec<Drawn>)> {
+    let mut d = data;
+    let mut take = |n: usize| -> Option<&[u8]> {
+        if d.len() < n {
+            return None;
+        }
+        let (a, b) = d.split_at(n);
+        d = b;
+        Some(a)
+    };
+    let mut pos = [0; 3];
+    for v in &mut pos {
+        *v = i32::from_le_bytes(take(4)?.try_into().ok()?);
+    }
+    let n = u16::from_le_bytes(take(2)?.try_into().ok()?);
+    let mut out = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        let id = u32::from_le_bytes(take(4)?.try_into().ok()?);
+        let looping = take(1)?[0] != 0;
+        let len = take(1)?[0] as usize;
+        let item = String::from_utf8(take(len)?.to_vec()).ok()?;
+        let mut f = [0f32; 9];
+        for v in &mut f {
+            *v = f32::from_le_bytes(take(4)?.try_into().ok()?);
+        }
+        out.push(Drawn {
+            id,
+            item,
+            looping,
+            angle: f[0],
+            degrees: f[1],
+            yaw: f[2],
+            at: [f[3], f[4], f[5]],
+            velocity: [f[6], f[7], f[8]],
+        });
+    }
+    Some((pos, out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -921,6 +1063,32 @@ mod tests {
             stack: "box",
             address: address.into(),
         }
+    }
+
+    #[test]
+    fn clients_get_each_package_once_per_change() {
+        let mut ch = line();
+        ch.take_changed();
+        ch.insert([0, 0, 0], 30.0, None, parcel("x")).unwrap();
+        ch.insert([0, 0, 0], 0.5, Some([4, 0, 0]), parcel("y"))
+            .unwrap();
+        assert_eq!(ch.take_changed(), vec![[0, 0, 0]]);
+        let drawn = ch.drawn([0, 0, 0], |s| s.to_string());
+        assert_eq!(drawn.len(), 2);
+        assert!(drawn[0].looping && drawn[0].angle == 30.0);
+        // 32 rpm: 32/360 blocks a tick along a chain, 20 ticks a second, toward +x.
+        let v = drawn[1].velocity;
+        assert!(
+            (v[0] - 32.0 / 360.0 * 20.0).abs() < 1e-4 && v[1] == 0.0,
+            "{v:?}"
+        );
+        let (pos, back) = decode(&encode([0, 0, 0], &drawn)).unwrap();
+        assert_eq!(pos, [0, 0, 0]);
+        assert_eq!(back, drawn);
+        // Moving packages that stay on their wheel or chain change nothing for clients.
+        let mut ev = Vec::new();
+        ch.tick(|_| true, &mut ev);
+        assert!(ch.take_changed().is_empty());
     }
 
     #[test]
