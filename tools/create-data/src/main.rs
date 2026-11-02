@@ -265,6 +265,17 @@ fn compile(create: &Path, out: &Path) {
             items.push(name.clone());
         } else if matches!(
             facts.class.as_deref(),
+            Some("MinecartContraptionItem" | "MinecartCouplingItem")
+        ) {
+            // MinecartContraptionItem (a cart with its contraption in
+            // `create:minecart_contraption_data`, placed on a rail by the native mod) and
+            // MinecartCouplingItem (its clicks on carts are the native mod's): plain items of
+            // Create's default stack size.
+            let doc = json!({ "template": "minecraft:stick" });
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
+        } else if matches!(
+            facts.class.as_deref(),
             Some("VerticalGearboxItem" | "BlazeBurnerBlockItem")
         ) {
             // VerticalGearboxItem (a gearbox on a vertical axis) and the empty blaze burner

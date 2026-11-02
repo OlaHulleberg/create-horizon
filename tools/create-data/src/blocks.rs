@@ -1671,6 +1671,38 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
             item: false,
         });
     }
+    // CartAssemblerBlock (BaseRailBlock, `isStraight`, `SharedProperties::stone` (andesite),
+    // `noOcclusion`): its `shape` (EAST_WEST or NORTH_SOUTH), `powered`, `rail_type`
+    // (CartAssembleRailType, POWERED_RAIL by default: listed first), `backwards` and
+    // waterlogging. The powered rail's template: a rail to minecarts (`properties.rail`), with
+    // its survival, no collision and a rail's outline (AllShapes.CART_ASSEMBLER's outline and
+    // player collision would block carts too: a content shape is every entity's); its item
+    // replaces a rail (`CartAssemblerBlockItem`), its power and carts are the glue's.
+    if n == "cart_assembler" {
+        return Some(declared(
+            "minecraft:powered_rail",
+            "minecraft:andesite",
+            true,
+            None,
+            own(&[
+                ("backwards", bools),
+                ("powered", bools),
+                (
+                    "rail_type",
+                    &[
+                        "powered_rail",
+                        "regular",
+                        "detector_rail",
+                        "activator_rail",
+                        "controller_rail",
+                    ],
+                ),
+                ("shape", &["east_west", "north_south"]),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ));
+    }
     // ControllerRailBlock (BaseRailBlock, `initialProperties(POWERED_RAIL)`): straight rail
     // shapes, `power`, `backwards`, waterlogging. The powered rail's template: a rail to
     // minecarts (`properties.rail`, along `shape`), its shapes (2 px flat, half a block on a
@@ -2759,9 +2791,9 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     if b.name == "turntable" || dyed(&b.name, "seat").is_some() {
         props.insert("entity_inside".into(), json!(true));
     }
-    // ControllerRailBlock (BaseRailBlock): a rail to minecarts, which it pushes
-    // (`onMinecartPass`, `native_minecart_pass`).
-    if b.name == "controller_rail" {
+    // ControllerRailBlock and CartAssemblerBlock (BaseRailBlock): rails to minecarts, which they
+    // push or load (`onMinecartPass`, `native_minecart_pass`).
+    if matches!(b.name.as_str(), "controller_rail" | "cart_assembler") {
         props.insert("rail".into(), json!(true));
     }
     let mut doc = Map::new();
