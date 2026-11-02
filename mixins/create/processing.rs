@@ -1817,10 +1817,23 @@ pub(super) fn tick_fans(game: &mut Game<'_>, dimension: &str, dim: usize) {
                 (speed, f),
             );
         }
-        if speed == 0.0 || !recipes {
+        if speed == 0.0 {
             continue;
         }
-        fan_on_items(game, dimension, dim, pos, &mut old, &mut kept);
+        // `entitySearchCooldown`: the entities in the current are looked for every 6th tick.
+        let search = with_world(|w| {
+            let f = w.dims[dim].fans.get_mut(&pos)?;
+            let search = f.search_cooldown == 0;
+            f.search_cooldown = if search { 5 } else { f.search_cooldown - 1 };
+            Some(search)
+        })
+        .flatten()
+        .unwrap_or(false);
+        fan_on_entities(game, dimension, dim, pos, search);
+        if !recipes {
+            continue;
+        }
+        fan_on_items(game, dimension, dim, pos, search, &mut old, &mut kept);
         let handlers = with_world(|w| w.dims[dim].fans.get(&pos).map(|f| f.handlers.clone()))
             .flatten()
             .unwrap_or_default();
@@ -1876,13 +1889,13 @@ fn check_nozzles(game: &mut Game<'_>, dimension: &str, dim: usize) {
 }
 
 /// `NozzleBlockEntity.tick` for the nozzle at `pos` on the front of a ticking fan (`fan`: its
-/// speed and facing): every sixth tick it looks for the item entities and mobs within half its
-/// range that it sees (`lazyTick`, `canSee` through whole blocks); then it takes its range from
-/// the fan and pushes (or pulls) each caught one by `(range - distance)` along the line from its
-/// centre, 1/128 for items and 1/32 for mobs a tick. Pulling more than 256 discards them all.
-/// Not here (no hook): players (their motion is the client's), other entities, resetting the
-/// fall distance (`fallDistance = 0`), the explosion of an overloaded nozzle (`Level.explode`)
-/// and its particles.
+/// speed and facing): every sixth tick it looks for the entities within half its range that it
+/// sees (`lazyTick`, `canSee` through whole blocks); then it takes its range from the fan and
+/// pushes (or pulls) each caught one by `(range - distance)` along the line from its centre,
+/// 1/128 for items and 1/32 for anything else (mobs, players, carts...) a tick, forgetting its
+/// fall (`fallDistance = 0`). Pulling more than 256 discards the items and mobs it holds. Not
+/// here: sneaking players and creative flyers are pushed too (no reader), the explosion of an
+/// overloaded nozzle (`Level.explode`) and its particles.
 fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], fan: (f32, Dir)) {
     use create_engine::nozzle::{self, Push, Target};
     let Some(mut n) = with_world(|w| w.dims[dim].nozzles.remove(&pos)).flatten() else {
@@ -1897,9 +1910,14 @@ fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], 
         let r = f64::from(range);
         (c.map(|v| v - r), c.map(|v| v + r))
     };
+    // The entities that aren't items (those are `items_in`'s), in a box.
+    let others = |game: &Game<'_>, lo: [f64; 3], hi: [f64; 3]| {
+        let mut all = game.native_entities_in(dimension, lo, hi);
+        all.retain(|e| e.kind != "minecraft:item");
+        all
+    };
     if n.lazy_due() && n.range != 0.0 {
         let (lo, hi) = nozzle::search_box(pos, n.range);
-        let inside = |p: [f64; 3]| (0..3).all(|a| p[a] >= lo[a] && p[a] <= hi[a]);
         let mut seen: Vec<(Target, [f64; 3])> = Vec::new();
         let (rlo, rhi) = reach(n.range);
         let mut alive: Vec<Target> = Vec::new();
@@ -1909,10 +1927,11 @@ fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], 
                 seen.push((Target::Item(id), at));
             }
         });
-        for m in game.native_mobs(dimension) {
-            alive.push(Target::Mob(m.id));
-            if inside(m.pos) {
-                seen.push((Target::Mob(m.id), m.pos));
+        for e in others(game, rlo, rhi) {
+            let t = Target::Entity(e.id);
+            alive.push(t);
+            if (0..3).all(|a| e.min[a] < hi[a] && e.max[a] > lo[a]) {
+                seen.push((t, e.pos));
             }
         }
         for (t, at) in seen {
@@ -1929,7 +1948,7 @@ fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], 
                 }
             });
             for t in gone {
-                if let Target::Mob(id) = t {
+                if let Target::Entity(id) = t {
                     game.native_remove_mob(dimension, id);
                 }
             }
@@ -1955,17 +1974,23 @@ fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], 
             }
         });
         if caught.iter().any(|t| !t.is_item()) {
-            for m in game.native_mobs(dimension) {
-                let t = Target::Mob(m.id);
+            for e in others(game, lo, hi) {
+                let t = Target::Entity(e.id);
                 if !n.entities.contains(&t) {
                     continue;
                 }
                 found.push(t);
-                match nozzle::push(pos, range, pushing, m.pos, false, false) {
+                match nozzle::push(pos, range, pushing, e.pos, false, false) {
                     Push::Release => released.push(t),
                     Push::Hold => {}
                     Push::Add(add) => {
-                        game.native_push_mob(dimension, m.id, add);
+                        let v = e.velocity;
+                        game.native_set_delta_movement(
+                            dimension,
+                            e.id,
+                            [v[0] + add[0], v[1] + add[1], v[2] + add[2]],
+                        );
+                        game.native_reset_fall_distance(dimension, e.id);
                     }
                 }
             }
@@ -1986,15 +2011,14 @@ pub(super) fn fan_on_items(
     dimension: &str,
     dim: usize,
     pos: [i32; 3],
+    search: bool,
     old: &mut std::collections::HashMap<u32, create_engine::fan::Progress>,
     kept: &mut std::collections::HashMap<u32, create_engine::fan::Progress>,
 ) {
     use create_engine::{fan, processing};
-    let Some((facing, speed, current, search)) = with_world(|w| {
-        let f = w.dims[dim].fans.get_mut(&pos)?;
-        let search = f.search_cooldown == 0;
-        f.search_cooldown = if search { 5 } else { f.search_cooldown - 1 };
-        Some((f.facing?, f.speed, f.current.clone(), search))
+    let Some((facing, speed, current)) = with_world(|w| {
+        let f = w.dims[dim].fans.get(&pos)?;
+        Some((f.facing?, f.speed, f.current.clone()))
     })
     .flatten() else {
         return;
@@ -2102,6 +2126,66 @@ pub(super) fn fan_on_items(
             "summon minecraft:item {} {} {} {{Item:{{id:'{item}',count:{count}}},Motion:[{}d,{}d,{}d]}}",
             at[0], at[1], at[2], v[0], v[1], v[2]
         ));
+    }
+}
+
+/// `AirCurrent.tickAffectedEntities` for every entity but items (mobs, players, minecarts,
+/// boats, armor stands): those its search caught (`search`, every 6th tick) and still in its box
+/// are pushed along the current as items are (`setDeltaMovement`, a player's client told) and
+/// forget their fall (`fallDistance = 0`). A rider moves with its vehicle (`rideTick` zeroes its
+/// motion), so it is left alone. Not here: sneaking (4096 in place of 512) and creative flying
+/// (let go) have no reader; the processing types' effects on living entities (`affectEntity`:
+/// fire, freezing water, haunting).
+fn fan_on_entities(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], search: bool) {
+    use create_engine::fan;
+    let Some((facing, speed, max, pushing, none)) = with_world(|w| {
+        let f = w.dims[dim].fans.get(&pos)?;
+        Some((
+            f.facing?,
+            f.speed,
+            f.current.max,
+            f.current.pushing,
+            f.others.is_empty(),
+        ))
+    })
+    .flatten() else {
+        return;
+    };
+    // Nothing caught and no search this tick: nothing to look at.
+    if none && !search {
+        return;
+    }
+    let Some((lo, hi)) = fan::bounds(pos, facing, max) else {
+        return;
+    };
+    let mut inside = game.native_entities_in(dimension, lo, hi);
+    inside.retain(|e| e.kind != "minecraft:item");
+    let others: Vec<u32> = if search {
+        let ids: Vec<u32> = inside.iter().map(|e| e.id).collect();
+        with_world(|w| {
+            if let Some(f) = w.dims[dim].fans.get_mut(&pos) {
+                f.others = ids.clone();
+            }
+        });
+        ids
+    } else {
+        with_world(|w| w.dims[dim].fans.get(&pos).map(|f| f.others.clone()))
+            .flatten()
+            .unwrap_or_default()
+    };
+    let flow = if pushing { facing } else { facing.opposite() };
+    let centre = pos.map(|v| f64::from(v) + 0.5);
+    for e in inside {
+        if !others.contains(&e.id) || e.vehicle.is_some() {
+            continue;
+        }
+        let distance = (0..3)
+            .map(|a| (e.pos[a] - centre[a]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let motion = fan::push(flow, speed, max, distance, e.velocity);
+        game.native_set_delta_movement(dimension, e.id, motion);
+        game.native_reset_fall_distance(dimension, e.id);
     }
 }
 

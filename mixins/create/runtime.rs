@@ -81,6 +81,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
             super::create_schematics::forget();
             super::create_decor::forget();
             super::create_controller::forget();
+            super::create_seats::forget();
             states::clear_range();
         }
     }
@@ -798,6 +799,13 @@ pub(super) fn right_click_inner(
     }
     // Placards, clipboards, bells, the creative crate, the item hatch, table cloths.
     if super::create_decor::use_block(game, dim, pos, face, canceled) {
+        return;
+    }
+    // Seats.
+    if let Some(b) = block
+        && create_engine::dye::is_seat(b)
+    {
+        super::create_seats::use_seat(game, dim, pos, b, BlockStateId(state), back, canceled);
         return;
     }
     // Packagers; valve handles, sliding doors, toolboxes, postboxes.
