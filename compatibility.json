@@ -1,13 +1,13 @@
 {
-  "horizon_revision": "da38364c18d17b4cea922800cd6f5c43383c8879",
+  "horizon_revision": "fe554b8d72366e170c9d4737071d14b1dff0168e",
   "source_sha256": {
     "crates/horizon-client/src/game.rs": "e13f4bb0160c8912fcf7b7747168dd609087d45fde15cf8673d4b81664f90847",
-    "crates/horizon-client/src/game/native_hooks.rs": "1dcfcc62b2e1bec795f3cf6be52f9b9723689ae62c5cf1efb32c880ce72304d7"
+    "crates/horizon-client/src/game/native_hooks.rs": "b29ec66eefde711bd54220e20ae70f24476c2e7a0fdea3d270bf7202ba6df841"
   },
   "horizon_repository": "https://github.com/horizon-rust/horizon",
   "horizon_mixins_repository": "https://github.com/horizon-rust/horizon-mixins",
   "horizon_mixins_revision": "d9c83d7096b7ea5b83678da2efdfd6161f74997e",
   "mixin_schema": 6,
   "horizon_base": "9d979caa48a3bb58203319b9ea044db58c38e0d8",
-  "horizon_branch": "feat/create-hooks"
+  "horizon_branch": "feat/create-hooks-interaction"
 }
