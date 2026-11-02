@@ -1,0 +1,112 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 0.7,
+    "explosion_resistance": 0.7,
+    "requires_tool": false,
+    "sounds": "minecraft:iron_block",
+    "analog_output": true
+  },
+  "item": true,
+  "shapes": {
+    "property": "shape",
+    "values": {
+      "north_south": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.125,
+          1.0
+        ]
+      ],
+      "east_west": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.125,
+          1.0
+        ]
+      ],
+      "ascending_east": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.5,
+          1.0
+        ]
+      ],
+      "ascending_west": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.5,
+          1.0
+        ]
+      ],
+      "ascending_north": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.5,
+          1.0
+        ]
+      ],
+      "ascending_south": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.5,
+          1.0
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "backwards": [
+      "false",
+      "true"
+    ],
+    "power": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15"
+    ],
+    "shape": [
+      "north_south",
+      "east_west",
+      "ascending_east",
+      "ascending_west",
+      "ascending_north",
+      "ascending_south"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}

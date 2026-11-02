@@ -1,0 +1,10 @@
+{
+  "template": "minecraft:iron_trapdoor",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:netherite_block"
+  },
+  "item": true
+}

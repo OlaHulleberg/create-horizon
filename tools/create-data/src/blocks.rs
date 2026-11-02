@@ -1512,6 +1512,151 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
             true,
         ));
     }
+    // ContraptionControlsBlock (a ControlsBlock, `SharedProperties::stone`): the controls'
+    // states; AllShapes.CONTRAPTION_CONTROLS. Its filter, `Disabled` and `Powered` are the
+    // glue's; on a moving contraption it drives `ContraptionControlsMovingInteraction`.
+    if n == "contraption_controls" {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:stone",
+            true,
+            Some(by_horizontal(&[
+                [0., 0., 6., 2., 16., 16.],
+                [14., 0., 6., 16., 16., 16.],
+                [0., 0., 14., 16., 16., 16.],
+                [0., 0., 6., 16., 12., 16.],
+                [0., 0., 4., 16., 2., 16.],
+            ])),
+            own(&[
+                ("facing", horizontal),
+                ("open", bools),
+                ("virtual", bools),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ));
+    }
+    // PortableStorageInterfaceBlock (WrenchableDirectionalBlock, `any()` facing down): the item
+    // one `SharedProperties::stone`, the fluid one `copperMetal`; AllShapes
+    // .PORTABLE_STORAGE_INTERFACE to its facing. Its transfer timer is the glue's.
+    if n == "portable_storage_interface" || n == "portable_fluid_interface" {
+        let fluid = n == "portable_fluid_interface";
+        return Some(declared(
+            if fluid {
+                "minecraft:copper_block"
+            } else {
+                "minecraft:andesite"
+            },
+            if fluid {
+                "minecraft:copper_block"
+            } else {
+                "minecraft:stone"
+            },
+            true,
+            Some(by_facing(&[[0., 0., 0., 16., 14., 16.]])),
+            own(&[("facing", &["down", "up", "north", "south", "west", "east"])]),
+            true,
+        ));
+    }
+    // RollerBlock (AttachedActorBlock, `SharedProperties::stone`, a full block's shape):
+    // horizontal facing and waterlogging; its paving is a contraption actor's.
+    if n == "mechanical_roller" {
+        return Some(declared(
+            "minecraft:andesite",
+            "minecraft:stone",
+            true,
+            None,
+            own(&[("facing", horizontal), ("waterlogged", bools)]),
+            true,
+        ));
+    }
+    // TrackObserverBlock (`SharedProperties::softMetal`, netherite sounds, a full block): only
+    // `powered`, set by the glue while a train passes its track point; its signal is the glue's.
+    if n == "track_observer" {
+        return Some(declared(
+            "minecraft:gold_block",
+            "minecraft:netherite_block",
+            true,
+            None,
+            own(&[("powered", bools)]),
+            true,
+        ));
+    }
+    // TrainTrapdoorBlock (TrapDoorBlock, `SharedProperties::softMetal`, Create's train and glass
+    // `BlockSetType`s: iron trapdoor sounds): vanilla's trapdoor states and redstone from the
+    // iron trapdoor's template; a click opens it as Create's `useWithoutItem` does (the glue).
+    if n == "train_trapdoor" || n == "framed_glass_trapdoor" {
+        return Some(Decision::Declared {
+            template: "minecraft:iron_trapdoor",
+            sounds: Some(if n == "train_trapdoor" {
+                "minecraft:netherite_block"
+            } else {
+                "minecraft:glass"
+            }),
+            requires_tool: Some(true),
+            shapes: None,
+            own: None,
+            animated: false,
+            item: true,
+        });
+    }
+    // FakeTrackBlock (no initial properties: stone's sounds, strength 0): air to players (no
+    // shape, invisible, replaceable) with waterlogging; no item. The glue lays it along curves.
+    if n == "fake_track" {
+        return Some(Decision::Declared {
+            template: "minecraft:structure_void",
+            sounds: Some("minecraft:stone"),
+            requires_tool: None,
+            shapes: Some(
+                json!({ "property": "waterlogged", "values": { "false": [], "true": [] } }),
+            ),
+            own: Some(own(&[("waterlogged", bools)])),
+            animated: false,
+            item: false,
+        });
+    }
+    // ControllerRailBlock (BaseRailBlock, `initialProperties(POWERED_RAIL)`): straight rail
+    // shapes, `power`, `backwards`, waterlogging. Horizon's rail code drives only vanilla's
+    // rails, so not a rail template: a thin block whose placement and power are the glue's.
+    // BaseRailBlock's shapes: 2 px flat, half a block on a slope.
+    if n == "controller_rail" {
+        let flat = px(&[[0., 0., 0., 16., 2., 16.]]);
+        let slope = px(&[[0., 0., 0., 16., 8., 16.]]);
+        let shapes: &[&str] = &[
+            "north_south",
+            "east_west",
+            "ascending_east",
+            "ascending_west",
+            "ascending_north",
+            "ascending_south",
+        ];
+        let values: Map<String, Value> = shapes
+            .iter()
+            .map(|s| {
+                let b = if s.starts_with("ascending") {
+                    slope.clone()
+                } else {
+                    flat.clone()
+                };
+                (s.to_string(), b)
+            })
+            .collect();
+        let powers: Vec<String> = (0..16).map(|i| i.to_string()).collect();
+        let powers: Vec<&str> = powers.iter().map(String::as_str).collect();
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:iron_block",
+            false,
+            Some(json!({ "property": "shape", "values": values })),
+            own(&[
+                ("backwards", bools),
+                ("power", &powers),
+                ("shape", shapes),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ));
+    }
     // NixieTubeBlock (DoubleFaceAttachedBlock, `SharedProperties::softMetal`, light 5): its face
     // (`double_face`, floor by default), facing and waterlogging. Only the orange one
     // (`nixie_tube`) has an item. Shapes by facing: AllShapes.NIXIE_TUBE on the floor, along
@@ -2378,9 +2523,9 @@ fn later_phase(b: &CreateBlock) -> Option<String> {
 /// `RedstoneRequesterBlock`, `ItemDrainBlock`, `SpoutBlock`, `FluidTankBlock`, `BacktankBlock`,
 /// `GaugeBlock`, `SequencedGearshiftBlock`, `BlazeBurnerBlock`, `LitBlazeBurnerBlock`,
 /// `SignalBlock`, `StationBlock`); the glue answers for each
-/// (`create_engine::comparator::has_analog_output`). Portable storage interfaces, the
-/// controller rail and the lectern controller have one too and are not declared.
-pub const ANALOG_OUTPUT: [&str; 21] = [
+/// (`create_engine::comparator::has_analog_output`), with the portable storage interfaces and
+/// the controller rail. The lectern controller has one too and is not declared.
+pub const ANALOG_OUTPUT: [&str; 24] = [
     "item_vault",
     "depot",
     "weighted_ejector",
@@ -2402,6 +2547,9 @@ pub const ANALOG_OUTPUT: [&str; 21] = [
     "lit_blaze_burner",
     "track_signal",
     "track_station",
+    "controller_rail",
+    "portable_storage_interface",
+    "portable_fluid_interface",
 ];
 
 fn analog_output(name: &str) -> bool {
@@ -2438,7 +2586,7 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     }
     if matches!(
         b.name.as_str(),
-        "crushing_wheel_controller" | "water_wheel_structure"
+        "crushing_wheel_controller" | "water_wheel_structure" | "fake_track"
     ) {
         props.insert("render_shape".into(), json!("invisible"));
     }
@@ -2870,8 +3018,8 @@ mod tests {
             assert_eq!(says, analog_output(&b.name), "{}", b.name);
             declared += usize::from(says);
         }
-        // 21 blocks, 16 toolboxes and 16 postboxes.
-        assert_eq!(declared, 21 + 16 + 16);
+        // 24 blocks, 16 toolboxes and 16 postboxes.
+        assert_eq!(declared, 24 + 16 + 16);
     }
 
     #[test]

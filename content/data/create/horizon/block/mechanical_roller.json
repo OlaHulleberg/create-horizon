@@ -1,0 +1,22 @@
+{
+  "template": "minecraft:andesite",
+  "properties": {
+    "hardness": 1.5,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:stone"
+  },
+  "item": true,
+  "state_properties": {
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}
