@@ -271,13 +271,13 @@ def build(ctl_bin, sock, scenario, center):
             command(ctl_bin, sock, f"setblock {x-27} {y-3} {zz} create:controls[facing=west]", failures)
             if scenario == "signals":
                 command(ctl_bin, sock, f"setblock {x-10} {y-6} {zz-1} create:track_signal", failures)
+                command(ctl_bin, sock, f"setblock {x+10} {y-6} {zz-1} create:track_signal", failures)
             if scenario == "driven" and row == 0:
                 # A seat on a slime block stuck to the train's, and a stone 2 high beside it to
                 # click it from.
                 command(ctl_bin, sock, f"setblock {x-28} {y-4} {zz} minecraft:slime_block", failures)
                 command(ctl_bin, sock, f"setblock {x-28} {y-3} {zz} create:white_seat", failures)
                 command(ctl_bin, sock, f"setblock {x-28} {y-5} {zz+2} minecraft:stone", failures)
-                command(ctl_bin, sock, f"setblock {x+10} {y-6} {zz-1} create:track_signal", failures)
     if scenario in ("goggles", "presses"):
         # A floor of presses just under the flight, in reach of the crosshair: the overlay shows
         # the one looked at (not counted: the count looks lower).
@@ -741,7 +741,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "curves": 32, "curvetracks": 32, "gauges": 64 * 64, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "diodes": 512, "links": 64,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "driven": 12 * 60 + 1, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8, "boilers": 10 * 17, "tanks": 10 * 16, "hoppers": 0, "clocks": 16 * 2, "clockbase": 16 * 2, "arms": 8 * 6, "armbase": 8 * 6, "displays": 16 * 3, "displaybase": 16 * 3, "drillpistons": 16 * 10, "conveyors": 16 * 3, "conveyorbase": 16 * 3, "turntables": 16 * 31 * 2, "standbase": 16 * 31, "carts": 16, "cartbase": 0, "cartfuel": 16}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "driven": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8, "boilers": 10 * 17, "tanks": 10 * 16, "hoppers": 0, "clocks": 16 * 2, "clockbase": 16 * 2, "arms": 8 * 6, "armbase": 8 * 6, "displays": 16 * 3, "displaybase": 16 * 3, "drillpistons": 16 * 10, "conveyors": 16 * 3, "conveyorbase": 16 * 3, "turntables": 16 * 31 * 2, "standbase": 16 * 31, "carts": 16, "cartbase": 0, "cartfuel": 16}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
