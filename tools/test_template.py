@@ -281,7 +281,7 @@ pub mod native_entities {
     /// API 60's entity as a native mod reads it.
     #[derive(Clone, Debug, PartialEq)]
     pub struct NativeEntity { pub id: u32, pub kind: String, pub pos: [f64; 3], pub velocity: [f64; 3], pub yaw: f32,
-                              pub on_ground: bool, pub vehicle: Option<u32>, pub min: [f64; 3], pub max: [f64; 3] }
+                              pub on_ground: bool, pub sneaking: bool, pub flying: bool, pub vehicle: Option<u32>, pub min: [f64; 3], pub max: [f64; 3] }
 }
 pub mod native_minecarts {
     /// API 62's minecart as a native mod reads it.
@@ -688,7 +688,7 @@ pub fn boxed(mut e: native_entities::NativeEntity) -> native_entities::NativeEnt
 }
 /// A fixture entity of `kind` standing at `pos`.
 pub fn fixture_entity(id: u32, kind: &str, pos: [f64; 3]) -> native_entities::NativeEntity {
-    boxed(native_entities::NativeEntity { id, kind: kind.into(), pos, velocity: [0.0; 3], yaw: 0.0, on_ground: true,
+    boxed(native_entities::NativeEntity { id, kind: kind.into(), pos, velocity: [0.0; 3], yaw: 0.0, on_ground: true, sneaking: false, flying: false,
                                           vehicle: None, min: [0.0; 3], max: [0.0; 3] })
 }
 pub struct Player { pub exhaustion: f32 }

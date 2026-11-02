@@ -1893,9 +1893,9 @@ fn check_nozzles(game: &mut Game<'_>, dimension: &str, dim: usize) {
 /// sees (`lazyTick`, `canSee` through whole blocks); then it takes its range from the fan and
 /// pushes (or pulls) each caught one by `(range - distance)` along the line from its centre,
 /// 1/128 for items and 1/32 for anything else (mobs, players, carts...) a tick, forgetting its
-/// fall (`fallDistance = 0`). Pulling more than 256 discards the items and mobs it holds. Not
-/// here: sneaking players and creative flyers are pushed too (no reader), the explosion of an
-/// overloaded nozzle (`Level.explode`) and its particles.
+/// fall (`fallDistance = 0`). Sneaking players and flyers (`isPlayerCreativeFlying`; Horizon's
+/// `flying` is a spectator's too) are let go. Pulling more than 256 discards the items and mobs
+/// it holds. Not here: the explosion of an overloaded nozzle (`Level.explode`) and its particles.
 fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], fan: (f32, Dir)) {
     use create_engine::nozzle::{self, Push, Target};
     let Some(mut n) = with_world(|w| w.dims[dim].nozzles.remove(&pos)).flatten() else {
@@ -1930,6 +1930,10 @@ fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], 
         for e in others(game, rlo, rhi) {
             let t = Target::Entity(e.id);
             alive.push(t);
+            // Sneaking players and flyers are skipped.
+            if e.sneaking || e.flying {
+                continue;
+            }
             if (0..3).all(|a| e.min[a] < hi[a] && e.max[a] > lo[a]) {
                 seen.push((t, e.pos));
             }
@@ -1980,7 +1984,7 @@ fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], 
                     continue;
                 }
                 found.push(t);
-                match nozzle::push(pos, range, pushing, e.pos, false, false) {
+                match nozzle::push(pos, range, pushing, e.pos, false, e.sneaking || e.flying) {
                     Push::Release => released.push(t),
                     Push::Hold => {}
                     Push::Add(add) => {
@@ -2071,7 +2075,7 @@ pub(super) fn fan_on_items(
             + (at[1] - centre[1]).powi(2)
             + (at[2] - centre[2]).powi(2))
         .sqrt();
-        let motion = fan::push(flow, speed, current.max, distance, v);
+        let motion = fan::push(flow, speed, current.max, distance, v, false);
         let mut result = None;
         if let Some(kind) = current.type_at(fan::aligned_distance(at, pos, facing) as f32) {
             let mut p = kept
@@ -2133,9 +2137,10 @@ pub(super) fn fan_on_items(
 /// boats, armor stands): those its search caught (`search`, every 6th tick) and still in its box
 /// are pushed along the current as items are (`setDeltaMovement`, a player's client told) and
 /// forget their fall (`fallDistance = 0`). A rider moves with its vehicle (`rideTick` zeroes its
-/// motion), so it is left alone. Not here: sneaking (4096 in place of 512) and creative flying
-/// (let go) have no reader; the processing types' effects on living entities (`affectEntity`:
-/// fire, freezing water, haunting).
+/// motion), so it is left alone. A sneaking player is pushed an eighth as hard (4096 in place
+/// of 512); a flying one is let go (`isPlayerCreativeFlying`; Horizon's `flying` is a
+/// spectator's too). Not here: the processing types' effects on living entities
+/// (`affectEntity`: fire, freezing water, haunting).
 fn fan_on_entities(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], search: bool) {
     use create_engine::fan;
     let Some((facing, speed, max, pushing, none)) = with_world(|w| {
@@ -2179,11 +2184,20 @@ fn fan_on_entities(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 
         if !others.contains(&e.id) || e.vehicle.is_some() {
             continue;
         }
+        // `isPlayerCreativeFlying`: let go until the next search.
+        if e.flying {
+            with_world(|w| {
+                if let Some(f) = w.dims[dim].fans.get_mut(&pos) {
+                    f.others.retain(|id| *id != e.id);
+                }
+            });
+            continue;
+        }
         let distance = (0..3)
             .map(|a| (e.pos[a] - centre[a]).powi(2))
             .sum::<f64>()
             .sqrt();
-        let motion = fan::push(flow, speed, max, distance, e.velocity);
+        let motion = fan::push(flow, speed, max, distance, e.velocity, e.sneaking);
         game.native_set_delta_movement(dimension, e.id, motion);
         game.native_reset_fall_distance(dimension, e.id);
     }
