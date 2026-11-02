@@ -76,6 +76,33 @@ pub(super) fn block_changed(dim: usize, pos: [i32; 3], old: u32, new: u32) {
     CHANGES.with_borrow_mut(|c| c.push((dim, pos, o, n)));
 }
 
+/// `getAnalogOutputSignal` of a packager (`PackagerBlock`: 15 while it holds a box or animates)
+/// or a frogport or postbox (`PackagePortBlockEntity.getComparatorOutput`: its 18 slots of
+/// packages, as `calcRedstoneFromInventory` counts them); None for anything else.
+pub(super) fn analog(
+    dim: usize,
+    pos: [i32; 3],
+    items: &horizon_client::items::Items,
+) -> Option<i32> {
+    PACKAGES.with(|p| {
+        let p = p.try_borrow().ok()?;
+        let pk = &p.as_ref()?[dim];
+        if let Some(k) = pk.packagers.get(&pos) {
+            return Some(i32::from(k.comparator()));
+        }
+        let port = pk.ports.get(&pos)?;
+        Some(create_engine::comparator::inventory(
+            port.items.iter().map(|s| {
+                s.as_ref().map(|p| {
+                    let max = items.get(&p.stack.item).map_or(64, |i| i.max_stack);
+                    (p.stack.count, max)
+                })
+            }),
+            64,
+        ))
+    })
+}
+
 /// A neighbour of a Create block changed: a packager reads its power at the level's tick
 /// (`PackagerBlock.neighborChanged`); a frogport looks at the inventory below.
 pub(super) fn neighbor_changed(dim: usize, pos: [i32; 3], state: u32) {
@@ -172,6 +199,11 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     for (_, pos, was, is) in changes {
         block_moved(game, dimension, dim, pos, was, is);
     }
+    // What comparators read of packagers and ports that changed (since the last tick too: a
+    // funnel or a menu took or gave a package) is looked at after this tick.
+    for pos in with(dim, |pk| std::mem::take(&mut pk.changed)) {
+        analog_touched(dim, pos);
+    }
     let now = game.world.game_time.max(0) as u64;
     if with(dim, |pk| pk.is_idle()) && GONE.with_borrow(Vec::is_empty) {
         return;
@@ -232,6 +264,9 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     if !changed.is_empty() {
         let players = players_in(game, dimension);
         send_chains(game, &players, dim, &changed);
+    }
+    for pos in with(dim, |pk| std::mem::take(&mut pk.changed)) {
+        analog_touched(dim, pos);
     }
     let mut unsaved = with(dim, |pk| std::mem::take(&mut pk.unsaved));
     unsaved.extend(changed.iter().map(|p| (p[0] >> 4, p[2] >> 4)));

@@ -4,7 +4,8 @@
     "hardness": 3.0,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:copper_block"
+    "sounds": "minecraft:copper_block",
+    "analog_output": true
   },
   "item": true,
   "components": {

@@ -4,7 +4,8 @@
     "hardness": 50.0,
     "explosion_resistance": 1200.0,
     "requires_tool": true,
-    "sounds": "minecraft:netherite_block"
+    "sounds": "minecraft:netherite_block",
+    "analog_output": true
   },
   "item": true,
   "components": {

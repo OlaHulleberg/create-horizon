@@ -4,7 +4,8 @@
     "hardness": 2.0,
     "explosion_resistance": 2.0,
     "requires_tool": false,
-    "sounds": "minecraft:oak_planks"
+    "sounds": "minecraft:oak_planks",
+    "analog_output": true
   },
   "item": true,
   "shapes": {

@@ -20,6 +20,7 @@ pub(super) fn tick_spouts(game: &mut Game<'_>, dim: usize) {
     })
     .unwrap_or_default();
     for (pos, mut s) in spouts {
+        let before = s.fluid;
         let depot = [pos[0], pos[1] - 2, pos[2]];
         let on_depot = with_world(|w| w.dims[dim].depots.contains_key(&depot)).unwrap_or(false);
         let held = on_depot
@@ -65,6 +66,9 @@ pub(super) fn tick_spouts(game: &mut Game<'_>, dim: usize) {
             with_world(|w| w.depot_changed(dim, depot));
         }
         with_world(|w| w.dims[dim].spouts.insert(pos, s));
+        if s.fluid != before {
+            analog_touched(dim, pos);
+        }
     }
 }
 
@@ -97,7 +101,12 @@ pub(super) fn tick_drains(game: &mut Game<'_>, dim: usize) {
                     d.held = None;
                     return held.map(|h| (h.0, h.1));
                 }
-                create_engine::drain::tick(d, emptying)?.map(|left| (left, 1))
+                let before = d.fluid;
+                let out = create_engine::drain::tick(d, emptying);
+                if d.fluid != before {
+                    w.dims[dim].analog_checks.push(pos);
+                }
+                out?.map(|left| (left, 1))
             })
             .flatten()
         }) else {
@@ -308,7 +317,13 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                             }
                             // A tank block fills its tank (by its controller).
                             match w.dims[dim].spouts.get_mut(&to.pos) {
-                                Some(s) => create_engine::spout::fill(s, fluid, n),
+                                Some(s) => {
+                                    let took = create_engine::spout::fill(s, fluid, n);
+                                    if took > 0 {
+                                        w.dims[dim].analog_checks.push(to.pos);
+                                    }
+                                    took
+                                }
                                 None => w.fill_tank(dim, to.pos, fluid, n),
                             }
                         })
@@ -361,6 +376,7 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                         with_world(|w| {
                             if let Some(d) = w.dims[dim].drains.get_mut(&from.pos) {
                                 create_engine::drain::drain(d, moved);
+                                w.dims[dim].analog_checks.push(from.pos);
                             }
                         });
                     } else if from.tank {
@@ -590,6 +606,8 @@ pub(super) fn send_tank_changes(game: &mut Game<'_>, dimension: &str, dim: usize
     if changed.is_empty() {
         return;
     }
+    // Their comparators read the tank's fill again (`onFluidStackChanged`: `setChanged`).
+    with_world(|w| w.dims[dim].analog_checks.extend_from_slice(&changed));
     let players = players_in(game, dimension);
     send_tanks(game, &players, dim, &changed);
 }

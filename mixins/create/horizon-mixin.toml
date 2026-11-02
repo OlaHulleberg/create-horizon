@@ -389,6 +389,21 @@ bindings = [
 ]
 
 [[injection]]
+id = "analog-output-signal"
+hook = "analog_output_signal"
+hook_version = 1
+kind = "HEAD"
+helper = "analog.rs"
+bindings = [
+  { name = "level", ty = "&crate::game::GameLevel<'_>", value = "self" },
+  { name = "dimension", ty = "horizon_world::level::Dimension", value = "dimension" },
+  { name = "pos", ty = "horizon_core::position::BlockPos", value = "pos" },
+  { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
+  { name = "direction", ty = "horizon_core::geometry::Direction", value = "direction" },
+  { name = "signal", ty = "&mut i32", value = "signal" },
+]
+
+[[injection]]
 id = "is-signal-source"
 hook = "is_signal_source"
 hook_version = 1

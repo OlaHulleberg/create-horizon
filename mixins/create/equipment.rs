@@ -275,6 +275,7 @@ pub(super) fn place_block(
             b.air = air;
             b.capacity = capacity;
             w.backtank_changed(dim, pos);
+            w.dims[dim].analog_checks.push(pos);
         }
     });
 }
@@ -348,6 +349,10 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
             let f = w.dims[dim].backtanks.get_mut(&pos)?.tick(speed, false);
             if f.is_some() {
                 w.backtank_changed(dim, pos);
+            }
+            // `if (getComparatorOutput() != prevComparatorLevel) updateNeighbourForOutputSignal`.
+            if f.is_some_and(|f| f.comparator_changed) {
+                w.dims[dim].analog_checks.push(pos);
             }
             f
         })

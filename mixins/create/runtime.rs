@@ -366,11 +366,12 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     with_world(|w| w.settle_belts(dim));
     let Some((removed, unsaved, gauges)) = with_world(|w| {
         w.tick(dim, &mut events);
-        (
-            w.dims[dim].kinetics.take_removed(),
-            w.take_unsaved(dim),
-            w.take_gauge_changes(dim),
-        )
+        (w.dims[dim].kinetics.take_removed(), w.take_unsaved(dim), {
+            // A gauge's dial moved: what its comparators read may have too.
+            let gauges = w.take_gauge_changes(dim);
+            w.dims[dim].analog_checks.extend_from_slice(&gauges);
+            gauges
+        })
     }) else {
         return;
     };
@@ -3321,6 +3322,14 @@ pub(super) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
         w.dims[dim].arms.touched(pos);
     });
     wake_ejectors(dim, &[pos]);
+    // A vault's comparators read the whole vault: those beside its other blocks read again
+    // (`ItemVaultBlockEntity.updateComparators`; the game told this block's).
+    if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
+        == Some(create_engine::Block::ItemVault)
+    {
+        analog_touched(dim, pos);
+        return;
+    }
     // An item put into a crafter: its chain may start (`insertItem` -> `checkCompletedRecipe`).
     if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
         == Some(create_engine::Block::MechanicalCrafter)
@@ -3953,6 +3962,204 @@ pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
     {
         *source = true;
     }
+}
+
+/// `getAnalogOutputSignal` of Create's blocks (API 56): what a comparator reads, from the
+/// block's own state. Comparators read rarely: one range test misses for every other block.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn analog_output_signal(
+    world: &super::World,
+    items: &horizon_client::items::Items,
+    dimension: horizon_world::level::Dimension,
+    pos: horizon_core::position::BlockPos,
+    state: BlockStateId,
+    direction: horizon_core::geometry::Direction,
+    signal: &mut i32,
+) {
+    if states::index(state.0).is_none() {
+        return;
+    }
+    // No Create block reads differently by side.
+    let _ = direction;
+    let at = [pos.x, pos.y, pos.z];
+    if let Some(s) = analog_level(world, items, level_index(dimension), at, state.0) {
+        *signal = s;
+    }
+}
+
+/// The slots of the mod block entity at `pos` (none for another block entity).
+fn mod_slots(world: &super::World, pos: [i32; 3]) -> &[Option<horizon_client::items::ItemStack>] {
+    match world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+        Some(horizon_client::containers::BlockEntity::Mod(m)) => &m.items,
+        _ => &[],
+    }
+}
+
+/// The output of the Create block `state` at `pos` that has one (`hasAnalogOutputSignal`),
+/// as its class computes it; None for any other block.
+pub(super) fn analog_level(
+    world: &super::World,
+    items: &horizon_client::items::Items,
+    dim: usize,
+    pos: [i32; 3],
+    state: u32,
+) -> Option<i32> {
+    use create_engine::{Block, comparator as cmp};
+    let max_stack =
+        |s: &horizon_client::items::ItemStack| items.get(&s.item).map_or(64, |i| i.max_stack);
+    // `calcRedstoneFromInventory` over the slots `range` of each block, 64 to a slot.
+    let inventory = |blocks: &[[i32; 3]], range: std::ops::Range<usize>| {
+        cmp::inventory(
+            blocks.iter().flat_map(|p| {
+                let slots = mod_slots(world, *p);
+                range.clone().map(move |i| {
+                    slots
+                        .get(i)
+                        .and_then(Option::as_ref)
+                        .map(|s| (s.count, max_stack(s)))
+                })
+            }),
+            64,
+        )
+    };
+    // What the block's typed state gives, read without the game's containers.
+    enum Typed {
+        Level(i32),
+        Vault(Vec<[i32; 3]>),
+        Ejector(u32),
+        Slots,
+    }
+    let (block, typed) = WORLD.with(|w| {
+        let w = w.try_borrow().ok()?;
+        let w = w.as_ref()?;
+        let (b, info) = w.table.get(state)?;
+        if !cmp::has_analog_output(b) {
+            return None;
+        }
+        let d = &w.dims[dim];
+        let typed = match b {
+            Block::ItemVault => Typed::Vault(d.vaults.inventory(pos).unwrap_or_else(|| vec![pos])),
+            Block::WeightedEjector => {
+                Typed::Ejector(d.ejectors.get(&pos).map_or(0, |e| u32::from(e.max_stack)))
+            }
+            Block::FluidTank => Typed::Level(
+                d.tanks
+                    .get(pos)
+                    .map_or(0, |(_, m)| cmp::fluid_tank(m.tank.amount, m.capacity())),
+            ),
+            Block::Spout => Typed::Level(cmp::smart_tank(
+                d.spouts.get(&pos).and_then(|s| s.fluid).map_or(0, |f| f.1),
+                create_engine::spout::CAPACITY,
+            )),
+            Block::ItemDrain => Typed::Level(cmp::smart_tank(
+                d.drains.get(&pos).and_then(|s| s.fluid).map_or(0, |f| f.1),
+                create_engine::drain::CAPACITY,
+            )),
+            Block::CopperBacktank | Block::NetheriteBacktank => {
+                Typed::Level(d.backtanks.get(&pos).map_or(0, |t| t.comparator()))
+            }
+            Block::Speedometer | Block::Stressometer => Typed::Level(
+                d.gauges
+                    .get(&pos)
+                    .map_or(0, |g| create_engine::gauge::analog_output(g.shown.dial)),
+            ),
+            Block::SequencedGearshift => Typed::Level(i32::from(info.sequence)),
+            Block::BlazeBurner => Typed::Level(info.heat.map_or(0, cmp::blaze_burner)),
+            Block::LitBlazeBurner => Typed::Level(cmp::lit_blaze_burner(info.soul)),
+            Block::TrackSignal => {
+                Typed::Level(cmp::full(d.railway.lights.get(&pos) == Some(&true)))
+            }
+            Block::TrackStation => Typed::Level(cmp::full(
+                d.railway
+                    .trains
+                    .iter()
+                    .any(|t| t.train.at_station == Some(pos)),
+            )),
+            _ => Typed::Slots,
+        };
+        Some((b, typed))
+    })?;
+    Some(match typed {
+        Typed::Level(level) => level,
+        Typed::Vault(blocks) => inventory(&blocks, 0..create_engine::vault::SLOTS),
+        Typed::Ejector(max) => cmp::depot(depot_present(world, pos), max),
+        // A depot: its items over the held stack's max stack size, 64 when it holds none.
+        Typed::Slots if block == Block::Depot => {
+            let held = mod_slots(world, pos).first().and_then(Option::as_ref);
+            cmp::depot(depot_present(world, pos), held.map_or(64, max_stack))
+        }
+        Typed::Slots if block == Block::Basin => inventory(&[pos], create_engine::basin::INPUTS),
+        Typed::Slots if create_engine::dye::is_toolbox(block) => {
+            inventory(&[pos], 0..create_engine::toolbox::STORED)
+        }
+        // Packagers, frogports and postboxes keep their packages typed.
+        Typed::Slots => super::create_packages::analog(dim, pos, items).unwrap_or(0),
+    })
+}
+
+/// `DepotBehaviour.getPresentStackSize`: the held stack and the outputs.
+fn depot_present(world: &super::World, pos: [i32; 3]) -> u32 {
+    mod_slots(world, pos)
+        .iter()
+        .take(create_engine::depot::SLOTS)
+        .flatten()
+        .map(|s| s.count)
+        .sum()
+}
+
+/// After a level's tick: the blocks whose comparator output may have changed are read again and
+/// comparators beside them told (`updateNeighbourForOutputSignal`); fluid blocks only when it
+/// moved. Nothing runs while no block changed.
+pub(super) fn tick_comparators(game: &mut Game<'_>, dimension: &str) {
+    let Some(dim) = dimension_index(dimension) else {
+        return;
+    };
+    let Some(blocks) = with_world(|w| {
+        if w.dims[dim].analog_checks.is_empty() {
+            return None;
+        }
+        let checks = std::mem::take(&mut w.dims[dim].analog_checks);
+        let mut all: Vec<[i32; 3]> = checks
+            .into_iter()
+            .flat_map(|p| w.analog_unit(dim, p))
+            .collect();
+        all.sort_unstable();
+        all.dedup();
+        Some(all)
+    })
+    .flatten() else {
+        return;
+    };
+    for pos in blocks {
+        if !game.world.loaded(pos[0], pos[2]) {
+            continue;
+        }
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let Some(level) = analog_level(&game.world, &game.items(), dim, pos, state) else {
+            continue;
+        };
+        let level = level.clamp(0, 15) as u8;
+        let tell = with_world(|w| {
+            let fluid = w.table.get(state).is_some_and(|(b, _)| {
+                matches!(
+                    b,
+                    create_engine::Block::FluidTank
+                        | create_engine::Block::Spout
+                        | create_engine::Block::ItemDrain
+                )
+            });
+            !fluid || w.dims[dim].analog_levels.insert(pos, level) != Some(level)
+        })
+        .unwrap_or(false);
+        if tell {
+            game.native_update_neighbour_for_output_signal(dimension, pos);
+        }
+    }
+}
+
+/// The block at `pos` may read differently to comparators: looked at after the level's tick.
+pub(super) fn analog_touched(dim: usize, pos: [i32; 3]) {
+    with_world(|w| w.dims[dim].analog_checks.push(pos));
 }
 
 /// A latch's or a brass diode's scheduled tick is the glue's: the repeater it is built on doesn't

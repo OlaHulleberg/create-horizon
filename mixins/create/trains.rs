@@ -63,6 +63,8 @@ pub(super) fn use_station(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) -> Opt
         AssemblyError, MAX_ASSEMBLY_LENGTH, MAX_BOGEY_COUNT, Structure, Train, TrainOnTrack, layout,
     };
     railway_ready(dim);
+    // A train assembled or taken apart here: its comparators read `trainPresent` again.
+    analog_touched(dim, pos);
     let dimension = game.dim.id().to_owned();
     let stopped = with_world(|w| {
         let r = &mut w.dims[dim].railway;
@@ -580,8 +582,23 @@ pub(super) fn tick_trains(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let (due, fresh, lights) = with_world(|w| {
         let d = &mut w.dims[dim];
         d.railway.ensure(&d.track_curves);
+        // The stations a train stands at, before and after: a station's comparators read
+        // `trainPresent`, a signal's whether it is red.
+        let at = |r: &create_engine::trains::Railway| -> Vec<[i32; 3]> {
+            r.trains.iter().filter_map(|t| t.train.at_station).collect()
+        };
+        let before = at(&d.railway);
         d.railway.tick(&mut events);
+        let after = at(&d.railway);
+        for p in before.iter().filter(|p| !after.contains(p)) {
+            d.analog_checks.push(*p);
+        }
+        for p in after.iter().filter(|p| !before.contains(p)) {
+            d.analog_checks.push(*p);
+        }
         let lights = std::mem::take(&mut d.railway.lights_changed);
+        d.analog_checks
+            .extend(lights.iter().filter(|l| l.1.is_some()).map(|l| l.0));
         let r = &d.railway;
         let due: Vec<u32> = events
             .iter()
