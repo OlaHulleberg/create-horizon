@@ -94,6 +94,8 @@ the server thread's smoothed tick time. Scenarios:
            structure up and runs on carrying it, followed and drawn as one GPU part (phase 8)
   cartbase the control for carts: the same loops with a powered rail in the assembler's place and
            nothing above it, plain carts running round
+  cartfuel the carts loops with furnace minecarts each picking up a chest of 64 coal: the chest's
+           items ride with it and feed the furnace (Horizon API 68), the cart moving as a ridden one
 
     python3 tools/bench_create.py --game target/horizon-cargo/fast/horizon-client \\
         --content target/create-content --scenario idle --repeats 3 --out benchmarks/p0-idle.json
@@ -393,7 +395,7 @@ def build(ctl_bin, sock, scenario, center):
             for i in range(3):
                 command(ctl_bin, sock, f"setblock {x-13+i} {y-5} {zz} "
                         'create:depot{Items:[{Slot:0b,id:"minecraft:ice",count:64}]}', failures)
-    if scenario in ("carts", "cartbase"):
+    if scenario in ("carts", "cartbase", "cartfuel"):
         # 16 loops of rail in a 4x4 grid, each 10 by 6 with its corners turned; the north side
         # holds the assembler (or a powered rail) and powered rails, redstone blocks under them.
         for i in range(16):
@@ -413,7 +415,13 @@ def build(ctl_bin, sock, scenario, center):
                 command(ctl_bin, sock, f"setblock {px} {yy} {z0} minecraft:powered_rail[shape=east_west,powered=true]",
                         failures)
             command(ctl_bin, sock, f"setblock {x0+4} {yy-1} {z0} minecraft:redstone_block", failures)
-            if scenario == "carts":
+            if scenario == "cartfuel":
+                command(ctl_bin, sock, f"setblock {x0+4} {yy} {z0} create:cart_assembler[shape=east_west,"
+                        "rail_type=powered_rail,powered=true]", failures)
+                command(ctl_bin, sock, f"setblock {x0+4} {yy+1} {z0} minecraft:chest", failures)
+                command(ctl_bin, sock, f"item replace block {x0+4} {yy+1} {z0} container.0 with "
+                        "minecraft:coal 64", failures)
+            elif scenario == "carts":
                 command(ctl_bin, sock, f"setblock {x0+4} {yy} {z0} create:cart_assembler[shape=east_west,"
                         "rail_type=powered_rail,powered=true]", failures)
                 command(ctl_bin, sock, f"setblock {x0+4} {yy+1} {z0} minecraft:slime_block", failures)
@@ -733,7 +741,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "curves": 32, "curvetracks": 32, "gauges": 64 * 64, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "diodes": 512, "links": 64,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "driven": 12 * 60 + 1, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8, "boilers": 10 * 17, "tanks": 10 * 16, "hoppers": 0, "clocks": 16 * 2, "clockbase": 16 * 2, "arms": 8 * 6, "armbase": 8 * 6, "displays": 16 * 3, "displaybase": 16 * 3, "drillpistons": 16 * 10, "conveyors": 16 * 3, "conveyorbase": 16 * 3, "turntables": 16 * 31 * 2, "standbase": 16 * 31, "carts": 16, "cartbase": 0}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "driven": 12 * 60 + 1, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8, "boilers": 10 * 17, "tanks": 10 * 16, "hoppers": 0, "clocks": 16 * 2, "clockbase": 16 * 2, "arms": 8 * 6, "armbase": 8 * 6, "displays": 16 * 3, "displaybase": 16 * 3, "drillpistons": 16 * 10, "conveyors": 16 * 3, "conveyorbase": 16 * 3, "turntables": 16 * 31 * 2, "standbase": 16 * 31, "carts": 16, "cartbase": 0, "cartfuel": 16}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
@@ -786,14 +794,15 @@ def run_once(args, scenario):
             armed = arm_deployers_east(ctl_bin, sock, center, item)
             if armed != 16:
                 raise SystemExit(f"only {armed} of 16 deployers took their {item}")
-        if scenario in ("carts", "cartbase"):
+        if scenario in ("carts", "cartbase", "cartfuel"):
             # A cart on each loop's north side, sent east over the assembler.
+            kind = "furnace_minecart" if scenario == "cartfuel" else "minecart"
             for i in range(16):
                 x0, z0 = x - 28 + 14 * (i % 4), z - 28 + 14 * (i // 4)
-                ctl(ctl_bin, sock, "command", f"summon minecraft:minecart {x0+1}.5 {y-6} {z0}.5 "
+                ctl(ctl_bin, sock, "command", f"summon minecraft:{kind} {x0+1}.5 {y-6} {z0}.5 "
                     "{Motion:[0.4d,0d,0d]}")
             time.sleep(3)
-            if scenario == "carts":
+            if scenario in ("carts", "cartfuel"):
                 # Every cart carries its structure, and goes on round its loop.
                 seen = []
                 for _ in range(2):
@@ -813,7 +822,7 @@ def run_once(args, scenario):
             # Mobs wandering into view swing the frame time (vanilla's entity drawing) from run to run
             # (the carts scenarios keep their minecarts).
             ctl(ctl_bin, sock, "command", "gamerule spawn_mobs false")
-            ctl(ctl_bin, sock, "command", "kill @e[type=!player,type=!item,type=!armor_stand,type=!minecart]")
+            ctl(ctl_bin, sock, "command", "kill @e[type=!player,type=!item,type=!armor_stand,type=!minecart,type=!furnace_minecart]")
         ctl(ctl_bin, sock, "tp", str(x), str(y), str(z))
         ctl(ctl_bin, sock, "fly", str(x), str(y), str(z), str(x), str(y), str(z), "0.1", "40")
         ctl(ctl_bin, sock, "wait-ready")
@@ -993,7 +1002,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "gauges", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains", "boilers", "tanks", "hoppers", "clocks", "clockbase", "arms", "armbase", "displays", "displaybase", "drillpistons", "conveyors", "conveyorbase", "turntables", "standbase", "carts", "cartbase", "driven"],
+                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "gauges", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains", "boilers", "tanks", "hoppers", "clocks", "clockbase", "arms", "armbase", "displays", "displaybase", "drillpistons", "conveyors", "conveyorbase", "turntables", "standbase", "carts", "cartbase", "cartfuel", "driven"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)

@@ -393,9 +393,465 @@ pub fn soft_step(bodies: [Body; 2], length: f64) -> Option<[[f64; 3]; 2]> {
     Some([0, 1].map(|k| clamp(motions[k], bodies[k].max_speed)))
 }
 
+/// `AbstractMinecart.getCurrentRailPosition().above()`: the rail block a cart at `pos` runs on
+/// (the one below its own when that is a rail, else its own), and its shape; None off a rail.
+pub fn rail_of(
+    pos: [f64; 3],
+    rail: &impl Fn([i32; 3]) -> Option<RailShape>,
+) -> Option<([i32; 3], RailShape)> {
+    let p = pos.map(|v| v.floor() as i32);
+    let below = [p[0], p[1] - 1, p[2]];
+    match rail(below) {
+        Some(shape) => Some((below, shape)),
+        None => rail(p).map(|shape| (p, shape)),
+    }
+}
+
+/// `OldMinecartBehavior.getPos`: the point on the rail under `pos`, None off a rail.
+pub fn rail_pos(pos: [f64; 3], rail: &impl Fn([i32; 3]) -> Option<RailShape>) -> Option<[f64; 3]> {
+    let (b, shape) = rail_of(pos, rail)?;
+    let (e0, e1) = shape.exits();
+    let f = b.map(f64::from);
+    let end = |e: [i32; 3]| {
+        [
+            f[0] + 0.5 + f64::from(e[0]) * 0.5,
+            f[1] + 0.0625 + f64::from(e[1]) * 0.5,
+            f[2] + 0.5 + f64::from(e[2]) * 0.5,
+        ]
+    };
+    let (a, c) = (end(e0), end(e1));
+    let (xd, yd, zd) = (c[0] - a[0], (c[1] - a[1]) * 2.0, c[2] - a[2]);
+    let t = if xd == 0.0 {
+        pos[2] - f[2]
+    } else if zd == 0.0 {
+        pos[0] - f[0]
+    } else {
+        ((pos[0] - a[0]) * xd + (pos[2] - a[2]) * zd) * 2.0
+    };
+    let mut out = [a[0] + xd * t, a[1] + yd * t, a[2] + zd * t];
+    if yd < 0.0 {
+        out[1] += 1.0;
+    } else if yd > 0.0 {
+        out[1] += 0.5;
+    }
+    Some(out)
+}
+
+/// `OldMinecartBehavior.getPosOffs`: the point on the rail `offs` along the rail's way from
+/// `pos`, None off a rail.
+pub fn rail_pos_offs(
+    pos: [f64; 3],
+    offs: f64,
+    rail: &impl Fn([i32; 3]) -> Option<RailShape>,
+) -> Option<[f64; 3]> {
+    let (b, shape) = rail_of(pos, rail)?;
+    let mut y = f64::from(b[1]) + if shape.ascending() { 1.0 } else { 0.0 };
+    let (e0, e1) = shape.exits();
+    let (xd, zd) = (f64::from(e1[0] - e0[0]), f64::from(e1[2] - e0[2]));
+    let d = xd.hypot(zd);
+    let (x, z) = (pos[0] + xd / d * offs, pos[2] + zd / d * offs);
+    let at = |e: [i32; 3]| x.floor() as i32 - b[0] == e[0] && z.floor() as i32 - b[2] == e[2];
+    if e0[1] != 0 && at(e0) {
+        y += f64::from(e0[1]);
+    } else if e1[1] != 0 && at(e1) {
+        y += f64::from(e1[1]);
+    }
+    rail_pos([x, y, z], rail)
+}
+
+/// `AbstractMinecart.getSlopeAdjustment`.
+const SLOPE: f64 = 0.0078125;
+
+/// `MinecartSim2020.moveCartAlongTrack`: where a cart at `pos` on the rail `rail_block` of
+/// `shape` ends up moved by `forced` along it (`moveMinecartOnRail`: by `scale` of it, 0.75 for
+/// a cart with a passenger, each part held to `max_speed`), back on its rail (`getPos`). Its
+/// motion is left as it was. Blocks in the way are not looked at (a cart on its rail has none).
+pub fn move_along_track(
+    pos: [f64; 3],
+    forced: [f64; 3],
+    rail_block: [i32; 3],
+    shape: RailShape,
+    scale: f64,
+    max_speed: f64,
+    rail: &impl Fn([i32; 3]) -> Option<RailShape>,
+) -> [f64; 3] {
+    if forced == [0.0; 3] {
+        return pos;
+    }
+    let mut forced = forced;
+    let before = rail_pos(pos, rail);
+    let mut y = f64::from(rail_block[1]);
+    match shape {
+        RailShape::AscendingEast => forced[0] -= SLOPE,
+        RailShape::AscendingWest => forced[0] += SLOPE,
+        RailShape::AscendingNorth => forced[2] += SLOPE,
+        RailShape::AscendingSouth => forced[2] -= SLOPE,
+        _ => {}
+    }
+    if shape.ascending() {
+        y += 1.0;
+    }
+    let (e0, e1) = shape.exits();
+    let (fx, fz) = (f64::from(rail_block[0]), f64::from(rail_block[2]));
+    let x0 = fx + 0.5 + f64::from(e0[0]) * 0.5;
+    let z0 = fz + 0.5 + f64::from(e0[2]) * 0.5;
+    let (xd, zd) = (
+        f64::from(e1[0] - e0[0]) * 0.5,
+        f64::from(e1[2] - e0[2]) * 0.5,
+    );
+    let t = if xd == 0.0 {
+        pos[2] - fz
+    } else if zd == 0.0 {
+        pos[0] - fx
+    } else {
+        ((pos[0] - x0) * xd + (pos[2] - z0) * zd) * 2.0
+    };
+    let mut p = [
+        x0 + xd * t + (scale * forced[0]).clamp(-max_speed, max_speed),
+        y,
+        z0 + zd * t + (scale * forced[2]).clamp(-max_speed, max_speed),
+    ];
+    let at = |e: [i32; 3], p: [f64; 3]| {
+        p[0].floor() as i32 - rail_block[0] == e[0] && p[2].floor() as i32 - rail_block[2] == e[2]
+    };
+    if e0[1] != 0 && at(e0, p) {
+        p[1] += f64::from(e0[1]);
+    } else if e1[1] != 0 && at(e1, p) {
+        p[1] += f64::from(e1[1]);
+    }
+    if let (Some(after), Some(_)) = (rail_pos(p, rail), before) {
+        p[1] = after[1];
+    }
+    p
+}
+
+/// One coupled cart as the hard step reads it: where it is, whether motion may be added, its
+/// top speed and whether it carries something (`isVehicle`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hard {
+    pub pos: [f64; 3],
+    pub can_add_motion: bool,
+    pub max_speed: f64,
+    pub vehicle: bool,
+}
+
+/// What the hard step did to a cart: its new position, and whether it was off a rail (moved
+/// straight, its motion then kept at 0.95).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Moved {
+    pub pos: [f64; 3],
+    pub off_rail: bool,
+}
+
+/// `CouplingPhysics.hardCollisionStep`: carts whose distance is off their `length` by an
+/// eighth or more are moved back toward it along their rails, the first half the way, then
+/// the other all of it, then the first again (a cart that can't add motion half as far), each
+/// move at most `min(1.75, max_speed)`. Each cart's new place, or None where it stayed.
+pub fn hard_step(
+    bodies: [Hard; 2],
+    length: f64,
+    rail: &impl Fn([i32; 3]) -> Option<RailShape>,
+) -> [Option<Moved>; 2] {
+    // The second can't move and the first can: they swap.
+    let order = if !bodies[1].can_add_motion && bodies[0].can_add_motion {
+        [1, 0]
+    } else {
+        [0, 1]
+    };
+    let mut pos = bodies.map(|b| b.pos);
+    let mut out = [None, None];
+    let mut first = true;
+    for k in [0, 1, 0] {
+        let (i, j) = (order[k], order[1 - k]);
+        let b = bodies[i];
+        let stress = (length - len(sub(pos[j], pos[i]))) as f32;
+        if stress.abs() < 1.0 / 8.0 {
+            continue;
+        }
+        let link = sub(pos[j], pos[i]);
+        let mut magnitude = if first { -stress / 2.0 } else { -stress };
+        if !b.can_add_motion {
+            magnitude /= 2.0;
+        }
+        let on = rail_of(pos[i], rail);
+        let correction = match on {
+            Some((_, shape)) => sub(
+                follow_link_on_rail(link, pos[i], f64::from(magnitude), shape.vec()),
+                pos[i],
+            ),
+            None => normalize(link).map(|c| c * f64::from(magnitude)),
+        };
+        let correction = clamp(correction, b.max_speed.min(1.75));
+        let moved = match on {
+            Some((block, shape)) => {
+                let scale = if b.vehicle { 0.75 } else { 1.0 };
+                move_along_track(pos[i], correction, block, shape, scale, b.max_speed, rail)
+            }
+            None => add(pos[i], correction),
+        };
+        pos[i] = moved;
+        out[i] = Some(Moved {
+            pos: moved,
+            off_rail: on.is_none(),
+        });
+        first = false;
+    }
+    out
+}
+
+/// `OrientedContraptionEntity.updateOrientation` on a coupling: the yaw and pitch (degrees) of
+/// a contraption spanning `main` (the coupling's leading cart) and `connected`, turned a half
+/// turn when it rides the leading cart (`getCouplingId().equals(riding.getUUID())`).
+pub fn coupled_orientation(main: [f64; 3], connected: [f64; 3], rides_main: bool) -> (f32, f32) {
+    let d = sub(main, connected);
+    let mut yaw = d[2].atan2(d[0]).to_degrees() as f32;
+    let mut pitch = d[1].atan2(d[0].hypot(d[2])).to_degrees() as f32;
+    if rides_main {
+        pitch = -pitch;
+        yaw += 180.0;
+    }
+    (yaw, pitch)
+}
+
+/// `Direction.fromYRot`: south 0, west 90, north 180, east 270 (as `y_rot`), the nearest.
+pub fn dir_from_y_rot(yaw: f64) -> crate::kinetics::Dir {
+    use crate::kinetics::Dir;
+    match ((yaw / 90.0 + 0.5).floor() as i64).rem_euclid(4) {
+        0 => Dir::South,
+        1 => Dir::West,
+        2 => Dir::North,
+        _ => Dir::East,
+    }
+}
+
+/// `CouplingRenderer.getSuitableCartEndpoint` (its 0.004-block jitter left out): where a
+/// coupling meets the cart at `pos` (the rail under it, 3/8 + 1/8 up, 13/16 toward the
+/// coupling's `centre`) and the cart's yaw there (`180 - yaw`, degrees, plus a half turn when
+/// its back faces the centre: the attachment's turn).
+pub fn endpoint(
+    pos: [f64; 3],
+    centre: [f64; 3],
+    rail: &impl Fn([i32; 3]) -> Option<RailShape>,
+) -> ([f64; 3], f32) {
+    let on = rail_pos(pos, rail);
+    let (mut front, mut back) = (pos, pos);
+    let mut yaw = 0.0f32;
+    let mut at = [pos[0], pos[1] + 0.375, pos[2]];
+    if let Some(r) = on {
+        front = rail_pos_offs(pos, 0.3, rail).unwrap_or(r);
+        back = rail_pos_offs(pos, -0.3, rail).unwrap_or(r);
+        at = [r[0], (front[1] + back[1]) / 2.0 + 0.375, r[2]];
+        let d = normalize(sub(back, front));
+        if d != [0.0; 3] {
+            yaw = d[2].atan2(d[0]).to_degrees() as f32;
+        }
+    }
+    let toward = if on.is_some() {
+        normalize(sub(front, back))
+    } else {
+        [0.0; 3]
+    };
+    let dist = |p: [f64; 3]| len(sub(p, centre));
+    let back_closer = dist(front) > dist(back);
+    let offset = if back_closer {
+        -13.0 / 16.0
+    } else {
+        13.0 / 16.0
+    };
+    let p = [
+        at[0] + toward[0] * offset,
+        at[1] + 2.0 / 16.0 + toward[1] * offset,
+        at[2] + toward[2] * offset,
+    ];
+    let turn = 180.0 - yaw + if back_closer { 180.0 } else { 0.0 };
+    (p, turn)
+}
+
+/// `CouplingRenderer.renderCoupling`'s connector between two endpoints: its yaw (about up,
+/// degrees), pitch (about its own z) and length.
+pub fn connector(a: [f64; 3], b: [f64; 3]) -> (f32, f32, f64) {
+    let d = sub(b, a);
+    let yaw = -(d[2].atan2(d[0]).to_degrees()) as f32;
+    let pitch = d[1].atan2(d[0].hypot(d[2])).to_degrees() as f32;
+    (yaw, pitch, len(d))
+}
+
+/// The mod message channel: couplings as clients draw them, server to client.
+pub const CHANNEL: &str = "create:coupling";
+
+/// A player's coupling as clients draw it (`CouplingRenderer`): keyed by its leading cart's
+/// entity id, each end (`endpoint`) gliding at its cart's velocity (blocks a second) with its
+/// attachment's turn, and the connector from the first end, turned `yaw` about up and `pitch`
+/// about its own z, `length` long. Sent again when the glide drifts, as contraptions are.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Drawn {
+    pub key: u32,
+    pub ends: [[f64; 3]; 2],
+    pub velocity: [[f32; 3]; 2],
+    pub turns: [f32; 2],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub length: f32,
+}
+
+const DRAWN_BYTES: usize = 4 + 6 * 8 + 11 * 4;
+
+impl Drawn {
+    /// The key, the ends, then the velocities, turns, yaw, pitch and length. A message of the
+    /// key alone clears it.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(DRAWN_BYTES);
+        out.extend_from_slice(&self.key.to_le_bytes());
+        for v in self.ends.iter().flatten() {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        let singles = self
+            .velocity
+            .iter()
+            .flatten()
+            .copied()
+            .chain(self.turns)
+            .chain([self.yaw, self.pitch, self.length]);
+        for v in singles {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out
+    }
+
+    /// The coupling in a message, or the key of one to clear.
+    pub fn decode(d: &[u8]) -> Result<Drawn, Option<u32>> {
+        let key = d
+            .get(0..4)
+            .and_then(|b| b.try_into().ok())
+            .map(u32::from_le_bytes)
+            .ok_or(None)?;
+        if d.len() < DRAWN_BYTES {
+            return Err(Some(key));
+        }
+        let double = |k: usize| f64::from_le_bytes(d[k..k + 8].try_into().unwrap_or([0; 8]));
+        let single = |k: usize| f32::from_le_bytes(d[k..k + 4].try_into().unwrap_or([0; 4]));
+        let s = |i: usize| single(52 + 4 * i);
+        Ok(Drawn {
+            key,
+            ends: [0, 1].map(|e| [0, 1, 2].map(|a| double(4 + 8 * (3 * e + a)))),
+            velocity: [0, 1].map(|e| [0, 1, 2].map(|a| s(3 * e + a))),
+            turns: [s(6), s(7)],
+            yaw: s(8),
+            pitch: s(9),
+            length: s(10),
+        })
+    }
+
+    /// Whether clients, gliding on from `self` for `ticks`, are off `now`: an end a 32nd of a
+    /// block away, a turn half a degree, the length a 32nd; and every two seconds (a player
+    /// who came near since hears of it).
+    pub fn due(&self, now: &Drawn, ticks: i64) -> bool {
+        let t = ticks as f64 / 20.0;
+        let off = (0..2).any(|e| {
+            let d = (0..3)
+                .map(|a| {
+                    let p = self.ends[e][a] + f64::from(self.velocity[e][a]) * t;
+                    (p - now.ends[e][a]).powi(2)
+                })
+                .sum::<f64>();
+            d.sqrt() > crate::mounted::DRIFT
+        });
+        let turned = |a: f32, b: f32| {
+            crate::mounted::shortest_angle_diff(f64::from(a), f64::from(b)).abs()
+                > crate::mounted::TURN_DRIFT
+        };
+        ticks >= 40
+            || off
+            || (0..2).any(|e| turned(self.turns[e], now.turns[e]))
+            || turned(self.yaw, now.yaw)
+            || turned(self.pitch, now.pitch)
+            || (self.length - now.length).abs() > 1.0 / 32.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hard_step_pulls_carts_back_to_their_length() {
+        let flat = |p: [i32; 3]| (p[1] == 64).then_some(RailShape::EastWest);
+        let body = |x: f64| Hard {
+            pos: [x, 64.0625, 0.5],
+            can_add_motion: true,
+            max_speed: 0.4,
+            vehicle: false,
+        };
+        // 3 long, 3.5 apart: the first moves a quarter toward the second, the second the other
+        // quarter, and then they are at their length.
+        let [a, b] = hard_step([body(0.5), body(4.0)], 3.0, &flat);
+        let (a, b) = (a.unwrap().pos, b.unwrap().pos);
+        assert!((a[0] - 0.75).abs() < 1e-6, "{a:?}");
+        assert!(
+            (b[0] - 3.75).abs() < 1e-6 && (b[1] - 64.0625).abs() < 1e-9,
+            "{b:?}"
+        );
+        // Within an eighth: nothing moves.
+        assert_eq!(hard_step([body(0.5), body(3.6)], 3.0, &flat), [None, None]);
+        // Off a rail: straight along the link.
+        let none = |_: [i32; 3]| None;
+        let [a, _] = hard_step([body(0.5), body(4.0)], 3.0, &none);
+        assert!(a.unwrap().off_rail);
+        // A cart with a passenger moves three quarters as far along its rail.
+        let p = move_along_track(
+            [0.5, 64.0625, 0.5],
+            [0.4, 0.0, 0.0],
+            [0, 64, 0],
+            RailShape::EastWest,
+            0.75,
+            0.4,
+            &flat,
+        );
+        assert!(
+            (p[0] - 0.8).abs() < 1e-9 && (p[1] - 64.0625).abs() < 1e-9,
+            "{p:?}"
+        );
+        assert_eq!(rail_pos([0.3, 64.5, 0.9], &flat), Some([0.3, 64.0625, 0.5]));
+    }
+
+    #[test]
+    fn coupled_contraptions_face_along_their_carts() {
+        // The second cart east of the first: assembled facing south (`fromYRot(0)`), and its
+        // yaw a full turn from it, so it is drawn as assembled.
+        assert_eq!(dir_from_y_rot(0.0), crate::kinetics::Dir::South);
+        assert_eq!(dir_from_y_rot(-90.0), crate::kinetics::Dir::East);
+        let (yaw, pitch) = coupled_orientation([0.0, 0.0, 0.0], [3.0, 0.0, 0.0], true);
+        assert_eq!((yaw, pitch), (360.0, 0.0));
+        // Round a corner: the second cart south-east of the first.
+        let (yaw, _) = coupled_orientation([0.0, 0.0, 0.0], [2.0, 0.0, 2.0], true);
+        assert!((yaw - 45.0).abs() < 1e-4, "{yaw}");
+        // The coupling's ends 13/16 in front of each cart, toward each other.
+        let flat = |p: [i32; 3]| (p[1] == 64).then_some(RailShape::EastWest);
+        let (a, _) = endpoint([0.5, 64.0625, 0.5], [2.0, 64.0, 0.5], &flat);
+        let (b, _) = endpoint([3.5, 64.0625, 0.5], [2.0, 64.0, 0.5], &flat);
+        assert!(
+            (a[0] - 1.3125).abs() < 1e-9 && (b[0] - 2.6875).abs() < 1e-9,
+            "{a:?} {b:?}"
+        );
+        let (yaw, pitch, length) = connector(a, b);
+        assert!(yaw.abs() < 1e-6 && pitch == 0.0 && (length - 1.375).abs() < 1e-9);
+        let drawn = Drawn {
+            key: 7,
+            ends: [a, b],
+            velocity: [[2.0, 0.0, 0.0]; 2],
+            turns: [0.0, 180.0],
+            yaw,
+            pitch,
+            length: length as f32,
+        };
+        assert_eq!(Drawn::decode(&drawn.encode()), Ok(drawn.clone()));
+        assert_eq!(Drawn::decode(&7u32.to_le_bytes()), Err(Some(7)));
+        // Gliding at 2 blocks a second: on time after 5 ticks, off when the carts stopped.
+        let mut later = drawn.clone();
+        later.ends = [a, b].map(|e| [e[0] + 0.5, e[1], e[2]]);
+        assert!(!drawn.due(&later, 5));
+        assert!(drawn.due(&drawn, 5) && drawn.due(&later, 40));
+    }
 
     #[test]
     fn players_couple_carts_by_create_s_rules() {
