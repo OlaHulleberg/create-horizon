@@ -412,6 +412,27 @@ tube in a row: the first tube holds "1" "5", the second blank (`display_state`);
 hook, see Blocked). A first try with `target[power=7]` read 0: vanilla's `TargetBlock.onPlace` resets a placed target
 to 0, so that was right.
 
+Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
+7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
+vault: a hopper put one iron ingot in, the observer went `powered=true` and the lamp behind it lit; a threshold switch
+on a chest with thresholds 0/10 (`/create_debug threshold`): 64 cobblestone put in turned it on (`level=1`, powered),
+emptied it went off (`level=0`); a cuckoo clock turned by a motor at its back (16 rpm): both hands up at time 6000, the
+hour hand at three at 9000 (screenshots with the HUD hidden). These re-check only when their target changes (or on
+Create's lazy interval for vanilla containers): Create idle stays free.
+
+Contraption actors and super glue, proven headless: a mechanical piston (8 poles) pushing a mechanical drill with a
+chest glued on it (`/create_debug glue`) at 48 rpm toward 2 stones: drill and chest left the world, the first stone was
+gone by 4 s and the second by 8 s (the contraption held still while each broke); stopped, the piston put the drill and
+chest back 8 blocks out, the chest holding the 2 cobblestone.
+
+| Scenario (2026-11-02, Phase 8 contraption actors, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| off: no content mod | 1861 | 0.484 / 1.155 | 2.545 ± 0.123 | baseline |
+| pistons (control): 16 mechanical pistons (8 poles) pushing a stone, 16 rpm | 1817 | 0.494 / 1.230 | 2.771 ± 0.049 | control |
+| drillpistons: the same pushing a mechanical drill into 6 stones each (stalling and breaking) | 1869 | 0.484 / 1.207 | 2.848 ± 0.091 | tick ≤ control + 0.2 ms, frame p50 ≤ control + 10% |
+
+Sixteen drilling contraptions cost 0.077 ms of tick over plain pistons (`benchmarks/create-p8actors-*.json`).
+
 | Scenario (2026-11-01, Phase 6 equipment, `--no-mobs`, 25 s settle, same session) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
 |---|---|---|---|---|
 | off: no content mod | 1696 | 0.492 / 2.065 | 2.607 ± 0.277 | baseline |

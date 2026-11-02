@@ -328,7 +328,7 @@ def build(ctl_bin, sock, scenario, center):
             command(ctl_bin, sock, f"setblock {x0+3} {y-6} {zz} create:fluid_tank", failures)
             command(ctl_bin, sock, f"setblock {x0} {y-5} {zz} create:cogwheel[axis=x]", failures)
             command(ctl_bin, sock, f"setblock {x0+1} {y-5} {zz} create:creative_motor[facing=west]", failures)
-    if scenario in ("pistons", "chassis"):
+    if scenario in ("pistons", "chassis", "drillpistons"):
         for row in range(16):
             zz = z - 16 + 2 * row
             command(ctl_bin, sock, f"fill {x-18} {y-6} {zz} {x-11} {y-6} {zz} create:piston_extension_pole[facing=east]",
@@ -339,6 +339,10 @@ def build(ctl_bin, sock, scenario, center):
                 command(ctl_bin, sock, f"setblock {x-9} {y-6} {zz} "
                         "create:linear_chassis[axis=y,sticky_top=true]", failures)
                 command(ctl_bin, sock, f"fill {x-9} {y-5} {zz} {x-9} {y-3} {zz} minecraft:stone", failures)
+            elif scenario == "drillpistons":
+                # A drill on the piston, 6 stones in its way (it stalls on each while it breaks it).
+                command(ctl_bin, sock, f"setblock {x-9} {y-6} {zz} create:mechanical_drill[facing=east]", failures)
+                command(ctl_bin, sock, f"fill {x-7} {y-6} {zz} {x-2} {y-6} {zz} minecraft:stone", failures)
             else:
                 command(ctl_bin, sock, f"setblock {x-9} {y-6} {zz} minecraft:stone", failures)
     if scenario == "burners":
@@ -665,7 +669,7 @@ def run_once(args, scenario):
         center = (int(spawn[0]), int(spawn[1]) + LIFT, int(spawn[2]))
         expected = {"off": 0, "idle": 0, "static": 1024, "kinetic": 4096, "chains": 0,
                     "processing": 528, "deployers": 48, "deployeruse": 32, "deployerstroke": 32, "waterchurn": 0, "waterstill": 0, "honey": 0, "curves": 32, "curvetracks": 32, "gauges": 64 * 64, "bearings": 32, "brass": 16 * 34, "brassbelts": 16 * 33, "chassis": 16 * 10, "crafters": 16 * 3 + 2, "gantries": 16 * 31, "gantryshafts": 16 * 30, "logistics": 32 * 48 + 32, "tunnels": 32 * 48 + 32 + 32 * 21, "belts9": 32 * 48 + 32, "redstone": 512, "diodes": 512, "links": 64,
-                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8, "boilers": 10 * 17, "tanks": 10 * 16, "hoppers": 0, "clocks": 16 * 2, "clockbase": 16 * 2, "arms": 8 * 6, "armbase": 8 * 6, "displays": 16 * 3, "displaybase": 16 * 3}[scenario]
+                    "repeaters": 0, "contraptions": 16 * 18, "fans": 32 * 5, "crushers": 30 * 4, "burners": 1024, "mixers": 32 * 4, "pumps": 10 * 8, "trains": 12 * 60, "signals": 12 * 62, "pistons": 16 * 9, "goggles": 4096, "presses": 4096, "chutes": 16 * 3, "drills": 64, "saws": 32, "spouts": 10 * 8, "funnels": 64, "chests": 0, "drains": 10 * 8, "boilers": 10 * 17, "tanks": 10 * 16, "hoppers": 0, "clocks": 16 * 2, "clockbase": 16 * 2, "arms": 8 * 6, "armbase": 8 * 6, "displays": 16 * 3, "displaybase": 16 * 3, "drillpistons": 16 * 10}[scenario]
         for attempt in range(5):
             failures = build(ctl_bin, sock, scenario, center)
             # Commands land at the server's next tick: a one-command scene is counted after it.
@@ -737,7 +741,7 @@ def run_once(args, scenario):
         if scenario in ("gantries", "gantryshafts"):
             for row in range(16):
                 ctl(ctl_bin, sock, "command", f"setblock {x+15} {y-7} {z-16+2*row} create:creative_motor[facing=west]")
-        if scenario in ("pistons", "chassis"):
+        if scenario in ("pistons", "chassis", "drillpistons"):
             for row in range(16):
                 ctl(ctl_bin, sock, "command", f"setblock {x-10} {y-5} {z-16+2*row} create:creative_motor[facing=down]")
         if scenario == "goggles":
@@ -874,7 +878,7 @@ def main():
     p.add_argument("--game", default=str(ROOT / "target/horizon-cargo/fast/horizon-client"))
     p.add_argument("--content", default=str(ROOT / "target/create-content"))
     p.add_argument("--scenario", choices=["off", "idle", "static", "kinetic", "chains", "processing",
-                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "gauges", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains", "boilers", "tanks", "hoppers", "clocks", "clockbase", "arms", "armbase", "displays", "displaybase"],
+                                          "logistics", "tunnels", "belts9", "deployers", "deployeruse", "deployerstroke", "waterchurn", "waterstill", "honey", "curves", "curvetracks", "gauges", "bearings", "signals", "brass", "brassbelts", "chassis", "crafters", "gantries", "gantryshafts", "redstone", "repeaters", "diodes", "links", "contraptions", "fans", "crushers", "burners", "mixers", "pumps", "trains", "pistons", "goggles", "presses", "chutes", "drills", "saws", "spouts", "funnels", "chests", "drains", "boilers", "tanks", "hoppers", "clocks", "clockbase", "arms", "armbase", "displays", "displaybase", "drillpistons"],
                    required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--seconds", type=float, default=12.0)
