@@ -9,6 +9,7 @@ use super::create::*;
 use super::create_contraptions::*;
 use super::create_logistics::*;
 use create_engine::kinetics::{Axis, Dir};
+use create_engine::states;
 use create_engine::world::dimension_index;
 use horizon_world::registry::BlockStateId;
 use std::cell::RefCell;
@@ -604,6 +605,7 @@ pub(super) fn tick_trains(game: &mut Game<'_>, dimension: &str, dim: usize) {
     }
     let tick = game.world.game_time.max(0) as u64;
     let mut events = EVENTS.take();
+    let mut observed = Vec::new();
     let (due, fresh, lights) = with_world(|w| {
         let d = &mut w.dims[dim];
         d.railway.ensure(&d.track_curves);
@@ -624,6 +626,7 @@ pub(super) fn tick_trains(game: &mut Game<'_>, dimension: &str, dim: usize) {
         let lights = std::mem::take(&mut d.railway.lights_changed);
         d.analog_checks
             .extend(lights.iter().filter(|l| l.1.is_some()).map(|l| l.0));
+        observed.append(&mut d.railway.observer_changes);
         let r = &d.railway;
         let due: Vec<u32> = events
             .iter()
@@ -652,6 +655,19 @@ pub(super) fn tick_trains(game: &mut Game<'_>, dimension: &str, dim: usize) {
         }
     }
     EVENTS.set(events);
+    // `TrackObserverBlockEntity.tick`: the block's `powered` follows its observer
+    // (`setBlock(..., UPDATE_ALL)`).
+    for (pos, lit) in observed {
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        if observer_powered(state.0).is_some_and(|p| p != lit) {
+            game.native_set_block_property_with(
+                pos,
+                "powered",
+                if lit { "true" } else { "false" },
+                super::native_hooks::flags::UPDATE_ALL,
+            );
+        }
+    }
     if !fresh.is_empty() {
         send_trains(game, dim, &fresh, true);
     }
@@ -662,6 +678,64 @@ pub(super) fn tick_trains(game: &mut Game<'_>, dimension: &str, dim: usize) {
         let players = players_in(game, dimension);
         send_signal_lights(game, &players, &lights);
     }
+}
+
+/// A track observer's `powered`, None for any other block (a state test; usable from the signal
+/// hooks, which may run inside the world's borrow).
+pub(super) fn observer_powered(state: u32) -> Option<bool> {
+    states::index(state)?;
+    WORLD.with(|w| {
+        let w = w.try_borrow().ok()?;
+        let (b, info) = w.as_ref()?.table.get(state)?;
+        (b == create_engine::Block::TrackObserver).then_some(info.powered)
+    })
+}
+
+/// `TrackObserverBlock.getSignal`: 15 to every side while powered.
+pub(super) fn observer_signal(state: u32) -> Option<i32> {
+    observer_powered(state).map(|p| if p { 15 } else { 0 })
+}
+
+/// A click on a track observer: on its filter slot (`TrackObserverBlockEntity.createFilter`: on
+/// top, 15.5 px up) the held item becomes its cargo filter (a filter item taken from the hand,
+/// the one it held given back), an empty hand clears it (`onFilterChanged` →
+/// `setFilterAndNotify`). Trains carry no cargo in this port: a filtered observer sees none.
+pub(super) fn use_observer(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    face: [i32; 3],
+    canceled: &mut bool,
+) {
+    if face != [0, 1, 0] || !may_use_value_box(game) {
+        return;
+    }
+    let Some(hit) = game.pick() else {
+        return;
+    };
+    let local = [0, 1, 2].map(|i| hit.point[i] - f64::from(pos[i]));
+    if !create_engine::board::hits_box([0.5, 15.5 / 16.0, 0.5], local) {
+        return;
+    }
+    if game
+        .native_held()
+        .is_some_and(|h| matches!(h.0.as_str(), "create:wrench" | "create:mechanical_arm"))
+    {
+        return;
+    }
+    *canceled = true;
+    let filter = super::create_items::take_filter(game);
+    let old = with_world(|w| {
+        let d = &mut w.dims[dim];
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        d.railway.set_observer_filtered(pos, filter.is_some());
+        match filter {
+            Some(f) => d.observer_filters.insert(pos, f),
+            None => d.observer_filters.remove(&pos),
+        }
+    })
+    .flatten();
+    super::create_items::return_filter(game, pos, old);
 }
 
 /// Signal lights on the client (`SignalRenderer`): Create's `indicator_on` partial while a
@@ -1623,6 +1697,7 @@ pub(super) fn debug_curve(game: &mut Game<'_>, dim: usize, a: [i32; 3], b: [i32;
 /// Curves that changed since the last tick: a track left with none is no longer `turn`
 /// (`HAS_BE`), and players are sent what each block draws now.
 pub(super) fn sync_curves(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    lay_fake_track(game, dimension, dim);
     let Some(changed) = with_world(|w| {
         let c = &mut w.dims[dim].track_curves.changed;
         if c.is_empty() {
@@ -1656,6 +1731,65 @@ pub(super) fn sync_curves(game: &mut Game<'_>, dimension: &str, dim: usize) {
     }
     let players = players_in(game, dimension);
     send_curves(game, &players, &shown);
+}
+
+/// `TrackBlockEntity.manageFakeTracksAlong` for curves added or gone: fake track (`Track
+/// Marker for Maps`) laid in the replaceable blocks above a curve (waterlogged in a water
+/// source, never in another fluid), taken up with it. Create also lays it again every lazy tick
+/// and lets it decay by random ticks (`FakeTrackBlockEntity.keepAlive`); here it is laid once and
+/// taken up when its curve goes, with nothing per tick.
+fn lay_fake_track(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let fake = with_world(|w| {
+        let f = &mut w.dims[dim].track_curves.fake;
+        if f.is_empty() {
+            Vec::new()
+        } else {
+            std::mem::take(f)
+        }
+    })
+    .unwrap_or_default();
+    if fake.is_empty() {
+        return;
+    }
+    let registry = game.pack.assets.registry;
+    let Some(dry) = registry.default_state("create:fake_track") else {
+        return;
+    };
+    let wet = state_with_props(game, dry, &[("waterlogged", "true")]).unwrap_or(dry);
+    let flags = super::native_hooks::flags::UPDATE_ALL;
+    for (p, lay) in fake {
+        if !game.world.loaded(p[0], p[2]) {
+            continue;
+        }
+        let here = game.world.block(p[0], p[1], p[2]);
+        let present = here == dry || here == wet;
+        if !lay {
+            if present {
+                // `removeBlock`: its water stays.
+                let left = if here == wet {
+                    registry.default_state("minecraft:water")
+                } else {
+                    registry.default_state("minecraft:air")
+                };
+                if let Some(s) = left {
+                    game.native_set_block(dimension, p, s, flags);
+                }
+            }
+            continue;
+        }
+        if present {
+            continue;
+        }
+        let b = game.res.behaviours();
+        let water = registry.state(here).is_some_and(|s| {
+            s.name == "minecraft:water" && s.properties.get("level").is_none_or(|l| l == "0")
+        });
+        let fluid = b.fluid(here).kind() != horizon_world::fluid::FluidKind::Empty;
+        if (fluid && !water) || !b.is_replaceable(here) {
+            continue;
+        }
+        game.native_set_block(dimension, p, if water { wet } else { dry }, flags);
+    }
 }
 
 pub(super) fn send_curves(

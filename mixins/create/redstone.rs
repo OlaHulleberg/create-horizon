@@ -425,6 +425,96 @@ pub(super) fn latch_inputs(game: &mut Game<'_>, pos: [i32; 3], facing: Dir) -> (
 
 /// Latches: their due ticks (`tick`), then the ones whose neighbours changed
 /// (`checkTickOnNeighbor`), which take a tick one game tick later. Nothing runs without either.
+/// The controller rail at `pos`, if one is there.
+fn controller_rail(game: &Game<'_>, pos: [i32; 3]) -> Option<create_engine::rail::Rail> {
+    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    states::index(state)?;
+    with_world(|w| {
+        let (b, info) = w.table.get(state)?;
+        (b == create_engine::Block::ControllerRail).then(|| create_engine::rail::Rail {
+            shape: info.rail.unwrap_or_default(),
+            backwards: info.backwards,
+            power: info.power,
+        })
+    })
+    .flatten()
+}
+
+/// What `calculatePower` reads: the strongest signal beside a block, and controller rails.
+struct RailWorld<'a, 'g> {
+    game: &'a RefCell<&'a mut Game<'g>>,
+}
+
+impl create_engine::rail::Probe for RailWorld<'_, '_> {
+    fn signal(&self, pos: [i32; 3]) -> i32 {
+        let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+        self.game
+            .borrow_mut()
+            .with_level(|b, level, ticks| b.best_neighbor_signal(level, ticks, at))
+    }
+    fn rail(&self, pos: [i32; 3]) -> Option<create_engine::rail::Rail> {
+        controller_rail(&self.game.borrow(), pos)
+    }
+}
+
+/// `ControllerRailBlock.getStateForPlacement`: straight across the player's facing, backwards
+/// when facing a positive way. (`BaseRailBlock`'s turn and slope toward rails beside it are not
+/// ported: Horizon's rail code drives vanilla's rails only.)
+pub(super) fn place_controller_rail(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateId) {
+    let (shape, backwards) =
+        create_engine::rail::placement(create_engine::place::horizontal_direction(game.yaw));
+    let registry = game.pack.assets.registry;
+    let Some(mut s) = registry.state(state).cloned() else {
+        return;
+    };
+    s.properties.insert("shape".into(), shape.name().into());
+    s.properties
+        .insert("backwards".into(), backwards.to_string());
+    if let Some(id) = registry.id(&s).filter(|id| *id != state) {
+        let dimension = game.dim.id().to_owned();
+        game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
+    }
+}
+
+/// Controller rails whose neighbour changed (`BaseRailBlock.neighborChanged` → `updateState`):
+/// `power` is worked out again and set when it changed (`placeAndNotify`: the rails beside it
+/// are told, and work theirs out in turn). Nothing runs without a change.
+pub(super) fn tick_controller_rails(game: &mut Game<'_>, dim: usize) {
+    let checks = with_world(|w| {
+        let c = &mut w.dims[dim].rail_checks;
+        if c.is_empty() {
+            Vec::new()
+        } else {
+            std::mem::take(c)
+        }
+    })
+    .unwrap_or_default();
+    if checks.is_empty() {
+        return;
+    }
+    let mut checks = checks;
+    checks.sort_unstable();
+    checks.dedup();
+    for pos in checks {
+        let Some(rail) = controller_rail(game, pos) else {
+            continue;
+        };
+        let power = {
+            let cell = RefCell::new(&mut *game);
+            create_engine::rail::power(&RailWorld { game: &cell }, pos)
+        };
+        if power != rail.power {
+            game.native_set_block_property_with(
+                pos,
+                "power",
+                &power.to_string(),
+                super::native_hooks::flags::UPDATE_ALL,
+            );
+            with_world(|w| w.dims[dim].analog_checks.push(pos));
+        }
+    }
+}
+
 pub(super) fn tick_latches(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let now = game.world.game_time;
     let Some((due, checks)) = with_world(|w| {

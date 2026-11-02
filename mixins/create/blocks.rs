@@ -82,6 +82,8 @@ pub(super) fn use_block(
         use_toolbox(game, pos, block, state, back, canceled);
     } else if dye::is_postbox(block) {
         use_postbox(game, dim, pos, back, canceled);
+    } else if matches!(block, Block::TrainTrapdoor | Block::FramedGlassTrapdoor) {
+        use_trapdoor(game, pos, state, back, canceled);
     } else {
         return false;
     }
@@ -251,6 +253,50 @@ pub(super) fn tick_postboxes(game: &mut Game<'_>, dimension: &str, dim: usize) {
             set_postbox_open(game, dimension, pos, true);
         }
     }
+}
+
+/// `TrainTrapdoorBlock.useWithoutItem`: a click (not sneaking with something held) opens or
+/// closes it whatever its power (`state.cycle(OPEN)`, `UPDATE_CLIENTS`; a waterlogged one has
+/// its water ticked by the template), with its `BlockSetType`'s iron trapdoor sounds.
+fn use_trapdoor(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    state: BlockStateId,
+    back: bool,
+    canceled: &mut bool,
+) {
+    if back && holds_something(game) {
+        return;
+    }
+    let Some(open) = with_world(|w| w.table.get(state.0).map(|(_, i)| i.open)).flatten() else {
+        return;
+    };
+    *canceled = true;
+    let open = !open;
+    let Some(id) = with_props(
+        game,
+        state,
+        &[("open", if open { "true" } else { "false" })],
+    ) else {
+        return;
+    };
+    let dimension = game.dim.id().to_owned();
+    game.native_set_block(
+        &dimension,
+        pos,
+        id,
+        super::native_hooks::flags::UPDATE_CLIENTS,
+    );
+    let sound = if open {
+        "minecraft:block.iron_trapdoor.open"
+    } else {
+        "minecraft:block.iron_trapdoor.close"
+    };
+    let pitch = door_pitch(game, pos);
+    let [x, y, z] = pos.map(|v| f64::from(v) + 0.5);
+    game.native_run_command(&format!(
+        "execute in {dimension} run playsound {sound} blocks @a {x} {y} {z} 1 {pitch}"
+    ));
 }
 
 /// The sliding door at `pos`: its block and state.

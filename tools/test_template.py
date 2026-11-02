@@ -563,9 +563,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 59) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 63) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 59;
+        let empty = state.0 == 0 || state.0 == 63;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -574,10 +574,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 59 is a water source.
+    /// State 63 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 59 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 63 { FluidKind::Water } else { FluidKind::Empty })
     }
     /// `Block.updateFromNeighbourShapes`: the fixture's states keep their shape.
     pub fn update_from_neighbour_shapes(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos,
@@ -774,7 +774,18 @@ impl Behaviours {
         ("powered".to_owned(), "false".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
     states.push(BlockState { name: "create:repackager".into(), properties: BTreeMap::from([
         ("facing".to_owned(), "east".to_owned()), ("powered".to_owned(), "false".to_owned())]) });
-    // 59: a water source; 60: a target block at power 7.
+    // 59, 60: a train trapdoor facing north, closed and open; 61: a mechanical roller facing
+    // north; 62: a powered track observer.
+    for open in ["false", "true"] {
+        states.push(BlockState { name: "create:train_trapdoor".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), "north".to_owned()), ("half".to_owned(), "bottom".to_owned()),
+            ("open".to_owned(), open.to_owned()), ("powered".to_owned(), "false".to_owned()),
+            ("waterlogged".to_owned(), "false".to_owned())]) });
+    }
+    states.push(BlockState { name: "create:mechanical_roller".into(), properties: BTreeMap::from([
+        ("facing".to_owned(), "north".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
+    states.push(BlockState { name: "create:track_observer".into(), properties: props("powered", "true") });
+    // 63: a water source; 64: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
@@ -844,7 +855,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 39);
+    assert_eq!(commands.len(), 40);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -1052,7 +1063,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 59), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 63), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1141,7 +1152,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 60);
+    game.world.blocks.insert([79, 0, 80], 64);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1268,6 +1279,34 @@ impl Behaviours {
     assert_eq!(data.get(&"create_glue".into()), Some(&glue));
     // Controls on a contraption that isn't there.
     game.native_perform_command(&player, "create_debug controls 0 90 0 all", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("no moving contraption at 0 90 0"));
+    // A train trapdoor at (900, 0, 900): a click opens it, whatever its power, with an iron
+    // trapdoor's sound.
+    game.world.blocks.insert([900, 0, 900], 59);
+    level.native_block_changed(LevelDimension::Overworld, at([900, 0, 900]), BlockStateId(0), BlockStateId(59));
+    let mut canceled = false;
+    game.native_right_click_block([900, 0, 900], [0, 1, 0], &mut canceled);
+    assert!(canceled);
+    assert_eq!(game.world.blocks.get(&[900, 0, 900]), Some(&60), "open");
+    assert!(game.said.last().is_some_and(|l| l.contains("block.iron_trapdoor.open")));
+    // A roller at (902, 0, 900): its mode by command (its value box), saved with its column.
+    game.world.blocks.insert([902, 0, 900], 61);
+    level.native_block_changed(LevelDimension::Overworld, at([902, 0, 900]), BlockStateId(0), BlockStateId(61));
+    game.native_perform_command(&player, "create_debug roller 902 0 900 wide_fill", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("roller 902 0 900: wide_fill no material"));
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [56, 56], &mut data);
+    let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create_glue".into()) else { panic!("no roller saved") };
+    assert!(own.contains_key(&"rollers".into()), "{own:?}");
+    // A powered track observer gives 15 to every side, no direct signal.
+    for direct in [false, true] {
+        let mut signal = -1;
+        level.native_block_signal(LevelDimension::Overworld, BlockPos { x: 904, y: 0, z: 900 }, BlockStateId(62),
+            horizon_core::geometry::Direction::North, direct, &mut signal);
+        assert_eq!(signal, if direct { 0 } else { 15 });
+    }
+    // Controls clicked on a contraption with none aboard: none to click.
+    game.native_perform_command(&player, "create_debug controls 0 90 0 block", &mut ran);
     assert_eq!(game.said.last().map(String::as_str), Some("no moving contraption at 0 90 0"));
     // Packages: a packager at (300, 0, 300) facing east with a postbox behind it and a frogport
     // on it; two chain conveyors (302, 1, 300) and (306, 1, 300), the first under a motor
@@ -1687,7 +1726,7 @@ impl Behaviours {
     // its comparator reads 15.
     game.native_perform_command(&player, "create_debug requester 1004 0 1000 Home all gold_ingot 5", &mut ran);
     assert_eq!(game.said.last().map(String::as_str), Some("requester to \\"Home\\""));
-    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 1004, y: 0, z: 1000 }, BlockStateId(56));
+    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 1004, y: 0, z: 1000 }, BlockStateId(61));
     game.native_level_tick_post("minecraft:overworld");
     game.native_perform_command(&player, "create_debug packages 1000 0 1000", &mut ran);
     assert!(game.said.last().is_some_and(|l| l.contains("queued=1")), "{:?}", game.said.last());
