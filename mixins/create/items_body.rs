@@ -384,6 +384,28 @@ pub(super) fn set_schedule(stack: &mut ItemStack, entries: &[(String, i32)]) {
     set_custom(stack, vec![(SCHEDULE_KEY, Some(schedule))]);
 }
 
+/// The belt connector's first shaft (`BELT_FIRST_SHAFT`, a `BlockPos`: three ints).
+pub(super) fn belt_first_shaft(stack: &ItemStack) -> Option<[i32; 3]> {
+    match get(
+        custom(stack),
+        create_engine::belt_connector::FIRST_SHAFT_KEY,
+    ) {
+        Some(Tag::IntArray(v)) if v.len() == 3 => Some([v[0], v[1], v[2]]),
+        _ => None,
+    }
+}
+
+/// `set` (or `remove`, for None) of `BELT_FIRST_SHAFT`.
+pub(super) fn set_belt_first_shaft(stack: &mut ItemStack, pos: Option<[i32; 3]>) {
+    set_custom(
+        stack,
+        vec![(
+            create_engine::belt_connector::FIRST_SHAFT_KEY,
+            pos.map(|p| Tag::IntArray(p.to_vec())),
+        )],
+    );
+}
+
 /// `Inventory.placeItemBackInInventory`: into the inventory, the rest dropped at the player.
 pub(super) fn give_back(game: &mut Game<'_>, stack: ItemStack) {
     if let Some(rest) = game.give(stack)

@@ -7,6 +7,7 @@
 use super::Game;
 use super::create::with_world;
 use super::create_items_body as body;
+use create_engine::belt_connector as bc;
 use create_engine::filter::{self, Attribute, Filter, Mode, Passes, Probe};
 use create_engine::kinetics::Dir;
 use create_engine::symmetry::{self, Wand};
@@ -1026,6 +1027,7 @@ pub(super) fn use_item_on(
     match &*stack.item {
         symmetry::WAND => use_wand_on(game, pos, face, claimed),
         "create:tree_fertilizer" => fertilize(game, pos, claimed),
+        bc::ITEM => use_belt_connector(game, pos, claimed),
         _ => {}
     }
 }
@@ -1075,6 +1077,152 @@ fn fertilize(game: &mut Game<'_>, pos: [i32; 3], claimed: &mut bool) {
     }
     if !game.creative {
         shrink_hand(game);
+    }
+}
+
+// --- Belt connector ---
+
+/// The world as the belt connector asks it, on the level in place.
+struct Ground<'a, 'g> {
+    game: &'a Game<'g>,
+    dim: usize,
+}
+
+impl bc::Ground for Ground<'_, '_> {
+    fn loaded(&self, pos: [i32; 3]) -> bool {
+        self.game.world.loaded(pos[0], pos[2])
+    }
+
+    fn shaft(&self, pos: [i32; 3]) -> Option<create_engine::kinetics::Axis> {
+        let state = self.game.world.block(pos[0], pos[1], pos[2]).0;
+        with_world(|w| match w.table.get(state) {
+            Some((create_engine::Block::Shaft, info)) => info.axis,
+            _ => None,
+        })
+        .flatten()
+    }
+
+    fn speed(&self, pos: [i32; 3]) -> f32 {
+        with_world(|w| w.speed(self.dim, pos))
+            .flatten()
+            .unwrap_or(0.0)
+    }
+
+    fn replaceable(&self, pos: [i32; 3]) -> bool {
+        let state = self.game.world.block(pos[0], pos[1], pos[2]);
+        self.game.res.behaviours().is_replaceable(state)
+    }
+}
+
+/// `BeltConnectorItem.useOn` on the server: sneaking forgets the first shaft; a click on a shaft
+/// remembers it, a click on a second shaft that connects lays the belt (one belt connector used
+/// up outside creative) and forgets it. Refusals say nothing, as in Create (its client draws the
+/// red particles of `BeltConnectorHandler`). Not here: the 5-tick item cooldown and the `belt`
+/// advancement (no hook gives either).
+fn use_belt_connector(game: &mut Game<'_>, pos: [i32; 3], claimed: &mut bool) {
+    *claimed = true;
+    let Some(dim) = dimension_index(game.dim.id()) else {
+        return;
+    };
+    let player = game.native_acting_player().is_some();
+    let first = hand_slot(game).as_ref().and_then(body::belt_first_shaft);
+    let click = bc::click(&Ground { game, dim }, sneaking(game), first, pos, player);
+    let set_first = |game: &mut Game<'_>, p: Option<[i32; 3]>| {
+        if let Some(s) = hand_slot(game).as_mut() {
+            body::set_belt_first_shaft(s, p);
+        }
+    };
+    match click {
+        bc::Click::Forget => set_first(game, None),
+        bc::Click::Fail { forget } => {
+            if forget {
+                set_first(game, None);
+            }
+        }
+        bc::Click::Remember => set_first(game, Some(pos)),
+        bc::Click::Refused => {}
+        bc::Click::Connect(start) => {
+            create_belts(game, dim, start, pos);
+            if !game.creative {
+                shrink_hand(game);
+            }
+            set_first(game, None);
+        }
+    }
+}
+
+/// `createBelts`: the wool sound, then each block of the chain becomes its belt segment
+/// (`switchToBlockState`, waterlogged in a water source; what can't be replaced, the shafts, is
+/// broken without drops first); an unbreakable block on the way stops it and takes every belt
+/// block laid away again.
+fn create_belts(game: &mut Game<'_>, dim: usize, start: [i32; 3], end: [i32; 3]) {
+    use horizon_world::fluid::FluidKind;
+    let at = bc::sound_at(start, end).map(|v| f64::from(v) + 0.5);
+    game.audio
+        .play("minecraft:block.wool.place", Some(at), 0.5, 1.0);
+    let ground = Ground { game, dim };
+    let Some(axis) = bc::Ground::shaft(&ground, start) else {
+        return;
+    };
+    let layout = bc::layout(start, end, axis, |p| bc::Ground::shaft(&ground, p));
+    let registry = game.pack.assets.registry;
+    let Some(belt) = registry
+        .default_state("create:belt")
+        .and_then(|id| registry.state(id).cloned())
+    else {
+        return;
+    };
+    let dimension = game.dim.id().to_owned();
+    let all = super::native_hooks::flags::UPDATE_ALL;
+    let air = registry.default_state("minecraft:air");
+    let water = registry.default_state("minecraft:water");
+    let mut failed = false;
+    for (pos, seg) in &layout {
+        let pos = *pos;
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let b = game.res.behaviours();
+        if b.facts(state).hardness < 0.0 {
+            failed = true;
+            break;
+        }
+        let waterlogged = b.fluid(state).kind() == FluidKind::Water;
+        if !b.is_replaceable(state) {
+            // `destroyBlock(pos, false)`: what stays is its fluid.
+            if let Some(id) = if waterlogged { water } else { air } {
+                game.native_set_block(&dimension, pos, id, all);
+            }
+        }
+        let mut s = belt.clone();
+        for (k, v) in [
+            ("facing", super::create::dir_name(seg.facing)),
+            ("slope", bc::slope_name(seg.slope)),
+            ("part", bc::part_name(seg.part)),
+            ("waterlogged", if waterlogged { "true" } else { "false" }),
+        ] {
+            s.properties.insert(k.to_owned(), v.to_owned());
+        }
+        if let Some(id) = registry.id(&s)
+            && game.world.block(pos[0], pos[1], pos[2]) != id
+        {
+            game.native_set_block(&dimension, pos, id, all);
+        }
+    }
+    if !failed {
+        return;
+    }
+    for (pos, _) in layout {
+        let state = game.world.block(pos[0], pos[1], pos[2]);
+        let is_belt = with_world(|w| {
+            w.table
+                .get(state.0)
+                .is_some_and(|(b, _)| b == create_engine::Block::Belt)
+        });
+        if is_belt == Some(true) {
+            let wet = game.res.behaviours().fluid(state).kind() == FluidKind::Water;
+            if let Some(id) = if wet { water } else { air } {
+                game.native_set_block(&dimension, pos, id, all);
+            }
+        }
     }
 }
 

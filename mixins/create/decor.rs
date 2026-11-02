@@ -1100,6 +1100,22 @@ pub(super) fn place_block(
             }
         }
         Block::PeculiarBell => with(dim, |d| d.bell_checks.push(pos)),
+        // `NozzleBlock.getStateForPlacement`: facing the clicked face; `canSurvive` (checked
+        // before a placement): only on the front of an encased fan facing the same way.
+        Block::Nozzle => {
+            let o = clicked.offset();
+            let fan = game
+                .world
+                .block(pos[0] - o[0], pos[1] - o[1], pos[2] - o[2]);
+            let behind = block_of(fan.0)
+                .filter(|(b, _)| *b == Block::EncasedFan)
+                .and_then(|(_, i)| i.facing);
+            if !create_engine::nozzle::survives(clicked, behind) {
+                refuse(game, pos, &stack.item);
+            } else if let Some(id) = with_props(game, pos, &[("facing", dir_name(clicked))]) {
+                set_state(game, pos, id);
+            }
+        }
         _ => {}
     }
 }

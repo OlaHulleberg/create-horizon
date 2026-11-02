@@ -1774,6 +1774,7 @@ pub(super) fn tick_crusher(game: &mut Game<'_>, dimension: &str, dim: usize, pos
 /// (`AirCurrent.rebuild`), then the depots and belts in it processed
 /// (`tickAffectedHandlers`). Stopped fans cost nothing.
 pub(super) fn tick_fans(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    check_nozzles(game, dimension, dim);
     let fans = with_world(|w| w.fans_to_tick(dim)).unwrap_or_default();
     if fans.is_empty() {
         return;
@@ -1804,6 +1805,18 @@ pub(super) fn tick_fans(game: &mut Game<'_>, dimension: &str, dim: usize) {
                 }
             });
         }
+        // The nozzle on its front (`NozzleBlockEntity.tick`): it does something only while
+        // its fan turns, so it ticks with it (and once more when it stops, to let go).
+        if let Some(f) = facing {
+            let o = f.offset();
+            tick_nozzle(
+                game,
+                dimension,
+                dim,
+                [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]],
+                (speed, f),
+            );
+        }
         if speed == 0.0 || !recipes {
             continue;
         }
@@ -1820,6 +1833,148 @@ pub(super) fn tick_fans(game: &mut Game<'_>, dimension: &str, dim: usize) {
         }
     }
     with_world(|w| w.dims[dim].item_fan = kept);
+}
+
+/// Nozzles whose neighbour changed break, with their drops, when the block behind them is no
+/// longer an encased fan facing their way (`NozzleBlock.neighborChanged`, `canSurvive`).
+fn check_nozzles(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    let checks = with_world(|w| {
+        let c = &mut w.dims[dim].nozzle_checks;
+        if c.is_empty() {
+            Vec::new()
+        } else {
+            std::mem::take(c)
+        }
+    })
+    .unwrap_or_default();
+    for pos in checks {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let Some(facing) = with_world(|w| match w.table.get(state) {
+            Some((create_engine::Block::Nozzle, i)) => i.facing,
+            _ => None,
+        })
+        .flatten() else {
+            continue;
+        };
+        let o = facing.offset();
+        let behind = game
+            .world
+            .block(pos[0] - o[0], pos[1] - o[1], pos[2] - o[2])
+            .0;
+        let fan = with_world(|w| match w.table.get(behind) {
+            Some((create_engine::Block::EncasedFan, i)) => i.facing,
+            _ => None,
+        })
+        .flatten();
+        if !create_engine::nozzle::survives(facing, fan) {
+            game.native_run_command(&format!(
+                "execute in {dimension} run setblock {} {} {} air destroy",
+                pos[0], pos[1], pos[2]
+            ));
+        }
+    }
+}
+
+/// `NozzleBlockEntity.tick` for the nozzle at `pos` on the front of a ticking fan (`fan`: its
+/// speed and facing): every sixth tick it looks for the item entities and mobs within half its
+/// range that it sees (`lazyTick`, `canSee` through whole blocks); then it takes its range from
+/// the fan and pushes (or pulls) each caught one by `(range - distance)` along the line from its
+/// centre, 1/128 for items and 1/32 for mobs a tick. Pulling more than 256 discards them all.
+/// Not here (no hook): players (their motion is the client's), other entities, resetting the
+/// fall distance (`fallDistance = 0`), the explosion of an overloaded nozzle (`Level.explode`)
+/// and its particles.
+fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], fan: (f32, Dir)) {
+    use create_engine::nozzle::{self, Push, Target};
+    let Some(mut n) = with_world(|w| w.dims[dim].nozzles.remove(&pos)).flatten() else {
+        return;
+    };
+    if n.facing != fan.1 {
+        with_world(|w| w.dims[dim].nozzles.insert(pos, n));
+        return;
+    }
+    let reach = |range: f32| {
+        let c = nozzle::center(pos);
+        let r = f64::from(range);
+        (c.map(|v| v - r), c.map(|v| v + r))
+    };
+    if n.lazy_due() && n.range != 0.0 {
+        let (lo, hi) = nozzle::search_box(pos, n.range);
+        let inside = |p: [f64; 3]| (0..3).all(|a| p[a] >= lo[a] && p[a] <= hi[a]);
+        let mut seen: Vec<(Target, [f64; 3])> = Vec::new();
+        let (rlo, rhi) = reach(n.range);
+        let mut alive: Vec<Target> = Vec::new();
+        items_in(game, dimension, rlo, rhi, |id, _, at, _| {
+            alive.push(Target::Item(id));
+            if create_engine::belt::item_touches(at, lo, hi) {
+                seen.push((Target::Item(id), at));
+            }
+        });
+        for m in game.native_mobs(dimension) {
+            alive.push(Target::Mob(m.id));
+            if inside(m.pos) {
+                seen.push((Target::Mob(m.id), m.pos));
+            }
+        }
+        for (t, at) in seen {
+            n.look_at(pos, t, at, || {
+                nozzle::sees(pos, at, |p| p != pos && blocked(game, p))
+            });
+        }
+        n.entities.retain(|t| alive.contains(t));
+        if nozzle::overloaded(n.pushing, n.entities.len()) {
+            let gone = std::mem::take(&mut n.entities);
+            items_in(game, dimension, rlo, rhi, |id, stack, _, _| {
+                if gone.contains(&Target::Item(id)) {
+                    stack.count = 0;
+                }
+            });
+            for t in gone {
+                if let Target::Mob(id) = t {
+                    game.native_remove_mob(dimension, id);
+                }
+            }
+        }
+    }
+    n.update_range(Some(fan));
+    if !n.entities.is_empty() {
+        let (range, pushing) = (n.range, n.pushing);
+        let (lo, hi) = reach(range);
+        let mut released: Vec<Target> = Vec::new();
+        let mut found: Vec<Target> = Vec::new();
+        let caught = &n.entities;
+        items_in(game, dimension, lo, hi, |id, _, at, v| {
+            let t = Target::Item(id);
+            if !caught.contains(&t) {
+                return;
+            }
+            found.push(t);
+            match nozzle::push(pos, range, pushing, at, true, false) {
+                Push::Release => released.push(t),
+                Push::Hold => {}
+                Push::Add(add) => *v = [v[0] + add[0], v[1] + add[1], v[2] + add[2]],
+            }
+        });
+        if caught.iter().any(|t| !t.is_item()) {
+            for m in game.native_mobs(dimension) {
+                let t = Target::Mob(m.id);
+                if !n.entities.contains(&t) {
+                    continue;
+                }
+                found.push(t);
+                match nozzle::push(pos, range, pushing, m.pos, false, false) {
+                    Push::Release => released.push(t),
+                    Push::Hold => {}
+                    Push::Add(add) => {
+                        game.native_push_mob(dimension, m.id, add);
+                    }
+                }
+            }
+        }
+        // Gone, or out of the box and so out of range: let go.
+        n.entities
+            .retain(|t| found.contains(t) && !released.contains(t));
+    }
+    with_world(|w| w.dims[dim].nozzles.insert(pos, n));
 }
 
 /// `AirCurrent.tickAffectedEntities` for items: those its search caught (every 5 ticks) and still
