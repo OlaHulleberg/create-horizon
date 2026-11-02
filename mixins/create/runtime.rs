@@ -346,6 +346,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_mixers(game, dim);
     tick_pipes(game, dimension, dim);
     tick_boilers(game, dimension, dim);
+    super::create_plumbing::tick_plumbing(game, dimension, dim);
     tick_tank_states(game, dimension, dim);
     super::create_actors::tick_stickers(game, dim);
     tick_pistons(game, dimension, dim);
@@ -563,6 +564,7 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     let tanks: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].tanks.multis.keys().copied().collect()).unwrap_or_default();
     send_tanks(game, &[player], dim, &tanks);
+    super::create_plumbing::sync_plumbing(game, player, dim);
     let windmills: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].windmills.keys().copied().collect()).unwrap_or_default();
     send_windmills(game, &[player], dim, &windmills);
@@ -795,6 +797,12 @@ pub(super) fn right_click_inner(
     }
     if block == Some(create_engine::Block::Millstone) {
         use_millstone(game, pos, canceled);
+        return;
+    }
+    // Valves, pipes, creative tanks, whistles.
+    if let Some(b) = block
+        && super::create_plumbing::use_plumbing(game, dim, pos, b, canceled)
+    {
         return;
     }
     if matches!(
@@ -2327,6 +2335,7 @@ pub(super) fn model_state(
         }
         Model::GaugeDial(d) => find("create:part_gauge_dial", "facing", dir_name(d)),
         Model::ArmCog => find("create:part_arm_cog", "facing", "up"),
+        Model::HoseCoil(d) => find("create:part_hose_coil", "facing", dir_name(d)),
     }
 }
 
@@ -2417,6 +2426,12 @@ pub(super) fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> b
     // A running clock's bearing top turns with its hour hand, which draws it.
     if block == create_engine::Block::ClockworkBearing && clock_shown(pos) {
         game.native_part_clear(client::key(pos, 1));
+    }
+    // FluidValveRenderer's pointer, after the slots above were cleared.
+    if block == create_engine::Block::FluidValve
+        && let Some(info) = c.table.get(state.0).map(|(_, i)| *i)
+    {
+        super::create_plumbing::valve_shown(game, pos, &info, speeds[0]);
     }
     // The dials were drawn at rest: put the needle back where it is.
     if create_engine::world::gauge_kind(block).is_some()
@@ -2529,6 +2544,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         tanks_from_server(game, data);
         return;
     }
+    if channel == create_engine::hose::CHANNEL {
+        super::create_plumbing::hoses_from_server(game, data);
+        return;
+    }
     if channel == TRAIN_CHANNEL {
         trains_from_server(game, data);
         return;
@@ -2624,6 +2643,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
     }
     tick_client_gauges(game, &mut c);
     tick_client_clocks(game, &c);
+    super::create_plumbing::tick_client_valves(game, &c.table);
     CLIENT.with_borrow_mut(|slot| *slot = Some(c));
 }
 
@@ -3201,6 +3221,11 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
         "create_debug controls <pos:block_pos> <filter:text>",
         2,
     ));
+    // What a valve, smart pipe, hose pulley, creative tank or whistle holds, for tests.
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug fluid_state <pos:block_pos>",
+        2,
+    ));
 }
 
 pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool) {
@@ -3208,6 +3233,7 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
         || redstone_command(game, command)
         || super::create_actors::contraption_command(game, command)
         || train_command(game, command)
+        || super::create_plumbing::plumbing_command(game, command)
     {
         *ran = true;
         return;
@@ -3509,6 +3535,21 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
         let dimension = game.dim.id().to_owned();
         game.native_set_block(&dimension, pos, id, super::native_hooks::flags::UPDATE_ALL);
         return;
+    }
+    match block {
+        Some(create_engine::Block::FluidValve) => {
+            return super::create_plumbing::place_valve(game, dim, pos);
+        }
+        Some(create_engine::Block::SmartFluidPipe) => {
+            return super::create_plumbing::place_smart_pipe(game, pos);
+        }
+        Some(create_engine::Block::HosePulley) => {
+            return super::create_plumbing::place_hose(game, dim, pos);
+        }
+        Some(create_engine::Block::SteamWhistle) => {
+            return super::create_plumbing::place_whistle(game, pos, clicked_face);
+        }
+        _ => {}
     }
     if block == Some(create_engine::Block::FluidPipe) {
         // FluidPipeBlock.getStateForPlacement: straight toward the player's view when nothing is
@@ -4078,6 +4119,12 @@ pub(super) fn analog_level(
                     .get(pos)
                     .map_or(0, |(_, m)| cmp::fluid_tank(m.tank.amount, m.capacity())),
             ),
+            // A creative tank reads full of its fluid, or empty.
+            Block::CreativeFluidTank => {
+                let full = d.plumbing.creative_fluid(pos).flatten().is_some();
+                let cap = create_engine::tank::CAPACITY;
+                Typed::Level(cmp::fluid_tank(if full { cap } else { 0 }, cap))
+            }
             Block::Spout => Typed::Level(cmp::smart_tank(
                 d.spouts.get(&pos).and_then(|s| s.fluid).map_or(0, |f| f.1),
                 create_engine::spout::CAPACITY,
@@ -4260,8 +4307,12 @@ pub(super) fn use_item_on(
     {
         return;
     }
-    // `IWrenchableWithBracket.onWrenched`: a bracket comes off first.
-    if super::create_decor::wrench_bracket(game, pos) {
+    // `IWrenchableWithBracket.onWrenched`: a bracket comes off first; then pipes become glass
+    // pipes and back, encased pipes lose their casing, whistles change size.
+    if super::create_decor::wrench_bracket(game, pos)
+        || super::create_plumbing::wrench_pipe(game, pos, block, clicked)
+        || super::create_plumbing::wrench_whistle(game, pos, block)
+    {
         return;
     }
     // A `facing` that never points up is a horizontal one (HORIZONTAL_FACING).

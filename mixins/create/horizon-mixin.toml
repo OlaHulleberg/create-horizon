@@ -66,6 +66,14 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_fluids"
 source = "fluids.rs"
 
+# Fluid valves, smart, glass and encased pipes, hose pulleys, creative fluid tanks and steam
+# whistles.
+[[module]]
+id = "plumbing"
+file = "crates/horizon-client/src/game.rs"
+name = "create_plumbing"
+source = "plumbing.rs"
+
 [[module]]
 id = "processing"
 file = "crates/horizon-client/src/game.rs"
