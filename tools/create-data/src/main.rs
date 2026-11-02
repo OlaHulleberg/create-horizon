@@ -139,7 +139,12 @@ fn compile(create: &Path, out: &Path) {
             continue;
         }
         if facts.class.as_deref() == Some("Item") && !facts.food {
-            let doc = json!({ "template": "minecraft:stick" });
+            // AllItems.EMPTY_SCHEMATIC: `stacksTo(1)`.
+            let doc = if name == "empty_schematic" {
+                json!({ "template": "minecraft:stick", "max_stack_size": 1 })
+            } else {
+                json!({ "template": "minecraft:stick" })
+            };
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
         } else if name == "goggles" {
@@ -251,6 +256,13 @@ fn compile(create: &Path, out: &Path) {
             // `*_backtank_placeable`: Create's hidden block item; the backtank's own item places
             // its block here.
             continue;
+        } else if matches!(name.as_str(), "schematic" | "schematic_and_quill") {
+            // SchematicItem, SchematicAndQuillItem: `stacksTo(1)`; a schematic's file, anchor,
+            // rotation and mirror are kept in `minecraft:custom_data` by the native mod, which
+            // stands in for their clicks (`/create_debug schematic`).
+            let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
         } else if name == "wrench" {
             // WrenchItem: `stacksTo(1)`; its use is the native mod's.
             let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });

@@ -4,4 +4,5 @@ fn block_entity_container(
     container: &mut Option<horizon_client::containers::ModContainer>,
 ) {
     crate::game::create::block_entity_container(block, container);
+    crate::game::create_schematics::block_entity_container(block, container);
 }

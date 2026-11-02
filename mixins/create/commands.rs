@@ -2,4 +2,5 @@
 fn register_commands(commands: &mut Vec<crate::game::native_server::NativeCommand>) {
     crate::game::create::register_commands(commands);
     crate::game::create_packages::register_commands(commands);
+    crate::game::create_schematics::register_commands(commands);
 }

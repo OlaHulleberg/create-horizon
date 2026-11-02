@@ -7,4 +7,5 @@ fn chunk_load(
     crate::game::create::chunk_load(game, dimension, chunk);
     crate::game::create_equipment::chunk_load(dimension, chunk);
     crate::game::create_packages::chunk_load(dimension, chunk);
+    crate::game::create_schematics::chunk_load(game, dimension, chunk);
 }

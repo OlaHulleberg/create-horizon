@@ -7,5 +7,6 @@ fn place_block(
     state: horizon_world::registry::BlockStateId,
 ) {
     crate::game::create::place_block(game, pos, state);
+    crate::game::create_schematics::place_block(game, pos, state);
     crate::game::create_equipment::place_block(game, stack, pos, state);
 }
