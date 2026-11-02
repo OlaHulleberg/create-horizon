@@ -13,4 +13,5 @@ fn chunk_load(
     crate::game::create_schematics::chunk_load(game, dimension, chunk);
     crate::game::create_decor::chunk_load(dimension, chunk);
     crate::game::create_controller::chunk_load(dimension, chunk);
+    crate::game::create_copycat::chunk_load(game, dimension, chunk);
 }

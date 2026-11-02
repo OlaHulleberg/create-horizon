@@ -6,4 +6,5 @@ fn chunk_unload(dimension: &str, chunk: &horizon_client::chunk::Chunk) {
     crate::game::create_schematics::chunk_unload(dimension, chunk);
     crate::game::create_decor::chunk_unload(dimension, chunk);
     crate::game::create_controller::chunk_unload(dimension, chunk);
+    crate::game::create_copycat::chunk_unload(dimension, chunk);
 }

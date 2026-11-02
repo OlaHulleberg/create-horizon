@@ -13,4 +13,5 @@ fn chunk_data_save(
     crate::game::create_schematics::chunk_data_save(game, dimension, chunk, data);
     crate::game::create_decor::chunk_data_save(dimension, chunk, data);
     crate::game::create_controller::chunk_data_save(dimension, chunk, data);
+    crate::game::create_copycat::chunk_data_save(game, dimension, chunk, data);
 }
