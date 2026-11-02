@@ -525,12 +525,16 @@ pub(super) fn tick_chute_pulls(game: &mut Game<'_>, dim: usize) {
         let above = [pos[0], pos[1] + 1, pos[2]];
         // A creative crate (no block entity here) is looked at again as a vanilla container.
         let supply = super::create_decor::crate_supply(game, dim, above);
+        // A portable storage interface hands down its contraption's storage while connected;
+        // it wakes the chute when it connects.
+        let psi = super::create_actors::is_item_interface(game, above);
         let tells = match game
             .world
             .block_entities
             .get(&(above[0], above[1], above[2]))
         {
             _ if supply.is_some() => false,
+            _ if psi => true,
             None => continue,
             Some(e) => matches!(e, horizon_client::containers::BlockEntity::Mod(_)),
         };
@@ -560,6 +564,9 @@ pub(super) fn tick_chute_pulls(game: &mut Game<'_>, dim: usize) {
                     amount,
                 )
             }
+            _ if psi => super::create_actors::psi_extract(game, dim, above, test, amount)
+                .ok()
+                .flatten(),
             Some(parts) => extract_vault(game, &parts, test, amount),
             None => super::machines::create_extract::extract_matching(
                 game,
@@ -749,6 +756,11 @@ pub(super) fn insert_item(
     if super::create_decor::crate_supply(game, dim, pos).is_some() {
         return None;
     }
+    // A portable storage interface: into its contraption's storage while connected.
+    let stack = match super::create_actors::psi_insert(game, dim, pos, stack) {
+        Ok(left) => return left,
+        Err(stack) => stack,
+    };
     match vault_at(game, dim, pos) {
         Some(parts) => insert_vault(game, &parts, stack),
         None => game.native_insert_item(pos, face, stack),
@@ -769,6 +781,9 @@ pub(super) fn insert_room(
     }
     if super::create_decor::crate_supply(game, dim, pos).is_some() {
         return Some(stack.count);
+    }
+    if let Some(room) = super::create_actors::psi_room(game, dim, pos, stack) {
+        return Some(room);
     }
     match vault_at(game, dim, pos) {
         Some(parts) => {
@@ -1143,6 +1158,10 @@ fn take_from_behind(
     // `BottomlessItemHandler.extractItem`: a creative crate gives its supply, a stack at most.
     if let Some(supply) = super::create_decor::crate_supply(game, dim, behind) {
         return super::create_decor::crate_extract(game, supply.as_deref(), |_| true, max);
+    }
+    // A portable storage interface: its contraption's storage while connected.
+    if let Ok(taken) = super::create_actors::psi_extract(game, dim, behind, |_, _| true, max) {
+        return taken;
     }
     match vault_at(game, dim, behind) {
         Some(parts) => extract_vault(game, &parts, |_, _| true, max),

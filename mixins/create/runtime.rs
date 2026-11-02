@@ -331,6 +331,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_chain_drives(game, dim);
     tick_sequencers(game, dim);
     tick_latches(game, dimension, dim);
+    tick_controller_rails(game, dim);
     tick_diodes(game, dimension, dim);
     tick_lamps(game, dimension, dim);
     tick_links(game, dimension, dim);
@@ -350,6 +351,9 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_tank_states(game, dimension, dim);
     super::create_actors::tick_stickers(game, dim);
     tick_pistons(game, dimension, dim);
+    // Stationary interfaces tick after the contraptions that hold them (block entities after
+    // entities); contraption controls follow redstone.
+    super::create_actors::tick_mounted(game, dimension, dim);
     tick_lifts(game, dimension, dim);
     tick_trains(game, dimension, dim);
     sync_curves(game, dimension, dim);
@@ -870,6 +874,16 @@ pub(super) fn right_click_inner(
     if block == Some(create_engine::Block::TrackStation) {
         *canceled = true;
         use_station(game, dim, pos);
+        return;
+    }
+    if block == Some(create_engine::Block::TrackObserver) {
+        use_observer(game, dim, pos, face, canceled);
+        return;
+    }
+    // Contraption controls (a click or their filter slot) and rollers (their filter slot).
+    if let Some(b) = block
+        && super::create_actors::use_mounted(game, dim, pos, face, b, back, canceled)
+    {
         return;
     }
     if block == Some(create_engine::Block::BlazeBurner) {
@@ -3221,6 +3235,11 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
         "create_debug controls <pos:block_pos> <filter:text>",
         2,
     ));
+    // A mechanical roller's mode (its value box), for tests.
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug roller <pos:block_pos> <mode:text>",
+        2,
+    ));
     // What a valve, smart pipe, hose pulley, creative tank or whistle holds, for tests.
     commands.push(super::native_server::NativeCommand::op(
         "create_debug fluid_state <pos:block_pos>",
@@ -3467,6 +3486,14 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
     if block == Some(create_engine::Block::SteamEngine) {
         place_engine(game, pos, state);
         return;
+    }
+    if block == Some(create_engine::Block::ControllerRail) {
+        place_controller_rail(game, pos, state);
+        return;
+    }
+    if block == Some(create_engine::Block::MechanicalRoller) {
+        // `setPlacedBy` → `searchForSharedValues`, after its facing below.
+        super::create_actors::roller_placed(dim, pos);
     }
     if block == Some(create_engine::Block::RedstoneContact) {
         place_contact(game, pos, clicked_face);
@@ -3983,6 +4010,11 @@ pub(super) fn block_signal(
         *signal = s;
         return;
     }
+    // `TrackObserverBlock.getSignal` (no direct signal).
+    if let Some(s) = observer_signal(state.0) {
+        *signal = if direct { 0 } else { s };
+        return;
+    }
     if let Some((_, s)) = diode_state(state.0) {
         *signal = create_engine::diode::signal(&s, side);
         return;
@@ -4029,6 +4061,7 @@ pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
         || link_state(state.0).is_some_and(|(_, receiver, powered)| receiver && powered)
         || lift_signal_source(state.0)
         || super::create_decor::is_signal_source(state.0)
+        || observer_powered(state.0).is_some()
         || detector_block(state.0)
             .is_some_and(|(b, i)| b != create_engine::Block::ContentObserver || i.powered)
     {
@@ -4153,6 +4186,16 @@ pub(super) fn analog_level(
                     .iter()
                     .any(|t| t.train.at_station == Some(pos)),
             )),
+            // `ControllerRailBlock.getAnalogOutputSignal`: its power.
+            Block::ControllerRail => Typed::Level(i32::from(info.power)),
+            // `PortableStorageInterfaceBlock`: 15 while connected.
+            Block::PortableStorageInterface | Block::PortableFluidInterface => {
+                Typed::Level(if d.psis.get(&pos).is_some_and(|s| s.is_connected()) {
+                    15
+                } else {
+                    0
+                })
+            }
             _ => Typed::Slots,
         };
         Some((b, typed))
