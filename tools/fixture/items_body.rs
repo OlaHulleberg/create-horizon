@@ -18,6 +18,7 @@ struct Data {
     schedule: Option<Vec<(String, i32)>>,
     belt_first: Option<[i32; 3]>,
     controller: Vec<String>,
+    contraption: Option<horizon_world::nbt::Compound>,
 }
 
 thread_local! {
@@ -120,6 +121,14 @@ pub(super) fn controller_items(stack: &ItemStack) -> Vec<String> {
 
 pub(super) fn set_controller_items(stack: &mut ItemStack, items: &[String]) {
     edit(stack, |d| d.controller = items.to_vec());
+}
+
+pub(super) fn minecart_contraption(stack: &ItemStack) -> Option<horizon_world::nbt::Compound> {
+    data(stack).contraption
+}
+
+pub(super) fn set_minecart_contraption(stack: &mut ItemStack, data: horizon_world::nbt::Compound) {
+    edit(stack, |d| d.contraption = Some(data));
 }
 
 /// Into the first empty inventory slot.

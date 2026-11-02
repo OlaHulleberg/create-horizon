@@ -1,5 +1,5 @@
 // A player breaks a block: a held extendo grip wears, a backtank's drop keeps its air, wands of
-// symmetry in the hotbar break its mirror images.
+// symmetry in the hotbar break its mirror images, a cart assembler drops its rail.
 fn destroy_block(
     game: &mut crate::game::Game<'_>,
     pos: [i32; 3],
@@ -9,4 +9,5 @@ fn destroy_block(
     crate::game::create_equipment::destroy_block(game, pos, state, *canceled);
     crate::game::create_items::destroy_block(game, pos, state, *canceled);
     crate::game::create_copycat::destroy_block(game, pos, state, *canceled);
+    crate::game::create_carts::destroy_block(game, pos, state, *canceled);
 }

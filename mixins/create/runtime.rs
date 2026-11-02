@@ -83,6 +83,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
             super::create_controller::forget();
             super::create_seats::forget();
             super::create_copycat::forget();
+            super::create_carts::forget();
             states::clear_range();
         }
     }
@@ -114,6 +115,7 @@ pub(super) fn block_changed(
     super::create_decor::block_changed(dim, at, old.0, new.0);
     super::create_controller::block_changed(dim, at, old.0, new.0);
     super::create_copycat::block_changed(dim, at, old.0, new.0);
+    super::create_carts::block_changed(dim, at, old.0, new.0);
     with_world(|w| w.block_changed(dim, at, old.0, new.0));
 }
 
@@ -357,6 +359,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_tank_states(game, dimension, dim);
     super::create_actors::tick_stickers(game, dim);
     tick_pistons(game, dimension, dim);
+    super::create_carts::level_tick(game, dimension, dim);
     // Stationary interfaces tick after the contraptions that hold them (block entities after
     // entities); contraption controls follow redstone.
     super::create_actors::tick_mounted(game, dimension, dim);
@@ -805,6 +808,11 @@ pub(super) fn right_click_inner(
     }
     // Placards, clipboards, bells, the creative crate, the item hatch, table cloths.
     if super::create_decor::use_block(game, dim, pos, face, canceled) {
+        return;
+    }
+    // A cart assembler: another rail type's item.
+    if block == Some(create_engine::Block::CartAssembler) {
+        super::create_carts::use_assembler(game, pos, canceled);
         return;
     }
     // Seats.
@@ -2600,6 +2608,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         pistons_from_server(game, data);
         return;
     }
+    if channel == create_engine::mounted::CHANNEL {
+        super::create_carts::from_server(game, data);
+        return;
+    }
     if channel == CONTRAPTION_CHANNEL {
         contraptions_from_server(game, data);
         return;
@@ -2645,6 +2657,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         ARMS.with_borrow_mut(|a| *a = ClientArms::default());
         reset_client_displays();
         CLOCKS.with_borrow_mut(|k| *k = ClientClocks::default());
+        super::create_carts::client_reset();
         return;
     }
     tick_client_depots(game);
@@ -3267,6 +3280,16 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
         "create_debug fluid_state <pos:block_pos>",
         2,
     ));
+    // The contraptions on carts and couplings, and a cart assembler's mode (its value box), for
+    // tests.
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug carts",
+        2,
+    ));
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug cart_mode <pos:block_pos> [mode:word]",
+        2,
+    ));
 }
 
 pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool) {
@@ -3275,6 +3298,7 @@ pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool
         || super::create_actors::contraption_command(game, command)
         || train_command(game, command)
         || super::create_plumbing::plumbing_command(game, command)
+        || super::create_carts::cart_command(game, command)
     {
         *ran = true;
         return;
@@ -4327,6 +4351,10 @@ pub(super) fn use_item_on(
 ) {
     // The face a placement that follows was clicked on (`BlockPlaceContext.getClickedFace`).
     CLICKED.set(Some((game.world.game_time, face)));
+    // Cart assemblers and minecart contraptions placed on rails, the wrench on an assembler.
+    if super::create_carts::use_item_on(game, stack, pos, claimed) {
+        return;
+    }
     // A shaft on a girder, brackets, the vertical gearbox and the empty blaze burner.
     if super::create_decor::use_item_on(game, stack, pos, face, claimed) {
         return;

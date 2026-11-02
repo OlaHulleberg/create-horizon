@@ -501,6 +501,13 @@ pub mod native_hooks {
         }
         pub fn native_set_delta_movement(&mut self, dimension: &str, id: u32, velocity: [f64; 3]) -> bool {
             let _ = dimension;
+            let moved = CARTS.with_borrow_mut(|list| {
+                let found = list.iter_mut().find(|x| x.id == id);
+                found.map(|x| x.velocity = velocity).is_some()
+            });
+            if moved {
+                return true;
+            }
             ENTITIES.with_borrow_mut(|list| { list.iter_mut().find(|e| e.id == id).map(|e| e.velocity = velocity).is_some() })
         }
         /// Recorded in `FALLS_RESET`.
@@ -512,6 +519,36 @@ pub mod native_hooks {
         pub fn native_set_yaw(&mut self, dimension: &str, id: u32, yaw: f32) -> bool {
             let _ = dimension;
             ENTITIES.with_borrow_mut(|list| { list.iter_mut().find(|e| e.id == id).map(|e| e.yaw = yaw).is_some() })
+        }
+        /// The fixture's minecarts (`CARTS`); spawned ones take the next id from 6000 and a UUID
+        /// of their id + 0xC000.
+        pub fn native_minecart(&mut self, dimension: &str, id: u32) -> Option<super::native_minecarts::NativeMinecart> {
+            let _ = dimension;
+            CARTS.with_borrow(|c| c.iter().find(|c| c.id == id).cloned())
+        }
+        pub fn native_minecarts(&mut self, dimension: &str) -> Vec<super::native_minecarts::NativeMinecart> {
+            let _ = dimension;
+            CARTS.with_borrow(|c| c.clone())
+        }
+        pub fn native_spawn_minecart(&mut self, dimension: &str, kind: &str, pos: [f64; 3], yaw: f32,
+                                     velocity: [f64; 3]) -> Option<u32> {
+            let _ = dimension;
+            let kind: &'static str = match kind {
+                "minecraft:minecart" => "minecraft:minecart",
+                "minecraft:chest_minecart" => "minecraft:chest_minecart",
+                "minecraft:furnace_minecart" => "minecraft:furnace_minecart",
+                _ => return None,
+            };
+            Some(CARTS.with_borrow_mut(|c| {
+                let id = c.iter().map(|x| x.id).max().unwrap_or(5999).max(5999) + 1;
+                c.push(super::native_minecarts::NativeMinecart { id, uuid: 0xC000 + u128::from(id), kind, pos, velocity,
+                    yaw, riders: vec![], ridden: false });
+                id
+            }))
+        }
+        pub fn native_remove_minecart(&mut self, dimension: &str, id: u32) -> bool {
+            let _ = dimension;
+            CARTS.with_borrow_mut(|c| { let n = c.len(); c.retain(|x| x.id != id); c.len() != n })
         }
         /// Seats (`SEAT_ENTITIES`) from id 5000; a player rides 0.6 below one, any other its own
         /// attachment (0 here) below; getting off puts a rider where the seat is.
@@ -726,9 +763,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 76) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 81) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 76;
+        let empty = state.0 == 0 || state.0 == 81;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -740,7 +777,7 @@ impl Behaviours {
     /// State 76 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 76 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 81 { FluidKind::Water } else { FluidKind::Empty })
     }
     /// `Block.updateFromNeighbourShapes`: the fixture's states keep their shape.
     pub fn update_from_neighbour_shapes(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos,
@@ -781,6 +818,8 @@ thread_local! {
     pub static ENTITIES: std::cell::RefCell<Vec<native_entities::NativeEntity>> = Default::default();
     pub static FALLS_RESET: std::cell::RefCell<Vec<u32>> = Default::default();
     pub static SEAT_ENTITIES: std::cell::RefCell<Vec<(u32, [f64; 3], bool)>> = Default::default();
+    /// The level's minecarts (API 62, 65).
+    pub static CARTS: std::cell::RefCell<Vec<native_minecarts::NativeMinecart>> = Default::default();
     /// Blocks giving a signal of 15 toward every side, for the latch test.
     pub static SIGNALS: std::cell::RefCell<std::collections::HashSet<[i32; 3]>> = Default::default();
     /// Where the acting player stands, and the keys held down (`native_is_key_down`).
@@ -948,6 +987,166 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     cart.velocity = [0.2, 0.0, 0.0];
     game.native_minecart_pass(dim, rail, BlockStateId(70), &mut cart);
     assert!(close(cart.velocity[0], -0.4 / 16.0) && cart.velocity[1] == 0.0, "{:?}", cart.velocity);
+}
+/// Cart assemblers, contraptions on carts, their items, saves and couplings, at x 1500 and up.
+#[cfg(test)]
+fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
+    use horizon_client::items::ItemStack;
+    let dim = "minecraft:overworld";
+    let place = |game: &mut Game<'_>, pos: [i32; 3], state: u32| {
+        let old = game.world.blocks.insert(pos, state).unwrap_or(0);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] },
+            BlockStateId(old), BlockStateId(state));
+    };
+    let cart = |id: u32| CARTS.with_borrow(|c| c.iter().find(|c| c.id == id).cloned());
+    let command = |game: &mut Game<'_>, line: &str| {
+        let me = game.native_acting_player().unwrap();
+        let mut ran = false;
+        game.native_perform_command(&me, line, &mut ran);
+        assert!(ran, "{line}");
+        game.said.last().cloned().unwrap_or_default()
+    };
+    // Nothing on a cart: the level tick looks at nothing.
+    assert_eq!(command(game, "create_debug carts"), "no carts");
+    // The assembler's item on a rail along x at (1500, 0, 1500) replaces it, facing north (not
+    // backwards), as a regular rail's.
+    game.world.blocks.insert([1500, 0, 1500], 84);
+    game.inventory[0] = Some(ItemStack::new("create:cart_assembler", 1));
+    game.hand = horizon_client::first_person::Hand::Main;
+    game.yaw = 180.0;
+    let mut claimed = false;
+    let stack = ItemStack::new("create:cart_assembler", 1);
+    game.native_use_item_on(&stack, [1500, 0, 1500], [0, 1, 0], &mut claimed);
+    assert!(claimed);
+    assert_eq!(game.world.blocks.get(&[1500, 0, 1500]), Some(&76));
+    assert!(game.inventory[0].is_none(), "used up");
+    // Its item on stone says where it goes.
+    game.world.blocks.insert([1502, 0, 1500], 1);
+    let mut claimed = false;
+    game.native_use_item_on(&stack, [1502, 0, 1500], [0, 1, 0], &mut claimed);
+    assert!(claimed && game.said.last().is_some_and(|l| l == "Place your Cart Assembler on a rail block"));
+    // A neighbour's change has it read its power.
+    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 1500, y: 0, z: 1500 }, BlockStateId(76));
+    game.native_level_tick_post(dim);
+    assert!(game.said.iter().any(|l| l == "set [1500, 0, 1500] powered=true"), "powered by its neighbour");
+    // Powered (as the property would now say), a stone block and its slime above, and a still
+    // rideable cart passing: at the assembler's tick both ride the cart, the assembler an anchor.
+    place(game, [1500, 0, 1500], 77);
+    place(game, [1500, 1, 1500], 1);
+    let first = native_minecarts::NativeMinecart { id: 90, uuid: 0xAB, kind: "minecraft:minecart",
+        pos: [1500.5, 0.0625, 1500.5], velocity: [0.0; 3], yaw: 0.0, riders: vec![], ridden: false };
+    CARTS.with_borrow_mut(|list| list.push(first));
+    let mut c90 = cart(90).unwrap();
+    game.native_minecart_pass(dim, BlockPos { x: 1500, y: 0, z: 1500 }, BlockStateId(77), &mut c90);
+    let sent = game.sent.len();
+    game.native_level_tick_post(dim);
+    assert_eq!(game.world.blocks.get(&[1500, 1, 1500]), Some(&0), "the stone left the world");
+    let line = command(game, "create_debug carts");
+    assert!(line.starts_with("cart 000000000000000000000000000000ab id=90 at=1500.50,0.06,1500.50 yaw=90.0 blocks=2 mode=ROTATE"), "{line}");
+    // Its clients learn the blocks and how it moves.
+    let msg = game.sent[sent..].iter().find(|m| m.1 == create_engine::mounted::CHANNEL).expect("sent").2.clone();
+    let pose = create_engine::mounted::Pose::decode(&msg).unwrap();
+    assert_eq!(pose.blocks, Some(vec![([0, 1, 0], 1), ([0, 0, 0], 78)]));
+    assert_eq!((pose.at, pose.angle), ([1500.5, 0.5625, 1500.5], 0.0));
+    let glides = game.glides.len();
+    game.native_net_from_server(create_engine::mounted::CHANNEL, &msg);
+    assert_eq!(game.glides.len(), glides + 1, "drawn as one gliding part");
+    assert_eq!(game.glides.last().map(|g| (g.1, g.2)), Some(([1500, 0, 1500], 1)));
+    // Assembled facing west (the assembler not backwards). The cart runs east: the contraption
+    // turns to face it, 12 degrees a tick, the half turn the
+    // way it moved; told to clients again as it turns.
+    CARTS.with_borrow_mut(|c| c[0].velocity = [0.2, 0.0, 0.0]);
+    for _ in 0..3 {
+        CARTS.with_borrow_mut(|c| c[0].pos[0] += 0.2);
+        game.native_level_tick_post(dim);
+    }
+    let line = command(game, "create_debug carts");
+    assert!(line.contains("yaw=54.0"), "{line}");
+    // A player can't get on it.
+    let mut canceled = false;
+    game.native_entity_mount(dim, 7, 90, true, &mut canceled);
+    assert!(canceled);
+    // A wrench picks it up: a minecart contraption item with its blocks, the cart gone.
+    game.inventory[0] = None;
+    let wrench = ItemStack::new("create:wrench", 1);
+    let mut claimed = false;
+    game.native_interact_entity(90, "minecraft:minecart", Some(&wrench), &mut claimed);
+    assert!(claimed && cart(90).is_none());
+    let item = game.inventory[0].clone().expect("the contraption's item");
+    assert_eq!(&*item.item, "create:minecart_contraption");
+    assert_eq!(command(game, "create_debug carts"), "no carts");
+    // Used on the rail at (1510, 0, 1500): a cart with it, facing the player's way.
+    game.world.blocks.insert([1510, 0, 1500], 84);
+    let mut claimed = false;
+    game.native_use_item_on(&item, [1510, 0, 1500], [0, 1, 0], &mut claimed);
+    let spawned = CARTS.with_borrow(|c| c.last().cloned()).expect("a cart");
+    assert_eq!((spawned.kind, spawned.pos), ("minecraft:minecart", [1510.5, 0.0625, 1500.5]));
+    let line = command(game, "create_debug carts");
+    assert!(line.contains("yaw=180.0 blocks=2"), "{line}");
+    // Saved with the world and back after a reload, found by its cart's UUID.
+    game.native_level_save(dim);
+    let saved = game.saved.get("create/minecart_contraptions").cloned().expect("saved");
+    assert!(game.saved_dirty.iter().any(|d| d == "create/minecart_contraptions"));
+    // (the world closed: what the mod kept of it forgotten)
+    create_carts::forget();
+    game.saved.insert("create/minecart_contraptions".into(), saved);
+    game.native_level_load(dim);
+    game.native_level_tick_post(dim);
+    let line = command(game, "create_debug carts");
+    assert!(line.contains(&format!("id={} at=1510.50", spawned.id)), "{line}");
+    // The cart breaks: the contraption goes back where it was, turned as it faced.
+    CARTS.with_borrow_mut(|c| c.retain(|x| x.id != spawned.id));
+    game.native_level_tick_post(dim);
+    assert_eq!(game.world.blocks.get(&[1510, 1, 1500]), Some(&1));
+    assert_eq!(command(game, "create_debug carts"), "no carts");
+    // Two carts 3 apart on x: a coupling's two clicks link them (one used), and they keep their
+    // length: the one pulled away runs on at 0.3 while the other is set to follow, half the gap
+    // each (their next positions 3 apart).
+    CARTS.with_borrow_mut(|c| {
+        c.clear();
+        for (id, x) in [(91u32, 1520.5), (92, 1523.5)] {
+            c.push(native_minecarts::NativeMinecart { id, uuid: u128::from(id), kind: "minecraft:minecart",
+                pos: [x, 0.0625, 1500.5], velocity: [0.0; 3], yaw: 0.0, riders: vec![], ridden: false });
+        }
+    });
+    game.inventory[0] = Some(ItemStack::new("create:minecart_coupling", 2));
+    let coupling = ItemStack::new("create:minecart_coupling", 2);
+    for id in [91, 92] {
+        let mut claimed = false;
+        game.native_interact_entity(id, "minecraft:minecart", Some(&coupling), &mut claimed);
+        assert!(claimed);
+    }
+    assert_eq!(game.inventory[0].as_ref().map(|s| s.count), Some(1));
+    let line = command(game, "create_debug carts");
+    assert!(line.contains("coupling 0000000000000000000000000000005b->0000000000000000000000000000005c length=3"), "{line}");
+    CARTS.with_borrow_mut(|c| {
+        c[1].pos[0] += 0.3;
+        c[1].velocity = [0.3, 0.0, 0.0];
+    });
+    game.native_level_tick_post(dim);
+    let (a, b) = (cart(91).unwrap().velocity, cart(92).unwrap().velocity);
+    assert!((a[0] - 0.3).abs() < 1e-6 && b[0].abs() < 1e-6, "{a:?} {b:?}");
+    // Saved and back.
+    game.native_level_save(dim);
+    let saved = game.saved.get("create/minecart_contraptions").cloned().expect("saved");
+    create_carts::forget();
+    game.saved.insert("create/minecart_contraptions".into(), saved);
+    game.native_level_load(dim);
+    game.native_level_tick_post(dim);
+    let line = command(game, "create_debug carts");
+    assert!(line.contains("length=3 distance=3.300"), "{line}");
+    // A wrench takes both off and gives the coupling back.
+    let mut claimed = false;
+    game.native_interact_entity(91, "minecraft:minecart", Some(&wrench), &mut claimed);
+    assert!(claimed && game.said.iter().any(|l| l == "Removed all couplings from minecart"));
+    assert_eq!(command(game, "create_debug carts"), "no carts");
+    // A cart assembler's mode, as its board sets it.
+    assert_eq!(command(game, "create_debug cart_mode 1500 0 1500 rotation_locked"),
+        "cart assembler at 1500 0 1500: ROTATION_LOCKED");
+    CARTS.with_borrow_mut(Vec::clear);
+    game.native_level_save(dim);
+    game.saved_dirty.retain(|d| d != "create/minecart_contraptions");
+    game.inventory[0] = None;
 }
 #[test] fn every_hook_reaches_the_engine() {
     use horizon_world::registry::BlockState;
@@ -1129,12 +1328,29 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
             ("waterlogged".to_owned(), "false".to_owned())]) });
     }
     states.push(BlockState { name: "create:copycat_base".into(), properties: BTreeMap::new() });
-    // 76: a water source; 77: a target block at power 7; 78: a lectern facing north, no book.
+    // 76, 77: cart assemblers along x standing in for a rail, unpowered and powered; 78: a
+    // minecart anchor along x; 79: an unpowered assembler for a powered rail; 80: an unpowered
+    // assembler along z.
+    for (powered, rail, shape) in [("false", "regular", "east_west"), ("true", "regular", "east_west"),
+                                   ("", "", ""), ("false", "powered_rail", "east_west"),
+                                   ("false", "regular", "north_south")] {
+        if rail.is_empty() {
+            states.push(BlockState { name: "create:minecart_anchor".into(), properties: props("axis", "x") });
+            continue;
+        }
+        states.push(BlockState { name: "create:cart_assembler".into(), properties: BTreeMap::from([
+            ("backwards".to_owned(), "false".to_owned()), ("powered".to_owned(), powered.to_owned()),
+            ("rail_type".to_owned(), rail.to_owned()), ("shape".to_owned(), shape.to_owned()),
+            ("waterlogged".to_owned(), "false".to_owned())]) });
+    }
+    // 81: a water source; 82: a target block at power 7; 83: a lectern facing north, no book; 84:
+    // a rail along x.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     states.push(BlockState { name: "minecraft:lectern".into(), properties: BTreeMap::from([
         ("facing".to_owned(), "north".to_owned()), ("has_book".to_owned(), "false".to_owned()),
         ("powered".to_owned(), "false".to_owned())]) });
+    states.push(BlockState { name: "minecraft:rail".into(), properties: props("shape", "east_west") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
     let mut calls = 0;
     let mut game = Game { pack: Pack { assets: Assets { registry } }, calls: &mut calls, said: vec![],
@@ -1203,7 +1419,7 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 42);
+    assert_eq!(commands.len(), 44);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -1411,7 +1627,7 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 76), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 81), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1500,7 +1716,7 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 77);
+    game.world.blocks.insert([79, 0, 80], 82);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -2260,13 +2476,13 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     // The controller on a lectern (1210, 0, 1200): a lectern controller, read by comparators as
     // 15. Used by a player at it, W powers the receiver from the lectern's controller; walking
     // away stops it; sneaking takes the lectern's controller off (dropped) and leaves a lectern.
-    game.world.blocks.insert([1210, 0, 1200], 78);
+    game.world.blocks.insert([1210, 0, 1200], 83);
     let mut claimed = false;
     game.native_use_item_on(&controller, [1210, 0, 1200], [0, 1, 0], &mut claimed);
     assert!(claimed);
     assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&65));
     assert!(game.inventory[0].is_none(), "the controller went on the lectern");
-    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1210, y: 0, z: 1200 }, BlockStateId(78), BlockStateId(65));
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1210, y: 0, z: 1200 }, BlockStateId(83), BlockStateId(65));
     assert_eq!(comparator(&game, [1210, 0, 1200], 65), 15);
     PLAYER_AT.set([1210.5, 0.0, 1201.2]);
     let from = game.sent.len();
@@ -2295,10 +2511,11 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     game.native_right_click_block([1210, 0, 1200], [0, 1, 0], &mut canceled);
     game.keys.clear();
     assert!(canceled);
-    assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&78), "a lectern again");
+    assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&83), "a lectern again");
     assert!(create_contraption_body::DROPPED.with_borrow(|d| d.iter().any(|x| x.1 == "create:linked_controller")));
     PLAYER_AT.set([0.5, 2.0, 0.5]);
     seats_turntables_fans_and_rails(&mut game, &level);
+    minecart_contraptions(&mut game, &level);
     // Logistics networks across restarts: the world's save writes network "Base" (its link at
     // (1000, 1, 1000), owned by the player who linked it) to `data/create/logistics_networks.dat`
     // once; unchanged, a later save writes nothing. Forgotten and read back as after a restart,
