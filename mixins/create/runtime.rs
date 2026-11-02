@@ -368,6 +368,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     super::create_train_controls::level_tick(game, dimension, dim);
     tick_trains(game, dimension, dim);
     super::create_train_controls::tick_seats(game, dimension, dim);
+    super::create_train_controls::tick_hud(game, dim);
     sync_curves(game, dimension, dim);
     tick_vaults(game, dim);
     tick_chutes(game, dim);
@@ -619,6 +620,7 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
             .unwrap_or_default();
     send_trains(game, dim, &trains, true);
     sync_signal_lights(game, player, dim);
+    super::create_carts::sync(dim);
 }
 
 /// A player right-clicks a block (`HandCrankBlock.useItemOn`): a hand crank turns for 10 ticks,
@@ -1571,6 +1573,7 @@ pub(super) fn value_board(game: &mut Game<'_>, batch: &mut horizon_client::hud::
 /// crosshair tells its stress (`KineticBlockEntity.addToGoggleTooltip`: impact × speed;
 /// `GeneratingKineticBlockEntity`: capacity × speed), in a tooltip right of the crosshair.
 pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
+    super::create_train_controls::hud(game, batch);
     if value_board(game, batch) {
         return;
     }
@@ -1738,6 +1741,10 @@ pub(super) fn goggle_overlay(game: &mut Game<'_>, batch: &mut horizon_client::hu
 
 /// The mouse wheel on the client: a creative motor under the crosshair takes it.
 pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
+    if !*claimed && super::create_train_controls::wheel(steps) {
+        *claimed = true;
+        return;
+    }
     if *claimed || !client_ensure(game) {
         return;
     }

@@ -87,6 +87,7 @@ pub mod track;
 pub mod track_curves;
 pub mod track_render;
 pub mod train_controls;
+pub mod train_hud;
 pub mod trains;
 pub mod tunnel;
 pub mod turntable;

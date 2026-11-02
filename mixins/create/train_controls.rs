@@ -4,7 +4,8 @@
 // there (API 66's `native_interaction_key_mapping_triggered`, Create's
 // `ContraptionHandlerClient`) and sends it; while its player controls a train it takes W, S, A,
 // D, space and left shift from the game (API 57) and sends them as Create's `ControlsHandler`
-// does. The server half seats players on a carriage's seats (mod seats, API 63, moved with the
+// does, and draws Create's `TrainHUD` (speed, throttle set by the wheel, the prompt box). The
+// server half seats players on a carriage's seats (mod seats, API 63, moved with the
 // carriage every tick) and gives them its controls (`ControlsInteractionBehaviour`), keeps their
 // keys alive (`ControlsServerHandler`) and drives the train by them. Nothing runs without a
 // carriage seat in use, a key held, a controlling player's word or a click waiting: each hook's
@@ -15,6 +16,7 @@ use super::native_entities::NativeEntity;
 use create_engine::train_controls::{
     self as tc, Driver, Driving, Frame, Inputs, Prompt, Target, ToClient, ToServer,
 };
+use create_engine::train_hud::{self as th, Hud};
 use create_engine::world::dimension_index;
 use create_engine::{Block, dye};
 use horizon_client::text::Text;
@@ -32,7 +34,8 @@ struct CarSeat {
 }
 
 /// A carriage's controls held (`AbstractContraptionEntity.controllingPlayer`): by whom, whether
-/// they face the train's back, and what `control` keeps between ticks.
+/// they face the train's back, what `control` keeps between ticks, and the ticks to the
+/// holder's next HUD word (`hudPacketCooldown`).
 #[derive(Clone, Copy, Debug)]
 struct Controlling {
     dim: usize,
@@ -40,6 +43,7 @@ struct Controlling {
     player: u128,
     inverted: bool,
     driving: Driving,
+    hud: u8,
 }
 
 /// A rider waiting for the level's tick: to board a carriage seat from the world seat a train
@@ -70,10 +74,13 @@ enum Pending {
 const RESEAT_WAIT: u16 = 600;
 
 thread_local! {
-    /// The client's hold on a carriage's controls, and whether it has one (the key hook's and
-    /// the client tick's one test).
+    /// The client's hold on a carriage's controls, and whether it has one (the key hook's, the
+    /// client tick's, the HUD's and the wheel's one test); its HUD (`TrainHUD`) and the HUD's
+    /// prompt (`currentPrompt`, with `currentPromptShadow`).
     static DRIVER: RefCell<Driver> = RefCell::new(Driver::default());
     static DRIVING: Cell<bool> = const { Cell::new(false) };
+    static HUD: RefCell<Hud> = RefCell::new(Hud::default());
+    static PROMPT: RefCell<Option<(Text, bool)>> = const { RefCell::new(None) };
     /// The server's: clicks on carriages waiting for the level's tick (player, the block, a
     /// wrench in hand), every player's keys by dimension, the controls held and the carriage
     /// seats in use.
@@ -166,16 +173,66 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
     if channel != tc::CHANNEL {
         return;
     }
-    let packets = DRIVER.with_borrow_mut(|d| match ToClient::decode(data) {
+    let message = ToClient::decode(data);
+    if matches!(message, Some(ToClient::Start(_) | ToClient::Stop)) {
+        HUD.with_borrow_mut(|h| *h = Hud::default());
+        PROMPT.with_borrow_mut(|p| *p = None);
+    }
+    let line = match &message {
+        Some(ToClient::Prompt(p)) => prompt_text(game, p),
+        _ => None,
+    };
+    if let Some(line) = line {
+        PROMPT.with_borrow_mut(|c| *c = Some(line));
+        HUD.with_borrow_mut(Hud::prompted);
+    }
+    let packets = DRIVER.with_borrow_mut(|d| match message {
         Some(ToClient::Start(at)) => {
             d.start(at);
             Vec::new()
         }
         Some(ToClient::Stop) => d.stop(),
-        None => Vec::new(),
+        Some(ToClient::Hud { speed, throttle }) => {
+            HUD.with_borrow_mut(|h| {
+                h.speed = speed;
+                h.throttle = th::throttle(throttle) as f32;
+            });
+            Vec::new()
+        }
+        Some(ToClient::Prompt(_)) | None => Vec::new(),
     });
     send_server(game, packets);
     DRIVING.set(DRIVER.with_borrow(|d| d.controls.is_some()));
+}
+
+/// A prompt as the HUD shows it (`TrainPromptPacket`'s component), with whether it has a
+/// shadow (an approach's progress).
+fn prompt_text(game: &mut Game<'_>, p: &Prompt) -> Option<(Text, bool)> {
+    let station = |key: &str, name: &str| Text::translate(key, &[Text::colored(name, 0x70_46_30)]);
+    Some(match p {
+        Prompt::None | Prompt::Clear => return None,
+        Prompt::Arrived(name) => (station("create.train.arrived_at", name), false),
+        Prompt::Departing(name) => (station("create.train.departing_from", name), false),
+        Prompt::Approach(name) => {
+            // `Component.keybind("key.jump")`: the key the player bound.
+            let key = game.native_mapping("key.jump").map_or_else(
+                || Text::translate("key.keyboard.space", &[]),
+                |m| Text::literal(m.1),
+            );
+            let line = Text::translate(
+                "create.contraption.controls.approach_station",
+                &[key, Text::literal(name.as_str())],
+            );
+            (line, false)
+        }
+        Prompt::Progress(progress) => {
+            let (mixed, rest) = tc::progress_colors(*progress);
+            let gone = "|".repeat(usize::from(30 - (*progress).min(30)));
+            let to_go = "|".repeat(usize::from((*progress).min(30)));
+            let line = Text::colored(gone, mixed).append(Text::colored(to_go, rest));
+            (line, true)
+        }
+    })
 }
 
 /// `ControlsHandler.tick`: the six keys held on the keyboard itself (consumed or not) and
@@ -195,9 +252,57 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         .filter(|(_, k)| game.native_is_key_down(k))
         .fold(0u8, |m, (i, _)| m | (1 << i));
     let escape = game.native_is_key_down("key.keyboard.escape");
-    let packets = DRIVER.with_borrow_mut(|d| d.tick(down, escape));
+    let mut packets = DRIVER.with_borrow_mut(|d| d.tick(down, escape));
+    // `TrainHUD.tick`: the bars chase the train, the prompt lives 30 ticks, and a throttle set
+    // by the wheel goes to the server until it agrees.
+    let width = PROMPT.with_borrow(|p| p.as_ref().map(|(t, _)| game.native_text_width(&t.plain())));
+    let throttle = HUD.with_borrow_mut(|h| {
+        let send = h.tick(width);
+        if !h.prompt_alive() {
+            PROMPT.with_borrow_mut(|p| *p = None);
+        }
+        send
+    });
+    if let (Some(steps), Some(target)) = (throttle, DRIVER.with_borrow(|d| d.controls)) {
+        packets.push(ToServer::Throttle { target, steps });
+    }
     send_server(game, packets);
     DRIVING.set(DRIVER.with_borrow(|d| d.controls.is_some()));
+}
+
+/// `TrainHUD.onScroll`: while controlling, the wheel sets the train's throttle (a notch is
+/// 1/18) and nothing else hears it. The miss is one flag.
+pub(super) fn wheel(steps: f32) -> bool {
+    if !DRIVING.get() || steps == 0.0 {
+        return false;
+    }
+    HUD.with_borrow_mut(|h| h.scroll(steps));
+    true
+}
+
+/// `TrainHUD.renderOverlay`, only while controlling: the speed and throttle bars over the
+/// hotbar and the prompt box above them, from Create's `widgets` texture (the player's jar), at
+/// the latest tick's values (no partial tick here). Not drawn: the direction arrow (Catnip's
+/// `PlacementClient` texture is not Create's).
+pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
+    if !DRIVING.get() || game.native_sprite_size(th::TEXTURE).is_none() {
+        return;
+    }
+    let prompt = PROMPT.with_borrow(Clone::clone);
+    let width = prompt
+        .as_ref()
+        .map(|(t, _)| game.native_text_width(&t.plain()));
+    let drawn = HUD.with_borrow(|h| th::layout(h, [batch.width, batch.height], 1.0, width));
+    for (src, dst) in &drawn.parts {
+        game.native_sprite(batch, th::TEXTURE, *src, *dst);
+    }
+    if let (Some([mut x, y]), Some((text, shadow))) = (drawn.text, prompt) {
+        for span in &text.resolved().spans {
+            let rgb = span.style.color.unwrap_or(th::PROMPT_TEXT);
+            game.native_text(batch, &span.text, [x, y], rgb, shadow);
+            x += game.native_text_width(&span.text);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -288,6 +393,15 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
             CLICKS.with_borrow_mut(|c| c.push((player, dim, target, wrench)));
         }
         ToServer::Input { target, stop, .. } if stop => stop_controlling(game, dim, target),
+        // `TrainHUDUpdatePacket.Serverbound.handle`: the train's throttle.
+        ToServer::Throttle { target, steps } => {
+            with_world(|w| {
+                let r = &mut w.dims[dim].railway;
+                if let Some(t) = r.trains.iter_mut().find(|t| t.id == target.train) {
+                    t.train.throttle = th::throttle(steps);
+                }
+            });
+        }
         ToServer::Input {
             target,
             keys,
@@ -396,6 +510,7 @@ fn use_controls(
             player,
             inverted,
             driving: Driving::default(),
+            hud: 0,
         })
     });
     send_client(game, player, ToClient::Start(at));
@@ -477,30 +592,52 @@ fn click(game: &mut Game<'_>, dimension: &str, dim: usize, player: u128, at: Tar
     }
 }
 
-/// What the train tells its driver, on their action bar (`TrainPromptPacket`).
+/// What the train tells its driver: the HUD's prompt (`TrainPromptPacket`), or the approach
+/// prompt taken away from the action bar (`cleanUpApproachStationMessage`).
 fn prompt(game: &mut Game<'_>, player: u128, p: Prompt) {
-    let station =
-        |key: &str, name: String| Text::translate(key, &[Text::colored(name, 0x70_46_30)]);
-    let line = match p {
-        Prompt::None => return,
-        Prompt::Arrived(name) => station("create.train.arrived_at", name),
-        Prompt::Departing(name) => station("create.train.departing_from", name),
-        Prompt::Approach(name) => Text::translate(
-            "create.contraption.controls.approach_station",
-            &[
-                Text::translate("key.keyboard.space", &[]),
-                Text::literal(name),
-            ],
-        ),
-        Prompt::Progress(progress) => {
-            let (mixed, rest) = tc::progress_colors(progress);
-            let gone = "|".repeat(usize::from(30 - progress.min(30)));
-            let to_go = "|".repeat(usize::from(progress.min(30)));
-            Text::colored(gone, mixed).append(Text::colored(to_go, rest))
+    match p {
+        Prompt::None => {}
+        Prompt::Clear => {
+            game.native_action_bar(player, Text::literal(""));
         }
-        Prompt::Clear => Text::literal(""),
-    };
-    game.native_action_bar(player, line);
+        p => send_client(game, player, ToClient::Prompt(p)),
+    }
+}
+
+/// `CarriageContraptionEntity.control`'s `TrainHUDUpdatePacket.Clientbound`: every 5 ticks,
+/// each player holding a carriage's controls is told its train's speed (as a share of the top
+/// speed by hand) and throttle. Create sends it while keys are held, its clients running the
+/// trains between; here it goes while the controls are held, as clients don't. Nothing without
+/// controls held.
+pub(super) fn tick_hud(game: &mut Game<'_>, dim: usize) {
+    if CONTROLLING.with_borrow(Vec::is_empty) {
+        return;
+    }
+    let due: Vec<(u128, u32)> = CONTROLLING.with_borrow_mut(|c| {
+        c.iter_mut()
+            .filter(|c| c.dim == dim)
+            .filter_map(|c| {
+                if c.hud > 0 {
+                    c.hud -= 1;
+                    return None;
+                }
+                c.hud = th::PACKET_COOLDOWN;
+                Some((c.player, c.at.train))
+            })
+            .collect()
+    });
+    for (player, train) in due {
+        let Some((speed, throttle)) = with_world(|w| {
+            let t = w.dims[dim].railway.trains.iter().find(|t| t.id == train)?;
+            let top = create_engine::trains::TOP_SPEED * create_engine::trains::MANUAL_SPEED;
+            let speed = (t.train.speed.abs() / top) as f32;
+            Some((speed, th::steps(t.train.throttle as f32)))
+        })
+        .flatten() else {
+            continue;
+        };
+        send_client(game, player, ToClient::Hud { speed, throttle });
+    }
 }
 
 /// Before the trains move in a server level's tick: the clicks on carriages, then

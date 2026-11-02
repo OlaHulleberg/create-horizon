@@ -216,6 +216,9 @@ pub enum ToServer {
         press: bool,
         stop: bool,
     },
+    /// `TrainHUDUpdatePacket.Serverbound`: the throttle the driver set with the wheel, in
+    /// 1/18 steps (`train_hud::steps`).
+    Throttle { target: Target, steps: u8 },
 }
 
 impl ToServer {
@@ -238,6 +241,11 @@ impl ToServer {
                 out.push(*keys);
                 out.push(u8::from(*press) | (u8::from(*stop) << 1));
             }
+            ToServer::Throttle { target, steps } => {
+                out.push(2);
+                put_target(&mut out, target);
+                out.push(*steps);
+            }
         }
         out
     }
@@ -255,17 +263,26 @@ impl ToServer {
                 press: d[20] & 1 != 0,
                 stop: d[20] & 2 != 0,
             }),
+            (2, 20) => Some(ToServer::Throttle {
+                target,
+                steps: d[19],
+            }),
             _ => None,
         }
     }
 }
 
 /// What a server tells a client: it controls a carriage's controls now
-/// (`ControlsHandler.startControlling`), or no more (`ControlsStopControllingPacket`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// (`ControlsHandler.startControlling`), or no more (`ControlsStopControllingPacket`); its
+/// train's speed, as a share of the top speed by hand (`maxSpeed()` times
+/// `manualTrainSpeedModifier`), and throttle in 1/18 steps (`TrainHUDUpdatePacket.Clientbound`);
+/// a prompt for the HUD (`TrainPromptPacket`; an approach's progress is drawn with a shadow).
+#[derive(Clone, Debug, PartialEq)]
 pub enum ToClient {
     Start(Target),
     Stop,
+    Hud { speed: f32, throttle: u8 },
+    Prompt(Prompt),
 }
 
 impl ToClient {
@@ -277,6 +294,28 @@ impl ToClient {
                 out
             }
             ToClient::Stop => vec![1],
+            ToClient::Hud { speed, throttle } => {
+                let mut out = vec![2];
+                out.extend(speed.to_le_bytes());
+                out.push(*throttle);
+                out
+            }
+            ToClient::Prompt(p) => {
+                let (kind, name) = match p {
+                    Prompt::None => (0, ""),
+                    Prompt::Arrived(n) => (1, n.as_str()),
+                    Prompt::Departing(n) => (2, n.as_str()),
+                    Prompt::Approach(n) => (3, n.as_str()),
+                    Prompt::Progress(_) => (4, ""),
+                    Prompt::Clear => (5, ""),
+                };
+                let mut out = vec![3, kind];
+                if let Prompt::Progress(k) = p {
+                    out.push(*k);
+                }
+                out.extend(name.as_bytes());
+                out
+            }
         }
     }
 
@@ -284,6 +323,22 @@ impl ToClient {
         match (d.first()?, d.len()) {
             (0, 19) => Some(ToClient::Start(get_target(&d[1..])?)),
             (1, 1) => Some(ToClient::Stop),
+            (2, 6) => Some(ToClient::Hud {
+                speed: f32::from_le_bytes(d[1..5].try_into().ok()?),
+                throttle: d[5],
+            }),
+            (3, _) => {
+                let name = || String::from_utf8(d.get(2..)?.to_vec()).ok();
+                Some(ToClient::Prompt(match d.get(1)? {
+                    0 => Prompt::None,
+                    1 => Prompt::Arrived(name()?),
+                    2 => Prompt::Departing(name()?),
+                    3 => Prompt::Approach(name()?),
+                    4 if d.len() == 3 => Prompt::Progress(d[2]),
+                    5 => Prompt::Clear,
+                    _ => return None,
+                }))
+            }
             _ => None,
         }
     }
@@ -598,10 +653,23 @@ mod tests {
                 press: false,
                 stop: true,
             },
+            ToServer::Throttle { target, steps: 9 },
         ] {
             assert_eq!(ToServer::decode(&m.encode()), Some(m));
         }
-        for m in [ToClient::Start(target), ToClient::Stop] {
+        for m in [
+            ToClient::Start(target),
+            ToClient::Stop,
+            ToClient::Hud {
+                speed: 0.75,
+                throttle: 18,
+            },
+            ToClient::Prompt(Prompt::Arrived("Ünder Station".into())),
+            ToClient::Prompt(Prompt::Departing("A".into())),
+            ToClient::Prompt(Prompt::Approach("B".into())),
+            ToClient::Prompt(Prompt::Progress(17)),
+            ToClient::Prompt(Prompt::Clear),
+        ] {
             assert_eq!(ToClient::decode(&m.encode()), Some(m));
         }
         assert_eq!(ToServer::decode(&[1, 2, 3]), None);
