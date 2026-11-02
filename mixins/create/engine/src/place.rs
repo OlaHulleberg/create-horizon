@@ -152,6 +152,14 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
         // StickerBlock: away from the player's view; sneaking, toward it.
         Block::Sticker if ctx.sneaking => nearest,
         Block::Sticker => nearest.opposite(),
+        // RollerBlock.getStateForPlacement: facing the player.
+        Block::MechanicalRoller => horizontal_direction(ctx.yaw).opposite(),
+        // ControlsBlock (contraption controls): facing the player; sneaking, away.
+        Block::ContraptionControls if ctx.sneaking => horizontal_direction(ctx.yaw),
+        Block::ContraptionControls => horizontal_direction(ctx.yaw).opposite(),
+        // PortableStorageInterfaceBlock: against the player's view; sneaking, along it.
+        Block::PortableStorageInterface | Block::PortableFluidInterface if ctx.sneaking => nearest,
+        Block::PortableStorageInterface | Block::PortableFluidInterface => nearest.opposite(),
         // AttachedActorBlock (harvester, plough): on a wall's clicked face, else facing the
         // player.
         Block::MechanicalHarvester | Block::MechanicalPlough => {

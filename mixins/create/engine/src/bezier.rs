@@ -181,6 +181,73 @@ impl Curve {
         t + distance / dx
     }
 
+    /// `BezierConnection.rasterise`: the columns the curve's rails cross, each with the lowest
+    /// height of the rail middle in it (3/16 above the curve, a quarter below along its normal),
+    /// a column that only doubles a diagonal step left out (`isLineDoubled`). The fake track
+    /// goes a block above each (`manageFakeTracksAlong`).
+    pub fn rasterise(&self) -> Vec<([i32; 2], f64)> {
+        let segments = self.segments;
+        let [fn1, fn2] = self.normals;
+        let mut samples = Vec::with_capacity(segments);
+        for i in 0..segments {
+            let t =
+                (((i as f32 + 0.5) * self.step_lut[i] / segments as f32).clamp(0.0, 1.0)) as f64;
+            let mut p = self.position(t);
+            p[1] += f64::from(3.0f32 / 16.0);
+            let face = if fn1 == fn2 { fn1 } else { slerp(t, fn1, fn2) };
+            samples.push(add(p, scale(face, f64::from(-0.25f32))));
+        }
+        let mid = scale(add(self.starts[0], self.starts[1]), 0.5);
+        let centre = [mid[0], mid[1] + f64::from(3.0f32 / 16.0), mid[2]];
+        let diff = |k: [i32; 2]| {
+            let (dx, dz) = (
+                f64::from(k[0]) + 0.5 - centre[0],
+                f64::from(k[1]) + 0.5 - centre[2],
+            );
+            dx * dx + dz * dz
+        };
+        let doubled = |from: [i32; 2], via: [i32; 2], to: [i32; 2]| {
+            let (d1x, d1z) = (via[0] - from[0], via[1] - from[1]);
+            let (d2x, d2z) = (to[0] - via[0], to[1] - via[1]);
+            d1x.abs() + d1z.abs() == 1 && d2x.abs() + d2z.abs() == 1 && d1x != d2x && d1z != d2z
+        };
+        let mut levels: Vec<([i32; 2], f64)> = Vec::new();
+        let mut prev: Option<[i32; 2]> = None;
+        let mut prev2: Option<[i32; 2]> = None;
+        let mut prev3: Option<[i32; 2]> = None;
+        for s in samples {
+            let key = [s[0].floor() as i32, s[2].floor() as i32];
+            let present = levels.iter().position(|(k, _)| *k == key);
+            if let Some(i) = present {
+                if levels[i].1 <= s[1] {
+                    continue;
+                }
+                levels[i].1 = s[1];
+                continue;
+            }
+            levels.push((key, s[1]));
+            if let (Some(p1), Some(p2), Some(p3)) = (prev, prev2, prev3) {
+                let via_prev = doubled(p2, p1, key);
+                let via_prev2 = doubled(p3, p2, p1);
+                let prev_closer = diff(p1) > diff(p2);
+                if via_prev2 && (!via_prev || !prev_closer) {
+                    levels.retain(|(k, _)| *k != p2);
+                    prev2 = prev;
+                    prev = Some(key);
+                    continue;
+                } else if via_prev && via_prev2 && prev_closer {
+                    levels.retain(|(k, _)| *k != p1);
+                    prev = Some(key);
+                    continue;
+                }
+            }
+            prev3 = prev2;
+            prev2 = prev;
+            prev = Some(key);
+        }
+        levels
+    }
+
     /// `getNormal(t)`: the track's up, between the ends' normals.
     pub fn normal(&self, t: f64) -> Vec3 {
         let derivative = normalize(self.derivative(t));
@@ -292,5 +359,37 @@ mod tests {
         );
         assert!((line.handle_length - 3.0).abs() < 1e-9);
         assert!((line.length - 9.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_curve_rasterises_into_one_column_a_step() {
+        // The quarter turn from (3, 64, 0.5) east to (10.5, 64, 8) south.
+        let c = Curve::new(
+            [[3.0, 64.0, 0.5], [10.5, 64.0, 8.0]],
+            [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0]],
+            [UP, UP],
+        );
+        let cols = c.rasterise();
+        assert_eq!(cols.first().map(|c| c.0), Some([3, 0]));
+        assert_eq!(cols.last().map(|c| c.0), Some([10, 7]));
+        for (k, y) in &cols {
+            // The rail middle: 3/16 up and a quarter down along the flat curve's normal.
+            assert!((y - 63.9375).abs() < 1e-6, "{k:?} {y}");
+        }
+        // Each column once, each a step (side or diagonal) from the one before, and no side
+        // step pair doubling a diagonal one is left in (`isLineDoubled`) unless closer.
+        for w in cols.windows(2) {
+            let (a, b) = (w[0].0, w[1].0);
+            assert!(
+                (a[0] - b[0]).abs() <= 1 && (a[1] - b[1]).abs() <= 1,
+                "{a:?} {b:?}"
+            );
+            assert_ne!(a, b);
+        }
+        let mut keys: Vec<[i32; 2]> = cols.iter().map(|c| c.0).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), cols.len());
+        assert!(cols.len() >= 8 && cols.len() <= 12, "{}", cols.len());
     }
 }

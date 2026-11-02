@@ -352,6 +352,19 @@ pub struct Dimension {
     /// Backtanks and their air (`BacktankBlockEntity`); the saved ones not placed yet.
     pub backtanks: HashMap<[i32; 3], crate::equipment::Backtank>,
     backtank_saved: HashMap<[i32; 3], crate::equipment::Backtank>,
+    /// Stationary portable storage interfaces (`PortableStorageInterfaceBlockEntity`), those
+    /// whose timer runs (ticked), and those whose neighbour changed (their power read).
+    pub psis: HashMap<[i32; 3], crate::psi::Stationary>,
+    pub psi_running: Vec<[i32; 3]>,
+    pub psi_checks: Vec<[i32; 3]>,
+    /// Contraption controls blocks (filter, `Disabled`, `Powered`) and those whose neighbour
+    /// changed; mechanical rollers' filter and mode; track observers' filters.
+    pub controls: HashMap<[i32; 3], crate::actors::Controls>,
+    pub controls_checks: Vec<[i32; 3]>,
+    pub rollers: HashMap<[i32; 3], (Option<String>, crate::actors::RollingMode)>,
+    pub observer_filters: HashMap<[i32; 3], crate::filter::Filter>,
+    /// Controller rails whose neighbour changed: their power is worked out again.
+    pub rail_checks: Vec<[i32; 3]>,
 }
 
 pub use crate::trains::TrainOnTrack;
@@ -455,6 +468,12 @@ fn has_state(block: Block) -> bool {
             | Block::ContentObserver
             | Block::StockpileSwitch
             | Block::Sticker
+            | Block::TrackObserver
+            | Block::PortableStorageInterface
+            | Block::PortableFluidInterface
+            | Block::ContraptionControls
+            | Block::MechanicalRoller
+            | Block::ControllerRail
     ) || crate::display::is_nixie(block)
         || is_plumbing(block)
 }
@@ -724,6 +743,26 @@ impl CreateWorld {
                 d.railway.add_signal(pos, kind, info.powered);
             }
             Block::TrackStation => d.railway.add_station(pos),
+            Block::TrackObserver => {
+                d.railway.add_observer(pos, info.powered);
+                let filtered = d.observer_filters.contains_key(&pos);
+                d.railway.set_observer_filtered(pos, filtered);
+            }
+            // `initialize`: an interface or contraption controls read their power when they join
+            // (their own states change only as they are placed).
+            Block::PortableStorageInterface | Block::PortableFluidInterface => {
+                d.psis.entry(pos).or_default();
+                d.psi_checks.push(pos);
+            }
+            Block::ContraptionControls => {
+                d.controls.entry(pos).or_default();
+                d.controls_checks.push(pos);
+            }
+            Block::MechanicalRoller => {
+                d.rollers.entry(pos).or_default();
+            }
+            // `onPlace` → `updateState`: its power.
+            Block::ControllerRail => d.rail_checks.push(pos),
             Block::Track => d
                 .railway
                 .set_track(pos, info.track.unwrap_or(crate::track::TrackShape::Zo)),
@@ -1034,10 +1073,12 @@ impl CreateWorld {
         }
         // Track, a station or a signal gone (placed ones are added by `place`).
         let rail = |s: u32| {
-            self.table
-                .get(s)
-                .map(|(b, _)| b)
-                .filter(|b| matches!(b, Block::Track | Block::TrackStation | Block::TrackSignal))
+            self.table.get(s).map(|(b, _)| b).filter(|b| {
+                matches!(
+                    b,
+                    Block::Track | Block::TrackStation | Block::TrackSignal | Block::TrackObserver
+                )
+            })
         };
         if let Some(b) = rail(old)
             && rail(new) != Some(b)
@@ -1059,6 +1100,35 @@ impl CreateWorld {
                 if f.is_filter_item() {
                     d.dropped_filters.push((pos, f));
                 }
+            }
+        }
+        // Blocks that ride contraptions, and track observers: what they hold goes with them (a
+        // filter item drops, `FilteringBehaviour.destroy`). A contraption taking them away moves
+        // their settings first (`create_actors::carry`).
+        if let Some(gone) = kind(old)
+            && kind(new) != Some(gone)
+        {
+            let d = &mut self.dims[dim];
+            let had = match gone {
+                Block::PortableStorageInterface | Block::PortableFluidInterface => {
+                    d.psis.remove(&pos);
+                    false
+                }
+                Block::ContraptionControls => d.controls.remove(&pos).is_some(),
+                Block::MechanicalRoller => d.rollers.remove(&pos).is_some(),
+                Block::TrackObserver => match d.observer_filters.remove(&pos) {
+                    Some(f) => {
+                        if f.is_filter_item() {
+                            d.dropped_filters.push((pos, f));
+                        }
+                        true
+                    }
+                    None => false,
+                },
+                _ => false,
+            };
+            if had {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
         }
         if is {
@@ -1340,6 +1410,12 @@ impl CreateWorld {
             d.chute_pulls.column_unloaded(cx, cz);
             d.chute_filters
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            let out = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) != (cx, cz);
+            d.psis.retain(|p, _| out(p));
+            d.psi_running.retain(out);
+            d.controls.retain(|p, _| out(p));
+            d.rollers.retain(|p, _| out(p));
+            d.observer_filters.retain(|p, _| out(p));
             d.vaults.column_unloaded(cx, cz);
             d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1844,6 +1920,11 @@ impl CreateWorld {
                 .push((pos, crate::diode::BLOCK_DELAY)),
             Some(Block::RoseQuartzLamp) => self.dims[dim].lamp_checks.push(pos),
             Some(Block::Sticker) => self.dims[dim].sticker_checks.push(pos),
+            Some(Block::PortableStorageInterface | Block::PortableFluidInterface) => {
+                self.dims[dim].psi_checks.push(pos)
+            }
+            Some(Block::ContraptionControls) => self.dims[dim].controls_checks.push(pos),
+            Some(Block::ControllerRail) => self.dims[dim].rail_checks.push(pos),
             Some(Block::ElevatorContact | Block::RedstoneContact) => {
                 self.dims[dim].lifts.contact_checks.push(pos)
             }

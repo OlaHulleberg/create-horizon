@@ -404,6 +404,7 @@ pub fn search(net: &Network, start: Point, targets: &[usize], cx: &SearchContext
             Mark::Signal(b) => {
                 penalty += signal_penalty(net, cx, b, initial, &mut signal_weight)?;
             }
+            Mark::Observer(_) => {}
             Mark::Station(i) => {
                 let present = cx.present.get(&net.stations[i].0).copied();
                 let own = present == Some(cx.me);
@@ -481,6 +482,7 @@ pub fn search(net: &Network, start: Point, targets: &[usize], cx: &SearchContext
                             None => continue 'next,
                         }
                     }
+                    Mark::Observer(_) => {}
                     Mark::Station(i) => {
                         let present = cx.present.get(&net.stations[i].0).copied();
                         let own = present == Some(cx.me);
@@ -1112,6 +1114,7 @@ impl Train {
                             }
                         }
                     }
+                    Mark::Observer(_) => {}
                     Mark::Station(i) => {
                         if net.stations[i].0 == nav.station {
                             break 'walk;
@@ -1731,6 +1734,34 @@ pub struct SignalBlock {
     pub powered: bool,
 }
 
+/// `TrackObserver.keepAlive`'s count: decremented before and after the trains move each tick
+/// (`tickPoints` both times), so an observer stays lit 3 ticks after the last one leaves.
+pub const OBSERVER_KEEP_ALIVE: i32 = 8;
+
+/// A track observer (`TrackObserver` with its block): whether its filter holds anything (trains
+/// carry no cargo in this port, so a filtered one sees none: `tickOccupiedObservers` finds no
+/// item or fluid passing), its `activated` count, the train it last saw (`currentTrain`), and
+/// whether its block is lit (`powered`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObserverBlock {
+    pub filtered: bool,
+    pub activated: i32,
+    pub train: Option<u32>,
+    pub lit: bool,
+}
+
+impl ObserverBlock {
+    /// `TrackObserver.tick`.
+    fn tick(&mut self) {
+        if self.activated > 0 {
+            self.activated -= 1;
+        }
+        if self.activated <= 0 {
+            self.train = None;
+        }
+    }
+}
+
 /// A dimension's railway: its track, stations (with their names) and signals as the world has
 /// them, the graph built from them (again only when they or the curves change), its trains and
 /// its signals' states (worked out after the trains move, and when signals change).
@@ -1750,6 +1781,12 @@ pub struct Railway {
     pub states: Vec<[SignalState; 2]>,
     pub lights: HashMap<[i32; 3], bool>,
     pub lights_changed: Vec<([i32; 3], Option<bool>)>,
+    /// Track observers as the world has them, the observers each train stands over as of its
+    /// last move (`occupiedObservers`), and the observers whose `powered` must change.
+    pub observers: HashMap<[i32; 3], ObserverBlock>,
+    occupied: HashMap<u32, Vec<[i32; 3]>>,
+    pub observer_changes: Vec<([i32; 3], bool)>,
+    observers_active: bool,
     dirty: bool,
     signals_dirty: bool,
     curves_seen: u64,
@@ -1787,6 +1824,58 @@ impl Railway {
         }
     }
 
+    /// A track observer placed (or loaded) beside a track: on the graph when it is next built.
+    pub fn add_observer(&mut self, pos: [i32; 3], lit: bool) {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.observers.entry(pos) {
+            e.insert(ObserverBlock {
+                lit,
+                ..Default::default()
+            });
+            self.dirty = true;
+            // A block loaded lit with no train over it goes dark (`tick`).
+            self.observers_active |= lit;
+        }
+    }
+
+    /// `setFilterAndNotify`: whether the observer's filter holds anything.
+    pub fn set_observer_filtered(&mut self, pos: [i32; 3], filtered: bool) {
+        if let Some(o) = self.observers.get_mut(&pos) {
+            o.filtered = filtered;
+        }
+    }
+
+    /// The observers each train stands over now (`collectInitiallyOccupiedSignalBlocks` for
+    /// them, and the listeners as it runs), for the trains `which` gives.
+    fn occupy_observers(&mut self, which: impl Fn(&TrainOnTrack) -> bool) {
+        if self.net.observers.is_empty() {
+            self.occupied.clear();
+            return;
+        }
+        for t in &self.trains {
+            if !t.train.bound || !which(t) {
+                continue;
+            }
+            let over: Vec<[i32; 3]> = self
+                .net
+                .observers
+                .iter()
+                .filter(|(_, at)| self.net.covers(&t.train.points, *at))
+                .map(|(p, _)| *p)
+                .collect();
+            self.occupied.insert(t.id, over);
+        }
+    }
+
+    /// `tickPoints` for the observers: each counts down; a block whose light changes is told.
+    fn tick_observers(&mut self) -> bool {
+        let mut active = false;
+        for o in self.observers.values_mut() {
+            o.tick();
+            active |= o.activated > 0;
+        }
+        active
+    }
+
     /// Which boundary sides redstone holds red, from their blocks' power.
     fn refresh_forced(&mut self) {
         let signals = &self.signals;
@@ -1810,7 +1899,12 @@ impl Railway {
         if signal && self.lights.remove(&pos).is_some() {
             self.lights_changed.push((pos, None));
         }
-        if self.tracks.remove(&pos).is_some() || self.stations.remove(&pos).is_some() || signal {
+        let observer = self.observers.remove(&pos).is_some();
+        if self.tracks.remove(&pos).is_some()
+            || self.stations.remove(&pos).is_some()
+            || signal
+            || observer
+        {
             self.dirty = true;
         }
     }
@@ -1820,9 +1914,14 @@ impl Railway {
     pub fn column_unloaded(&mut self, cx: i32, cz: i32) {
         let out = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) != (cx, cz);
         let (t, s, g) = (self.tracks.len(), self.stations.len(), self.signals.len());
+        let o = self.observers.len();
         self.tracks.retain(|p, _| out(p));
         self.stations.retain(|p, _| out(p));
         self.signals.retain(|p, _| out(p));
+        self.observers.retain(|p, _| out(p));
+        if o != self.observers.len() {
+            self.dirty = true;
+        }
         let gone = &mut self.lights_changed;
         self.lights.retain(|p, _| {
             let keep = out(p);
@@ -1895,6 +1994,9 @@ impl Railway {
         let signals: Vec<([i32; 3], SignalType)> =
             self.signals.iter().map(|(p, s)| (*p, s.kind)).collect();
         self.net = Network::build(&self.tracks, curves, &stations, &signals);
+        let mut observers: Vec<[i32; 3]> = self.observers.keys().copied().collect();
+        observers.sort_unstable();
+        self.net.bind_observers(&self.tracks, &observers);
         self.dirty = false;
         self.signals_dirty = true;
         self.curves_seen = curves.revision;
@@ -1918,6 +2020,8 @@ impl Railway {
                 }
             }
         }
+        // `updateSignalBlocks`: what each train stands over on the new graph.
+        self.occupy_observers(|_| true);
         true
     }
 
@@ -2043,7 +2147,9 @@ impl Railway {
     pub fn idle(&self, curves: &crate::track_curves::Curves) -> bool {
         self.trains.is_empty()
             && !self.signals_dirty
+            && !self.observers_active
             && self.lights_changed.is_empty()
+            && self.observer_changes.is_empty()
             && (self.signals.is_empty() || (!self.dirty && curves.revision == self.curves_seen))
     }
 
@@ -2064,10 +2170,28 @@ impl Railway {
     /// Nothing is done without trains unless a signal changed.
     pub fn tick(&mut self, events: &mut Vec<Event>) {
         events.clear();
-        if self.trains.is_empty() && !self.signals_dirty {
+        if self.trains.is_empty() && !self.signals_dirty && !self.observers_active {
             return;
         }
         self.signals_dirty = false;
+        // Observers: `tickPoints(true)`, then each train keeps those it stands over alive
+        // (`tickOccupiedObservers` in `earlyTick`, before it moves).
+        if !self.observers.is_empty() {
+            self.tick_observers();
+            let trains = &self.trains;
+            self.occupied
+                .retain(|id, _| trains.iter().any(|t| t.id == *id));
+            for (id, over) in &self.occupied {
+                for p in over {
+                    if let Some(o) = self.observers.get_mut(p)
+                        && !o.filtered
+                    {
+                        o.activated = OBSERVER_KEEP_ALIVE;
+                        o.train = Some(*id);
+                    }
+                }
+            }
+        }
         self.occupancy.fill(&self.net, &self.trains);
         for i in 0..self.trains.len() {
             if !self.trains[i].train.bound {
@@ -2123,6 +2247,22 @@ impl Railway {
                     now: t.column,
                 });
             }
+        }
+        if !self.observers.is_empty() {
+            // The listeners as each moving train ran, then `tickPoints(false)`; the blocks
+            // whose light changed are told (`TrackObserverBlockEntity.tick`).
+            let moved: Vec<u32> = events.iter().map(|e| e.id).collect();
+            self.occupy_observers(|t| moved.contains(&t.id));
+            self.observers_active = self.tick_observers();
+            for (p, o) in self.observers.iter_mut() {
+                let lit = o.activated > 0;
+                if lit != o.lit {
+                    o.lit = lit;
+                    self.observer_changes.push((*p, lit));
+                }
+            }
+        } else {
+            self.observers_active = false;
         }
         self.tick_signal_states();
     }
@@ -2991,5 +3131,82 @@ mod tests {
             }
         }
         assert!(Railway::default().drive(9, Manual::default()).is_none());
+    }
+
+    #[test]
+    fn an_observer_is_lit_while_a_train_passes_over_it() {
+        // An observer beside the track at x 60, a filtered one at x 61, a station at x 120 and a
+        // two-bogey train from x 10.
+        let mut r = straight(200);
+        r.add_observer([60, 64, 1], false);
+        r.add_observer([61, 64, -1], false);
+        r.set_observer_filtered([61, 64, -1], true);
+        r.add_station([120, 64, 1]);
+        r.ensure(&Curves::default());
+        assert_eq!(r.net.observers.len(), 2);
+        let a = assemble(&mut r, &[[14, 64, 0], [10, 64, 0]], [1.0, 0.0, 0.0]);
+        // The graph ran before the train: what it stands over is looked at as it moves.
+        let station = r.station_index([120, 64, 1]).unwrap();
+        assert!(r.navigate(a, &[station]));
+        let mut events = Vec::new();
+        let mut lit_from = None;
+        let mut dark_at = None;
+        for tick in 0..2000 {
+            r.tick(&mut events);
+            for (p, lit) in r.observer_changes.drain(..) {
+                assert_eq!(p, [60, 64, 1], "the filtered one sees no cargo");
+                if lit {
+                    lit_from = Some(tick);
+                } else {
+                    dark_at = Some(tick);
+                }
+            }
+            if events.iter().any(|e| e.run == Run::Arrived) {
+                break;
+            }
+        }
+        let (lit, dark) = (lit_from.unwrap(), dark_at.unwrap());
+        assert!(dark > lit);
+        // While lit, the train's points were over x 60.5 (the observer's track point); it went
+        // dark 3 ticks after the last of them passed (8, counted down twice a tick).
+        assert!(r.observers[&[60, 64, 1]].train.is_none());
+        assert!(!r.observers[&[60, 64, 1]].lit);
+        assert!(r.idle(&Curves::default()) || !r.trains.is_empty());
+        // Without trains and with every observer dark, a tick does nothing.
+        r.trains.clear();
+        r.tick(&mut events);
+        assert!(r.idle(&Curves::default()));
+    }
+
+    #[test]
+    fn a_train_assembled_over_an_observer_lights_it() {
+        let mut r = straight(100);
+        r.add_observer([20, 64, 1], false);
+        r.ensure(&Curves::default());
+        assemble(&mut r, &[[22, 64, 0], [18, 64, 0]], [1.0, 0.0, 0.0]);
+        // A rebuilt graph looks at what each train stands over.
+        r.set_track([150, 64, 0], TrackShape::Xo);
+        r.ensure(&Curves::default());
+        let mut events = Vec::new();
+        r.tick(&mut events);
+        assert_eq!(r.observer_changes, vec![([20, 64, 1], true)]);
+        assert_eq!(r.observers[&[20, 64, 1]].activated, OBSERVER_KEEP_ALIVE - 1);
+        // Across a node (the chunk line at x 16): both sides of it are under the train, past
+        // it nothing is.
+        let mut r = straight(100);
+        for x in [15, 16, 25] {
+            r.add_observer([x, 64, 1], false);
+        }
+        r.ensure(&Curves::default());
+        let i = assemble(&mut r, &[[19, 64, 0], [13, 64, 0]], [1.0, 0.0, 0.0]);
+        let points = r.trains[i].train.points.clone();
+        let covered: Vec<[i32; 3]> = r
+            .net
+            .observers
+            .iter()
+            .filter(|(_, at)| r.net.covers(&points, *at))
+            .map(|(p, _)| *p)
+            .collect();
+        assert_eq!(covered, vec![[15, 64, 1], [16, 64, 1]]);
     }
 }

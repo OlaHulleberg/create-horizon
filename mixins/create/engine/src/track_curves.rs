@@ -63,12 +63,27 @@ pub struct Curves {
     pub changed: Vec<[i32; 3]>,
     /// Counts every change, for the track graph to know it must be built again.
     pub revision: u64,
+    /// Fake track to lay (true) or take up (false) along curves added or gone
+    /// (`manageFakeTracksAlong`), for the glue.
+    pub fake: Vec<([i32; 3], bool)>,
+}
+
+/// `manageFakeTracksAlong`: the blocks a curve's fake track takes, a block above each column it
+/// rasterises to.
+pub fn fake_track_along(curve: &Curve) -> Vec<[i32; 3]> {
+    curve
+        .rasterise()
+        .into_iter()
+        .map(|(k, y)| [k[0], y.floor() as i32 + 1, k[1]])
+        .collect()
 }
 
 impl Curves {
     /// `addConnection` on both ends: `from`'s copy primary, `to`'s the reverse.
     pub fn add(&mut self, s: Saved) {
         let curve = s.curve();
+        self.fake
+            .extend(fake_track_along(&curve).into_iter().map(|p| (p, true)));
         let back = Curve::new(
             [s.starts[1], s.starts[0]],
             [s.axes[1], s.axes[0]],
@@ -97,6 +112,21 @@ impl Curves {
             return Vec::new();
         };
         let others: Vec<[i32; 3]> = list.iter().map(|c| c.to).collect();
+        // Each curve's fake track goes with it (drawn from its primary copy either end).
+        for c in &list {
+            let primary = if c.primary {
+                Some(c.curve.clone())
+            } else {
+                self.at
+                    .get(&c.to)
+                    .and_then(|l| l.iter().find(|o| o.to == pos && o.primary))
+                    .map(|o| o.curve.clone())
+            };
+            if let Some(curve) = primary {
+                self.fake
+                    .extend(fake_track_along(&curve).into_iter().map(|p| (p, false)));
+            }
+        }
         for o in &others {
             if let Some(l) = self.at.get_mut(o) {
                 l.retain(|c| c.to != pos);
@@ -234,5 +264,10 @@ mod tests {
         // Breaking the far end takes it from both.
         assert_eq!(c.remove_at([8, 0, 8]), vec![[0, 0, 0]]);
         assert!(c.at.is_empty());
+        // Its fake track was laid as it was added and is taken up with it, block for block.
+        let laid: Vec<[i32; 3]> = c.fake.iter().filter(|f| f.1).map(|f| f.0).collect();
+        let gone: Vec<[i32; 3]> = c.fake.iter().filter(|f| !f.1).map(|f| f.0).collect();
+        assert!(!laid.is_empty());
+        assert_eq!(laid, gone);
     }
 }
