@@ -48,6 +48,9 @@ pub enum Model {
     GaugeDial(Dir),
     /// The mechanical arm's cog (`AllPartialModels.ARM_COG`), on the y axis.
     ArmCog,
+    /// The hose pulley's coil (`AllPartialModels.HOSE_COIL`), turned to the positive end of its
+    /// shaft's axis (`partialFacing`, as the shaft half).
+    HoseCoil(Dir),
 }
 
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
@@ -343,6 +346,35 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 v
             })
             .unwrap_or_default(),
+        // FluidValveRenderer (KineticBlockEntityRenderer of a shaft on its axis): the shaft
+        // turns; the pointer is the glue's (`VALVE_POINTER_SLOT`), it follows the valve's own
+        // pointer.
+        Block::FluidValve => s
+            .facing
+            .map(|f| {
+                let a = crate::parts::directional_axis(f, s.along_first);
+                vec![own(a, Model::Shaft(a))]
+            })
+            .unwrap_or_default(),
+        // HosePulleyRenderer (AbstractPulleyRenderer): the shaft through it on its axis
+        // (`getShaftAxis`: the facing turned clockwise) and the coil, still (Create scrolls its
+        // texture instead).
+        Block::HosePulley => s
+            .facing
+            .map(|f| {
+                let a = crate::wrench::clockwise(f, Axis::Y).axis();
+                vec![
+                    own(a, Model::Shaft(a)),
+                    Draw {
+                        slot: 1,
+                        model: Model::HoseCoil(Dir::from_axis(a, true)),
+                        axis: Axis::Y,
+                        rpm: 0.0,
+                        phase: 0.0,
+                    },
+                ]
+            })
+            .unwrap_or_default(),
         // PumpRenderer: its cog turns with it.
         Block::MechanicalPump => s
             .facing
@@ -485,6 +517,9 @@ pub const PRESS_HEAD_SLOT: u8 = 1;
 
 /// A gauge's first dial slot (its second dial is the next).
 pub const GAUGE_DIAL_SLOT: u8 = 3;
+
+/// A fluid valve's pointer's slot.
+pub const VALVE_POINTER_SLOT: u8 = 1;
 
 /// A cuckoo clock's hour hand's slot (its minute hand is the next).
 pub const CUCKOO_HAND_SLOT: u8 = 1;

@@ -25,6 +25,7 @@ pub fn has_analog_output(b: Block) -> bool {
             | Block::ItemDrain
             | Block::Spout
             | Block::FluidTank
+            | Block::CreativeFluidTank
             | Block::CopperBacktank
             | Block::NetheriteBacktank
             | Block::Speedometer

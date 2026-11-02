@@ -62,6 +62,12 @@ pub struct StateInfo {
     pub cross_signal: bool,
     /// A lit blaze burner's `flame_type` is `soul`.
     pub soul: bool,
+    /// A fluid valve's `enabled`.
+    pub enabled: bool,
+    /// A steam whistle's `wall`; its or an extension's `size`; an extension's `shape`.
+    pub wall: bool,
+    pub size: Option<crate::whistle::Size>,
+    pub extender: Option<crate::whistle::Shape>,
 }
 
 impl StateInfo {
@@ -105,7 +111,11 @@ impl StateInfo {
                     s.tunnel = crate::tunnel::Shape::read(v);
                     s.track = crate::track::TrackShape::read(v);
                     s.belt_funnel = crate::funnel::BeltShape::read(v);
+                    s.extender = crate::whistle::Shape::read(v);
                 }
+                "enabled" => s.enabled = v == "true",
+                "wall" => s.wall = v == "true",
+                "size" => s.size = crate::whistle::Size::read(v),
                 "part" => s.chain = crate::chain::Part::read(v),
                 "vertical" => s.vertical = v == "true",
                 "state" => s.sequence = v.parse().unwrap_or(0),
@@ -410,6 +420,16 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::cog(f.axis(), false)
             })
         }),
+        // FluidValveBlock (DirectionalAxisKineticBlock): shafts at both ends of its rotation
+        // axis, across its facing and its pipe.
+        Block::FluidValve => s.facing.map_or([None, None], |f| {
+            one(Part::shaft(directional_axis(f, s.along_first)))
+        }),
+        // HosePulleyBlock (HorizontalKineticBlock): one shaft, out of the side clockwise of its
+        // facing (`hasShaftTowards`); the other side is its pipe's.
+        Block::HosePulley => s.facing.map_or([None, None], |f| {
+            one(Part::half(crate::wrench::clockwise(f, Axis::Y)))
+        }),
         // MechanicalMixerBlock: a small cog on the y axis, no shaft (`hasShaftTowards` false).
         Block::MechanicalMixer => one(Part {
             shafts: 0,
@@ -511,6 +531,10 @@ pub fn is_kinetic(block: Block) -> bool {
         hinge_right: false,
         cross_signal: false,
         soul: false,
+        enabled: false,
+        wall: false,
+        size: None,
+        extender: None,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

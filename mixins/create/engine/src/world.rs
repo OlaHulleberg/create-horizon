@@ -260,6 +260,8 @@ pub struct Dimension {
     pub pumping: Vec<[i32; 3]>,
     pub pipe_checks: Vec<[i32; 3]>,
     pub pipes_changed: bool,
+    /// Fluid valves, smart pipe filters, hose pulleys, creative fluid tanks, steam whistles.
+    pub plumbing: crate::plumbing::Plumbing,
     /// Mechanical pistons: those asked to start or stop (`assembleNextTick`, after a speed
     /// change), and the moving ones with what they carry (the only ones that tick).
     pub piston_checks: Vec<[i32; 3]>,
@@ -452,6 +454,46 @@ fn has_state(block: Block) -> bool {
             | Block::StockpileSwitch
             | Block::Sticker
     ) || crate::display::is_nixie(block)
+        || is_plumbing(block)
+}
+
+/// Phase 5's pipes, tanks and whistles with state of their own (`plumbing.rs`).
+fn is_plumbing(block: Block) -> bool {
+    matches!(
+        block,
+        Block::FluidValve
+            | Block::SmartFluidPipe
+            | Block::GlassFluidPipe
+            | Block::EncasedFluidPipe
+            | Block::HosePulley
+            | Block::CreativeFluidTank
+            | Block::SteamWhistle
+            | Block::SteamWhistleExtension
+    )
+}
+
+/// Blocks fluid passes through or is kept in: a change to one makes pumps look for their ends
+/// again and the pipes beside it connect again (`FluidPropagator.propagateChangedPipe`).
+pub fn is_fluid_block(block: Block) -> bool {
+    matches!(
+        block,
+        Block::FluidPipe
+            | Block::MechanicalPump
+            | Block::FluidTank
+            | Block::Spout
+            | Block::ItemDrain
+            | Block::FluidValve
+            | Block::SmartFluidPipe
+            | Block::GlassFluidPipe
+            | Block::EncasedFluidPipe
+            | Block::HosePulley
+            | Block::CreativeFluidTank
+    )
+}
+
+/// The way a steam whistle's state is attached (`WhistleBlock.getAttachedDirection`).
+fn whistle_attached(info: &StateInfo) -> Option<crate::kinetics::Dir> {
+    Some(crate::whistle::attached(info.wall, info.facing?))
 }
 
 /// A boiler (`FluidTankBlockEntity.boiler` of a controller): its data, the engines on its tank
@@ -460,6 +502,8 @@ fn has_state(block: Block) -> bool {
 pub struct SteamBoiler {
     pub data: crate::steam::Boiler,
     pub engines: Vec<[i32; 3]>,
+    /// The steam whistles on its tank (`attachedWhistles`).
+    pub whistles: Vec<[i32; 3]>,
     /// `getTotalTankSize`: width × width × height.
     pub size: i32,
 }
@@ -523,6 +567,7 @@ fn follows_power(block: Block) -> bool {
             | Block::AdjustableChainGearshift
             | Block::SmartChute
             | Block::TrackSignal
+            | Block::SteamWhistle
     )
 }
 
@@ -719,14 +764,11 @@ impl CreateWorld {
         if block == Block::CrushingWheel {
             d.crusher_checks.push(pos);
         }
-        if matches!(
-            block,
-            Block::FluidPipe
-                | Block::MechanicalPump
-                | Block::FluidTank
-                | Block::Spout
-                | Block::ItemDrain
-        ) {
+        if is_plumbing(block) {
+            self.plumbing_placed(dim, pos, block, info);
+        }
+        let d = &mut self.dims[dim];
+        if is_fluid_block(block) {
             // `FluidPropagator.propagateChangedPipe`: the pipe and its neighbours connect again,
             // pumps find their ends again.
             d.pipes_changed = true;
@@ -936,9 +978,22 @@ impl CreateWorld {
                     .push((pos, was.unwrap_or(false)));
             }
         }
+        // A still hose turning forwards waits for the block below its end (`lazyTick`).
+        if !self.dims[dim].plumbing.hose_waits.is_empty()
+            && let Some(hose) = self.dims[dim].plumbing.hose_waits.remove(&pos)
+        {
+            self.dims[dim].plumbing.hose_speeds.push((hose, f32::NAN));
+        }
         let (was, is) = (self.table.is_kinetic(old), self.table.is_kinetic(new));
         if !was && !is {
             return;
+        }
+        if let Some((gone, info)) = self.table.get(old)
+            && is_plumbing(gone) | (gone == Block::FluidTank)
+            && Some(gone) != self.table.get(new).map(|(b, _)| b)
+        {
+            let info = *info;
+            self.plumbing_removed(dim, pos, Some((gone, info)));
         }
         self.dims[dim]
             .lifts
@@ -1095,14 +1150,7 @@ impl CreateWorld {
                 d.crusher_checks.push(pos);
             }
             if let Some((b, _)) = self.table.get(old)
-                && matches!(
-                    b,
-                    Block::FluidPipe
-                        | Block::MechanicalPump
-                        | Block::FluidTank
-                        | Block::Spout
-                        | Block::ItemDrain
-                )
+                && is_fluid_block(b)
             {
                 d.pipes_changed = true;
                 for dir in crate::kinetics::Dir::ALL {
@@ -1302,6 +1350,7 @@ impl CreateWorld {
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumping.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pipes_changed = true;
+            d.plumbing.column_unloaded(cx, cz);
             d.mixing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixer_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1490,6 +1539,15 @@ impl CreateWorld {
                     d.pumping.push(pos);
                 }
                 d.pipes_changed = true;
+            }
+            // Valves chase their pointer, hoses move (`onSpeedChanged`).
+            if let Event::Speed { pos, speed, .. } = *e {
+                if d.plumbing.valves.contains_key(&pos) {
+                    d.plumbing.valve_speed(pos, speed);
+                }
+                if d.plumbing.hoses.contains_key(&pos) {
+                    d.plumbing.hose_speeds.push((pos, speed));
+                }
             }
             if let Event::Speed { pos, .. } = *e
                 && (d.mixers.contains_key(&pos) || d.presses.contains_key(&pos))
@@ -1756,6 +1814,14 @@ impl CreateWorld {
                 if b == Block::AdjustableChainGearshift {
                     self.dims[dim].chain_checks.push(pos);
                 }
+                if b == Block::SteamWhistle {
+                    // `updateShape`: without its tank it breaks.
+                    self.dims[dim].plumbing.whistle_support.push(pos);
+                }
+            }
+            // `WhistleExtenderBlock.updateShape`: it joins the one above, or falls.
+            Some(Block::SteamWhistleExtension) => {
+                self.dims[dim].plumbing.extension_checks.push(pos)
             }
             Some(Block::EncasedChainDrive) => self.dims[dim].chain_checks.push(pos),
             Some(Block::SequencedGearshift) => self.dims[dim].sequencer_checks.push(pos),
@@ -2862,6 +2928,10 @@ impl CreateWorld {
                 && let Some(b) = self.dims[dim].boilers.remove(&p)
             {
                 stopped.extend(b.engines);
+                self.dims[dim]
+                    .plumbing
+                    .sound_checks
+                    .extend_from_slice(&b.whistles);
             }
             let Some(c) = controller else {
                 continue;
@@ -2874,20 +2944,29 @@ impl CreateWorld {
                 crate::tank::blocks(c, m.width, m.height).filter(|q| parts.contains_key(q)),
                 |q| self.engine_at(dim, q),
             );
+            let whistles = crate::steam::attached_whistles(
+                crate::tank::blocks(c, m.width, m.height).filter(|q| parts.contains_key(q)),
+                |q| self.whistle_at(dim, q),
+            );
             let d = &mut self.dims[dim];
-            if engines.is_empty() {
+            if engines.is_empty() && whistles.is_empty() {
                 if let Some(b) = d.boilers.remove(&c) {
                     stopped.extend(b.engines);
+                    d.plumbing.sound_checks.extend_from_slice(&b.whistles);
                 }
                 continue;
             }
             let b = d.boilers.entry(c).or_default();
             let was_active = b.data.is_active();
             stopped.extend(b.engines.iter().filter(|e| !engines.contains(e)).copied());
+            d.plumbing.sound_checks.extend_from_slice(&b.whistles);
+            d.plumbing.sound_checks.extend_from_slice(&whistles);
             b.size = m.blocks();
             b.data.attached_engines = engines.len() as i32;
+            b.data.attached_whistles = whistles.len() as i32;
             b.data.needs_heat_level_update = true;
             b.engines = engines;
+            b.whistles = whistles;
             d.boiler_heat_checks.push(c);
             if !was_active && m.window {
                 if let Some(m) = d.tanks.multis.get_mut(&c) {
@@ -2937,7 +3016,10 @@ impl CreateWorld {
         let Some(b) = self.dims[dim].boilers.get_mut(&tank) else {
             return;
         };
-        b.data.update_temperature(heats.iter().copied());
+        if b.data.update_temperature(heats.iter().copied()) {
+            // Its whistles sound only while it is heated.
+            self.boiler_whistles_changed(dim, tank);
+        }
         self.drive_engines(dim, tank);
     }
 
@@ -3231,6 +3313,138 @@ impl CreateWorld {
             return crate::tank::blocks(c, m.width, m.height).collect();
         }
         vec![pos]
+    }
+}
+
+/// Phase 5's valves, smart pipes, hose pulleys, creative tanks and whistles.
+impl CreateWorld {
+    /// A valve, smart pipe, hose pulley, creative tank, whistle or extension placed, loaded or
+    /// changed.
+    fn plumbing_placed(&mut self, dim: usize, pos: [i32; 3], block: Block, info: &StateInfo) {
+        let d = &mut self.dims[dim];
+        let p = &mut d.plumbing;
+        match block {
+            Block::FluidValve => p.valve_placed(pos, info.enabled),
+            Block::HosePulley if !p.hoses.contains_key(&pos) => {
+                let (offset, tank) = p.hose_saved.remove(&pos).unwrap_or_default();
+                p.hoses.insert(
+                    pos,
+                    crate::hose::Hose {
+                        offset,
+                        tank,
+                        ..Default::default()
+                    },
+                );
+                p.hose_changes.push(pos);
+            }
+            Block::CreativeFluidTank if !p.creative.contains_key(&pos) => {
+                let fluid = p.creative_saved.remove(&pos).flatten();
+                p.creative.insert(pos, fluid);
+                p.creative_changes.push(pos);
+            }
+            Block::SteamWhistle => {
+                p.whistles.entry(pos).or_default();
+                // `onPlace`: its tank counts it (`updateBoilerState`), its pitch is counted;
+                // placed or powered, it may sound.
+                p.whistle_checks.push(pos);
+                p.sound_checks.push(pos);
+                if let Some(a) = whistle_attached(info) {
+                    let o = a.offset();
+                    d.boiler_checks
+                        .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
+                }
+            }
+            Block::SteamWhistleExtension => p.extension_checks.push(pos),
+            _ => {}
+        }
+    }
+
+    /// A whistle or extension left `pos`: its tank counts again, the stack's root counts its
+    /// pitch again, the extension above may fall.
+    fn plumbing_removed(&mut self, dim: usize, pos: [i32; 3], old: Option<(Block, StateInfo)>) {
+        let d = &mut self.dims[dim];
+        if d.plumbing.removed(pos) {
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+        match old {
+            Some((Block::SteamWhistle, info)) => {
+                if let Some(a) = whistle_attached(&info) {
+                    let o = a.offset();
+                    d.boiler_checks
+                        .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
+                }
+                d.plumbing
+                    .extension_checks
+                    .push([pos[0], pos[1] + 1, pos[2]]);
+            }
+            Some((Block::SteamWhistleExtension, _)) => {
+                // `onRemove`: the root below counts again; above, an extension may fall.
+                d.plumbing.extension_checks.push(pos);
+                d.plumbing
+                    .extension_checks
+                    .push([pos[0], pos[1] + 1, pos[2]]);
+            }
+            Some((Block::FluidTank, _)) => {
+                // Whistles on a tank that went break (`updateShape`, `canSurvive`).
+                for dir in crate::kinetics::Dir::ALL {
+                    let o = dir.offset();
+                    d.plumbing
+                        .whistle_support
+                        .push([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The steam whistle at `pos` is attached this way, if it is one.
+    pub fn whistle_at(&self, dim: usize, pos: [i32; 3]) -> Option<crate::kinetics::Dir> {
+        match self.table.get(*self.dims[dim].states.get(&pos)?)? {
+            (Block::SteamWhistle, info) => whistle_attached(info),
+            _ => None,
+        }
+    }
+
+    /// Whistles whose pitch is counted again (`queuePitchUpdate`), each once.
+    pub fn take_whistle_checks(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        let p = &mut self.dims[dim].plumbing;
+        if p.whistle_checks.is_empty() {
+            return Vec::new();
+        }
+        let mut v = std::mem::take(&mut p.whistle_checks);
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// The boiler of the tank the whistle at `pos` is on, if that tank is one.
+    pub fn whistle_boiler(&self, dim: usize, pos: [i32; 3]) -> Option<&crate::steam::Boiler> {
+        let a = self.whistle_at(dim, pos)?.offset();
+        let tank = [pos[0] + a[0], pos[1] + a[1], pos[2] + a[2]];
+        let d = &self.dims[dim];
+        let c = d.tanks.controller(tank)?;
+        d.boilers.get(&c).map(|b| &b.data)
+    }
+
+    /// Whistles that may start or stop sounding (placed, powered, their boiler's heat or
+    /// engines changed), each once.
+    pub fn take_sound_checks(&mut self, dim: usize) -> Vec<[i32; 3]> {
+        let p = &mut self.dims[dim].plumbing;
+        if p.sound_checks.is_empty() {
+            return Vec::new();
+        }
+        let mut v = std::mem::take(&mut p.sound_checks);
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// The whistles of the boiler at `tank` look again at whether they sound.
+    fn boiler_whistles_changed(&mut self, dim: usize, tank: [i32; 3]) {
+        let d = &mut self.dims[dim];
+        if let Some(b) = d.boilers.get(&tank) {
+            d.plumbing.sound_checks.extend_from_slice(&b.whistles);
+        }
     }
 }
 

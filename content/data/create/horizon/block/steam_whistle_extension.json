@@ -1,0 +1,57 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:copper_block"
+  },
+  "item": false,
+  "shapes": {
+    "property": "shape",
+    "values": {
+      "single": [
+        [
+          0.1875,
+          0.0,
+          0.1875,
+          0.8125,
+          0.625,
+          0.8125
+        ]
+      ],
+      "double": [
+        [
+          0.1875,
+          0.0,
+          0.1875,
+          0.8125,
+          1.125,
+          0.8125
+        ]
+      ],
+      "double_connected": [
+        [
+          0.1875,
+          0.0,
+          0.1875,
+          0.8125,
+          1.0,
+          0.8125
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "shape": [
+      "single",
+      "double",
+      "double_connected"
+    ],
+    "size": [
+      "medium",
+      "small",
+      "large"
+    ]
+  }
+}
