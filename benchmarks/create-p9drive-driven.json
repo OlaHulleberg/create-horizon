@@ -1,0 +1,113 @@
+{
+  "scenario": "driven",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.5869140625,
+    1.7236328125,
+    1.51611328125
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 721,
+      "frames": 22526,
+      "frame_ms_p50": 0.5204560160636902,
+      "frame_ms_p99": 0.8698959946632385,
+      "fps": 1877.1666666666667,
+      "tick_ms": 1.9130579233169556,
+      "tick_ms_max": 3.339289665222168,
+      "cpu_ms_p50": 0.4339530020952225,
+      "gpu_ms_p50": 0.4665104150772095,
+      "check": [
+        [
+          "train 12 heading for the station, 53.0 blocks along the track",
+          "train 11 heading for the station, 53.0 blocks along the track",
+          "train 10 heading for the station, 53.0 blocks along the track",
+          "train 9 heading for the station, 53.0 blocks along the track",
+          "train 8 heading for the station, 53.0 blocks along the track",
+          "train 7 heading for the station, 53.0 blocks along the track",
+          "train 6 heading for the station, 53.0 blocks along the track",
+          "train 5 heading for the station, 53.0 blocks along the track",
+          "train 4 heading for the station, 53.0 blocks along the track",
+          "train 3 heading for the station, 53.0 blocks along the track",
+          "train 2 heading for the station, 53.0 blocks along the track",
+          "Killed 244 entities"
+        ],
+        "rider at x +27.0, y -3.60, z -23.5"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 721,
+      "frames": 23479,
+      "frame_ms_p50": 0.5071960091590881,
+      "frame_ms_p99": 0.795307993888855,
+      "fps": 1956.5833333333333,
+      "tick_ms": 1.992013692855835,
+      "tick_ms_max": 3.497499465942383,
+      "cpu_ms_p50": 0.3772889971733093,
+      "gpu_ms_p50": 0.4534895718097687,
+      "check": [
+        [
+          "train 12 heading for the station, 53.0 blocks along the track",
+          "train 11 heading for the station, 53.0 blocks along the track",
+          "train 10 heading for the station, 53.0 blocks along the track",
+          "train 9 heading for the station, 53.0 blocks along the track",
+          "train 8 heading for the station, 53.0 blocks along the track",
+          "train 7 heading for the station, 53.0 blocks along the track",
+          "train 6 heading for the station, 53.0 blocks along the track",
+          "train 5 heading for the station, 53.0 blocks along the track",
+          "train 4 heading for the station, 53.0 blocks along the track",
+          "train 3 heading for the station, 53.0 blocks along the track",
+          "train 2 heading for the station, 53.0 blocks along the track",
+          "Killed 251 entities"
+        ],
+        "rider at x +27.0, y -3.60, z -23.5"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 721,
+      "frames": 22564,
+      "frame_ms_p50": 0.5222904980182648,
+      "frame_ms_p99": 0.9323740005493164,
+      "fps": 1880.3333333333333,
+      "tick_ms": 2.0085575580596924,
+      "tick_ms_max": 3.413092613220215,
+      "cpu_ms_p50": 0.4841264933347702,
+      "gpu_ms_p50": 0.4505208134651184,
+      "check": [
+        [
+          "train 12 heading for the station, 53.0 blocks along the track",
+          "train 11 heading for the station, 53.0 blocks along the track",
+          "train 10 heading for the station, 53.0 blocks along the track",
+          "train 9 heading for the station, 53.0 blocks along the track",
+          "train 8 heading for the station, 53.0 blocks along the track",
+          "train 7 heading for the station, 53.0 blocks along the track",
+          "train 6 heading for the station, 53.0 blocks along the track",
+          "train 5 heading for the station, 53.0 blocks along the track",
+          "train 4 heading for the station, 53.0 blocks along the track",
+          "train 3 heading for the station, 53.0 blocks along the track",
+          "train 2 heading for the station, 53.0 blocks along the track",
+          "Killed 256 entities"
+        ],
+        "rider at x +27.0, y -3.60, z -23.5"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1904.6944444444443,
+    "frame_ms_p50": 0.5166475077470144,
+    "frame_ms_p99": 0.86585932970047,
+    "tick_ms": 1.971209724744161,
+    "tick_ms_max": 3.4166272481282554
+  },
+  "stdev": {
+    "fps": 44.964981230253315,
+    "frame_ms_p50": 0.008236470735612043,
+    "frame_ms_p99": 0.0686221068131666,
+    "tick_ms": 0.05103576075550062,
+    "tick_ms_max": 0.07916410483250838
+  }
+}
