@@ -238,7 +238,7 @@ pub(super) fn use_item_on(
 /// takes a button's frequency (its screen, `LinkedControllerMenu`, stands in).
 pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeCommand>) {
     commands.push(super::native_server::NativeCommand::op(
-        "create_debug controller <button:int> <items:text>",
+        "create_debug controller <button:integer> <items:text>",
         2,
     ));
 }
