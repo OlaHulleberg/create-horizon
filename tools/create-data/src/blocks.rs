@@ -195,6 +195,9 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
     if let Some(d) = kinetic(b, sounds) {
         return d;
     }
+    if let Some(d) = own_states(b) {
+        return d;
+    }
     // AllFluids' `standardFluid` blocks: `LiquidBlock`s, water's states; how they flow is
     // their fluid declaration's (`fluid_declarations`).
     if matches!(n, "honey" | "chocolate") {
@@ -1047,6 +1050,173 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
     })
 }
 
+/// `DyeColor`'s names, in its order.
+pub const DYES: [&str; 16] = [
+    "white",
+    "orange",
+    "magenta",
+    "light_blue",
+    "yellow",
+    "lime",
+    "pink",
+    "gray",
+    "light_gray",
+    "cyan",
+    "purple",
+    "blue",
+    "brown",
+    "green",
+    "red",
+    "black",
+];
+
+/// The colour a dyed block's name starts with (`black_toolbox` is black).
+fn dyed<'a>(name: &'a str, family: &str) -> Option<&'a str> {
+    let colour = name.strip_suffix(family)?.strip_suffix('_')?;
+    DYES.contains(&colour).then_some(colour)
+}
+
+/// Blocks with state properties no vanilla block has (gap 2) whose behaviour is a template's plus
+/// the glue's: valve handles, sliding doors, toolboxes, postboxes and nixie tubes. Each is declared
+/// with its own `state_properties`, Create's default state first, and Create's shape selected by
+/// one property.
+fn own_states(b: &CreateBlock) -> Option<Decision> {
+    use crate::shapes::*;
+    let n = b.name.as_str();
+    let own = |props: &[(&str, &[&str])]| -> Value {
+        let mut m = Map::new();
+        for (k, v) in props {
+            m.insert((*k).into(), json!(v));
+        }
+        Value::Object(m)
+    };
+    let bools: &[&str] = &["false", "true"];
+    // HORIZONTAL_FACING's values; `any()` is north.
+    let horizontal: &[&str] = &["north", "south", "west", "east"];
+    let px = |boxes: &[Px]| -> Value {
+        json!(
+            boxes
+                .iter()
+                .map(|b| b.map(|v| v / 16.0))
+                .collect::<Vec<_>>()
+        )
+    };
+    let declared = |template: &'static str,
+                    sounds: &'static str,
+                    requires_tool: bool,
+                    shapes: Option<Value>,
+                    own: Value,
+                    item: bool| Decision::Declared {
+        template,
+        sounds: Some(sounds),
+        requires_tool: Some(requires_tool),
+        shapes,
+        own: Some(own),
+        animated: false,
+        item,
+    };
+    // ValveHandleBlock (HandCrankBlock: DirectionalKineticBlock, waterlogged), copper's
+    // properties (`BuilderTransformers.valveHandle`): the hand crank's heavy core template,
+    // AllShapes.VALVE_HANDLE to its facing. `FACING` has no default of its own: `any()` is down.
+    // Its model is drawn in the chunk mesh (Create turns the block's own model; not here).
+    if n == "copper_valve_handle" || dyed(n, "valve_handle").is_some() {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:copper_block",
+            true,
+            Some(by_facing(&[
+                [5., 0., 5., 11., 4., 11.],
+                [1., 3., 1., 15., 8., 15.],
+            ])),
+            own(&[
+                ("facing", &["down", "up", "north", "south", "west", "east"]),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ));
+    }
+    // SlidingDoorBlock (DoorBlock, `initialProperties(IRON_DOOR)`, strength 3/6, the sound of
+    // its BlockSetType): the iron door's template (both halves, hinges, redstone, no opening by
+    // hand: the glue opens it as Create does) with DoorBlock's `powered` and Create's `visible`
+    // (true in `any()`). Without `shapes` it keeps the door's: Create's closed shape; open, its
+    // panel slides beside the frame (SlidingDoorShapes), which one property can't select.
+    if let Some(sounds) = match n {
+        "andesite_door" | "brass_door" | "copper_door" => Some("minecraft:stone"),
+        "train_door" => Some("minecraft:netherite_block"),
+        "framed_glass_door" => Some("minecraft:glass"),
+        _ => None,
+    } {
+        return Some(declared(
+            "minecraft:iron_door",
+            sounds,
+            true,
+            None,
+            own(&[
+                ("facing", horizontal),
+                ("half", &["lower", "upper"]),
+                ("hinge", &["left", "right"]),
+                ("open", bools),
+                ("powered", bools),
+                ("visible", &["true", "false"]),
+            ]),
+            true,
+        ));
+    }
+    // ToolboxBlock (`SharedProperties::wooden`, wood sounds): a container whose menu opens on use,
+    // so the barrel's template; AllShapes.TOOLBOX turned to its facing.
+    if dyed(n, "toolbox").is_some() {
+        return Some(declared(
+            "minecraft:barrel",
+            "minecraft:oak_planks",
+            false,
+            Some(by_horizontal(&[[1., 0., 4., 15., 9., 12.]])),
+            own(&[("facing", horizontal), ("waterlogged", bools)]),
+            true,
+        ));
+    }
+    // PostboxBlock (`SharedProperties::wooden`): facing, `open` (its menu is open), waterlogged;
+    // AllShapes.POSTBOX (the same box turned any way).
+    if dyed(n, "postbox").is_some() {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:stripped_spruce_wood",
+            false,
+            Some(by_horizontal(&[[2., 0., 0., 14., 14., 16.]])),
+            own(&[
+                ("facing", horizontal),
+                ("open", bools),
+                ("waterlogged", bools),
+            ]),
+            true,
+        ));
+    }
+    // NixieTubeBlock (DoubleFaceAttachedBlock, `SharedProperties::softMetal`, light 5): its face
+    // (`double_face`, floor by default), facing and waterlogging. Only the orange one
+    // (`nixie_tube`) has an item. Shapes by facing: AllShapes.NIXIE_TUBE on the floor, along
+    // the axis clockwise of its facing (one property can't also select the wall and ceiling).
+    if n == "nixie_tube" || dyed(n, "nixie_tube").is_some() {
+        let along_z = px(&[[9., 0., 5., 15., 12., 11.], [1., 0., 5., 7., 12., 11.]]);
+        let along_x = px(&[[5., 0., 9., 11., 12., 15.], [5., 0., 1., 11., 12., 7.]]);
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:gold_block",
+            true,
+            Some(json!({ "property": "facing", "values": {
+                "north": along_x, "south": along_x, "east": along_z, "west": along_z } })),
+            own(&[
+                (
+                    "double_face",
+                    &["floor", "wall", "wall_reversed", "ceiling"],
+                ),
+                ("facing", horizontal),
+                ("waterlogged", bools),
+            ]),
+            n == "nixie_tube",
+        ));
+    }
+    None
+}
+
 /// AllShapes.BASIN_COLLISION_SHAPE: shape(0, 2, 0, 16, 13, 16) less (2, 5, 2, 14, 16, 14), and
 /// the foot (2, 0, 2, 14, 2, 14).
 const BASIN: [[f64; 6]; 6] = [
@@ -1414,7 +1584,7 @@ fn later_phase(b: &CreateBlock) -> Option<String> {
     ];
     // Copycats need custom models (gap 2).
     if b.name.starts_with("copycat") {
-        return Some("copycat model (gap 2)".into());
+        return Some("copycats need custom models (gap 2)".into());
     }
     (!decorative.contains(&class)).then(|| format!("{class}: ported with its subsystem"))
 }
@@ -1459,6 +1629,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     if matches!(b.name.as_str(), "redstone_contact" | "elevator_contact") {
         props.insert("light".into(), json!(0));
     }
+    // AllBlocks' nixie tubes: `lightLevel($ -> 5)`.
+    if b.name == "nixie_tube" || dyed(&b.name, "nixie_tube").is_some() {
+        props.insert("light".into(), json!(5));
+    }
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));
     doc.insert("properties".into(), Value::Object(props));
@@ -1501,6 +1675,167 @@ mod tests {
         assert_eq!(rotation("up", "north"), (90, 0));
         assert_eq!(rotation("up", "east"), (90, 90));
         assert_eq!(rotation("up", "down"), (180, 0));
+    }
+
+    /// A declaration's state count (every combination of its own properties) and its default
+    /// (each property's first value).
+    fn states_and_default(doc: &Value) -> (usize, Vec<(String, String)>) {
+        let props = doc["state_properties"].as_object().expect("own properties");
+        let count = props
+            .values()
+            .map(|v| v.as_array().unwrap().len())
+            .product();
+        let default = props
+            .iter()
+            .map(|(k, v)| (k.clone(), v[0].as_str().unwrap().to_owned()))
+            .collect();
+        (count, default)
+    }
+
+    fn declare(name: &str, info: (f64, f64, u32)) -> Value {
+        let b = CreateBlock {
+            name: name.into(),
+            props: Props::new(),
+            hardness: info.0,
+            blast_resistance: info.1,
+            stack: info.2,
+            java: JavaFacts::default(),
+        };
+        let d = decide(&b, &BTreeMap::new());
+        declaration(&b, &d).unwrap_or_else(|| panic!("{name}: {d:?}"))
+    }
+
+    fn pairs(p: &[(&str, &str)]) -> Vec<(String, String)> {
+        p.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn gap_two_blocks_have_their_own_states_and_create_defaults() {
+        // ValveHandleBlock: facing (any() is down) and waterlogged; copper's properties.
+        for name in ["copper_valve_handle", "black_valve_handle"] {
+            let doc = declare(name, (3.0, 6.0, 64));
+            assert_eq!(doc["template"], "minecraft:heavy_core");
+            assert_eq!(doc["properties"]["sounds"], "minecraft:copper_block");
+            assert_eq!(doc["properties"]["requires_tool"], true);
+            assert_eq!(doc["item"], true);
+            assert_eq!(doc["shapes"]["property"], "facing");
+            assert_eq!(
+                states_and_default(&doc),
+                (12, pairs(&[("facing", "down"), ("waterlogged", "false")]))
+            );
+        }
+        // SlidingDoorBlock: DoorBlock's five properties and `visible`, 128 states.
+        let doc = declare("train_door", (3.0, 6.0, 64));
+        assert_eq!(doc["template"], "minecraft:iron_door");
+        assert_eq!(doc["properties"]["sounds"], "minecraft:netherite_block");
+        assert_eq!(doc["properties"]["hardness"], 3.0);
+        assert_eq!(doc["properties"]["explosion_resistance"], 6.0);
+        assert_eq!(
+            states_and_default(&doc),
+            (
+                128,
+                pairs(&[
+                    ("facing", "north"),
+                    ("half", "lower"),
+                    ("hinge", "left"),
+                    ("open", "false"),
+                    ("powered", "false"),
+                    ("visible", "true"),
+                ])
+            )
+        );
+        assert_eq!(
+            declare("framed_glass_door", (3.0, 6.0, 64))["properties"]["sounds"],
+            "minecraft:glass"
+        );
+        // ToolboxBlock: a barrel's container, horizontal facing and waterlogged.
+        let doc = declare("red_toolbox", (2.0, 2.0, 64));
+        assert_eq!(doc["template"], "minecraft:barrel");
+        assert_eq!(doc["properties"]["sounds"], "minecraft:oak_planks");
+        assert_eq!(doc["properties"]["requires_tool"], false);
+        assert_eq!(
+            states_and_default(&doc),
+            (8, pairs(&[("facing", "north"), ("waterlogged", "false")]))
+        );
+        // PostboxBlock: facing, open, waterlogged.
+        let doc = declare("lime_postbox", (2.0, 2.0, 64));
+        assert_eq!(
+            states_and_default(&doc),
+            (
+                16,
+                pairs(&[
+                    ("facing", "north"),
+                    ("open", "false"),
+                    ("waterlogged", "false")
+                ])
+            )
+        );
+        // NixieTubeBlock: floor by default, light 5; only the orange one has an item.
+        let doc = declare("nixie_tube", (3.0, 6.0, 64));
+        assert_eq!(doc["properties"]["light"], 5);
+        assert_eq!(doc["item"], true);
+        assert_eq!(
+            states_and_default(&doc),
+            (
+                32,
+                pairs(&[
+                    ("double_face", "floor"),
+                    ("facing", "north"),
+                    ("waterlogged", "false")
+                ])
+            )
+        );
+        let doc = declare("blue_nixie_tube", (3.0, 6.0, 1));
+        assert_eq!(doc["item"], false);
+        assert!(doc.get("components").is_none());
+        // Copycats stay pending.
+        let b = CreateBlock {
+            name: "copycat_step".into(),
+            props: Props::new(),
+            hardness: 1.0,
+            blast_resistance: 1.0,
+            stack: 64,
+            java: JavaFacts {
+                class: Some("CopycatStepBlock".into()),
+                ..JavaFacts::default()
+            },
+        };
+        assert_eq!(
+            decide(&b, &BTreeMap::new()),
+            Decision::Pending("copycats need custom models (gap 2)".into())
+        );
+    }
+
+    /// With Create's generated data beside the port: every valve handle, sliding door, toolbox,
+    /// postbox and nixie tube is declared, with their state counts.
+    #[test]
+    fn create_data_declares_the_gap_two_families() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let generated = root.join("src/generated/resources");
+        if !generated.is_dir() {
+            return;
+        }
+        let java = crate::java::read_all(&root.join("src/main/java"));
+        let all = read_blocks(&generated, &java);
+        let mut states = BTreeMap::<&str, (usize, usize)>::new();
+        for b in &all {
+            let family = ["valve_handle", "_door", "toolbox", "postbox", "nixie_tube"]
+                .into_iter()
+                .find(|f| b.name.ends_with(f) && !b.name.contains("trapdoor"));
+            let Some(family) = family else { continue };
+            let d = decide(b, &BTreeMap::new());
+            let doc = declaration(b, &d).unwrap_or_else(|| panic!("{}: {d:?}", b.name));
+            let e = states.entry(family).or_default();
+            e.0 += 1;
+            e.1 += states_and_default(&doc).0;
+        }
+        assert_eq!(states["valve_handle"], (17, 204));
+        assert_eq!(states["_door"], (5, 640));
+        assert_eq!(states["toolbox"], (16, 128));
+        assert_eq!(states["postbox"], (16, 256));
+        assert_eq!(states["nixie_tube"], (16, 512));
     }
 
     #[test]

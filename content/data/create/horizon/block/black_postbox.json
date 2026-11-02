@@ -1,0 +1,71 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 2.0,
+    "explosion_resistance": 2.0,
+    "requires_tool": false,
+    "sounds": "minecraft:stripped_spruce_wood"
+  },
+  "item": true,
+  "shapes": {
+    "property": "facing",
+    "values": {
+      "north": [
+        [
+          0.125,
+          0.0,
+          0.0,
+          0.875,
+          0.875,
+          1.0
+        ]
+      ],
+      "south": [
+        [
+          0.125,
+          0.0,
+          0.0,
+          0.875,
+          0.875,
+          1.0
+        ]
+      ],
+      "west": [
+        [
+          0.0,
+          0.0,
+          0.125,
+          1.0,
+          0.875,
+          0.875
+        ]
+      ],
+      "east": [
+        [
+          0.0,
+          0.0,
+          0.125,
+          1.0,
+          0.875,
+          0.875
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "open": [
+      "false",
+      "true"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}

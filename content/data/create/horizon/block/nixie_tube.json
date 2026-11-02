@@ -1,0 +1,106 @@
+{
+  "template": "minecraft:heavy_core",
+  "properties": {
+    "hardness": 3.0,
+    "explosion_resistance": 6.0,
+    "requires_tool": true,
+    "sounds": "minecraft:gold_block",
+    "light": 5
+  },
+  "item": true,
+  "shapes": {
+    "property": "facing",
+    "values": {
+      "north": [
+        [
+          0.3125,
+          0.0,
+          0.5625,
+          0.6875,
+          0.75,
+          0.9375
+        ],
+        [
+          0.3125,
+          0.0,
+          0.0625,
+          0.6875,
+          0.75,
+          0.4375
+        ]
+      ],
+      "south": [
+        [
+          0.3125,
+          0.0,
+          0.5625,
+          0.6875,
+          0.75,
+          0.9375
+        ],
+        [
+          0.3125,
+          0.0,
+          0.0625,
+          0.6875,
+          0.75,
+          0.4375
+        ]
+      ],
+      "east": [
+        [
+          0.5625,
+          0.0,
+          0.3125,
+          0.9375,
+          0.75,
+          0.6875
+        ],
+        [
+          0.0625,
+          0.0,
+          0.3125,
+          0.4375,
+          0.75,
+          0.6875
+        ]
+      ],
+      "west": [
+        [
+          0.5625,
+          0.0,
+          0.3125,
+          0.9375,
+          0.75,
+          0.6875
+        ],
+        [
+          0.0625,
+          0.0,
+          0.3125,
+          0.4375,
+          0.75,
+          0.6875
+        ]
+      ]
+    }
+  },
+  "state_properties": {
+    "double_face": [
+      "floor",
+      "wall",
+      "wall_reversed",
+      "ceiling"
+    ],
+    "facing": [
+      "north",
+      "south",
+      "west",
+      "east"
+    ],
+    "waterlogged": [
+      "false",
+      "true"
+    ]
+  }
+}
