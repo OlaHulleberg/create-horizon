@@ -511,7 +511,38 @@ as `read`. Clients are told on `create:copycat` when a material changes, when it
 panel's 3 pixels, the step's quarter), a panel's trapdoor whole, its bars as `copycat_bars`' model turned to it.
 Engine tests: accepted materials, boxes per shape and facing, cycling, placement, save and message round trips;
 fixture: a panel placed, given stone (drawn cut), refused a depot, wrenched, saved, broken (stone dropped, override
-cleared), a step placed high on a side (upper half). Not yet proven in game.
+cleared), a step placed high on a side (upper half). Proven headless (BMG G21): a copycat panel facing up clicked
+with oak planks held read `copycat at …: minecraft:oak_planks (minecraft:oak_planks)` (`/create_debug copycat`) and
+drew as a 3-pixel oak panel beside a bare one (the copycat base's texture). A first try aimed from 2 blocks up, fell
+before the click and hit the floor (DEBUG logs on the click path, removed, showed the hit at the floor block).
+
+Seats, turntables, fans on players and the controller rail (Horizon API 60 to 64), proven headless: a click on a white
+seat with an empty hand sat the player at the seat's y − 0.1875 (Create's seat height less a player's vehicle
+attachment), sneaking put them off at its top (y + 0.5). A turntable on a creative motor (16 rpm) turned a pig and an
+armor stand standing on it 4.8° a tick (3/10 of its speed: −244.8° in 51 ticks, −148.8° in 31) and the player standing
+on it 213° in 2 s (16 × 2/3 × ½ × 40 ticks): Create turns the player per frame by `speed × 2/3 × frame ticks × partial
+tick` (`TurntableHandler`), which over a tick's frames averages ½ at high frame rates ((n + 1) / 2n at n frames a
+tick) and is ported per tick as that half. A first try used a NoAI pig, which Horizon leaves floating off the ground
+(the turntable needs it on the ground), and `@e[type=pig,limit=1]` read another pig: DEBUG logs on `entity_inside`,
+removed, showed it. An encased fan facing east on a creative motor (16 rpm) pushed a player 3.5 blocks out 0.28 blocks
+east in 1 s (0.0052 a tick set from rest); sneaking (`horizon-ctl key lshift down`), it was set 0.00064, an eighth
+(`AirCurrent`'s `sneakModifier` 4096, read through API 64's `sneaking`), below vanilla's 0.003 cut-off
+(`LivingEntity.aiStep`), so it stayed put, as on Create's client (DEBUG log of the motion, removed). A flying player is
+let go (`isPlayerCreativeFlying`, API 64's `flying`); the nozzle lets sneaking and flying players go. A minecart moving
+east onto a controller rail at power 15 (`shape=east_west`, not backwards) was sent west at 0.384 a tick (`maxSpeed ×
+15/15`, less the cart's drag) and ran off the rail's west end.
+
+| Scenario (2026-11-02, turntables, `--no-mobs` keeping armor stands, 25 s settle, 5 runs) | fps | frame p50 / p99 (ms) | server tick (ms) | Budget |
+|---|---|---|---|---|
+| mods off | 2044 ± 28 | 0.483 / 0.798 | 1.874 ± 0.110 | |
+| Create idle | 2060 ± 38 | 0.478 / 0.776 | 1.992 ± 0.110 | tick ≤ off + 0.25 ms |
+| standbase: 496 creative motors facing up, 248 armor stands on stone | 1244 ± 55 | 0.699 / 1.728 | 2.687 ± 0.145 | control |
+| turntables: the same with a turntable on each motor, a stand on every other one, turned each tick | 1238 ± 31 | 0.701 / 1.811 | 2.928 ± 0.051 | tick ≤ control + 0.25 ms, frame p50 ≤ control + 10% |
+
+248 entities turned every tick by turntables cost 0.24 ms of tick (about 1 µs each: `entityInside`, the speed
+lookup and `native_set_yaw` with its rotation packet) and no frame time; within budget, near its edge
+(`benchmarks/create-p8t-*.json`). A first run measured nothing: `--no-mobs` killed every entity but players and items,
+the stands too.
 
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
@@ -788,7 +819,7 @@ running).
   (`board_texts`) draw their text through `native_text_set`, set again only when what they show changes; signs
   written by display links are vanilla's and draw themselves. Comparators (was blocked; done with API 56): see
   Phase 7.
-- Entities, rails and riding (were blocked; done with Horizon API 60 to 63, pinned at `4f54ca2a8`): seats
+- Entities, rails and riding (were blocked; done with Horizon API 60 to 64, pinned at `8d9e491eb`): seats
   (`native_entity_inside`, `native_spawn_seat`, `native_start_riding`, `native_entity_mount`), turntables turning
   and carrying what stands on them (`native_set_yaw`, `native_set_delta_movement`), the encased fan and the nozzle
   pushing every entity and resetting its fall, the controller rail as a rail (`rail`, `native_minecart_pass`).
