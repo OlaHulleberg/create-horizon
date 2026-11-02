@@ -206,6 +206,8 @@ pub(super) fn chunk_load(
     load_lifts(dim, lifts);
     arms_from_nbt(dim, Game::native_chunk_data(chunk, "create"));
     displays_from_nbt(dim, Game::native_chunk_data(chunk, "create_display"));
+    let now = game.world.game_time;
+    redstone_from_nbt(dim, now, Game::native_chunk_data(chunk, "create_redstone"));
     let mut buffer = [0u32; 4096];
     with_world(|w| {
         w.dims[dim].vaults.load(vaults.into_iter());
@@ -346,6 +348,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_deployers(game, dimension, dim);
     tick_arms(game, dimension, dim);
     tick_ejectors(game, dimension, dim);
+    tick_detectors(game, dimension, dim);
     send_tank_changes(game, dimension, dim);
     let mut events = Vec::new();
     with_world(|w| w.settle_belts(dim));
@@ -566,6 +569,9 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     send_deployers(game, &[player], dim, &deployers);
     sync_arms(game, player, dim);
     sync_displays(game, player, dim);
+    let levers: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].levers.levers.keys().copied().collect()).unwrap_or_default();
+    send_levers(game, &[player], dim, &levers);
     let trains: Vec<u32> =
         with_world(|w| w.dims[dim].railway.trains.iter().map(|t| t.id).collect())
             .unwrap_or_default();
@@ -839,6 +845,15 @@ pub(super) fn right_click_inner(
     ) = block
     {
         use_lift(game, dim, pos, b, back, canceled);
+        return;
+    }
+    if let Some((b, info)) = detector_block(state) {
+        if b == create_engine::Block::AnalogLever {
+            use_lever(game, dim, pos, back, canceled);
+        } else {
+            let switch = b == create_engine::Block::StockpileSwitch;
+            use_detector(game, dim, pos, face, switch, &info, canceled);
+        }
         return;
     }
     if let Some((facing, receiver, _)) = link_state(state) {
@@ -2014,6 +2029,7 @@ pub(super) fn chunk_data_save(
     };
     lifts_chunk_save(game, dim, chunk, data);
     displays_chunk_save(dim, chunk, data);
+    redstone_chunk_save(game, dim, chunk, data);
     let settings = with_world(|w| w.column_settings(dim, chunk[0], chunk[1])).unwrap_or_default();
     let belts = with_world(|w| w.column_belts(dim, chunk[0], chunk[1])).unwrap_or_default();
     let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
@@ -2351,6 +2367,14 @@ pub(super) fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> b
             game.native_part_clear(client::key(pos, slot));
         }
     }
+    // CuckooClockRenderer's hands, after the slots above were cleared.
+    if matches!(
+        block,
+        create_engine::Block::CuckooClock | create_engine::Block::MysteriousCuckooClock
+    ) && let Some(facing) = c.table.get(state.0).and_then(|(_, i)| i.facing)
+    {
+        draw_clock_hands(game, pos, facing, speeds[0] != 0.0);
+    }
     // A running clock's bearing top turns with its hour hand, which draws it.
     if block == create_engine::Block::ClockworkBearing && clock_shown(pos) {
         game.native_part_clear(client::key(pos, 1));
@@ -2424,6 +2448,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
     }
     if channel == create_engine::link::CHANNEL {
         links_from_server(game, data);
+        return;
+    }
+    if channel == create_engine::lever::CHANNEL {
+        levers_from_server(game, data);
         return;
     }
     if channel == create_engine::display::CHANNEL {
@@ -2514,6 +2542,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         reset_client_lifts();
         ARMS.with_borrow_mut(|a| *a = ClientArms::default());
         reset_client_displays();
+        CLOCKS.with_borrow_mut(|k| *k = ClientClocks::default());
         return;
     }
     tick_client_depots(game);
@@ -2545,6 +2574,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         }
     }
     tick_client_gauges(game, &mut c);
+    tick_client_clocks(game, &c);
     CLIENT.with_borrow_mut(|slot| *slot = Some(c));
 }
 
@@ -3097,10 +3127,20 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
         "create_debug display_state <pos:block_pos>",
         2,
     ));
+    // A threshold switch's thresholds (its screen), and what a lever, smart observer or
+    // threshold switch holds, for tests.
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug threshold <pos:block_pos> <values:text>",
+        2,
+    ));
+    commands.push(super::native_server::NativeCommand::op(
+        "create_debug redstone_state <pos:block_pos>",
+        2,
+    ));
 }
 
 pub(super) fn perform_command(game: &mut Game<'_>, command: &str, ran: &mut bool) {
-    if display_command(game, command) {
+    if display_command(game, command) || redstone_command(game, command) {
         *ran = true;
         return;
     }
@@ -3240,9 +3280,11 @@ pub(super) fn contents_changed(game: &mut Game<'_>, pos: [i32; 3]) {
         return;
     };
     // Chutes asleep under this container (or under its vault) look into it again; arms using
-    // it as a point, and an ejector it is, look again.
+    // it as a point, and an ejector it is, look again; so do smart observers and threshold
+    // switches looking at it.
     with_world(|w| {
         w.container_changed(dim, pos);
+        w.detectors_contents_changed(dim, pos);
         w.dims[dim].arms.touched(pos);
     });
     wake_ejectors(dim, &[pos]);
@@ -3334,6 +3376,13 @@ pub(super) fn place_block(game: &mut Game<'_>, pos: [i32; 3], state: BlockStateI
     }
     if block == Some(create_engine::Block::RedstoneContact) {
         place_contact(game, pos, clicked_face);
+        return;
+    }
+    if let Some(
+        b @ (create_engine::Block::ContentObserver | create_engine::Block::StockpileSwitch),
+    ) = block
+    {
+        place_detector(game, pos, state, b == create_engine::Block::StockpileSwitch);
         return;
     }
     if block == Some(create_engine::Block::ItemVault) {
@@ -3812,6 +3861,11 @@ pub(super) fn block_signal(
         *signal = s;
         return;
     }
+    if let Some((b, info)) = detector_block(state.0) {
+        let at = [pos.x, pos.y, pos.z];
+        *signal = detector_signal(level_index(dimension), at, b, &info, side, direct);
+        return;
+    }
     if let Some((_, l)) = latch_state(state.0) {
         *signal = create_engine::latch::signal(&l, side);
         return;
@@ -3861,6 +3915,8 @@ pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
         || lamp_state(state.0).is_some()
         || link_state(state.0).is_some_and(|(_, receiver, powered)| receiver && powered)
         || lift_signal_source(state.0)
+        || detector_block(state.0)
+            .is_some_and(|(b, i)| b != create_engine::Block::ContentObserver || i.powered)
     {
         *source = true;
     }

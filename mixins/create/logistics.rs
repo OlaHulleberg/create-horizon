@@ -606,7 +606,7 @@ pub(super) fn vault_at(game: &Game<'_>, dim: usize, pos: [i32; 3]) -> Option<Vec
 }
 
 /// The slots of vault blocks, in order (each `vault::SLOTS` long).
-fn vault_slots(
+pub(super) fn vault_slots(
     game: &Game<'_>,
     parts: &[[i32; 3]],
 ) -> Vec<Option<horizon_client::items::ItemStack>> {
