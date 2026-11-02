@@ -82,6 +82,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
             super::create_decor::forget();
             super::create_controller::forget();
             super::create_seats::forget();
+            super::create_train_controls::forget();
             super::create_copycat::forget();
             super::create_carts::forget();
             states::clear_range();
@@ -364,7 +365,9 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     // entities); contraption controls follow redstone.
     super::create_actors::tick_mounted(game, dimension, dim);
     tick_lifts(game, dimension, dim);
+    super::create_train_controls::level_tick(game, dimension, dim);
     tick_trains(game, dimension, dim);
+    super::create_train_controls::tick_seats(game, dimension, dim);
     sync_curves(game, dimension, dim);
     tick_vaults(game, dim);
     tick_chutes(game, dim);

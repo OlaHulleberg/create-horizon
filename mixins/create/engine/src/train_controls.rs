@@ -135,19 +135,19 @@ impl Frame {
 /// `rayTraceContraption`: the block of a carriage (posed by `frame`; its blocks' offsets and
 /// states) the segment from `origin` to `target` first hits, by each block's outline boxes
 /// (`shape`, in block units), with how far along (0 to 1) it is hit.
-pub fn ray_trace<'a>(
+pub fn ray_trace<'a, S: AsRef<[[f64; 6]]>>(
     frame: &Frame,
     blocks: impl IntoIterator<Item = &'a ([i32; 3], u32)>,
     origin: Vec3,
     target: Vec3,
-    shape: impl Fn(u32) -> &'a [[f64; 6]],
+    shape: impl Fn(u32) -> S,
 ) -> Option<([i32; 3], f64)> {
     let a = frame.to_local(origin);
     let b = frame.to_local(target);
     let d: Vec3 = std::array::from_fn(|i| b[i] - a[i]);
     let mut best: Option<([i32; 3], f64)> = None;
     for (o, state) in blocks {
-        for bx in shape(*state) {
+        for bx in shape(*state).as_ref() {
             let (mut lo, mut hi) = (0.0f64, 1.0f64);
             let mut hit = true;
             for i in 0..3 {
@@ -462,6 +462,25 @@ pub enum Prompt {
     Clear,
 }
 
+/// The approach's progress bars' colours (`CarriageContraptionEntity.control`): the bars gone
+/// by in a colour mixed from green toward amber by the share still to go (Catnip's
+/// `Color.mixColors(0x529915, 0xFFC244, progress / 30)`, outside this repository, taken as a
+/// mix per channel), those still to go grey, or green once there (`progress` 0).
+pub fn progress_colors(progress: u8) -> (u32, u32) {
+    const TO: u32 = 0x52_99_15;
+    const FROM: u32 = 0xFF_C2_44;
+    let w = f32::from(progress) / 30.0;
+    let channel = |shift: u32| {
+        let (a, b) = (
+            ((TO >> shift) & 0xFF) as f32,
+            ((FROM >> shift) & 0xFF) as f32,
+        );
+        ((a + (b - a) * w) as u32) << shift
+    };
+    let mixed = channel(16) | channel(8) | channel(0);
+    (mixed, if progress == 0 { TO } else { 0x54_4D_45 })
+}
+
 /// What `control` keeps per carriage between ticks: whether the approach prompt is shown
 /// (`stationMessage`) and how far the approached station was (`navDistanceTotal`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -547,6 +566,12 @@ mod tests {
         // The controls at (0, 0, 0): its world block is (0, 65, 0).
         assert!(f.within([0, 0, 0], [0.5, 66.6, 12.9], 4.5, CONTROL_RANGE));
         assert!(!f.within([0, 0, 0], [0.5, 66.6, 13.6], 4.5, CONTROL_RANGE));
+    }
+
+    #[test]
+    fn the_approach_bars_turn_green_as_it_nears() {
+        assert_eq!(progress_colors(30), (0xFF_C2_44, 0x54_4D_45));
+        assert_eq!(progress_colors(0), (0x52_99_15, 0x52_99_15));
     }
 
     #[test]

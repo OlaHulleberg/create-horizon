@@ -140,6 +140,36 @@ fn sit_down(
     true
 }
 
+/// `Contraption.moveSeat`: the seat block at `pos` moves into a contraption (a train's
+/// carriage); its seat's first rider is taken off and returned, and the seat goes.
+pub(super) fn take_rider(
+    game: &mut Game<'_>,
+    dimension: &str,
+    dim: usize,
+    pos: [i32; 3],
+) -> Option<NativeEntity> {
+    let seat = SEATS.with_borrow_mut(|s| s.remove(&(dim, pos)))?;
+    let rider = game.native_passengers(dimension, seat.id).first().copied();
+    game.native_remove_seat(dimension, seat.id);
+    game.native_entity(dimension, rider?)
+}
+
+/// `Contraption.addPassengersToWorld`: a contraption's rider sits on the seat block at `pos`
+/// put back in the world, if it is a seat and free (`isSeatOccupied`, `sitDown`).
+pub(super) fn seat_rider(
+    game: &mut Game<'_>,
+    dimension: &str,
+    dim: usize,
+    pos: [i32; 3],
+    rider: &NativeEntity,
+) -> bool {
+    let is_seat = block_of(game.world.block(pos[0], pos[1], pos[2]).0).is_some_and(dye::is_seat);
+    if !is_seat || SEATS.with_borrow(|s| s.contains_key(&(dim, pos))) {
+        return false;
+    }
+    sit_down(game, dimension, dim, pos, rider)
+}
+
 /// The seat at `pos` lets its riders off where Create's do (`getDismountLocationForPassenger`)
 /// and goes.
 fn remove_seat(game: &mut Game<'_>, dimension: &str, pos: [i32; 3], id: u32) {

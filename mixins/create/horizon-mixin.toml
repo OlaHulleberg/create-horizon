@@ -190,6 +190,13 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_seats"
 source = "seats.rs"
 
+# Train carriages' seats and controls: riding and driving trains.
+[[module]]
+id = "train-controls"
+file = "crates/horizon-client/src/game.rs"
+name = "create_train_controls"
+source = "train_controls.rs"
+
 # Minecart contraptions: cart assemblers, contraptions on carts, their items and couplings.
 [[module]]
 id = "carts"
@@ -715,4 +722,17 @@ bindings = [
   { name = "vehicle", ty = "u32", value = "vehicle" },
   { name = "mounting", ty = "bool", value = "mounting" },
   { name = "canceled", ty = "&mut bool", value = "canceled" },
+]
+
+[[injection]]
+id = "interaction-key-mapping-triggered"
+hook = "interaction_key_mapping_triggered"
+hook_version = 1
+kind = "HEAD"
+helper = "interaction_key.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "button", ty = "horizon_client::interaction_input::Button", value = "button" },
+  { name = "canceled", ty = "&mut bool", value = "canceled" },
+  { name = "swing", ty = "&mut bool", value = "swing" },
 ]
