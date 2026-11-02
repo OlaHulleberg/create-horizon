@@ -258,12 +258,20 @@ pub fn aligned_distance(pos: [f64; 3], fan: [i32; 3], facing: Dir) -> f64 {
     (pos[a] - face).abs()
 }
 
-/// `tickAffectedEntities`' push on an entity that isn't sneaking (an item, a mob, a player): its
-/// new motion, `flow` the way the air goes, `distance` from the fan's centre.
-pub fn push(flow: Dir, speed: f32, max: f32, distance: f64, motion: [f64; 3]) -> [f64; 3] {
+/// `tickAffectedEntities`' push on an entity (an item, a mob, a player): its new motion, `flow`
+/// the way the air goes, `distance` from the fan's centre, `sneaking` for one holding sneak.
+pub fn push(
+    flow: Dir,
+    speed: f32,
+    max: f32,
+    distance: f64,
+    motion: [f64; 3],
+    sneaking: bool,
+) -> [f64; 3] {
     let o = flow.offset();
-    // `sneakModifier`: 512 (4096 for a sneaking entity).
-    let acceleration = (f64::from(speed.abs()) / 512.0 / (distance / f64::from(max))) as f32;
+    let sneak_modifier = if sneaking { 4096.0 } else { 512.0 };
+    let acceleration =
+        (f64::from(speed.abs()) / sneak_modifier / (distance / f64::from(max))) as f32;
     let mut out = motion;
     for a in 0..3 {
         let add = (f64::from(o[a] as f32 * acceleration) - motion[a]).clamp(-5.0, 5.0);
@@ -529,8 +537,11 @@ mod tests {
         );
         assert_eq!(aligned_distance([3.5, 0.2, 0.5], [0, 0, 0], Dir::East), 2.5);
         // Pushed east: an eighth of the way to speed/512 over distance/max.
-        let v = push(Dir::East, 64.0, 4.0, 2.0, [0.0, 0.0, 0.0]);
+        let v = push(Dir::East, 64.0, 4.0, 2.0, [0.0, 0.0, 0.0], false);
         assert!((v[0] - 0.25 / 8.0).abs() < 1e-6 && v[1] == 0.0, "{v:?}");
+        // Sneaking: an eighth of that (`sneakModifier` 4096 in place of 512).
+        let v = push(Dir::East, 64.0, 4.0, 2.0, [0.0, 0.0, 0.0], true);
+        assert!((v[0] - 0.25 / 64.0).abs() < 1e-6, "{v:?}");
         // An entity's timer: 151 ticks for one stack, then never again by that type.
         let mut p = Progress::default();
         let ticks = (1..)
