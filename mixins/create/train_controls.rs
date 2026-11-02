@@ -56,7 +56,18 @@ enum Pending {
         seat: u32,
         to: Option<[i32; 3]>,
     },
+    /// A seat stand-in that came back from a save, at `pos`, to find its carriage seat again
+    /// (`Carriage.serialisedPassengers`) while the trains find their track: `wait` ticks more.
+    Reseat {
+        dim: usize,
+        seat: u32,
+        pos: [f64; 3],
+        wait: u16,
+    },
 }
+
+/// How long a stand-in that came back waits for its train to be on its track again: 30 s.
+const RESEAT_WAIT: u16 = 600;
 
 thread_local! {
     /// The client's hold on a carriage's controls, and whether it has one (the key hook's and
@@ -695,11 +706,66 @@ pub(super) fn disassembled(
     });
 }
 
-/// The riders waiting to board a new train's seats or to leave a train taken apart.
+/// A seat stand-in that came back from a save and stands in no seat block
+/// (`create_seats::seat_loaded`): it is a carriage seat's if one is where it stands.
+pub(super) fn seat_loaded(dim: usize, seat: u32, pos: [f64; 3]) {
+    PENDING.with_borrow_mut(|p| {
+        p.push(Pending::Reseat {
+            dim,
+            seat,
+            pos,
+            wait: RESEAT_WAIT,
+        })
+    });
+}
+
+/// The free carriage seat of a train on its track nearest `pos`, within half a block and the
+/// way its train went since it was saved (a tick at its speed).
+fn carriage_seat_at(dim: usize, pos: [f64; 3]) -> Option<Target> {
+    let seats: Vec<(Target, f64)> = with_world(|w| {
+        let r = &w.dims[dim].railway;
+        let mut out = Vec::new();
+        for t in r.trains.iter().filter(|t| t.train.bound) {
+            for (car, blocks) in t.cars.iter().enumerate() {
+                for &(local, state) in blocks {
+                    if w.table.get(state).is_some_and(|(b, _)| dye::is_seat(b)) {
+                        let at = Target {
+                            train: t.id,
+                            car: car as u16,
+                            local,
+                        };
+                        out.push((at, 0.5 + t.train.speed.abs()));
+                    }
+                }
+            }
+        }
+        out
+    })
+    .unwrap_or_default();
+    let taken = |at: &Target| SEATS.with_borrow(|s| s.iter().any(|s| s.dim == dim && s.at == *at));
+    let distance = |at: &Target| {
+        let f = frame(dim, at.train, at.car)?;
+        let s = f.seat(at.local);
+        Some((0..3).map(|a| (s[a] - pos[a]).powi(2)).sum::<f64>().sqrt())
+    };
+    seats
+        .into_iter()
+        .filter(|(at, _)| !taken(at))
+        .filter_map(|(at, within)| Some((distance(&at)?, within, at)))
+        .filter(|(d, within, _)| d < within)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, _, at)| at)
+}
+
+/// The riders waiting to board a new train's seats or to leave a train taken apart, and the
+/// stand-ins that came back from a save finding their carriage seat: once found it is that
+/// seat's again, its rider on it; one not found in time lets its riders off where it is.
 fn board_and_alight(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let pending: Vec<Pending> = PENDING.with_borrow_mut(|p| {
         let (here, rest) = std::mem::take(p).into_iter().partition(|p| match p {
-            Pending::Board { dim: d, .. } | Pending::Alight { dim: d, .. } => *d == dim,
+            Pending::Board { dim: d, .. }
+            | Pending::Alight { dim: d, .. }
+            | Pending::Reseat { dim: d, .. } => *d == dim,
         });
         *p = rest;
         here
@@ -719,6 +785,36 @@ fn board_and_alight(game: &mut Game<'_>, dimension: &str, dim: usize) {
                     .and_then(|&r| game.native_entity(dimension, r));
                 if let (Some(to), Some(rider)) = (to, rider) {
                     super::create_seats::seat_rider(game, dimension, dim, to, &rider);
+                }
+            }
+            Pending::Reseat {
+                seat, pos, wait, ..
+            } => {
+                let riders = game.native_passengers(dimension, seat);
+                if let Some(at) = carriage_seat_at(dim, pos) {
+                    // A seat's riders are players or mobs.
+                    let player = riders
+                        .iter()
+                        .any(|&r| game.native_mob(dimension, r).is_none());
+                    SEATS.with_borrow_mut(|s| {
+                        s.push(CarSeat {
+                            dim,
+                            at,
+                            seat,
+                            player,
+                        })
+                    });
+                } else if wait > 0 && !riders.is_empty() {
+                    PENDING.with_borrow_mut(|p| {
+                        p.push(Pending::Reseat {
+                            dim,
+                            seat,
+                            pos,
+                            wait: wait - 1,
+                        })
+                    });
+                } else {
+                    game.native_remove_seat(dimension, seat);
                 }
             }
         }
