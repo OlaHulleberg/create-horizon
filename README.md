@@ -5,6 +5,12 @@ A port of [Create](https://github.com/Creators-of-Create/Create) 6.0.11 to
 **horizon-mixins** native mod. No Java runs, at build time or play time. The plan, what is done, and
 the measured budgets are in [PORTING.md](PORTING.md).
 
+It builds against Horizon's `feat/create-hooks` branch on
+[OlaHulleberg/horizon](https://github.com/OlaHulleberg/horizon/tree/feat/create-hooks): Horizon 9d979ca plus the
+native hook points Create needs (API 41 to 66), pinned in `compatibility.json`. Create's own textures, models and
+sounds (`src/main/resources/assets`, All Rights Reserved) are not here: `tools/create-data prepare` reads them from a
+Create jar you have.
+
 ## Layout
 
 ```text
