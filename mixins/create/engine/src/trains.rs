@@ -2478,12 +2478,88 @@ impl Railway {
     }
 }
 
+/// A saved train's motion (`Train.write`): its speed, whether its controls face both ways, its
+/// heading, the station it stands at and the station it is bound for, with whether it reached
+/// it backwards (`behind`). Saved as 13 ints: speed (f32 bits), double-ended, heading (2), at a
+/// station (flag, then 3), bound for one (flag, then 3), behind.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SavedMotion {
+    pub speed: f64,
+    pub double_ended: bool,
+    pub heading: [i32; 2],
+    pub at_station: Option<[i32; 3]>,
+    pub nav: Option<[i32; 3]>,
+    pub behind: bool,
+}
+
+impl SavedMotion {
+    pub fn encode(&self) -> Vec<i32> {
+        let pos = |p: Option<[i32; 3]>| p.unwrap_or_default();
+        let mut v = vec![
+            (self.speed as f32).to_bits() as i32,
+            i32::from(self.double_ended),
+            self.heading[0],
+            self.heading[1],
+            i32::from(self.at_station.is_some()),
+        ];
+        v.extend(pos(self.at_station));
+        v.push(i32::from(self.nav.is_some()));
+        v.extend(pos(self.nav));
+        v.push(i32::from(self.behind));
+        v
+    }
+
+    /// None for fewer than the 13 ints `encode` writes.
+    pub fn decode(m: &[i32]) -> Option<Self> {
+        if m.len() < 13 {
+            return None;
+        }
+        let at = |k: usize| [m[k], m[k + 1], m[k + 2]];
+        Some(Self {
+            speed: f64::from(f32::from_bits(m[0] as u32)),
+            double_ended: m[1] != 0,
+            heading: [m[2], m[3]],
+            at_station: (m[4] != 0).then(|| at(5)),
+            nav: (m[8] != 0).then(|| at(9)),
+            behind: m[12] != 0,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::network::SignalType;
     use crate::schedule::{Condition, Entry, SECONDS};
     use crate::track_curves::{Curves, Saved};
+
+    #[test]
+    fn a_saved_trains_motion_reads_back_as_written() {
+        for m in [
+            SavedMotion {
+                speed: 0.0,
+                double_ended: false,
+                heading: [1, 0],
+                at_station: Some([3, 64, -2]),
+                nav: None,
+                behind: false,
+            },
+            SavedMotion {
+                speed: 1.25,
+                double_ended: true,
+                heading: [0, -1],
+                at_station: None,
+                nav: Some([-40, 70, 12]),
+                behind: true,
+            },
+        ] {
+            let ints = m.encode();
+            assert_eq!(ints.len(), 13);
+            assert_eq!(SavedMotion::decode(&ints), Some(m));
+        }
+        assert_eq!(SavedMotion::decode(&[0; 12]), None);
+    }
 
     const UP: Vec3 = [0.0, 1.0, 0.0];
 
