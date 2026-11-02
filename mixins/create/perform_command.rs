@@ -4,6 +4,9 @@ fn perform_command(game: &mut crate::game::Game<'_>, command: &str, ran: &mut bo
     let mut ours = false;
     crate::game::create_packages::perform_command(game, command, &mut ours);
     if !ours {
+        ours = crate::game::create_stock::perform_command(game, command);
+    }
+    if !ours {
         crate::game::create_schematics::perform_command(game, command, &mut ours);
     }
     if !ours {

@@ -46,6 +46,7 @@ fn with<R>(dim: usize, f: impl FnOnce(&mut Pk) -> R) -> R {
 
 /// The world closed: everything is forgotten.
 pub(super) fn forget() {
+    super::create_stock::forget();
     PACKAGES.with_borrow_mut(|p| *p = None);
     CHANGES.with_borrow_mut(Vec::clear);
     GONE.with_borrow_mut(Vec::clear);
@@ -55,8 +56,14 @@ pub(super) fn forget() {
 fn ours(b: Block) -> bool {
     matches!(
         b,
-        Block::Packager | Block::PackageFrogport | Block::ChainConveyor
+        Block::Packager | Block::Repackager | Block::PackageFrogport | Block::ChainConveyor
     ) || create_engine::dye::is_postbox(b)
+        || super::create_stock::ours(b)
+}
+
+/// A packager or a re-packager.
+fn is_packager(b: Block) -> bool {
+    matches!(b, Block::Packager | Block::Repackager)
 }
 
 fn block_of(state: u32) -> Option<Block> {
@@ -87,6 +94,9 @@ pub(super) fn analog(
     PACKAGES.with(|p| {
         let p = p.try_borrow().ok()?;
         let pk = &p.as_ref()?[dim];
+        if let Some(lit) = super::create_stock::requester_succeeded(dim, pos) {
+            return Some(if lit { 15 } else { 0 });
+        }
         if let Some(k) = pk.packagers.get(&pos) {
             return Some(i32::from(k.comparator()));
         }
@@ -107,8 +117,9 @@ pub(super) fn analog(
 /// (`PackagerBlock.neighborChanged`); a frogport looks at the inventory below.
 pub(super) fn neighbor_changed(dim: usize, pos: [i32; 3], state: u32) {
     match block_of(state) {
-        Some(Block::Packager) => with(dim, |pk| pk.redstone.push(pos)),
+        Some(Block::Packager | Block::Repackager) => with(dim, |pk| pk.redstone.push(pos)),
         Some(Block::PackageFrogport) => with(dim, |pk| pk.wake(pos)),
+        Some(b) if super::create_stock::ours(b) => super::create_stock::neighbor_changed(dim, pos),
         _ => {}
     }
 }
@@ -211,7 +222,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
     // PackagerBlock.neighborChanged: `powered` follows the signal; a new one activates it.
     for pos in with(dim, |pk| std::mem::take(&mut pk.redstone)) {
         let state = game.world.block(pos[0], pos[1], pos[2]).0;
-        let Some((Block::Packager, was)) =
+        let Some((Block::Packager | Block::Repackager, was)) =
             with_world(|w| w.table.get(state).map(|(b, i)| (b, i.powered))).flatten()
         else {
             continue;
@@ -243,7 +254,7 @@ pub(super) fn level_tick(game: &mut Game<'_>, dimension: &str) {
                     .flatten()
                     .unwrap_or(false);
                 with(dim, |pk| pk.packager(pos).powered = powered);
-                if with(dim, |pk| pk.packager(pos).can_send()) {
+                if redstone_mode(game, dim, pos) && with(dim, |pk| pk.packager(pos).can_send()) {
                     attempt_send(game, dim, pos);
                 }
             }
@@ -287,16 +298,25 @@ fn block_moved(
     is: Option<Block>,
 ) {
     let mut drops: Vec<([f64; 3], ItemStack)> = Vec::new();
+    if was.is_some_and(super::create_stock::ours) || is.is_some_and(super::create_stock::ours) {
+        super::create_stock::block_moved(game, dim, pos, was, is);
+    }
     match was {
-        // `PackagerBlockEntity.destroy`: its box drops.
-        Some(Block::Packager) => with(dim, |pk| {
+        // `PackagerBlockEntity.destroy`: its box and queued boxes drop.
+        Some(Block::Packager | Block::Repackager) => with(dim, |pk| {
             if let Some(p) = pk.packagers.remove(&pos) {
                 for b in p.held.into_iter().chain(p.sliding) {
                     drops.push((center(pos), b.stack));
                 }
+                for (b, n) in p.queue {
+                    for _ in 0..n.max(1) {
+                        drops.push((center(pos), b.stack.clone()));
+                    }
+                }
             }
             pk.active.retain(|x| *x != pos);
         }),
+        Some(b) if super::create_stock::ours(b) => {}
         // `ChainConveyorBlockEntity.destroy`: its packages drop, the conveyors it joined let go.
         Some(Block::ChainConveyor) => {
             let joined: Vec<[i32; 3]> = with(dim, |pk| {
@@ -331,12 +351,15 @@ fn block_moved(
         None => {}
     }
     match is {
-        Some(Block::Packager) => {
+        Some(b @ (Block::Packager | Block::Repackager)) => {
             with(dim, |pk| {
-                pk.packager(pos);
+                pk.packager(pos).repackager = b == Block::Repackager;
                 pk.touch(pos);
             });
+            // `initialize`: `linked` follows a stock link on it.
+            super::create_stock::recheck_linked(game, pos);
         }
+        Some(b) if super::create_stock::ours(b) => {}
         Some(Block::ChainConveyor) => {
             let speed = speed_of(dim, pos);
             with(dim, |pk| {
@@ -430,11 +453,7 @@ fn inv_take(
     n: u32,
 ) -> Option<Parcel<ItemStack>> {
     match inv {
-        Inv::Packager(p) => with(dim, |pk| {
-            let b = pk.packager(*p).take();
-            pk.touch(*p);
-            b
-        }),
+        Inv::Packager(p) => with(dim, |pk| take_box(pk, *p)),
         Inv::Port(p) => with(dim, |pk| {
             let port = pk.ports.get_mut(p)?;
             let b = port.items.get_mut(slot)?.take();
@@ -468,6 +487,18 @@ fn inv_take(
             super::machines::create_extract::take_from_slot(game, *p, index, n).map(parcel)
         }
     }
+}
+
+/// `PackagerItemHandler.extractItem`: the held box; the next queued one may come out after.
+fn take_box(pk: &mut Pk, pos: [i32; 3]) -> Option<Parcel<ItemStack>> {
+    let k = pk.packager(pos);
+    let b = k.take();
+    let queued = !k.queue.is_empty();
+    pk.touch(pos);
+    if b.is_some() && queued {
+        pk.activate(pos);
+    }
+    b
 }
 
 /// `insertItemStacked` / `insertItem` into `inv`: what is left (None when all went in).
@@ -535,6 +566,12 @@ fn behind(game: &Game<'_>, pos: [i32; 3]) -> Option<([i32; 3], Direction)> {
 /// button cooldown starts.
 fn activate(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
     with(dim, |pk| pk.packager(pos).pulse());
+    // `recheckIfLinksPresent`, then a linked packager waits for its network's orders.
+    super::create_stock::recheck_linked(game, pos);
+    if !redstone_mode(game, dim, pos) {
+        with(dim, |pk| pk.activate(pos));
+        return;
+    }
     if with(dim, |pk| pk.packager(pos).can_send()) {
         attempt_send(game, dim, pos);
     }
@@ -561,6 +598,10 @@ fn bulky(item: &str) -> bool {
 /// `PackagerBlockEntity.attemptToSend(null)`: the inventory behind packed into one box (a
 /// package there goes as it is), addressed with the packager's address, sliding out.
 fn attempt_send(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
+    if with(dim, |pk| pk.packager(pos).repackager) {
+        attempt_repackage(game, dim, pos);
+        return;
+    }
     let Some((at, face)) = behind(game, pos) else {
         return;
     };
@@ -581,6 +622,7 @@ fn attempt_send(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
                     count: s.count,
                     max: u32::from(stack_limit(game, &s.item)),
                     bulky: bulky(&s.item),
+                    package: package::is_package(&s.item),
                 })
             })
             .collect();
@@ -608,19 +650,7 @@ fn attempt_send(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
                     })
                 })
                 .collect();
-            let mut seed = (game.world.game_time as u64)
-                ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                ^ (pos[2] as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
-                ^ (pos[1] as u64) << 40;
-            let next = |n: u32| {
-                seed ^= seed >> 31;
-                seed = seed.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-                seed ^= seed >> 29;
-                (seed % u64::from(n.max(1))) as u32
-            };
-            let mut b = ItemStack::new(package::random_box(next), 1);
-            body::set_contents(&mut b, &contents);
-            b
+            new_box(game, pos, &contents)
         }
     };
     let address = with(dim, |pk| pk.packager(pos).address.clone());
@@ -649,6 +679,9 @@ fn unwrap(
 ) -> bool {
     if !with(dim, |pk| pk.packager(pos).can_unwrap()) {
         return false;
+    }
+    if with(dim, |pk| pk.packager(pos).repackager) {
+        return unwrap_whole(game, dim, pos, stack, simulate);
     }
     let items: Vec<ItemStack> = body::contents(stack).into_iter().flatten().collect();
     if items.is_empty() {
@@ -710,6 +743,305 @@ fn unwrap(
     });
     contents_changed(game, at);
     true
+}
+
+/// `RepackagerBlockEntity.unwrapBox`: the package goes into the inventory behind as it is, when
+/// a slot takes it.
+fn unwrap_whole(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    stack: &ItemStack,
+    simulate: bool,
+) -> bool {
+    let Some((at, face)) = behind(game, pos) else {
+        return false;
+    };
+    let Some(inv) = inv_at(game, dim, at, face) else {
+        return false;
+    };
+    let room = match &inv {
+        Inv::Packager(_) => return false,
+        Inv::Vault(parts) => vault_slots(game, parts).iter().any(Option::is_none),
+        Inv::Native(p, _) => super::machines::create_extract::all_slots(game, *p)
+            .unwrap_or_default()
+            .iter()
+            .any(Option::is_none),
+        Inv::Port(p) => with(dim, |pk| {
+            pk.ports.get(p).is_some_and(|port| {
+                port.automation_takes(&body::address(stack)) && !port.backed_up()
+            })
+        }),
+    };
+    if !room || simulate {
+        return room;
+    }
+    if let Some(left) = inv_insert(game, dim, &inv, parcel(stack.clone())) {
+        let dimension = game.dim.id().to_owned();
+        drop_stack(game, &dimension, center(pos), &left.stack);
+    }
+    with(dim, |pk| {
+        pk.packager(pos).unwrapped();
+        pk.activate(pos);
+    });
+    contents_changed(game, at);
+    true
+}
+
+/// `RepackagerBlockEntity.attemptToSend`: a package without order data in the inventory behind
+/// goes out as it is (with the sign's address); else, once every fragment of an order is there,
+/// they are taken and the order goes out repacked (`PackageRepackageHelper`), queued.
+fn attempt_repackage(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
+    if !with(dim, |pk| {
+        let k = pk.packager(pos);
+        k.can_send() && k.queue.is_empty()
+    }) {
+        return;
+    }
+    let Some((at, face)) = behind(game, pos) else {
+        return;
+    };
+    let Some(inv) = inv_at(game, dim, at, face) else {
+        return;
+    };
+    if matches!(inv, Inv::Packager(_)) {
+        return;
+    }
+    let view = inv_view(game, dim, &inv);
+    let mut fragments: Vec<(usize, create_engine::stock::OrderData<ItemStack>)> = Vec::new();
+    let mut completed = None;
+    for (slot, s) in view.iter().enumerate() {
+        let Some(s) = s else { continue };
+        if !package::is_package(&s.item) {
+            continue;
+        }
+        let Some(order) = body::order(s) else {
+            // Not fragmented: it goes out as it is.
+            let Some(mut p) = inv_take(game, dim, &inv, slot, 1) else {
+                return;
+            };
+            let address = with(dim, |pk| pk.packager(pos).address.clone());
+            if !package::is_blank(&address) {
+                body::set_address(&mut p.stack, Some(&address));
+                p.address = address;
+            }
+            with(dim, |pk| {
+                pk.packager(pos).send(p);
+                pk.activate(pos);
+            });
+            contents_changed(game, at);
+            return;
+        };
+        let id = order.order_id;
+        fragments.push((slot, order));
+        let mine: Vec<&create_engine::stock::OrderData<ItemStack>> = fragments
+            .iter()
+            .filter(|f| f.1.order_id == id)
+            .map(|f| &f.1)
+            .collect();
+        if create_engine::stock::is_order_complete(&mine) {
+            completed = Some(id);
+            break;
+        }
+    }
+    let Some(id) = completed else { return };
+    let mut frags = Vec::new();
+    for (slot, order) in fragments.into_iter().filter(|f| f.1.order_id == id) {
+        let Some(s) = view[slot].as_ref() else {
+            continue;
+        };
+        frags.push(create_engine::stock::Fragment {
+            order: super::create_stock::order_data_key(&order),
+            address: body::address(s),
+            contents: body::contents(s)
+                .into_iter()
+                .flatten()
+                .map(|i| (super::create_stock::Key::of(&i), i.count))
+                .collect(),
+        });
+    }
+    let boxes = create_engine::stock::repack(
+        &frags,
+        id,
+        |k| u32::from(stack_limit(game, &k.0.item)),
+        || super::create_stock::next_int(game),
+    );
+    // Every fragment of the order leaves the inventory.
+    for (slot, s) in view.iter().enumerate() {
+        if s.as_ref().is_some_and(|s| {
+            package::is_package(&s.item) && body::order(s).is_some_and(|o| o.order_id == id)
+        }) {
+            inv_take(game, dim, &inv, slot, 1);
+        }
+    }
+    for b in boxes {
+        let contents: Vec<Option<ItemStack>> = b
+            .contents
+            .iter()
+            .map(|(k, n)| {
+                Some(ItemStack {
+                    count: *n,
+                    ..k.0.clone()
+                })
+            })
+            .collect();
+        let mut stack = new_box(game, pos, &contents);
+        body::set_address(&mut stack, Some(&b.address));
+        body::set_order(&mut stack, &super::create_stock::order_data_stack(&b.order));
+        with(dim, |pk| {
+            pk.packager(pos).queue.push_back((
+                Parcel {
+                    stack,
+                    address: b.address.clone(),
+                },
+                b.count,
+            ))
+        });
+    }
+    with(dim, |pk| pk.activate(pos));
+    contents_changed(game, at);
+}
+
+/// `PackageItem.containing`: a box of a random style holding `contents`.
+fn new_box(game: &Game<'_>, pos: [i32; 3], contents: &[Option<ItemStack>]) -> ItemStack {
+    let mut seed = (game.world.game_time as u64)
+        ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (pos[2] as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ (pos[1] as u64) << 40;
+    let next = |n: u32| {
+        seed ^= seed >> 31;
+        seed = seed.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        seed ^= seed >> 29;
+        (seed % u64::from(n.max(1))) as u32
+    };
+    let mut b = ItemStack::new(package::random_box(next), 1);
+    body::set_contents(&mut b, contents);
+    b
+}
+
+/// The packager's inventory as `getAvailableItems` sums it, and which inventory it is
+/// (`InventoryIdentifier`: its first block), or None when nothing is behind it. A packager behind
+/// it is an inventory of nothing.
+pub(super) fn available(
+    game: &Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+) -> (
+    create_engine::stock::Summary<super::create_stock::Key>,
+    Option<[i32; 3]>,
+) {
+    let mut s = create_engine::stock::Summary::default();
+    let Some((at, face)) = behind(game, pos) else {
+        return (s, None);
+    };
+    let Some(inv) = inv_at(game, dim, at, face) else {
+        return (s, None);
+    };
+    let id = match &inv {
+        Inv::Vault(parts) => parts.iter().min().copied().unwrap_or(at),
+        _ => at,
+    };
+    if matches!(inv, Inv::Packager(_)) {
+        return (s, Some(id));
+    }
+    for stack in inv_view(game, dim, &inv).iter().flatten() {
+        s.add(&super::create_stock::Key::of(stack), stack.count as i32);
+    }
+    (s, Some(id))
+}
+
+/// `isTooBusyFor`: a packager with that many boxes queued takes no order.
+pub(super) fn too_busy(dim: usize, pos: [i32; 3], kind: create_engine::stock::RequestType) -> bool {
+    with(dim, |pk| {
+        pk.packagers.get(&pos).is_some_and(|k| k.too_busy(kind))
+    })
+}
+
+/// `performPackageRequests` for one packager: up to 100 boxes of its requests
+/// (`attemptToSend(requests)`), each sliding out or queued. The stacks put in boxes (not
+/// packages sent as they are), for `deductFromAccurateSummary`.
+pub(super) fn perform_requests(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    queue: &mut std::collections::VecDeque<create_engine::stock::Request<super::create_stock::Key>>,
+) -> Vec<ItemStack> {
+    let mut boxed = Vec::new();
+    for _ in 0..create_engine::stock::MAX_PACKAGES {
+        if queue.is_empty() {
+            break;
+        }
+        let Some((at, face)) = behind(game, pos) else {
+            break;
+        };
+        let Some(inv) = inv_at(game, dim, at, face) else {
+            break;
+        };
+        if matches!(inv, Inv::Packager(_)) {
+            break;
+        }
+        let view = inv_view(game, dim, &inv);
+        let mut slots: Vec<Option<package::Slot<super::create_stock::Key>>> = view
+            .iter()
+            .map(|s| {
+                s.as_ref().map(|s| package::Slot {
+                    key: super::create_stock::Key::of(s),
+                    count: s.count,
+                    max: u32::from(stack_limit(game, &s.item)),
+                    bulky: bulky(&s.item),
+                    package: package::is_package(&s.item),
+                })
+            })
+            .collect();
+        let Some(r) = create_engine::stock::pack_requests(&mut slots, queue) else {
+            continue;
+        };
+        let mut taken: HashMap<usize, Parcel<ItemStack>> = HashMap::new();
+        for &(slot, n) in &r.packed.taken {
+            if let Some(p) = inv_take(game, dim, &inv, slot, n) {
+                taken.insert(slot, p);
+            }
+        }
+        let mut stack = match r.packed.package.and_then(|s| taken.remove(&s)) {
+            Some(p) => p.stack,
+            None => {
+                let contents: Vec<Option<ItemStack>> = r
+                    .packed
+                    .contents
+                    .iter()
+                    .map(|c| {
+                        let (from, n) = (*c)?;
+                        let s = view.get(from)?.as_ref()?;
+                        Some(ItemStack {
+                            count: n,
+                            ..s.clone()
+                        })
+                    })
+                    .collect();
+                boxed.extend(contents.iter().flatten().cloned());
+                new_box(game, pos, &contents)
+            }
+        };
+        body::set_address(&mut stack, Some(&r.address));
+        body::set_order(&mut stack, &super::create_stock::order_data_stack(&r.order));
+        with(dim, |pk| {
+            pk.packager(pos).send_or_queue(Parcel {
+                stack,
+                address: r.address.clone(),
+            });
+            pk.activate(pos);
+        });
+        contents_changed(game, at);
+    }
+    boxed
+}
+
+/// `redstoneModeActive`: a packager with a stock link on it packs for its network only, not on
+/// a signal; a re-packager always on a signal.
+fn redstone_mode(game: &Game<'_>, dim: usize, pos: [i32; 3]) -> bool {
+    with(dim, |pk| {
+        pk.packagers.get(&pos).is_some_and(|k| k.repackager)
+    }) || super::create_stock::link_of(game, pos).is_none()
 }
 
 /// A frogport looks at its inventories (`lazyTick`): what it caught for its address goes down
@@ -921,15 +1253,19 @@ pub(super) fn use_block(
     block: Block,
     canceled: &mut bool,
 ) -> bool {
-    if block != Block::Packager {
+    if super::create_stock::use_block(block, canceled) {
+        return true;
+    }
+    if !is_packager(block) {
         return false;
     }
     let hand = game.native_held().map(|h| h.0);
+    let linked = super::create_stock::link_of(game, pos).is_some();
     if hand.as_deref().is_some_and(|h| {
         matches!(
             h,
             "create:wrench" | "create:package_frogport" | "create:factory_gauge"
-        )
+        ) || (h == "create:stock_link" && !linked)
     }) {
         return true;
     }
@@ -952,6 +1288,7 @@ pub(super) fn use_block(
             return true;
         }
         unwrap(game, dim, pos, &stack, false);
+        super::create_stock::stock_check(game, dim, pos);
         if let Some(slot) = game.inventory.get_mut(game.selected) {
             match slot {
                 Some(s) if s.count > 1 => s.count -= 1,
@@ -962,11 +1299,7 @@ pub(super) fn use_block(
         game.audio.play("create:depot_plop", Some(c), 1.0, 1.0);
         return true;
     }
-    let Some(b) = with(dim, |pk| {
-        let b = pk.packager(pos).take();
-        pk.touch(pos);
-        b
-    }) else {
+    let Some(b) = with(dim, |pk| take_box(pk, pos)) else {
         return true;
     };
     // `placeItemBackInInventory`: into a free slot, else dropped.
@@ -996,7 +1329,7 @@ pub(super) fn register_commands(commands: &mut Vec<super::native_server::NativeC
 }
 
 /// Coordinates from the command's words (`~` from the player's position).
-fn coords(words: &[&str], here: Option<[f64; 3]>) -> Option<[i32; 3]> {
+pub(super) fn coords(words: &[&str], here: Option<[f64; 3]>) -> Option<[i32; 3]> {
     let mut out = [0; 3];
     for i in 0..3 {
         let t = words.get(i)?;
@@ -1158,8 +1491,14 @@ fn describe(dim: usize, pos: [i32; 3]) -> String {
     with(dim, |pk| {
         if let Some(p) = pk.packagers.get(&pos) {
             let held = p.held.as_ref().or(p.sliding.as_ref());
+            let queued: u32 = p.queue.iter().map(|q| q.1.max(1)).sum();
             return format!(
-                "packager address=\"{}\" powered={} animation={} inward={} held={}",
+                "{} address=\"{}\" powered={} animation={} inward={} held={} queued={queued}",
+                if p.repackager {
+                    "repackager"
+                } else {
+                    "packager"
+                },
                 p.address,
                 p.powered,
                 p.animation_ticks,
@@ -1356,6 +1695,24 @@ pub(super) fn chunk_data_save(dimension: &str, chunk: [i32; 2], data: &mut Compo
             if let Some(b) = &k.sliding {
                 c.push(("SlidingBox", parcel_tag(b)));
             }
+            if k.repackager {
+                c.push(("Repackager", Tag::IntArray(vec![1])));
+            }
+            if !k.queue.is_empty() {
+                // `QueuedExitingPackages`: each box with its count.
+                let queue = k
+                    .queue
+                    .iter()
+                    .filter_map(|(b, n)| {
+                        let Tag::Compound(mut c) = parcel_tag(b) else {
+                            return None;
+                        };
+                        c.insert("Count".into(), Tag::IntArray(vec![*n as i32]));
+                        Some(Tag::Compound(c))
+                    })
+                    .collect();
+                c.push(("QueuedExitingPackages", Tag::List(queue)));
+            }
             packagers.push(Tag::compound(c));
         }
         let mut ports: Vec<Tag> = Vec::new();
@@ -1537,6 +1894,17 @@ pub(super) fn chunk_load(dimension: &str, chunk: &horizon_client::chunk::Chunk) 
             k.button_cooldown = s.get(3).copied().unwrap_or(0).clamp(0, 40) as u32;
             k.held = parcel_from(c.get(&"HeldBox".into()));
             k.sliding = parcel_from(c.get(&"SlidingBox".into()));
+            k.repackager = !ints(c.get(&"Repackager".into())).is_empty();
+            if let Some(Tag::List(l)) = c.get(&"QueuedExitingPackages".into()) {
+                k.queue = l
+                    .iter()
+                    .filter_map(|t| {
+                        let Tag::Compound(e) = t else { return None };
+                        let n = ints(e.get(&"Count".into())).first().copied().unwrap_or(1);
+                        Some((parcel_from(Some(t))?, n.max(0) as u32))
+                    })
+                    .collect();
+            }
             if k.active() {
                 pk.activate(pos);
             }

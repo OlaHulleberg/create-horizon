@@ -4,6 +4,7 @@
 // chunk save; a stack as SNBT for the `summon` of a dropped one. Compiled against Horizon by
 // `horizon.py check`; the template test swaps it for `tools/fixture/package_body.rs`.
 use create_engine::package::{ADDRESS_KEY, CONTENTS_KEY, SLOTS};
+use create_engine::stock::{Order, OrderData};
 use horizon_client::items::ItemStack;
 use horizon_world::nbt::{Compound, Tag};
 
@@ -73,4 +74,128 @@ pub(super) fn from_nbt(tag: &Tag) -> Option<ItemStack> {
 /// The stack as SNBT, for `summon minecraft:item ... {Item:...}`.
 pub(super) fn snbt(stack: &ItemStack) -> String {
     horizon_world::snbt_text::to_snbt(&to_nbt(stack))
+}
+
+/// `PACKAGE_ORDER_DATA` (`PackageOrderData.CODEC`), kept in `minecraft:custom_data`.
+const ORDER_KEY: &str = "create:package_order_data";
+
+fn int(c: &Compound, key: &str) -> i32 {
+    match c.get(&key.into()) {
+        Some(Tag::Int(v)) => *v,
+        Some(Tag::Byte(v)) => i32::from(*v),
+        _ => 0,
+    }
+}
+
+/// `List<BigItemStack>` as `{entries: [{item_stack, count}]}` (`PackageOrder.CODEC`).
+fn stacks_nbt(stacks: &[(ItemStack, u32)]) -> Tag {
+    Tag::compound([(
+        "entries",
+        Tag::List(
+            stacks
+                .iter()
+                .map(|(s, n)| {
+                    Tag::compound([
+                        (
+                            "item_stack",
+                            to_nbt(&ItemStack {
+                                count: 1,
+                                ..s.clone()
+                            }),
+                        ),
+                        ("count", Tag::Int(*n as i32)),
+                    ])
+                })
+                .collect(),
+        ),
+    )])
+}
+
+fn stacks_from(t: Option<&Tag>) -> Vec<(ItemStack, u32)> {
+    let Some(Tag::Compound(c)) = t else {
+        return Vec::new();
+    };
+    let Some(Tag::List(l)) = c.get(&"entries".into()) else {
+        return Vec::new();
+    };
+    l.iter()
+        .filter_map(|e| {
+            let Tag::Compound(e) = e else { return None };
+            let s = from_nbt(e.get(&"item_stack".into())?)?;
+            Some((s, int(e, "count").max(0) as u32))
+        })
+        .collect()
+}
+
+/// `PackageOrderWithCrafts.CODEC`: `{ordered_stacks, ordered_crafts: [{pattern, count}]}`.
+pub(super) fn order_nbt(o: &Order<ItemStack>) -> Tag {
+    Tag::compound([
+        ("ordered_stacks", stacks_nbt(&o.stacks)),
+        (
+            "ordered_crafts",
+            Tag::List(
+                o.crafts
+                    .iter()
+                    .map(|(p, n)| {
+                        Tag::compound([("pattern", stacks_nbt(p)), ("count", Tag::Int(*n as i32))])
+                    })
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+pub(super) fn order_from_nbt(t: &Tag) -> Option<Order<ItemStack>> {
+    let Tag::Compound(c) = t else { return None };
+    // The legacy form (6.0.0 - 6.0.2): the stacks' list itself.
+    if c.contains_key(&"entries".into()) {
+        return Some(Order::simple(stacks_from(Some(t))));
+    }
+    let crafts = match c.get(&"ordered_crafts".into()) {
+        Some(Tag::List(l)) => l
+            .iter()
+            .filter_map(|e| {
+                let Tag::Compound(e) = e else { return None };
+                Some((
+                    stacks_from(e.get(&"pattern".into())),
+                    int(e, "count").max(0) as u32,
+                ))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    Some(Order {
+        stacks: stacks_from(c.get(&"ordered_stacks".into())),
+        crafts,
+    })
+}
+
+/// `PackageItem.getOrderId` and the rest of its order data; None when it has none.
+pub(super) fn order(stack: &ItemStack) -> Option<OrderData<ItemStack>> {
+    let Some(Tag::Compound(c)) = custom(stack)?.get(&ORDER_KEY.into()) else {
+        return None;
+    };
+    Some(OrderData {
+        order_id: int(c, "order_id"),
+        link_index: int(c, "link_index"),
+        final_link: int(c, "is_final_link") != 0,
+        fragment_index: int(c, "fragment_index"),
+        is_final: int(c, "is_final") != 0,
+        context: c.get(&"order_context".into()).and_then(order_from_nbt),
+    })
+}
+
+/// `PackageItem.setOrder`.
+pub(super) fn set_order(stack: &mut ItemStack, d: &OrderData<ItemStack>) {
+    let mut c = vec![
+        ("order_id", Tag::Int(d.order_id)),
+        ("link_index", Tag::Int(d.link_index)),
+        ("is_final_link", Tag::Byte(i8::from(d.final_link))),
+        ("fragment_index", Tag::Int(d.fragment_index)),
+        ("is_final", Tag::Byte(i8::from(d.is_final))),
+    ];
+    if let Some(o) = &d.context {
+        c.push(("order_context", order_nbt(o)));
+    }
+    set_custom(stack, ORDER_KEY, Some(Tag::compound(c)));
 }
