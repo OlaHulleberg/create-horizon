@@ -468,6 +468,13 @@ filled 81 stone blocks. Create installed and unused, again (`benchmarks/create-p
 headless games left running by earlier proofs were found and stopped first, so earlier rows were measured beside them
 (each with its own control in the same session, so their comparisons stand).
 
+Stock logistics, proven headless: a chest of 64 iron and 10 gold behind a packager, a stock link on the packager (it
+went `linked=true`), a stock ticker and a factory gauge, all put on one network by `/create_debug network … Base`: the
+ticker's stock read "from 1 links: 64 minecraft:iron_ingot, 10 minecraft:gold_ingot"; an order of 40 iron and 5 gold to
+"Home" boxed them (the packager held `create:cardboard_package_10x8 to "Home"`) and left 24 iron and 5 gold in the
+chest; a gauge set to keep 10 gold for "Home" read level 5, not satisfied. Networks are summed only when asked
+(no per-tick work).
+
 Analog lever, smart observer, threshold switch and cuckoo clock, proven headless: an analog lever on the floor clicked
 7 times read `state 7` and the redstone wire beside it `power=7` (the handle drawn tilted); a smart observer facing a
 vault: a hopper put one iron ingot in, the observer went `powered=true` and the lamp behind it lit; a threshold switch
