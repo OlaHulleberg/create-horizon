@@ -2,10 +2,13 @@
 //! `MovementContext`, `AbstractContraptionEntity.tickActors`): drills and saws breaking what
 //! they pass (`BlockBreakingMovementBehaviour`, `DrillMovementBehaviour`,
 //! `SawMovementBehaviour`), harvesters (`HarvesterMovementBehaviour`), ploughs
-//! (`PloughMovementBehaviour`); a contraption's storage taking what they collect
-//! (`MovementBehaviour.collectOrDropItem`, `ItemHandlerHelper.insertItem`); and contraption
-//! controls turning kinds of actor off (`ContraptionControlsMovingInteraction`). Actors tick only
-//! while their contraption moves: a stopped contraption has none.
+//! (`PloughMovementBehaviour`), rollers (`RollerMovementBehaviour`) and portable storage
+//! interfaces (`PortableStorageInterfaceMovement`, with `crate::psi`); a contraption's storage
+//! taking what they collect (`MovementBehaviour.collectOrDropItem`,
+//! `ItemHandlerHelper.insertItem`); and contraption controls turning kinds of actor off
+//! (`ContraptionControlsBlockEntity`, `ContraptionControlsMovement`,
+//! `ContraptionControlsMovingInteraction`). Actors tick only while their contraption moves: a
+//! stopped contraption has none.
 
 use crate::kinetics::Dir;
 
@@ -16,6 +19,11 @@ pub enum Kind {
     Saw,
     Harvester,
     Plough,
+    Roller,
+    /// A portable storage interface (`fluid`: the fluid one).
+    Interface {
+        fluid: bool,
+    },
 }
 
 impl Kind {
@@ -26,6 +34,9 @@ impl Kind {
             crate::Block::MechanicalSaw => Kind::Saw,
             crate::Block::MechanicalHarvester => Kind::Harvester,
             crate::Block::MechanicalPlough => Kind::Plough,
+            crate::Block::MechanicalRoller => Kind::Roller,
+            crate::Block::PortableStorageInterface => Kind::Interface { fluid: false },
+            crate::Block::PortableFluidInterface => Kind::Interface { fluid: true },
             _ => return None,
         })
     }
@@ -34,7 +45,8 @@ impl Kind {
     pub fn reach(self) -> f64 {
         match self {
             Kind::Drill | Kind::Saw => 0.65,
-            Kind::Harvester | Kind::Plough => 0.45,
+            Kind::Harvester | Kind::Plough | Kind::Roller => 0.45,
+            Kind::Interface { .. } => crate::psi::REACH,
         }
     }
 
@@ -45,12 +57,66 @@ impl Kind {
             Kind::Saw => "create:mechanical_saw",
             Kind::Harvester => "create:mechanical_harvester",
             Kind::Plough => "create:mechanical_plough",
+            Kind::Roller => "create:mechanical_roller",
+            Kind::Interface { fluid: false } => "create:portable_storage_interface",
+            Kind::Interface { fluid: true } => "create:portable_fluid_interface",
         }
     }
 
     fn breaks(self) -> bool {
-        !matches!(self, Kind::Harvester)
+        matches!(self, Kind::Drill | Kind::Saw | Kind::Plough | Kind::Roller)
     }
+}
+
+/// `RollerBlockEntity.RollingMode`, its scroll value's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RollingMode {
+    #[default]
+    TunnelPave,
+    StraightFill,
+    WideFill,
+}
+
+impl RollingMode {
+    pub const ALL: [RollingMode; 3] = [
+        RollingMode::TunnelPave,
+        RollingMode::StraightFill,
+        RollingMode::WideFill,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            RollingMode::TunnelPave => "tunnel_pave",
+            RollingMode::StraightFill => "straight_fill",
+            RollingMode::WideFill => "wide_fill",
+        }
+    }
+
+    pub fn read(v: &str) -> Option<RollingMode> {
+        RollingMode::ALL.into_iter().find(|m| m.name() == v)
+    }
+}
+
+/// `CKinetics.rollerFillDepth`'s default.
+pub const ROLLER_FILL_DEPTH: i32 = 12;
+
+/// What a roller finds where it would pave (`tryFill`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fill {
+    /// Already its block (`PASS`).
+    Same,
+    /// May be filled: replaceable, leaves, or without collision and not a portal.
+    Open,
+    /// Solid, a portal, or not loaded (`FAIL`).
+    Blocked,
+}
+
+/// `RollerMovementBehaviour.PaveResult`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pave {
+    Fail,
+    Pass,
+    Success,
 }
 
 /// What a moving contraption carries besides its blocks (`Contraption.actors`, `superglue`,
@@ -60,6 +126,8 @@ pub struct Carried {
     pub actors: Vec<Actor>,
     /// The glue it took, offsets as its blocks.
     pub glue: Vec<crate::glue::Glue>,
+    /// The contraption controls blocks it carries, by their block's offset.
+    pub controls: Vec<([i32; 3], Controls)>,
     pub disabled: Vec<Filter>,
     pub stalled: bool,
 }
@@ -90,6 +158,14 @@ pub struct Actor {
     pub waiting: Option<(i32, [i32; 3])>,
     /// `BreakerId` (`-NEXT_BREAKER_ID.incrementAndGet()`), for its cracks.
     pub breaker_id: i32,
+    /// Its block entity's filter as it started moving (a roller's pave material: a plain block
+    /// item), and a roller's mode.
+    pub filter: Option<String>,
+    pub mode: RollingMode,
+    /// A roller's `ReferencePos`: the block it visited while it breaks what is above it.
+    pub reference: Option<[i32; 3]>,
+    /// An interface's `WorkingPos`.
+    pub interface: crate::psi::Moving,
 }
 
 impl Actor {
@@ -108,6 +184,10 @@ impl Actor {
             breaking: None,
             waiting: None,
             breaker_id,
+            filter: None,
+            mode: RollingMode::TunnelPave,
+            reference: None,
+            interface: crate::psi::Moving::default(),
         }
     }
 }
@@ -123,6 +203,9 @@ pub enum Effect {
     Destroy([i32; 3]),
     /// `HarvesterMovementBehaviour.visitNewPosition` at a block.
     Harvest([i32; 3]),
+    /// A roller's `tryFill`: one item its filter passes out of the contraption's storage, and
+    /// its block (a slab doubled; air with no filter) set there.
+    Pave([i32; 3]),
     /// The plough's hoe used on the top of the block (`useOn`).
     Till([i32; 3]),
 }
@@ -133,6 +216,28 @@ pub trait Probe {
     fn breakable(&self, kind: Kind, pos: [i32; 3]) -> Option<f32>;
     /// Whether the block is a `FallingBlock` (sand, gravel, concrete powder, anvils...).
     fn falling(&self, pos: [i32; 3]) -> bool;
+    /// A roller: how many items the contraption's storage holds that `filter` passes (any item
+    /// for none).
+    fn material(&self, filter: Option<&str>) -> u32 {
+        let _ = filter;
+        0
+    }
+    /// A roller: what it finds filling `pos` with `filter`'s block (air for none).
+    fn fill(&self, pos: [i32; 3], filter: Option<&str>) -> Fill {
+        let _ = (pos, filter);
+        Fill::Blocked
+    }
+    /// A roller: whether `pos` holds `item`'s block, or (`slab`) its slab
+    /// (`getStateToPaveWithAsSlab`).
+    fn is_pave(&self, pos: [i32; 3], item: &str, slab: bool) -> bool {
+        let _ = (pos, item, slab);
+        false
+    }
+    /// A roller: whether `item`'s block is a `FallingBlock`.
+    fn pave_falls(&self, item: &str) -> bool {
+        let _ = item;
+        false
+    }
 }
 
 fn length(v: [f64; 3]) -> f64 {
@@ -176,8 +281,13 @@ pub const CONTROLLED_LOWER: f32 = 1.0 / 128.0;
 /// moved by `translation` (blocks).
 pub fn translated_position(a: &Actor, translation: [f64; 3]) -> [f64; 3] {
     let o = a.facing.offset();
-    [0, 1, 2]
-        .map(|i| f64::from(a.local[i]) + 0.5 + f64::from(o[i]) * a.kind.reach() + translation[i])
+    let mut p = [0, 1, 2]
+        .map(|i| f64::from(a.local[i]) + 0.5 + f64::from(o[i]) * a.kind.reach() + translation[i]);
+    // The roller's drum works the block two below its own (`subtract(0, 2, 0)`).
+    if a.kind == Kind::Roller {
+        p[1] -= 2.0;
+    }
+    p
 }
 
 impl Actor {
@@ -194,9 +304,193 @@ impl Actor {
             || (length(self.relative_motion) > 0.0 && self.first_movement)
     }
 
-    /// `isActive`: not turned off, and not moving away from its facing.
+    /// `isActive`: not turned off, and (a breaker) not moving away from its facing; a roller only
+    /// while it moves the way it faces.
     pub fn active(&self) -> bool {
-        !self.disabled && !pointing_towards(self.relative_motion, self.facing.opposite())
+        match self.kind {
+            Kind::Roller => !self.disabled && pointing_towards(self.relative_motion, self.facing),
+            Kind::Interface { .. } => !self.disabled,
+            _ => !self.disabled && !pointing_towards(self.relative_motion, self.facing.opposite()),
+        }
+    }
+
+    /// An interface's tick (`PortableStorageInterfaceMovement`): `visitNewPosition` when it
+    /// reaches a block, then `tick`, against the stationary interfaces of `world`; `contraption`
+    /// is its contraption's key. Returns whether it stalls the contraption.
+    pub fn tick_interface(
+        &mut self,
+        position: [f64; 3],
+        world: &mut impl crate::psi::World,
+        contraption: [i32; 3],
+    ) -> bool {
+        let grid = position.map(|v| v.floor() as i32);
+        let visit = self.trigger(position, grid);
+        self.position = Some(position);
+        if !self.active() {
+            return false;
+        }
+        if visit {
+            self.interface
+                .visit(world, contraption, grid, position, self.facing);
+            self.first_movement = false;
+        }
+        self.stall = self.interface.tick(
+            world,
+            contraption,
+            position,
+            self.motion,
+            self.facing,
+            self.stall,
+        );
+        self.stall
+    }
+
+    /// `RollerMovementBehaviour.getPositionsToBreak` (no train under it): in tunnel mode, the
+    /// blocks it may break from the one under its drum (only with material to pave it again) to
+    /// its own level, not its pave block nor at drum level its slab. `cleared` were broken this
+    /// tick.
+    fn roller_breaks(
+        &self,
+        visited: [i32; 3],
+        probe: &impl Probe,
+        cleared: &[[i32; 3]],
+    ) -> Vec<[i32; 3]> {
+        let mut out = Vec::new();
+        if self.mode != RollingMode::TunnelPave {
+            return out;
+        }
+        let filter = self.filter.as_deref();
+        let start = if filter.is_some() && probe.material(filter) > 0 {
+            0
+        } else {
+            1
+        };
+        for i in start..=2 {
+            let target = [visited[0], visited[1] + i, visited[2]];
+            if cleared.contains(&target) {
+                continue;
+            }
+            if let Some(item) = filter
+                && ((i == 0 && probe.is_pave(target, item, false))
+                    || (i == 1 && probe.is_pave(target, item, true)))
+            {
+                continue;
+            }
+            if probe.breakable(Kind::Roller, target).is_some() {
+                out.push(target);
+            }
+        }
+        out
+    }
+
+    /// `RollerMovementBehaviour.visitNewPosition`: the hardest block to break holds it (the last
+    /// of equals), else it paves.
+    fn roller_visit(&mut self, pos: [i32; 3], probe: &impl Probe, effects: &mut Vec<Effect>) {
+        let breaks = self.roller_breaks(pos, probe, &[]);
+        let mut best: Option<[i32; 3]> = None;
+        let mut max = -1.0f32;
+        for p in breaks {
+            let h = probe.breakable(Kind::Roller, p).unwrap_or(0.0);
+            if h < max {
+                continue;
+            }
+            max = h;
+            best = Some(p);
+        }
+        let Some(target) = best else {
+            self.pave(pos, probe, effects, &[]);
+            return;
+        };
+        self.reference = Some(pos);
+        self.breaking = Some(Breaking {
+            pos: target,
+            ..Default::default()
+        });
+        self.stall = true;
+    }
+
+    /// `triggerPaver`: in tunnel mode the visited block alone; filling, layer by layer down to
+    /// `ROLLER_FILL_DEPTH` (the wide fill spreading a diamond of radius `(depth + 1) / 2`) until
+    /// one is placed or all are blocked; each place takes an item from the storage. A placed
+    /// block holds it 2 ticks (a falling block lets it fill on).
+    fn pave(
+        &mut self,
+        pos: [i32; 3],
+        probe: &impl Probe,
+        effects: &mut Vec<Effect>,
+        cleared: &[[i32; 3]],
+    ) {
+        let filter = self.filter.as_deref();
+        if self.mode != RollingMode::TunnelPave && filter.is_none() {
+            return;
+        }
+        let mut material = probe.material(filter);
+        let falls = filter.is_some_and(|f| probe.pave_falls(f));
+        let mut result = Pave::Pass;
+        let mut y = 0;
+        while result == Pave::Pass {
+            if y > ROLLER_FILL_DEPTH {
+                break;
+            }
+            let mut layer: Vec<[i32; 3]> = Vec::new();
+            if self.mode == RollingMode::WideFill {
+                let radius = (y + 1) / 2;
+                for i in -radius..=radius {
+                    for j in -radius..=radius {
+                        if i.abs() + j.abs() <= radius {
+                            layer.push([pos[0] + i, pos[1] - y, pos[2] + j]);
+                        }
+                    }
+                }
+            } else {
+                layer.push([pos[0], pos[1] - y, pos[2]]);
+            }
+            let mut blocked = true;
+            let mut placed = false;
+            for p in layer {
+                let found = if cleared.contains(&p) {
+                    if filter.is_none() {
+                        Fill::Same
+                    } else {
+                        Fill::Open
+                    }
+                } else {
+                    probe.fill(p, filter)
+                };
+                result = match found {
+                    Fill::Same => Pave::Pass,
+                    Fill::Blocked => Pave::Fail,
+                    Fill::Open if material == 0 => Pave::Fail,
+                    Fill::Open => {
+                        material -= 1;
+                        effects.push(Effect::Pave(p));
+                        Pave::Success
+                    }
+                };
+                if result != Pave::Fail {
+                    blocked = false;
+                }
+                if result == Pave::Success {
+                    placed = true;
+                }
+            }
+            if placed {
+                result = Pave::Success;
+            } else if !blocked || y == 0 {
+                result = Pave::Pass;
+            }
+            if result == Pave::Success && falls {
+                result = Pave::Pass;
+            }
+            if result != Pave::Pass || self.mode == RollingMode::TunnelPave {
+                break;
+            }
+            y += 1;
+        }
+        if result == Pave::Success {
+            self.waiting = Some((2, pos));
+            self.stall = true;
+        }
     }
 
     /// One tick of `tickActors` for this actor at `position` (the contraption's motion done);
@@ -235,6 +529,10 @@ impl Actor {
     ) {
         if self.kind == Kind::Harvester {
             effects.push(Effect::Harvest(pos));
+            return;
+        }
+        if self.kind == Kind::Roller {
+            self.roller_visit(pos, probe, effects);
             return;
         }
         // BlockBreakingMovementBehaviour: a block it may break holds the contraption.
@@ -303,7 +601,10 @@ impl Actor {
             self.stall = false;
             return;
         };
-        let speed = break_speed(self.motion, self.disabled, lower);
+        let mut speed = break_speed(self.motion, self.disabled, lower);
+        if self.kind == Kind::Roller {
+            speed = (speed * 1.5).clamp(1.0 / 128.0, 16.0);
+        }
         b.progress += ((speed / hardness) as i32).clamp(1, 10 - b.progress);
         effects.push(Effect::Hit(b.pos));
         if b.progress >= 10 {
@@ -323,6 +624,17 @@ impl Actor {
                 self.waiting = Some((10, origin));
                 self.stall = true;
             }
+            // The roller breaks the rest of what it found at once, then paves there.
+            if let Some(reference) = self.reference.take() {
+                let mut cleared = vec![top];
+                for other in self.roller_breaks(reference, probe, &cleared) {
+                    if other != origin {
+                        effects.push(Effect::Destroy(other));
+                        cleared.push(other);
+                    }
+                }
+                self.pave(reference, probe, effects, &cleared);
+            }
             return;
         }
         b.ticks_until = (hardness / speed) as i32;
@@ -335,6 +647,8 @@ impl Actor {
         if let Some(b) = self.breaking.take() {
             effects.push(Effect::Crack(b.pos, -1));
         }
+        // An interface's `reset`.
+        self.interface.working = None;
         self.stall = false;
     }
 }
@@ -607,6 +921,122 @@ where
 
 /// A contraption controls' filter: an item, or none (every actor).
 pub type Filter = Option<String>;
+
+/// Create's `create:contraption_controlled` item tag (its generated data): the items a
+/// contraption controls' filter takes (`ContraptionControlsBlockEntity`'s predicate).
+pub const CONTRAPTION_CONTROLLED: [&str; 23] = [
+    "create:portable_fluid_interface",
+    "create:mechanical_drill",
+    "create:mechanical_saw",
+    "create:deployer",
+    "create:portable_storage_interface",
+    "create:redstone_contact",
+    "create:mechanical_harvester",
+    "create:mechanical_plough",
+    "create:mechanical_roller",
+    "create:andesite_funnel",
+    "create:brass_funnel",
+    "create:peculiar_bell",
+    "create:haunted_bell",
+    "create:andesite_door",
+    "create:brass_door",
+    "create:copper_door",
+    "create:train_door",
+    "create:framed_glass_door",
+    "minecraft:bell",
+    "minecraft:campfire",
+    "minecraft:soul_campfire",
+    "minecraft:dispenser",
+    "minecraft:dropper",
+];
+
+/// A contraption controls block (`ContraptionControlsBlockEntity`): its filter, `disabled`
+/// (`Disabled`) and `powered` (`Powered`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Controls {
+    pub filter: Filter,
+    pub disabled: bool,
+    pub powered: bool,
+}
+
+impl Controls {
+    /// `useWithoutItem`: a click turns it off or on; whether it is now on.
+    pub fn click(&mut self) -> bool {
+        self.disabled = !self.disabled;
+        !self.disabled
+    }
+
+    /// `updatePoweredState`: a change of signal turns it off while powered, on again after;
+    /// whether anything changed.
+    pub fn powered(&mut self, powered: bool) -> bool {
+        if self.powered == powered {
+            return false;
+        }
+        self.powered = powered;
+        self.disabled = powered;
+        true
+    }
+}
+
+/// `AngleHelper.horizontalAngle`: south 0, north 180, and x facings turned back.
+fn horizontal_angle(facing: Dir) -> f64 {
+    match facing {
+        Dir::South => 0.0,
+        Dir::West => -90.0,
+        Dir::North => 180.0,
+        Dir::East => -270.0,
+        _ => 0.0,
+    }
+}
+
+/// `VecHelper.rotateCentered(voxelSpace(x, y, z), deg, Y)`: a point in pixels turned about the
+/// block's centre (`x cos + z sin`, `z cos - x sin`, with `Mth`'s float sine).
+fn rotate_centred(px: [f64; 3], deg: f64) -> [f64; 3] {
+    let angle = (deg / 180.0 * std::f64::consts::PI) as f32;
+    let (s, c) = (f64::from(angle.sin()), f64::from(angle.cos()));
+    let (x, y, z) = (px[0] / 16.0 - 0.5, px[1] / 16.0, px[2] / 16.0 - 0.5);
+    [x * c + z * s + 0.5, y, z * c - x * s + 0.5]
+}
+
+/// `ContraptionControlsBlockEntity.ControlsSlot`: the filter slot on top of the controls, and
+/// the distance a click on it is within (`scale / 2`, scale .508).
+pub fn controls_slot(facing: Dir) -> ([f64; 3], f64) {
+    (
+        rotate_centred([8.0, 14.0, 5.5], horizontal_angle(facing)),
+        0.508 / 2.0,
+    )
+}
+
+/// `RollerBlockEntity.RollerValueBox`: the filter (`filter`, 3 px one way) or mode slot on top of
+/// a roller, and the distance a click on it is within (`scale / 3`).
+pub fn roller_slot(facing: Dir, filter: bool) -> ([f64; 3], f64) {
+    let h = if filter { 3.0 } else { -3.0 };
+    (
+        rotate_centred([8.0 + h, 15.5, 11.0], horizontal_angle(facing) + 180.0),
+        0.5 / 3.0,
+    )
+}
+
+/// `Contraption.startMoving` with `disableActorOnStart`: the actor kinds turned off as a
+/// contraption starts, from its controls set off (each filter once), applied to its actors.
+pub fn start_moving(carried: &mut Carried, controls: &[Controls]) {
+    carried.disabled.clear();
+    for c in controls.iter().filter(|c| c.disabled) {
+        if !carried.disabled.contains(&c.filter) {
+            carried.disabled.push(c.filter.clone());
+        }
+    }
+    let mut effects = Vec::new();
+    for f in carried.disabled.clone() {
+        set_active(&mut carried.actors, &f, false, &mut effects);
+    }
+}
+
+/// `ContraptionControlsMovement.stopMoving`: a controls block put back is off when its filter's
+/// kind, or everything, is off on the contraption.
+pub fn stays_disabled(disabled: &[Filter], filter: &Filter) -> bool {
+    disabled.contains(filter) || disabled.contains(&None)
+}
 
 /// `ContraptionControlsMovingInteraction.handlePlayerInteraction` (not an elevator): the list
 /// of turned-off actor kinds changes for a click on controls with `filter`; `kinds` are the
@@ -930,5 +1360,253 @@ mod tests {
         assert!(actors[0].disabled && !actors[1].disabled);
         set_active(&mut actors, &None, true, &mut effects);
         assert!(!actors[0].disabled);
+    }
+
+    #[test]
+    fn controls_set_off_turn_their_kind_off_as_the_contraption_starts() {
+        let drill = Some("create:mechanical_drill".to_owned());
+        let mut carried = Carried {
+            actors: vec![
+                Actor::new([0, 0, 0], Kind::Drill, Dir::East, 0),
+                Actor::new([0, 1, 0], Kind::Roller, Dir::East, 0),
+            ],
+            ..Default::default()
+        };
+        let mut c = Controls {
+            filter: drill.clone(),
+            ..Default::default()
+        };
+        // A click turns it off, redstone keeps it off while powered and turns it on after.
+        assert!(!c.click());
+        assert!(!c.powered(false));
+        assert!(c.powered(true) && c.disabled);
+        assert!(c.powered(false) && !c.disabled);
+        c.click();
+        let on = Controls::default();
+        start_moving(&mut carried, &[c.clone(), c.clone(), on]);
+        assert_eq!(carried.disabled, vec![drill.clone()]);
+        assert!(carried.actors[0].disabled && !carried.actors[1].disabled);
+        // Put back: off while its kind, or everything, is off.
+        assert!(stays_disabled(&carried.disabled, &drill));
+        assert!(!stays_disabled(&carried.disabled, &None));
+        assert!(stays_disabled(&[None], &drill));
+    }
+
+    #[test]
+    fn value_slots_turn_with_the_block() {
+        let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-6);
+        assert!(near(
+            controls_slot(Dir::South).0,
+            [0.5, 14.0 / 16.0, 5.5 / 16.0]
+        ));
+        assert!(near(
+            controls_slot(Dir::North).0,
+            [0.5, 14.0 / 16.0, 10.5 / 16.0]
+        ));
+        assert!(near(
+            controls_slot(Dir::East).0,
+            [5.5 / 16.0, 14.0 / 16.0, 0.5]
+        ));
+        assert!(near(
+            controls_slot(Dir::West).0,
+            [10.5 / 16.0, 14.0 / 16.0, 0.5]
+        ));
+        // A roller facing north: turned 0 from (11, 15.5, 11); its mode box 6 px to the west.
+        assert!(near(
+            roller_slot(Dir::North, true).0,
+            [11.0 / 16.0, 15.5 / 16.0, 11.0 / 16.0]
+        ));
+        assert!(near(
+            roller_slot(Dir::North, false).0,
+            [5.0 / 16.0, 15.5 / 16.0, 11.0 / 16.0]
+        ));
+        assert!(near(
+            roller_slot(Dir::South, true).0,
+            [5.0 / 16.0, 15.5 / 16.0, 5.0 / 16.0]
+        ));
+    }
+
+    #[test]
+    fn the_controlled_items_are_create_s_tag() {
+        let tag = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../../../src/generated/resources/data/create/tags/item/contraption_controlled.json",
+        );
+        let Ok(text) = std::fs::read_to_string(tag) else {
+            return;
+        };
+        let listed: Vec<&str> = text
+            .split('"')
+            .filter(|s| s.contains(':') && !s.contains(' '))
+            .collect();
+        assert_eq!(listed, CONTRAPTION_CONTROLLED);
+    }
+
+    /// A roller's world: blocks by position (hardness, falling), the pave block's positions,
+    /// and the storage's material.
+    struct Ground {
+        solid: HashMap<[i32; 3], f32>,
+        paved: std::cell::RefCell<Vec<[i32; 3]>>,
+        material: u32,
+        loaded_below: i32,
+    }
+
+    impl Probe for Ground {
+        fn breakable(&self, kind: Kind, pos: [i32; 3]) -> Option<f32> {
+            assert_eq!(kind, Kind::Roller);
+            if self.paved.borrow().contains(&pos) {
+                return Some(1.5);
+            }
+            self.solid.get(&pos).copied()
+        }
+        fn falling(&self, _: [i32; 3]) -> bool {
+            false
+        }
+        fn material(&self, filter: Option<&str>) -> u32 {
+            assert_eq!(filter, Some("minecraft:cobblestone"));
+            self.material - self.paved.borrow().len() as u32
+        }
+        fn fill(&self, pos: [i32; 3], _: Option<&str>) -> Fill {
+            if pos[1] < self.loaded_below {
+                Fill::Blocked
+            } else if self.paved.borrow().contains(&pos) {
+                Fill::Same
+            } else if self.solid.contains_key(&pos) {
+                Fill::Blocked
+            } else {
+                Fill::Open
+            }
+        }
+        fn is_pave(&self, pos: [i32; 3], _: &str, slab: bool) -> bool {
+            !slab && self.paved.borrow().contains(&pos)
+        }
+    }
+
+    /// A roller facing east pushed east at 0.125 a tick, its block at y 2 (paving y 0); the
+    /// world takes each effect.
+    fn roll(ground: &mut Ground, mode: RollingMode, ticks: usize) -> Vec<Effect> {
+        let mut a = Actor::new([0, 2, 0], Kind::Roller, Dir::East, -1);
+        a.filter = Some("minecraft:cobblestone".into());
+        a.mode = mode;
+        let mut offset = 0.0;
+        let mut stalled = false;
+        let mut all = Vec::new();
+        for _ in 0..ticks {
+            if !stalled {
+                offset += 0.125;
+            }
+            let mut effects = Vec::new();
+            let pos = translated_position(&a, [offset, 0.0, 0.0]);
+            stalled = a.tick(pos, Dir::East, CONTROLLED_LOWER, ground, &mut effects);
+            for e in &effects {
+                match *e {
+                    Effect::Destroy(p) => {
+                        ground.solid.remove(&p);
+                        ground.paved.borrow_mut().retain(|q| *q != p);
+                    }
+                    Effect::Pave(p) => ground.paved.borrow_mut().push(p),
+                    _ => {}
+                }
+            }
+            all.extend(effects);
+        }
+        all
+    }
+
+    #[test]
+    fn a_roller_paves_under_its_drum_and_clears_its_tunnel() {
+        // Tunnel mode over a gap at x 2 and stone in the way at x 4 (drum level y 1) and y 2.
+        let mut ground = Ground {
+            solid: HashMap::from([([4, 1, 0], 1.5), ([4, 2, 0], 1.5)]),
+            paved: Default::default(),
+            material: 64,
+            loaded_below: -100,
+        };
+        // The ground of x 1..5 is solid except x 2.
+        for x in [1, 3, 4, 5, 6] {
+            ground.solid.insert([x, 0, 0], 0.6);
+        }
+        let effects = roll(&mut ground, RollingMode::TunnelPave, 300);
+        let paved: Vec<[i32; 3]> = effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Pave(p) => Some(*p),
+                _ => None,
+            })
+            .collect();
+        let destroyed: Vec<[i32; 3]> = effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Destroy(p) => Some(*p),
+                _ => None,
+            })
+            .collect();
+        // With material, each ground block is broken and paved again; the gap is paved; the
+        // stone at drum level and its own level is broken.
+        assert!(paved.contains(&[2, 0, 0]), "{paved:?}");
+        assert!(destroyed.contains(&[4, 1, 0]) && destroyed.contains(&[4, 2, 0]));
+        assert!(destroyed.contains(&[3, 0, 0]) && paved.contains(&[3, 0, 0]));
+        assert!(ground.paved.borrow().contains(&[4, 0, 0]));
+    }
+
+    #[test]
+    fn rollers_fill_down_straight_or_wide() {
+        // Nothing under it down to y -3 (solid below, at y -4).
+        let mut ground = Ground {
+            solid: HashMap::new(),
+            paved: Default::default(),
+            material: 1000,
+            loaded_below: -3,
+        };
+        let effects = roll(&mut ground, RollingMode::StraightFill, 40);
+        let at_x1: Vec<[i32; 3]> = effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Pave(p) if p[0] == 1 => Some(*p),
+                _ => None,
+            })
+            .collect();
+        // One layer a visit from the top down (filled layers pass), each placing holding it 2
+        // ticks and visiting again, down to the blocked one.
+        assert_eq!(at_x1, vec![[1, 0, 0], [1, -1, 0], [1, -2, 0], [1, -3, 0]]);
+        // Wide: the layers below the first spread a plus of five (radius `(depth + 1) / 2`).
+        let mut ground = Ground {
+            solid: HashMap::new(),
+            paved: Default::default(),
+            material: 1000,
+            loaded_below: -2,
+        };
+        let effects = roll(&mut ground, RollingMode::WideFill, 20);
+        let at_x1: Vec<[i32; 3]> = effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Pave(p) if p[1] < 0 || p[0] == 1 => Some(*p),
+                _ => None,
+            })
+            .take(11)
+            .collect();
+        assert_eq!(
+            at_x1,
+            vec![
+                [1, 0, 0],
+                [0, -1, 0],
+                [1, -1, -1],
+                [1, -1, 0],
+                [1, -1, 1],
+                [2, -1, 0],
+                [0, -2, 0],
+                [1, -2, -1],
+                [1, -2, 0],
+                [1, -2, 1],
+                [2, -2, 0]
+            ]
+        );
+        // No material: nothing.
+        let mut ground = Ground {
+            solid: HashMap::new(),
+            paved: Default::default(),
+            material: 0,
+            loaded_below: -2,
+        };
+        assert!(roll(&mut ground, RollingMode::StraightFill, 40).is_empty());
     }
 }

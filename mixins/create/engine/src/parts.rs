@@ -68,6 +68,10 @@ pub struct StateInfo {
     pub wall: bool,
     pub size: Option<crate::whistle::Size>,
     pub extender: Option<crate::whistle::Shape>,
+    /// A controller rail's straight `shape`, `backwards` and `power`.
+    pub rail: Option<crate::rail::Shape>,
+    pub backwards: bool,
+    pub power: u8,
 }
 
 impl StateInfo {
@@ -112,7 +116,10 @@ impl StateInfo {
                     s.track = crate::track::TrackShape::read(v);
                     s.belt_funnel = crate::funnel::BeltShape::read(v);
                     s.extender = crate::whistle::Shape::read(v);
+                    s.rail = crate::rail::Shape::read(v);
                 }
+                "backwards" => s.backwards = v == "true",
+                "power" => s.power = v.parse().unwrap_or(0),
                 "enabled" => s.enabled = v == "true",
                 "wall" => s.wall = v == "true",
                 "size" => s.size = crate::whistle::Size::read(v),
@@ -535,6 +542,9 @@ pub fn is_kinetic(block: Block) -> bool {
         wall: false,
         size: None,
         extender: None,
+        rail: None,
+        backwards: false,
+        power: 0,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

@@ -10,9 +10,9 @@ pub use crate::equipment::fraction_to_redstone_level;
 /// `ItemVaultBlock`, `ToolboxBlock`, `DepotBlock`, `EjectorBlock`, `BasinBlock`,
 /// `FrogportBlock`, `PostboxBlock`, `PackagerBlock`, `ItemDrainBlock`, `SpoutBlock`,
 /// `FluidTankBlock`, `BacktankBlock`, `GaugeBlock`, `SequencedGearshiftBlock`,
-/// `BlazeBurnerBlock`, `LitBlazeBurnerBlock`, `SignalBlock` and `StationBlock`. (Create's
-/// portable storage interfaces, controller rail, redstone requester, creative fluid tank and
-/// lectern controller have one too, and are not ported.)
+/// `BlazeBurnerBlock`, `LitBlazeBurnerBlock`, `SignalBlock`, `StationBlock`,
+/// `PortableStorageInterfaceBlock` (15 while connected) and `ControllerRailBlock` (its power).
+/// (Create's redstone requester and lectern controller have one too, and are not ported.)
 pub fn has_analog_output(b: Block) -> bool {
     matches!(
         b,
@@ -37,6 +37,9 @@ pub fn has_analog_output(b: Block) -> bool {
             | Block::LitBlazeBurner
             | Block::TrackSignal
             | Block::TrackStation
+            | Block::PortableStorageInterface
+            | Block::PortableFluidInterface
+            | Block::ControllerRail
     ) || crate::dye::is_toolbox(b)
         || crate::dye::is_postbox(b)
 }

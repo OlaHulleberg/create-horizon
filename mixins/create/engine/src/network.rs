@@ -80,6 +80,8 @@ pub struct Location {
 pub enum Mark {
     Station(usize),
     Signal(usize),
+    /// A track observer (`TrackObserver`), by its index in `Network::observers`.
+    Observer(usize),
 }
 
 /// What a signal block is (`SignalBlock.TYPE`): an entry signal holds trains while the section
@@ -132,6 +134,8 @@ pub struct Network {
     pub stations: Vec<([i32; 3], Location)>,
     /// Signal boundaries (`SignalBoundary`), each where its track block's centre is.
     pub signals: Vec<Boundary>,
+    /// Track observers bound to the graph: their block and where on the piece's even edge.
+    pub observers: Vec<([i32; 3], Location)>,
     /// Per edge, what stands on it, by how far along it.
     pub marks: Vec<Vec<(f64, Mark)>>,
     /// Signal sections: each piece of track's first slot (its stretches between signals are
@@ -376,6 +380,99 @@ impl Network {
         net.sections();
         net.chains();
         net
+    }
+
+    /// Track observers on the track beside them (`TrackTargetingBehaviour`, as stations are
+    /// placed), each on its piece's even edge; they split no section.
+    pub fn bind_observers(
+        &mut self,
+        tracks: &HashMap<[i32; 3], TrackShape>,
+        observers: &[[i32; 3]],
+    ) {
+        for &pos in observers {
+            let Some(&loc) = target_track(tracks, pos).and_then(|t| self.blocks.get(&t)) else {
+                continue;
+            };
+            let at = if loc.edge.is_multiple_of(2) {
+                loc
+            } else {
+                Location {
+                    edge: loc.edge ^ 1,
+                    position: self.graph.length(loc.edge) - loc.position,
+                }
+            };
+            let mark = Mark::Observer(self.observers.len());
+            self.observers.push((pos, at));
+            self.mark(at, mark);
+        }
+        for m in &mut self.marks {
+            m.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+    }
+
+    /// Whether the train whose wheel points are `points` (front first, all facing its front)
+    /// stands over the place `at` (on an even edge): between its first and last point
+    /// (`frontSignalListener` added it, `backSignalListener` not yet taken it off). Each stretch
+    /// between neighbouring points is followed from the back one up to 8 edges on.
+    pub fn covers(&self, points: &[Point], at: Location) -> bool {
+        let g = &self.graph;
+        // `at` along edge `e`, or None when it is on another piece.
+        let along = |e: usize| -> Option<f64> {
+            if e == at.edge {
+                Some(at.position)
+            } else if e == at.edge ^ 1 {
+                Some(g.length(e) - at.position)
+            } else {
+                None
+            }
+        };
+        for w in points.windows(2) {
+            let (front, back) = (w[0], w[1]);
+            if front.edge == back.edge {
+                if along(back.edge).is_some_and(|p| p >= back.position && p <= front.position) {
+                    return true;
+                }
+                continue;
+            }
+            if along(back.edge).is_some_and(|p| p >= back.position) {
+                return true;
+            }
+            if along(front.edge).is_some_and(|p| p <= front.position) {
+                return true;
+            }
+            // The edges between: the shortest way (in edges) from the back's edge to the front's.
+            let mut parent: Vec<(usize, usize)> = vec![(back.edge, usize::MAX)];
+            let mut frontier = vec![back.edge];
+            let mut found = None;
+            'search: for _ in 0..8 {
+                let mut next = Vec::new();
+                for &e in &frontier {
+                    for n in g.onward_iter(e) {
+                        if parent.iter().any(|(x, _)| *x == n) {
+                            continue;
+                        }
+                        parent.push((n, e));
+                        if n == front.edge {
+                            found = Some(e);
+                            break 'search;
+                        }
+                        next.push(n);
+                    }
+                }
+                frontier = next;
+            }
+            let mut e = found.unwrap_or(back.edge);
+            while e != back.edge {
+                if along(e).is_some() {
+                    return true;
+                }
+                e = parent
+                    .iter()
+                    .find(|(x, _)| *x == e)
+                    .map_or(back.edge, |p| p.1);
+            }
+        }
+        false
     }
 
     fn add_node(&mut self, k: Key) -> usize {
