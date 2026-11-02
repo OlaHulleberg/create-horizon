@@ -72,6 +72,8 @@ pub struct StateInfo {
     pub rail: Option<crate::rail::Shape>,
     pub backwards: bool,
     pub power: u8,
+    /// A cart assembler's `rail_type`.
+    pub rail_type: Option<crate::cart::RailType>,
 }
 
 impl StateInfo {
@@ -119,6 +121,7 @@ impl StateInfo {
                     s.rail = crate::rail::Shape::read(v);
                 }
                 "backwards" => s.backwards = v == "true",
+                "rail_type" => s.rail_type = crate::cart::RailType::read(v),
                 "power" => s.power = v.parse().unwrap_or(0),
                 "enabled" => s.enabled = v == "true",
                 "wall" => s.wall = v == "true",
@@ -545,6 +548,7 @@ pub fn is_kinetic(block: Block) -> bool {
         rail: None,
         backwards: false,
         power: 0,
+        rail_type: None,
     };
     parts(block, &probe, &Settings::default())[0].is_some()
 }

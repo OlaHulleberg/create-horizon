@@ -484,6 +484,7 @@ fn has_state(block: Block) -> bool {
             | Block::ContraptionControls
             | Block::MechanicalRoller
             | Block::ControllerRail
+            | Block::CartAssembler
             | Block::Nozzle
     ) || crate::display::is_nixie(block)
         || is_plumbing(block)
@@ -589,7 +590,8 @@ pub struct BeltBreak {
     pub shaft: Option<crate::kinetics::Axis>,
 }
 
-/// Blocks that follow redstone power (`powered`): Create's split shafts.
+/// Blocks that follow redstone power (`powered`): Create's split shafts, and the cart assembler
+/// (`CartAssemblerBlock.neighborChanged`).
 fn follows_power(block: Block) -> bool {
     matches!(
         block,
@@ -600,6 +602,7 @@ fn follows_power(block: Block) -> bool {
             | Block::SmartChute
             | Block::TrackSignal
             | Block::SteamWhistle
+            | Block::CartAssembler
     )
 }
 
