@@ -257,6 +257,10 @@ pub struct Dimension {
     /// change), and the moving ones with what they carry (the only ones that tick).
     pub piston_checks: Vec<[i32; 3]>,
     pub pistons: HashMap<[i32; 3], Moving>,
+    /// Super glue areas (`SuperGlueEntity`), saved with the column holding each.
+    pub glue: Vec<crate::glue::Glue>,
+    /// Stickers whose neighbour changed: their power is read again after the level's tick.
+    pub sticker_checks: Vec<[i32; 3]>,
     /// Clockwork bearings, rope pulleys, elevators and their contacts (`lifts.rs`).
     pub lifts: crate::lifts::Lifts,
     /// Display links, the nixie tubes and display boards they write to (`display.rs`).
@@ -342,6 +346,8 @@ pub struct Moving {
     pub blocks: Vec<([i32; 3], u32)>,
     pub offset: f32,
     pub range: i32,
+    /// Its actors, glue and turned-off actor kinds (`Contraption`).
+    pub carried: crate::actors::Carried,
 }
 
 /// A mechanical pump: the ends behind and in front of it, found when its pipes changed, and the
@@ -429,6 +435,7 @@ fn has_state(block: Block) -> bool {
             | Block::AnalogLever
             | Block::ContentObserver
             | Block::StockpileSwitch
+            | Block::Sticker
     ) || crate::display::is_nixie(block)
 }
 
@@ -1696,6 +1703,7 @@ impl CreateWorld {
                 .diode_checks
                 .push((pos, crate::diode::BLOCK_DELAY)),
             Some(Block::RoseQuartzLamp) => self.dims[dim].lamp_checks.push(pos),
+            Some(Block::Sticker) => self.dims[dim].sticker_checks.push(pos),
             Some(Block::ElevatorContact | Block::RedstoneContact) => {
                 self.dims[dim].lifts.contact_checks.push(pos)
             }

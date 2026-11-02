@@ -1,12 +1,14 @@
 //! Create 6.0.11's rules, translated from its MIT Java into plain Rust with no game types,
 //! so every rule is unit-tested here and the game glue (`runtime.rs`) stays thin.
 
+pub mod actors;
 pub mod arm;
 pub mod basin;
 pub mod belt;
 pub mod bezier;
 pub mod board;
 pub mod burner;
+pub mod cart;
 pub mod chain;
 pub mod chute;
 pub mod client;
@@ -32,6 +34,7 @@ pub mod funnel;
 pub mod gantry;
 pub mod gauge;
 pub mod generated;
+pub mod glue;
 pub mod graph;
 pub mod kinetics;
 pub mod lamp;

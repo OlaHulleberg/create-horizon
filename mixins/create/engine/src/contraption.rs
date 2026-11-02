@@ -7,7 +7,7 @@ use std::collections::{HashSet, VecDeque};
 
 /// A block as the search reads it: its id, whether it is in `create:windmill_sails` (and so a
 /// `SailBlock` and its `facing`), whether it is slime or honey, and whether it can move at all.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Found {
     pub state: u32,
     pub sail_facing: Option<Dir>,
@@ -15,6 +15,22 @@ pub struct Found {
     pub movable: bool,
     /// A linear chassis (`LinearChassisBlock`) and what it holds on to.
     pub chassis: Option<Chassis>,
+    /// Its faces super glue holds to the block beside them (`SuperGlueEntity.isGlued`, a
+    /// `Dir::bit` each).
+    pub glued: u8,
+    /// An extended sticker's facing (`StickerBlock.EXTENDED`): it takes the block it faces.
+    pub sticker: Option<Dir>,
+}
+
+/// `Contraption.moveBlock`'s extended sticker: the block it faces joins the frontier (an
+/// unmovable one there then refuses the structure).
+pub(crate) fn sticker_target(pos: [i32; 3], f: &Found) -> Option<[i32; 3]> {
+    f.sticker.map(|d| add(pos, d.offset()))
+}
+
+/// `faceHasGlue`: glue on this face of the block takes its neighbour.
+pub(crate) fn glued_toward(f: &Found, d: Dir) -> bool {
+    f.glued & d.bit() != 0
 }
 
 /// A linear chassis as the search reads it: its kind (`sameKind`: linear or secondary), axis,
@@ -185,6 +201,9 @@ pub fn gather_from(
                 }
             }
         }
+        if let Some(p) = sticker_target(pos, &found).filter(|p| !visited.contains(p) && !skip(*p)) {
+            frontier.push_back(p);
+        }
         for d in Dir::ALL {
             let next = add(pos, d.offset());
             if visited.contains(&next) || skip(next) {
@@ -196,7 +215,10 @@ pub fn gather_from(
             if !other.movable {
                 continue;
             }
-            if sticks(&found, &other) || attached_towards(&other, d.opposite()) {
+            if sticks(&found, &other)
+                || attached_towards(&other, d.opposite())
+                || glued_toward(&found, d)
+            {
                 frontier.push_back(next);
             }
         }
@@ -244,6 +266,10 @@ pub fn gather_gantry(
                 }
             }
         }
+        if let Some(p) = sticker_target(pos, &found).filter(|p| !visited.contains(p) && *p != shaft)
+        {
+            frontier.push_back(p);
+        }
         for d in Dir::ALL {
             let next = add(pos, d.offset());
             if visited.contains(&next) || next == shaft {
@@ -252,7 +278,11 @@ pub fn gather_gantry(
             let Some(other) = at(next) else {
                 continue;
             };
-            if other.movable && (sticks(&found, &other) || attached_towards(&other, d.opposite())) {
+            if other.movable
+                && (sticks(&found, &other)
+                    || attached_towards(&other, d.opposite())
+                    || glued_toward(&found, d))
+            {
                 frontier.push_back(next);
             }
         }
@@ -400,6 +430,7 @@ mod tests {
                 sticky: None,
                 movable: true,
                 chassis: (p[1] == 0 || p[1] == 1).then_some(chassis),
+                ..Default::default()
             })
         };
         let reach = chassis_reach([0, 0, 0], chassis, None, &at);
@@ -423,6 +454,7 @@ mod tests {
             sticky: None,
             movable: true,
             chassis: None,
+            ..Default::default()
         }
     }
 
@@ -442,6 +474,7 @@ mod tests {
                 sticky: None,
                 movable: true,
                 chassis: None,
+                ..Default::default()
             }),
             _ => None,
         };
