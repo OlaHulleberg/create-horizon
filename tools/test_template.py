@@ -557,9 +557,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 49) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 53) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 49;
+        let empty = state.0 == 0 || state.0 == 53;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -568,10 +568,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 49 is a water source.
+    /// State 53 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 49 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 53 { FluidKind::Water } else { FluidKind::Empty })
     }
 }
 pub struct Res;
@@ -734,7 +734,19 @@ impl Behaviours {
             ("waterlogged".to_owned(), "false".to_owned())]) });
     }
     states.push(BlockState { name: "create:creative_crate".into(), properties: props("facing", "down") });
-    // 49: a water source; 50: a target block at power 7.
+    // 49: a closed fluid valve facing up (its shaft along x, its pipe along z); 50: a
+    // small powered steam whistle on the floor facing north; 51: a creative fluid tank; 52: a
+    // hose pulley facing south (its shaft out west, its pipe side east).
+    states.push(BlockState { name: "create:fluid_valve".into(), properties: BTreeMap::from([
+        ("axis_along_first".to_owned(), "true".to_owned()), ("enabled".to_owned(), "false".to_owned()),
+        ("facing".to_owned(), "up".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
+    states.push(BlockState { name: "create:steam_whistle".into(), properties: BTreeMap::from([
+        ("facing".to_owned(), "north".to_owned()), ("powered".to_owned(), "true".to_owned()),
+        ("size".to_owned(), "small".to_owned()), ("wall".to_owned(), "false".to_owned())]) });
+    states.push(BlockState { name: "create:creative_fluid_tank".into(), properties: BTreeMap::from([
+        ("bottom".to_owned(), "true".to_owned()), ("shape".to_owned(), "window".to_owned()), ("top".to_owned(), "true".to_owned())]) });
+    states.push(BlockState { name: "create:hose_pulley".into(), properties: props("facing", "south") });
+    // 53: a water source; 54: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
@@ -804,7 +816,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 26);
+    assert_eq!(commands.len(), 27);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -1012,7 +1024,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 49), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 53), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1101,7 +1113,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 50);
+    game.world.blocks.insert([79, 0, 80], 54);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1467,6 +1479,80 @@ impl Behaviours {
     let taken = create_decor::crate_extract(&game, Some("minecraft:stone"), |_| true, 64);
     assert_eq!(taken.map(|s| (s.item.to_string(), s.count)), Some(("minecraft:stone".to_owned(), 64)));
     game.aim = None;
+
+    // Phase 5's plumbing, at x 600 and on.
+    // A whistle (50, powered) on a tank (15) at (600, 0, 600) over a kindled burner (43): the
+    // tank becomes a boiler, the burner heats it and the whistle sounds, high (small) at pitch 0,
+    // its chiff first.
+    for (pos, state) in [([600, -1, 600], 43), ([600, 0, 600], 15), ([600, 1, 600], 50)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, at(pos), BlockStateId(0), BlockStateId(state));
+    }
+    game.native_level_tick_post("minecraft:overworld");
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(game.said.iter().any(|l| l.contains("playsound create:chiff record @a 600.5 1.5 600.5 0.175 1.75")), "{:?}", game.said);
+    assert!(game.said.iter().any(|l| l.contains("playsound create:whistle_high record @a 600.5 1.5 600.5 1 1")), "{:?}", game.said);
+    let mut ran = false;
+    game.native_perform_command(&player, "create_debug fluid_state 600 1 600", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("whistle at 600 1 600: pitch 0, sounding true"));
+    // Sounding, it starts its loop again only when it ran out: nothing more for a while.
+    let before = game.said.len();
+    for _ in 0..10 { game.native_level_tick_post("minecraft:overworld"); }
+    assert!(!game.said[before..].iter().any(|l| l.contains("playsound")), "{:?}", &game.said[before..]);
+    // The burner goes: silent, its loop stopped.
+    game.world.blocks.insert([600, -1, 600], 0);
+    level.native_block_changed(LevelDimension::Overworld, at([600, -1, 600]), BlockStateId(43), BlockStateId(0));
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(game.said.iter().any(|l| l.ends_with("stopsound @a record create:whistle_high")), "{:?}", &game.said[before..]);
+    // A creative fluid tank (51) at (620, 0, 600): a water bucket sets it to water, kept; it is
+    // saved with its column and drawn as a full tank.
+    game.world.blocks.insert([620, 0, 600], 51);
+    level.native_block_changed(LevelDimension::Overworld, at([620, 0, 600]), BlockStateId(0), BlockStateId(51));
+    let was_creative = std::mem::replace(&mut game.creative, true);
+    game.inventory[0] = Some(horizon_client::items::ItemStack::new("minecraft:water_bucket", 1));
+    let mut canceled = false;
+    game.native_right_click_block([620, 0, 600], [0, 1, 0], &mut canceled);
+    assert!(canceled, "the creative tank takes the bucket");
+    game.inventory[0] = None;
+    game.creative = was_creative;
+    game.native_perform_command(&player, "create_debug fluid_state 620 0 600", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("creative fluid tank at 620 0 600: minecraft:water"));
+    let before = game.sent.len();
+    game.native_level_tick_post("minecraft:overworld");
+    let drawn: Vec<_> = game.sent[before..].iter().filter(|m| m.1 == "create:tank")
+        .flat_map(|m| create_engine::tank::decode(&m.2)).collect();
+    assert!(drawn.iter().any(|(p, m)| *p == [620, 0, 600] && m.is_some_and(|m| m.tank.amount == 8000)), "{drawn:?}");
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [38, 37], &mut data);
+    let Some(horizon_world::nbt::Tag::Compound(own)) = data.get(&"create_fluids".into()) else { panic!("no fluid data") };
+    assert_eq!(own.get(&"creative_tanks".into()), Some(&horizon_world::nbt::Tag::IntArray(vec![620, 0, 600, 0])));
+    // A hose pulley (52) at (630, 5, 600) turned by a motor facing east (3) west of it lowers
+    // its hose 1/32 block a tick at 16 RPM through the air to the stone at y 0: 4 blocks down.
+    game.world.blocks.insert([630, 0, 600], 1);
+    for (pos, state) in [([630, 5, 600], 52), ([629, 5, 600], 3)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, at(pos), BlockStateId(0), BlockStateId(state));
+    }
+    let before = game.sent.len();
+    for _ in 0..140 { game.world.game_time += 1; game.native_level_tick_post("minecraft:overworld"); }
+    game.native_perform_command(&player, "create_debug fluid_state 630 5 600", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str),
+        Some("hose pulley at 630 5 600: offset 4.00, moving false, tank none 0, infinite false"));
+    assert!(game.sent[before..].iter().any(|m| m.1 == "create:hose"), "clients see the hose");
+    // Still, it ticks no more.
+    let before = game.sent.len();
+    for _ in 0..20 { game.native_level_tick_post("minecraft:overworld"); }
+    assert!(!game.sent[before..].iter().any(|m| m.1 == "create:hose"));
+    // A valve (49) at (640, 0, 600) turned forwards by a motor facing east (3) west of it: its
+    // pointer reaches open in 20 ticks at 16 RPM (0.05 a tick) and its block is enabled.
+    for (pos, state) in [([640, 0, 600], 49), ([639, 0, 600], 3)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, at(pos), BlockStateId(0), BlockStateId(state));
+    }
+    for _ in 0..30 { game.native_level_tick_post("minecraft:overworld"); }
+    game.native_perform_command(&player, "create_debug fluid_state 640 0 600", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("valve at 640 0 600: pointer 1.00 toward 1"));
+    assert!(game.said.iter().any(|l| l == "set [640, 0, 600] enabled=true"), "{:?}", game.said);
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);
