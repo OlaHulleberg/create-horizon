@@ -1268,6 +1268,58 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
             true,
         ));
     }
+    // PackagerBlock (BuilderTransformers.packager: `SharedProperties::softMetal`, netherite's
+    // sounds, not a redstone conductor): facing (DirectionalBlock's, down first), `powered`,
+    // `linked`; a full block. Its box and address are the native mod's.
+    if n == "packager" {
+        let full = [[0., 0., 0., 16., 16., 16.]];
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:netherite_block",
+            true,
+            Some(by_property("powered", bools, &full)),
+            own(&[
+                ("facing", &["down", "up", "north", "south", "west", "east"]),
+                ("powered", bools),
+                ("linked", bools),
+            ]),
+            true,
+        ));
+    }
+    // FrogportBlock (`SharedProperties::softMetal`, netherite's sounds): no properties of its
+    // own, so heavy core's waterlogging carries AllShapes.PACKAGE_PORT. Its packages, filter and
+    // chain are the native mod's.
+    if n == "package_frogport" {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:netherite_block",
+            true,
+            Some(by_property(
+                "waterlogged",
+                bools,
+                &[[0., 0., 0., 16., 4., 16.], [2., 2., 2., 14., 14., 14.]],
+            )),
+            own(&[("waterlogged", bools)]),
+            true,
+        ));
+    }
+    // ChainConveyorBlock (KineticBlock, `SharedProperties::stone`): no properties of its own;
+    // its collision is a full block (the wider CHAIN_CONVEYOR_INTERACTION reaches past the
+    // block, which a declared shape cannot). Its kinetic part and chains are the native mod's.
+    if n == "chain_conveyor" {
+        return Some(declared(
+            "minecraft:heavy_core",
+            "minecraft:stone",
+            true,
+            Some(by_property(
+                "waterlogged",
+                bools,
+                &[[0., 0., 0., 16., 16., 16.]],
+            )),
+            own(&[("waterlogged", bools)]),
+            true,
+        ));
+    }
     // PostboxBlock (`SharedProperties::wooden`): facing, `open` (its menu is open), waterlogged;
     // AllShapes.POSTBOX (the same box turned any way).
     if dyed(n, "postbox").is_some() {

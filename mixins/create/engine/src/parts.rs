@@ -422,6 +422,9 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::shaft(f.axis())
             })
         }),
+        // ChainConveyorBlock (KineticBlock): on the y axis, shafts up and down
+        // (`hasShaftTowards`); its chains join other conveyors (`Kinetics::set_far`).
+        Block::ChainConveyor => one(Part::shaft(Axis::Y)),
         // ArmBlock (ICogWheel): a small cog on the y axis, no shaft.
         Block::MechanicalArm => one(Part {
             shafts: 0,
@@ -509,6 +512,43 @@ mod tests {
         assert!(none.is_none());
         assert!(is_kinetic(Block::Cogwheel));
         assert!(!is_kinetic(Block::AndesiteCasing));
+    }
+
+    #[test]
+    fn chains_turn_conveyors_together() {
+        // A motor below one chain conveyor; a chain to another 5 blocks east turns it too.
+        let mut k = Kinetics::new();
+        let motor = info(&[("facing", "up")]);
+        let settings = Settings {
+            motor_rpm: 32.0,
+            ..Settings::default()
+        };
+        let [m, _] = parts(Block::CreativeMotor, &motor, &settings);
+        k.set([0, -1, 0], 0, m.unwrap());
+        let none = info(&[]);
+        for p in [[0, 0, 0], [5, 0, 0]] {
+            k.set(
+                p,
+                0,
+                parts(Block::ChainConveyor, &none, &settings)[0].unwrap(),
+            );
+        }
+        let mut e = Vec::new();
+        k.solve(&mut e);
+        assert_eq!(k.speed([5, 0, 0], 0), Some(0.0));
+        k.set_far([0, 0, 0], vec![[5, 0, 0]]);
+        k.set_far([5, 0, 0], vec![[0, 0, 0]]);
+        k.solve(&mut e);
+        assert_eq!(k.speed([0, 0, 0], 0), Some(32.0));
+        assert_eq!(k.speed([5, 0, 0], 0), Some(32.0));
+        assert_eq!(Block::ChainConveyor.impact(), 1.0);
+        k.set_far([5, 0, 0], vec![]);
+        k.solve(&mut e);
+        assert_eq!(
+            k.speed([5, 0, 0], 0),
+            Some(0.0),
+            "a chain one side lists only"
+        );
     }
 
     #[test]

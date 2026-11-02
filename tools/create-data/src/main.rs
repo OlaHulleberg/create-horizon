@@ -278,6 +278,15 @@ fn compile(create: &Path, out: &Path) {
         items.push(name.to_owned());
     }
 
+    // PackageStyles.STYLES' items (AllItems registers them in a loop, so the Java scan misses
+    // them): `stacksTo(1)`; their address and contents are the native mod's, kept in
+    // `minecraft:custom_data`. Throwing and placing them (PackageEntity) are not ported.
+    for name in PACKAGES {
+        let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
+        write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+        items.push(name.to_owned());
+    }
+
     write(
         &out.join("content/horizon-mod.toml"),
         b"id = \"create\"\nname = \"Create\"\nversion = \"6.0.11\"\n\
@@ -368,6 +377,24 @@ fn camel(name: &str) -> String {
     }
     out
 }
+
+/// `PackageStyles.STYLES`' item ids, in Create's order (the engine's `package::STYLES`).
+const PACKAGES: [&str; 14] = [
+    "cardboard_package_12x12",
+    "cardboard_package_10x12",
+    "cardboard_package_10x8",
+    "cardboard_package_12x10",
+    "rare_creeper_package",
+    "rare_darcy_package",
+    "rare_evan_package",
+    "rare_jinx_package",
+    "rare_kryppers_package",
+    "rare_simi_package",
+    "rare_starlotte_package",
+    "rare_thunder_package",
+    "rare_up_package",
+    "rare_vector_package",
+];
 
 /// AllItems' plain foods: nutrition and saturation modifier.
 fn food(name: &str) -> Option<(u32, f32)> {
