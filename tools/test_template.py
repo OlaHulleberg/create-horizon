@@ -563,9 +563,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 54) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 59) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 54;
+        let empty = state.0 == 0 || state.0 == 59;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -574,10 +574,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 54 is a water source.
+    /// State 59 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 54 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 59 { FluidKind::Water } else { FluidKind::Empty })
     }
     /// `Block.updateFromNeighbourShapes`: the fixture's states keep their shape.
     pub fn update_from_neighbour_shapes(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos,
@@ -760,7 +760,21 @@ impl Behaviours {
     states.push(BlockState { name: "create:hose_pulley".into(), properties: props("facing", "south") });
     // 53: a smart chute, unpowered.
     states.push(BlockState { name: "create:smart_chute".into(), properties: props("powered", "false") });
-    // 54: a water source; 55: a target block at power 7.
+    // 54: a stock link on the floor (hanging on the block below), unpowered; 55: a stock ticker
+    // facing north; 56: a redstone requester along x, unpowered; 57: a factory gauge on a wall
+    // facing south (hanging on the block north of it); 58: a re-packager facing east.
+    states.push(BlockState { name: "create:stock_link".into(), properties: BTreeMap::from([
+        ("face".to_owned(), "floor".to_owned()), ("facing".to_owned(), "north".to_owned()),
+        ("powered".to_owned(), "false".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
+    states.push(BlockState { name: "create:stock_ticker".into(), properties: props("facing", "north") });
+    states.push(BlockState { name: "create:redstone_requester".into(), properties: BTreeMap::from([
+        ("axis".to_owned(), "x".to_owned()), ("powered".to_owned(), "false".to_owned())]) });
+    states.push(BlockState { name: "create:factory_gauge".into(), properties: BTreeMap::from([
+        ("face".to_owned(), "wall".to_owned()), ("facing".to_owned(), "south".to_owned()),
+        ("powered".to_owned(), "false".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
+    states.push(BlockState { name: "create:repackager".into(), properties: BTreeMap::from([
+        ("facing".to_owned(), "east".to_owned()), ("powered".to_owned(), "false".to_owned())]) });
+    // 59: a water source; 60: a target block at power 7.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     let registry = Box::leak(Box::new(BlockRegistry { states }));
@@ -830,7 +844,7 @@ impl Behaviours {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 32);
+    assert_eq!(commands.len(), 39);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -1038,7 +1052,7 @@ impl Behaviours {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 54), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 59), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1127,7 +1141,7 @@ impl Behaviours {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 55);
+    game.world.blocks.insert([79, 0, 80], 60);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -1633,6 +1647,74 @@ impl Behaviours {
     let mut canceled = false;
     game.native_attack_entity(9, "minecraft:spider", [0.0; 3], &mut canceled);
     assert!(!canceled);
+    // Stock logistics: a vault at (999, 0, 1000) holding 64 iron and 10 gold behind a packager
+    // facing east at (1000, 0, 1000) with a stock link on top; a ticker at (1002, 0, 1000) and a
+    // requester at (1004, 0, 1000) on the link's network "Base"; a gauge on the packager's south
+    // face (1000, 0, 1001) restocks it.
+    let mut vault = vec![None; 20];
+    vault[0] = Some(ItemStack::new("minecraft:iron_ingot", 64));
+    vault[1] = Some(ItemStack::new("minecraft:gold_ingot", 10));
+    game.world.block_entities.insert((999, 0, 1000), Mod(ModBlockEntity { items: vault }));
+    for (pos, state) in [([999, 0, 1000], 42), ([1000, 0, 1000], 36), ([1000, 1, 1000], 54),
+                         ([1002, 0, 1000], 55), ([1004, 0, 1000], 56), ([1000, 0, 1001], 57)] {
+        game.world.blocks.insert(pos, state);
+        level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] },
+            BlockStateId(0), BlockStateId(state));
+    }
+    game.native_level_tick_post("minecraft:overworld");
+    assert!(game.said.iter().any(|l| l == "set [1000, 0, 1000] linked=true"), "the packager is linked");
+    for pos in ["1000 1 1000", "1002 0 1000", "1004 0 1000", "1000 0 1001"] {
+        game.native_perform_command(&player, &format!("create_debug network {pos} Base"), &mut ran);
+        assert!(game.said.last().is_some_and(|l| l.starts_with("network ")), "{:?}", game.said.last());
+    }
+    game.native_perform_command(&player, "create_debug stock 1002 0 1000", &mut ran);
+    let said = game.said.last().cloned().unwrap_or_default();
+    assert!(said.ends_with("from 1 links: 64 minecraft:iron_ingot, 10 minecraft:gold_ingot"), "{said}");
+    // Linked, the packager no longer packs on a pulse.
+    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 1000, y: 0, z: 1000 }, BlockStateId(36));
+    game.native_level_tick_post("minecraft:overworld");
+    game.native_perform_command(&player, "create_debug packages 1000 0 1000", &mut ran);
+    assert!(game.said.last().is_some_and(|l| l.contains("held=-")), "{:?}", game.said.last());
+    // An order of 70 iron (64 there) and 5 gold to "Home": one box of both, sliding out.
+    game.native_perform_command(&player, "create_debug order 1002 0 1000 Home iron_ingot 70 gold_ingot 5", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("ordered 2 stacks to \\"Home\\""));
+    game.native_perform_command(&player, "create_debug packages 1000 0 1000", &mut ran);
+    let said = game.said.last().cloned().unwrap_or_default();
+    assert!(said.contains("animation=20") && said.contains("to \\"Home\\"") && said.contains("queued=0"), "{said}");
+    let Some(Mod(m)) = game.world.block_entities.get(&(999, 0, 1000)) else { panic!() };
+    assert!(m.items[0].is_none() && m.items[1].as_ref().map(|s| s.count) == Some(5), "64 iron and 5 gold taken");
+    // The requester asks for 5 gold on a rising signal: in stock, so a second box is queued, and
+    // its comparator reads 15.
+    game.native_perform_command(&player, "create_debug requester 1004 0 1000 Home all gold_ingot 5", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("requester to \\"Home\\""));
+    level.native_neighbor_changed(LevelDimension::Overworld, BlockPos { x: 1004, y: 0, z: 1000 }, BlockStateId(56));
+    game.native_level_tick_post("minecraft:overworld");
+    game.native_perform_command(&player, "create_debug packages 1000 0 1000", &mut ran);
+    assert!(game.said.last().is_some_and(|l| l.contains("queued=1")), "{:?}", game.said.last());
+    assert_eq!(comparator(&game, [1004, 0, 1000], 56), 15, "the requester succeeded");
+    // The gauge keeps 10 gold in the packager's inventory: none left, and nothing elsewhere in the
+    // network to restock from; 20 gold put in, it is satisfied at its next look.
+    game.native_perform_command(&player, "create_debug gauge 1000 0 1001 gold_ingot 10 items Home", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("gauge gold_ingot x10 items to \\"Home\\""));
+    game.native_level_tick_post("minecraft:overworld");
+    game.native_perform_command(&player, "create_debug stock 1000 0 1001", &mut ran);
+    let said = game.said.last().cloned().unwrap_or_default();
+    assert!(said.contains("restocker=true satisfied=false") && said.contains("level=0"), "{said}");
+    if let Some(Mod(m)) = game.world.block_entities.get_mut(&(999, 0, 1000)) {
+        m.items[1] = Some(ItemStack::new("minecraft:gold_ingot", 20));
+    }
+    game.world.game_time += 100;
+    game.native_level_tick_post("minecraft:overworld");
+    game.native_perform_command(&player, "create_debug stock 1000 0 1001", &mut ran);
+    let said = game.said.last().cloned().unwrap_or_default();
+    assert!(said.contains("satisfied=true") && said.contains("level=20"), "{said}");
+    // Saved with their column.
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [62, 62], &mut data);
+    let Some(horizon_world::nbt::Tag::Compound(saved)) = data.get(&"create_stock".into()) else { panic!("{data:?}") };
+    for key in ["links", "tickers", "requesters", "gauges"] {
+        assert!(matches!(saved.get(&key.into()), Some(horizon_world::nbt::Tag::List(l)) if l.len() == 1), "{key}");
+    }
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

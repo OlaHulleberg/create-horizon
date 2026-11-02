@@ -52,6 +52,13 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_packages"
 source = "packages.rs"
 
+# Stock links, stock tickers, redstone requesters and factory gauges (logistics networks).
+[[module]]
+id = "stock"
+file = "crates/horizon-client/src/game.rs"
+name = "create_stock"
+source = "stock.rs"
+
 # What packages read and write of a stack (address and contents in `minecraft:custom_data`,
 # NBT and SNBT); the template test swaps it for `tools/fixture/package_body.rs`.
 [[module]]

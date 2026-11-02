@@ -44,3 +44,44 @@ pub(super) fn from_nbt(tag: &Tag) -> Option<ItemStack> {
 pub(super) fn snbt(stack: &ItemStack) -> String {
     format!("{{id:'{}',count:{}}}", stack.item, stack.count)
 }
+
+/// The fixture's stacks keep no order data; an order saved with a requester is its stacks.
+pub(super) fn order(stack: &ItemStack) -> Option<create_engine::stock::OrderData<ItemStack>> {
+    let _ = stack;
+    None
+}
+
+pub(super) fn set_order(stack: &mut ItemStack, d: &create_engine::stock::OrderData<ItemStack>) {
+    let _ = (stack, d);
+}
+
+pub(super) fn order_nbt(o: &create_engine::stock::Order<ItemStack>) -> Tag {
+    Tag::List(
+        o.stacks
+            .iter()
+            .map(|(s, n)| {
+                let mut c = horizon_world::nbt::Compound::new();
+                c.insert("item_stack".into(), to_nbt(s));
+                c.insert("count".into(), Tag::IntArray(vec![*n as i32]));
+                Tag::Compound(c)
+            })
+            .collect(),
+    )
+}
+
+pub(super) fn order_from_nbt(t: &Tag) -> Option<create_engine::stock::Order<ItemStack>> {
+    let Tag::List(l) = t else { return None };
+    let stacks = l
+        .iter()
+        .filter_map(|e| {
+            let Tag::Compound(c) = e else { return None };
+            let s = from_nbt(c.get(&"item_stack".into())?)?;
+            let n = match c.get(&"count".into()) {
+                Some(Tag::IntArray(v)) => v.first().copied().unwrap_or(0).max(0) as u32,
+                _ => 0,
+            };
+            Some((s, n))
+        })
+        .collect();
+    Some(create_engine::stock::Order::simple(stacks))
+}
