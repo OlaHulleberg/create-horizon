@@ -101,6 +101,25 @@ impl RailShape {
         )
     }
 
+    /// `AbstractMinecart.EXITS` (`MinecartSim2020.MATRIX`): the two ends a rail joins, a block
+    /// below for the low end of a slope.
+    pub fn exits(self) -> ([i32; 3], [i32; 3]) {
+        let (w, e, n, s) = ([-1, 0, 0], [1, 0, 0], [0, 0, -1], [0, 0, 1]);
+        let below = |v: [i32; 3]| [v[0], -1, v[2]];
+        match self {
+            RailShape::NorthSouth => (n, s),
+            RailShape::EastWest => (w, e),
+            RailShape::AscendingEast => (below(w), e),
+            RailShape::AscendingWest => (w, below(e)),
+            RailShape::AscendingNorth => (n, below(s)),
+            RailShape::AscendingSouth => (below(n), s),
+            RailShape::SouthEast => (s, e),
+            RailShape::SouthWest => (s, w),
+            RailShape::NorthWest => (n, w),
+            RailShape::NorthEast => (n, e),
+        }
+    }
+
     /// `MinecartSim2020.getRailVec`.
     pub fn vec(self) -> [f64; 3] {
         let d = std::f64::consts::FRAC_1_SQRT_2;

@@ -2615,6 +2615,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         super::create_carts::from_server(game, data);
         return;
     }
+    if channel == create_engine::coupling::CHANNEL {
+        super::create_carts::coupling_from_server(game, data);
+        return;
+    }
     if channel == CONTRAPTION_CHANNEL {
         contraptions_from_server(game, data);
         return;

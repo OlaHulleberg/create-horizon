@@ -1,0 +1,30 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/minecart_coupling/connector",
+      "x": 90
+    },
+    "facing=east": {
+      "model": "create:block/minecart_coupling/connector",
+      "x": 90,
+      "y": 90
+    },
+    "facing=south": {
+      "model": "create:block/minecart_coupling/connector",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create:block/minecart_coupling/connector",
+      "x": 90,
+      "y": 270
+    },
+    "facing=up": {
+      "model": "create:block/minecart_coupling/connector"
+    },
+    "facing=down": {
+      "model": "create:block/minecart_coupling/connector",
+      "x": 180
+    }
+  }
+}

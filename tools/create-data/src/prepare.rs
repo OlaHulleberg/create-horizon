@@ -301,6 +301,21 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
             if let Some(rest) = path.strip_prefix("assets/create/textures/fluid/") {
                 put(&format!("assets/create/textures/block/fluid/{rest}"), bytes)?;
             }
+            // The coupling's entity models (`CouplingRenderer`) are drawn as part blocks: their
+            // texture on the block atlas, the models beside the block models pointing at it.
+            if path == "assets/create/textures/entity/coupling.png" {
+                put("assets/create/textures/block/entity/coupling.png", bytes)?;
+            }
+            if let Some(rest) = path.strip_prefix("assets/create/models/entity/minecart_coupling/")
+                && rest.ends_with(".json")
+            {
+                let text = String::from_utf8_lossy(bytes)
+                    .replace("create:entity/coupling", "create:block/entity/coupling");
+                put(
+                    &format!("assets/create/models/block/minecart_coupling/{rest}"),
+                    text.as_bytes(),
+                )?;
+            }
         }
     }
     // NeoForge's common tags Create's recipes name and nobody else defines here.

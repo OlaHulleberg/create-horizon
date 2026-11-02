@@ -2299,7 +2299,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 62] = [
+pub const PARTIALS: [(&str, &str, &str); 65] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -2551,6 +2551,23 @@ pub const PARTIALS: [(&str, &str, &str); 62] = [
     (
         "part_hose_half_magnet",
         "create:block/hose_pulley/rope_half_magnet",
+        "up",
+    ),
+    // CouplingRenderer's pieces (`AllPartialModels.COUPLING_*`: entity models the prepare step
+    // copies under `block/`, their texture on the block atlas), posed by the glue.
+    (
+        "part_coupling_attachment",
+        "create:block/minecart_coupling/attachment",
+        "up",
+    ),
+    (
+        "part_coupling_ring",
+        "create:block/minecart_coupling/ring",
+        "up",
+    ),
+    (
+        "part_coupling_connector",
+        "create:block/minecart_coupling/connector",
         "up",
     ),
 ];

@@ -34,6 +34,48 @@ pub(super) fn put_storage(game: &mut Game<'_>, pos: [i32; 3], stored: Stored) {
     STORAGE.with_borrow_mut(|s| s.insert(pos, stored));
 }
 
+/// Each filled slot as a compound of its slot, item and count.
+pub(super) fn stored_tag(stored: &Stored) -> horizon_world::nbt::Tag {
+    use horizon_world::nbt::Tag;
+    Tag::List(
+        stored
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                let s = s.as_ref()?;
+                Some(Tag::compound([
+                    ("Slot", Tag::IntArray(vec![i as i32])),
+                    ("id", Tag::String(s.item.as_ref().into())),
+                    ("count", Tag::IntArray(vec![s.count as i32])),
+                ]))
+            })
+            .collect(),
+    )
+}
+
+pub(super) fn stored_of(tag: &horizon_world::nbt::Tag) -> Option<Stored> {
+    use horizon_world::nbt::Tag;
+    let Tag::List(list) = tag else { return None };
+    let mut slots = vec![None; 27];
+    for t in list {
+        let Tag::Compound(c) = t else { continue };
+        let int = |k: &str| match c.get(&k.into()) {
+            Some(Tag::IntArray(v)) => v.first().copied(),
+            _ => None,
+        };
+        let id = match c.get(&"id".into()) {
+            Some(Tag::String(s)) => s.to_string_lossy(),
+            _ => continue,
+        };
+        if let (Some(i), Some(n)) = (int("Slot"), int("count"))
+            && let Some(slot) = slots.get_mut(i as usize)
+        {
+            *slot = Some(ItemStack::new(&id, n as u32));
+        }
+    }
+    Some(slots)
+}
+
 pub(super) fn slots(stored: &mut Stored) -> Option<&mut [Option<ItemStack>]> {
     Some(stored.as_mut_slice())
 }

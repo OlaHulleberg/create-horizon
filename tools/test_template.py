@@ -296,7 +296,8 @@ pub mod native_minecarts {
     /// API 62's minecart as a native mod reads it.
     #[derive(Clone, Debug, PartialEq)]
     pub struct NativeMinecart { pub id: u32, pub uuid: u128, pub kind: &'static str, pub pos: [f64; 3], pub velocity: [f64; 3],
-                                pub yaw: f32, pub riders: Vec<u32>, pub ridden: bool }
+                                pub yaw: f32, pub riders: Vec<u32>, pub ridden: bool, pub fuel: i32,
+                                pub push: [f64; 3], pub carrying: bool }
 }
 pub mod native_server {
     pub struct NativeCommand { pub usage: String, pub level: u8 }
@@ -554,13 +555,27 @@ pub mod native_hooks {
             Some(CARTS.with_borrow_mut(|c| {
                 let id = c.iter().map(|x| x.id).max().unwrap_or(5999).max(5999) + 1;
                 c.push(super::native_minecarts::NativeMinecart { id, uuid: 0xC000 + u128::from(id), kind, pos, velocity,
-                    yaw, riders: vec![], ridden: false });
+                    yaw, riders: vec![], ridden: false, fuel: 0, push: [0.0; 3], carrying: false });
                 id
             }))
         }
         pub fn native_remove_minecart(&mut self, dimension: &str, id: u32) -> bool {
             let _ = dimension;
             CARTS.with_borrow_mut(|c| { let n = c.len(); c.retain(|x| x.id != id); c.len() != n })
+        }
+        /// API 68 on the fixture's minecarts (`CARTS`).
+        pub fn native_set_minecart_position(&mut self, dimension: &str, id: u32, pos: [f64; 3]) -> bool {
+            let _ = dimension;
+            CARTS.with_borrow_mut(|c| { let found = c.iter_mut().find(|x| x.id == id); found.map(|x| x.pos = pos).is_some() })
+        }
+        pub fn native_set_furnace_fuel(&mut self, dimension: &str, id: u32, fuel: i32, push: [f64; 3]) -> bool {
+            let _ = dimension;
+            CARTS.with_borrow_mut(|c| { let found = c.iter_mut().find(|x| x.id == id && x.kind == "minecraft:furnace_minecart");
+                found.map(|x| { x.fuel = fuel; x.push = push; }).is_some() })
+        }
+        pub fn native_set_minecart_carrying(&mut self, dimension: &str, id: u32, carrying: bool) -> bool {
+            let _ = dimension;
+            CARTS.with_borrow_mut(|c| { let found = c.iter_mut().find(|x| x.id == id); found.map(|x| x.carrying = carrying).is_some() })
         }
         /// Seats (`SEAT_ENTITIES`) from id 5000; a player rides 0.6 below one, any other its own
         /// attachment (0 here) below; getting off puts a rider where the seat is.
@@ -1025,7 +1040,7 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     // west at the rail's top speed; one going east, against it, is pulled to the rail's centre.
     place(game, [1440, 0, 1440], 70);
     let mut cart = native_minecarts::NativeMinecart { id: 90, uuid: 1, kind: "minecraft:minecart",
-        pos: [1440.5, 0.0625, 1440.5], velocity: [0.0; 3], yaw: 0.0, riders: vec![], ridden: false };
+        pos: [1440.5, 0.0625, 1440.5], velocity: [0.0; 3], yaw: 0.0, riders: vec![], ridden: false, fuel: 0, push: [0.0; 3], carrying: false };
     let rail = BlockPos { x: 1440, y: 0, z: 1440 };
     game.native_minecart_pass(dim, rail, BlockStateId(70), &mut cart);
     assert_eq!(cart.velocity, [-0.4, 0.0, 0.0]);
@@ -1127,7 +1142,7 @@ fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
     place(game, [1500, 0, 1500], 77);
     place(game, [1500, 1, 1500], 1);
     let first = native_minecarts::NativeMinecart { id: 90, uuid: 0xAB, kind: "minecraft:minecart",
-        pos: [1500.5, 0.0625, 1500.5], velocity: [0.0; 3], yaw: 0.0, riders: vec![], ridden: false };
+        pos: [1500.5, 0.0625, 1500.5], velocity: [0.0; 3], yaw: 0.0, riders: vec![], ridden: false, fuel: 0, push: [0.0; 3], carrying: false };
     CARTS.with_borrow_mut(|list| list.push(first));
     let mut c90 = cart(90).unwrap();
     game.native_minecart_pass(dim, BlockPos { x: 1500, y: 0, z: 1500 }, BlockStateId(77), &mut c90);
@@ -1192,6 +1207,49 @@ fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
     game.native_level_tick_post(dim);
     assert_eq!(game.world.blocks.get(&[1510, 1, 1500]), Some(&1));
     assert_eq!(command(game, "create_debug carts"), "no carts");
+    // A furnace cart with a push on a powered assembler at (1530, 0, 1500) under a storage block
+    // holding two coal: the storage's items ride with it, the cart moves as a ridden one (API
+    // 68), its push zeroed, and it burns a coal from the storage at once (no fuel left).
+    use create_contraption_body::STORAGE;
+    place(game, [1530, 0, 1500], 77);
+    place(game, [1530, 1, 1500], 1);
+    STORAGE.with_borrow_mut(|s| s.insert([1530, 1, 1500], vec![Some(ItemStack::new("minecraft:coal", 2))]));
+    let furnace = native_minecarts::NativeMinecart { id: 93, uuid: 0x93,
+        kind: "minecraft:furnace_minecart", pos: [1530.5, 0.0625, 1500.5], velocity: [0.0; 3], yaw: 0.0,
+        riders: vec![], ridden: false, fuel: 0, push: [0.1, 0.0, 0.0], carrying: false };
+    CARTS.with_borrow_mut(|c| c.push(furnace));
+    let mut c93 = cart(93).unwrap();
+    game.native_minecart_pass(dim, BlockPos { x: 1530, y: 0, z: 1500 }, BlockStateId(77), &mut c93);
+    game.native_level_tick_post(dim);
+    assert!(STORAGE.with_borrow(|s| !s.contains_key(&[1530, 1, 1500])), "its items left the world with it");
+    let c93 = cart(93).unwrap();
+    assert!(c93.carrying && c93.push == [0.0; 3] && c93.fuel == 3600, "{c93:?}");
+    let line = command(game, "create_debug carts");
+    assert!(line.contains("blocks=2 mode=ROTATE items=1"), "{line}");
+    // With fuel, on its rail, it is sent on at full speed (a unit vector: the rail holds it).
+    CARTS.with_borrow_mut(|c| { for x in c.iter_mut().filter(|x| x.id == 93) { x.velocity = [0.1, 0.0, 0.0]; } });
+    game.native_level_tick_post(dim);
+    assert_eq!(cart(93).unwrap().velocity, [1.0, 0.0, 0.0]);
+    // Saved and back with its items.
+    game.native_level_save(dim);
+    let saved = game.saved.get("create/minecart_contraptions").cloned().expect("saved");
+    create_carts::forget();
+    game.saved.insert("create/minecart_contraptions".into(), saved);
+    game.native_level_load(dim);
+    game.native_level_tick_post(dim);
+    let line = command(game, "create_debug carts");
+    assert!(line.contains("id=93 at=1530.50") && line.contains("items=1"), "{line}");
+    // Its cart breaks: the storage block back (a fresh one where it was) takes the coal left.
+    STORAGE.with_borrow_mut(|s| s.insert([1530, 1, 1500], vec![None; 27]));
+    CARTS.with_borrow_mut(|c| c.retain(|x| x.id != 93));
+    game.native_level_tick_post(dim);
+    let back = STORAGE.with_borrow(|s| s.get(&[1530, 1, 1500]).cloned()).unwrap();
+    assert_eq!(back.iter().flatten().map(|s| (s.item.to_string(), s.count)).collect::<Vec<_>>(),
+        vec![("minecraft:coal".to_owned(), 1)]);
+    STORAGE.with_borrow_mut(|s| s.remove(&[1530, 1, 1500]));
+    game.world.blocks.insert([1530, 0, 1500], 0);
+    game.world.blocks.insert([1530, 1, 1500], 0);
+    assert_eq!(command(game, "create_debug carts"), "no carts");
     // Two carts 3 apart on x: a coupling's two clicks link them (one used), and they keep their
     // length: the one pulled away runs on at 0.3 while the other is set to follow, half the gap
     // each (their next positions 3 apart).
@@ -1199,7 +1257,7 @@ fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
         c.clear();
         for (id, x) in [(91u32, 1520.5), (92, 1523.5)] {
             c.push(native_minecarts::NativeMinecart { id, uuid: u128::from(id), kind: "minecraft:minecart",
-                pos: [x, 0.0625, 1500.5], velocity: [0.0; 3], yaw: 0.0, riders: vec![], ridden: false });
+                pos: [x, 0.0625, 1500.5], velocity: [0.0; 3], yaw: 0.0, riders: vec![], ridden: false, fuel: 0, push: [0.0; 3], carrying: false });
         }
     });
     game.inventory[0] = Some(ItemStack::new("create:minecart_coupling", 2));
@@ -1212,13 +1270,26 @@ fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
     assert_eq!(game.inventory[0].as_ref().map(|s| s.count), Some(1));
     let line = command(game, "create_debug carts");
     assert!(line.contains("coupling 0000000000000000000000000000005b->0000000000000000000000000000005c length=3"), "{line}");
+    for x in 1519..1528 {
+        game.world.blocks.insert([x, 0, 1500], 84);
+    }
     CARTS.with_borrow_mut(|c| {
         c[1].pos[0] += 0.3;
         c[1].velocity = [0.3, 0.0, 0.0];
     });
+    let sent = game.sent.len();
     game.native_level_tick_post(dim);
     let (a, b) = (cart(91).unwrap().velocity, cart(92).unwrap().velocity);
     assert!((a[0] - 0.3).abs() < 1e-6 && b[0].abs() < 1e-6, "{a:?} {b:?}");
+    // The hard step: 3.3 apart on a 3 long coupling, each is set half the 0.3 back
+    // along its rail (API 68).
+    let (a, b) = (cart(91).unwrap().pos, cart(92).unwrap().pos);
+    assert!((a[0] - 1520.65).abs() < 1e-6 && (b[0] - 1523.65).abs() < 1e-6, "{a:?} {b:?}");
+    // Clients are told how to draw it.
+    let msg = game.sent[sent..].iter().find(|m| m.1 == create_engine::coupling::CHANNEL).expect("drawn").2.clone();
+    let drawn = create_engine::coupling::Drawn::decode(&msg).unwrap();
+    assert_eq!(drawn.key, 91);
+    assert!((drawn.length - (3.0 - 2.0 * 13.0 / 16.0)).abs() < 1e-4, "{drawn:?}");
     // Saved and back.
     game.native_level_save(dim);
     let saved = game.saved.get("create/minecart_contraptions").cloned().expect("saved");
@@ -1227,7 +1298,7 @@ fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
     game.native_level_load(dim);
     game.native_level_tick_post(dim);
     let line = command(game, "create_debug carts");
-    assert!(line.contains("length=3 distance=3.300"), "{line}");
+    assert!(line.contains("length=3 distance=3.000"), "{line}");
     // A wrench takes both off and gives the coupling back.
     let mut claimed = false;
     game.native_interact_entity(91, "minecraft:minecart", Some(&wrench), &mut claimed);

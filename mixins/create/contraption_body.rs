@@ -54,6 +54,24 @@ pub(super) fn put_storage(game: &mut Game<'_>, pos: [i32; 3], stored: Stored) {
         .insert((pos[0], pos[1], pos[2]), stored);
 }
 
+/// Carried storage's items as its block entity saves them (`Items`, with their slots), for a
+/// contraption kept in the save or an item.
+pub(super) fn stored_tag(stored: &Stored) -> horizon_world::nbt::Tag {
+    match stored {
+        horizon_client::containers::BlockEntity::Chest(items) => {
+            horizon_items::item_nbt::encode_items(items)
+        }
+        _ => horizon_world::nbt::Tag::List(Vec::new()),
+    }
+}
+
+/// Carried storage back from [`stored_tag`]: a chest's or barrel's 27 slots.
+pub(super) fn stored_of(tag: &horizon_world::nbt::Tag) -> Option<Stored> {
+    Some(horizon_client::containers::BlockEntity::Chest(
+        horizon_items::item_nbt::decode_items(Some(tag), 27),
+    ))
+}
+
 /// The slots of carried storage.
 pub(super) fn slots(stored: &mut Stored) -> Option<&mut [Option<ItemStack>]> {
     match stored {
