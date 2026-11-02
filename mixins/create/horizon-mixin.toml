@@ -123,6 +123,14 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_blocks"
 source = "blocks.rs"
 
+# Girders, brackets, the large water wheel's frame, placards, bells, the creative crate, the item
+# hatch, clipboards, table cloths, cardboard, the vertical gearbox and empty blaze burner items.
+[[module]]
+id = "decor"
+file = "crates/horizon-client/src/game.rs"
+name = "create_decor"
+source = "decor.rs"
+
 [[module]]
 id = "equipment"
 file = "crates/horizon-client/src/game.rs"
@@ -436,6 +444,33 @@ bindings = [
   { name = "stack", ty = "&horizon_client::items::ItemStack", value = "stack" },
   { name = "pos", ty = "[i32; 3]", value = "pos" },
   { name = "face", ty = "[i32; 3]", value = "face" },
+  { name = "claimed", ty = "&mut bool", value = "claimed" },
+]
+
+[[injection]]
+id = "left-click-block"
+hook = "left_click_block"
+hook_version = 1
+kind = "HEAD"
+helper = "left_click.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "state", ty = "horizon_world::registry::BlockStateId", value = "state" },
+  { name = "canceled", ty = "&mut bool", value = "canceled" },
+]
+
+[[injection]]
+id = "interact-entity"
+hook = "interact_entity"
+hook_version = 1
+kind = "HEAD"
+helper = "interact_entity.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "entity", ty = "i32", value = "entity" },
+  { name = "kind", ty = "&str", value = "kind" },
+  { name = "stack", ty = "Option<&horizon_client::items::ItemStack>", value = "stack" },
   { name = "claimed", ty = "&mut bool", value = "claimed" },
 ]
 

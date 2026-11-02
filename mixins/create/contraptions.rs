@@ -24,12 +24,19 @@ pub(super) fn chassis_group(game: &Game<'_>, pos: [i32; 3]) -> Vec<[i32; 3]> {
             .state(game.world.block(p[0], p[1], p[2]))?;
         matches!(
             s.name.as_str(),
-            "create:linear_chassis" | "create:secondary_linear_chassis"
+            "create:linear_chassis" | "create:secondary_linear_chassis" | "create:radial_chassis"
         )
         .then(|| (s.name.clone(), s.properties.get("axis").cloned()))
     };
     let Some(own) = kind(pos) else {
         return Vec::new();
+    };
+    // A radial chassis' group is the radial chassis on its axis either side.
+    let radial = own.0 == "create:radial_chassis";
+    let axis = match own.1.as_deref() {
+        Some("x") => Axis::X,
+        Some("z") => Axis::Z,
+        _ => Axis::Y,
     };
     let mut group = vec![pos];
     let mut i = 0;
@@ -37,6 +44,9 @@ pub(super) fn chassis_group(game: &Game<'_>, pos: [i32; 3]) -> Vec<[i32; 3]> {
         let p = group[i];
         i += 1;
         for d in Dir::ALL {
+            if radial && d.axis() != axis {
+                continue;
+            }
             let o = d.offset();
             let n = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
             if !group.contains(&n) && kind(n).as_ref() == Some(&own) {
@@ -66,9 +76,15 @@ pub(super) fn use_chassis(
     let slime = held.as_deref() == Some("minecraft:slime_ball")
         || held.as_deref() == Some("create:super_glue");
     let axis = s.properties.get("axis").cloned().unwrap_or_default();
-    // getGlueableSide: an end on its axis, sticky_top toward the positive end.
+    let radial = s.name == "create:radial_chassis";
+    // getGlueableSide: a linear chassis' end on its axis, sticky_top toward the positive end;
+    // a radial chassis' side across it (`RadialChassisBlock.getGlueableSide`).
     let side_of = |f: [i32; 3]| -> Option<&'static str> {
         let i = ["x", "y", "z"].iter().position(|a| *a == axis)?;
+        if radial {
+            let a = [Axis::X, Axis::Y, Axis::Z][i];
+            return create_engine::contraption::radial_side(a, Dir::from_offset(f)?);
+        }
         match f[i] {
             1 => Some("sticky_top"),
             -1 => Some("sticky_bottom"),
@@ -78,13 +94,15 @@ pub(super) fn use_chassis(
     let Some(side) = side_of(face) else {
         return;
     };
+    // `glueAllowedOnSide`: a radial chassis may be glued on any side.
     let allowed = |game: &Game<'_>, f: [i32; 3]| {
-        registry
-            .state(
-                game.world
-                    .block(pos[0] + f[0], pos[1] + f[1], pos[2] + f[2]),
-            )
-            .is_none_or(|o| o.name != s.name || o.properties.get("axis") != Some(&axis))
+        radial
+            || registry
+                .state(
+                    game.world
+                        .block(pos[0] + f[0], pos[1] + f[1], pos[2] + f[2]),
+                )
+                .is_none_or(|o| o.name != s.name || o.properties.get("axis") != Some(&axis))
     };
     let glued = s.properties.get(side).is_some_and(|v| v == "true");
     if slime && glued {
@@ -181,6 +199,36 @@ pub(super) fn put_back(
     }
 }
 
+/// A radial chassis as the search reads it: its axis, glued sides and range.
+fn radial_chassis(
+    game: &Game<'_>,
+    p: [i32; 3],
+    props: &std::collections::BTreeMap<String, String>,
+) -> create_engine::contraption::Chassis {
+    let axis = match props.get("axis").map(String::as_str) {
+        Some("x") => Axis::X,
+        Some("z") => Axis::Z,
+        _ => Axis::Y,
+    };
+    let sides = Dir::ALL.into_iter().fold(0u8, |acc, d| {
+        let glued = create_engine::contraption::radial_side(axis, d)
+            .and_then(|k| props.get(k))
+            .is_some_and(|v| v == "true");
+        if glued { acc | d.bit() } else { acc }
+    });
+    create_engine::contraption::Chassis {
+        secondary: false,
+        axis,
+        sticky_top: false,
+        sticky_bottom: false,
+        range: dimension_index(game.dim.id())
+            .and_then(|dim| with_world(|w| w.dims[dim].chassis_range.get(&p).copied()))
+            .flatten()
+            .unwrap_or(create_engine::contraption::CHASSIS_RANGE),
+        radial: Some(sides),
+    }
+}
+
 /// Blocks Create can't move (unbreakable ones) and blocks whose block entity would be lost
 /// (moving block entities isn't ported: refused rather than emptied).
 pub(super) fn contraption_found(
@@ -254,6 +302,10 @@ pub(super) fn contraption_found(
                 .and_then(|dim| with_world(|w| w.dims[dim].chassis_range.get(&p).copied()))
                 .flatten()
                 .unwrap_or(create_engine::contraption::CHASSIS_RANGE),
+            radial: None,
+        })
+        .or_else(|| {
+            (s.name == "create:radial_chassis").then(|| radial_chassis(game, p, &s.properties))
         }),
     })
 }

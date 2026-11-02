@@ -524,11 +524,14 @@ pub(super) fn tick_chute_pulls(game: &mut Game<'_>, dim: usize) {
             continue;
         }
         let above = [pos[0], pos[1] + 1, pos[2]];
+        // A creative crate (no block entity here) is looked at again as a vanilla container.
+        let supply = super::create_decor::crate_supply(game, dim, above);
         let tells = match game
             .world
             .block_entities
             .get(&(above[0], above[1], above[2]))
         {
+            _ if supply.is_some() => false,
             None => continue,
             Some(e) => matches!(e, horizon_client::containers::BlockEntity::Mod(_)),
         };
@@ -547,6 +550,9 @@ pub(super) fn tick_chute_pulls(game: &mut Game<'_>, dim: usize) {
         };
         let test = |item: &str| create_engine::chute::passes(filter.as_deref(), item);
         let taken = match vault_at(game, dim, above) {
+            _ if supply.is_some() => {
+                super::create_decor::crate_extract(game, supply.flatten().as_deref(), test, amount)
+            }
             Some(parts) => extract_vault(game, &parts, test, amount),
             None => super::machines::create_extract::extract_matching(
                 game,
@@ -732,6 +738,10 @@ pub(super) fn insert_item(
         Ok(left) => return left,
         Err(stack) => stack,
     };
+    // `BottomlessItemHandler.insertItem`: a creative crate takes everything.
+    if super::create_decor::crate_supply(game, dim, pos).is_some() {
+        return None;
+    }
     match vault_at(game, dim, pos) {
         Some(parts) => insert_vault(game, &parts, stack),
         None => game.native_insert_item(pos, face, stack),
@@ -749,6 +759,9 @@ pub(super) fn insert_room(
 ) -> Option<u32> {
     if let Some(room) = super::create_packages::automation_room(game, dim, pos, stack) {
         return Some(room);
+    }
+    if super::create_decor::crate_supply(game, dim, pos).is_some() {
+        return Some(stack.count);
     }
     match vault_at(game, dim, pos) {
         Some(parts) => {
@@ -1123,6 +1136,10 @@ fn take_from_behind(
     // A packager's box once it is out; a port's packages for it.
     if let Some(taken) = super::create_packages::automation_take(game, dim, behind) {
         return taken;
+    }
+    // `BottomlessItemHandler.extractItem`: a creative crate gives its supply, a stack at most.
+    if let Some(supply) = super::create_decor::crate_supply(game, dim, behind) {
+        return super::create_decor::crate_extract(game, supply.as_deref(), |_| true, max);
     }
     match vault_at(game, dim, behind) {
         Some(parts) => extract_vault(game, &parts, |_| true, max),

@@ -79,6 +79,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
             super::create_actors::forget();
             super::create_packages::forget();
             super::create_schematics::forget();
+            super::create_decor::forget();
             states::clear_range();
         }
     }
@@ -107,6 +108,7 @@ pub(super) fn block_changed(
     let (dim, at) = (level_index(dimension), [pos.x, pos.y, pos.z]);
     super::create_packages::block_changed(dim, at, old.0, new.0);
     super::create_schematics::block_changed(dim, at, old.0, new.0);
+    super::create_decor::block_changed(dim, at, old.0, new.0);
     with_world(|w| w.block_changed(dim, at, old.0, new.0));
 }
 
@@ -124,6 +126,7 @@ pub(super) fn neighbor_changed(
     let (dim, at) = (level_index(dimension), [pos.x, pos.y, pos.z]);
     super::create_packages::neighbor_changed(dim, at, state.0);
     super::create_schematics::neighbor_changed(dim, at, state.0);
+    super::create_decor::neighbor_changed(dim, at, state.0);
     with_world(|w| w.neighbor_changed(dim, at, state.0));
 }
 
@@ -284,8 +287,13 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_postboxes(game, dimension, dim);
     // Water wheels whose surroundings changed, and one in 60 of the others each tick.
     let tick = game.world.game_time as u64;
-    for (pos, axis) in with_world(|w| w.take_wheel_checks(dim, tick)).unwrap_or_default() {
-        let samples: Vec<([i32; 3], [f64; 3])> = create_engine::waterwheel::small_offsets(axis)
+    for (pos, axis, large) in with_world(|w| w.take_wheel_checks(dim, tick)).unwrap_or_default() {
+        let offsets = if large {
+            create_engine::waterwheel::large_offsets(axis)
+        } else {
+            create_engine::waterwheel::small_offsets(axis).to_vec()
+        };
+        let samples: Vec<([i32; 3], [f64; 3])> = offsets
             .into_iter()
             .map(|o| {
                 let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
@@ -570,6 +578,7 @@ pub(super) fn net_from_client(game: &mut Game<'_>, player: u128, channel: &str, 
     })
     .unwrap_or_default();
     send_links(game, &[player], dim, &links);
+    super::create_decor::sync(game, player, dim);
     let curves: Vec<_> = with_world(|w| {
         let c = &w.dims[dim].track_curves;
         c.at.keys()
@@ -773,6 +782,10 @@ pub(super) fn right_click_inner(
     let back = game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
     let state = game.world.block(pos[0], pos[1], pos[2]).0;
     let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
+    // Placards, clipboards, bells, the creative crate, the item hatch, table cloths.
+    if super::create_decor::use_block(game, dim, pos, face, canceled) {
+        return;
+    }
     // Packagers; valve handles, sliding doors, toolboxes, postboxes.
     if let Some(b) = block
         && (super::create_packages::use_block(game, dim, pos, b, canceled)
@@ -819,7 +832,11 @@ pub(super) fn right_click_inner(
     }
     if matches!(
         block,
-        Some(create_engine::Block::LinearChassis | create_engine::Block::SecondaryLinearChassis)
+        Some(
+            create_engine::Block::LinearChassis
+                | create_engine::Block::SecondaryLinearChassis
+                | create_engine::Block::RadialChassis
+        )
     ) {
         use_chassis(game, pos, face, back, canceled);
         return;
@@ -957,7 +974,7 @@ pub(super) fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8])
             return;
         }
         // `ChassisScrollValueBehaviour`: the whole group of chassis takes the range, 1 to 16.
-        Some(B::LinearChassis | B::SecondaryLinearChassis) => {
+        Some(B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis) => {
             let group = chassis_group(game, pos);
             let now = with_world(|w| w.dims[dim].chassis_range.get(&pos).copied())
                 .flatten()
@@ -1546,7 +1563,7 @@ pub(super) fn value_tip(game: &mut Game<'_>, batch: &mut horizon_client::hud::Hu
             ("Generated Speed in RPM", format!("{setting:.0}"))
         }
         // `ChassisScrollValueBehaviour` (with the wrench).
-        B::LinearChassis | B::SecondaryLinearChassis if wrench => (
+        B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis if wrench => (
             "Range of Sticky Sides",
             seen.unwrap_or(create_engine::contraption::CHASSIS_RANGE)
                 .to_string(),
@@ -1693,7 +1710,11 @@ pub(super) fn wheel(game: &mut Game<'_>, steps: f32, claimed: &mut bool) {
                 matches!(
                     b,
                     B::CreativeMotor | B::RotationSpeedController | B::BrassTunnel
-                ) || wrench && matches!(b, B::LinearChassis | B::SecondaryLinearChassis)
+                ) || wrench
+                    && matches!(
+                        b,
+                        B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis
+                    )
             })
     });
     if !scrolls {
@@ -2454,6 +2475,10 @@ pub(super) fn client_ensure(game: &Game<'_>) -> bool {
 pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
     if channel == create_engine::depot::CHANNEL {
         depots_from_server(game, data);
+        return;
+    }
+    if channel == create_engine::decor::CHANNEL {
+        super::create_decor::from_server(game, data);
         return;
     }
     if channel == create_engine::arm::CHANNEL {
@@ -3913,6 +3938,10 @@ pub(super) fn block_signal(
         *signal = create_engine::latch::signal(&l, side);
         return;
     }
+    if let Some(s) = super::create_decor::block_signal(state.0, side, direct) {
+        *signal = s;
+        return;
+    }
     if let Some((_, s)) = diode_state(state.0) {
         *signal = create_engine::diode::signal(&s, side);
         return;
@@ -3958,6 +3987,7 @@ pub(super) fn is_signal_source(state: BlockStateId, source: &mut bool) {
         || lamp_state(state.0).is_some()
         || link_state(state.0).is_some_and(|(_, receiver, powered)| receiver && powered)
         || lift_signal_source(state.0)
+        || super::create_decor::is_signal_source(state.0)
         || detector_block(state.0)
             .is_some_and(|(b, i)| b != create_engine::Block::ContentObserver || i.powered)
     {
@@ -4183,6 +4213,10 @@ pub(super) fn use_item_on(
 ) {
     // The face a placement that follows was clicked on (`BlockPlaceContext.getClickedFace`).
     CLICKED.set(Some((game.world.game_time, face)));
+    // A shaft on a girder, brackets, the vertical gearbox and the empty blaze burner.
+    if super::create_decor::use_item_on(game, stack, pos, face, claimed) {
+        return;
+    }
     if &*stack.item == "create:track" {
         use_track(game, pos, face, claimed);
         return;
@@ -4224,6 +4258,10 @@ pub(super) fn use_item_on(
         && let Some(dim) = dimension_index(&dimension)
         && wrench_deployer(game, dim, pos)
     {
+        return;
+    }
+    // `IWrenchableWithBracket.onWrenched`: a bracket comes off first.
+    if super::create_decor::wrench_bracket(game, pos) {
         return;
     }
     // A `facing` that never points up is a horizontal one (HORIZONTAL_FACING).
