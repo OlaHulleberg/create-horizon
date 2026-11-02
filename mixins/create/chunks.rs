@@ -4,6 +4,8 @@ fn chunk_load(
     dimension: &str,
     chunk: &horizon_client::chunk::Chunk,
 ) {
+    // Before the blocks: what valves' pipes, hoses and creative tanks saved.
+    crate::game::create_plumbing::chunk_load(dimension, chunk);
     crate::game::create::chunk_load(game, dimension, chunk);
     crate::game::create_equipment::chunk_load(dimension, chunk);
     crate::game::create_packages::chunk_load(dimension, chunk);

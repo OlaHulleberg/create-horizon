@@ -140,7 +140,8 @@ pub(super) fn pipe_cell(game: &Game<'_>, p: [i32; 3]) -> create_engine::fluids::
             Block::FluidPipe => Cell::Pipe(pipe_sides_of(game, state)),
             Block::MechanicalPump => info.facing.map_or(Cell::Solid, Cell::Pump),
             Block::FluidTank | Block::Spout | Block::ItemDrain | Block::Basin => Cell::Tank,
-            _ => Cell::Solid,
+            b => super::create_plumbing::plumbing_cell(game, state, b, &info, p)
+                .unwrap_or(Cell::Solid),
         };
     }
     let b = game.res.behaviours();
@@ -238,13 +239,22 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
             pump.push = fluids::reach(pos, facing, speed, |p| pipe_cell(game, p));
             pump.found = true;
         }
-        if let (Some(from), false) = (pump.pull.first().copied(), pump.push.is_empty()) {
+        // The first end behind it no closed valve shuts off.
+        let from = pump.pull.iter().find(|e| !e.blocked).copied();
+        if let (Some(from), false) = (from, pump.push.is_empty()) {
             let amount = fluids::transfer_speed(from.pressure);
-            // What the source can give this tick.
+            // What the source can give this tick: a creative tank or a hose pulley's, else...
+            let special = if from.tank {
+                super::create_plumbing::source(game, dimension, dim, from.pos, amount)
+            } else {
+                None
+            };
             let drained_from_drain = from.tank
                 && with_world(|w| w.dims[dim].drains.contains_key(&from.pos)).unwrap_or(false);
             let from_basin = from.tank && basin_at(game, from.pos);
-            let offer = if from_basin {
+            let offer = if let Some(offer) = special {
+                offer
+            } else if from_basin {
                 // A basin gives from its outputs.
                 let mut t = basin_tanks(dim, from.pos);
                 create_engine::basin::drain(&mut t.output, amount)
@@ -296,11 +306,23 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                 }
                 pump.buffer.map(|(f, n)| (f, n.min(amount)))
             };
+            // Smart pipes on the way let only their filter's fluid through.
+            let offer = offer.filter(|(f, _)| from.passes(*f));
             if let Some((fluid, n)) = offer {
-                // The first end in front that takes some.
+                // The first end in front that takes some (past open valves and filters).
                 let mut moved = 0;
                 for to in &pump.push {
-                    moved = if to.tank && basin_at(game, to.pos) {
+                    if !to.passes(fluid) {
+                        continue;
+                    }
+                    let special = if to.tank {
+                        super::create_plumbing::sink(game, dimension, dim, to.pos, fluid, n)
+                    } else {
+                        None
+                    };
+                    moved = if let Some(took) = special {
+                        took
+                    } else if to.tank && basin_at(game, to.pos) {
                         // A basin takes into its inputs.
                         let mut t = basin_tanks(dim, to.pos);
                         let took = create_engine::basin::fill(&mut t.input, fluid, n);
@@ -368,7 +390,9 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                     }
                 }
                 if moved > 0 {
-                    if from_basin {
+                    if special.is_some() {
+                        super::create_plumbing::take(game, dimension, dim, from.pos, moved);
+                    } else if from_basin {
                         let mut t = basin_tanks(dim, from.pos);
                         create_engine::basin::drain(&mut t.output, moved);
                         with_world(|w| w.set_basin_fluids(dim, from.pos, t));

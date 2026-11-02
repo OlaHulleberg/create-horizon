@@ -3995,6 +3995,113 @@ mod tests {
     }
 
     #[test]
+    fn a_whistle_makes_its_tank_a_boiler_and_sounds_while_it_is_heated() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:fluid_tank",
+                vec![("bottom", "true"), ("top", "true")],
+            ),
+            (
+                "create:steam_whistle",
+                vec![
+                    ("facing", "north"),
+                    ("powered", "true"),
+                    ("size", "small"),
+                    ("wall", "false"),
+                ],
+            ),
+            (
+                "create:steam_whistle_extension",
+                vec![("shape", "single"), ("size", "small")],
+            ),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (tank, whistle) = ([0, 0, 0], [0, 1, 0]);
+        w.block_changed(0, tank, 0, 10);
+        w.block_changed(0, whistle, 0, 11);
+        assert_eq!(w.whistle_at(0, whistle), Some(crate::kinetics::Dir::Down));
+        w.evaluate_boilers(0);
+        let b = &w.dims[0].boilers[&tank];
+        assert_eq!(
+            (b.whistles.clone(), b.data.attached_whistles),
+            (vec![whistle], 1)
+        );
+        assert!(b.data.is_active() && b.engines.is_empty());
+        assert!(w.take_sound_checks(0).contains(&whistle));
+        // Unheated: silent. A passive heater under it: it sounds; its heat changing tells it.
+        assert!(!crate::whistle::sounds(true, w.whistle_boiler(0, whistle)));
+        w.set_boiler_heat(0, tank, &[crate::steam::PASSIVE_HEAT]);
+        assert_eq!(w.take_sound_checks(0), vec![whistle]);
+        assert!(crate::whistle::sounds(true, w.whistle_boiler(0, whistle)));
+        // An extension placed on it: its pitch is counted again.
+        w.block_changed(0, [0, 2, 0], 0, 12);
+        assert_eq!(w.dims[0].plumbing.extension_checks, vec![[0, 2, 0]]);
+        // The whistle goes: the tank is no boiler, the extension above may fall.
+        w.block_changed(0, whistle, 11, 0);
+        w.evaluate_boilers(0);
+        assert!(w.dims[0].boilers.is_empty());
+        assert!(w.dims[0].plumbing.whistles.is_empty());
+        assert!(w.dims[0].plumbing.extension_checks.contains(&[0, 2, 0]));
+        states::clear_range();
+    }
+
+    #[test]
+    fn valves_open_with_their_speed_and_pipes_look_again() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_motor", vec![("facing", "west")]),
+            (
+                "create:fluid_valve",
+                vec![
+                    ("axis_along_first", "false"),
+                    ("enabled", "false"),
+                    ("facing", "up"),
+                ],
+            ),
+            ("create:hose_pulley", vec![("facing", "north")]),
+            ("create:creative_fluid_tank", vec![]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (valve, hose, tank) = ([0, 0, 0], [5, 0, 0], [9, 0, 0]);
+        w.block_changed(0, valve, 0, 11);
+        assert!(w.dims[0].pipes_changed, "a valve is a pipe");
+        assert!(w.dims[0].plumbing.valves.contains_key(&valve));
+        w.dims[0].plumbing.valve_speed(valve, 32.0);
+        assert_eq!(w.dims[0].plumbing.valve_moving, vec![valve]);
+        // A hose pulley turns on x (its facing north turned clockwise), its shaft out east.
+        w.block_changed(0, hose, 0, 12);
+        assert!(w.dims[0].plumbing.hoses.contains_key(&hose));
+        let [p, _] = crate::parts::parts(
+            Block::HosePulley,
+            &StateInfo::read([("facing", "north")].into_iter()),
+            &Settings::default(),
+        );
+        assert_eq!(p.map(|p| p.axis), Some(crate::kinetics::Axis::X));
+        // A motor east of the hose, facing west into its shaft: the hose is given its speed.
+        w.block_changed(0, [6, 0, 0], 0, 10);
+        w.tick(0, &mut Vec::new());
+        let speeds = std::mem::take(&mut w.dims[0].plumbing.hose_speeds);
+        assert!(
+            speeds.iter().any(|(p, s)| *p == hose && s.abs() == 16.0),
+            "{speeds:?}"
+        );
+        w.block_changed(0, tank, 0, 13);
+        assert_eq!(w.dims[0].plumbing.creative.get(&tank), Some(&None));
+        w.block_changed(0, tank, 13, 0);
+        assert!(w.dims[0].plumbing.creative.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
     fn a_two_by_two_boiler_over_kindled_burners_drives_its_engine() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
