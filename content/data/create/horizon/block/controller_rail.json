@@ -1,78 +1,14 @@
 {
-  "template": "minecraft:heavy_core",
+  "template": "minecraft:powered_rail",
   "properties": {
     "hardness": 0.7,
     "explosion_resistance": 0.7,
     "requires_tool": false,
     "sounds": "minecraft:iron_block",
-    "analog_output": true
+    "analog_output": true,
+    "rail": true
   },
   "item": true,
-  "shapes": {
-    "property": "shape",
-    "values": {
-      "north_south": [
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.125,
-          1.0
-        ]
-      ],
-      "east_west": [
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.125,
-          1.0
-        ]
-      ],
-      "ascending_east": [
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.5,
-          1.0
-        ]
-      ],
-      "ascending_west": [
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.5,
-          1.0
-        ]
-      ],
-      "ascending_north": [
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.5,
-          1.0
-        ]
-      ],
-      "ascending_south": [
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.5,
-          1.0
-        ]
-      ]
-    }
-  },
   "state_properties": {
     "backwards": [
       "false",

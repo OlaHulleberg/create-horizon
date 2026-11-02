@@ -2,7 +2,33 @@
   "template": "minecraft:heavy_core",
   "properties": {
     "hardness": 2.0,
-    "explosion_resistance": 2.0
+    "explosion_resistance": 2.0,
+    "entity_inside": true
   },
-  "item": true
+  "item": true,
+  "shapes": {
+    "property": "waterlogged",
+    "values": {
+      "false": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.5,
+          1.0
+        ]
+      ],
+      "true": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.5,
+          1.0
+        ]
+      ]
+    }
+  }
 }
