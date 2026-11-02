@@ -273,6 +273,12 @@ fn compile(create: &Path, out: &Path) {
             let doc = json!({ "template": "minecraft:stick" });
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
+        } else if name == "belt_connector" {
+            // BeltConnectorItem: a block item of the belt that never places it; its two clicks
+            // on shafts are the native mod's (the first shaft kept in `minecraft:custom_data`).
+            let doc = json!({ "template": "minecraft:stick" });
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
         } else if name == "wrench" {
             // WrenchItem: `stacksTo(1)`; its use is the native mod's.
             let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
