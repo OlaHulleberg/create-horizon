@@ -15,6 +15,9 @@ fn perform_command(game: &mut crate::game::Game<'_>, command: &str, ran: &mut bo
     if !ours {
         ours = crate::game::create_controller::perform_command(game, command);
     }
+    if !ours {
+        ours = crate::game::create_copycat::perform_command(game, command);
+    }
     if ours {
         *ran = true;
     } else {

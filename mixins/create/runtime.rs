@@ -82,6 +82,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
             super::create_decor::forget();
             super::create_controller::forget();
             super::create_seats::forget();
+            super::create_copycat::forget();
             states::clear_range();
         }
     }
@@ -112,6 +113,7 @@ pub(super) fn block_changed(
     super::create_schematics::block_changed(dim, at, old.0, new.0);
     super::create_decor::block_changed(dim, at, old.0, new.0);
     super::create_controller::block_changed(dim, at, old.0, new.0);
+    super::create_copycat::block_changed(dim, at, old.0, new.0);
     with_world(|w| w.block_changed(dim, at, old.0, new.0));
 }
 
@@ -795,6 +797,10 @@ pub(super) fn right_click_inner(
     // A lectern holding a linked controller.
     if block == Some(create_engine::Block::LecternController) {
         super::create_controller::use_lectern(game, dim, pos, back, canceled);
+        return;
+    }
+    // A block item on a copycat: its material.
+    if super::create_copycat::use_block(game, dim, pos, face, canceled) {
         return;
     }
     // Placards, clipboards, bells, the creative crate, the item hatch, table cloths.
@@ -4353,6 +4359,17 @@ pub(super) fn use_item_on(
     let Some(current) = registry.state(state).cloned() else {
         return;
     };
+    // `CopycatBlock.onWrenched` (and before a sneaking wrench picks it up): its material comes
+    // off; it never turns.
+    if matches!(
+        block,
+        create_engine::Block::CopycatPanel | create_engine::Block::CopycatStep
+    ) {
+        super::create_copycat::wrench(game, pos);
+        if !game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
+            return;
+        }
+    }
     if game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft) {
         if !game.creative && game.items().get(&current.name).is_some() {
             game.native_give_items(&current.name, 1);

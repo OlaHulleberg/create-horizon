@@ -170,6 +170,15 @@ pub mod containers {
 pub mod first_person {
     #[derive(Clone, Copy, PartialEq)] pub enum Hand { Main, Off }
 }
+pub mod mesher {
+    use horizon_world::registry::BlockStateId;
+    /// API 59's per-position model.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct ModelOverride { pub state: BlockStateId, pub faces: [Option<BlockStateId>; 6], pub boxes: Vec<[[f32; 3]; 2]> }
+    impl ModelOverride {
+        pub fn new(state: BlockStateId) -> Self { Self { state, faces: [None; 6], boxes: Vec::new() } }
+    }
+}
 pub mod debug_keys {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum KeyAction { Press, Repeat, Release }
 }
@@ -410,6 +419,13 @@ pub mod native_hooks {
             super::TEXTS.with_borrow_mut(|t| t.push("clear".to_owned()));
         }
         pub fn native_parts_seconds(&self) -> f32 { 1.0 }
+        /// The fixture records the model overrides set (API 59).
+        pub fn native_block_model_override(&mut self, pos: [i32; 3], model: Option<horizon_client::mesher::ModelOverride>) {
+            super::OVERRIDES.with_borrow_mut(|o| match model {
+                Some(m) => { o.insert(pos, m); }
+                None => { o.remove(&pos); }
+            });
+        }
         pub fn native_part_item_model(&mut self, item: &str, pose: glam::Mat4) -> Option<u32> {
             let _ = pose;
             Some(1000 + item.len() as u32)
@@ -710,9 +726,9 @@ pub struct Facts { pub flags: u32, pub hardness: f32 }
 pub struct BlockSet;
 impl BlockSet { pub fn contains(&self, block: BlockId) -> bool { let _ = block; false } }
 impl Behaviours {
-    /// Air (state 0) and water (state 71) have no collision; every other state of the fixture has.
+    /// Air (state 0) and water (state 76) have no collision; every other state of the fixture has.
     pub fn facts(&self, state: BlockStateId) -> Facts {
-        let empty = state.0 == 0 || state.0 == 71;
+        let empty = state.0 == 0 || state.0 == 76;
         Facts { flags: if empty { horizon_world::level::data::state_flags::COLLISION_EMPTY } else { 0 }, hardness: 1.5 }
     }
     /// No block tags; no cached shapes (the collision flag decides).
@@ -721,10 +737,10 @@ impl Behaviours {
     pub fn is_air(&self, state: BlockStateId) -> bool { state.0 == 0 }
     pub fn block(&self, state: BlockStateId) -> BlockId { BlockId(state.0 as u16) }
     pub fn collision_shape(&self, state: BlockStateId) -> Option<&horizon_core::geometry::VoxelShape> { let _ = state; None }
-    /// State 71 is a water source.
+    /// State 76 is a water source.
     pub fn fluid(&self, state: BlockStateId) -> horizon_world::fluid::FluidState {
         use horizon_world::fluid::{FluidKind, FluidState};
-        FluidState(if state.0 == 71 { FluidKind::Water } else { FluidKind::Empty })
+        FluidState(if state.0 == 76 { FluidKind::Water } else { FluidKind::Empty })
     }
     /// `Block.updateFromNeighbourShapes`: the fixture's states keep their shape.
     pub fn update_from_neighbour_shapes(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos,
@@ -770,6 +786,8 @@ thread_local! {
     /// Where the acting player stands, and the keys held down (`native_is_key_down`).
     pub static PLAYER_AT: std::cell::Cell<[f64; 3]> = const { std::cell::Cell::new([0.5, 2.0, 0.5]) };
     pub static KEYS_DOWN: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+    /// The model overrides a client set, by position.
+    pub static OVERRIDES: std::cell::RefCell<std::collections::HashMap<[i32; 3], horizon_client::mesher::ModelOverride>> = Default::default();
 }
 impl Behaviours {
     pub fn neighbor_changed_at(&self, level: &mut GameLevel<'_>, ticks: &mut Ticks, pos: BlockPos, block: BlockId) {
@@ -1099,7 +1117,19 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     states.push(BlockState { name: "create:controller_rail".into(), properties: BTreeMap::from([
         ("backwards".to_owned(), "false".to_owned()), ("power".to_owned(), "15".to_owned()),
         ("shape".to_owned(), "east_west".to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
-    // 71: a water source; 72: a target block at power 7; 73: a lectern facing north, no book.
+    // 71, 72: copycat panels facing up and north; 73, 74: copycat steps facing south, bottom
+    // and top; 75: the copycat base.
+    for facing in ["up", "north"] {
+        states.push(BlockState { name: "create:copycat_panel".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), facing.to_owned()), ("waterlogged".to_owned(), "false".to_owned())]) });
+    }
+    for half in ["bottom", "top"] {
+        states.push(BlockState { name: "create:copycat_step".into(), properties: BTreeMap::from([
+            ("facing".to_owned(), "south".to_owned()), ("half".to_owned(), half.to_owned()),
+            ("waterlogged".to_owned(), "false".to_owned())]) });
+    }
+    states.push(BlockState { name: "create:copycat_base".into(), properties: BTreeMap::new() });
+    // 76: a water source; 77: a target block at power 7; 78: a lectern facing north, no book.
     states.push(BlockState { name: "minecraft:water".into(), properties: props("level", "0") });
     states.push(BlockState { name: "minecraft:target".into(), properties: props("power", "7") });
     states.push(BlockState { name: "minecraft:lectern".into(), properties: BTreeMap::from([
@@ -1173,7 +1203,7 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     assert_eq!(data.get(&"create".into()), Some(&expected));
     let mut commands = Vec::new();
     game.native_register_commands(&mut commands);
-    assert_eq!(commands.len(), 41);
+    assert_eq!(commands.len(), 42);
     let player = game.native_acting_player().unwrap();
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 2 0 0", &mut ran);
@@ -1381,7 +1411,7 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     game.world.block_entities.insert((63, -1, 60), horizon_client::containers::BlockEntity::Mod(
         horizon_client::containers::ModBlockEntity { items: vec![Some(horizon_client::items::ItemStack {
             item: "minecraft:ice".into(), count: 2, damage: 0, extra: None })] }));
-    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 71), ([63, -1, 60], 4)] {
+    for (pos, state) in [([59, 0, 60], 3), ([60, 0, 60], 19), ([61, 0, 60], 76), ([63, -1, 60], 4)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
@@ -1470,7 +1500,7 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     // A display link at (80, 0, 80) facing east, on a target block at power 7 west of it, and two
     // nixie tubes (of two colours: one row) at (80, 0, 84) and (80, 0, 85) facing north: bound by
     // the debug command it writes "7" across the row at once, the left tube (south) first.
-    game.world.blocks.insert([79, 0, 80], 72);
+    game.world.blocks.insert([79, 0, 80], 77);
     for (pos, state) in [([80, 0, 80], 32), ([80, 0, 84], 34), ([80, 0, 85], 35)] {
         game.world.blocks.insert(pos, state);
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
@@ -2230,13 +2260,13 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     // The controller on a lectern (1210, 0, 1200): a lectern controller, read by comparators as
     // 15. Used by a player at it, W powers the receiver from the lectern's controller; walking
     // away stops it; sneaking takes the lectern's controller off (dropped) and leaves a lectern.
-    game.world.blocks.insert([1210, 0, 1200], 73);
+    game.world.blocks.insert([1210, 0, 1200], 78);
     let mut claimed = false;
     game.native_use_item_on(&controller, [1210, 0, 1200], [0, 1, 0], &mut claimed);
     assert!(claimed);
     assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&65));
     assert!(game.inventory[0].is_none(), "the controller went on the lectern");
-    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1210, y: 0, z: 1200 }, BlockStateId(73), BlockStateId(65));
+    level.native_block_changed(LevelDimension::Overworld, BlockPos { x: 1210, y: 0, z: 1200 }, BlockStateId(78), BlockStateId(65));
     assert_eq!(comparator(&game, [1210, 0, 1200], 65), 15);
     PLAYER_AT.set([1210.5, 0.0, 1201.2]);
     let from = game.sent.len();
@@ -2265,7 +2295,7 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     game.native_right_click_block([1210, 0, 1200], [0, 1, 0], &mut canceled);
     game.keys.clear();
     assert!(canceled);
-    assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&73), "a lectern again");
+    assert_eq!(game.world.blocks.get(&[1210, 0, 1200]), Some(&78), "a lectern again");
     assert!(create_contraption_body::DROPPED.with_borrow(|d| d.iter().any(|x| x.1 == "create:linked_controller")));
     PLAYER_AT.set([0.5, 2.0, 0.5]);
     seats_turntables_fans_and_rails(&mut game, &level);
@@ -2304,6 +2334,93 @@ fn seats_turntables_fans_and_rails(game: &mut Game<'_>, level: &GameLevel<'_>) {
     assert_eq!(saved.len(), 1);
     assert_eq!(links(&saved[0]), 2, "the unloaded link and the new one");
     assert_eq!(saved[0].get(&"Owner".into()), Some(&Tag::IntArray(vec![0, 0, 0, 7])));
+    // Copycats. A panel placed at (1320, 0, 1320) looking down faces up and shows the copycat
+    // base cut to its 3 pixels; stone used on it becomes its material (one used), drawn on its
+    // client cut to the same box; stone again turns nothing and passes; a depot (a block
+    // entity) is refused. The wrench takes the stone back; stone again, then the column saves
+    // it. A step placed at (1322, 0, 1320) facing south, clicked high on a side, takes the upper
+    // half and shows the base in its upper south quarter. The panel broken drops its stone and
+    // its client draws the block again.
+    let copycat_tick = |game: &mut Game<'_>| {
+        let from = game.sent.len();
+        game.native_level_tick_post("minecraft:overworld");
+        let messages: Vec<Vec<u8>> = game.sent[from..].iter()
+            .filter(|m| m.0 == 7 && m.1 == "create:copycat").map(|m| m.2.clone()).collect();
+        for m in &messages { game.native_net_from_server("create:copycat", m); }
+        messages.len()
+    };
+    let panel = [1320, 0, 1320];
+    let panel_box = vec![[[0.0f32, 0.0, 0.0], [1.0, 3.0 / 16.0, 1.0]]];
+    (game.creative, game.hand, game.offhand, game.pitch, game.yaw) =
+        (false, horizon_client::first_person::Hand::Main, None, 90.0, 0.0);
+    game.keys.clear();
+    game.world.blocks.insert(panel, 71);
+    let panel_item = horizon_client::items::ItemStack::new("create:copycat_panel", 1);
+    game.native_place_block(&panel_item, panel, BlockStateId(71));
+    level.native_block_changed(LevelDimension::Overworld, at(panel), BlockStateId(0), BlockStateId(71));
+    assert_eq!(copycat_tick(&mut game), 1);
+    let drawn = OVERRIDES.with_borrow(|o| o.get(&panel).cloned()).expect("the base is drawn");
+    assert_eq!((drawn.state, &drawn.boxes), (BlockStateId(75), &panel_box));
+    assert_eq!(copycat_tick(&mut game), 0, "nothing more to send");
+    game.inventory[0] = Some(horizon_client::items::ItemStack::new("minecraft:stone", 5));
+    game.aim = Some(panel);
+    game.aim_point = Some([1320.5, 3.0 / 16.0, 1320.5]);
+    let mut canceled = false;
+    game.native_right_click_block(panel, [0, 1, 0], &mut canceled);
+    assert!(canceled, "the panel takes stone");
+    assert_eq!(game.inventory[0].as_ref().map(|s| s.count), Some(4));
+    copycat_tick(&mut game);
+    let drawn = OVERRIDES.with_borrow(|o| o.get(&panel).cloned()).unwrap();
+    assert_eq!((drawn.state, &drawn.boxes), (BlockStateId(1), &panel_box));
+    game.native_perform_command(&player, "create_debug copycat 1320 0 1320", &mut ran);
+    assert_eq!(game.said.last().map(String::as_str), Some("copycat at 1320 0 1320: minecraft:stone (minecraft:stone)"));
+    let mut canceled = false;
+    game.native_right_click_block(panel, [0, 1, 0], &mut canceled);
+    assert!(!canceled, "stone again: stone has nothing to turn");
+    assert_eq!(game.inventory[0].as_ref().map(|s| s.count), Some(4));
+    let step = [1322, 0, 1320];
+    let step_item = horizon_client::items::ItemStack::new("create:copycat_step", 1);
+    game.yaw = 0.0;
+    game.aim = Some([1322, 0, 1319]);
+    game.aim_point = Some([1322.5, 0.75, 1320.0]);
+    let mut claimed = false;
+    game.native_use_item_on(&step_item, [1322, 0, 1319], [0, 0, 1], &mut claimed);
+    assert!(!claimed);
+    game.world.blocks.insert(step, 73);
+    game.native_place_block(&step_item, step, BlockStateId(73));
+    assert_eq!(game.world.blocks.get(&step), Some(&74), "facing south, high on a side: the upper half");
+    level.native_block_changed(LevelDimension::Overworld, at(step), BlockStateId(0), BlockStateId(74));
+    copycat_tick(&mut game);
+    game.inventory[0] = Some(horizon_client::items::ItemStack::new("create:depot", 1));
+    let mut canceled = false;
+    game.native_right_click_block(step, [0, 1, 0], &mut canceled);
+    assert!(!canceled, "a block entity is refused");
+    let drawn = OVERRIDES.with_borrow(|o| o.get(&step).cloned()).unwrap();
+    assert_eq!((drawn.state, drawn.boxes), (BlockStateId(75), vec![[[0.0, 0.5, 0.5], [1.0, 1.0, 1.0]]]));
+    game.inventory[0] = Some(horizon_client::items::ItemStack::new("minecraft:stone", 4));
+    let wrench = horizon_client::items::ItemStack::new("create:wrench", 1);
+    let mut claimed = false;
+    game.native_use_item_on(&wrench, panel, [0, 1, 0], &mut claimed);
+    assert!(claimed);
+    assert_eq!(game.inventory[0].as_ref().map(|s| s.count), Some(5), "the stone is back");
+    assert_eq!(game.world.blocks.get(&panel), Some(&71), "a wrench never turns a copycat");
+    copycat_tick(&mut game);
+    assert_eq!(OVERRIDES.with_borrow(|o| o.get(&panel).map(|m| m.state)), Some(BlockStateId(75)));
+    let mut canceled = false;
+    game.native_right_click_block(panel, [0, 1, 0], &mut canceled);
+    assert!(canceled);
+    let mut data = horizon_world::nbt::Compound::new();
+    game.native_chunk_data_save("minecraft:overworld", [1320 >> 4, 1320 >> 4], &mut data);
+    let saved = match data.get(&"create_copycat".into()) { Some(horizon_world::nbt::Tag::Compound(c)) => c.clone(), other => panic!("{other:?}") };
+    assert_eq!(saved.get(&"Pos".into()), Some(&horizon_world::nbt::Tag::IntArray(vec![1320, 0, 1320, 1322, 0, 1320])));
+    assert_eq!(saved.get(&"Materials".into()), Some(&horizon_world::nbt::Tag::List(vec![
+        horizon_world::nbt::Tag::String("minecraft:stone".into()), horizon_world::nbt::Tag::String("".into())])));
+    game.world.blocks.remove(&panel);
+    level.native_block_changed(LevelDimension::Overworld, at(panel), BlockStateId(71), BlockStateId(0));
+    copycat_tick(&mut game);
+    assert!(create_contraption_body::DROPPED.with_borrow(|d| d.iter().any(|x| x.1 == "minecraft:stone" && x.0 == [1320.5, 0.5, 1320.5])));
+    assert!(OVERRIDES.with_borrow(|o| !o.contains_key(&panel)), "its own model again");
+    (game.aim, game.aim_point, game.pitch, game.yaw) = (None, None, 0.0, 180.0);
     game.native_chunk_unload("minecraft:overworld", &chunk);
     let mut ran = false;
     game.native_perform_command(&player, "create_debug speed 1 0 0", &mut ran);

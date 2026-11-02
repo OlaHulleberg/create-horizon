@@ -190,6 +190,21 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_seats"
 source = "seats.rs"
 
+# Copycat panels and steps: their materials, saved with the column, drawn by model overrides.
+[[module]]
+id = "copycat"
+file = "crates/horizon-client/src/game.rs"
+name = "create_copycat"
+source = "copycat.rs"
+
+# What copycats read of the game beyond the hook helpers (a block's classes, tags, shapes and
+# sounds); the template test swaps it for `tools/fixture/copycat_body.rs`.
+[[module]]
+id = "copycat-body"
+file = "crates/horizon-client/src/game.rs"
+name = "create_copycat_body"
+source = "copycat_body.rs"
+
 # Pure logic and the tables create-data compiles from Create's MIT data.
 [[crate]]
 id = "engine"

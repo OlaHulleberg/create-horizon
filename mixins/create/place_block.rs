@@ -12,4 +12,5 @@ fn place_block(
     crate::game::create_equipment::place_block(game, stack, pos, state);
     crate::game::create_decor::place_block(game, stack, pos, state);
     crate::game::create_items::place_block(game, pos, state);
+    crate::game::create_copycat::place_block(game, pos, state);
 }

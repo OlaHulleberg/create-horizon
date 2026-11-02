@@ -8,4 +8,5 @@ fn destroy_block(
 ) {
     crate::game::create_equipment::destroy_block(game, pos, state, *canceled);
     crate::game::create_items::destroy_block(game, pos, state, *canceled);
+    crate::game::create_copycat::destroy_block(game, pos, state, *canceled);
 }
