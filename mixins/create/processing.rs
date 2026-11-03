@@ -8,6 +8,8 @@ use create_engine::client::{self, Model};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::states;
 use horizon_world::registry::BlockStateId;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// The millstones that turn: Create's `MillstoneBlockEntity.tick` on their slots (input 0,
 /// outputs 1 to 9). Millstones that don't turn cost nothing.
@@ -2006,19 +2008,28 @@ pub(super) fn press_on_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
     };
     let heat = basin_heat(game, basin_pos);
     let limit = |i: &str| stack_limit(game, i);
+    let tanks = basin_tanks(dim, basin_pos);
     let found = RECIPES.with_borrow(|r| {
         r.as_ref().and_then(|r| {
-            basin::matching(
-                &r.compacting,
-                &slots,
-                &basin_tanks(dim, basin_pos),
-                heat,
-                &limit,
-            )
-            .first()
-            .copied()
+            let i = *basin::matching(&r.compacting, &slots, &tanks, heat, &limit).first()?;
+            Some((i, r.compacting[i].ingredients.len()))
         })
     });
+    // Square crafting recipes of one item (`canCompress`), with the compacting ones: the one
+    // with the most ingredients first (`getMatchingRecipes`' order).
+    let crafted = compressible(game, &slots).into_iter().find(|c| {
+        !basin::matching(std::slice::from_ref(c), &slots, &tanks, heat, &limit).is_empty()
+    });
+    let crafted = crafted.filter(|c| found.is_none_or(|(_, n)| c.ingredients.len() > n));
+    PRESS_CRAFTED.with_borrow_mut(|m| match &crafted {
+        Some(c) => {
+            m.insert((dim, pos), c.clone());
+        }
+        None => {
+            m.remove(&(dim, pos));
+        }
+    });
+    let found = found.map(|f| f.0).or(crafted.as_ref().map(|_| usize::MAX));
     if let Some(i) = found {
         with_world(|w| {
             let d = &mut w.dims[dim];
@@ -2029,6 +2040,70 @@ pub(super) fn press_on_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
             d.press_changes.push(pos);
         });
     }
+}
+
+thread_local! {
+    /// The square crafting recipe a press is compacting with, by dimension and press.
+    static PRESS_CRAFTED: RefCell<HashMap<(usize, [i32; 3]), create_engine::basin::Recipe>> =
+        RefCell::new(HashMap::new());
+    /// `canCompress` answers by item: its 3×3 and 2×2 crafting recipes of only it (with the
+    /// recipe table they were read from).
+    static COMPRESSED: RefCell<(usize, HashMap<String, Vec<create_engine::basin::Recipe>>)> =
+        RefCell::new((0, HashMap::new()));
+}
+
+/// The crafting recipes made of 9, else 4, of one item in the basin's inputs
+/// (`MechanicalPressBlockEntity.canCompress`: 4 or 9 ingredients, all the same), as basin
+/// recipes, 9 first; looked up once per item.
+fn compressible(
+    game: &Game<'_>,
+    slots: &[create_engine::processing::Slot],
+) -> Vec<create_engine::basin::Recipe> {
+    let table = game.native_recipes_of_type("create:compacting").as_ptr() as usize;
+    let mut items: Vec<&str> = slots[create_engine::basin::INPUTS]
+        .iter()
+        .flatten()
+        .map(|(i, _)| i.as_str())
+        .collect();
+    items.sort();
+    items.dedup();
+    COMPRESSED.with_borrow_mut(|(at, cache)| {
+        if *at != table {
+            cache.clear();
+            *at = table;
+        }
+        let mut out = Vec::new();
+        for item in items {
+            let found = cache.entry(item.to_string()).or_insert_with(|| {
+                [3usize, 2]
+                    .into_iter()
+                    .filter_map(|size| {
+                        let square: Vec<Option<horizon_client::items::ItemStack>> = (0..size
+                            * size)
+                            .map(|_| Some(horizon_client::items::ItemStack::new(item, 1)))
+                            .collect();
+                        let made = game.recipes().craft(&square, size)?;
+                        Some(create_engine::basin::Recipe {
+                            id: format!("crafting:{item}:{size}"),
+                            ingredients: vec![vec![item.to_string()]; size * size],
+                            results: vec![create_engine::processing::Output {
+                                item: made.item.to_string(),
+                                count: made.count.min(64) as u8,
+                                chance: 1.0,
+                            }],
+                            time: 0,
+                            heat: Default::default(),
+                            fluids: Vec::new(),
+                            fluid_results: Vec::new(),
+                        })
+                    })
+                    .collect()
+            });
+            out.extend(found.iter().cloned());
+        }
+        out.sort_by_key(|r| std::cmp::Reverse(r.ingredients.len()));
+        out
+    })
 }
 
 /// `tryProcessInBasin` at the head's lowest point: the press's compacting recipe on the basin.
@@ -2049,15 +2124,21 @@ pub(super) fn compact_in_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
     );
     let limit = |i: &str| stack_limit(game, i);
     let mut tanks = basin_tanks(dim, basin_pos);
-    let done = RECIPES.with_borrow(|r| {
-        r.as_ref()
-            .and_then(|r| r.compacting.get(i))
-            .is_some_and(|recipe| {
-                basin::apply(
-                    &mut slots, &mut tanks, recipe, heat, &limit, &mut rng, false,
-                )
-            })
-    });
+    let crafted = PRESS_CRAFTED.with_borrow(|m| m.get(&(dim, pos)).cloned());
+    let done = match crafted.filter(|_| i == usize::MAX) {
+        Some(recipe) => basin::apply(
+            &mut slots, &mut tanks, &recipe, heat, &limit, &mut rng, false,
+        ),
+        None => RECIPES.with_borrow(|r| {
+            r.as_ref()
+                .and_then(|r| r.compacting.get(i))
+                .is_some_and(|recipe| {
+                    basin::apply(
+                        &mut slots, &mut tanks, recipe, heat, &limit, &mut rng, false,
+                    )
+                })
+        }),
+    };
     if done {
         with_world(|w| w.set_basin_fluids(dim, basin_pos, tanks));
         game.native_with_mod_block_entity(basin_pos, |be| {
