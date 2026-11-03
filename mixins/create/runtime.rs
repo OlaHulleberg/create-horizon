@@ -1948,6 +1948,7 @@ pub(super) fn deployers_to_nbt(
                         i32::from(n),
                         i32::from(d.mode.index()),
                         i32::from(d.locked),
+                        d.held_damage as i32,
                     ]),
                 );
                 b.insert("HeldItem".into(), Tag::String(item.as_str().into()));
@@ -1988,6 +1989,7 @@ pub(super) fn deployers_from_nbt(
                     ),
                     breaking: None,
                     locked: v.get(8).is_some_and(|l| *l != 0),
+                    held_damage: v.get(9).map_or(0, |d| (*d).max(0) as u32),
                 },
             ))
         })

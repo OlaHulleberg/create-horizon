@@ -250,7 +250,7 @@ pub(super) fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]
             if let Some((a, progress, _)) = &sequenced {
                 held = sequenced_step_on_depot(game, dim, depot, count, held, a, progress.as_ref());
                 held.locked = true;
-                deployer::use_held(&mut d.held, &r);
+                deployer_used(game, &mut d, &r, above);
                 with_world(|w| w.set_deployer(dim, above, d.clone()));
                 with_world(|w| {
                     if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
@@ -274,7 +274,7 @@ pub(super) fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]
                     .collect();
             held = results_on_depot(game, dim, depot, count, held, results);
             held.locked = true;
-            deployer::use_held(&mut d.held, &r);
+            deployer_used(game, &mut d, &r, above);
             with_world(|w| w.set_deployer(dim, above, d.clone()));
             true
         }
@@ -285,6 +285,26 @@ pub(super) fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]
         }
     });
     hold
+}
+
+/// The deployer at `pos` after applying `recipe` (`activate`): its tool wears, other items are
+/// used up (`Deployer::use_for`); a crafting remainder that finds no room in the hand drops at
+/// the deployer (the fake player's overflow).
+pub(super) fn deployer_used(
+    game: &mut Game<'_>,
+    d: &mut create_engine::deployer::Deployer,
+    recipe: &create_engine::deployer::Recipe,
+    pos: [i32; 3],
+) {
+    let info = d.held.as_ref().and_then(|h| game.items().get(&h.0));
+    let max_damage = info.as_ref().map_or(0, |i| i.max_damage);
+    let remainder = info.and_then(|i| i.crafting_remainder.clone());
+    if let Some(rest) = d.use_for(recipe, max_damage, remainder.as_deref()) {
+        game.native_run_command(&format!(
+            "summon minecraft:item {}.5 {}.5 {}.5 {{Item:{{id:'{rest}',count:1}}}}",
+            pos[0], pos[1], pos[2]
+        ));
+    }
 }
 
 /// Deployers mid-stroke (`DeployerBlockEntity.tick` without a fake player): the stroke runs;
@@ -576,20 +596,25 @@ pub(super) fn deployer_use_item(game: &mut Game<'_>, dim: usize, pos: [i32; 3], 
     else {
         return;
     };
+    let damage = with_world(|w| w.dims[dim].deployers.get(&pos).map(|d| d.held_damage))
+        .flatten()
+        .unwrap_or(0);
     let stack = horizon_client::items::ItemStack {
         item: item.as_str().into(),
         count: u32::from(count),
-        damage: 0,
+        damage,
         extra: None,
     };
     let Some(left) = super::dispenser::create_use::use_item_at(game, pos, facing, stack) else {
         return;
     };
+    let worn = left.as_ref().map_or(0, |s| s.damage);
     let held = left.map(|s| (s.item.to_string(), s.count.min(64) as u8));
     with_world(|w| {
         if let Some(mut d) = w.dims[dim].deployers.get(&pos).cloned() {
-            if d.held != held {
+            if d.held != held || d.held_damage != worn {
                 d.held = held;
+                d.held_damage = worn;
                 w.dims[dim].deployer_changes.push(pos);
                 w.set_deployer(dim, pos, d);
             }
@@ -757,10 +782,8 @@ pub(super) fn use_deployer(
         return;
     }
     let hand = game.inventory.get(game.selected).cloned().flatten();
-    if hand
-        .as_ref()
-        .is_some_and(|s| s.extra.is_some() || s.damage != 0)
-    {
+    // Its hand keeps an item's id, count and wear, nothing else.
+    if hand.as_ref().is_some_and(|s| s.extra.is_some()) {
         return;
     }
     let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten() else {
@@ -775,9 +798,10 @@ pub(super) fn use_deployer(
         .map(|(item, n)| horizon_client::items::ItemStack {
             item: item.as_str().into(),
             count: u32::from(n),
-            damage: 0,
+            damage: d.held_damage,
             extra: None,
         });
+    d.held_damage = hand.as_ref().map_or(0, |s| s.damage);
     d.held = hand.map(|s| (s.item.to_string(), s.count.min(64) as u8));
     if let Some(slot) = game.inventory.get_mut(game.selected) {
         *slot = back;
@@ -1157,7 +1181,7 @@ pub(super) fn deployer_on_belt(
                     o
                 })
                 .collect();
-            deployer::use_held(&mut d.held, &r);
+            deployer_used(game, &mut d, &r, above);
             with_world(|w| w.set_deployer(dim, above, d.clone()));
             Process::Convert {
                 held: belt_left(item),

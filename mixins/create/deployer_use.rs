@@ -48,7 +48,7 @@ pub(crate) fn use_item_at(
 
 /// `BlockTransformer.transformBlock` for the fake player's axe, hoe or shovel on the block it
 /// reaches, clicked on the face toward the deployer (`Game::use_block_transformer` without the
-/// player's hand, statistics and shield). Held stacks carry no damage here, so it does not wear.
+/// player's hand, statistics and shield); the tool wears.
 fn transform(
     game: &mut crate::game::Game<'_>,
     pos: [i32; 3],
@@ -123,7 +123,8 @@ fn transform(
     let center = at.map(|v| f64::from(v) + 0.5);
     game.audio.play(&sound, Some(center), 1.0, 1.0);
     game.post_block_game_event("minecraft:block_change", at, None, Some(new));
-    Some(stack)
+    // `hurtAndBreak(1)`: the tool wears.
+    game.hurt_and_break(stack, 1)
 }
 
 /// `SpawnEggItem.useOn` for the fake player: on a spawner the egg sets its mob (the fake player
@@ -482,6 +483,10 @@ pub(crate) fn deployer_punch(
         Punch::Broken => {
             deployer_crack(game, breaker, at, -1);
             deployer_harvest(game, dimension, at, &stack, harvest);
+            // `mineBlock`: a tool wears by a block that isn't broken at once.
+            if hardness != 0.0 {
+                wear_held(game, dim, pos, 1);
+            }
         }
         Punch::Crack(Some(stage)) => deployer_crack(game, breaker, at, stage),
         Punch::Crack(None) | Punch::Stop => {}
@@ -533,4 +538,22 @@ pub(crate) fn use_block(game: &mut crate::game::Game<'_>, pos: [i32; 3], facing:
     });
     let _ = game.process_level_events();
     result.consumes_action()
+}
+
+/// `hurtAndBreak(amount)` on the held tool of the deployer at `pos` (none for other items).
+fn wear_held(game: &mut crate::game::Game<'_>, dim: usize, pos: [i32; 3], amount: u32) {
+    let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten() else {
+        return;
+    };
+    let Some((item, n)) = d.held.clone() else {
+        return;
+    };
+    let stack = ItemStack {
+        damage: d.held_damage,
+        ..ItemStack::new(item.as_str(), u32::from(n))
+    };
+    let left = game.hurt_and_break(stack, amount);
+    d.held_damage = left.as_ref().map_or(0, |s| s.damage);
+    d.held = left.map(|s| (s.item.to_string(), s.count.min(64) as u8));
+    with_world(|w| w.set_deployer(dim, pos, d));
 }
