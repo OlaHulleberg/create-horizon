@@ -4,7 +4,7 @@ version = "0.1.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "6531be992fceafac3cf966ccda373b7756935ac8"
+horizon_revision = "4395c43148b06985817109aedd66190c0295d5dc"
 
 # Game glue: per-world state on the server thread, translating hooks into engine calls.
 [[module]]
@@ -429,6 +429,33 @@ helper = "menu_closed.rs"
 bindings = [
   { name = "uuid", ty = "u128", value = "uuid" },
   { name = "window", ty = "i32", value = "window" },
+]
+
+[[injection]]
+id = "item-handler-insert"
+hook = "item_handler_insert"
+hook_version = 1
+kind = "HEAD"
+helper = "item_handler_insert.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "stack", ty = "&mut Option<horizon_client::items::ItemStack>", value = "stack" },
+  { name = "handled", ty = "&mut bool", value = "handled" },
+]
+
+[[injection]]
+id = "item-handler-extract"
+hook = "item_handler_extract"
+hook_version = 1
+kind = "HEAD"
+helper = "item_handler_extract.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "amount", ty = "u32", value = "amount" },
+  { name = "taken", ty = "&mut Option<horizon_client::items::ItemStack>", value = "taken" },
+  { name = "handled", ty = "&mut bool", value = "handled" },
 ]
 
 [[injection]]
