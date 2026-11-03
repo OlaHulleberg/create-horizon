@@ -1840,6 +1840,9 @@ pub(super) fn tick_mixers(game: &mut Game<'_>, dim: usize) {
     use create_engine::basin::{self, MixStep};
     let mut checks =
         with_world(|w| std::mem::take(&mut w.dims[dim].mixer_checks)).unwrap_or_default();
+    if !checks.is_empty() {
+        add_shapeless_mixing(game);
+    }
     let running = with_world(|w| w.dims[dim].mixing.clone()).unwrap_or_default();
     if checks.is_empty() && running.is_empty() {
         return;
@@ -2040,6 +2043,60 @@ pub(super) fn press_on_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
             d.press_changes.push(pos);
         });
     }
+}
+
+/// `MechanicalMixerBlockEntity.matchStaticFilters`: shapeless crafting recipes of more than one
+/// ingredient that the press doesn't compress (`canCompress`) mix in a basin too, after Create's
+/// own (`allowShapelessInMixer`). Read once per recipe table, when a mixer first looks.
+fn add_shapeless_mixing(game: &mut Game<'_>) {
+    use super::native_hooks::NativeRecipeKind;
+    if RECIPES.with_borrow(|r| r.as_ref().is_none_or(|r| r.shapeless_mixing)) {
+        return;
+    }
+    let Some(all) = game.native_recipes() else {
+        return;
+    };
+    let id = |i: u32| all.items.get(i as usize).map(|x| x.id.clone());
+    let mut found = Vec::new();
+    for r in &all.recipes {
+        if r.kind != NativeRecipeKind::CraftingShapeless || r.slots.len() < 2 {
+            continue;
+        }
+        let ingredients: Vec<Vec<String>> = r
+            .slots
+            .iter()
+            .map(|s| s.iter().filter_map(|x| id(x.item)).collect())
+            .collect();
+        let same = ingredients.windows(2).all(|w| w[0] == w[1]);
+        if same && matches!(ingredients.len(), 4 | 9) {
+            continue;
+        }
+        let Some(result) = r.results.first() else {
+            continue;
+        };
+        let Some(item) = id(result.item) else {
+            continue;
+        };
+        found.push(create_engine::basin::Recipe {
+            id: r.id.clone(),
+            ingredients,
+            results: vec![create_engine::processing::Output {
+                item,
+                count: result.count.min(64) as u8,
+                chance: 1.0,
+            }],
+            time: 0,
+            heat: Default::default(),
+            fluids: Vec::new(),
+            fluid_results: Vec::new(),
+        });
+    }
+    RECIPES.with_borrow_mut(|r| {
+        if let Some(r) = r.as_mut() {
+            r.mixing.extend(found);
+            r.shapeless_mixing = true;
+        }
+    });
 }
 
 thread_local! {

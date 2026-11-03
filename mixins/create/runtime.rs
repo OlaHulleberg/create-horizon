@@ -2939,6 +2939,9 @@ pub(super) struct Recipes {
     pub(super) filling: Vec<create_engine::spout::Filling>,
     /// `create:sequenced_assembly`: steps the machines ask for first.
     pub(super) sequenced: Vec<create_engine::sequenced::Assembly>,
+    /// Whether `mixing` has the shapeless crafting recipes yet (read on a mixer's first look,
+    /// which may ask the game for them).
+    pub(super) shapeless_mixing: bool,
 }
 
 impl Recipes {
@@ -2987,6 +2990,7 @@ pub(super) fn ensure_recipes(game: &Game<'_>) -> bool {
             emptying: read_emptying(game),
             filling: read_filling(game),
             sequenced: read_sequenced(game),
+            shapeless_mixing: false,
         })
     });
     true
