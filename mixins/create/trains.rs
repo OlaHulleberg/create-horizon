@@ -835,6 +835,87 @@ struct ClientTrain {
     since: f32,
 }
 
+thread_local! {
+    /// Each carriage's pivot when the player's collisions last asked (parts seconds), and how
+    /// far it had moved since the time before: a carriage jumps when a pose arrives (its
+    /// glide ran behind or ahead), and a player standing on it must jump with it.
+    static CARRIAGE_MOVES: RefCell<HashMap<(u32, usize), (f32, [f64; 3], [f64; 3])>> =
+        RefCell::new(HashMap::new());
+}
+
+/// How far carriage `car` of train `train` moved since it was last asked, now at `pivot`
+/// (`now` in parts seconds): nothing the first time or after a pause of more than a second; the
+/// same answer asked twice at one time.
+fn carriage_moved(train: u32, car: usize, pivot: [f64; 3], now: f32) -> [f64; 3] {
+    CARRIAGE_MOVES.with_borrow_mut(|m| {
+        let entry = m.entry((train, car)).or_insert((now, pivot, [0.0; 3]));
+        if entry.0 == now {
+            return entry.2;
+        }
+        let moved = if now - entry.0 <= 1.0 {
+            std::array::from_fn(|k| pivot[k] - entry.1[k])
+        } else {
+            [0.0; 3]
+        };
+        *entry = (now, pivot, moved);
+        moved
+    })
+}
+
+/// `ContraptionCollider` for the window's player (Horizon API 70): the boxes of the carriages
+/// this client draws near `around`, posed where they glide now, each block's collision shape
+/// (its outline when the shape depends on the world), with how far its carriage moved since the
+/// last tick, so the player stands and walks on a moving train. Nothing without trains.
+pub(super) fn entity_collisions(
+    game: &Game<'_>,
+    around: horizon_core::geometry::Aabb,
+    out: &mut Vec<(horizon_core::geometry::Aabb, horizon_core::geometry::Vec3)>,
+) {
+    use create_engine::train_controls::{Frame, collision_boxes};
+    use horizon_core::geometry::{Aabb, Vec3};
+    if TRAINS.with_borrow(HashMap::is_empty) {
+        CARRIAGE_MOVES.with_borrow_mut(HashMap::clear);
+        return;
+    }
+    let (lo, hi) = (around.min_position(), around.max_position());
+    let around = [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z];
+    let now = game.native_parts_seconds();
+    let facts = game.res.facts();
+    let behaviours = game.res.behaviours();
+    let shape = |s: u32| -> Vec<[f64; 6]> {
+        match behaviours.collision_shape(BlockStateId(s)) {
+            Some(v) => v
+                .boxes()
+                .iter()
+                .map(|b| {
+                    let (l, h) = (b.min_position(), b.max_position());
+                    [l.x, l.y, l.z, h.x, h.y, h.z]
+                })
+                .collect(),
+            None => facts.get(BlockStateId(s)).outline.to_vec(),
+        }
+    };
+    TRAINS.with_borrow(|trains| {
+        for (&train, t) in trains {
+            let dt = f64::from(now - t.since);
+            for (car, (pose, blocks)) in t.poses.iter().zip(&t.cars).enumerate() {
+                let frame = Frame {
+                    pivot: std::array::from_fn(|k| pose.at[k] + f64::from(pose.velocity[k]) * dt),
+                    yaw: f64::from(pose.yaw) + f64::from(pose.yaw_rate) * dt,
+                    pitch: f64::from(pose.pitch),
+                    heading: t.heading,
+                };
+                let m = carriage_moved(train, car, frame.pivot, now);
+                let motion = Vec3::new(m[0], m[1], m[2]);
+                for b in collision_boxes(&frame, blocks, &shape, around) {
+                    let bx = Aabb::new(Vec3::new(b[0], b[1], b[2]), Vec3::new(b[3], b[4], b[5]));
+                    out.push((bx, motion));
+                }
+            }
+        }
+    });
+}
+
 /// For the train HUD's arrow, the carriage `at` points into as this client draws it: its
 /// entity's `yaw` now (`Carriage.alignEntity`: the leading bogey's way, `atan2(dz, dx) + 180`),
 /// the way it faced when assembled, and the block state at the controls.
