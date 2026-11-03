@@ -4,12 +4,16 @@
 //! them (`TrainPromptPacket`: a station arrived at or departed, the station ahead, an
 //! approach's progress). Its numbers chase what the server last said
 //! (`TrainHUDUpdatePacket.Clientbound`) as Catnip's `LerpedFloat` with `Chaser.EXP` does
-//! (outside this repository, taken as `value += (target - value) * speed` each tick, drawn
-//! between the last two values). Drawn from Create's `widgets` GUI texture
-//! (`AllGuiTextures.TRAIN_HUD_*`, `TRAIN_PROMPT*`), read from the player's jar.
+//! (`value += (target - value) * speed` each tick, drawn between the last two values). Drawn
+//! from Create's `widgets` GUI texture (`AllGuiTextures.TRAIN_HUD_*`, `TRAIN_PROMPT*`), read
+//! from the player's jar, and the direction arrow from Catnip's placement indicator sheet
+//! (Ponder's MIT repository, committed with the content mod).
 
 /// The GUI texture the HUD's parts come from (`create:textures/gui/widgets.png`).
 pub const TEXTURE: &str = "create:gui/widgets";
+/// Catnip's placement indicator sheet (`PlacementClient.textured`): 16 frames of 16 x 16 down a
+/// 16 x 256 texture, one per 22.5 degrees.
+pub const ARROW_TEXTURE: &str = "create:gui/placement_indicator";
 /// Throttle steps (`TrainHUD.onScroll`: 1/18 a notch, from 1/18 to 1).
 pub const THROTTLE_STEPS: u8 = 18;
 /// `TrainPromptPacket.handle`: ticks a prompt stays without another.
@@ -190,6 +194,53 @@ pub fn layout(hud: &Hud, gui: [f32; 2], partial: f32, text_width: Option<f32>) -
     d
 }
 
+/// Catnip's `AngleHelper.getShortestAngleDiff`: from `current` to `target`, -180 to 180.
+fn shortest_angle_diff(current: f64, target: f64) -> f32 {
+    let (current, target) = (current % 360.0, target % 360.0);
+    ((((target - current) % 360.0) + 540.0) % 360.0 - 180.0) as f32
+}
+
+/// `TrainHUD.renderOverlay`'s direction: the way the train goes, seen from the camera, snapped
+/// to 22.5 degrees. `camera_yaw` is the camera entity's `getYRot`, `carriage_yaw` the carriage
+/// entity's `yaw`; `inverted` when the controls face away from the carriage's
+/// `getInitialOrientation` counterclockwise; `pressed` the controls held (bit per control):
+/// back reverses it, left and right turn it 45 degrees.
+pub fn arrow_angle(camera_yaw: f32, carriage_yaw: f32, inverted: bool, pressed: u8) -> f32 {
+    use crate::train_controls::{BACK, LEFT, RIGHT};
+    let held = |k: u8| pressed & (1 << k) != 0;
+    let reversing = held(BACK);
+    let inverted = inverted ^ reversing;
+    let mut offset = if held(LEFT) { -45 } else { 0 } + if held(RIGHT) { 45 } else { 0 };
+    if reversing {
+        offset = -offset;
+    }
+    let snap = 22.5f32;
+    let mut diff = shortest_angle_diff(f64::from(camera_yaw), f64::from(carriage_yaw))
+        + if inverted { -90.0 } else { 90.0 };
+    if diff.abs() < 60.0 {
+        diff = 0.0;
+    }
+    let angle = diff + offset as f32;
+    // Java's `Math.round(float)`: the floor of x + 0.5.
+    (snap * (angle / snap + 0.5).floor()) % 360.0
+}
+
+/// The arrow over the direction plate for `angle` (`arrow_angle`) on a `gui` sized screen: its
+/// frame of `ARROW_TEXTURE` and where it goes. The pose is `translate(91, -9)` and
+/// `scale(0.925)` from the HUD's corner, then Catnip's `translate(0, 0, 50)`,
+/// `scale(indicatorScale * 0.75 * 12)` (the scale's default, 1) over a quad from -1 to 1. The
+/// frame is the angle over 22.5 down the sheet, wrapping as the texture repeats.
+pub fn arrow(gui: [f32; 2], angle: f32) -> (Part, [f32; 4]) {
+    let ox = (gui[0] as i32 / 2 - 91) as f32;
+    let oy = gui[1] - 29.0;
+    let half = 0.925 * 0.75 * 12.0;
+    let frame = ((angle / 22.5) as i32).rem_euclid(16) as f32;
+    (
+        [0.0, frame * 16.0, 16.0, 16.0],
+        [ox + 91.0 - half, oy - 9.0 - half, half * 2.0, half * 2.0],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +348,35 @@ mod tests {
         );
         assert!(d.parts.contains(&(PROMPT_R, [px + size, 184.0, 3.0, 16.0])));
         assert_eq!(d.text, Some([122.0 - 20.0 + 82.0 + 9.0, 188.0]));
+    }
+
+    #[test]
+    fn the_arrow_points_the_way_the_train_goes_from_the_camera() {
+        use crate::train_controls::{BACK, LEFT, RIGHT};
+        // shortest(camera -> carriage) + 90, zero inside 60, snapped to 22.5.
+        // Camera at the carriage's yaw + 90: straight ahead; 20 degrees off is in the dead zone.
+        assert_eq!(arrow_angle(180.0, 90.0, false, 0), 0.0);
+        assert_eq!(arrow_angle(160.0, 90.0, false, 0), 0.0);
+        // Along the carriage: a quarter turn; -30 + 90 = 60 is out of the zone: 67.5.
+        assert_eq!(arrow_angle(90.0, 90.0, false, 0), 90.0);
+        assert_eq!(arrow_angle(120.0, 90.0, false, 0), 67.5);
+        // Inverted controls take 90 instead; reversing inverts too.
+        assert_eq!(arrow_angle(0.0, 90.0, true, 0), 0.0);
+        assert_eq!(arrow_angle(0.0, 90.0, false, 1 << BACK), 0.0);
+        // Left and right turn it 45 degrees, mirrored while reversing.
+        assert_eq!(arrow_angle(180.0, 90.0, false, 1 << LEFT), -45.0);
+        assert_eq!(arrow_angle(180.0, 90.0, false, 1 << RIGHT), 45.0);
+        assert_eq!(arrow_angle(0.0, 90.0, false, 1 << BACK | 1 << LEFT), 45.0);
+    }
+
+    #[test]
+    fn the_arrow_sits_over_the_plate_one_frame_per_step() {
+        // 427 x 240: the corner at (122, 211); the plate is drawn at (77, -20) from it, 28 wide.
+        let (src, dst) = arrow([427.0, 240.0], 45.0);
+        assert_eq!(src, [0.0, 32.0, 16.0, 16.0]);
+        let half = 0.925 * 0.75 * 12.0;
+        assert_eq!(dst, [213.0 - half, 202.0 - half, 2.0 * half, 2.0 * half]);
+        // A negative angle wraps down the repeating sheet: -22.5 is the last frame.
+        assert_eq!(arrow([427.0, 240.0], -22.5).0[1], 15.0 * 16.0);
     }
 }

@@ -282,8 +282,7 @@ pub(super) fn wheel(steps: f32) -> bool {
 
 /// `TrainHUD.renderOverlay`, only while controlling: the speed and throttle bars over the
 /// hotbar and the prompt box above them, from Create's `widgets` texture (the player's jar), at
-/// the latest tick's values (no partial tick here). Not drawn: the direction arrow (Catnip's
-/// `PlacementClient` texture is not Create's).
+/// the latest tick's values (no partial tick here), and the direction arrow over its plate.
 pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch) {
     if !DRIVING.get() || game.native_sprite_size(th::TEXTURE).is_none() {
         return;
@@ -295,6 +294,14 @@ pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch
     let drawn = HUD.with_borrow(|h| th::layout(h, [batch.width, batch.height], 1.0, width));
     for (src, dst) in &drawn.parts {
         game.native_sprite(batch, th::TEXTURE, *src, *dst);
+    }
+    let driving = DRIVER.with_borrow(|d| d.controls.map(|at| (at, d.pressed)));
+    if let Some((at, pressed)) = driving
+        && let Some((yaw, heading, state)) = super::create_trains::client_carriage_view(game, at)
+    {
+        let angle = th::arrow_angle(game.yaw, yaw, inverted(game, state, heading), pressed);
+        let (src, dst) = th::arrow([batch.width, batch.height], angle);
+        game.native_sprite(batch, th::ARROW_TEXTURE, src, dst);
     }
     if let (Some([mut x, y]), Some((text, shadow))) = (drawn.text, prompt) {
         for span in &text.resolved().spans {

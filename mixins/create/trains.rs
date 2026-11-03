@@ -835,6 +835,29 @@ struct ClientTrain {
     since: f32,
 }
 
+/// For the train HUD's arrow, the carriage `at` points into as this client draws it: its
+/// entity's `yaw` now (`Carriage.alignEntity`: the leading bogey's way, `atan2(dz, dx) + 180`),
+/// the way it faced when assembled, and the block state at the controls.
+pub(super) fn client_carriage_view(
+    game: &Game<'_>,
+    at: create_engine::train_controls::Target,
+) -> Option<(f32, [i32; 2], u32)> {
+    let now = game.native_parts_seconds();
+    TRAINS.with_borrow(|trains| {
+        let t = trains.get(&at.train)?;
+        let car = usize::from(at.car);
+        let pose = t.poses.get(car)?;
+        let state = t.cars.get(car)?.iter().find(|(o, _)| *o == at.local)?.1;
+        // The pose's yaw turns counterclockwise from the heading; `angle` is the same measure
+        // of the heading, and `atan2(dz, dx)` its negative.
+        let heading = (-t.heading[1] as f32)
+            .atan2(t.heading[0] as f32)
+            .to_degrees();
+        let turned = pose.yaw + pose.yaw_rate * (now - t.since);
+        Some((180.0 - (turned + heading), t.heading, state))
+    })
+}
+
 /// Whether this client draws any train (a click has carriages to look at).
 pub(super) fn client_draws_trains() -> bool {
     !TRAINS.with_borrow(HashMap::is_empty)
