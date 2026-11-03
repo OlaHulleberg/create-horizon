@@ -9,6 +9,14 @@ The goal: the mod builds on the Horizon the team releases. That means the trait-
 `[native]`, `src/lib.rs` implementing the generated `Hooks`) using catalogued hook points and Host helpers only; raw
 injections into internal functions break on every refactor.
 
+**Answer from the fork's owner (arismoko/horizon#44, 2026-11-03 20:49 UTC):** a fork-API mod pins an exact fork
+commit (`[native] horizon = "<sha>"`) and is built with the fork's own launcher (`launcher/`, from source: no released
+binary yet). Upstream's released launcher can't build such mods, and upstream's current API is what the fork's clean
+break removes, so don't target it. How players will get fork builds is undecided; they'll post it on #44. Send
+Create's needs to the fork, claimed through #27: instanced drawing is an unclaimed Rendering row of #26 that sits on
+the coming `DrawContext` (co-design with that PR or start after it, not on today's draw lists); moving structures
+(#5313) has no row yet: post a design note on #27 first.
+
 Up = horizon-rust main, Fork = arismoko main. a = has it, b = partly or differently, c = missing.
 
 ## Use what exists (port the mod to it)
