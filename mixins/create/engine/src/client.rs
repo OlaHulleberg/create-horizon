@@ -53,6 +53,39 @@ pub enum Model {
     HoseCoil(Dir),
 }
 
+/// `FlywheelBlockEntity.visualSpeed` on a client: the wheel's drawn speed, which starts at 0 and
+/// chases the shaft's (`LerpedFloat.chase(.., 1 / 64f, Chaser.EXP)`, `updateChaseTarget`,
+/// `tickChaser`), so a flywheel spins up and down slowly while its shaft changes at once.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WheelSpin {
+    pub visual: f32,
+}
+
+impl WheelSpin {
+    /// One client tick towards `target` RPM: Catnip's `Chaser.EXP` moves a 64th of the way (in
+    /// double, stored as a float), and lands on it once within `Mth.equal`. True while it still
+    /// moves: a step too small to change the float leaves it where it is for good, as in Create.
+    pub fn tick(&mut self, target: f32) -> bool {
+        if (f64::from(target) - f64::from(self.visual)).abs() < 1.0e-5 {
+            self.visual = target;
+            return false;
+        }
+        let c = f64::from(self.visual);
+        let next = (c + (f64::from(target) - c) / 64.0) as f32;
+        let moved = next != self.visual;
+        self.visual = next;
+        moved
+    }
+}
+
+/// The starting angle (degrees at clock time 0) that keeps a part turning at `rpm` at the angle
+/// it reached at `seconds` turning at `was_rpm` from `was_phase`: a part's angle is
+/// `phase + rpm * 6 * seconds`.
+pub fn continued_phase(was_phase: f32, was_rpm: f32, rpm: f32, seconds: f32) -> f32 {
+    let angle = was_phase + was_rpm * 6.0 * seconds;
+    (angle - rpm * 6.0 * seconds).rem_euclid(360.0)
+}
+
 /// One part to draw: its slot in its block (part keys are per block and slot), model, axis,
 /// speed and starting angle in degrees.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -617,5 +650,42 @@ mod tests {
             .unwrap();
         assert_eq!((east.rpm, west.rpm), (8.0, -8.0));
         assert_eq!(east.axis, Axis::X);
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::{WheelSpin, continued_phase};
+
+    #[test]
+    fn a_flywheel_spins_up_a_64th_at_a_time_and_lands() {
+        let mut w = WheelSpin::default();
+        assert!(w.tick(64.0));
+        assert_eq!(w.visual, 1.0);
+        assert!(w.tick(64.0));
+        assert_eq!(w.visual, 1.0 + 63.0 / 64.0);
+        // Half way after ln(2) / -ln(63/64) = 44 ticks.
+        for _ in 2..44 {
+            w.tick(64.0);
+        }
+        assert!((w.visual - 32.0).abs() < 0.5, "{}", w.visual);
+        let mut ticks = 44;
+        while w.tick(64.0) {
+            ticks += 1;
+        }
+        // It stops where a 64th of the gap no longer moves the float: 63.999878, as Create's.
+        assert_eq!(w.visual, 63.999878);
+        assert!(ticks > 600, "{ticks}");
+        // Stopped: it winds down the same way.
+        let at = w.visual;
+        assert!(w.tick(0.0));
+        assert_eq!(w.visual, at - at / 64.0);
+    }
+
+    #[test]
+    fn a_new_speed_continues_the_angle() {
+        // 10 RPM from 30 degrees: 30 + 60 * 2.5 = 180 at 2.5 s; at 20 RPM from there.
+        let phase = continued_phase(30.0, 10.0, 20.0, 2.5);
+        assert!(((phase + 20.0 * 6.0 * 2.5).rem_euclid(360.0) - 180.0).abs() < 1e-3);
     }
 }

@@ -2324,6 +2324,20 @@ pub(super) struct ClientParts {
     /// Speeds that came before their block did: tried again for a few ticks.
     pub(super) pending: Vec<([i32; 3], u8)>,
     pub(super) synced: bool,
+    /// Flywheels' wheels shown (`FlywheelBlockEntity.visualSpeed`), and those still chasing
+    /// their shaft's speed, the only ones a tick looks at.
+    pub(super) wheels: HashMap<[i32; 3], Wheel>,
+    pub(super) easing: Vec<[i32; 3]>,
+}
+
+/// A flywheel's wheel on a client: its drawn speed, where it is shown and from which angle.
+#[derive(Clone, Copy)]
+pub(super) struct Wheel {
+    spin: client::WheelSpin,
+    target: f32,
+    model: u32,
+    axis: u8,
+    phase: f32,
 }
 
 thread_local! {
@@ -2453,13 +2467,17 @@ pub(super) fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> b
             }),
         };
         if let Some(h) = handle {
+            let (mut rpm, mut phase) = (d.rpm, d.phase);
+            if block == create_engine::Block::Flywheel && d.slot == 1 {
+                (rpm, phase) = show_wheel(c, pos, h, axis_index(d.axis), d.rpm);
+            }
             game.native_part_set(
                 client::key(pos, d.slot),
                 h,
                 pos,
                 axis_index(d.axis),
-                d.rpm,
-                d.phase,
+                rpm,
+                phase,
             );
             used |= 1 << d.slot;
         }
@@ -2495,6 +2513,60 @@ pub(super) fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> b
         draw_gauge_dials(game, c, pos, &still);
     }
     true
+}
+
+/// A flywheel's wheel shown at `pos` with its shaft at `target` RPM: drawn at its own speed,
+/// from 0 when new (`FlywheelBlockEntity.visualSpeed`), chasing the shaft's in the ticks after.
+fn show_wheel(c: &mut ClientParts, pos: [i32; 3], model: u32, axis: u8, target: f32) -> (f32, f32) {
+    let w = c.wheels.entry(pos).or_insert(Wheel {
+        spin: client::WheelSpin::default(),
+        target,
+        model,
+        axis,
+        phase: 0.0,
+    });
+    (w.target, w.model, w.axis) = (target, model, axis);
+    if w.spin.visual != target && !c.easing.contains(&pos) {
+        c.easing.push(pos);
+    }
+    (w.spin.visual, w.phase)
+}
+
+/// The flywheels whose wheels still chase their shaft: a tick of each, its angle carried on at
+/// the new speed. Nothing when none does.
+fn tick_client_wheels(game: &mut Game<'_>, c: &mut ClientParts) {
+    if c.easing.is_empty() {
+        return;
+    }
+    let seconds = game.native_parts_seconds();
+    let ClientParts {
+        table,
+        wheels,
+        easing,
+        ..
+    } = c;
+    easing.retain(|&pos| {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let flywheel = table
+            .get(state)
+            .is_some_and(|(b, _)| b == create_engine::Block::Flywheel);
+        let Some(w) = wheels.get_mut(&pos).filter(|_| flywheel) else {
+            wheels.remove(&pos);
+            return false;
+        };
+        let was = w.spin.visual;
+        let moving = w.spin.tick(w.target);
+        w.phase = client::continued_phase(w.phase, was, w.spin.visual, seconds);
+        game.native_part_set(
+            client::key(pos, 1),
+            w.model,
+            pos,
+            w.axis,
+            w.spin.visual,
+            w.phase,
+        );
+        moving
+    });
 }
 
 pub(super) fn hide(game: &mut Game<'_>, pos: [i32; 3]) {
@@ -2535,6 +2607,8 @@ pub(super) fn client_ensure(game: &Game<'_>) -> bool {
             models: HashMap::new(),
             pending: Vec::new(),
             synced: false,
+            wheels: HashMap::new(),
+            easing: Vec::new(),
         });
         true
     })
@@ -2705,6 +2779,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
         }
     }
     tick_client_gauges(game, &mut c);
+    tick_client_wheels(game, &mut c);
     tick_client_clocks(game, &c);
     super::create_plumbing::tick_client_valves(game, &c.table);
     CLIENT.with_borrow_mut(|slot| *slot = Some(c));
