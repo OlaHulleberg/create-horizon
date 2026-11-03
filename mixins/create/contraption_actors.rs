@@ -835,6 +835,76 @@ fn collect(game: &mut Game<'_>, dim: usize, key: [i32; 3], actor: &Actor, mut st
     );
 }
 
+/// The actors of a bearing's structure (its blocks' offsets from the bearing and states):
+/// breakers, harvesters, ploughs and rollers, each a breaker of its own. Its storage, glue and
+/// controls don't ride a bearing.
+pub(super) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
+    let mut carried = Carried::default();
+    for (o, state) in blocks {
+        let Some((block, Some(facing))) =
+            with_world(|w| w.table.get(*state).map(|(b, i)| (b, i.facing))).flatten()
+        else {
+            continue;
+        };
+        let Some(kind) = Kind::of(block) else {
+            continue;
+        };
+        if matches!(kind, Kind::Interface { .. }) {
+            continue;
+        }
+        let id = NEXT_BREAKER.get() + 1;
+        NEXT_BREAKER.set(id);
+        carried.actors.push(Actor::new(*o, kind, facing, -id));
+    }
+    carried
+}
+
+/// A turning contraption's actors stop (`stopMoving`): what they were breaking is left as it
+/// was, its cracks gone.
+pub(super) fn cancel_actors(game: &mut Game<'_>, carried: &mut Carried) {
+    let mut effects = Vec::new();
+    for a in carried.actors.iter_mut() {
+        a.cancel(&mut effects);
+    }
+    apply_cracks(game, &carried.actors, &effects);
+}
+
+/// `tickActors` for a bearing's structure turned `deg` about `axis` through the bearing at
+/// `bearing`: each actor works where it is turned to, facing the way it turned
+/// (`toGlobalVector`, `rotation`). Returns whether one stalls it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn tick_turning_actors(
+    game: &mut Game<'_>,
+    dimension: &str,
+    dim: usize,
+    key: [i32; 3],
+    carried: &mut Carried,
+    bearing: [i32; 3],
+    axis: create_engine::kinetics::Axis,
+    deg: f64,
+) -> bool {
+    let mut stalled = false;
+    for i in 0..carried.actors.len() {
+        let mut effects = Vec::new();
+        let a = &mut carried.actors[i];
+        a.turn = Some((axis, deg));
+        let position = actors::turned_position(a, bearing, axis, deg);
+        let facing = actors::turned_facing(a.facing, axis, deg);
+        stalled |= a.tick(
+            position,
+            facing,
+            actors::CONTROLLED_LOWER,
+            &Reader { game, dim, key },
+            &mut effects,
+        );
+        let a = carried.actors[i].clone();
+        for e in effects {
+            apply(game, dimension, dim, key, &a, e);
+        }
+    }
+    stalled
+}
+
 /// `ContraptionCollider.isCollidingWithWorld` for a breaker: the contraption's block at `local`
 /// is a breaker (drill, saw, plough, roller) that can break the block at `cell`, so it doesn't
 /// stop the contraption there (`canBreak`).
