@@ -1947,6 +1947,7 @@ pub(super) fn deployers_to_nbt(
                         d.reach.to_bits() as i32,
                         i32::from(n),
                         i32::from(d.mode.index()),
+                        i32::from(d.locked),
                     ]),
                 );
                 b.insert("HeldItem".into(), Tag::String(item.as_str().into()));
@@ -1986,6 +1987,7 @@ pub(super) fn deployers_from_nbt(
                         v.get(7).copied().unwrap_or(0) as u8
                     ),
                     breaking: None,
+                    locked: v.get(8).is_some_and(|l| *l != 0),
                 },
             ))
         })
