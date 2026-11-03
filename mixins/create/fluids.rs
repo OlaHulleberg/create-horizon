@@ -238,6 +238,8 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
             pump.pull = fluids::reach(pos, facing.opposite(), speed, |p| pipe_cell(game, p));
             pump.push = fluids::reach(pos, facing, speed, |p| pipe_cell(game, p));
             pump.found = true;
+            // `FluidNetwork.reset`: the flows start again from the pump.
+            pump.pumped = 0;
         }
         // The first end behind it no closed valve shuts off.
         let from = pump.pull.iter().find(|e| !e.blocked).copied();
@@ -309,86 +311,20 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
             // Smart pipes on the way let only their filter's fluid through.
             let offer = offer.filter(|(f, _)| from.passes(*f));
             if let Some((fluid, n)) = offer {
-                // The first end in front that takes some (past open valves and filters).
-                let mut moved = 0;
-                for to in &pump.push {
-                    if !to.passes(fluid) {
-                        continue;
-                    }
-                    let special = if to.tank {
-                        super::create_plumbing::sink(game, dimension, dim, to.pos, fluid, n)
-                    } else {
-                        None
-                    };
-                    moved = if let Some(took) = special {
-                        took
-                    } else if to.tank && basin_at(game, to.pos) {
-                        // A basin takes into its inputs.
-                        let mut t = basin_tanks(dim, to.pos);
-                        let took = create_engine::basin::fill(&mut t.input, fluid, n);
-                        if took > 0 {
-                            with_world(|w| w.set_basin_fluids(dim, to.pos, t));
-                        }
-                        took
-                    } else if to.tank {
-                        with_world(|w| {
-                            // A boiler takes all the water as supply, none into its tank
-                            // (`BoilerFluidHandler.fill`).
-                            if let Some(took) = w.fill_boiler(dim, to.pos, fluid, n) {
-                                return took;
-                            }
-                            // A tank block fills its tank (by its controller).
-                            match w.dims[dim].spouts.get_mut(&to.pos) {
-                                Some(s) => {
-                                    let took = create_engine::spout::fill(s, fluid, n);
-                                    if took > 0 {
-                                        w.dims[dim].analog_checks.push(to.pos);
-                                    }
-                                    took
-                                }
-                                None => w.fill_tank(dim, to.pos, fluid, n),
-                            }
-                        })
-                        .unwrap_or(0)
-                    } else {
-                        // `OpenEndedPipe.provideFluidToSpace`: a bucket's worth becomes a source.
-                        let have = pump.out.filter(|o| o.0 == fluid).map_or(0, |o| o.1);
-                        let total = have + n;
-                        if !fluid.placeable() {
-                            // Create's own fluids have no blocks in the world yet.
-                            0
-                        } else if total >= BUCKET {
-                            let name = if fluid == create_engine::tank::Fluid::Water {
-                                "minecraft:water"
-                            } else {
-                                "minecraft:lava"
-                            };
-                            let here = game.world.block(to.pos[0], to.pos[1], to.pos[2]);
-                            if !game.res.behaviours().is_replaceable(here) {
-                                0
-                            } else {
-                                if let Some(src) =
-                                    state_with(game.pack.assets.registry, name, &[("level", "0")])
-                                {
-                                    game.native_set_block(
-                                        dimension,
-                                        to.pos,
-                                        src,
-                                        super::native_hooks::flags::UPDATE_ALL,
-                                    );
-                                }
-                                pump.out = (total > BUCKET).then_some((fluid, total - BUCKET));
-                                n
-                            }
-                        } else {
-                            pump.out = Some((fluid, total));
-                            n
-                        }
-                    };
-                    if moved > 0 {
-                        break;
-                    }
-                }
+                // The flows on the way advance (`manageFlows`); the ends in front they have
+                // reached take an equal share each (`FluidNetwork.tick`'s `availableOutputs`).
+                pump.pumped = pump.pumped.saturating_add(1);
+                let reached: Vec<fluids::End> = pump
+                    .push
+                    .iter()
+                    .filter(|to| {
+                        to.passes(fluid) && pump.pumped >= fluids::arrival_ticks(&from, to, speed)
+                    })
+                    .copied()
+                    .collect();
+                let moved = fluids::share(reached.len(), n, |k, give| {
+                    fill_end(game, dimension, dim, &reached[k], fluid, give, &mut pump)
+                });
                 if moved > 0 {
                     if special.is_some() {
                         super::create_plumbing::take(game, dimension, dim, from.pos, moved);
@@ -416,6 +352,89 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
             w.dims[dim].pumps.insert(pos, pump);
         });
     }
+}
+
+/// Up to `n` mB of `fluid` into end `to` of `pump`'s pipes in front: a hose pulley's or creative
+/// tank's sink, a basin's inputs, a boiler's supply, a spout's tank, a tank's, or an open end's
+/// space (a source placed per bucket, `provideFluidToSpace`). How much it took.
+fn fill_end(
+    game: &mut Game<'_>,
+    dimension: &str,
+    dim: usize,
+    to: &create_engine::fluids::End,
+    fluid: create_engine::tank::Fluid,
+    n: u32,
+    pump: &mut create_engine::world::Pump,
+) -> u32 {
+    use create_engine::tank::BUCKET;
+    let special = if to.tank {
+        super::create_plumbing::sink(game, dimension, dim, to.pos, fluid, n)
+    } else {
+        None
+    };
+    if let Some(took) = special {
+        return took;
+    }
+    if to.tank && basin_at(game, to.pos) {
+        // A basin takes into its inputs.
+        let mut t = basin_tanks(dim, to.pos);
+        let took = create_engine::basin::fill(&mut t.input, fluid, n);
+        if took > 0 {
+            with_world(|w| w.set_basin_fluids(dim, to.pos, t));
+        }
+        return took;
+    }
+    if to.tank {
+        return with_world(|w| {
+            // A boiler takes all the water as supply, none into its tank
+            // (`BoilerFluidHandler.fill`).
+            if let Some(took) = w.fill_boiler(dim, to.pos, fluid, n) {
+                return took;
+            }
+            // A tank block fills its tank (by its controller).
+            match w.dims[dim].spouts.get_mut(&to.pos) {
+                Some(s) => {
+                    let took = create_engine::spout::fill(s, fluid, n);
+                    if took > 0 {
+                        w.dims[dim].analog_checks.push(to.pos);
+                    }
+                    took
+                }
+                None => w.fill_tank(dim, to.pos, fluid, n),
+            }
+        })
+        .unwrap_or(0);
+    }
+    // `OpenEndedPipe.provideFluidToSpace`: a bucket's worth becomes a source.
+    let have = pump.out.filter(|o| o.0 == fluid).map_or(0, |o| o.1);
+    let total = have + n;
+    if !fluid.placeable() {
+        // Create's own fluids have no blocks in the world yet.
+        return 0;
+    }
+    if total < BUCKET {
+        pump.out = Some((fluid, total));
+        return n;
+    }
+    let name = if fluid == create_engine::tank::Fluid::Water {
+        "minecraft:water"
+    } else {
+        "minecraft:lava"
+    };
+    let here = game.world.block(to.pos[0], to.pos[1], to.pos[2]);
+    if !game.res.behaviours().is_replaceable(here) {
+        return 0;
+    }
+    if let Some(src) = state_with(game.pack.assets.registry, name, &[("level", "0")]) {
+        game.native_set_block(
+            dimension,
+            to.pos,
+            src,
+            super::native_hooks::flags::UPDATE_ALL,
+        );
+    }
+    pump.out = (total > BUCKET).then_some((fluid, total - BUCKET));
+    n
 }
 
 /// Boilers and steam engines (`BoilerData.tick`, `SteamEngineBlockEntity.tick`): tanks whose

@@ -399,6 +399,8 @@ pub struct Pump {
     pub buffer: Option<(crate::tank::Fluid, u32)>,
     /// What arrived at an open end in front, placed as a source block once a bucket's worth.
     pub out: Option<(crate::tank::Fluid, u32)>,
+    /// Ticks it has pumped since its pipes last changed (its flows' progress).
+    pub pumped: u32,
 }
 
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.

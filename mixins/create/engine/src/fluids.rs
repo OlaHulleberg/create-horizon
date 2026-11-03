@@ -113,6 +113,8 @@ pub struct End {
     pub pressure: f32,
     pub blocked: bool,
     pub only: Option<Fluid>,
+    /// Pipes between the pump and it.
+    pub distance: i32,
 }
 
 impl End {
@@ -168,6 +170,7 @@ pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> C
         pressure: 0.0,
         blocked: pass.blocked,
         only: pass.only,
+        distance: 0,
     };
     let first = step(pump, side);
     let first_cell = cell(first);
@@ -221,10 +224,60 @@ pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> C
         let branches = same.max(1) as f32;
         out.push(End {
             pressure: speed.abs() / branches,
+            distance: *distance,
             ..*e
         });
     }
     out
+}
+
+/// `PipeConnection.manageFlows`: how far a flow gets across half a pipe in a tick at
+/// `pressure` (`1/32 + clamp(pressure / 128, 0, 1) * 31/32`).
+pub fn flow_speed(pressure: f32) -> f32 {
+    1.0 / 32.0 + (pressure / 128.0).clamp(0.0, 1.0) * 31.0 / 32.0
+}
+
+/// Ticks from a pump starting until fluid from end `from` behind it reaches end `to` in front
+/// (`FluidNetwork.tick` finds a target only once every flow on the way is complete): each pipe
+/// two connections (a half each) at its end's pressure, and the pump's own two at its speed.
+pub fn arrival_ticks(from: &End, to: &End, speed: f32) -> u32 {
+    let halves = |n: i32, pressure: f32| 2.0 * n as f32 / flow_speed(pressure);
+    let t = halves(from.distance, from.pressure)
+        + halves(1, speed.abs())
+        + halves(to.distance, to.pressure);
+    t.ceil() as u32
+}
+
+/// `FluidNetwork.tick`'s share of `amount` among `outputs` ends: equal parts, the remainder one
+/// each to the first, an end that takes less than its part left out of the next round
+/// (`availableOutputs`), until all is placed or nobody takes more. `fill` places at an end and
+/// says how much it took. What was placed in all.
+pub fn share(outputs: usize, amount: u32, mut fill: impl FnMut(usize, u32) -> u32) -> u32 {
+    let mut open: Vec<usize> = (0..outputs).collect();
+    let mut left = amount;
+    while !open.is_empty() && left > 0 {
+        let (part, mut extra) = (left / open.len() as u32, left % open.len() as u32);
+        let mut still = Vec::new();
+        for &i in &open {
+            let mut give = part;
+            if extra > 0 {
+                give += 1;
+                extra -= 1;
+            }
+            if give == 0 || left == 0 {
+                still.push(i);
+                continue;
+            }
+            let took = fill(i, give.min(left));
+            left -= took;
+            if took >= give {
+                still.push(i);
+            }
+        }
+        // Each round places something or leaves out an end that took less than its part.
+        open = still;
+    }
+    amount - left
 }
 
 /// `FluidNetwork.transferSpeed`: half the pressure where the fluid enters, at least 1 mB a tick.
@@ -425,6 +478,7 @@ mod tests {
             pressure,
             blocked: false,
             only: None,
+            distance: 0,
         }
     }
 
@@ -493,9 +547,21 @@ mod tests {
             _ => Cell::Solid,
         };
         let front = reach([0, 0, 0], Dir::East, 16.0, cell);
-        assert_eq!(front, vec![end([4, 0, 0], true, 16.0)]);
+        assert_eq!(
+            front,
+            vec![End {
+                distance: 3,
+                ..end([4, 0, 0], true, 16.0)
+            }]
+        );
         let back = reach([0, 0, 0], Dir::West, 16.0, cell);
-        assert_eq!(back, vec![end([-2, 0, 0], false, 16.0)]);
+        assert_eq!(
+            back,
+            vec![End {
+                distance: 1,
+                ..end([-2, 0, 0], false, 16.0)
+            }]
+        );
         assert_eq!(transfer_speed(16.0), 8);
         // Two ends at the same distance share the pressure.
         let fork = |p: [i32; 3]| match p {
@@ -525,7 +591,13 @@ mod tests {
             }
         };
         let open = reach([0, 0, 0], Dir::East, 32.0, line(Gate::Open));
-        assert_eq!(open, vec![end([4, 0, 0], true, 32.0)]);
+        assert_eq!(
+            open,
+            vec![End {
+                distance: 3,
+                ..end([4, 0, 0], true, 32.0)
+            }]
+        );
         assert!(open[0].passes(Fluid::Lava));
         let shut = reach([0, 0, 0], Dir::East, 32.0, line(Gate::Closed));
         assert_eq!(shut.len(), 1);
@@ -632,5 +704,46 @@ mod tests {
         );
         assert_eq!(smart_pipe_axis(true, Dir::East), Axis::Y);
         assert_eq!(smart_pipe_axis(false, Dir::East), Axis::X);
+    }
+
+    #[test]
+    fn fluid_takes_its_time_through_the_pipes_and_is_shared() {
+        // 16 rpm: a half pipe in 1 / (1/32 + 16/128 * 31/32) ≈ 6.6 ticks.
+        assert!((flow_speed(16.0) - 0.152_343_75).abs() < 1e-6);
+        let at = |distance: i32, pressure: f32| End {
+            pos: [0; 3],
+            tank: true,
+            pressure,
+            blocked: false,
+            only: None,
+            distance,
+        };
+        let end = |distance: i32| at(distance, 16.0);
+        // A tank right behind, one 5 pipes in front: (0 + 2 + 10) halves at 6.56 ticks.
+        assert_eq!(arrival_ticks(&end(0), &end(5), 16.0), 79);
+        // Further is later; faster is sooner.
+        assert!(arrival_ticks(&end(0), &end(10), 16.0) > 79);
+        assert!(arrival_ticks(&at(0, 256.0), &at(5, 256.0), 256.0) < 20);
+        // 10 mB among three ends that take all: 4, 3, 3.
+        let mut got = [0u32; 3];
+        assert_eq!(
+            share(3, 10, |i, n| {
+                got[i] += n;
+                n
+            }),
+            10
+        );
+        assert_eq!(got, [4, 3, 3]);
+        // One end full after 1 mB: the rest goes to the others.
+        let mut got = [0u32; 3];
+        let cap = [1u32, 100, 100];
+        let placed = share(3, 10, |i, n| {
+            let take = n.min(cap[i] - got[i]);
+            got[i] += take;
+            take
+        });
+        assert_eq!((placed, got), (10, [1, 5, 4]));
+        // Nobody takes anything: nothing placed, and it ends.
+        assert_eq!(share(2, 10, |_, _| 0), 0);
     }
 }
