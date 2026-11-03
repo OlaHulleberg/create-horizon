@@ -248,6 +248,15 @@ pub(super) fn chunk_load(
             rest = &more[n * 3..];
         }
     }
+    // Crafters with a slot cover: x, y, z each.
+    let covers: Vec<[i32; 3]> = match Game::native_chunk_data(chunk, "create")
+        .and_then(|d| d.get(&"crafter_covers".into()))
+    {
+        Some(horizon_world::nbt::Tag::IntArray(v)) => {
+            v.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+        }
+        _ => Vec::new(),
+    };
     let (vaults, filters) = vaults_from_nbt(Game::native_chunk_data(chunk, "create"));
     load_lifts(dim, lifts);
     arms_from_nbt(dim, Game::native_chunk_data(chunk, "create"));
@@ -275,6 +284,7 @@ pub(super) fn chunk_load(
         w.load_brass(dim, brass.into_iter());
         w.dims[dim].chassis_range.extend(ranges);
         w.dims[dim].crafter_inputs.extend(inputs);
+        w.dims[dim].crafter_covers.extend(covers);
         w.dims[dim].basin_fluids.extend(basins);
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
@@ -2243,6 +2253,18 @@ pub(super) fn chunk_data_save(
             .collect()
     })
     .unwrap_or_default();
+    // Crafters with a slot cover (`Cover`).
+    let covers: Vec<i32> = with_world(|w| {
+        let mut v: Vec<[i32; 3]> = w.dims[dim]
+            .crafter_covers
+            .iter()
+            .filter(|p| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]))
+            .copied()
+            .collect();
+        v.sort();
+        v.into_iter().flatten().collect()
+    })
+    .unwrap_or_default();
     // Crafters joined with the wrench (`ConnectedInput.write`).
     let inputs: Vec<i32> = with_world(|w| {
         let mut v: Vec<(&[i32; 3], &create_engine::crafter_input::Input)> = w.dims[dim]
@@ -2293,6 +2315,7 @@ pub(super) fn chunk_data_save(
         && deployers.is_empty()
         && ranges.is_empty()
         && inputs.is_empty()
+        && covers.is_empty()
         && basins.is_empty()
         && brass.is_empty()
         && trains.is_empty()
@@ -2344,6 +2367,12 @@ pub(super) fn chunk_data_save(
         own.insert(
             "crafter_inputs".into(),
             horizon_world::nbt::Tag::IntArray(inputs),
+        );
+    }
+    if !covers.is_empty() {
+        own.insert(
+            "crafter_covers".into(),
+            horizon_world::nbt::Tag::IntArray(covers),
         );
     }
     if !ranges.is_empty() {

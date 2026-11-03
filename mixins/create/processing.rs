@@ -3258,6 +3258,11 @@ pub(super) fn crafter_slot(game: &Game<'_>, p: [i32; 3]) -> Option<String> {
     }
 }
 
+/// Whether a crafter has its slot cover on (`covered`).
+pub(super) fn crafter_covered(dim: usize, p: [i32; 3]) -> bool {
+    with_world(|w| w.dims[dim].crafter_covers.contains(&p)) == Some(true)
+}
+
 /// The crafters whose slots make the inventory of the crafter at `pos`
 /// (`ConnectedInput.getInventories`): its group's, in order, or itself alone.
 pub(super) fn crafter_group(game: &Game<'_>, dim: usize, pos: [i32; 3]) -> Vec<[i32; 3]> {
@@ -3283,9 +3288,16 @@ pub(super) fn crafter_handler_insert(
     mut stack: horizon_client::items::ItemStack,
     simulate: bool,
 ) -> Option<horizon_client::items::ItemStack> {
+    // The grid keeps items by id: a stack with components stays out.
+    if stack.extra.is_some() || stack.damage != 0 {
+        return Some(stack);
+    }
     for p in crafter_group(game, dim, pos) {
         if stack.count == 0 {
             break;
+        }
+        if crafter_covered(dim, p) {
+            continue;
         }
         let idle = with_world(|w| w.dims[dim].crafters.get(&p).map(|c| c.phase))
             .flatten()
@@ -3367,8 +3379,9 @@ pub(super) fn crafter_edge(game: &mut Game<'_>, dim: usize, pos: [i32; 3], face:
     false
 }
 
-/// `MechanicalCrafterBlock.useItemOn` on its front: an empty slot takes one of the item in hand;
-/// an empty hand takes the slot's item back.
+/// `MechanicalCrafterBlock.useItemOn` on its front: at work, it throws its grid out; idle, a slot
+/// cover goes on an empty uncovered slot, anything else into its inventory (its group's, as much
+/// as it takes); an empty hand takes the slot's item back, or the cover off an empty one.
 pub(super) fn use_crafter(
     game: &mut Game<'_>,
     dim: usize,
@@ -3382,42 +3395,81 @@ pub(super) fn use_crafter(
     if face != facing.offset() || game.hand != horizon_client::first_person::Hand::Main {
         return;
     }
-    let idle = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.phase)).flatten()
-        == Some(create_engine::crafter::Phase::Idle);
     let held = game.inventory.get(game.selected).cloned().flatten();
+    if held
+        .as_ref()
+        .is_some_and(|h| &*h.item == "create:mechanical_arm")
+    {
+        return;
+    }
+    let wrenched = held.as_ref().is_some_and(|h| &*h.item == "create:wrench");
+    let is_hand = held.is_none();
+    let idle = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.phase))
+        .flatten()
+        .is_none_or(|ph| ph == create_engine::crafter::Phase::Idle);
+    if !idle && !wrenched {
+        *canceled = true;
+        let dimension = game.dim.id().to_owned();
+        crafters_eject(game, &dimension, dim, pos);
+        return;
+    }
+    let covered = crafter_covered(dim, pos);
     let slot = crafter_slot(game, pos);
-    match (held, slot) {
-        (Some(h), None) if idle && h.extra.is_none() && h.damage == 0 => {
-            *canceled = true;
-            let one = horizon_client::items::ItemStack {
-                count: 1,
-                ..h.clone()
-            };
-            if game
-                .native_with_mod_block_entity(pos, |be| {
-                    be.items.resize(be.items.len().max(1), None);
-                    be.items[0] = Some(one);
-                })
-                .is_some()
-                && let Some(Some(s)) = game.inventory.get_mut(game.selected)
-            {
-                s.count -= 1;
-                if s.count == 0 {
-                    game.inventory[game.selected] = None;
-                }
+    if idle && !is_hand && !wrenched {
+        let Some(h) = held else { return };
+        if &*h.item == "create:crafter_slot_cover" {
+            if covered || slot.is_some() {
+                return;
             }
-            with_world(|w| w.dims[dim].crafter_checks.push(pos));
-        }
-        (None, Some(item)) => {
             *canceled = true;
-            game.native_with_mod_block_entity(pos, |be| {
-                if let Some(s) = be.items.first_mut() {
-                    *s = None;
-                }
+            with_world(|w| {
+                w.dims[dim].crafter_covers.insert(pos);
+                w.mark_unsaved(dim, pos);
             });
-            game.native_give_items(&item, 1);
+            if !game.creative {
+                take_held(game, 1);
+            }
+            return;
         }
-        _ => {}
+        *canceled = true;
+        let count = h.count;
+        let left = crafter_handler_insert(game, dim, pos, h, false).map_or(0, |l| l.count);
+        take_held(game, count - left);
+        return;
+    }
+    let Some(item) = slot else {
+        if covered && !wrenched {
+            *canceled = true;
+            with_world(|w| {
+                w.dims[dim].crafter_covers.remove(&pos);
+                w.mark_unsaved(dim, pos);
+            });
+            if !game.creative {
+                game.native_give_items("create:crafter_slot_cover", 1);
+            }
+        }
+        return;
+    };
+    if !is_hand && held.as_ref().is_none_or(|h| *h.item != *item) {
+        return;
+    }
+    *canceled = true;
+    game.native_with_mod_block_entity(pos, |be| {
+        if let Some(s) = be.items.first_mut() {
+            *s = None;
+        }
+    });
+    game.native_give_items(&item, 1);
+}
+
+/// `n` of the selected stack used up.
+fn take_held(game: &mut Game<'_>, n: u32) {
+    let selected = game.selected;
+    if let Some(Some(s)) = game.inventory.get_mut(selected) {
+        s.count = s.count.saturating_sub(n);
+        if s.count == 0 {
+            game.inventory[selected] = None;
+        }
     }
 }
 
@@ -3605,11 +3657,13 @@ pub(super) fn tick_crafters(game: &mut Game<'_>, dimension: &str, dim: usize) {
         let idle = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.phase)).flatten()
             == Some(Phase::Idle);
         let rpm = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
-        if !idle || rpm == 0.0 || crafter_slot(game, pos).is_none() {
+        // `hasItemOrCover`.
+        let filled =
+            |g: &Game<'_>, p: [i32; 3]| crafter_slot(g, p).is_some() || crafter_covered(dim, p);
+        if !idle || rpm == 0.0 || !filled(game, pos) {
             continue;
         }
-        let Some(chain) = crafter_chain(game, pos, |g, p| crafter_slot(g, p).is_some(), false)
-        else {
+        let Some(chain) = crafter_chain(game, pos, filled, false) else {
             continue;
         };
         for p in chain {

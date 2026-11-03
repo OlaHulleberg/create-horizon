@@ -6,7 +6,7 @@ use crate::Block;
 use crate::kinetics::{Event, Kinetics, SolveStats};
 use crate::parts::{Settings, StateInfo, is_kinetic, parts};
 use crate::states;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Every Create block state, by `state - first`: its block, its decoded properties, and whether it
 /// holds kinetic parts. Built once when a world opens, never per tick.
@@ -244,6 +244,8 @@ pub struct Dimension {
     /// Crafters joined with the wrench (`ConnectedInput`), saved with their chunk; one alone
     /// has no entry.
     pub crafter_inputs: crate::crafter_input::Inputs,
+    /// Crafters with a slot cover (`covered`), saved with their chunk.
+    pub crafter_covers: HashSet<[i32; 3]>,
     pub gantry_assemble: Vec<[i32; 3]>,
     pub gantries: Vec<crate::gantry::Moving>,
     /// Mechanical bearings whose speed changed (`assembleNextTick`).
@@ -1327,6 +1329,12 @@ impl CreateWorld {
                 }
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
+            // `onRemove`: its slot cover drops.
+            if d.crafter_covers.remove(&pos) {
+                d.crafter_drops
+                    .push((pos, "create:crafter_slot_cover".to_owned()));
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if let Some(c) = d.crafters.remove(&pos) {
                 d.crafting.retain(|p| *p != pos);
                 // `ejectWholeGrid` when it breaks: what it held drops (its slot drops with its
@@ -1513,6 +1521,8 @@ impl CreateWorld {
             d.crafters.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafter_inputs
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.crafter_covers
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafting.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafter_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
