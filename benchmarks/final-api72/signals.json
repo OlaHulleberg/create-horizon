@@ -1,0 +1,104 @@
+{
+  "scenario": "signals",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.99755859375,
+    2.14892578125,
+    2.00341796875
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 744,
+      "frames": 23101,
+      "frame_ms_p50": 0.5076149702072144,
+      "frame_ms_p99": 0.9349740147590636,
+      "fps": 1925.0833333333333,
+      "tick_ms": 2.133707046508789,
+      "tick_ms_max": 4.769717216491699,
+      "cpu_ms_p50": 0.4046880006790161,
+      "gpu_ms_p50": 0.4538020789623261,
+      "check": [
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 744,
+      "frames": 22829,
+      "frame_ms_p50": 0.5166950225830078,
+      "frame_ms_p99": 0.9419739842414856,
+      "fps": 1902.4166666666667,
+      "tick_ms": 2.263374090194702,
+      "tick_ms_max": 8.200632095336914,
+      "cpu_ms_p50": 0.4652869999408722,
+      "gpu_ms_p50": 0.4359895586967468,
+      "check": [
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 744,
+      "frames": 23339,
+      "frame_ms_p50": 0.5021960139274597,
+      "frame_ms_p99": 0.9179549813270568,
+      "fps": 1944.9166666666667,
+      "tick_ms": 2.2659616470336914,
+      "tick_ms_max": 7.757665157318115,
+      "cpu_ms_p50": 0.4547469913959503,
+      "gpu_ms_p50": 0.4420833289623261,
+      "check": [
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)",
+        "no train can reach that station (no track beside it, or no path)"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1924.138888888889,
+    "frame_ms_p50": 0.5088353355725607,
+    "frame_ms_p99": 0.9316343267758687,
+    "tick_ms": 2.2210142612457275,
+    "tick_ms_max": 6.909338156382243
+  },
+  "stdev": {
+    "fps": 21.265734915151214,
+    "frame_ms_p50": 0.007326136889051228,
+    "frame_ms_p99": 0.012352864530936038,
+    "tick_ms": 0.07562133410248834,
+    "tick_ms_max": 1.8661560095174272
+  }
+}
