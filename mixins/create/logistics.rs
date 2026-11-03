@@ -1782,7 +1782,7 @@ pub(super) fn draw_belt(
     }
     for (i, item) in contents.items.items.iter().enumerate() {
         let place = belt::item_place(&contents.segment, length, item.position, item.side_offset);
-        let moving = !item.locked && !item.at_funnel && speed != 0.0;
+        let moving = !item.locked && !item.at_funnel && !item.stalled && speed != 0.0;
         let velocity = if moving {
             belt::item_velocity(&contents.segment, length, item.position, speed).to_array()
         } else {

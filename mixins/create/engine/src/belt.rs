@@ -222,6 +222,15 @@ pub fn movement_facing(rpm: f32, facing: Dir) -> Dir {
     Dir::from_axis(axis, !negative)
 }
 
+/// Notes that an item stopped or started moving: clients draw it gliding, so they must hear when
+/// that changes (Create resends a belt whose items changed, `notifyUpdate`).
+fn set_stalled(item: &mut Item, stalled: bool, out: &mut Ticked) {
+    if item.stalled != stalled {
+        item.stalled = stalled;
+        out.changed = true;
+    }
+}
+
 /// A stack on a belt (`TransportedItemStack`): how far along it is, sideways offset, angle, the
 /// stack, and whether a machine holds it.
 #[derive(Clone, Debug, PartialEq)]
@@ -240,6 +249,9 @@ pub struct Item {
     pub held_externally: bool,
     /// A belt funnel facing against the belt holds it at its entry (drawn standing still).
     pub at_funnel: bool,
+    /// It didn't move last tick: queued behind another stack or held at the belt's end. Clients
+    /// draw it gliding only while this is false, so they are told when it flips. Not saved.
+    pub stalled: bool,
 }
 
 impl Item {
@@ -258,6 +270,7 @@ impl Item {
             fan: Default::default(),
             held_externally: false,
             at_funnel: false,
+            stalled: false,
         };
         i.side_offset = i.target_side_offset();
         i
@@ -744,6 +757,7 @@ impl Inventory {
                 FunnelStep::Free => {}
             }
             if no_movement {
+                set_stalled(&mut self.items[i], true, &mut out);
                 front = Some(self.items[i].position);
                 i += 1;
                 continue;
@@ -760,11 +774,16 @@ impl Inventory {
                     out.changed = true;
                 }
                 if stuck {
+                    set_stalled(&mut self.items[i], true, &mut out);
                     front = Some(self.items[i].position);
                     i += 1;
                     continue;
                 }
             }
+            // Held at the end the move is a float's rounding away from none: what counts is
+            // whether the position changes.
+            let still = self.items[i].position + limited == self.items[i].position;
+            set_stalled(&mut self.items[i], still, &mut out);
             let item = &mut self.items[i];
             item.position += limited;
             let to_middle = item.target_side_offset() - item.side_offset;
@@ -1022,7 +1041,9 @@ fn encode_one(c: &Contents, out: &mut Vec<u8>) {
         out.extend_from_slice(&i.side_offset.to_le_bytes());
         out.extend_from_slice(&(i.angle as i16).to_le_bytes());
         let name = &i.item.as_bytes()[..i.item.len().min(255)];
-        out.extend_from_slice(&[i.count, u8::from(i.locked), name.len() as u8]);
+        // Standing still, by why: bit 0 locked, 1 held at a funnel, 2 stalled.
+        let still = u8::from(i.locked) | u8::from(i.at_funnel) << 1 | u8::from(i.stalled) << 2;
+        out.extend_from_slice(&[i.count, still, name.len() as u8]);
         out.extend_from_slice(name);
     }
 }
@@ -1086,13 +1107,14 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
                 side_offset: f32_of(&r[4..8]),
                 angle: i32::from(i16::from_le_bytes([r[8], r[9]])),
                 count: r[10],
-                locked: r[11] != 0,
+                locked: r[11] & 1 != 0,
                 item: String::from_utf8_lossy(name).into_owned(),
                 inserted_at: 0,
                 inserted_from: None,
                 fan: Default::default(),
                 held_externally: false,
-                at_funnel: false,
+                at_funnel: r[11] & 2 != 0,
+                stalled: r[11] & 4 != 0,
             });
         }
         out.push(c);
@@ -1428,6 +1450,33 @@ mod tests {
     }
 
     #[test]
+    fn a_stack_that_stops_at_a_blocked_end_is_sent_once_and_starts_again() {
+        let mut belt = Inventory {
+            positive: true,
+            ..Inventory::default()
+        };
+        let mut i = Item::new("minecraft:iron_ingot", 8, 0, false);
+        i.position = 2.5;
+        belt.items.push(i);
+        let mut blocked = Open(Ending::Blocked);
+        // Rolling toward the end of a 4-long belt: the ticks that move it report nothing new.
+        let mut changes = Vec::new();
+        for _ in 0..40 {
+            changes.push(belt.tick(4, 0.1, true, &mut blocked).changed);
+        }
+        let item = &belt.items[0];
+        assert!(item.stalled, "held at the end");
+        assert_eq!(
+            changes.iter().filter(|c| **c).count(),
+            1,
+            "told once, when it stopped: {changes:?}"
+        );
+        // Turned the other way it moves off again, and that is a change too.
+        assert!(belt.tick(4, -0.1, true, &mut blocked).changed);
+        assert!(!belt.items[0].stalled);
+    }
+
+    #[test]
     fn belts_round_trip_in_messages() {
         let mut items = Inventory {
             positive: true,
@@ -1437,6 +1486,12 @@ mod tests {
         i.position = 1.25;
         i.locked = true;
         items.items.push(i);
+        // Each way of standing still reaches the client on its own.
+        for (at_funnel, stalled) in [(true, false), (false, true)] {
+            let mut i = Item::new("minecraft:gold_ingot", 3, 0, false);
+            (i.at_funnel, i.stalled) = (at_funnel, stalled);
+            items.items.push(i);
+        }
         let c = Contents {
             controller: [4, 70, -9],
             segment: seg(Dir::West, Slope::Downward, Part::Start),
