@@ -138,3 +138,12 @@ pub(super) fn give_back(game: &mut Game<'_>, stack: ItemStack) {
         None => game.inventory.push(Some(stack)),
     }
 }
+
+pub(super) fn sequenced_progress(stack: &ItemStack) -> Option<(String, u32)> {
+    let _ = stack;
+    None
+}
+
+pub(super) fn set_sequenced_progress(stack: &mut ItemStack, id: &str, step: u32, progress: f32) {
+    let _ = (stack, id, step, progress);
+}

@@ -1352,8 +1352,9 @@ pub(super) fn item_landed(
         ) => (pos, b),
         _ => return,
     };
-    if stack.extra.is_some() {
-        // Stacks with components keep them only as entities, for now.
+    // Stacks with components keep them only as entities, for now, but on a depot: it holds the
+    // whole stack (a sequenced assembly's transitional item, its progress with it).
+    if (stack.extra.is_some() || stack.damage != 0) && block != create_engine::Block::Depot {
         return;
     }
     if block == create_engine::Block::Basin {
@@ -1426,10 +1427,8 @@ pub(super) fn item_landed(
             return;
         }
         let put = horizon_client::items::ItemStack {
-            item: stack.item.clone(),
             count: u32::from(count),
-            damage: 0,
-            extra: None,
+            ..stack.clone()
         };
         if game
             .native_with_mod_block_entity(spot, |be| {

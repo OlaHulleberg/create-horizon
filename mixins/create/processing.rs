@@ -195,10 +195,21 @@ pub(super) fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]
         return false;
     }
     let tool = d.held.as_ref().map(|h| h.0.clone()).unwrap_or_default();
-    let recipe = RECIPES.with_borrow(|r| {
-        r.as_ref()
-            .and_then(|r| deployer::find(&r.deploying, &item, &tool).cloned())
-    });
+    // A sequenced assembly's deploying step first, with the item the deployer holds.
+    let sequenced = sequenced_on_depot(game, depot, "create:deploying", Some(&tool));
+    let recipe = match &sequenced {
+        Some((a, _, s)) => Some(deployer::Recipe {
+            id: a.id.clone(),
+            target: Vec::new(),
+            tool: s.with.clone().unwrap_or_default(),
+            results: Vec::new(),
+            keep_held: s.keep_held,
+        }),
+        None => RECIPES.with_borrow(|r| {
+            r.as_ref()
+                .and_then(|r| deployer::find(&r.deploying, &item, &tool).cloned())
+        }),
+    };
     let step = deployer::on_depot(&d, rpm, held.locked, recipe.is_some());
     let hold = match step {
         Depot::Pass => {
@@ -236,6 +247,18 @@ pub(super) fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]
             let Some(r) = recipe else {
                 return false;
             };
+            if let Some((a, progress, _)) = &sequenced {
+                held = sequenced_step_on_depot(game, dim, depot, count, held, a, progress.as_ref());
+                held.locked = true;
+                deployer::use_held(&mut d.held, &r);
+                with_world(|w| w.set_deployer(dim, above, d.clone()));
+                with_world(|w| {
+                    if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
+                        *h = h.map(|_| held);
+                    }
+                });
+                return true;
+            }
             // `RecipeApplier.applyRecipeOn` on one of the stack, `getMaxOutputCount` 4.
             let seed = game.world.game_time as u64 ^ (depot[0] as u64).wrapping_mul(0x9E37_79B9);
             let p = create_engine::processing::Recipe {
@@ -790,10 +813,13 @@ pub(super) fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
         };
         let speed = with_world(|w| w.speed(dim, above)).flatten().unwrap_or(0.0);
         let in_way = blocked(game, [depot[0], depot[1] + 1, depot[2]]);
-        let fits = RECIPES.with_borrow(|r| {
-            r.as_ref()
-                .is_some_and(|r| r.pressing.find_single(&item).is_some())
-        });
+        // A sequenced assembly's pressing step first (`SequencedAssemblyRecipe.getRecipe`).
+        let sequenced = sequenced_on_depot(game, depot, "create:pressing", None);
+        let fits = sequenced.is_some()
+            || RECIPES.with_borrow(|r| {
+                r.as_ref()
+                    .is_some_and(|r| r.pressing.find_single(&item).is_some())
+            });
         let step = press::depot_step(&mut held, &p, speed, in_way, fits);
         match step {
             Step::Idle => {}
@@ -807,7 +833,12 @@ pub(super) fn tick_presses(game: &mut Game<'_>, dimension: &str, dim: usize) {
                 keep.push(depot);
             }
             Step::Process => {
-                held = press_on_depot(game, dim, depot, &item, count, held);
+                held = match &sequenced {
+                    Some((a, progress, _)) => {
+                        sequenced_step_on_depot(game, dim, depot, count, held, a, progress.as_ref())
+                    }
+                    None => press_on_depot(game, dim, depot, &item, count, held),
+                };
                 keep.push(depot);
             }
         }
@@ -895,6 +926,126 @@ pub(super) fn press_on_depot(
         return held;
     };
     results_on_depot(game, dim, depot, count, held, results)
+}
+
+/// The depot's held stack with its components.
+fn depot_held_stack(game: &Game<'_>, depot: [i32; 3]) -> Option<horizon_client::items::ItemStack> {
+    match game
+        .world
+        .block_entities
+        .get(&(depot[0], depot[1], depot[2]))
+    {
+        Some(horizon_client::containers::BlockEntity::Mod(m)) => m.items.first()?.clone(),
+        _ => None,
+    }
+}
+
+/// `SequencedAssemblyRecipe.getRecipe` for the stack held on `depot` and a machine of recipe
+/// type `kind` (a deployer holding `tool`): the assembly, the item's progress and the step,
+/// when the item is at a step of that type (and the deployer holds what it takes).
+pub(super) fn sequenced_on_depot(
+    game: &Game<'_>,
+    depot: [i32; 3],
+    kind: &str,
+    tool: Option<&str>,
+) -> Option<(
+    create_engine::sequenced::Assembly,
+    Option<create_engine::sequenced::Progress>,
+    create_engine::sequenced::Step,
+)> {
+    use create_engine::sequenced::{Progress, step_for};
+    let stack = depot_held_stack(game, depot)?;
+    let progress = super::create_items_body::sequenced_progress(&stack)
+        .map(|(id, step)| Progress { id, step });
+    RECIPES.with_borrow(|r| {
+        let r = r.as_ref()?;
+        let (a, s) = step_for(&r.sequenced, &stack.item, progress.as_ref(), kind)?;
+        if let Some(with) = &s.with
+            && !tool.is_some_and(|t| with.iter().any(|w| w == t))
+        {
+            return None;
+        }
+        Some((a.clone(), progress.clone(), s.clone()))
+    })
+}
+
+/// A sequenced step done on the depot's held stack (one of it, `advance`): the transitional item
+/// a step on (its progress kept with it), or a result rolled from the pool.
+pub(super) fn sequenced_step_on_depot(
+    game: &mut Game<'_>,
+    dim: usize,
+    depot: [i32; 3],
+    count: u8,
+    held: create_engine::depot::Held,
+    assembly: &create_engine::sequenced::Assembly,
+    progress: Option<&create_engine::sequenced::Progress>,
+) -> create_engine::depot::Held {
+    use create_engine::sequenced::Advanced;
+    let seed = game.world.game_time as u64 ^ (depot[0] as u64).wrapping_mul(0x9E37_79B9);
+    let roll = create_engine::processing::Rng::new(seed).next_float();
+    match assembly.advance(progress, roll) {
+        Advanced::Done { item, count: n } => {
+            results_on_depot(game, dim, depot, count, held, vec![(item, n)])
+        }
+        Advanced::Nothing => results_on_depot(game, dim, depot, count, held, Vec::new()),
+        Advanced::Next {
+            item,
+            progress,
+            fraction,
+        } => {
+            let mut stack = horizon_client::items::ItemStack::new(item.as_str(), 1);
+            super::create_items_body::set_sequenced_progress(
+                &mut stack,
+                &progress.id,
+                progress.step,
+                fraction,
+            );
+            // One held: it becomes the transitional item, centred; more: one goes to the first
+            // free output, or drops above the depot.
+            let angle = random_angle(game, depot);
+            let mut next = held;
+            let placed = game
+                .native_with_mod_block_entity(depot, |be| {
+                    be.items
+                        .resize(be.items.len().max(create_engine::depot::SLOTS), None);
+                    if count == 1 {
+                        be.items[0] = Some(stack.clone());
+                        next = create_engine::depot::Held {
+                            angle,
+                            position: 0.5,
+                            locked: true,
+                            ..held
+                        };
+                        return true;
+                    }
+                    if let Some(s) = be.items[0].as_mut() {
+                        s.count -= 1;
+                    }
+                    let free = be.items[create_engine::depot::OUTPUTS]
+                        .iter_mut()
+                        .find(|s| s.is_none());
+                    match free {
+                        Some(slot) => {
+                            *slot = Some(stack.clone());
+                            true
+                        }
+                        None => false,
+                    }
+                })
+                .unwrap_or(false);
+            if !placed {
+                game.native_run_command(&format!(
+                    "summon minecraft:item {}.5 {}.0 {}.5 {{Item:{{id:'{}',count:1}}}}",
+                    depot[0],
+                    depot[1] + 1,
+                    depot[2],
+                    stack.item
+                ));
+            }
+            with_world(|w| w.depot_changed(dim, depot));
+            next
+        }
+    }
 }
 
 /// A processing result on a depot's held stack (`handleProcessingOnItem`): one of the stack

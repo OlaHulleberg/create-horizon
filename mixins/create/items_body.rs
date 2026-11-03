@@ -455,3 +455,25 @@ pub(super) fn give_back(game: &mut Game<'_>, stack: ItemStack) {
         game.spawn_item(rest, p.position, [0.0; 3], 0);
     }
 }
+
+/// `AllDataComponents.SEQUENCED_ASSEMBLY` of a stack (kept in `minecraft:custom_data`): the
+/// assembly recipe and the step it is at.
+const SEQUENCED_KEY: &str = "create:sequenced_assembly";
+
+pub(super) fn sequenced_progress(stack: &ItemStack) -> Option<(String, u32)> {
+    let Some(Tag::Compound(c)) = get(custom(stack), SEQUENCED_KEY) else {
+        return None;
+    };
+    let id = text(c.get(&JavaString::from("id")))?;
+    let step = int(c.get(&JavaString::from("step")))?;
+    Some((id, step.max(0) as u32))
+}
+
+/// The stack marked with assembly `id` at `step` (`progress` the step over all of them).
+pub(super) fn set_sequenced_progress(stack: &mut ItemStack, id: &str, step: u32, progress: f32) {
+    let mut c = Compound::new();
+    c.insert("id".into(), Tag::String(id.into()));
+    c.insert("step".into(), Tag::Int(step as i32));
+    c.insert("progress".into(), Tag::Float(progress.to_bits()));
+    set_custom(stack, vec![(SEQUENCED_KEY, Some(Tag::Compound(c)))]);
+}
