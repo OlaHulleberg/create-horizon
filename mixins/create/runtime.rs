@@ -4120,6 +4120,7 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
                 }
                 // `setStackToDistribute`.
                 b.stack = Some((item.item.clone(), item.count));
+                b.stack_progress = item.progress.clone();
                 b.entered_from = Some(movement.opposite());
                 b.progress = -1;
                 b.new_item = true;

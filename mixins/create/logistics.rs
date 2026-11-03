@@ -485,10 +485,12 @@ pub(super) fn tick_chutes(game: &mut Game<'_>, dim: usize) {
                     f64::from(pos[1]) + 0.5 - 0.75,
                     f64::from(pos[2]) + 0.5,
                 );
-                game.native_run_command(&format!(
-                    "summon minecraft:item {x} {y} {z} {{Item:{{id:'{}',count:{}}},Motion:[0d,-0.25d,0d]}}",
-                    stack.item, stack.count
-                ));
+                super::create_contraption_body::drop_stack_now(
+                    game,
+                    [x, y, z],
+                    [0.0, -0.25, 0.0],
+                    stack,
+                );
                 set_chute_stack(game, pos, None);
                 None
             }
@@ -1368,15 +1370,20 @@ pub(super) fn item_landed(
         ) => (pos, b),
         _ => return,
     };
-    // Stacks with components keep them only as entities, for now, but on a depot (it holds the
-    // whole stack), a saw and a belt (a sequenced assembly's transitional item, its progress
-    // with it).
-    let carried = block == create_engine::Block::Depot
-        || (matches!(
-            block,
-            create_engine::Block::MechanicalSaw | create_engine::Block::Belt
-        ) && stack.damage == 0
-            && super::create_items_body::sequenced_progress(stack).is_some());
+    // Stacks with components keep them only as entities, for now, but on a depot and in a chute
+    // (they hold the whole stack), a saw and a belt (a sequenced assembly's transitional item,
+    // its progress with it).
+    // A chute holds a whole stack too.
+    let carried = matches!(
+        block,
+        create_engine::Block::Depot
+            | create_engine::Block::Chute
+            | create_engine::Block::SmartChute
+    ) || (matches!(
+        block,
+        create_engine::Block::MechanicalSaw | create_engine::Block::Belt
+    ) && stack.damage == 0
+        && super::create_items_body::sequenced_progress(stack).is_some());
     if (stack.extra.is_some() || stack.damage != 0) && !carried {
         return;
     }
@@ -2103,18 +2110,15 @@ pub(super) fn tick_brass(game: &mut Game<'_>, dim: usize) {
                     }
                     return Some(0);
                 }
-                insert_into(
-                    game,
-                    dim,
-                    p,
-                    d,
-                    &create_engine::belt::Item::new(&item, n, 180, false),
-                )
+                let mut one = create_engine::belt::Item::new(&item, n, 180, false);
+                one.progress = b.stack_progress.clone();
+                insert_into(game, dim, p, d, &one)
             },
         );
         b.stack = (left > 0).then(|| (item.clone(), left));
         if b.stack.is_none() {
             b.entered_from = None;
+            b.stack_progress = None;
         }
         b.previous_output = (b.previous_output + 1) % outputs.len().max(1);
         b.progress = -1;

@@ -110,6 +110,15 @@ pub(super) fn drop_stack(game: &mut Game<'_>, at: [f64; 3], motion: [f64; 3], st
     DROPPED.with_borrow_mut(|d| d.push((at, stack.item.to_string(), stack.count)));
 }
 
+pub(super) fn drop_stack_now(
+    game: &mut Game<'_>,
+    at: [f64; 3],
+    motion: [f64; 3],
+    stack: ItemStack,
+) {
+    drop_stack(game, at, motion, stack);
+}
+
 pub(super) fn random_float(game: &mut Game<'_>) -> f32 {
     let _ = game;
     0.5
