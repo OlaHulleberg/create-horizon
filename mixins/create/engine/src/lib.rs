@@ -22,6 +22,7 @@ pub mod controller;
 pub mod copycat;
 pub mod coupling;
 pub mod crafter;
+pub mod crafter_input;
 pub mod crusher;
 pub mod cuckoo;
 pub mod decor;

@@ -241,6 +241,9 @@ pub struct Dimension {
     pub crafting: Vec<[i32; 3]>,
     pub crafter_checks: Vec<[i32; 3]>,
     pub crafter_drops: Vec<([i32; 3], String)>,
+    /// Crafters joined with the wrench (`ConnectedInput`), saved with their chunk; one alone
+    /// has no entry.
+    pub crafter_inputs: crate::crafter_input::Inputs,
     pub gantry_assemble: Vec<[i32; 3]>,
     pub gantries: Vec<crate::gantry::Moving>,
     /// Mechanical bearings whose speed changed (`assembleNextTick`).
@@ -1315,6 +1318,15 @@ impl CreateWorld {
                         .extend(std::iter::repeat_n((pos, item), usize::from(n)));
                 }
             }
+            if d.crafter_inputs.contains_key(&pos) {
+                match self.table.get(old).and_then(|(_, i)| i.facing) {
+                    Some(f) => crate::crafter_input::remove(&mut d.crafter_inputs, pos, f),
+                    None => {
+                        d.crafter_inputs.remove(&pos);
+                    }
+                }
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if let Some(c) = d.crafters.remove(&pos) {
                 d.crafting.retain(|p| *p != pos);
                 // `ejectWholeGrid` when it breaks: what it held drops (its slot drops with its
@@ -1499,6 +1511,8 @@ impl CreateWorld {
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.deploying.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafters.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.crafter_inputs
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafting.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafter_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));

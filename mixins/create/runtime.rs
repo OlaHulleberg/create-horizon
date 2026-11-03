@@ -223,6 +223,31 @@ pub(super) fn chunk_load(
                 .collect(),
             _ => Vec::new(),
         };
+    // Crafters joined with the wrench: x, y, z, controller, the count, then the offsets.
+    let mut inputs: Vec<([i32; 3], create_engine::crafter_input::Input)> = Vec::new();
+    if let Some(horizon_world::nbt::Tag::IntArray(v)) =
+        Game::native_chunk_data(chunk, "create").and_then(|d| d.get(&"crafter_inputs".into()))
+    {
+        let mut rest = &v[..];
+        while let [x, y, z, controller, n, more @ ..] = rest {
+            let n = (*n).clamp(0, 4096) as usize;
+            let Some(offsets) = more.get(..n * 3) else {
+                break;
+            };
+            let data = offsets
+                .chunks_exact(3)
+                .map(|o| [o[0], o[1], o[2]])
+                .collect();
+            inputs.push((
+                [*x, *y, *z],
+                create_engine::crafter_input::Input {
+                    controller: *controller != 0,
+                    data,
+                },
+            ));
+            rest = &more[n * 3..];
+        }
+    }
     let (vaults, filters) = vaults_from_nbt(Game::native_chunk_data(chunk, "create"));
     load_lifts(dim, lifts);
     arms_from_nbt(dim, Game::native_chunk_data(chunk, "create"));
@@ -249,6 +274,7 @@ pub(super) fn chunk_load(
         w.load_deployers(dim, deployers.into_iter());
         w.load_brass(dim, brass.into_iter());
         w.dims[dim].chassis_range.extend(ranges);
+        w.dims[dim].crafter_inputs.extend(inputs);
         w.dims[dim].basin_fluids.extend(basins);
         for (i, section) in chunk.sections.iter().enumerate() {
             if let Some(single) = section.blocks.uniform()
@@ -2217,6 +2243,29 @@ pub(super) fn chunk_data_save(
             .collect()
     })
     .unwrap_or_default();
+    // Crafters joined with the wrench (`ConnectedInput.write`).
+    let inputs: Vec<i32> = with_world(|w| {
+        let mut v: Vec<(&[i32; 3], &create_engine::crafter_input::Input)> = w.dims[dim]
+            .crafter_inputs
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]))
+            .collect();
+        v.sort_by_key(|e| *e.0);
+        v.into_iter()
+            .flat_map(|(p, i)| {
+                [
+                    p[0],
+                    p[1],
+                    p[2],
+                    i32::from(i.controller),
+                    i.data.len() as i32,
+                ]
+                .into_iter()
+                .chain(i.data.iter().flatten().copied())
+            })
+            .collect()
+    })
+    .unwrap_or_default();
     let vaults = with_world(|w| w.dims[dim].vaults.column(chunk[0], chunk[1])).unwrap_or_default();
     let filters: Vec<([i32; 3], create_engine::filter::Filter)> = with_world(|w| {
         let mut v: Vec<([i32; 3], create_engine::filter::Filter)> = w.dims[dim]
@@ -2243,6 +2292,7 @@ pub(super) fn chunk_data_save(
         && diodes.is_empty()
         && deployers.is_empty()
         && ranges.is_empty()
+        && inputs.is_empty()
         && basins.is_empty()
         && brass.is_empty()
         && trains.is_empty()
@@ -2289,6 +2339,12 @@ pub(super) fn chunk_data_save(
     }
     if !deployers.is_empty() {
         own.insert("deployers".into(), deployers_to_nbt(&deployers));
+    }
+    if !inputs.is_empty() {
+        own.insert(
+            "crafter_inputs".into(),
+            horizon_world::nbt::Tag::IntArray(inputs),
+        );
     }
     if !ranges.is_empty() {
         own.insert("chassis".into(), horizon_world::nbt::Tag::IntArray(ranges));
@@ -4593,6 +4649,15 @@ pub(super) fn use_item_on(
     let Some(clicked) = Dir::from_offset(face) else {
         return;
     };
+    // The wrench on a crafter's edge joins or parts inputs (before it turns anything).
+    if block == create_engine::Block::MechanicalCrafter
+        && !game.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+        && let Some(dim) = dimension_index(&dimension)
+        && crafter_edge(game, dim, pos, clicked)
+    {
+        *claimed = true;
+        return;
+    }
     *claimed = true;
     let registry = game.pack.assets.registry;
     let Some(current) = registry.state(state).cloned() else {

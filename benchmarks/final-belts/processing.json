@@ -1,0 +1,71 @@
+{
+  "scenario": "processing",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.07177734375,
+    1.52392578125,
+    1.84814453125
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 23861,
+      "frame_ms_p50": 0.4916759729385376,
+      "frame_ms_p99": 0.9974320530891418,
+      "fps": 1988.4166666666667,
+      "tick_ms": 2.5254807472229004,
+      "tick_ms_max": 5.468033313751221,
+      "cpu_ms_p50": 0.397258996963501,
+      "gpu_ms_p50": 0.4403124749660492,
+      "check": [
+        "-536, 88, 73 has the following block data: {x: -536, y: 88, Items: [{count: 57, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 7, Slot: 1b, id: \"create:iron_sheet\"}], z: 73, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 23329,
+      "frame_ms_p50": 0.5036370158195496,
+      "frame_ms_p99": 0.9446539878845216,
+      "fps": 1944.0833333333333,
+      "tick_ms": 2.50399398803711,
+      "tick_ms_max": 8.54111099243164,
+      "cpu_ms_p50": 0.4011690020561218,
+      "gpu_ms_p50": 0.45135414600372314,
+      "check": [
+        "-531, 91, 66 has the following block data: {x: -531, y: 91, Items: [{count: 57, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 7, Slot: 1b, id: \"create:iron_sheet\"}], z: 66, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 23314,
+      "frame_ms_p50": 0.5071160197257996,
+      "frame_ms_p99": 0.9628329873085022,
+      "fps": 1942.8333333333333,
+      "tick_ms": 2.602487087249756,
+      "tick_ms_max": 7.55441951751709,
+      "cpu_ms_p50": 0.3859094977378845,
+      "gpu_ms_p50": 0.45526039600372314,
+      "check": [
+        "-527, 91, 73 has the following block data: {x: -527, y: 91, Items: [{count: 57, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 7, Slot: 1b, id: \"create:iron_sheet\"}], z: 73, id: \"create:depot\"}"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1958.4444444444443,
+    "frame_ms_p50": 0.5008096694946289,
+    "frame_ms_p99": 0.9683063427607219,
+    "tick_ms": 2.543987274169922,
+    "tick_ms_max": 7.187854607899983
+  },
+  "stdev": {
+    "fps": 25.96422931079812,
+    "frame_ms_p50": 0.00809902318980452,
+    "frame_ms_p99": 0.0268113643184293,
+    "tick_ms": 0.051788911002826295,
+    "tick_ms_max": 1.5689897958632195
+  }
+}

@@ -1659,6 +1659,48 @@ pub(super) fn tick_saws(game: &mut Game<'_>, dim: usize) {
             }
             Step::Out => {
                 let m = create_engine::saw::movement(along_first, speed);
+                // A belt or depot it turns toward takes the results (`DirectBeltInputBehaviour`
+                // from that side); what it doesn't take waits in the saw.
+                let next = [pos[0] + m[0], pos[1], pos[2] + m[2]];
+                let facing = Dir::ALL.into_iter().find(|d| d.offset() == m);
+                let belt_input = with_world(|w| {
+                    let d = &w.dims[dim];
+                    d.depots.contains_key(&next) || d.belt_of.contains_key(&next)
+                }) == Some(true);
+                if let (true, Some(facing)) = (belt_input, facing) {
+                    let progress = saw.progress.clone();
+                    let transitional = progress.as_ref().and_then(transitional_of).map(|t| t.0);
+                    let mut left = Vec::new();
+                    for (item, count) in std::mem::take(&mut saw.slots) {
+                        let mut one = create_engine::belt::Item::new(
+                            &item,
+                            count,
+                            random_angle(game, pos),
+                            upright(game, &item),
+                        );
+                        if transitional.as_deref() == Some(item.as_str()) {
+                            one.progress = progress.clone();
+                        }
+                        let n =
+                            insert_into_from(game, dim, next, facing, &one, false).unwrap_or(count);
+                        if n > 0 {
+                            left.push((item, n));
+                        }
+                    }
+                    if left.is_empty() {
+                        saw.clear();
+                    } else {
+                        saw.slots = left;
+                    }
+                    with_world(|w| {
+                        if saw.slots.is_empty() {
+                            w.dims[dim].saws.remove(&pos);
+                        } else {
+                            w.dims[dim].saws.insert(pos, saw);
+                        }
+                    });
+                    continue;
+                }
                 let (x, y, z) = (
                     f64::from(pos[0]) + 0.5 + f64::from(m[0]) * 0.5,
                     f64::from(pos[1]) + 1.0,
@@ -2182,13 +2224,53 @@ pub(super) fn tick_crusher(game: &mut Game<'_>, dimension: &str, dim: usize, pos
                 });
             }
             crusher::Step::Output => {
-                // Results thrown out past the facing side (`outPos`, `outSpeed`).
-                let (at, v) = crusher::output(pos, facing);
-                for (item, count) in std::mem::take(&mut c.slots) {
-                    game.native_run_command(&format!(
+                // Facing anywhere but up: a belt or depot below (and on, past a sideways
+                // facing) takes the results from that side; what it doesn't take waits.
+                let next = [
+                    pos[0]
+                        + if facing.axis() == Axis::Y {
+                            0
+                        } else {
+                            facing.offset()[0]
+                        },
+                    pos[1] - 1,
+                    pos[2]
+                        + if facing.axis() == Axis::Y {
+                            0
+                        } else {
+                            facing.offset()[2]
+                        },
+                ];
+                let belt_input = facing != Dir::Up
+                    && with_world(|w| {
+                        let d = &w.dims[dim];
+                        d.depots.contains_key(&next) || d.belt_of.contains_key(&next)
+                    }) == Some(true);
+                if belt_input {
+                    let mut left = Vec::new();
+                    for (item, count) in std::mem::take(&mut c.slots) {
+                        let one = create_engine::belt::Item::new(
+                            &item,
+                            count,
+                            random_angle(game, pos),
+                            upright(game, &item),
+                        );
+                        let n =
+                            insert_into_from(game, dim, next, facing, &one, false).unwrap_or(count);
+                        if n > 0 {
+                            left.push((item, n));
+                        }
+                    }
+                    c.slots = left;
+                } else {
+                    // Results thrown out past the facing side (`outPos`, `outSpeed`).
+                    let (at, v) = crusher::output(pos, facing);
+                    for (item, count) in std::mem::take(&mut c.slots) {
+                        game.native_run_command(&format!(
                         "summon minecraft:item {} {} {} {{Item:{{id:'{item}',count:{count}}},Motion:[{}d,{}d,{}d]}}",
                         at[0], at[1], at[2], v[0], v[1], v[2]
                     ));
+                    }
                 }
             }
         }
@@ -3176,6 +3258,115 @@ pub(super) fn crafter_slot(game: &Game<'_>, p: [i32; 3]) -> Option<String> {
     }
 }
 
+/// The crafters whose slots make the inventory of the crafter at `pos`
+/// (`ConnectedInput.getInventories`): its group's, in order, or itself alone.
+pub(super) fn crafter_group(game: &Game<'_>, dim: usize, pos: [i32; 3]) -> Vec<[i32; 3]> {
+    let Some((facing, _)) = crafter_at(game, pos) else {
+        return Vec::new();
+    };
+    let list = with_world(|w| {
+        create_engine::crafter_input::inventories(&w.dims[dim].crafter_inputs, pos, facing)
+    })
+    .unwrap_or_default();
+    list.into_iter()
+        .filter(|p| crafter_at(game, *p).is_some())
+        .collect()
+}
+
+/// The crafter's item handler (`CombinedInvWrapper` over its group's `Inventory`s): one item
+/// into each crafter of the group in turn that is idle with an empty slot; what is left of
+/// `stack`. Nothing changes when `simulate`.
+pub(super) fn crafter_handler_insert(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    mut stack: horizon_client::items::ItemStack,
+    simulate: bool,
+) -> Option<horizon_client::items::ItemStack> {
+    for p in crafter_group(game, dim, pos) {
+        if stack.count == 0 {
+            break;
+        }
+        let idle = with_world(|w| w.dims[dim].crafters.get(&p).map(|c| c.phase))
+            .flatten()
+            .is_none_or(|ph| ph == create_engine::crafter::Phase::Idle);
+        if !idle || crafter_slot(game, p).is_some() {
+            continue;
+        }
+        if !simulate {
+            let one = horizon_client::items::ItemStack {
+                count: 1,
+                ..stack.clone()
+            };
+            game.native_with_mod_block_entity(p, |be| {
+                be.items.resize(be.items.len().max(1), None);
+                be.items[0] = Some(one);
+            });
+            with_world(|w| w.dims[dim].crafter_checks.push(p));
+        }
+        stack.count -= 1;
+    }
+    (stack.count > 0).then_some(stack)
+}
+
+/// `EdgeInteractionHandler` with the wrench on a crafter (not sneaking): a click on the strip
+/// along an edge toward a crafter beside it, facing the same way, joins their inputs or parts
+/// them (`toggleConnection`); true when it did.
+pub(super) fn crafter_edge(game: &mut Game<'_>, dim: usize, pos: [i32; 3], face: Dir) -> bool {
+    use create_engine::crafter_input;
+    let Some((facing, _)) = crafter_at(game, pos) else {
+        return false;
+    };
+    let Some(hit) = game.pick().map(|h| h.point) else {
+        return false;
+    };
+    let sturdy = |game: &Game<'_>, p: [i32; 3], side: Dir| {
+        let state = game.world.block(p[0], p[1], p[2]);
+        game.res.facts().get(state).sturdy_full & (1 << side as u8) != 0
+    };
+    let o = face.offset();
+    // `getConnectiveSides`: none when the face is covered.
+    if sturdy(
+        game,
+        [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]],
+        face.opposite(),
+    ) {
+        return false;
+    }
+    for d in Dir::ALL {
+        if d.axis() == face.axis() {
+            continue;
+        }
+        let n = d.offset();
+        let neighbour = [pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]];
+        let front = [
+            neighbour[0] + o[0],
+            neighbour[1] + o[1],
+            neighbour[2] + o[2],
+        ];
+        if sturdy(game, front, face.opposite()) {
+            continue;
+        }
+        let other = crafter_at(game, neighbour).map(|c| c.0);
+        if !crafter_input::should_connect(facing, face, d, other) {
+            continue;
+        }
+        let (min, max) = crafter_input::edge_box(pos, d);
+        if (0..3).all(|k| hit[k] >= min[k] && hit[k] <= max[k]) {
+            with_world(|w| {
+                crafter_input::toggle(&mut w.dims[dim].crafter_inputs, pos, neighbour);
+                // One alone needs no entry.
+                w.dims[dim]
+                    .crafter_inputs
+                    .retain(|_, i| *i != crafter_input::Input::default());
+                w.mark_unsaved(dim, pos);
+            });
+            return true;
+        }
+    }
+    false
+}
+
 /// `MechanicalCrafterBlock.useItemOn` on its front: an empty slot takes one of the item in hand;
 /// an empty hand takes the slot's item back.
 pub(super) fn use_crafter(
@@ -3334,20 +3525,41 @@ pub(super) fn crafter_insert(game: &mut Game<'_>, dimension: &str, dim: usize, p
     let dir = create_engine::crafter::target(facing, pointing);
     let o = dir.offset();
     let t = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-    if !game.world.block_entities.contains_key(&(t[0], t[1], t[2])) {
+    // `isTargetingBelt`: a belt or depot there takes the results from the side
+    // (`DirectBeltInputBehaviour.handleInsertion`); else `inserting.hasInventory()`.
+    let belt_input = with_world(|w| {
+        let d = &w.dims[dim];
+        d.depots.contains_key(&t) || d.belt_of.contains_key(&t)
+    }) == Some(true);
+    let face = horizon_core::geometry::Direction::ALL[dir.opposite() as usize];
+    if !belt_input && !game.world.block_entities.contains_key(&(t[0], t[1], t[2])) {
         crafters_eject(game, dimension, dim, pos);
         return;
     }
     let grid = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.grid.clone()))
         .flatten()
         .unwrap_or_default();
-    let mut left = Vec::new();
+    // Each stack of the grid in turn, whole (the result is one stack of its count).
+    let mut stacks: Vec<(String, Vec<(i32, i32)>)> = Vec::new();
     for (at, item) in grid {
-        let stack = horizon_client::items::ItemStack::new(&item, 1);
-        let face = horizon_core::geometry::Direction::ALL[dir.opposite() as usize];
-        if insert_item(game, dim, t, face, stack).is_some() {
-            left.push((at, item));
+        match stacks.iter_mut().find(|(i, _)| *i == item) {
+            Some((_, cells)) => cells.push(at),
+            None => stacks.push((item, vec![at])),
         }
+    }
+    let mut left = Vec::new();
+    for (item, cells) in stacks {
+        let n = cells.len().min(64);
+        let kept = if belt_input {
+            let angle = random_angle(game, pos);
+            let one = create_engine::belt::Item::new(&item, n as u8, angle, upright(game, &item));
+            insert_into_from(game, dim, t, dir, &one, false).map_or(n, usize::from)
+        } else {
+            let stack = horizon_client::items::ItemStack::new(&item, n as u32);
+            insert_item(game, dim, t, face, stack).map_or(0, |l| l.count as usize)
+        };
+        let kept = kept + cells.len() - n;
+        left.extend(cells.into_iter().take(kept).map(|at| (at, item.clone())));
     }
     let done = left.is_empty();
     with_world(|w| {
@@ -3462,10 +3674,22 @@ pub(super) fn tick_crafters(game: &mut Game<'_>, dimension: &str, dim: usize) {
                     });
                     continue;
                 }
+                // What the ingredients leave (`getCraftingRemainingItem`), after the result.
+                let containers: Vec<String> = c
+                    .grid
+                    .iter()
+                    .filter_map(|(_, i)| game.items().get(i)?.crafting_remainder.clone())
+                    .collect();
                 match crafter_recipe(game, &c.grid) {
                     Some((item, n)) => with_world(|w| {
                         if let Some(x) = w.dims[dim].crafters.get_mut(&pos) {
                             x.grid = (0..n).map(|i| ((i32::from(i), 0), item.clone())).collect();
+                            x.grid.extend(
+                                containers
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, r)| ((i32::from(n) + i as i32, 0), r.clone())),
+                            );
                             x.phase = Phase::Crafting;
                             x.count_down = 2000;
                         }

@@ -761,6 +761,9 @@ pub(super) fn insert_item(
         Ok(left) => return left,
         Err(stack) => stack,
     };
+    if crafter_at(game, pos).is_some() {
+        return crafter_handler_insert(game, dim, pos, stack, false);
+    }
     match vault_at(game, dim, pos) {
         Some(parts) => insert_vault(game, &parts, stack),
         None => game.native_insert_item(pos, face, stack),
@@ -784,6 +787,19 @@ pub(super) fn insert_room(
     }
     if let Some(room) = super::create_actors::psi_room(game, dim, pos, stack) {
         return Some(room);
+    }
+    if crafter_at(game, pos).is_some() {
+        // The group's idle crafters with empty slots, one each (nothing changes).
+        let free = crafter_group(game, dim, pos)
+            .into_iter()
+            .filter(|p| {
+                crafter_slot(game, *p).is_none()
+                    && with_world(|w| w.dims[dim].crafters.get(p).map(|c| c.phase))
+                        .flatten()
+                        .is_none_or(|ph| ph == create_engine::crafter::Phase::Idle)
+            })
+            .count() as u32;
+        return Some(free.min(stack.count));
     }
     match vault_at(game, dim, pos) {
         Some(parts) => {
@@ -1551,7 +1567,9 @@ pub(super) fn insert_into_from(
         let mut moved = item.clone();
         moved.locked = false;
         moved.position = index as f32 + 0.5 - speed2.signum() / 16.0;
-        if movement2 != side {
+        // From above or below: in the segment's middle.
+        if side.axis() == create_engine::kinetics::Axis::Y {
+        } else if movement2 != side {
             moved.side_offset = if side.positive() { 0.675 } else { -0.675 };
             if side.axis() == create_engine::kinetics::Axis::X {
                 moved.side_offset = -moved.side_offset;

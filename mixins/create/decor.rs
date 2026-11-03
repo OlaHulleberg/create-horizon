@@ -1551,7 +1551,7 @@ pub(super) fn crate_extract(
 /// A hopper gives to the block at `pos` (Horizon API 69): a creative crate takes everything
 /// (`BottomlessItemHandler.insertItem`).
 pub(super) fn item_handler_insert(
-    game: &Game<'_>,
+    game: &mut Game<'_>,
     pos: [i32; 3],
     stack: &mut Option<ItemStack>,
     handled: &mut bool,
@@ -1566,6 +1566,15 @@ pub(super) fn item_handler_insert(
     if crate_supply(game, dim, pos).is_some() {
         *handled = true;
         *stack = None;
+        return;
+    }
+    // A crafter's inventory: its group's, connected with the wrench.
+    if with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
+        == Some(create_engine::Block::MechanicalCrafter)
+        && let Some(s) = stack.take()
+    {
+        *handled = true;
+        *stack = super::create_processing::crafter_handler_insert(game, dim, pos, s, false);
     }
 }
 
