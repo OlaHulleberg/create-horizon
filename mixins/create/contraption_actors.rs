@@ -835,6 +835,26 @@ fn collect(game: &mut Game<'_>, dim: usize, key: [i32; 3], actor: &Actor, mut st
     );
 }
 
+/// `ContraptionCollider.isCollidingWithWorld` for a breaker: the contraption's block at `local`
+/// is a breaker (drill, saw, plough, roller) that can break the block at `cell`, so it doesn't
+/// stop the contraption there (`canBreak`).
+pub(super) fn breaker_clears(
+    game: &Game<'_>,
+    dim: usize,
+    key: [i32; 3],
+    carried: &Carried,
+    local: [i32; 3],
+    cell: [i32; 3],
+) -> bool {
+    use actors::Probe;
+    let reader = Reader { game, dim, key };
+    carried
+        .actors
+        .iter()
+        .find(|a| a.local == local && a.kind.breaks())
+        .is_some_and(|a| reader.breakable(a.kind, cell).is_some())
+}
+
 /// `AbstractContraptionEntity.tickActors` for a translating contraption whose offset 0 is at
 /// `translation` in the world now: each active actor ticks, and what it does happens. Returns
 /// whether one stalls the contraption. Only moving contraptions with actors call it.

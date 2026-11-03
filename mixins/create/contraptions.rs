@@ -1456,7 +1456,18 @@ pub(super) fn tick_lifts(game: &mut Game<'_>, dimension: &str, dim: usize) {
     let orphans =
         with_world(|w| std::mem::take(&mut w.dims[dim].lifts.orphans)).unwrap_or_default();
     for (pos, held) in orphans {
+        let origin = match &held {
+            create_engine::lifts::Held::Pulley(p) => {
+                Some(p.placed_at(create_engine::pulley::grid_offset(p.offset, p.range)))
+            }
+            _ => None,
+        };
         lift_put_back(game, dimension, &held.put_back(pos));
+        if let Some(origin) = origin
+            && let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos)))
+        {
+            actors::release(game, dimension, dim, pos, origin, &mut carried);
+        }
         send_lift_gone(game, dimension, pos);
         mark_lift_unsaved(game, dimension, pos);
     }
@@ -1569,6 +1580,51 @@ fn disassemble_clock(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32
     mark_lift_unsaved(game, dimension, pos);
 }
 
+/// For a pulley not yet started: whether its block at `local` (offsets from `anchor`) is a
+/// breaker that can break the block at `cell`, as `breaker_clears` once it runs.
+fn breaker_below(
+    game: &Game<'_>,
+    dim: usize,
+    blocks: &[([i32; 3], u32)],
+    anchor: [i32; 3],
+    local: [i32; 3],
+    cell: [i32; 3],
+) -> bool {
+    use create_engine::actors::{Actor, Carried, Kind};
+    let Some((_, state)) = blocks.iter().find(|(o, _)| *o == local) else {
+        return false;
+    };
+    let Some((block, Some(facing))) =
+        with_world(|w| w.table.get(*state).map(|(b, i)| (b, i.facing))).flatten()
+    else {
+        return false;
+    };
+    let Some(kind) = Kind::of(block) else {
+        return false;
+    };
+    let one = Carried {
+        actors: vec![Actor::new(local, kind, facing, 0)],
+        ..Carried::default()
+    };
+    actors::breaker_clears(game, dim, anchor, &one, local, cell)
+}
+
+thread_local! {
+    /// What running rope pulleys carry besides their blocks (`Contraption.actors`, storage, glue,
+    /// controls), by dimension and pulley; only pulleys whose structure has any.
+    static PULLEY_CARRIED: RefCell<HashMap<(usize, [i32; 3]), create_engine::actors::Carried>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Where offset 0 of a pulley's structure is now: its anchor, `offset - initial` lower.
+fn pulley_origin(p: &create_engine::pulley::Pulley, offset: f32) -> [f64; 3] {
+    [
+        f64::from(p.anchor[0]),
+        f64::from(p.anchor[1]) - f64::from(offset - p.initial as f32),
+        f64::from(p.anchor[2]),
+    ]
+}
+
 /// `LinearActuatorBlockEntity.tick` for rope pulleys: speed changes start, stop or turn them
 /// (`assembleNextTick`); running ones move and stop at their ends, against the world, or (an
 /// empty rope) at the block they reach.
@@ -1612,11 +1668,28 @@ fn tick_pulleys(game: &mut Game<'_>, dimension: &str, dim: usize) {
         let Some(mut p) = with_world(|w| w.dims[dim].lifts.pulleys.remove(&pos)).flatten() else {
             continue;
         };
+        // Its actors first (`tickActors`); while one stalls, the pulley holds (`isStalled`).
+        if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
+            let at = pulley_origin(&p, p.offset);
+            let stalled = actors::tick_actors(game, dimension, dim, pos, &mut carried, at);
+            carried.stalled = stalled;
+            PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
+            if stalled {
+                with_world(|w| w.dims[dim].lifts.pulleys.insert(pos, p));
+                continue;
+            }
+        }
         let registry = game.pack.assets.registry;
         let step = p.step(
             p.rpm,
             pos,
-            |c| passable(game, c),
+            |c, l| {
+                passable(game, c)
+                    || PULLEY_CARRIED.with_borrow(|m| {
+                        m.get(&(dim, pos))
+                            .is_some_and(|k| actors::breaker_clears(game, dim, pos, k, l, c))
+                    })
+            },
             |c| {
                 contraption_found(game, c).is_some_and(|f| f.movable)
                     && registry
@@ -1665,7 +1738,9 @@ fn assemble_pulley(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 
     // `isCollidingWithWorld` a block further down: it doesn't start.
     if speed > 0.0
         && !p.blocks.is_empty()
-        && p.collides(offset as f32 + 1.0, true, &|c| passable(game, c))
+        && p.collides(offset as f32 + 1.0, true, &|c, l| {
+            passable(game, c) || breaker_below(game, dim, &p.blocks, anchor, l, c)
+        })
     {
         return;
     }
@@ -1680,6 +1755,11 @@ fn assemble_pulley(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 
             BlockStateId(0)
         };
         game.native_set_block(dimension, c, to, super::native_hooks::flags::UPDATE_CLIENTS);
+    }
+    // Its actors, storage, glue and controls ride with it (`Contraption.addBlock`).
+    let carried = actors::carry(game, dimension, dim, pos, anchor, &p.blocks, |_| false);
+    if !carried.actors.is_empty() || !carried.controls.is_empty() || !carried.glue.is_empty() {
+        PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
     }
     lift_take(game, dimension, anchor, &p.blocks);
     with_world(|w| w.dims[dim].lifts.pulleys.insert(pos, p));
@@ -1713,8 +1793,14 @@ fn stop_pulley(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], 
         }
     }
     p.offset = grid as f32;
+    let origin = p.placed_at(create_engine::pulley::grid_offset(p.offset, p.range));
     let held = create_engine::lifts::Held::Pulley(p);
     lift_put_back(game, dimension, &held.put_back(pos));
+    // What rode with it goes back with its blocks (`disassemble`).
+    let mut carried = PULLEY_CARRIED
+        .with_borrow_mut(|c| c.remove(&(dim, pos)))
+        .unwrap_or_default();
+    actors::release(game, dimension, dim, pos, origin, &mut carried);
     send_lift_gone(game, dimension, pos);
     mark_lift_unsaved(game, dimension, pos);
 }
