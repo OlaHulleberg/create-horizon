@@ -31,7 +31,11 @@ This port translates Create 6.0.11's Java code and compiles its data (everything
 ## Ponder and Catnip (MIT)
 
 Create's utility library Catnip ships in its Ponder project; the port translates a few of its helpers
-(`VecHelper.rotate` for the water wheel's flow score). Source:
+(`VecHelper.rotate` for the water wheel's flow score; `LerpedFloat`'s `Chaser.EXP` for the flywheel and
+the train HUD; `AngleHelper.getShortestAngleDiff` for the train HUD's arrow), and the content mod carries
+its placement indicator texture unchanged (`content/assets/create/textures/gui/placement_indicator.png`, under Create's namespace,
+from `common/src/main/resources/assets/ponder/textures/gui/placement_indicator.png` at commit
+`c3e5a41380203e1dd1e2431c494ec491a51965a5`; the repository's only license is this MIT one). Source:
 <https://github.com/Creators-of-Create/Ponder>, branch `mc1.21.1/dev`, file `LICENSE`:
 "MIT License, Copyright (c) 2022 The Create Team", with the same permission notice as above.
 
