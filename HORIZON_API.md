@@ -9,13 +9,18 @@ The goal: the mod builds on the Horizon the team releases. That means the trait-
 `[native]`, `src/lib.rs` implementing the generated `Hooks`) using catalogued hook points and Host helpers only; raw
 injections into internal functions break on every refactor.
 
-**Answer from the fork's owner (arismoko/horizon#44, 2026-11-03 20:49 UTC):** a fork-API mod pins an exact fork
-commit (`[native] horizon = "<sha>"`) and is built with the fork's own launcher (`launcher/`, from source: no released
-binary yet). Upstream's released launcher can't build such mods, and upstream's current API is what the fork's clean
-break removes, so don't target it. How players will get fork builds is undecided; they'll post it on #44. Send
-Create's needs to the fork, claimed through #27: instanced drawing is an unclaimed Rendering row of #26 that sits on
-the coming `DrawContext` (co-design with that PR or start after it, not on today's draw lists); moving structures
-(#5313) has no row yet: post a design note on #27 first.
+**Who decides (checked 2026-11-03).** horizon-rust/horizon is what the Horizon team releases; its mergers are
+ludovic111 (most merges, code owner of the release pipeline), rdbtCVS, kacpherek and levzzz5154, and it still merges
+native-mod hook PRs from many contributors. arismoko/horizon is one contributor's fork (arismoko is a contributor
+upstream and merges nothing there); its owner asks for modding PRs there and paused sending its work upstream on
+Nov 3. Fork work reaches upstream only as ordinary PRs an upstream maintainer accepts. So the mod targets upstream's
+API, and what it needs is PR'd upstream; the fork is a design lab to watch.
+
+The fork owner's answer on #44 (2026-11-03 20:49 UTC), for the record: fork-API mods pin a fork commit and build with
+the fork's own launcher (from source); upstream's released launcher can't build them; how players get fork builds is
+undecided; Create's needs would go to the fork via #27 (instancing on the coming `DrawContext`, moving structures as a
+design note first). Their fork's #26 also plans Java jars as asset sources, which would solve shipping Create's ARR
+assets: watch for it upstream.
 
 Up = horizon-rust main, Fork = arismoko main. a = has it, b = partly or differently, c = missing.
 
