@@ -1402,6 +1402,14 @@ fn fluid_state(dim: usize, pos: [i32; 3]) -> String {
         if let Some(f) = p.filters.get(&pos) {
             return format!("smart pipe at {x} {y} {z}: filter {}", f.id());
         }
+        // A fluid tank: its multiblock's fluid, by any of its blocks.
+        if let Some((_, m)) = w.tank(dim, pos) {
+            return format!(
+                "fluid tank at {x} {y} {z}: {} {} mB",
+                name(m.tank.fluid),
+                m.tank.amount
+            );
+        }
         format!("nothing of the fluids' at {x} {y} {z}")
     })
     .unwrap_or_default()
