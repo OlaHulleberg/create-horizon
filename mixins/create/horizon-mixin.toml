@@ -4,7 +4,7 @@ version = "0.1.0"
 priority = 100
 
 [compatibility]
-horizon_revision = "4395c43148b06985817109aedd66190c0295d5dc"
+horizon_revision = "ccfe1a17e1c046f1c0b3dd980a84e59516537492"
 
 # Game glue: per-world state on the server thread, translating hooks into engine calls.
 [[module]]
@@ -429,6 +429,18 @@ helper = "menu_closed.rs"
 bindings = [
   { name = "uuid", ty = "u128", value = "uuid" },
   { name = "window", ty = "i32", value = "window" },
+]
+
+[[injection]]
+id = "entity-collisions"
+hook = "entity_collisions"
+hook_version = 1
+kind = "HEAD"
+helper = "entity_collisions.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "self" },
+  { name = "around", ty = "horizon_core::geometry::Aabb", value = "around" },
+  { name = "out", ty = "&mut Vec<(horizon_core::geometry::Aabb, horizon_core::geometry::Vec3)>", value = "out" },
 ]
 
 [[injection]]

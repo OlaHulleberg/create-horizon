@@ -48,6 +48,7 @@ def write_fixture(original, root):
         ('block_entity', "horizon_client::game::native_hooks::Game<'_>::native_block_entity"),
         ('block_entity_container', "horizon_client::game::native_hooks::Game<'_>::native_block_entity_container"),
         ('contents_changed', "horizon_client::game::native_hooks::Game<'_>::native_contents_changed"),
+        ('entity_collisions', "horizon_client::game::native_hooks::Game<'_>::native_entity_collisions"),
         ('item_handler_insert', "horizon_client::game::native_hooks::Game<'_>::native_item_handler_insert"),
         ('item_handler_extract', "horizon_client::game::native_hooks::Game<'_>::native_item_handler_extract"),
         ('update_entity_after_fall_on',
@@ -93,8 +94,17 @@ pub mod geometry {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum Direction { Down, Up, North, South, West, East }
     impl Direction { pub const ALL: [Self; 6] = [Self::Down, Self::Up, Self::North, Self::South, Self::West, Self::East]; }
     #[derive(Clone, Copy)] pub enum Axis { X, Y, Z }
+    #[derive(Clone, Copy, Debug, PartialEq, Default)] pub struct Vec3 { pub x: f64, pub y: f64, pub z: f64 }
+    impl Vec3 { pub fn new(x: f64, y: f64, z: f64) -> Self { Self { x, y, z } } }
+    #[derive(Clone, Copy, Debug, PartialEq)] pub struct Aabb { min: Vec3, max: Vec3 }
+    impl Aabb {
+        pub fn new(min: Vec3, max: Vec3) -> Self { Self { min, max } }
+        pub fn min_position(self) -> Vec3 { self.min }
+        pub fn max_position(self) -> Vec3 { self.max }
+    }
     pub struct VoxelShape;
     impl VoxelShape {
+        pub fn boxes(&self) -> &[Aabb] { &[] }
         pub fn is_empty(&self) -> bool { false }
         pub fn is_block(&self) -> bool { true }
         pub fn min_at(&self, axis: Axis, first: f64, second: f64) -> f64 { let _ = (axis, first, second); 0.0 }
@@ -470,6 +480,10 @@ pub mod native_hooks {
             self.glides.push((model, block, axis, rpm, velocity));
         }
         pub fn native_contents_changed(&mut self, pos: [i32; 3]) { let _ = pos; }
+        pub fn native_entity_collisions(&self, around: horizon_core::geometry::Aabb,
+            out: &mut Vec<(horizon_core::geometry::Aabb, horizon_core::geometry::Vec3)>) {
+            let _ = (around, out);
+        }
         pub fn native_item_handler_insert(&mut self, pos: [i32; 3], side: horizon_core::geometry::Direction,
             stack: &mut Option<horizon_client::items::ItemStack>, simulate: bool, handled: &mut bool) {
             let _ = (pos, side, stack, simulate, handled);

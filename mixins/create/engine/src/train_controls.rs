@@ -132,6 +132,58 @@ impl Frame {
     }
 }
 
+/// `ContraptionCollider`'s boxes of a carriage (posed by `frame`; its blocks' offsets and
+/// states) near `around` (min x, y, z, max x, y, z in the world): each nearby block's collision
+/// boxes (`shape`, in block units) posed into the world, as the axis-aligned box around their
+/// corners (exact while the carriage runs along x or z; a little larger turned or tilted).
+/// Only blocks whose cell meets `around` taken into the carriage's space are looked at.
+pub fn collision_boxes<'a, S: AsRef<[[f64; 6]]>>(
+    frame: &Frame,
+    blocks: impl IntoIterator<Item = &'a ([i32; 3], u32)>,
+    shape: impl Fn(u32) -> S,
+    around: [f64; 6],
+) -> Vec<[f64; 6]> {
+    let corners = |b: [f64; 6]| {
+        (0..8).map(move |i| {
+            [
+                if i & 1 == 0 { b[0] } else { b[3] },
+                if i & 2 == 0 { b[1] } else { b[4] },
+                if i & 4 == 0 { b[2] } else { b[5] },
+            ]
+        })
+    };
+    let bound = |points: &mut dyn Iterator<Item = Vec3>| {
+        let mut b = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+        for p in points {
+            for k in 0..3 {
+                b[k] = b[k].min(p[k]);
+                b[k + 3] = b[k + 3].max(p[k]);
+            }
+        }
+        b
+    };
+    let near = bound(&mut corners(around).map(|c| frame.to_local(c)));
+    let mut out = Vec::new();
+    for &(o, state) in blocks {
+        let cell = o.map(f64::from);
+        if (0..3).any(|k| cell[k] + 1.0 < near[k] || cell[k] > near[k + 3]) {
+            continue;
+        }
+        for b in shape(state).as_ref() {
+            let local = [
+                cell[0] + b[0],
+                cell[1] + b[1],
+                cell[2] + b[2],
+                cell[0] + b[3],
+                cell[1] + b[4],
+                cell[2] + b[5],
+            ];
+            out.push(bound(&mut corners(local).map(|c| frame.to_world(c))));
+        }
+    }
+    out
+}
+
 /// `rayTraceContraption`: the block of a carriage (posed by `frame`; its blocks' offsets and
 /// states) the segment from `origin` to `target` first hits, by each block's outline boxes
 /// (`shape`, in block units), with how far along (0 to 1) it is hit.
@@ -546,6 +598,49 @@ pub struct Driving {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_carriage_s_blocks_collide_where_they_are_drawn() {
+        let frame = Frame {
+            pivot: [10.0, 64.0, 20.0],
+            yaw: 0.0,
+            pitch: 0.0,
+            heading: [1, 0],
+        };
+        let blocks = [([0, 0, 0], 1u32), ([0, 1, 0], 2), ([5, 0, 0], 1)];
+        let shape = |s: u32| -> Vec<[f64; 6]> {
+            match s {
+                1 => vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]],
+                _ => vec![[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]],
+            }
+        };
+        // Around the bogey's block: it and the half slab on it, not the block 5 along.
+        let near = collision_boxes(&frame, &blocks, shape, [9.0, 64.5, 19.0, 11.0, 67.0, 21.0]);
+        assert_eq!(
+            near,
+            vec![
+                [9.5, 65.0, 19.5, 10.5, 66.0, 20.5],
+                [9.5, 66.0, 19.5, 10.5, 66.5, 20.5],
+            ]
+        );
+        // A quarter turn: the same blocks, still unit boxes, turned about the pivot.
+        let turned = Frame { yaw: 90.0, ..frame };
+        let b = collision_boxes(&turned, &blocks, shape, [0.0, 60.0, 0.0, 40.0, 70.0, 40.0]);
+        assert_eq!(b.len(), 3);
+        for bx in &b {
+            assert!(((bx[3] - bx[0]) - 1.0).abs() < 1e-9 && ((bx[5] - bx[2]) - 1.0).abs() < 1e-9);
+        }
+        // Far away: nothing.
+        assert!(
+            collision_boxes(
+                &frame,
+                &blocks,
+                shape,
+                [100.0, 0.0, 100.0, 101.0, 1.0, 101.0]
+            )
+            .is_empty()
+        );
+    }
+
     use super::*;
 
     fn close(a: Vec3, b: Vec3) -> bool {
