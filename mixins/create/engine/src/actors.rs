@@ -152,6 +152,9 @@ pub struct Actor {
     pub position: Option<[f64; 3]>,
     pub motion: [f64; 3],
     pub relative_motion: [f64; 3],
+    /// A turning contraption's rotation this tick (its axis and degrees, as clients turn its
+    /// parts): the relative motion is the motion turned back (`relativeMotion`).
+    pub turn: Option<(crate::kinetics::Axis, f64)>,
     pub stall: bool,
     pub first_movement: bool,
     pub disabled: bool,
@@ -180,6 +183,7 @@ impl Actor {
             position: None,
             motion: [0.0; 3],
             relative_motion: [0.0; 3],
+            turn: None,
             stall: false,
             first_movement: true,
             disabled: false,
@@ -292,6 +296,43 @@ pub fn translated_position(a: &Actor, translation: [f64; 3]) -> [f64; 3] {
     p
 }
 
+/// `v` turned `deg` degrees about `axis`, counterclockwise looking down the positive axis, as
+/// clients turn a contraption's parts.
+pub fn turn_vec(v: [f64; 3], axis: crate::kinetics::Axis, deg: f64) -> [f64; 3] {
+    use crate::kinetics::Axis;
+    let (s, c) = deg.to_radians().sin_cos();
+    match axis {
+        Axis::X => [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c],
+        Axis::Y => [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c],
+        Axis::Z => [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]],
+    }
+}
+
+/// `toGlobalVector` for an actor of a bearing's structure (its block offset from the bearing at
+/// `bearing`) turned `deg` about `axis` through the bearing's centre: where it works.
+pub fn turned_position(
+    a: &Actor,
+    bearing: [i32; 3],
+    axis: crate::kinetics::Axis,
+    deg: f64,
+) -> [f64; 3] {
+    let at = translated_position(a, [0.0; 3]);
+    let turned = turn_vec([at[0] - 0.5, at[1] - 0.5, at[2] - 0.5], axis, deg);
+    [0, 1, 2].map(|i| f64::from(bearing[i]) + 0.5 + turned[i])
+}
+
+/// The way `facing` points turned `deg` about `axis`: the nearest direction.
+pub fn turned_facing(facing: Dir, axis: crate::kinetics::Axis, deg: f64) -> Dir {
+    let o = facing.offset().map(f64::from);
+    let v = turn_vec(o, axis, deg);
+    let k = (0..3)
+        .max_by(|&a, &b| v[a].abs().total_cmp(&v[b].abs()))
+        .unwrap_or(0);
+    let mut n = [0, 0, 0];
+    n[k] = if v[k] < 0.0 { -1 } else { 1 };
+    Dir::from_offset(n).unwrap_or(facing)
+}
+
 impl Actor {
     /// `shouldActorTrigger`: the motion since the last tick; a new block reached, or the first
     /// movement.
@@ -300,8 +341,12 @@ impl Actor {
             return false;
         };
         self.motion = [0, 1, 2].map(|i| position[i] - previous[i]);
-        // Translating contraptions don't turn: the relative motion is the motion.
-        self.relative_motion = self.motion;
+        // A translating contraption doesn't turn: the relative motion is the motion; a turning
+        // one's is turned back into its own frame.
+        self.relative_motion = match self.turn {
+            Some((axis, deg)) => turn_vec(self.motion, axis, -deg),
+            None => self.motion,
+        };
         previous.map(|v| v.floor() as i32) != grid
             || (length(self.relative_motion) > 0.0 && self.first_movement)
     }
@@ -1610,5 +1655,25 @@ mod tests {
             loaded_below: -2,
         };
         assert!(roll(&mut ground, RollingMode::StraightFill, 40).is_empty());
+    }
+
+    #[test]
+    fn a_bearing_s_actors_turn_with_it() {
+        use crate::kinetics::Axis;
+        // A drill one block up from a bearing facing up, pointing east, turned a quarter about y.
+        let d = Actor::new([1, 1, 0], Kind::Drill, Dir::East, -1);
+        let at = turned_position(&d, [0, 0, 0], Axis::Y, 90.0);
+        // Its working point (0.65 past its block's centre, east) goes from x 2.15 to z -1.15.
+        assert!((at[0] - 0.5).abs() < 1e-9 && (at[1] - 1.5).abs() < 1e-9);
+        assert!(
+            (at[2] - (0.5 - 1.0 - d.kind.reach())).abs() < 1e-9,
+            "{at:?}"
+        );
+        assert_eq!(turned_facing(Dir::East, Axis::Y, 90.0), Dir::North);
+        assert_eq!(turned_facing(Dir::East, Axis::Y, 30.0), Dir::East);
+        assert_eq!(turned_facing(Dir::Up, Axis::Y, 90.0), Dir::Up);
+        // The relative motion is turned back: moving north at 90°, it moves east in its frame.
+        let back = turn_vec([0.0, 0.0, -1.0], Axis::Y, -90.0);
+        assert!((back[0] - 1.0).abs() < 1e-9 && back[2].abs() < 1e-9);
     }
 }

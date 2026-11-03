@@ -346,6 +346,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_links(game, dimension, dim);
     tick_displays(game, dimension, dim);
     tick_bearings(game, dimension, dim);
+    super::create_contraptions::tick_bearing_actors(game, dimension, dim);
     tick_gantries(game, dimension, dim);
     tick_crafters(game, dimension, dim);
     tick_windmills(game, dimension, dim);

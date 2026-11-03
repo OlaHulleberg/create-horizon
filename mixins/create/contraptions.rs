@@ -376,6 +376,69 @@ pub(super) fn tick_windmills(game: &mut Game<'_>, dimension: &str, dim: usize) {
     }
 }
 
+thread_local! {
+    /// The actors of mechanical bearings' turning structures, by dimension and bearing; only
+    /// bearings whose structure has any.
+    static BEARING_CARRIED: RefCell<HashMap<(usize, [i32; 3]), create_engine::actors::Carried>> =
+        RefCell::new(HashMap::new());
+}
+
+/// `tickActors` for turning bearings with actors: each works where the structure has turned to;
+/// while one stalls the bearing holds its angle, and turns on at its speed after
+/// (`isStalled`). Nothing runs without such a bearing.
+pub(super) fn tick_bearing_actors(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    if BEARING_CARRIED.with_borrow(|c| !c.keys().any(|k| k.0 == dim)) {
+        return;
+    }
+    let keys: Vec<[i32; 3]> =
+        BEARING_CARRIED.with_borrow(|c| c.keys().filter(|k| k.0 == dim).map(|k| k.1).collect());
+    let now = game.world.game_time;
+    for pos in keys {
+        let facing = with_world(|w| {
+            w.table
+                .get(game.world.block(pos[0], pos[1], pos[2]).0)
+                .and_then(|(_, i)| i.facing)
+        })
+        .flatten();
+        let turn =
+            with_world(|w| w.dims[dim].windmills.get(&pos).and_then(|m| m.bearing)).flatten();
+        let (Some(facing), Some(turn)) = (facing, turn) else {
+            if let Some(mut c) = BEARING_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
+                actors::cancel_actors(game, &mut c);
+            }
+            continue;
+        };
+        let Some(mut carried) = BEARING_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) else {
+            continue;
+        };
+        let deg = f64::from(turn.angle_at(now));
+        let was = carried.stalled;
+        let stalled = actors::tick_turning_actors(
+            game,
+            dimension,
+            dim,
+            pos,
+            &mut carried,
+            pos,
+            facing.axis(),
+            deg,
+        );
+        carried.stalled = stalled;
+        BEARING_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
+        if stalled != was {
+            let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+            with_world(|w| {
+                if let Some(m) = w.dims[dim].windmills.get_mut(&pos)
+                    && let Some(t) = m.bearing.as_mut()
+                {
+                    t.rebase(now, if stalled { 0.0 } else { speed });
+                }
+                w.dims[dim].windmill_changes.push(pos);
+            });
+        }
+    }
+}
+
 /// Mechanical bearings whose speed changed (`tick` after `onSpeedChanged`): a still one starts
 /// turning what is in front of it (`assemble`); a turning one stopped puts it back turned to the
 /// nearest quarter turn (`disassemble`, `ROTATE_PLACE`); otherwise the angle runs on at the new
@@ -407,6 +470,9 @@ pub(super) fn tick_bearings(game: &mut Game<'_>, dimension: &str, dim: usize) {
         let running = with_world(|w| w.dims[dim].windmills.get(&pos).map(|m| m.bearing)).flatten();
         match running {
             Some(Some(turn)) if speed == 0.0 => {
+                if let Some(mut c) = BEARING_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
+                    actors::cancel_actors(game, &mut c);
+                }
                 let quarter = contraption::quarter(turn.angle_at(now));
                 if let Some(w) = with_world(|w| w.windmill_disassembled(dim, pos, state)).flatten()
                 {
@@ -414,7 +480,10 @@ pub(super) fn tick_bearings(game: &mut Game<'_>, dimension: &str, dim: usize) {
                 }
             }
             Some(Some(mut turn)) => {
-                turn.rebase(now, speed);
+                // A stalled structure stays still at any speed until its actor is done.
+                let stalled =
+                    BEARING_CARRIED.with_borrow(|c| c.get(&(dim, pos)).is_some_and(|c| c.stalled));
+                turn.rebase(now, if stalled { 0.0 } else { speed });
                 with_world(|w| {
                     if let Some(m) = w.dims[dim].windmills.get_mut(&pos) {
                         m.bearing = Some(turn);
@@ -429,6 +498,10 @@ pub(super) fn tick_bearings(game: &mut Game<'_>, dimension: &str, dim: usize) {
                 let Ok((blocks, sails)) = gathered else {
                     continue;
                 };
+                let carried = actors::bearing_actors(&blocks);
+                if !carried.actors.is_empty() {
+                    BEARING_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
+                }
                 if let Some(air) = game.pack.assets.registry.default_state("minecraft:air") {
                     for (o, _) in &blocks {
                         let p = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
@@ -1181,6 +1254,11 @@ pub(super) fn send_windmills(
         let now = game.world.game_time;
         let angle = w_turn.map_or(0.0, |t| t.angle_at(now));
         m.extend_from_slice(&angle.to_le_bytes());
+        // The speed it turns at (a mechanical bearing's: none while an actor stalls it), else
+        // the client's own speed for it.
+        if let Some(t) = w_turn {
+            m.extend_from_slice(&t.rpm.to_le_bytes());
+        }
         for &p in players {
             let _ = game.native_net_send_to_player(p, CONTRAPTION_CHANNEL, &m);
         }
@@ -1227,7 +1305,10 @@ pub(super) fn contraptions_from_server(game: &mut Game<'_>, d: &[u8]) {
         .get(17 + 16 * n..21 + 16 * n)
         .map_or(0.0, |b| f32::from_le_bytes(b.try_into().unwrap()));
     let now = game.native_parts_seconds();
-    let rpm = press_speed(pos);
+    let rpm = d.get(21 + 16 * n..25 + 16 * n).map_or_else(
+        || press_speed(pos),
+        |b| f32::from_le_bytes(b.try_into().unwrap()),
+    );
     CONTRAPTIONS.with_borrow_mut(|c| c.insert(pos, (model, facing, angle, now, rpm)));
     turn_contraption(game, pos, rpm);
 }
