@@ -206,12 +206,14 @@ pub fn x_size(blocks: &[([i32; 3], u32)]) -> f64 {
     f64::from(2 * radius + 3)
 }
 
-/// `OrientedContraptionEntity`'s `yaw`, `prevYaw` and `targetYaw`.
+/// `OrientedContraptionEntity`'s `yaw`, `prevYaw`, `targetYaw` and `pitch` (only a contraption
+/// on a coupling pitches, along the line between its carts).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Orientation {
     pub yaw: f32,
     pub prev_yaw: f32,
     pub target_yaw: f32,
+    pub pitch: f32,
 }
 
 impl Orientation {
@@ -221,6 +223,7 @@ impl Orientation {
             yaw,
             prev_yaw: yaw,
             target_yaw: yaw,
+            pitch: 0.0,
         }
     }
 }
@@ -361,7 +364,9 @@ pub const CHANNEL: &str = "create:cart";
 
 /// A cart's contraption as clients draw it: the pivot (the anchor block's centre, half a block
 /// above the cart), its velocity (blocks a second) and turn (degrees, and degrees a second)
-/// until the next update, and its blocks when the client must learn them.
+/// until the next update, its pitch and the turn of its initial orientation (`base`: it is drawn
+/// `Y(angle - base) · Z(pitch) · Y(base)` about the pivot, `applyLocalTransforms`), and its blocks
+/// when the client must learn them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pose {
     pub id: u32,
@@ -369,6 +374,8 @@ pub struct Pose {
     pub velocity: [f32; 3],
     pub angle: f32,
     pub rate: f32,
+    pub pitch: f32,
+    pub base: f32,
     pub blocks: Option<Vec<([i32; 3], u32)>>,
 }
 
@@ -376,16 +383,20 @@ pub struct Pose {
 const MAX_SENT_BLOCKS: usize = 1800;
 
 impl Pose {
-    /// id, whether blocks follow, pivot, velocity, angle, rate, then the block count and each
-    /// block. A message of the id alone clears the cart's contraption.
+    /// id, whether blocks follow, pivot, velocity, angle, rate, pitch, base, then the block
+    /// count and each block. A message of the id alone clears the cart's contraption.
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(53);
+        let mut out = Vec::with_capacity(61);
         out.extend_from_slice(&self.id.to_le_bytes());
         out.push(u8::from(self.blocks.is_some()));
         for v in self.at {
             out.extend_from_slice(&v.to_le_bytes());
         }
-        for v in self.velocity.into_iter().chain([self.angle, self.rate]) {
+        for v in self
+            .velocity
+            .into_iter()
+            .chain([self.angle, self.rate, self.pitch, self.base])
+        {
             out.extend_from_slice(&v.to_le_bytes());
         }
         if let Some(blocks) = &self.blocks {
@@ -405,14 +416,14 @@ impl Pose {
     pub fn decode(d: &[u8]) -> Result<Pose, Option<u32>> {
         let word = |k: usize| -> Option<[u8; 4]> { d.get(k..k + 4)?.try_into().ok() };
         let id = word(0).map(u32::from_le_bytes).ok_or(None)?;
-        if d.len() < 49 {
+        if d.len() < 57 {
             return Err(Some(id));
         }
         let float = |k: usize| f64::from_le_bytes(d[k..k + 8].try_into().unwrap_or([0; 8]));
         let single = |k: usize| f32::from_le_bytes(d[k..k + 4].try_into().unwrap_or([0; 4]));
         let blocks = (d[4] != 0).then(|| {
-            let n = word(49).map_or(0, u32::from_le_bytes) as usize;
-            d.get(53..)
+            let n = word(57).map_or(0, u32::from_le_bytes) as usize;
+            d.get(61..)
                 .unwrap_or(&[])
                 .chunks_exact(16)
                 .take(n.min(MAX_SENT_BLOCKS))
@@ -428,6 +439,8 @@ impl Pose {
             velocity: [single(29), single(33), single(37)],
             angle: single(41),
             rate: single(45),
+            pitch: single(49),
+            base: single(53),
             blocks,
         })
     }
@@ -440,6 +453,7 @@ pub struct Sent {
     pub velocity: [f32; 3],
     pub angle: f32,
     pub rate: f32,
+    pub pitch: f32,
     pub tick: i64,
 }
 
@@ -449,8 +463,9 @@ pub const DRIFT: f64 = 1.0 / 32.0;
 pub const TURN_DRIFT: f32 = 0.5;
 
 impl Sent {
-    /// Whether clients, gliding on from what they heard, are off the contraption's motion now.
-    pub fn due(&self, at: [f64; 3], angle: f32, tick: i64) -> bool {
+    /// Whether clients, gliding on from what they heard, are off the contraption's motion now
+    /// (its pitch is drawn as heard, to half a degree).
+    pub fn due(&self, at: [f64; 3], angle: f32, pitch: f32, tick: i64) -> bool {
         let t = (tick - self.tick) as f64 / 20.0;
         let off = (0..3)
             .map(|k| {
@@ -460,7 +475,9 @@ impl Sent {
             .sum::<f64>()
             .sqrt();
         let turned = self.angle + self.rate * t as f32;
-        off > DRIFT || shortest_angle_diff(f64::from(turned), f64::from(angle)).abs() > TURN_DRIFT
+        off > DRIFT
+            || shortest_angle_diff(f64::from(turned), f64::from(angle)).abs() > TURN_DRIFT
+            || (pitch - self.pitch).abs() > TURN_DRIFT
     }
 }
 
@@ -571,6 +588,8 @@ mod tests {
             velocity: [8.0, 0.0, 0.0],
             angle: -180.0,
             rate: 240.0,
+            pitch: -45.0,
+            base: 90.0,
             blocks: Some(vec![([0, 1, 0], 42)]),
         };
         assert_eq!(Pose::decode(&p.encode()), Ok(p.clone()));
@@ -582,13 +601,16 @@ mod tests {
             velocity: [8.0, 0.0, 0.0],
             angle: 0.0,
             rate: 0.0,
+            pitch: 0.0,
             tick: 100,
         };
         // Two ticks on at 0.4 a tick: on the glide.
-        assert!(!s.due([0.8, 0.0, 0.0], 0.0, 102));
+        assert!(!s.due([0.8, 0.0, 0.0], 0.0, 0.0, 102));
         // Slowed down: off by more than a 32nd.
-        assert!(s.due([0.7, 0.0, 0.0], 0.0, 102));
-        assert!(s.due([0.8, 0.0, 0.0], 2.0, 102));
+        assert!(s.due([0.7, 0.0, 0.0], 0.0, 0.0, 102));
+        assert!(s.due([0.8, 0.0, 0.0], 2.0, 0.0, 102));
+        // Onto a slope: the pitch changed.
+        assert!(s.due([0.8, 0.0, 0.0], 0.0, 45.0, 102));
         let m = Mounted::new(vec![], Mode::Rotate, Dir::West);
         assert_eq!(m.angle(), 0.0);
         let placed = Mounted::placed_at(vec![], Mode::Rotate, Dir::West, 270.0);

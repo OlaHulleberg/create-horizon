@@ -151,12 +151,21 @@ impl Carts {
     }
 }
 
+/// A contraption on a cart as a client draws it: its blocks, and its part model, baked tilted to
+/// a pitch (to half a degree) and turned to its initial orientation.
+struct ClientCart {
+    blocks: Vec<([i32; 3], u32)>,
+    model: u32,
+    pitch: f32,
+    base: f32,
+}
+
 thread_local! {
     static CARTS: RefCell<Carts> = RefCell::new(Carts::default());
     /// Rail facts by block state: its shape, and whether it is an activator rail and powered.
     static RAILS: RefCell<HashMap<u32, Option<(RailShape, bool, bool)>>> = RefCell::new(HashMap::new());
     /// Contraptions a client draws, by cart id: their part model.
-    static CLIENT: RefCell<HashMap<u32, u32>> = RefCell::new(HashMap::new());
+    static CLIENT: RefCell<HashMap<u32, ClientCart>> = RefCell::new(HashMap::new());
     /// Couplings a client draws, by key: the connector's part model (its length).
     static CLIENT_COUPLINGS: RefCell<HashMap<u32, u32>> = RefCell::new(HashMap::new());
 }
@@ -1421,10 +1430,11 @@ fn tick_mounted(
             let on = c.mounted.get_mut(&uuid)?;
             if on.coupled {
                 if let Some((main, connected)) = pair {
-                    let (yaw, _pitch) =
+                    let (yaw, pitch) =
                         coupling::coupled_orientation(main.pos, connected.pos, main.uuid == uuid);
                     on.m.turn.prev_yaw = on.m.turn.yaw;
                     on.m.turn.yaw = yaw;
+                    on.m.turn.pitch = pitch;
                 }
             } else {
                 let size = mounted::x_size(&on.m.blocks);
@@ -1439,7 +1449,8 @@ fn tick_mounted(
             }
             let at = [nc.pos[0], nc.pos[1] + 0.5, nc.pos[2]];
             let angle = on.m.angle();
-            let due = on.fresh || on.sent.is_none_or(|s| s.due(at, angle, tick));
+            let pitch = on.m.turn.pitch;
+            let due = on.fresh || on.sent.is_none_or(|s| s.due(at, angle, pitch, tick));
             if !due {
                 return None;
             }
@@ -1453,6 +1464,8 @@ fn tick_mounted(
                 velocity: moved.map(|v| (v * 20.0) as f32),
                 angle,
                 rate: -turned * 20.0,
+                pitch,
+                base: mounted::y_rot(on.m.initial),
                 blocks: on.fresh.then(|| on.m.blocks.clone()),
             };
             on.fresh = false;
@@ -1461,6 +1474,7 @@ fn tick_mounted(
                 velocity: pose.velocity,
                 angle,
                 rate: pose.rate,
+                pitch,
                 tick,
             });
             Some(pose.encode())
@@ -1578,8 +1592,18 @@ fn tick_couplings(
         let mut ends = [ca.pos, cb.pos];
         for (k, nc) in [ca, cb].into_iter().enumerate() {
             let Some(m) = moved[k] else { continue };
-            game.native_set_minecart_position(dimension, nc.id, m.pos);
-            ends[k] = m.pos;
+            // On its rail the cart is put there (`moveCartAlongTrack`); off one it moves as far
+            // as blocks let it (`move(MoverType.SELF)`, Horizon API 72).
+            ends[k] = if m.off_rail {
+                let delta = [0, 1, 2].map(|i| m.pos[i] - nc.pos[i]);
+                let at = game
+                    .native_move_minecart(dimension, nc.id, delta)
+                    .unwrap_or(nc.pos);
+                at
+            } else {
+                game.native_set_minecart_position(dimension, nc.id, m.pos);
+                m.pos
+            };
             if m.off_rail {
                 game.native_set_delta_movement(dimension, nc.id, motion[k].map(|v| v * 0.95));
             }
@@ -1883,22 +1907,41 @@ pub(super) fn from_server(game: &mut Game<'_>, d: &[u8]) {
         Ok(p) => p,
         Err(id) => {
             if let Some(id) = id
-                && let Some(model) = CLIENT.with_borrow_mut(|c| c.remove(&id))
+                && let Some(cart) = CLIENT.with_borrow_mut(|c| c.remove(&id))
             {
                 game.native_part_clear(part_key(id));
-                game.native_part_model_free(model);
+                game.native_part_model_free(cart.model);
             }
             return;
         }
     };
-    if let Some(blocks) = &pose.blocks {
+    // `applyLocalTransforms`: `Y(-yaw) · Z(pitch) · Y(initialYaw)` about the anchor's centre;
+    // the last two are baked into the model, the first is the part's turn on the GPU.
+    let pitch = (pose.pitch * 2.0).round() / 2.0;
+    let stale = CLIENT.with_borrow(|c| {
+        c.get(&pose.id)
+            .is_none_or(|cart| cart.pitch != pitch || cart.base != pose.base)
+    });
+    if pose.blocks.is_some() || stale {
+        let blocks = match &pose.blocks {
+            Some(b) => b.clone(),
+            None => match CLIENT.with_borrow(|c| c.get(&pose.id).map(|cart| cart.blocks.clone())) {
+                Some(b) => b,
+                None => return,
+            },
+        };
+        let centre = glam::Vec3::splat(0.5);
+        let tilt = glam::Mat4::from_translation(centre)
+            * glam::Mat4::from_rotation_z(pitch.to_radians())
+            * glam::Mat4::from_rotation_y(pose.base.to_radians())
+            * glam::Mat4::from_translation(-centre);
         let parts: Vec<(BlockStateId, glam::Mat4)> = blocks
             .iter()
             .filter(|(o, _)| *o != [0, 0, 0])
             .map(|(o, s)| {
                 (
                     BlockStateId(*s),
-                    glam::Mat4::from_translation(glam::Vec3::new(
+                    tilt * glam::Mat4::from_translation(glam::Vec3::new(
                         o[0] as f32,
                         o[1] as f32,
                         o[2] as f32,
@@ -1908,13 +1951,23 @@ pub(super) fn from_server(game: &mut Game<'_>, d: &[u8]) {
             .collect();
         if let Some(old) = CLIENT.with_borrow_mut(|c| c.remove(&pose.id)) {
             game.native_part_clear(part_key(pose.id));
-            game.native_part_model_free(old);
+            game.native_part_model_free(old.model);
         }
         if let Some(model) = game.native_part_model_compound(&parts) {
-            CLIENT.with_borrow_mut(|c| c.insert(pose.id, model));
+            CLIENT.with_borrow_mut(|c| {
+                c.insert(
+                    pose.id,
+                    ClientCart {
+                        blocks,
+                        model,
+                        pitch,
+                        base: pose.base,
+                    },
+                )
+            });
         }
     }
-    let Some(model) = CLIENT.with_borrow(|c| c.get(&pose.id).copied()) else {
+    let Some(model) = CLIENT.with_borrow(|c| c.get(&pose.id).map(|cart| cart.model)) else {
         return;
     };
     let now = game.native_parts_seconds();
@@ -1925,7 +1978,7 @@ pub(super) fn from_server(game: &mut Game<'_>, d: &[u8]) {
         (pose.at[2] - f64::from(block[2]) - 0.5) as f32,
         now,
     ];
-    let phase = (pose.angle - pose.rate * now).rem_euclid(360.0);
+    let phase = (pose.angle - pose.base - pose.rate * now).rem_euclid(360.0);
     game.native_part_glide(
         part_key(pose.id),
         model,
