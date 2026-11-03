@@ -14,7 +14,7 @@ benchmark table, measured against that session's own off or control run; compare
 |---|---|---|---|---|
 | Kinetics | motors, shafts, cogs, gauges, stress, turntables, seats, belts' drive | 4,096 GPU-turned shafts: 0.528 ms / 3.970 ms vs chains 0.502 / 4.167 | frame ≤ control + 10 %, tick ≤ off + 0.25 ms: met | flywheel lag |
 | Processing | presses, mixers, crushers, fans, saws, drills, deployers, crafters, burners | 256 presses on depots: 0.547 / 4.357 ms | tick ≤ off + 0.5 ms, frame ≤ off + 15 %: met (its table's off) | |
-| Logistics | belts, funnels, tunnels, chutes, vaults, arms, packages, stock | 32 belts × 48 with 672 stacks: 0.604 / 4.132 ms | tick ≤ off + 0.5 ms: met (its table's off) | hoppers into creative crates |
+| Logistics | belts, funnels, tunnels, chutes, vaults, arms, packages, stock | 32 belts × 48 with 672 stacks: 0.604 / 4.132 ms | tick ≤ off + 0.5 ms: met (its table's off) | |
 | Fluids | pipes, pumps, tanks, boilers, spouts, drains, honey and chocolate blocks | 10 pumps into tanks: 0.510 / 4.380 ms | tick ≤ off + 0.25 ms, frame ≤ off + 10 %: met | |
 | Equipment | wrench, goggles, backtank and diving gear, toolboxes, value boxes and boards | hooks loaded, nothing worn: tick 2.454 vs off 2.607 ms | free when unused: met | clipboard editing screen |
 | Redstone | links, latches, diodes, observers, comparators, display links and boards, nixie text | latch chains: 3.852 ms tick (over at first, within after the fix in its section) | tick ≤ control + 0.3 ms: met | |
@@ -1069,10 +1069,18 @@ messages.
 - Hooks missing for the decorative blocks (not added to Horizon): the clipboard's pages
   need a text-editing screen (Create's `ClipboardScreen`, NeoForge `Screen` with `MultiLineEditBox`: Horizon's
   native screens have buttons and slots only); the empty blaze burner on a spawner needs the spawner's
-  `BaseSpawner.spawnPotentials`; hoppers and vanilla containers can't reach a creative crate (NeoForge
-  `Capabilities.ItemHandler.BLOCK` for a mod block without a container); haunted bells keep vanilla's bell sound
+  `BaseSpawner.spawnPotentials`; haunted bells keep vanilla's bell sound
   and ring logic from their template (Create's `HauntedBellBlockEntity` effect particles are not ported).
 - Minecart contraptions and couplings (were blocked on a contraption riding a cart; done with Horizon API 58 and 60 to 65 as typed data keyed by the cart's UUID, see Phase 8). Horizon API 68 (`feat/create-hooks-carts`) closed the last three: a furnace cart's fuel and push (fed from its contraption's storage), setting a cart's position (`CouplingPhysics.hardCollisionStep`), and a cart carrying something that isn't an entity moving as a ridden one. Storage rides carts, contraptions span two coupled carts and players' couplings are drawn (see Phase 8).
+- Hoppers and a creative crate (was blocked; done with Horizon API 69, `4395c4314` on `feat/create-hooks`:
+  `native_item_handler_insert` / `native_item_handler_extract`, NeoForge's `Capabilities.ItemHandler.BLOCK` through
+  `VanillaInventoryCodeHooks.insertHook` / `extractHook`, asked only when a hopper's block has no container). A hopper
+  under a crate takes its supply one item a transfer, and one facing into a crate has what it gives voided
+  (`BottomlessItemHandler`; glue `item_handler_insert.rs`, `item_handler_extract.rs`, `decor.rs`). In game (server
+  thread, BMG G21): a crate supplied with iron by a click on its top filled the chest under its hopper with 20 ingots
+  in 8 s (one per 8 ticks); a hopper of 5 emeralds over a crate with no supply was empty after it, and no item was
+  dropped. Droppers and comparators don't ask the handler yet; not benchmarked on its own, since the hooks run only on
+  a hopper's transfer to or from a block with no container.
 - Moving contraptions: clicks on a moving contraption reach the mod since Horizon API 66 (`native_interaction_key_mapping_triggered`, pinned `fe554b8d7` on `feat/create-hooks`) and train carriages take them (seats and controls, see Phase 9); other contraptions don't trace them yet (`AbstractContraptionEntity.handlePlayerInteraction` → `MovingInteractionBehaviour` for contraption controls, train doors and trapdoors, storage); item and fluid handlers on a mod block without a container (`Capabilities.ItemHandler.BLOCK`, `Capabilities.FluidHandler.BLOCK`, gap 4) for hoppers and pipes at a portable storage interface.
 - Explosions: Horizon has no helper for a mod to explode (NeoForge `Level.explode`); the mysterious cuckoo clock's
   surprise (`CuckooClockBlockEntity`: the block destroyed and a power 3 explosion halfway through its animation) and an

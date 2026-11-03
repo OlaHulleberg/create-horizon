@@ -1485,6 +1485,49 @@ pub(super) fn crate_extract(
     Some(ItemStack::new(item, n))
 }
 
+/// A hopper gives to the block at `pos` (Horizon API 69): a creative crate takes everything
+/// (`BottomlessItemHandler.insertItem`).
+pub(super) fn item_handler_insert(
+    game: &Game<'_>,
+    pos: [i32; 3],
+    stack: &mut Option<ItemStack>,
+    handled: &mut bool,
+) {
+    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    if states::index(state).is_none() {
+        return;
+    }
+    let Some(dim) = dimension_index(game.dim.id()) else {
+        return;
+    };
+    if crate_supply(game, dim, pos).is_some() {
+        *handled = true;
+        *stack = None;
+    }
+}
+
+/// A hopper takes from the block at `pos` (Horizon API 69): a creative crate gives its supply
+/// (`BottomlessItemHandler.extractItem`), the same whether simulated or not.
+pub(super) fn item_handler_extract(
+    game: &Game<'_>,
+    pos: [i32; 3],
+    amount: u32,
+    taken: &mut Option<ItemStack>,
+    handled: &mut bool,
+) {
+    let state = game.world.block(pos[0], pos[1], pos[2]).0;
+    if states::index(state).is_none() {
+        return;
+    }
+    let Some(dim) = dimension_index(game.dim.id()) else {
+        return;
+    };
+    if let Some(supply) = crate_supply(game, dim, pos) {
+        *handled = true;
+        *taken = crate_extract(game, supply.as_deref(), |_| true, amount);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Clients
 

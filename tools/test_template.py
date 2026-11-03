@@ -48,6 +48,8 @@ def write_fixture(original, root):
         ('block_entity', "horizon_client::game::native_hooks::Game<'_>::native_block_entity"),
         ('block_entity_container', "horizon_client::game::native_hooks::Game<'_>::native_block_entity_container"),
         ('contents_changed', "horizon_client::game::native_hooks::Game<'_>::native_contents_changed"),
+        ('item_handler_insert', "horizon_client::game::native_hooks::Game<'_>::native_item_handler_insert"),
+        ('item_handler_extract', "horizon_client::game::native_hooks::Game<'_>::native_item_handler_extract"),
         ('update_entity_after_fall_on',
          "horizon_client::game::native_hooks::Game<'_>::native_update_entity_after_fall_on"),
         ('block_signal', "horizon_client::game::native_hooks::GameLevel<'_>::native_block_signal"),
@@ -454,6 +456,14 @@ pub mod native_hooks {
             self.glides.push((model, block, axis, rpm, velocity));
         }
         pub fn native_contents_changed(&mut self, pos: [i32; 3]) { let _ = pos; }
+        pub fn native_item_handler_insert(&mut self, pos: [i32; 3], side: horizon_core::geometry::Direction,
+            stack: &mut Option<horizon_client::items::ItemStack>, simulate: bool, handled: &mut bool) {
+            let _ = (pos, side, stack, simulate, handled);
+        }
+        pub fn native_item_handler_extract(&mut self, pos: [i32; 3], side: horizon_core::geometry::Direction,
+            amount: u32, simulate: bool, taken: &mut Option<horizon_client::items::ItemStack>, handled: &mut bool) {
+            let _ = (pos, side, amount, simulate, taken, handled);
+        }
         pub fn native_use_item_on(&mut self, stack: &horizon_client::items::ItemStack, pos: [i32; 3], face: [i32; 3], claimed: &mut bool) {
             let _ = (stack, pos, face, claimed);
         }
