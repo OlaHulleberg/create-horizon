@@ -64,6 +64,48 @@ pub fn step(s: &mut Spout, item: Option<&str>, recipes: &[Filling]) -> Option<St
     Some(result)
 }
 
+/// `FillingBySpout.canItemBeFilled`: a filling recipe takes the item (with any fluid), or it is
+/// an empty bucket.
+pub fn fillable(item: &str, recipes: &[Filling]) -> bool {
+    item == "minecraft:bucket" || recipes.iter().any(|r| r.item == item)
+}
+
+/// What a spout does to a stack on the belt below.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OnBelt {
+    Pass,
+    Hold,
+    /// One of the stack is filled: what it became.
+    Fill(String),
+}
+
+/// The spout's belt callbacks, `onItemReceived` (not `locked`) and `whenItemHeld`: it holds a
+/// stack it can fill, starts its cycle when it has enough fluid, and fills one at the cycle's
+/// 5th-last tick (the cycle runs down in `step`).
+pub fn on_belt(s: &mut Spout, item: &str, recipes: &[Filling], locked: bool) -> OnBelt {
+    if locked && s.processing != -1 && s.processing != 5 {
+        return OnBelt::Hold;
+    }
+    if !fillable(item, recipes) {
+        return OnBelt::Pass;
+    }
+    let Some((fluid, have)) = s.fluid else {
+        return OnBelt::Hold;
+    };
+    let Some((need, result)) = filling(item, fluid, recipes) else {
+        return OnBelt::Pass;
+    };
+    if !locked || need > have {
+        return OnBelt::Hold;
+    }
+    if s.processing == -1 {
+        s.processing = FILLING_TIME;
+        return OnBelt::Hold;
+    }
+    s.fluid = (have > need).then_some((fluid, have - need));
+    OnBelt::Fill(result)
+}
+
 /// Fluid put into the spout's tank: what it took.
 pub fn fill(s: &mut Spout, fluid: Fluid, amount: u32) -> u32 {
     if s.fluid.is_some_and(|f| f.0 != fluid) {
@@ -118,5 +160,30 @@ mod tests {
             .count();
         assert_eq!(made, 4, "a bucket of honey glazes four apples");
         assert!(filling("minecraft:apple", Fluid::Water, &recipes).is_none());
+    }
+
+    #[test]
+    fn a_belt_stack_is_held_and_filled_after_the_cycle() {
+        let mut s = Spout::default();
+        assert_eq!(on_belt(&mut s, "minecraft:stone", &[], false), OnBelt::Pass);
+        assert_eq!(
+            on_belt(&mut s, "minecraft:bucket", &[], false),
+            OnBelt::Hold,
+            "held while the spout is empty"
+        );
+        fill(&mut s, Fluid::Water, 1000);
+        assert_eq!(on_belt(&mut s, "minecraft:bucket", &[], true), OnBelt::Hold);
+        assert_eq!(s.processing, FILLING_TIME, "the cycle starts");
+        let mut ticks = 0;
+        let filled = loop {
+            // The spout's tick runs the cycle down; the belt asks after it.
+            step(&mut s, None, &[]);
+            ticks += 1;
+            if let OnBelt::Fill(r) = on_belt(&mut s, "minecraft:bucket", &[], true) {
+                break r;
+            }
+        };
+        assert_eq!((ticks, filled.as_str()), (15, "minecraft:water_bucket"));
+        assert_eq!(s.fluid, None);
     }
 }

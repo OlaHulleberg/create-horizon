@@ -1353,10 +1353,13 @@ pub(super) fn item_landed(
         _ => return,
     };
     // Stacks with components keep them only as entities, for now, but on a depot (it holds the
-    // whole stack) and a saw (a sequenced assembly's transitional item, its progress with it).
+    // whole stack), a saw and a belt (a sequenced assembly's transitional item, its progress
+    // with it).
     let carried = block == create_engine::Block::Depot
-        || (block == create_engine::Block::MechanicalSaw
-            && stack.damage == 0
+        || (matches!(
+            block,
+            create_engine::Block::MechanicalSaw | create_engine::Block::Belt
+        ) && stack.damage == 0
             && super::create_items_body::sequenced_progress(stack).is_some());
     if (stack.extra.is_some() || stack.damage != 0) && !carried {
         return;
@@ -1457,6 +1460,7 @@ pub(super) fn item_landed(
     }
     let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
     let angle = random_angle(game, spot);
+    let progress = stack_progress(stack);
     let added = with_world(|w| {
         let b = w.dims[dim].belts.get_mut(&c)?;
         let movement = create_engine::belt::movement_facing(rpm, b.segment.facing);
@@ -1468,6 +1472,7 @@ pub(super) fn item_landed(
             return None;
         }
         let mut item = create_engine::belt::Item::new(&stack.item, count, angle, up);
+        item.progress = progress.clone();
         item.inserted_at = index;
         item.inserted_from = Some(create_engine::kinetics::Dir::Up);
         item.position = index as f32 + 0.5 + if b.items.positive { -1.0 } else { 1.0 } / 16.0;
@@ -1510,12 +1515,7 @@ pub(super) fn insert_into_from(
         if !depot_items(game, next).is_empty() || !ejector_accepts(dim, next) {
             return Some(item.count);
         }
-        let put = horizon_client::items::ItemStack {
-            item: item.item.as_str().into(),
-            count: u32::from(item.count),
-            damage: 0,
-            extra: None,
-        };
+        let put = belt_stack(item);
         game.native_with_mod_block_entity(next, |be| {
             be.items
                 .resize(be.items.len().max(create_engine::depot::SLOTS), None);
@@ -1593,17 +1593,30 @@ pub(super) fn eject_from_belt(
         1.0 / 8.0,
         f64::from(d[2]) * f64::from(speed),
     ];
-    game.native_run_command(&format!(
-        "summon minecraft:item {:.4} {:.4} {:.4} {{Item:{{id:'{}',count:{}}},Motion:[{:.4}d,{:.4}d,{:.4}d]}}",
-        at[0],
-        at[1] + 6.0 / 16.0,
-        at[2],
-        item.item,
-        item.count,
-        motion[0],
-        motion[1],
-        motion[2]
-    ));
+    super::create_contraption_body::drop_stack(
+        game,
+        [at[0], at[1] + 6.0 / 16.0, at[2]],
+        motion,
+        belt_stack(item),
+    );
+}
+
+/// A belt item as a stack, its sequenced assembly progress with it.
+pub(super) fn belt_stack(item: &create_engine::belt::Item) -> horizon_client::items::ItemStack {
+    let mut stack =
+        horizon_client::items::ItemStack::new(item.item.as_str(), u32::from(item.count));
+    if let Some((_, p, fraction)) = item.progress.as_ref().and_then(transitional_of) {
+        super::create_items_body::set_sequenced_progress(&mut stack, &p.id, p.step, fraction);
+    }
+    stack
+}
+
+/// The sequenced assembly progress a stack carries.
+pub(super) fn stack_progress(
+    stack: &horizon_client::items::ItemStack,
+) -> Option<create_engine::sequenced::Progress> {
+    super::create_items_body::sequenced_progress(stack)
+        .map(|(id, step)| create_engine::sequenced::Progress { id, step })
 }
 
 /// Belts: segments broken next to a broken one become shafts or air, a broken belt's items

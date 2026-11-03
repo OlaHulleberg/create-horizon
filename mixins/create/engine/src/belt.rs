@@ -252,6 +252,9 @@ pub struct Item {
     /// It didn't move last tick: queued behind another stack or held at the belt's end. Clients
     /// draw it gliding only while this is false, so they are told when it flips. Not saved.
     pub stalled: bool,
+    /// The sequenced assembly it is in (its `SequencedAssembly` component): the only component
+    /// a stack keeps on a belt.
+    pub progress: Option<crate::sequenced::Progress>,
 }
 
 impl Item {
@@ -271,6 +274,7 @@ impl Item {
             held_externally: false,
             at_funnel: false,
             stalled: false,
+            progress: None,
         };
         i.side_offset = i.target_side_offset();
         i
@@ -1115,6 +1119,7 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
                 held_externally: false,
                 at_funnel: r[11] & 2 != 0,
                 stalled: r[11] & 4 != 0,
+                progress: None,
             });
         }
         out.push(c);
