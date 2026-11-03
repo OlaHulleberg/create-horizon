@@ -52,3 +52,8 @@ pub(crate) fn deployer_punch(
 ) {
     let _ = (game, dimension, dim, pos, facing);
 }
+
+pub(crate) fn use_block(game: &mut crate::game::Game<'_>, pos: [i32; 3], facing: Dir) -> bool {
+    let _ = (game, pos, facing);
+    false
+}

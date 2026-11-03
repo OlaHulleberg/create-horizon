@@ -310,19 +310,14 @@ pub(super) fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
             }
         });
     }
-    // Deployers at rest holding something or punching, turning: `tick`'s `WAITING` start
+    // Deployers at rest, turning, not locked: `tick`'s `WAITING` start
     // (`shouldActivate` when using), else a look again `getTimerSpeed() × 10` later. Using ones
     // over a depot or belt wait for it.
     let idle: Vec<([i32; 3], f32, Mode)> = with_world(|w| {
         let d = &w.dims[dim];
         d.deployers
             .iter()
-            .filter(|(p, dp)| {
-                (dp.held.is_some() || dp.mode == Mode::Punch)
-                    && !dp.busy()
-                    && !dp.locked
-                    && !d.deploying.contains(p)
-            })
+            .filter(|(p, dp)| !dp.busy() && !dp.locked && !d.deploying.contains(p))
             .map(|(p, dp)| (*p, w.speed(dim, *p).unwrap_or(0.0), dp.mode))
             .filter(|(_, rpm, _)| *rpm != 0.0)
             .collect()
@@ -484,10 +479,11 @@ pub(super) fn deployer_place_target(
 /// `shouldActivate` for a held item that is not a block: always, except a bucket of a fluid
 /// whose source is already in the block it reaches.
 pub(super) fn deployer_uses(game: &Game<'_>, dim: usize, pos: [i32; 3], facing: Dir) -> bool {
+    // `shouldActivate`: an empty hand always (it uses the block it reaches).
     let Some((item, _)) =
         with_world(|w| w.dims[dim].deployers.get(&pos).and_then(|d| d.held.clone())).flatten()
     else {
-        return false;
+        return true;
     };
     if game.items().get(&item).is_some_and(|i| i.block.is_some()) {
         return false;
@@ -532,6 +528,10 @@ pub(super) fn deployer_activate(game: &mut Game<'_>, dimension: &str, dim: usize
     }) == Some(true);
     if punching {
         super::dispenser::create_use::deployer_punch(game, dimension, dim, pos, facing);
+        return;
+    }
+    // `safeOnUse`: the block it reaches, used first (a lever, a door); it took the action.
+    if super::dispenser::create_use::use_block(game, pos, facing) {
         return;
     }
     let Some(target) = deployer_place_target(game, dim, pos, facing) else {
