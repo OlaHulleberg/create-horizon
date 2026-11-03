@@ -314,17 +314,20 @@ pub(super) fn tick_pipes(game: &mut Game<'_>, dimension: &str, dim: usize) {
                 // The flows on the way advance (`manageFlows`); the ends in front they have
                 // reached take an equal share each (`FluidNetwork.tick`'s `availableOutputs`).
                 pump.pumped = pump.pumped.saturating_add(1);
-                let reached: Vec<fluids::End> = pump
-                    .push
-                    .iter()
-                    .filter(|to| {
-                        to.passes(fluid) && pump.pumped >= fluids::arrival_ticks(&from, to, speed)
-                    })
-                    .copied()
-                    .collect();
-                let moved = fluids::share(reached.len(), n, |k, give| {
-                    fill_end(game, dimension, dim, &reached[k], fluid, give, &mut pump)
+                // No list of them is made: the k-th reached end is found when it is filled.
+                let push = std::mem::take(&mut pump.push);
+                let pumped = pump.pumped;
+                let reaches = |to: &&fluids::End| {
+                    to.passes(fluid) && pumped >= fluids::arrival_ticks(&from, to, speed)
+                };
+                let count = push.iter().filter(reaches).count();
+                let moved = fluids::share(count, n, |k, give| {
+                    let Some(to) = push.iter().filter(reaches).nth(k) else {
+                        return 0;
+                    };
+                    fill_end(game, dimension, dim, to, fluid, give, &mut pump)
                 });
+                pump.push = push;
                 if moved > 0 {
                     if special.is_some() {
                         super::create_plumbing::take(game, dimension, dim, from.pos, moved);
