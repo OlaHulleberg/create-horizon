@@ -2945,6 +2945,7 @@ pub(super) fn read_sequenced(game: &Game<'_>) -> Vec<create_engine::sequenced::A
                         with,
                         fluid: fluid.map(|(f, n)| (f.id().to_string(), n)),
                         keep_held: step["keep_held_item"].as_bool().unwrap_or(false),
+                        time: step["processing_time"].as_i64().unwrap_or(0) as i32,
                     })
                 })
                 .collect::<Option<Vec<_>>>()?;

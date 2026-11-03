@@ -928,6 +928,18 @@ pub(super) fn press_on_depot(
     results_on_depot(game, dim, depot, count, held, results)
 }
 
+/// The transitional item of the assembly an item's progress names, with the progress and the
+/// fraction of the steps done (`SequencedAssembly.progress`).
+fn transitional_of(
+    p: &create_engine::sequenced::Progress,
+) -> Option<(String, &create_engine::sequenced::Progress, f32)> {
+    RECIPES.with_borrow(|r| {
+        let a = r.as_ref()?.sequenced.iter().find(|a| a.id == p.id)?;
+        let total = (a.steps.len().max(1) as u32 * a.loops.max(1)) as f32;
+        Some((a.transitional.clone(), p, p.step as f32 / total))
+    })
+}
+
 /// The depot's held stack with its components.
 fn depot_held_stack(game: &Game<'_>, depot: [i32; 3]) -> Option<horizon_client::items::ItemStack> {
     match game
@@ -1329,6 +1341,8 @@ pub(super) fn saw_take(
         s.slots = vec![(stack.item.to_string(), stack.count.min(64) as u8)];
         s.remaining = -1.0;
         s.applied = false;
+        s.progress = super::create_items_body::sequenced_progress(stack)
+            .map(|(id, step)| create_engine::sequenced::Progress { id, step });
         true
     })
     .unwrap_or(false);
@@ -1362,6 +1376,23 @@ pub(super) fn tick_saws(game: &mut Game<'_>, dim: usize) {
             Step::Wait => {}
             Step::Start => RECIPES.with_borrow(|r| {
                 let Some(r) = r.as_ref() else { return };
+                // A sequenced assembly's cutting step alone, when the item is at one
+                // (`getRecipes`), for its processing time.
+                if let Some((_, step)) = create_engine::sequenced::step_for(
+                    &r.sequenced,
+                    &item,
+                    saw.progress.as_ref(),
+                    "create:cutting",
+                ) {
+                    let time = create_engine::processing::Recipe {
+                        id: String::new(),
+                        ingredients: Vec::new(),
+                        results: Vec::new(),
+                        time: step.time,
+                    };
+                    saw.start(&[&time]);
+                    return;
+                }
                 let list: Vec<&create_engine::processing::Recipe> = r
                     .cutting
                     .matching(&item)
@@ -1378,6 +1409,15 @@ pub(super) fn tick_saws(game: &mut Game<'_>, dim: usize) {
                 );
                 RECIPES.with_borrow(|r| {
                     let Some(r) = r.as_ref() else { return };
+                    if let Some((a, _)) = create_engine::sequenced::step_for(
+                        &r.sequenced,
+                        &item,
+                        saw.progress.as_ref(),
+                        "create:cutting",
+                    ) {
+                        saw.apply_assembly(a, &mut rng);
+                        return;
+                    }
                     let list = r.cutting.matching(&item);
                     let recipe = list.get(saw.index).map(|&i| r.cutting.get(i));
                     saw.apply(recipe, |i: &str| stack_limit(game, i), &mut rng);
@@ -1392,8 +1432,16 @@ pub(super) fn tick_saws(game: &mut Game<'_>, dim: usize) {
                 );
                 let (vx, vz) = (f64::from(m[0]) * 0.0625, f64::from(m[2]) * 0.0625);
                 for (item, count) in &saw.slots {
+                    // A transitional item keeps its progress.
+                    let components = match saw.progress.as_ref().and_then(transitional_of) {
+                        Some((t, p, fraction)) if t == *item => format!(
+                            ",components:{{\"minecraft:custom_data\":{{\"create:sequenced_assembly\":{{id:\"{}\",step:{},progress:{}f}}}}}}",
+                            p.id, p.step, fraction
+                        ),
+                        _ => String::new(),
+                    };
                     game.native_run_command(&format!(
-                        "summon minecraft:item {x} {y} {z} {{Item:{{id:'{item}',count:{count}}},Motion:[{vx}d,0.125d,{vz}d]}}"
+                        "summon minecraft:item {x} {y} {z} {{Item:{{id:'{item}',count:{count}{components}}},Motion:[{vx}d,0.125d,{vz}d]}}"
                     ));
                 }
                 saw.clear();

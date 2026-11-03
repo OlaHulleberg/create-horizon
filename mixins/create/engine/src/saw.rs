@@ -2,6 +2,7 @@
 //! cut by its cutting recipes (taking turns when several fit), then thrown off the way it turns.
 
 use crate::processing::{Recipe, Rng, roll};
+use crate::sequenced::{Advanced, Assembly, Progress};
 
 /// The saw's inventory (`ProcessingInventory`): the input, then up to 9 results.
 #[derive(Clone, Debug, PartialEq)]
@@ -10,6 +11,9 @@ pub struct Saw {
     pub remaining: f32,
     pub applied: bool,
     pub index: usize,
+    /// The sequenced assembly progress its items carry (`SequencedAssembly`), the input's
+    /// before its step, the results' after.
+    pub progress: Option<Progress>,
 }
 
 impl Default for Saw {
@@ -19,6 +23,7 @@ impl Default for Saw {
             remaining: -1.0,
             applied: false,
             index: 0,
+            progress: None,
         }
     }
 }
@@ -101,12 +106,40 @@ impl Saw {
         }
         list.truncate(9);
         self.slots = list;
+        self.progress = None;
     }
 
     /// After ejecting: empty, waiting (`remainingTime = -1`).
     pub fn clear(&mut self) {
         self.slots.clear();
         self.remaining = -1.0;
+        self.progress = None;
+    }
+
+    /// `applyRecipe` with a sequenced assembly's cutting step (`enforceNextResult`): each of the
+    /// input `advance`s, to the transitional item a step on or a result of the pool.
+    pub fn apply_assembly(&mut self, a: &Assembly, rng: &mut Rng) {
+        let Some((_, count)) = self.slots.first().cloned() else {
+            return;
+        };
+        let before = self.progress.take();
+        let mut list: Vec<(String, u8)> = Vec::new();
+        for _ in 0..count {
+            let (item, n) = match a.advance(before.as_ref(), rng.next_float()) {
+                Advanced::Next { item, progress, .. } => {
+                    self.progress = Some(progress);
+                    (item, 1)
+                }
+                Advanced::Done { item, count } => (item, count),
+                Advanced::Nothing => continue,
+            };
+            match list.iter_mut().find(|(i, _)| *i == item) {
+                Some((_, m)) => *m = m.saturating_add(n),
+                None => list.push((item, n)),
+            }
+        }
+        self.slots = list;
+        self.slots.truncate(9);
     }
 }
 
@@ -154,5 +187,40 @@ mod tests {
         }
         assert_eq!(out, 15);
         assert_eq!(movement(false, -8.0), [-1, 0, 0]);
+    }
+
+    #[test]
+    fn a_cutting_step_advances_the_assembly() {
+        use crate::sequenced::{Outcome, Step as S};
+        let step = |kind: &str| S {
+            kind: kind.into(),
+            with: None,
+            fluid: None,
+            keep_held: false,
+            time: 50,
+        };
+        let a = Assembly {
+            id: "x:cut".into(),
+            ingredient: vec!["minecraft:oak_planks".into()],
+            transitional: "x:incomplete".into(),
+            steps: vec![step("create:cutting"), step("create:cutting")],
+            loops: 1,
+            results: vec![Outcome {
+                item: "x:done".into(),
+                count: 2,
+                weight: 1.0,
+            }],
+        };
+        let mut rng = Rng::new(1);
+        let mut saw = Saw {
+            slots: vec![("minecraft:oak_planks".into(), 1)],
+            ..Saw::default()
+        };
+        saw.apply_assembly(&a, &mut rng);
+        assert_eq!(saw.slots, vec![("x:incomplete".to_string(), 1)]);
+        assert_eq!(saw.progress.as_ref().map(|p| p.step), Some(1));
+        saw.apply_assembly(&a, &mut rng);
+        assert_eq!(saw.slots, vec![("x:done".to_string(), 2)]);
+        assert_eq!(saw.progress, None);
     }
 }
