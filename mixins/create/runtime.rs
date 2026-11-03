@@ -2813,6 +2813,8 @@ pub(super) struct Recipes {
     /// the machines carry.
     pub(super) emptying: Vec<(String, create_engine::drain::Emptying)>,
     pub(super) filling: Vec<create_engine::spout::Filling>,
+    /// `create:sequenced_assembly`: steps the machines ask for first.
+    pub(super) sequenced: Vec<create_engine::sequenced::Assembly>,
 }
 
 impl Recipes {
@@ -2860,6 +2862,7 @@ pub(super) fn ensure_recipes(game: &Game<'_>) -> bool {
                 .collect(),
             emptying: read_emptying(game),
             filling: read_filling(game),
+            sequenced: read_sequenced(game),
         })
     });
     true
@@ -2903,6 +2906,70 @@ pub(super) fn recipe_fluid(json: &serde_json::Value) -> Option<(create_engine::t
         .or_else(|| json["tag"].as_str())
         .or_else(|| json["id"].as_str())?;
     Some((create_engine::tank::Fluid::of_id(id)?, amount))
+}
+
+/// `create:sequenced_assembly` (`SequencedAssemblyRecipeSerializer`): the starting items, the
+/// transitional item, each step's recipe type with a deployer's second ingredient or a spout's
+/// fluid, the loops (1 unset) and the weighted results.
+pub(super) fn read_sequenced(game: &Game<'_>) -> Vec<create_engine::sequenced::Assembly> {
+    use create_engine::sequenced::{Assembly, Outcome, Step};
+    game.native_recipes_of_type("create:sequenced_assembly")
+        .iter()
+        .filter_map(|r| {
+            let json = &*r.json;
+            let ingredient = game
+                .native_recipe_ingredient(&json["ingredient"])?
+                .1
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let transitional = json["transitional_item"]["id"]
+                .as_str()
+                .or_else(|| json["transitional_item"]["item"].as_str())?
+                .to_string();
+            let steps = json["sequence"]
+                .as_array()?
+                .iter()
+                .map(|step| {
+                    let ingredients = step["ingredients"].as_array();
+                    let second = ingredients.and_then(|i| i.get(1));
+                    let fluid = second
+                        .filter(|i| i.get("amount").is_some())
+                        .and_then(recipe_fluid);
+                    let with = second.filter(|i| i.get("amount").is_none()).and_then(|i| {
+                        game.native_recipe_ingredient(i)
+                            .map(|ing| ing.1.iter().map(|s| s.to_string()).collect())
+                    });
+                    Some(Step {
+                        kind: step["type"].as_str()?.to_string(),
+                        with,
+                        fluid: fluid.map(|(f, n)| (f.id().to_string(), n)),
+                        keep_held: step["keep_held_item"].as_bool().unwrap_or(false),
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let results = json["results"]
+                .as_array()?
+                .iter()
+                .map(|o| {
+                    let stack = game.native_recipe_result(o)?;
+                    Some(Outcome {
+                        item: stack.item.to_string(),
+                        count: stack.count.min(255) as u8,
+                        weight: o["chance"].as_f64().unwrap_or(1.0) as f32,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(Assembly {
+                id: r.id.clone(),
+                ingredient,
+                transitional,
+                steps,
+                loops: json["loops"].as_u64().unwrap_or(1) as u32,
+                results,
+            })
+        })
+        .collect()
 }
 
 /// `create:emptying`: each item its fluid and what is left of it.
