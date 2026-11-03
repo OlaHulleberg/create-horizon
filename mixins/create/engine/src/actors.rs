@@ -152,9 +152,10 @@ pub struct Actor {
     pub position: Option<[f64; 3]>,
     pub motion: [f64; 3],
     pub relative_motion: [f64; 3],
-    /// A turning contraption's rotation this tick (its axis and degrees, as clients turn its
-    /// parts): the relative motion is the motion turned back (`relativeMotion`).
-    pub turn: Option<(crate::kinetics::Axis, f64)>,
+    /// A turning contraption's rotation this tick (up to three turns about an axis, in degrees,
+    /// applied in order, as clients turn its parts; none for a translating one): the relative
+    /// motion is the motion turned back (`relativeMotion`).
+    pub turns: Turns,
     pub stall: bool,
     pub first_movement: bool,
     pub disabled: bool,
@@ -183,7 +184,7 @@ impl Actor {
             position: None,
             motion: [0.0; 3],
             relative_motion: [0.0; 3],
-            turn: None,
+            turns: NO_TURNS,
             stall: false,
             first_movement: true,
             disabled: false,
@@ -308,6 +309,51 @@ pub fn turn_vec(v: [f64; 3], axis: crate::kinetics::Axis, deg: f64) -> [f64; 3] 
     }
 }
 
+/// Up to three turns about an axis (degrees), applied first to last.
+pub type Turns = [(crate::kinetics::Axis, f64); 3];
+/// No turn at all.
+pub const NO_TURNS: Turns = [(crate::kinetics::Axis::Y, 0.0); 3];
+
+/// `v` turned by `turns`, first to last.
+pub fn turn_all(v: [f64; 3], turns: &Turns) -> [f64; 3] {
+    turns
+        .iter()
+        .fold(v, |v, &(axis, deg)| turn_vec(v, axis, deg))
+}
+
+/// `v` turned back from `turns`, last to first.
+pub fn unturn(v: [f64; 3], turns: &Turns) -> [f64; 3] {
+    turns
+        .iter()
+        .rev()
+        .fold(v, |v, &(axis, deg)| turn_vec(v, axis, -deg))
+}
+
+/// `toGlobalVector` for an actor of a turning structure whose block offsets are from its anchor
+/// block, that block's centre at `pivot` in the world, turned by `turns` about that centre:
+/// where it works.
+pub fn posed_position(a: &Actor, pivot: [f64; 3], turns: &Turns) -> [f64; 3] {
+    let at = translated_position(a, [0.0; 3]);
+    let turned = turn_all([at[0] - 0.5, at[1] - 0.5, at[2] - 0.5], turns);
+    [0, 1, 2].map(|i| pivot[i] + turned[i])
+}
+
+/// The way `facing` points turned by `turns`: the nearest direction.
+pub fn posed_facing(facing: Dir, turns: &Turns) -> Dir {
+    let v = turn_all(facing.offset().map(f64::from), turns);
+    let k = (0..3)
+        .max_by(|&a, &b| v[a].abs().total_cmp(&v[b].abs()))
+        .unwrap_or(0);
+    let mut n = [0, 0, 0];
+    n[k] = if v[k] < 0.0 { -1 } else { 1 };
+    Dir::from_offset(n).unwrap_or(facing)
+}
+
+/// One turn of `deg` about `axis`.
+pub fn one_turn(axis: crate::kinetics::Axis, deg: f64) -> Turns {
+    [(axis, deg), NO_TURNS[1], NO_TURNS[2]]
+}
+
 /// `toGlobalVector` for an actor of a bearing's structure (its block offset from the bearing at
 /// `bearing`) turned `deg` about `axis` through the bearing's centre: where it works.
 pub fn turned_position(
@@ -316,21 +362,12 @@ pub fn turned_position(
     axis: crate::kinetics::Axis,
     deg: f64,
 ) -> [f64; 3] {
-    let at = translated_position(a, [0.0; 3]);
-    let turned = turn_vec([at[0] - 0.5, at[1] - 0.5, at[2] - 0.5], axis, deg);
-    [0, 1, 2].map(|i| f64::from(bearing[i]) + 0.5 + turned[i])
+    posed_position(a, bearing.map(|v| f64::from(v) + 0.5), &one_turn(axis, deg))
 }
 
 /// The way `facing` points turned `deg` about `axis`: the nearest direction.
 pub fn turned_facing(facing: Dir, axis: crate::kinetics::Axis, deg: f64) -> Dir {
-    let o = facing.offset().map(f64::from);
-    let v = turn_vec(o, axis, deg);
-    let k = (0..3)
-        .max_by(|&a, &b| v[a].abs().total_cmp(&v[b].abs()))
-        .unwrap_or(0);
-    let mut n = [0, 0, 0];
-    n[k] = if v[k] < 0.0 { -1 } else { 1 };
-    Dir::from_offset(n).unwrap_or(facing)
+    posed_facing(facing, &one_turn(axis, deg))
 }
 
 impl Actor {
@@ -343,10 +380,7 @@ impl Actor {
         self.motion = [0, 1, 2].map(|i| position[i] - previous[i]);
         // A translating contraption doesn't turn: the relative motion is the motion; a turning
         // one's is turned back into its own frame.
-        self.relative_motion = match self.turn {
-            Some((axis, deg)) => turn_vec(self.motion, axis, -deg),
-            None => self.motion,
-        };
+        self.relative_motion = unturn(self.motion, &self.turns);
         previous.map(|v| v.floor() as i32) != grid
             || (length(self.relative_motion) > 0.0 && self.first_movement)
     }
@@ -1675,5 +1709,26 @@ mod tests {
         // The relative motion is turned back: moving north at 90°, it moves east in its frame.
         let back = turn_vec([0.0, 0.0, -1.0], Axis::Y, -90.0);
         assert!((back[0] - 1.0).abs() < 1e-9 && back[2].abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_cart_s_actors_turn_and_pitch_with_it() {
+        use crate::kinetics::Axis;
+        // A drill a block east of a cart's anchor, facing east; the contraption turned a quarter
+        // (no initial turn) and pitched 45°: `Y(angle - base) · Z(pitch) · Y(base)`.
+        let d = Actor::new([1, 0, 0], Kind::Drill, Dir::East, -1);
+        let flat = posed_position(&d, [10.5, 64.5, 20.5], &one_turn(Axis::Y, 90.0));
+        assert!((flat[0] - 10.5).abs() < 1e-9 && (flat[2] - (20.5 - 1.65)).abs() < 1e-9);
+        let turns = [(Axis::Y, 0.0), (Axis::Z, 45.0), (Axis::Y, 0.0)];
+        let up = posed_position(&d, [0.5, 0.5, 0.5], &turns);
+        let r = 1.65 / 2f64.sqrt();
+        assert!(
+            (up[0] - (0.5 + r)).abs() < 1e-9 && (up[1] - (0.5 + r)).abs() < 1e-9,
+            "{up:?}"
+        );
+        // Back again: a motion turned by the turns comes back as it was.
+        let v = [0.3, -0.2, 0.7];
+        let w = unturn(turn_all(v, &turns), &turns);
+        assert!((0..3).all(|i| (w[i] - v[i]).abs() < 1e-12));
     }
 }

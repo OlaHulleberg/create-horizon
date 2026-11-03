@@ -870,8 +870,7 @@ pub(super) fn cancel_actors(game: &mut Game<'_>, carried: &mut Carried) {
 }
 
 /// `tickActors` for a bearing's structure turned `deg` about `axis` through the bearing at
-/// `bearing`: each actor works where it is turned to, facing the way it turned
-/// (`toGlobalVector`, `rotation`). Returns whether one stalls it.
+/// `bearing`. Returns whether one stalls it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn tick_turning_actors(
     game: &mut Game<'_>,
@@ -883,13 +882,37 @@ pub(super) fn tick_turning_actors(
     axis: create_engine::kinetics::Axis,
     deg: f64,
 ) -> bool {
+    let pivot = bearing.map(|v| f64::from(v) + 0.5);
+    tick_posed_actors(
+        game,
+        dimension,
+        dim,
+        key,
+        carried,
+        pivot,
+        &actors::one_turn(axis, deg),
+    )
+}
+
+/// `tickActors` for a turning structure whose anchor block's centre is at `pivot`, turned by
+/// `turns` about it: each actor works where it is turned to, facing the way it turned
+/// (`toGlobalVector`, `rotation`). Returns whether one stalls it.
+pub(super) fn tick_posed_actors(
+    game: &mut Game<'_>,
+    dimension: &str,
+    dim: usize,
+    key: [i32; 3],
+    carried: &mut Carried,
+    pivot: [f64; 3],
+    turns: &actors::Turns,
+) -> bool {
     let mut stalled = false;
     for i in 0..carried.actors.len() {
         let mut effects = Vec::new();
         let a = &mut carried.actors[i];
-        a.turn = Some((axis, deg));
-        let position = actors::turned_position(a, bearing, axis, deg);
-        let facing = actors::turned_facing(a.facing, axis, deg);
+        a.turns = *turns;
+        let position = actors::posed_position(a, pivot, turns);
+        let facing = actors::posed_facing(a.facing, turns);
         stalled |= a.tick(
             position,
             facing,

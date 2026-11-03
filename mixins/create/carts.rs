@@ -608,6 +608,18 @@ fn disassemble_at(
 /// where the cart is, clients forget it, the cart moves as an empty one again and a coupling
 /// the contraption made goes.
 fn let_go(game: &mut Game<'_>, dimension: &str, id: u32, at: [f64; 3], mut on: OnCart) {
+    // Its actors stop (their cracks gone); a cart held for one moves on.
+    let uuid = CARTS.with_borrow(|c| c.ids.iter().find(|(_, v)| v.1 == id).map(|(u, _)| *u));
+    if let Some(uuid) = uuid
+        && let Some((carried, held)) = CART_ACTORS.with_borrow_mut(|a| a.remove(&uuid))
+    {
+        if let Some(mut carried) = carried {
+            super::create_actors::cancel_actors(game, &mut carried);
+        }
+        if let Some(v) = held {
+            game.native_set_delta_movement(dimension, id, v);
+        }
+    }
     put_back(game, dimension, at, &mut on);
     gone(game, dimension, id);
     game.native_set_minecart_carrying(dimension, id, false);
@@ -1493,7 +1505,81 @@ fn tick_mounted(
             None if link.is_none() => fuel_furnace(game, dimension, uuid, nc),
             None => {}
         }
+        tick_cart_actors(game, dimension, dim, nc);
     }
+}
+
+thread_local! {
+    /// The actors of contraptions on carts, by cart UUID, made the first tick it is seen
+    /// (none for a contraption without any), with the cart's motion while one stalls it.
+    static CART_ACTORS: RefCell<HashMap<u128, (Option<create_engine::actors::Carried>, Option<[f64; 3]>)>> =
+        RefCell::new(HashMap::new());
+}
+
+/// `tickActors` for the contraption on cart `nc`: each actor works where the contraption's turn
+/// and pitch put it about its anchor (`applyLocalTransforms`: `Y(angle - base) · Z(pitch) ·
+/// Y(base)`, as clients draw it); while one stalls the cart holds still, its motion given back
+/// after (`StallData`). Nothing more than a lookup for a contraption without actors.
+fn tick_cart_actors(game: &mut Game<'_>, dimension: &str, dim: usize, nc: &NativeMinecart) {
+    use create_engine::actors::Turns;
+    use create_engine::kinetics::Axis;
+    let uuid = nc.uuid;
+    if CART_ACTORS.with_borrow(|a| a.get(&uuid).is_some_and(|e| e.0.is_none())) {
+        return;
+    }
+    let Some((pose, blocks)) = CARTS.with_borrow(|c| {
+        let on = c.mounted.get(&uuid)?;
+        let base = mounted::y_rot(on.m.initial);
+        let pose = (base, on.m.turn.pitch, on.m.angle());
+        let blocks =
+            (!CART_ACTORS.with_borrow(|a| a.contains_key(&uuid))).then(|| on.m.blocks.clone());
+        Some((pose, blocks))
+    }) else {
+        return;
+    };
+    if let Some(blocks) = blocks {
+        let carried = super::create_actors::bearing_actors(&blocks);
+        let entry = (!carried.actors.is_empty()).then_some(carried);
+        let none = entry.is_none();
+        CART_ACTORS.with_borrow_mut(|a| a.insert(uuid, (entry, None)));
+        if none {
+            return;
+        }
+    }
+    let Some((Some(mut carried), held)) = CART_ACTORS.with_borrow_mut(|a| a.remove(&uuid)) else {
+        return;
+    };
+    let (base, pitch, angle) = pose;
+    let turns: Turns = [
+        (Axis::Y, f64::from(base)),
+        (Axis::Z, f64::from(pitch)),
+        (Axis::Y, f64::from(angle - base)),
+    ];
+    let pivot = [nc.pos[0], nc.pos[1] + 0.5, nc.pos[2]];
+    let key = [nc.id as i32, i32::MIN + 3, 0];
+    let stalled = super::create_actors::tick_posed_actors(
+        game,
+        dimension,
+        dim,
+        key,
+        &mut carried,
+        pivot,
+        &turns,
+    );
+    // `StallData`: the cart's motion kept and held at none while stalled, then given back.
+    let held = match (stalled, held) {
+        (true, None) => Some(nc.velocity),
+        (true, h) => h,
+        (false, Some(v)) => {
+            game.native_set_delta_movement(dimension, nc.id, v);
+            None
+        }
+        (false, None) => None,
+    };
+    if stalled {
+        game.native_set_delta_movement(dimension, nc.id, [0.0; 3]);
+    }
+    CART_ACTORS.with_borrow_mut(|a| a.insert(uuid, (Some(carried), held)));
 }
 
 /// `powerFurnaceCartWithFuelFromStorage` for `cart`, fed by the contraption on cart `owner`: a
