@@ -1460,6 +1460,7 @@ pub(super) fn tick_lifts(game: &mut Game<'_>, dimension: &str, dim: usize) {
             create_engine::lifts::Held::Pulley(p) => {
                 Some(p.placed_at(create_engine::pulley::grid_offset(p.offset, p.range)))
             }
+            create_engine::lifts::Held::Elevator(e) => Some(e.placed_at()),
             _ => None,
         };
         lift_put_back(game, dimension, &held.put_back(pos));
@@ -1610,8 +1611,8 @@ fn breaker_below(
 }
 
 thread_local! {
-    /// What running rope pulleys carry besides their blocks (`Contraption.actors`, storage, glue,
-    /// controls), by dimension and pulley; only pulleys whose structure has any.
+    /// What running rope pulleys and elevators carry besides their blocks (`Contraption.actors`,
+    /// storage, glue, controls), by dimension and pulley; only those whose structure has any.
     static PULLEY_CARRIED: RefCell<HashMap<(usize, [i32; 3]), create_engine::actors::Carried>> =
         RefCell::new(HashMap::new());
 }
@@ -1824,6 +1825,26 @@ fn tick_elevators(game: &mut Game<'_>, dimension: &str, dim: usize) {
         with_world(|w| w.dims[dim].lifts.travelling.iter().copied().collect()).unwrap_or_default();
     let now = game.world.game_time;
     for pos in travelling {
+        // Its actors first (`tickActors`); while one stalls, the elevator holds.
+        if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
+            let at = with_world(|w| {
+                w.dims[dim].lifts.elevators.get(&pos).map(|e| {
+                    [
+                        f64::from(e.anchor[0]),
+                        f64::from(e.anchor[1] + e.initial) - f64::from(e.offset),
+                        f64::from(e.anchor[2]),
+                    ]
+                })
+            })
+            .flatten();
+            let stalled = at
+                .is_some_and(|at| actors::tick_actors(game, dimension, dim, pos, &mut carried, at));
+            carried.stalled = stalled;
+            PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
+            if stalled {
+                continue;
+            }
+        }
         let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
         let done = with_world(|w| {
             let l = &mut w.dims[dim].lifts;
@@ -1911,6 +1932,10 @@ fn assemble_elevator(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32
     if conflict != Some(false) {
         return;
     }
+    let carried = actors::carry(game, dimension, dim, pos, anchor, &blocks, |_| false);
+    if !carried.actors.is_empty() || !carried.controls.is_empty() || !carried.glue.is_empty() {
+        PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
+    }
     lift_take(game, dimension, anchor, &blocks);
     let range = pulley::extension_range(pos[1], game.world.shape.min_y);
     let e = Elevator::new(pos[1], anchor, offset, range, key, contact_y, blocks);
@@ -1972,8 +1997,12 @@ fn disassemble_elevator(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [
     .flatten() else {
         return;
     };
+    let origin = e.placed_at();
     let held = create_engine::lifts::Held::Elevator(e);
     lift_put_back(game, dimension, &held.put_back(pos));
+    if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
+        actors::release(game, dimension, dim, pos, origin, &mut carried);
+    }
     send_lift_gone(game, dimension, pos);
     mark_lift_unsaved(game, dimension, pos);
 }
