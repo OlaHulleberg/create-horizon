@@ -141,6 +141,16 @@ pub(super) fn drop_stack(game: &mut Game<'_>, at: [f64; 3], motion: [f64; 3], st
     game.spawn_item(stack, at, motion, 10);
 }
 
+/// The same with no pick-up delay (`new ItemEntity(..)` alone).
+pub(super) fn drop_stack_now(
+    game: &mut Game<'_>,
+    at: [f64; 3],
+    motion: [f64; 3],
+    stack: ItemStack,
+) {
+    game.spawn_item(stack, at, motion, 0);
+}
+
 /// `world.random.nextFloat()`.
 pub(super) fn random_float(game: &mut Game<'_>) -> f32 {
     use horizon_core::random::RandomSource;

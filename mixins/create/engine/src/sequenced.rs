@@ -39,7 +39,7 @@ pub struct Assembly {
 }
 
 /// What an item says of the assembly it is in (`SequencedAssembly`: the recipe, its step).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Progress {
     pub id: String,
     pub step: u32,

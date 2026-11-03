@@ -214,6 +214,8 @@ pub struct Brass {
     pub previous_output: usize,
     /// `selectionMode`.
     pub mode: Mode,
+    /// The sequenced assembly progress of the stack it distributes (not saved).
+    pub stack_progress: Option<crate::sequenced::Progress>,
 }
 
 impl Default for Brass {
@@ -225,6 +227,7 @@ impl Default for Brass {
             new_item: false,
             previous_output: 0,
             mode: Mode::Split,
+            stack_progress: None,
         }
     }
 }
