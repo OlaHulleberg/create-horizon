@@ -791,11 +791,15 @@ pub(super) fn insert_room(
         return Some(room);
     }
     if crafter_at(game, pos).is_some() {
+        if stack.extra.is_some() || stack.damage != 0 {
+            return Some(0);
+        }
         // The group's idle crafters with empty slots, one each (nothing changes).
         let free = crafter_group(game, dim, pos)
             .into_iter()
             .filter(|p| {
                 crafter_slot(game, *p).is_none()
+                    && !crafter_covered(dim, *p)
                     && with_world(|w| w.dims[dim].crafters.get(p).map(|c| c.phase))
                         .flatten()
                         .is_none_or(|ph| ph == create_engine::crafter::Phase::Idle)
