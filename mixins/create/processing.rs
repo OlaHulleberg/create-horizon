@@ -930,7 +930,7 @@ pub(super) fn press_on_depot(
 
 /// The transitional item of the assembly an item's progress names, with the progress and the
 /// fraction of the steps done (`SequencedAssembly.progress`).
-fn transitional_of(
+pub(super) fn transitional_of(
     p: &create_engine::sequenced::Progress,
 ) -> Option<(String, &create_engine::sequenced::Progress, f32)> {
     RECIPES.with_borrow(|r| {
@@ -965,20 +965,254 @@ pub(super) fn sequenced_on_depot(
     Option<create_engine::sequenced::Progress>,
     create_engine::sequenced::Step,
 )> {
-    use create_engine::sequenced::{Progress, step_for};
     let stack = depot_held_stack(game, depot)?;
-    let progress = super::create_items_body::sequenced_progress(&stack)
-        .map(|(id, step)| Progress { id, step });
+    let progress = stack_progress(&stack);
+    let (a, s) = sequenced_for(&stack.item, progress.as_ref(), kind, tool)?;
+    Some((a, progress, s))
+}
+
+/// `SequencedAssemblyRecipe.getRecipe` for `item` at `progress` and a machine of recipe type
+/// `kind` (a deployer holding `tool`): the assembly and the step, when the item is at a step of
+/// that type (and the deployer holds what it takes).
+pub(super) fn sequenced_for(
+    item: &str,
+    progress: Option<&create_engine::sequenced::Progress>,
+    kind: &str,
+    tool: Option<&str>,
+) -> Option<(
+    create_engine::sequenced::Assembly,
+    create_engine::sequenced::Step,
+)> {
     RECIPES.with_borrow(|r| {
         let r = r.as_ref()?;
-        let (a, s) = step_for(&r.sequenced, &stack.item, progress.as_ref(), kind)?;
+        let (a, s) = create_engine::sequenced::step_for(&r.sequenced, item, progress, kind)?;
         if let Some(with) = &s.with
             && !tool.is_some_and(|t| with.iter().any(|w| w == t))
         {
             return None;
         }
-        Some((a.clone(), progress.clone(), s.clone()))
+        Some((a.clone(), s.clone()))
     })
+}
+
+/// One of a belt stack through a sequenced step (`advance`): the transitional item a step on,
+/// its progress with it, or a result of the pool.
+pub(super) fn sequenced_on_belt(
+    game: &Game<'_>,
+    at: [i32; 3],
+    item: &create_engine::belt::Item,
+    a: &create_engine::sequenced::Assembly,
+) -> Vec<create_engine::belt::Item> {
+    use create_engine::sequenced::Advanced;
+    let seed = game.world.game_time as u64 ^ (at[0] as u64).wrapping_mul(0x9E37_79B9);
+    let roll = create_engine::processing::Rng::new(seed).next_float();
+    let (name, count, progress) = match a.advance(item.progress.as_ref(), roll) {
+        Advanced::Next { item, progress, .. } => (item, 1, Some(progress)),
+        Advanced::Done { item, count } => (item, count, None),
+        Advanced::Nothing => return Vec::new(),
+    };
+    let mut out = item.clone();
+    out.item = name;
+    out.count = count;
+    out.progress = progress;
+    out.fan = Default::default();
+    vec![out]
+}
+
+/// The rest of a belt stack after one of it was processed (`convertToAndLeaveHeld`).
+fn belt_left(item: &create_engine::belt::Item) -> Option<create_engine::belt::Item> {
+    (item.count > 1).then(|| {
+        let mut left = item.clone();
+        left.count -= 1;
+        left
+    })
+}
+
+/// `BeltDeployerCallbacks` for a stack on the belt at `at` under the deployer `d` (facing down,
+/// at `rpm`): the deployer starts its stroke on a stack its held item applies to (a sequenced
+/// assembly's deploying step first) and, back at the top of it, turns one of the stack into the
+/// results (`activate`).
+pub(super) fn deployer_on_belt(
+    game: &mut Game<'_>,
+    dim: usize,
+    at: [i32; 3],
+    item: &mut create_engine::belt::Item,
+    locked: bool,
+    mut d: create_engine::deployer::Deployer,
+    rpm: f32,
+) -> create_engine::belt::Process {
+    use create_engine::belt::Process;
+    use create_engine::deployer::{self, Depot};
+    let above = [at[0], at[1] + 2, at[2]];
+    if !ensure_recipes(game) {
+        return Process::Pass;
+    }
+    let tool = d.held.as_ref().map(|h| h.0.clone()).unwrap_or_default();
+    let sequenced = sequenced_for(
+        &item.item,
+        item.progress.as_ref(),
+        "create:deploying",
+        Some(&tool),
+    );
+    let recipe = match &sequenced {
+        Some((a, s)) => Some(deployer::Recipe {
+            id: a.id.clone(),
+            target: Vec::new(),
+            tool: s.with.clone().unwrap_or_default(),
+            results: Vec::new(),
+            keep_held: s.keep_held,
+        }),
+        None => RECIPES.with_borrow(|r| {
+            r.as_ref()
+                .and_then(|r| deployer::find(&r.deploying, &item.item, &tool).cloned())
+        }),
+    };
+    match deployer::on_depot(&d, rpm, locked, recipe.is_some()) {
+        Depot::Pass => Process::Pass,
+        Depot::Hold => Process::Hold,
+        Depot::Start => {
+            // The ray from the deployer's face to the belt's top (`start`).
+            let state = game.world.block(at[0], at[1], at[2]);
+            let top = game
+                .res
+                .facts()
+                .get(state)
+                .outline
+                .iter()
+                .map(|b| b[4])
+                .fold(0.0, f64::max);
+            d.start((1.0 - top) as f32);
+            with_world(|w| {
+                let dd = &mut w.dims[dim];
+                dd.deployers.insert(above, d.clone());
+                if !dd.deploying.contains(&above) {
+                    dd.deploying.push(above);
+                }
+                dd.deployer_changes.push(above);
+            });
+            Process::Hold
+        }
+        Depot::Apply => {
+            let Some(r) = recipe else {
+                return Process::Pass;
+            };
+            let outputs = match &sequenced {
+                Some((a, _)) => sequenced_on_belt(game, at, item, a),
+                None => {
+                    // `RecipeApplier.applyRecipeOn` on one of the stack, `getMaxOutputCount` 4.
+                    let seed =
+                        game.world.game_time as u64 ^ (at[0] as u64).wrapping_mul(0x9E37_79B9);
+                    let p = create_engine::processing::Recipe {
+                        id: r.id.clone(),
+                        ingredients: Vec::new(),
+                        results: r.results.clone(),
+                        time: 0,
+                    };
+                    create_engine::processing::roll(
+                        &p,
+                        &mut create_engine::processing::Rng::new(seed),
+                    )
+                    .into_iter()
+                    .take(4)
+                    .map(|(name, n)| {
+                        let mut out = item.clone();
+                        out.item = name;
+                        out.count = n;
+                        out.progress = None;
+                        out.fan = Default::default();
+                        out
+                    })
+                    .collect()
+                }
+            };
+            let outputs = outputs
+                .into_iter()
+                .map(|mut o| {
+                    o.locked = false;
+                    o.angle = if upright(game, &o.item) {
+                        180
+                    } else {
+                        random_angle(game, at)
+                    };
+                    o
+                })
+                .collect();
+            deployer::use_held(&mut d.held, &r);
+            with_world(|w| w.set_deployer(dim, above, d.clone()));
+            Process::Convert {
+                held: belt_left(item),
+                outputs,
+            }
+        }
+    }
+}
+
+/// The spout's belt callbacks for a stack on the belt at `at` under the spout `above`: held
+/// while it can be filled, one of it filled at the cycle's end (a sequenced assembly's filling
+/// step first, with that step's fluid).
+pub(super) fn spout_on_belt(
+    game: &mut Game<'_>,
+    dim: usize,
+    above: [i32; 3],
+    item: &mut create_engine::belt::Item,
+    locked: bool,
+) -> Option<create_engine::belt::Process> {
+    use create_engine::belt::Process;
+    use create_engine::spout::{self, OnBelt};
+    let mut s = with_world(|w| w.dims[dim].spouts.get(&above).copied()).flatten()?;
+    if !ensure_recipes(game) {
+        return Some(Process::Pass);
+    }
+    let sequenced = sequenced_for(&item.item, item.progress.as_ref(), "create:filling", None)
+        .and_then(|(a, step)| {
+            let (fluid, amount) = step.fluid?;
+            let fluid = create_engine::tank::Fluid::of_id(&fluid)?;
+            Some((a, fluid, amount))
+        });
+    let before = s.fluid;
+    let result = RECIPES.with_borrow(|r| {
+        let r = r.as_ref()?;
+        Some(match &sequenced {
+            Some((a, fluid, amount)) => {
+                let step = [spout::Filling {
+                    item: item.item.clone(),
+                    fluid: *fluid,
+                    amount: *amount,
+                    result: a.transitional.clone(),
+                }];
+                spout::on_belt(&mut s, &item.item, &step, locked)
+            }
+            None => spout::on_belt(&mut s, &item.item, &r.filling, locked),
+        })
+    })?;
+    with_world(|w| w.dims[dim].spouts.insert(above, s));
+    if s.fluid != before {
+        analog_touched(dim, above);
+    }
+    Some(match result {
+        OnBelt::Pass => Process::Pass,
+        OnBelt::Hold => Process::Hold,
+        OnBelt::Fill(out) => {
+            let outputs = match &sequenced {
+                Some((a, _, _)) => sequenced_on_belt(game, at_below(above), item, a),
+                None => {
+                    let mut o = item.clone();
+                    o.item = out;
+                    o.count = 1;
+                    o.progress = None;
+                    vec![o]
+                }
+            };
+            Process::Convert {
+                held: belt_left(item),
+                outputs,
+            }
+        }
+    })
+}
+
+fn at_below(above: [i32; 3]) -> [i32; 3] {
+    [above[0], above[1] - 2, above[2]]
 }
 
 /// A sequenced step done on the depot's held stack (one of it, `advance`): the transitional item

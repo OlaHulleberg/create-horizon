@@ -1844,6 +1844,22 @@ pub(super) fn belts_to_nbt(
                     "positive".into(),
                     Tag::IntArray(vec![i32::from(inv.positive)]),
                 );
+                // Items in a sequenced assembly: their index and step, and the recipe.
+                let assembly: Vec<Tag> = inv
+                    .items
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(n, i)| {
+                        let p = i.progress.as_ref()?;
+                        let mut a = Compound::new();
+                        a.insert("at".into(), Tag::IntArray(vec![n as i32, p.step as i32]));
+                        a.insert("id".into(), Tag::String(p.id.as_str().into()));
+                        Some(Tag::Compound(a))
+                    })
+                    .collect();
+                if !assembly.is_empty() {
+                    b.insert("assembly".into(), Tag::List(assembly));
+                }
                 Tag::Compound(b)
             })
             .collect(),
@@ -2095,7 +2111,7 @@ pub(super) fn belts_from_nbt(
                 return None;
             };
             let positive = matches!(b.get(&"positive".into()), Some(Tag::IntArray(v)) if v.first() == Some(&1));
-            let items = numbers
+            let mut items: Vec<create_engine::belt::Item> = numbers
                 .chunks_exact(5)
                 .zip(ids)
                 .filter_map(|(n, id)| {
@@ -2112,6 +2128,25 @@ pub(super) fn belts_from_nbt(
                     Some(item)
                 })
                 .collect();
+            if let Some(Tag::List(assembly)) = b.get(&"assembly".into()) {
+                for a in assembly {
+                    let Tag::Compound(a) = a else { continue };
+                    let (Some(Tag::IntArray(at)), Some(Tag::String(id))) =
+                        (a.get(&"at".into()), a.get(&"id".into()))
+                    else {
+                        continue;
+                    };
+                    let (Some(n), Some(step)) = (at.first(), at.get(1)) else {
+                        continue;
+                    };
+                    if let Some(item) = items.get_mut(*n as usize) {
+                        item.progress = Some(create_engine::sequenced::Progress {
+                            id: id.to_string_lossy().to_string(),
+                            step: (*step).max(0) as u32,
+                        });
+                    }
+                }
+            }
             let c = [*pos.first()?, *pos.get(1)?, *pos.get(2)?];
             Some((c, create_engine::belt::Inventory::from_saved(items, positive)))
         })
@@ -3993,12 +4028,7 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
         let f = funnel_at(self.game, pos)?;
         let behind = create_engine::funnel::behind(pos, f.facing);
         let face = horizon_core::geometry::Direction::ALL[f.facing as usize];
-        let stack = horizon_client::items::ItemStack {
-            item: item.item.as_str().into(),
-            count: u32::from(item.count),
-            damage: 0,
-            extra: None,
-        };
+        let stack = belt_stack(item);
         let left = insert_item(self.game, self.dim, behind, face, stack);
         Some(left.map_or(0, |l| l.count.min(255) as u8))
     }
@@ -4095,6 +4125,12 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
         );
         let above = [at[0], at[1] + 2, at[2]];
         let dim = self.dim;
+        if let Some((d, rpm)) = deployer_above(self.game, dim, at) {
+            return Some(deployer_on_belt(self.game, dim, at, item, locked, d, rpm));
+        }
+        if let Some(p) = spout_on_belt(self.game, dim, above, item, locked) {
+            return Some(p);
+        }
         let mut press = with_world(|w| w.dims[dim].presses.get(&above).copied()).flatten()?;
         if !locked && blocked(self.game, [at[0], at[1] + 1, at[2]]) {
             return None;
@@ -4103,15 +4139,18 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
         if speed == 0.0 {
             return Some(Process::Pass);
         }
+        // A sequenced assembly's pressing step first (`SequencedAssemblyRecipe.getRecipe`).
+        let sequenced = sequenced_for(&item.item, item.progress.as_ref(), "create:pressing", None);
         if !locked {
             // BeltPressingCallbacks.onItemReceived.
             if press.running {
                 return Some(Process::Hold);
             }
-            let fits = RECIPES.with_borrow(|r| {
-                r.as_ref()
-                    .is_some_and(|r| r.pressing.find_single(&item.item).is_some())
-            });
+            let fits = sequenced.is_some()
+                || RECIPES.with_borrow(|r| {
+                    r.as_ref()
+                        .is_some_and(|r| r.pressing.find_single(&item.item).is_some())
+                });
             if !fits {
                 return Some(Process::Pass);
             }
@@ -4129,6 +4168,19 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
         if press.ticks != CYCLE / 2 {
             return Some(Process::Hold);
         }
+        if let Some((a, _)) = &sequenced {
+            let mut outputs = sequenced_on_belt(self.game, at, item, a);
+            for o in &mut outputs {
+                o.locked = true;
+                o.angle = random_angle(self.game, at);
+            }
+            let held = (item.count > 1).then(|| {
+                let mut left = item.clone();
+                left.count -= 1;
+                left
+            });
+            return Some(Process::Convert { held, outputs });
+        }
         let seed = self.game.world.game_time as u64 ^ (at[0] as u64).wrapping_mul(0x9E37_79B9);
         let results = RECIPES.with_borrow(|r| {
             let r = r.as_ref()?;
@@ -4143,6 +4195,7 @@ impl create_engine::belt::Surroundings for BeltSide<'_, '_> {
             let mut out = item.clone();
             out.item = name;
             out.count = n;
+            out.progress = None;
             out.locked = true;
             out.angle = random_angle(self.game, at);
             outputs.push(out);
