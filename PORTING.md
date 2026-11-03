@@ -22,6 +22,48 @@ benchmark table, measured against that session's own off or control run; compare
 | Trains | track and curves, stations, signals, assembly, schedules, riding, driving, HUD, saves, LAN | 12 trains: 0.543 / 4.660 ms; driven 2.051 vs 2.051 ms | tick ≤ off + 0.5 ms: met | carriage collision, HUD arrow |
 | Create unused | — | idle 0.500 / 4.011 ms vs off 0.530 / 4.047 | within noise of off: met (ticks, frames) | +0.55 s warm start, accepted 2026-11-02 |
 
+### One session on the final tree (2026-11-03)
+
+Every subsystem measured in one sitting on Horizon `a8f22bb4d` with the train HUD merged (headless, BMG G21,
+`--no-mobs`, 25 s settle, 3 runs each, `tools/bench_create.py`); frame p50 and tick are the means of the three runs.
+Each scene is held to its own budget against this session's off run or its own control.
+
+| Scenario | frame p50 (ms) | tick (ms) | Against | Budget | Result |
+|---|---|---|---|---|---|
+| off | 0.485 | 2.007 ± 0.251 | | baseline | |
+| idle (Create installed, no Create blocks) | 0.486 | 2.094 ± 0.053 | off | within noise | met |
+| kinetic: 4,096 GPU-turned shafts | 0.522 | 2.168 | chains 0.482 / off | frame ≤ chains + 10 %, tick ≤ off + 0.25 ms | met (+8.3 %, +0.16 ms) |
+| processing: 256 presses on depots | 0.525 | 2.201 | off | frame ≤ off + 15 %, tick ≤ off + 0.5 ms | met (+8.2 %, +0.19 ms) |
+| logistics: 32 belts × 48, 672 stacks | 0.593 | 2.170 | off | frame ≤ off + 20 %, tick ≤ off + 0.5 ms | **missed (+22.3 %)**: see below |
+| pumps (fluids): 10 pumps into tanks | 0.471 | 2.225 | off | frame ≤ off + 10 %, tick ≤ off + 0.25 ms | met (−2.9 %, +0.22 ms) |
+| redstone: latch chains | 0.462 | 2.768 | repeaters 2.685 | tick ≤ control + 0.3 ms | met (+0.08 ms) |
+| contraptions: 16 windmills | 0.500 | 1.888 | off | frame ≤ off + 10 %, tick ≤ off + 0.25 ms | met (+3.1 %) |
+| carts: 16 minecart contraptions | 0.496 | 2.184 | cartbase 0.459 / 2.170 | frame ≤ control + 10 %, tick ≤ control + 0.25 ms | met (+8.1 %, +0.01 ms) |
+| trains: 12 trains sent across | 0.519 | 2.232 | off | frame ≤ off + 15 %, tick ≤ off + 0.5 ms | met (+7.0 %, +0.23 ms) |
+| signals: the same with 24 signals | 0.535 | 2.254 | trains | frame ≤ control + 10 %, tick ≤ control + 0.25 ms | met (+3.1 %, +0.02 ms) |
+| driven: a player driving one train | 0.516 | 2.076 | trains | the same | met (−0.6 %, −0.16 ms) |
+| turntables: 248 stands turned each tick | 0.704 | 3.116 | standbase 0.701 / 2.990 | frame ≤ control + 10 %, tick ≤ control + 0.25 ms | met (+0.4 %, +0.13 ms) |
+
+**Logistics missed its frame budget in this session**, by 2.3 points. Its own runs were 0.586 to 0.601 ms against off's
+0.474 to 0.491 ms, so it wasn't noise. Splitting the cost (off 0.481, the same belts with stacks on 9 segments 0.542,
+all 672 stacks 0.602) showed both the belts and the stacks cost frame time, and no mod code runs per frame: the parts
+renderer drew every part every frame, off screen too (the first point ErikKalikas raised on horizon-rust/horizon#6302).
+Fixed in Horizon `8c2c2d3ce` (parts sorted by chunk section, each section drawn only when its box, grown by the
+model's reach, is in the view) and `6531be992` (a gliding part's run is grown by how far its parts have glided, so
+moving belt items are culled too, with nothing uploaded again). The screenshots then showed ingots gliding past the
+belt ends: a stack held at the end or behind another was never sent again, so clients glided it on (`2476550`: a
+belt item's `stalled` flips are sent; tested). Re-measured on the final tree with both:
+
+| Scenario (same sitting, after the fixes) | frame p50 (ms) | tick (ms) | Result |
+|---|---|---|---|
+| off | 0.483 | 2.145 | |
+| belts9: the belts, stacks on 9 segments | 0.537 | 2.198 | +11.2 % |
+| logistics | 0.571 | 2.230 | met: +18.2 % (≤ 20 %), +0.09 ms |
+
+and, in the sitting before (culling, without the belt fix), the scenes culling could have broken: carts 0.464 against
+cartbase 0.452 (+2.7 %), contraptions 0.504 against off 0.482 (+4.6 %), kinetic 0.508 against chains 0.473 (+7.4 %),
+the windmills and every belt item still drawn in the screenshots. Logistics' margin is thin (1.8 points).
+
 Checks on every merged feature: fmt, clippy `-D warnings`, `cargo test --workspace`, `tools/test_template.py`,
 `tools/test_stage.py`, `tools/horizon.py stage/check/test/build --horizon /workspace/horizon`.
 
