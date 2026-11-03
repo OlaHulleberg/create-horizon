@@ -487,3 +487,50 @@ pub(crate) fn deployer_punch(
         Punch::Crack(None) | Punch::Stop => {}
     }
 }
+
+/// `DeployerHandler.safeOnUse` (`BlockHelper.invokeUse`) for the deployer at `pos` facing
+/// `facing`: the block it reaches used as a player not sneaking would, clicked at the middle
+/// of its face toward the deployer (`useWithoutItem`: levers, buttons, doors, note blocks);
+/// whether that took the action. A block with no shape is not clicked.
+pub(crate) fn use_block(game: &mut crate::game::Game<'_>, pos: [i32; 3], facing: Dir) -> bool {
+    let o = facing.offset();
+    let at = [pos[0] + o[0] * 2, pos[1] + o[1] * 2, pos[2] + o[2] * 2];
+    let state = game.world.block(at[0], at[1], at[2]);
+    if game.res.facts().get(state).outline.is_empty() {
+        return false;
+    }
+    let face = horizon_core::geometry::Direction::ALL[facing.opposite() as usize];
+    let hit = horizon_core::geometry::Vec3::new(
+        f64::from(at[0]) + 0.5 - f64::from(o[0]) * 0.5,
+        f64::from(at[1]) + 0.5 - f64::from(o[1]) * 0.5,
+        f64::from(at[2]) + 0.5 - f64::from(o[2]) * 0.5,
+    );
+    // The fake player looks the way the deployer faces.
+    let (yaw, pitch) = match facing {
+        Dir::Down => (0.0, 90.0),
+        Dir::Up => (0.0, -90.0),
+        Dir::North => (180.0, 0.0),
+        Dir::South => (0.0, 0.0),
+        Dir::West => (90.0, 0.0),
+        Dir::East => (-90.0, 0.0),
+    };
+    let player = horizon_world::level::PlayerContext {
+        yaw,
+        pitch,
+        may_build: true,
+        can_eat: false,
+        game_master: false,
+    };
+    let result = game.with_level(|b, level, ticks| {
+        b.use_without_item(
+            level,
+            ticks,
+            horizon_core::position::BlockPos::new(at[0], at[1], at[2]),
+            face,
+            hit,
+            player,
+        )
+    });
+    let _ = game.process_level_events();
+    result.consumes_action()
+}
