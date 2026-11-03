@@ -1352,9 +1352,13 @@ pub(super) fn item_landed(
         ) => (pos, b),
         _ => return,
     };
-    // Stacks with components keep them only as entities, for now, but on a depot: it holds the
-    // whole stack (a sequenced assembly's transitional item, its progress with it).
-    if (stack.extra.is_some() || stack.damage != 0) && block != create_engine::Block::Depot {
+    // Stacks with components keep them only as entities, for now, but on a depot (it holds the
+    // whole stack) and a saw (a sequenced assembly's transitional item, its progress with it).
+    let carried = block == create_engine::Block::Depot
+        || (block == create_engine::Block::MechanicalSaw
+            && stack.damage == 0
+            && super::create_items_body::sequenced_progress(stack).is_some());
+    if (stack.extra.is_some() || stack.damage != 0) && !carried {
         return;
     }
     if block == create_engine::Block::Basin {

@@ -29,11 +29,46 @@ pub(super) fn tick_spouts(game: &mut Game<'_>, dim: usize) {
         if !ensure_recipes(game) {
             continue;
         }
+        // A sequenced assembly's filling step first (`SequencedAssemblyRecipe.getRecipe`): its
+        // fluid and amount, if the spout holds that fluid.
+        let sequenced = held
+            .as_ref()
+            .and_then(|_| sequenced_on_depot(game, depot, "create:filling", None))
+            .and_then(|(a, progress, step)| {
+                let (fluid, amount) = step.fluid?;
+                let fluid = create_engine::tank::Fluid::of_id(&fluid)?;
+                (s.fluid.map(|f| f.0) == Some(fluid)).then_some((a, progress, fluid, amount))
+            });
         let filled = RECIPES.with_borrow(|r| {
             let r = r.as_ref()?;
-            create_engine::spout::step(&mut s, held.as_ref().map(|h| h.1.as_str()), &r.filling)
+            let item = held.as_ref().map(|h| h.1.as_str());
+            match &sequenced {
+                Some((a, _, fluid, amount)) => {
+                    let step = [create_engine::spout::Filling {
+                        item: item?.to_string(),
+                        fluid: *fluid,
+                        amount: *amount,
+                        result: a.transitional.clone(),
+                    }];
+                    create_engine::spout::step(&mut s, item, &step)
+                }
+                None => create_engine::spout::step(&mut s, item, &r.filling),
+            }
         });
-        if let (Some(out), Some((_, item, count))) = (filled, held) {
+        if let (Some(_), Some((a, progress, _, _)), Some((_, _, count))) =
+            (&filled, &sequenced, &held)
+        {
+            let state = with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten();
+            if let Some(state) = state {
+                let next =
+                    sequenced_step_on_depot(game, dim, depot, *count, state, a, progress.as_ref());
+                with_world(|w| {
+                    if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
+                        *h = Some(next);
+                    }
+                });
+            }
+        } else if let (Some(out), Some((_, item, count))) = (filled, held) {
             let out = out.as_str();
             // `convertToAndLeaveHeld`: one is filled; the rest stays held, the filled one goes to
             // the outputs.

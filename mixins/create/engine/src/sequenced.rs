@@ -14,6 +14,8 @@ pub struct Step {
     /// The fluid and amount a filling step takes.
     pub fluid: Option<(String, u32)>,
     pub keep_held: bool,
+    /// Its `processing_time` (a saw's).
+    pub time: i32,
 }
 
 /// A result of the pool, its count and weight (`chance`).
@@ -140,12 +142,14 @@ mod tests {
                     with: Some(vec!["create:cogwheel".into()]),
                     fluid: None,
                     keep_held: false,
+                    time: 0,
                 },
                 Step {
                     kind: "create:pressing".into(),
                     with: None,
                     fluid: None,
                     keep_held: false,
+                    time: 0,
                 },
             ],
             loops: 5,
