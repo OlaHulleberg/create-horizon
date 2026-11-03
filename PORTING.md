@@ -22,6 +22,36 @@ benchmark table, measured against that session's own off or control run; compare
 | Trains | track and curves, stations, signals, assembly, schedules, riding, driving, HUD, saves, LAN | 12 trains: 0.543 / 4.660 ms; driven 2.051 vs 2.051 ms | tick ≤ off + 0.5 ms: met | |
 | Create unused | — | idle 0.500 / 4.011 ms vs off 0.530 / 4.047; again on the tree with Horizon API 69 and 70 (2026-11-03), three runs each, two of them interleaved: idle 0.530 / 4.916 ms vs off 0.538 / 4.892 ms (run-to-run spread 0.3 ms of tick; `benchmarks/final-*.json`, `benchmarks/final-interleaved/`) | within noise of off: met (ticks, frames) | +0.55 s warm start, accepted 2026-11-02 |
 
+### Again with Horizon API 69 to 72 (2026-11-03, later)
+
+Every subsystem measured again in one sitting on `feat/create-hooks` with API 69 to 72 (item handlers, moving boxes, mod
+screens, carts moved by `Entity.move`; headless, BMG G21, `--no-mobs`, 25 s settle, 3 runs each;
+`benchmarks/final-api72/`). Frame p50 / tick in ms, the means of the three runs:
+
+| Scenario | frame p50 | tick | Against | Result |
+|---|---|---|---|---|
+| off | 0.474 | 2.077 ± 0.148 | | |
+| idle | 0.480 | 2.102 | off | within noise (+1.3 %, +0.03 ms) |
+| kinetic | 0.519 | 2.167 | chains 0.473 / 2.153 | met (+9.6 %, +0.09 ms on off) |
+| processing | 0.505 | 2.306 | off | met (+6.6 %, +0.23 ms) |
+| logistics | 0.563 | 2.141 | off | met (+18.8 %, +0.06 ms) |
+| pumps | 0.467 | 2.245 | off | met (−1.5 %, +0.17 ms) |
+| redstone | 0.452 | 2.661 | repeaters 0.453 / 2.733 | met (−0.07 ms) |
+| contraptions | 0.492 | 1.950 | off | met (+3.8 %) |
+| carts | 0.471 | 2.291 | cartbase 0.463 / 2.249 | met (+1.6 %, +0.04 ms) |
+| trains | 0.525 | 2.290 | off | met (+10.8 %, +0.21 ms) |
+| signals | 0.509 | 2.221 | trains | met (−3.1 %) |
+| driven | 0.546 | 2.146 | trains | met (+4.0 %) |
+| turntables | 0.714 | 3.197 | standbase 0.725 / 2.844 | **missed (+0.35 ms)**, see below |
+
+**Turntables missed their tick budget** (≤ control + 0.25 ms): +0.353, then +0.326 and +0.166 in two interleaved pairs
+(+0.28 on average). A DEBUG timer (removed) put Create's own turntable code at about 105 µs a tick for its 240 calls,
+65 µs of it in `native_set_yaw`, whose entity lookup searched every list for each stand. Horizon `00996fa00` makes the
+lookup try where the last entity was found and the slot after it first (checked by id, a player's id first as the search
+does): 48 µs a tick for the turntables' code, 12 µs of it the lookup. Two interleaved pairs after it: +0.268 and +0.220
+(+0.244 on average): within the budget, by little; their frames +13.6 % and +4.9 % (noisy: one pair over the 10 %). The
+rest is Horizon turning and syncing 248 entities a tick, which standbase's still stands don't pay.
+
 ### One session on the final tree (2026-11-03)
 
 Every subsystem measured in one sitting on Horizon `a8f22bb4d` with the train HUD merged (headless, BMG G21,
