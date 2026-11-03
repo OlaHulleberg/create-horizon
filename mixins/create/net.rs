@@ -7,4 +7,5 @@ fn net_from_client(game: &mut crate::game::Game<'_>, player: u128, channel: &str
     crate::game::create_controller::net_from_client(game, player, channel, data);
     crate::game::create_copycat::net_from_client(game, player, channel, data);
     crate::game::create_train_controls::net_from_client(game, player, channel, data);
+    crate::game::create_clipboard::net_from_client(game, player, channel, data);
 }
