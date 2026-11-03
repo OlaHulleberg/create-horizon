@@ -63,7 +63,9 @@ impl Kind {
         }
     }
 
-    fn breaks(self) -> bool {
+    /// A `BlockBreakingMovementBehaviour`'s (`ContraptionCollider.isCollidingWithWorld` lets it
+    /// into a block it can break).
+    pub fn breaks(self) -> bool {
         matches!(self, Kind::Drill | Kind::Saw | Kind::Plough | Kind::Roller)
     }
 }

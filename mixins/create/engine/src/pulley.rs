@@ -123,7 +123,12 @@ impl Pulley {
 
     /// Whether the structure at `offset` overlaps a world cell that isn't free
     /// (`ContraptionCollider.collideBlocks`), its leading blocks the way it moves.
-    pub fn collides(&self, offset: f32, down: bool, free: &impl Fn([i32; 3]) -> bool) -> bool {
+    pub fn collides(
+        &self,
+        offset: f32,
+        down: bool,
+        free: &impl Fn([i32; 3], [i32; 3]) -> bool,
+    ) -> bool {
         let base = self.base(offset);
         let leading = if down { &self.down } else { &self.up };
         leading.iter().any(|l| {
@@ -133,18 +138,18 @@ impl Pulley {
             } else {
                 (y0 + 1.0).ceil() as i32 - 1
             };
-            !free([self.anchor[0] + l[0], cell, self.anchor[2] + l[2]])
+            !free([self.anchor[0] + l[0], cell, self.anchor[2] + l[2]], *l)
         })
     }
 
     /// One tick (`LinearActuatorBlockEntity.tick` while running). `free` says whether a world
-    /// cell lets the structure through; `grab` whether an empty rope's magnet takes the block
+    /// cell lets the structure's block (its offset from the anchor) through; `grab` whether an empty rope's magnet takes the block
     /// at a cell (`isMovementNecessary`, not brittle). `pulley` is the pulley's position.
     pub fn step(
         &mut self,
         rpm: f32,
         pulley: [i32; 3],
-        free: impl Fn([i32; 3]) -> bool,
+        free: impl Fn([i32; 3], [i32; 3]) -> bool,
         grab: impl Fn([i32; 3]) -> bool,
     ) -> Step {
         let speed = movement(rpm);
@@ -232,7 +237,7 @@ mod tests {
         // 0.125 a tick at 64 rpm and stops resting on the floor, its anchor at y 5.
         let pulley = [0, 10, 0];
         let mut p = Pulley::new([0, 9, 0], 0, extension_range(10, -64), vec![([0, 0, 0], 1)]);
-        let free = |c: [i32; 3]| c[1] > 4;
+        let free = |c: [i32; 3], _: [i32; 3]| c[1] > 4;
         let mut ticks = 0;
         let stop = loop {
             ticks += 1;
@@ -258,7 +263,7 @@ mod tests {
         assert_eq!(range, 3);
         let mut p = Pulley::new([0, -61, 0], 0, range, vec![([0, 0, 0], 1)]);
         let stop = loop {
-            if let Step::Stop(at) = p.step(256.0, pulley, |_| true, |_| false) {
+            if let Step::Stop(at) = p.step(256.0, pulley, |_, _| true, |_| false) {
                 break at;
             }
         };
@@ -266,7 +271,7 @@ mod tests {
         // Going up from offset 2: back to 0, the structure under the pulley.
         let mut up = Pulley::new([0, -63, 0], 2, range, vec![([0, 0, 0], 1)]);
         let stop = loop {
-            if let Step::Stop(at) = up.step(-128.0, pulley, |_| true, |_| false) {
+            if let Step::Stop(at) = up.step(-128.0, pulley, |_, _| true, |_| false) {
                 break at;
             }
         };
@@ -280,7 +285,7 @@ mod tests {
         let mut p = Pulley::new([0, 9, 0], 0, 20, Vec::new());
         let grab = |c: [i32; 3]| c[1] == 7;
         let at = loop {
-            match p.step(64.0, pulley, |_| true, grab) {
+            match p.step(64.0, pulley, |_, _| true, grab) {
                 Step::Grab(at) => break at,
                 Step::Stop(_) => unreachable!(),
                 Step::Move(_) => {}
