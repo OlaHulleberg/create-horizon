@@ -1068,10 +1068,14 @@ messages.
   pushing every entity and resetting its fall, the controller rail as a rail (`rail`, `native_minecart_pass`).
 - Hooks missing for the decorative blocks (not added to Horizon): the clipboard's pages
   need a text-editing screen (Create's `ClipboardScreen`, NeoForge `Screen` with `MultiLineEditBox`: Horizon's
-  native screens have buttons and slots only); the empty blaze burner on a spawner needs the spawner's
-  `BaseSpawner.spawnPotentials`; haunted bells keep vanilla's bell sound
+  native screens have buttons and slots only); haunted bells keep vanilla's bell sound
   and ring logic from their template (Create's `HauntedBellBlockEntity` effect particles are not ported).
 - Minecart contraptions and couplings (were blocked on a contraption riding a cart; done with Horizon API 58 and 60 to 65 as typed data keyed by the cart's UUID, see Phase 8). Horizon API 68 (`feat/create-hooks-carts`) closed the last three: a furnace cart's fuel and push (fed from its contraption's storage), setting a cart's position (`CouplingPhysics.hardCollisionStep`), and a cart carrying something that isn't an entity moving as a ridden one. Storage rides carts, contraptions span two coupled carts and players' couplings are drawn (see Phase 8).
+- An empty blaze burner on a spawner (was blocked; done without a new hook, the glue reading Horizon's spawner block
+  entity): `BlazeBurnerBlockItem.useOn` catches a blaze when the spawner's potentials, or with none its next spawn,
+  hold one (`create:blaze_burner_capturable`), with the capture sounds; a filled burner replaces a last held one, else
+  goes to the inventory. In game (survival, server thread, BMG G21): used on a zombie spawner it was placed beside it
+  as a block; used on a blaze spawner the last empty burner became a blaze burner and nothing was placed.
 - Hoppers and a creative crate (was blocked; done with Horizon API 69, `4395c4314` on `feat/create-hooks`:
   `native_item_handler_insert` / `native_item_handler_extract`, NeoForge's `Capabilities.ItemHandler.BLOCK` through
   `VanillaInventoryCodeHooks.insertHook` / `extractHook`, asked only when a hopper's block has no container). A hopper

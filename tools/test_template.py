@@ -170,7 +170,7 @@ pub mod items {
 }
 pub mod containers {
     pub struct ModBlockEntity { pub items: Vec<Option<crate::items::ItemStack>> }
-    pub enum BlockEntity { Mod(ModBlockEntity) }
+    pub enum BlockEntity { Mod(ModBlockEntity), Spawner(Box<crate::chunk::block_entity::Spawner>) }
     pub struct ModContainer { pub slots: usize, pub faces: [Vec<usize>; 6], pub inputs: Vec<usize>, pub outputs: Vec<usize>, pub menu: Option<String>, pub only_when_empty: bool }
 }
 pub mod first_person {
@@ -219,7 +219,20 @@ pub mod text {
         pub fn append(self, other: Text) -> Self { Text(self.0 + &other.0) }
     }
 }
+pub mod mobs {
+    pub mod spawner {
+        pub trait SpawnDataExt { fn id(&self) -> Option<String>; }
+        impl SpawnDataExt for crate::chunk::block_entity::SpawnData {
+            fn id(&self) -> Option<String> { Some(self.0.clone()) }
+        }
+    }
+}
 pub mod chunk {
+    pub mod block_entity {
+        pub struct SpawnData(pub String);
+        pub enum Next { Potential(usize), Own(SpawnData) }
+        pub struct Spawner { pub potentials: Vec<(SpawnData, i32)>, pub next: Option<Next> }
+    }
     pub struct Blocks(pub Vec<u32>);
     impl Blocks {
         pub fn uniform(&self) -> Option<u32> { self.0.iter().all(|&v| v == self.0[0]).then(|| self.0[0]) }
@@ -377,6 +390,7 @@ pub mod native_hooks {
         pub fn native_with_mod_block_entity<R>(&mut self, pos: [i32; 3], change: impl FnOnce(&mut horizon_client::containers::ModBlockEntity) -> R) -> Option<R> {
             match self.world.block_entities.get_mut(&(pos[0], pos[1], pos[2]))? {
                 horizon_client::containers::BlockEntity::Mod(m) => Some(change(m)),
+                _ => None,
             }
         }
         pub fn native_held(&self) -> Option<(String, u32, bool)> {
@@ -1646,7 +1660,7 @@ fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
     for _ in 0..80 { game.native_level_tick_post("minecraft:overworld"); }
-    let horizon_client::containers::BlockEntity::Mod(depot) = &game.world.block_entities[&(5, 0, 0)];
+    let horizon_client::containers::BlockEntity::Mod(depot) = &game.world.block_entities[&(5, 0, 0)] else { panic!("a mod block entity") };
     let slot = |i: usize| depot.items.get(i).and_then(|s| s.as_ref()).map(|s| (s.item.to_string(), s.count));
     assert_eq!(slot(0), Some(("minecraft:iron_ingot".into(), 4)), "one of five pressed");
     assert_eq!(slot(1), Some(("create:iron_sheet".into(), 1)));
@@ -1665,7 +1679,7 @@ fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
     game.native_update_entity_after_fall_on([10, 0, 10], &mut stack, [10.5, 0.8125, 10.5]);
     assert_eq!(stack.count, 0, "the belt took the stack");
     for _ in 0..200 { game.native_level_tick_post("minecraft:overworld"); }
-    let horizon_client::containers::BlockEntity::Mod(end) = &game.world.block_entities[&(10, 0, 13)];
+    let horizon_client::containers::BlockEntity::Mod(end) = &game.world.block_entities[&(10, 0, 13)] else { panic!("a mod block entity") };
     assert_eq!(end.items.first().and_then(|s| s.as_ref()).map(|s| (s.item.to_string(), s.count)),
         Some(("minecraft:gold_ingot".into(), 4)), "carried onto the depot");
     let belts: Vec<Vec<u8>> = game.sent.iter().filter(|m| m.1 == "create:belt").map(|m| m.2.clone()).collect();
@@ -1818,7 +1832,7 @@ fn minecart_contraptions(game: &mut Game<'_>, level: &GameLevel<'_>) {
         level.native_block_changed(LevelDimension::Overworld, BlockPos { x: pos[0], y: pos[1], z: pos[2] }, BlockStateId(0), BlockStateId(state));
     }
     let washed = |game: &Game<'_>| {
-        let horizon_client::containers::BlockEntity::Mod(d) = &game.world.block_entities[&(63, -1, 60)];
+        let horizon_client::containers::BlockEntity::Mod(d) = &game.world.block_entities[&(63, -1, 60)] else { panic!("a mod block entity") };
         d.items.first().and_then(|s| s.as_ref()).map(|s| (s.item.to_string(), s.count))
     };
     for _ in 0..100 { game.native_level_tick_post("minecraft:overworld"); }

@@ -857,6 +857,12 @@ pub(super) fn use_item_on(
             encase_girder(game, pos, face);
             true
         }
+        "create:empty_blaze_burner" if spawns_capturable(game, pos) => {
+            *claimed = true;
+            let at = [0, 1, 2].map(|i| f64::from(pos[i]) + 0.5);
+            give_burner(game, stack, at);
+            true
+        }
         "create:vertical_gearbox" | "create:empty_blaze_burner" => {
             *claimed = true;
             place_item(game, item, pos, face);
@@ -976,13 +982,40 @@ pub(super) fn interact_entity(
         return;
     };
     *claimed = true;
-    // `spawnCaptureEffects` (at the blaze; here beside the player who caught it).
+    // `spawnCaptureEffects` at the blaze; here beside the player who caught it.
+    if let Some(stack) = stack {
+        give_burner(game, stack, at);
+    }
+    game.native_remove_mob(&dimension, entity as u32);
+}
+
+/// `BlazeBurnerBlockItem.useOn`: whether the spawner at `pos` spawns a capturable mob
+/// (`create:blaze_burner_capturable`), among its potentials or, with none, its next spawn.
+fn spawns_capturable(game: &Game<'_>, pos: [i32; 3]) -> bool {
+    use horizon_client::chunk::block_entity::Next;
+    use horizon_client::mobs::spawner::SpawnDataExt;
+    let Some(horizon_client::containers::BlockEntity::Spawner(spawner)) =
+        game.world.block_entities.get(&(pos[0], pos[1], pos[2]))
+    else {
+        return false;
+    };
+    let blaze = |d: &horizon_client::chunk::block_entity::SpawnData| {
+        d.id().as_deref() == Some("minecraft:blaze")
+    };
+    if spawner.potentials.is_empty() {
+        return matches!(&spawner.next, Some(Next::Own(d)) if blaze(d));
+    }
+    spawner.potentials.iter().any(|(d, _)| blaze(d))
+}
+
+/// `spawnCaptureEffects` (its sounds) and `giveBurnerItemTo`: the held stack shrinks, the burner
+/// goes to the hand or the inventory.
+fn give_burner(game: &mut Game<'_>, stack: &ItemStack, at: [f64; 3]) {
     game.audio
         .play("minecraft:entity.blaze.hurt", Some(at), 0.25, 0.75);
     game.audio
         .play("minecraft:block.fire.extinguish", Some(at), 0.5, 0.75);
-    // `giveBurnerItemTo`: the held stack shrinks, the burner goes to the hand or the inventory.
-    let single = stack.is_some_and(|s| s.count <= 1);
+    let single = stack.count <= 1;
     if !game.creative {
         use_one(game);
     }
@@ -993,7 +1026,6 @@ pub(super) fn interact_entity(
     } else {
         game.native_give_items("create:blaze_burner", 1);
     }
-    game.native_remove_mob(&dimension, entity as u32);
 }
 
 // ---------------------------------------------------------------------------------------------
