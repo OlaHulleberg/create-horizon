@@ -2942,6 +2942,9 @@ pub(super) struct Recipes {
     /// Whether `mixing` has the shapeless crafting recipes yet (read on a mixer's first look,
     /// which may ask the game for them).
     pub(super) shapeless_mixing: bool,
+    /// Whether `cutting` has the stonecutting recipes yet (`allowStonecuttingOnSaw`), read on a
+    /// saw's first look.
+    pub(super) saw_stonecutting: bool,
 }
 
 impl Recipes {
@@ -2991,6 +2994,7 @@ pub(super) fn ensure_recipes(game: &Game<'_>) -> bool {
             filling: read_filling(game),
             sequenced: read_sequenced(game),
             shapeless_mixing: false,
+            saw_stonecutting: false,
         })
     });
     true

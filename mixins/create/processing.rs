@@ -1621,6 +1621,8 @@ pub(super) fn saw_take(
         s.slots = vec![(stack.item.to_string(), stack.count.min(64) as u8)];
         s.remaining = -1.0;
         s.applied = false;
+        // `recipeIndex` stays with the saw between items.
+        s.index = SAW_INDEX.with_borrow(|m| m.get(&(dim, pos)).copied().unwrap_or(0));
         s.progress = super::create_items_body::sequenced_progress(stack)
             .map(|(id, step)| create_engine::sequenced::Progress { id, step });
         true
@@ -1640,6 +1642,7 @@ pub(super) fn tick_saws(game: &mut Game<'_>, dim: usize) {
     if saws.is_empty() || !ensure_recipes(game) {
         return;
     }
+    add_saw_stonecutting(game);
     for pos in saws {
         let state = game.world.block(pos[0], pos[1], pos[2]);
         let Some(along_first) =
@@ -1735,6 +1738,7 @@ pub(super) fn tick_saws(game: &mut Game<'_>, dim: usize) {
                     }
                     if left.is_empty() {
                         saw.clear();
+                        SAW_INDEX.with_borrow_mut(|m| m.insert((dim, pos), saw.index));
                     } else {
                         saw.slots = left;
                     }
@@ -1769,6 +1773,9 @@ pub(super) fn tick_saws(game: &mut Game<'_>, dim: usize) {
                 saw.clear();
             }
         }
+        if saw.slots.is_empty() {
+            SAW_INDEX.with_borrow_mut(|m| m.insert((dim, pos), saw.index));
+        }
         with_world(|w| {
             if saw.slots.is_empty() {
                 w.dims[dim].saws.remove(&pos);
@@ -1777,6 +1784,11 @@ pub(super) fn tick_saws(game: &mut Game<'_>, dim: usize) {
             }
         });
     }
+}
+
+thread_local! {
+    /// Each saw's `recipeIndex` while it holds nothing (an empty saw keeps no other state).
+    static SAW_INDEX: RefCell<HashMap<(usize, [i32; 3]), usize>> = RefCell::new(HashMap::new());
 }
 
 /// The heat under a basin (`BasinBlockEntity.getHeatLevelOf`): a blaze burner's, smouldering for
@@ -2043,6 +2055,47 @@ pub(super) fn press_on_basin(game: &mut Game<'_>, dim: usize, pos: [i32; 3]) {
             d.press_changes.push(pos);
         });
     }
+}
+
+/// `SawBlockEntity.getRecipes` with `allowStonecuttingOnSaw` (on by default): vanilla's
+/// stonecutting recipes cut on a saw too, after Create's cutting ones, each 50 ticks (`start`:
+/// only a cutting recipe has its own time). Read once per recipe table, when a saw first looks.
+fn add_saw_stonecutting(game: &mut Game<'_>) {
+    use super::native_hooks::NativeRecipeKind;
+    if RECIPES.with_borrow(|r| r.as_ref().is_none_or(|r| r.saw_stonecutting)) {
+        return;
+    }
+    let Some(all) = game.native_recipes() else {
+        return;
+    };
+    let id = |i: u32| all.items.get(i as usize).map(|x| x.id.clone());
+    let found: Vec<create_engine::processing::Recipe> = all
+        .recipes
+        .iter()
+        .filter(|r| r.kind == NativeRecipeKind::Stonecutting)
+        .filter_map(|r| {
+            let input: Vec<String> = r.slots.first()?.iter().filter_map(|x| id(x.item)).collect();
+            let result = r.results.first()?;
+            Some(create_engine::processing::Recipe {
+                id: r.id.clone(),
+                ingredients: vec![input],
+                results: vec![create_engine::processing::Output {
+                    item: id(result.item)?,
+                    count: result.count.min(64) as u8,
+                    chance: 1.0,
+                }],
+                time: 50,
+            })
+        })
+        .collect();
+    RECIPES.with_borrow_mut(|r| {
+        if let Some(r) = r.as_mut() {
+            let mut all = std::mem::take(&mut r.cutting.recipes);
+            all.extend(found);
+            r.cutting = create_engine::processing::Book::new(all);
+            r.saw_stonecutting = true;
+        }
+    });
 }
 
 /// `MechanicalMixerBlockEntity.matchStaticFilters`: shapeless crafting recipes of more than one

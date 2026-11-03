@@ -346,7 +346,7 @@ pub mod native_hooks {
     use super::*;
     pub mod flags { pub const UPDATE_CLIENTS: i32 = 2; pub const UPDATE_ALL: i32 = 3; }
     #[derive(Clone, Copy, PartialEq, Eq)]
-    pub enum NativeRecipeKind { CraftingShaped, CraftingShapeless }
+    pub enum NativeRecipeKind { CraftingShaped, CraftingShapeless, Stonecutting }
     pub struct NativeRecipeStack { pub item: u32, pub count: u32 }
     pub struct NativeRecipe { pub id: String, pub kind: NativeRecipeKind, pub slots: Vec<Vec<NativeRecipeStack>>, pub results: Vec<NativeRecipeStack> }
     pub struct NativeItem { pub id: String }
