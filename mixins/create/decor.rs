@@ -497,9 +497,13 @@ pub(super) fn use_block(
                 return true;
             }
             *canceled = true;
-            // `breakAndCollect` when sneaking; the pages' screen otherwise (not ported).
+            // `breakAndCollect` when sneaking; the pages' screen otherwise.
             if back {
                 collect_clipboard(game, dim, pos);
+            } else {
+                let stack = with(dim, |d| d.clipboards.get(&pos).cloned())
+                    .unwrap_or_else(|| ItemStack::new("create:clipboard", 1));
+                super::create_clipboard::open(game, Some(pos), &stack);
             }
             true
         }
@@ -1491,6 +1495,33 @@ fn tick_large_wheels(game: &mut Game<'_>, dimension: &str, dim: usize) {
         {
             set_state(game, pos, id);
         }
+    }
+}
+
+/// The stack a placed clipboard at `pos` keeps (its pages), if one is there.
+pub(super) fn clipboard_stack(game: &Game<'_>, dim: usize, pos: [i32; 3]) -> Option<ItemStack> {
+    let id = game.world.block(pos[0], pos[1], pos[2]);
+    (block_of(id.0)?.0 == Block::Clipboard).then(|| {
+        with(dim, |d| d.clipboards.get(&pos).cloned())
+            .unwrap_or_else(|| ItemStack::new("create:clipboard", 1))
+    })
+}
+
+/// A placed clipboard's pages edited (`ClipboardEditPacket` on a block): its stack keeps them,
+/// and its `written` state follows (`ClipboardBlockEntity.updateWrittenState`).
+pub(super) fn set_clipboard_stack(
+    game: &mut Game<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    stack: ItemStack,
+) {
+    let written = stack.extra.is_some();
+    with(dim, |d| d.clipboards.insert(pos, stack));
+    mark_unsaved(game, pos);
+    if let Some(id) = with_props(game, pos, &[("written", flag(written))])
+        && id != game.world.block(pos[0], pos[1], pos[2])
+    {
+        set_state(game, pos, id);
     }
 }
 

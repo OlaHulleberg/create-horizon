@@ -14,6 +14,7 @@ pub mod chain;
 pub mod chain_conveyor;
 pub mod chute;
 pub mod client;
+pub mod clipboard;
 pub mod clock;
 pub mod comparator;
 pub mod contraption;

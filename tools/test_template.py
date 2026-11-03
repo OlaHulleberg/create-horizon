@@ -48,6 +48,11 @@ def write_fixture(original, root):
         ('block_entity', "horizon_client::game::native_hooks::Game<'_>::native_block_entity"),
         ('block_entity_container', "horizon_client::game::native_hooks::Game<'_>::native_block_entity_container"),
         ('contents_changed', "horizon_client::game::native_hooks::Game<'_>::native_contents_changed"),
+        ('mod_screen_draw', "horizon_client::game::native_hooks::Game<'_>::native_mod_screen_draw"),
+        ('mod_screen_text', "horizon_client::game::native_hooks::Game<'_>::native_mod_screen_text"),
+        ('mod_screen_mouse', "horizon_client::game::native_hooks::Game<'_>::native_mod_screen_mouse"),
+        ('mod_screen_scroll', "horizon_client::game::native_hooks::Game<'_>::native_mod_screen_scroll"),
+        ('mod_screen_removed', "horizon_client::game::native_hooks::Game<'_>::native_mod_screen_removed"),
         ('entity_collisions', "horizon_client::game::native_hooks::Game<'_>::native_entity_collisions"),
         ('item_handler_insert', "horizon_client::game::native_hooks::Game<'_>::native_item_handler_insert"),
         ('item_handler_extract', "horizon_client::game::native_hooks::Game<'_>::native_item_handler_extract"),
@@ -480,6 +485,15 @@ pub mod native_hooks {
             self.glides.push((model, block, axis, rpm, velocity));
         }
         pub fn native_contents_changed(&mut self, pos: [i32; 3]) { let _ = pos; }
+        pub fn native_mod_screen_draw(&mut self, name: &str, batch: &mut horizon_client::hud::HudBatch, cursor: [f32; 2]) {
+            let _ = (name, batch, cursor);
+        }
+        pub fn native_mod_screen_text(&mut self, name: &str, text: &str) { let _ = (name, text); }
+        pub fn native_mod_screen_mouse(&mut self, name: &str, at: [f32; 2], button: u8, pressed: bool) {
+            let _ = (name, at, button, pressed);
+        }
+        pub fn native_mod_screen_scroll(&mut self, name: &str, at: [f32; 2], delta: f32) { let _ = (name, at, delta); }
+        pub fn native_mod_screen_removed(&mut self, name: &str) { let _ = name; }
         pub fn native_entity_collisions(&self, around: horizon_core::geometry::Aabb,
             out: &mut Vec<(horizon_core::geometry::Aabb, horizon_core::geometry::Vec3)>) {
             let _ = (around, out);
