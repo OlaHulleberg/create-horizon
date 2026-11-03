@@ -20,7 +20,7 @@ benchmark table, measured against that session's own off or control run; compare
 | Redstone | links, latches, diodes, observers, comparators, display links and boards, nixie text | latch chains: 3.852 ms tick (over at first, within after the fix in its section) | tick ≤ control + 0.3 ms: met | |
 | Contraptions | pistons, bearings, gantries, chassis, glue, actors, minecart contraptions, couplings, schematics | 16 windmills: 0.524 / 3.972 ms; carts 2.289 vs 2.280 ms | tick ≤ off + 0.25 ms: met | two-cart pitch, hard step vs blocks |
 | Trains | track and curves, stations, signals, assembly, schedules, riding, driving, HUD, saves, LAN | 12 trains: 0.543 / 4.660 ms; driven 2.051 vs 2.051 ms | tick ≤ off + 0.5 ms: met | |
-| Create unused | — | idle 0.500 / 4.011 ms vs off 0.530 / 4.047 | within noise of off: met (ticks, frames) | +0.55 s warm start, accepted 2026-11-02 |
+| Create unused | — | idle 0.500 / 4.011 ms vs off 0.530 / 4.047; again on the tree with Horizon API 69 and 70 (2026-11-03), three runs each, two of them interleaved: idle 0.530 / 4.916 ms vs off 0.538 / 4.892 ms (run-to-run spread 0.3 ms of tick; `benchmarks/final-*.json`, `benchmarks/final-interleaved/`) | within noise of off: met (ticks, frames) | +0.55 s warm start, accepted 2026-11-02 |
 
 ### One session on the final tree (2026-11-03)
 
