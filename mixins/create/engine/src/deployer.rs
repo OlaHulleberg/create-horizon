@@ -69,6 +69,8 @@ pub struct Deployer {
     pub held: Option<(String, u8)>,
     pub mode: Mode,
     pub breaking: Option<([i32; 3], f32)>,
+    /// `redstoneLocked`: powered, it starts no stroke (saved, as `Powered`).
+    pub locked: bool,
 }
 
 /// `getTimerSpeed`: twice the speed, held between 8 and 512 (0 when still).
@@ -204,6 +206,9 @@ pub fn on_depot(d: &Deployer, rpm: f32, locked: bool, fits: bool) -> Depot {
     if !locked && d.state != State::Waiting {
         return Depot::Hold;
     }
+    if !locked && d.locked {
+        return Depot::Pass;
+    }
     if d.held.is_none() {
         return Depot::Hold;
     }
@@ -214,6 +219,10 @@ pub fn on_depot(d: &Deployer, rpm: f32, locked: bool, fits: bool) -> Depot {
         return Depot::Apply;
     }
     if d.state == State::Waiting {
+        // `whenItemHeld`: a locked one lets it go.
+        if d.locked {
+            return Depot::Pass;
+        }
         return Depot::Start;
     }
     Depot::Hold
@@ -674,5 +683,18 @@ mod tests {
         d.timer = 0;
         let (at, v) = d.hand(16.0);
         assert!((at - 1.0).abs() < 1e-6 && v == 0.0);
+    }
+
+    #[test]
+    fn a_powered_deployer_lets_stacks_pass() {
+        let d = Deployer {
+            held: Some(("minecraft:oak_planks".into(), 2)),
+            locked: true,
+            ..Deployer::default()
+        };
+        assert_eq!(on_depot(&d, 16.0, false, true), Depot::Pass);
+        assert_eq!(on_depot(&d, 16.0, true, true), Depot::Pass);
+        let free = Deployer { locked: false, ..d };
+        assert_eq!(on_depot(&free, 16.0, false, true), Depot::Start);
     }
 }

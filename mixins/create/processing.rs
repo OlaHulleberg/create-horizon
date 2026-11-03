@@ -291,6 +291,25 @@ pub(super) fn deployer_on_depot(game: &mut Game<'_>, dim: usize, depot: [i32; 3]
 /// one back at rest has the depot below look at it again. Nothing runs without one.
 pub(super) fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
     use create_engine::deployer::{Mode, State, Tick};
+    // `redstoneUpdate`: powered, it is locked.
+    let power =
+        with_world(|w| std::mem::take(&mut w.dims[dim].deployer_power_checks)).unwrap_or_default();
+    for pos in power {
+        if deployer_facing(game, pos).is_none() {
+            continue;
+        }
+        let powered = super::create_redstone::neighbor_signal(game, pos);
+        with_world(|w| {
+            if let Some(d) = w.dims[dim].deployers.get_mut(&pos)
+                && d.locked != powered
+            {
+                d.locked = powered;
+                w.mark_unsaved(dim, pos);
+                // A depot below looks at it again.
+                w.dims[dim].depot_work.push([pos[0], pos[1] - 2, pos[2]]);
+            }
+        });
+    }
     // Deployers at rest holding something or punching, turning: `tick`'s `WAITING` start
     // (`shouldActivate` when using), else a look again `getTimerSpeed() × 10` later. Using ones
     // over a depot or belt wait for it.
@@ -301,6 +320,7 @@ pub(super) fn tick_deployers(game: &mut Game<'_>, dimension: &str, dim: usize) {
             .filter(|(p, dp)| {
                 (dp.held.is_some() || dp.mode == Mode::Punch)
                     && !dp.busy()
+                    && !dp.locked
                     && !d.deploying.contains(p)
             })
             .map(|(p, dp)| (*p, w.speed(dim, *p).unwrap_or(0.0), dp.mode))

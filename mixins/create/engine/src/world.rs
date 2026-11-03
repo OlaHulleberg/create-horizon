@@ -250,6 +250,8 @@ pub struct Dimension {
     /// other counts as powered before, as Create's `wasPoweredBefore` starts).
     pub crafter_power_checks: Vec<[i32; 3]>,
     pub crafter_unpowered: HashSet<[i32; 3]>,
+    /// Deployers whose neighbours changed, to look at their power (`redstoneLocked`).
+    pub deployer_power_checks: Vec<[i32; 3]>,
     pub gantry_assemble: Vec<[i32; 3]>,
     pub gantries: Vec<crate::gantry::Moving>,
     /// Mechanical bearings whose speed changed (`assembleNextTick`).
@@ -740,6 +742,8 @@ impl CreateWorld {
             }
             d.deployers.insert(pos, saved);
             d.deployer_changes.push(pos);
+            // `onPlace` → `redstoneUpdate`.
+            d.deployer_power_checks.push(pos);
             // A depot below may have work for it.
             d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
         }
@@ -1534,6 +1538,8 @@ impl CreateWorld {
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafter_power_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.deployer_power_checks
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafting.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafter_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -1968,6 +1974,8 @@ impl CreateWorld {
             Some(Block::EncasedChainDrive) => self.dims[dim].chain_checks.push(pos),
             // A crafter's power may have risen (`wasPoweredBefore`).
             Some(Block::MechanicalCrafter) => self.dims[dim].crafter_power_checks.push(pos),
+            // `DeployerBlock.neighborChanged` → `redstoneUpdate`.
+            Some(Block::Deployer) => self.dims[dim].deployer_power_checks.push(pos),
             Some(Block::SequencedGearshift) => self.dims[dim].sequencer_checks.push(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(Block::LargeWaterWheel) => self.dims[dim].large_wheel_checks.push(pos),
