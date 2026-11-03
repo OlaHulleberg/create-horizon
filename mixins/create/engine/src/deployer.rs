@@ -71,6 +71,8 @@ pub struct Deployer {
     pub breaking: Option<([i32; 3], f32)>,
     /// `redstoneLocked`: powered, it starts no stroke (saved, as `Powered`).
     pub locked: bool,
+    /// The held tool's damage (`DAMAGE`).
+    pub held_damage: u32,
 }
 
 /// `getTimerSpeed`: twice the speed, held between 8 and 512 (0 when still).
@@ -259,6 +261,49 @@ pub fn use_held(held: &mut Option<(String, u8)>, recipe: &Recipe) {
         if *n == 0 {
             *held = None;
         }
+    }
+}
+
+impl Deployer {
+    /// `BeltDeployerCallbacks.activate` after a recipe: unless it keeps its item, a tool
+    /// (`max_damage` > 0) wears by one (`hurtAndBreak`), anything else is used up, leaving its
+    /// crafting remainder in the hand when it was the last. What else is left over (a
+    /// remainder with more of the stack in hand) for the world.
+    pub fn use_for(
+        &mut self,
+        recipe: &Recipe,
+        max_damage: u32,
+        remainder: Option<&str>,
+    ) -> Option<String> {
+        if recipe.keep_held {
+            return None;
+        }
+        if max_damage > 0 {
+            self.wear(1, max_damage);
+            return None;
+        }
+        use_held(&mut self.held, recipe);
+        let rest = remainder?.to_owned();
+        if self.held.is_none() {
+            self.held = Some((rest, 1));
+            self.held_damage = 0;
+            return None;
+        }
+        Some(rest)
+    }
+
+    /// `hurtAndBreak(amount)` on the held tool: it breaks at its `max_damage`. Whether it broke.
+    pub fn wear(&mut self, amount: u32, max_damage: u32) -> bool {
+        if max_damage == 0 || self.held.is_none() {
+            return false;
+        }
+        self.held_damage += amount;
+        if self.held_damage >= max_damage {
+            self.held = None;
+            self.held_damage = 0;
+            return true;
+        }
+        false
     }
 }
 
@@ -696,5 +741,41 @@ mod tests {
         assert_eq!(on_depot(&d, 16.0, true, true), Depot::Pass);
         let free = Deployer { locked: false, ..d };
         assert_eq!(on_depot(&free, 16.0, false, true), Depot::Start);
+    }
+
+    #[test]
+    fn tools_wear_and_break_other_items_are_used_up() {
+        let r = Recipe {
+            id: "x".into(),
+            target: Vec::new(),
+            tool: Vec::new(),
+            results: Vec::new(),
+            keep_held: false,
+        };
+        let mut d = Deployer {
+            held: Some(("minecraft:iron_axe".into(), 1)),
+            held_damage: 248,
+            ..Deployer::default()
+        };
+        assert_eq!(d.use_for(&r, 250, None), None);
+        assert_eq!((d.held.is_some(), d.held_damage), (true, 249));
+        d.use_for(&r, 250, None);
+        assert_eq!(d.held, None, "worn through, it breaks");
+        // A water bucket leaves its bucket in the hand; with more held, out in the world.
+        let mut d = Deployer {
+            held: Some(("minecraft:milk_bucket".into(), 1)),
+            ..Deployer::default()
+        };
+        assert_eq!(d.use_for(&r, 0, Some("minecraft:bucket")), None);
+        assert_eq!(d.held, Some(("minecraft:bucket".into(), 1)));
+        let mut d = Deployer {
+            held: Some(("minecraft:honey_bottle".into(), 3)),
+            ..Deployer::default()
+        };
+        assert_eq!(
+            d.use_for(&r, 0, Some("minecraft:glass_bottle")).as_deref(),
+            Some("minecraft:glass_bottle")
+        );
+        assert_eq!(d.held, Some(("minecraft:honey_bottle".into(), 2)));
     }
 }
