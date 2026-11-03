@@ -626,6 +626,12 @@ pub mod native_hooks {
             let _ = dimension;
             CARTS.with_borrow_mut(|c| { let found = c.iter_mut().find(|x| x.id == id); found.map(|x| x.pos = pos).is_some() })
         }
+        /// No blocks stop a cart here: it moves the whole way.
+        pub fn native_move_minecart(&mut self, dimension: &str, id: u32, delta: [f64; 3]) -> Option<[f64; 3]> {
+            let _ = dimension;
+            CARTS.with_borrow_mut(|c| { let found = c.iter_mut().find(|x| x.id == id);
+                found.map(|x| { for k in 0..3 { x.pos[k] += delta[k]; } x.pos }) })
+        }
         pub fn native_set_furnace_fuel(&mut self, dimension: &str, id: u32, fuel: i32, push: [f64; 3]) -> bool {
             let _ = dimension;
             CARTS.with_borrow_mut(|c| { let found = c.iter_mut().find(|x| x.id == id && x.kind == "minecraft:furnace_minecart");
