@@ -345,6 +345,12 @@ pub mod native_server {
 pub mod native_hooks {
     use super::*;
     pub mod flags { pub const UPDATE_CLIENTS: i32 = 2; pub const UPDATE_ALL: i32 = 3; }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum NativeRecipeKind { CraftingShaped, CraftingShapeless }
+    pub struct NativeRecipeStack { pub item: u32, pub count: u32 }
+    pub struct NativeRecipe { pub id: String, pub kind: NativeRecipeKind, pub slots: Vec<Vec<NativeRecipeStack>>, pub results: Vec<NativeRecipeStack> }
+    pub struct NativeItem { pub id: String }
+    pub struct NativeRecipes { pub items: Vec<NativeItem>, pub recipes: Vec<NativeRecipe> }
     pub struct NativeScreen { pub width: f32, pub height: f32, pub slots: Vec<Option<[f32; 2]>>,
                               pub inventory_y: f32, pub inventory_x: f32, pub own_labels: bool }
     use native_lifecycle::WorldPhase;
@@ -391,6 +397,7 @@ pub mod native_hooks {
             let _ = (block, container);
         }
         pub fn items(&self) -> horizon_client::items::Items { horizon_client::items::Items { item_tags: Default::default() } }
+        pub fn native_recipes(&mut self) -> Option<std::sync::Arc<NativeRecipes>> { None }
         pub fn native_recipes_of_type(&self, kind: &str) -> &[horizon_client::crafting::CustomRecipe] {
             self.custom_recipes.get(kind).map_or(&[], Vec::as_slice)
         }
