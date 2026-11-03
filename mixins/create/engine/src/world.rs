@@ -246,6 +246,10 @@ pub struct Dimension {
     pub crafter_inputs: crate::crafter_input::Inputs,
     /// Crafters with a slot cover (`covered`), saved with their chunk.
     pub crafter_covers: HashSet<[i32; 3]>,
+    /// Crafters whose neighbours changed, to look at their power; those seen unpowered (any
+    /// other counts as powered before, as Create's `wasPoweredBefore` starts).
+    pub crafter_power_checks: Vec<[i32; 3]>,
+    pub crafter_unpowered: HashSet<[i32; 3]>,
     pub gantry_assemble: Vec<[i32; 3]>,
     pub gantries: Vec<crate::gantry::Moving>,
     /// Mechanical bearings whose speed changed (`assembleNextTick`).
@@ -795,6 +799,8 @@ impl CreateWorld {
         if block == Block::MechanicalCrafter && !d.crafters.contains_key(&pos) {
             d.crafters.insert(pos, crate::crafter::Crafter::default());
             d.crafter_checks.push(pos);
+            // Its first tick finds out whether it is powered.
+            d.crafter_power_checks.push(pos);
         }
         if block == Block::GantryCarriage {
             // `checkValidGantryShaft` when it is placed.
@@ -1330,6 +1336,7 @@ impl CreateWorld {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
             // `onRemove`: its slot cover drops.
+            d.crafter_unpowered.remove(&pos);
             if d.crafter_covers.remove(&pos) {
                 d.crafter_drops
                     .push((pos, "create:crafter_slot_cover".to_owned()));
@@ -1522,6 +1529,10 @@ impl CreateWorld {
             d.crafter_inputs
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafter_covers
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.crafter_unpowered
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.crafter_power_checks
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafting.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafter_checks
@@ -1955,6 +1966,8 @@ impl CreateWorld {
                 self.dims[dim].plumbing.extension_checks.push(pos)
             }
             Some(Block::EncasedChainDrive) => self.dims[dim].chain_checks.push(pos),
+            // A crafter's power may have risen (`wasPoweredBefore`).
+            Some(Block::MechanicalCrafter) => self.dims[dim].crafter_power_checks.push(pos),
             Some(Block::SequencedGearshift) => self.dims[dim].sequencer_checks.push(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(Block::LargeWaterWheel) => self.dims[dim].large_wheel_checks.push(pos),

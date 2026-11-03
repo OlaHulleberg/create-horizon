@@ -3632,38 +3632,65 @@ pub(super) fn crafter_insert(game: &mut Game<'_>, dimension: &str, dim: usize, p
 /// puts the result out. Nothing runs without one of them.
 pub(super) fn tick_crafters(game: &mut Game<'_>, dimension: &str, dim: usize) {
     use create_engine::crafter::{self, Phase};
-    let Some((mut checks, drops, working)) = with_world(|w| {
+    let Some((mut checks, drops, working, power)) = with_world(|w| {
         let d = &mut w.dims[dim];
         (
             std::mem::take(&mut d.crafter_checks),
             std::mem::take(&mut d.crafter_drops),
             d.crafting.clone(),
+            std::mem::take(&mut d.crafter_power_checks),
         )
     }) else {
         return;
     };
+    // `wasPoweredBefore`: a crafter newly powered starts its chain with what it has
+    // (`checkCompletedRecipe(true)`: gaps are empty cells; covers don't count).
+    let mut powered_starts = Vec::new();
+    for pos in power {
+        if crafter_at(game, pos).is_none() {
+            continue;
+        }
+        let powered = super::create_redstone::neighbor_signal(game, pos);
+        let rose = with_world(|w| {
+            let d = &mut w.dims[dim];
+            if powered {
+                d.crafter_unpowered.remove(&pos)
+            } else {
+                d.crafter_unpowered.insert(pos);
+                false
+            }
+        }) == Some(true);
+        if rose {
+            powered_starts.push(pos);
+        }
+    }
     for (p, item) in drops {
         game.native_run_command(&format!(
             "execute in {dimension} run summon minecraft:item {}.5 {}.5 {}.5 {{Item:{{id:'{item}',count:1}}}}",
             p[0], p[1], p[2]
         ));
     }
-    if checks.is_empty() && working.is_empty() {
+    if checks.is_empty() && working.is_empty() && powered_starts.is_empty() {
         return;
     }
     checks.sort();
     checks.dedup();
-    for pos in checks {
+    let starts = powered_starts
+        .into_iter()
+        .map(|p| (p, true))
+        .chain(checks.into_iter().map(|p| (p, false)));
+    for (pos, powered_start) in starts {
         let idle = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.phase)).flatten()
             == Some(Phase::Idle);
         let rpm = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
         // `hasItemOrCover`.
-        let filled =
-            |g: &Game<'_>, p: [i32; 3]| crafter_slot(g, p).is_some() || crafter_covered(dim, p);
-        if !idle || rpm == 0.0 || !filled(game, pos) {
+        let filled = |g: &Game<'_>, p: [i32; 3]| {
+            crafter_slot(g, p).is_some() || !powered_start && crafter_covered(dim, p)
+        };
+        if !idle || rpm == 0.0 || !powered_start && !filled(game, pos) {
             continue;
         }
-        let Some(chain) = crafter_chain(game, pos, filled, false) else {
+        let Some(chain) = crafter_chain(game, pos, filled, powered_start) else {
             continue;
         };
         for p in chain {
