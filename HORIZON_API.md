@@ -1,80 +1,67 @@
 # What the port needs from Horizon, and where it stands
 
-Checked 2026-11-03 against horizon-rust/horizon `main` (hook API 359) and the modding fork arismoko/horizon `main`
-(where native-mod API work goes, horizon-rust/horizon#4953; tracker arismoko/horizon#27). Re-check before acting on
-any line: both move by the hour. Our old hook branch is `feat/create-hooks` on OlaHulleberg/horizon (65 commits on
-`9d979ca`); it is a source of ideas, not something to send as is.
+Checked 2026-11-04 against the modding fork arismoko/horizon `main` (`da67617ff`). Re-check before acting on any
+line: the fork merges dozens of PRs a day.
 
-The goal: the mod builds on the Horizon the team releases. That means the trait-mod format (`horizon-mod.toml`
-`[native]`, `src/lib.rs` implementing the generated `Hooks`) using catalogued hook points and Host helpers only; raw
-injections into internal functions break on every refactor.
+**Target: the fork's trait-mod API.** The fork is where the native mod API is built (its AGENTS.md, "the clean
+break"; trackers #26 design, #44 milestones, #27 hooks), and contributors who merge upstream (levzzz5154) work there
+too. The mod builds against one pinned fork commit with the fork's launcher (arismoko/horizon#44, answer of
+2026-11-03). Upstream's answer on direction (horizon-rust/horizon#4953) is still pending.
 
-**Who decides (checked 2026-11-03).** horizon-rust/horizon is what the Horizon team releases; its mergers are
-ludovic111 (most merges, code owner of the release pipeline), rdbtCVS, kacpherek and levzzz5154, and it still merges
-native-mod hook PRs from many contributors. arismoko/horizon is one contributor's fork (arismoko is a contributor
-upstream and merges nothing there); its owner asks for modding PRs there and paused sending its work upstream on
-Nov 3. Fork work reaches upstream only as ordinary PRs an upstream maintainer accepts. So the mod targets upstream's
-API, and what it needs is PR'd upstream; the fork is a design lab to watch.
+The port today is a horizon-mixins bundle: a rules engine with no game types (`mixins/create/engine`, ~68k lines,
+moves over unchanged) and game glue (~43k lines in 33 modules, 50 hook injections) that calls `Game` internals. The
+fork forbids that: a mod depends only on `mod_api` and uses catalogued hooks, Parts, handles, capabilities under
+transactions, attachments, mod messages and draw contexts. The glue is rewritten against those.
 
-The fork owner's answer on #44 (2026-11-03 20:49 UTC), for the record: fork-API mods pin a fork commit and build with
-the fork's own launcher (from source); upstream's released launcher can't build them; how players get fork builds is
-undecided; Create's needs would go to the fork via #27 (instancing on the coming `DrawContext`, moving structures as a
-design note first). Their fork's #26 also plans Java jars as asset sources, which would solve shipping Create's ARR
-assets: watch for it upstream.
+## What exists (port the glue to it)
 
-Up = horizon-rust main, Fork = arismoko main. a = has it, b = partly or differently, c = missing.
+| Area | Fork API |
+|---|---|
+| World and level life | `world_lifecycle`, `level_tick_post` (keep one global tick; a block entity's own tick runs with it out of the world), `tick` (`HostSide`), `client_level_unload`, `level_load` |
+| Saved state | attachments with codecs on `Holder::Chunk` / `BlockEntity` / `Level`; a write marks the chunk dirty, so no save hook is needed |
+| Blocks | `LevelRef::block_state` / `set_block` / `destroy_block` / `block_shape` / `block_face_sturdy` / `clip` / `level_event` / `play_sound` / `random`; `block_state_id` / `_string` / `_default` / `_property`; `LevelHost::state_with_property`, `fluid_state`, tags |
+| Block behaviour | `BlockPart`: `use_item_on`, `use_without_item`, `state_for_placement` (yaw, pitch, sneaking, face, hit), `neighbor_changed` (read-only), `tick_block`, `block_signal`, `is_signal_source`, `has_analog_output` + `analog_output`, `entity_inside`, `contents_changed`, `affect_neighbors_after_removal` |
+| Block entities | `r.block_entity_type(..).blocks(..)`, `BlockEntityPart::block_entity`, `block_entity_update_tag` + `block_entity_sync`, `screen` / `screen_draw` / `screen_click`, `BlockEntityRef::data` / `merge_data` / `replace_data` / `set_changed` |
+| Items, fluids | `ITEMS`, `FLUIDS`, `ITEM_FLUIDS`, `ENTITY_ITEMS` providers, `move_resources`, `host.transaction`, `ItemPlace`. Create needs its own providers: vaults outgrow `block_entity_container`'s 256 slots, tanks `block_entity_fluids`' 1,000,000 mB |
+| Items used | `ItemPart::use_on` / `use_item` / `hurt_enemy`, `right_click_item`, `left_click_block`, `entity_place`, `break_block`, `loot_drops`, `entity_interact`, `attack_entity`, `player_tick`, `living_breathe` |
+| Entities | `LevelRef::entities_in` / `spawn_item(_with_motion)` / `pop_resource`, `summon`, `EntityRef` push, velocity, riding, teleport, rotation, discard, air; `MinecartRef` fuel; `entity_mount`, `entity_join_level`, `vehicle_moved`; `LivingRef` equipment, `hurt_and_break`, attribute modifiers |
+| Recipes, commands, messages | `recipes_of_type` / `recipe_result` / `recipe_ingredient`, `server_data_loaded`; `register_commands` / `perform_command`; `net_send_to_player` / `_to_server`, `net_from_client` / `_from_server` |
+| Client | `block_entity_submit` + `BlockEntityDrawContext` (block, item, cube, quad, rotate, partial, keep), `block_entity_render_bounding_box`, `standalone_models`, `RenderHooks::world_drawn`; `hud`, `screen_render_post` + `DrawContext`; mod screens; `mouse_scrolling`, `movement_input`, `interaction_key_mapping_triggered`, `mod_key`; `crosshair_target`, `camera` |
 
-## Use what exists (port the mod to it)
+## Missing: small additions the fork's rules allow
 
-| Need | Up | Fork | Use |
-|---|---|---|---|
-| Block `state_properties` | a | a | content declarations (horizon-rust#5306) |
-| `render_shape`, `occludes` | a | a | ours, merged upstream (#7867, #8083) |
-| OBJ models | a | a | `neoforge:obj` (horizon-rust#7568) |
-| Saved state with chunks / levels / block entities / entities | a | a | attachments, `AttachmentType` + `Holder` (#6216); fork also `level_save` |
-| Comparator output | a | a | `has_analog_output`, `analog_output`, `update_output_neighbors` |
-| Item entities in a box | a | a | `item_entities`, `set_item_entity` |
-| Taking items out of containers | a | a | `extract_item`, `move_items`, `container_slots`; fork ITEMS + `move_resources` |
-| Hoppers, funnels into a mod block (item handler) | c | a | fork ITEMS capability providers; `block_entity_capability_before_game` orders ours first |
-| Contents changed | b | a | fork ITEMS providers see every insert and extract |
-| Interaction key | a | a | `interaction_key` |
-| HUD layers | a | a | `gui_layer_pre`/`gui_layer_post` |
-| Recipe folders, recipe helpers on servers | a | a | `json_folder`, `outside_world()` |
-| Entity inside a block | b | b | `block_entity_inside` (static: act next tick) |
-| Item landing on a block | b | b | `block_step_on`/`block_entity_inside` + `item_entities` (next tick) |
-| Mod screens | b | b | `mod_screen_open`/`close`, `screen_render_post`, `screen_*_pre`, `screen_closing` |
-| Riding, seats | b | b | `entity_mount`; fork `entity_start_riding`/`stop`/`passengers` |
-| Minecarts | b | b | `summon`/`remove_entity`, `vehicle_*`; fork `minecart_set_fuel` |
-| Entity reads and moves | b | b | fork `level_entities_in`, `entity_push`, `entity_set_rotation`, `entity_teleport_to`, `entity_is_shift_key_down` |
-| Drawing machines | b | b | `block_entity_submit` + `draw_block`/`draw_model`/`draw_item`, `draw.keep()` |
-| Chunk load / unload | b | b | `native_chunk_load` + `read_columns`; fork `chunk_refs` |
+Each needs a claim on its #44 / #27 row first, with the plan agreed in the thread, as levzzz5154 does.
 
-## Missing: candidates for small PRs (each needs a claim first)
+1. **Catalogue helpers that already exist** in the game but not in `native-hooks.json`: `native_draw_model`
+   (`native_block_entity_draw.rs:544`), `native_text_width`, `native_sprite_size`, `native_playing`,
+   `native_mapping` (`native_hooks.rs`). One fragment; unblocks partial models and the train HUD.
+2. **Redstone on `LevelRef`**: `signal(pos, dir)`, `best_neighbor_signal(pos)`, `update_neighbors(pos, NeighbourUpdate)`;
+   removes the id-based `neighbor_signal`, `update_signal_neighbors`, `update_output_neighbors` (no shims).
+3. **State facts off the world**: can be replaced, destroy speed, sound type, has block entity, the states of a
+   block; `item_block` (row G9, host-lead-2: coordinate).
+4. **Breaking with a tool**: `LevelRef::destroy_block` with breaker and tool, or `block_drops(pos, tool)`; break progress.
+5. **Entity motion**: `EntityRef::reset_fall_distance`, `move_by` (`Entity.move`), `MinecartRef::set_push`.
+6. **Fluid flow** (`FluidState.getFlow`) on the level host, for water wheels.
+7. **Crafting-grid match** (`RecipeManager.getRecipeFor` over a `CraftingInput`) on `LevelRef`.
+8. **Part methods** (NeoForge `IBlockExtension` / vanilla `Block`): `minecart_pass` (`onMinecartPass`),
+   `set_placed_by` with the stack, items landing (`updateEntityMovementAfterFallOn`); with the F1/F2 rows (api-lead).
+9. **Client**: `draw_text` on the block-entity draw context, GUI text with alpha, clipboard text, UI sounds without a
+   position, block-entity view distance (`getViewDistance`), write access in screen hooks.
+10. **Fake players F5/F6** (use, place, attack, break): rows 83–84 of #44, unblocked and unclaimed. The deployer
+    depends on them.
 
-Fork (mod API):
-1. `native_recipes` on the server's tick (still `self.player.as_ref()?` on both; ours `578bc1aae`).
-2. Fluid flow read (`FluidState.getFlow`) as a level helper.
-3. Item draws lit as a block (`isGui3d`).
-4. Clipboard text helpers; `mod_screen_open` that pauses (new version).
-5. Entity gaps: reset fall distance, is-flying, velocity on players.
-6. Host or deferred world access in `block_entity_inside` / `block_step_on`, or confirm next-tick is intended.
-7. A deployer using its item on the block it reaches (`use_item_at`).
-8. `onMinecartPass` as a block-scope part, and mod rails.
-9. Directional signal and neighbour-update helpers, if still needed.
+## Large designs (contribute, don't work around)
 
-Upstream (engine, content format):
-1. Declared shapes as occlusion shapes (ours `95932161e`).
-2. Faster block tables (ours `1754ad635`).
+- Instanced moving parts: #44 "Rendering" (not started), #27, horizon-rust/horizon#6302. Until then, per-frame
+  `block_entity_submit` drawing.
+- Moving block structures (contraptions, trains, carts; collisions, seats): horizon-rust/horizon#5313, #27.
+  Draft: `notes/moving-structures-note.md`.
+- Mod entity types (seats, carriages): #44 row E, horizon-rust/horizon#5212.
+- A block entity reaching its own storage during its own tick: #44 (design accepted, not started).
+- Copycat models in the chunk mesh: #44 D7, horizon-rust/horizon#6303.
 
-## Contribute to existing designs instead of new hooks
+## Not to send
 
-- Instanced moving parts and world text: horizon-rust#6302 (partly done).
-- Model changes at bake time: horizon-rust#6303.
-- Mod fluids: horizon-rust#6301 (water/lava only today).
-- Moving block structures (contraptions, trains, carts; entity collisions, seats): horizon-rust#5313.
-
-## Not to upstream
-
-- `8a8c23021` (hopper item handler before the container): written after reading a NeoForge source patch, which
-  Horizon's rules forbid; the fork's capability providers already cover it.
+- `8a8c23021` on `feat/create-hooks` (hopper item handler): written after reading a NeoForge source patch, which
+  Horizon's rules forbid; the fork's `ITEMS` providers cover it.
 - Block-facts snapshot cache `e4f3833ae`: a cache, kept private.
