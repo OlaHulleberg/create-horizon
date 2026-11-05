@@ -30,6 +30,13 @@ block count checked): off 0.538 ms frame p50 / 4.662 ms tick; idle 0.537 / 4.513
 chains 0.522 / 4.171 (frame +8.4 %); processing 0.544 / 3.983; logistics 0.614 / 3.787; pumps 0.561 / 4.317; goggles
 0.587 / 4.111; redstone 0.542 / 4.627; contraptions 0.572 / 3.447; trains 0.603 / 4.344, driven 0.598 / 4.257.
 Every budget in the table above is met; Create installed and unused stays within noise of off.
+Each run's own check of the work, on the same tree: processing, a depot under a press held 60 iron ingots and 4
+iron sheets; logistics, no stack left the belts as an entity (0); redstone, the latch rows read `0110110111111111`
+then `1100110111111111` a moment apart; contraptions, all 16 windmills turning; trains, all 12 heading for the station
+53 blocks along; fluids (`spouts`, run once more), a depot under a spout fed by a pump from a pool held 15 buckets and
+a water bucket. Equipment, in game the same day: Create's wrench clicked on a shaft's north face turned it from axis x
+to y and back (about z, `KineticBlock.getRotatedBlockState`). The kinetic, outbox, far-column, copper, zinc, nozzle
+and cuckoo work of the day has its own proof in its section.
 
 ### Again with Horizon API 69 to 72 (2026-11-03, later)
 
