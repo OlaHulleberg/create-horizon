@@ -311,6 +311,10 @@ pub struct Dimension {
     /// Drills and their breaking, the turning ones (the only ones that tick).
     pub drills: HashMap<[i32; 3], crate::drill::Breaker>,
     pub drilling: Vec<[i32; 3]>,
+    /// Cuckoo clocks that turn (the only ones that look at the time), and the animations
+    /// running: what, and its progress.
+    pub cuckoo_turning: Vec<[i32; 3]>,
+    pub cuckoos: HashMap<[i32; 3], (crate::cuckoo::Animation, u32)>,
     /// Saws holding items (the only ones that tick) and their processing.
     pub saws: HashMap<[i32; 3], crate::saw::Saw>,
     /// Spouts and their tank and cycle; those holding fluid tick.
@@ -1402,6 +1406,80 @@ impl CreateWorld {
 
     /// One section of a column that joined the level: `base` is its lowest corner, `states` its
     /// 4,096 states in vanilla's index order (`y << 8 | z << 4 | x`).
+    /// `CuckooClockBlockEntity.tick` on the server at `hours:minutes` of a natural dimension:
+    /// turning clocks with nothing running start what is due, running ones go on. Each start
+    /// (to tell the clients) and each surprise going off. Nothing is looked at without turning
+    /// clocks, nor outside the two times unless one runs.
+    pub fn tick_cuckoos(
+        &mut self,
+        dim: usize,
+        hours: i32,
+        minutes: i32,
+    ) -> Vec<([i32; 3], crate::cuckoo::Animation, bool)> {
+        use crate::cuckoo;
+        let table = &self.table;
+        let d = &mut self.dims[dim];
+        if d.cuckoo_turning.is_empty() && d.cuckoos.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if cuckoo::due(hours, minutes, false).is_some() {
+            // Gone, broken or replaced clocks leave the list here.
+            d.cuckoo_turning.retain(|p| {
+                d.states
+                    .get(p)
+                    .and_then(|&s| table.get(s))
+                    .is_some_and(|(b, _)| {
+                        matches!(b, Block::CuckooClock | Block::MysteriousCuckooClock)
+                    })
+            });
+            for &pos in &d.cuckoo_turning {
+                if d.cuckoos.contains_key(&pos) {
+                    continue;
+                }
+                let mysterious = d
+                    .states
+                    .get(&pos)
+                    .and_then(|&s| table.get(s))
+                    .is_some_and(|(b, _)| b == Block::MysteriousCuckooClock);
+                if let Some(a) = cuckoo::due(hours, minutes, mysterious) {
+                    d.cuckoos.insert(pos, (a, 0));
+                    out.push((pos, a, false));
+                }
+            }
+        }
+        // Started this tick, they run from the next (`startAnimation` is in the else's
+        // sibling branch).
+        let started: Vec<[i32; 3]> = out.iter().map(|o| o.0).collect();
+        let turning = &d.cuckoo_turning;
+        let states = &d.states;
+        d.cuckoos.retain(|pos, (kind, progress)| {
+            let clock = states
+                .get(pos)
+                .and_then(|&s| table.get(s))
+                .is_some_and(|(b, _)| {
+                    matches!(b, Block::CuckooClock | Block::MysteriousCuckooClock)
+                });
+            if !clock {
+                return false;
+            }
+            if started.contains(pos) {
+                return true;
+            }
+            // `getSpeed() == 0` returns before the animation goes on; a clock that stopped is
+            // left as it is until it turns again.
+            if !turning.contains(pos) {
+                return true;
+            }
+            let (running, boom) = cuckoo::step(*kind, progress);
+            if boom {
+                out.push((*pos, *kind, true));
+            }
+            running
+        });
+        out
+    }
+
     pub fn section_loaded(&mut self, dim: usize, base: [i32; 3], states: &[u32; 4096]) {
         for (i, &s) in states.iter().enumerate() {
             if self.table.is_kinetic(s) {
@@ -1670,6 +1748,19 @@ impl CreateWorld {
                     && !d.lifts.clocks.contains_key(&pos))
             {
                 d.lifts.speed_changed(pos, b.0);
+            }
+            if let Event::Speed { pos, speed, .. } = *e
+                && d.states
+                    .get(&pos)
+                    .and_then(|&s| self.table.get(s))
+                    .is_some_and(|(b, _)| {
+                        matches!(b, Block::CuckooClock | Block::MysteriousCuckooClock)
+                    })
+            {
+                d.cuckoo_turning.retain(|p| *p != pos);
+                if speed != 0.0 {
+                    d.cuckoo_turning.push(pos);
+                }
             }
             if let Event::Speed { pos, speed, .. } = *e
                 && d.drills.contains_key(&pos)

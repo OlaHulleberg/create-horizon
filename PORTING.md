@@ -1205,9 +1205,22 @@ messages.
   swaps it for a stand-in. In game (headless, BMG G21, server thread): a creative motor scrolled to -17 rpm turning an
   encased fan with a nozzle (pulling, catching within about 2 blocks), 300 iron swords summoned 1.6 blocks in front of
   it: one explosion heard while they came, the caught ones gone and the 40 summoned after it left, nozzle and fan
-  unbroken. Not yet: the mysterious cuckoo clock's surprise (`CuckooClockBlockEntity`: its pig, creeper and surprise
-  animations are not ported; the surprise destroys the block and explodes at power 3 with
-  `ExplosionInteraction.BLOCK`), and a train's collision explosion (`Train.java`, up to power 5).
+  unbroken. Cuckoo clocks' animations (`CuckooClockBlockEntity.tick`, `startAnimation`; engine `cuckoo::due`, `step`, `sounds`,
+  world `tick_cuckoos`, glue `redstone.rs`): in the overworld (the only `natural` dimension) a turning clock starts the
+  pig at 12:00 to 12:04 and the creeper at 18:32 to 18:35, a mysterious clock its surprise instead; it runs 101 ticks,
+  frozen while the clock stands still. Only turning clocks are looked at (kept from the speed events, as drills are),
+  and only at those times or while one runs. Clients are told (`create:cuckoo`) and play Create's sounds at Create's
+  ticks (chimes, the doors, the pig or creeper, the fuse) and the surprise's large smoke after 30; at progress 50 the
+  surprise breaks the clock without drops (`destroyBlock(pos, false)`: the 2001 event) and explodes at power 3
+  breaking blocks (`ExplosionInteraction.BLOCK`, `block_explosion_drop_decay`); the damage is vanilla's explosion
+  (Create's `cuckoo_surprise` damage type is not carried). In game (headless, BMG G21, server thread): a clock and a
+  mysterious clock each turned by a creative motor at 16 rpm, the time set to 5960: 4 chimes, the pig 3 times, the
+  creeper hurt 11 times, the fuse once, the doors 14 times each; the mysterious clock gone (a wood break sound), its
+  motor and 16 of the floor's stone blown away, the other clock standing. The explosion's own sound was not in
+  `horizon-ctl status`'s `heard`, nor was a vanilla TNT's in the same world (a Horizon matter, not looked into).
+  Benchmark (`benchmarks/cuckoo/`, 3 runs each): off 0.533 ms frame p50 / 4.728 ms tick, idle 0.528 / 4.759. Not yet:
+  the doors, pig and creeper drawn moving (`CuckooClockRenderer`), Create's `CUCKOO_CLOCK` advancement, and a train's
+  collision explosion (`Train.java`, up to power 5).
 - The belt connector's `ItemCooldowns.addCooldown` and `AllAdvancements.BELT` (`CriteriaTriggers` for a mod) have
   no helper.
 - Part colours: a part's vertex colour can't be set (NeoForge `SuperByteBuffer.color` in a renderer; Horizon tints only

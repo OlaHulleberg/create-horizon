@@ -380,6 +380,7 @@ pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
     tick_controller_rails(game, dim);
     tick_diodes(game, dimension, dim);
     tick_lamps(game, dimension, dim);
+    super::create_redstone::tick_cuckoos(game, dimension, dim);
     super::create_controller::level_tick(game, dimension, dim);
     tick_links(game, dimension, dim);
     tick_displays(game, dimension, dim);
@@ -2842,6 +2843,10 @@ pub(super) fn net_from_server(game: &mut Game<'_>, channel: &str, data: &[u8]) {
         links_from_server(game, data);
         return;
     }
+    if channel == super::create_redstone::CUCKOO_CHANNEL {
+        super::create_redstone::cuckoo_from_server(data);
+        return;
+    }
     if channel == create_engine::lever::CHANNEL {
         levers_from_server(game, data);
         return;
@@ -3005,6 +3010,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
     tick_client_gauges(game, &mut c);
     tick_client_wheels(game, &mut c);
     tick_client_clocks(game, &c);
+    super::create_redstone::tick_client_cuckoos(game);
     super::create_plumbing::tick_client_valves(game, &c.table);
     CLIENT.with_borrow_mut(|slot| *slot = Some(c));
 }

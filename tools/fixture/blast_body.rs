@@ -5,3 +5,11 @@ use super::Game;
 pub(super) fn explode_sparing_blocks(game: &mut Game<'_>, center: [f64; 3], power: f32) {
     let _ = (game, center, power);
 }
+
+pub(super) fn cuckoo_surprise(game: &mut Game<'_>, pos: [i32; 3]) {
+    let _ = (game, pos);
+}
+
+pub(super) fn cuckoo_smoke(game: &mut Game<'_>, center: [f64; 3]) {
+    let _ = (game, center);
+}
