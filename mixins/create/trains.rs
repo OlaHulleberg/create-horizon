@@ -581,14 +581,14 @@ pub(super) fn send_trains(game: &mut Game<'_>, dim: usize, ids: &[u32], full: bo
     let players = players_in(game, &dimension);
     for msg in &messages {
         for &p in &players {
-            let _ = game.native_net_send_to_player(p, TRAIN_CHANNEL, msg);
+            send_to_player(game, p, TRAIN_CHANNEL, msg);
         }
     }
 }
 
 pub(super) fn send_train_clear(game: &mut Game<'_>, dimension: &str, id: u32) {
     for p in players_in(game, dimension) {
-        let _ = game.native_net_send_to_player(p, TRAIN_CHANNEL, &id.to_le_bytes());
+        send_to_player(game, p, TRAIN_CHANNEL, &id.to_le_bytes());
     }
 }
 
@@ -613,7 +613,7 @@ pub(super) fn send_signal_lights(
         });
     }
     for &p in players {
-        let _ = game.native_net_send_to_player(p, SIGNAL_CHANNEL, &data);
+        send_to_player(game, p, SIGNAL_CHANNEL, &data);
     }
 }
 
@@ -2005,7 +2005,7 @@ pub(super) fn send_curves(
     }
     let data = create_engine::track_curves::encode(shown);
     for &p in players {
-        let _ = game.native_net_send_to_player(p, create_engine::track_curves::CHANNEL, &data);
+        send_to_player(game, p, create_engine::track_curves::CHANNEL, &data);
     }
 }
 

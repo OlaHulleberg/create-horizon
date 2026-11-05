@@ -544,7 +544,7 @@ fn send(game: &mut Game<'_>, players: &[u128], aims: &[Aim]) {
     for chunk in aims.chunks(800) {
         let data = cn::encode(chunk);
         for &p in players {
-            let _ = game.native_net_send_to_player(p, cn::CHANNEL, &data);
+            send_to_player(game, p, cn::CHANNEL, &data);
         }
     }
 }

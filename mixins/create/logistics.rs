@@ -161,7 +161,7 @@ pub(super) fn send_depots(game: &mut Game<'_>, players: &[u128], dim: usize, dep
         .collect();
     for m in create_engine::depot::encode(&contents) {
         for &p in players {
-            let _ = game.native_net_send_to_player(p, create_engine::depot::CHANNEL, &m);
+            send_to_player(game, p, create_engine::depot::CHANNEL, &m);
         }
     }
 }
@@ -1783,7 +1783,7 @@ pub(super) fn send_belts(game: &mut Game<'_>, players: &[u128], dim: usize, belt
         .collect();
     for m in create_engine::belt::encode(&all) {
         for &p in players {
-            let _ = game.native_net_send_to_player(p, create_engine::belt::CHANNEL, &m);
+            send_to_player(game, p, create_engine::belt::CHANNEL, &m);
         }
     }
 }

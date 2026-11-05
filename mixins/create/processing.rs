@@ -710,7 +710,7 @@ pub(super) fn send_deployers(game: &mut Game<'_>, players: &[u128], dim: usize, 
     for chunk in shown.chunks(64) {
         let m = create_engine::deployer::encode(chunk);
         for &p in players {
-            let _ = game.native_net_send_to_player(p, create_engine::deployer::CHANNEL, &m);
+            send_to_player(game, p, create_engine::deployer::CHANNEL, &m);
         }
     }
 }
@@ -3291,7 +3291,7 @@ pub(super) fn send_presses(
         .collect();
     for m in create_engine::press::encode(&all) {
         for &p in players {
-            let _ = game.native_net_send_to_player(p, create_engine::press::CHANNEL, &m);
+            send_to_player(game, p, create_engine::press::CHANNEL, &m);
         }
     }
 }

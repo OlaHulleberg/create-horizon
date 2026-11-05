@@ -157,7 +157,7 @@ pub(super) fn open(game: &mut Game<'_>, pos: Option<[i32; 3]>, stack: &ItemStack
         pos,
         content: content(stack),
     };
-    let _ = game.native_net_send_to_player(player, cb::CHANNEL, &message.encode());
+    super::create::send_to_player(game, player, cb::CHANNEL, &message.encode());
 }
 
 /// `ClipboardBlockItem.use` (in the air, or on a block when not sneaking, `useOn`): the screen

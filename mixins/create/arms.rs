@@ -638,7 +638,7 @@ pub(super) fn send_arms(game: &mut Game<'_>, players: &[u128], dim: usize, list:
         .collect();
     for m in arm::encode(&shown) {
         for &p in players {
-            let _ = game.native_net_send_to_player(p, arm::CHANNEL, &m);
+            send_to_player(game, p, arm::CHANNEL, &m);
         }
     }
 }
@@ -1035,7 +1035,7 @@ pub(super) fn send_ejectors(game: &mut Game<'_>, players: &[u128], dim: usize, l
         .collect();
     for m in ejector::encode(&shown) {
         for &p in players {
-            let _ = game.native_net_send_to_player(p, ejector::CHANNEL, &m);
+            send_to_player(game, p, ejector::CHANNEL, &m);
         }
     }
 }

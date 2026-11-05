@@ -733,7 +733,7 @@ fn send_displays(
     for chunk in all.chunks(16) {
         let m = display::encode(chunk);
         for &p in players {
-            let _ = game.native_net_send_to_player(p, display::CHANNEL, &m);
+            send_to_player(game, p, display::CHANNEL, &m);
         }
     }
 }

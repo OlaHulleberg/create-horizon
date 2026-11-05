@@ -918,7 +918,7 @@ pub(super) fn send_gantry(
         }
     }
     for p in players_in(game, dimension) {
-        let _ = game.native_net_send_to_player(p, PISTON_CHANNEL, &msg);
+        send_to_player(game, p, PISTON_CHANNEL, &msg);
     }
 }
 
@@ -1171,7 +1171,7 @@ pub(super) fn disassemble_piston(game: &mut Game<'_>, dimension: &str, dim: usiz
         msg.extend_from_slice(&v.to_le_bytes());
     }
     for p in players {
-        let _ = game.native_net_send_to_player(p, PISTON_CHANNEL, &msg);
+        send_to_player(game, p, PISTON_CHANNEL, &msg);
     }
 }
 
@@ -1209,7 +1209,7 @@ pub(super) fn send_piston(game: &mut Game<'_>, dimension: &str, dim: usize, pos:
         msg.extend_from_slice(&s.to_le_bytes());
     }
     for p in players_in(game, dimension) {
-        let _ = game.native_net_send_to_player(p, PISTON_CHANNEL, &msg);
+        send_to_player(game, p, PISTON_CHANNEL, &msg);
     }
 }
 
@@ -1317,7 +1317,7 @@ pub(super) fn send_windmills(
             m.extend_from_slice(&t.rpm.to_le_bytes());
         }
         for &p in players {
-            let _ = game.native_net_send_to_player(p, CONTRAPTION_CHANNEL, &m);
+            send_to_player(game, p, CONTRAPTION_CHANNEL, &m);
         }
     }
 }
@@ -2387,7 +2387,7 @@ fn lift_blocks_bytes(m: &mut Vec<u8>, blocks: &[([i32; 3], u32)]) {
 
 fn lift_send(game: &mut Game<'_>, players: &[u128], m: &[u8]) {
     for &p in players {
-        let _ = game.native_net_send_to_player(p, LIFT_CHANNEL, m);
+        send_to_player(game, p, LIFT_CHANNEL, m);
     }
 }
 

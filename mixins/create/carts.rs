@@ -691,7 +691,7 @@ fn put_back(game: &mut Game<'_>, dimension: &str, at: [f64; 3], on: &mut OnCart)
 /// Clients forget cart `id`'s contraption.
 fn gone(game: &mut Game<'_>, dimension: &str, id: u32) {
     for p in players_in(game, dimension) {
-        let _ = game.native_net_send_to_player(p, mounted::CHANNEL, &id.to_le_bytes());
+        send_to_player(game, p, mounted::CHANNEL, &id.to_le_bytes());
     }
 }
 
@@ -1493,7 +1493,7 @@ fn tick_mounted(
         });
         if let Some(msg) = message {
             for &p in &players {
-                let _ = game.native_net_send_to_player(p, mounted::CHANNEL, &msg);
+                send_to_player(game, p, mounted::CHANNEL, &msg);
             }
         }
         match pair {
@@ -1759,7 +1759,7 @@ fn draw_couplings(
     }
     for p in players_in(game, dimension) {
         for msg in &messages {
-            let _ = game.native_net_send_to_player(p, coupling::CHANNEL, msg);
+            send_to_player(game, p, coupling::CHANNEL, msg);
         }
     }
 }

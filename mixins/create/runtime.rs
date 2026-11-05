@@ -75,6 +75,7 @@ pub(super) fn world_lifecycle(game: &mut Game<'_>, phase: &WorldPhase) {
         | WorldPhase::WorldOpenFailed
         | WorldPhase::WorldCloseFailed => {
             WORLD.with_borrow_mut(|w| *w = None);
+            OUTBOX.take();
             RECIPES.with_borrow_mut(|r| *r = None);
             super::create_actors::forget();
             super::create_packages::forget();
@@ -318,6 +319,7 @@ thread_local! {
 /// After a server level's tick: re-solve what changed there (nothing when nothing did), break
 /// the blocks Create would break, and tell the level's players what turns now.
 pub(super) fn level_tick_post(game: &mut Game<'_>, dimension: &str) {
+    flush_outbox(game);
     let Some(dim) = dimension_index(dimension) else {
         return;
     };
@@ -557,10 +559,84 @@ pub(super) fn send(game: &mut Game<'_>, players: &[u128], updates: &[Update]) {
     let messages = client::encode(updates);
     for &p in players {
         for m in &messages {
-            // A player who left meanwhile just misses it.
-            let _ = game.native_net_send_to_player(p, client::CHANNEL, m);
+            send_to_player(game, p, client::CHANNEL, m);
         }
     }
+}
+
+/// Messages past Horizon's allowance (32 a player a tick), per player in the order sent, sent
+/// first on the next ticks.
+#[derive(Default)]
+pub(super) struct Outbox(HashMap<u128, std::collections::VecDeque<(&'static str, Vec<u8>)>>);
+
+/// Horizon's answer when this tick's allowance to a player is used (`native_net.rs`).
+fn past_allowance(error: &str) -> bool {
+    error.starts_with("past ")
+}
+
+impl Outbox {
+    /// Sends through `try_send`, or keeps the message when the allowance is used or older ones
+    /// still wait for that player.
+    fn send(
+        &mut self,
+        player: u128,
+        channel: &'static str,
+        data: &[u8],
+        try_send: impl FnOnce(u128, &str, &[u8]) -> Result<(), String>,
+    ) {
+        if self.0.is_empty() || !self.0.contains_key(&player) {
+            match try_send(player, channel, data) {
+                Err(e) if past_allowance(&e) => {}
+                _ => return,
+            }
+        }
+        self.0
+            .entry(player)
+            .or_default()
+            .push_back((channel, data.to_vec()));
+    }
+
+    /// Sends what waits, in order, as far as the allowance goes.
+    fn flush(&mut self, mut try_send: impl FnMut(u128, &str, &[u8]) -> Result<(), String>) {
+        self.0.retain(|&player, queue| {
+            while let Some((channel, data)) = queue.front() {
+                match try_send(player, channel, data) {
+                    Err(e) if past_allowance(&e) => return true,
+                    _ => {
+                        queue.pop_front();
+                    }
+                }
+            }
+            false
+        });
+    }
+}
+
+thread_local! {
+    static OUTBOX: RefCell<Outbox> = RefCell::new(Outbox::default());
+}
+
+/// Sends `data` on `channel` to `player`'s client, keeping it for the next ticks when this
+/// tick's allowance is used. A player who left meanwhile just misses it.
+pub(super) fn send_to_player(
+    game: &mut Game<'_>,
+    player: u128,
+    channel: &'static str,
+    data: &[u8],
+) {
+    OUTBOX.with_borrow_mut(|o| {
+        o.send(player, channel, data, |p, c, d| {
+            game.native_net_send_to_player(p, c, d)
+        })
+    });
+}
+
+/// Sends what waits in the outbox, as far as this tick's allowance goes.
+fn flush_outbox(game: &mut Game<'_>) {
+    if OUTBOX.with_borrow(|o| o.0.is_empty()) {
+        return;
+    }
+    OUTBOX.with_borrow_mut(|o| o.flush(|p, c, d| game.native_net_send_to_player(p, c, d)));
 }
 
 /// A client asks for every part of its dimension when it joins (`sync`).
@@ -1093,7 +1169,7 @@ pub(super) fn scroll_from_client(game: &mut Game<'_>, player: u128, data: &[u8])
     for v in [x, y, z, value] {
         m.extend_from_slice(&v.to_le_bytes());
     }
-    let _ = game.native_net_send_to_player(player, VALUE, &m);
+    send_to_player(game, player, VALUE, &m);
 }
 
 /// Values set by the wheel or a board, and the value a board asked for, from the server to the
@@ -1225,7 +1301,7 @@ pub(super) fn value_settings_from_client(game: &mut Game<'_>, player: u128, data
     for v in [x, y, z, value] {
         m.extend_from_slice(&v.to_le_bytes());
     }
-    let _ = game.native_net_send_to_player(player, VALUE, &m);
+    send_to_player(game, player, VALUE, &m);
 }
 
 /// `ValueSettingsInputHandler.canInteract` (not sneaking, a spectator or in adventure) and no
@@ -4823,7 +4899,7 @@ pub(super) fn send_gauges(game: &mut Game<'_>, players: &[u128], dim: usize, gau
     .unwrap_or_default();
     for m in create_engine::gauge::encode(&all) {
         for &p in players {
-            let _ = game.native_net_send_to_player(p, create_engine::gauge::CHANNEL, &m);
+            send_to_player(game, p, create_engine::gauge::CHANNEL, &m);
         }
     }
 }
@@ -4937,5 +5013,60 @@ pub(super) fn draw_gauge_dials(
             g.offset,
             g.velocity,
         );
+    }
+}
+
+#[cfg(test)]
+mod outbox_tests {
+    use super::Outbox;
+
+    /// A stand-in for Horizon's allowance: `left` messages a tick, any player.
+    fn allowance<'a>(
+        left: &'a mut u32,
+        sent: &'a mut Vec<(u128, Vec<u8>)>,
+    ) -> impl FnMut(u128, &str, &[u8]) -> Result<(), String> + 'a {
+        move |p, _, d| {
+            if *left == 0 {
+                return Err("past 32 messages to this player this tick".into());
+            }
+            *left -= 1;
+            sent.push((p, d.to_vec()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn messages_past_the_allowance_go_on_the_next_ticks_in_order() {
+        let mut outbox = Outbox::default();
+        let mut sent = Vec::new();
+        let mut left = 2;
+        for i in 0..5u8 {
+            outbox.send(7, "create:test", &[i], allowance(&mut left, &mut sent));
+        }
+        assert_eq!(sent.iter().map(|(_, d)| d[0]).collect::<Vec<_>>(), [0, 1]);
+        // The next tick: what waited goes first, and a new message waits behind it.
+        left = 2;
+        outbox.flush(allowance(&mut left, &mut sent));
+        outbox.send(7, "create:test", &[5], allowance(&mut left, &mut sent));
+        assert_eq!(
+            sent.iter().map(|(_, d)| d[0]).collect::<Vec<_>>(),
+            [0, 1, 2, 3]
+        );
+        left = 32;
+        outbox.flush(allowance(&mut left, &mut sent));
+        assert_eq!(
+            sent.iter().map(|(_, d)| d[0]).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4, 5]
+        );
+        assert!(outbox.0.is_empty());
+    }
+
+    #[test]
+    fn another_error_drops_the_message() {
+        let mut outbox = Outbox::default();
+        outbox.send(7, "create:test", &[0], |_, _, _| {
+            Err("a client has no players to send to".into())
+        });
+        assert!(outbox.0.is_empty());
     }
 }
