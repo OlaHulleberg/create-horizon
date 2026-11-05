@@ -54,7 +54,7 @@ fn sneaking(game: &Game<'_>) -> bool {
 }
 
 fn send_client(game: &mut Game<'_>, player: u128, m: ToClient) {
-    let _ = game.native_net_send_to_player(player, ct::CHANNEL, &m.encode());
+    send_to_player(game, player, ct::CHANNEL, &m.encode());
 }
 
 fn center(pos: [i32; 3]) -> [f64; 3] {

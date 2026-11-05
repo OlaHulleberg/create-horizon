@@ -724,7 +724,7 @@ pub(super) fn send_creative_tanks(
     .unwrap_or_default();
     for m in create_engine::tank::encode(&all) {
         for &p in players {
-            let _ = game.native_net_send_to_player(p, create_engine::tank::CHANNEL, &m);
+            send_to_player(game, p, create_engine::tank::CHANNEL, &m);
         }
     }
 }
@@ -746,7 +746,7 @@ pub(super) fn send_hoses(game: &mut Game<'_>, players: &[u128], dim: usize, hose
     .unwrap_or_default();
     for m in create_engine::hose::encode(&all) {
         for &p in players {
-            let _ = game.native_net_send_to_player(p, create_engine::hose::CHANNEL, &m);
+            send_to_player(game, p, create_engine::hose::CHANNEL, &m);
         }
     }
 }

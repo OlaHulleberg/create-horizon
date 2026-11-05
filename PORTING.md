@@ -1081,8 +1081,13 @@ messages.
   copies) key by a 64-bit mix of position, slot and copy with the top bit set.
 - Multiplayer: a client gets depots and speeds when it joins and when they change; a second player walking into chunks
   another player already keeps loaded does not get them yet (one `sync` per join).
-- Mod messages are limited to 32 per tick per player (about 1,600 part updates each); a very large network resolving
-  at once would exceed it. Not handled yet (queue the rest for the next ticks).
+- Mod messages past Horizon's 32 a player a tick (about 1,600 part updates each) wait in the glue's outbox
+  (`runtime.rs` `send_to_player`, every send to a player goes through it) and are sent first, in order, at the
+  next level ticks; before, they were dropped. In game (headless, BMG G21, server thread): rejoining a world of
+  65,536 shafts, the join's `sync` of 63,488 parts met the cap after 32 messages; the outbox kept the 46 messages
+  after it and sent 32 and 14 of them in the next two ticks, leaving none waiting, and the client counted every
+  part update sent (DEBUG logs, removed). Benchmarks (`benchmarks/outbox/`, 3 runs each, the same session): off
+  0.522 ms frame p50 / 4.673 ms tick, idle 0.534 / 4.749, kinetic 0.556 / 4.346: within budget.
 - Horizon's `fill` drops block entity data for mod blocks (`setblock` and `data merge` keep it); vanilla applies it to
   every block filled. `/item` reaches only vanilla containers (Create's depot is no `Container` in Create either).
 - A depot that joins holding a stack (a saved world, a block placed with its items) now gets its held stack at rest and

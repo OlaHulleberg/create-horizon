@@ -2938,7 +2938,7 @@ def main():
         report = json.loads(run([str(cli), 'check', *base, '--out', str(stage), '--trust-native-mods']).stdout)
         assert report['injections'] == len(manifest['injection']), report
         assert report['modules'] == len(manifest['module']), report
-        assert '1 passed' in report['cargo_stdout'], report['cargo_stdout']
+        assert 'game::every_hook_reaches_the_engine ... ok' in report['cargo_stdout'] and ' FAILED' not in report['cargo_stdout'], report['cargo_stdout']
         first = snapshot(stage)
         second = json.loads(run([str(cli), 'check', *base, '--out', str(stage), '--trust-native-mods']).stdout)
         assert not second['stage_changed'] and snapshot(stage) == first

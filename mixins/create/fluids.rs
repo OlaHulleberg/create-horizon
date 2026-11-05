@@ -704,7 +704,7 @@ pub(super) fn send_tanks(game: &mut Game<'_>, players: &[u128], dim: usize, tank
     .unwrap_or_default();
     for m in create_engine::tank::encode(&all) {
         for &p in players {
-            let _ = game.native_net_send_to_player(p, create_engine::tank::CHANNEL, &m);
+            send_to_player(game, p, create_engine::tank::CHANNEL, &m);
         }
     }
 }

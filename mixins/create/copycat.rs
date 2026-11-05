@@ -545,7 +545,7 @@ fn send(game: &mut Game<'_>, players: &[u128], dim: usize, list: &[[i32; 3]]) {
     for chunk in out.chunks(64) {
         let m = cc::encode(chunk);
         for &p in players {
-            let _ = game.native_net_send_to_player(p, cc::CHANNEL, &m);
+            send_to_player(game, p, cc::CHANNEL, &m);
         }
     }
 }

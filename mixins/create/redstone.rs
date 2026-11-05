@@ -219,7 +219,7 @@ pub(super) fn send_links(game: &mut Game<'_>, players: &[u128], dim: usize, link
     for chunk in shown.chunks(64) {
         let m = create_engine::link::encode(chunk);
         for &p in players {
-            let _ = game.native_net_send_to_player(p, create_engine::link::CHANNEL, &m);
+            send_to_player(game, p, create_engine::link::CHANNEL, &m);
         }
     }
 }
@@ -1402,7 +1402,7 @@ pub(super) fn send_levers(game: &mut Game<'_>, players: &[u128], dim: usize, lev
     for chunk in shown.chunks(256) {
         let m = create_engine::lever::encode(chunk);
         for &p in players {
-            let _ = game.native_net_send_to_player(p, create_engine::lever::CHANNEL, &m);
+            send_to_player(game, p, create_engine::lever::CHANNEL, &m);
         }
     }
 }

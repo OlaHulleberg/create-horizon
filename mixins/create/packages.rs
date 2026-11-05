@@ -1555,7 +1555,7 @@ fn send_chains(game: &mut Game<'_>, players: &[u128], dim: usize, conveyors: &[[
         let drawn = with(dim, |pk| pk.chains.drawn(pos, |s| s.item.to_string()));
         let data = chain::encode(pos, &drawn);
         for &p in players {
-            let _ = game.native_net_send_to_player(p, chain::CHANNEL, &data);
+            send_to_player(game, p, chain::CHANNEL, &data);
         }
     }
 }
