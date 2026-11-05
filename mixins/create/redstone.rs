@@ -1508,12 +1508,33 @@ pub(super) fn cuckoo_from_server(data: &[u8]) {
 
 /// `tick` on the client while an animation runs: its sounds at the clock (`playLocalSound`) and
 /// the surprise's smoke after 30; it ends past 100. Nothing runs without one.
-pub(super) fn tick_client_cuckoos(game: &mut Game<'_>) {
+pub(super) fn tick_client_cuckoos(game: &mut Game<'_>, c: &ClientParts) {
     if CLIENT_CUCKOOS.with_borrow(Vec::is_empty) {
         return;
     }
     let mut running = CLIENT_CUCKOOS.take();
     running.retain_mut(|(pos, kind, value)| {
+        let state = game.world.block(pos[0], pos[1], pos[2]).0;
+        let facing = c
+            .table
+            .get(state)
+            .filter(|(b, _)| {
+                matches!(
+                    b,
+                    create_engine::Block::CuckooClock | create_engine::Block::MysteriousCuckooClock
+                )
+            })
+            .and_then(|(_, i)| i.facing);
+        let Some(facing) = facing else {
+            // The clock is gone (the surprise broke it).
+            game.native_part_clear(create_engine::client::key(
+                *pos,
+                create_engine::client::CUCKOO_FIGURE_SLOT,
+            ));
+            return false;
+        };
+        let ends = *value > 101;
+        draw_clock_doors(game, *pos, facing, (!ends).then_some((*kind, *value)));
         let center = pos.map(|v| f64::from(v) + 0.5);
         for (sound, volume, pitch) in create_engine::cuckoo::sounds(*kind, *value) {
             game.audio.play(sound, Some(center), volume, pitch);
@@ -1522,7 +1543,7 @@ pub(super) fn tick_client_cuckoos(game: &mut Game<'_>) {
             super::create_blast_body::cuckoo_smoke(game, center);
         }
         *value += 1;
-        *value <= 101
+        !ends
     });
     CLIENT_CUCKOOS.with_borrow_mut(|c| {
         running.append(c);
@@ -1568,6 +1589,71 @@ pub(super) fn draw_clock_hands(game: &mut Game<'_>, pos: [i32; 3], facing: Dir, 
             [0.0; 3],
         );
     }
+}
+
+/// `CuckooClockRenderer`'s doors and figure of the clock at `pos` facing `facing`, at its
+/// animation's tick (`running`): the doors at their angle about their hinges, the pig or
+/// creeper standing out as far as they are open; without one the doors are shut and no figure.
+pub(super) fn draw_clock_doors(
+    game: &mut Game<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    running: Option<(create_engine::cuckoo::Animation, u32)>,
+) {
+    use create_engine::client::{CUCKOO_DOOR_SLOT, CUCKOO_FIGURE_SLOT, key};
+    use create_engine::cuckoo::{self, Animation};
+    let angle = running.map_or(0.0, |(kind, value)| cuckoo::door_angle(kind, value as f32));
+    let registry = game.pack.assets.registry;
+    let mut set = |game: &mut Game<'_>, name: &str, slot: u8, p: cuckoo::YPose| {
+        let Some(state) = state_with(registry, name, &[("facing", "up")]) else {
+            return;
+        };
+        let Some(model) = game.native_part_model_posed(state, p.pose) else {
+            return;
+        };
+        let [x, y, z] = p.offset;
+        game.native_part_glide(
+            key(pos, slot),
+            model,
+            pos,
+            1,
+            0.0,
+            p.angle,
+            [x, y, z, 0.0],
+            [0.0; 3],
+        );
+    };
+    for (i, (name, left)) in [
+        ("create:part_cuckoo_left_door", true),
+        ("create:part_cuckoo_right_door", false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set(
+            game,
+            name,
+            CUCKOO_DOOR_SLOT + i as u8,
+            cuckoo::door_pose(facing, left, angle),
+        );
+    }
+    match running {
+        Some((kind, _)) => {
+            let name = if kind == Animation::Pig {
+                "create:part_cuckoo_pig"
+            } else {
+                "create:part_cuckoo_creeper"
+            };
+            let pose = cuckoo::figure_pose(facing, cuckoo::figure_offset(angle));
+            set(game, name, CUCKOO_FIGURE_SLOT, pose);
+        }
+        None => game.native_part_clear(key(pos, CUCKOO_FIGURE_SLOT)),
+    }
+}
+
+/// The animation a client plays at a clock, if any.
+pub(super) fn clock_animation(pos: [i32; 3]) -> Option<(create_engine::cuckoo::Animation, u32)> {
+    CLIENT_CUCKOOS.with_borrow(|c| c.iter().find(|a| a.0 == pos).map(|a| (a.1, a.2)))
 }
 
 /// Each client tick: when the minute shown changes, the turning clocks' hands move to it. One

@@ -2700,6 +2700,7 @@ pub(super) fn show(game: &mut Game<'_>, c: &mut ClientParts, pos: [i32; 3]) -> b
     ) && let Some(facing) = c.table.get(state.0).and_then(|(_, i)| i.facing)
     {
         draw_clock_hands(game, pos, facing, speeds[0] != 0.0);
+        draw_clock_doors(game, pos, facing, clock_animation(pos));
     }
     // A running clock's bearing top turns with its hour hand, which draws it.
     if block == create_engine::Block::ClockworkBearing && clock_shown(pos) {
@@ -3010,7 +3011,7 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
     tick_client_gauges(game, &mut c);
     tick_client_wheels(game, &mut c);
     tick_client_clocks(game, &c);
-    super::create_redstone::tick_client_cuckoos(game);
+    super::create_redstone::tick_client_cuckoos(game, &c);
     super::create_plumbing::tick_client_valves(game, &c.table);
     CLIENT.with_borrow_mut(|slot| *slot = Some(c));
 }
