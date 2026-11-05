@@ -573,6 +573,98 @@ pub fn copper_next(block: crate::Block) -> Option<crate::Block> {
     })
 }
 
+/// `WeatheringCopper.getPrevious` for Create's chain: the age an axe scrapes a copper shingle or
+/// tile block back to. None for unaffected and waxed blocks.
+pub fn copper_previous(block: crate::Block) -> Option<crate::Block> {
+    use crate::Block::*;
+    Some(match block {
+        ExposedCopperShingles => CopperShingles,
+        WeatheredCopperShingles => ExposedCopperShingles,
+        OxidizedCopperShingles => WeatheredCopperShingles,
+        ExposedCopperShingleSlab => CopperShingleSlab,
+        WeatheredCopperShingleSlab => ExposedCopperShingleSlab,
+        OxidizedCopperShingleSlab => WeatheredCopperShingleSlab,
+        ExposedCopperShingleStairs => CopperShingleStairs,
+        WeatheredCopperShingleStairs => ExposedCopperShingleStairs,
+        OxidizedCopperShingleStairs => WeatheredCopperShingleStairs,
+        ExposedCopperTiles => CopperTiles,
+        WeatheredCopperTiles => ExposedCopperTiles,
+        OxidizedCopperTiles => WeatheredCopperTiles,
+        ExposedCopperTileSlab => CopperTileSlab,
+        WeatheredCopperTileSlab => ExposedCopperTileSlab,
+        OxidizedCopperTileSlab => WeatheredCopperTileSlab,
+        ExposedCopperTileStairs => CopperTileStairs,
+        WeatheredCopperTileStairs => ExposedCopperTileStairs,
+        OxidizedCopperTileStairs => WeatheredCopperTileStairs,
+        _ => return None,
+    })
+}
+
+/// `CopperRegistries.addWaxable`: the waxed twin honeycomb makes of an unwaxed copper shingle or
+/// tile block, any age.
+pub fn copper_waxed(block: crate::Block) -> Option<crate::Block> {
+    use crate::Block::*;
+    Some(match block {
+        CopperShingles => WaxedCopperShingles,
+        ExposedCopperShingles => WaxedExposedCopperShingles,
+        WeatheredCopperShingles => WaxedWeatheredCopperShingles,
+        OxidizedCopperShingles => WaxedOxidizedCopperShingles,
+        CopperShingleSlab => WaxedCopperShingleSlab,
+        ExposedCopperShingleSlab => WaxedExposedCopperShingleSlab,
+        WeatheredCopperShingleSlab => WaxedWeatheredCopperShingleSlab,
+        OxidizedCopperShingleSlab => WaxedOxidizedCopperShingleSlab,
+        CopperShingleStairs => WaxedCopperShingleStairs,
+        ExposedCopperShingleStairs => WaxedExposedCopperShingleStairs,
+        WeatheredCopperShingleStairs => WaxedWeatheredCopperShingleStairs,
+        OxidizedCopperShingleStairs => WaxedOxidizedCopperShingleStairs,
+        CopperTiles => WaxedCopperTiles,
+        ExposedCopperTiles => WaxedExposedCopperTiles,
+        WeatheredCopperTiles => WaxedWeatheredCopperTiles,
+        OxidizedCopperTiles => WaxedOxidizedCopperTiles,
+        CopperTileSlab => WaxedCopperTileSlab,
+        ExposedCopperTileSlab => WaxedExposedCopperTileSlab,
+        WeatheredCopperTileSlab => WaxedWeatheredCopperTileSlab,
+        OxidizedCopperTileSlab => WaxedOxidizedCopperTileSlab,
+        CopperTileStairs => WaxedCopperTileStairs,
+        ExposedCopperTileStairs => WaxedExposedCopperTileStairs,
+        WeatheredCopperTileStairs => WaxedWeatheredCopperTileStairs,
+        OxidizedCopperTileStairs => WaxedOxidizedCopperTileStairs,
+        _ => return None,
+    })
+}
+
+/// The unwaxed twin an axe takes the wax off to (the inverse of [`copper_waxed`]).
+pub fn copper_unwaxed(block: crate::Block) -> Option<crate::Block> {
+    use crate::Block::*;
+    Some(match block {
+        WaxedCopperShingles => CopperShingles,
+        WaxedExposedCopperShingles => ExposedCopperShingles,
+        WaxedWeatheredCopperShingles => WeatheredCopperShingles,
+        WaxedOxidizedCopperShingles => OxidizedCopperShingles,
+        WaxedCopperShingleSlab => CopperShingleSlab,
+        WaxedExposedCopperShingleSlab => ExposedCopperShingleSlab,
+        WaxedWeatheredCopperShingleSlab => WeatheredCopperShingleSlab,
+        WaxedOxidizedCopperShingleSlab => OxidizedCopperShingleSlab,
+        WaxedCopperShingleStairs => CopperShingleStairs,
+        WaxedExposedCopperShingleStairs => ExposedCopperShingleStairs,
+        WaxedWeatheredCopperShingleStairs => WeatheredCopperShingleStairs,
+        WaxedOxidizedCopperShingleStairs => OxidizedCopperShingleStairs,
+        WaxedCopperTiles => CopperTiles,
+        WaxedExposedCopperTiles => ExposedCopperTiles,
+        WaxedWeatheredCopperTiles => WeatheredCopperTiles,
+        WaxedOxidizedCopperTiles => OxidizedCopperTiles,
+        WaxedCopperTileSlab => CopperTileSlab,
+        WaxedExposedCopperTileSlab => ExposedCopperTileSlab,
+        WaxedWeatheredCopperTileSlab => WeatheredCopperTileSlab,
+        WaxedOxidizedCopperTileSlab => OxidizedCopperTileSlab,
+        WaxedCopperTileStairs => CopperTileStairs,
+        WaxedExposedCopperTileStairs => ExposedCopperTileStairs,
+        WaxedWeatheredCopperTileStairs => WeatheredCopperTileStairs,
+        WaxedOxidizedCopperTileStairs => OxidizedCopperTileStairs,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,6 +700,27 @@ mod tests {
         assert_eq!(steps, 18);
         assert_eq!(copper_next(Block::OxidizedCopperTiles), None);
         assert_eq!(copper_next(Block::WaxedCopperShingles), None);
+    }
+
+    #[test]
+    fn axes_and_honeycomb_undo_and_wax_create_s_copper() {
+        use crate::Block;
+        let (mut scraped, mut waxed) = (0, 0);
+        for b in Block::ALL {
+            if let Some(next) = copper_next(b) {
+                assert_eq!(copper_previous(next), Some(b));
+                scraped += 1;
+            }
+            if let Some(w) = copper_waxed(b) {
+                assert_eq!(w.name(), format!("waxed_{}", b.name()));
+                assert_eq!(copper_unwaxed(w), Some(b));
+                waxed += 1;
+            }
+        }
+        assert_eq!((scraped, waxed), (18, 24));
+        assert_eq!(copper_previous(Block::CopperTiles), None);
+        assert_eq!(copper_waxed(Block::WaxedCopperTiles), None);
+        assert_eq!(copper_unwaxed(Block::CopperTiles), None);
     }
 
     #[test]

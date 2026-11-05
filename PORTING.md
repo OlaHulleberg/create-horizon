@@ -1120,8 +1120,18 @@ messages.
   far a patch got in a run varied either way against vanilla cut copper beside it (once 18 vanilla changes to 7,
   once 1 to 8), as the chance grows with older neighbours.
   Benchmark (`benchmarks/copper/`, 3 runs each): off 0.532 ms frame p50 / 4.764 ms tick, idle 0.549 / 4.834 (within
-  the runs' spread). Not yet: scraping with an axe and waxing with honeycomb (Horizon's vanilla code steps only
-  `minecraft:` copper, so it leaves Create's as it is), lightning clearing them.
+  the runs' spread). An axe scrapes them back an age or takes their wax off, and honeycomb waxes them
+  (`copper_body.rs` `use_item_on`, engine `copper_previous` / `copper_unwaxed` / `copper_waxed`), with the
+  `minecraft:axe` transformer's steps (`BlockTransformer.transformBlock`: the trigger, the 3005 / 3004 level event,
+  the scrape / wax-off sound, one point of wear, `block_change`) and `HoneycombItem.useOn`'s (3003, the wax-on sound,
+  one honeycomb used outside creative); a shield in the off hand blocks the axe unless sneaking, as vanilla. Horizon's
+  vanilla code steps only `minecraft:` copper and its client predicts only that, so the sounds go to the acting
+  player too, and the off hand's click after a main-hand use is taken (`TAKEN_OFF_HAND`): before, an axe in the main
+  hand and honeycomb in the off hand scraped and then waxed in the same tick (DEBUG log, removed). In game
+  (headless, BMG G21, survival, server thread): exposed shingles scraped to copper shingles, waxed tiles to copper
+  tiles, a top tile slab waxed (`type=top` kept), each with its sound heard; the iron axe at 2 damage and the
+  honeycomb 2 -> 1 after; oxidized stairs scraped to weathered with honeycomb in the off hand left at 4; the off hand
+  alone waxed shingles (4 -> 3). Nothing runs per tick. Not yet: lightning clearing them.
 - Food items (done in `fba24c4`, `create-data`'s `food`): bar of chocolate, sweet roll, chocolate glazed berries and
   honeyed apple with `AllItems`' nutrition and saturation, builder's tea always edible with 3 minutes of haste and a
   glass bottle left. In game (headless, BMG G21, survival, server thread): a bar of chocolate eaten at food 0 gave
