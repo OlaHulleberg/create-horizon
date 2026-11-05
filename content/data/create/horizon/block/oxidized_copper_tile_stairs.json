@@ -1,5 +1,5 @@
 {
-  "template": "minecraft:stone_stairs",
+  "template": "minecraft:oxidized_cut_copper_stairs",
   "properties": {
     "hardness": 3.0,
     "explosion_resistance": 6.0

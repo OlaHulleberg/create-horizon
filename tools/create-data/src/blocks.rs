@@ -178,6 +178,57 @@ fn has(name: &str, parts: &[&str]) -> bool {
     parts.iter().any(|p| name.contains(p))
 }
 
+/// Vanilla's cut copper blocks, every age, waxed or not, and shape.
+const CUT_COPPER: [&str; 24] = [
+    "minecraft:cut_copper",
+    "minecraft:cut_copper_slab",
+    "minecraft:cut_copper_stairs",
+    "minecraft:exposed_cut_copper",
+    "minecraft:exposed_cut_copper_slab",
+    "minecraft:exposed_cut_copper_stairs",
+    "minecraft:weathered_cut_copper",
+    "minecraft:weathered_cut_copper_slab",
+    "minecraft:weathered_cut_copper_stairs",
+    "minecraft:oxidized_cut_copper",
+    "minecraft:oxidized_cut_copper_slab",
+    "minecraft:oxidized_cut_copper_stairs",
+    "minecraft:waxed_cut_copper",
+    "minecraft:waxed_cut_copper_slab",
+    "minecraft:waxed_cut_copper_stairs",
+    "minecraft:waxed_exposed_cut_copper",
+    "minecraft:waxed_exposed_cut_copper_slab",
+    "minecraft:waxed_exposed_cut_copper_stairs",
+    "minecraft:waxed_weathered_cut_copper",
+    "minecraft:waxed_weathered_cut_copper_slab",
+    "minecraft:waxed_weathered_cut_copper_stairs",
+    "minecraft:waxed_oxidized_cut_copper",
+    "minecraft:waxed_oxidized_cut_copper_slab",
+    "minecraft:waxed_oxidized_cut_copper_stairs",
+];
+
+/// `CopperBlockSet`'s blocks (copper shingles and tiles) are vanilla's weathering copper classes
+/// (`WeatheringCopperFullBlock`, `WeatheringCopperSlabBlock`, `CreateWeatheringCopperStairBlock`,
+/// and their waxed `Block`s) with copper's properties for their age: the cut copper block of the
+/// same age, waxing and shape, so they tick randomly as vanilla's do (the glue gives the next age).
+fn copper_template(name: &str) -> Option<&'static str> {
+    let (waxed, rest) = match name.strip_prefix("waxed_") {
+        Some(rest) => ("waxed_", rest),
+        None => ("", name),
+    };
+    let age = ["exposed_", "weathered_", "oxidized_"]
+        .into_iter()
+        .find(|a| rest.starts_with(a))
+        .unwrap_or("");
+    let shape = match &rest[age.len()..] {
+        "copper_shingles" | "copper_tiles" => "",
+        "copper_shingle_slab" | "copper_tile_slab" => "_slab",
+        "copper_shingle_stairs" | "copper_tile_stairs" => "_stairs",
+        _ => return None,
+    };
+    let template = format!("minecraft:{waxed}{age}cut_copper{shape}");
+    CUT_COPPER.into_iter().find(|t| *t == template)
+}
+
 /// The template for one block, by its properties, then its name and Java class.
 pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decision {
     let n = b.name.as_str();
@@ -194,6 +245,9 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
     };
     if let Some(d) = kinetic(b, sounds) {
         return d;
+    }
+    if let Some(template) = copper_template(n) {
+        return declared(template);
     }
     if let Some(d) = own_states(b) {
         return d;
@@ -2838,6 +2892,27 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copper_shingles_and_tiles_take_the_cut_copper_of_their_age_and_shape() {
+        assert_eq!(
+            copper_template("copper_shingles"),
+            Some("minecraft:cut_copper")
+        );
+        assert_eq!(
+            copper_template("exposed_copper_tile_slab"),
+            Some("minecraft:exposed_cut_copper_slab")
+        );
+        assert_eq!(
+            copper_template("waxed_weathered_copper_shingle_stairs"),
+            Some("minecraft:waxed_weathered_cut_copper_stairs")
+        );
+        assert_eq!(
+            copper_template("oxidized_copper_tiles"),
+            Some("minecraft:oxidized_cut_copper")
+        );
+        assert_eq!(copper_template("copper_backtank"), None);
+    }
 
     #[test]
     fn partials_turn_to_every_face() {

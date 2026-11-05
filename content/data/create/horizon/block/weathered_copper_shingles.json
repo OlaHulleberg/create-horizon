@@ -1,5 +1,5 @@
 {
-  "template": "minecraft:andesite",
+  "template": "minecraft:weathered_cut_copper",
   "properties": {
     "hardness": 3.0,
     "explosion_resistance": 6.0

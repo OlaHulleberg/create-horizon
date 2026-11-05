@@ -1,5 +1,5 @@
 {
-  "template": "minecraft:stone_slab",
+  "template": "minecraft:waxed_cut_copper_slab",
   "properties": {
     "hardness": 3.0,
     "explosion_resistance": 6.0

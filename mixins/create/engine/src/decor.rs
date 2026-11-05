@@ -4,7 +4,7 @@
 //! the peculiar bell's conversion (`PeculiarBellBlock.tryConvert`), the item hatch
 //! (`ItemHatchBlock`), the creative crate (`BottomlessItemHandler`), the vertical gearbox
 //! (`VerticalGearboxItem`), cardboard blocks, the clipboard's placement and table cloths'
-//! placement helper.
+//! placement helper, and the copper shingles' and tiles' weathering (`CopperBlockSet`).
 
 use crate::kinetics::{Axis, Dir};
 
@@ -542,9 +542,73 @@ pub fn placard_pose(face: &str, facing: Dir, block_item: bool) -> glam::Mat4 {
         * Mat4::from_scale(Vec3::splat(if block_item { 0.5 } else { 0.375 }))
 }
 
+// ---------------------------------------------------------------------------------------------
+// Copper shingles and tiles
+
+/// `CopperBlockSet`'s weathering chain (`CopperRegistries.addWeathering`): the next age of an
+/// unwaxed copper shingle or tile block, in the same shape. None for oxidized and waxed blocks
+/// (vanilla's `WeatheringCopper.getNext`), and for every other block.
+pub fn copper_next(block: crate::Block) -> Option<crate::Block> {
+    use crate::Block::*;
+    Some(match block {
+        CopperShingles => ExposedCopperShingles,
+        ExposedCopperShingles => WeatheredCopperShingles,
+        WeatheredCopperShingles => OxidizedCopperShingles,
+        CopperShingleSlab => ExposedCopperShingleSlab,
+        ExposedCopperShingleSlab => WeatheredCopperShingleSlab,
+        WeatheredCopperShingleSlab => OxidizedCopperShingleSlab,
+        CopperShingleStairs => ExposedCopperShingleStairs,
+        ExposedCopperShingleStairs => WeatheredCopperShingleStairs,
+        WeatheredCopperShingleStairs => OxidizedCopperShingleStairs,
+        CopperTiles => ExposedCopperTiles,
+        ExposedCopperTiles => WeatheredCopperTiles,
+        WeatheredCopperTiles => OxidizedCopperTiles,
+        CopperTileSlab => ExposedCopperTileSlab,
+        ExposedCopperTileSlab => WeatheredCopperTileSlab,
+        WeatheredCopperTileSlab => OxidizedCopperTileSlab,
+        CopperTileStairs => ExposedCopperTileStairs,
+        ExposedCopperTileStairs => WeatheredCopperTileStairs,
+        WeatheredCopperTileStairs => OxidizedCopperTileStairs,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copper_weathers_one_age_at_a_time_in_its_shape() {
+        use crate::Block;
+        let mut steps = 0;
+        for b in Block::ALL {
+            let name = b.name();
+            let Some(next) = copper_next(b) else {
+                continue;
+            };
+            steps += 1;
+            // CopperBlockSet names each age by a prefix on the unaffected block's name.
+            let (from, to) = [
+                ("", "exposed_"),
+                ("exposed_", "weathered_"),
+                ("weathered_", "oxidized_"),
+            ]
+            .into_iter()
+            .find(|(from, to)| {
+                next.name()
+                    .strip_prefix(to)
+                    .is_some_and(|rest| name == format!("{from}{rest}"))
+            })
+            .expect(name);
+            assert!(
+                !name.starts_with("waxed_") && !name.starts_with("oxidized_"),
+                "{name} -> {from}{to}"
+            );
+        }
+        assert_eq!(steps, 18);
+        assert_eq!(copper_next(Block::OxidizedCopperTiles), None);
+        assert_eq!(copper_next(Block::WaxedCopperShingles), None);
+    }
 
     #[test]
     fn clients_get_brackets_and_placard_items() {

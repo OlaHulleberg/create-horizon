@@ -62,6 +62,7 @@ def write_fixture(original, root):
         ('analog_output_signal', "horizon_client::game::native_hooks::GameLevel<'_>::native_analog_output_signal"),
         ('is_signal_source', "horizon_client::game::native_hooks::GameLevel<'_>::native_is_signal_source"),
         ('tick_block', "horizon_client::game::native_hooks::GameLevel<'_>::native_tick_block"),
+        ('random_tick', "horizon_client::game::native_hooks::GameLevel<'_>::native_random_tick"),
         ('use_item_on', "horizon_client::game::native_hooks::Game<'_>::native_use_item_on"),
         ('use_item', "horizon_client::game::native_hooks::Game<'_>::native_use_item"),
         ('place_block', "horizon_client::game::native_hooks::Game<'_>::native_place_block"),
@@ -373,6 +374,10 @@ pub mod native_hooks {
         pub fn native_is_signal_source(&self, state: BlockStateId, source: &mut bool) { let _ = (state, source); }
         pub fn native_tick_block(&mut self, ticks: &mut Ticks, dimension: LevelDimension, pos: BlockPos,
                                  state: BlockStateId, handled: &mut bool) {
+            let _ = (ticks, dimension, pos, state, handled);
+        }
+        pub fn native_random_tick(&mut self, ticks: &mut Ticks, dimension: LevelDimension, pos: BlockPos,
+                                  state: BlockStateId, handled: &mut bool) {
             let _ = (ticks, dimension, pos, state, handled);
         }
     }
