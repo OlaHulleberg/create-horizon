@@ -1,0 +1,71 @@
+{
+  "scenario": "processing",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    1.48583984375,
+    1.91796875,
+    1.8076171875
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 21713,
+      "frame_ms_p50": 0.5352050065994263,
+      "frame_ms_p99": 0.9989320635795592,
+      "fps": 1809.4166666666667,
+      "tick_ms": 3.913036108016968,
+      "tick_ms_max": 11.722867965698242,
+      "cpu_ms_p50": 0.4554069936275482,
+      "gpu_ms_p50": 0.4779166579246521,
+      "check": [
+        "-526, 91, 65 has the following block data: {x: -526, y: 91, Items: [{count: 60, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 4, Slot: 1b, id: \"create:iron_sheet\"}], z: 65, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 21008,
+      "frame_ms_p50": 0.5549539923667908,
+      "frame_ms_p99": 1.0633699893951416,
+      "fps": 1750.6666666666667,
+      "tick_ms": 4.077223300933838,
+      "tick_ms_max": 10.256664276123049,
+      "cpu_ms_p50": 0.5181149840354919,
+      "gpu_ms_p50": 0.4704687297344208,
+      "check": [
+        "-528, 90, 73 has the following block data: {x: -528, y: 90, Items: [{count: 60, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 4, Slot: 1b, id: \"create:iron_sheet\"}], z: 73, id: \"create:depot\"}"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 528,
+      "frames": 21588,
+      "frame_ms_p50": 0.5406395196914673,
+      "frame_ms_p99": 1.0092320442199707,
+      "fps": 1799.0,
+      "tick_ms": 3.960039377212525,
+      "tick_ms_max": 9.673583030700684,
+      "cpu_ms_p50": 0.4887460172176361,
+      "gpu_ms_p50": 0.4792187511920929,
+      "check": [
+        "-526, 91, 64 has the following block data: {x: -526, y: 91, Items: [{count: 60, Slot: 0b, id: \"minecraft:iron_ingot\"}, {count: 4, Slot: 1b, id: \"create:iron_sheet\"}], z: 64, id: \"create:depot\"}"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1786.361111111111,
+    "frame_ms_p50": 0.5435995062192281,
+    "frame_ms_p99": 1.0238446990648904,
+    "tick_ms": 3.9834329287211103,
+    "tick_ms_max": 10.551038424173992
+  },
+  "stdev": {
+    "fps": 31.347994501391288,
+    "frame_ms_p50": 0.010201801306303,
+    "frame_ms_p99": 0.03461515321454165,
+    "tick_ms": 0.08455650340818839,
+    "tick_ms_max": 1.0558808126311066
+  }
+}
