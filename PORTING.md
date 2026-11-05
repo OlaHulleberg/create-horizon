@@ -1107,7 +1107,11 @@ messages.
   (`fits false` for iron). `c:milk` (a fluid tag) waits for fluids.
 - Zinc ore generation: Create adds it with a NeoForge biome modifier, which Horizon's content mods do not read.
 - Copper shingles/tiles do not weather yet (template `minecraft:andesite`, copper sounds).
-- Food items (bar of chocolate, sweet roll, honeyed apple, chocolate glazed berries) wait for Phase 6.
+- Food items (done in `fba24c4`, `create-data`'s `food`): bar of chocolate, sweet roll, chocolate glazed berries and
+  honeyed apple with `AllItems`' nutrition and saturation, builder's tea always edible with 3 minutes of haste and a
+  glass bottle left. In game (headless, BMG G21, survival, server thread): a bar of chocolate eaten at food 0 gave
+  food 6 and saturation 3.6 (Create's 6 at 0.3); builder's tea drunk at food 20 gave haste 0 (3,562 ticks left a
+  second later) and left a glass bottle in the hand.
 - Key input and world saved data (were blocked; done with Horizon API 57 and 58, pinned at `abfc4d272`): the linked
   controller and the lectern controller (Phase 7, `native_input_key`, `native_is_key_down`), and the logistics
   networks across restarts (Phase 4, `native_saved_data` at `native_level_load` / `native_level_save`).
