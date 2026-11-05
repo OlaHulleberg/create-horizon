@@ -22,6 +22,15 @@ benchmark table, measured against that session's own off or control run; compare
 | Trains | track and curves, stations, signals, assembly, schedules, riding, driving, HUD, saves, LAN | 12 trains: 0.543 / 4.660 ms; driven 2.051 vs 2.051 ms | tick ≤ off + 0.5 ms: met | |
 | Create unused | — | idle 0.500 / 4.011 ms vs off 0.530 / 4.047; again on the tree with Horizon API 69 and 70 (2026-11-03), three runs each, two of them interleaved: idle 0.530 / 4.916 ms vs off 0.538 / 4.892 ms (run-to-run spread 0.3 ms of tick; `benchmarks/final-*.json`, `benchmarks/final-interleaved/`) | within noise of off: met (ticks, frames) | +0.55 s warm start, accepted 2026-11-02 |
 
+### Again on Horizon `dd96f4adf` (2026-11-05)
+
+After the outbox, far-column parts, copper, zinc ore and nozzle changes and the repin, one scenario per subsystem
+(`benchmarks/recheck/`, `tools/bench_create.py`, 3 runs each, the same session, headless BMG G21, each scenario's
+block count checked): off 0.538 ms frame p50 / 4.662 ms tick; idle 0.537 / 4.513; kinetic 0.566 / 4.163 against
+chains 0.522 / 4.171 (frame +8.4 %); processing 0.544 / 3.983; logistics 0.614 / 3.787; pumps 0.561 / 4.317; goggles
+0.587 / 4.111; redstone 0.542 / 4.627; contraptions 0.572 / 3.447; trains 0.603 / 4.344, driven 0.598 / 4.257.
+Every budget in the table above is met; Create installed and unused stays within noise of off.
+
 ### Again with Horizon API 69 to 72 (2026-11-03, later)
 
 Every subsystem measured again in one sitting on `feat/create-hooks` with API 69 to 72 (item handlers, moving boxes, mod

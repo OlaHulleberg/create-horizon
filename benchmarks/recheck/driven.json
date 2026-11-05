@@ -1,0 +1,113 @@
+{
+  "scenario": "driven",
+  "distance": 12,
+  "seconds": 12.0,
+  "loadavg_before": [
+    2.4736328125,
+    2.10546875,
+    1.95263671875
+  ],
+  "runs": [
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 18956,
+      "frame_ms_p50": 0.6198275089263916,
+      "frame_ms_p99": 1.0992590188980105,
+      "fps": 1579.6666666666667,
+      "tick_ms": 4.072849750518799,
+      "tick_ms_max": 5.644077301025391,
+      "cpu_ms_p50": 0.5838339924812317,
+      "gpu_ms_p50": 0.469062477350235,
+      "check": [
+        [
+          "train 12 heading for the station, 53.0 blocks along the track",
+          "train 11 heading for the station, 53.0 blocks along the track",
+          "train 10 heading for the station, 53.0 blocks along the track",
+          "train 9 heading for the station, 53.0 blocks along the track",
+          "train 8 heading for the station, 53.0 blocks along the track",
+          "train 7 heading for the station, 53.0 blocks along the track",
+          "train 6 heading for the station, 53.0 blocks along the track",
+          "train 5 heading for the station, 53.0 blocks along the track",
+          "train 4 heading for the station, 53.0 blocks along the track",
+          "train 3 heading for the station, 53.0 blocks along the track",
+          "train 2 heading for the station, 53.0 blocks along the track",
+          "train 12 assembled: 1 carriages on 1 bogeys"
+        ],
+        "rider at x +27.0, y -3.60, z -23.5"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 20001,
+      "frame_ms_p50": 0.5883930325508118,
+      "frame_ms_p99": 1.0507110357284546,
+      "fps": 1666.75,
+      "tick_ms": 4.703894138336182,
+      "tick_ms_max": 6.9365339279174805,
+      "cpu_ms_p50": 0.5507739782333374,
+      "gpu_ms_p50": 0.49036458134651184,
+      "check": [
+        [
+          "train 12 heading for the station, 53.0 blocks along the track",
+          "train 11 heading for the station, 53.0 blocks along the track",
+          "train 10 heading for the station, 53.0 blocks along the track",
+          "train 9 heading for the station, 53.0 blocks along the track",
+          "train 8 heading for the station, 53.0 blocks along the track",
+          "train 7 heading for the station, 53.0 blocks along the track",
+          "train 6 heading for the station, 53.0 blocks along the track",
+          "train 5 heading for the station, 53.0 blocks along the track",
+          "train 4 heading for the station, 53.0 blocks along the track",
+          "train 3 heading for the station, 53.0 blocks along the track",
+          "train 2 heading for the station, 53.0 blocks along the track",
+          "train 12 assembled: 1 carriages on 1 bogeys"
+        ],
+        "rider at x +27.0, y -3.60, z -23.5"
+      ]
+    },
+    {
+      "gpu": "Intel(R) Graphics (BMG G21)",
+      "create_blocks": 720,
+      "frames": 20534,
+      "frame_ms_p50": 0.5843639969825745,
+      "frame_ms_p99": 1.0003020763397217,
+      "fps": 1711.1666666666667,
+      "tick_ms": 3.994351387023926,
+      "tick_ms_max": 5.680685043334961,
+      "cpu_ms_p50": 0.5469144880771637,
+      "gpu_ms_p50": 0.4842187464237213,
+      "check": [
+        [
+          "train 12 heading for the station, 53.0 blocks along the track",
+          "train 11 heading for the station, 53.0 blocks along the track",
+          "train 10 heading for the station, 53.0 blocks along the track",
+          "train 9 heading for the station, 53.0 blocks along the track",
+          "train 8 heading for the station, 53.0 blocks along the track",
+          "train 7 heading for the station, 53.0 blocks along the track",
+          "train 6 heading for the station, 53.0 blocks along the track",
+          "train 5 heading for the station, 53.0 blocks along the track",
+          "train 4 heading for the station, 53.0 blocks along the track",
+          "train 3 heading for the station, 53.0 blocks along the track",
+          "train 2 heading for the station, 53.0 blocks along the track",
+          "train 12 assembled: 1 carriages on 1 bogeys"
+        ],
+        "rider at x +27.0, y -3.60, z -23.5"
+      ]
+    }
+  ],
+  "mean": {
+    "fps": 1652.5277777777778,
+    "frame_ms_p50": 0.5975281794865926,
+    "frame_ms_p99": 1.0500907103220622,
+    "tick_ms": 4.257031758626302,
+    "tick_ms_max": 6.087098757425944
+  },
+  "stdev": {
+    "fps": 66.89369330290937,
+    "frame_ms_p50": 0.019416574157174196,
+    "frame_ms_p99": 0.049481387640490426,
+    "tick_ms": 0.3889794185658487,
+    "tick_ms_max": 0.7358601180592954
+  }
+}
