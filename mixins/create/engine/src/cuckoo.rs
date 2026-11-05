@@ -65,9 +65,140 @@ pub fn hand_pose(facing: Dir) -> HandPose {
     }
 }
 
+/// `CuckooClockBlockEntity.Animation`: what comes out of the clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Animation {
+    Pig,
+    Creeper,
+    /// The mysterious clock's (`CuckooClockBlock.containsSurprise`): it blows up.
+    Surprise,
+}
+
+impl Animation {
+    pub fn index(self) -> u8 {
+        match self {
+            Animation::Pig => 0,
+            Animation::Creeper => 1,
+            Animation::Surprise => 2,
+        }
+    }
+    pub fn from_index(i: u8) -> Option<Animation> {
+        Some(match i {
+            0 => Animation::Pig,
+            1 => Animation::Creeper,
+            2 => Animation::Surprise,
+            _ => return None,
+        })
+    }
+}
+
+/// `tick` on the server with no animation running: the pig at 12:00 to 12:04, the creeper at
+/// 18:32 to 18:35; a mysterious clock's is always the surprise (`startAnimation`).
+pub fn due(hours: i32, minutes: i32, mysterious: bool) -> Option<Animation> {
+    let a = if hours == 12 && minutes < 5 {
+        Animation::Pig
+    } else if hours == 18 && minutes < 36 && minutes > 31 {
+        Animation::Creeper
+    } else {
+        return None;
+    };
+    Some(if mysterious { Animation::Surprise } else { a })
+}
+
+/// One server tick of a running animation (`animationProgress` from 0): it ends once past
+/// 100; true when the surprise goes off now (its progress reaching 50).
+pub fn step(kind: Animation, progress: &mut u32) -> (bool, bool) {
+    let value = *progress;
+    *progress = value + 1;
+    let running = value <= 100;
+    (running, kind == Animation::Surprise && *progress == 50)
+}
+
+/// A client's sound at animation tick `value` (`tick` on the client: the chimes, the doors
+/// opening and closing, the pig or creeper and the surprise's fuse): id, volume, pitch.
+pub fn sounds(kind: Animation, value: u32) -> Vec<(&'static str, f32, f32)> {
+    let mut out = Vec::new();
+    if value == 1 {
+        out.push(("minecraft:block.note_block.chime", 2.0, 0.5));
+    }
+    if value == 21 {
+        out.push(("minecraft:block.note_block.chime", 2.0, 0.793_701));
+    }
+    let surprise = kind == Animation::Surprise;
+    if value == 40 && surprise {
+        out.push(("minecraft:entity.tnt.primed", 1.0, 1.0));
+    }
+    let step = if surprise { 3 } else { 15 };
+    let mut phase = 30;
+    while phase <= 60 {
+        if value == phase - step / 3 {
+            out.push(("minecraft:block.chest.open", 1.0 / 16.0, 2.0));
+        }
+        if value == phase {
+            out.push(if kind == Animation::Pig {
+                ("minecraft:entity.pig.ambient", 0.25, 1.0)
+            } else {
+                ("minecraft:entity.creeper.hurt", 0.25, 3.0)
+            });
+        }
+        if value == phase + step / 3 {
+            out.push(("minecraft:block.chest.close", 1.0 / 16.0, 2.0));
+        }
+        phase += step;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pig_comes_at_noon_the_creeper_at_dusk_and_the_surprise_goes_off_at_50() {
+        assert_eq!(due(12, 0, false), Some(Animation::Pig));
+        assert_eq!(due(12, 5, false), None);
+        assert_eq!(due(18, 32, false), Some(Animation::Creeper));
+        assert_eq!(due(18, 31, false), None);
+        assert_eq!(due(18, 36, false), None);
+        assert_eq!(due(12, 2, true), Some(Animation::Surprise));
+        assert_eq!(due(9, 0, true), None);
+        let (mut p, mut boom, mut ticks) = (0, Vec::new(), 0);
+        loop {
+            let (running, now) = step(Animation::Surprise, &mut p);
+            if now {
+                boom.push(p);
+            }
+            if !running {
+                break;
+            }
+            ticks += 1;
+        }
+        assert_eq!((boom, ticks), (vec![50], 101));
+        // Two chimes, and the pig every 15 from 30 to 60 (30, 45, 60).
+        let all: Vec<_> = (0..=101).flat_map(|v| sounds(Animation::Pig, v)).collect();
+        assert_eq!(all.iter().filter(|s| s.0.ends_with("chime")).count(), 2);
+        assert_eq!(
+            all.iter().filter(|s| s.0.ends_with("pig.ambient")).count(),
+            3
+        );
+        let surprise: Vec<_> = (0..=101)
+            .flat_map(|v| sounds(Animation::Surprise, v))
+            .collect();
+        assert_eq!(
+            surprise
+                .iter()
+                .filter(|s| s.0.ends_with("tnt.primed"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            surprise
+                .iter()
+                .filter(|s| s.0.ends_with("creeper.hurt"))
+                .count(),
+            11
+        );
+    }
 
     #[test]
     fn the_time_shown_follows_create_s_clock() {

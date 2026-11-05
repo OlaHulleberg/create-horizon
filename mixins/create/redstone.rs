@@ -1449,6 +1449,87 @@ fn clock_time(game: &Game<'_>) -> (i32, i32) {
     create_engine::cuckoo::time(game.world.day_time, natural)
 }
 
+/// Cuckoo clocks' animations, from the server to the clients: position, then the animation.
+pub(super) const CUCKOO_CHANNEL: &str = "create:cuckoo";
+
+/// `CuckooClockBlockEntity.tick` on the server, after a level's tick: in the overworld (the only
+/// `natural` dimension) turning clocks start the pig at noon and the creeper at dusk, the
+/// mysterious one its surprise, and the clients are told; a surprise at its progress 50 breaks
+/// the clock and blows up. Nothing runs without turning clocks.
+pub(super) fn tick_cuckoos(game: &mut Game<'_>, dimension: &str, dim: usize) {
+    if dimension != "minecraft:overworld" {
+        return;
+    }
+    let (hours, minutes) = create_engine::cuckoo::time(game.world.day_time, true);
+    let Some(events) = with_world(|w| w.tick_cuckoos(dim, hours, minutes)) else {
+        return;
+    };
+    if events.is_empty() {
+        return;
+    }
+    let players = players_in(game, dimension);
+    for (pos, kind, boom) in events {
+        if boom {
+            super::create_blast_body::cuckoo_surprise(game, pos);
+            continue;
+        }
+        let mut m = Vec::with_capacity(13);
+        for v in pos {
+            m.extend_from_slice(&v.to_le_bytes());
+        }
+        m.push(kind.index());
+        for &p in &players {
+            send_to_player(game, p, CUCKOO_CHANNEL, &m);
+        }
+    }
+}
+
+thread_local! {
+    /// The animations a client plays: the clock, what, and its tick.
+    static CLIENT_CUCKOOS: RefCell<Vec<([i32; 3], create_engine::cuckoo::Animation, u32)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// A clock's animation started (`read` with `Animation`: from 0).
+pub(super) fn cuckoo_from_server(data: &[u8]) {
+    if data.len() != 13 {
+        return;
+    }
+    let i = |k: usize| i32::from_le_bytes(data[k..k + 4].try_into().unwrap());
+    let Some(kind) = create_engine::cuckoo::Animation::from_index(data[12]) else {
+        return;
+    };
+    let pos = [i(0), i(4), i(8)];
+    CLIENT_CUCKOOS.with_borrow_mut(|c| {
+        c.retain(|a| a.0 != pos);
+        c.push((pos, kind, 0));
+    });
+}
+
+/// `tick` on the client while an animation runs: its sounds at the clock (`playLocalSound`) and
+/// the surprise's smoke after 30; it ends past 100. Nothing runs without one.
+pub(super) fn tick_client_cuckoos(game: &mut Game<'_>) {
+    if CLIENT_CUCKOOS.with_borrow(Vec::is_empty) {
+        return;
+    }
+    let mut running = CLIENT_CUCKOOS.take();
+    running.retain_mut(|(pos, kind, value)| {
+        let center = pos.map(|v| f64::from(v) + 0.5);
+        for (sound, volume, pitch) in create_engine::cuckoo::sounds(*kind, *value) {
+            game.audio.play(sound, Some(center), volume, pitch);
+        }
+        if *value > 30 && *kind == create_engine::cuckoo::Animation::Surprise {
+            super::create_blast_body::cuckoo_smoke(game, center);
+        }
+        *value += 1;
+        *value <= 101
+    });
+    CLIENT_CUCKOOS.with_borrow_mut(|c| {
+        running.append(c);
+        *c = running;
+    });
+}
+
 /// `CuckooClockRenderer`'s hands of the clock at `pos` facing `facing`: where the time puts them
 /// while it turns (`moveHands`), else where they were.
 pub(super) fn draw_clock_hands(game: &mut Game<'_>, pos: [i32; 3], facing: Dir, turning: bool) {
