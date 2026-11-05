@@ -194,6 +194,85 @@ pub fn convert_loot(v: &mut Value) {
 /// Data and asset paths the content mod keeps: Create's own namespace, plus additions to vanilla's
 /// and the convention (`c`) tags. NeoForge's biome modifiers, Curios and other loaders' files stay
 /// out (Horizon's content fence refuses them).
+/// Create's configured features of its own feature types (`create:layered_ore`, the striated
+/// stone layers): Horizon has no such feature, so they, the placed features using them and the
+/// biome modifiers adding only those are left out. Their ids, as `create:<name>`.
+fn unplaced_features(files: &BTreeMap<String, Vec<u8>>) -> Vec<String> {
+    files
+        .iter()
+        .filter_map(|(path, bytes)| {
+            let name = path
+                .strip_prefix("data/create/worldgen/configured_feature/")?
+                .strip_suffix(".json")?;
+            let doc: Value = serde_json::from_slice(bytes).ok()?;
+            let kind = doc["type"].as_str()?;
+            (!kind.starts_with("minecraft:")).then(|| format!("create:{name}"))
+        })
+        .collect()
+}
+
+/// A worldgen or biome modifier file as Horizon reads it, or false to leave it out: configured
+/// and placed features of `unplaced` and modifiers adding only those go; Create's
+/// `create:config_filter` placement goes from the rest (`ConfigPlacementFilter`: it passes every
+/// position unless `disableWorldGen`, off by default, and draws no random).
+fn convert_worldgen(path: &str, doc: &mut Value, unplaced: &[String]) -> bool {
+    let unplaced = |id: &str| unplaced.iter().any(|u| u == id);
+    let name = path
+        .rsplit('/')
+        .next()
+        .and_then(|n| n.strip_suffix(".json"))
+        .map(|n| format!("create:{n}"))
+        .unwrap_or_default();
+    if path.contains("/configured_feature/") {
+        if unplaced(&name) {
+            return false;
+        }
+        // 26.3 keeps a feature's configuration beside its type, not under `config`, and writes
+        // block states as `{"id", "properties"}` (a bare id without properties).
+        if let Some(Value::Object(config)) = doc.as_object_mut().and_then(|o| o.remove("config"))
+            && let Some(o) = doc.as_object_mut()
+        {
+            o.extend(config);
+        }
+        convert_states(doc);
+        return true;
+    }
+    if path.contains("/placed_feature/") {
+        if doc["feature"].as_str().is_some_and(unplaced) {
+            return false;
+        }
+        if let Some(Value::Array(steps)) = doc.get_mut("placement") {
+            steps.retain(|p| p["type"] != "create:config_filter");
+        }
+        return true;
+    }
+    // A biome modifier: its placed features are named as the configured ones are.
+    let features: Vec<&str> = match &doc["features"] {
+        Value::String(s) => vec![s.as_str()],
+        Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    !features.iter().all(|f| unplaced(f))
+}
+
+/// 1.21.1's block states (`{"Name", "Properties"}`) as 26.3's codec reads them, everywhere inside.
+fn convert_states(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            if let Some(Value::String(name)) = o.get("Name").cloned() {
+                *v = match o.get("Properties") {
+                    Some(p @ Value::Object(_)) => json!({"id": name, "properties": p}),
+                    _ => Value::String(name),
+                };
+                return;
+            }
+            o.values_mut().for_each(convert_states);
+        }
+        Value::Array(a) => a.iter_mut().for_each(convert_states),
+        _ => {}
+    }
+}
+
 fn kept(path: &str) -> bool {
     let data = |rest: &str| {
         rest.starts_with("create/recipe/")
@@ -201,6 +280,8 @@ fn kept(path: &str) -> bool {
             || rest.starts_with("create/tags/")
             || rest.starts_with("minecraft/tags/")
             || rest.starts_with("c/tags/")
+            || rest.starts_with("create/worldgen/")
+            || rest.starts_with("create/neoforge/biome_modifier/")
     };
     let assets = |rest: &str| {
         rest.starts_with("create/blockstates/")
@@ -263,7 +344,8 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
         })
         .collect();
 
-    let (mut recipes, mut skipped, mut copied) = (0, 0, 0);
+    let unplaced = unplaced_features(&files);
+    let (mut recipes, mut skipped, mut copied, mut worldgen_left_out) = (0, 0, 0, 0);
     for (path, bytes) in &files {
         // Our own files (a blockstate we draw differently) stand over Create's.
         if !kept(path) || ours.contains_key(path) {
@@ -287,6 +369,17 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
             flatten_composite(&mut doc);
             put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
             copied += 1;
+        } else if path.starts_with("data/create/worldgen/")
+            || path.starts_with("data/create/neoforge/biome_modifier/")
+        {
+            let mut doc: Value =
+                serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
+            if convert_worldgen(path, &mut doc, &unplaced) {
+                put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
+                copied += 1;
+            } else {
+                worldgen_left_out += 1;
+            }
         } else if path.starts_with("data/create/loot_table/") {
             let mut doc: Value =
                 serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
@@ -348,6 +441,7 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
     report.insert("declared".into(), json!(declared.len()));
     report.insert("recipes".into(), json!(recipes));
     report.insert("recipes_skipped_for_other_mods".into(), json!(skipped));
+    report.insert("worldgen_left_out".into(), json!(worldgen_left_out));
     report.insert("files_copied".into(), json!(copied));
     report.insert("common_tags_added".into(), json!(common));
     Ok(serde_json::to_string_pretty(&Value::Object(report)).unwrap())
@@ -452,6 +546,65 @@ mod tests {
         assert!(kept("data/minecraft/tags/block/mineable/pickaxe.json"));
         assert!(!kept("data/create/.wiki/block_info/a.json"));
         assert!(!kept("data/neoforge/data_maps/x.json"));
+        assert!(kept("data/create/worldgen/placed_feature/zinc_ore.json"));
+        assert!(kept("data/create/neoforge/biome_modifier/zinc_ore.json"));
+    }
+
+    #[test]
+    fn zinc_ore_is_carried_without_create_s_filter_and_layered_ores_are_left_out() {
+        let unplaced = vec!["create:striated_ores_overworld".to_string()];
+        let mut placed = json!({"feature": "create:zinc_ore", "placement": [
+            {"type": "minecraft:count", "count": 8}, {"type": "create:config_filter"}]});
+        assert!(convert_worldgen(
+            "data/create/worldgen/placed_feature/zinc_ore.json",
+            &mut placed,
+            &unplaced
+        ));
+        assert_eq!(
+            placed["placement"],
+            json!([{"type": "minecraft:count", "count": 8}])
+        );
+        let mut layered = json!({"feature": "create:striated_ores_overworld", "placement": []});
+        assert!(!convert_worldgen(
+            "data/create/worldgen/placed_feature/striated_ores_overworld.json",
+            &mut layered,
+            &unplaced
+        ));
+        let mut configured = json!({"type": "create:layered_ore"});
+        assert!(!convert_worldgen(
+            "data/create/worldgen/configured_feature/striated_ores_overworld.json",
+            &mut configured,
+            &unplaced
+        ));
+        let mut modifier =
+            json!({"type": "neoforge:add_features", "features": "create:striated_ores_overworld"});
+        assert!(!convert_worldgen(
+            "data/create/neoforge/biome_modifier/striated_ores_overworld.json",
+            &mut modifier,
+            &unplaced
+        ));
+        let mut ore = json!({"type": "minecraft:ore", "config": {"size": 12, "targets": [
+            {"state": {"Name": "create:zinc_ore"}, "target": {"predicate_type": "minecraft:tag_match",
+            "tag": "minecraft:stone_ore_replaceables"}},
+            {"state": {"Name": "create:x", "Properties": {"axis": "y"}}, "target": {}}]}});
+        assert!(convert_worldgen(
+            "data/create/worldgen/configured_feature/zinc_ore.json",
+            &mut ore,
+            &unplaced
+        ));
+        assert_eq!(ore["size"], 12);
+        assert!(ore.get("config").is_none());
+        assert_eq!(ore["targets"][0]["state"], "create:zinc_ore");
+        assert_eq!(
+            ore["targets"][1]["state"],
+            json!({"id": "create:x", "properties": {"axis": "y"}})
+        );
+        let mut zinc = json!({"type": "neoforge:add_features", "features": "create:zinc_ore"});
+        assert!(convert_worldgen(
+            "data/create/neoforge/biome_modifier/zinc_ore.json",
+            &mut zinc,
+            &unplaced
+        ));
         assert!(kept("assets/create/textures/block/a.png"));
         assert!(!kept("assets/create/ponder/a.nbt"));
         assert!(!kept("assets/create/lang/README.md"));

@@ -1105,7 +1105,20 @@ messages.
   of Create's crafting). `create-data prepare` now writes those tags (60 with the ones they nest) from our table of
   NeoForge 21.1's memberships (`tools/create-data/src/common_tags.rs`). Found by a DEBUG log in the press's tick
   (`fits false` for iron). `c:milk` (a fluid tag) waits for fluids.
-- Zinc ore generation: Create adds it with a NeoForge biome modifier, which Horizon's content mods do not read.
+- Zinc ore generates (Create's `zinc_ore` configured and placed features and its `neoforge:add_features` biome
+  modifier, `#minecraft:is_overworld`, `underground_ores`). Horizon `dd96f4adf` on `feat/create-hooks` (pinned):
+  content mods' `add_features` biome modifiers add their placed features to the step of each biome they name (an id,
+  a list or a tag, nested tags too), after the biome's own (`mod_content.rs`, with a unit test and a content-root
+  test). `create-data prepare` carries Create's worldgen and modifiers in 26.3's form: a configured feature's
+  `config` flattened beside its type and 1.21.1's `{"Name", "Properties"}` states as `{"id", "properties"}` (Horizon
+  skipped the feature as one that cannot run before), and Create's `create:config_filter` placement dropped
+  (`ConfigPlacementFilter` passes everything unless `disableWorldGen`, off by default, and draws no random). In game
+  (headless, BMG G21, a new world, seed 1234): 551 zinc ore and 555 deepslate zinc ore in 64 x 134 x 64 blocks around
+  spawn, spread over y -64 to 70 (the feature's uniform -63..70); vanilla's ores beside them as before within a few
+  blocks (coal 1,215 -> 1,208, gold 64 -> 63, not explained: zinc replaces only stone and deepslate). Benchmark
+  (`benchmarks/zinc/`, 3 runs each): off 0.533 ms frame p50 / 4.582 ms tick, idle 0.517 / 4.752 (within the runs'
+  spread, ±0.17 and ±0.21 ms). Not yet: the striated stone layers (`create:layered_ore`, Create's own feature
+  type, left out with their modifiers).
 - Copper shingles and tiles weather (`CopperBlockSet`, vanilla's `WeatheringCopper` classes with Create's chain from
   `CopperRegistries.addWeathering`): each is declared on vanilla's cut copper block of its age, waxing and shape
   (`create-data` `copper_template`: copper's properties and sounds, random ticks for the unwaxed ones), and the
