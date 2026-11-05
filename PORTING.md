@@ -1106,7 +1106,22 @@ messages.
   NeoForge 21.1's memberships (`tools/create-data/src/common_tags.rs`). Found by a DEBUG log in the press's tick
   (`fits false` for iron). `c:milk` (a fluid tag) waits for fluids.
 - Zinc ore generation: Create adds it with a NeoForge biome modifier, which Horizon's content mods do not read.
-- Copper shingles/tiles do not weather yet (template `minecraft:andesite`, copper sounds).
+- Copper shingles and tiles weather (`CopperBlockSet`, vanilla's `WeatheringCopper` classes with Create's chain from
+  `CopperRegistries.addWeathering`): each is declared on vanilla's cut copper block of its age, waxing and shape
+  (`create-data` `copper_template`: copper's properties and sounds, random ticks for the unwaxed ones), and the
+  `random_tick` hook (`copper_body.rs`) runs vanilla's `ChangeOverTimeBlock.changeOverTime` (Horizon's port: the
+  5.69 % chance, the neighbours within 4 blocks, `(older + 1) / (older + same + 1)` squared, 0.75 for unaffected)
+  into Create's next age (engine `decor::copper_next`), keeping vanilla's own tick from turning it into vanilla
+  copper. In game (headless, BMG G21, server thread, `random_tick_speed` 4096): 9 copper shingles and a top tile
+  slab became Create's exposed ones within 30 s (DEBUG log, removed: age 0 read from the template, the neighbour
+  counts growing as each aged); 9 top tile slabs reached oxidized in 60 s and 9 tile stairs in 60 s, keeping
+  `type=top` and `facing=east`, and stayed there; 9 waxed shingles never changed. Create's copper got 1,000 to 1,999
+  random ticks in 10 s for 9 blocks (a DEBUG count), as one per block per tick at that speed gives (about 1,800); how
+  far a patch got in a run varied either way against vanilla cut copper beside it (once 18 vanilla changes to 7,
+  once 1 to 8), as the chance grows with older neighbours.
+  Benchmark (`benchmarks/copper/`, 3 runs each): off 0.532 ms frame p50 / 4.764 ms tick, idle 0.549 / 4.834 (within
+  the runs' spread). Not yet: scraping with an axe and waxing with honeycomb (Horizon's vanilla code steps only
+  `minecraft:` copper, so it leaves Create's as it is), lightning clearing them.
 - Food items (done in `fba24c4`, `create-data`'s `food`): bar of chocolate, sweet roll, chocolate glazed berries and
   honeyed apple with `AllItems`' nutrition and saturation, builder's tea always edible with 3 minutes of haste and a
   glass bottle left. In game (headless, BMG G21, survival, server thread): a bar of chocolate eaten at food 0 gave
