@@ -2524,6 +2524,10 @@ pub(super) struct ClientParts {
     pub(super) models: HashMap<(u32, Model), u32>,
     /// Speeds that came before their block did: tried again for a few ticks.
     pub(super) pending: Vec<([i32; 3], u8)>,
+    /// Speeds for columns this client doesn't have (the server sends a dimension's parts, and
+    /// keeps columns loaded for other players and forced chunks): tried again once their column
+    /// arrives, checked once per column a tick.
+    pub(super) unloaded: HashMap<[i32; 2], Vec<[i32; 3]>>,
     pub(super) synced: bool,
     /// Flywheels' wheels shown (`FlywheelBlockEntity.visualSpeed`), and those still chasing
     /// their shaft's speed, the only ones a tick looks at.
@@ -2807,6 +2811,7 @@ pub(super) fn client_ensure(game: &Game<'_>) -> bool {
             speeds: HashMap::new(),
             models: HashMap::new(),
             pending: Vec::new(),
+            unloaded: HashMap::new(),
             synced: false,
             wheels: HashMap::new(),
             easing: Vec::new(),
@@ -2974,10 +2979,28 @@ pub(super) fn client_tick(game: &mut Game<'_>) {
     if !c.pending.is_empty() {
         let pending = std::mem::take(&mut c.pending);
         for (pos, tries) in pending {
-            if c.speeds.contains_key(&pos) && !show(game, &mut c, pos) && tries < 100 {
+            if !c.speeds.contains_key(&pos) {
+                continue;
+            }
+            if !game.world.loaded(pos[0], pos[2]) {
+                c.unloaded
+                    .entry([pos[0] >> 4, pos[2] >> 4])
+                    .or_default()
+                    .push(pos);
+            } else if !show(game, &mut c, pos) && tries < 100 {
                 c.pending.push((pos, tries + 1));
             }
         }
+    }
+    if !c.unloaded.is_empty() {
+        let pending = &mut c.pending;
+        c.unloaded.retain(|&[cx, cz], parts| {
+            if !game.world.loaded(cx << 4, cz << 4) {
+                return true;
+            }
+            pending.extend(parts.drain(..).map(|pos| (pos, 0)));
+            false
+        });
     }
     tick_client_gauges(game, &mut c);
     tick_client_wheels(game, &mut c);

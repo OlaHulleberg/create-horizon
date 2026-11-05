@@ -1079,15 +1079,23 @@ messages.
   (`use_item`, the same player within a tick), for every click its blocks take.
 - Depot and part keys: kinetic parts key by position and a 3-bit slot; a depot's up to 36 item parts (9 stacks × 4
   copies) key by a 64-bit mix of position, slot and copy with the top bit set.
-- Multiplayer: a client gets depots and speeds when it joins and when they change; a second player walking into chunks
-  another player already keeps loaded does not get them yet (one `sync` per join).
+- Multiplayer: a client gets the dimension's speeds when it joins and when they change, for columns it does not have
+  too (another player's, forced chunks). A part whose column the client lacks now waits for it (`ClientParts.unloaded`,
+  one check per waiting column a tick) instead of being given up after 100 ticks, so walking into those chunks later
+  shows it. Found by a DEBUG log (removed): 36 parts sent before their column arrived were given up with block id 0.
+  In game (headless, BMG G21, server thread; the client side is the same for LAN guests, not run over LAN): a
+  creative motor and 11 shafts built in forced chunks 1,000 blocks away while the player stood at spawn, the player
+  sent there 10 s later: both columns arrived and their 12 parts were shown, turning beside a control line built
+  with the player there (screenshot). The kinetic parts were the only client state with such a limit (no other
+  `tries` in the glue); depot items are set without reading the client's block.
 - Mod messages past Horizon's 32 a player a tick (about 1,600 part updates each) wait in the glue's outbox
   (`runtime.rs` `send_to_player`, every send to a player goes through it) and are sent first, in order, at the
   next level ticks; before, they were dropped. In game (headless, BMG G21, server thread): rejoining a world of
   65,536 shafts, the join's `sync` of 63,488 parts met the cap after 32 messages; the outbox kept the 46 messages
   after it and sent 32 and 14 of them in the next two ticks, leaving none waiting, and the client counted every
-  part update sent (DEBUG logs, removed). Benchmarks (`benchmarks/outbox/`, 3 runs each, the same session): off
-  0.522 ms frame p50 / 4.673 ms tick, idle 0.534 / 4.749, kinetic 0.556 / 4.346: within budget.
+  part update sent (DEBUG logs, removed). Benchmarks (`benchmarks/outbox/`, 3 runs each, the same session, after the
+  column wait above): off 0.535 ms frame p50 / 4.642 ms tick, idle 0.543 / 4.769 (within the runs' spread, ±0.06
+  and ±0.11 ms tick), kinetic 0.554 / 4.429: within budget.
 - Horizon's `fill` drops block entity data for mod blocks (`setblock` and `data merge` keep it); vanilla applies it to
   every block filled. `/item` reaches only vanilla containers (Create's depot is no `Container` in Create either).
 - A depot that joins holding a stack (a saved world, a block placed with its items) now gets its held stack at rest and
