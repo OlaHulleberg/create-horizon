@@ -2645,7 +2645,7 @@ fn check_nozzles(game: &mut Game<'_>, dimension: &str, dim: usize) {
 /// 1/128 for items and 1/32 for anything else (mobs, players, carts...) a tick, forgetting its
 /// fall (`fallDistance = 0`). Sneaking players and flyers (`isPlayerCreativeFlying`; Horizon's
 /// `flying` is a spectator's too) are let go. Pulling more than 256 discards the items and mobs
-/// it holds. Not here: the explosion of an overloaded nozzle (`Level.explode`) and its particles.
+/// it holds, after a power 2 explosion that breaks no block (`Level.explode`).
 fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], fan: (f32, Dir)) {
     use create_engine::nozzle::{self, Push, Target};
     let Some(mut n) = with_world(|w| w.dims[dim].nozzles.remove(&pos)).flatten() else {
@@ -2695,6 +2695,8 @@ fn tick_nozzle(game: &mut Game<'_>, dimension: &str, dim: usize, pos: [i32; 3], 
         }
         n.entities.retain(|t| alive.contains(t));
         if nozzle::overloaded(n.pushing, n.entities.len()) {
+            // `level.explode(.., 2, ExplosionInteraction.NONE)`, then what it held vanishes.
+            super::create_blast_body::explode_sparing_blocks(game, nozzle::center(pos), 2.0);
             let gone = std::mem::take(&mut n.entities);
             items_in(game, dimension, rlo, rhi, |id, stack, _, _| {
                 if gone.contains(&Target::Item(id)) {

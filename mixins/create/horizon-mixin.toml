@@ -235,6 +235,13 @@ file = "crates/horizon-client/src/game.rs"
 name = "create_copper_body"
 source = "copper_body.rs"
 
+# Create's blasts (`Level.explode`); the template test swaps it for `tools/fixture/blast_body.rs`.
+[[module]]
+id = "blast-body"
+file = "crates/horizon-client/src/game.rs"
+name = "create_blast_body"
+source = "blast_body.rs"
+
 # Pure logic and the tables create-data compiles from Create's MIT data.
 [[crate]]
 id = "engine"
