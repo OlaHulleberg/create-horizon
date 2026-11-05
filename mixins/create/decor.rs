@@ -840,7 +840,7 @@ pub(super) fn left_click_block(
 // Items used on blocks
 
 /// Create's items used on a block that are this module's: a shaft on a girder, brackets, the
-/// vertical gearbox and the empty blaze burner. True when the use was theirs.
+/// vertical gearbox and the empty blaze burner; and an axe or honeycomb on Create's copper. True when the use was theirs.
 pub(super) fn use_item_on(
     game: &mut Game<'_>,
     stack: &ItemStack,
@@ -848,6 +848,9 @@ pub(super) fn use_item_on(
     face: [i32; 3],
     claimed: &mut bool,
 ) -> bool {
+    if super::create_copper_body::use_item_on(game, stack, pos, claimed) {
+        return true;
+    }
     let item = &*stack.item;
     let state = game.world.block(pos[0], pos[1], pos[2]);
     match item {

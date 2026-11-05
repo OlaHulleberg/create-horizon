@@ -20,3 +20,13 @@ pub(super) fn random_tick(
         *handled = true;
     }
 }
+
+pub(super) fn use_item_on(
+    game: &mut super::Game<'_>,
+    stack: &horizon_client::items::ItemStack,
+    pos: [i32; 3],
+    claimed: &mut bool,
+) -> bool {
+    let _ = (game, stack, pos, claimed);
+    false
+}
