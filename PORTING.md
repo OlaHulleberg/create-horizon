@@ -1160,7 +1160,11 @@ messages.
   (headless, BMG G21, survival, server thread): exposed shingles scraped to copper shingles, waxed tiles to copper
   tiles, a top tile slab waxed (`type=top` kept), each with its sound heard; the iron axe at 2 damage and the
   honeycomb 2 -> 1 after; oxidized stairs scraped to weathered with honeycomb in the off hand left at 4; the off hand
-  alone waxed shingles (4 -> 3). Nothing runs per tick. Not yet: lightning clearing them.
+  alone waxed shingles (4 -> 3). Nothing runs per tick. Lightning clears them (Horizon `7195f7df9` on
+  `feat/create-hooks`, pinned: `LightningBolt.clearCopperOnLightningStrike` steps a content mod's weathering copper
+  back by vanilla's naming in the block's own namespace, before only `minecraft:`; a unit test): in game (headless,
+  BMG G21), a bolt on a 5 x 5 patch of oxidized shingles left the struck one copper shingles and its walks 4 exposed
+  and 5 weathered beside it, all Create's.
 - Food items (done in `fba24c4`, `create-data`'s `food`): bar of chocolate, sweet roll, chocolate glazed berries and
   honeyed apple with `AllItems`' nutrition and saturation, builder's tea always edible with 3 minutes of haste and a
   glass bottle left. In game (headless, BMG G21, survival, server thread): a bar of chocolate eaten at food 0 gave
