@@ -1225,8 +1225,14 @@ messages.
   creeper hurt 11 times, the fuse once, the doors 14 times each; the mysterious clock gone (a wood break sound), its
   motor and 16 of the floor's stone blown away, the other clock standing. The explosion's own sound was not in
   `horizon-ctl status`'s `heard`, nor was a vanilla TNT's in the same world (a Horizon matter, not looked into).
-  Benchmark (`benchmarks/cuckoo/`, 3 runs each): off 0.533 ms frame p50 / 4.728 ms tick, idle 0.528 / 4.759. Not yet:
-  the doors, pig and creeper drawn moving (`CuckooClockRenderer`), Create's `CUCKOO_CLOCK` advancement, and a train's
+  Benchmark (`benchmarks/cuckoo/`, 3 runs each): off 0.533 ms frame p50 / 4.728 ms tick, idle 0.528 / 4.759. Clients draw the doors and the
+  figure (`CuckooClockRenderer`; engine `door_angle`, `figure_offset`, `door_pose`, `figure_pose`; parts
+  `part_cuckoo_left_door`, `_right_door`, `_pig`, `_creeper`): the doors always, shut when nothing runs, and while an
+  animation runs turned each tick about their hinges (a turn about the block's centre and the shift that keeps the
+  hinge in place, checked against Create's transform in a unit test), with the pig or creeper standing out as far as
+  they are open. In game (headless, BMG G21): a clock facing south shut before noon, then at noon its doors open and
+  the pig out between them (screenshots). Each clock draws two more static parts; no benchmark scene has cuckoo clocks
+  (`clocks` is clockwork bearings). Not yet: Create's `CUCKOO_CLOCK` advancement, and a train's
   collision explosion (`Train.java`, up to power 5).
 - The belt connector's `ItemCooldowns.addCooldown` and `AllAdvancements.BELT` (`CriteriaTriggers` for a mod) have
   no helper.

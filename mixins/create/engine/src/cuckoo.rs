@@ -65,6 +65,87 @@ pub fn hand_pose(facing: Dir) -> HandPose {
     }
 }
 
+/// `CuckooClockRenderer`'s door angle at animation tick `value`: from closed to 135 degrees in
+/// the 5 ticks before each phase (every 15 from 30 to 60, every 3 for the surprise), held a
+/// third of the step, back to closed in the next 5.
+pub fn door_angle(kind: Animation, value: f32) -> f32 {
+    let step = if kind == Animation::Surprise { 3 } else { 15 };
+    let lerp = |t: f32, a: f32, b: f32| a + t * (b - a);
+    let mut angle = 0.0;
+    let mut phase = 30;
+    while phase <= 60 {
+        let local = value - phase as f32;
+        let third = (step / 3) as f32;
+        if local < -third {
+        } else if local < 0.0 {
+            angle = lerp((value - (phase - 5) as f32) / 5.0, 0.0, 135.0);
+        } else if local < third {
+            angle = 135.0;
+        } else if local < 2.0 * third {
+            angle = lerp((value - (phase + 5) as f32) / 5.0, 135.0, 0.0);
+        }
+        phase += step;
+    }
+    angle
+}
+
+/// How far out the figure stands with the doors at `angle` (`-(angle / 135) / 2 + 10 / 16`).
+pub fn figure_offset(angle: f32) -> f32 {
+    -(angle / 135.0) / 2.0 + 10.0 / 16.0
+}
+
+/// A part drawn turned about its block's centre on y: its model's pose (the clock's facing), the
+/// angle about y and the offset that puts its pivot where Create's renderer has it.
+pub struct YPose {
+    pub pose: glam::Mat4,
+    pub angle: f32,
+    pub offset: [f32; 3],
+}
+
+/// The clock's turn (`rotateCentered(horizontalAngle(facing.getCounterClockWise()), UP)`).
+fn clock_turn(facing: Dir) -> (glam::Mat4, f32) {
+    use glam::{Mat4, Vec3};
+    let ry = crate::ejector::horizontal_angle(counter_clockwise(facing)).to_radians();
+    let c = Vec3::splat(0.5);
+    (
+        Mat4::from_translation(c) * Mat4::from_rotation_y(ry) * Mat4::from_translation(-c),
+        ry,
+    )
+}
+
+/// `rotateDoor`: the door turns `angle` (the left one the other way) about its hinge, (2, y, 6) or
+/// (2, y, 10) px in the clock's turned frame. Turning about the hinge is turning about the
+/// centre and a shift, constant for an angle: `M(c) - c`.
+pub fn door_pose(facing: Dir, left: bool, angle: f32) -> YPose {
+    use glam::{Mat4, Vec3};
+    let (turn, _) = clock_turn(facing);
+    let a = if left { -angle } else { angle };
+    let p = Vec3::new(2.0 / 16.0, 0.0, if left { 6.0 } else { 10.0 } / 16.0);
+    let m = turn
+        * Mat4::from_translation(p)
+        * Mat4::from_rotation_y(a.to_radians())
+        * Mat4::from_translation(-p);
+    let c = Vec3::splat(0.5);
+    let o = m.transform_point3(c) - c;
+    YPose {
+        pose: turn,
+        angle: a,
+        offset: o.to_array(),
+    }
+}
+
+/// The figure (`rotateCentered` to the facing, then `translate(offset, 0, 0)`): the facing's
+/// pose and the shift along the turned x.
+pub fn figure_pose(facing: Dir, offset: f32) -> YPose {
+    let (turn, ry) = clock_turn(facing);
+    let o = glam::Mat4::from_rotation_y(ry).transform_vector3(glam::Vec3::new(offset, 0.0, 0.0));
+    YPose {
+        pose: turn,
+        angle: 0.0,
+        offset: o.to_array(),
+    }
+}
+
 /// `CuckooClockBlockEntity.Animation`: what comes out of the clock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Animation {
@@ -152,6 +233,36 @@ pub fn sounds(kind: Animation, value: u32) -> Vec<(&'static str, f32, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn doors_open_before_each_phase_and_turn_about_their_hinges() {
+        assert_eq!(door_angle(Animation::Pig, 10.0), 0.0);
+        assert_eq!(door_angle(Animation::Pig, 27.5), 67.5);
+        assert_eq!(door_angle(Animation::Pig, 30.0), 135.0);
+        assert_eq!(door_angle(Animation::Pig, 37.5), 67.5);
+        // Closed between phases, opening again for 45.
+        assert_eq!(door_angle(Animation::Pig, 40.0), 0.0);
+        assert_eq!(door_angle(Animation::Pig, 41.0), 27.0);
+        assert_eq!(figure_offset(135.0), 10.0 / 16.0 - 0.5);
+        // The GPU turns (pose * v - c) about y by `angle` and adds `offset`: that is Create's
+        // transform for every vertex, the hinge staying where it is.
+        for facing in [Dir::North, Dir::East, Dir::South, Dir::West] {
+            for left in [true, false] {
+                let d = door_pose(facing, left, 135.0);
+                let (turn, _) = clock_turn(facing);
+                let hinge = glam::Vec3::new(2.0 / 16.0, 0.3, if left { 6.0 } else { 10.0 } / 16.0);
+                let c = glam::Vec3::splat(0.5);
+                let gpu = |v: glam::Vec3| {
+                    glam::Mat4::from_rotation_y(d.angle.to_radians())
+                        .transform_vector3(d.pose.transform_point3(v) - c)
+                        + c
+                        + glam::Vec3::from(d.offset)
+                };
+                let want = turn.transform_point3(hinge);
+                assert!((gpu(hinge) - want).length() < 1e-5, "{facing:?} {left}");
+            }
+        }
+    }
 
     #[test]
     fn the_pig_comes_at_noon_the_creeper_at_dusk_and_the_surprise_goes_off_at_50() {

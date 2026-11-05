@@ -2353,7 +2353,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 65] = [
+pub const PARTIALS: [(&str, &str, &str); 69] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -2562,6 +2562,23 @@ pub const PARTIALS: [(&str, &str, &str); 65] = [
     (
         "part_cuckoo_minute_hand",
         "create:block/cuckoo_clock/minute_hand",
+        "up",
+    ),
+    // CuckooClockRenderer's doors and figures, posed by the glue while it strikes.
+    (
+        "part_cuckoo_left_door",
+        "create:block/cuckoo_clock/left_door",
+        "up",
+    ),
+    (
+        "part_cuckoo_right_door",
+        "create:block/cuckoo_clock/right_door",
+        "up",
+    ),
+    ("part_cuckoo_pig", "create:block/cuckoo_clock/pig", "up"),
+    (
+        "part_cuckoo_creeper",
+        "create:block/cuckoo_clock/creeper",
         "up",
     ),
     // EjectorRenderer's plate (`EJECTOR_TOP`), posed by the glue about its hinge.

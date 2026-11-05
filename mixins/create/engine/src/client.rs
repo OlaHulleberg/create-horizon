@@ -556,6 +556,9 @@ pub const VALVE_POINTER_SLOT: u8 = 1;
 
 /// A cuckoo clock's hour hand's slot (its minute hand is the next).
 pub const CUCKOO_HAND_SLOT: u8 = 1;
+/// The cuckoo clock's doors (left, right) and its figure, the glue's too.
+pub const CUCKOO_DOOR_SLOT: u8 = 3;
+pub const CUCKOO_FIGURE_SLOT: u8 = 5;
 
 /// Slots a block may use, to clear them all.
 pub const SLOTS: u8 = 8;
