@@ -1190,9 +1190,15 @@ messages.
   dropped. Droppers and comparators don't ask the handler yet; not benchmarked on its own, since the hooks run only on
   a hopper's transfer to or from a block with no container.
 - Moving contraptions: clicks on a moving contraption reach the mod since Horizon API 66 (`native_interaction_key_mapping_triggered`, pinned `fe554b8d7` on `feat/create-hooks`) and train carriages take them (seats and controls, see Phase 9); other contraptions don't trace them yet (`AbstractContraptionEntity.handlePlayerInteraction` → `MovingInteractionBehaviour` for contraption controls, train doors and trapdoors, storage); item and fluid handlers on a mod block without a container (`Capabilities.ItemHandler.BLOCK`, `Capabilities.FluidHandler.BLOCK`, gap 4) for hoppers and pipes at a portable storage interface.
-- Explosions: Horizon has no helper for a mod to explode (NeoForge `Level.explode`); the mysterious cuckoo clock's
-  surprise (`CuckooClockBlockEntity`: the block destroyed and a power 3 explosion halfway through its animation) and an
-  overloaded nozzle's (power 2) wait for it.
+- Explosions: an overloaded nozzle explodes (`NozzleBlockEntity.lazyTick`: pulling more than 256, `level.explode(..,
+  2, ExplosionInteraction.NONE)` and then what it held vanishes): `blast_body.rs` calls Horizon's own server explosion
+  (`server_explode`, blocks kept, no fire), reached from the glue as its other `Game` internals are; the template test
+  swaps it for a stand-in. In game (headless, BMG G21, server thread): a creative motor scrolled to -17 rpm turning an
+  encased fan with a nozzle (pulling, catching within about 2 blocks), 300 iron swords summoned 1.6 blocks in front of
+  it: one explosion heard while they came, the caught ones gone and the 40 summoned after it left, nozzle and fan
+  unbroken. Not yet: the mysterious cuckoo clock's surprise (`CuckooClockBlockEntity`: its pig, creeper and surprise
+  animations are not ported; the surprise destroys the block and explodes at power 3 with
+  `ExplosionInteraction.BLOCK`), and a train's collision explosion (`Train.java`, up to power 5).
 - The belt connector's `ItemCooldowns.addCooldown` and `AllAdvancements.BELT` (`CriteriaTriggers` for a mod) have
   no helper.
 - Part colours: a part's vertex colour can't be set (NeoForge `SuperByteBuffer.color` in a renderer; Horizon tints only
