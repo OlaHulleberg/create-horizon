@@ -881,6 +881,10 @@ fn send_changed(lv: &mut ServerLevel<'_>) {
     }
     let players = lv.players();
     send_displays(lv, &players, &shown, &forgotten);
+    // Their kept drawing (the kinetic block entity's) is drawn again once its data changes.
+    for &pos in &shown {
+        super::logistics::touch_shown(lv, pos);
+    }
 }
 
 fn shown_of(dim: usize, pos: [i32; 3]) -> Option<Shown> {

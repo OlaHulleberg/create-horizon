@@ -23,8 +23,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   (copycats guess stairs, bars and trapdoors from tags and ids).
 - **A state's numeric id**, for `level_event(2001, ..)` (block-break particles on a wrenched copycat, a
   belt's casing taken off).
-- **Content shapes selected by more than one property**: a sloped belt collides as a flat one (Create's
-  `BeltShapes` by facing, slope and part).
 - **The neighbour-shape update of a state placed by code** (`updateShape` against its neighbours): mirrored
   placements of the wand of symmetry skip it.
 - **Waterlogging in `state_for_placement`**: the event carries no fluid at the position, so rails and display
@@ -112,6 +110,8 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 ## Left out of the port, not for want of API
 
+- Logistics: a sloped belt collides as a flat one; Create's `BeltShapes` (by facing, slope and part) are
+  not declared yet, though content shapes can select by several properties (as the steam engine's do).
 - Fluids: the smart pipe's filter is set by a click anywhere on the pipe, not only on its filter slot;
   potion fluids (`PotionFluid`, potions in spouts, drains and tanks) and builder's tea.
 

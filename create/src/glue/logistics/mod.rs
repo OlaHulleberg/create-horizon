@@ -25,7 +25,8 @@
 //! - Belts: a dye, the belt connector's lengthening and the wrench's shortening and splitting
 //!   (`BeltSlicer`) are not in the port; a brass casing is drawn with the andesite casing's
 //!   texture (Create's `BeltModel` retextures the block model; the mod API cannot), and a sloped
-//!   belt collides as a flat one (content shapes select by one property).
+//!   belt collides as a flat one (`BeltShapes` by facing, slope and part are not declared yet,
+//!   though content shapes can select by several properties).
 //! - Players riding a belt are pushed by their own client (`push_player`), other entities by
 //!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`.
 //! - Diagonal chutes, a chute's window or casing drawn as Create joins them, and vaults' and
@@ -293,8 +294,9 @@ impl Subsystem for Logistics {
 /// else.
 pub struct Entities;
 
-/// A block entity key the server bumps when a depot's or belt's contents sent on its channel
-/// change what its kept drawing shows: synced, so the client draws it again.
+/// A block entity key the server bumps when a depot's or belt's contents (or a nixie tube's or
+/// display board's text) sent on its channel change what its kept drawing shows: synced, so the
+/// client draws it again.
 const SHOWN: &str = "Shown";
 
 /// A block entity key holding the item a brass funnel's or smart chute's filter slot shows
