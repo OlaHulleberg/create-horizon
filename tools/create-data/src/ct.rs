@@ -339,7 +339,7 @@ enum Join {
     /// The same state, the faces' neighbours found along the drawn texture's own directions
     /// (`ItemVaultCTBehaviour`: `state == other`, its `getUpDirection` and `getRightDirection`
     /// follow the vault model's turned faces).
-    SameStateTexture,
+    StateAlongTexture,
 }
 
 /// `block`'s faces showing `original` take `sheet` (Create's `_connected` sheet
@@ -429,7 +429,7 @@ fn plans() -> Vec<Plan> {
             .collect();
         plan(
             &format!("item_vault:large={large}"),
-            Join::SameStateTexture,
+            Join::StateAlongTexture,
             rules,
         );
     }
@@ -575,7 +575,7 @@ fn properties(plan: &Plan, rule: &Rule, tiles: &str) -> String {
     let method = rule.ty.method();
     let count = method.masks().len();
     let connect = match plan.join {
-        Join::SameStateTexture => "state\norient=texture",
+        Join::StateAlongTexture => "state\norient=texture",
         _ => "block",
     };
     let mut out = format!(
