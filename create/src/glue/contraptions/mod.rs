@@ -110,6 +110,32 @@ impl Subsystem for Contraptions {
         bearings::tick_pistons(lv);
         actors::tick_mounted(lv);
         lifts::tick_lifts(lv);
+        superglue::tick(lv);
+    }
+
+    fn server_message(
+        &self,
+        _host: &mut dyn mod_api::ClientHost,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != superglue::CHANNEL {
+            return false;
+        }
+        superglue::from_server(data);
+        true
+    }
+
+    fn client_reset(&self) {
+        superglue::client_reset();
+    }
+
+    fn render_level_stage(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        superglue::render(host, event);
     }
 
     /// A left click with super glue in hand takes the glue off the block hit.

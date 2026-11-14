@@ -5,8 +5,12 @@
 //! takes the glue off the block hit. The areas are kept and saved as `actors` keeps them.
 //!
 //! Create picks the corners on its client and draws the selection and glue outlines there;
-//! here the clicks are taken on the server (the corner a player picked is the server's), and
-//! nothing is drawn: the client is not told of the glue areas.
+//! here the clicks are taken on the server (the corner a player picked is the server's), which
+//! tells a player holding the glue of their first corner and the glue areas near them
+//! (`create:glue`), and their client outlines them as Create's does: each area in Create's
+//! passive green, the one looked at highlighted, and the selection from the first corner to the
+//! block looked at. Create's glue face texture (`AllSpecialTextures.GLUE`) is not drawn: the
+//! lines are plain.
 
 use super::super::items::{action_bar, creative, held, sneaking};
 use super::super::persist::mark_unsaved;
@@ -23,13 +27,186 @@ use std::collections::HashMap;
 
 pub const ITEM: &str = "create:super_glue";
 
+/// The glue a player holding super glue sees: their first corner and the areas near them,
+/// from the server to that player.
+pub(super) const CHANNEL: &str = "create:glue";
+
+/// `SuperGlueSelectionHandler`'s colours: `PASSIVE`, `HIGHLIGHT`, `FAIL`.
+const PASSIVE: u32 = 0xFF4D_9162;
+const HIGHLIGHT: u32 = 0xFF68_C586;
+const FAIL: u32 = 0xFFC5_B548;
+
+/// What this client was told: its first corner and the glue areas near it.
+type Seen = (Option<[i32; 3]>, Vec<([i32; 3], [i32; 3])>);
+
 thread_local! {
     /// Each player's first corner (`firstPos`), by player.
     static FIRST: RefCell<HashMap<u128, [i32; 3]>> = RefCell::new(HashMap::new());
+    /// The client's: what the server last told it.
+    static SEEN: RefCell<Option<Seen>> = const { RefCell::new(None) };
 }
 
 pub(super) fn forget() {
     FIRST.with_borrow_mut(HashMap::clear);
+}
+
+pub(super) fn client_reset() {
+    SEEN.with_borrow_mut(|s| *s = None);
+}
+
+/// `SuperGlueSelectionHandler.tick`'s scan (`inflate(32, 16, 32)`), from the server: each
+/// player of the level holding the glue is told of their first corner and the areas near them,
+/// every half second (and at once when they change, `send_glue`).
+pub(super) fn tick(lv: &mut ServerLevel<'_>) {
+    if lv.game_time() % 10 != 0 {
+        return;
+    }
+    for player in lv.players() {
+        if is_glue(&*lv.host, player) {
+            send_glue(lv, player);
+        }
+    }
+}
+
+/// Tells `player` their first corner and the glue areas near them.
+fn send_glue(lv: &mut ServerLevel<'_>, player: PlayerRef) {
+    let Some(at) = player.entity().position(&*lv.host) else {
+        return;
+    };
+    let first = FIRST.with_borrow(|f| f.get(&player.uuid()).copied());
+    let dim = lv.dim;
+    let near = |g: &glue::Glue| {
+        let reach = [32.0, 16.0, 32.0];
+        (0..3).all(|i| {
+            f64::from(g.max[i]) + 1.0 >= at[i] - reach[i] && f64::from(g.min[i]) <= at[i] + reach[i]
+        })
+    };
+    let areas: Vec<glue::Glue> = with_world(|w| {
+        w.dims[dim]
+            .glue
+            .iter()
+            .filter(|g| near(g))
+            .copied()
+            .collect()
+    })
+    .unwrap_or_default();
+    let mut words = vec![i32::from(first.is_some())];
+    words.extend(first.unwrap_or_default());
+    for g in &areas {
+        words.extend(g.min);
+        words.extend(g.max);
+    }
+    let data: Vec<u8> = words.iter().flat_map(|v| v.to_le_bytes()).collect();
+    super::super::net::send_to_player(lv.host, player, CHANNEL, &data);
+}
+
+/// What the server told this client (`CHANNEL`).
+pub(super) fn from_server(data: &[u8]) {
+    let w: Vec<i32> = data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| i32::from_le_bytes(*b))
+        .collect();
+    let [has, x, y, z, ref rest @ ..] = w[..] else {
+        return;
+    };
+    let first = (has != 0).then_some([x, y, z]);
+    let areas = rest
+        .as_chunks::<6>()
+        .0
+        .iter()
+        .map(|a| ([a[0], a[1], a[2]], [a[3], a[4], a[5]]))
+        .collect();
+    SEEN.with_borrow_mut(|s| *s = Some((first, areas)));
+}
+
+/// `SuperGlueSelectionHandler.tick`'s outlines, while the main hand holds the glue: the glue
+/// areas near (the one the crosshair is in highlighted), and the selection from the first
+/// corner to the block looked at (`getCurrentSelectionBox`; `FAIL` 24 blocks or more away, or
+/// sneaking to discard).
+pub(super) fn render(
+    host: &dyn mod_api::ClientHost,
+    event: &mut mod_api::RenderLevelStageEvent<'_>,
+) {
+    use mod_api::{CrosshairTarget, RenderLevelStage};
+    if event.stage != RenderLevelStage::AfterTranslucentBlocks {
+        return;
+    }
+    let Some(player) = host.local_player() else {
+        return;
+    };
+    let holding = held(host, player, Hand::Main).is_some_and(|s| s.item().id(host) == ITEM);
+    if !holding {
+        return;
+    }
+    let Some((first, areas)) = SEEN.with_borrow(Clone::clone) else {
+        return;
+    };
+    let hovered = match host.crosshair_target() {
+        Some(CrosshairTarget::Block { pos, .. }) => Some([pos.x, pos.y, pos.z]),
+        _ => None,
+    };
+    let inside = |(min, max): &([i32; 3], [i32; 3]), p: [i32; 3]| {
+        (0..3).all(|i| min[i] <= p[i] && p[i] <= max[i])
+    };
+    let mut lines = Vec::new();
+    if first.is_none() {
+        let lit = hovered.and_then(|h| areas.iter().position(|a| inside(a, h)));
+        for (i, a) in areas.iter().enumerate() {
+            let (colour, width) = if Some(i) == lit {
+                (HIGHLIGHT, 4.0)
+            } else {
+                (PASSIVE, 1.5)
+            };
+            box_lines(&mut lines, *a, colour, width);
+        }
+    }
+    if let (Some(f), Some(h)) = (first, hovered) {
+        let d2: i64 = (0..3).map(|i| i64::from(f[i] - h[i]).pow(2)).sum();
+        let ok = d2 < 24 * 24 && !sneaking(host, player);
+        let min = [0, 1, 2].map(|i| f[i].min(h[i]));
+        let max = [0, 1, 2].map(|i| f[i].max(h[i]));
+        box_lines(
+            &mut lines,
+            (min, max),
+            if ok { HIGHLIGHT } else { FAIL },
+            4.0,
+        );
+    }
+    if !lines.is_empty() {
+        let _ = event.draw.lines(&lines);
+    }
+}
+
+/// The twelve edges of the blocks `min` to `max` (inclusive), a hair outside them.
+fn box_lines(
+    lines: &mut Vec<mod_api::WorldLine>,
+    (min, max): ([i32; 3], [i32; 3]),
+    colour: u32,
+    width: f32,
+) {
+    use mod_api::{WorldDepth, WorldLine};
+    let lo = min.map(|v| f64::from(v) - 0.005);
+    let hi = max.map(|v| f64::from(v) + 1.005);
+    let c = |x: usize, y: usize, z: usize| {
+        [
+            if x == 0 { lo[0] } else { hi[0] },
+            if y == 0 { lo[1] } else { hi[1] },
+            if z == 0 { lo[2] } else { hi[2] },
+        ]
+    };
+    for i in 0..2 {
+        for j in 0..2 {
+            for (a, b) in [
+                (c(0, i, j), c(1, i, j)),
+                (c(i, 0, j), c(i, 1, j)),
+                (c(i, j, 0), c(i, j, 1)),
+            ] {
+                lines.push(WorldLine::new(a, b, colour, width, WorldDepth::Tested));
+            }
+        }
+    }
 }
 
 pub(super) fn register(r: &mut dyn Registrar) {
@@ -69,6 +246,10 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         first?;
         FIRST.with_borrow_mut(|f| f.remove(&id));
         action_bar(host, player, "create.super_glue.abort");
+        let dimension = player.dimension(&*host)?.to_string();
+        if let Some(mut lv) = ServerLevel::new(host, &dimension) {
+            send_glue(&mut lv, player);
+        }
         return Some(InteractionResult::Success);
     }
     let pos = event.pos;
@@ -78,6 +259,7 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         FIRST.with_borrow_mut(|f| f.insert(id, pos));
         action_bar(lv.host, player, "create.super_glue.first_pos");
         slime_sound(&mut lv, pos, 0.85);
+        send_glue(&mut lv, player);
         return Some(InteractionResult::Success);
     };
     // `confirm`, then `SuperGlueSelectionPacket.handle`: the corners must hold together.
@@ -104,6 +286,7 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     FIRST.with_borrow_mut(|f| f.remove(&id));
     action_bar(lv.host, player, "create.super_glue.success");
     slime_sound(&mut lv, pos, 0.95);
+    send_glue(&mut lv, player);
     Some(InteractionResult::Success)
 }
 
@@ -136,7 +319,7 @@ pub(super) fn left_click(host: &mut dyn ServerHost, event: &LeftClickBlockEvent)
     let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
         return false;
     };
-    let Some(lv) = ServerLevel::new(host, &dimension) else {
+    let Some(mut lv) = ServerLevel::new(host, &dimension) else {
         return false;
     };
     let dim = lv.dim;
@@ -160,5 +343,6 @@ pub(super) fn left_click(host: &mut dyn ServerHost, event: &LeftClickBlockEvent)
         0.5,
         0.5,
     );
+    send_glue(&mut lv, player);
     true
 }
