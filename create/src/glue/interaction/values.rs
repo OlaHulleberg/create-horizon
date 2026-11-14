@@ -119,15 +119,14 @@ pub(super) fn right_click(host: &mut dyn ServerHost, event: &mut RightClickBlock
     let pos = click.pos;
     let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]));
     let dim = lv.dim;
-    let charged = |p: [i32; 3]| {
-        with_world(|w| {
-            w.dims[dim]
-                .ejectors
-                .get(&p)
-                .is_none_or(|e| e.state == create_engine::ejector::State::Charged)
-        })
-        .unwrap_or(true)
-    };
+    let charged_here = with_world(|w| {
+        w.dims[dim]
+            .ejectors
+            .get(&pos)
+            .is_none_or(|e| e.state == create_engine::ejector::State::Charged)
+    })
+    .unwrap_or(true);
+    let charged = |_: [i32; 3]| charged_here;
     let hit = with_world(|w| value_box_hit(&w.table, |p| lv.block(p), charged, pos, side, local));
     if hit != Some(true) {
         return Flow::Continue;
