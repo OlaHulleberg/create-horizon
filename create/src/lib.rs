@@ -248,6 +248,16 @@ impl Hooks for Create {
         }
     }
 
+    fn render_level_stage(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.render_level_stage(host, event);
+        }
+    }
+
     fn render_gui_post(&self, host: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
         for s in SUBSYSTEMS {
             s.render_gui_post(host, event);

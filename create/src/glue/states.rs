@@ -27,6 +27,8 @@ static KEYS: OnceLock<Vec<BlockKey>> = OnceLock::new();
 /// They are not engine blocks. Sorted, as `data/create/horizon/block/part_*.json`.
 pub const PARTIALS: &[&str] = &[
     "part_analog_lever_handle",
+    "part_andesite_door_fold_left",
+    "part_andesite_door_fold_right",
     "part_arm_base",
     "part_arm_claw_base",
     "part_arm_cog",
@@ -51,6 +53,8 @@ pub const PARTIALS: &[&str] = &[
     "part_bogey_frame",
     "part_bogey_wheel",
     "part_cogwheel_shaftless",
+    "part_copper_door_fold_left",
+    "part_copper_door_fold_right",
     "part_coupling_attachment",
     "part_coupling_connector",
     "part_coupling_ring",

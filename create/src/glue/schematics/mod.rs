@@ -21,6 +21,9 @@
 //!   `isSolidRender` is not in the API.
 
 pub mod body;
+mod deploy;
+mod quill;
+mod screens;
 
 use super::packages::{self, block_of, debug_verb, feedback, ints, text};
 use super::persist;
@@ -73,6 +76,8 @@ struct Dim {
     wake_of: HashMap<[i32; 3], u64>,
     /// The aim last given to clients.
     sent: HashMap<[i32; 3], Option<[i32; 3]>>,
+    /// What the cannon's screen was last given (its menu data slots).
+    sent_data: HashMap<[i32; 3], Vec<i32>>,
 }
 
 impl Dim {
@@ -168,9 +173,136 @@ fn now(lv: &ServerLevel<'_>) -> u64 {
     lv.game_time().max(0) as u64
 }
 
+/// An upload asked for: level, player, table, file.
+type Upload = (usize, String, [i32; 3], String);
+
+thread_local! {
+    /// Uploads asked for by tables' buttons: level, player, table, file.
+    static UPLOADS: RefCell<Vec<Upload>> = const { RefCell::new(Vec::new()) };
+    /// Whether the table's screen drew this frame: the wheel then chooses its schematic.
+    static TABLE_OPEN: Cell<bool> = const { Cell::new(false) };
+}
+
 pub struct Schematics;
 
 impl Subsystem for Schematics {
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != quill::CHANNEL {
+            return false;
+        }
+        quill::client_message(host, player, data);
+        true
+    }
+
+    fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
+        quill::tick(host);
+        deploy::tick(host);
+    }
+
+    fn client_reset(&self) {
+        quill::reset();
+        deploy::reset();
+        screens::reset();
+    }
+
+    fn interaction_key(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
+    ) -> Flow {
+        if quill::interaction_key(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        deploy::interaction_key(host, event)
+    }
+
+    fn mouse_scrolling(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        event: &mut mod_api::MouseScrollingEvent,
+    ) -> Flow {
+        quill::mouse_scrolling(host, event)
+    }
+
+    fn render_level_stage(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        quill::render_level_stage(host, event);
+        deploy::render_level_stage(host, event);
+    }
+
+    fn screen_render_post(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenRenderPostEvent<'_>,
+    ) {
+        quill::screen_render_post(host, event);
+        deploy::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> Flow {
+        if quill::screen_mouse_pressed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        deploy::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_scrolled(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenMouseScrolledPreEvent<'_>,
+    ) -> Flow {
+        if TABLE_OPEN.get() && event.scroll[1] != 0.0 && host.mod_screen().is_none() {
+            screens::scroll_table(host, event.scroll[1] > 0.0);
+            return Flow::Cancel;
+        }
+        deploy::screen_mouse_scrolled(host, event)
+    }
+
+    fn screen_key_pressed(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenKeyPressedPreEvent<'_>,
+    ) -> Flow {
+        if quill::screen_key_pressed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        deploy::screen_key_pressed(host, event)
+    }
+
+    fn screen_char_typed(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenCharTypedPreEvent<'_>,
+    ) -> Flow {
+        if quill::screen_char_typed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        deploy::screen_char_typed(host, event)
+    }
+
+    fn screen_closing(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenClosingEvent<'_>,
+    ) {
+        TABLE_OPEN.set(false);
+        quill::screen_closing(host, event);
+        deploy::screen_closing(host, event);
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let cannon = r
             .block_entity_type("create:schematicannon")
@@ -750,9 +882,100 @@ fn send_aim(lv: &mut ServerLevel<'_>, c: &Cannon) {
     OWN_WRITE.set(false);
 }
 
+/// What the cannon's screen shows, into its menu data slots when it changed.
+fn send_screen_data(lv: &mut ServerLevel<'_>, c: &Cannon) {
+    let data = screens::cannon_data(c);
+    let dim = lv.dim;
+    let same = with(dim, |d| d.sent_data.get(&c.pos) == Some(&data));
+    if same {
+        return;
+    }
+    let Some(be) = entity(lv, c.pos) else {
+        return;
+    };
+    OWN_WRITE.set(true);
+    let set = be.set_data_slots(&mut *lv.host, data.clone());
+    OWN_WRITE.set(false);
+    if matches!(set, Ok(true) | Ok(false)) {
+        with(dim, |d| d.sent_data.insert(c.pos, data));
+    }
+}
+
+/// The table's upload button (`SchematicUploadPacket`): the schematic chosen, by its place
+/// among the saved ones, uploaded at the level's next tick (the table's block entity is out of
+/// the world while its button is handled).
+fn table_button(host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<'_>) {
+    let context = event.context;
+    let Some(index) = usize::try_from(context.id - screens::UPLOAD).ok() else {
+        return;
+    };
+    let Some(player) = host.player(context.player) else {
+        return;
+    };
+    let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+        return;
+    };
+    let Some(dim) = level_index(&dimension) else {
+        return;
+    };
+    let Some(file) = body::local_files(&*host).into_iter().nth(index) else {
+        return;
+    };
+    let name = player.name(&*host).unwrap_or_default();
+    UPLOADS.with_borrow_mut(|u| u.push((dim, name, context.pos, file)));
+}
+
+/// The uploads asked for in `dim` since its last tick.
+fn run_uploads(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let mine: Vec<(String, [i32; 3], String)> = UPLOADS.with_borrow_mut(|u| {
+        let (mine, rest): (Vec<_>, Vec<_>) =
+            std::mem::take(u).into_iter().partition(|x| x.0 == dim);
+        *u = rest;
+        mine.into_iter().map(|(_, n, p, f)| (n, p, f)).collect()
+    });
+    for (name, pos, file) in mine {
+        upload(lv, &name, pos, &file);
+    }
+}
+
+/// `ConfigureSchematicannonPacket` from the cannon's screen, and its confirm button.
+fn cannon_button(host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<'_>) {
+    let context = event.context;
+    if context.id == screens::CONFIRM {
+        host.close_menu(context.player);
+        return;
+    }
+    let Some(player) = host.player(context.player) else {
+        return;
+    };
+    let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+        return;
+    };
+    let Some(dim) = level_index(&dimension) else {
+        return;
+    };
+    let pos = context.pos;
+    let data = with(dim, |d| d.sent_data.get(&pos).cloned()).unwrap_or_default();
+    let Some(option) = screens::configure(context.id, &data) else {
+        return;
+    };
+    let Some(lv) = ServerLevel::new(host, &dimension) else {
+        return;
+    };
+    let now = now(&lv);
+    with(dim, |d| {
+        if let Some(c) = d.cannons.get_mut(&pos) {
+            c.configure(now, option);
+            d.wake(pos, now);
+        }
+    });
+}
+
 /// The level's tick: cannons placed, removed and woken, then those whose tick is due; clients
 /// are told where barrels point now. Nothing runs without a cannon.
 fn level_tick(lv: &mut ServerLevel<'_>) {
+    run_uploads(lv);
     let dim = lv.dim;
     if !present() && EVENTS.with_borrow(Vec::is_empty) {
         return;
@@ -785,6 +1008,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             Event::Changed(_, pos, false) => with(dim, |d| {
                 d.unwake(pos);
                 d.sent.remove(&pos);
+                d.sent_data.remove(&pos);
                 d.cannons.remove(&pos);
             }),
             Event::Placed(_, pos, yaw) => with(dim, |d| {
@@ -847,6 +1071,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
         if changed {
             send_aim(lv, &c);
         }
+        send_screen_data(lv, &c);
         with(dim, |d| d.cannons.insert(pos, c));
         persist::mark_pos_unsaved(dim, pos);
     }
@@ -912,18 +1137,106 @@ impl BlockEntityPart for SchematicEntity {
     }
 
     /// `SchematicTableMenu`: the input and output slots, as the hopper's first and last.
-    fn screen(&self, _host: &dyn Host, event: &mut ScreenEvent<'_>) -> Option<Screen> {
-        if event.block != "create:schematic_table" {
+    fn screen_draw(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenDrawEvent<'_>) {
+        match event.block {
+            "create:schematicannon" => {
+                screens::draw_cannon(host, event.draw, event.data, event.origin);
+            }
+            "create:schematic_table" => {
+                TABLE_OPEN.set(true);
+                screens::draw_table(host, event.draw, event.data, event.origin);
+            }
+            _ => {}
+        }
+    }
+
+    fn screen_click(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenClickEvent<'_>,
+    ) -> Option<i32> {
+        if event.right {
             return None;
         }
-        Some(Screen {
-            width: 176.0,
-            height: 133.0,
-            slots: vec![Some([44.0, 20.0]), Some([116.0, 20.0]), None, None, None],
-            inventory_y: 51.0,
-            inventory_x: 8.0,
-            ..Screen::default()
-        })
+        match event.block {
+            "create:schematicannon" => screens::click_cannon(host, event.data, event.at),
+            "create:schematic_table" => screens::click_table(host, event.at),
+            _ => None,
+        }
+    }
+
+    fn screen_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenTooltipEvent<'_>) {
+        match event.block {
+            "create:schematicannon" => {
+                screens::tooltip_cannon(host, event.data, event.at, event.lines);
+            }
+            "create:schematic_table" => screens::tooltip_table(host, event.at, event.lines),
+            _ => {}
+        }
+    }
+
+    fn menu_button(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<'_>) {
+        match event.entity.id() {
+            "create:schematicannon" => cannon_button(host, event),
+            "create:schematic_table" => table_button(host, event),
+            _ => {}
+        }
+    }
+
+    /// `SchematicannonMenu.quickMoveStack` and `SchematicTableMenu`'s: from the player's
+    /// inventory a schematic goes to the schematic slot, a book or clipboard to the checklist's,
+    /// gunpowder to the fuel slot (`SchematicannonInventory.isItemValid`); the table takes blank
+    /// schematics, quills and schematics in its input. The game's own routing (the first slot
+    /// with room) moves it when that is the right slot; a part of a stack is moved here; a whole
+    /// stack bound elsewhere stays, as the hook cannot empty the clicked slot.
+    fn menu_quick_move(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::MenuQuickMoveEvent<'_>,
+    ) -> Flow {
+        if event.slot < event.container_slots {
+            return Flow::Continue;
+        }
+        let id = packages::body::item_id(&*host, event.stack);
+        let to = match (event.entity.id(), id.as_str()) {
+            ("create:schematicannon", SCHEMATIC) => 0,
+            ("create:schematicannon", "minecraft:book" | "minecraft:written_book")
+            | ("create:schematicannon", "create:clipboard") => 2,
+            ("create:schematicannon", GUNPOWDER) => 4,
+            ("create:schematic_table", EMPTY_SCHEMATIC | QUILL | SCHEMATIC) => 0,
+            _ => return Flow::Cancel,
+        };
+        let max = host.max_stack_size(event.stack.item()).unwrap_or(64);
+        let stack = event.stack.clone();
+        let room = |s: &Option<ItemStack>| match s {
+            None => max,
+            Some(t) if t.is_stackable_with(&stack) => max.saturating_sub(t.count()),
+            Some(_) => 0,
+        };
+        let items = &mut event.entity.items;
+        if items.len() <= to {
+            return Flow::Cancel;
+        }
+        if items.iter().position(|s| room(s) > 0) == Some(to) && room(&items[to]) >= stack.count() {
+            return Flow::Continue;
+        }
+        let n = room(&items[to]).min(stack.count());
+        if n == 0 || n == stack.count() {
+            return Flow::Cancel;
+        }
+        let there = items[to].as_ref().map_or(0, ItemStack::count);
+        items[to] = packages::body::with_count(&stack, there + n);
+        if let Some(rest) = packages::body::with_count(&stack, stack.count() - n) {
+            *event.stack = rest;
+        }
+        Flow::Cancel
+    }
+
+    fn screen(&self, _host: &dyn Host, event: &mut ScreenEvent<'_>) -> Option<Screen> {
+        if event.block == "create:schematicannon" {
+            return Some(screens::cannon_screen());
+        }
+        (event.block == "create:schematic_table").then(screens::table_screen)
     }
 }
 
