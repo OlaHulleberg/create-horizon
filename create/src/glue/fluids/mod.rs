@@ -17,7 +17,7 @@
 //!   ends as the legacy glue did.
 
 mod clicks;
-mod client;
+pub(crate) mod client;
 mod drawn;
 mod engine;
 mod goggles;

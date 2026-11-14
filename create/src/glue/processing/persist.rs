@@ -83,10 +83,14 @@ pub fn save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
         data.insert("crushers".into(), crushers_to_nbt(&crushers));
     }
     if !burners.is_empty() {
-        // x, y, z, fuel type, burn time left for each burner (`fuelLevel`, `burnTimeRemaining`).
+        // x, y, z, fuel type, burn time left for each burner (`fuelLevel`, `burnTimeRemaining`);
+        // a creative one (`isCreative`) as fuel type 3 and its heat.
         let v = burners
             .iter()
-            .flat_map(|(p, b)| [p[0], p[1], p[2], b.fuel.index(), b.remaining])
+            .flat_map(|(p, b)| match b.creative {
+                Some(h) => [p[0], p[1], p[2], CREATIVE_BURNER, h as i32],
+                None => [p[0], p[1], p[2], b.fuel.index(), b.remaining],
+            })
             .collect();
         data.insert("burners".into(), Tag::IntArray(v));
     }
@@ -248,6 +252,19 @@ fn crushers_from_nbt(data: &Compound) -> Vec<([i32; 3], crusher::Crusher)> {
         .collect()
 }
 
+/// A saved burner's fuel type when it is creative: its heat follows.
+const CREATIVE_BURNER: i32 = 3;
+
+fn heat_of(i: i32) -> create_engine::fan::Heat {
+    use create_engine::fan::Heat;
+    match i {
+        2 => Heat::Fading,
+        3 => Heat::Kindled,
+        4 => Heat::Seething,
+        _ => Heat::Smouldering,
+    }
+}
+
 fn burners_from_nbt(data: &Compound) -> Vec<([i32; 3], burner::Burner)> {
     let Some(Tag::IntArray(v)) = data.get(&"burners".into()) else {
         return Vec::new();
@@ -256,9 +273,17 @@ fn burners_from_nbt(data: &Compound) -> Vec<([i32; 3], burner::Burner)> {
         .0
         .iter()
         .map(|c| {
-            let b = burner::Burner {
-                fuel: burner::Fuel::from_index(c[3]),
-                remaining: c[4],
+            let b = if c[3] == CREATIVE_BURNER {
+                burner::Burner {
+                    creative: Some(heat_of(c[4])),
+                    ..burner::Burner::default()
+                }
+            } else {
+                burner::Burner {
+                    fuel: burner::Fuel::from_index(c[3]),
+                    remaining: c[4],
+                    creative: None,
+                }
             };
             ([c[0], c[1], c[2]], b)
         })

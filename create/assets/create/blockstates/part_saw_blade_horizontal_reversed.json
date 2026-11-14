@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/mechanical_saw/blade_horizontal_reversed",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/mechanical_saw/blade_horizontal_reversed",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/mechanical_saw/blade_horizontal_reversed"
+    },
+    "facing=west": {
+      "model": "create:block/mechanical_saw/blade_horizontal_reversed",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/mechanical_saw/blade_horizontal_reversed",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/mechanical_saw/blade_horizontal_reversed",
+      "x": 270
+    }
+  }
+}

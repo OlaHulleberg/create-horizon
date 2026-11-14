@@ -5,7 +5,7 @@
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::TANK;
-use super::client::fluid_part;
+use super::client::fluid_box;
 use create_engine::kinetics::Dir;
 use create_engine::tank::Fluid;
 use mod_api::{
@@ -114,13 +114,13 @@ pub(super) fn draw(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>
         let (min, max) = (2.0 / 16.0, 14.0 / 16.0);
         let y = 5.0 / 16.0;
         let top = y + 7.0 / 16.0 * level;
-        fluid_part(
+        fluid_box(
             host,
-            event,
+            &mut *event.draw,
             fluid,
+            amount as u32,
             [min, y, min],
             [max, top, max],
-            amount as u32,
         );
     }
     let Some((item, count, position, prev, from)) = shown(event.entity) else {

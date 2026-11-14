@@ -5,7 +5,7 @@
 
 use crate::glue::server::ServerLevel;
 use create_engine::processing::{Book, Output, Recipe};
-use create_engine::{basin, deployer, drain, fan, sequenced, spout, tank};
+use create_engine::{basin, deployer, drain, fan, runtime_data, sequenced, spout, tank};
 use mod_api::serde_json::Value;
 use mod_api::{Host, Identifier, ItemStack, RecipeInput, RecipeRule};
 use std::cell::RefCell;
@@ -83,8 +83,13 @@ pub fn publish(host: &dyn Host) {
         clear();
         return;
     }
+    // `RuntimeDataGenerator`'s recipes (wood cutting, concrete washing), made from the items.
+    let items: Vec<String> = host.item_keys().into_iter().map(|k| k.id(host)).collect();
     let mut cutting = read_book(host, "create:cutting").recipes;
+    cutting.extend(runtime_data::cutting(&items));
     cutting.extend(read_stonecutting(host));
+    let mut splashing = read_book(host, "create:splashing").recipes;
+    splashing.extend(runtime_data::splashing(&items));
     let mut mixing = read_basin(host, "create:mixing");
     mixing.extend(read_shapeless_mixing(host));
     let next = Recipes {
@@ -94,7 +99,7 @@ pub fn publish(host: &dyn Host) {
         cutting: Book::new(cutting),
         mixing,
         compacting: read_basin(host, "create:compacting"),
-        splashing: read_book(host, "create:splashing"),
+        splashing: Book::new(splashing),
         haunting: read_book(host, "create:haunting"),
         smoking: read_cooking(host, "minecraft:smoking"),
         smelting: read_cooking(host, "minecraft:smelting"),
@@ -112,8 +117,22 @@ pub fn publish(host: &dyn Host) {
     RECIPES.with_borrow_mut(|r| *r = Some(next));
 }
 
-/// An ingredient's items in its order, from recipe-file JSON.
+/// An ingredient's items in its order, from recipe-file JSON: an item, a `#tag` or a list of
+/// them (the game's reading), or NeoForge's `neoforge:block_tag` (the items of the tag's
+/// blocks, in registry order), which the game reads only in its own recipe types.
 fn ingredient(host: &dyn Host, json: &Value) -> Option<Vec<String>> {
+    if json["type"].as_str() == Some("neoforge:block_tag") {
+        let tag = json["tag"].as_str()?;
+        let items: Vec<String> = host
+            .block_keys()
+            .into_iter()
+            .filter(|&b| host.block_in_tag(b, tag) == Some(true))
+            .filter_map(|b| host.block_item(b))
+            .map(|i| i.id(host))
+            .filter(|i| i != "minecraft:air")
+            .collect();
+        return (!items.is_empty()).then_some(items);
+    }
     let ing = host.recipe_ingredient(&json.to_string()).ok()??;
     Some(ing.order)
 }
@@ -222,10 +241,9 @@ fn read_stonecutting(host: &dyn Host) -> Vec<Recipe> {
 /// basin too, after Create's own.
 fn read_shapeless_mixing(host: &dyn Host) -> Vec<basin::Recipe> {
     let mut found = Vec::new();
-    for r in host.recipes_of_type("minecraft:crafting").iter() {
-        if r.json["type"].as_str() != Some("minecraft:crafting_shapeless")
-            || r.ingredients.len() < 2
-        {
+    // The game lists recipes by their file's type.
+    for r in host.recipes_of_type("minecraft:crafting_shapeless").iter() {
+        if r.ingredients.len() < 2 || r.id.ends_with("_manual_only") {
             continue;
         }
         let ingredients: Vec<Vec<String>> = r.ingredients.iter().map(|i| i.order.clone()).collect();

@@ -263,6 +263,8 @@ pub struct Dimension {
     pub brass_running: Vec<[i32; 3]>,
     /// Basins' fluid tanks (`BasinBlockEntity`'s inputs and outputs).
     pub basin_fluids: HashMap<[i32; 3], crate::basin::Tanks>,
+    /// Basins whose tanks changed: their clients are told (taken by the glue).
+    pub basin_changes: Vec<[i32; 3]>,
     /// Linear chassis ranges set with the wrench (`ChassisScrollValueBehaviour`; others 8).
     pub chassis_range: HashMap<[i32; 3], i32>,
     pub tunnels_new: Vec<[i32; 3]>,
@@ -916,8 +918,19 @@ impl CreateWorld {
         if block == Block::Spout {
             d.spouts.entry(pos).or_default();
         }
-        if block == Block::MechanicalDrill {
+        // Block breakers: the drill, and the saw facing sideways (`SawBlockEntity` cuts only then).
+        if block == Block::MechanicalDrill
+            || (block == Block::MechanicalSaw
+                && info
+                    .facing
+                    .is_some_and(|f| f.axis() != crate::kinetics::Axis::Y))
+        {
             d.drills.entry(pos).or_default();
+            // A breaker loaded already turning gets no speed change: it looks at its speed
+            // itself until one comes (a stopped one does nothing).
+            if !d.drilling.contains(&pos) {
+                d.drilling.push(pos);
+            }
         }
         if block == Block::MechanicalPump {
             d.pumps.entry(pos).or_default();
@@ -2885,7 +2898,8 @@ impl CreateWorld {
         }
     }
 
-    /// A basin's tanks changed: its mixer or press looks again, its column is saved.
+    /// A basin's tanks changed: its mixer or press looks again, its clients are told, its
+    /// column is saved.
     pub fn set_basin_fluids(&mut self, dim: usize, pos: [i32; 3], t: crate::basin::Tanks) {
         let d = &mut self.dims[dim];
         if t == crate::basin::Tanks::default() {
@@ -2894,6 +2908,7 @@ impl CreateWorld {
             d.basin_fluids.insert(pos, t);
         }
         d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
+        d.basin_changes.push(pos);
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }
 
@@ -3010,7 +3025,7 @@ impl CreateWorld {
         self.dims[dim].burner_saved.extend(saved);
     }
 
-    /// The burners of a column with fuel, to save.
+    /// The burners of a column with fuel or a creative heat, to save.
     pub fn column_burners(
         &self,
         dim: usize,
@@ -3020,7 +3035,7 @@ impl CreateWorld {
         let mut out: Vec<_> = self.dims[dim]
             .burners
             .iter()
-            .filter(|(p, b)| (p[0] >> 4, p[2] >> 4) == (cx, cz) && b.burning())
+            .filter(|(p, b)| (p[0] >> 4, p[2] >> 4) == (cx, cz) && b.saved())
             .map(|(p, b)| (*p, *b))
             .collect();
         out.sort_by_key(|(p, _)| *p);

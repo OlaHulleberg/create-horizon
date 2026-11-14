@@ -3,7 +3,7 @@
 //! and the game time its cycle started (`SPOUT_START`).
 
 use super::super::states;
-use super::client::fluid_part;
+use super::client::fluid_box;
 use super::{SPOUT_START, TANK};
 use create_engine::spout::FILLING_TIME;
 use create_engine::tank::Fluid;
@@ -36,13 +36,13 @@ pub(super) fn draw(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>
         let level = (amount as f32 / capacity as f32).clamp(0.175, 1.0);
         let (min, max) = (2.5 / 16.0, 2.5 / 16.0 + 11.0 / 16.0);
         let top = min + 11.0 / 16.0 * level;
-        fluid_part(
+        fluid_box(
             host,
-            event,
+            &mut *event.draw,
             fluid,
+            amount as u32,
             [min, min, min],
             [max, top, max],
-            amount as u32,
         );
     }
     // `processingTicks` and the frame's part of a tick.
@@ -60,13 +60,13 @@ pub(super) fn draw(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>
     if let (Some((fluid, amount, _)), Some(_)) = (tank, pt) {
         let r = radius.abs() / 32.0;
         if r > 0.0 {
-            fluid_part(
+            fluid_box(
                 host,
-                event,
+                &mut *event.draw,
                 fluid,
+                amount as u32,
                 [0.5 - r, -1.2, 0.5 - r],
                 [0.5 + r, 0.0, 0.5 + r],
-                amount as u32,
             );
         }
     }

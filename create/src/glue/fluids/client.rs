@@ -184,22 +184,22 @@ fn draw_tank(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
     let Some(fluid) = m.tank.fluid else {
         return;
     };
-    fluid_part(host, event, fluid, min, max, m.tank.amount);
+    fluid_box(host, &mut *event.draw, fluid, m.tank.amount, min, max);
     event.draw.keep();
 }
 
-/// A box of `fluid` from `min` to `max` in the block: drawn as the game draws a still fluid
-/// (water in its default colour), else the fluid's still texture on a block model stretched to
-/// the box.
-pub(super) fn fluid_part(
+/// A fluid's box from `min` to `max` (in blocks from the block's corner), as `FluidRenderer`
+/// draws one: as the game draws a still fluid (water in its default colour), else (a fluid the
+/// game has no key for) the fluid's still texture on a block model stretched to the box. Tanks,
+/// spouts, drains and basins draw theirs with it.
+pub(crate) fn fluid_box(
     host: &dyn ClientHost,
-    event: &mut BlockEntitySubmitEvent<'_>,
+    draw: &mut dyn mod_api::BlockEntityDrawContext,
     fluid: Fluid,
+    amount: u32,
     min: [f32; 3],
     max: [f32; 3],
-    amount: u32,
 ) {
-    let draw = &mut *event.draw;
     let bounds = [min[0], min[1], min[2], max[0], max[1], max[2]];
     let drawn = host.fluid_key(fluid.id()).is_some_and(|key| {
         let options = FluidBoxOptions::new(true, 0.0);

@@ -486,6 +486,8 @@ pub struct Shown {
     pub at: f32,
     pub per_tick: f32,
     pub held: Option<String>,
+    /// In punch mode (`Mode.PUNCH`): the held item is shown as a fist holds it.
+    pub punch: bool,
 }
 
 pub fn encode(list: &[Shown]) -> Vec<u8> {
@@ -494,7 +496,8 @@ pub fn encode(list: &[Shown]) -> Vec<u8> {
         for v in s.pos {
             out.extend_from_slice(&v.to_le_bytes());
         }
-        out.push(s.facing as u8);
+        // The facing, with the punch mode in its high bit.
+        out.push(s.facing as u8 | u8::from(s.punch) << 7);
         out.extend_from_slice(&s.at.to_le_bytes());
         out.extend_from_slice(&s.per_tick.to_le_bytes());
         let item = s.held.as_deref().unwrap_or("");
@@ -510,7 +513,7 @@ pub fn decode(mut data: &[u8]) -> Vec<Shown> {
     while data.len() >= 22 {
         let int = |i: usize| i32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
         let float = |i: usize| f32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
-        let Some(&facing) = Dir::ALL.get(usize::from(data[12])) else {
+        let Some(&facing) = Dir::ALL.get(usize::from(data[12] & 0x7f)) else {
             break;
         };
         let n = usize::from(data[21]);
@@ -524,6 +527,7 @@ pub fn decode(mut data: &[u8]) -> Vec<Shown> {
             at: float(13),
             per_tick: float(17),
             held: (!item.is_empty()).then_some(item),
+            punch: data[12] & 0x80 != 0,
         });
         data = &data[22 + n..];
     }
@@ -591,6 +595,7 @@ mod tests {
                 at: 0.5,
                 per_tick: -0.032,
                 held: Some("minecraft:oak_planks".into()),
+                punch: true,
             },
             Shown {
                 pos: [4, 5, 6],
@@ -598,6 +603,7 @@ mod tests {
                 at: 0.0,
                 per_tick: 0.0,
                 held: None,
+                punch: false,
             },
         ];
         assert_eq!(decode(&encode(&list)), list);

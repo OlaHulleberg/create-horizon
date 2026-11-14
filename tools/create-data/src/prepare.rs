@@ -61,6 +61,15 @@ fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Result<
 /// `"#t"`, lists of strings). Anything else is left as it is.
 pub fn ingredient(v: &Value) -> Value {
     match v {
+        // NeoForge's block-tag ingredient keeps its shape; only the tag's 26.3 name changes.
+        Value::Object(o) if o.get("type").and_then(Value::as_str) == Some("neoforge:block_tag") => {
+            let mut o = o.clone();
+            if let Some(t) = o.get("tag").and_then(Value::as_str) {
+                let t = renamed_tag(t).to_string();
+                o.insert("tag".into(), Value::String(t));
+            }
+            Value::Object(o)
+        }
         Value::Object(o) if o.len() == 1 && o.get("item").is_some_and(Value::is_string) => {
             o["item"].clone()
         }
@@ -76,6 +85,14 @@ pub fn ingredient(v: &Value) -> Value {
             }
         }
         other => other.clone(),
+    }
+}
+
+/// A vanilla tag Create's 1.21.1 data names by a name 26.3 changed.
+fn renamed_tag(tag: &str) -> &str {
+    match tag {
+        "minecraft:convertable_to_mud" => "minecraft:convertible_to_mud",
+        t => t,
     }
 }
 
@@ -115,6 +132,14 @@ pub fn convert_recipe(mut doc: Value) -> Option<Value> {
     if let Some(Value::Array(list)) = o.get_mut("ingredients") {
         for v in list.iter_mut() {
             *v = ingredient(v);
+        }
+    }
+    // A sequenced assembly's steps are recipes of their own, nested.
+    if let Some(Value::Array(steps)) = o.get_mut("sequence") {
+        for step in steps.iter_mut() {
+            if let Some(c) = convert_recipe(step.take()) {
+                *step = c;
+            }
         }
     }
     Some(doc)
@@ -546,6 +571,20 @@ mod tests {
         let c = convert_recipe(s).unwrap();
         assert_eq!(c["ingredients"][0], json!(["a:b", "c:d"]));
         assert_eq!(c["ingredients"][1], "#x:y");
+        let a = json!({"type": "create:sequenced_assembly", "ingredient": {"tag": "c:plates/gold"},
+            "sequence": [{"type": "create:deploying",
+                "ingredients": [{"item": "a:b"}, [{"tag": "c:nuggets/iron"}, {"tag": "c:nuggets/zinc"}]]}]});
+        let c = convert_recipe(a).unwrap();
+        assert_eq!(c["ingredient"], "#c:plates/gold");
+        assert_eq!(c["sequence"][0]["ingredients"][0], "a:b");
+        assert_eq!(
+            c["sequence"][0]["ingredients"][1],
+            json!(["#c:nuggets/iron", "#c:nuggets/zinc"])
+        );
+        let m = json!({"type": "create:mixing", "ingredients": [
+            {"type": "neoforge:block_tag", "tag": "minecraft:convertable_to_mud"}]});
+        let c = convert_recipe(m).unwrap();
+        assert_eq!(c["ingredients"][0]["tag"], "minecraft:convertible_to_mud");
     }
 
     #[test]

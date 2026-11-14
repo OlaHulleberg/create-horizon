@@ -106,6 +106,7 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         let (lo, hi) = cell(0.5);
         let found = lv.items_in(lo, hi).into_iter().find(|d| d.id() == id);
         match found {
+            None if crush_entity(lv, pos, facing, speed, id) => {}
             None => c.entity = None,
             Some(d) => {
                 let item = stacks::id(&*lv.host, &d.stack);
@@ -130,7 +131,8 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             .items_in(lo, hi)
             .into_iter()
             .find(|d| !crusher::bypassed(pos, facing, d.at))
-            .map(|d| d.id());
+            .map(|d| d.id())
+            .or_else(|| crushable_in(lv, lo, hi));
     } else {
         match crusher::tick_inventory(&mut c, speed) {
             crusher::Step::Wait => {}
@@ -182,4 +184,93 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             w.mark_unsaved(dim, pos);
         }
     });
+}
+
+/// `CrushingWheelControllerBlockEntity.CRUSHER_DAMAGE` (`crushingDamage`, 4 by default).
+const CRUSHING_DAMAGE: f32 = 4.0;
+
+/// The damage the wheels deal. Create's own `create:crush` (through armour, `bypasses_armor`)
+/// is not among the world's damage types: a native mod's `data/<ns>/damage_type` files are not
+/// read (HORIZON_API.md), so vanilla's cramming, which also goes through armour, stands in.
+const CRUSH: &str = "minecraft:cramming";
+
+/// `CrushingWheelControllerBlock.checkEntityForProcessing` for what is not an item: the first
+/// living entity in the controller's cell, but a creative player or any player on peaceful.
+fn crushable_in(lv: &mut ServerLevel<'_>, lo: [f64; 3], hi: [f64; 3]) -> Option<u32> {
+    let peaceful = lv.level.difficulty(&*lv.host) == Some("peaceful");
+    let found = lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default();
+    found
+        .into_iter()
+        .find(|&e| {
+            if lv.host.item_entity(e).is_some() || lv.host.living(e).is_none() {
+                return false;
+            }
+            if e.kind(&*lv.host).as_deref() == Some("minecraft:player") {
+                let creative = e
+                    .uuid(&mut *lv.host)
+                    .and_then(|u| lv.host.player(u))
+                    .and_then(|p| p.is_creative(&*lv.host))
+                    .unwrap_or(false);
+                return !creative && !peaceful;
+            }
+            true
+        })
+        .map(|e| e.id())
+}
+
+/// `CrushingWheelControllerBlockEntity.tick` for a held entity that is not an item: drawn to
+/// the middle and along the facing (held still across it when sneaking), hurt by the crushing
+/// (`CreateDamageSources.crush`) every tick and moved out past the wheels when it dies (just
+/// before the blow that would kill it, so its drops fall there). False when it is gone or out of
+/// the cell: the controller lets go.
+fn crush_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, speed: f32, id: u32) -> bool {
+    let lo = pos.map(|v| f64::from(v) - 0.5);
+    let hi = pos.map(|v| f64::from(v) + 1.5);
+    let Some(entity) = lv
+        .level
+        .entities_in(&*lv.host, lo, hi)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|e| e.id() == id)
+    else {
+        return false;
+    };
+    let Some(living) = lv.host.living(entity) else {
+        return false;
+    };
+    if living.alive(&*lv.host) != Some(true) {
+        return false;
+    }
+    let Some(at) = entity.position(&*lv.host) else {
+        return false;
+    };
+    let (mut motion, _) = crusher::hold(pos, facing, speed, at);
+    if entity.is_shift_key_down(&*lv.host) == Some(true) {
+        let a = match facing.axis() {
+            Axis::X => 0,
+            Axis::Y => 1,
+            Axis::Z => 2,
+        };
+        for (i, m) in motion.iter_mut().enumerate() {
+            if i != a {
+                *m = 0.0;
+            }
+        }
+    }
+    entity.set_velocity(&mut *lv.host, motion);
+    // `entityOutPos`: half a block past where items leave.
+    let (out, _) = crusher::output(pos, facing);
+    let o = facing.offset();
+    let out = [0, 1, 2].map(|i| out[i] + 0.5 * f64::from(o[i]));
+    if living
+        .health(&*lv.host)
+        .is_some_and(|h| h - CRUSHING_DAMAGE <= 0.0)
+    {
+        entity.teleport_to(&mut *lv.host, out, None);
+    }
+    let _ = entity.hurt(&mut *lv.host, CRUSH, CRUSHING_DAMAGE, None, None);
+    if living.alive(&*lv.host) != Some(true) {
+        entity.teleport_to(&mut *lv.host, out, None);
+    }
+    true
 }

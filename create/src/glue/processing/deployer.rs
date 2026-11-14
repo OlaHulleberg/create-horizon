@@ -480,7 +480,14 @@ fn act(
         .held
         .as_ref()
         .and_then(|h| held_stack(lv, h, d.held_damage));
-    let (eye, _) = deployer::ray(pos, facing);
+    // Create's fake player stands at the ray's origin with no eye height and is not in the
+    // world; the game's has a standing body there (1.62 to its eyes), which would be in the
+    // way of the block it places. It stands in the deployer instead: its eyes in the middle,
+    // facing down above it.
+    let mut eye = pos.map(|v| f64::from(v) + 0.5);
+    if facing == Dir::Down {
+        eye[1] = f64::from(pos[1]) + 1.63;
+    }
     // The fake player looks the way the deployer faces.
     let (yaw, pitch) = match facing {
         Dir::Down => (0.0, 90.0),
@@ -724,6 +731,7 @@ fn send_deployers(lv: &mut ServerLevel<'_>, players: &[PlayerRef], list: &[[i32;
                     facing: f,
                     at,
                     per_tick: v,
+                    punch: d.mode == deployer::Mode::Punch,
                     held: d.held.map(|h| h.0),
                 }
             }
@@ -733,6 +741,7 @@ fn send_deployers(lv: &mut ServerLevel<'_>, players: &[PlayerRef], list: &[[i32;
                 at: f32::NAN,
                 per_tick: 0.0,
                 held: None,
+                punch: false,
             },
         });
     }

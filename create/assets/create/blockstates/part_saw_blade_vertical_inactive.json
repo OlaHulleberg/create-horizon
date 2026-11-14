@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/mechanical_saw/blade_vertical_inactive",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/mechanical_saw/blade_vertical_inactive",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/mechanical_saw/blade_vertical_inactive"
+    },
+    "facing=west": {
+      "model": "create:block/mechanical_saw/blade_vertical_inactive",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/mechanical_saw/blade_vertical_inactive",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/mechanical_saw/blade_vertical_inactive",
+      "x": 270
+    }
+  }
+}
