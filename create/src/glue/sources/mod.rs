@@ -4,6 +4,7 @@
 //! network's (`kinetics`); a crank's and a valve's use are `interaction`'s and `blocks`'.
 
 pub mod handles;
+pub mod indicators;
 pub mod stress;
 pub mod waterwheels;
 
@@ -14,10 +15,11 @@ use create_engine::Block;
 use create_engine::client::Draw;
 use create_engine::dye;
 use mod_api::{
-    ClientHost, Compound, Flow, HostSide, ModBlockEntity, Registrar, RegistrationContext,
-    RightClickBlockEvent, Tag,
+    ClientHost, Compound, EntityPlaceEvent, EquipmentSlot, Flow, HostSide, ModBlockEntity,
+    ParticleProviders, Registrar, RegistrationContext, RightClickBlockEvent, ServerHost, Tag,
 };
 use std::cell::RefCell;
+use std::sync::Arc;
 
 /// The block entity data keys the sources' clients read.
 const SYNCED: &[&str] = &[
@@ -77,6 +79,15 @@ fn tell_generated(lv: &mut ServerLevel<'_>) {
                 Some(Tag::Float(bits)) => Some(f32::from_bits(*bits)),
                 _ => None,
             });
+        // `updateGeneratedRotation`: a source that drives its network (`!hasSource`) and
+        // changes speed level shows its indicators.
+        let level = create_engine::gauge::SpeedLevel::of;
+        let driving = with_world(|w| w.dims[dim].kinetics.speed(pos, 0))
+            .flatten()
+            .is_some_and(|s| s.abs() == generated.abs());
+        if level(told.unwrap_or(0.0)) != level(generated) && driving {
+            indicators::queue(dim, pos);
+        }
         if told != Some(generated) {
             let data = Compound::from([(GENERATED.into(), Tag::Float(generated.to_bits()))]);
             let _ = entity.merge_data(&mut *lv.host, data);
@@ -100,6 +111,7 @@ impl Subsystem for Sources {
         waterwheels::register(r);
         handles::register(r);
         stress::register(r);
+        indicators::register(r);
     }
 
     fn synced_keys(&self) -> &'static [&'static str] {
@@ -120,6 +132,7 @@ impl Subsystem for Sources {
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         tell_generated(lv);
         handles::level_tick(lv);
+        indicators::level_tick(lv);
     }
 
     fn draws_itself(&self, block: Block, part: &Draw) -> bool {
@@ -133,6 +146,38 @@ impl Subsystem for Sources {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         handles::client_tick(&*host);
         stress::client_tick(host);
+        let goggles = host.local_player().is_some_and(|p| {
+            let head = host
+                .living(p.entity())
+                .and_then(|l| l.equipment(&*host, EquipmentSlot::Head));
+            super::items::is(head.as_ref(), super::items::Item::Goggles)
+        });
+        indicators::client_tick(goggles);
+    }
+
+    fn particle_providers(&self, providers: &mut dyn ParticleProviders) {
+        providers.register(indicators::NAME.to_owned(), Arc::new(indicators::Indicator));
+    }
+
+    /// `KineticBlock.setPlacedBy`: a kinetic block a player places shows its indicators.
+    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut EntityPlaceEvent) -> Flow {
+        let Some(placer) = event.placer else {
+            return Flow::Continue;
+        };
+        let Some(dim) = placer
+            .level(&*host)
+            .and_then(|l| l.dimension().id(&*host))
+            .and_then(|d| super::world::level_index(&d))
+        else {
+            return Flow::Continue;
+        };
+        let kinetic = super::states::id(event.state)
+            .and_then(|id| with_world(|w| w.table.is_kinetic(id)))
+            == Some(true);
+        if kinetic {
+            indicators::queue(dim, [event.pos.x, event.pos.y, event.pos.z]);
+        }
+        Flow::Continue
     }
 
     fn client_reset(&self) {

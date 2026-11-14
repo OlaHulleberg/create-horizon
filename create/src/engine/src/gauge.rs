@@ -52,6 +52,16 @@ impl SpeedLevel {
         }
     }
 
+    /// `SpeedLevel.getParticleSpeed`: how fast its rotation indicators circle.
+    pub fn particle_speed(self) -> i32 {
+        match self {
+            SpeedLevel::None => 0,
+            SpeedLevel::Slow => 10,
+            SpeedLevel::Medium => 20,
+            SpeedLevel::Fast => 30,
+        }
+    }
+
     /// `SpeedLevel.getTextColor` (ChatFormatting DARK_GRAY, GREEN, AQUA, LIGHT_PURPLE).
     pub fn text_color(self) -> u32 {
         match self {

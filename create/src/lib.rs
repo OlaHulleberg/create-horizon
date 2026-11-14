@@ -144,6 +144,16 @@ impl Hooks for Create {
         until_cancel(|s| s.entity_place(host, event))
     }
 
+    fn register_particle_providers(
+        &self,
+        _context: &RegistrationContext,
+        event: &mut mod_api::RegisterParticleProvidersEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.particle_providers(&mut *event.providers);
+        }
+    }
+
     fn right_click_block(&self, mut host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
         until_cancel(|s| s.right_click_block(reborrow(&mut host), event))
     }
