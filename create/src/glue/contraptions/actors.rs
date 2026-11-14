@@ -2009,17 +2009,121 @@ fn tick_interface(
 /// The contraption an item interface at `pos` hands its storage to now (`canTransfer`), if
 /// any: whatever reaches the interface reaches that storage.
 fn psi_connected(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<[i32; 3]> {
+    interface_connected(lv, pos, Block::PortableStorageInterface)
+}
+
+/// The contraption an interface of kind `kind` at `pos` hands its storage to now.
+fn interface_connected(lv: &ServerLevel<'_>, pos: [i32; 3], kind: Block) -> Option<[i32; 3]> {
     let state = lv.block(pos);
     create_engine::states::index(state)?;
     let dim = lv.dim;
     with_world(|w| {
         let (b, _) = w.table.get(state)?;
-        if b != Block::PortableStorageInterface {
+        if b != kind {
             return None;
         }
         w.dims[dim].psis.get(&pos)?.can_transfer()
     })
     .flatten()
+}
+
+/// The fluid tanks contraption `key` carries (`MountedStorageManager.getFluids`: its tanks'
+/// contents, controller by controller), changed by `f`.
+fn with_carried_tanks<R>(
+    dim: usize,
+    key: [i32; 3],
+    f: impl FnOnce(&mut [&mut create_engine::tank::Multi]) -> R,
+) -> Option<R> {
+    HELD.with_borrow_mut(|m| {
+        let list = m.get_mut(&(dim, key))?;
+        let mut tanks: Vec<&mut create_engine::tank::Multi> = list
+            .iter_mut()
+            .filter_map(|(_, d)| d.tank.as_mut())
+            .collect();
+        Some(f(&mut tanks))
+    })
+}
+
+/// A portable fluid interface at `pos` as a pump's end (`InterfaceFluidHandler.drain`, simulated):
+/// what the tanks of the contraption it is connected to give, up to `amount` of the first fluid
+/// in them; Some(None) when it is connected to nothing, None for any other block.
+pub fn pfi_offer(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    amount: u32,
+) -> Option<Option<(create_engine::tank::Fluid, u32)>> {
+    if lv.create_block(pos) != Some(Block::PortableFluidInterface) {
+        return None;
+    }
+    let Some(key) = interface_connected(lv, pos, Block::PortableFluidInterface) else {
+        return Some(None);
+    };
+    let offer = with_carried_tanks(lv.dim, key, |tanks| {
+        let fluid = tanks.iter().find_map(|t| t.tank.fluid)?;
+        let have: u32 = tanks
+            .iter()
+            .filter(|t| t.tank.fluid == Some(fluid))
+            .map(|t| t.tank.amount)
+            .sum();
+        Some((fluid, have.min(amount)))
+    });
+    Some(offer.flatten())
+}
+
+/// What a pump drew from a portable fluid interface leaves the contraption's tanks
+/// (`InterfaceFluidHandler.drain`): `amount` of their first fluid, tank by tank.
+pub fn pfi_drain(lv: &ServerLevel<'_>, pos: [i32; 3], amount: u32) {
+    let Some(key) = interface_connected(lv, pos, Block::PortableFluidInterface) else {
+        return;
+    };
+    let mut left = amount;
+    with_carried_tanks(lv.dim, key, |tanks| {
+        let Some(fluid) = tanks.iter().find_map(|t| t.tank.fluid) else {
+            return;
+        };
+        for t in tanks.iter_mut().filter(|t| t.tank.fluid == Some(fluid)) {
+            if left == 0 {
+                break;
+            }
+            left -= t.tank.drain_amount(left).map_or(0, |d| d.1);
+        }
+    });
+    if left < amount {
+        psi_transferred(lv.dim, pos);
+    }
+}
+
+/// A pump filling a portable fluid interface (`InterfaceFluidHandler.fill`): into the tanks of
+/// the contraption it is connected to, tank by tank (`CombinedTankWrapper`); how much went in.
+/// None for any other block.
+pub fn pfi_fill(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    fluid: create_engine::tank::Fluid,
+    amount: u32,
+) -> Option<u32> {
+    if lv.create_block(pos) != Some(Block::PortableFluidInterface) {
+        return None;
+    }
+    let Some(key) = interface_connected(lv, pos, Block::PortableFluidInterface) else {
+        return Some(0);
+    };
+    let took = with_carried_tanks(lv.dim, key, |tanks| {
+        let mut left = amount;
+        for t in tanks.iter_mut() {
+            if left == 0 {
+                break;
+            }
+            let capacity = t.capacity();
+            left -= t.tank.fill_amount(fluid, left, capacity);
+        }
+        amount - left
+    })
+    .unwrap_or(0);
+    if took > 0 {
+        psi_transferred(lv.dim, pos);
+    }
+    Some(took)
 }
 
 /// Whether an item interface stands at `pos` (connected or not).

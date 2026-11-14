@@ -46,7 +46,7 @@ pub(super) fn plumbing_cell(
             )
         }
         Block::HosePulley => Cell::Port(create_engine::hose::pipe_side(info.facing?)),
-        Block::CreativeFluidTank => Cell::Tank,
+        Block::CreativeFluidTank | Block::PortableFluidInterface => Cell::Tank,
         _ => return None,
     })
 }
@@ -59,6 +59,10 @@ pub(super) fn source(
     amount: u32,
 ) -> Option<Option<(Fluid, u32)>> {
     let dim = lv.dim;
+    // A portable fluid interface gives what its contraption's tanks hold.
+    if let Some(offer) = crate::glue::contraptions::actors::pfi_offer(lv, pos, amount) {
+        return Some(offer);
+    }
     // CreativeSmartFluidTank.drain: always full of its fluid, never emptied.
     if let Some(fluid) = with_world(|w| w.dims[dim].plumbing.creative_fluid(pos)).flatten() {
         return Some(fluid.map(|f| (f, amount)));
@@ -74,6 +78,7 @@ pub(super) fn source(
 /// real).
 pub(super) fn take(lv: &mut ServerLevel<'_>, pos: [i32; 3], moved: u32) {
     let dim = lv.dim;
+    crate::glue::contraptions::actors::pfi_drain(lv, pos, moved);
     let Some(mut hose) = with_world(|w| w.dims[dim].plumbing.hoses.remove(&pos)).flatten() else {
         return;
     };
@@ -92,6 +97,9 @@ pub(super) fn sink(
     amount: u32,
 ) -> Option<u32> {
     let dim = lv.dim;
+    if let Some(took) = crate::glue::contraptions::actors::pfi_fill(lv, pos, fluid, amount) {
+        return Some(took);
+    }
     if with_world(|w| w.dims[dim].plumbing.creative.contains_key(&pos)) == Some(true) {
         return Some(amount);
     }
