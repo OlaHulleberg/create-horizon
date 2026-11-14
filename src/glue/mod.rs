@@ -3,6 +3,9 @@
 
 pub mod interaction;
 pub mod items;
+pub mod equipment;
+pub mod fluids;
+pub mod gauges;
 pub mod kinetics;
 pub mod logistics;
 pub mod net;
@@ -38,6 +41,9 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &trains::Carts,
     &trains::Trains,
     &trains::TrainControls,
+    &equipment::Equipment,
+    &fluids::Fluids,
+    &gauges::Gauges,
 ];
 
 thread_local! {
