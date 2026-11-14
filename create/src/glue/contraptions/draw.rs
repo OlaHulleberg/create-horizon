@@ -136,7 +136,26 @@ pub fn moving(data: &Compound) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Server: writing a structure into its anchor
 
-fn blocks_tags(c: &mut Compound, suffix: &str, host: &dyn Host, blocks: &[([i32; 3], u32)]) {
+/// `blocks` (offsets from `place`, in whole blocks from the anchor) with their states, and the
+/// light each is drawn with.
+fn blocks_tags(
+    c: &mut Compound,
+    suffix: &str,
+    lv: &ServerLevel<'_>,
+    anchor: [i32; 3],
+    place: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+) {
+    let host = &*lv.host;
+    c.insert(
+        format!("Lights{suffix}").as_str().into(),
+        Tag::IntArray(
+            blocks
+                .iter()
+                .map(|(o, _)| light_near(lv, [0, 1, 2].map(|i| anchor[i] + place[i] + o[i])) as i32)
+                .collect(),
+        ),
+    );
     c.insert(
         format!("Blocks{suffix}").as_str().into(),
         Tag::IntArray(blocks.iter().flat_map(|(o, _)| *o).collect()),
@@ -150,6 +169,24 @@ fn blocks_tags(c: &mut Compound, suffix: &str, host: &dyn Host, blocks: &[([i32;
                 .collect(),
         ),
     );
+}
+
+/// The light a moving block at `p` is drawn with (`ContraptionRenderer` lights each block with
+/// the world's light where it is): the brightest of its cell and the six beside it, since the
+/// cell itself may not have been lit again since its block left. The anchor's own light is its
+/// block's, dark inside a solid bearing or piston. Packed as the draw context takes it: 16
+/// times sky light in bits 0..8, 16 times block light in bits 8..16.
+fn light_near(lv: &ServerLevel<'_>, p: [i32; 3]) -> u32 {
+    use mod_api::LightLayer;
+    let (mut sky, mut block) = (0, 0);
+    for o in [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]] {
+        let q = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
+        let at = |layer| lv.level.brightness(&*lv.host, layer, q).unwrap_or(0);
+        sky = sky.max(at(LightLayer::Sky));
+        block = block.max(at(LightLayer::Block));
+    }
+    let c = |v: i32| (v.clamp(0, 15) as u32) * 16;
+    c(sky) | c(block) << 8
 }
 
 fn float(v: f32) -> Tag {
@@ -208,7 +245,7 @@ pub(super) fn show_turn(
 ) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(TURN));
-    blocks_tags(&mut c, "", &*lv.host, blocks);
+    blocks_tags(&mut c, "", lv, anchor, [0; 3], blocks);
     c.insert("Axis".into(), Tag::Int(axis_index(axis)));
     let now = lv.game_time();
     c.insert("Angle".into(), float(turn.map_or(0.0, |t| t.angle_at(now))));
@@ -234,7 +271,8 @@ pub(super) struct Glide<'a> {
 pub(super) fn show_glide(lv: &mut ServerLevel<'_>, anchor: [i32; 3], g: Glide<'_>) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(GLIDE));
-    blocks_tags(&mut c, "", &*lv.host, g.blocks);
+    let place = [0, 1, 2].map(|i| g.origin[i] + (g.dir[i] as f32 * g.offset).round() as i32);
+    blocks_tags(&mut c, "", lv, anchor, place, g.blocks);
     c.insert("Origin".into(), Tag::IntArray(g.origin.to_vec()));
     c.insert("Dir".into(), Tag::IntArray(g.dir.to_vec()));
     c.insert("Offset".into(), float(g.offset));
@@ -262,8 +300,8 @@ pub(super) struct Hands<'a> {
 pub(super) fn show_clock(lv: &mut ServerLevel<'_>, anchor: [i32; 3], h: Hands<'_>) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(CLOCK));
-    blocks_tags(&mut c, "", &*lv.host, h.hour);
-    blocks_tags(&mut c, "2", &*lv.host, h.minute);
+    blocks_tags(&mut c, "", lv, anchor, [0; 3], h.hour);
+    blocks_tags(&mut c, "2", lv, anchor, [0; 3], h.minute);
     c.insert("Axis".into(), Tag::Int(axis_index(h.axis)));
     c.insert("Angle".into(), float(h.angles.0));
     c.insert("Angle2".into(), float(h.angles.1));
@@ -283,7 +321,12 @@ pub(super) fn show_elevator(
 ) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(ELEVATOR));
-    blocks_tags(&mut c, "", &*lv.host, &e.blocks);
+    let place = [
+        e.anchor[0] - anchor[0],
+        e.y.round() as i32 - anchor[1],
+        e.anchor[2] - anchor[2],
+    ];
+    blocks_tags(&mut c, "", lv, anchor, place, &e.blocks);
     let y = e.y.to_bits();
     let nums = vec![
         e.anchor[0],
@@ -341,12 +384,15 @@ fn vec3(v: &[i32]) -> [i32; 3] {
 /// A block of a structure as the client draws it: its offset, block and properties.
 struct Drawn {
     at: [f32; 3],
+    /// The light it is drawn with (none from an older save: the anchor's).
+    light: Option<u32>,
     block: BlockKey,
     props: Vec<(String, String)>,
 }
 
 fn drawn_blocks(host: &dyn Host, c: &Compound, suffix: &str) -> Vec<Drawn> {
     let offsets = ints(c, &format!("Blocks{suffix}"));
+    let lights = ints(c, &format!("Lights{suffix}"));
     let Some(Tag::List(texts)) = c.get(&format!("States{suffix}").as_str().into()) else {
         return Vec::new();
     };
@@ -355,13 +401,15 @@ fn drawn_blocks(host: &dyn Host, c: &Compound, suffix: &str) -> Vec<Drawn> {
         .0
         .iter()
         .zip(texts)
-        .filter_map(|(o, t)| {
+        .enumerate()
+        .filter_map(|(i, (o, t))| {
             let Tag::String(t) = t else { return None };
             let text = t.to_string_lossy();
             let state = host.block_state_id(&text)?;
             let (_, props) = states::split(&text);
             Some(Drawn {
                 at: o.map(|v| v as f32),
+                light: lights.get(i).map(|l| *l as u32),
                 block: state.block(),
                 props: props
                     .into_iter()
@@ -525,17 +573,20 @@ fn client_tick(_host: &mut dyn ClientHost) {
 }
 
 fn draw_blocks(draw: &mut dyn BlockEntityDrawContext, blocks: &[Drawn]) {
+    let own = draw.light();
     for b in blocks {
         let props: Vec<(&str, &str)> = b
             .props
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
+        draw.set_light(b.light.unwrap_or(own));
         draw.push();
         draw.translate(b.at);
         draw.block(b.block, &props);
         draw.pop();
     }
+    draw.set_light(own);
 }
 
 /// The speed the kinetic data gives the anchor's own part (slot 0).
