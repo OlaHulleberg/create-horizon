@@ -2337,6 +2337,41 @@ impl CreateWorld {
         step
     }
 
+    /// The instructions of the sequenced gearshift at `pos`.
+    pub fn sequencer_instructions(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+    ) -> Option<Vec<crate::sequencer::Instruction>> {
+        Some(self.dims[dim].sequencers.get(&pos)?.instructions.clone())
+    }
+
+    /// `ConfigureSequencedGearshiftPacket.applySettings`: the running sequence stops
+    /// (`run(-1)`, its block's `state` back to 0 unless powered) and the new instructions are
+    /// its own. With `stop` false (its block entity loading them) nothing else changes.
+    pub fn set_sequencer_instructions(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        instructions: Vec<crate::sequencer::Instruction>,
+        stop: bool,
+    ) -> bool {
+        let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
+            return false;
+        };
+        let step = if stop { s.run(-1) } else { None };
+        s.instructions = if instructions.is_empty() {
+            crate::sequencer::default_instructions()
+        } else {
+            instructions
+        };
+        if let Some(step) = step {
+            self.dims[dim].sequencer_steps.push((pos, step));
+        }
+        self.sequencer_stepped(dim, pos);
+        true
+    }
+
     /// One tick of the sequenced gearshifts whose instruction runs (`tick`), and the steps they
     /// took as their speed changed: what their blocks' `state` becomes. Nothing without one.
     pub fn tick_sequencers(&mut self, dim: usize) -> Vec<([i32; 3], crate::sequencer::Step)> {

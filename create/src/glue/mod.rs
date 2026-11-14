@@ -21,6 +21,7 @@ pub mod persist;
 pub mod processing;
 pub mod redstone;
 pub mod schematics;
+pub mod sequencer;
 pub mod server;
 pub mod states;
 pub mod stock;

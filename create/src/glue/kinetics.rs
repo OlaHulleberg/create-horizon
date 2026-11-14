@@ -52,6 +52,57 @@ impl Subsystem for Kinetics {
             crate::create_log!("[create] the kinetic block entity's part was refused: {e:?}");
         }
         super::transmission::register(r);
+        super::sequencer::register(r);
+    }
+
+    fn client_message(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        player: mod_api::PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        super::sequencer::client_message(host, player, channel, data)
+    }
+
+    fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
+        super::sequencer::server_message(host, channel, data)
+    }
+
+    fn client_tick(&self, host: &mut dyn ClientHost) {
+        super::sequencer::client_tick(host);
+    }
+
+    fn client_reset(&self) {
+        super::sequencer::client_reset();
+    }
+
+    fn screen_render_post(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenRenderPostEvent<'_>,
+    ) {
+        super::sequencer::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> mod_api::Flow {
+        super::sequencer::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_scrolled(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenMouseScrolledPreEvent<'_>,
+    ) -> mod_api::Flow {
+        super::sequencer::screen_mouse_scrolled(host, event)
+    }
+
+    fn screen_closing(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenClosingEvent<'_>) {
+        super::sequencer::screen_closing(host, event);
     }
 
     fn wrench_used(
@@ -358,6 +409,9 @@ impl BlockEntityPart for KineticEntity {
         };
         super::ensure_column(host, &dimension, [pos[0] >> 4, pos[2] >> 4]);
         with_world(|w| w.block_loaded(dim, pos, state));
+        if with_world(|w| w.block_at(dim, pos)).flatten() == Some(Block::SequencedGearshift) {
+            super::sequencer::loaded(&*host, dim, pos, entity);
+        }
     }
 
     fn block_entity_update_tag(
