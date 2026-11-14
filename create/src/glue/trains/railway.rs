@@ -14,9 +14,11 @@ use super::{assembly, riding, saved, tracks, visuals};
 use create_engine::Block;
 use create_engine::trains::{CURVE_UPDATE_TICKS, Event, Run};
 use mod_api::{
-    BlockClick, BlockPart, BlockSignalEvent, ClientHost, Compound, Host, InteractionResult,
-    IsSignalSourceEvent, LevelHost, PlayerRef, Registrar, RegistrationContext, ServerHost,
-    UseItemOnEvent, UseWithoutItemEvent,
+    BlockClick, BlockPart, BlockSignalEvent, ClientHost, Compound, Flow, Host, InteractionResult,
+    IsSignalSourceEvent, LevelHost, PlayerRef, Registrar, RegistrationContext,
+    ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenRenderPostEvent, ServerHost, UseItemOnEvent,
+    UseWithoutItemEvent,
 };
 use std::cell::RefCell;
 
@@ -50,6 +52,8 @@ impl Subsystem for Trains {
 
     fn world_closed(&self) {
         tracks::forget();
+        assembly::forget();
+        super::station_screen::forget();
         visuals::forget();
         riding::forget();
     }
@@ -68,7 +72,7 @@ impl Subsystem for Trains {
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         let trains = saved::trains_from_nbt(&*lv.host, data);
-        let names = saved::station_names_from_nbt(data);
+        let names = saved::stations_from_nbt(data);
         let curves = saved::curves_from_nbt(data);
         if trains.is_empty() && names.is_empty() && curves.is_empty() {
             return;
@@ -76,7 +80,7 @@ impl Subsystem for Trains {
         let dim = lv.dim;
         with_world(|w| {
             w.load_trains(dim, trains);
-            w.dims[dim].railway.load_names(names.into_iter());
+            w.dims[dim].railway.load_stations(names);
             for c in curves {
                 w.dims[dim].track_curves.add(c);
             }
@@ -88,7 +92,7 @@ impl Subsystem for Trains {
         let Some((trains, names, curves)) = with_world(|w| {
             (
                 w.column_trains(dim, chunk[0], chunk[1]),
-                w.dims[dim].railway.column_names(chunk[0], chunk[1]),
+                w.dims[dim].railway.column_stations(chunk[0], chunk[1]),
                 w.dims[dim].track_curves.column(chunk[0], chunk[1]),
             )
         }) else {
@@ -98,7 +102,7 @@ impl Subsystem for Trains {
             data.insert("trains".into(), saved::trains_to_nbt(&*lv.host, &trains));
         }
         if !names.is_empty() {
-            data.insert("station_names".into(), saved::station_names_to_nbt(&names));
+            data.insert("station_names".into(), saved::stations_to_nbt(&names));
         }
         if !curves.is_empty() {
             data.insert("track_curves".into(), saved::curves_to_nbt(&curves));
@@ -113,19 +117,74 @@ impl Subsystem for Trains {
         riding::tick(lv);
         super::controls::after_trains(lv);
         tracks::sync(lv);
+        super::station_screen::tick(lv);
+    }
+
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        match channel {
+            super::station_screen::CHANNEL => {
+                super::station_screen::client_message(host, player, data);
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         match channel {
             TRAIN_CHANNEL => super::client::trains_from_server(&*host, data),
             STATES_CHANNEL => super::client::states_from_server(&*host, data),
+            super::station_screen::CHANNEL => super::station_screen::server_message(host, data),
             _ => return false,
         }
         true
     }
 
+    fn client_tick(&self, host: &mut dyn ClientHost) {
+        super::station_screen::tick_client(host);
+    }
+
     fn client_reset(&self) {
         super::client::reset();
+        super::station_screen::reset();
+    }
+
+    fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
+        super::station_screen::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> Flow {
+        super::station_screen::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_key_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenKeyPressedPreEvent<'_>,
+    ) -> Flow {
+        super::station_screen::screen_key_pressed(host, event)
+    }
+
+    fn screen_char_typed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenCharTypedPreEvent<'_>,
+    ) -> Flow {
+        super::station_screen::screen_char_typed(host, event)
+    }
+
+    fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
+        super::station_screen::screen_closing(host, event);
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {

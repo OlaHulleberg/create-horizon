@@ -4,7 +4,7 @@
 use create_engine::schedule::{Condition, Entry, Runtime, Schedule, State};
 use create_engine::track_curves::Saved;
 use create_engine::trains::{
-    BogeySize, CarriageShape, Nav, Placed, SavedMotion, Train, TrainOnTrack,
+    BogeySize, CarriageShape, Nav, Placed, SavedMotion, SavedStation, Train, TrainOnTrack,
 };
 use mod_api::{Compound, Host, Tag};
 
@@ -72,6 +72,10 @@ pub fn trains_to_nbt(host: &dyn Host, all: &[TrainOnTrack]) -> Tag {
                     throttle: t.train.throttle,
                 };
                 c.insert("motion".into(), Tag::IntArray(motion.encode()));
+                if !t.name.is_empty() {
+                    c.insert("name".into(), Tag::String(t.name.as_str().into()));
+                }
+                c.insert("icon".into(), Tag::Int(i32::from(t.icon)));
                 c.insert(
                     "cars".into(),
                     Tag::List(
@@ -339,25 +343,41 @@ pub fn trains_from_nbt(host: &dyn Host, data: &Compound) -> Vec<TrainOnTrack> {
                 sent_tick: 0,
                 sent_edge: usize::MAX,
                 fresh: true,
+                name: match c.get(&"name".into()) {
+                    Some(Tag::String(n)) => n.to_string_lossy(),
+                    _ => String::new(),
+                },
+                icon: match c.get(&"icon".into()) {
+                    Some(Tag::Int(i)) => (*i).clamp(0, 2) as u8,
+                    _ => 0,
+                },
             })
         })
         .collect()
 }
 
-pub fn station_names_to_nbt(list: &[([i32; 3], String)]) -> Tag {
+/// The column's stations: position, name, the assembly direction while in assembly mode
+/// (`assembling`) and the name of the train last taken apart there (`prev_train`).
+pub fn stations_to_nbt(list: &[SavedStation]) -> Tag {
     Tag::List(
         list.iter()
-            .map(|(p, n)| {
+            .map(|s| {
                 let mut c = Compound::new();
-                c.insert("pos".into(), Tag::IntArray(p.to_vec()));
-                c.insert("name".into(), Tag::String(n.as_str().into()));
+                c.insert("pos".into(), Tag::IntArray(s.pos.to_vec()));
+                c.insert("name".into(), Tag::String(s.name.as_str().into()));
+                if let Some(d) = s.assembling {
+                    c.insert("assembling".into(), Tag::IntArray(d.to_vec()));
+                }
+                if let Some(n) = &s.prev_train {
+                    c.insert("prev_train".into(), Tag::String(n.as_str().into()));
+                }
                 Tag::Compound(c)
             })
             .collect(),
     )
 }
 
-pub fn station_names_from_nbt(data: &Compound) -> Vec<([i32; 3], String)> {
+pub fn stations_from_nbt(data: &Compound) -> Vec<SavedStation> {
     let Some(Tag::List(list)) = data.get(&"station_names".into()) else {
         return Vec::new();
     };
@@ -367,8 +387,16 @@ pub fn station_names_from_nbt(data: &Compound) -> Vec<([i32; 3], String)> {
             let (Some(p), Some(Tag::String(n))) = (ints(c, "pos"), c.get(&"name".into())) else {
                 return None;
             };
-            let p: [i32; 3] = p.as_slice().try_into().ok()?;
-            Some((p, n.to_string_lossy()))
+            let pos: [i32; 3] = p.as_slice().try_into().ok()?;
+            Some(SavedStation {
+                pos,
+                name: n.to_string_lossy(),
+                assembling: ints(c, "assembling").and_then(|d| d.as_slice().try_into().ok()),
+                prev_train: match c.get(&"prev_train".into()) {
+                    Some(Tag::String(n)) => Some(n.to_string_lossy()),
+                    _ => None,
+                },
+            })
         })
         .collect()
 }

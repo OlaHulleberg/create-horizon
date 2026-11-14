@@ -1431,6 +1431,10 @@ pub struct TrainOnTrack {
     pub sent_tick: u64,
     pub sent_edge: usize,
     pub fresh: bool,
+    /// Its name (`Train.name`; empty: `train.unnamed`) and icon (`TrainIconType`: 0
+    /// traditional, 1 electric, 2 modern).
+    pub name: String,
+    pub icon: u8,
 }
 
 impl TrainOnTrack {
@@ -1781,6 +1785,12 @@ pub struct Railway {
     pub signals: HashMap<[i32; 3], SignalBlock>,
     /// Names saved with a column, waiting for their station block.
     pub saved_names: HashMap<[i32; 3], String>,
+    /// Stations in assembly mode (`StationBlock.ASSEMBLING`), each with its assembly
+    /// direction (a unit along x or z from its track); no train is sent to them.
+    pub assembling: HashMap<[i32; 3], [i32; 3]>,
+    /// The name of the train last taken apart at a station (`lastDisassembledTrainName`),
+    /// given to the next one assembled there.
+    pub prev_train_names: HashMap<[i32; 3], String>,
     pub trains: Vec<TrainOnTrack>,
     pub net: Network,
     pub occupancy: Occupancy,
@@ -1909,6 +1919,8 @@ impl Railway {
             self.lights_changed.push((pos, None));
         }
         let observer = self.observers.remove(&pos).is_some();
+        self.assembling.remove(&pos);
+        self.prev_train_names.remove(&pos);
         if self.tracks.remove(&pos).is_some()
             || self.stations.remove(&pos).is_some()
             || signal
@@ -1940,6 +1952,8 @@ impl Railway {
             keep
         });
         self.saved_names.retain(|p, _| out(p));
+        self.assembling.retain(|p, _| out(p));
+        self.prev_train_names.retain(|p, _| out(p));
         self.trains.retain(|t| t.column != (cx, cz));
         if (t, s, g) != (self.tracks.len(), self.stations.len(), self.signals.len()) {
             self.dirty = true;
@@ -1956,6 +1970,44 @@ impl Railway {
             .collect();
         out.sort();
         out
+    }
+
+    /// What a column saves of its stations: each one's name, its assembly direction while in
+    /// assembly mode, and the name of the train last taken apart there; only those with
+    /// something to save.
+    pub fn column_stations(&self, cx: i32, cz: i32) -> Vec<SavedStation> {
+        let in_column = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (cx, cz);
+        let mut out: Vec<SavedStation> = self
+            .stations
+            .iter()
+            .filter(|(p, _)| in_column(p))
+            .map(|(p, n)| SavedStation {
+                pos: *p,
+                name: n.clone(),
+                assembling: self.assembling.get(p).copied(),
+                prev_train: self.prev_train_names.get(p).cloned(),
+            })
+            .filter(|s| {
+                s.name != DEFAULT_STATION_NAME || s.assembling.is_some() || s.prev_train.is_some()
+            })
+            .collect();
+        out.sort_by_key(|s| s.pos);
+        out
+    }
+
+    /// Stations saved with a column that joined, before their blocks are found.
+    pub fn load_stations(&mut self, saved: Vec<SavedStation>) {
+        for s in saved {
+            if let Some(d) = s.assembling {
+                self.assembling.insert(s.pos, d);
+            }
+            if let Some(n) = s.prev_train {
+                self.prev_train_names.insert(s.pos, n);
+            }
+            if s.name != DEFAULT_STATION_NAME {
+                self.load_names(std::iter::once((s.pos, s.name)));
+            }
+        }
     }
 
     /// Station names saved with a column that joined, before its blocks are found.
@@ -2039,16 +2091,19 @@ impl Railway {
         self.net.stations.iter().position(|(p, _)| *p == pos)
     }
 
-    /// The stations whose names match a schedule's filter.
+    /// The stations whose names match a schedule's filter (none in assembly mode:
+    /// `GlobalStation.assembling`).
     pub fn matching(&self, filter: &str) -> Vec<usize> {
         self.net
             .stations
             .iter()
             .enumerate()
             .filter(|(_, (p, _))| {
-                self.stations
-                    .get(p)
-                    .is_some_and(|name| station_matches(filter, name))
+                !self.assembling.contains_key(p)
+                    && self
+                        .stations
+                        .get(p)
+                        .is_some_and(|name| station_matches(filter, name))
             })
             .map(|(i, _)| i)
             .collect()
@@ -2484,6 +2539,15 @@ impl Railway {
     }
 }
 
+/// A station as its column saves it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SavedStation {
+    pub pos: [i32; 3],
+    pub name: String,
+    pub assembling: Option<[i32; 3]>,
+    pub prev_train: Option<String>,
+}
+
 /// A saved train's motion (`Train.write`): its speed, whether its controls face both ways, its
 /// heading, the station it stands at and the station it is bound for, with whether it reached
 /// it backwards (`behind`), and its throttle (`Throttle`). Saved as 14 ints: speed (f32 bits),
@@ -2638,6 +2702,8 @@ mod tests {
             sent_tick: 0,
             sent_edge: 0,
             fresh: true,
+            name: String::new(),
+            icon: 0,
         });
         r.trains.len() - 1
     }
@@ -2979,6 +3045,8 @@ mod tests {
             sent_tick: 0,
             sent_edge: 0,
             fresh: true,
+            name: String::new(),
+            icon: 0,
         });
         r.trains.len() - 1
     }

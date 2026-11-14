@@ -1,5 +1,8 @@
-//! A station's assembly (`StationBlockEntity.assemble` / `disassemble`): a click on the station
-//! takes a train standing at it apart, else builds one from the bogeys along its track.
+//! A station (`StationBlock`, `StationBlockEntity`): a click opens its screen
+//! (`station_screen`), from which it enters assembly mode (`enterAssemblyMode`, taking apart a
+//! train standing at it), assembles the bogeys along its track into a train (`assemble`) and
+//! leaves assembly mode (`exitAssemblyMode`). In assembly mode, a click on its track places
+//! bogeys (`trackClicked`).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
@@ -9,31 +12,67 @@ use super::structure::{found, turned_state};
 use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::schedule::Runtime;
+use create_engine::track::TrackShape;
 use create_engine::trains::{
     AssemblyError, BogeySize, MAX_ASSEMBLY_LENGTH, MAX_BOGEY_COUNT, Structure, Train, TrainOnTrack,
     layout,
 };
 use mod_api::{
-    BlockPart, HostBlockStates, InteractionResult, PlayerRef, ServerHost, Text, UseWithoutItemEvent,
+    BlockClick, BlockPart, HostBlockStates, InteractionResult, PlayerRef, ServerHost, Text,
+    UseItemOnEvent, UseWithoutItemEvent,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// The station block's part: its click.
 pub struct Station;
 
+/// The off hand's turn after an empty main hand: Create's station and track answer the main
+/// hand on the client too, so the off hand is never tried; here the client can't know.
+fn after_empty_main(host: &dyn ServerHost, player: PlayerRef, click: &BlockClick<'_>) -> bool {
+    click.hand == mod_api::Hand::Off
+        && crate::glue::items::held(host, player, mod_api::Hand::Main)
+            .is_none_or(|s| s.count() == 0)
+}
+
+/// `StationBlock.useItemOn`: sneaking, or with a wrench or a filled map in hand, the click is
+/// not the station's; else its screen opens.
+fn click_station(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<InteractionResult> {
+    let player = host.player(click.player)?;
+    if after_empty_main(&*host, player, click) {
+        return None;
+    }
+    if crate::glue::items::sneaking(&*host, player) {
+        return None;
+    }
+    if let Some(stack) = click.stack {
+        let id = stack.item().id(&*host);
+        if id == "create:wrench" || id == "minecraft:filled_map" {
+            return None;
+        }
+    }
+    let dimension = click.dimension.key().id().to_owned();
+    let mut lv = ServerLevel::new(host, &dimension)?;
+    super::station_screen::open(&mut lv, player, click.pos);
+    Some(InteractionResult::SuccessServer)
+}
+
 #[mod_api::horizon_part]
 impl BlockPart for Station {
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        click_station(host, event.click)
+    }
+
     fn use_without_item(
         &self,
         host: &mut dyn ServerHost,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
-        let click = event.click;
-        let dimension = click.dimension.key().id().to_owned();
-        let player = host.player(click.player);
-        let mut lv = ServerLevel::new(host, &dimension)?;
-        use_station(&mut lv, click.pos, player);
-        Some(InteractionResult::SuccessServer)
+        click_station(host, event.click)
     }
 }
 
@@ -46,107 +85,238 @@ fn bogey_size(state: u32) -> Option<BogeySize> {
     }
 }
 
-/// Tells the acting player why the station can't assemble (`AssemblyException`, shown on the
-/// station's screen in Create).
-fn assembly_failed(lv: &mut ServerLevel<'_>, player: Option<PlayerRef>, e: AssemblyError) {
-    let key = format!("create.train_assembly.{}", e.key());
-    let args = e.args().into_iter().map(Text::literal).collect();
-    if let Some(p) = player {
-        super::action_bar(lv.host, p, Text::translate(key, args));
-    }
+/// Why a station last failed to assemble (`lastException`, `failedCarriageIndex`), shown on
+/// its assembly screen.
+struct Failure {
+    key: String,
+    args: Vec<String>,
+    carriage: i32,
 }
 
-/// The station's assembly: a train standing at it goes back into the world, each carriage
-/// where it stands (turned to its quarter; `canDisassemble`: only level and square to the
-/// grid); else the bogeys along its track and what each carries become carriages of a train on
-/// the track graph, by Create's rules. The station's track runs on toward its assembly
-/// direction: the way whose first track block has a bogey on it (Create's frontmost bogey at
-/// the station; the direction Create takes from the click that targets the track).
-pub fn use_station(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<PlayerRef>) {
-    let dim = lv.dim;
-    railway_ready(dim);
-    // A train assembled or taken apart here: its comparators read `trainPresent` again.
-    crate::glue::redstone::analog_touched(dim, pos);
-    let stopped = with_world(|w| {
-        let r = &mut w.dims[dim].railway;
-        let i = r.trains.iter().position(|t| {
-            t.train.bound
-                && t.train.nav.is_none()
-                && t.train.speed == 0.0
-                && t.train.at_station == Some(pos)
-        })?;
-        let t = &r.trains[i];
-        let g = &r.net.graph;
-        let poses: Vec<_> = (0..t.train.carriages.len())
-            .map(|c| t.train.carriage_pose(g, c))
-            .collect();
-        // `canDisassemble`.
-        let square = poses.iter().all(|(_, front)| {
-            let (yaw, pitch) = create_engine::trains::yaw_pitch(*front, t.heading);
-            pitch.abs() < 1.0e-3 && ((yaw.rem_euclid(90.0) + 1.0e-3) % 90.0) < 2.0e-3
-        });
-        if !square {
-            return Some(Err(()));
-        }
-        let t = r.trains.remove(i);
-        Some(Ok((t, poses)))
+thread_local! {
+    /// Each station's last failure, by level and position.
+    static FAILURES: RefCell<HashMap<(usize, [i32; 3]), Failure>> = RefCell::new(HashMap::new());
+}
+
+/// The world closed.
+pub fn forget() {
+    FAILURES.with_borrow_mut(HashMap::clear);
+}
+
+/// The station's last failure as its screen shows it: the lang key, its arguments and the
+/// carriage (-1 for none).
+pub fn failure(dim: usize, pos: [i32; 3]) -> Option<(String, Vec<String>, i32)> {
+    FAILURES.with_borrow(|f| {
+        f.get(&(dim, pos))
+            .map(|f| (f.key.clone(), f.args.clone(), f.carriage))
     })
-    .flatten();
-    match stopped {
-        // Not square to the grid: it stays a train.
-        Some(Err(())) => return,
-        Some(Ok((t, poses))) => {
-            for (car, (pivot, front)) in t.cars.iter().zip(poses) {
-                let (yaw, _) = create_engine::trains::yaw_pitch(front, t.heading);
-                let quarter = ((yaw / 90.0).round() as i32 * 90).rem_euclid(360);
-                for (o, s) in car {
-                    // The block's centre from the pivot (the middle of the track under the
-                    // carriage's leading bogey), turned about it; its height from the track.
-                    let r = create_engine::contraption::rotate([o[0], 0, o[2]], quarter, Axis::Y);
-                    let p = [
-                        (pivot[0] + f64::from(r[0])).floor() as i32,
-                        (pivot[1] + f64::from(o[1]) + 1.0).round() as i32,
-                        (pivot[2] + f64::from(r[2])).floor() as i32,
-                    ];
-                    let Some(state) = super::car_state(*s) else {
-                        continue;
-                    };
-                    let state = turned_state(&*lv.host, state, quarter, Axis::Y);
-                    lv.set_state(p, state, update_all());
-                }
-            }
-            super::super::persist::mark_unsaved(dim, [t.column.0, t.column.1]);
-            super::controls::disassembled(lv, t.id);
-            super::riding::train_gone(lv, t.id);
-            send_train_clear(lv, t.id);
-            return;
-        }
-        None => {}
-    }
-    // The straight track the station looks at, and which way along it the train is.
-    let Some((target, shape)) = with_world(|w| {
+}
+
+/// `exception`: the station keeps why it failed (`create.train_assembly.*`).
+fn assembly_failed(lv: &ServerLevel<'_>, pos: [i32; 3], e: AssemblyError) {
+    let failure = Failure {
+        key: format!("create.train_assembly.{}", e.key()),
+        args: e.args(),
+        carriage: -1,
+    };
+    let dim = lv.dim;
+    FAILURES.with_borrow_mut(|f| f.insert((dim, pos), failure));
+}
+
+fn clear_failure(dim: usize, pos: [i32; 3]) {
+    FAILURES.with_borrow_mut(|f| f.remove(&(dim, pos)));
+}
+
+/// The straight track a station looks at, and its shape.
+fn station_track(dim: usize, pos: [i32; 3]) -> Option<([i32; 3], TrackShape)> {
+    with_world(|w| {
         let r = &w.dims[dim].railway;
         let target = create_engine::network::target_track(&r.tracks, pos)?;
         Some((target, r.tracks[&target]))
     })
-    .flatten() else {
-        return;
-    };
-    let along = if shape == create_engine::track::TrackShape::Xo {
+    .flatten()
+}
+
+/// The unit along a straight track.
+fn along(shape: TrackShape) -> [i32; 3] {
+    if shape == TrackShape::Xo {
         [1, 0, 0]
     } else {
         [0, 0, 1]
+    }
+}
+
+/// A bogey standing on the track at `p`.
+fn bogey_at(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<BogeySize> {
+    bogey_size(lv.block([p[0], p[1] + 1, p[2]]))
+}
+
+/// Whether the station has a straight track to assemble on (`edgePoint.isOrthogonal`).
+pub fn has_track(dim: usize, pos: [i32; 3]) -> bool {
+    station_track(dim, pos).is_some()
+}
+
+/// The train standing still at the station, if any (`getPresentTrain`).
+fn stopped_at(r: &create_engine::trains::Railway, pos: [i32; 3]) -> Option<usize> {
+    r.trains.iter().position(|t| {
+        t.train.bound
+            && t.train.nav.is_none()
+            && t.train.speed == 0.0
+            && t.train.at_station == Some(pos)
+    })
+}
+
+/// `Train.canDisassemble` for the train standing still at the station: each carriage level and
+/// square to the grid.
+pub fn can_disassemble(dim: usize, pos: [i32; 3]) -> bool {
+    with_world(|w| {
+        let r = &w.dims[dim].railway;
+        let t = &r.trains[stopped_at(r, pos)?];
+        let g = &r.net.graph;
+        Some((0..t.train.carriages.len()).all(|c| {
+            let (_, front) = t.train.carriage_pose(g, c);
+            let (yaw, pitch) = create_engine::trains::yaw_pitch(front, t.heading);
+            pitch.abs() < 1.0e-3 && ((yaw.rem_euclid(90.0) + 1.0e-3) % 90.0) < 2.0e-3
+        }))
+    })
+    .flatten()
+    .unwrap_or(false)
+}
+
+/// `tryDisassembleTrain`: the train standing at the station goes back into the world, each
+/// carriage where it stands (turned to its quarter); its name is kept for the next train
+/// assembled there. False when there is none, or it is not square to the grid.
+pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    let dim = lv.dim;
+    railway_ready(dim);
+    if !can_disassemble(dim, pos) {
+        return false;
+    }
+    let stopped = with_world(|w| {
+        let r = &mut w.dims[dim].railway;
+        let i = stopped_at(r, pos)?;
+        let g = &r.net.graph;
+        let poses: Vec<_> = (0..r.trains[i].train.carriages.len())
+            .map(|c| r.trains[i].train.carriage_pose(g, c))
+            .collect();
+        let t = r.trains.remove(i);
+        if t.name.is_empty() {
+            r.prev_train_names.remove(&pos);
+        } else {
+            r.prev_train_names.insert(pos, t.name.clone());
+        }
+        Some((t, poses))
+    })
+    .flatten();
+    let Some((t, poses)) = stopped else {
+        return false;
     };
-    let bogey_at = |lv: &ServerLevel<'_>, p: [i32; 3]| bogey_size(lv.block([p[0], p[1] + 1, p[2]]));
-    let direction = [1, -1]
+    // A train taken apart here: its comparators read `trainPresent` again.
+    crate::glue::redstone::analog_touched(dim, pos);
+    for (car, (pivot, front)) in t.cars.iter().zip(poses) {
+        let (yaw, _) = create_engine::trains::yaw_pitch(front, t.heading);
+        let quarter = ((yaw / 90.0).round() as i32 * 90).rem_euclid(360);
+        for (o, s) in car {
+            // The block's centre from the pivot (the middle of the track under the
+            // carriage's leading bogey), turned about it; its height from the track.
+            let r = create_engine::contraption::rotate([o[0], 0, o[2]], quarter, Axis::Y);
+            let p = [
+                (pivot[0] + f64::from(r[0])).floor() as i32,
+                (pivot[1] + f64::from(o[1]) + 1.0).round() as i32,
+                (pivot[2] + f64::from(r[2])).floor() as i32,
+            ];
+            let Some(state) = super::car_state(*s) else {
+                continue;
+            };
+            let state = turned_state(&*lv.host, state, quarter, Axis::Y);
+            lv.set_state(p, state, update_all());
+        }
+    }
+    super::super::persist::mark_unsaved(dim, [t.column.0, t.column.1]);
+    super::super::persist::mark_pos_unsaved(dim, pos);
+    super::controls::disassembled(lv, t.id);
+    super::riding::train_gone(lv, t.id);
+    send_train_clear(lv, t.id);
+    true
+}
+
+/// Whether the station is in assembly mode.
+pub fn assembling(dim: usize, pos: [i32; 3]) -> bool {
+    with_world(|w| w.dims[dim].railway.assembling.contains_key(&pos)).unwrap_or(false)
+}
+
+/// `enterAssemblyMode`: a train standing at the station is taken apart first; the station's
+/// track must be straight (`tryEnterAssemblyMode`). Its assembly direction is the way along
+/// the track bogeys stand on, else the way `player` looks (Create takes it from the look of
+/// the player who placed the station on its track). Trains bound for it look for another way.
+pub fn enter_assembly(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<PlayerRef>) -> bool {
+    let dim = lv.dim;
+    railway_ready(dim);
+    if assembling(dim, pos) {
+        return false;
+    }
+    if with_world(|w| stopped_at(&w.dims[dim].railway, pos).is_some()) == Some(true)
+        && !disassemble(lv, pos)
+    {
+        return false;
+    }
+    let Some((target, shape)) = station_track(dim, pos) else {
+        return false;
+    };
+    let along = along(shape);
+    let with_bogeys = [1, -1]
         .into_iter()
         .map(|s| [along[0] * s, 0, along[2] * s])
-        .find(|d| bogey_at(lv, [target[0] + d[0], target[1], target[2] + d[2]]).is_some())
-        .unwrap_or(along);
-    // `refreshAssemblyInfo`: the track on from the station's, while it runs the same way; a
-    // bogey above it at each place counts.
+        .find(|d| bogey_at(lv, [target[0] + d[0], target[1], target[2] + d[2]]).is_some());
+    let looked = player
+        .and_then(|p| p.entity().rotation(&*lv.host))
+        .map_or(1, |[yaw, _]| {
+            // The look's unit: yaw 0 faces +z, 90 faces -x.
+            let r = f64::from(yaw).to_radians();
+            let s = if along[0] != 0 { -r.sin() } else { r.cos() };
+            if s < 0.0 { -1 } else { 1 }
+        });
+    let direction = with_bogeys.unwrap_or([along[0] * looked, 0, along[2] * looked]);
+    with_world(|w| {
+        let r = &mut w.dims[dim].railway;
+        r.assembling.insert(pos, direction);
+        // `startNavigation` again for trains bound here: the station is no destination now.
+        for t in &mut r.trains {
+            if t.train.nav.as_ref().is_some_and(|n| n.station == pos) {
+                t.train.nav = None;
+                t.runtime.interrupted();
+            }
+        }
+    });
+    clear_failure(dim, pos);
+    super::super::persist::mark_pos_unsaved(dim, pos);
+    true
+}
+
+/// `exitAssemblyMode` (`cancelAssembly`).
+pub fn exit_assembly(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    let dim = lv.dim;
+    let was =
+        with_world(|w| w.dims[dim].railway.assembling.remove(&pos).is_some()).unwrap_or(false);
+    clear_failure(dim, pos);
+    if was {
+        super::super::persist::mark_pos_unsaved(dim, pos);
+    }
+    was
+}
+
+/// A bogey on an assembly track: its place from the station's track, block and size.
+pub type Bogey = (i32, [i32; 3], BogeySize);
+
+/// The station's assembly track (`refreshAssemblyInfo`): the track on from the station's in
+/// its assembly direction while it runs the same way, and the bogeys on it, each with its place
+/// from the station's track, block and size.
+pub fn assembly_track(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Vec<[i32; 3]>, Vec<Bogey>)> {
+    let dim = lv.dim;
+    let direction = with_world(|w| w.dims[dim].railway.assembling.get(&pos).copied()).flatten()?;
+    let (target, shape) = station_track(dim, pos)?;
     let mut run = Vec::new();
-    let mut bogeys: Vec<(i32, [i32; 3], BogeySize)> = Vec::new();
+    let mut bogeys = Vec::new();
     for i in 0..MAX_ASSEMBLY_LENGTH - 1 {
         let p = [
             target[0] + direction[0] * (i + 1),
@@ -163,6 +333,26 @@ pub fn use_station(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
             bogeys.push((i, [p[0], p[1] + 1, p[2]], size));
         }
     }
+    Some((run, bogeys))
+}
+
+/// `StationBlockEntity.assemble`: the bogeys along the station's track in its assembly
+/// direction, and what each carries, become carriages of a train on the track graph, by
+/// Create's rules; a failure is kept for the screen (`exception`). True when a train was made.
+pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    let dim = lv.dim;
+    railway_ready(dim);
+    let Some(direction) =
+        with_world(|w| w.dims[dim].railway.assembling.get(&pos).copied()).flatten()
+    else {
+        return false;
+    };
+    let Some((target, _)) = station_track(dim, pos) else {
+        return false;
+    };
+    let Some((run, bogeys)) = assembly_track(lv, pos) else {
+        return false;
+    };
     let locations: Vec<i32> = bogeys.iter().map(|b| b.0).collect();
     let dir_name = match direction {
         [1, _, 0] => "east",
@@ -213,9 +403,12 @@ pub fn use_station(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
     });
     let laid = match laid {
         // Something on it can't move: nothing is assembled.
-        Ok(_) if refused => return,
+        Ok(_) if refused => return false,
         Ok(l) => l,
-        Err(e) => return assembly_failed(lv, player, e),
+        Err(e) => {
+            assembly_failed(lv, pos, e);
+            return false;
+        }
     };
     let sizes: Vec<_> = bogeys.iter().map(|b| b.2).collect();
     let dir = [f64::from(direction[0]), 0.0, f64::from(direction[2])];
@@ -237,6 +430,8 @@ pub fn use_station(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
         let mut train = Train::assembled(&r.net, origin, dir, &laid, &sizes)?;
         train.at_station = Some(pos);
         let id = r.next_id();
+        // `lastDisassembledTrainName`.
+        let name = r.prev_train_names.remove(&pos).unwrap_or_default();
         let mut t = TrainOnTrack {
             id,
             train,
@@ -249,6 +444,8 @@ pub fn use_station(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
             sent_tick: 0,
             sent_edge: usize::MAX,
             fresh: true,
+            name,
+            icon: 0,
         };
         t.column = t.column_on(&r.net);
         r.trains.push(t);
@@ -256,10 +453,15 @@ pub fn use_station(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
     })
     .flatten();
     let Some(id) = made else {
-        return assembly_failed(lv, player, AssemblyError::NoBogeys);
+        assembly_failed(lv, pos, AssemblyError::NoBogeys);
+        return false;
     };
+    clear_failure(dim, pos);
+    // A train assembled here: its comparators read `trainPresent` again.
+    crate::glue::redstone::analog_touched(dim, pos);
+    super::super::persist::mark_pos_unsaved(dim, pos);
     let Some(air) = super::default_state(&*lv.host, "minecraft:air") else {
-        return;
+        return true;
     };
     for (c, car) in laid.carriages.iter().zip(&cars) {
         let b = bogeys[c.first].1;
@@ -270,97 +472,95 @@ pub fn use_station(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
         }
     }
     send_trains(lv, &[id], true);
+    true
 }
 
-/// The track blocks' part: a click with railway casing places a bogey at a station.
+/// The track blocks' part: a click on a station's assembly track (`TrackBlock.useItemOn`).
 pub struct TrackClick;
+
+fn click_track(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<InteractionResult> {
+    let player = host.player(click.player)?;
+    if after_empty_main(&*host, player, click) {
+        return None;
+    }
+    let dimension = click.dimension.key().id().to_owned();
+    let mut lv = ServerLevel::new(host, &dimension)?;
+    track_clicked(&mut lv, player, click.hand, click.stack, click.pos)
+        .then_some(InteractionResult::SuccessServer)
+}
 
 #[mod_api::horizon_part]
 impl BlockPart for TrackClick {
     fn use_item_on(
         &self,
         host: &mut dyn ServerHost,
-        event: &mut mod_api::UseItemOnEvent<'_>,
+        event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
-        let click = event.click;
-        let stack = click.stack?;
-        if stack.item().id(&*host) != "create:railway_casing" {
-            return None;
-        }
-        let player = host.player(click.player)?;
-        let dimension = click.dimension.key().id().to_owned();
-        let mut lv = ServerLevel::new(host, &dimension)?;
-        track_clicked(&mut lv, player, click.hand, click.pos)
-            .then_some(InteractionResult::SuccessServer)
+        click_track(host, event.click)
+    }
+
+    fn use_without_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseWithoutItemEvent<'_>,
+    ) -> Option<InteractionResult> {
+        click_track(host, event.click)
     }
 }
 
-/// `StationBlockEntity.trackClicked` for the station whose assembly track holds `pos` (the
-/// straight track beside a station with no train at it, on toward the clicked side): at a
-/// place a bogey may stand (`isValidBogeyOffset`: the first right after the station's track,
-/// the others three on from it and two clear of each other), a small bogey goes on the track
-/// (what stood there broken, one casing used outside creative); elsewhere a bogey within a
-/// block of the click changes size. Create takes any item in creative while the station's
-/// screen holds it in assembly mode; with no screen here the casing is always needed.
+/// `StationBlockEntity.trackClicked` for each station in assembly mode whose assembly area
+/// (`assemblyAreas`: its assembly track but the last block) holds `pos`: at a place a bogey
+/// may stand (`isValidBogeyOffset`: the first right after the station's track, the others
+/// three on from it and two clear of each other), a small bogey goes on the track (what stood
+/// there broken, one railway casing used outside creative, which needs one); elsewhere a
+/// bogey within a block of the click changes size.
 fn track_clicked(
     lv: &mut ServerLevel<'_>,
     player: PlayerRef,
     hand: mod_api::Hand,
+    stack: Option<&mod_api::ItemStack>,
     pos: [i32; 3],
 ) -> bool {
-    use create_engine::track::TrackShape;
     let dim = lv.dim;
     railway_ready(dim);
-    // The station and the way from its track to the click.
-    let found = with_world(|w| {
-        let r = &w.dims[dim].railway;
-        let shape = *r.tracks.get(&pos)?;
-        let along = match shape {
-            TrackShape::Xo => 0,
-            TrackShape::Zo => 2,
-            _ => return None,
-        };
-        r.stations.keys().find_map(|&st| {
-            let target = create_engine::network::target_track(&r.tracks, st)?;
-            if r.tracks.get(&target) != Some(&shape) || target[1] != pos[1] {
-                return None;
-            }
-            let other = 2 - along;
-            if target[other] != pos[other] || target[along] == pos[along] {
-                return None;
-            }
-            let mut d = [0, 0, 0];
-            d[along] = (pos[along] - target[along]).signum();
-            let offset = (pos[along] - target[along]).abs() - 1;
-            // The run of track between them is the station's.
-            let run = (1..=offset + 1).all(|i| {
-                let p = [target[0] + d[0] * i, target[1], target[2] + d[2] * i];
-                r.tracks.get(&p) == Some(&shape)
-            });
-            let busy = r.trains.iter().any(|t| t.train.at_station == Some(st));
-            (run && !busy && offset < MAX_ASSEMBLY_LENGTH - 1).then_some((target, d, offset, shape))
-        })
+    let mut stations: Vec<([i32; 3], [i32; 3])> = with_world(|w| {
+        w.dims[dim]
+            .railway
+            .assembling
+            .iter()
+            .map(|(p, d)| (*p, *d))
+            .collect()
     })
-    .flatten();
-    let Some((target, d, offset, shape)) = found else {
-        return false;
-    };
-    // `refreshAssemblyInfo`'s bogeys on that side.
-    let mut bogeys = Vec::new();
-    for i in 0..MAX_ASSEMBLY_LENGTH - 1 {
-        let p = [
-            target[0] + d[0] * (i + 1),
-            target[1],
-            target[2] + d[2] * (i + 1),
-        ];
-        if with_world(|w| w.dims[dim].railway.tracks.get(&p) != Some(&shape)) != Some(false) {
-            break;
-        }
-        if bogeys.len() < MAX_BOGEY_COUNT && bogey_size(lv.block([p[0], p[1] + 1, p[2]])).is_some()
-        {
-            bogeys.push(i);
+    .unwrap_or_default();
+    stations.sort();
+    for (station, d) in stations {
+        let Some((run, found)) = assembly_track(lv, station) else {
+            continue;
+        };
+        let area = &run[..run.len().saturating_sub(1)];
+        let Some(offset) = area.iter().position(|p| *p == pos) else {
+            continue;
+        };
+        if bogey_clicked(lv, player, hand, stack, pos, d, offset as i32, &found) {
+            return true;
         }
     }
+    false
+}
+
+/// What a click at place `offset` of a station's assembly track does, `bogeys` standing on it.
+#[allow(clippy::too_many_arguments)]
+fn bogey_clicked(
+    lv: &mut ServerLevel<'_>,
+    player: PlayerRef,
+    hand: mod_api::Hand,
+    stack: Option<&mod_api::ItemStack>,
+    pos: [i32; 3],
+    d: [i32; 3],
+    offset: i32,
+    found: &[Bogey],
+) -> bool {
+    let bogeys: Vec<i32> = found.iter().map(|b| b.0).collect();
     let valid = !((offset < 3 || bogeys.is_empty()) && offset != 0)
         && !bogeys.iter().any(|&j| offset >= j - 2 && offset <= j + 2);
     if !valid {
@@ -395,6 +595,16 @@ fn track_clicked(
         }
         return false;
     }
+    let creative = player.is_creative(&*lv.host) == Some(true);
+    let casing = stack.is_some_and(|s| s.item().id(&*lv.host) == "create:railway_casing");
+    if !creative && !casing {
+        super::action_bar(
+            lv.host,
+            player,
+            Text::translate("create.train_assembly.requires_casing", Vec::new()),
+        );
+        return false;
+    }
     let up = [pos[0], pos[1] + 1, pos[2]];
     let unbreakable = lv
         .block_state(up)
@@ -425,7 +635,7 @@ fn track_clicked(
         1.0,
         0.8,
     );
-    if player.is_creative(&*lv.host) != Some(true) {
+    if !creative {
         crate::glue::items::shrink_held(lv.host, player, hand, 1);
     }
     true
