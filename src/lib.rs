@@ -11,12 +11,12 @@ use glue::{SUBSYSTEMS, persist, states, world};
 use mod_api::{
     AttackEntityEvent, BlockChangedEvent, BlockPart, BreakBlockEvent, ChunkLoadEvent,
     ChunkUnloadEvent, ClientHost, ClientLevelUnloadEvent, ClientTickPostEvent, EntityInteractEvent,
-    EntityMountEvent, EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent, InteractionResult,
-    LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent, LevelTickPostEvent,
-    LevelTicksHost, MouseScrollingEvent, NeighborChangedEvent, PlayerLoggedInEvent,
-    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
-    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost, WorldLifecycleEvent,
-    WorldPhase,
+    EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent,
+    InteractionResult, KeyMappingPreEvent, LeftClickBlockEvent, LevelHost, LevelLoadEvent,
+    LevelSaveEvent, LevelTickPostEvent, LevelTicksHost, MouseScrollingEvent, NeighborChangedEvent,
+    PlayerLoggedInEvent, PlayerTickPostEvent, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
+    RunModCommandEvent, ServerHost, WorldLifecycleEvent, WorldPhase,
 };
 
 #[derive(Default)]
@@ -163,6 +163,22 @@ impl Hooks for Create {
 
     fn entity_mount(&self, host: &mut dyn ServerHost, event: &mut EntityMountEvent<'_>) -> Flow {
         until_cancel(|s| s.entity_mount(host, event))
+    }
+
+    fn entity_join_level(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut EntityJoinLevelEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.entity_join_level(host, event))
+    }
+
+    fn key_mapping_pre(
+        &self,
+        host: &mut dyn ClientHost,
+        event: &mut KeyMappingPreEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.key_mapping_pre(host, event))
     }
 
     fn player_tick_post(&self, mut host: HostSide, event: &mut PlayerTickPostEvent) {

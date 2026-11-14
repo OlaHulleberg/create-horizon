@@ -287,8 +287,14 @@ impl BlockEntityPart for KineticEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let speeds = event.entity.nbt.get(&SPEEDS.into())?.clone();
-        Some(Compound::from([(SPEEDS.into(), speeds)]))
+        // The parts' speeds, and the structure a bearing, piston or pulley moves (`contraptions`).
+        let mut tag = Compound::new();
+        for key in [SPEEDS, super::contraptions::draw::KEY] {
+            if let Some(v) = event.entity.nbt.get(&key.into()) {
+                tag.insert(key.into(), v.clone());
+            }
+        }
+        (!tag.is_empty()).then_some(tag)
     }
 
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
@@ -303,8 +309,14 @@ impl BlockEntityPart for KineticEntity {
         let speeds = speeds_of(&event.entity.nbt);
         let text = host.block_state_string(event.state).unwrap_or_default();
         let (_, own) = states::split(&text);
+        // A structure moving along a line is drawn again each frame: nothing of it is kept.
+        let moving = super::contraptions::draw::moving(&event.entity.nbt);
         for d in client::draws(block, &info, event.pos, speeds) {
-            draw_part(event.draw, block, &own, &d);
+            if moving {
+                draw_turning(event.draw, block, &own, &d);
+            } else {
+                draw_part(event.draw, block, &own, &d);
+            }
         }
     }
 }
@@ -383,6 +395,17 @@ pub fn draw_part(
     own: &[(&str, &str)],
     d: &Draw,
 ) {
+    draw_turning(draw, block, own, d);
+    draw.keep();
+}
+
+/// [`draw_part`] for this frame only.
+fn draw_turning(
+    draw: &mut dyn BlockEntityDrawContext,
+    block: Block,
+    own: &[(&str, &str)],
+    d: &Draw,
+) {
     let Some((model, prop)) = model_block(block, d.model) else {
         return;
     };
@@ -392,5 +415,4 @@ pub fn draw_part(
         None => draw.block(states::key(model), own),
     };
     draw.still();
-    draw.keep();
 }

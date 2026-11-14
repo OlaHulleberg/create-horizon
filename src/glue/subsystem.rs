@@ -14,10 +14,11 @@
 use super::server::ServerLevel;
 use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityInteractEvent,
-    EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent, InteractionResult,
-    LeftClickBlockEvent, LevelSaveEvent, MouseScrollingEvent, PlayerRef, PlayerTickPostEvent,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
-    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost,
+    EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
+    InteractionResult, KeyMappingPreEvent, LeftClickBlockEvent, LevelSaveEvent,
+    MouseScrollingEvent, PlayerRef, PlayerTickPostEvent, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
+    RunModCommandEvent, ServerHost,
 };
 
 pub trait Subsystem: Sync {
@@ -165,6 +166,24 @@ pub trait Subsystem: Sync {
         &self,
         _host: &mut dyn ClientHost,
         _event: &mut MouseScrollingEvent,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::entity_join_level`: an entity joins a server level.
+    fn entity_join_level(
+        &self,
+        _host: &mut dyn ServerHost,
+        _event: &mut EntityJoinLevelEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::key_mapping_pre`, on the client: `Flow::Cancel` keeps the key from the game.
+    fn key_mapping_pre(
+        &self,
+        _host: &mut dyn ClientHost,
+        _event: &mut KeyMappingPreEvent<'_>,
     ) -> Flow {
         Flow::Continue
     }

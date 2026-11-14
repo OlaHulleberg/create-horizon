@@ -1,0 +1,1079 @@
+//! Bearings and windmills, pistons, chassis and gantries moving blocks as one, and their saved
+//! data (`windmills`, `chassis` in the column's compound).
+
+use super::super::server::{ServerLevel, update_all};
+use super::super::world::with_world;
+use super::{
+    actors, add, axis_of, clicker, dir_name, dir_of, draw, flag, found, in_click_level, prop,
+    put_back_blocks, state_of_text, state_text, state_with, take_blocks, turned_state,
+};
+use create_engine::Block;
+use create_engine::actors::Carried;
+use create_engine::contraption::{self, Turn};
+use create_engine::kinetics::{Axis, Dir};
+use mod_api::{BlockPart, Compound, InteractionResult, Registrar, ServerHost, Tag, UseItemOnEvent};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+
+/// A turning structure's actors, and a windmill's own turn.
+type Turning = (Carried, Option<Turn>);
+
+/// A structure's blocks: offsets and states.
+type Blocks = Vec<([i32; 3], u32)>;
+
+thread_local! {
+    /// The actors of bearings' turning structures (mechanical and windmill bearings), by
+    /// dimension and bearing; only structures that have any. A windmill's with the angle it has
+    /// turned to (a mechanical bearing keeps its own, `Windmill.bearing`).
+    static BEARING_CARRIED: RefCell<HashMap<(usize, [i32; 3]), Turning>> =
+        RefCell::new(HashMap::new());
+    /// The structures whose actors were looked for (once each: assembled or loaded).
+    static BEARINGS_LOOKED: RefCell<HashSet<(usize, [i32; 3])>> = RefCell::new(HashSet::new());
+}
+
+pub(super) fn forget() {
+    BEARING_CARRIED.with_borrow_mut(HashMap::clear);
+    BEARINGS_LOOKED.with_borrow_mut(HashSet::clear);
+}
+
+pub(super) fn register(r: &mut dyn Registrar) {
+    use super::super::states::key;
+    for b in [
+        Block::LinearChassis,
+        Block::SecondaryLinearChassis,
+        Block::RadialChassis,
+    ] {
+        r.block_part(key(b), ChassisPart);
+    }
+    r.block_part(key(Block::WindmillBearing), WindmillPart);
+}
+
+/// `MechanicalBearingBlockEntity.onSpeedChanged`: looked at on the next tick.
+pub(super) fn bearing_speed_changed(dim: usize, pos: [i32; 3]) {
+    with_world(|w| w.dims[dim].bearing_checks.push(pos));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Chassis
+
+/// `ChassisBlockEntity.collectChassisGroup`: the chassis joined to `pos`, of its kind and axis
+/// (a radial chassis' group: the radial chassis on its axis either side). For the value box's
+/// range (`ChassisScrollValueBehaviour`, `World::set_chassis_range`).
+#[allow(
+    dead_code,
+    reason = "for the value box glue: a chassis' range scrolls for its group"
+)]
+pub fn chassis_group(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<[i32; 3]> {
+    let kind = |p: [i32; 3]| {
+        let (name, props) = lv.name_props(p)?;
+        matches!(
+            name.as_str(),
+            "create:linear_chassis" | "create:secondary_linear_chassis" | "create:radial_chassis"
+        )
+        .then(|| (name, prop(&props, "axis").map(str::to_owned)))
+    };
+    let Some(own) = kind(pos) else {
+        return Vec::new();
+    };
+    let radial = own.0 == "create:radial_chassis";
+    let axis = axis_of(own.1.as_deref());
+    let mut group = vec![pos];
+    let mut i = 0;
+    while i < group.len() && group.len() < 256 {
+        let p = group[i];
+        i += 1;
+        for d in Dir::ALL {
+            if radial && d.axis() != axis {
+                continue;
+            }
+            let n = add(p, d.offset());
+            if !group.contains(&n) && kind(n).as_ref() == Some(&own) {
+                group.push(n);
+            }
+        }
+    }
+    group
+}
+
+struct ChassisPart;
+
+#[mod_api::horizon_part]
+impl BlockPart for ChassisPart {
+    /// `AbstractChassisBlock.useItemOn`: a slime ball on a glueable side glues it (on a glued
+    /// side: every side that may be glued); sneaking with an empty hand unglues it. A linear
+    /// chassis' end against a chassis of its kind on its axis can't be glued
+    /// (`glueAllowedOnSide`).
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let c = clicker(&*host, event.click);
+        let pos = event.click.pos;
+        let face = event.click.hit.face;
+        in_click_level(host, event.click, |lv| use_chassis(lv, pos, face, &c))?
+    }
+}
+
+fn use_chassis(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    face: [i32; 3],
+    c: &super::Clicker,
+) -> Option<InteractionResult> {
+    let (name, mut props) = lv.name_props(pos)?;
+    let slime = matches!(
+        c.held.as_deref(),
+        Some("minecraft:slime_ball" | "create:super_glue")
+    );
+    let axis = prop(&props, "axis").unwrap_or_default().to_owned();
+    let radial = name == "create:radial_chassis";
+    // getGlueableSide: a linear chassis' end on its axis, sticky_top toward the positive end;
+    // a radial chassis' side across it (`RadialChassisBlock.getGlueableSide`).
+    let side_of = |f: [i32; 3]| -> Option<&'static str> {
+        let i = ["x", "y", "z"].iter().position(|a| *a == axis)?;
+        if radial {
+            let a = [Axis::X, Axis::Y, Axis::Z][i];
+            return contraption::radial_side(a, Dir::from_offset(f)?);
+        }
+        match f[i] {
+            1 => Some("sticky_top"),
+            -1 => Some("sticky_bottom"),
+            _ => None,
+        }
+    };
+    let side = side_of(face)?;
+    // `glueAllowedOnSide`: a radial chassis may be glued on any side.
+    let allowed = |lv: &ServerLevel<'_>, f: [i32; 3]| {
+        radial
+            || lv
+                .name_props(add(pos, f))
+                .is_none_or(|(n, p)| n != name || prop(&p, "axis") != Some(axis.as_str()))
+    };
+    let glued = flag(&props, side);
+    let set = |props: &mut Vec<(String, String)>, k: &str, v: &str| match props
+        .iter_mut()
+        .find(|(key, _)| key == k)
+    {
+        Some(e) => e.1 = v.to_owned(),
+        None => props.push((k.to_owned(), v.to_owned())),
+    };
+    if slime && glued {
+        for d in Dir::ALL {
+            let f = d.offset();
+            if let Some(other) = side_of(f)
+                && allowed(lv, f)
+            {
+                set(&mut props, other, "true");
+            }
+        }
+    } else if (slime || (c.sneaking && c.held.is_none())) && glued != slime && allowed(lv, face) {
+        set(&mut props, side, if slime { "true" } else { "false" });
+    } else {
+        return None;
+    }
+    let p: Vec<(&str, &str)> = props
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    if let Some(new) = state_with(&*lv.host, &name, &p)
+        && Some(new) != lv.state_num(pos)
+    {
+        lv.set_num(pos, new, update_all());
+    }
+    Some(InteractionResult::Success)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Windmills and mechanical bearings
+
+struct WindmillPart;
+
+#[mod_api::horizon_part]
+impl BlockPart for WindmillPart {
+    /// `WindmillBearingBlock.useItemOn` with an empty hand, not sneaking: assembled sails come
+    /// apart now; otherwise they assemble on the next tick (`assembleNextTick`).
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let c = clicker(&*host, event.click);
+        if c.sneaking {
+            return Some(InteractionResult::Fail);
+        }
+        if c.held.is_some() {
+            return None;
+        }
+        let pos = event.click.pos;
+        in_click_level(host, event.click, |lv| {
+            let dim = lv.dim;
+            let running = with_world(|w| w.dims[dim].windmills.contains_key(&pos)) == Some(true);
+            if running {
+                let state = lv.block(pos);
+                if let Some(w) = with_world(|w| w.windmill_disassembled(dim, pos, state)).flatten()
+                {
+                    put_back(lv, pos, &w);
+                }
+            } else {
+                with_world(|w| {
+                    if !w.dims[dim].windmill_assemble.contains(&pos) {
+                        w.dims[dim].windmill_assemble.push(pos);
+                    }
+                });
+            }
+        });
+        Some(InteractionResult::Success)
+    }
+}
+
+/// `ControlledContraptionEntity.disassemble` at angle 0 (a windmill turns back first): each
+/// block where it was, or dropped where something else took its place.
+fn put_back(lv: &mut ServerLevel<'_>, bearing: [i32; 3], w: &create_engine::world::Windmill) {
+    let blocks: Vec<([i32; 3], u32)> = w
+        .blocks
+        .iter()
+        .map(|(o, s)| (add(bearing, *o), *s))
+        .collect();
+    put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
+}
+
+/// The facing of the Create block `block` at `pos`.
+fn facing_of(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block) -> Option<Dir> {
+    super::create_info(lv.block(pos))
+        .filter(|(b, _)| *b == block)
+        .and_then(|(_, i)| i.facing)
+}
+
+fn speed(dim: usize, pos: [i32; 3]) -> f32 {
+    with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0)
+}
+
+/// Windmills: structures whose bearing broke go back; right-clicked bearings assemble their
+/// sails (`assemble`), the blocks leaving the world; clients see the changes. Nothing runs
+/// without either.
+pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let Some((orphans, queued)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        (
+            std::mem::take(&mut d.windmill_orphans),
+            std::mem::take(&mut d.windmill_assemble),
+        )
+    }) else {
+        return;
+    };
+    for (pos, w) in orphans {
+        put_back(lv, pos, &w);
+    }
+    for pos in queued {
+        let state = lv.block(pos);
+        let Some(facing) = facing_of(lv, pos, Block::WindmillBearing) else {
+            continue;
+        };
+        let gathered = contraption::gather_windmill(pos, facing, |p| found(lv, p));
+        let Ok((blocks, sails)) = gathered else {
+            continue;
+        };
+        take_blocks(lv, pos, &blocks);
+        let w = create_engine::world::Windmill {
+            blocks,
+            sails,
+            clockwise: true,
+            bearing: None,
+        };
+        with_world(|world| world.windmill_assembled(dim, pos, state, w));
+    }
+    let changed = with_world(|w| {
+        let mut v = std::mem::take(&mut w.dims[dim].windmill_changes);
+        v.sort();
+        v.dedup();
+        v
+    })
+    .unwrap_or_default();
+    for pos in changed {
+        show_windmill(lv, pos);
+    }
+}
+
+/// The angle a windmill with actors has turned to, and the speed it turns at; None for others.
+fn windmill_turn(dim: usize, pos: [i32; 3]) -> Option<Turn> {
+    BEARING_CARRIED.with_borrow(|c| c.get(&(dim, pos)).and_then(|c| c.1))
+}
+
+/// A bearing's structure to its block entity, for its clients: its blocks turning about the
+/// bearing's axis from its angle now, at the speed it turns (a mechanical bearing's: none while
+/// an actor stalls it; a windmill with no actors turns at its block's own speed). None when it
+/// came apart.
+fn show_windmill(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let w = with_world(|w| w.dims[dim].windmills.get(&pos).cloned()).flatten();
+    let Some(w) = w else {
+        draw::hide(lv, pos);
+        return;
+    };
+    let facing = super::create_info(lv.block(pos))
+        .and_then(|(_, i)| i.facing)
+        .unwrap_or(Dir::Up);
+    let turn = w.bearing.or_else(|| windmill_turn(dim, pos));
+    draw::show_turn(lv, pos, &w.blocks, facing.axis(), turn);
+}
+
+/// `tickActors` for turning bearings and windmills with actors: each works where the structure
+/// has turned to; while one stalls the structure holds its angle, and turns on at its speed
+/// after (`isStalled`). A structure's actors are found once, the first tick it turns (also after
+/// a load). Nothing runs without a turning structure.
+pub(super) fn tick_bearing_actors(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let now = lv.game_time();
+    let structures = with_world(|w| w.dims[dim].windmills.len()).unwrap_or(0);
+    if structures > 0 || BEARINGS_LOOKED.with_borrow(|l| !l.is_empty()) {
+        let fresh: Vec<([i32; 3], Blocks, bool)> = with_world(|w| {
+            let mut fresh = Vec::new();
+            BEARINGS_LOOKED.with_borrow_mut(|l| {
+                let d = &w.dims[dim];
+                // One taken apart is looked at again when it is put together again.
+                l.retain(|k| k.0 != dim || d.windmills.contains_key(&k.1));
+                for (p, m) in &d.windmills {
+                    if l.insert((dim, *p)) {
+                        fresh.push((*p, m.blocks.clone(), m.bearing.is_none()));
+                    }
+                }
+            });
+            fresh
+        })
+        .unwrap_or_default();
+        for (pos, blocks, windmill) in fresh {
+            let carried = actors::bearing_actors(&blocks);
+            if carried.actors.is_empty() {
+                continue;
+            }
+            let own = windmill.then(|| Turn {
+                angle: 0.0,
+                since: now,
+                rpm: speed(dim, pos),
+            });
+            BEARING_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), (carried, own)));
+            with_world(|w| w.dims[dim].windmill_changes.push(pos));
+        }
+    }
+    let keys: Vec<[i32; 3]> =
+        BEARING_CARRIED.with_borrow(|c| c.keys().filter(|k| k.0 == dim).map(|k| k.1).collect());
+    for pos in keys {
+        let facing = super::create_info(lv.block(pos)).and_then(|(_, i)| i.facing);
+        let Some((mut carried, own)) = BEARING_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos)))
+        else {
+            continue;
+        };
+        let turn = match own {
+            Some(t) => (with_world(|w| w.dims[dim].windmills.contains_key(&pos)) == Some(true))
+                .then_some(t),
+            None => {
+                with_world(|w| w.dims[dim].windmills.get(&pos).and_then(|m| m.bearing)).flatten()
+            }
+        };
+        let (Some(facing), Some(mut turn)) = (facing, turn) else {
+            actors::cancel_actors(lv, &mut carried);
+            continue;
+        };
+        let rpm = speed(dim, pos);
+        // A windmill's speed changed (its sails, or the network's): on from here at it.
+        if own.is_some() && !carried.stalled && turn.rpm != rpm {
+            turn.rebase(now, rpm);
+            with_world(|w| w.dims[dim].windmill_changes.push(pos));
+        }
+        let deg = f64::from(turn.angle_at(now));
+        let was = carried.stalled;
+        let stalled = actors::tick_turning_actors(lv, pos, &mut carried, pos, facing.axis(), deg);
+        carried.stalled = stalled;
+        if stalled != was {
+            let rpm = if stalled { 0.0 } else { rpm };
+            if own.is_some() {
+                turn.rebase(now, rpm);
+            }
+            with_world(|w| {
+                if own.is_none()
+                    && let Some(m) = w.dims[dim].windmills.get_mut(&pos)
+                    && let Some(t) = m.bearing.as_mut()
+                {
+                    t.rebase(now, rpm);
+                }
+                w.dims[dim].windmill_changes.push(pos);
+            });
+        }
+        BEARING_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), (carried, own.map(|_| turn))));
+    }
+}
+
+/// Mechanical bearings whose speed changed (`tick` after `onSpeedChanged`): a still one starts
+/// turning what is in front of it (`assemble`); a turning one stopped puts it back turned to the
+/// nearest quarter turn (`disassemble`, `ROTATE_PLACE`); otherwise the angle runs on at the new
+/// speed. Nothing runs without a change.
+pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let Some(mut checks) = with_world(|w| std::mem::take(&mut w.dims[dim].bearing_checks)) else {
+        return;
+    };
+    if checks.is_empty() {
+        return;
+    }
+    checks.sort();
+    checks.dedup();
+    let now = lv.game_time();
+    for pos in checks {
+        let state = lv.block(pos);
+        let Some(facing) = facing_of(lv, pos, Block::MechanicalBearing) else {
+            continue;
+        };
+        let rpm = speed(dim, pos);
+        let running = with_world(|w| w.dims[dim].windmills.get(&pos).map(|m| m.bearing)).flatten();
+        match running {
+            Some(Some(turn)) if rpm == 0.0 => {
+                if let Some((mut c, _)) = BEARING_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos)))
+                {
+                    actors::cancel_actors(lv, &mut c);
+                }
+                let quarter = contraption::quarter(turn.angle_at(now));
+                if let Some(w) = with_world(|w| w.windmill_disassembled(dim, pos, state)).flatten()
+                {
+                    put_back_turned(lv, pos, facing, quarter, &w);
+                }
+            }
+            Some(Some(mut turn)) => {
+                // A stalled structure stays still at any speed until its actor is done.
+                let stalled = BEARING_CARRIED
+                    .with_borrow(|c| c.get(&(dim, pos)).is_some_and(|c| c.0.stalled));
+                turn.rebase(now, if stalled { 0.0 } else { rpm });
+                with_world(|w| {
+                    if let Some(m) = w.dims[dim].windmills.get_mut(&pos) {
+                        m.bearing = Some(turn);
+                    }
+                    w.dims[dim].windmill_changes.push(pos);
+                });
+            }
+            Some(None) => {}
+            None if rpm != 0.0 => {
+                let gathered = contraption::gather_bearing(pos, facing, 0, |p| found(lv, p));
+                let Ok((blocks, sails)) = gathered else {
+                    continue;
+                };
+                take_blocks(lv, pos, &blocks);
+                let w = create_engine::world::Windmill {
+                    blocks,
+                    sails,
+                    clockwise: true,
+                    bearing: Some(Turn {
+                        angle: 0.0,
+                        since: now,
+                        rpm,
+                    }),
+                };
+                with_world(|world| world.bearing_assembled(dim, pos, w));
+            }
+            None => {}
+        }
+    }
+}
+
+/// `ControlledContraptionEntity.disassemble` with its `StructureTransform`: each block turned
+/// `quarter`° about the bearing's axis through the block in front of it ([`turned_state`]). A
+/// block whose place is taken drops.
+fn put_back_turned(
+    lv: &mut ServerLevel<'_>,
+    bearing: [i32; 3],
+    facing: Dir,
+    quarter: i32,
+    w: &create_engine::world::Windmill,
+) {
+    let axis = facing.axis();
+    let f = facing.offset();
+    let anchor = add(bearing, f);
+    let turned: Vec<([i32; 3], u32)> = w
+        .blocks
+        .iter()
+        .map(|(o, state)| {
+            let local = [o[0] - f[0], o[1] - f[1], o[2] - f[2]];
+            let r = contraption::rotate(local, quarter, axis);
+            (
+                add(anchor, r),
+                turned_state(&*lv.host, *state, quarter, axis),
+            )
+        })
+        .collect();
+    put_back_blocks(lv, &turned, |lv, p| lv.is_free(p));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Gantries
+
+/// A gantry shaft's facing, part and power; None for any other block.
+fn gantry_shaft(
+    lv: &ServerLevel<'_>,
+    p: [i32; 3],
+) -> Option<(Dir, create_engine::gantry::Part, bool)> {
+    let (name, props) = lv.name_props(p)?;
+    if name != "create:gantry_shaft" {
+        return None;
+    }
+    let facing = prop(&props, "facing").and_then(dir_of)?;
+    let part = create_engine::gantry::Part::read(prop(&props, "part")?)?;
+    Some((facing, part, flag(&props, "powered")))
+}
+
+/// `checkAttachedCarriageBlocks`: carriages beside the shaft facing away from it, off its axis,
+/// try to start on the next tick.
+pub(super) fn gantry_carriages_on(lv: &ServerLevel<'_>, shaft: [i32; 3]) {
+    let Some((facing, ..)) = gantry_shaft(lv, shaft) else {
+        return;
+    };
+    for d in Dir::ALL {
+        if d.axis() == facing.axis() {
+            continue;
+        }
+        let c = add(shaft, d.offset());
+        let carriage = lv.name_props(c).is_some_and(|(n, p)| {
+            n == "create:gantry_carriage" && prop(&p, "facing") == Some(dir_name(d))
+        });
+        if carriage {
+            with_world(|w| w.dims[lv.dim].gantry_assemble.push(c));
+        }
+    }
+}
+
+/// Gantries: shafts take their place in their line (`updateShape`); queued carriages on a shaft
+/// they may start from take their structure out of the world (`tryAssemble`); moving ones run
+/// along the shafts at their speed (`checkPinionShaft`) and go back into the world, at the
+/// nearest whole block, where they stop. Nothing runs without one of them.
+pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
+    use create_engine::gantry::{self, Moving, Shaft, Step};
+    let dim = lv.dim;
+    let Some((mut checks, mut queued, moving)) = with_world(|w| {
+        let d = &mut w.dims[dim];
+        (
+            std::mem::take(&mut d.gantry_checks),
+            std::mem::take(&mut d.gantry_assemble),
+            !d.gantries.is_empty(),
+        )
+    }) else {
+        return;
+    };
+    if checks.is_empty() && queued.is_empty() && !moving {
+        return;
+    }
+    checks.sort();
+    checks.dedup();
+    for pos in checks {
+        let Some((facing, part, _)) = gantry_shaft(lv, pos) else {
+            continue;
+        };
+        let along =
+            |d: Dir| gantry_shaft(lv, add(pos, d.offset())).is_some_and(|(f, ..)| f == facing);
+        let now = gantry::Part::of(along(facing), along(facing.opposite()));
+        if now != part {
+            lv.set_property(pos, "part", now.name(), update_all());
+        }
+    }
+    queued.sort();
+    queued.dedup();
+    for c in queued {
+        let Some(cf) = lv
+            .name_props(c)
+            .filter(|(n, _)| n == "create:gantry_carriage")
+            .and_then(|(_, p)| prop(&p, "facing").and_then(dir_of))
+        else {
+            continue;
+        };
+        let shaft = add(c, cf.opposite().offset());
+        let Some((sf, part, powered)) = gantry_shaft(lv, shaft) else {
+            continue;
+        };
+        let v = gantry::pinion_speed(speed(dim, shaft));
+        if !gantry::can_assemble_on(part, powered, v) {
+            continue;
+        }
+        let moving_dir = if v > 0.0 { sf } else { sf.opposite() };
+        let gathered = contraption::gather_gantry(c, cf, moving_dir, |p| found(lv, p));
+        let Ok(blocks) = gathered else {
+            continue;
+        };
+        let carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
+        take_blocks(lv, c, &blocks);
+        with_world(|w| {
+            w.dims[dim].gantries.push(Moving {
+                start: c,
+                carriage_facing: cf,
+                shaft_facing: sf,
+                offset: 0.0,
+                per_tick: 0.0,
+                blocks,
+                carried,
+            })
+        });
+    }
+    let list = with_world(|w| std::mem::take(&mut w.dims[dim].gantries)).unwrap_or_default();
+    let mut keep = Vec::new();
+    for mut g in list {
+        // Its actors first; while one stalls, the gantry holds (`isStalled`).
+        if !g.carried.actors.is_empty() {
+            let o = g.shaft_facing.offset();
+            let at =
+                [0, 1, 2].map(|a| f64::from(g.start[a]) + f64::from(o[a]) * f64::from(g.offset));
+            let stalled = actors::tick_actors(lv, g.start, &mut g.carried, at);
+            g.carried.stalled = stalled;
+            if stalled {
+                if g.per_tick != 0.0 {
+                    g.per_tick = 0.0;
+                    show_gantry(lv, &g, false);
+                }
+                keep.push(g);
+                continue;
+            }
+        }
+        let sp = g.shaft_pos();
+        let shaft = gantry_shaft(lv, sp).map(|(facing, part, powered)| Shaft {
+            facing,
+            part,
+            powered,
+            speed: speed(dim, sp),
+        });
+        match g.step(shaft) {
+            Step::Move(v) => {
+                if v != g.per_tick {
+                    g.per_tick = v;
+                    show_gantry(lv, &g, false);
+                }
+                g.offset += v;
+                keep.push(g);
+            }
+            Step::Stop => {
+                // `disassemble` at `BlockPos.containing(anchor + .5)`.
+                let at = g.carriage();
+                let shift = [at[0] - g.start[0], at[1] - g.start[1], at[2] - g.start[2]];
+                let blocks: Vec<([i32; 3], u32)> = g
+                    .blocks
+                    .iter()
+                    .map(|(o, id)| (add(add(g.start, *o), shift), *id))
+                    .collect();
+                put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
+                actors::release(lv, g.start, at, &mut g.carried);
+                show_gantry(lv, &g, true);
+            }
+        }
+    }
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        keep.extend(std::mem::take(&mut d.gantries));
+        d.gantries = keep;
+    });
+}
+
+/// A moving gantry to its clients, through the shaft its carriage started on: gliding along the
+/// shaft line from its offset at its speed; `gone` clears it.
+fn show_gantry(lv: &mut ServerLevel<'_>, g: &create_engine::gantry::Moving, gone: bool) {
+    let shaft = add(g.start, g.carriage_facing.opposite().offset());
+    if gone {
+        draw::hide(lv, shaft);
+        return;
+    }
+    let origin = g.carriage_facing.offset();
+    draw::show_glide(
+        lv,
+        shaft,
+        draw::Glide {
+            origin,
+            blocks: &g.blocks,
+            dir: g.shaft_facing.offset(),
+            offset: g.offset,
+            per_tick: g.per_tick,
+            clamp: None,
+            rope: false,
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Mechanical pistons
+
+/// A block's world position on a piston's structure at `offset` blocks out.
+fn piston_world(anchor: [i32; 3], local: [i32; 3], facing: Dir, offset: i32) -> [i32; 3] {
+    let o = facing.offset();
+    [0, 1, 2].map(|a| anchor[a] + local[a] + o[a] * offset)
+}
+
+/// Mechanical pistons (`LinearActuatorBlockEntity.tick`): a speed change makes a still piston
+/// assemble or a moving one stop (`assembleNextTick`); moving ones slide `getMovementSpeed`
+/// a tick and are put back at their end (`tryDisassemble`). Clients glide the structure.
+pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let mut checks =
+        with_world(|w| std::mem::take(&mut w.dims[dim].piston_checks)).unwrap_or_default();
+    let moving: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].pistons.keys().copied().collect()).unwrap_or_default();
+    if checks.is_empty() && moving.is_empty() {
+        return;
+    }
+    checks.sort();
+    checks.dedup();
+    for pos in checks {
+        let rpm = speed(dim, pos);
+        let running = with_world(|w| w.dims[dim].pistons.contains_key(&pos)).unwrap_or(false);
+        match (running, rpm != 0.0) {
+            (false, true) => assemble_piston(lv, pos, rpm),
+            (true, false) => disassemble_piston(lv, pos),
+            (true, true) => show_piston(lv, pos),
+            _ => {}
+        }
+    }
+    for pos in moving {
+        let rpm = speed(dim, pos);
+        let Some(facing) = super::create_info(lv.block(pos)).and_then(|(_, i)| i.facing) else {
+            continue;
+        };
+        // Its actors first (the contraption entity ticks before the piston's block entity);
+        // while one stalls, the piston holds (`isStalled`).
+        let stalled = tick_piston_actors(lv, pos, facing);
+        let end = with_world(|w| {
+            let m = w.dims[dim].pistons.get_mut(&pos)?;
+            if !stalled {
+                m.offset += create_engine::piston::movement(rpm, facing, m.offset, m.range);
+            }
+            Some(m.offset <= 0.0 || m.offset >= m.range as f32)
+        })
+        .flatten();
+        if end == Some(true) {
+            disassemble_piston(lv, pos);
+        }
+    }
+}
+
+/// A moving piston's actors at its offset now; clients hear when it stalls or moves on. Only
+/// pistons carrying actors do anything.
+fn tick_piston_actors(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> bool {
+    let dim = lv.dim;
+    let Some((mut carried, anchor, offset)) = with_world(|w| {
+        let m = w.dims[dim].pistons.get_mut(&pos)?;
+        if m.carried.actors.is_empty() {
+            return None;
+        }
+        Some((std::mem::take(&mut m.carried), m.anchor, m.offset))
+    })
+    .flatten() else {
+        return false;
+    };
+    let o = facing.offset();
+    let at = [0, 1, 2].map(|a| f64::from(anchor[a]) + f64::from(o[a]) * f64::from(offset));
+    let stalled = actors::tick_actors(lv, pos, &mut carried, at);
+    let changed = stalled != carried.stalled;
+    carried.stalled = stalled;
+    let back = with_world(|w| match w.dims[dim].pistons.get_mut(&pos) {
+        Some(m) => {
+            m.carried = carried;
+            true
+        }
+        None => false,
+    })
+    .unwrap_or(false);
+    if back && changed {
+        show_piston(lv, pos);
+    }
+    stalled
+}
+
+/// `MechanicalPistonBlockEntity.assemble`: the head, poles and structure leave the world.
+fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
+    use create_engine::piston::{self, PoleCell};
+    let dim = lv.dim;
+    let Some((block, Some(facing))) = super::create_info(lv.block(pos)).map(|(b, i)| (b, i.facing))
+    else {
+        return;
+    };
+    let extended = lv
+        .name_props(pos)
+        .is_some_and(|(_, p)| prop(&p, "state") == Some("extended"));
+    let cell = |p: [i32; 3]| match super::create_info(lv.block(p)).map(|(b, i)| (b, i.facing)) {
+        Some((Block::PistonExtensionPole, Some(f))) => PoleCell::Pole(f.axis()),
+        Some((Block::MechanicalPistonHead, Some(f))) => PoleCell::Head(f),
+        _ => PoleCell::Other,
+    };
+    let Some(c) = piston::collect(pos, facing, extended, cell) else {
+        return;
+    };
+    let m = piston::movement(rpm, facing, c.progress as f32, c.range);
+    let result = c.progress as f32 + m.signum() * 0.5;
+    if m == 0.0 || result <= 0.0 || result >= c.range as f32 {
+        return;
+    }
+    // The poles' and head's own states, then the structure in front (searched from the anchor,
+    // pushed the way it moves).
+    let sticky = block == Block::StickyMechanicalPiston;
+    let head = state_with(
+        &*lv.host,
+        "create:mechanical_piston_head",
+        &[
+            ("facing", dir_name(facing)),
+            ("type", if sticky { "sticky" } else { "normal" }),
+        ],
+    );
+    let pole = state_with(
+        &*lv.host,
+        "create:piston_extension_pole",
+        &[("facing", dir_name(facing))],
+    );
+    let (Some(head), Some(pole)) = (head, pole) else {
+        return;
+    };
+    let pole_worlds: Vec<[i32; 3]> = c
+        .poles
+        .iter()
+        .map(|(l, _)| piston_world(c.anchor, *l, facing, c.progress))
+        .collect();
+    let forced = if m > 0.0 { facing } else { facing.opposite() };
+    let mut exclude = pole_worlds;
+    exclude.push(pos);
+    let Ok(structure) = piston::gather(c.anchor, forced, &exclude, |p| found(lv, p)) else {
+        return;
+    };
+    let o = facing.offset();
+    let mut blocks: Vec<([i32; 3], u32)> = c
+        .poles
+        .iter()
+        .map(|(l, is_head)| (*l, if *is_head { head } else { pole }))
+        .collect();
+    for (off, s) in &structure {
+        blocks.push(([0, 1, 2].map(|a| off[a] - o[a] * c.progress), *s));
+    }
+    // What rides with it (actors, storage, glue; offsets as the blocks', from the anchor at
+    // offset 0), then off the world: everything but the piston.
+    let origin = piston_world(c.anchor, [0; 3], facing, c.progress);
+    let local: Vec<([i32; 3], u32)> = blocks
+        .iter()
+        .filter(|(l, _)| piston_world(c.anchor, *l, facing, c.progress) != pos)
+        .copied()
+        .collect();
+    let carried = actors::carry(lv, pos, origin, &local, |p| p == pos);
+    for (l, _) in &blocks {
+        let p = piston_world(c.anchor, *l, facing, c.progress);
+        if p != pos {
+            lv.set_air(p, update_all());
+        }
+    }
+    lv.set_property(pos, "state", "moving", update_all());
+    with_world(|w| {
+        w.dims[dim].pistons.insert(
+            pos,
+            create_engine::world::Moving {
+                anchor: c.anchor,
+                blocks,
+                offset: c.progress as f32,
+                range: c.range,
+                carried,
+            },
+        )
+    });
+    show_piston(lv, pos);
+}
+
+/// `tryDisassemble`: the structure goes back into the world at the nearest whole offset; the
+/// piston is extended unless all the way in.
+fn disassemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let Some(mut m) = with_world(|w| w.dims[dim].pistons.remove(&pos)).flatten() else {
+        return;
+    };
+    let Some(facing) = super::create_info(lv.block(pos)).and_then(|(_, i)| i.facing) else {
+        return;
+    };
+    let grid = m.offset.round() as i32;
+    for (l, s) in &m.blocks {
+        let p = piston_world(m.anchor, *l, facing, grid);
+        if p != pos {
+            lv.set_num(p, *s, update_all());
+        }
+    }
+    let state = if grid > 0 { "extended" } else { "retracted" };
+    lv.set_property(pos, "state", state, update_all());
+    let o = facing.offset();
+    let origin = [0, 1, 2].map(|a| m.anchor[a] + o[a] * grid);
+    actors::release(lv, pos, origin, &mut m.carried);
+    draw::hide(lv, pos);
+}
+
+/// A moving piston to its clients: its blocks (offset from the anchor at offset 0) gliding
+/// along its facing from its offset now at the blocks a tick it moves (none while stalled,
+/// `ContraptionStallPacket`).
+fn show_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let Some(m) = with_world(|w| w.dims[dim].pistons.get(&pos).cloned()).flatten() else {
+        return;
+    };
+    let Some(facing) = super::create_info(lv.block(pos)).and_then(|(_, i)| i.facing) else {
+        return;
+    };
+    let per_tick = if m.carried.stalled {
+        0.0
+    } else {
+        create_engine::piston::movement(speed(dim, pos), facing, m.offset, m.range)
+    };
+    let origin = [
+        m.anchor[0] - pos[0],
+        m.anchor[1] - pos[1],
+        m.anchor[2] - pos[2],
+    ];
+    draw::show_glide(
+        lv,
+        pos,
+        draw::Glide {
+            origin,
+            blocks: &m.blocks,
+            dir: facing.offset(),
+            offset: m.offset,
+            per_tick,
+            clamp: None,
+            rope: false,
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Saved with the column
+
+/// Windmills and mechanical bearings (`windmills`) and chassis ranges (`chassis`).
+pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
+    let dim = lv.dim;
+    let windmills = windmills_from_nbt(lv, data);
+    let ranges: Vec<([i32; 3], i32)> = match data.get(&"chassis".into()) {
+        Some(Tag::IntArray(v)) => v
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| ([c[0], c[1], c[2]], c[3].clamp(1, 16)))
+            .collect(),
+        _ => Vec::new(),
+    };
+    with_world(|w| {
+        w.load_windmills(dim, windmills.into_iter());
+        w.dims[dim].chassis_range.extend(ranges);
+    });
+}
+
+pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+    let dim = lv.dim;
+    let Some((windmills, ranges)) = with_world(|w| {
+        let mut ranges: Vec<([i32; 3], i32)> = w.dims[dim]
+            .chassis_range
+            .iter()
+            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]))
+            .map(|(p, r)| (*p, *r))
+            .collect();
+        ranges.sort();
+        (w.column_windmills(dim, chunk[0], chunk[1]), ranges)
+    }) else {
+        return;
+    };
+    if !ranges.is_empty() {
+        let v = ranges
+            .iter()
+            .flat_map(|(p, r)| [p[0], p[1], p[2], *r])
+            .collect();
+        data.insert("chassis".into(), Tag::IntArray(v));
+    }
+    if !windmills.is_empty() {
+        data.insert("windmills".into(), windmills_to_nbt(lv, &windmills));
+    }
+}
+
+fn windmills_to_nbt(
+    lv: &ServerLevel<'_>,
+    all: &[([i32; 3], create_engine::world::Windmill)],
+) -> Tag {
+    let now = lv.game_time();
+    Tag::List(
+        all.iter()
+            .map(|(p, w)| {
+                let mut c = Compound::new();
+                c.insert("pos".into(), Tag::IntArray(p.to_vec()));
+                c.insert(
+                    "blocks".into(),
+                    Tag::IntArray(w.blocks.iter().flat_map(|(o, _)| *o).collect()),
+                );
+                c.insert(
+                    "states".into(),
+                    Tag::List(
+                        w.blocks
+                            .iter()
+                            .map(|(_, s)| {
+                                let text = state_text(&*lv.host, *s).unwrap_or_default();
+                                Tag::String(text.as_str().into())
+                            })
+                            .collect(),
+                    ),
+                );
+                // A mechanical bearing's `Angle` (now) and that it is one.
+                let angle = w.bearing.map_or(0.0, |t| t.angle_at(now));
+                c.insert(
+                    "sails".into(),
+                    Tag::IntArray(vec![
+                        w.sails as i32,
+                        i32::from(w.clockwise),
+                        angle.to_bits() as i32,
+                        i32::from(w.bearing.is_some()),
+                    ]),
+                );
+                Tag::Compound(c)
+            })
+            .collect(),
+    )
+}
+
+fn windmills_from_nbt(
+    lv: &ServerLevel<'_>,
+    data: &Compound,
+) -> Vec<([i32; 3], create_engine::world::Windmill)> {
+    let Some(Tag::List(list)) = data.get(&"windmills".into()) else {
+        return Vec::new();
+    };
+    let now = lv.game_time();
+    list.iter()
+        .filter_map(|c| {
+            let Tag::Compound(c) = c else { return None };
+            let Some(Tag::IntArray(p)) = c.get(&"pos".into()) else {
+                return None;
+            };
+            let Some(Tag::IntArray(offsets)) = c.get(&"blocks".into()) else {
+                return None;
+            };
+            let Some(Tag::List(states)) = c.get(&"states".into()) else {
+                return None;
+            };
+            let Some(Tag::IntArray(sails)) = c.get(&"sails".into()) else {
+                return None;
+            };
+            let blocks = offsets
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .zip(states)
+                .filter_map(|(o, s)| {
+                    let Tag::String(s) = s else { return None };
+                    Some((
+                        [o[0], o[1], o[2]],
+                        state_of_text(&*lv.host, &s.to_string_lossy())?,
+                    ))
+                })
+                .collect();
+            Some((
+                [*p.first()?, *p.get(1)?, *p.get(2)?],
+                create_engine::world::Windmill {
+                    blocks,
+                    sails: (*sails.first()?).max(0) as u32,
+                    clockwise: sails.get(1) != Some(&0),
+                    bearing: (sails.get(3) == Some(&1)).then(|| Turn {
+                        angle: f32::from_bits(sails.get(2).copied().unwrap_or(0) as u32),
+                        since: now,
+                        rpm: 0.0,
+                    }),
+                },
+            ))
+        })
+        .collect()
+}
