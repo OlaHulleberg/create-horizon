@@ -5,7 +5,7 @@
 //! `create.carriage_seat` that the server moves to the seat every tick, gliding between. Getting
 //! off puts the rider where Create does (`ContraptionDismountLocation`); a stand-in with no
 //! rider, or whose train went, goes. Stand-ins are not saved as Create's: one that comes back
-//! with its chunk or a player's file is discarded.
+//! with its chunk or a player's file is discarded (`visuals::sweep`), its rider let off.
 
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
@@ -26,25 +26,10 @@ struct Seated {
 
 thread_local! {
     static SEATED: RefCell<Vec<Seated>> = const { RefCell::new(Vec::new()) };
-    /// Stand-ins tagged as ours that joined a level, for its next tick.
-    static JOINED: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
 }
 
 pub fn forget() {
     SEATED.with_borrow_mut(Vec::clear);
-    JOINED.with_borrow_mut(Vec::clear);
-}
-
-/// A stand-in tagged as ours joined level `dim`.
-pub fn joined(dim: usize, id: u32) {
-    JOINED.with_borrow_mut(|j| j.push((dim, id)));
-}
-
-/// Whether entity `id` is one of our stand-ins (by its tag).
-pub fn is_ours(host: &dyn ServerHost, id: u32) -> bool {
-    host.entity(id)
-        .and_then(|e| e.tags(host))
-        .is_some_and(|t| t.iter().any(|t| t == TAG))
 }
 
 /// Whether the carriage block `at` is a seat (`SeatBlock`), by its state.
@@ -74,7 +59,13 @@ fn frame(dim: usize, at: Target) -> Option<Frame> {
 fn stand_nbt() -> Compound {
     let mut nbt = Compound::new();
     nbt.insert("teleport_duration".into(), Tag::Int(2));
-    nbt.insert("Tags".into(), Tag::List(vec![Tag::String(TAG.into())]));
+    nbt.insert(
+        "Tags".into(),
+        Tag::List(vec![
+            Tag::String(TAG.into()),
+            Tag::String(super::visuals::session_tag().as_str().into()),
+        ]),
+    );
     nbt
 }
 
@@ -156,20 +147,6 @@ pub fn train_gone(lv: &mut ServerLevel<'_>, train: u32) {
 /// moves to its seat, and goes when it has no rider or its train is gone.
 pub fn tick(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let joined: Vec<u32> = JOINED.with_borrow_mut(|j| {
-        let (here, rest): (Vec<_>, Vec<_>) =
-            std::mem::take(j).into_iter().partition(|e| e.0 == dim);
-        *j = rest;
-        here.into_iter().map(|e| e.1).collect()
-    });
-    for id in joined {
-        if !SEATED.with_borrow(|s| s.iter().any(|s| s.stand == id))
-            && let Some(e) = lv.host.entity(id)
-        {
-            e.eject_passengers(lv.host);
-            e.discard(lv.host);
-        }
-    }
     let seated: Vec<Seated> =
         SEATED.with_borrow(|s| s.iter().filter(|s| s.dim == dim).copied().collect());
     for s in seated {

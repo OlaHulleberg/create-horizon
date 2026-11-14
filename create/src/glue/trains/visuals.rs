@@ -7,13 +7,13 @@
 //! A carriage has its displays while the chunk under it is loaded (`Carriage.manageEntities`
 //! spawns its entity the same way); they go when it leaves, when the train goes, and with the
 //! world. They are never saved as Create's: one that comes back with its chunk is discarded and
-//! made again from the train.
+//! made again from the train (`sweep`).
 
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use create_engine::train_controls::Frame;
 use create_engine::trains::{BogeySize, yaw_pitch};
-use mod_api::{Compound, ServerHost, Tag, Transformation};
+use mod_api::{Compound, Tag, Transformation};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -55,19 +55,65 @@ const CART: u8 = 2;
 
 thread_local! {
     static SHOWN: RefCell<HashMap<Key, Shown>> = RefCell::new(HashMap::new());
-    /// Displays tagged as ours that joined a level, for its next tick.
-    static JOINED: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
+    /// This opening of the world's number (`session_tag`), 0 before the first display.
+    static SESSION: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// The world closed: its displays are saved with their chunks and discarded when they return.
 pub fn forget() {
     SHOWN.with_borrow_mut(HashMap::clear);
-    JOINED.with_borrow_mut(Vec::clear);
+    SESSION.set(0);
 }
 
-/// A display tagged as ours joined level `dim`.
-pub fn joined(dim: usize, id: u32) {
-    JOINED.with_borrow_mut(|j| j.push((dim, id)));
+/// Ticks between sweeps for displays and seat stand-ins that came back with their chunks.
+const SWEEP_TICKS: i64 = 40;
+
+/// Displays and seat stand-ins of ours from before this world opened (saved with their chunk
+/// and back with it) are discarded: those made since carry this opening's tag. The game tells
+/// mods of no display joining from a save and lists none among a level's entities, so a kill
+/// by selector finds them.
+fn sweep(lv: &mut ServerLevel<'_>) {
+    let now = session_tag();
+    for (kind, tag) in [
+        ("minecraft:block_display", TAG),
+        ("minecraft:item_display", super::riding::TAG),
+    ] {
+        lv.run_command(&format!("kill @e[type={kind},tag={tag},tag=!{now}]"));
+    }
+    // A group missing a display (killed by a command) is made again at the next tick.
+    let dim = lv.dim;
+    let broken: Vec<Key> = SHOWN.with_borrow(|s| {
+        s.iter()
+            .filter(|(k, v)| {
+                k.0 == dim && v.displays.iter().any(|(d, _)| lv.host.entity(*d).is_none())
+            })
+            .map(|(k, _)| *k)
+            .collect()
+    });
+    for k in broken {
+        if let Some(shown) = SHOWN.with_borrow_mut(|s| s.remove(&k)) {
+            for (id, _) in shown.displays {
+                if let Some(e) = lv.host.entity(id) {
+                    e.discard(lv.host);
+                }
+            }
+        }
+    }
+}
+
+/// The tag every display and stand-in made since the world opened carries.
+pub fn session_tag() -> String {
+    let n = SESSION.get();
+    let n = if n == 0 {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| d.subsec_nanos() | 1);
+        SESSION.set(t);
+        t
+    } else {
+        n
+    };
+    format!("create.s{n:x}")
 }
 
 /// One carriage or bogey as this tick has it.
@@ -137,18 +183,8 @@ fn place(now: &Now, part: Part) -> [f64; 3] {
 /// get their displays, those that moved move them, and those gone or out of reach lose them.
 pub fn tick(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let joined: Vec<u32> = JOINED.with_borrow_mut(|j| {
-        let (here, rest): (Vec<_>, Vec<_>) =
-            std::mem::take(j).into_iter().partition(|e| e.0 == dim);
-        *j = rest;
-        here.into_iter().map(|e| e.1).collect()
-    });
-    for id in joined {
-        let ours =
-            SHOWN.with_borrow(|s| s.values().any(|v| v.displays.iter().any(|(d, _)| *d == id)));
-        if !ours && let Some(e) = lv.host.entity(id) {
-            e.discard(lv.host);
-        }
+    if lv.game_time() % SWEEP_TICKS == 0 {
+        sweep(lv);
     }
     let empty = SHOWN.with_borrow(|s| !s.keys().any(|k| k.0 == dim && k.2 != CART));
     let any =
@@ -446,13 +482,12 @@ fn display_nbt(
     nbt.insert("teleport_duration".into(), Tag::Int(GLIDE));
     nbt.insert("view_range".into(), float(2.0));
     nbt.insert("Rotation".into(), floats(&[yaw, pitch]));
-    nbt.insert("Tags".into(), Tag::List(vec![Tag::String(TAG.into())]));
+    nbt.insert(
+        "Tags".into(),
+        Tag::List(vec![
+            Tag::String(TAG.into()),
+            Tag::String(session_tag().as_str().into()),
+        ]),
+    );
     nbt
-}
-
-/// Whether `host`'s entity `id` is one of our displays (by its tag).
-pub fn is_ours(host: &dyn ServerHost, id: u32) -> bool {
-    host.entity(id)
-        .and_then(|e| e.tags(host))
-        .is_some_and(|t| t.iter().any(|t| t == TAG))
 }

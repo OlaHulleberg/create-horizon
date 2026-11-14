@@ -53,25 +53,6 @@ impl Subsystem for Trains {
         riding::forget();
     }
 
-    /// A carriage's display came back with its chunk: it is discarded at the level's next tick
-    /// unless it is one the trains show now.
-    fn entity_join_level(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::EntityJoinLevelEvent<'_>,
-    ) -> mod_api::Flow {
-        let Some(dim) = super::super::world::level_index(event.dimension) else {
-            return mod_api::Flow::Continue;
-        };
-        if event.kind == "minecraft:block_display" && visuals::is_ours(&*host, event.entity) {
-            visuals::joined(dim, event.entity);
-        }
-        if event.kind == "minecraft:item_display" && riding::is_ours(&*host, event.entity) {
-            riding::joined(dim, event.entity);
-        }
-        mod_api::Flow::Continue
-    }
-
     /// A rider getting off a carriage's seat is let off where Create lets them off.
     fn entity_mount(
         &self,
