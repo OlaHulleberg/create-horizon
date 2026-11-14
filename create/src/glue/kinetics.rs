@@ -26,8 +26,8 @@ pub const TYPE: &str = "create:kinetic";
 const SPEEDS: &str = "Speeds";
 /// The keys of its first part's theoretical speed (`getTheoreticalSpeed`, what the goggles
 /// show) and of whether its network is overstressed (`isOverStressed`).
-const THEORY: &str = "Theory";
-const OVER: &str = "Over";
+pub const THEORY: &str = "Theory";
+pub const OVER: &str = "Over";
 /// Whether a speed controller shows its bracket (`SpeedControllerBlockEntity.hasBracket`).
 const BRACKET: &str = "Bracket";
 

@@ -20,11 +20,15 @@ use create_engine::gauge::{Needle, Shown, dial_faces, dial_pose};
 use create_engine::parts::StateInfo;
 use mod_api::{
     BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
-    BlockEntitySubmitEvent, BlockPart, ClientHost, Compound, ModBlockEntity, Registrar,
-    RegistrationContext, Tag,
+    BlockEntitySubmitEvent, BlockPart, ClientHost, Compound, ModBlockEntity, ParticleOptions,
+    Registrar, RegistrationContext, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// `minecraft:dust`, for the gauges' puffs.
+static DUST: OnceLock<mod_api::ParticleKey> = OnceLock::new();
 
 /// The key in a gauge's block entity data: dial, speed, stress, capacity, overstressed (0 or 1).
 pub const GAUGE: &str = "Gauge";
@@ -48,6 +52,7 @@ impl Subsystem for Gauges {
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        let _ = DUST.set(r.particle_key("minecraft:dust"));
         let Some(kind) = kinetics::kind() else {
             return;
         };
@@ -159,6 +164,9 @@ struct Client {
 
 thread_local! {
     static CLIENT: RefCell<Client> = RefCell::new(Client::default());
+    /// The gauges' dust's random source (the client level's `random` in Create).
+    static DUST_RNG: RefCell<create_engine::processing::Rng> =
+        RefCell::new(create_engine::processing::Rng::new(0x6A06_E5D0));
 }
 
 /// Whether `kinetics` leaves part `d` of `block` to this module: a gauge's dials and a
@@ -236,6 +244,9 @@ impl BlockEntityPart for Animated {
                     .level(&*host)
                     .and_then(|l| l.game_time(&*host))
                     .unwrap_or(0) as u64;
+                if let Some((block, info)) = client_block(&*host, event.state) {
+                    dust(host, block, &info, pos, &shown);
+                }
                 CLIENT.with_borrow_mut(|c| {
                     let n = c.needles.entry(pos).or_default();
                     // The server's target: the needle sets off toward it.
@@ -273,6 +284,54 @@ impl BlockEntityPart for Animated {
             Block::Speedometer | Block::Stressometer => draw_dials(event, &info),
             Block::Flywheel => draw_wheel(host, event, &info),
             _ => {}
+        }
+    }
+}
+
+/// `GaugeBlock.animateTick`: a gauge whose dial is off zero puffs dust of its colour off each
+/// face with a dial, one at a time a quarter of the times it is asked, four at a time past its
+/// end. The game asks a block near the player about once in 44 ticks (`ClientLevel.animateTick`:
+/// 667 random blocks within 16, and 667 within 32), so each client tick asks with that chance.
+fn dust(host: &mut dyn ClientHost, block: Block, info: &StateInfo, pos: [i32; 3], shown: &Shown) {
+    const ASKED: f32 = 667.0 / 32768.0 + 667.0 / 262_144.0;
+    let (Some(&key), Some(facing)) = (DUST.get(), info.facing) else {
+        return;
+    };
+    if shown.dial == 0.0 {
+        return;
+    }
+    let next = || DUST_RNG.with_borrow_mut(|r| r.next_float());
+    if next() >= ASKED {
+        return;
+    }
+    let color = match block {
+        Block::Speedometer => create_engine::gauge::speed_color(shown.speed),
+        _ => create_engine::gauge::stress_color(shown.dial, 0),
+    };
+    let rgb = [16, 8, 0].map(|s| ((color >> s) & 0xFF) as f32 / 255.0);
+    let options = ParticleOptions::dust(key, rgb, 1.0);
+    let axis = create_engine::parts::directional_axis(facing, info.along_first);
+    let count = if shown.dial > 1.0 { 4 } else { 1 };
+    for face in dial_faces(facing, axis) {
+        if count == 1 && next() > 0.25 {
+            continue;
+        }
+        let normal = face.offset().map(f64::from);
+        for _ in 0..count {
+            // `VecHelper.offsetRandomly(ZERO, r, .25)` in the face's plane, normalised, at .3.
+            let mut m = [0; 3].map(|_| f64::from((next() - 0.5) * 2.0 * 0.25));
+            for (c, n) in m.iter_mut().zip(normal) {
+                if n != 0.0 {
+                    *c = 0.0;
+                }
+            }
+            let len = m.iter().map(|c| c * c).sum::<f64>().sqrt();
+            if len == 0.0 {
+                continue;
+            }
+            let m = m.map(|c| c / len * 0.3);
+            let at = [0, 1, 2].map(|i| f64::from(pos[i]) + 0.5 + normal[i] * 0.55 + m[i]);
+            host.add_particle(&options, at, m);
         }
     }
 }

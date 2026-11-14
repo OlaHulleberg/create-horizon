@@ -1,9 +1,10 @@
 //! What the power sources draw and keep of their own: water wheels' material
-//! (`waterwheels`), and the handles of hand cranks and valve handles (`handles`). Their speeds
-//! and stress are the network's (`kinetics`); a crank's and a valve's use are `interaction`'s
-//! and `blocks`'.
+//! (`waterwheels`), and the handles of hand cranks and valve handles (`handles`); and what
+//! clients see of a network's stress changing (`stress`). Their speeds and stress are the
+//! network's (`kinetics`); a crank's and a valve's use are `interaction`'s and `blocks`'.
 
 pub mod handles;
+pub mod stress;
 pub mod waterwheels;
 
 use super::subsystem::Subsystem;
@@ -27,6 +28,7 @@ impl Subsystem for Sources {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         waterwheels::register(r);
         handles::register(r);
+        stress::register(r);
     }
 
     fn synced_keys(&self) -> &'static [&'static str] {
@@ -43,10 +45,12 @@ impl Subsystem for Sources {
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         handles::client_tick(&*host);
+        stress::client_tick(host);
     }
 
     fn client_reset(&self) {
         handles::client_reset();
+        stress::client_reset();
     }
 
     fn right_click_block(&self, host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
