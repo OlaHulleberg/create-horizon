@@ -1294,6 +1294,8 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &mut Open, mouse: 
     draw.draw_menu_background([0.0, 0.0, size[0], size[1]], true);
     // `renderBg`: the panel, its title, the schedule.
     blit(draw, TEX, [0.0, 0.0, BG[0], BG[1]], c);
+    draw_schedule(host, draw, o, c);
+    // The title after the cards: their clipping redraws the panel's frame over it.
     let center = c[0] + ((BG[0] - 8.0) / 2.0).floor();
     let title = tr(host, "item.create.schedule");
     let w = draw.text_width(&title);
@@ -1303,7 +1305,6 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &mut Open, mouse: 
         0xFF50_5050,
         false,
     );
-    draw_schedule(host, draw, o, c);
     let mut hover: Option<Vec<Text>> = None;
     if o.editing.is_none() {
         draw_buttons(host, draw, o, c, mouse, &mut hover);
