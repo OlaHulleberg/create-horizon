@@ -128,18 +128,15 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **The player in `left_click_block`**: an arm's chosen point and an ejector's target can't be dropped
   by left-clicking them with the item.
 - **A terrain model that reads its neighbours** (Create's `CTModel` and `CTSpriteShifter`, connected textures):
-  casings, framed glass, windows and layered stone join through the connected-texture rules `create-data
-  prepare` writes, but gearboxes, encased shafts and cogs and fluid tanks wider than one keep each its own
+  casings, framed glass, windows, layered stone and item vaults join through the connected-texture rules
+  `create-data prepare` writes (a vault joins any vault block of its axis and size beside it, where
+  `ItemVaultCTBehaviour` joins only its own vault's blocks: a rule cannot read the multiblock), but gearboxes, encased shafts and cogs and fluid tanks wider than one keep each its own
   frame, where Create's `EncasedCTBehaviour`, `EncasedCogCTBehaviour` and `FluidTankCTBehaviour` join them
   into one (their models are not plain cubes a rule can retexture). A model hook given the neighbouring
   states (or a sprite shift per face) would close it.
 - **The level's redstone in `state_for_placement`** (`LevelHost` has no `has_neighbor_signal`): a clutch,
   gearshift or adjustable chain gearshift placed beside power is placed unpowered and takes `powered` in the
   same tick's level tick (`GearshiftBlock.getStateForPlacement` reads it at once).
-- **More than one UV shift in a `terrain_model` draw** (`TerrainModelOptions::uv_shift` takes one
-  sprite's): item vaults' connected textures (`ItemVaultCTBehaviour` picks each face's tile of the
-  front, side, top and bottom sheets by the vault's size) would be drawn by the vault's block entity
-  with one shift per sprite; they are not drawn.
 - **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
   light inside the chute is dark.
 - **The local player's inventory slots on its client** (`player_inventory_slots` answers on the server only;

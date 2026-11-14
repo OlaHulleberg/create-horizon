@@ -17,10 +17,12 @@
 //! Left out: pillars (`RotatedPillarCTBehaviour` turns its axes by the pillar's axis and joins by
 //! its `ConnectedPillarBlock` sides), the weathered iron window's position-picked sheets, copper
 //! roofs (`ROOF`), metal scaffolding, chassis, the encased blocks' and crafters' state-dependent
-//! sides, tanks and vaults (their sheets follow the multiblock's size and the block entity), the
+//! sides, tanks (their sheets follow the multiblock's size and the block entity), the
 //! glass panes' mirrored left and right on their north and west faces
 //! (`GlassPaneCTBehaviour.reverseUVsHorizontally`), and casings joining the encased blocks of their
-//! casing (`CasingConnectivity`): a casing joins only its own block.
+//! casing (`CasingConnectivity`): a casing joins only its own block. Item vaults join any vault
+//! block of the same axis and size beside them, where Create joins only its own vault's blocks
+//! (`ConnectivityHandler.isConnected`: two vaults side by side show their seam).
 
 use std::collections::BTreeMap;
 
@@ -334,6 +336,10 @@ enum Join {
     SameBlock,
     /// The same block (`GlassPaneCTBehaviour`).
     SameBlockAlways,
+    /// The same state, the faces' neighbours found along the drawn texture's own directions
+    /// (`ItemVaultCTBehaviour`: `state == other`, its `getUpDirection` and `getRightDirection`
+    /// follow the vault model's turned faces).
+    SameStateTexture,
 }
 
 /// `block`'s faces showing `original` take `sheet` (Create's `_connected` sheet
@@ -347,8 +353,18 @@ struct Rule {
 
 struct Plan {
     block: String,
+    /// The block's states the rules apply to (`:large=true`), empty for all.
+    state: String,
     join: Join,
     rules: Vec<Rule>,
+}
+
+impl Plan {
+    /// The folder of its properties files.
+    fn folder(&self) -> String {
+        let state = self.state.replace([':', '='], "_");
+        format!("{}{state}", self.block)
+    }
 }
 
 fn rule(original: &str, sheet: &str, ty: CtType, faces: Faces) -> Rule {
@@ -387,12 +403,36 @@ fn plans() -> Vec<Plan> {
     use CtType::*;
     let mut out = Vec::new();
     let mut plan = |block: &str, join: Join, rules: Vec<Rule>| {
+        let (block, state) = block.split_once(':').unwrap_or((block, ""));
         out.push(Plan {
             block: block.to_owned(),
+            state: if state.is_empty() {
+                String::new()
+            } else {
+                format!(":{state}")
+            },
             join,
             rules,
         });
     };
+    // `ItemVaultCTBehaviour`: each face's sprite by the vault's axis (the model's turned faces),
+    // a one-wide vault's (`large=false`) from the `_medium` sheets, a wider one's from the
+    // `_large` (`AllSpriteShifts.vault`, `RECTANGLE`).
+    for (large, size) in [("false", "medium"), ("true", "large")] {
+        let rules = ["front", "side", "top", "bottom"]
+            .into_iter()
+            .map(|face| {
+                let tex = format!("vault/vault_{face}_small");
+                let sheet = format!("vault/vault_{face}_{size}");
+                rule(&tex, &sheet, Rectangle, Faces::All)
+            })
+            .collect();
+        plan(
+            &format!("item_vault:large={large}"),
+            Join::SameStateTexture,
+            rules,
+        );
+    }
     for casing in [
         "andesite_casing",
         "brass_casing",
@@ -534,11 +574,16 @@ fn cut(sheet: &[u8], ty: CtType) -> Result<Vec<Vec<u8>>, String> {
 fn properties(plan: &Plan, rule: &Rule, tiles: &str) -> String {
     let method = rule.ty.method();
     let count = method.masks().len();
+    let connect = match plan.join {
+        Join::SameStateTexture => "state\norient=texture",
+        _ => "block",
+    };
     let mut out = format!(
-        "method={}\nmatchTiles={}\nmatchBlocks=create:{}\nconnect=block\ntiles={}\n",
+        "method={}\nmatchTiles={}\nmatchBlocks=create:{}{}\nconnect={connect}\ntiles={}\n",
         method.name(),
         rule.original,
         plan.block,
+        plan.state,
         (0..count)
             .map(|i| format!("create:optifine/ctm/tiles/{tiles}/{i}"))
             .collect::<Vec<_>>()
@@ -598,7 +643,10 @@ pub fn files(read: &dyn Fn(&str) -> Option<Vec<u8>>) -> (BTreeMap<String, Vec<u8
             });
             if cut_ok {
                 out.insert(
-                    format!("assets/create/optifine/ctm/{}/{i}.properties", plan.block),
+                    format!(
+                        "assets/create/optifine/ctm/{}/{i}.properties",
+                        plan.folder()
+                    ),
                     properties(&plan, rule, &rule.sheet).into_bytes(),
                 );
             }

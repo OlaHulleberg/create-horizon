@@ -31,9 +31,9 @@
 //!   every state), as `BeltModel` would draw it.
 //! - Players riding a belt are pushed by their own client (`push_player`), other entities by
 //!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`.
-//! - Item vaults' connected textures (`ItemVaultCTBehaviour`) are not drawn: a vault is a terrain
-//!   model per block, and drawing one by its block entity would need a UV shift per face of one
-//!   model (`TerrainModelOptions` takes one sprite's).
+//! - Item vaults' connected textures (`ItemVaultCTBehaviour`) are the connected-texture rules
+//!   `create-data prepare` writes: a vault joins any vault block of its axis and size beside it,
+//!   not only its own vault's.
 //! - A filter slot's amount board (`amount`) is opened by a held use as Create's; a smart chute's
 //!   client takes its stacks to fall when it decides whether to hold (the server decides by the
 //!   fans' real pull), and a portable storage interface gives up to the amount, never exactly.
