@@ -583,6 +583,11 @@ fn click_track(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<Inte
     }
     let dimension = click.dimension.key().id().to_owned();
     let mut lv = ServerLevel::new(host, &dimension)?;
+    if super::relocate::picking(player)
+        && super::relocate::track_clicked(&mut lv, player, click.pos)
+    {
+        return Some(InteractionResult::SuccessServer);
+    }
     track_clicked(&mut lv, player, click.hand, click.stack, click.pos)
         .then_some(InteractionResult::SuccessServer)
 }

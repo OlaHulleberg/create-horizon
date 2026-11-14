@@ -733,6 +733,61 @@ impl Train {
         Some(t)
     }
 
+    /// `TrainRelocator.relocate`: the train put back on the track with its front bogey on the
+    /// track block `block`, facing along the track the way nearest `look`, each wheel point as
+    /// far behind as it was assembled; standing still, bound nowhere. False (and the train
+    /// unchanged) when the block is no track or a wheel would leave the track.
+    pub fn relocate(&mut self, net: &Network, block: [i32; 3], look: Vec3) -> bool {
+        let g = &net.graph;
+        let Some(loc) = net.blocks.get(&block) else {
+            return false;
+        };
+        let centre = Point {
+            edge: loc.edge,
+            position: loc.position,
+            blocked: false,
+        };
+        let Some(front) = net.locate(centre.at(g), look) else {
+            return false;
+        };
+        // The bogeys' places behind the front one: each carriage's first bogey its spacing
+        // (`carriageSpacing`) behind the one before, its second its bogey spacing on; each
+        // bogey with its two wheels.
+        let mut places = Vec::with_capacity(self.bogeys.len());
+        let mut at = 0;
+        for (c, shape) in self.carriages.iter().enumerate() {
+            if c > 0 {
+                at += self.spacing.get(c - 1).copied().unwrap_or(0);
+            }
+            places.push(at);
+            if shape.two {
+                places.push(at + shape.bogey_spacing);
+            }
+        }
+        let mut points = Vec::with_capacity(self.points.len());
+        for place in places.iter().take(self.bogeys.len()) {
+            for d in [-WHEEL_SPACING / 2.0, WHEEL_SPACING / 2.0] {
+                let mut p = front;
+                p.travel_signed(g, -(f64::from(*place) + d), |_, _| 0);
+                if p.blocked {
+                    return false;
+                }
+                points.push(p);
+            }
+        }
+        if points.len() != self.points.len() {
+            return false;
+        }
+        self.points = points;
+        self.speed = 0.0;
+        self.nav = None;
+        self.at_station = None;
+        self.manual = None;
+        self.bound = true;
+        self.remember(net);
+        true
+    }
+
     /// A train of single-bogey carriages on the track blocks `under` (front first), facing
     /// `front` (a unit along the track), driven both ways: each bogey's wheels a wheel spacing
     /// apart about its block's centre. None when a wheel would be off the track.
@@ -3548,6 +3603,42 @@ mod tests {
             }
         }
         assert!(Railway::default().drive(9, Manual::default()).is_none());
+    }
+
+    #[test]
+    fn a_train_relocates_onto_a_track_facing_the_look() {
+        let mut r = straight(100);
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[8, 64, 0], [12, 64, 0]], [1.0, 0.0, 0.0]);
+        let before = r.trains[a].train.points.len();
+        let g = r.net.graph.clone();
+        let t = &mut r.trains[a].train;
+        // Looking toward -x: the front at block 40, the second bogey four blocks east of it.
+        assert!(t.relocate(&r.net, [40, 64, 0], [-1.0, 0.0, 0.0]));
+        assert_eq!(t.points.len(), before);
+        let xs: Vec<f64> = t.points.iter().map(|p| p.at(&g)[0]).collect();
+        assert!((xs[0] - 39.5).abs() < 1.0e-6 && (xs[1] - 41.5).abs() < 1.0e-6, "{xs:?}");
+        assert!((xs[2] - 43.5).abs() < 1.0e-6 && (xs[3] - 45.5).abs() < 1.0e-6, "{xs:?}");
+        // Off the end of the track: refused, the train as it was.
+        let kept = t.points.clone();
+        assert!(!t.relocate(&r.net, [98, 64, 0], [-1.0, 0.0, 0.0]));
+        assert!(!t.relocate(&r.net, [8, 70, 0], [1.0, 0.0, 0.0]));
+        assert_eq!(t.points, kept);
+        // Along z, looking north (-z) at a slant: the train behind, to the south.
+        let mut r = Railway::default();
+        let mut tracks = HashMap::new();
+        line(&mut tracks, [0, 64, -50], [0, 0, 1], 100, TrackShape::Zo);
+        for (p, s) in tracks {
+            r.set_track(p, s);
+        }
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[0, 64, 0], [0, 64, 4]], [0.0, 0.0, -1.0]);
+        let g = r.net.graph.clone();
+        let t = &mut r.trains[a].train;
+        assert!(t.relocate(&r.net, [0, 64, 5], [-0.7, 0.0, -0.7]));
+        let zs: Vec<f64> = t.points.iter().map(|p| p.at(&g)[2]).collect();
+        assert!(zs[0] < zs[1] && zs[1] < zs[2] && zs[2] < zs[3], "{zs:?}");
+        assert!((zs[0] - 4.5).abs() < 1.0e-6, "{zs:?}");
     }
 
     #[test]

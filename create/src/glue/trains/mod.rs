@@ -38,6 +38,7 @@ mod conductor;
 mod controls;
 mod gui;
 mod railway;
+mod relocate;
 mod riding;
 mod saved;
 mod schedule_screen;

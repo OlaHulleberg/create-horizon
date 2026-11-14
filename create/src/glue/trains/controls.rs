@@ -577,6 +577,13 @@ fn click(host: &mut dyn ServerHost, dim: usize, player: u128, at: Target, wrench
     if d2 > reach * reach {
         return;
     }
+    // `handleSpecialInteractions`: the wrench picks the train to move (`carriageWrenched`).
+    if wrench {
+        if let Some(p) = host.player(player) {
+            super::relocate::wrenched(host, dim, p, at.train, f.pivot);
+        }
+        return;
+    }
     let controls = state(id).is_some_and(|s| s.block() == states::key(Block::Controls));
     if controls && !wrench {
         use_controls(host, dim, player, spectator, at, id);

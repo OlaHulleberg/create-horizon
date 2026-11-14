@@ -56,6 +56,7 @@ impl Subsystem for Trains {
         tracks::forget();
         assembly::forget();
         super::conductor::forget();
+        super::relocate::forget();
         super::station_screen::forget();
         visuals::forget();
         riding::forget();
