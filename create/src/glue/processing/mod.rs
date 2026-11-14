@@ -33,7 +33,7 @@
 //! items moving between mechanical crafters (`MechanicalCrafterRenderer.renderItems` past
 //! `IDLE`).
 
-mod basin;
+pub(crate) mod basin;
 mod client;
 mod containers;
 mod crafter;
@@ -44,7 +44,7 @@ mod millstone;
 mod persist;
 mod press;
 pub mod recipes;
-mod saw;
+pub(crate) mod saw;
 mod stacks;
 
 pub use containers::TOOLBOX_TYPE;

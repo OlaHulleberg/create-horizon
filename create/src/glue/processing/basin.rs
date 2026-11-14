@@ -624,8 +624,6 @@ pub fn use_burner(
     player: PlayerRef,
     stack: Option<&ItemStack>,
 ) -> bool {
-    use burner::Fuel;
-    let dim = lv.dim;
     let Some(stack) = stack else {
         return false;
     };
@@ -646,16 +644,48 @@ pub fn use_burner(
         }
         return false;
     }
-    // `isCreativeFuel`: the creative blaze cake sets the next heat for good, never used up.
+    let Some(remainder) = feed_burner(lv, pos, stack, true, false) else {
+        return false;
+    };
+    if !lv.creative(player) && held != "create:creative_blaze_cake" {
+        lv.take_held(player, 1);
+        if let Some(r) = remainder {
+            lv.give(player, r);
+        }
+    }
+    true
+}
+
+/// `BlazeBurnerBlock.tryInsert` of one of `stack` into the burner at `pos` (a lit burner or an
+/// empty one takes nothing): the creative blaze cake sets the next heat for good, never used
+/// up; other fuel goes to the blaze (`tryUpdateFuel`, `overflow` as a player's click). Only
+/// looks with `simulate`. None when it is not taken, else what is left of the one used (a lava
+/// bucket's bucket).
+pub fn feed_burner(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    stack: &ItemStack,
+    overflow: bool,
+    simulate: bool,
+) -> Option<Option<ItemStack>> {
+    use burner::Fuel;
+    let dim = lv.dim;
+    let (_, info) = lv.info(pos)?;
+    if info.heat == Some(Heat::None) || info.heat.is_none() {
+        return None;
+    }
+    let held = stacks::id(&*lv.host, stack);
+    // `isCreativeFuel`.
     if held == "create:creative_blaze_cake" {
-        let Some(heat) = with_world(|w| {
+        if simulate {
+            return Some(None);
+        }
+        let heat = with_world(|w| {
             let next = w.dims[dim].burners.get_mut(&pos)?.creative_fuel();
             w.mark_unsaved(dim, pos);
             Some(next)
         })
-        .flatten() else {
-            return false;
-        };
+        .flatten()?;
         lv.set_property(
             pos,
             "blaze",
@@ -670,10 +700,10 @@ pub fn use_burner(
             0.2,
             0.6,
         );
-        return true;
+        return Some(None);
     }
     if stack.components().is_some() {
-        return false;
+        return None;
     }
     // A data map's superheating fuel (the blaze cake), the special tag; else a furnace fuel's
     // burn time, the regular tag (as coal).
@@ -688,29 +718,29 @@ pub fn use_burner(
             _ if stacks::item_tagged(host, &held, "create:blaze_burner_fuel/regular") => {
                 (Fuel::Normal, 1600)
             }
-            _ => return false,
+            _ => return None,
         }
     };
     let remainder = host.item_crafting_remainder(stack);
-    let Some(heat) = with_world(|w| {
-        w.fuel_burner(dim, pos, fuel, time, true)
+    if simulate {
+        let takes = with_world(|w| {
+            let mut b = *w.dims[dim].burners.get(&pos)?;
+            Some(b.try_fuel(fuel, time, overflow))
+        })
+        .flatten()?;
+        return takes.then_some(remainder);
+    }
+    let heat = with_world(|w| {
+        w.fuel_burner(dim, pos, fuel, time, overflow)
             .then(|| w.dims[dim].burners.get(&pos).map(|b| b.heat()))
             .flatten()
     })
-    .flatten() else {
-        return false;
-    };
+    .flatten()?;
     lv.set_property(
         pos,
         "blaze",
         burner::heat_name(heat),
         crate::glue::server::update_all(),
     );
-    if !lv.creative(player) {
-        lv.take_held(player, 1);
-        if let Some(r) = remainder {
-            lv.give(player, r);
-        }
-    }
-    true
+    Some(remainder)
 }

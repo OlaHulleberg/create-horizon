@@ -10,6 +10,12 @@ use crate::math::{Mat4, Vec3};
 use crate::place::{mth_cos, mth_sin};
 use std::collections::HashMap;
 
+/// The item id of a stack's name: the glue names a stack with components by its id, `#` and
+/// data of its own (`glue::logistics::items::key_of`); clients are sent the id alone.
+pub fn item_id(key: &str) -> &str {
+    key.split_once('#').map_or(key, |(id, _)| id)
+}
+
 /// `mechanicalArmRange`: points must lie closer than this to the arm.
 pub const RANGE: i32 = 5;
 /// `SmartBlockEntity`'s lazy tick rate: a lazy tick every 11 ticks (the counter runs 10 to 0).
@@ -30,10 +36,17 @@ pub enum Kind {
     Funnel,
     Millstone,
     Saw,
+    // Later in Create's order (`packager` comes before `saw` there); added after the saved
+    // indices of the first eleven.
+    Packager,
+    Campfire,
+    Composter,
+    Jukebox,
+    RespawnAnchor,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 16] = [
         Kind::Basin,
         Kind::Belt,
         Kind::BlazeBurner,
@@ -45,6 +58,11 @@ impl Kind {
         Kind::Funnel,
         Kind::Millstone,
         Kind::Saw,
+        Kind::Packager,
+        Kind::Campfire,
+        Kind::Composter,
+        Kind::Jukebox,
+        Kind::RespawnAnchor,
     ];
 
     pub fn index(self) -> u8 {
@@ -59,7 +77,11 @@ impl Kind {
     pub fn deposit_only(self) -> bool {
         matches!(
             self,
-            Kind::BlazeBurner | Kind::CrushingWheels | Kind::Funnel
+            Kind::BlazeBurner
+                | Kind::CrushingWheels
+                | Kind::Funnel
+                | Kind::Campfire
+                | Kind::RespawnAnchor
         )
     }
 
@@ -90,8 +112,13 @@ impl Point {
         let p = Vec3::new(self.pos[0] as f32, self.pos[1] as f32, self.pos[2] as f32);
         let centre = p + Vec3::splat(0.5);
         match self.kind {
-            // TopFaceArmInteractionPoint; CrushingWheelPoint.
-            Kind::Chute | Kind::CrushingWheels => (p + Vec3::new(0.5, 1.0, 0.5), Dir::Down),
+            // TopFaceArmInteractionPoint (chutes, jukeboxes); CrushingWheelPoint;
+            // RespawnAnchorPoint.
+            Kind::Chute | Kind::CrushingWheels | Kind::Jukebox | Kind::RespawnAnchor => {
+                (p + Vec3::new(0.5, 1.0, 0.5), Dir::Down)
+            }
+            // ComposterPoint.
+            Kind::Composter => (p + Vec3::new(0.5, 13.0 / 16.0, 0.5), Dir::Down),
             // DepotPoint (depots, ejectors, saws) and BeltPoint.
             Kind::Depot | Kind::Belt | Kind::Saw => {
                 (p + Vec3::new(0.5, 14.0 / 16.0, 0.5), Dir::Down)
@@ -111,7 +138,11 @@ impl Point {
                 Some(f) => (centre - normal(f) * 0.15, f.opposite()),
                 None => (centre, Dir::Up),
             },
-            Kind::Basin | Kind::BlazeBurner | Kind::Millstone => (centre, Dir::Down),
+            Kind::Basin
+            | Kind::BlazeBurner
+            | Kind::Millstone
+            | Kind::Packager
+            | Kind::Campfire => (centre, Dir::Down),
         }
     }
 }
@@ -273,6 +304,19 @@ pub enum Selection {
     PreferFirst,
 }
 
+impl Selection {
+    pub fn index(self) -> i32 {
+        self as i32
+    }
+    pub fn from_index(i: i32) -> Selection {
+        match i {
+            1 => Selection::ForcedRoundRobin,
+            2 => Selection::PreferFirst,
+            _ => Selection::RoundRobin,
+        }
+    }
+}
+
 /// A stack the arm holds or moves.
 pub type Stack = (String, u8);
 
@@ -289,6 +333,11 @@ pub trait World {
     /// `keepAlive` while the arm reaches for an input (a belt holds its first item there).
     fn keep_alive(&mut self, p: &Point) {
         let _ = p;
+    }
+    /// `checkForMusicAmong`: a jukebox point playing a record.
+    fn playing(&mut self, p: &Point) -> bool {
+        let _ = p;
+        false
     }
 }
 
@@ -418,10 +467,32 @@ impl Arm {
         if self.progress < 0.5 {
             return false;
         }
+        if matches!(self.phase, Phase::SearchInputs | Phase::Dancing) {
+            return self.check_for_music(world);
+        }
         if self.phase == Phase::SearchOutputs {
             return self.search_for_destination(pos, world);
         }
         false
+    }
+
+    /// `checkForMusic`: an arm waiting for items dances while a jukebox among its points plays.
+    fn check_for_music(&mut self, world: &mut impl World) -> bool {
+        let points: Vec<Point> = self
+            .points()
+            .filter(|p| p.kind == Kind::Jukebox)
+            .copied()
+            .collect();
+        let music = points.iter().any(|p| world.playing(p));
+        if music == (self.phase == Phase::Dancing) {
+            return false;
+        }
+        self.phase = if music {
+            Phase::Dancing
+        } else {
+            Phase::SearchInputs
+        };
+        true
     }
 
     /// `getDistributableAmount`: what slot `slot` gives that the outputs would take.
@@ -629,7 +700,7 @@ impl Arm {
         } else {
             &self.inputs
         };
-        list.iter().any(|p| !p.kind.reported())
+        list.iter().any(|p| !p.kind.reported()) || self.points().any(|p| p.kind == Kind::Jukebox)
     }
 }
 
@@ -927,6 +998,9 @@ pub struct Shown {
     pub to: Option<Angles>,
     pub from_base: f32,
     pub held: Option<String>,
+    /// Its points and whether each is an input, for a wrench held at it
+    /// (`ArmInteractionPointHandler.checkForWrench`).
+    pub points: Vec<([i32; 3], bool)>,
 }
 
 impl Shown {
@@ -941,9 +1015,45 @@ impl Shown {
             from: arm.from,
             to: arm.target_angles(pos),
             from_base: arm.from_base,
-            held: arm.held.as_ref().map(|h| h.0.clone()),
+            held: arm.held.as_ref().map(|h| item_id(&h.0).to_owned()),
+            points: arm
+                .inputs
+                .iter()
+                .map(|p| (p.pos, true))
+                .chain(arm.outputs.iter().map(|p| (p.pos, false)))
+                .take(255)
+                .collect(),
         }
     }
+}
+
+/// A list of points and whether each is an input, as the messages carry it.
+pub fn encode_points(out: &mut Vec<u8>, points: &[([i32; 3], bool)]) {
+    let n = points.len().min(255);
+    out.push(n as u8);
+    for (p, input) in &points[..n] {
+        for c in p {
+            out.extend_from_slice(&c.to_le_bytes());
+        }
+        out.push(u8::from(*input));
+    }
+}
+
+/// `encode_points`' list, from the front of `d`.
+pub fn decode_points(d: &mut &[u8]) -> Option<Vec<([i32; 3], bool)>> {
+    let (&n, rest) = d.split_first()?;
+    let n = usize::from(n);
+    if rest.len() < n * 13 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let e = &rest[i * 13..i * 13 + 13];
+        let int = |k: usize| i32::from_le_bytes([e[k], e[k + 1], e[k + 2], e[k + 3]]);
+        out.push(([int(0), int(4), int(8)], e[12] != 0));
+    }
+    *d = &rest[n * 13..];
+    Some(out)
 }
 
 fn put_angles(out: &mut Vec<u8>, a: Option<Angles>) {
@@ -960,7 +1070,7 @@ fn put_angles(out: &mut Vec<u8>, a: Option<Angles>) {
 
 /// Arms as messages (each well under the 30,000-byte limit).
 pub fn encode(all: &[Shown]) -> Vec<Vec<u8>> {
-    all.chunks(64)
+    all.chunks(16)
         .map(|chunk| {
             let mut out = Vec::new();
             for s in chunk {
@@ -977,6 +1087,7 @@ pub fn encode(all: &[Shown]) -> Vec<Vec<u8>> {
                 let n = held.len().min(255);
                 out.push(n as u8);
                 out.extend_from_slice(&held.as_bytes()[..n]);
+                encode_points(&mut out, &s.points);
             }
             out
         })
@@ -1020,6 +1131,7 @@ pub fn decode(mut d: &[u8]) -> Vec<Shown> {
         let to = angles(d)?;
         let n = usize::from(take(d, 1)?[0]);
         let held = String::from_utf8_lossy(take(d, n)?).into_owned();
+        let points = decode_points(d)?;
         Some(Shown {
             pos,
             gone: flags & 1 != 0,
@@ -1030,6 +1142,7 @@ pub fn decode(mut d: &[u8]) -> Vec<Shown> {
             to,
             from_base,
             held: (!held.is_empty()).then_some(held),
+            points,
         })
     };
     while !d.is_empty() {
@@ -1308,6 +1421,7 @@ mod tests {
             to: Some(NO_TARGET),
             from_base: 12.5,
             held: Some("minecraft:dirt".into()),
+            points: vec![([2, -64, 3], true), ([-1, -63, 3], false)],
         };
         let gone = Shown {
             gone: true,

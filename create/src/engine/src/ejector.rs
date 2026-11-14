@@ -672,7 +672,7 @@ impl Shown {
             h: e.launcher.h,
             v: e.launcher.v,
             early: e.early.map(|x| x.time),
-            flying: e.flying.iter().map(|f| (f.time, f.item.clone())).collect(),
+            flying: e.flying.iter().map(|f| (f.time, crate::arm::item_id(&f.item).to_owned())).collect(),
         }
     }
 

@@ -1323,6 +1323,49 @@ fn use_packager(
     Some(InteractionResult::Success)
 }
 
+/// `PackagerItemHandler.insertItem` of one package from a mechanical arm (its `PackagerType`
+/// point): while it holds no box and sends none, a package that unwraps into the inventory
+/// behind is unwrapped (only looked at with `simulate`). Whether it took one.
+pub fn arm_insert(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    stack: &ItemStack,
+    simulate: bool,
+) -> bool {
+    let dim = lv.dim;
+    let busy = with(dim, |pk| {
+        let p = pk.packager(pos);
+        p.held.is_some() || !p.queue.is_empty()
+    });
+    let id = body::item_id(&*lv.host, stack);
+    if busy || !package::is_package(&id) || !unwrap(lv, dim, pos, stack, true) {
+        return false;
+    }
+    if !simulate {
+        unwrap(lv, dim, pos, stack, false);
+        stock::stock_check(lv, dim, pos);
+    }
+    true
+}
+
+/// `PackagerItemHandler.extractItem` for a mechanical arm: the box it holds, while it is not
+/// animating (only looked at with `simulate`).
+pub fn arm_extract(lv: &mut ServerLevel<'_>, pos: [i32; 3], simulate: bool) -> Option<ItemStack> {
+    let dim = lv.dim;
+    if simulate {
+        return with(dim, |pk| {
+            let p = pk.packager(pos);
+            if p.animation_ticks != 0 {
+                return None;
+            }
+            p.held.as_ref().map(|b| b.stack.clone())
+        });
+    }
+    let b = with(dim, |pk| inv::take_box(pk, pos))?;
+    with(dim, |pk| pk.wake([pos[0], pos[1] + 1, pos[2]]));
+    Some(b.stack)
+}
+
 /// Packagers', frogports' and postboxes' own moments: a packager's click, and what comparators
 /// read of each.
 struct PackageBlock;

@@ -41,7 +41,7 @@
 pub mod arms;
 mod belt;
 mod chute;
-mod client;
+pub(crate) mod client;
 mod depot;
 mod funnel;
 mod handlers;

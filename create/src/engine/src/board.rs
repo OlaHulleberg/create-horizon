@@ -486,6 +486,52 @@ pub fn tunnel_mode_slot(side: Dir) -> Option<[f64; 3]> {
     (side == Dir::Up).then(|| sided_offset([0.5, 0.5, 15.5 / 16.0], side))
 }
 
+/// `ArmBlockEntity.SelectionModeValueBox` (a `CenteredSideValueBoxTransform` on the sides
+/// only): 15.5 px out, 3 px up (13 under a ceiling arm).
+pub fn arm_mode_slot(ceiling: bool, side: Dir) -> Option<[f64; 3]> {
+    if side.axis() == Axis::Y {
+        return None;
+    }
+    let y = if ceiling { 13.0 } else { 3.0 };
+    Some(sided_offset([0.5, y / 16.0, 15.5 / 16.0], side))
+}
+
+/// The arm's selection modes (`create.mechanical_arm.selection_mode.*`), in order.
+pub const ARM_MODES: [&str; 3] = ["Round Robin", "Forced Round Robin", "Prefer First Target"];
+
+/// The arm's board (`create.logistics.when_multiple_outputs_available`).
+pub const ARM_MODE: Board = options("Distribution Method", ARM_MODES.len() as i32);
+
+/// `EjectorBlockEntity.EjectorSlot` for an ejector facing `facing`: on its two sides along its
+/// facing, 6 px up and 15.5 out; on its top while its plate is not charged, 5 px behind the
+/// middle, 10.5 px up.
+pub fn ejector_slot(facing: Dir, side: Dir, charged: bool) -> Option<[f64; 3]> {
+    if side == Dir::Up {
+        if charged {
+            return None;
+        }
+        let angle = f64::from(crate::ejector::horizontal_angle(facing));
+        let [x, _, z] = crate::ejector::rotate_y([0.0, 0.0, -5.0 / 16.0], angle);
+        return Some([0.5 + x, 10.5 / 16.0, 0.5 + z]);
+    }
+    if side.axis() != facing.axis() || side.axis() == Axis::Y {
+        return None;
+    }
+    Some(sided_offset([0.5, 6.0 / 16.0, 15.5 / 16.0], side))
+}
+
+/// The ejector's board (`create.weighted_ejector.stack_size`, `between(0, 64)`).
+pub const EJECTOR: Board = scroll_value("Ejected Stack Size", 64);
+
+/// The ejector's stack size as its value box shows it: `*` for any.
+pub fn ejector_text(s: Settings) -> String {
+    if s.value == 0 {
+        "*".to_owned()
+    } else {
+        s.value.to_string()
+    }
+}
+
 /// `BrassDiodeScrollValueBehaviour.getValueSettings`: a delay in ticks as ticks (up to 60),
 /// seconds (up to a minute) or minutes.
 pub fn diode_settings(ticks: i32) -> Settings {

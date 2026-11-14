@@ -23,15 +23,55 @@ pub fn id_of(host: &dyn Host, stack: &ItemStack) -> String {
     stack.item().id(host)
 }
 
-/// `count` of item `id`, without components; None for an unknown item or a zero count.
+/// `stack` as the engine's arms and ejectors name it (`create_engine::arm::item_id`): its item
+/// id, followed for a stack with components (a package's address and contents, a name) by `#`
+/// and the hex of its item NBT, so that moving it keeps them.
+pub fn key_of(host: &dyn Host, stack: &ItemStack) -> String {
+    let id = id_of(host, stack);
+    if !has_components(stack) {
+        return id;
+    }
+    let Some(mut nbt) = with_count(stack, 1).and_then(|s| s.to_nbt(host)) else {
+        return id;
+    };
+    nbt.remove(&"count".into());
+    let Ok(bytes) = mod_api::Tag::Compound(nbt).to_network_bytes() else {
+        return id;
+    };
+    let mut key = id;
+    key.push('#');
+    for b in bytes {
+        key.push_str(&format!("{b:02x}"));
+    }
+    key
+}
+
+/// `count` of item `id` (or of a stack named by `key_of`, its components kept); None for an
+/// unknown item or a zero count.
 pub fn stack_of(host: &dyn Host, id: &str, count: u32) -> Option<ItemStack> {
+    if let Some((_, hex)) = id.split_once('#') {
+        let bytes: Option<Vec<u8>> = (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(hex.get(2 * i..2 * i + 2)?, 16).ok())
+            .collect();
+        let (tag, _) = mod_api::Tag::from_network_bytes(&bytes?, None).ok()?;
+        let mod_api::Tag::Compound(nbt) = tag else {
+            return None;
+        };
+        let stack = ItemStack::from_nbt(host, &nbt)?;
+        return with_count(&stack, count);
+    }
     let key = host.item_key(&Identifier::parse(id).ok()?)?;
     ItemStack::new(key, count)
 }
 
+/// The item id of a stack's name (`key_of`).
+fn base(id: &str) -> &str {
+    create_engine::arm::item_id(id)
+}
+
 /// Whether item `id` is in item tag `tag`.
 fn in_tag(host: &dyn Host, id: &str, tag: &str) -> bool {
-    let (Ok(item), Ok(tag)) = (Identifier::parse(id), Identifier::parse(tag)) else {
+    let (Ok(item), Ok(tag)) = (Identifier::parse(base(id)), Identifier::parse(tag)) else {
         return false;
     };
     let Some(item) = host.item_key(&item) else {
@@ -51,7 +91,7 @@ pub fn upright(host: &dyn Host, id: &str) -> bool {
 
 /// A stack's limit (at most 64).
 pub fn stack_limit(host: &dyn Host, id: &str) -> u8 {
-    Identifier::parse(id)
+    Identifier::parse(base(id))
         .ok()
         .and_then(|i| host.item_key(&i))
         .and_then(|k| host.max_stack_size(k))
@@ -62,7 +102,7 @@ pub fn stack_limit(host: &dyn Host, id: &str) -> u8 {
 /// Whether `id` draws as a block (`BakedModel.isGui3d`). The mod API does not say; a block's
 /// item stands in for it.
 pub fn is_block_item(host: &dyn Host, id: &str) -> bool {
-    Identifier::parse(id)
+    Identifier::parse(base(id))
         .ok()
         .and_then(|i| host.item_key(&i))
         .is_some_and(|k| host.item_block(k).is_some())

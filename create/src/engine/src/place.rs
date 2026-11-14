@@ -49,7 +49,7 @@ pub fn ordered_by_nearest(yaw: f32, pitch: f32) -> [Dir; 6] {
 /// `Mth.sin` and `Mth.cos` of 26.3: a 65,536-step table indexed from a double, so exact angles
 /// tie as in vanilla (cos 90° is a little above 0).
 const SCALE: f64 = 10430.378350470453;
-pub(crate) fn mth_sin(x: f32) -> f32 {
+pub fn mth_sin(x: f32) -> f32 {
     table((f64::from(x) * SCALE) as i64)
 }
 pub(crate) fn mth_cos(x: f32) -> f32 {

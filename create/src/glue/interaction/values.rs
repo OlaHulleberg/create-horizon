@@ -59,6 +59,7 @@ pub(crate) fn may_use_value_box(host: &dyn Host, player: PlayerRef) -> bool {
 pub(crate) fn value_box_hit(
     table: &StateTable,
     block_at: impl Fn([i32; 3]) -> u32,
+    charged: impl Fn([i32; 3]) -> bool,
     pos: [i32; 3],
     side: Dir,
     local: [f64; 3],
@@ -72,6 +73,12 @@ pub(crate) fn value_box_hit(
         (B::PulseRepeater | B::PulseExtender | B::PulseTimer, ..) => {
             Some(create_engine::diode::SLOT)
         }
+        // `ArmBlockEntity.selectionMode`.
+        (B::MechanicalArm, ..) => board::arm_mode_slot(info.ceiling, side),
+        // `EjectorBlockEntity.maxStackSize`: its top only while the plate is not charged.
+        (B::WeightedEjector, ..) => info
+            .facing
+            .and_then(|f| board::ejector_slot(f, side, charged(pos))),
         // `selectionMode.onlyActiveWhen(this::hasDistributionBehaviour)`.
         (B::BrassTunnel, Some(axis), Some(shape)) => {
             let tunnel = |d: Dir| {
@@ -111,7 +118,17 @@ pub(super) fn right_click(host: &mut dyn ServerHost, event: &mut RightClickBlock
     };
     let pos = click.pos;
     let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]));
-    let hit = with_world(|w| value_box_hit(&w.table, |p| lv.block(p), pos, side, local));
+    let dim = lv.dim;
+    let charged = |p: [i32; 3]| {
+        with_world(|w| {
+            w.dims[dim]
+                .ejectors
+                .get(&p)
+                .is_none_or(|e| e.state == create_engine::ejector::State::Charged)
+        })
+        .unwrap_or(true)
+    };
+    let hit = with_world(|w| value_box_hit(&w.table, |p| lv.block(p), charged, pos, side, local));
     if hit != Some(true) {
         return Flow::Continue;
     }
@@ -223,6 +240,31 @@ pub(super) fn value_settings_from_client(
                 w.board_motor(dim, pos, pick);
             }
             w.motor_setting(dim, pos).map(|rpm| rpm as i32)
+        }),
+        // `ArmBlockEntity.selectionMode` (`ScrollOptionBehaviour`).
+        B::MechanicalArm => with_world(|w| {
+            let arm = w.dims[dim].arms.arms.get_mut(&pos)?;
+            let now = arm.selection.index();
+            let n = board::ARM_MODES.len() as i32;
+            if let Some(v) = pick.and_then(|s| board::option_value(s, now, n)) {
+                arm.selection = create_engine::arm::Selection::from_index(v);
+                w.mark_unsaved(dim, pos);
+            }
+            w.dims[dim].arms.arms.get(&pos).map(|a| a.selection.index())
+        }),
+        // `EjectorBlockEntity.maxStackSize` (`between(0, 64)`, row 0).
+        B::WeightedEjector => with_world(|w| {
+            let e = w.dims[dim].ejectors.get_mut(&pos)?;
+            if let Some(pick) = pick {
+                e.max_stack = pick.value.clamp(0, 64) as u8;
+                w.mark_unsaved(dim, pos);
+                w.dims[dim].ejecting.retain(|p| *p != pos);
+                w.dims[dim].ejecting.push(pos);
+            }
+            w.dims[dim]
+                .ejectors
+                .get(&pos)
+                .map(|e| i32::from(e.max_stack))
         }),
         // `ScrollOptionBehaviour` over Create's seven `SelectionMode`s: `RANDOMIZE` and
         // `SYNCHRONIZE` are not ported and leave the mode as it is (as do connected tunnels,
