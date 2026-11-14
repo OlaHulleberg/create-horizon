@@ -355,6 +355,10 @@ impl Hooks for Create {
         }
     }
 
+    fn item_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {
+        glue::items::item_tooltip(host, event);
+    }
+
     fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
         for s in SUBSYSTEMS {
             s.screen_render_post(host, event);

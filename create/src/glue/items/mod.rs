@@ -37,6 +37,7 @@ mod sequenced;
 mod sword;
 mod symmetry;
 mod symmetry_screen;
+mod tooltip;
 mod worldshaper;
 mod worldshaper_screen;
 pub(crate) mod wrench;
@@ -81,6 +82,11 @@ pub(crate) enum Item {
 static KEYS: OnceLock<Vec<ItemKey>> = OnceLock::new();
 
 /// The key of `item`, once registration asked for it.
+/// Create's tooltips on its items (`ClientEvents.addToItemTooltip`).
+pub(crate) fn item_tooltip(host: &dyn ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {
+    tooltip::item_tooltip(host, event);
+}
+
 pub(crate) fn key(item: Item) -> Option<ItemKey> {
     KEYS.get().map(|k| k[item as usize])
 }

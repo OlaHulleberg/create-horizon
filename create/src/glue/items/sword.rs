@@ -1,12 +1,15 @@
 //! The cardboard sword: it bonks instead of hurting (`CardboardSwordItem`), knocking the target
-//! back as a blow would and slowing the attacker. Left out: the slowness it gives creatures
-//! (`MobCategory.CREATURE`/`MISC`: no API names an entity type's category), knockback
-//! enchantments and resistance, and stopping the attacker's sprint. Its click on a block
+//! back as a blow would, slowing creatures it hits (`MobCategory.CREATURE`/`MISC`, players not)
+//! and the attacker. Left out: knockback enchantments and resistance, and stopping the
+//! attacker's sprint (no API sets it). Its click on a block
 //! (`cardboardSwordsMakeNoiseOnClick`, a sound only the clicking client plays) is heard here
 //! from the server, so the players near it hear it too: `left_click_block` is the server's.
 
 use super::{Item, held, is};
-use mod_api::{AttackEntityEvent, Flow, Hand, LeftClickBlockEvent, ServerHost, SoundSource};
+use mod_api::{
+    ActiveEffect, AttackEntityEvent, Flow, Hand, LeftClickBlockEvent, MobCategory, ServerHost,
+    SoundSource,
+};
 
 /// `EntityTypeTags.ARTHROPOD` (vanilla 26.3's `entity_type/arthropod`).
 const ARTHROPODS: &str = "minecraft:arthropod";
@@ -67,7 +70,26 @@ pub(super) fn attack(host: &mut dyn ServerHost, event: &AttackEntityEvent<'_>) -
         );
     }
     knock_back(host, player, target);
+    if event.kind != "minecraft:player" {
+        slow_creature(host, target);
+    }
     Flow::Cancel
+}
+
+/// `MobEffectInstance(MOVEMENT_SLOWDOWN, 60, 9, true, false, false)` on a creature or a
+/// `MISC` mob the sword hits (players are left out by the caller).
+fn slow_creature(host: &mut dyn ServerHost, target: mod_api::EntityRef) {
+    if !matches!(
+        target.classification(&*host),
+        Some(MobCategory::Creature | MobCategory::Misc)
+    ) {
+        return;
+    }
+    let (Some(living), Some(key)) = (host.living(target), host.effect_key("minecraft:slowness"))
+    else {
+        return;
+    };
+    living.add_effect(host, &ActiveEffect::new(key, 60, 9, true, false, false));
 }
 
 /// The knockback of `player.attack()`, without the hurt: `ATTACK_KNOCKBACK` (0) + 2, one more
@@ -75,6 +97,7 @@ pub(super) fn attack(host: &mut dyn ServerHost, event: &AttackEntityEvent<'_>) -
 /// then the attacker's own motion is cut to 0.6 across.
 fn knock_back(host: &mut dyn ServerHost, player: mod_api::PlayerRef, target: mod_api::EntityRef) {
     let attacker = player.entity();
+    target.stop_riding(host);
     let yaw = attacker.rotation(&*host).map_or(0.0, |r| r[0]).to_radians();
     let sprinting = attacker.is_sprinting(&*host).unwrap_or(false);
     let strength = if sprinting { 3.0 } else { 2.0 } * 0.5;
