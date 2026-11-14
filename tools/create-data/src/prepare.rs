@@ -507,7 +507,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             }
         }
     }
-    // Connected textures, as Fusion's: re-cut sheets, connecting models, their blockstates.
+    // Connected textures, as OptiFine's: a ctm properties file per block and sheet, the tiles.
     let read = |p: &str| -> Option<Vec<u8>> {
         fs::read(tmp.join(p)).ok().or_else(|| files.get(p).cloned())
     };
