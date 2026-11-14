@@ -109,6 +109,12 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
   light inside the chute is dark.
 - **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).
+- **A screen layout for a mod menu opened without a block** (`player_open_mod_menu` with no `pos`: the
+  client's `open_native_screen` returns without a `Screen`): the filters' screens are the mod's own screen,
+  and clicking an inventory slot carries a ghost copy, not the stack (Create's menus carry the real one). A
+  `Screen` for a menu type (not only a block entity's), or a `screen` part hook keyed by menu, would close it.
+- **An item's tags** (`ItemStack.getTags`) and **an item's tooltip lines**: the attribute filter offers no
+  `in_tag` attributes for its reference item, and the filters' screens show a slot's name, not its tooltip.
 - **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
 
 ## Left out of the port, not for want of API
