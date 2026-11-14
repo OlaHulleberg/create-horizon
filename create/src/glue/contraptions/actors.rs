@@ -84,10 +84,66 @@ fn storage_name(name: &str) -> bool {
     )
 }
 
+/// The block entity slots of Create's storage blocks that ride as mounted storage
+/// (`ItemVaultMountedStorage`: each vault block's 20 stacks; `ToolboxMountedStorage`: a
+/// toolbox's compartments and filters), read and written straight in their block entity.
+fn slot_storage(name: &str) -> Option<usize> {
+    if name == "create:item_vault" {
+        return Some(create_engine::vault::SLOTS);
+    }
+    let block = create_engine::Block::from_name(name.strip_prefix("create:")?)?;
+    create_engine::dye::is_toolbox(block).then_some(create_engine::toolbox::SLOTS)
+}
+
+/// Whether a carried storage block's slots take what actors collect and interfaces bring: a
+/// toolbox's don't (its compartments hold one kind each, `ToolboxInventory.isItemValid`).
+fn takes_any(stored: &Stored) -> bool {
+    stored.len() != create_engine::toolbox::SLOTS
+}
+
 /// Whether `pos` holds a storage block a contraption carries.
 pub(super) fn is_storage(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
-    lv.block_name(pos).is_some_and(|n| storage_name(&n))
+    lv.block_name(pos)
+        .is_some_and(|n| storage_name(&n) || slot_storage(&n).is_some())
         && lv.host.block_entity(lv.level, pos).is_some()
+}
+
+/// The slots of a vault or toolbox at `pos`, taken out of its block entity (left empty, so it
+/// spills nothing when its block goes).
+fn take_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], size: usize) -> Option<Stored> {
+    let e = lv.host.block_entity(lv.level, pos)?;
+    let stored: Stored = (0..size)
+        .map(|i| e.item_slot(&*lv.host, i as u32).ok().flatten())
+        .collect();
+    let _ = lv.host.transaction(|host, tx| {
+        for (i, s) in stored.iter().enumerate() {
+            if s.is_some() {
+                let _ = e.set_item_slot(host, tx, i as u32, None);
+            }
+        }
+        Ok::<(), ()>(())
+    });
+    Some(stored)
+}
+
+/// The carried slots back in the vault or toolbox now at `pos`; what has no slot drops.
+fn put_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], size: usize, stored: Stored) {
+    let Some(e) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let mut left = Vec::new();
+    let _ = lv.host.transaction(|host, tx| {
+        for (i, s) in stored.into_iter().enumerate() {
+            let Some(stack) = s else { continue };
+            if i >= size || e.set_item_slot(host, tx, i as u32, Some(stack.clone())) != Ok(true) {
+                left.push(stack);
+            }
+        }
+        Ok::<(), ()>(())
+    });
+    for stack in left {
+        lv.drop_stack(center(pos), [0.0; 3], stack, 10);
+    }
 }
 
 /// The `ITEMS` handler of the block at `pos`.
@@ -105,6 +161,9 @@ fn items_at(
 fn take_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Stored> {
     if !is_storage(lv, pos) {
         return None;
+    }
+    if let Some(size) = lv.block_name(pos).as_deref().and_then(slot_storage) {
+        return take_slots(lv, pos, size);
     }
     let items = items_at(lv, pos)?;
     let host = &mut *lv.host;
@@ -135,6 +194,10 @@ fn take_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Stored> {
 /// The carried items back in the storage block now at `pos` (`addBlocksToWorld`), each in its
 /// slot through the block's `ITEMS` handler; what does not go in drops there.
 fn put_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3], stored: Stored) {
+    if let Some(size) = lv.block_name(pos).as_deref().and_then(slot_storage) {
+        put_slots(lv, pos, size, stored);
+        return;
+    }
     let Some(items) = items_at(lv, pos) else {
         for stack in stored.into_iter().flatten() {
             lv.drop_stack(center(pos), [0.0; 3], stack, 10);
@@ -626,6 +689,7 @@ pub(super) fn storage_to_nbt(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<Tag>
                     .collect();
                 let mut c = Compound::new();
                 c.insert("pos".into(), Tag::IntArray(o.to_vec()));
+                c.insert("size".into(), Tag::Int(slots.len() as i32));
                 c.insert("items".into(), Tag::List(items));
                 Tag::Compound(c)
             })
@@ -648,7 +712,11 @@ pub(super) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<
             continue;
         };
         let [x, y, z] = p[..] else { continue };
-        let mut slots: Stored = vec![None; STORAGE_SLOTS as usize];
+        let size = match b.get(&"size".into()) {
+            Some(Tag::Int(n)) => (*n).clamp(0, 256) as usize,
+            _ => STORAGE_SLOTS as usize,
+        };
+        let mut slots: Stored = vec![None; size];
         for item in items {
             let Tag::Compound(c) = item else { continue };
             let Some(Tag::Int(i)) = c.get(&"Slot".into()) else {
@@ -1029,7 +1097,7 @@ fn collect(lv: &mut ServerLevel<'_>, key: [i32; 3], actor: &Actor, stack: ItemSt
         // `ItemHandlerHelper.insertItem`: slot by slot, onto the same items or into an empty
         // slot. A stack can't hold none, so what is left is counted beside it.
         let mut left = stack.count();
-        for (_, s) in list.iter_mut() {
+        for (_, s) in list.iter_mut().filter(|(_, s)| takes_any(s)) {
             for slot in s.iter_mut() {
                 if left == 0 {
                     return None;
@@ -1555,7 +1623,7 @@ pub fn psi_insert(
         let mut left = stack.count();
         // Same items first, then empty slots, storage block by storage block.
         for empty in [false, true] {
-            for (_, s) in list.iter_mut() {
+            for (_, s) in list.iter_mut().filter(|(_, s)| takes_any(s)) {
                 for slot in s.iter_mut() {
                     if left == 0 {
                         return None;
