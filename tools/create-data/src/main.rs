@@ -271,7 +271,7 @@ fn compile(create: &Path, repo: &Path) {
         } else if matches!(name.as_str(), "schematic" | "schematic_and_quill") {
             // SchematicItem, SchematicAndQuillItem: `stacksTo(1)`; a schematic's file, anchor,
             // rotation and mirror are kept in `minecraft:custom_data` by the native mod, which
-            // stands in for their clicks (`/create_debug schematic`).
+            // works their clicks.
             let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());

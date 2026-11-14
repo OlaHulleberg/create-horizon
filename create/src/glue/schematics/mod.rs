@@ -9,6 +9,10 @@
 //! are a hopper's menu (Create gives them no item handler, so no face reaches them); the
 //! cannon's barrel is drawn from where it aims, kept in its block entity's data (`Aim`).
 //!
+//! Players work them as in Create: the quill's corners, outline and prompt (`quill`), the held
+//! schematic's outline, deploying click and edit screen (`deploy`), and the table's and the
+//! cannon's screens (`screens`); the `create_debug` commands remain for scripted tests.
+//!
 //! The engine numbers block states as `u32`s; the API's `BlockState` is a key and an ordinal, so
 //! the states a cannon meets are numbered here as it meets them (`intern`).
 //!
@@ -19,6 +23,9 @@
 //!   blocks that override it (glass and the like) are not known to the API.
 //! - A schematic's export classes its blocks by their block entity and a full collision cube;
 //!   `isSolidRender` is not in the API.
+//! - Shift-clicking a whole stack into the cannon's or the table's slot of its own (gunpowder,
+//!   a book) only works where the game's routing puts it: `menu_quick_move` cannot empty the
+//!   clicked slot (an `ItemStack` is never empty).
 
 pub mod body;
 mod deploy;
