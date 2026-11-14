@@ -171,4 +171,32 @@ pub trait Subsystem: Sync {
 
     /// `Hooks::render_gui_post`: draw on the HUD.
     fn render_gui_post(&self, _host: &dyn ClientHost, _event: &mut RenderGuiPostEvent<'_>) {}
+
+    /// The wrench used on this subsystem's Create block `block` at `pos`, `clicked` the face
+    /// (`IWrenchable.onWrenched`, or `onSneakWrenched` when `sneaking`), on the server: true when
+    /// the block took it its own way, and the wrench then neither turns nor picks it up. Asked
+    /// by the wrench (`items::wrench`) in `SUBSYSTEMS` order.
+    fn wrench_used(
+        &self,
+        _lv: &mut ServerLevel<'_>,
+        _player: PlayerRef,
+        _pos: [i32; 3],
+        _block: create_engine::Block,
+        _clicked: create_engine::kinetics::Dir,
+        _sneaking: bool,
+    ) -> bool {
+        false
+    }
+
+    /// Lines this subsystem adds to the goggles' tooltip for its Create block `block` at `pos`
+    /// under the client's crosshair (`IHaveGoggleInformation.addToGoggleTooltip`): each line a
+    /// run of `(text, rgb)`. Asked by the goggles' overlay (`interaction`).
+    fn goggle_tooltip(
+        &self,
+        _host: &dyn ClientHost,
+        _pos: [i32; 3],
+        _block: create_engine::Block,
+        _lines: &mut Vec<Vec<(String, u32)>>,
+    ) {
+    }
 }

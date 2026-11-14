@@ -254,6 +254,14 @@ fn set_speeds(lv: &mut ServerLevel<'_>, pos: [i32; 3], speeds: Option<[f32; 2]>)
     let _ = entity.merge_data(&mut *lv.host, data);
 }
 
+/// The speeds the block entity at `pos` of `level` shows (on a client, what its update tag
+/// brought).
+pub fn shown_speeds(host: &dyn mod_api::Host, level: mod_api::LevelRef, pos: [i32; 3]) -> [f32; 2] {
+    host.block_entity(level, pos)
+        .and_then(|e| e.data(host))
+        .map_or([0.0; 2], |d| speeds_of(&d))
+}
+
 /// The kinetic block entity: found by the world when it loads, drawn by its parts.
 struct KineticEntity;
 
