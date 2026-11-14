@@ -404,7 +404,9 @@ pub fn use_smart_chute(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &BlockCli
     // taken from it outside creative); the one it held goes back, with the frame sound.
     let filter = filters::take_filter(lv.host, p, click.hand);
     let dim = lv.dim;
+    let shown = filter.clone();
     let old = with_world(|w| w.set_chute_filter(dim, pos, filter)).flatten();
+    super::show_filter(lv, pos, shown.as_ref());
     filters::return_filter(lv, p, pos, old);
     true
 }

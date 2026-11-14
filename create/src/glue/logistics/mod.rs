@@ -6,7 +6,7 @@
 //! take through `ITEMS` (`handlers`), and they reach every other inventory through `ITEMS` in
 //! transactions (`items`). Clients get their contents on Create's channels (`create:depot`,
 //! `create:belt`, `create:arm`, `create:ejector`) and draw them from the kinetic block
-//! entity's renderer, every frame (`client`).
+//! entity's renderer (`client`): again each frame while they move, else when they change.
 //!
 //! Left out, for want of an API or because another subsystem owns it:
 //! - `BakedModel.isGui3d` (how a stack lies on a belt or depot) is not in the mod API: an item
@@ -18,9 +18,20 @@
 //! - Containers that are not Create's (vanilla's, other mods') say nothing to Create when they
 //!   change (`contents_changed` reaches only a block's own parts), so a chute under one looks
 //!   again every `RETRY` ticks.
-//! - The ejector item's target and the arm item's points (`/create_debug ejector|arm` in the
-//!   legacy glue), a brass tunnel's mode value box, and the comparators beside a vault's other
-//!   blocks are the commands, interaction and redstone subsystems'.
+//! - An arm's points and an ejector's target are chosen with their items as in Create
+//!   (`arms::select_point`, `arms::select_ejector_target`), but the outlines Create's client draws
+//!   around the chosen blocks are not, and left-clicking a point to drop it is out: the mod API's
+//!   `left_click_block` names no player.
+//! - Belts: a dye, the belt connector's lengthening and the wrench's shortening and splitting
+//!   (`BeltSlicer`) are not in the port; a brass casing is drawn with the andesite casing's
+//!   texture (Create's `BeltModel` retextures the block model; the mod API cannot), and a sloped
+//!   belt collides as a flat one (content shapes select by one property).
+//! - Players riding a belt are pushed by their own client (`push_player`), other entities by
+//!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`.
+//! - Diagonal chutes, a chute's window or casing drawn as Create joins them, and vaults' and
+//!   casings' connected textures are not in the port.
+//! - A brass tunnel's mode value box and the comparators beside a vault's other blocks are the
+//!   interaction and redstone subsystems'; a brass tunnel's side filters are not in the port.
 //!
 //! The kinetic block entity type is declared by `Kinetics`; `Entities`, after it, adds the
 //! handlers and the renderer to it. Belts' segments and pulleys are posed partials that
@@ -286,6 +297,26 @@ pub struct Entities;
 /// change what its kept drawing shows: synced, so the client draws it again.
 const SHOWN: &str = "Shown";
 
+/// A block entity key holding the item a brass funnel's or smart chute's filter slot shows
+/// (an empty string: none), synced for its clients to draw.
+pub(crate) const FILTER: &str = "Filter";
+
+/// Shows filter `filter` in the slot of the block at `pos` (`FILTER`).
+pub(crate) fn show_filter(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    filter: Option<&create_engine::filter::Filter>,
+) {
+    let id = filter
+        .and_then(|f| filters::filter_stack(&*lv.host, f))
+        .map(|s| items::id_of(&*lv.host, &s))
+        .unwrap_or_default();
+    if let Some(entity) = lv.host.block_entity(lv.level, pos) {
+        let data = Compound::from([(FILTER.into(), Tag::String(id.as_str().into()))]);
+        let _ = entity.merge_data(&mut *lv.host, data);
+    }
+}
+
 /// Touches the block entity at `pos` (`SHOWN`) so its clients draw it again.
 pub(crate) fn touch_shown(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
@@ -314,7 +345,7 @@ impl Subsystem for Entities {
     }
 
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[SHOWN]
+        &[SHOWN, FILTER]
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {

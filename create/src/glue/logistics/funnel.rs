@@ -91,6 +91,8 @@ pub fn use_funnel_filter(
         old
     })
     .flatten();
+    let now = with_world(|w| w.dims[dim].chute_filters.get(&pos).cloned()).flatten();
+    super::show_filter(lv, pos, now.as_ref());
     filters::return_filter(lv, p, pos, old);
     true
 }
@@ -362,6 +364,15 @@ pub fn tick_funnel_shapes(lv: &mut ServerLevel<'_>) {
             && next != state
         {
             lv.set_state(pos, next, update_all());
+            // The filter stays with a brass funnel on and off a belt: its block entity shows it
+            // again.
+            if f.brass {
+                let dim = lv.dim;
+                let filter = with_world(|w| w.dims[dim].chute_filters.get(&pos).cloned()).flatten();
+                if filter.is_some() {
+                    super::show_filter(lv, pos, filter.as_ref());
+                }
+            }
         }
     }
 }
