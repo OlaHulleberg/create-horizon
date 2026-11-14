@@ -1086,6 +1086,21 @@ impl Nixie {
         true
     }
 
+    /// `clearCustomText`: back to showing its redstone strength. False when it had no text.
+    pub fn clear_custom_text(&mut self) -> bool {
+        self.index = 0;
+        self.custom.take().is_some()
+    }
+
+    /// `updateRedstoneStrength` (only for a tube that `reactsToRedstone`, without custom
+    /// text): false when it already showed `strength`.
+    pub fn update_redstone_strength(&mut self, strength: i32) -> bool {
+        let cleared = self.clear_custom_text();
+        let changed = cleared || self.redstone != strength;
+        self.redstone = strength;
+        changed
+    }
+
     /// `getFullText`.
     pub fn full_text(&self) -> String {
         self.custom
@@ -1179,6 +1194,9 @@ pub struct Displays {
     /// Links whose neighbours changed (`powered` may follow).
     pub checks: Vec<[i32; 3]>,
     pub nixies: HashMap<[i32; 3], Nixie>,
+    /// Tubes placed or whose neighbours changed: they read their redstone power after the tick
+    /// (`onPlace`, `neighborChanged` -> `tick`: `updateDisplayedRedstoneValue`).
+    pub nixie_checks: Vec<[i32; 3]>,
     pub boards: HashMap<[i32; 3], Board>,
     /// Boards placed, removed or turned: their rows join again.
     pub board_checks: Vec<[i32; 3]>,
@@ -1233,8 +1251,14 @@ impl Displays {
         self.links.remove(&pos);
     }
 
+    /// A tube placed or loaded: kept as saved; a new one is shown to clients and reads its
+    /// power.
     pub fn nixie_placed(&mut self, pos: [i32; 3]) {
-        self.nixies.entry(pos).or_default();
+        if let std::collections::hash_map::Entry::Vacant(e) = self.nixies.entry(pos) {
+            e.insert(Nixie::default());
+            self.shown.push(pos);
+        }
+        self.nixie_checks.push(pos);
     }
 
     pub fn nixie_removed(&mut self, pos: [i32; 3]) {
@@ -1292,6 +1316,7 @@ impl Displays {
         self.fresh.is_empty()
             && self.pulses.is_empty()
             && self.checks.is_empty()
+            && self.nixie_checks.is_empty()
             && self.board_checks.is_empty()
             && self.shown.is_empty()
             && self.forgotten.is_empty()

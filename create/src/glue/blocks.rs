@@ -84,7 +84,11 @@ fn with_props(host: &dyn Host, state: BlockState, props: &[(&str, &str)]) -> Opt
 
 /// `BlockHelper.copyProperties(state, to.getDefaultState())`: block `to` with the state's
 /// properties.
-fn recoloured_state(host: &dyn Host, state: BlockState, to: Block) -> Option<BlockState> {
+pub(crate) fn recoloured_state(
+    host: &dyn Host,
+    state: BlockState,
+    to: Block,
+) -> Option<BlockState> {
     let text = host.block_state_string(state)?;
     let (_, props) = states::split(&text);
     let base = host.block_state_default(states::key(to))?;
