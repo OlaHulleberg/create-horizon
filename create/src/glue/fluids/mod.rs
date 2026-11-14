@@ -13,9 +13,11 @@
 //!   engine back (no close callback on `Transaction`). Pumps reach Create's own blocks and open
 //!   ends as the legacy glue did.
 
+mod clicks;
 mod client;
 mod machines;
 mod pipes;
+mod place;
 mod plumbing;
 
 use super::server::ServerLevel;
@@ -25,8 +27,8 @@ use create_engine::Block;
 use create_engine::parts::StateInfo;
 use create_engine::tank::{Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
 use mod_api::{
-    BlockState, BlockUpdateFlags, Compound, HostBlockStates, ModBlockEntity, Registrar,
-    RegistrationContext, StateConstraint, Tag,
+    BlockState, BlockUpdateFlags, Compound, Flow, HostBlockStates, HostSide, ModBlockEntity,
+    Registrar, RegistrationContext, RightClickBlockEvent, StateConstraint, Tag,
 };
 
 pub use client::animated;
@@ -43,10 +45,12 @@ pub struct Fluids;
 impl Subsystem for Fluids {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         client::register(r);
-        r.block_part(
-            super::states::key(Block::CreativeFluidTank),
-            plumbing::CreativeTank,
-        );
+        for block in place::PLACED {
+            r.block_part(super::states::key(block), place::Placement);
+        }
+        for block in clicks::CLICKED {
+            r.block_part(super::states::key(block), clicks::Clicks);
+        }
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -96,6 +100,14 @@ impl Subsystem for Fluids {
 
     fn client_reset(&self) {
         client::reset();
+    }
+
+    /// The client's prediction of a click its block takes (`clicks`).
+    fn right_click_block(&self, host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
+        match host {
+            HostSide::Client(host) => clicks::predict(host, event),
+            HostSide::Server(_) => Flow::Continue,
+        }
     }
 
     /// The wrench on a pipe or a whistle, not sneaking (legacy `use_item_on`'s

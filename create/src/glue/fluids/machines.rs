@@ -285,3 +285,22 @@ pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
             .spawn_item_with_motion(&mut *lv.host, x, y, z, stack, [0.0; 3], 20);
     }
 }
+
+/// `ItemDrainBlock.useItemOn` with nothing to empty: the drain's held stack goes back to the
+/// player (`placeItemBackInInventory`).
+pub(super) fn give_back_drained(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    player: mod_api::PlayerRef,
+) {
+    let dim = lv.dim;
+    let Some((item, count)) =
+        with_world(|w| w.dims[dim].drains.get_mut(&pos).and_then(|d| d.held.take())).flatten()
+    else {
+        return;
+    };
+    with_world(|w| w.mark_unsaved(dim, pos));
+    if let Some(stack) = stack_of(&*lv.host, &item, u32::from(count)) {
+        super::super::items::give_back(lv.host, player, stack);
+    }
+}
