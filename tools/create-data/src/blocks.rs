@@ -3112,6 +3112,11 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     if matches!(b.name.as_str(), "mechanical_saw" | "mechanical_drill") {
         props.insert("occludes".into(), json!(false));
     }
+    // AllBlocks.CHUTE, SMART_CHUTE: `noOcclusion` with shapes of their own; light reaches the
+    // stack drawn inside (`ChuteRenderer`) and the filter on a smart chute's side.
+    if matches!(b.name.as_str(), "chute" | "smart_chute") && b.java.no_occlusion {
+        props.insert("occludes".into(), json!(false));
+    }
     // AllBlocks.ROSE_QUARTZ_LAMP: `mapColor(TERRACOTTA_PINK)` (MapColor id 42); its light by
     // `powering` is per state, which a declaration can't give: none.
     if b.name == "rose_quartz_lamp" {

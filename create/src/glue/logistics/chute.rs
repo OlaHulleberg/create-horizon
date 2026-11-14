@@ -11,7 +11,7 @@ use crate::glue::contraptions::actors;
 use crate::glue::items::filters;
 use create_engine::Block;
 use create_engine::kinetics::Dir;
-use mod_api::{BlockClick, Direction, HostBlockStates, ItemStack};
+use mod_api::{BlockClick, Direction, HostBlockStates, ItemStack, Tag};
 
 /// The chute or smart chute at `pos`, with whether it is powered.
 pub fn chute_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Block, bool)> {
@@ -370,6 +370,14 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
     let moving: Vec<([i32; 3], f32)> =
         with_world(|w| w.dims[dim].chutes.iter().map(|(p, v)| (*p, *v)).collect())
             .unwrap_or_default();
+    // The chutes whose stack moved, and those next to them it may have moved into: their
+    // windows show it again (`show_chute_item`).
+    let mut shown: Vec<[i32; 3]> = Vec::new();
+    for (pos, _) in &moving {
+        shown.push(*pos);
+        shown.push([pos[0], pos[1] - 1, pos[2]]);
+        shown.push([pos[0], pos[1] + 1, pos[2]]);
+    }
     for (pos, position) in moving {
         let Some(stack) = chute_stack(lv, pos) else {
             with_world(|w| {
@@ -479,6 +487,63 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
         });
     }
     tick_chute_pulls(lv);
+    shown.sort();
+    shown.dedup();
+    for pos in shown {
+        show_chute_item(lv, pos);
+    }
+}
+
+/// Block entity keys of a windowed chute's stack, for its clients to draw it moving
+/// (`ChuteRenderer`): the item (an empty string: none), where it is (1 the top, 0 the bottom)
+/// and how far it moves a tick.
+pub const CHUTE_ITEM: &str = "ChuteItem";
+pub const CHUTE_POSITION: &str = "ChutePosition";
+pub const CHUTE_MOTION: &str = "ChuteMotion";
+
+/// Tells the clients of the vertical windowed chute at `pos` what it holds and where
+/// (`CHUTE_ITEM`), when that changed.
+fn show_chute_item(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    if chute_facing(lv, pos) != Some(Dir::Down) {
+        return;
+    }
+    let window = lv.block_state(pos).is_some_and(|s| {
+        s.property(&lv.host.block_states(), "shape").ok().flatten() == Some("window")
+    });
+    if !window {
+        return;
+    }
+    let dim = lv.dim;
+    let stack = chute_stack(lv, pos);
+    let id = stack
+        .as_ref()
+        .map(|s| items::id_of(&*lv.host, s))
+        .unwrap_or_default();
+    let moving = with_world(|w| w.dims[dim].chutes.get(&pos).copied()).flatten();
+    let position = moving.unwrap_or(0.5);
+    let motion = if moving.is_some() && stack.is_some() {
+        chute_motion(lv, pos)
+    } else {
+        0.0
+    };
+    let Some(e) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let data = e.data(&*lv.host).unwrap_or_default();
+    let same = matches!(data.get(&CHUTE_ITEM.into()), Some(Tag::String(s)) if s.to_string_lossy() == id)
+        && matches!(data.get(&CHUTE_POSITION.into()), Some(Tag::Float(b)) if f32::from_bits(*b) == position)
+        && matches!(data.get(&CHUTE_MOTION.into()), Some(Tag::Float(b)) if f32::from_bits(*b) == motion);
+    if same {
+        return;
+    }
+    let _ = e.merge_data(
+        &mut *lv.host,
+        mod_api::Compound::from([
+            (CHUTE_ITEM.into(), Tag::String(id.as_str().into())),
+            (CHUTE_POSITION.into(), Tag::Float(position.to_bits())),
+            (CHUTE_MOTION.into(), Tag::Float(motion.to_bits())),
+        ]),
+    );
 }
 
 /// `ChuteBlockEntity.handleInputFromAbove` for the empty chutes due to look: up to 16 of the

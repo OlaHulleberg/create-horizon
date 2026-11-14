@@ -418,6 +418,9 @@ impl Subsystem for Entities {
             BELT_COVERED,
             flaps::KEY,
             tunnel::SIDE_FILTERS,
+            chute::CHUTE_ITEM,
+            chute::CHUTE_POSITION,
+            chute::CHUTE_MOTION,
         ]
     }
 

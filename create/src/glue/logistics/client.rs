@@ -134,6 +134,11 @@ fn table_info(
 pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
     match block {
         Block::MechanicalArm | Block::WeightedEjector => true,
+        // A windowed chute's stack moves (`chute::CHUTE_MOTION`).
+        Block::Chute => matches!(
+            entity.nbt.get(&super::chute::CHUTE_MOTION.into()),
+            Some(Tag::Float(b)) if f32::from_bits(*b) != 0.0
+        ),
         Block::AndesiteFunnel
         | Block::BrassFunnel
         | Block::AndesiteBeltFunnel
@@ -272,6 +277,39 @@ fn new_flaps(pos: [i32; 3], data: &Compound) {
             e.1 = if inward { -1.0 } else { 1.0 };
         }
     });
+}
+
+/// `ChuteRenderer`: a windowed chute's stack at half size, turning as it falls, between where
+/// the server last put it and a tick on (`chute::CHUTE_ITEM`).
+fn draw_chute_item(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, nbt: &Compound) {
+    let Some(Tag::String(id)) = nbt.get(&super::chute::CHUTE_ITEM.into()) else {
+        return;
+    };
+    let id = id.to_string_lossy();
+    if id.is_empty() {
+        return;
+    }
+    let float = |k: &str| match nbt.get(&k.into()) {
+        Some(Tag::Float(b)) => f32::from_bits(*b),
+        _ => 0.0,
+    };
+    let at = float(super::chute::CHUTE_POSITION);
+    let motion = float(super::chute::CHUTE_MOTION);
+    let position = (at + motion * draw.partial()).clamp(0.0, 1.0);
+    let Some(stack) = stack_of(host, &id, 1) else {
+        return;
+    };
+    // The light inside the chute is dark; the light outside isn't readable on a client.
+    if draw.light() == 0 {
+        draw.set_light(0xF0F0);
+    }
+    draw.push();
+    draw.translate([0.5, position, 0.5]);
+    draw.scale([0.5; 3]);
+    draw.rotate_about([1.0, 0.0, 0.0], position * 180.0, [0.0; 3]);
+    draw.rotate_about(UP, position * 180.0, [0.0; 3]);
+    draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+    draw.pop();
 }
 
 /// Whether a flap of the funnel or tunnel at `pos` swings.
@@ -729,6 +767,9 @@ impl BlockEntityPart for LogisticsEntity {
             return;
         };
         new_flaps(event.pos, &event.entity.nbt);
+        if block == Block::Chute {
+            draw_chute_item(&mut *event.draw, host, &event.entity.nbt);
+        }
         draw_block_flaps(&mut *event.draw, host, block, &info, event.pos);
         if matches!(
             block,
