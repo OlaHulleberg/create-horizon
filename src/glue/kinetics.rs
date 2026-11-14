@@ -392,5 +392,8 @@ pub fn draw_part(
         None => draw.block(states::key(model), own),
     };
     draw.still();
-    draw.keep();
+    // A cuckoo clock's hands and doors are drawn each frame (`redstone::client`).
+    if !matches!(block, Block::CuckooClock | Block::MysteriousCuckooClock) {
+        draw.keep();
+    }
 }

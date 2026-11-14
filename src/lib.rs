@@ -15,8 +15,10 @@ use mod_api::{
     LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent, LevelTickPostEvent,
     LevelTicksHost, MouseScrollingEvent, NeighborChangedEvent, PlayerLoggedInEvent,
     PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
-    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost, WorldLifecycleEvent,
-    WorldPhase,
+    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
+    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
+    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost, WorldLifecycleEvent, WorldPhase,
 };
 
 #[derive(Default)]
@@ -204,6 +206,58 @@ impl Hooks for Create {
     fn render_gui_post(&self, host: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
         for s in SUBSYSTEMS {
             s.render_gui_post(host, event);
+        }
+    }
+
+    fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
+        for s in SUBSYSTEMS {
+            s.screen_render_post(host, event);
+        }
+    }
+
+    fn screen_mouse_button_pressed_pre(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.screen_mouse_pressed(host, event))
+    }
+
+    fn screen_mouse_button_released_pre(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseButtonReleasedPreEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.screen_mouse_released(host, event))
+    }
+
+    fn screen_mouse_scrolled_pre(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseScrolledPreEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.screen_mouse_scrolled(host, event))
+    }
+
+    fn screen_key_pressed_pre(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenKeyPressedPreEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.screen_key_pressed(host, event))
+    }
+
+    fn screen_char_typed_pre(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenCharTypedPreEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.screen_char_typed(host, event))
+    }
+
+    fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
+        for s in SUBSYSTEMS {
+            s.screen_closing(host, event);
         }
     }
 

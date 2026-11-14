@@ -17,7 +17,10 @@ use mod_api::{
     EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent, InteractionResult,
     LeftClickBlockEvent, LevelSaveEvent, MouseScrollingEvent, PlayerRef, PlayerTickPostEvent,
     RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
-    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost,
+    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
+    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
+    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost,
 };
 
 pub trait Subsystem: Sync {
@@ -171,4 +174,55 @@ pub trait Subsystem: Sync {
 
     /// `Hooks::render_gui_post`: draw on the HUD.
     fn render_gui_post(&self, _host: &dyn ClientHost, _event: &mut RenderGuiPostEvent<'_>) {}
+
+    /// `Hooks::screen_render_post`: draw over the open screen (the mod's own, `mod_screen`).
+    fn screen_render_post(&self, _host: &dyn ClientHost, _event: &mut ScreenRenderPostEvent<'_>) {}
+
+    /// `Hooks::screen_mouse_button_pressed_pre`: `Flow::Cancel` when the click was taken.
+    fn screen_mouse_pressed(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::screen_mouse_button_released_pre`.
+    fn screen_mouse_released(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut ScreenMouseButtonReleasedPreEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::screen_mouse_scrolled_pre`.
+    fn screen_mouse_scrolled(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut ScreenMouseScrolledPreEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::screen_key_pressed_pre`.
+    fn screen_key_pressed(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut ScreenKeyPressedPreEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::screen_char_typed_pre`.
+    fn screen_char_typed(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut ScreenCharTypedPreEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::screen_closing`: the open screen is being replaced or closed.
+    fn screen_closing(&self, _host: &dyn ClientHost, _event: &mut ScreenClosingEvent<'_>) {}
 }
