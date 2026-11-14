@@ -2,8 +2,18 @@
 //! hold (`ArmBlockEntity.tick`), the ejector's launches and landings (`EjectorBlockEntity.tick`),
 //! their redstone, their saved data, and what clients draw (`create:arm`, `create:ejector`).
 //!
-//! An arm's points are chosen with the arm item in Create (`ArmInteractionPointHandler`); the
-//! legacy glue stood in for that with a debug command, which the commands port keeps.
+//! An arm's points are chosen with the arm item (`ArmInteractionPointHandler`): the selection is
+//! kept on the server and sent to the player's client, which outlines it while the arm is in
+//! hand (and an arm's points while a wrench looks at it). Every point type of Create 6 works:
+//! depots, ejectors and stations, belts, chutes, funnels, basins, millstones, crafters,
+//! deployers, blaze burners, crushing wheels, packagers, saws facing up, campfires,
+//! composters, jukeboxes (the arm dances while one plays) and respawn anchors. Stacks keep their
+//! components through an arm or ejector (`items::key_of`), which belts still cannot carry.
+//! The weighted ejector's target outline and arc are drawn as `EjectorTargetHandler` draws them.
+//!
+//! Left out: the rainbow tint of a dancing arm (a partial block is drawn untinted), goggles on
+//! an arm (`ARM_CLAW_BASE_GOGGLES` is not among the partial blocks), and dropping a chosen point
+//! or ejector target with a left click (see HORIZON_API.md).
 
 use super::super::net;
 use super::super::server::ServerLevel;

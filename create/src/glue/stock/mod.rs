@@ -9,6 +9,11 @@
 //! look) and kept for Create's cache times (one tick for orders, 20 for gauges); gauges are
 //! looked at on their interval only.
 //!
+//! Screens: the stock keeper's request screen (`keeper`: a mob seated beside a ticker, or a
+//! blaze burner beside it, is clicked) and the redstone requester's (`requester`). The ticker's
+//! category editor and the factory gauge's screens and connections are not ported: gauges are
+//! still set with `/create_debug gauge`, `gauge_connect` and `gauge_craft`.
+//!
 //! The overworld's saved networks are read at its first tick (an attachment is reached through
 //! a level's own host): a link whose column loaded before then is not counted as unloaded.
 
@@ -649,9 +654,10 @@ impl Subsystem for Stock {
         chunk_unload(dim, chunk);
     }
 
-    /// Our debug commands, standing in for the linking item's click (`network`), the ticker's
-    /// screen (`stock`, `order`), the requester's screen (`requester`) and the gauge's screens
-    /// and connections (`gauge`, `gauge_connect`, `gauge_craft`).
+    /// Our debug commands, for tests: a block's network (`network`), a ticker's stock and an
+    /// order (`stock`, `order`; its screen does both), a requester's order (`requester`), and the
+    /// gauge's settings and connections (`gauge`, `gauge_connect`, `gauge_craft`: its screens are
+    /// not ported).
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         for usage in [
             "create_debug network <pos:block_pos> <id:text>",
