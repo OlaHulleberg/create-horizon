@@ -88,6 +88,40 @@ pub fn content(stack: &ItemStack) -> Content {
     }
 }
 
+/// `ClipboardContent.copiedValues`: the block settings the clipboard copied.
+pub(crate) fn copied_values(stack: &ItemStack) -> Option<Compound> {
+    let Some(Tag::Compound(c)) = custom(stack).and_then(|c| c.get(&CONTENT_KEY.into())) else {
+        return None;
+    };
+    match c.get(&"copied_values".into()) {
+        Some(Tag::Compound(v)) => Some(v.clone()),
+        _ => None,
+    }
+}
+
+/// The clipboard with `values` copied (`setCopiedValues`), written on (`ClipboardType.WRITTEN`).
+pub(crate) fn with_copied_values(
+    _host: &dyn mod_api::Host,
+    stack: &ItemStack,
+    values: Compound,
+) -> ItemStack {
+    let mut content = content(stack);
+    content.kind = Kind::Written;
+    let mut out = with_content(stack, Some(&content));
+    let mut patch = out
+        .components()
+        .map(|c| c.as_nbt().clone())
+        .unwrap_or_default();
+    let mut c = custom(&out).cloned().unwrap_or_default();
+    if let Some(Tag::Compound(mut inner)) = c.remove(&CONTENT_KEY.into()) {
+        inner.insert("copied_values".into(), Tag::Compound(values));
+        c.insert(CONTENT_KEY.into(), Tag::Compound(inner));
+    }
+    patch.insert(CUSTOM_DATA.into(), Tag::Compound(c));
+    let _ = out.set_components(patch);
+    out
+}
+
 /// The stack with `content` (none takes the component off).
 pub fn with_content(stack: &ItemStack, content: Option<&Content>) -> ItemStack {
     let mut stack = stack.clone();
@@ -96,9 +130,14 @@ pub fn with_content(stack: &ItemStack, content: Option<&Content>) -> ItemStack {
         .map(|c| c.as_nbt().clone())
         .unwrap_or_default();
     let mut c = custom(&stack).cloned().unwrap_or_default();
+    // The settings it copied stay with its pages.
+    let copied = copied_values(&stack);
     match content {
         Some(content) => {
             let mut out = Compound::new();
+            if let Some(v) = copied {
+                out.insert("copied_values".into(), Tag::Compound(v));
+            }
             out.insert("type".into(), Tag::String(content.kind.name().into()));
             let pages = content
                 .pages

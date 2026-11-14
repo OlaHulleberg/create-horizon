@@ -46,6 +46,8 @@ struct Client {
     links: HashMap<[i32; 3], (Dir, create_engine::link::Key)>,
     /// Each lever's state, face and facing.
     levers: HashMap<[i32; 3], (u8, Face, Dir)>,
+    /// Each lever's `clientState` (`LerpedFloat`): this tick's value and the last.
+    lever_shown: HashMap<[i32; 3], (f32, f32)>,
     /// The animations playing: the clock, what, and its tick.
     cuckoos: Vec<([i32; 3], Animation, u32)>,
     /// Each clock's hands (`hourHand`, `minuteHand`): their angles this tick and the last
@@ -234,7 +236,7 @@ impl BlockEntityPart for RedstoneEntity {
     ) {
         if matches!(
             event.block,
-            "create:cuckoo_clock" | "create:mysterious_cuckoo_clock"
+            "create:cuckoo_clock" | "create:mysterious_cuckoo_clock" | "create:analog_lever"
         ) {
             event.ticks = true;
         }
@@ -248,14 +250,22 @@ impl BlockEntityPart for RedstoneEntity {
         let Some(id) = states::id(event.state) else {
             return;
         };
-        let clock = client_table(&*host, |t| {
-            t.get(id)
-                .map(|(b, _)| matches!(b, Block::CuckooClock | Block::MysteriousCuckooClock))
-        })
-        .flatten();
-        if clock == Some(true) {
-            let turning = speed_of(&event.entity.nbt) != 0.0;
-            tick_clock(host, event.pos, turning);
+        let block = client_table(&*host, |t| t.get(id).map(|(b, _)| b)).flatten();
+        match block {
+            Some(Block::CuckooClock | Block::MysteriousCuckooClock) => {
+                let turning = speed_of(&event.entity.nbt) != 0.0;
+                tick_clock(host, event.pos, turning);
+            }
+            // `clientState.chase(state, .2, EXP)`, `tickChaser`.
+            Some(Block::AnalogLever) => CLIENT.with_borrow_mut(|c| {
+                let Some(&(state, ..)) = c.levers.get(&event.pos) else {
+                    return;
+                };
+                let v = c.lever_shown.entry(event.pos).or_default();
+                v.0 = v.1;
+                v.1 += (f32::from(state) - v.1) * 0.2;
+            }),
+            _ => {}
         }
     }
 
@@ -382,9 +392,15 @@ fn draw_diode_indicator(draw: &mut dyn BlockEntityDrawContext, block: Block, nbt
     );
 }
 
-/// `AnalogLeverRenderer`'s handle, turned by the lever's state.
+/// `AnalogLeverRenderer`: the handle turned by the lever's (chased) state, and the indicator
+/// (`AllPartialModels.ANALOG_LEVER_INDICATOR`) from dark to bright red with it.
 fn draw_lever(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3]) {
-    let Some((state, face, facing)) = CLIENT.with_borrow(|c| c.levers.get(&pos).copied()) else {
+    let partial = draw.partial();
+    let Some((state, face, facing)) = CLIENT.with_borrow(|c| {
+        let (_, face, facing) = c.levers.get(&pos).copied()?;
+        let (last, now) = c.lever_shown.get(&pos).copied().unwrap_or_default();
+        Some((last + (now - last) * partial, face, facing))
+    }) else {
         return;
     };
     draw.push();
@@ -393,6 +409,25 @@ fn draw_lever(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3]) {
         &create_engine::lever::handle_pose(face, facing, state),
     );
     draw_part(draw, "part_analog_lever_handle");
+    draw.pop();
+    // The indicator: (removed)
+    const SPRITE: &str = "create:block/analog_lever";
+    let face_uv = |uv: [f32; 4]| Some(CubeFace::new(SPRITE).with_uv(uv));
+    draw.push();
+    pose::apply(draw, &create_engine::lever::handle_pose(face, facing, 0.0));
+    draw.cube(
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [
+            None,
+            None,
+            face_uv([0.0, 0.0, 0.0, 0.0]),
+            face_uv([0.0, 0.0, 0.0, 0.0]),
+            face_uv([0.0, 0.0, 0.0, 0.0]),
+            face_uv([0.0, 0.0, 0.0, 0.0]),
+        ],
+        create_engine::diode::indicator_color(state / 15.0),
+    );
     draw.pop();
 }
 

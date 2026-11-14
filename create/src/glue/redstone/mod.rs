@@ -22,6 +22,7 @@
 
 mod analog;
 mod client;
+mod clipboard_values;
 mod detectors;
 mod parts;
 pub(crate) mod pose;
@@ -66,8 +67,8 @@ impl Subsystem for Redstone {
         &[ticks::DIODE_SHOWN]
     }
 
-    /// A cuckoo clock's hands and doors, and a brass diode's indicator, are drawn each frame
-    /// (`client`).
+    /// A cuckoo clock's hands and doors, a brass diode's indicator and an analog lever's handle
+    /// are drawn each frame (`client`).
     fn animated(
         &self,
         block: create_engine::Block,
@@ -81,6 +82,7 @@ impl Subsystem for Redstone {
                 | create_engine::Block::PulseRepeater
                 | create_engine::Block::PulseExtender
                 | create_engine::Block::PulseTimer
+                | create_engine::Block::AnalogLever
         )
     }
 
@@ -162,6 +164,23 @@ impl Subsystem for Redstone {
         data: &[u8],
     ) -> bool {
         switch_screen::client_message(host, player, channel, data)
+            || clipboard_values::client_message(host, player, channel, data)
+    }
+
+    fn right_click_block(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::RightClickBlockEvent<'_>,
+    ) -> Flow {
+        clipboard_values::right_click_block(host, event)
+    }
+
+    fn interaction_key(
+        &self,
+        host: &mut dyn ClientHost,
+        event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
+    ) -> Flow {
+        clipboard_values::interaction_key(host, event)
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
@@ -209,6 +228,13 @@ impl Subsystem for Redstone {
     ) -> Flow {
         detectors::run_command(host, event)
     }
+}
+
+/// The engine block at `pos` of this client's level, for Create's blocks.
+pub(crate) fn client_block_of(host: &dyn ClientHost, pos: [i32; 3]) -> Option<Block> {
+    let level = host.level(host.dimension())?;
+    let id = super::states::id(level.block_state(host, pos)?)?;
+    super::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten()
 }
 
 /// The block and state of engine id `state`, read so that a hook asked inside one of the glue's

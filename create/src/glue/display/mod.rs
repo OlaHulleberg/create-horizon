@@ -10,7 +10,7 @@
 //!   drawn opaque.
 
 pub mod client;
-mod clipboard;
+pub(crate) mod clipboard;
 mod link_item;
 mod link_screen;
 
