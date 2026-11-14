@@ -12,7 +12,7 @@ use create_engine::tank::Fluid;
 use create_engine::{belt, sequenced};
 use mod_api::{HostTransaction, Identifier, ItemStack, ServerHost};
 
-fn stack_of(host: &dyn ServerHost, item: &str, count: u32) -> Option<ItemStack> {
+pub(super) fn stack_of(host: &dyn ServerHost, item: &str, count: u32) -> Option<ItemStack> {
     let key = host.item_key(&Identifier::parse(item).ok()?)?;
     ItemStack::new(key, count)
 }

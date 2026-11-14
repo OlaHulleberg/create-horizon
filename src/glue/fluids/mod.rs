@@ -43,6 +43,10 @@ pub struct Fluids;
 impl Subsystem for Fluids {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         client::register(r);
+        r.block_part(
+            super::states::key(Block::CreativeFluidTank),
+            plumbing::CreativeTank,
+        );
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {

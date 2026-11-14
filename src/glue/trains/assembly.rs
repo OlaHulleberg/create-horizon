@@ -64,7 +64,7 @@ pub fn use_station(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
     let dim = lv.dim;
     railway_ready(dim);
     // A train assembled or taken apart here: its comparators read `trainPresent` again.
-    with_world(|w| w.dims[dim].analog_checks.push(pos));
+    crate::glue::redstone::analog_touched(dim, pos);
     let stopped = with_world(|w| {
         let r = &mut w.dims[dim].railway;
         let i = r.trains.iter().position(|t| {

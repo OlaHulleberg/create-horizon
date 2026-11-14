@@ -5,13 +5,18 @@ use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::pipes::{connect_pipe, pipe_sides_at, pipe_sides_of};
 use super::{HOSE, all, flag, info_at, offset, property, state_with, world_fluid};
+use crate::glue::items;
 use crate::glue::kinetics::dir_name;
+use crate::glue::redstone::analog_touched;
 use create_engine::Block;
 use create_engine::fluids::{Cell, Gate};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
 use create_engine::tank::{CAPACITY, Fluid, Multi, Tank};
-use mod_api::{BlockShapeKind, Compound, HostBlockStates, SoundSource, Tag};
+use mod_api::{
+    BlockPart, BlockShapeKind, Compound, Hand, HostBlockStates, InteractionResult, ItemStack,
+    PlayerRef, ServerHost, SoundSource, Tag, UseItemOnEvent,
+};
 
 /// What a valve, a smart, glass or encased pipe, a hose pulley or a creative tank is to the
 /// pipes; None for other blocks.
@@ -786,4 +791,86 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
             p.creative_saved.insert([c[0], c[1], c[2]], fluid(c[3]));
         }
     });
+}
+
+/// A creative fluid tank's part: a bucket's click.
+pub(super) struct CreativeTank;
+
+#[mod_api::horizon_part]
+impl BlockPart for CreativeTank {
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let click = event.click;
+        let held = click.stack?.clone();
+        let player = host.player(click.player)?;
+        let dimension = click.dimension.key().id().to_owned();
+        let mut lv = ServerLevel::new(host, &dimension)?;
+        use_creative_tank(&mut lv, click.pos, player, click.hand, &held)
+            .then_some(InteractionResult::Success)
+    }
+}
+
+/// A bucket on a creative tank (legacy `use_creative_tank`; `FluidHelper.tryEmptyItemIntoBE` /
+/// `tryFillItemFromBE`): a fluid's bucket sets its fluid (a survival player's bucket emptied),
+/// an empty bucket takes it out and clears it (a survival player's filled; a creative one given
+/// a filled bucket if none is in the inventory). What comparators read of it changes with it.
+/// True when the click was the tank's.
+fn use_creative_tank(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    player: PlayerRef,
+    hand: Hand,
+    held: &ItemStack,
+) -> bool {
+    let dim = lv.dim;
+    let id = held.item().id(&*lv.host);
+    let now = with_world(|w| w.dims[dim].plumbing.creative_fluid(pos))
+        .flatten()
+        .flatten();
+    let creative = items::creative(&*lv.host, player);
+    let give = |lv: &mut ServerLevel<'_>, item: &str| {
+        if let Some(s) = super::machines::stack_of(&*lv.host, item, 1) {
+            items::give_back(lv.host, player, s);
+        }
+    };
+    let next = if let Some(f) = Fluid::of_bucket(&id) {
+        if !creative {
+            items::shrink_held(lv.host, player, hand, 1);
+            give(lv, "minecraft:bucket");
+        }
+        Some(f)
+    } else if id == "minecraft:bucket" {
+        let Some(f) = now else {
+            return false;
+        };
+        if !creative {
+            items::shrink_held(lv.host, player, hand, 1);
+            give(lv, f.bucket());
+        } else {
+            let has = player
+                .inventory_slots(&*lv.host)
+                .unwrap_or_default()
+                .iter()
+                .any(|(_, s)| s.item().id(&*lv.host) == f.bucket());
+            if !has {
+                give(lv, f.bucket());
+            }
+        }
+        None
+    } else {
+        return false;
+    };
+    if next != now {
+        with_world(|w| {
+            let p = &mut w.dims[dim].plumbing;
+            p.creative.insert(pos, next);
+            p.creative_changes.push(pos);
+            w.mark_unsaved(dim, pos);
+        });
+        analog_touched(dim, pos);
+    }
+    true
 }
