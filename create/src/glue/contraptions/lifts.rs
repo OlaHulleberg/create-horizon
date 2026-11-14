@@ -1,7 +1,14 @@
 //! Clockwork bearings, rope pulleys and elevators (`lifts.rs` in the engine): their structures
 //! leave the world while they run and come back where they stop; clients draw each from its
 //! block's data (`draw`), told when it starts, stops or changes speed. Redstone and elevator
-//! contacts: their signals, placement and lights. Saved under `create_lifts`.
+//! contacts: their signals, placement and lights; an elevator contact's floor names (made up as
+//! Create's `initNames` does, edited on its screen), door setting and the floor its column's
+//! elevator last passed or reached (`broadcastFloorData`). Saved under `create_lifts` and
+//! `create_contacts`.
+//!
+//! Left out of the port, not for want of API: the door setting is kept and edited but opens no
+//! door (doors on moving structures, `SlidingDoorMovementBehaviour`, are not ported), and the
+//! elevator's contraption controls choose no floor (`ElevatorControlsHandler`).
 
 use super::super::persist;
 use super::super::server::{ServerLevel, UPDATE_CLIENTS, update_all};

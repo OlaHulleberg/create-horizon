@@ -114,7 +114,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A colour over a block model a block entity draws** (`SuperByteBuffer.color`): an overstressed
   network's turning parts flash red, and a recovered one's green (`KineticEffectHandler.overStressedEffect`);
   `BlockEntityDrawContext::block` draws a model in its own tints, and `terrain_model`'s tint reaches only
-  quads with a tint index. The smoke and cloud that go with the flash are played.
+  quads with a tint index. The smoke and cloud that go with the flash are played. The display link's bulb
+  flash (`LinkBulbRenderer`: its glow model drawn additively in a fading grey) is left out for the same
+  want (and of an additive render type).
 - **Collision shapes in `can_survive`** (`LevelHost` has none): a hand crank or valve handle is refused
   only against air or a fluid as it is placed, where Create asks for any collision shape behind it (the
   neighbour check after placement reads them through `LevelRef::collision_boxes`).
@@ -171,6 +173,12 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
 
 ## Left out of the port, not for want of API
+
+- Display and redstone: the station summary display source (Create's `GlobalTrainDisplayData`, every train's
+  arrival predictions, is not in the trains port), the factory gauge status source (gauges are not connected
+  to display links), and an elevator contact's door setting opening doors (doors on moving structures are not
+  ported); the clipboard copies no value box `interaction::values` does not serve (a funnel's filter count, a
+  chassis' range, tunnels' side filters, deployers' filters), nor from a placed clipboard.
 
 - Logistics: a sloped belt collides as a flat one; Create's `BeltShapes` (by facing, slope and part) are
   not declared yet, though content shapes can select by several properties (as the steam engine's do).

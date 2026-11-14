@@ -5,13 +5,18 @@
 //!
 //! The sources: speedometers and stressometers, target blocks' redstone power, cuckoo clocks'
 //! time and stopwatch, item names along depots, belts and ejectors, nixie tubes' text, a smart
-//! observer's item and fluid counts and lists, a threshold switch's fill level, who sits on a
-//! seat, a tunnel's accumulated items and throughput (told by the belt, `items_through_tunnel`)
-//! and an enchanting table's max cost.
+//! observer's item and fluid counts and lists and its package's address, a threshold switch's
+//! fill level, who sits on a seat, a tunnel's accumulated items and throughput (told by the
+//! belt, `items_through_tunnel`), an enchanting table's max cost, a fluid tank's boiler, an
+//! elevator contact's floor (its names and screen are `contact_screen`), a station's train's
+//! schedule status and a track observer's train's name. A display board in hand clicked on a
+//! board goes beside it (its placement helper).
 //!
-//! Not ported (the API could do it): the boiler, elevator floor (elevator contacts' names and
-//! screen), station summary, train status, observed train name, package address and factory
-//! gauge sources, and a display board's placement helper.
+//! Left out of the port, not for want of API: the station summary (Create's
+//! `GlobalTrainDisplayData`, the arrival predictions of every train's schedule, is not in the
+//! trains port), and the factory gauge status (gauges are not connected to links: the gauge's
+//! connections are not ported). The sources' colours (the boiler's bars, the gauges' marks)
+//! are not kept: the engine's text is plain.
 //!
 //! Left out, the API having no way to do it:
 //! - The scoreboard and death count sources: the API reads no scoreboard objectives.
@@ -20,6 +25,8 @@
 //!   name its id's path in capitalised words); clients draw the boards' flap characters in their own.
 //! - The display boards' text alpha (`.85`, `.975` when glowing): a block entity's text is
 //!   drawn opaque.
+//! - The link's bulb flashing as it sends (`LinkBulbRenderer`): its glow is a block model drawn
+//!   additively in a fading colour, and a block entity's model is drawn in its own tints.
 
 pub mod client;
 pub(crate) mod clipboard;
