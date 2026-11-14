@@ -162,8 +162,17 @@ pub fn show_basins(lv: &mut ServerLevel<'_>) {
                 ]))
             })
             .collect();
-        let items = (!items.is_empty()).then_some(Tag::List(items));
-        set_shown(lv, pos, &[(FLUIDS_KEY, fluids), (ITEMS_KEY, items)]);
+        // Empty ones are sent empty: a key taken away stays with the clients
+        // (`merge_update_tag`).
+        let fluids = fluids.unwrap_or(Tag::IntArray(Vec::new()));
+        set_shown(
+            lv,
+            pos,
+            &[
+                (FLUIDS_KEY, Some(fluids)),
+                (ITEMS_KEY, Some(Tag::List(items))),
+            ],
+        );
     }
 }
 
@@ -184,7 +193,8 @@ fn show_mixer(lv: &mut ServerLevel<'_>, pos: [i32; 3], m: &basin::Mixer) {
             return;
         }
         MIXER_SHOWN.with_borrow_mut(|s| s.remove(&(dim, pos)));
-        None
+        // At rest: empty (a key taken away stays with the clients).
+        Some(Tag::Compound(Compound::new()))
     } else {
         if told.is_some_and(|(t, at)| basin::shown_ticks(t, now - at) == m.running_ticks) {
             return;
@@ -393,7 +403,17 @@ pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
             MixStep::Apply => {
                 let heat = basin_heat(lv, basin_pos);
                 let mut rng = Rng::new(lv.seed_at(pos));
-                if let (Some(before), Some(i)) = (basin_slots(lv, basin_pos), m.recipe) {
+                // `acceptOutputs(.., true)`: a basin spouting to a side needs a taker there.
+                let gives_items = recipes::with(|r| {
+                    m.recipe
+                        .and_then(|i| r.mixing.get(i))
+                        .is_some_and(|x| !x.results.is_empty())
+                })
+                .unwrap_or(false);
+                let can_output = !gives_items || super::spoutput::accepts(lv, basin_pos);
+                if let (Some(before), Some(i), true) =
+                    (basin_slots(lv, basin_pos), m.recipe, can_output)
+                {
                     let host = &*lv.host;
                     let limit = |i: &str| stacks::limit(host, i);
                     let mut slots = before.clone();
@@ -420,6 +440,7 @@ pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
                     .unwrap_or_default();
                     if done {
                         with_world(|w| w.set_basin_fluids(dim, basin_pos, tanks));
+                        super::spoutput::route(lv, basin_pos, &before, &mut slots);
                         write_basin(lv, basin_pos, &before, &slots);
                         // `continueWithPreviousRecipe`: stays down for the next one.
                         if again {
@@ -460,7 +481,8 @@ pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
             }
             continue;
         }
-        if speed == 0.0 || m.running {
+        // `canContinueProcessing`: not while results wait at the spout.
+        if speed == 0.0 || m.running || !super::spoutput::can_continue(lv, basin_pos) {
             continue;
         }
         let Some(slots) = basin_slots(lv, basin_pos) else {
@@ -503,7 +525,7 @@ fn press_on_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         return;
     }
     let basin_pos = [pos[0], pos[1] - 2, pos[2]];
-    if !basin_at(lv, basin_pos) {
+    if !basin_at(lv, basin_pos) || !super::spoutput::can_continue(lv, basin_pos) {
         return;
     }
     let Some(slots) = basin_slots(lv, basin_pos) else {
@@ -597,6 +619,10 @@ pub fn compact_in_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         return;
     };
     let basin_pos = [pos[0], pos[1] - 2, pos[2]];
+    // `acceptOutputs(.., true)`: compacting always gives items.
+    if !super::spoutput::accepts(lv, basin_pos) {
+        return;
+    }
     let Some(before) = basin_slots(lv, basin_pos) else {
         return;
     };
@@ -620,6 +646,7 @@ pub fn compact_in_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     if done {
         with_world(|w| w.set_basin_fluids(dim, basin_pos, tanks));
+        super::spoutput::route(lv, basin_pos, &before, &mut slots);
         write_basin(lv, basin_pos, &before, &slots);
     }
 }
@@ -665,12 +692,12 @@ pub fn use_burner(
         let wearing = lv
             .entity_at(pos)
             .and_then(|e| e.data(&*lv.host))
-            .is_some_and(|d| d.contains_key(&GOGGLES_KEY.into()));
+            .is_some_and(|d| d.get(&GOGGLES_KEY.into()) == Some(&Tag::Byte(1)));
         if wearing == held_goggles {
             return false;
         }
-        let value = held_goggles.then_some(Tag::Byte(1));
-        set_shown(lv, pos, &[(GOGGLES_KEY, value)]);
+        let value = Tag::Byte(i8::from(held_goggles));
+        set_shown(lv, pos, &[(GOGGLES_KEY, Some(value))]);
         return true;
     }
     let Some(stack) = stack else {

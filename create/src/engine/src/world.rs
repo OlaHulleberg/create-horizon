@@ -267,6 +267,8 @@ pub struct Dimension {
     /// that tick).
     pub brass: HashMap<[i32; 3], crate::tunnel::Brass>,
     pub brass_running: Vec<[i32; 3]>,
+    /// The loaded basins, whose spout output looks for somewhere to go (`lazyTick`).
+    pub basins: HashSet<[i32; 3]>,
     /// Basins' fluid tanks (`BasinBlockEntity`'s inputs and outputs).
     pub basin_fluids: HashMap<[i32; 3], crate::basin::Tanks>,
     /// Basins whose tanks changed: their clients are told (taken by the glue).
@@ -730,6 +732,9 @@ impl CreateWorld {
         }
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
+        }
+        if block == Block::Basin {
+            d.basins.insert(pos);
         }
         if matches!(block, Block::CopperBacktank | Block::NetheriteBacktank)
             && !d.backtanks.contains_key(&pos)
@@ -1312,6 +1317,9 @@ impl CreateWorld {
             if self.table.get(new).map(|(b, _)| b) == Some(Block::Millstone) {
                 self.dims[dim].millstones.entry(pos).or_default();
             }
+            if self.table.get(new).map(|(b, _)| b) == Some(Block::Basin) {
+                self.dims[dim].basins.insert(pos);
+            }
             if self.table.get(new).map(|(b, _)| b) == Some(Block::WaterWheel)
                 && self.table.get(old).map(|(b, _)| b) != Some(Block::WaterWheel)
             {
@@ -1359,6 +1367,7 @@ impl CreateWorld {
             d.valve_cooldowns.remove(&pos);
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
+            d.basins.remove(&pos);
             d.presses.remove(&pos);
             d.backtanks.remove(&pos);
             self.diode_removed(dim, pos);
@@ -1654,6 +1663,7 @@ impl CreateWorld {
             d.wheels.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.millstones
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.basins.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.backtanks
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.backtank_saved

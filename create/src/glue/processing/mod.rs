@@ -51,6 +51,7 @@ mod persist;
 mod press;
 pub mod recipes;
 pub(crate) mod saw;
+mod spoutput;
 mod stacks;
 
 pub use containers::TOOLBOX_TYPE;
@@ -98,6 +99,7 @@ impl Subsystem for Processing {
             basin::GOGGLES_KEY,
             crafter::CRAFTER_KEY,
             saw::SAW_KEY,
+            spoutput::VISUALIZED_KEY,
         ]
     }
 
@@ -118,6 +120,7 @@ impl Subsystem for Processing {
         recipes::clear();
         saw::clear();
         basin::clear();
+        spoutput::clear();
     }
 
     fn tags_updated(&self, host: &mut dyn ServerHost) {
@@ -142,6 +145,7 @@ impl Subsystem for Processing {
         crusher::tick_crushers(lv);
         basin::tick_burners(lv);
         basin::tick_mixers(lv);
+        spoutput::tick(lv);
         basin::show_basins(lv);
     }
 
@@ -161,6 +165,24 @@ impl Subsystem for Processing {
             ));
         }
         press::press_on_belt(lv, segment, item, locked)
+    }
+
+    /// `BasinBlock.onWrenched`: the basin's spout side is chosen or shut, not turned.
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        _player: PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        clicked: Dir,
+        _point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        if block != Block::Basin || sneaking {
+            return false;
+        }
+        spoutput::wrenched(lv, pos, clicked);
+        true
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
@@ -492,11 +514,13 @@ pub(crate) fn belt_input(
             if info.facing != Some(Dir::Up) || side == Dir::Down {
                 return Some(count);
             }
-            Some(if saw::saw_put(lv, next, &item.item, item.progress.clone()) {
-                count - 1
-            } else {
-                count
-            })
+            Some(
+                if saw::saw_put(lv, next, &item.item, item.progress.clone()) {
+                    count - 1
+                } else {
+                    count
+                },
+            )
         }
         Block::Basin => {
             let mut s = stack();

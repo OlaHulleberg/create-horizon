@@ -194,8 +194,8 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 /// draws in no entity. Whether it took them.
 pub fn crusher_put(lv: &mut ServerLevel<'_>, pos: [i32; 3], item: &str, count: u8) -> bool {
     let dim = lv.dim;
-    let time = recipes::with(|r| crusher::recipe(&r.crushing, &r.milling, item).map(|x| x.time))
-        .flatten();
+    let time =
+        recipes::with(|r| crusher::recipe(&r.crushing, &r.milling, item).map(|x| x.time)).flatten();
     with_world(|w| {
         let (c, _) = w.dims[dim].crushers.get_mut(&pos)?;
         if c.occupied() {

@@ -81,10 +81,13 @@ pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
             entity.nbt.get(&super::saw::SAW_KEY.into()),
             Some(Tag::Compound(c)) if c.contains_key(&"Items".into())
         ),
-        Block::MechanicalMixer => entity.nbt.contains_key(&basin_glue::MIXER_KEY.into()),
+        Block::MechanicalMixer => matches!(
+            entity.nbt.get(&basin_glue::MIXER_KEY.into()),
+            Some(Tag::Compound(c)) if c.contains_key(&"T".into())
+        ),
         Block::Basin => {
-            entity.nbt.contains_key(&basin_glue::FLUIDS_KEY.into())
-                && !basin_items(&entity.nbt).is_empty()
+            (!basin_fluids(&entity.nbt).is_empty() && !basin_items(&entity.nbt).is_empty())
+                || !super::spoutput::visualized(&entity.nbt).is_empty()
         }
         _ => false,
     }
@@ -208,6 +211,52 @@ fn draw_basin(
         count -= 1;
     }
     draw.pop();
+}
+
+/// `BasinRenderer`'s `visualizedOutputItems`: the items leaving a basin's spout, falling out of
+/// it over their moment (only the first third of it unless another basin is there).
+fn draw_spout_items(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    pos: [i32; 3],
+    facing: Dir,
+    nbt: &Compound,
+) {
+    if facing == Dir::Down || facing == Dir::Up {
+        return;
+    }
+    let seen = super::spoutput::visualized(nbt);
+    if seen.is_empty() {
+        return;
+    }
+    let o = facing.offset().map(|v| v as f32);
+    let out = [0.5 + o[0] * 0.55, 0.0, 0.5 + o[2] * 0.55];
+    let next = [pos[0] + o[0] as i32, pos[1], pos[2] + o[2] as i32];
+    let out_to_basin = host
+        .level(host.dimension())
+        .and_then(|l| l.block_state(host, next))
+        .and_then(states::id)
+        .and_then(|id| crate::glue::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten())
+        == Some(Block::Basin);
+    let time = draw.game_time() as f32 + draw.partial();
+    let span = super::spoutput::OUTPUT_ANIMATION_TIME as f32;
+    for (id, at) in seen {
+        let progress = (time - at as f32) / span;
+        if !(0.0..=1.0).contains(&progress) || (!out_to_basin && progress > 0.35) {
+            continue;
+        }
+        let Some(stack) = stacks::stack(host, &id, 1) else {
+            continue;
+        };
+        draw.push();
+        draw.translate(out);
+        draw.translate([0.0, (-(progress * progress * 2.0)).max(-0.55), 0.0]);
+        draw.translate([o[0] * progress * 0.5, 0.0, o[2] * progress * 0.5]);
+        draw.rotate_about([0.0, 1.0, 0.0], horizontal_angle(facing), [0.0; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], progress * 180.0, [0.0; 3]);
+        draw.item(&stack, ItemDisplayContext::Ground, None, 0);
+        draw.pop();
+    }
 }
 
 /// The server's word on presses or deployers. True for those channels.
@@ -336,16 +385,17 @@ impl BlockEntityPart for MachineDraw {
                     }
                 }
             }
-            Block::Basin => draw_basin(host, event.draw, event.pos, &event.entity.nbt),
+            Block::Basin => {
+                draw_basin(host, event.draw, event.pos, &event.entity.nbt);
+                let facing = info.facing.unwrap_or(Dir::Down);
+                draw_spout_items(host, event.draw, event.pos, facing, &event.entity.nbt);
+            }
             Block::BlazeBurner => super::burner_draw::draw(
                 event.draw,
                 event.pos,
                 info.heat.unwrap_or(create_engine::fan::Heat::None),
                 info.facing.unwrap_or(Dir::South),
-                event
-                    .entity
-                    .nbt
-                    .contains_key(&basin_glue::GOGGLES_KEY.into()),
+                event.entity.nbt.get(&basin_glue::GOGGLES_KEY.into()) == Some(&Tag::Byte(1)),
             ),
             Block::MechanicalCrafter => {
                 draw_crafter(host, event.draw, event.pos, &event.entity.nbt);

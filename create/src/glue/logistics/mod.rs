@@ -60,7 +60,10 @@ pub use arms::Arms;
 // What the processing machines hand their results to beside them (the legacy logistics glue's
 // siblings called these): a belt or depot taking a stack from a side, and the two facts every
 // stack placed on one needs.
-pub(crate) use belt::{direct_input_accepts, direct_input_at, insert_into_from};
+pub(crate) use belt::{
+    belt_segment, direct_input_accepts, direct_input_at, insert_into_from, put_on_from_above,
+};
+pub(crate) use funnel::{funnel_at, funnel_passes};
 pub(crate) use items::{random_angle, upright};
 pub(crate) use tunnel::set_brass_mode;
 
