@@ -19,7 +19,7 @@ use super::super::server::{ServerLevel, update_all};
 use super::super::states::key;
 use super::super::subsystem::Subsystem;
 use super::super::world::{level_index, with_world};
-use super::{clicker, create_info, in_click_level};
+use super::{clicker, in_click_level};
 use create_engine::Block;
 use create_engine::dye::{self, DyeColor};
 use create_engine::{seat, turntable};
@@ -361,11 +361,11 @@ fn turn_local_player(host: &mut dyn ClientHost) {
     let Some(state) = level.block_state(&*host, below) else {
         return;
     };
-    if super::super::states::id(state)
-        .and_then(create_info)
-        .map(|(b, _)| b)
-        != Some(Block::Turntable)
-    {
+    // The client's own state table: the server's world isn't on this thread.
+    let turntable = super::super::states::id(state).and_then(|id| {
+        super::super::client_table(&*host, |t| matches!(t.get(id), Some((Block::Turntable, _))))
+    });
+    if turntable != Some(true) {
         return;
     }
     let rpm = host
