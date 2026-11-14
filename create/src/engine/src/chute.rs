@@ -1,7 +1,9 @@
-//! Create's chute (`ChuteBlockEntity`), without fans: one stack falls through each chute at
-//! gravity's 4 chutes a second, into the inventory below, the chute below, or out of the bottom;
-//! an empty chute takes from the inventory above it (`handleInputFromAbove`). The smart chute
-//! (`SmartChuteBlockEntity`) adds a filter and stops while powered.
+//! Create's chute (`ChuteBlockEntity`): one stack falls through each chute at gravity's 4 chutes
+//! a second, into the inventory below, the chute below, or out of the bottom; an empty chute
+//! takes from the inventory above it (`handleInputFromAbove`). Encased fans at the ends of a
+//! column of chutes blow its stacks up or speed them down (`getItemMotion`); rising, an empty
+//! chute takes from the inventory below it. The smart chute (`SmartChuteBlockEntity`) adds a
+//! filter and stops while powered. Diagonal chutes are not in the port.
 
 /// `getItemMotion` with no fan: `-gravity / 20` chutes a tick.
 pub const MOTION: f32 = -4.0 / 20.0;
@@ -18,12 +20,27 @@ pub enum Fall {
 /// The downward part of `tick`: past the middle it only goes on when `can_output` (the place
 /// below takes it); past the bottom it leaves.
 pub fn fall(position: f32, can_output: bool) -> Fall {
-    let next = position + MOTION;
-    if next < 0.5 {
+    step(position, MOTION, can_output)
+}
+
+/// `getItemMotion`: chutes a tick for a column of chutes pushed by a fan below it (`push`, the
+/// fan's speed) and pulled by one above it (`pull`): up while the fans blow up, else down
+/// faster than gravity alone while they blow down.
+pub fn item_motion(push: f32, pull: f32) -> f32 {
+    let motion = (push + pull) / 64.0;
+    (motion.clamp(-20.0, 20.0) + if motion <= 0.0 { -4.0 } else { 0.0 }) / 20.0
+}
+
+/// `tick` for a stack moving at `motion` (`item_motion`): past the middle it only goes on when
+/// `can_output` (the place it goes next takes it); past the bottom (or the top, moving up) it
+/// leaves.
+pub fn step(position: f32, motion: f32, can_output: bool) -> Fall {
+    let next = position + motion;
+    if motion < 0.0 && next < 0.5 || motion > 0.0 && next > 0.5 {
         if !can_output {
             return Fall::At(0.5);
         }
-        if next < 0.0 {
+        if next < 0.0 || next > 1.0 {
             return Fall::Out;
         }
     }

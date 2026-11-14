@@ -1120,7 +1120,7 @@ pub fn select_point(
                     .and_then(point_kind)
                     .is_some()
         }
-        mod_api::HostSide::Server(host) => select_on_server(host, &click),
+        mod_api::HostSide::Server(host) => select_on_server(host, click),
     };
     if !selected {
         return mod_api::Flow::Continue;

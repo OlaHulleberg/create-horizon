@@ -1,6 +1,7 @@
 //! Chutes, smart chutes and item vaults on the server: stacks falling through chutes into what
-//! lies below (`ChuteBlockEntity.tick`), empty chutes taking from what is above
-//! (`handleInputFromAbove`), a smart chute's filter slot, and vaults' shapes.
+//! lies below (`ChuteBlockEntity.tick`), or blown up them by an encased fan, empty chutes taking
+//! from what is above (`handleInputFromAbove`) or below while blown up, a smart chute's filter
+//! slot, and vaults' shapes.
 
 use super::super::server::{ServerLevel, UPDATE_CLIENTS};
 use super::super::world::with_world;
@@ -85,13 +86,103 @@ fn falls_through(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         .is_none_or(|b| b.is_empty())
 }
 
+/// The speed of an encased fan at `pos` blowing `way` (`fan.getSpeed()`), if one is there.
+fn fan_blowing(lv: &ServerLevel<'_>, pos: [i32; 3], way: Dir) -> Option<f32> {
+    let (block, info) = info_at(lv, pos)?;
+    if block != Block::EncasedFan || info.facing != Some(way) {
+        return None;
+    }
+    let dim = lv.dim;
+    with_world(|w| w.speed(dim, pos)).flatten()
+}
+
+/// `getItemMotion` of the chute at `pos`: its column's `push` (`calculatePush`: a fan under the
+/// lowest chute blowing up) and `pull` (`calculatePull`: a fan over the highest one blowing
+/// down), in chutes a tick.
+pub fn chute_motion(lv: &ServerLevel<'_>, pos: [i32; 3]) -> f32 {
+    let end = |step: i32| {
+        let mut p = [pos[0], pos[1] + step, pos[2]];
+        while chute_at(lv, p).is_some() {
+            p[1] += step;
+        }
+        p
+    };
+    let push = fan_blowing(lv, end(-1), Dir::Up).unwrap_or(0.0);
+    let pull = fan_blowing(lv, end(1), Dir::Down).unwrap_or(0.0);
+    create_engine::chute::item_motion(push, pull)
+}
+
+/// A stack the fans carry up the chute at `pos` (`tick` with a positive motion,
+/// `handleUpwardOutput`): into the container above, else the chute above if it is empty and
+/// does not fall (`getInputChutes`, `canAcceptItem`), else out of the top when nothing solid is
+/// over it; it waits in the middle while the way is shut. The chute's next position, None when
+/// the stack left.
+fn rise(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    position: f32,
+    motion: f32,
+    stack: ItemStack,
+    active: bool,
+) -> Option<f32> {
+    use create_engine::chute::{Fall, step};
+    let dim = lv.dim;
+    let above = [pos[0], pos[1] + 1, pos[2]];
+    let above_chute = chute_at(lv, above);
+    let container =
+        above_chute.is_none() && items::items_at(lv, above, Some(Direction::Down)).is_some();
+    let can = if !active {
+        false
+    } else if let Some((b, powered)) = above_chute {
+        chute_stack(lv, above).is_none()
+            && chute_accepts(lv, above, b, powered, &stack)
+            && chute_motion(lv, above) >= 0.0
+    } else if container {
+        true
+    } else {
+        let funnel_up = super::funnel::funnel_at(lv, above).is_some_and(|f| f.facing == Dir::Up);
+        !funnel_up && falls_through(lv, above)
+    };
+    match step(position, motion, can) {
+        Fall::At(p) => Some(p),
+        Fall::Out if above_chute.is_some() => {
+            set_chute_stack(lv, above, Some(stack));
+            set_chute_stack(lv, pos, None);
+            with_world(|w| w.dims[dim].chutes.insert(above, 0.0));
+            None
+        }
+        Fall::Out if container => {
+            let count = stack.count();
+            let left = items::insert_item(lv, above, Direction::Down, stack);
+            if left.as_ref().is_some_and(|l| l.count() == count) {
+                Some(0.5)
+            } else {
+                let done = left.is_none();
+                set_chute_stack(lv, pos, left);
+                (!done).then_some(0.5)
+            }
+        }
+        Fall::Out => {
+            // Out of the top, half a block over the centre, at twice the chute's speed.
+            let at = [
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]) + 1.0,
+                f64::from(pos[2]) + 0.5,
+            ];
+            set_chute_stack(lv, pos, None);
+            items::drop_stack(lv, at, [0.0, f64::from(motion) * 2.0, 0.0], stack, 0);
+            None
+        }
+    }
+}
+
 /// Chutes holding a stack (`ChuteBlockEntity.tick` falling, `handleDownwardOutput`): into the
 /// container below (`insertItemStacked`; a vault's whole inventory), else the chute below if it
 /// is empty (and a smart chute's filter passes it), else out of the bottom when nothing solid is
 /// under it; it waits in the middle while the way is shut, or while a smart chute is powered
 /// (`canActivate`). Then the empty chutes that may take from the inventory above them do.
 pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
-    use create_engine::chute::{Fall, fall};
+    use create_engine::chute::{Fall, step};
     let dim = lv.dim;
     let moving: Vec<([i32; 3], f32)> =
         with_world(|w| w.dims[dim].chutes.iter().map(|(p, v)| (*p, *v)).collect())
@@ -112,6 +203,20 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
             with_world(|w| w.dims[dim].chutes.remove(&pos));
             continue;
         }
+        let motion = chute_motion(lv, pos);
+        if motion > 0.0 {
+            let next = rise(lv, pos, position, motion, stack, active);
+            with_world(|w| match next {
+                Some(p) => {
+                    w.dims[dim].chutes.insert(pos, p);
+                }
+                None => {
+                    w.dims[dim].chutes.remove(&pos);
+                    w.dims[dim].chute_pulls.wake(pos);
+                }
+            });
+            continue;
+        }
         let below = [pos[0], pos[1] - 1, pos[2]];
         let below_chute = chute_at(lv, below);
         let container =
@@ -125,7 +230,7 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
         } else {
             falls_through(lv, below)
         };
-        let next = match fall(position, can) {
+        let next = match step(position, motion, can) {
             Fall::At(p) => Some(p),
             Fall::Out if below_chute.is_some() => {
                 set_chute_stack(lv, below, Some(stack));
@@ -186,15 +291,21 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
             // Powered: it looks again when that changes; holding a stack: when it is empty.
             continue;
         }
-        let above = [pos[0], pos[1] + 1, pos[2]];
-        // `grabCapability(UP)`: a chute above hands its items down itself.
+        // `handleInputFromAbove`, or `handleInputFromBelow` while the fans blow up.
+        let rising = chute_motion(lv, pos) > 0.0;
+        let (above, from_side, start) = if rising {
+            ([pos[0], pos[1] - 1, pos[2]], Direction::Up, 0.0)
+        } else {
+            ([pos[0], pos[1] + 1, pos[2]], Direction::Down, 1.0)
+        };
+        // `grabCapability`: a chute there hands its items on itself.
         if chute_at(lv, above).is_some() {
             continue;
         }
         // A portable storage interface hands down its contraption's storage while connected;
         // it wakes the chute when it connects.
         let psi = actors::is_item_interface(lv, above);
-        let from = items::items_at(lv, above, Some(Direction::Down));
+        let from = items::items_at(lv, above, Some(from_side));
         if from.is_none() && !psi {
             continue;
         }
@@ -239,7 +350,7 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
         match taken {
             Some(stack) => {
                 set_chute_stack(lv, pos, Some(stack));
-                with_world(|w| w.dims[dim].chutes.insert(pos, 1.0));
+                with_world(|w| w.dims[dim].chutes.insert(pos, start));
             }
             None => {
                 with_world(|w| {
