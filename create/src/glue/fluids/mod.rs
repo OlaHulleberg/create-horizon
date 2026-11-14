@@ -2,11 +2,14 @@
 //! encased pipes, hose pulleys, creative fluid tanks, steam whistles, spouts and item drains.
 //! The rules are `create_engine::{fluids, tank, steam, hose, whistle, plumbing, spout, drain}`.
 //!
-//! What clients draw comes in each block entity's data, sent by `kinetics`: a tank controller's
-//! (or a creative tank's) contents under `Tank`, a hose pulley's hose under `Hose`; a valve's
-//! pointer follows the valve's own state and speed on the client (`client`).
+//! What clients draw and the goggles read comes in each block entity's data (`synced_keys`): a
+//! tank controller's (or a creative tank's, spout's or drain's) contents under `Tank`, a boiler's
+//! state, a hose pulley's hose, a pipe's rims, a drain's stack, an engine's shaft speed and a
+//! spout's cycle; a valve's pointer follows the valve's own state and speed on the client.
 //!
 //! Left out:
+//! - Potion fluids (`PotionFluid`): a spout fills glass bottles with water only, and drains and
+//!   tanks take no potions.
 //! - The `FLUIDS` capability on Create's tanks, so other mods' handlers and Create's pumps reach
 //!   each other: the tanks' contents live in the engine's world, outside the game's transaction
 //!   journal, and a handler cannot learn that a transaction it wrote in was aborted to roll the
