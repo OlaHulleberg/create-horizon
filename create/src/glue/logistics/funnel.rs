@@ -185,6 +185,89 @@ fn belt_facing_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Dir> {
     seg.transports().then_some(seg.facing)
 }
 
+/// Whether a depot is below `pos` (`DepotBehaviour`'s input takes belt funnels).
+fn depot_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    info_at(lv, [pos[0], pos[1] - 1, pos[2]]).is_some_and(|(b, _)| b == Block::Depot)
+}
+
+/// `activateExtractingBeltFunnel` over a depot: up to `max` of the inventory behind onto the
+/// depot below while it holds nothing, sliding in from the funnel's side. Answers as
+/// `extract_in_front`.
+fn push_onto_depot(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    side: Direction,
+    behind: [i32; 3],
+    max: u32,
+) -> Option<Option<bool>> {
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    if !super::depot::depot_items(lv, below).is_empty() {
+        return Some(Some(false));
+    }
+    let Some(stack) = take_filtered(lv, pos, behind, side, false, max) else {
+        return Some(None);
+    };
+    let id = items::id_of(&*lv.host, &stack);
+    if !items::set_slot(lv, below, 0, Some(stack)) {
+        return Some(None);
+    }
+    // `handleInsertion(stack, facing)`: it comes in from the funnel's side.
+    let held = create_engine::depot::Held {
+        position: 0.0,
+        from: create_engine::depot::Side::from_dir(facing),
+        ..create_engine::depot::Held::new(random_angle(lv, below), upright(&*lv.host, &id))
+    };
+    let dim = lv.dim;
+    with_world(|w| w.depot_put(dim, below, Some(held)));
+    Some(Some(true))
+}
+
+/// `DepotBehaviour.handleBeltFunnelOutput` for a pulling belt funnel over a depot: the depot's
+/// outputs, then its held stack once it has come to rest, go into the inventory behind the
+/// funnel as far as they fit and its filter passes them (`tryExportingToBeltFunnel`). Answers as
+/// `extract_in_front`.
+fn pull_from_depot(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    side: Direction,
+    behind: [i32; 3],
+) -> Option<Option<bool>> {
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    let dim = lv.dim;
+    let resting = with_world(|w| {
+        w.dims[dim]
+            .depots
+            .get(&below)
+            .is_some_and(|h| h.is_none_or(|h| !h.sliding()))
+    })
+    .unwrap_or(false);
+    let mut slots: Vec<u32> = (1..create_engine::depot::SLOTS as u32).collect();
+    if resting {
+        slots.push(0);
+    }
+    for slot in slots {
+        let Some(stack) = items::slot(lv, below, slot) else {
+            continue;
+        };
+        if !funnel_passes(lv, pos, &stack) {
+            continue;
+        }
+        let count = stack.count();
+        let left = items::insert_item(lv, behind, side, stack);
+        if left.as_ref().is_some_and(|l| l.count() == count) {
+            continue;
+        }
+        let emptied = left.is_none();
+        items::set_slot(lv, below, slot, left);
+        if slot == 0 && emptied {
+            with_world(|w| w.depot_put(dim, below, None));
+        }
+        return Some(Some(true));
+    }
+    Some(None)
+}
+
 /// Funnels whose block below changed (`FunnelBlock.updateShape`, `BeltFunnelBlock.updateShape`):
 /// a horizontal funnel over a belt becomes its belt funnel (`getEquivalentBeltFunnel`, shaped by
 /// `getShapeForPosition`), a belt funnel no longer on a belt becomes its funnel again (extracting
@@ -212,7 +295,10 @@ pub fn tick_funnel_shapes(lv: &mut ServerLevel<'_>) {
                 .unwrap_or("false")
                 .to_owned()
         };
-        let belt = belt_facing_below(lv, pos);
+        // What carries a belt funnel below: a belt (its facing), or a depot.
+        let belt = belt_facing_below(lv, pos)
+            .map(Some)
+            .or_else(|| depot_below(lv, pos).then_some(None));
         let flag = |b: bool| if b { "true" } else { "false" };
         let (block, shape) = match (f.belt, belt) {
             (None, Some(b)) => (
@@ -221,7 +307,7 @@ pub fn tick_funnel_shapes(lv: &mut ServerLevel<'_>) {
                 } else {
                     Block::AndesiteBeltFunnel
                 },
-                shape_for_position(Some(b), f.facing, f.extracting),
+                shape_for_position(b, f.facing, f.extracting),
             ),
             (Some(shape), None) => (
                 if f.brass {
@@ -232,7 +318,7 @@ pub fn tick_funnel_shapes(lv: &mut ServerLevel<'_>) {
                 shape,
             ),
             (Some(shape), Some(b)) => {
-                let fresh = shape_for_position(Some(b), f.facing, shape == BeltShape::Pushing);
+                let fresh = shape_for_position(b, f.facing, shape == BeltShape::Pushing);
                 let now = updated_shape(shape, fresh);
                 if now == shape {
                     continue;
@@ -328,7 +414,11 @@ pub fn tick_funnels(lv: &mut ServerLevel<'_>) {
         let max = amount(f.brass);
         let next = match mode {
             Mode::Extract => extract_in_front(lv, pos, f.facing, side, behind, max),
+            Mode::PushingToBelt if depot_below(lv, pos) => {
+                push_onto_depot(lv, pos, f.facing, side, behind, max)
+            }
             Mode::PushingToBelt => push_onto_belt(lv, pos, f.facing, side, behind, max),
+            Mode::TakingFromBelt if depot_below(lv, pos) => pull_from_depot(lv, pos, side, behind),
             // Inserting, pulling from a belt (the belt does it), paused or invalid: dormant.
             _ => None,
         };
