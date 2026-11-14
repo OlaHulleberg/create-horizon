@@ -80,6 +80,21 @@ fn write_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3], before: &[Slot], after: 
     }
 }
 
+/// Plays `sound` at the centre of `pos`.
+fn sound(
+    lv: &mut ServerLevel<'_>,
+    sound: &str,
+    pos: [i32; 3],
+    source: mod_api::SoundSource,
+    volume: f32,
+    pitch: f32,
+) {
+    let at = pos.map(|v| f64::from(v) + 0.5);
+    let _ = lv
+        .level
+        .play_sound(&mut *lv.host, sound, at, source, volume, pitch);
+}
+
 /// `BasinBlock.updateEntityAfterFallOn`: an item landing in a basin goes into its inputs as far
 /// as it fits (`insertItem`). `stack` keeps what is left.
 pub fn basin_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut Option<ItemStack>) {
@@ -101,6 +116,86 @@ pub fn basin_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut Option<It
     *stack = stack.take().and_then(|s| s.shrink(u32::from(count - left)));
     let dim = lv.dim;
     with_world(|w| w.dims[dim].mixer_checks.push([pos[0], pos[1] + 2, pos[2]]));
+}
+
+/// `BasinBlock.useItemOn`: an empty hand takes every stack out (inputs and outputs, into the
+/// inventory); a fluid's bucket empties into an input tank when all of it fits
+/// (`FluidHelper.tryEmptyItemIntoBE`); an empty bucket takes a bucket's worth from the first tank
+/// holding one, the outputs first (`tryFillItemFromBE` on `CombinedTankWrapper(output, input)`).
+/// A creative player keeps their bucket and gets none. True when the click was the basin's.
+pub fn use_basin(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    player: PlayerRef,
+    stack: Option<&ItemStack>,
+) -> bool {
+    use create_engine::tank::{BUCKET, Fluid};
+    let dim = lv.dim;
+    let Some(stack) = stack else {
+        let Some(slots) = lv.slots(pos, basin::SLOTS) else {
+            return false;
+        };
+        let taken: Vec<(usize, Option<ItemStack>)> = slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.is_some())
+            .map(|(i, _)| (i, None))
+            .collect();
+        if !taken.is_empty() && lv.set_slots(pos, &taken) {
+            for s in slots.into_iter().flatten() {
+                lv.give(player, s);
+            }
+            sound(
+                lv,
+                "minecraft:entity.item.pickup",
+                pos,
+                mod_api::SoundSource::Players,
+                0.2,
+                1.5,
+            );
+        }
+        return true;
+    };
+    let creative = lv.creative(player);
+    let held = stacks::id(&*lv.host, stack);
+    let mut tanks = basin_tanks(dim, pos);
+    if let Some(fluid) = Fluid::of_bucket(&held) {
+        let mut inputs = tanks.input;
+        if basin::fill(&mut inputs, fluid, BUCKET) != BUCKET {
+            return false;
+        }
+        tanks.input = inputs;
+        with_world(|w| w.set_basin_fluids(dim, pos, tanks));
+        if !creative {
+            lv.take_held(player, 1);
+            if let Some(b) = stacks::stack(&*lv.host, "minecraft:bucket", 1) {
+                lv.give(player, b);
+            }
+        }
+        return true;
+    }
+    if held != "minecraft:bucket" {
+        return false;
+    }
+    let full =
+        |t: &[Option<(Fluid, u32)>; 2]| t.iter().position(|s| s.is_some_and(|(_, n)| n >= BUCKET));
+    let take = |t: &mut [Option<(Fluid, u32)>; 2]| {
+        let i = full(t)?;
+        let (f, n) = t[i]?;
+        t[i] = (n > BUCKET).then_some((f, n - BUCKET));
+        Some(f)
+    };
+    let Some(fluid) = take(&mut tanks.output).or_else(|| take(&mut tanks.input)) else {
+        return false;
+    };
+    with_world(|w| w.set_basin_fluids(dim, pos, tanks));
+    if !creative {
+        lv.take_held(player, 1);
+        if let Some(b) = stacks::stack(&*lv.host, fluid.bucket(), 1) {
+            lv.give(player, b);
+        }
+    }
+    true
 }
 
 /// Mechanical mixers: those asked to look at their basin (`updateBasin`: turning, not running,
@@ -412,6 +507,32 @@ pub fn use_burner(
             }
         }
         return false;
+    }
+    // `isCreativeFuel`: the creative blaze cake sets the next heat for good, never used up.
+    if held == "create:creative_blaze_cake" {
+        let Some(heat) = with_world(|w| {
+            let next = w.dims[dim].burners.get_mut(&pos)?.creative_fuel();
+            w.mark_unsaved(dim, pos);
+            Some(next)
+        })
+        .flatten() else {
+            return false;
+        };
+        lv.set_property(
+            pos,
+            "blaze",
+            burner::heat_name(heat),
+            crate::glue::server::update_all(),
+        );
+        sound(
+            lv,
+            "minecraft:entity.blaze.shoot",
+            pos,
+            mod_api::SoundSource::Blocks,
+            0.2,
+            0.6,
+        );
+        return true;
     }
     if stack.components().is_some() {
         return false;

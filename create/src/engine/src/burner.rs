@@ -33,16 +33,41 @@ impl Fuel {
 pub struct Burner {
     pub fuel: Fuel,
     pub remaining: i32,
+    /// `isCreative`: fed a creative blaze cake, it holds this heat and takes no fuel.
+    pub creative: Option<Heat>,
 }
 
 impl Burner {
     /// Whether it has anything to burn down (the only burners that tick).
     pub fn burning(&self) -> bool {
-        self.fuel != Fuel::None || self.remaining > 0
+        self.creative.is_none() && (self.fuel != Fuel::None || self.remaining > 0)
+    }
+
+    /// Whether it has anything to save: fuel, or a creative heat.
+    pub fn saved(&self) -> bool {
+        self.creative.is_some() || self.burning()
+    }
+
+    /// `applyCreativeFuel`: no fuel, creative, the heat after the current one
+    /// (`HeatLevel.nextActiveLevel`, fading skipped): smouldering, kindled, seething, round.
+    pub fn creative_fuel(&mut self) -> Heat {
+        let next = match self.heat() {
+            Heat::Smouldering | Heat::Fading => Heat::Kindled,
+            Heat::Kindled => Heat::Seething,
+            Heat::None | Heat::Seething => Heat::Smouldering,
+        };
+        *self = Burner {
+            creative: Some(next),
+            ..Burner::default()
+        };
+        next
     }
 
     /// `getHeatLevel`.
     pub fn heat(&self) -> Heat {
+        if let Some(h) = self.creative {
+            return h;
+        }
         match self.fuel {
             Fuel::Special => Heat::Seething,
             Fuel::Normal if (self.remaining as f64) / (MAX_HEAT_CAPACITY as f64) < 0.0125 => {
@@ -56,7 +81,7 @@ impl Burner {
     /// `tryUpdateFuel` for an item that is `fuel` burning `time` ticks; `overflow` lets a player
     /// top normal fuel up to the capacity. False when it doesn't take it.
     pub fn try_fuel(&mut self, fuel: Fuel, time: i32, overflow: bool) -> bool {
-        if fuel == Fuel::None || fuel < self.fuel {
+        if self.creative.is_some() || fuel == Fuel::None || fuel < self.fuel {
             return false;
         }
         let mut time = time;
@@ -158,5 +183,17 @@ mod tests {
         }
         assert_eq!((b.fuel, b.remaining), (Fuel::Normal, 5000));
         assert_eq!(head(b.heat()), "part_blaze_idle");
+    }
+
+    #[test]
+    fn a_creative_cake_cycles_the_heat_and_refuses_fuel() {
+        let mut b = Burner::default();
+        assert!(b.try_fuel(Fuel::Normal, 1600, true));
+        assert_eq!(b.creative_fuel(), Heat::Seething, "kindled goes on to seething");
+        assert_eq!(b.creative_fuel(), Heat::Smouldering);
+        assert_eq!(b.creative_fuel(), Heat::Kindled, "fading is skipped");
+        assert!(!b.try_fuel(Fuel::Special, 3200, true));
+        assert!(!b.burning() && b.saved());
+        assert_eq!(b.heat(), Heat::Kindled);
     }
 }

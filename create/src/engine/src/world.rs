@@ -2945,7 +2945,7 @@ impl CreateWorld {
         self.dims[dim].burner_saved.extend(saved);
     }
 
-    /// The burners of a column with fuel, to save.
+    /// The burners of a column with fuel or a creative heat, to save.
     pub fn column_burners(
         &self,
         dim: usize,
@@ -2955,7 +2955,7 @@ impl CreateWorld {
         let mut out: Vec<_> = self.dims[dim]
             .burners
             .iter()
-            .filter(|(p, b)| (p[0] >> 4, p[2] >> 4) == (cx, cz) && b.burning())
+            .filter(|(p, b)| (p[0] >> 4, p[2] >> 4) == (cx, cz) && b.saved())
             .map(|(p, b)| (*p, *b))
             .collect();
         out.sort_by_key(|(p, _)| *p);

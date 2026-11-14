@@ -5,7 +5,7 @@
 
 use crate::glue::server::ServerLevel;
 use create_engine::processing::{Book, Output, Recipe};
-use create_engine::{basin, deployer, drain, fan, sequenced, spout, tank};
+use create_engine::{basin, deployer, drain, fan, runtime_data, sequenced, spout, tank};
 use mod_api::serde_json::Value;
 use mod_api::{Host, Identifier, ItemStack, RecipeInput, RecipeRule};
 use std::cell::RefCell;
@@ -81,8 +81,13 @@ pub fn publish(host: &dyn Host) {
         clear();
         return;
     }
+    // `RuntimeDataGenerator`'s recipes (wood cutting, concrete washing), made from the items.
+    let items: Vec<String> = host.item_keys().into_iter().map(|k| k.id(host)).collect();
     let mut cutting = read_book(host, "create:cutting").recipes;
+    cutting.extend(runtime_data::cutting(&items));
     cutting.extend(read_stonecutting(host));
+    let mut splashing = read_book(host, "create:splashing").recipes;
+    splashing.extend(runtime_data::splashing(&items));
     let mut mixing = read_basin(host, "create:mixing");
     mixing.extend(read_shapeless_mixing(host));
     let next = Recipes {
@@ -92,7 +97,7 @@ pub fn publish(host: &dyn Host) {
         cutting: Book::new(cutting),
         mixing,
         compacting: read_basin(host, "create:compacting"),
-        splashing: read_book(host, "create:splashing"),
+        splashing: Book::new(splashing),
         haunting: read_book(host, "create:haunting"),
         smoking: read_cooking(host, "minecraft:smoking"),
         smelting: read_cooking(host, "minecraft:smelting"),

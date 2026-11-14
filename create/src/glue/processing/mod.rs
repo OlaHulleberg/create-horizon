@@ -82,9 +82,10 @@ impl Subsystem for Processing {
         let kind = r.block_entity_type_key(super::kinetics::TYPE);
         r.block_entity_capability_before_game(&mod_api::ITEMS, &kind, crafter::provide_items);
         client::register(r);
-        for block in [Block::Basin, Block::MechanicalSaw] {
+        for block in [Block::Basin, Block::MechanicalSaw, Block::Millstone] {
             r.block_part(super::states::key(block), Landing);
         }
+        r.block_part(super::states::key(Block::BlazeBurner), BurnerPlacement);
     }
 
     fn world_closed(&self) {
@@ -157,10 +158,47 @@ impl Subsystem for Processing {
         host: HostSide,
         event: &mut RightClickBlockEvent<'_>,
     ) -> mod_api::Flow {
-        let HostSide::Server(host) = host else {
-            return mod_api::Flow::Continue;
-        };
-        use_block(host, event)
+        match host {
+            HostSide::Server(host) => use_block(host, event),
+            HostSide::Client(host) => {
+                let click = event.click;
+                let block = host
+                    .level(host.dimension())
+                    .and_then(|l| l.block_state(&*host, click.pos))
+                    .and_then(super::states::id)
+                    .and_then(|id| {
+                        super::client_table(&*host, |t| t.get(id).map(|(b, _)| b)).flatten()
+                    });
+                if let Some(block) = block
+                    && passes_item_use(&*host, block, click.stack)
+                {
+                    *event.use_block = mod_api::TriState::False;
+                }
+                mod_api::Flow::Continue
+            }
+        }
+    }
+}
+
+/// Whether a click with `stack` on `block` passes to the item's own use (a block placed against
+/// it), the block taking no part: `PASS_TO_DEFAULT_BLOCK_INTERACTION` and no `useWithoutItem`.
+/// These blocks are templated on the barrel for their slots, whose own use would take the click.
+fn passes_item_use(
+    host: &dyn mod_api::Host,
+    block: Block,
+    stack: Option<&mod_api::ItemStack>,
+) -> bool {
+    let Some(stack) = stack else {
+        return false;
+    };
+    match block {
+        Block::Millstone => true,
+        // `BasinBlock.useItemOn`: what isn't a fluid container (only buckets here).
+        Block::Basin => {
+            let id = stacks::id(host, stack);
+            id != "minecraft:bucket" && create_engine::tank::Fluid::of_bucket(&id).is_none()
+        }
+        _ => false,
     }
 }
 
@@ -178,8 +216,9 @@ impl Subsystem for Tools {
     }
 }
 
-/// The basin and the saw taking an item that lands on them (`updateEntityAfterFallOn`, legacy
-/// `item_landed`): a basin puts it into its inputs, a saw facing up takes it to cut. Stacks with
+/// The basin, the saw and the millstone taking an item that lands on them
+/// (`updateEntityAfterFallOn`, legacy `item_landed`): a basin puts it into its inputs, a saw
+/// facing up takes it to cut, a millstone into its input when it can mill it. Stacks with
 /// components stay entities, but on a saw a sequenced assembly's transitional item (its
 /// progress with it).
 struct Landing;
@@ -211,9 +250,30 @@ impl BlockPart for Landing {
         match block {
             Some(Block::Basin) => basin::basin_take(&mut lv, pos, event.stack),
             Some(Block::MechanicalSaw) => saw::saw_take(&mut lv, pos, event.stack),
+            Some(Block::Millstone) => millstone::millstone_take(&mut lv, pos, event.stack),
             _ => {}
         }
         mod_api::Flow::Continue
+    }
+}
+
+/// `BlazeBurnerBlock.getStateForPlacement` for its own item (the empty burner's is decor's):
+/// a captured blaze, smouldering, facing the player.
+struct BurnerPlacement;
+
+#[mod_api::horizon_part]
+impl BlockPart for BurnerPlacement {
+    fn state_for_placement(
+        &self,
+        level: &dyn mod_api::LevelHost,
+        event: &mut mod_api::StateForPlacementEvent<'_>,
+    ) -> Option<Option<mod_api::BlockState>> {
+        let c = event.context;
+        let facing = create_engine::decor::horizontal_facing(c.yaw).opposite();
+        let state = level.state_with_property(event.state, "blaze", "smouldering")?;
+        let state =
+            level.state_with_property(state, "facing", super::kinetics::dir_name(facing))?;
+        Some(Some(state))
     }
 }
 
@@ -262,11 +322,15 @@ fn use_block(host: &mut dyn ServerHost, event: &mut RightClickBlockEvent<'_>) ->
             .facing
             .is_some_and(|f| deployer::use_deployer(&mut lv, pos, f, click, player, main)),
         Block::BlazeBurner => basin::use_burner(&mut lv, pos, player, click.stack),
+        Block::Basin if main => basin::use_basin(&mut lv, pos, player, click.stack),
         _ => false,
     };
     if used {
         *event.cancellation_result = mod_api::InteractionResult::Success;
         return mod_api::Flow::Cancel;
+    }
+    if passes_item_use(&*lv.host, block, click.stack) {
+        *event.use_block = mod_api::TriState::False;
     }
     mod_api::Flow::Continue
 }
