@@ -93,7 +93,7 @@ pub fn item(name: &str) -> Option<Value> {
             "template": "minecraft:stick",
             "max_stack_size": 1,
             "rarity": "uncommon",
-            "components": { "minecraft:max_damage": 200 }
+            "components": { "minecraft:max_damage": 200, "minecraft:damage": 0 }
         }),
         // SandPaperItem: `durability(8)`, enchantability 1.
         "sand_paper" | "red_sand_paper" => json!({
@@ -101,6 +101,7 @@ pub fn item(name: &str) -> Option<Value> {
             "max_stack_size": 1,
             "components": {
                 "minecraft:max_damage": 8,
+                "minecraft:damage": 0,
                 "minecraft:enchantable": { "value": 1 }
             }
         }),
@@ -117,7 +118,7 @@ pub fn item(name: &str) -> Option<Value> {
         "super_glue" => json!({
             "template": "minecraft:stick",
             "max_stack_size": 1,
-            "components": { "minecraft:max_damage": 99 }
+            "components": { "minecraft:max_damage": 99, "minecraft:damage": 0 }
         }),
         // SymmetryWandItem: `stacksTo(1)`, uncommon.
         "wand_of_symmetry" => json!({
@@ -132,12 +133,14 @@ pub fn item(name: &str) -> Option<Value> {
             "rarity": "epic"
         }),
         // PotatoCannonItem: `durability(100)` (one to a stack), a projectile weapon's
-        // enchantability 1 (`ProjectileWeaponItem.getEnchantmentValue`).
+        // enchantability 1 (`ProjectileWeaponItem.getEnchantmentValue`). A stick has no
+        // `damage`: an item wears only with both components (`isDamageableItem`).
         "potato_cannon" => json!({
             "template": "minecraft:stick",
             "max_stack_size": 1,
             "components": {
                 "minecraft:max_damage": 100,
+                "minecraft:damage": 0,
                 "minecraft:enchantable": { "value": 1 }
             }
         }),

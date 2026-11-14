@@ -17,11 +17,12 @@ pub const FLOW: &str = "Flow";
 /// Ticks a glass pipe keeps showing a flow after it last carried it.
 const LINGER: i64 = 4;
 
+/// A glass pipe's flow: the fluid, when it last went through, and whether clients were told.
+type Flow = (Fluid, i64, bool);
+
 thread_local! {
-    /// Glass pipes carrying fluid, by level and position: the fluid, when it last went through,
-    /// and whether clients were told.
-    static FLOWS: RefCell<HashMap<(usize, [i32; 3]), (Fluid, i64, bool)>> =
-        RefCell::new(HashMap::new());
+    /// Glass pipes carrying fluid, by level and position.
+    static FLOWS: RefCell<HashMap<(usize, [i32; 3]), Flow>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn reset() {

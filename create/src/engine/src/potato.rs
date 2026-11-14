@@ -1,9 +1,9 @@
 //! Create's potato cannon (`PotatoCannonItem`, `PotatoCannonProjectileType`,
 //! `PotatoProjectileEntity`): its ammunition and the projectile's flight, damage and recovery.
 //!
-//! Only the rules: the projectile is an entity of Create's own type, which Horizon cannot
-//! register (NeoForge's `EntityType` registration, gap 3), so the cannon fires nothing yet.
-//! The types are Create's data (`data/create/create/potato_projectile/type/*.json`).
+//! Only the rules; the glue fires `create:potato_projectile`, a thrown item projectile declared
+//! as a copy of the snowball. The types are Create's data
+//! (`data/create/create/potato_projectile/type/*.json`).
 
 /// `CEquipment.maxPotatoCannonShots`'s default: shots a backtank's air pays for.
 pub const MAX_SHOTS: i32 = 200;

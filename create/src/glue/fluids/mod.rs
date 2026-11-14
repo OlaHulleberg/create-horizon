@@ -7,9 +7,12 @@
 //! state, a hose pulley's hose, a pipe's rims, a drain's stack, an engine's shaft speed and a
 //! spout's cycle; a valve's pointer follows the valve's own state and speed on the client.
 //!
+//! Potions and builder's tea are fluids too (`tank::Fluid::Potion`, `Tea`): drains and tanks take
+//! potions as their potion fluid (a regular water bottle as water), spouts fill bottles with it;
+//! the engine names a potion item with its contents (`tank::potion_item`).
+//!
 //! Left out:
-//! - Potion fluids (`PotionFluid`): a spout fills glass bottles with water only, and drains and
-//!   tanks take no potions.
+//! - Creative fluid tanks wider or taller than one block (Create joins them as it does tanks).
 //! - The `FLUIDS` capability on Create's tanks, so other mods' handlers and Create's pumps reach
 //!   each other: the tanks' contents live in the engine's world, outside the game's transaction
 //!   journal, and a handler cannot learn that a transaction it wrote in was aborted to roll the

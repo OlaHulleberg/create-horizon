@@ -1,6 +1,6 @@
 //! Create's equipment (`create_engine::equipment` holds the rules): backtanks filled by their
-//! shaft, their air kept on the item, the diving helmet's breathing and the extendo grip's reach
-//! and wear. Free when unused: a player's tick reads their armour and hands and looks each item
+//! shaft, their air kept on the item (and shown as its bar), the diving helmet's breathing, the
+//! extendo grip's reach and wear, and the potato cannon (`potato`). Free when unused: a player's tick reads their armour and hands and looks each item
 //! up once (the gear each item is, cached by key), and only backtanks with something to do tick.
 //!
 //! Left out, for want of the API: the diving boots' sinking (`DivingBootsItem
@@ -30,6 +30,8 @@ use mod_api::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
+
+mod potato;
 
 /// The column's own data key: Create's equipment state beside the rest of Create's.
 const KEY: &str = "create_equipment";
@@ -71,9 +73,45 @@ impl Subsystem for Equipment {
         let _ = BACKTANK_ITEMS.set(keys);
         let grip = r.item_key("create:extendo_grip");
         r.item_part(grip, GripHit);
+        let cannon = r.item_key("create:potato_cannon");
+        r.item_part(cannon, potato::Cannon);
+    }
+
+    /// A potato shot's hit (`potato`).
+    fn projectile_impact(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ProjectileImpactEvent<'_>,
+    ) -> Flow {
+        Equipment::potato_impact(host, event)
+    }
+
+    fn hears_projectile_impacts(&self) -> bool {
+        potato::hears()
+    }
+
+    fn server_message(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != potato::SHOT {
+            return false;
+        }
+        potato::shot_seen(&*host, data);
+        true
+    }
+
+    fn register_entity_renderers(&self, event: &mut mod_api::RegisterEntityRenderersEvent<'_>) {
+        event.renderers.register(
+            potato::PROJECTILE.into(),
+            std::sync::Arc::new(potato::Shown),
+        );
     }
 
     fn world_closed(&self) {
+        potato::reset();
         GEAR.with_borrow_mut(HashMap::clear);
         REACH.with_borrow_mut(Vec::clear);
         BREAKING.with_borrow_mut(HashMap::clear);
@@ -295,6 +333,11 @@ fn gear(host: &dyn ServerHost, stack: Option<ItemStack>) -> Gear {
     let g = Gear::of(&key.id(host));
     GEAR.with_borrow_mut(|c| c.insert(key, g));
     g
+}
+
+/// The gear a stack is, on either side.
+fn gear_of(host: &dyn mod_api::Host, stack: &ItemStack) -> Gear {
+    Gear::of(&stack.item().id(host))
 }
 
 fn backtank_block(state: mod_api::BlockState) -> Option<(Block, bool)> {

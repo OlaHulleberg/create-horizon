@@ -92,6 +92,23 @@ pub trait Subsystem: Sync {
     /// After a server level's tick.
     fn level_tick(&self, _lv: &mut ServerLevel<'_>) {}
 
+    /// A projectile hit something (`ProjectileImpactEvent`); `Flow::Cancel` takes the hit.
+    fn projectile_impact(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        _event: &mut mod_api::ProjectileImpactEvent<'_>,
+    ) -> mod_api::Flow {
+        mod_api::Flow::Continue
+    }
+
+    /// The entity renderers this subsystem draws its entity types with, once at client start.
+    fn register_entity_renderers(&self, _event: &mut mod_api::RegisterEntityRenderersEvent<'_>) {}
+
+    /// Whether this subsystem wants `projectile_impact` this tick.
+    fn hears_projectile_impacts(&self) -> bool {
+        false
+    }
+
     /// A world fluid's scheduled tick is about to run (`FlowingFluid.tick`): set `cancelled` to
     /// skip it. Read-only: what changes is done from the next `level_tick`.
     fn fluid_tick(

@@ -37,10 +37,12 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   scaffolding declares the stable shape, so it is stood on but not climbed through from inside; a declaration
   field (or class-based lookup) for scaffolding's context rule would close it.
 - **Fluid interactions in content declarations**: honey and chocolate meeting lava (obsidian from a source,
-  limestone or scoria from flowing lava, `registerFluidInteractions`) have no declaration.
-
-### Containers, items and transactions
-
+  limestone or scoria from flowing lava, `registerFluidInteractions`) have no declaration; the glue finds them
+  when the lava or the honey next ticks (`fluid_tick`) and turns the lava in the level's next tick, where
+  Create's happen at once on the neighbour's change.
+- **Connected textures on terrain models** (Create's `CTModel`, `FluidTankCTBehaviour`): a block model can't
+  choose its texture by its neighbours, so a tank wider than one shows every block's own frame instead of one
+  big tank (casings likewise).
 - **Rolling back mod-owned state with a transaction.** A handler cannot learn that its transaction aborted,
   so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, and packagers and
   frogports offer no `ITEMS` handlers to hoppers, funnels and chutes. A close/abort callback on `Transaction`
@@ -115,8 +117,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 - Logistics: a sloped belt collides as a flat one; Create's `BeltShapes` (by facing, slope and part) are
   not declared yet, though content shapes can select by several properties (as the steam engine's do).
-- Fluids: the smart pipe's filter is set by a click anywhere on the pipe, not only on its filter slot;
-  potion fluids (`PotionFluid`, potions in spouts, drains and tanks) and builder's tea.
+- Fluids: creative fluid tanks stay one block each (Create's join into tanks up to 3 wide); potion fluids
+  keep registered potions only (custom effects are lost), and belts carry only the potions a spout fills on
+  them (the logistics glue keeps no components on belts); the boiler's gauge is drawn at its level without
+  its swing, and its steam sounds are not played; glass pipes show a steady stream, not its growth, and open
+  pipe ends have no flow particles.
+- Equipment: the potato cannon's shots fly as snowballs (not by their ammunition's gravity and drag), never
+  stick, and the food, chorus fruit, golden apple and suspicious stew effects are not ported.
 
 ## Not to send
 
