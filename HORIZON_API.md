@@ -127,8 +127,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   not any block state's.
 - **Text and sprites on a block face in the world** outside a block entity's draw: a value box's value and icon
   (`ValueBox.renderContents`) are left out; only its outline is drawn.
-- **Block textures in `draw_scene`**: the scene finds its sprites in the GUI atlas, so a model whose textures no
-  item uses (the wand of symmetry's mirror preview) draws nothing.
+- **Block textures in `draw_scene`**: the wand of symmetry's mirror preview (a part block's model in a scene)
+  shows nothing in game, while a toolbox's draws; the scene looks its sprites up in the GUI atlas
+  (`native_scene.rs`), which likely lacks textures that no item uses. Not confirmed further.
 - **A slot's count text and a slot holding more than 99**: a toolbox compartment holds 4 stacks (256), Create's
   screen shows the compartment's total on its one slot; here a slot shows its own stack, and the other three are
   filled by the deposit button and hoppers, not by clicks.
