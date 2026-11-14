@@ -1,3 +1,6 @@
 {
-  "template": "minecraft:stick"
+  "template": "minecraft:stick",
+  "components": {
+    "!minecraft:cooking_fuel": {}
+  }
 }

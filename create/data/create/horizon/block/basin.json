@@ -316,5 +316,8 @@
   },
   "default_state": {
     "facing": "down"
+  },
+  "components": {
+    "!minecraft:cooking_fuel": {}
   }
 }

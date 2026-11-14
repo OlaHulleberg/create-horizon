@@ -29,11 +29,17 @@
 //! - Create's own damage types (`create:crush`): a native mod's are not registered, so the
 //!   crushing wheels deal vanilla's cramming.
 //!
+//! A blaze burner's blaze, rods, flame and goggles are its block entity's drawing
+//! (`burner_draw`), so a burner carried by a moving structure, drawn from its block model,
+//! shows only its cage.
+//!
 //! Not drawn yet: the items a saw facing up is cutting (`SawRenderer.renderItems`) and a grid's
 //! items moving between mechanical crafters (`MechanicalCrafterRenderer.renderItems` past
 //! `IDLE`).
 
 pub(crate) mod basin;
+mod application;
+mod burner_draw;
 mod client;
 mod containers;
 mod crafter;
@@ -89,6 +95,7 @@ impl Subsystem for Processing {
             basin::ITEMS_KEY,
             basin::FLUIDS_KEY,
             basin::MIXER_KEY,
+            basin::GOGGLES_KEY,
             crafter::CRAFTER_KEY,
         ]
     }
@@ -172,13 +179,27 @@ impl Subsystem for Processing {
         client::reset();
     }
 
+    fn standalone_models(&self, models: &mut Vec<String>) {
+        models.push(burner_draw::FLAME_MODEL.to_owned());
+        models.push(burner_draw::FLAME_SCROLLS_MODEL.to_owned());
+    }
+
+    fn models_baked(&self, host: &mut dyn ClientHost) {
+        burner_draw::models_baked(host);
+    }
+
     fn right_click_block(
         &self,
         host: HostSide,
         event: &mut RightClickBlockEvent<'_>,
     ) -> mod_api::Flow {
         match host {
-            HostSide::Server(host) => use_block(host, event),
+            HostSide::Server(host) => {
+                if application::apply_in_world(host, event) {
+                    return mod_api::Flow::Cancel;
+                }
+                use_block(host, event)
+            }
             HostSide::Client(host) => {
                 let click = event.click;
                 let block = host

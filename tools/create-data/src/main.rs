@@ -71,6 +71,18 @@ fn main() {
     }
 }
 
+/// The templates Create's declarations use that vanilla burns (`FuelValues`).
+const FUEL_TEMPLATES: &[&str] = &[
+    "minecraft:barrel",
+    "minecraft:ladder",
+    "minecraft:oak_planks",
+    "minecraft:scaffolding",
+    "minecraft:stick",
+    "minecraft:stripped_spruce_wood",
+    "minecraft:white_carpet",
+    "minecraft:wooden_sword",
+];
+
 fn write(path: &Path, bytes: &[u8]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     if fs::read(path).ok().as_deref() != Some(bytes) {
@@ -148,6 +160,10 @@ fn compile(create: &Path, repo: &Path) {
     for (name, model) in blocks::sprite_models() {
         write(&models_dir.join(format!("{name}.json")), &pretty(&model));
     }
+    write(
+        &models_dir.join("blaze_burner_flame_scrolls.json"),
+        &pretty(&blocks::flame_scroll_model()),
+    );
 
     // Items that are not blocks: plain ingredients now, the rest with their subsystem.
     let block_names: std::collections::BTreeSet<&str> =
@@ -342,6 +358,54 @@ fn compile(create: &Path, repo: &Path) {
         let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
         write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
         items.push(name.to_owned());
+    }
+
+    // Furnace fuels: Create's (`data_maps/item/furnace_fuels`, read through `getBurnTime`) and no
+    // other. A declaration copies its template's components, so a stick's or a barrel's fuel
+    // would make every plain ingredient or basin burn in furnaces and blaze burners.
+    let fuels: Value = fs::read(generated.join("data/neoforge/data_maps/item/furnace_fuels.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(Value::Null);
+    let burn_time = |name: &str| fuels["values"][format!("create:{name}")]["burn_time"].as_i64();
+    let item_docs = items
+        .iter()
+        .map(|n| decl_dir.join(format!("item/{n}.json")))
+        .chain(
+            block_items
+                .iter()
+                .map(|n| decl_dir.join(format!("block/{n}.json"))),
+        );
+    for path in item_docs {
+        let Some(mut doc) = fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        else {
+            continue;
+        };
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        let template = doc["template"].as_str().unwrap_or_default().to_owned();
+        let components = doc
+            .as_object_mut()
+            .unwrap()
+            .entry("components")
+            .or_insert_with(|| json!({}));
+        match burn_time(name) {
+            Some(t) => {
+                components["minecraft:cooking_fuel"] = json!({
+                    "burn_time": t,
+                    "speed_multiplier": "minecraft:cooking/speed_default"
+                });
+            }
+            None if FUEL_TEMPLATES.contains(&template.as_str()) => {
+                components["!minecraft:cooking_fuel"] = json!({});
+            }
+            None => continue,
+        }
+        write(&path, &pretty(&doc));
     }
 
     // AllCreativeModeTabs: the base and palettes tabs (with AllFluids' buckets).

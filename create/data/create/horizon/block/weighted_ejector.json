@@ -71,5 +71,8 @@
   },
   "default_state": {
     "waterlogged": "false"
+  },
+  "components": {
+    "!minecraft:cooking_fuel": {}
   }
 }

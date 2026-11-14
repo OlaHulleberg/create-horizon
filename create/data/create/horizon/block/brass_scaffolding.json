@@ -147,5 +147,8 @@
         1.0
       ]
     ]
+  },
+  "components": {
+    "!minecraft:cooking_fuel": {}
   }
 }

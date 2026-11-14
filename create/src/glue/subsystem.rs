@@ -139,6 +139,9 @@ pub trait Subsystem: Sync {
     /// `Hooks::register_particle_providers`: the mod's particle types moved by code.
     fn particle_providers(&self, _providers: &mut dyn mod_api::ParticleProviders) {}
 
+    /// `Hooks::model_baking_completed`: resolve the standalone models drawn from now on.
+    fn models_baked(&self, _host: &mut dyn ClientHost) {}
+
     /// `Hooks::entity_place`: a block is about to be placed.
     fn entity_place(&self, _host: &mut dyn ServerHost, _event: &mut EntityPlaceEvent) -> Flow {
         Flow::Continue

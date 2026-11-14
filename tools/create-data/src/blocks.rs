@@ -1097,8 +1097,9 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         // MechanicalMixerBlock: a casing of stone's properties; its cog and head are parts.
         "mechanical_mixer" => ("minecraft:andesite", None, None),
         // BlazeBurnerBlock: its heat level and horizontal facing, gold's properties
-        // (SharedProperties.softMetal), AllShapes.HEATER_BLOCK_SHAPE; drawn by our multipart
-        // blockstate (`blaze_burner_states`). LitBlazeBurnerBlock: its flame instead.
+        // (SharedProperties.softMetal), AllShapes.HEATER_BLOCK_SHAPE; the cage its model
+        // (`blaze_burner_states`), the blaze its block entity's. LitBlazeBurnerBlock: its flame
+        // instead.
         "blaze_burner" => (
             "minecraft:gold_block",
             Some(by_property("blaze", HEATS, &[[1., 0., 1., 15., 14., 15.]])),
@@ -2325,9 +2326,6 @@ const BASIN: [[f64; 6]; 6] = [
 /// `BlazeBurnerBlock.HEAT_LEVEL` (`blaze`), in order.
 pub const HEATS: &[&str] = &["none", "smouldering", "fading", "kindled", "seething"];
 
-/// The blaze burner's blockstate: Create draws the cage as its model and the blaze in its
-/// renderer (`BlazeBurnerRenderer`: the head chosen by heat, turned to `horizontalAngle(facing) +
-/// 180`); here the head at rest is part of the block's model, by heat and facing.
 /// AllFluids' honey and chocolate as Horizon fluid declarations (`data/<id>/horizon/fluid/`):
 /// in the world (`levelDecreasePerBlock(2)`, `tickRate(25)`, `slopeFindDistance(3)`, with their
 /// buckets), drawn with Create's still texture, untinted
@@ -2350,28 +2348,25 @@ pub fn fluid_declarations() -> [(&'static str, Value); 2] {
     [("honey", fluid("honey")), ("chocolate", fluid("chocolate"))]
 }
 
+/// A model of our own that only names the sprites the blaze burner's flame scrolls over it
+/// (`AllSpriteShifts.BURNER_FLAME`, `SUPER_BURNER_FLAME`): Horizon stitches only the textures a
+/// model uses, so the glue asks for it as a standalone model and never draws it.
+pub fn flame_scroll_model() -> Value {
+    let element = |texture: &str| json!({ "from": [0, 0, 0], "to": [1, 1, 1], "faces": { "up": { "uv": [0, 0, 16, 16], "texture": texture } } });
+    json!({
+        "textures": {
+            "normal": "create:block/blaze_burner_flame_scroll",
+            "superheated": "create:block/blaze_burner_flame_superheated_scroll",
+            "particle": "create:block/blaze_burner_flame_scroll"
+        },
+        "elements": [element("#normal"), element("#superheated")]
+    })
+}
+
+/// The blaze burner's blockstate: Create's, the cage alone in every state. The blaze, its rods
+/// and flame are drawn by the block entity (`BlazeBurnerRenderer`, the processing glue's client).
 pub fn blaze_burner_states() -> Value {
-    let mut parts = vec![json!({ "apply": { "model": "create:block/blaze_burner/block" } })];
-    for (heat, model) in [
-        ("smouldering", "inert"),
-        ("fading", "idle"),
-        ("kindled", "idle"),
-        ("seething", "super"),
-    ] {
-        // Blockstate y turns clockwise from above; the head turns the other way.
-        for (facing, y) in [("north", 0), ("east", 90), ("south", 180), ("west", 270)] {
-            let mut apply = Map::new();
-            apply.insert(
-                "model".into(),
-                json!(format!("create:block/blaze_burner/blaze/{model}")),
-            );
-            if y != 0 {
-                apply.insert("y".into(), json!(y));
-            }
-            parts.push(json!({ "when": { "blaze": heat, "facing": facing }, "apply": apply }));
-        }
-    }
-    json!({ "multipart": parts })
+    json!({ "multipart": [{ "apply": { "model": "create:block/blaze_burner/block" } }] })
 }
 
 /// Create's partial models (`AllPartialModels`) that turn as parts, as hidden blocks of the
@@ -2379,7 +2374,64 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 118] = [
+pub const PARTIALS: [(&str, &str, &str); 129] = [
+    // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
+    // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
+    (
+        "part_blaze_inert",
+        "create:block/blaze_burner/blaze/inert",
+        "up",
+    ),
+    (
+        "part_blaze_idle",
+        "create:block/blaze_burner/blaze/idle",
+        "up",
+    ),
+    (
+        "part_blaze_active",
+        "create:block/blaze_burner/blaze/active",
+        "up",
+    ),
+    (
+        "part_blaze_super",
+        "create:block/blaze_burner/blaze/super",
+        "up",
+    ),
+    (
+        "part_blaze_super_active",
+        "create:block/blaze_burner/blaze/super_active",
+        "up",
+    ),
+    (
+        "part_blaze_rods_small",
+        "create:block/blaze_burner/rods_small",
+        "up",
+    ),
+    (
+        "part_blaze_rods_large",
+        "create:block/blaze_burner/rods_large",
+        "up",
+    ),
+    (
+        "part_blaze_super_rods_small",
+        "create:block/blaze_burner/superheated_rods_small",
+        "up",
+    ),
+    (
+        "part_blaze_super_rods_large",
+        "create:block/blaze_burner/superheated_rods_large",
+        "up",
+    ),
+    (
+        "part_blaze_goggles",
+        "create:block/blaze_burner/goggles",
+        "up",
+    ),
+    (
+        "part_blaze_goggles_small",
+        "create:block/blaze_burner/goggles_small",
+        "up",
+    ),
     ("part_shaft_half", "create:block/shaft_half", "south"),
     // AllPartialModels.FOLDING_DOORS: the folding doors' two leaves, drawn unturned (`north`)
     // and posed by the glue as SlidingDoorRenderer poses them.
@@ -3254,6 +3306,17 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     };
     if let Some(s) = shapes {
         doc.insert("shapes".into(), fork_shapes(template, &default, s));
+    }
+    if b.name == "crushing_wheel_controller" {
+        // CrushingWheelControllerBlock.getCollisionShape: items stop on
+        // CRUSHING_WHEEL_CONTROLLER_COLLISION (13 px from the facing side) until the controller
+        // draws one in (the glue takes it from there); players and mobs fall through to be crushed.
+        let item = fork_shapes(
+            template,
+            &default,
+            &crate::shapes::by_facing(&[[0., 3., 0., 16., 16., 16.]]),
+        );
+        doc.insert("collision_context_shapes".into(), json!({ "item": item }));
     }
     if !declared.is_empty() {
         doc.insert("state_properties".into(), Value::Object(declared));

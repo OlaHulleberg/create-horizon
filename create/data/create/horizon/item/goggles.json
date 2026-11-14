@@ -4,6 +4,7 @@
   "components": {
     "minecraft:equippable": {
       "slot": "head"
-    }
+    },
+    "!minecraft:cooking_fuel": {}
   }
 }

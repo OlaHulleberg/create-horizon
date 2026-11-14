@@ -76,7 +76,7 @@ pub fn register(r: &mut dyn Registrar) {
 /// The press and deployer always; a mixer while it runs; a basin whose items bob on its fluid.
 pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
     match block {
-        Block::MechanicalPress | Block::Deployer => true,
+        Block::MechanicalPress | Block::Deployer | Block::BlazeBurner => true,
         Block::MechanicalMixer => entity.nbt.contains_key(&basin_glue::MIXER_KEY.into()),
         Block::Basin => {
             entity.nbt.contains_key(&basin_glue::FLUIDS_KEY.into())
@@ -225,6 +225,7 @@ pub fn server_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8]) ->
 
 /// The client left its world.
 pub fn reset() {
+    super::burner_draw::reset();
     PRESSES.with_borrow_mut(HashMap::clear);
     DEPLOYERS.with_borrow_mut(HashMap::clear);
 }
@@ -260,6 +261,7 @@ fn client_press_step(p: &press::Press, speed: f32, waiting: bool) -> i32 {
 /// Each client tick: running presses move on a cycle step.
 pub fn tick(host: &mut dyn ClientHost) {
     TICKS.set(TICKS.get() + 1);
+    super::burner_draw::tick(&*host);
     let running: Vec<([i32; 3], press::Press, bool)> =
         PRESSES.with_borrow(|c| c.iter().map(|(k, v)| (*k, v.0, v.1)).collect());
     for (pos, mut p, waiting) in running {
@@ -326,6 +328,16 @@ impl BlockEntityPart for MachineDraw {
                 }
             }
             Block::Basin => draw_basin(host, event.draw, event.pos, &event.entity.nbt),
+            Block::BlazeBurner => super::burner_draw::draw(
+                event.draw,
+                event.pos,
+                info.heat.unwrap_or(create_engine::fan::Heat::None),
+                info.facing.unwrap_or(Dir::South),
+                event
+                    .entity
+                    .nbt
+                    .contains_key(&basin_glue::GOGGLES_KEY.into()),
+            ),
             Block::MechanicalCrafter => {
                 draw_crafter(host, event.draw, event.pos, &event.entity.nbt);
             }

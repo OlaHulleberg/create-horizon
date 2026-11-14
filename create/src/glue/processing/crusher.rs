@@ -112,7 +112,7 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                 let item = stacks::id(&*lv.host, &d.stack);
                 let count = d.stack.count().min(255) as u8;
                 let (motion, taken) = crusher::hold(pos, facing, speed, d.at);
-                if taken {
+                if taken || crusher::on_shelf(pos, facing, d.at) {
                     let time = recipes::with(|r| {
                         crusher::recipe(&r.crushing, &r.milling, &item).map(|x| x.time)
                     })

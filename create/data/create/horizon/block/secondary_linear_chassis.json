@@ -19,5 +19,8 @@
     "axis": "x",
     "sticky_bottom": "false",
     "sticky_top": "false"
+  },
+  "components": {
+    "!minecraft:cooking_fuel": {}
   }
 }

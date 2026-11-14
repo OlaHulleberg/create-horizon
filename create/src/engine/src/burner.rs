@@ -48,10 +48,11 @@ impl Burner {
         self.creative.is_some() || self.burning()
     }
 
-    /// `applyCreativeFuel`: no fuel, creative, the heat after the current one
-    /// (`HeatLevel.nextActiveLevel`, fading skipped): smouldering, kindled, seething, round.
-    pub fn creative_fuel(&mut self) -> Heat {
-        let next = match self.heat() {
+    /// `applyCreativeFuel`: no fuel, creative, the heat after `shown`, the block's
+    /// (`getHeatLevelFromBlock().nextActiveLevel()`, fading skipped): smouldering, kindled,
+    /// seething, round.
+    pub fn creative_fuel(&mut self, shown: Heat) -> Heat {
+        let next = match shown {
             Heat::Smouldering | Heat::Fading => Heat::Kindled,
             Heat::Kindled => Heat::Seething,
             Heat::None | Heat::Seething => Heat::Smouldering,
@@ -189,9 +190,15 @@ mod tests {
     fn a_creative_cake_cycles_the_heat_and_refuses_fuel() {
         let mut b = Burner::default();
         assert!(b.try_fuel(Fuel::Normal, 1600, true));
-        assert_eq!(b.creative_fuel(), Heat::Seething, "kindled goes on to seething");
-        assert_eq!(b.creative_fuel(), Heat::Smouldering);
-        assert_eq!(b.creative_fuel(), Heat::Kindled, "fading is skipped");
+        assert_eq!(
+            b.creative_fuel(b.heat()),
+            Heat::Seething,
+            "kindled goes on to seething"
+        );
+        assert_eq!(b.creative_fuel(b.heat()), Heat::Smouldering);
+        assert_eq!(b.creative_fuel(b.heat()), Heat::Kindled, "fading is skipped");
+        // The block's heat counts, not what the burner last burned.
+        assert_eq!(b.creative_fuel(Heat::Smouldering), Heat::Kindled);
         assert!(!b.try_fuel(Fuel::Special, 3200, true));
         assert!(!b.burning() && b.saved());
         assert_eq!(b.heat(), Heat::Kindled);

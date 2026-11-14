@@ -179,6 +179,31 @@ pub fn hold(
     (motion, taken)
 }
 
+/// Whether a dropped item at `at` (its feet) rests against the controller's collision for items
+/// (`CRUSHING_WHEEL_CONTROLLER_COLLISION`, 13 px from the facing side): the item the controller
+/// holds can't be drawn through it, so it is taken there.
+pub fn on_shelf(controller: [i32; 3], facing: Dir, at: [f64; 3]) -> bool {
+    const DEPTH: f64 = 13.0 / 16.0;
+    const EPS: f64 = 0.05;
+    let a = match facing.axis() {
+        Axis::X => 0,
+        Axis::Y => 1,
+        Axis::Z => 2,
+    };
+    // The item's extent along the axis (0.25 square, feet at `at`).
+    let (lo, hi) = if a == 1 {
+        (at[1], at[1] + 0.25)
+    } else {
+        (at[a] - 0.125, at[a] + 0.125)
+    };
+    let base = f64::from(controller[a]);
+    if facing.positive() {
+        hi >= base + 1.0 - DEPTH - EPS
+    } else {
+        lo <= base + DEPTH + EPS
+    }
+}
+
 /// `BypassCrushingWheel`: an item at or past the controller's output face (where its results are
 /// let out) isn't caught again.
 pub fn bypassed(controller: [i32; 3], facing: Dir, at: [f64; 3]) -> bool {
@@ -186,10 +211,19 @@ pub fn bypassed(controller: [i32; 3], facing: Dir, at: [f64; 3]) -> bool {
     (0..3).any(|a| o[a] != 0 && (at[a] - (f64::from(controller[a]) + 0.5)) * f64::from(o[a]) >= 0.5)
 }
 
-/// Where and how fast the results leave (`outPos`, `outSpeed`).
+/// Where (the dropped item's feet) and how fast the results leave (`outPos`, `outSpeed`). Create
+/// lets them out 0.55 past the middle and has them ignore the controller (`BypassCrushingWheel`);
+/// here they start clear of its collision for items, or it would push them back in.
 pub fn output(controller: [i32; 3], facing: Dir) -> ([f64; 3], [f64; 3]) {
     let o = facing.offset();
-    let pos = [0, 1, 2].map(|a| f64::from(controller[a]) + 0.5 + 0.55 * f64::from(o[a]));
+    let mut pos = [0, 1, 2].map(|a| {
+        let past = if a == 1 { 0.55 } else { 0.68 };
+        f64::from(controller[a]) + 0.5 + past * f64::from(o[a])
+    });
+    if facing == Dir::Down {
+        // Its whole height (a quarter) below the controller.
+        pos[1] = f64::from(controller[1]) - 0.3;
+    }
     let speed = match facing {
         Dir::Up => [0.0, 0.5, 0.0],
         Dir::Down => [0.0; 3],
@@ -202,6 +236,15 @@ pub fn output(controller: [i32; 3], facing: Dir) -> ([f64; 3], [f64; 3]) {
 mod tests {
     use super::*;
     use crate::processing::{Output, Recipe};
+
+    #[test]
+    fn an_item_resting_on_a_downward_controller_is_on_its_shelf() {
+        let c = [0, 64, 0];
+        // Resting on the 13 px collision for items.
+        assert!(on_shelf(c, Dir::Down, [0.5, 64.8125, 0.5]));
+        // Still falling through the top of the cell.
+        assert!(!on_shelf(c, Dir::Down, [0.5, 64.95, 0.5]));
+    }
 
     #[test]
     fn wheels_turning_against_each_other_crush_downward() {
@@ -272,7 +315,7 @@ mod tests {
         assert!(hold([0, 0, 0], Dir::Down, 1.28, [0.5, 0.2, 0.5]).1);
         assert_eq!(
             output([0, 0, 0], Dir::Down),
-            ([0.5, -0.050000000000000044, 0.5], [0.0; 3])
+            ([0.5, -0.3, 0.5], [0.0; 3])
         );
     }
 }

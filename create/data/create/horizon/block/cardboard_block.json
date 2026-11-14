@@ -18,5 +18,11 @@
   },
   "default_state": {
     "axis": "x"
+  },
+  "components": {
+    "minecraft:cooking_fuel": {
+      "burn_time": 4000,
+      "speed_multiplier": "minecraft:cooking/speed_default"
+    }
   }
 }
