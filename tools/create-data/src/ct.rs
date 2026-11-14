@@ -1,23 +1,27 @@
-//! Create's connected textures (`ConnectedTextureBehaviour`, `AllCTTypes`) as Fusion connecting
-//! textures, which the game draws. Create's `_connected` sheets are laid out for its own index
-//! functions (`AllCTTypes.getTextureIndex`); Fusion's layouts are other grids. At prepare time
-//! each sheet is cut into the Fusion layout whose masks stand for the same neighbours: for every
-//! Fusion tile, the context it stands for goes through Create's index function and that tile of
-//! Create's sheet is copied. The blocks' models are then given child models of type
-//! `fusion:connecting` whose texture keys name the new sheets, joined by Create's `connectsTo`.
+//! Create's connected textures (`ConnectedTextureBehaviour`, `AllCTTypes`) as OptiFine connected
+//! textures (`optifine/ctm`), which the game's terrain mesher draws. Create's `_connected` sheets
+//! are laid out for its own index functions (`AllCTTypes.getTextureIndex`); OptiFine's methods
+//! take their tiles in other orders. At prepare time each sheet is cut into the tiles of the
+//! method whose neighbour masks stand for the same contexts: for every OptiFine tile, the context
+//! it stands for goes through Create's index function and that tile of Create's sheet is taken.
+//! A properties file per block and sheet matches the block and the texture Create shifts
+//! (`matchBlocks`, `matchTiles`, as Create's CT behaviours are per block and per sprite), on the
+//! faces Create shifts. Block models stay Create's: whatever draws a block outside the terrain
+//! (a copycat, a moving structure, a block display) shows its plain texture.
 //!
 //! Faces are oriented as Create's `ConnectedTextureBehaviour.buildContext` (a side's up is up,
 //! its right as its texture reads from outside; the top's up is north, the bottom's south), which
-//! are a cube's default UVs, as Fusion's (`Axes::cube`).
+//! are a cube's default UVs, as OptiFine's. Create's `isBeingBlocked` (a neighbour covered by the
+//! same block in front doesn't join) is OptiFine's `innerSeams`.
 //!
 //! Left out: pillars (`RotatedPillarCTBehaviour` turns its axes by the pillar's axis and joins by
 //! its `ConnectedPillarBlock` sides), the weathered iron window's position-picked sheets, copper
 //! roofs (`ROOF`), metal scaffolding, chassis, the encased blocks' and crafters' state-dependent
-//! sides, tanks and vaults (their sheets follow the multiblock's size and the block entity), and
-//! casings joining the encased blocks of their casing (`CasingConnectivity`): a casing joins only
-//! its own block.
+//! sides, tanks and vaults (their sheets follow the multiblock's size and the block entity), the
+//! glass panes' mirrored left and right on their north and west faces
+//! (`GlassPaneCTBehaviour.reverseUVsHorizontally`), and casings joining the encased blocks of their
+//! casing (`CasingConnectivity`): a casing joins only its own block.
 
-use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 /// Create's CT types the port's blocks use, with their sheet sizes (`AllCTTypes`).
@@ -78,16 +82,6 @@ impl CtType {
                 x + y * 4
             }
             Self::Omni => omni(c),
-        }
-    }
-
-    /// The Fusion layout the sheet becomes.
-    fn layout(self) -> Layout {
-        match self {
-            Self::HorizontalKryppers => Layout::Horizontal,
-            Self::Vertical => Layout::Vertical,
-            Self::Omni => Layout::Full,
-            Self::Rectangle => Layout::Simple,
         }
     }
 }
@@ -155,7 +149,7 @@ fn omni(c: Ctx) -> u32 {
     (x + 8 * y) as u32
 }
 
-// Fusion's neighbour mask bits (`horizon_optifine::ctm::connect`).
+// OptiFine's neighbour mask bits (`horizon_optifine::ctm::connect`), in texture directions.
 const U: u8 = 1;
 const UR: u8 = 2;
 const R: u8 = 4;
@@ -164,126 +158,101 @@ const D: u8 = 16;
 const DL: u8 = 32;
 const L: u8 = 64;
 const UL: u8 = 128;
-const SIDES: u8 = U | R | D | L;
-const CORNERS: u8 = UR | DR | DL | UL;
 
-/// Fusion's `full` template: each tile's mask, row by row of its 8 x 6 grid. `None` is its one
-/// cell no mask draws.
-const FULL: [Option<u8>; 48] = [
-    Some(0),
-    Some(R),
-    Some(R | L),
-    Some(L),
-    Some(R | D),
-    Some(D | L),
-    Some(U | R | D),
-    Some(R | D | L),
-    Some(D),
-    Some(R | DR | D),
-    Some(R | DR | D | DL | L),
-    Some(D | DL | L),
-    Some(U | R),
-    Some(U | L),
-    Some(U | R | L),
-    Some(U | D | L),
-    Some(U | D),
-    Some(U | UR | R | DR | D),
-    Some(SIDES | CORNERS),
-    Some(U | D | DL | L | UL),
-    Some(U | UR | R | D),
-    Some(R | DR | D | L),
-    Some(U | R | DR | D),
-    Some(R | D | DL | L),
-    Some(U),
-    Some(U | UR | R),
-    Some(U | UR | R | L | UL),
-    Some(U | L | UL),
-    Some(U | R | L | UL),
-    Some(U | D | DL | L),
-    Some(U | UR | R | L),
-    Some(U | D | L | UL),
-    Some(SIDES | UR | DL),
-    Some(SIDES),
-    Some(SIDES | UR | DR),
-    Some(SIDES | DR | DL),
-    Some(SIDES | DR),
-    Some(SIDES | DL),
-    Some(SIDES | UL | UR | DL),
-    Some(SIDES | UL | UR | DR),
-    Some(SIDES | UL | DR),
-    None,
-    Some(SIDES | UL | UR),
-    Some(SIDES | UL | DL),
-    Some(SIDES | UR),
-    Some(SIDES | UL),
-    Some(SIDES | UL | DL | DR),
-    Some(SIDES | UR | DL | DR),
-];
-
-/// Fusion's `simple` template (4 x 4): the sides each tile joins.
-const SIMPLE: [u8; 16] = [
+/// OptiFine's `ctm` template (`ctm_template.png`): the neighbours each of its 47 tiles joins.
+const CTM: [u8; 47] = [
     0,
-    SIDES,
-    D,
-    L,
-    R | L,
-    U | D,
     R,
-    U,
-    U | R | D,
-    R | D | L,
+    R | L,
+    L,
     R | D,
     D | L,
-    U | R | L,
-    U | D | L,
+    U | R | D,
+    R | D | L,
+    U | UR | R | D | L,
+    U | R | DR | D | L,
+    U | R | D | DL | L | UL,
+    U | UR | R | D | L | UL,
+    D,
+    R | DR | D,
+    R | DR | D | DL | L,
+    D | DL | L,
     U | R,
     U | L,
+    U | R | L,
+    U | D | L,
+    U | R | D | L | UL,
+    U | R | D | DL | L,
+    U | R | DR | D | DL | L,
+    U | UR | R | DR | D | L,
+    U | D,
+    U | UR | R | DR | D,
+    U | UR | R | DR | D | DL | L | UL,
+    U | D | DL | L | UL,
+    U | R | DR | D,
+    R | D | DL | L,
+    U | UR | R | D,
+    R | DR | D | L,
+    U | UR | R | D | DL | L | UL,
+    U | UR | R | DR | D | L | UL,
+    U | UR | R | D | DL | L,
+    U | R | DR | D | L | UL,
+    U,
+    U | UR | R,
+    U | UR | R | L | UL,
+    U | L | UL,
+    U | UR | R | L,
+    U | D | L | UL,
+    U | R | L | UL,
+    U | D | DL | L,
+    U | R | DR | D | DL | L | UL,
+    U | UR | R | DR | D | DL | L,
+    U | R | D | L,
 ];
 
+/// OptiFine's methods the sheets become.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Layout {
-    Full,
-    Simple,
+enum Method {
+    Ctm,
     Horizontal,
     Vertical,
 }
 
-impl Layout {
+impl Method {
     fn name(self) -> &'static str {
         match self {
-            Self::Full => "full",
-            Self::Simple => "simple",
+            Self::Ctm => "ctm",
             Self::Horizontal => "horizontal",
             Self::Vertical => "vertical",
         }
     }
 
-    /// Columns, rows.
-    fn grid(self) -> (u32, u32) {
+    /// The neighbours each tile joins, by tile.
+    fn masks(self) -> Vec<u8> {
         match self {
-            Self::Full => (8, 6),
-            Self::Simple => (4, 4),
-            Self::Horizontal => (4, 1),
-            Self::Vertical => (1, 4),
-        }
-    }
-
-    /// The neighbour mask each tile stands for (`None`: never drawn).
-    fn masks(self) -> Vec<Option<u8>> {
-        // Fusion's straight layouts: alone, joined only toward `b` (a row's left end, a
-        // column's top), both ways, only toward `a`.
-        let straight = |a: u8, b: u8| vec![Some(0), Some(b), Some(a | b), Some(a)];
-        match self {
-            Self::Full => FULL.to_vec(),
-            Self::Simple => SIMPLE.iter().map(|m| Some(*m)).collect(),
-            Self::Horizontal => straight(L, R),
-            Self::Vertical => straight(U, D),
+            Self::Ctm => CTM.to_vec(),
+            // A row's left end (joined right), its middle, its right end, alone.
+            Self::Horizontal => vec![R, L | R, L, 0],
+            // A column's bottom (joined up), its middle, its top, alone.
+            Self::Vertical => vec![U, U | D, D, 0],
         }
     }
 }
 
-/// The context a Fusion mask stands for: a corner joins only with both sides beside it, as
-/// Create's `buildContext` tests it.
+impl CtType {
+    /// The OptiFine method the sheet becomes: `RECTANGLE` reads only the sides, which the 47
+    /// tiles tell apart too.
+    fn method(self) -> Method {
+        match self {
+            Self::HorizontalKryppers => Method::Horizontal,
+            Self::Vertical => Method::Vertical,
+            Self::Omni | Self::Rectangle => Method::Ctm,
+        }
+    }
+}
+
+/// The context a mask stands for: a corner joins only with both sides beside it, as Create's
+/// `buildContext` tests it.
 fn context(mask: u8) -> Ctx {
     let has = |b: u8| mask & b != 0;
     let (up, down, left, right) = (has(U), has(D), has(L), has(R));
@@ -299,16 +268,15 @@ fn context(mask: u8) -> Ctx {
     }
 }
 
-/// The Create sheet tile each Fusion tile of `ty`'s layout takes.
-fn tile_map(ty: CtType) -> Vec<Option<u32>> {
-    ty.layout()
+/// The Create sheet tile each OptiFine tile of `ty`'s method takes.
+fn tile_map(ty: CtType) -> Vec<u32> {
+    ty.method()
         .masks()
         .into_iter()
-        .map(|m| m.map(|m| ty.index(context(m))))
+        .map(|m| ty.index(context(m)))
         .collect()
 }
 
-/// An RGBA image.
 struct Image {
     w: u32,
     h: u32,
@@ -350,35 +318,7 @@ fn encode(img: &Image) -> Vec<u8> {
     out
 }
 
-/// Create's sheet re-cut into `ty`'s Fusion layout, and that layout's name.
-fn retile(sheet: &[u8], ty: CtType) -> Result<(Vec<u8>, &'static str), String> {
-    let src = decode(sheet)?;
-    let n = ty.sheet_size();
-    if src.w % n != 0 || src.w != src.h {
-        return Err(format!("a {}x{} sheet for {ty:?}", src.w, src.h));
-    }
-    let t = src.w / n;
-    let layout = ty.layout();
-    let (cols, rows) = layout.grid();
-    let mut out = Image {
-        w: cols * t,
-        h: rows * t,
-        px: vec![0; (cols * t * rows * t * 4) as usize],
-    };
-    for (i, from) in tile_map(ty).into_iter().enumerate() {
-        let Some(from) = from else { continue };
-        let (sx, sy) = ((from % n) * t, (from / n) * t);
-        let (dx, dy) = ((i as u32 % cols) * t, (i as u32 / cols) * t);
-        for y in 0..t {
-            let s = (((sy + y) * src.w + sx) * 4) as usize;
-            let d = (((dy + y) * out.w + dx) * 4) as usize;
-            out.px[d..d + (t * 4) as usize].copy_from_slice(&src.px[s..s + (t * 4) as usize]);
-        }
-    }
-    Ok((encode(&out), layout.name()))
-}
-
-/// Which faces of a model a rule changes (`HorizontalCTBehaviour`: its shift on the sides, its
+/// Which faces a rule changes (`HorizontalCTBehaviour`: its shift on the sides, its
 /// top shift on the top and bottom).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Faces {
@@ -396,7 +336,7 @@ enum Join {
     SameBlockAlways,
 }
 
-/// Faces of `block`'s models showing `original` take `sheet` (Create's `_connected` sheet
+/// `block`'s faces showing `original` take `sheet` (Create's `_connected` sheet
 /// path, under `block/`).
 struct Rule {
     original: String,
@@ -568,235 +508,100 @@ fn plans() -> Vec<Plan> {
     out
 }
 
-fn connection(join: Join, block: &str) -> Value {
-    match join {
-        Join::SameBlockAlways => json!({ "type": "is_same_block" }),
-        Join::SameBlock => json!({
-            "type": "and",
-            "predicates": [
-                { "type": "is_same_block" },
-                { "type": "not", "predicate": { "type": "match_block_in_front", "block": format!("create:{block}") } }
-            ]
-        }),
+/// Create's sheet cut into the tiles of `ty`'s OptiFine method, in its order.
+fn cut(sheet: &[u8], ty: CtType) -> Result<Vec<Vec<u8>>, String> {
+    let src = decode(sheet)?;
+    let n = ty.sheet_size();
+    if src.w % n != 0 || src.w != src.h {
+        return Err(format!("a {}x{} sheet for {ty:?}", src.w, src.h));
     }
-}
-
-/// `create:block/x` (or `create:x`, `block/x`) as its file in the jar.
-fn model_path(name: &str) -> Option<String> {
-    let (ns, path) = name.split_once(':').unwrap_or(("minecraft", name));
-    (ns == "create").then(|| format!("assets/create/models/{path}.json"))
-}
-
-fn namespaced(name: &str) -> String {
-    if name.contains(':') {
-        name.to_owned()
-    } else {
-        format!("minecraft:{name}")
-    }
-}
-
-/// A Create model's texture keys over its Create parents (a child's win), and the first parent
-/// outside Create.
-fn textures_of(
-    read: &dyn Fn(&str) -> Option<Value>,
-    model: &str,
-) -> (Map<String, Value>, Option<String>) {
-    let mut keys = Map::new();
-    let mut name = model.to_owned();
-    for _ in 0..16 {
-        let Some(doc) = model_path(&name).and_then(|p| read(&p)) else {
-            return (keys, Some(namespaced(&name)));
-        };
-        if let Some(t) = doc.get("textures").and_then(Value::as_object) {
-            for (k, v) in t {
-                keys.entry(k.clone()).or_insert_with(|| v.clone());
+    let t = src.w / n;
+    Ok(tile_map(ty)
+        .into_iter()
+        .map(|from| {
+            let (sx, sy) = ((from % n) * t, (from / n) * t);
+            let mut px = Vec::with_capacity((t * t * 4) as usize);
+            for y in 0..t {
+                let s = (((sy + y) * src.w + sx) * 4) as usize;
+                px.extend_from_slice(&src.px[s..s + (t * 4) as usize]);
             }
-        }
-        match doc.get("parent").and_then(Value::as_str) {
-            Some(p) => name = p.to_owned(),
-            None => return (keys, None),
-        }
-    }
-    (keys, None)
+            encode(&Image { w: t, h: t, px })
+        })
+        .collect())
 }
 
-/// A key's texture, `#` references followed.
-fn resolve(keys: &Map<String, Value>, value: &str) -> Option<String> {
-    let mut v = value.to_owned();
-    for _ in 0..16 {
-        match v.strip_prefix('#') {
-            Some(k) => v = keys.get(k)?.as_str()?.to_owned(),
-            None => return Some(namespaced(&v)),
-        }
+/// The properties file of `rule` for `plan`'s block, its tiles under `tiles/`.
+fn properties(plan: &Plan, rule: &Rule, tiles: &str) -> String {
+    let method = rule.ty.method();
+    let count = method.masks().len();
+    let mut out = format!(
+        "method={}\nmatchTiles={}\nmatchBlocks=create:{}\nconnect=block\ntiles={}\n",
+        method.name(),
+        rule.original,
+        plan.block,
+        (0..count)
+            .map(|i| format!("create:optifine/ctm/tiles/{tiles}/{i}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    match rule.faces {
+        Faces::All => {}
+        Faces::Sides => out.push_str("faces=sides\n"),
+        Faces::Ends => out.push_str("faces=top bottom\n"),
     }
-    None
+    // Create's `isBeingBlocked`: a neighbour whose face the same block covers doesn't join.
+    if plan.join == Join::SameBlock {
+        out.push_str("innerSeams=true\n");
+    }
+    out
 }
 
-fn key_faces(key: &str) -> Option<Faces> {
-    match key {
-        "north" | "south" | "east" | "west" | "side" => Some(Faces::Sides),
-        "up" | "down" | "end" | "top" | "bottom" => Some(Faces::Ends),
-        _ => None,
-    }
-}
-
-/// The connecting child of `model` for `plan`, `None` when no face of it shows a rule's texture.
-fn connecting_model(
-    read: &dyn Fn(&str) -> Option<Value>,
-    plan: &Plan,
-    model: &str,
-) -> Option<Value> {
-    let (mut keys, outside) = textures_of(read, model);
-    let mut parent = model.to_owned();
-    // `cube_all` names every face `all`: as `cube` each face has a key of its own.
-    if outside.as_deref() == Some("minecraft:block/cube_all")
-        && plan.rules.iter().any(|r| r.faces != Faces::All)
-    {
-        let all = keys.get("all").cloned()?;
-        for face in ["down", "up", "north", "south", "west", "east"] {
-            keys.insert(face.into(), all.clone());
-        }
-        keys.entry("particle").or_insert(all);
-        keys.remove("all");
-        parent = "minecraft:block/cube".into();
-    }
-    let mut textures = Map::new();
-    let mut first_original = None;
-    for (key, value) in &keys {
-        if key == "particle" {
-            continue;
-        }
-        let Some(texture) = value.as_str().and_then(|v| resolve(&keys, v)) else {
-            continue;
-        };
-        let class = key_faces(key);
-        let Some(rule) = plan.rules.iter().find(|r| {
-            r.original == texture
-                && (r.faces == Faces::All || class.is_none() || class == Some(r.faces))
-        }) else {
-            continue;
-        };
-        first_original.get_or_insert_with(|| rule.original.clone());
-        textures.insert(key.clone(), json!(sheet_name(&rule.sheet)));
-    }
-    if textures.is_empty() {
-        return None;
-    }
-    if parent != model {
-        for (key, value) in &keys {
-            textures.entry(key.clone()).or_insert(value.clone());
-        }
-    }
-    // The particle stays the plain texture: the model's own, else the texture its first
-    // connected face replaces (a vanilla parent's `#side` or `#all`).
-    let particle = keys
-        .get("particle")
-        .and_then(Value::as_str)
-        .and_then(|v| resolve(&keys, v))
-        .or(first_original);
-    if let Some(particle) = particle {
-        textures.insert("particle".into(), json!(particle));
-    }
-    Some(json!({
-        "parent": parent,
-        "loader": "fusion:model",
-        "type": "connecting",
-        "textures": textures,
-        "connections": connection(plan.join, &plan.block),
-    }))
-}
-
-/// The sprite of a re-cut sheet.
-fn sheet_name(sheet: &str) -> String {
-    format!("create:block/ct/{sheet}")
-}
-
-/// Each `model` string of a blockstate, mutably.
-fn models_mut(v: &mut Value, f: &mut dyn FnMut(&mut Value)) {
-    match v {
-        Value::Object(map) => {
-            for (k, child) in map.iter_mut() {
-                if k == "model" && child.is_string() {
-                    f(child);
-                } else {
-                    models_mut(child, f);
-                }
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(|i| models_mut(i, f)),
-        _ => {}
-    }
-}
-
-/// The files connected textures add or replace: re-cut sheets with their `.mcmeta`, connecting
-/// models, and the blockstates that name them. `read` gives a file of the assembled mod (ours
-/// over Create's). Returns the files and the sheets left out, with why.
+/// The files connected textures add: one OptiFine `ctm` properties file per block and sheet,
+/// and each sheet's tiles. Block models stay as Create's: only the terrain mesher swaps the
+/// tiles in. `read` gives a file of the sources. Returns the files and what was left out, with
+/// why.
 pub fn files(read: &dyn Fn(&str) -> Option<Vec<u8>>) -> (BTreeMap<String, Vec<u8>>, Vec<String>) {
-    let json = |p: &str| read(p).and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let mut out = BTreeMap::new();
     let mut skipped = Vec::new();
     let mut sheets: BTreeMap<String, bool> = BTreeMap::new();
     for plan in plans() {
-        // The sheets first: a plan whose sheet can't be cut is left as it is.
-        let ok = plan.rules.iter().all(|r| {
-            *sheets.entry(r.sheet.clone()).or_insert_with(|| {
-                let src = format!("assets/create/textures/block/{}.png", r.sheet);
+        if read(&format!("assets/create/blockstates/{}.json", plan.block)).is_none() {
+            skipped.push(format!("{}: no blockstate", plan.block));
+            continue;
+        }
+        for (i, rule) in plan.rules.iter().enumerate() {
+            let cut_ok = *sheets.entry(rule.sheet.clone()).or_insert_with(|| {
+                let src = format!("assets/create/textures/block/{}.png", rule.sheet);
                 if read(&format!("{src}.mcmeta")).is_some() {
-                    skipped.push(format!("{}: animated", r.sheet));
+                    skipped.push(format!("{}: animated", rule.sheet));
                     return false;
                 }
                 let Some(bytes) = read(&src) else {
-                    skipped.push(format!("{}: not in the sources", r.sheet));
+                    skipped.push(format!("{}: not in the sources", rule.sheet));
                     return false;
                 };
-                match retile(&bytes, r.ty) {
-                    Ok((png, layout)) => {
-                        let dst = format!("assets/create/textures/block/ct/{}.png", r.sheet);
-                        let meta = json!({ "fusion": { "type": "connecting", "layout": layout } });
-                        out.insert(format!("{dst}.mcmeta"), meta.to_string().into_bytes());
-                        out.insert(dst, png);
+                match cut(&bytes, rule.ty) {
+                    Ok(tiles) => {
+                        for (n, png) in tiles.into_iter().enumerate() {
+                            out.insert(
+                                format!("assets/create/optifine/ctm/tiles/{}/{n}.png", rule.sheet),
+                                png,
+                            );
+                        }
                         true
                     }
                     Err(e) => {
-                        skipped.push(format!("{}: {e}", r.sheet));
+                        skipped.push(format!("{}: {e}", rule.sheet));
                         false
                     }
                 }
-            })
-        });
-        if !ok {
-            continue;
-        }
-        let state_path = format!("assets/create/blockstates/{}.json", plan.block);
-        let Some(mut state) = json(&state_path) else {
-            skipped.push(format!("{}: no blockstate", plan.block));
-            continue;
-        };
-        let mut changed = false;
-        let read_json = |p: &str| json(p);
-        models_mut(&mut state, &mut |m| {
-            let name = m.as_str().unwrap_or_default().to_owned();
-            let Some(doc) = connecting_model(&read_json, &plan, &name) else {
-                return;
-            };
-            let Some(path) = name
-                .strip_prefix("create:block/")
-                .or_else(|| name.strip_prefix("create:"))
-            else {
-                return;
-            };
-            let new = format!("block/ct/{}/{path}", plan.block);
-            out.insert(
-                format!("assets/create/models/{new}.json"),
-                serde_json::to_vec_pretty(&doc).unwrap(),
-            );
-            *m = json!(format!("create:{new}"));
-            changed = true;
-        });
-        if changed {
-            out.insert(state_path, serde_json::to_vec_pretty(&state).unwrap());
-        } else {
-            skipped.push(format!("{}: no face shows its texture", plan.block));
+            });
+            if cut_ok {
+                out.insert(
+                    format!("assets/create/optifine/ctm/{}/{i}.properties", plan.block),
+                    properties(&plan, rule, &rule.sheet).into_bytes(),
+                );
+            }
         }
     }
     (out, skipped)
@@ -815,7 +620,7 @@ mod tests {
         // Alone: Create's top-left tile; all four sides and no corner: (3, 3); joined all round
         // with every corner: (6, 6), the sheet's plain middle.
         assert_eq!(CtType::Omni.index(ctx(0)), 0);
-        assert_eq!(CtType::Omni.index(ctx(SIDES)), 3 + 8 * 3);
+        assert_eq!(CtType::Omni.index(ctx(U | R | D | L)), 3 + 8 * 3);
         assert_eq!(CtType::Omni.index(ctx(0xff)), 6 + 8 * 6);
         // Joined up only: column 1 of row 0; down only: column 2; left only: row 1.
         assert_eq!(CtType::Omni.index(ctx(U)), 1);
@@ -855,74 +660,60 @@ mod tests {
         assert_eq!(Vertical.index(col(false, true)), 2);
         // A lone rectangle tile is (0, 3); joined all four ways (2, 1).
         assert_eq!(Rectangle.index(Ctx::default()), 12);
-        assert_eq!(Rectangle.index(ctx(SIDES)), 2 + 4);
+        assert_eq!(Rectangle.index(ctx(U | R | D | L)), 2 + 4);
     }
 
     #[test]
-    fn fusion_tiles_take_the_matching_create_tiles() {
-        // Fusion's full layout: tile 0 alone, 18 joined all round, 33 all sides no corners.
-        let full = tile_map(CtType::Omni);
-        assert_eq!(full.len(), 48);
-        assert_eq!(full[0], Some(0));
-        assert_eq!(full[18], Some(54));
-        assert_eq!(full[33], Some(27));
-        assert_eq!(full[41], None);
-        // Horizontal: alone, a row's left end (joins right), middle, right end.
-        assert_eq!(
-            tile_map(CtType::HorizontalKryppers),
-            [Some(0), Some(2), Some(1), Some(3)]
-        );
-        // Vertical: alone, a column's top (joins down), middle, bottom (joins up).
-        assert_eq!(
-            tile_map(CtType::Vertical),
-            [Some(0), Some(2), Some(3), Some(1)]
-        );
-        // Simple tile 1 joins all four sides: the rectangle's middle.
-        assert_eq!(tile_map(CtType::Rectangle)[1], Some(6));
+    fn optifine_tiles_take_the_matching_create_tiles() {
+        // `ctm`: tile 0 alone, 26 joined all round, 46 all sides without corners, 12 joined
+        // below only.
+        let ctm = tile_map(CtType::Omni);
+        assert_eq!(ctm.len(), 47);
+        assert_eq!(ctm[0], 0);
+        assert_eq!(ctm[26], 54);
+        assert_eq!(ctm[46], 27);
+        assert_eq!(ctm[12], 2);
+        // `horizontal`: a row's left end (Create's "joined right", 2), middle, right end, alone.
+        assert_eq!(tile_map(CtType::HorizontalKryppers), [2, 1, 3, 0]);
+        // `vertical`: a column's bottom (Create's "joined up", 1), middle, top, alone.
+        assert_eq!(tile_map(CtType::Vertical), [1, 3, 2, 0]);
+        // A rectangle tile joined all four ways, corners or not, is its middle.
+        let rect = tile_map(CtType::Rectangle);
+        assert_eq!((rect[26], rect[46]), (6, 6));
     }
 
     #[test]
-    fn retiles_a_sheet_into_its_layout() {
+    fn cuts_a_sheet_into_its_tiles() {
         // A 2 x 2 sheet of 1-pixel tiles, each a grey of its index.
         let img = Image {
             w: 2,
             h: 2,
             px: (0..4u8).flat_map(|i| [i, i, i, 255]).collect(),
         };
-        let (png, layout) = retile(&encode(&img), CtType::HorizontalKryppers).unwrap();
-        assert_eq!(layout, "horizontal");
-        let out = decode(&png).unwrap();
-        assert_eq!((out.w, out.h), (4, 1));
-        let greys: Vec<u8> = out.px.chunks(4).map(|p| p[0]).collect();
-        assert_eq!(greys, [0, 2, 1, 3]);
+        let tiles = cut(&encode(&img), CtType::HorizontalKryppers).unwrap();
+        let greys: Vec<u8> = tiles.iter().map(|t| decode(t).unwrap().px[0]).collect();
+        assert_eq!(greys, [2, 1, 3, 0]);
     }
 
     #[test]
-    fn a_cube_all_block_gets_per_face_sheets() {
-        let files: BTreeMap<String, Value> = [(
-            "assets/create/models/block/horizontal_framed_glass.json".to_owned(),
-            json!({"parent": "minecraft:block/cube_all", "textures": {"all": "create:block/palettes/framed_glass"}}),
-        )]
-        .into();
-        let read = |p: &str| files.get(p).cloned();
+    fn properties_name_the_block_texture_faces_and_seams() {
         let plans = plans();
         let plan = plans
             .iter()
             .find(|p| p.block == "horizontal_framed_glass")
             .unwrap();
-        let doc = connecting_model(&read, plan, "create:block/horizontal_framed_glass").unwrap();
-        assert_eq!(doc["parent"], "minecraft:block/cube");
-        assert_eq!(
-            doc["textures"]["north"],
-            "create:block/ct/palettes/horizontal_framed_glass_connected"
-        );
-        assert_eq!(
-            doc["textures"]["up"],
-            "create:block/ct/palettes/framed_glass_connected"
-        );
-        assert_eq!(
-            doc["textures"]["particle"],
-            "create:block/palettes/framed_glass"
-        );
+        let text = properties(plan, &plan.rules[0], "x");
+        assert!(text.contains("method=horizontal\n"));
+        assert!(text.contains("matchTiles=create:block/palettes/framed_glass\n"));
+        assert!(text.contains("matchBlocks=create:horizontal_framed_glass\n"));
+        assert!(text.contains("faces=sides\n"));
+        assert!(text.contains("innerSeams=true\n"));
+        assert!(text.contains("tiles=create:optifine/ctm/tiles/x/0 "));
+        let pane = plans
+            .iter()
+            .find(|p| p.block == "framed_glass_pane")
+            .unwrap();
+        let text = properties(pane, &pane.rules[0], "x");
+        assert!(!text.contains("innerSeams") && !text.contains("faces="));
     }
 }
