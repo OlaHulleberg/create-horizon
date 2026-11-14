@@ -39,16 +39,24 @@ impl Subsystem for Arms {
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        turn_placed_ejectors(lv);
         tick_arms(lv);
         tick_ejectors(lv);
     }
 
     fn right_click_block(
         &self,
-        host: mod_api::HostSide,
+        mut host: mod_api::HostSide,
         event: &mut mod_api::RightClickBlockEvent<'_>,
     ) -> mod_api::Flow {
-        select_point(host, event)
+        let again = match &mut host {
+            mod_api::HostSide::Server(h) => mod_api::HostSide::Server(&mut **h),
+            mod_api::HostSide::Client(h) => mod_api::HostSide::Client(&mut **h),
+        };
+        match select_point(again, event) {
+            mod_api::Flow::Continue => select_ejector_target(host, event),
+            cancel => cancel,
+        }
     }
 
     fn entity_place(
@@ -57,6 +65,7 @@ impl Subsystem for Arms {
         event: &mut mod_api::EntityPlaceEvent,
     ) -> mod_api::Flow {
         arm_placed(host, event);
+        ejector_placed(host, event);
         mod_api::Flow::Continue
     }
 
@@ -1256,4 +1265,156 @@ pub fn arm_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEvent) 
     with_world(|w| {
         w.dims[dim].arms.saved.insert(pos, arm);
     });
+}
+
+/// Create's default `maxEjectorDistance`.
+const MAX_EJECTOR_DISTANCE: i32 = 32;
+
+thread_local! {
+    /// The block each player chose as the target of the next ejector they place
+    /// (`EjectorTargetHandler.currentSelection`, kept on the server here).
+    static EJECTOR_TARGET: std::cell::RefCell<HashMap<u128, [i32; 3]>> =
+        std::cell::RefCell::default();
+    /// Ejectors just placed that turn to face their target once their block is there
+    /// (`EjectorPlacementPacket.handle`), by level.
+    static EJECTOR_FACING: std::cell::RefCell<Vec<(usize, [i32; 3], Dir)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `EjectorTargetHandler.rightClickingBlocksSelectsThem`: sneaking with an ejector in the main
+/// hand, a click on any block makes it the target of the next ejector placed. On a client it
+/// only keeps the ejector from being placed there.
+pub fn select_ejector_target(
+    host: mod_api::HostSide,
+    event: &mut mod_api::RightClickBlockEvent<'_>,
+) -> mod_api::Flow {
+    let click = event.click;
+    let is_ejector = |host: &dyn mod_api::Host| {
+        click.hand == mod_api::Hand::Main
+            && click
+                .stack
+                .is_some_and(|s| items::id_of(host, s) == "create:weighted_ejector")
+            && host.player(click.player).is_some_and(|p| {
+                crate::glue::items::sneaking(host, p) && p.entity().spectator(host) != Some(true)
+            })
+    };
+    let selected = match host {
+        mod_api::HostSide::Client(host) => is_ejector(&*host),
+        mod_api::HostSide::Server(host) => {
+            let selected = is_ejector(&*host);
+            if selected {
+                EJECTOR_TARGET.with_borrow_mut(|t| t.insert(click.player, click.pos));
+                if let Some(p) = host.player(click.player) {
+                    let line = coloured(
+                        mod_api::Text::translate("create.weighted_ejector.target_set", Vec::new()),
+                        "gold",
+                    );
+                    let _ = p.action_bar(host, line);
+                }
+            }
+            selected
+        }
+    };
+    if !selected {
+        return mod_api::Flow::Continue;
+    }
+    *event.cancellation_result = mod_api::InteractionResult::Success;
+    mod_api::Flow::Cancel
+}
+
+/// `EjectorTargetHandler.getValidTargetDirection`: the way an ejector at `pos` faces to throw
+/// at `target`, straight along x or z within the maximum distance, not right above or below.
+fn ejector_direction(pos: [i32; 3], target: [i32; 3]) -> Option<Dir> {
+    let (dx, dz) = (target[0] - pos[0], target[2] - pos[2]);
+    if (dx, dz) == (0, 0) || dx.abs() > MAX_EJECTOR_DISTANCE || dz.abs() > MAX_EJECTOR_DISTANCE {
+        return None;
+    }
+    match (dx, dz) {
+        (0, _) => Some(if dz < 0 { Dir::North } else { Dir::South }),
+        (_, 0) => Some(if dx < 0 { Dir::West } else { Dir::East }),
+        _ => None,
+    }
+}
+
+/// `EjectorTargetHandler.flushSettings` and `EjectorPlacementPacket`: an ejector a player
+/// places throws at the target they chose (it turns to face it) when that lies straight along
+/// x or z within range; the action bar says where, or why not.
+pub fn ejector_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEvent) {
+    let Some(placer) = event.placer else {
+        return;
+    };
+    let Some(id) = super::super::states::id(event.state) else {
+        return;
+    };
+    let Some(Block::WeightedEjector) = with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten()
+    else {
+        return;
+    };
+    let Some(player) = host
+        .players()
+        .server_players()
+        .into_iter()
+        .find(|p| p.entity() == placer)
+    else {
+        return;
+    };
+    let pos = [event.pos.x, event.pos.y, event.pos.z];
+    let target = EJECTOR_TARGET.with_borrow_mut(|t| t.remove(&player.uuid()));
+    let direction = target.and_then(|t| ejector_direction(pos, t));
+    let (Some(target), Some(direction)) = (target, direction) else {
+        let key = if target.is_none() {
+            "create.weighted_ejector.no_target"
+        } else {
+            "create.weighted_ejector.target_not_valid"
+        };
+        let line = coloured(mod_api::Text::translate(key, Vec::new()), "white");
+        let _ = player.action_bar(host, line);
+        return;
+    };
+    let line = coloured(
+        mod_api::Text::translate(
+            "create.weighted_ejector.targeting",
+            target
+                .iter()
+                .map(|v| mod_api::Text::literal(v.to_string()))
+                .collect(),
+        ),
+        "green",
+    );
+    let _ = player.action_bar(host, line);
+    let Some(dim) = placer
+        .level(&*host)
+        .and_then(|l| l.dimension().id(&*host))
+        .and_then(|d| super::super::world::level_index(&d))
+    else {
+        return;
+    };
+    let h = (target[0] - pos[0] + target[2] - pos[2]).abs();
+    let v = target[1] - pos[1];
+    let mut e = ejector::Ejector::default();
+    e.set_target(h, v);
+    with_world(|w| {
+        w.dims[dim].ejector_saved.insert(pos, e);
+    });
+    EJECTOR_FACING.with_borrow_mut(|f| f.push((dim, pos, direction)));
+}
+
+/// Ejectors placed this tick turn to face their target.
+fn turn_placed_ejectors(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let due: Vec<([i32; 3], Dir)> = EJECTOR_FACING.with_borrow_mut(|f| {
+        let (mine, rest): (Vec<_>, Vec<_>) = f.drain(..).partition(|(d, _, _)| *d == dim);
+        *f = rest;
+        mine.into_iter().map(|(_, p, d)| (p, d)).collect()
+    });
+    for (pos, facing) in due {
+        if info_at(lv, pos).is_some_and(|(b, _)| b == Block::WeightedEjector) {
+            lv.set_property(
+                pos,
+                "facing",
+                super::super::kinetics::dir_name(facing),
+                super::super::server::update_all(),
+            );
+        }
+    }
 }

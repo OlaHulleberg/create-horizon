@@ -135,8 +135,11 @@ pub fn tick_depots(lv: &mut ServerLevel<'_>) {
     }
     let players = lv.players();
     send_depots(lv, &players, &changed);
+    // Ejectors are drawn every frame; a depot's kept drawing is redrawn.
     for &pos in &changed {
-        super::touch_shown(lv, pos);
+        if super::info_at(lv, pos).is_some_and(|(b, _)| b == create_engine::Block::Depot) {
+            super::touch_shown(lv, pos);
+        }
     }
 }
 
