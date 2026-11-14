@@ -197,15 +197,14 @@ fn scraped(name: &str) -> Option<String> {
         format!("weathered_{rest}")
     } else if let Some(rest) = path.strip_prefix("weathered_") {
         format!("exposed_{rest}")
-    } else if let Some(rest) = path.strip_prefix("exposed_") {
+    } else {
         // `exposed_copper` steps back to `copper_block`.
+        let rest = path.strip_prefix("exposed_")?;
         if rest == "copper" {
             "copper_block".to_owned()
         } else {
             rest.to_owned()
         }
-    } else {
-        return None;
     };
     Some(format!("{ns}:{back}"))
 }
