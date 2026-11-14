@@ -47,6 +47,7 @@ pub fn en_us(key: &str) -> Option<&'static str> {
         "create.display_source.fill_level.progress_bar" => "Progress Bar",
         "create.display_source.entity_name" => "Entity Name",
         "create.display_source.accumulate_items" => "Accumulate Item Count",
+        "create.display_source.max_enchant_level" => "Max Enchanting Cost",
         "create.display_source.item_throughput" => "Item Throughput",
         "create.display_source.item_throughput.interval" => "Interval",
         "create.display_source.item_throughput.interval.second" => "per Second",
@@ -117,10 +118,11 @@ pub enum Source {
     EntityName,
     AccumulateItems,
     ItemThroughput,
+    EnchantPower,
 }
 
 impl Source {
-    pub const ALL: [Source; 15] = [
+    pub const ALL: [Source; 16] = [
         Source::KineticSpeed,
         Source::KineticStress,
         Source::RedstonePower,
@@ -136,6 +138,7 @@ impl Source {
         Source::EntityName,
         Source::AccumulateItems,
         Source::ItemThroughput,
+        Source::EnchantPower,
     ];
 
     /// Its registry id's path (`create:<id>`).
@@ -156,6 +159,7 @@ impl Source {
             Source::EntityName => "entity_name",
             Source::AccumulateItems => "accumulate_items",
             Source::ItemThroughput => "item_throughput",
+            Source::EnchantPower => "enchant_power",
         }
     }
 
@@ -164,6 +168,7 @@ impl Source {
         let id = id.strip_prefix("create:").unwrap_or(id);
         Source::ALL.into_iter().find(|s| s.id() == id).or(match id {
             "redstone_power_display_source" => Some(Source::RedstonePower),
+            "enchant_power_display_source" => Some(Source::EnchantPower),
             "nixie_tube_source" => Some(Source::NixieTube),
             "belt_source_combine_item_names"
             | "depot_source_combine_item_names"
@@ -206,6 +211,7 @@ impl Source {
             Source::EntityName => "create.display_source.entity_name",
             Source::AccumulateItems => "create.display_source.accumulate_items",
             Source::ItemThroughput => "create.display_source.item_throughput",
+            Source::EnchantPower => "create.display_source.max_enchant_level",
         }
     }
 
@@ -520,8 +526,11 @@ pub fn provide_line(
             numeric = text.as_deref().is_some_and(|t| t.parse::<i32>().is_ok());
             text.clone()
         }
-        // ItemCountDisplaySource: `ZERO` without an inventory.
-        (Source::CountItems, Reading::Count(n)) => Some(n.unwrap_or(0).to_string()),
+        // ItemCountDisplaySource and EnchantPowerDisplaySource: `ZERO` without an inventory or
+        // an enchanting table.
+        (Source::CountItems | Source::EnchantPower, Reading::Count(n)) => {
+            Some(n.unwrap_or(0).to_string())
+        }
         // FluidAmountDisplaySource: `FluidFormatter.asString(collected, false)`.
         (Source::CountFluids, Reading::Fluid(n)) => n.map(|v| fluid_string(v, false, lang)),
         // FillLevelDisplaySource.getProgress.
@@ -557,6 +566,30 @@ pub fn provide_line(
         numeric,
         entries: None,
     }
+}
+
+/// `EnchantmentHelper.getEnchantmentCost` of a diamond pickaxe (enchantability 10) for the
+/// third slot with `power` bookshelves (at most 15), from two random draws `a` in 0..8 and `b`
+/// in 0..=power.
+pub fn enchant_cost(power: i32, a: i32, b: i32) -> i32 {
+    let power = power.min(15);
+    let j = a + 1 + (power >> 1) + b;
+    j.max(power * 2)
+}
+
+/// `EnchantingTableBlock.BOOKSHELF_OFFSETS`: the ring two blocks out, at its height and one up.
+pub fn bookshelf_offsets() -> Vec<[i32; 3]> {
+    let mut out = Vec::new();
+    for x in -2..=2 {
+        for y in 0..=1 {
+            for z in -2..=2 {
+                if i32::abs(x) == 2 || i32::abs(z) == 2 {
+                    out.push([x, y, z]);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// `ValueListDisplaySource.ENTRIES_PER_PAGE`.
@@ -1133,7 +1166,8 @@ pub fn load_flap_layout(
         | Source::ItemNames
         | Source::CountItems
         | Source::AccumulateItems
-        | Source::ItemThroughput => "Number",
+        | Source::ItemThroughput
+        | Source::EnchantPower => "Number",
         Source::KineticStress | Source::RedstonePower | Source::FillLevel if progress_bar => {
             "Progress"
         }
@@ -1155,7 +1189,8 @@ pub fn load_flap_layout(
             | Source::FillLevel
             | Source::CountItems
             | Source::AccumulateItems
-            | Source::ItemThroughput => Section::new(width, Cycle::Numeric, false, false),
+            | Source::ItemThroughput
+            | Source::EnchantPower => Section::new(width, Cycle::Numeric, false, false),
             Source::NixieTube if numeric => Section::new(width, Cycle::Numeric, false, false),
             Source::TimeOfDay | Source::StopWatch => {
                 Section::new(width, Cycle::Instant, false, false)

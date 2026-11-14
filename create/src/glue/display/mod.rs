@@ -346,6 +346,8 @@ fn sources_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> &'static [Source] {
             &[Source::AccumulateItems, Source::ItemThroughput]
         }
         Some(b) if create_engine::dye::is_seat(b) => &[Source::EntityName],
+        // AllDisplaySources.ENCHANT_POWER `associate(BlockEntityType.ENCHANTING_TABLE)`.
+        None if block_name(lv, pos) == "minecraft:enchanting_table" => &[Source::EnchantPower],
         // AllDisplaySources.REDSTONE_POWER `associate(Blocks.TARGET)`.
         None if block_name(lv, pos) == "minecraft:target" => &[Source::RedstonePower],
         _ => &[],
@@ -545,6 +547,33 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
             .flatten(),
         ),
         Source::EntityName => Reading::Text(super::contraptions::seats::rider_name(lv, at)),
+        // EnchantPowerDisplaySource: each valid bookshelf (`isValidBookShelf`: a power provider
+        // with a transmitter between it and the table) gives one (`getEnchantPowerBonus`).
+        Source::EnchantPower => {
+            if block_name(lv, at) != "minecraft:enchanting_table" {
+                return Reading::Count(None);
+            }
+            let tagged = |p: [i32; 3], tag: &str| {
+                lv.block_state(p)
+                    .is_some_and(|s| lv.host.block_in_tag(s.block(), tag) == Some(true))
+            };
+            let power = display::bookshelf_offsets()
+                .into_iter()
+                .filter(|o| {
+                    tagged(
+                        [at[0] + o[0], at[1] + o[1], at[2] + o[2]],
+                        "minecraft:enchantment_power_provider",
+                    ) && tagged(
+                        [at[0] + o[0] / 2, at[1] + o[1], at[2] + o[2] / 2],
+                        "minecraft:enchantment_power_transmitter",
+                    )
+                })
+                .count() as i32;
+            let mut rng = create_engine::processing::Rng::new(lv.game_time() as u64);
+            let a = (rng.next_float() * 8.0) as i32;
+            let b = (rng.next_float() * (power.min(15) + 1) as f32) as i32;
+            Reading::Count(Some(i64::from(display::enchant_cost(power, a, b))))
+        }
         // The tunnels' counts are the link's own (`itemReceived`).
         Source::AccumulateItems | Source::ItemThroughput => Reading::Now(lv.game_time()),
     }
