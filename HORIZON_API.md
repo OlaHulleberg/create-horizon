@@ -65,7 +65,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   minecart contraptions (`notes/moving-structures-note.md`).
 - **Mod entity types that are not template copies**, rideable by players: Create's seat entity and carriage seats
   are stood in by tagged item display entities; riding a moving structure's seats on bearings and pistons and
-  clicking its blocks are out.
+  clicking its blocks are out. Only players sit on a carriage's seats, so a train's conductor (handed its
+  schedule) is a seated player, never a mob, and the client, which can't read the stand-ins' tags, takes a
+  schedule used on anyone seated as handed over.
 - **Reading the client level's light** (`LevelRef::brightness` answers on the logical server only): a
   moving structure's blocks are lit with the light the server read where they were last sent from,
   not where they are each frame (`ContraptionRenderer`'s per-block world light).
@@ -110,11 +112,14 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   light inside the chute is dark.
 - **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).
 - **A screen layout for a mod menu opened without a block** (`player_open_mod_menu` with no `pos`: the
-  client's `open_native_screen` returns without a `Screen`): the filters' screens are the mod's own screen,
+  client's `open_native_screen` returns without a `Screen`): the filters' and the schedule's screens are the mod's own screen,
   and clicking an inventory slot carries a ghost copy, not the stack (Create's menus carry the real one). A
   `Screen` for a menu type (not only a block entity's), or a `screen` part hook keyed by menu, would close it.
 - **An item's tags** (`ItemStack.getTags`) and **an item's tooltip lines**: the attribute filter offers no
   `in_tag` attributes for its reference item, and the filters' screens show a slot's name, not its tooltip.
+- **A clip rectangle in `DrawContext`** (`GuiGraphics.enableScissor`): the schedule's cards scrolled past its
+  panel are covered by the panel's frame drawn again, and a card's condition groups that don't fit across it are
+  left out until scrolled to, where Create cuts them at the card's edge.
 - **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
 
 ## Left out of the port, not for want of API

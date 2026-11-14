@@ -172,3 +172,57 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
         }
     }
 }
+
+/// The carriage seat `entity` sits on (`Contraption.getSeatMapping`): its level and the
+/// carriage's block. None for an entity on no carriage's seat.
+pub fn seat_of(host: &dyn ServerHost, entity: EntityRef) -> Option<(usize, Target)> {
+    let vehicle = entity.vehicle(host)?;
+    SEATED.with_borrow(|s| {
+        s.iter()
+            .find(|s| s.stand == vehicle.id())
+            .map(|s| (s.dim, s.at))
+    })
+}
+
+/// `CarriageContraption.inControl`: whether the carriage's seat `at` is a conductor's
+/// (`conductorSeats`): train controls beside it, along the way the train was assembled, facing
+/// it.
+pub fn conductor_seat(host: &dyn mod_api::Host, dim: usize, at: Target) -> bool {
+    let beside: Vec<([i32; 2], u32)> = with_world(|w| {
+        let t = w.dims[dim]
+            .railway
+            .trains
+            .iter()
+            .find(|t| t.id == at.train)?;
+        let car = t.cars.get(usize::from(at.car))?;
+        let [hx, hz] = t.heading;
+        Some(
+            [[hx, hz], [-hx, -hz]]
+                .into_iter()
+                .filter_map(|[dx, dz]| {
+                    let p = [at.local[0] + dx, at.local[1], at.local[2] + dz];
+                    car.iter()
+                        .find(|(o, _)| *o == p)
+                        .map(|(_, id)| ([dx, dz], *id))
+                })
+                .collect(),
+        )
+    })
+    .flatten()
+    .unwrap_or_default();
+    let controls = super::super::states::key(create_engine::Block::Controls);
+    beside.into_iter().any(|([dx, dz], id)| {
+        let Some(state) = super::car_state(id) else {
+            return false;
+        };
+        // Facing the seat: the opposite of the way from the seat to the controls.
+        let toward = match [-dx, -dz] {
+            [1, _] => "east",
+            [-1, _] => "west",
+            [_, 1] => "south",
+            _ => "north",
+        };
+        state.block() == controls
+            && super::property(host, state, "facing").is_some_and(|f| f == toward)
+    })
+}

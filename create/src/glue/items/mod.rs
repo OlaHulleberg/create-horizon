@@ -16,7 +16,8 @@
 //!   advancement: as in the legacy glue.
 //! - Super glue's selection (`SuperGlueSelectionHandler`) is the contraptions' to port: what it
 //!   makes (`SuperGlueEntity` areas) is found and saved with contraptions (`contraption_found`,
-//!   `sticky_sides`, `create_glue`). The schedule's item commands are the trains'.
+//!   `sticky_sides`, `create_glue`). The train schedule (`schedule`,
+//!   `schedule_screen`) hands itself to a train through the trains' seats.
 
 mod belt_connector;
 mod fertilizer;
@@ -25,6 +26,8 @@ mod filter_screen;
 pub(crate) mod filters;
 mod nugget;
 mod sandpaper;
+mod schedule;
+mod schedule_screen;
 mod sequenced;
 mod sword;
 mod symmetry;
@@ -35,9 +38,9 @@ use super::server::ServerLevel;
 use super::subsystem::Subsystem;
 use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityPlaceEvent, Flow, Hand, Host,
-    ItemKey, ItemStack, LeftClickBlockEvent, PlayerRef, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RunModCommandEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    HostSide, ItemKey, ItemStack, LeftClickBlockEvent, PlayerRef, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RunModCommandEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
+    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, Tag, Text,
 };
 use std::sync::OnceLock;
@@ -191,6 +194,8 @@ impl Subsystem for Items {
             let key = r.item_key(id);
             r.item_part(key, filters::FilterPart);
         }
+        let key = r.item_key(schedule::ITEM);
+        r.item_part(key, schedule::SchedulePart);
         for id in sandpaper::IDS {
             let key = r.item_key(id);
             r.item_part(key, sandpaper::SandPaper);
@@ -249,27 +254,32 @@ impl Subsystem for Items {
         channel: &str,
         data: &[u8],
     ) -> bool {
-        if channel != filter_screen::CHANNEL {
-            return false;
+        match channel {
+            filter_screen::CHANNEL => filters::client_message(host, player, data),
+            schedule_screen::CHANNEL => schedule::client_message(host, player, data),
+            _ => return false,
         }
-        filters::client_message(host, player, data);
         true
     }
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         filter_screen::server_message(host, channel, data)
+            || schedule_screen::server_message(host, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         filter_screen::tick(host);
+        schedule_screen::tick(host);
     }
 
     fn client_reset(&self) {
         filter_screen::reset();
+        schedule_screen::reset();
     }
 
     fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
         filter_screen::screen_render_post(host, event);
+        schedule_screen::screen_render_post(host, event);
     }
 
     fn screen_mouse_pressed(
@@ -277,7 +287,10 @@ impl Subsystem for Items {
         host: &dyn ClientHost,
         event: &mut ScreenMouseButtonPressedPreEvent<'_>,
     ) -> Flow {
-        filter_screen::screen_mouse_pressed(host, event)
+        match schedule_screen::screen_mouse_pressed(host, event) {
+            Flow::Continue => filter_screen::screen_mouse_pressed(host, event),
+            flow => flow,
+        }
     }
 
     fn screen_mouse_released(
@@ -285,7 +298,10 @@ impl Subsystem for Items {
         host: &dyn ClientHost,
         event: &mut ScreenMouseButtonReleasedPreEvent<'_>,
     ) -> Flow {
-        filter_screen::screen_mouse_released(host, event)
+        match schedule_screen::screen_mouse_released(host, event) {
+            Flow::Continue => filter_screen::screen_mouse_released(host, event),
+            flow => flow,
+        }
     }
 
     fn screen_mouse_scrolled(
@@ -293,7 +309,10 @@ impl Subsystem for Items {
         host: &dyn ClientHost,
         event: &mut ScreenMouseScrolledPreEvent<'_>,
     ) -> Flow {
-        filter_screen::screen_mouse_scrolled(host, event)
+        match schedule_screen::screen_mouse_scrolled(host, event) {
+            Flow::Continue => filter_screen::screen_mouse_scrolled(host, event),
+            flow => flow,
+        }
     }
 
     fn screen_key_pressed(
@@ -301,11 +320,32 @@ impl Subsystem for Items {
         host: &dyn ClientHost,
         event: &mut ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
-        filter_screen::screen_key_pressed(host, event)
+        match schedule_screen::screen_key_pressed(host, event) {
+            Flow::Continue => filter_screen::screen_key_pressed(host, event),
+            flow => flow,
+        }
     }
 
     fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
         filter_screen::screen_closing(host, event);
+        schedule_screen::screen_closing(host, event);
+    }
+
+    fn screen_char_typed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenCharTypedPreEvent<'_>,
+    ) -> Flow {
+        schedule_screen::screen_char_typed(host, event)
+    }
+
+    /// A schedule handed to a conductor, or taken back from one.
+    fn entity_interact(
+        &self,
+        host: HostSide,
+        event: &mut mod_api::EntityInteractEvent<'_>,
+    ) -> Option<mod_api::InteractionResult> {
+        schedule::entity_interact(host, event)
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
