@@ -343,6 +343,7 @@ fn tick_sequencers(lv: &mut ServerLevel<'_>) {
     use create_engine::sequencer::Step;
     let dim = lv.dim;
     let mut steps = Vec::new();
+    let mut checked = Vec::new();
     for (pos, running) in with_world(|w| w.take_sequencer_checks(dim)).unwrap_or_default() {
         let powered = lv.has_neighbor_signal(pos);
         if let Some(step) =
@@ -350,8 +351,12 @@ fn tick_sequencers(lv: &mut ServerLevel<'_>) {
         {
             steps.push((pos, step));
         }
+        checked.push(pos);
     }
     steps.extend(with_world(|w| w.tick_sequencers(dim)).unwrap_or_default());
+    for &pos in checked.iter().chain(steps.iter().map(|(p, _)| p)) {
+        super::sequencer::save_run(lv, pos);
+    }
     for (pos, step) in steps {
         let state = match step {
             Step::Run(n) => n,

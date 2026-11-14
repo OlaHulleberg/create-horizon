@@ -2375,6 +2375,21 @@ impl CreateWorld {
         step
     }
 
+    /// Where the sequence of the sequenced gearshift at `pos` is, to save with it.
+    pub fn sequencer_run(&self, dim: usize, pos: [i32; 3]) -> Option<crate::sequencer::Run> {
+        Some(self.dims[dim].sequencers.get(&pos)?.saved_run())
+    }
+
+    /// The sequenced gearshift at `pos` loaded mid-sequence: it goes on from `run`, its far half
+    /// at the running instruction's modifier.
+    pub fn restore_sequencer(&mut self, dim: usize, pos: [i32; 3], run: crate::sequencer::Run) {
+        let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
+            return;
+        };
+        s.restore(run);
+        self.sequencer_stepped(dim, pos);
+    }
+
     /// The instructions of the sequenced gearshift at `pos`.
     pub fn sequencer_instructions(
         &self,
@@ -4740,6 +4755,55 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0));
         assert!(w.tick_sequencers(0).is_empty(), "idle: nothing ticks");
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_sequenced_gearshift_loaded_at_an_await_goes_on_at_the_next_pulse() {
+        use crate::sequencer::{Instruction, Kind, Run, Step};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:sequenced_gearshift", seq("2")),
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:shaft", vec![("axis", "x")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, [-1, 0, 0], 0, 11);
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, [1, 0, 0], 0, 12);
+        let list = vec![
+            Instruction::new(Kind::Await, -1),
+            Instruction::new(Kind::TurnAngle, 90),
+            Instruction::new(Kind::End, 1),
+        ];
+        w.set_sequencer_instructions(0, [0, 0, 0], list, false);
+        // Saved waiting at the await (index 0), power gone since.
+        w.restore_sequencer(
+            0,
+            [0, 0, 0],
+            Run {
+                current: 0,
+                duration: -1,
+                progress: 0.0,
+                timer: 0,
+                powered_before: false,
+            },
+        );
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "waiting: still");
+        assert_eq!(w.sequencer_run(0, [0, 0, 0]).map(|r| r.current), Some(0));
+        // The pulse moves past the await to the turn.
+        assert_eq!(
+            w.sequencer_redstone(0, [0, 0, 0], true, true),
+            Some(Step::Run(2))
+        );
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(16.0));
         states::clear_range();
     }
 

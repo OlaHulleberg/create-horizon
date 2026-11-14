@@ -285,7 +285,39 @@ pub enum Step {
 
 pub type State = Option<Step>;
 
+/// Where a sequence is, as `SequencedGearshiftBlockEntity.write` saves it: `InstructionIndex`,
+/// `InstructionDuration`, `InstructionProgress`, `Timer` and `PrevPowered`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Run {
+    pub current: i32,
+    pub duration: i32,
+    pub progress: f32,
+    pub timer: i32,
+    pub powered_before: bool,
+}
+
 impl Sequencer {
+    /// Where the sequence is, to save.
+    pub fn saved_run(&self) -> Run {
+        Run {
+            current: self.current,
+            duration: self.duration,
+            progress: self.progress,
+            timer: self.timer,
+            powered_before: self.powered_before,
+        }
+    }
+
+    /// `read`: the sequence goes on where it was saved.
+    pub fn restore(&mut self, run: Run) {
+        let in_list = usize::try_from(run.current).is_ok_and(|i| i < self.instructions.len());
+        self.current = if in_list { run.current } else { -1 };
+        self.duration = run.duration;
+        self.progress = run.progress;
+        self.timer = run.timer;
+        self.powered_before = run.powered_before;
+    }
+
     pub fn is_idle(&self) -> bool {
         self.current == -1
     }
