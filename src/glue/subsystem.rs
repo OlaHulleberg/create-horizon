@@ -30,6 +30,10 @@ pub trait Subsystem: Sync {
     /// The world closed: drop everything kept for it.
     fn world_closed(&self) {}
 
+    /// `Hooks::tags_updated` on the server: its recipes and tags are published (first open and
+    /// each data reload). Caches of recipes are rebuilt here.
+    fn tags_updated(&self, _host: &mut dyn ServerHost) {}
+
     /// A committed block change in level `dim`, in engine ids (0 for any block not Create's).
     /// At least one of `old` and `new` is Create's. Runs inside the write: change the world from
     /// the level tick, not here.

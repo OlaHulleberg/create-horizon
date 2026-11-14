@@ -227,7 +227,7 @@ fn current_speeds(lv: &ServerLevel<'_>, pos: [i32; 3]) -> [f32; 2] {
         .map_or([0.0; 2], |d| speeds_of(&d))
 }
 
-fn speeds_of(data: &Compound) -> [f32; 2] {
+pub fn speeds_of(data: &Compound) -> [f32; 2] {
     match data.get(&SPEEDS.into()) {
         Some(Tag::List(l)) => {
             let at = |i: usize| match l.get(i) {
@@ -303,8 +303,14 @@ impl BlockEntityPart for KineticEntity {
         let speeds = speeds_of(&event.entity.nbt);
         let text = host.block_state_string(event.state).unwrap_or_default();
         let (_, own) = states::split(&text);
+        // The machines `processing` draws moving are drawn again each frame, not kept.
+        let moving = super::processing::moving(block);
         for d in client::draws(block, &info, event.pos, speeds) {
-            draw_part(event.draw, block, &own, &d);
+            if moving {
+                draw_turning(event.draw, block, &own, &d);
+            } else {
+                draw_part(event.draw, block, &own, &d);
+            }
         }
     }
 }
@@ -353,7 +359,6 @@ fn model_block(
         Model::CrankHandle(d) => part("part_hand_crank_handle", dir_name(d)),
         Model::WaterWheel(d) => part("part_water_wheel", dir_name(d)),
         Model::MillstoneCog => part("part_millstone_cog", "up"),
-        Model::PressHead(d) => part("part_press_head", dir_name(d)),
         Model::BearingTop(d) => part("part_bearing_top_wooden", dir_name(d)),
         Model::BearingTopMetal(d) => part("part_bearing_top", dir_name(d)),
         Model::FanPropeller(d) => part("part_fan_propeller", dir_name(d)),
@@ -369,8 +374,13 @@ fn model_block(
         Model::GaugeDial(d) => part("part_gauge_dial", dir_name(d)),
         Model::ArmCog => part("part_arm_cog", "up"),
         Model::HoseCoil(d) => part("part_hose_coil", dir_name(d)),
-        // Posed partials (belts, the mixer's pole and head) are drawn by their own systems.
-        Model::Belt(..) | Model::BeltPulley(_) | Model::MixerPole | Model::MixerHead => None,
+        // Posed partials (belts, the mixer's pole and head) and the press head on its stroke
+        // are drawn by their own systems.
+        Model::Belt(..)
+        | Model::BeltPulley(_)
+        | Model::MixerPole
+        | Model::MixerHead
+        | Model::PressHead(_) => None,
     }
 }
 
@@ -378,6 +388,17 @@ fn model_block(
 /// rest, turning at its speed about its axis through the block's centre (`rpm * 0.3` degrees a
 /// tick), from its starting angle. Kept until the block entity changes.
 pub fn draw_part(
+    draw: &mut dyn BlockEntityDrawContext,
+    block: Block,
+    own: &[(&str, &str)],
+    d: &Draw,
+) {
+    draw_turning(draw, block, own, d);
+    draw.keep();
+}
+
+/// `draw_part` without keeping the drawing.
+pub fn draw_turning(
     draw: &mut dyn BlockEntityDrawContext,
     block: Block,
     own: &[(&str, &str)],
@@ -392,5 +413,4 @@ pub fn draw_part(
         None => draw.block(states::key(model), own),
     };
     draw.still();
-    draw.keep();
 }

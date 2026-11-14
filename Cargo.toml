@@ -11,3 +11,5 @@ description = "Create for Horizon: the native mod (game glue on the mod API)"
 horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }
 # Create's rules as plain Rust with no game types.
 create-engine = { path = "src/engine" }
+# Recipe files as the game gives them (`Recipe::json`).
+serde_json = "1"

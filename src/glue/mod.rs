@@ -4,6 +4,7 @@
 pub mod kinetics;
 pub mod net;
 pub mod persist;
+pub mod processing;
 pub mod server;
 pub mod states;
 pub mod subsystem;
@@ -17,7 +18,7 @@ use std::collections::HashSet;
 use subsystem::Subsystem;
 
 /// Every subsystem, in the order their level ticks run.
-pub static SUBSYSTEMS: &[&dyn Subsystem] = &[&kinetics::Kinetics];
+pub static SUBSYSTEMS: &[&dyn Subsystem] = &[&processing::Processing, &kinetics::Kinetics];
 
 thread_local! {
     /// The columns of each level whose saved data the subsystems have been given.
