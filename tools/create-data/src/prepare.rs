@@ -148,6 +148,38 @@ pub fn convert_recipe(mut doc: Value) -> Option<Value> {
 /// A 1.21.1 loot table as 26.3 writes it, the form Horizon reads: a condition names its kind in
 /// `type` (1.21.1: `condition`), a function in `type` (1.21.1: `function`), and a pool's or
 /// entry's functions are its `modifier` list (1.21.1: `functions`).
+/// The item models of Create's `CustomRenderedItemModelRenderer`s, as 26.3 item definitions: the
+/// item's own model with the partial models its renderer draws over it, at rest (a definition
+/// turns nothing: the wand's bits, the wrench's gear, the cannon's cog and the worldshaper's
+/// accelerator stand still), and the cardboard sword's held model outside the GUI
+/// (`CardboardSwordItemRenderer`). None for an item drawn by its plain model.
+fn custom_rendered(name: &str) -> Option<Value> {
+    let model =
+        |m: &str| json!({ "type": "minecraft:model", "model": format!("create:item/{name}/{m}") });
+    let parts: &[&str] = match name {
+        // `SymmetryWandItemRenderer`: CORE, CORE_GLOW, BITS.
+        "wand_of_symmetry" => &["item", "core", "core_glow", "bits"],
+        // `WrenchItemRenderer`: GEAR.
+        "wrench" => &["item", "gear"],
+        // `PotatoCannonItemRenderer`: COG.
+        "potato_cannon" => &["item", "cog"],
+        // `WorldshaperItemRenderer`: CORE, CORE_GLOW, ACCELERATOR.
+        "handheld_worldshaper" => &["item", "core", "core_glow", "accelerator"],
+        "cardboard_sword" => {
+            return Some(json!({
+                "type": "minecraft:select",
+                "property": "minecraft:display_context",
+                "cases": [{ "when": "gui", "model": model("item") }],
+                "fallback": model("item_in_hand"),
+            }));
+        }
+        _ => return None,
+    };
+    Some(
+        json!({ "type": "minecraft:composite", "models": parts.iter().map(|p| model(p)).collect::<Vec<_>>() }),
+    )
+}
+
 /// NeoForge's `neoforge:composite` model loader (the nixie tube, display and stock links): its
 /// children's elements, in order, become the model's own, their textures joined under the
 /// model's, which vanilla's baker reads. A child's `render_type` has no vanilla form and goes.
@@ -532,7 +564,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         } else {
             format!("create:block/{name}")
         };
-        let doc = json!({ "model": { "type": "minecraft:model", "model": target } });
+        let doc = json!({ "model": custom_rendered(name).unwrap_or_else(|| json!({ "type": "minecraft:model", "model": target })) });
         put(
             &format!("assets/create/items/{name}.json"),
             &serde_json::to_vec_pretty(&doc).unwrap(),
