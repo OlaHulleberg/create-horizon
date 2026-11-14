@@ -18,9 +18,12 @@ use std::collections::HashMap;
 /// position a tick ago and way (`Dir` index); empty while it holds nothing.
 pub const DRAIN_ITEM: &str = "DrainItem";
 
+/// A drain by level and position.
+type Shown = (usize, [i32; 3]);
+
 thread_local! {
     /// What each drain's block entity last showed, by level and position.
-    static SHOWN: RefCell<HashMap<(usize, [i32; 3]), Vec<Tag>>> = RefCell::new(HashMap::new());
+    static SHOWN: RefCell<HashMap<Shown, Vec<Tag>>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn reset() {

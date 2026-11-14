@@ -220,10 +220,13 @@ pub const BOILER: &str = "Boiler";
 /// The key of the game time a spout's filling cycle started, while it runs, for its clients.
 pub const SPOUT_START: &str = "SpoutStart";
 
+/// A block entity's key by level and position.
+type ShownKey = (usize, [i32; 3], &'static str);
+
 thread_local! {
     /// What each spout's, drain's and boiler's block entity last showed its clients, by level
     /// and position.
-    static SHOWN: RefCell<HashMap<(usize, [i32; 3], &'static str), Vec<i32>>> =
+    static SHOWN: RefCell<HashMap<ShownKey, Vec<i32>>> =
         RefCell::new(HashMap::new());
 }
 
