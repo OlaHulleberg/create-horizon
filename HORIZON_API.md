@@ -95,6 +95,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Keeping only some of a block entity's drawing**: `keep()` keeps everything drawn for it, so a block with
   one animated part is drawn every frame (the glue decides through `Subsystem::animated`). A way to hide
   another part's model would let the clockwork bearing's hour hand replace its top.
+- **A colour over a block model a block entity draws** (`SuperByteBuffer.color`): an overstressed
+  network's turning parts flash red, and a recovered one's green (`KineticEffectHandler.overStressedEffect`);
+  `BlockEntityDrawContext::block` draws a model in its own tints, and `terrain_model`'s tint reaches only
+  quads with a tint index. The smoke and cloud that go with the flash are played.
+- **Collision shapes in `can_survive`** (`LevelHost` has none): a hand crank or valve handle is refused
+  only against air or a fluid as it is placed, where Create asks for any collision shape behind it (the
+  neighbour check after placement reads them through `LevelRef::collision_boxes`).
 - **Text alpha in `BlockEntityDrawContext::text`** (display boards' 0.85 / 0.975), and more than one colour per
   line in tooltips (goggles).
 - **A mutable `ClientHost` in screen hooks**: the clipboard screen closes and sends its pages from the next
