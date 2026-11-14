@@ -17,9 +17,9 @@ use create_engine::client::{Draw, Model};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::waterwheel::{DEFAULT_WOOD, wood_of_planks};
 use mod_api::{
-    BlockEntityPart, BlockEntitySubmitEvent, BlockPart, BlockState, ClientHost, Compound, Flow,
-    Hand, HostBlockStates, InteractionResult, ParticleKey, ParticleOptions, Registrar,
-    RightClickBlockEvent, ServerHost, SoundSource, Tag, UseItemOnEvent,
+    BlockEntityPart, BlockEntitySubmitEvent, BlockPart, BlockState, CanSurviveEvent, ClientHost,
+    Compound, Flow, Hand, HostBlockStates, InteractionResult, LevelHost, ParticleKey,
+    ParticleOptions, Registrar, RightClickBlockEvent, ServerHost, SoundSource, Tag, UseItemOnEvent,
 };
 use std::sync::OnceLock;
 
@@ -38,6 +38,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
     ] {
         r.block_part(states::key(block), Wheel);
     }
+    r.block_part(states::key(Block::WaterWheel), Spaced);
     let _ = BLOCK_PARTICLE.set(r.particle_key("minecraft:block"));
     let Some(kind) = kinetics::kind() else {
         return;
@@ -144,6 +145,36 @@ pub fn wood_of(data: &Compound) -> &'static str {
             .and_then(|n| wood_of_planks(&n))
             .unwrap_or(DEFAULT_WOOD),
         _ => DEFAULT_WOOD,
+    }
+}
+
+/// `WaterWheelBlock.canSurvive` as one is placed: a water wheel beside it must turn on the same
+/// axis, and be beside it along that axis.
+struct Spaced;
+
+#[mod_api::horizon_part]
+impl BlockPart for Spaced {
+    fn can_survive(&self, level: &dyn LevelHost, event: &mut CanSurviveEvent) -> Option<bool> {
+        let facing_of = |state: BlockState| {
+            let id = states::id(state)?;
+            with_world(|w| match w.table.get(id) {
+                Some((Block::WaterWheel, i)) => i.facing,
+                _ => None,
+            })
+            .flatten()
+        };
+        let axis = facing_of(event.state)?.axis();
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        for d in Dir::ALL {
+            let at = add(pos, d.offset());
+            let Some(other) = level.block_state(at).and_then(facing_of) else {
+                continue;
+            };
+            if other.axis() != axis || axis != d.axis() {
+                return Some(false);
+            }
+        }
+        None
     }
 }
 
