@@ -44,8 +44,7 @@ use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityPlaceEvent, Flow, Hand, Host,
     ItemKey, ItemStack, LeftClickBlockEvent, PlayerRef, RegisterCommandsEvent, Registrar,
     RegistrationContext, RenderLevelStageEvent, RunModCommandEvent, ScreenClosingEvent,
-    ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, Tag, Text,
 };
 use std::sync::OnceLock;
