@@ -21,7 +21,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   export approximate them by "full collision cube"); `requiresCorrectToolForDrops` / `isCorrectToolForDrops`
   (deployers dig every block at its harvestable speed); the weathering-copper class and age; a block's class
   (copycats guess stairs, bars and trapdoors from tags and ids).
-- **A state's numeric id**, for `level_event(2001, ..)` (block-break particles on a wrenched copycat).
+- **A state's numeric id**, for `level_event(2001, ..)` (block-break particles on a wrenched copycat, a
+  belt's casing taken off).
+- **Content shapes selected by more than one property**: a sloped belt collides as a flat one (Create's
+  `BeltShapes` by facing, slope and part).
 - **The neighbour-shape update of a state placed by code** (`updateShape` against its neighbours): mirrored
   placements of the wand of symmetry skip it.
 - **Waterlogging in `state_for_placement`**: the event carries no fluid at the position, so rails and display
@@ -56,6 +59,8 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **World-space drawing of any block state at a pose**: trains, minecart contraptions and couplings are
   simulated, saved and driven, but not drawn. Moving structures anchored to a block entity are drawn by it,
   lit with the anchor's light (no per-block light in a block entity's draw).
+- **`EntityRef::move_by` for any entity** (`Entity.move`): belts carry mobs by setting their motion
+  each tick, and players by a push from their own client (`push_player`), where Create moves them.
 - **`MinecartRef::set_carrying`** (a cart with a contraption counting as ridden) and **`EntityRef::move_by`**
   (moving a coupled cart off its rail with collisions).
 
@@ -73,6 +78,12 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Reading and setting the local player's movement on the client** (diving boots sinking), **consuming a key
   in `input_key`** (driving a train), and **a client-side left-click-block hook** (the cardboard sword's bonk
   is played from the server).
+- **The player in `left_click_block`**: an arm's chosen point and an ejector's target can't be dropped
+  by left-clicking them with the item.
+- **Retexturing a block's terrain model** (Create's `BeltModel`): a belt with a brass casing shows the
+  andesite casing's texture.
+- **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
+  light inside the chute is dark.
 - **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).
 - **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
 

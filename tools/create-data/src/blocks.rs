@@ -160,13 +160,22 @@ fn sound_block(b: &CreateBlock) -> Option<&'static str> {
     })
 }
 
-/// Whether the base properties require the right tool for drops (copied from the vanilla block
-/// Create's `initialProperties` names).
+/// Whether the block needs the right tool for drops: set in its chain, or by the base
+/// properties Create's `initialProperties` names (copied from a vanilla block: its template's);
+/// a block with no base properties has Registrate's `Properties.of()`, which does not (a belt,
+/// a funnel on an iron template drop by hand as in Create).
 fn requires_tool(b: &CreateBlock) -> Option<bool> {
-    match b.java.base.as_deref()? {
-        "wooden" => Some(false),
-        "stone" | "softMetal" | "copperMetal" | "netheriteMetal" => Some(true),
-        _ => None,
+    if b.java.requires_tool {
+        return Some(true);
+    }
+    match b.java.base.as_deref() {
+        // Only a chain read from the registration Java (it named the block's class) with no
+        // `BuilderTransformers` helper is known to set no base properties.
+        None if b.java.class.is_some() && !b.java.transformed => Some(false),
+        None => None,
+        Some("wooden") => Some(false),
+        Some("stone" | "softMetal" | "copperMetal" | "netheriteMetal") => Some(true),
+        Some(_) => None,
     }
 }
 
@@ -1234,9 +1243,9 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         }
         _ => return None,
     };
-    // KineticBlock.getRenderShape: shafts and cogs are all moving parts (valve handles are hand
-    // cranks: `HandCrankBlock.getRenderShape`); casings, gearboxes and motors keep their model and
-    // show their shafts as parts.
+    // KineticBlock.getRenderShape: shafts and cogs are all moving parts (valve handles, hand
+    // cranks too, are declared with their own states: `own_states`); casings, gearboxes and
+    // motors keep their model and show their shafts as parts.
     let animated = matches!(
         b.name.as_str(),
         "shaft"
@@ -1250,7 +1259,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             | "flywheel"
             | "turntable"
             | "large_water_wheel"
-    ) || b.name.ends_with("valve_handle");
+    );
     Some(Decision::Declared {
         template,
         sounds,
@@ -1342,9 +1351,10 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
     // ValveHandleBlock (HandCrankBlock: DirectionalKineticBlock, waterlogged), copper's
     // properties (`BuilderTransformers.valveHandle`): the hand crank's heavy core template,
     // AllShapes.VALVE_HANDLE to its facing. `FACING` has no default of its own: `any()` is down.
-    // Its model is drawn in the chunk mesh (Create turns the block's own model; not here).
+    // Its model is a moving part, as a hand crank's (`HandCrankBlock.getRenderShape`): the
+    // block entity draws it turned.
     if n == "copper_valve_handle" || dyed(n, "valve_handle").is_some() {
-        return Some(declared(
+        let mut valve = declared(
             "minecraft:heavy_core",
             "minecraft:copper_block",
             true,
@@ -1357,7 +1367,11 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
                 ("waterlogged", bools),
             ]),
             true,
-        ));
+        );
+        if let Decision::Declared { animated, .. } = &mut valve {
+            *animated = true;
+        }
+        return Some(valve);
     }
     // SlidingDoorBlock (DoorBlock, `initialProperties(IRON_DOOR)`, strength 3/6, the sound of
     // its BlockSetType): the iron door's template (both halves, hinges, redstone, no opening by

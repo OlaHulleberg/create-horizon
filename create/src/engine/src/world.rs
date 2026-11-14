@@ -884,6 +884,10 @@ impl CreateWorld {
             // Placed or changed (extracting, powered, shape): looked at again.
             d.funnels.insert(pos, 0);
             d.funnel_timers.at(0, pos);
+            // `FunnelItem.getPlacementState`: a funnel placed over a belt is its belt funnel.
+            if matches!(block, Block::AndesiteFunnel | Block::BrassFunnel) {
+                d.funnel_shapes.push(pos);
+            }
         }
         if block == Block::MechanicalArm {
             d.arms.placed(pos, info.ceiling);
@@ -1141,9 +1145,14 @@ impl CreateWorld {
             // `ItemVaultBlock.onRemove`: its vault splits.
             self.dims[dim].vaults.removed(pos);
         }
-        if matches!(kind(old), Some(Block::Chute | Block::SmartChute))
-            && !matches!(kind(new), Some(Block::Chute | Block::SmartChute))
-        {
+        // The blocks whose filter slot `chute_filters` holds, by the blocks it stays with: a
+        // brass funnel's filter goes with it onto a belt and off it again.
+        let family = |b: Option<Block>| match b {
+            Some(Block::Chute | Block::SmartChute) => Some(0),
+            Some(Block::BrassFunnel | Block::BrassBeltFunnel) => Some(1),
+            _ => None,
+        };
+        if family(kind(old)).is_some() && family(kind(new)) != family(kind(old)) {
             let d = &mut self.dims[dim];
             d.chute_pulls.forget(pos);
             if let Some(f) = d.chute_filters.remove(&pos) {

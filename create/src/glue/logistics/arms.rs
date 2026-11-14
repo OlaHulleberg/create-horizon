@@ -39,8 +39,34 @@ impl Subsystem for Arms {
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        turn_placed_ejectors(lv);
         tick_arms(lv);
         tick_ejectors(lv);
+    }
+
+    fn right_click_block(
+        &self,
+        mut host: mod_api::HostSide,
+        event: &mut mod_api::RightClickBlockEvent<'_>,
+    ) -> mod_api::Flow {
+        let again = match &mut host {
+            mod_api::HostSide::Server(h) => mod_api::HostSide::Server(&mut **h),
+            mod_api::HostSide::Client(h) => mod_api::HostSide::Client(&mut **h),
+        };
+        match select_point(again, event) {
+            mod_api::Flow::Continue => select_ejector_target(host, event),
+            cancel => cancel,
+        }
+    }
+
+    fn entity_place(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityPlaceEvent,
+    ) -> mod_api::Flow {
+        arm_placed(host, event);
+        ejector_placed(host, event);
+        mod_api::Flow::Continue
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
@@ -74,11 +100,10 @@ impl Subsystem for Arms {
     }
 }
 
-/// The block at `pos` as an arm interaction point (`ArmInteractionPointType.getPrimaryType`, in
+/// The arm interaction point type of `block` (`ArmInteractionPointType.getPrimaryType`, in
 /// Create's registry order): the types whose blocks this port has.
-pub fn arm_point(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Point> {
-    let (block, info) = info_at(lv, pos)?;
-    let kind = match block {
+pub fn point_kind(block: Block) -> Option<Kind> {
+    Some(match block {
         Block::Basin => Kind::Basin,
         Block::Belt => Kind::Belt,
         Block::Chute | Block::SmartChute => Kind::Chute,
@@ -91,10 +116,15 @@ pub fn arm_point(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Point> {
         | Block::BrassBeltFunnel => Kind::Funnel,
         Block::Millstone => Kind::Millstone,
         _ => return None,
-    };
+    })
+}
+
+/// The block at `pos` as an arm interaction point.
+pub fn arm_point(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Point> {
+    let (block, info) = info_at(lv, pos)?;
     Some(Point {
         pos,
-        kind,
+        kind: point_kind(block)?,
         facing: info.facing,
     })
 }
@@ -1050,4 +1080,341 @@ fn arms_from_nbt(dim: usize, data: &Compound) {
         d.arms.saved.extend(arms);
         d.ejector_saved.extend(ejectors);
     });
+}
+
+/// `ArmBlockEntity.getRange()`: Create's default `mechanicalArmRange`.
+const ARM_RANGE: i32 = 5;
+
+thread_local! {
+    /// The points each player chose with the arm item in hand (`ArmInteractionPointHandler`'s
+    /// `currentSelection`, kept on the server here): each with whether it is an input (TAKE).
+    static SELECTION: std::cell::RefCell<HashMap<u128, Vec<(Point, bool)>>> =
+        std::cell::RefCell::default();
+}
+
+/// Whether `stack` is a mechanical arm.
+fn is_arm_item(host: &dyn mod_api::Host, stack: Option<&mod_api::ItemStack>) -> bool {
+    stack.is_some_and(|s| items::id_of(host, s) == "create:mechanical_arm")
+}
+
+/// `ArmInteractionPointHandler.rightClickingBlocksSelectsThem`: with the arm in the main hand,
+/// a click on a block an arm can work with selects it, first as an input (a funnel, only ever
+/// an output), and each click after swaps its mode; the action bar says which. The click is the
+/// selection's, so no arm is placed. On a client it only keeps the arm from being placed there.
+pub fn select_point(
+    host: mod_api::HostSide,
+    event: &mut mod_api::RightClickBlockEvent<'_>,
+) -> mod_api::Flow {
+    let click = event.click;
+    let selected = match host {
+        mod_api::HostSide::Client(host) => {
+            click.hand == mod_api::Hand::Main
+                && is_arm_item(&*host, click.stack)
+                && host
+                    .level(host.dimension())
+                    .and_then(|l| l.block_state(&*host, click.pos))
+                    .and_then(super::super::states::id)
+                    .and_then(|id| {
+                        super::super::client_table(&*host, |t| t.get(id).map(|(b, _)| b)).flatten()
+                    })
+                    .and_then(point_kind)
+                    .is_some()
+        }
+        mod_api::HostSide::Server(host) => select_on_server(host, click),
+    };
+    if !selected {
+        return mod_api::Flow::Continue;
+    }
+    *event.cancellation_result = mod_api::InteractionResult::Success;
+    mod_api::Flow::Cancel
+}
+
+/// `select_point` on the server: true when the click selected a point.
+fn select_on_server(host: &mut dyn ServerHost, click: &mod_api::BlockClick<'_>) -> bool {
+    if click.hand != mod_api::Hand::Main || !is_arm_item(&*host, click.stack) {
+        return false;
+    }
+    let dimension = click.dimension.key().id().to_owned();
+    let Some(lv) = ServerLevel::new(host, &dimension) else {
+        return false;
+    };
+    let Some(player) = lv.host.player(click.player) else {
+        return false;
+    };
+    if player.entity().spectator(&*lv.host) == Some(true) {
+        return false;
+    }
+    let (Some(point), Some((block, _))) = (arm_point(&lv, click.pos), info_at(&lv, click.pos))
+    else {
+        return false;
+    };
+    // `cycleMode`: a new point starts as an output and turns at once; a deposit-only point
+    // stays an output.
+    let take = SELECTION.with_borrow_mut(|s| {
+        let list = s.entry(click.player).or_default();
+        let i = match list.iter().position(|(p, _)| p.pos == point.pos) {
+            Some(i) => i,
+            None => {
+                list.push((point, false));
+                list.len() - 1
+            }
+        };
+        let entry = &mut list[i];
+        if !entry.0.kind.deposit_only() {
+            entry.1 = !entry.1;
+        }
+        entry.1
+    });
+    let (key, color) = if take {
+        ("create.mechanical_arm.extract_from", "#7FCDE0")
+    } else {
+        ("create.mechanical_arm.deposit_to", "#DDC166")
+    };
+    let name = coloured(
+        mod_api::Text::translate(format!("block.create.{}", block.name()), Vec::new()),
+        "white",
+    );
+    let line = coloured(mod_api::Text::translate(key, vec![name]), color);
+    let _ = player.action_bar(&mut *lv.host, line);
+    true
+}
+
+/// `text` in colour `color`.
+fn coloured(text: mod_api::Text, color: &str) -> mod_api::Text {
+    let mut style = mod_api::text::TextStyle::default();
+    style.color = Some(color.into());
+    text.with_style(style)
+}
+
+/// `ArmInteractionPointHandler.flushSettings` and `ArmPlacementPacket`: an arm a player places
+/// takes the points they chose that lie within its range; the action bar counts them, or says
+/// how many were out of range. The arm is saved for its block, which `Arms::placed` finds.
+pub fn arm_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEvent) {
+    let Some(placer) = event.placer else {
+        return;
+    };
+    let Some(id) = super::super::states::id(event.state) else {
+        return;
+    };
+    let Some((Block::MechanicalArm, info)) =
+        with_world(|w| w.table.get(id).map(|(b, i)| (b, *i))).flatten()
+    else {
+        return;
+    };
+    let Some(player) = host
+        .players()
+        .server_players()
+        .into_iter()
+        .find(|p| p.entity() == placer)
+    else {
+        return;
+    };
+    let uuid = player.uuid();
+    let Some(mut chosen) = SELECTION.with_borrow_mut(|s| s.remove(&uuid)) else {
+        return;
+    };
+    let pos = [event.pos.x, event.pos.y, event.pos.z];
+    // `BlockPos.closerThan(pos, range)`.
+    let near = |p: [i32; 3]| {
+        let d = [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]];
+        d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < ARM_RANGE * ARM_RANGE
+    };
+    let before = chosen.len();
+    chosen.retain(|(p, _)| near(p.pos));
+    let removed = before - chosen.len();
+    let inputs = chosen.iter().filter(|(_, take)| *take).count();
+    let line = if removed > 0 {
+        Some(coloured(
+            mod_api::Text::translate(
+                "create.mechanical_arm.points_outside_range",
+                vec![mod_api::Text::literal(removed.to_string())],
+            ),
+            "red",
+        ))
+    } else {
+        (!chosen.is_empty()).then(|| {
+            coloured(
+                mod_api::Text::translate(
+                    "create.mechanical_arm.summary",
+                    vec![
+                        mod_api::Text::literal(inputs.to_string()),
+                        mod_api::Text::literal((chosen.len() - inputs).to_string()),
+                    ],
+                ),
+                "white",
+            )
+        })
+    };
+    if let Some(line) = line {
+        let _ = player.action_bar(host, line);
+    }
+    let Some(dim) = placer
+        .level(&*host)
+        .and_then(|l| l.dimension().id(&*host))
+        .and_then(|d| super::super::world::level_index(&d))
+    else {
+        return;
+    };
+    let (inputs, outputs): (Vec<_>, Vec<_>) = chosen.into_iter().partition(|(_, take)| *take);
+    let mut arm = arm::Arm::new(info.ceiling);
+    arm.set_points(
+        pos,
+        inputs.into_iter().map(|(p, _)| p).collect(),
+        outputs.into_iter().map(|(p, _)| p).collect(),
+    );
+    with_world(|w| {
+        w.dims[dim].arms.saved.insert(pos, arm);
+    });
+}
+
+/// Create's default `maxEjectorDistance`.
+const MAX_EJECTOR_DISTANCE: i32 = 32;
+
+thread_local! {
+    /// The block each player chose as the target of the next ejector they place
+    /// (`EjectorTargetHandler.currentSelection`, kept on the server here).
+    static EJECTOR_TARGET: std::cell::RefCell<HashMap<u128, [i32; 3]>> =
+        std::cell::RefCell::default();
+    /// Ejectors just placed that turn to face their target once their block is there
+    /// (`EjectorPlacementPacket.handle`), by level.
+    static EJECTOR_FACING: std::cell::RefCell<Vec<(usize, [i32; 3], Dir)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `EjectorTargetHandler.rightClickingBlocksSelectsThem`: sneaking with an ejector in the main
+/// hand, a click on any block makes it the target of the next ejector placed. On a client it
+/// only keeps the ejector from being placed there.
+pub fn select_ejector_target(
+    host: mod_api::HostSide,
+    event: &mut mod_api::RightClickBlockEvent<'_>,
+) -> mod_api::Flow {
+    let click = event.click;
+    let is_ejector = |host: &dyn mod_api::Host| {
+        click.hand == mod_api::Hand::Main
+            && click
+                .stack
+                .is_some_and(|s| items::id_of(host, s) == "create:weighted_ejector")
+            && host.player(click.player).is_some_and(|p| {
+                crate::glue::items::sneaking(host, p) && p.entity().spectator(host) != Some(true)
+            })
+    };
+    let selected = match host {
+        mod_api::HostSide::Client(host) => is_ejector(&*host),
+        mod_api::HostSide::Server(host) => {
+            let selected = is_ejector(&*host);
+            if selected {
+                EJECTOR_TARGET.with_borrow_mut(|t| t.insert(click.player, click.pos));
+                if let Some(p) = host.player(click.player) {
+                    let line = coloured(
+                        mod_api::Text::translate("create.weighted_ejector.target_set", Vec::new()),
+                        "gold",
+                    );
+                    let _ = p.action_bar(host, line);
+                }
+            }
+            selected
+        }
+    };
+    if !selected {
+        return mod_api::Flow::Continue;
+    }
+    *event.cancellation_result = mod_api::InteractionResult::Success;
+    mod_api::Flow::Cancel
+}
+
+/// `EjectorTargetHandler.getValidTargetDirection`: the way an ejector at `pos` faces to throw
+/// at `target`, straight along x or z within the maximum distance, not right above or below.
+fn ejector_direction(pos: [i32; 3], target: [i32; 3]) -> Option<Dir> {
+    let (dx, dz) = (target[0] - pos[0], target[2] - pos[2]);
+    if (dx, dz) == (0, 0) || dx.abs() > MAX_EJECTOR_DISTANCE || dz.abs() > MAX_EJECTOR_DISTANCE {
+        return None;
+    }
+    match (dx, dz) {
+        (0, _) => Some(if dz < 0 { Dir::North } else { Dir::South }),
+        (_, 0) => Some(if dx < 0 { Dir::West } else { Dir::East }),
+        _ => None,
+    }
+}
+
+/// `EjectorTargetHandler.flushSettings` and `EjectorPlacementPacket`: an ejector a player
+/// places throws at the target they chose (it turns to face it) when that lies straight along
+/// x or z within range; the action bar says where, or why not.
+pub fn ejector_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEvent) {
+    let Some(placer) = event.placer else {
+        return;
+    };
+    let Some(id) = super::super::states::id(event.state) else {
+        return;
+    };
+    let Some(Block::WeightedEjector) = with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten()
+    else {
+        return;
+    };
+    let Some(player) = host
+        .players()
+        .server_players()
+        .into_iter()
+        .find(|p| p.entity() == placer)
+    else {
+        return;
+    };
+    let pos = [event.pos.x, event.pos.y, event.pos.z];
+    let target = EJECTOR_TARGET.with_borrow_mut(|t| t.remove(&player.uuid()));
+    let direction = target.and_then(|t| ejector_direction(pos, t));
+    let (Some(target), Some(direction)) = (target, direction) else {
+        let key = if target.is_none() {
+            "create.weighted_ejector.no_target"
+        } else {
+            "create.weighted_ejector.target_not_valid"
+        };
+        let line = coloured(mod_api::Text::translate(key, Vec::new()), "white");
+        let _ = player.action_bar(host, line);
+        return;
+    };
+    let line = coloured(
+        mod_api::Text::translate(
+            "create.weighted_ejector.targeting",
+            target
+                .iter()
+                .map(|v| mod_api::Text::literal(v.to_string()))
+                .collect(),
+        ),
+        "green",
+    );
+    let _ = player.action_bar(host, line);
+    let Some(dim) = placer
+        .level(&*host)
+        .and_then(|l| l.dimension().id(&*host))
+        .and_then(|d| super::super::world::level_index(&d))
+    else {
+        return;
+    };
+    let h = (target[0] - pos[0] + target[2] - pos[2]).abs();
+    let v = target[1] - pos[1];
+    let mut e = ejector::Ejector::default();
+    e.set_target(h, v);
+    with_world(|w| {
+        w.dims[dim].ejector_saved.insert(pos, e);
+    });
+    EJECTOR_FACING.with_borrow_mut(|f| f.push((dim, pos, direction)));
+}
+
+/// Ejectors placed this tick turn to face their target.
+fn turn_placed_ejectors(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let due: Vec<([i32; 3], Dir)> = EJECTOR_FACING.with_borrow_mut(|f| {
+        let (mine, rest): (Vec<_>, Vec<_>) = f.drain(..).partition(|(d, _, _)| *d == dim);
+        *f = rest;
+        mine.into_iter().map(|(_, p, d)| (p, d)).collect()
+    });
+    for (pos, facing) in due {
+        if info_at(lv, pos).is_some_and(|(b, _)| b == Block::WeightedEjector) {
+            lv.set_property(
+                pos,
+                "facing",
+                super::super::kinetics::dir_name(facing),
+                super::super::server::update_all(),
+            );
+        }
+    }
 }

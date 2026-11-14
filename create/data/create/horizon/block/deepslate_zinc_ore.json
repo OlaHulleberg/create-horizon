@@ -3,6 +3,7 @@
   "properties": {
     "hardness": 4.5,
     "explosion_resistance": 3.0,
+    "requires_tool": true,
     "sounds": "minecraft:deepslate"
   },
   "item": true

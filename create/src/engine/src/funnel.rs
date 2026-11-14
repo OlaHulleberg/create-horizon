@@ -218,9 +218,53 @@ pub fn behind(pos: [i32; 3], facing: Dir) -> [i32; 3] {
     [pos[0] - o[0], pos[1] - o[1], pos[2] - o[2]]
 }
 
+/// `FunnelFilterSlotPositioning`: where a brass funnel facing `facing` (a belt funnel: its
+/// `shape`) shows its filter slot on `side`, in the block; None on a side without one
+/// (`isSideActive`: the front, any side of a vertical funnel, the top of an extended belt
+/// funnel).
+pub fn filter_slot(facing: Dir, shape: Option<BeltShape>, side: Dir) -> Option<[f64; 3]> {
+    use crate::board::sided_offset;
+    let px = |x: f64, y: f64, z: f64| [x / 16.0, y / 16.0, z / 16.0];
+    let vertical = facing.axis() == crate::kinetics::Axis::Y;
+    let active = if vertical {
+        side.axis() != crate::kinetics::Axis::Y
+    } else if shape == Some(BeltShape::Extended) {
+        side == Dir::Up
+    } else {
+        side == facing
+    };
+    if !active {
+        return None;
+    }
+    Some(match shape {
+        Some(BeltShape::Extended) => sided_offset(px(8.0, 15.5, 13.0), facing),
+        Some(BeltShape::Pulling | BeltShape::Pushing) => sided_offset(px(8.0, 12.0, 8.675), side),
+        Some(BeltShape::Retracted) => sided_offset(px(8.0, 13.0, 7.5), side),
+        None if vertical => {
+            let y = if facing == Dir::Down { 14.0 } else { 2.0 };
+            sided_offset(px(8.0, y, 15.5), side)
+        }
+        None => sided_offset(px(8.0, 12.2, 8.55), side),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_funnels_filter_slot_is_on_its_front_or_around_a_vertical_one() {
+        // A funnel facing east: on the east face, 12.2 px up, 8.55 px out from the centre line.
+        let s = filter_slot(Dir::East, None, Dir::East).unwrap();
+        assert!((s[0] - 8.55 / 16.0).abs() < 1e-9 && (s[1] - 12.2 / 16.0).abs() < 1e-9);
+        assert!(filter_slot(Dir::East, None, Dir::North).is_none());
+        // A funnel facing up: on each horizontal side, 2 px up; none on top.
+        assert!(filter_slot(Dir::Up, None, Dir::North).is_some());
+        assert!(filter_slot(Dir::Up, None, Dir::Up).is_none());
+        // An extended belt funnel: on top only.
+        assert!(filter_slot(Dir::North, Some(BeltShape::Extended), Dir::Up).is_some());
+        assert!(filter_slot(Dir::North, Some(BeltShape::Extended), Dir::North).is_none());
+    }
 
     #[test]
     fn stacks_come_out_in_front() {

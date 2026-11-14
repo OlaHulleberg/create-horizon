@@ -1,8 +1,8 @@
 //! `WrenchItem.useOn` on a Create block: sneaking, `onSneakWrenched` (its drops to the player
 //! unless creative, the block gone without drops); else `onWrenched`, turned about the axis of
-//! the face clicked. Belts (their own wrench use) and other blocks are left alone; a block a
-//! subsystem wrenches its own way answers first (`Subsystem::wrench_used`: a copycat's material,
-//! a pipe's glass, a whistle's size). What takes the click before the wrench's use (the legacy
+//! the face clicked. Blocks not Create's are left alone; a block a subsystem wrenches its own way
+//! answers first (`Subsystem::wrench_used`: a copycat's material, a pipe's glass, a whistle's
+//! size, a belt's casing, a funnel's mode). What takes the click before the wrench's use (the legacy
 //! `use_item_on` order) is each block's own: a crafter's edge and a deployer's mode
 //! (processing's `right_click_block`), a bracket (decor's part), a cart assembler (trains'
 //! part), a redstone link (redstone's part).
@@ -30,8 +30,8 @@ impl ItemPart for Wrench {
     }
 }
 
-/// The client's answer, as the server's will be: `IWrenchable`'s `SUCCESS` on a Create block
-/// other than a belt, for a player who may build.
+/// The client's answer, as the server's will be: `IWrenchable`'s `SUCCESS` on a Create block,
+/// for a player who may build.
 fn predict(host: &mut dyn ClientHost, event: &UseOnEvent<'_>) -> Option<InteractionResult> {
     let player = host.player(event.player)?;
     if player.may_build(&*host) != Some(true) {
@@ -42,9 +42,6 @@ fn predict(host: &mut dyn ClientHost, event: &UseOnEvent<'_>) -> Option<Interact
         .block_state(&*host, event.pos)
         .and_then(states::id)?;
     let block = super::super::client_table(&*host, |t| t.get(state).map(|(b, _)| b)).flatten()?;
-    if block == Block::Belt {
-        return None;
-    }
     Some(if block == Block::Nozzle && !sneaking(&*host, player) {
         InteractionResult::Fail
     } else {
@@ -66,9 +63,6 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         return None;
     }
     let block = with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten()?;
-    if block == Block::Belt {
-        return None;
-    }
     let clicked = Dir::from_offset(event.face)?;
     let back = sneaking(&*lv.host, player);
     for s in super::super::SUBSYSTEMS {

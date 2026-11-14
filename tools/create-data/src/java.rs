@@ -16,6 +16,10 @@ pub struct JavaFacts {
     /// `SoundType.X`, lowercased: `metal`, `wood`, `netherite_block`...
     pub sound: Option<String>,
     pub no_occlusion: bool,
+    /// `.requiresCorrectToolForDrops()` set in the chain itself.
+    pub requires_tool: bool,
+    /// A `BuilderTransformers` helper in the chain, which may set base properties of its own.
+    pub transformed: bool,
     /// An item chain that sets `.food(...)`.
     pub food: bool,
     /// `CStress.setImpact(x)` (`setNoImpact` is 0), directly or through a `BuilderTransformers`
@@ -259,6 +263,8 @@ fn facts(body: &str) -> JavaFacts {
             ]
             .iter()
             .any(|t| body.contains(t)),
+        requires_tool: body.contains("requiresCorrectToolForDrops()"),
+        transformed: body.contains("BuilderTransformers."),
         food: body.contains(".food("),
         impact: number_after(body, "CStress.setImpact(")
             .or_else(|| body.contains("CStress.setNoImpact()").then_some(0.0))

@@ -3,6 +3,7 @@
   "properties": {
     "hardness": 0.8,
     "explosion_resistance": 0.8,
+    "requires_tool": false,
     "sounds": "minecraft:white_wool",
     "render_shape": "ENTITYBLOCK_ANIMATED"
   },

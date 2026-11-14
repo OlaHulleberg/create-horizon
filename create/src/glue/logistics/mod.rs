@@ -6,7 +6,7 @@
 //! take through `ITEMS` (`handlers`), and they reach every other inventory through `ITEMS` in
 //! transactions (`items`). Clients get their contents on Create's channels (`create:depot`,
 //! `create:belt`, `create:arm`, `create:ejector`) and draw them from the kinetic block
-//! entity's renderer, every frame (`client`).
+//! entity's renderer (`client`): again each frame while they move, else when they change.
 //!
 //! Left out, for want of an API or because another subsystem owns it:
 //! - `BakedModel.isGui3d` (how a stack lies on a belt or depot) is not in the mod API: an item
@@ -18,9 +18,20 @@
 //! - Containers that are not Create's (vanilla's, other mods') say nothing to Create when they
 //!   change (`contents_changed` reaches only a block's own parts), so a chute under one looks
 //!   again every `RETRY` ticks.
-//! - The ejector item's target and the arm item's points (`/create_debug ejector|arm` in the
-//!   legacy glue), a brass tunnel's mode value box, and the comparators beside a vault's other
-//!   blocks are the commands, interaction and redstone subsystems'.
+//! - An arm's points and an ejector's target are chosen with their items as in Create
+//!   (`arms::select_point`, `arms::select_ejector_target`), but the outlines Create's client draws
+//!   around the chosen blocks are not, and left-clicking a point to drop it is out: the mod API's
+//!   `left_click_block` names no player.
+//! - Belts: a dye, the belt connector's lengthening and the wrench's shortening and splitting
+//!   (`BeltSlicer`) are not in the port; a brass casing is drawn with the andesite casing's
+//!   texture (Create's `BeltModel` retextures the block model; the mod API cannot), and a sloped
+//!   belt collides as a flat one (content shapes select by one property).
+//! - Players riding a belt are pushed by their own client (`push_player`), other entities by
+//!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`.
+//! - Diagonal chutes, a chute's window or casing drawn as Create joins them, and vaults' and
+//!   casings' connected textures are not in the port.
+//! - A brass tunnel's mode value box and the comparators beside a vault's other blocks are the
+//!   interaction and redstone subsystems'; a brass tunnel's side filters are not in the port.
 //!
 //! The kinetic block entity type is declared by `Kinetics`; `Entities`, after it, adds the
 //! handlers and the renderer to it. Belts' segments and pulleys are posed partials that
@@ -54,8 +65,8 @@ use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockPart, ClientHost, Compound, ContentsChangedEvent, Flow, Hand, HostSide, ITEMS,
-    InteractionResult, ItemAfterVerticalCollisionEvent, ModContainer, PlayerRef, Registrar,
+    BlockPart, ClientHost, Compound, ContentsChangedEvent, Flow, Hand, HostBlockStates, HostSide,
+    ITEMS, InteractionResult, ItemAfterVerticalCollisionEvent, ModContainer, PlayerRef, Registrar,
     RegistrationContext, ServerHost, Tag, UseItemOnEvent, UseWithoutItemEvent,
 };
 
@@ -165,6 +176,82 @@ impl Subsystem for Logistics {
         tunnel::tick_brass(lv);
         depot::tick_depots(lv);
         belt::tick_belts(lv);
+        belt::transport_passengers(lv);
+    }
+
+    /// `onWrenched` of Create's logistics blocks (sneaking, they are picked up as any block):
+    /// a funnel toggles extracting, a belt funnel its shape, a chute its window or casing, a
+    /// tunnel its window; a belt loses its casing or pulley (`belt::wrench_belt`). Each of them
+    /// is never turned.
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        player: PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        clicked: Dir,
+        _point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        if sneaking {
+            return false;
+        }
+        let prop = |lv: &ServerLevel<'_>, key: &str| -> Option<String> {
+            let state = lv.block_state(pos)?;
+            let facts = lv.host.block_states();
+            state
+                .property(&facts, key)
+                .ok()
+                .flatten()
+                .map(str::to_owned)
+        };
+        let set = |lv: &mut ServerLevel<'_>, key: &str, value: &str| {
+            lv.set_property(pos, key, value, super::server::update_all());
+        };
+        match block {
+            Block::Belt => {
+                belt::wrench_belt(lv, pos, player, clicked);
+            }
+            // FunnelBlock.onWrenched: `cycle(EXTRACTING)`.
+            Block::AndesiteFunnel | Block::BrassFunnel => {
+                let extracting = prop(lv, "extracting").as_deref() == Some("true");
+                set(lv, "extracting", if extracting { "false" } else { "true" });
+            }
+            // BeltFunnelBlock.onWrenched: pulling and pushing swap, extended and retracted
+            // swap (a funnel over a sloped belt stays retracted).
+            Block::AndesiteBeltFunnel | Block::BrassBeltFunnel => {
+                let sloped = belt::belt_segment(lv, [pos[0], pos[1] - 1, pos[2]])
+                    .is_some_and(|(_, _, s)| s.slope != create_engine::belt::Slope::Horizontal);
+                let next = match prop(lv, "shape").as_deref() {
+                    Some("pulling") => "pushing",
+                    Some("pushing") => "pulling",
+                    Some("extended") => "retracted",
+                    Some("retracted") if !sloped => "extended",
+                    _ => return true,
+                };
+                set(lv, "shape", next);
+            }
+            // ChuteBlock.onWrenched: an encased chute loses its casing; a vertical one swaps
+            // its window; an intersection passes.
+            Block::Chute => {
+                let down = prop(lv, "facing").as_deref() == Some("down");
+                match prop(lv, "shape").as_deref() {
+                    Some("intersection") => {}
+                    Some("encased") => set(lv, "shape", "normal"),
+                    Some("normal") if down => set(lv, "shape", "window"),
+                    Some(_) if down => set(lv, "shape", "normal"),
+                    _ => {}
+                }
+            }
+            // BeltTunnelBlock.onWrenched: a straight tunnel's window opens or closes.
+            Block::AndesiteTunnel | Block::BrassTunnel => match prop(lv, "shape").as_deref() {
+                Some("window") => set(lv, "shape", "closed"),
+                Some("closed") => set(lv, "shape", "window"),
+                _ => {}
+            },
+            _ => return false,
+        }
+        true
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
@@ -193,6 +280,7 @@ impl Subsystem for Logistics {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick_client_depots(host);
         client::tick_client_belts(host);
+        belt::carry_local_player(host);
     }
 
     fn client_reset(&self) {
@@ -205,18 +293,59 @@ impl Subsystem for Logistics {
 /// else.
 pub struct Entities;
 
+/// A block entity key the server bumps when a depot's or belt's contents sent on its channel
+/// change what its kept drawing shows: synced, so the client draws it again.
+const SHOWN: &str = "Shown";
+
+/// A block entity key holding the item a brass funnel's or smart chute's filter slot shows
+/// (an empty string: none), synced for its clients to draw.
+pub(crate) const FILTER: &str = "Filter";
+
+/// Shows filter `filter` in the slot of the block at `pos` (`FILTER`).
+pub(crate) fn show_filter(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    filter: Option<&create_engine::filter::Filter>,
+) {
+    let id = filter
+        .and_then(|f| filters::filter_stack(&*lv.host, f))
+        .map(|s| items::id_of(&*lv.host, &s))
+        .unwrap_or_default();
+    if let Some(entity) = lv.host.block_entity(lv.level, pos) {
+        let data = Compound::from([(FILTER.into(), Tag::String(id.as_str().into()))]);
+        let _ = entity.merge_data(&mut *lv.host, data);
+    }
+}
+
+/// Touches the block entity at `pos` (`SHOWN`) so its clients draw it again.
+pub(crate) fn touch_shown(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let n = match entity
+        .data(&*lv.host)
+        .and_then(|d| d.get(&SHOWN.into()).cloned())
+    {
+        Some(Tag::Int(n)) => n.wrapping_add(1),
+        _ => 1,
+    };
+    let _ = entity.merge_data(&mut *lv.host, Compound::from([(SHOWN.into(), Tag::Int(n))]));
+}
+
 impl Subsystem for Entities {
-    /// Arms and ejectors move their own parts every frame (`client`).
+    /// Arms and ejectors move their own parts every frame, sliding stacks and belts' items
+    /// move (`client::animated`).
     fn animated(
         &self,
         block: create_engine::Block,
-        _pos: [i32; 3],
+        pos: [i32; 3],
         _entity: &mod_api::ModBlockEntity,
     ) -> bool {
-        matches!(
-            block,
-            create_engine::Block::MechanicalArm | create_engine::Block::WeightedEjector
-        )
+        client::animated(block, pos)
+    }
+
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[SHOWN, FILTER]
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
@@ -295,15 +424,10 @@ fn use_block(
         }
         Block::MechanicalArm => arms::use_arm(&mut lv, pos, click.player),
         Block::SmartChute => chute::use_smart_chute(&mut lv, pos, click),
-        // `BeltBlock.useItemOn` with an empty main hand, not sneaking.
-        Block::Belt if held.is_none() && main => {
-            let sneaking = lv
-                .host
-                .player(click.player)
-                .and_then(|p| p.is_secondary_use_active(&*lv.host))
-                .unwrap_or(false);
-            !sneaking && belt::use_belt(&mut lv, pos, click.player)
+        Block::BrassFunnel | Block::BrassBeltFunnel => {
+            funnel::use_funnel_filter(&mut lv, pos, click)
         }
+        Block::Belt => belt::use_belt_with(&mut lv, pos, click.player, click.hand, held.as_deref()),
         _ => false,
     };
     used.then_some(InteractionResult::Success)
@@ -324,7 +448,9 @@ impl BlockPart for LogisticsBlock {
         host: &mut dyn ServerHost,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
-        use_block(host, event.state, event.click)
+        // Create's blocks open no menu: an unused click passes, so the held item is used (a
+        // block placed against a depot's side), never the barrel template's menu.
+        Some(use_block(host, event.state, event.click).unwrap_or(InteractionResult::Pass))
     }
 
     /// `BeltBlock.updateEntityAfterFallOn` / `entityInside` for an item, and
@@ -347,6 +473,29 @@ impl BlockPart for LogisticsBlock {
         };
         item_landed(&mut lv, event.block_pos, event.item_pos, event.stack);
         Flow::Continue
+    }
+
+    /// `BeltBlock.entityInside`: what stands on a belt is carried at the end of the tick.
+    fn entity_inside(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::EntityInsideEvent<'_>,
+    ) {
+        if event.kind == "minecraft:item" {
+            return;
+        }
+        let Some(id) = states::id(event.state) else {
+            return;
+        };
+        let belt = with_world(|w| w.table.get(id).map(|(b, _)| b == Block::Belt)).flatten();
+        if belt != Some(true) {
+            return;
+        }
+        let Some(dim) = super::world::level_index(event.dimension) else {
+            return;
+        };
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        belt::passenger_inside(dim, pos, event.entity as u32);
     }
 
     fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut ContentsChangedEvent) {
@@ -435,7 +584,7 @@ fn item_landed(
             let Some(f) = funnel::funnel_at(lv, spot) else {
                 return;
             };
-            if f.extracting || f.powered {
+            if f.extracting || f.powered || !funnel::funnel_passes(lv, spot, &s) {
                 return;
             }
             let behind = create_engine::funnel::behind(spot, f.facing);

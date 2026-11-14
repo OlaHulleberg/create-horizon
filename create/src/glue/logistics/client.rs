@@ -105,6 +105,23 @@ fn table_info(
     super::super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
 }
 
+/// Whether the logistics block at `pos` is drawn again next frame instead of kept: an
+/// ejector or arm (they move their own parts), a depot whose held stack slides, a belt's
+/// controller carrying items. The server touches the block entity (`SHOWN`) when what a kept
+/// drawing shows changes, so it is drawn once more from the contents it sent first.
+pub fn animated(block: Block, pos: [i32; 3]) -> bool {
+    match block {
+        Block::MechanicalArm | Block::WeightedEjector => true,
+        Block::Depot => CLIENT.with_borrow(|c| c.sliding.contains(&pos)),
+        Block::Belt => CLIENT.with_borrow(|c| {
+            c.belts
+                .get(&pos)
+                .is_some_and(|b| !b.contents.items.is_empty())
+        }),
+        _ => false,
+    }
+}
+
 /// Depots' and belts' contents from the server.
 pub fn logistics_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
     match channel {
@@ -447,6 +464,13 @@ impl BlockEntityPart for LogisticsEntity {
         let Some((block, info)) = table_info(host, event.state) else {
             return;
         };
+        if matches!(
+            block,
+            Block::BrassFunnel | Block::BrassBeltFunnel | Block::SmartChute
+        ) {
+            draw_filter(&mut *event.draw, host, block, &info, &event.entity.nbt);
+            return;
+        }
         if !matches!(
             block,
             Block::Belt | Block::Depot | Block::WeightedEjector | Block::MechanicalArm
@@ -729,6 +753,78 @@ fn draw_ejector(
         draw.rotate_about(axis_of(tumble), tsign * time * 40.0, CENTRE);
         pose(draw, m);
         item(draw, host, id);
+        draw.pop();
+    }
+}
+
+/// Draws the filter a brass funnel or a smart chute shows in its slot (`FilteringRenderer`),
+/// from its block entity's `FILTER`: on each side the slot is on, turned to face out of it
+/// (`ValueBoxTransform.Sided.rotate`; a horizontal funnel's tilted back 22.5°), at half the
+/// value box's half scale for a flat item and its half scale for a block.
+fn draw_filter(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    block: Block,
+    info: &create_engine::parts::StateInfo,
+    nbt: &Compound,
+) {
+    let Some(Tag::String(id)) = nbt.get(&super::FILTER.into()) else {
+        return;
+    };
+    let id = id.to_string_lossy();
+    if id.is_empty() {
+        return;
+    }
+    let Some(stack) = stack_of(host, &id, 1) else {
+        return;
+    };
+    let solid = block_item(host, &id);
+    let scale = 0.5 * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
+    // A slot on the face of a block that occludes (a smart chute here) would take the dark light
+    // inside it; the light outside isn't readable on a client, so it is drawn fully lit.
+    if draw.light() == 0 {
+        draw.set_light(0xF0F0);
+    }
+    for side in [Dir::South, Dir::West, Dir::North, Dir::East, Dir::Up] {
+        let (slot, tilt) = match block {
+            Block::SmartChute => (create_engine::chute::filter_slot(side), 0.0),
+            _ => {
+                let Some(facing) = info.facing else {
+                    return;
+                };
+                let slot = create_engine::funnel::filter_slot(facing, info.belt_funnel, side);
+                let horizontal = facing.axis() != Axis::Y;
+                let tilted = horizontal
+                    && info.belt_funnel.is_none_or(|s| {
+                        matches!(
+                            s,
+                            create_engine::funnel::BeltShape::Pulling
+                                | create_engine::funnel::BeltShape::Pushing
+                        )
+                    });
+                (slot, if tilted { -22.5 } else { 0.0 })
+            }
+        };
+        let Some(slot) = slot else {
+            continue;
+        };
+        // `Sided.rotate`: the side's horizontal angle plus 180°, then 90° up for the top.
+        let y_rot = match side {
+            Dir::South | Dir::Up | Dir::Down => 0.0,
+            Dir::West => 90.0,
+            Dir::North => 180.0,
+            Dir::East => 270.0,
+        } + 180.0;
+        let x_rot = if side == Dir::Up { 90.0 } else { 0.0 };
+        draw.push();
+        draw.translate(slot.map(|v| v as f32));
+        draw.rotate_about(UP, y_rot, [0.0; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], x_rot + tilt, [0.0; 3]);
+        draw.scale([scale; 3]);
+        if !solid {
+            draw.translate([0.0, 0.0, -0.15]);
+        }
+        draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
         draw.pop();
     }
 }

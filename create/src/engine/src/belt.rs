@@ -222,6 +222,88 @@ pub fn movement_facing(rpm: f32, facing: Dir) -> Dir {
     Dir::from_axis(axis, !negative)
 }
 
+/// `BeltMovementHandler.transportEntity`: how far an entity standing on the belt segment `seg`
+/// at `pos` (feet at `feet`) moves this tick, the belt turning at `rpm`; None when the belt
+/// leaves it be (too slow, the entity not on top or off to the side). `steering`: a living
+/// entity walking itself, which is not pulled to the middle.
+pub fn passenger_motion(
+    seg: &Segment,
+    pos: [i32; 3],
+    feet: [f64; 3],
+    rpm: f32,
+    steering: bool,
+) -> Option<[f64; 3]> {
+    if !seg.transports() || rpm.abs() < 1.0 || feet[1] - 0.25 < f64::from(pos[1]) {
+        return None;
+    }
+    let axis = seg.facing.axis();
+    let speed = f64::from(movement_speed(rpm));
+    // `movementDirection`: negative along x, positive along z.
+    let along = if axis == Axis::X { -speed } else { speed };
+    let mut m = if axis == Axis::X {
+        [along, 0.0, 0.0]
+    } else {
+        [0.0, 0.0, along]
+    };
+    let diff_center = if axis == Axis::Z {
+        f64::from(pos[0]) + 0.5 - feet[0]
+    } else {
+        f64::from(pos[2]) + 0.5 - feet[2]
+    };
+    if diff_center.abs() > 48.0 / 64.0 {
+        return None;
+    }
+    // Up or down a slope (the end's top half and the start's bottom half count as on it).
+    let rel = feet[1] - f64::from(pos[1]);
+    let top = 13.0 / 16.0;
+    let sloped = seg.slope != Slope::Horizontal;
+    let (high_end, low_end) = if seg.slope == Slope::Upward {
+        (Part::End, Part::Start)
+    } else {
+        (Part::Start, Part::End)
+    };
+    let on_slope = sloped
+        && (matches!(seg.part, Part::Middle | Part::Pulley)
+            || seg.part == high_end && rel < top
+            || seg.part == low_end && rel > top);
+    // `movementFacing` from the sign of the speed alone.
+    let movement_facing = Dir::from_axis(axis, rpm < 0.0);
+    let with_facing = movement_facing == seg.facing;
+    let mut down = on_slope
+        && seg.slope
+            == if with_facing {
+                Slope::Downward
+            } else {
+                Slope::Upward
+            };
+    let mut up = on_slope
+        && seg.slope
+            == if with_facing {
+                Slope::Upward
+            } else {
+                Slope::Downward
+            };
+    if axis == Axis::Z {
+        std::mem::swap(&mut down, &mut up);
+    }
+    if up {
+        m[1] = along.abs().max(0.13);
+    }
+    if down {
+        m[1] = -along.abs();
+    }
+    if !steering {
+        // `centering`: toward the middle across the belt.
+        let pull = diff_center * speed.abs().min(0.1) * 4.0;
+        if axis == Axis::Z {
+            m[0] += pull;
+        } else {
+            m[2] += pull;
+        }
+    }
+    Some(m)
+}
+
 /// Notes that an item stopped or started moving: clients draw it gliding, so they must hear when
 /// that changes (Create resends a belt whose items changed, `notifyUpdate`).
 fn set_stalled(item: &mut Item, stalled: bool, out: &mut Ticked) {
@@ -1130,6 +1212,21 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_belt_carries_what_stands_on_top_of_it_its_way() {
+        let seg = Segment {
+            facing: Dir::South,
+            slope: Slope::Horizontal,
+            part: Part::Middle,
+        };
+        // 48 RPM south: a tenth of a block a tick south, pulled a little toward the middle.
+        let m = passenger_motion(&seg, [0, 64, 0], [0.6, 64.8125, 0.5], 48.0, false).unwrap();
+        assert!((m[2] - 0.1).abs() < 1e-6 && m[0] < 0.0 && m[1] == 0.0);
+        // Nothing for one inside the belt, or on a belt too slow.
+        assert!(passenger_motion(&seg, [0, 64, 0], [0.5, 64.1, 0.5], 48.0, false).is_none());
+        assert!(passenger_motion(&seg, [0, 64, 0], [0.5, 64.8, 0.5], 0.5, false).is_none());
+    }
 
     struct Open(Ending);
     impl Surroundings for Open {

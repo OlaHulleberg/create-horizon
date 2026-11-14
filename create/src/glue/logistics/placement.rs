@@ -141,6 +141,49 @@ impl BlockPart for Placement {
                 if along { "true" } else { "false" },
             )));
         }
+        // Create's logistics blocks take no facing from their templates' placement.
+        let flag = |b: bool| if b { "true" } else { "false" };
+        match block {
+            // FunnelBlock.getStateForPlacement: extracting unless sneaking; facing away from the
+            // nearest way the player looks whose block behind is no funnel.
+            Block::AndesiteFunnel | Block::BrassFunnel => {
+                let funnel = |p: [i32; 3]| {
+                    level
+                        .block_state(p)
+                        .and_then(states::id)
+                        .and_then(table)
+                        .is_some_and(|(b, _)| super::funnel::is_funnel(b))
+                };
+                let facing = create_engine::place::ordered_by_nearest(c.yaw, c.pitch)
+                    .into_iter()
+                    .map(Dir::opposite)
+                    .find(|f| !funnel(beside(f.opposite())))
+                    .unwrap_or(Dir::Up);
+                let s = set(default, "facing", super::super::kinetics::dir_name(facing));
+                let s = set(s, "extracting", flag(!c.sneaking));
+                return Some(Some(s));
+            }
+            // ChuteBlock.getStateForPlacement: down (diagonal chutes are not in the port).
+            Block::Chute => return Some(Some(set(default, "facing", "down"))),
+            // HorizontalKineticBlock.getStateForPlacement: facing the player.
+            Block::WeightedEjector => {
+                let f = create_engine::place::horizontal_direction(c.yaw).opposite();
+                return Some(Some(set(
+                    default,
+                    "facing",
+                    super::super::kinetics::dir_name(f),
+                )));
+            }
+            // ArmBlock.getStateForPlacement: hanging when placed against a block's underside.
+            Block::MechanicalArm => {
+                return Some(Some(set(
+                    default,
+                    "ceiling",
+                    flag(clicked_face == Dir::Down),
+                )));
+            }
+            _ => {}
+        }
         let mut state = default;
         let mut changed = water;
         let facing = with_world(|w| {

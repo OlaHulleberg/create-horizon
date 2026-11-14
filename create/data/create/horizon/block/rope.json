@@ -3,6 +3,7 @@
   "properties": {
     "hardness": 0.0,
     "explosion_resistance": 0.0,
+    "requires_tool": false,
     "sounds": "minecraft:white_wool"
   },
   "item": false,

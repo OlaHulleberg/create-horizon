@@ -31,6 +31,104 @@ pub fn belt_segment(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<([i32; 3], i3
     Some((c, index, seg))
 }
 
+/// `BeltBlock.useItemOn` for a player who may build and is not sneaking: an empty main hand
+/// takes the segment's items (`use_belt`), a shaft makes a middle segment a pulley (used up
+/// outside creative), a casing cases the segment (`setCasingType`, nothing used up). True when
+/// the click was the belt's. Dyes, packages and the belt connector's and wrench's slicing are
+/// not in the port.
+pub fn use_belt_with(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    player: u128,
+    hand: mod_api::Hand,
+    held: Option<&str>,
+) -> bool {
+    let Some(p) = lv.host.player(player) else {
+        return false;
+    };
+    if crate::glue::items::sneaking(&*lv.host, p) || p.may_build(&*lv.host) != Some(true) {
+        return false;
+    }
+    match held {
+        None => hand == mod_api::Hand::Main && use_belt(lv, pos, player),
+        Some("create:shaft") => {
+            let Some((_, _, seg)) = belt_segment(lv, pos) else {
+                return false;
+            };
+            if seg.part != belt::Part::Middle {
+                return false;
+            }
+            if !crate::glue::items::creative(&*lv.host, p) {
+                crate::glue::items::shrink_held(&mut *lv.host, p, hand, 1);
+            }
+            lv.set_property(pos, "part", "pulley", update_all());
+            true
+        }
+        Some("create:andesite_casing" | "create:brass_casing") => {
+            set_casing(lv, pos, true);
+            // The casing's place sound (wood), at 0.8 of its pitch.
+            let at = pos.map(|v| f64::from(v) + 0.5);
+            lv.level.play_sound(
+                &mut *lv.host,
+                "minecraft:block.wood.place",
+                at,
+                mod_api::SoundSource::Blocks,
+                1.0,
+                0.8,
+            );
+            true
+        }
+        _ => false,
+    }
+}
+
+/// `BeltBlockEntity.setCasingType`: cases the segment at `pos` or takes its casing off. Belts
+/// draw their casing as their block model, so a brass casing shows the andesite one's texture
+/// (Create's `BeltModel` swaps it; the mod API cannot retexture a block's terrain model), and the
+/// casing's break particles are left out (the mod API has no state's numeric id).
+pub fn set_casing(lv: &mut ServerLevel<'_>, pos: [i32; 3], cased: bool) {
+    let flag = if cased { "true" } else { "false" };
+    lv.set_property(pos, "casing", flag, update_all());
+}
+
+/// `BeltBlock.onWrenched` after `BeltSlicer.useWrench` passed it on: a casing comes off when a
+/// side or the bottom is clicked; a pulley clicked on a side becomes a middle segment again, its
+/// shaft back to the player outside creative. True when the wrench did something; the slicing
+/// (shortening a belt from its end, splitting it) is not in the port, so other clicks do nothing.
+pub fn wrench_belt(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    player: mod_api::PlayerRef,
+    clicked: Dir,
+) -> bool {
+    let Some((_, _, seg)) = belt_segment(lv, pos) else {
+        return false;
+    };
+    let cased = lv
+        .block_state(pos)
+        .and_then(|s| {
+            s.property(&lv.host.block_states(), "casing")
+                .ok()
+                .flatten()
+                .map(|v| v == "true")
+        })
+        .unwrap_or(false);
+    if cased && clicked != Dir::Up {
+        set_casing(lv, pos, false);
+        return true;
+    }
+    if seg.part == belt::Part::Pulley && clicked.axis() != Axis::Y {
+        lv.set_property(pos, "part", "middle", update_all());
+        if !crate::glue::items::creative(&*lv.host, player)
+            && let Some(shaft) = items::stack_of(&*lv.host, "create:shaft", 1)
+        {
+            crate::glue::items::give_back(&mut *lv.host, player, shaft);
+        }
+        return true;
+    }
+    false
+}
+
 /// `BeltBlock.useItemOn` with an empty main hand: every item within reach of the segment's
 /// centre goes to the player. True when the click was the belt's.
 pub fn use_belt(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> bool {
@@ -313,7 +411,34 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
         arms_touched(dim, &[], &changed);
         let players = lv.players();
         send_belts(lv, &players, &changed);
+        // A belt that starts carrying is drawn again (its drawing was kept while empty).
+        for c in changed {
+            let carrying = with_world(|w| {
+                w.dims[dim]
+                    .belts
+                    .get(&c)
+                    .is_some_and(|b| !b.items.is_empty())
+            })
+            .unwrap_or(false);
+            let was = CARRYING.with_borrow_mut(|s| {
+                if carrying {
+                    !s.insert((dim, c))
+                } else {
+                    s.remove(&(dim, c));
+                    true
+                }
+            });
+            if !was {
+                super::touch_shown(lv, c);
+            }
+        }
     }
+}
+
+thread_local! {
+    /// Belts (by level and controller) last sent carrying items.
+    static CARRYING: std::cell::RefCell<std::collections::HashSet<(usize, [i32; 3])>> =
+        std::cell::RefCell::default();
 }
 
 fn axis_name(a: Axis) -> &'static str {
@@ -459,6 +584,10 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         let f = funnel_at(self.lv, pos)?;
         let behind = create_engine::funnel::behind(pos, f.facing);
         let stack = belt_stack(self.lv, item)?;
+        // `filtering.test`: a brass funnel lets only what its filter passes in.
+        if !super::funnel::funnel_passes(self.lv, pos, &stack) {
+            return Some(item.count);
+        }
         let left = items::insert_item(self.lv, behind, face(f.facing), stack);
         Some(left.map_or(0, |l| l.count().min(255) as u8))
     }
@@ -475,9 +604,10 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         let movement = self.movement();
         let dim = self.lv.dim;
         // A brass tunnel that distributes (`hasDistributionBehaviour`: an open side across its
-        // axis) takes the whole stack while it holds none, and holds back the next.
+        // axis, or a brass tunnel beside it) takes the whole stack while it holds none, and
+        // holds back the next.
         if with_world(|w| w.dims[dim].brass.contains_key(&t)) == Some(true) {
-            if !shape.junction() {
+            if !shape.junction() && !super::tunnel::brass_connected(self.lv, t) {
                 return false;
             }
             let took = with_world(|w| {
@@ -547,4 +677,114 @@ impl belt::Surroundings for BeltSide<'_, '_> {
             .iter()
             .find_map(|s| s.belt_process(self.lv, at, item, locked))
     }
+}
+
+thread_local! {
+    /// Entities inside a belt segment this tick (`BeltBlock.entityInside`), by level: noted in
+    /// the entity's move, where it can't be moved, and carried at the end of the level's tick.
+    static PASSENGERS: std::cell::RefCell<Vec<(usize, [i32; 3], u32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `BeltBlock.entityInside` for an entity that is not an item (items land on the belt): noted
+/// to be carried.
+pub fn passenger_inside(dim: usize, pos: [i32; 3], entity: u32) {
+    PASSENGERS.with_borrow_mut(|p| p.push((dim, pos, entity)));
+}
+
+/// `BeltMovementHandler.transportEntity` for the entities other than players on this level's
+/// belts: each is moved as the belt runs (`passenger_motion`), up and down slopes and toward the
+/// middle. The mod API moves an entity only by its motion (`EntityRef::set_velocity`), so a
+/// passenger is given the belt's motion each tick rather than moved by it; mobs are not slowed
+/// (Create's slowness).
+pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let mut mine: Vec<([i32; 3], u32)> = PASSENGERS.with_borrow_mut(|p| {
+        if p.is_empty() {
+            return Vec::new();
+        }
+        let mine = p
+            .iter()
+            .filter(|e| e.0 == dim)
+            .map(|e| (e.1, e.2))
+            .collect();
+        p.retain(|e| e.0 != dim);
+        mine
+    });
+    if mine.is_empty() {
+        return;
+    }
+    // One belt segment per entity: the one it stands in (`lastCollidedPos`).
+    mine.sort_by_key(|e| e.1);
+    mine.dedup_by_key(|e| e.1);
+    for (pos, id) in mine {
+        let Some(e) = lv.host.entity(id) else {
+            continue;
+        };
+        // Items land on the belt; players are carried by their own clients
+        // (`carry_local_player`), which move them.
+        let kind = e.kind(&*lv.host).unwrap_or_default();
+        if kind == "minecraft:item" || kind == "minecraft:player" {
+            continue;
+        }
+        let Some((c, _, seg)) = belt_segment(lv, pos) else {
+            continue;
+        };
+        let (Some(feet), Some(v)) = (e.position(&*lv.host), e.velocity(&*lv.host)) else {
+            continue;
+        };
+        let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+        let Some(m) = belt::passenger_motion(&seg, pos, feet, rpm, false) else {
+            continue;
+        };
+        // On a slope its motion carries it up or down against gravity (0.08 a tick).
+        let vy = if m[1] != 0.0 { m[1] + 0.08 } else { v[1] };
+        e.set_velocity(&mut *lv.host, [m[0], vy, m[2]]);
+    }
+}
+
+/// Ground friction a walking entity's motion keeps each tick (a block's 0.6 times 0.91).
+const GROUND_FRICTION: f64 = 0.6 * 0.91;
+
+/// `BeltMovementHandler.transportEntity` for the window's own player, which its client moves:
+/// standing on a running belt (not sneaking, not flying), it is pushed so that it goes the belt's
+/// way at the belt's speed on top of its own walking (a steady push `m (1 - friction)` moves it
+/// `m` a tick more).
+pub fn carry_local_player(host: &mut dyn mod_api::ClientHost) {
+    let Some(player) = host.local_player() else {
+        return;
+    };
+    let e = player.entity();
+    let (Some(feet), Some(level)) = (e.position(&*host), player.level(&*host)) else {
+        return;
+    };
+    if e.is_shift_key_down(&*host) == Some(true)
+        || player.abilities(&*host).is_some_and(|a| a.flying)
+    {
+        return;
+    }
+    let pos = [feet[0], feet[1] - 1.0e-5, feet[2]].map(|v| v.floor() as i32);
+    let Some(seg) = level
+        .block_state(&*host, pos)
+        .and_then(super::super::states::id)
+        .and_then(|id| {
+            super::super::client_table(&*host, |t| t.get(id).and_then(|(_, i)| i.belt)).flatten()
+        })
+    else {
+        return;
+    };
+    let rpm = super::super::kinetics::shown_speeds(&*host, level, pos)[0];
+    let Some(m) = belt::passenger_motion(&seg, pos, feet, rpm, false) else {
+        return;
+    };
+    let keep = 1.0 - GROUND_FRICTION;
+    host.push_player([
+        (m[0] * keep) as f32,
+        if m[1] > 0.0 {
+            (m[1] + 0.08) as f32
+        } else {
+            (m[1] * keep) as f32
+        },
+        (m[2] * keep) as f32,
+    ]);
 }
