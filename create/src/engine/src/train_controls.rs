@@ -94,13 +94,14 @@ impl Frame {
         [rel[0] + 0.5, rel[1] - 1.0, rel[2] + 0.5]
     }
 
-    /// Where a seat of the carriage at block `o` holds its rider's vehicle attachment
-    /// (`getPassengerPosition` with `positionRider`: the rider stands its attachment below the
-    /// seat's bottom centre, their own seat offset and Create's eighth cancelling).
+    /// Where a seat of the carriage at block `o` holds a player's vehicle attachment
+    /// (`getPassengerPosition` with `positionRider`): the player's feet stand a tenth under
+    /// the seat's bottom centre (their attachment off, Create's eighth and the centre's half
+    /// on, the eighth taken off again), their attachment that far over them.
     pub fn seat(&self, o: [i32; 3]) -> Vec3 {
         self.to_world([
             f64::from(o[0]) + 0.5,
-            f64::from(o[1]),
+            f64::from(o[1]) - 0.1 + PLAYER_ATTACHMENT,
             f64::from(o[2]) + 0.5,
         ])
     }
@@ -111,7 +112,7 @@ impl Frame {
     pub fn dismount(&self, o: [i32; 3]) -> Vec3 {
         self.to_world([
             f64::from(o[0]) + 0.5,
-            f64::from(o[1]) + 0.125 - PLAYER_ATTACHMENT,
+            f64::from(o[1]) - 0.1 + 0.125,
             f64::from(o[2]) + 0.5,
         ])
     }
@@ -681,8 +682,8 @@ mod tests {
         // A player on a carriage seat at (0, 0, 1) stands its attachment below the seat's
         // bottom centre; getting off, an eighth over that.
         let f = Frame::new([0.5, 64.0, 0.5], [0.0, 0.0, 1.0], [0, 1]);
-        assert!(close(f.seat([0, 0, 1]), [0.5, 65.0, 1.5]));
-        assert!(close(f.dismount([0, 0, 1]), [0.5, 65.0 + 0.125 - 0.6, 1.5]));
+        assert!(close(f.seat([0, 0, 1]), [0.5, 65.0 - 0.1 + 0.6, 1.5]));
+        assert!(close(f.dismount([0, 0, 1]), [0.5, 65.0 - 0.1 + 0.125, 1.5]));
     }
 
     #[test]

@@ -10,7 +10,7 @@ use super::super::server::{ServerLevel, update_all};
 use super::super::subsystem::Subsystem;
 use super::super::world::with_world;
 use super::super::{kinetics, persist, states};
-use super::{assembly, saved, tracks};
+use super::{assembly, riding, saved, tracks, visuals};
 use create_engine::Block;
 use create_engine::trains::{CURVE_UPDATE_TICKS, Event, Run};
 use mod_api::{
@@ -48,6 +48,39 @@ impl Subsystem for Trains {
 
     fn world_closed(&self) {
         tracks::forget();
+        visuals::forget();
+        riding::forget();
+    }
+
+    /// A carriage's display came back with its chunk: it is discarded at the level's next tick
+    /// unless it is one the trains show now.
+    fn entity_join_level(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityJoinLevelEvent<'_>,
+    ) -> mod_api::Flow {
+        let Some(dim) = super::super::world::level_index(event.dimension) else {
+            return mod_api::Flow::Continue;
+        };
+        if event.kind == "minecraft:block_display" && visuals::is_ours(&*host, event.entity) {
+            visuals::joined(dim, event.entity);
+        }
+        if event.kind == "minecraft:item_display" && riding::is_ours(&*host, event.entity) {
+            riding::joined(dim, event.entity);
+        }
+        mod_api::Flow::Continue
+    }
+
+    /// A rider getting off a carriage's seat is let off where Create lets them off.
+    fn entity_mount(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityMountEvent<'_>,
+    ) -> mod_api::Flow {
+        if !event.mounting && event.vehicle_kind == "minecraft:item_display" {
+            riding::dismounted(host, event.vehicle);
+        }
+        mod_api::Flow::Continue
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -93,6 +126,8 @@ impl Subsystem for Trains {
         // The controls drive before the trains move; their HUD hears of the move after.
         super::controls::before_trains(lv);
         tick_trains(lv);
+        visuals::tick(lv);
+        riding::tick(lv);
         super::controls::after_trains(lv);
         tracks::sync(lv);
     }

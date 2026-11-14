@@ -44,9 +44,11 @@ mod carts;
 mod client;
 mod controls;
 mod railway;
+mod riding;
 mod saved;
 mod structure;
 mod tracks;
+mod visuals;
 
 pub use carts::Carts;
 pub use controls::TrainControls;
