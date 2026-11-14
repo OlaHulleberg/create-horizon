@@ -34,6 +34,7 @@ mod brackets;
 mod clicks;
 mod copper;
 mod crates;
+mod doors;
 mod girders;
 mod items;
 mod placard;
@@ -274,12 +275,17 @@ impl Subsystem for Decor {
         items::register(r);
         brackets::register(r);
         placard::register(r);
+        doors::register(r);
         crates::register(r);
         copper::register(r);
     }
 
     fn world_closed(&self) {
         DECOR.with_borrow_mut(HashMap::clear);
+    }
+
+    fn client_reset(&self) {
+        doors::forget();
     }
 
     /// A Create block changed: ours are looked at after the level's tick. Shafts, cogs and pipes

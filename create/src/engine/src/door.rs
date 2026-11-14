@@ -140,6 +140,67 @@ impl Slide {
     }
 }
 
+/// `SlidingDoorRenderer`'s slide of a sliding (not folding) door at `value` (0 closed, 1 open):
+/// along `facing.getClockWise()` (the other way for a left hinge) by `value² × 13/16`, and out
+/// along its facing by up to 1/32 over the first tenth of the way.
+pub fn slide_offset(facing: Dir, hinge_right: bool, value: f32) -> [f32; 3] {
+    let along = if hinge_right {
+        clockwise(facing)
+    } else {
+        counter_clockwise(facing)
+    };
+    let out = (value * 10.0).clamp(0.0, 1.0) / 32.0;
+    let slide = value * value * 13.0 / 16.0;
+    let (a, f) = (along.offset(), facing.offset());
+    [0, 1, 2].map(|i| a[i] as f32 * slide + f[i] as f32 * out)
+}
+
+/// One leaf of a folding door (`SlidingDoorRenderer`, `isFoldingDoor`) at `value`: the steps
+/// of its pose in order, as the renderer applies them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FoldStep {
+    Translate([f32; 3]),
+    /// Degrees about y through `pivot` (blocks).
+    TurnY { degrees: f32, pivot: [f32; 3] },
+}
+
+/// The pose of a folding door's leaf: `left` the first of the two partials drawn (the left
+/// leaf, or the right one for a right hinge, `partials.get(left ^ flip)`), and whether the left
+/// partial model is the one to draw.
+pub fn fold_pose(facing: Dir, hinge_right: bool, left: bool, value: f32) -> (bool, Vec<FoldStep>) {
+    use FoldStep::*;
+    let flip = hinge_right;
+    let f = if flip { -1.0 } else { 1.0 };
+    let out = (value * 10.0).clamp(0.0, 1.0) / 32.0;
+    let o = facing.offset();
+    let mut steps = vec![
+        Translate([0.0, -1.0 / 512.0, 0.0]),
+        Translate([o[0] as f32 * out, o[1] as f32 * out, o[2] as f32 * out]),
+        TurnY {
+            degrees: crate::decor::horizontal_angle(clockwise(facing)),
+            pivot: [0.5; 3],
+        },
+    ];
+    if flip {
+        steps.push(Translate([0.0, 0.0, 1.0]));
+    }
+    steps.push(TurnY {
+        degrees: 91.0 * f * value * value,
+        pivot: [0.0; 3],
+    });
+    if !left {
+        steps.push(Translate([0.0, 0.0, f / 2.0]));
+        steps.push(TurnY {
+            degrees: -181.0 * f * value * value,
+            pivot: [0.0; 3],
+        });
+    }
+    if flip {
+        steps.push(Translate([0.0, 0.0, -0.5]));
+    }
+    (left ^ flip, steps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,6 +213,34 @@ mod tests {
             open,
             visible: !open,
         }
+    }
+
+    #[test]
+    fn a_sliding_panel_slides_toward_its_hinge_side_and_out() {
+        // Facing north with the hinge right: it slides east (clockwise), 13/16 when open, and
+        // 1/32 north.
+        let open = slide_offset(Dir::North, true, 1.0);
+        assert_eq!(open, [13.0 / 16.0, 0.0, -1.0 / 32.0]);
+        // A left hinge slides it west; half way it has gone a quarter of the way.
+        let half = slide_offset(Dir::North, false, 0.5);
+        assert_eq!(half, [-13.0 / 64.0, 0.0, -1.0 / 32.0]);
+        assert_eq!(slide_offset(Dir::East, true, 0.0), [0.0; 3]);
+    }
+
+    #[test]
+    fn folding_leaves_turn_against_each_other() {
+        let (first, steps) = fold_pose(Dir::South, false, true, 1.0);
+        assert!(first);
+        assert!(steps.contains(&FoldStep::TurnY {
+            degrees: 91.0,
+            pivot: [0.0; 3]
+        }));
+        let (model_left, steps) = fold_pose(Dir::South, true, false, 1.0);
+        assert!(model_left, "a right hinge draws the left leaf second");
+        assert!(steps.contains(&FoldStep::TurnY {
+            degrees: 181.0,
+            pivot: [0.0; 3]
+        }));
     }
 
     #[test]

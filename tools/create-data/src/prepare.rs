@@ -257,6 +257,42 @@ fn convert_worldgen(path: &str, doc: &mut Value, unplaced: &[String]) -> bool {
     !features.iter().all(|f| unplaced(f))
 }
 
+/// The sliding doors whose block entity draws them while they are not `visible`.
+const SLIDING_DOORS: [&str; 5] = [
+    "andesite_door",
+    "brass_door",
+    "copper_door",
+    "train_door",
+    "framed_glass_door",
+];
+
+/// A sliding door's blockstate (`SlidingDoorBlock.getRenderShape`: `ENTITYBLOCK_ANIMATED` while
+/// not `visible`): Create's variants as multipart cases, without those of hidden states, so a
+/// hidden door draws nothing of its own (its block entity draws it sliding).
+fn sliding_door_states(path: &str, bytes: &[u8]) -> Option<Value> {
+    let name = path
+        .strip_prefix("assets/create/blockstates/")?
+        .strip_suffix(".json")?;
+    if !SLIDING_DOORS.contains(&name) {
+        return None;
+    }
+    let doc: Value = serde_json::from_slice(bytes).ok()?;
+    let cases: Vec<Value> = doc["variants"]
+        .as_object()?
+        .iter()
+        .filter(|(key, _)| !key.split(',').any(|kv| kv == "visible=false"))
+        .map(|(key, model)| {
+            let when: serde_json::Map<String, Value> = key
+                .split(',')
+                .filter_map(|kv| kv.split_once('='))
+                .map(|(k, v)| (k.to_owned(), json!(v)))
+                .collect();
+            json!({ "when": when, "apply": model })
+        })
+        .collect();
+    Some(json!({ "multipart": cases }))
+}
+
 /// 1.21.1's block states (`{"Name", "Properties"}`) as 26.3's codec reads them, everywhere inside.
 fn convert_states(v: &mut Value) {
     match v {
@@ -398,6 +434,9 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
                 serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
             flatten_composite(&mut doc);
             put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
+            copied += 1;
+        } else if let Some(door) = sliding_door_states(path, bytes) {
+            put(path, &serde_json::to_vec_pretty(&door).unwrap())?;
             copied += 1;
         } else if path.starts_with("data/create/worldgen/")
             || path.starts_with("data/create/neoforge/biome_modifier/")
@@ -591,6 +630,20 @@ mod tests {
         assert!(!kept("data/neoforge/data_maps/x.json"));
         assert!(kept("data/create/worldgen/placed_feature/zinc_ore.json"));
         assert!(kept("data/create/neoforge/biome_modifier/zinc_ore.json"));
+    }
+
+    #[test]
+    fn hidden_sliding_doors_have_no_model() {
+        let states = json!({ "variants": {
+            "facing=north,half=lower,open=false,visible=true": { "model": "a" },
+            "facing=north,half=lower,open=true,visible=false": { "model": "a", "y": 90 }
+        }});
+        let bytes = serde_json::to_vec(&states).unwrap();
+        let door =
+            sliding_door_states("assets/create/blockstates/brass_door.json", &bytes).unwrap();
+        assert_eq!(door["multipart"].as_array().unwrap().len(), 1);
+        assert_eq!(door["multipart"][0]["when"]["visible"], "true");
+        assert!(sliding_door_states("assets/create/blockstates/oak_window.json", &bytes).is_none());
     }
 
     #[test]

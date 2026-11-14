@@ -136,7 +136,10 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
         lines.push(vec![("    Generator Stats:".into(), 0xFFFFFF)]);
         lines.push(vec![("    Kinetic Stress Capacity:".into(), 0xAAAAAA)]);
         lines.push(vec![
-            (format!("     {}su", number(capacity * speed.abs())), 0x55FFFF),
+            (
+                format!("     {}su", number(capacity * speed.abs())),
+                0x55FFFF,
+            ),
             (" at current speed".into(), 0x555555),
         ]);
     }
@@ -170,7 +173,12 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
         .fold(0.0f32, f32::max)
         .ceil();
     // The title line, then a gap of two, then ten a line.
-    let h = 8.0 + if lines.len() > 1 { 2.0 + (lines.len() - 1) as f32 * 10.0 } else { 0.0 };
+    let h = 8.0
+        + if lines.len() > 1 {
+            2.0 + (lines.len() - 1) as f32 * 10.0
+        } else {
+            0.0
+        };
     // At (width / 2 + overlayOffsetX 20, height / 2 + overlayOffsetY 0), kept on screen, sliding in
     // from 8 px right while it fades.
     let slide = (1.0 - fade).powi(3) * 8.0;

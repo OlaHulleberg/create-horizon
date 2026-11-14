@@ -2343,8 +2343,30 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 69] = [
+pub const PARTIALS: [(&str, &str, &str); 73] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
+    // AllPartialModels.FOLDING_DOORS: the folding doors' two leaves, drawn unturned (`north`)
+    // and posed by the glue as SlidingDoorRenderer poses them.
+    (
+        "part_andesite_door_fold_left",
+        "create:block/andesite_door/fold_left",
+        "north",
+    ),
+    (
+        "part_andesite_door_fold_right",
+        "create:block/andesite_door/fold_right",
+        "north",
+    ),
+    (
+        "part_copper_door_fold_left",
+        "create:block/copper_door/fold_left",
+        "north",
+    ),
+    (
+        "part_copper_door_fold_right",
+        "create:block/copper_door/fold_right",
+        "north",
+    ),
     (
         "part_hand_crank_handle",
         "create:block/hand_crank/handle",
