@@ -269,6 +269,13 @@ pub trait Subsystem: Sync {
     ) {
     }
 
+    /// `Hooks::standalone_models`: models no blockstate names that this subsystem draws
+    /// (`ModelEvent.RegisterStandalone`), by their namespaced file ids.
+    fn standalone_models(&self, _models: &mut Vec<String>) {}
+
+    /// `Hooks::model_baking_completed`: look this subsystem's standalone models up again.
+    fn models_baked(&self, _host: &dyn ClientHost) {}
+
     /// `Hooks::render_level_stage`: draw in the world at one stage of the frame.
     fn render_level_stage(
         &self,

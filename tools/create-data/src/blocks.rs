@@ -2379,7 +2379,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 118] = [
+pub const PARTIALS: [(&str, &str, &str); 121] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     // AllPartialModels.FOLDING_DOORS: the folding doors' two leaves, drawn unturned (`north`)
     // and posed by the glue as SlidingDoorRenderer poses them.
@@ -2900,6 +2900,23 @@ pub const PARTIALS: [(&str, &str, &str); 118] = [
     (
         "part_pipe_drain_east",
         "create:block/fluid_pipe/drain/east",
+        "up",
+    ),
+    // AllPartialModels.SYMMETRY_*: the wand of symmetry's mirrors, as its screen's preview
+    // draws them (a scene of one block); the world's are standalone models.
+    (
+        "part_symmetry_plane",
+        "create:block/symmetry_effect/plane",
+        "up",
+    ),
+    (
+        "part_symmetry_crossplane",
+        "create:block/symmetry_effect/crossplane",
+        "up",
+    ),
+    (
+        "part_symmetry_tripleplane",
+        "create:block/symmetry_effect/tripleplane",
         "up",
     ),
 ];

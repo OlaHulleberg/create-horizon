@@ -8,6 +8,10 @@
 //! given back (`give_back`), sneaking, and a stack's `minecraft:custom_data` under Create's
 //! component names (`custom`, `set_custom`: Horizon adds no component types).
 //!
+//! The wand of symmetry's and the worldshaper's screens (`symmetry_screen`,
+//! `worldshaper_screen`, drawn with `gadget_gui`'s widgets) are the client's own screens, opened
+//! by a sneaking use; their settings come back on their packets' channels.
+//!
 //! Left out (no API for it):
 //! - The wand of symmetry's mirrored placements take the placed state turned, not
 //!   `Block.updateFromNeighbourShapes` of it (the legacy's `update_from_neighbour_shapes`): no
@@ -21,6 +25,7 @@
 mod belt_connector;
 mod fertilizer;
 mod filter_screen;
+mod gadget_gui;
 // The filter slots' helpers, for the subsystems whose blocks hold one.
 pub(crate) mod filters;
 mod nugget;
@@ -28,7 +33,9 @@ mod sandpaper;
 mod sequenced;
 mod sword;
 mod symmetry;
+mod symmetry_screen;
 mod worldshaper;
+mod worldshaper_screen;
 mod wrench;
 
 use super::server::ServerLevel;
@@ -36,7 +43,8 @@ use super::subsystem::Subsystem;
 use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityPlaceEvent, Flow, Hand, Host,
     ItemKey, ItemStack, LeftClickBlockEvent, PlayerRef, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RunModCommandEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
+    RegistrationContext, RenderLevelStageEvent, RunModCommandEvent, ScreenClosingEvent,
+    ScreenKeyPressedPreEvent,
     ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, Tag, Text,
 };
@@ -173,6 +181,7 @@ pub struct Items;
 
 impl Subsystem for Items {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        symmetry::register(r);
         let keys: Vec<ItemKey> = IDS.iter().map(|id| r.item_key(id)).collect();
         let _ = KEYS.set(keys);
         let Some(k) = KEYS.get() else {
@@ -230,18 +239,14 @@ impl Subsystem for Items {
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         filters::level_tick(lv);
+        symmetry::level_tick(lv);
     }
 
-    /// `SandPaperItem.finishUsingItem`.
-    fn use_item_finished(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::LivingEntityUseItemFinishEvent<'_>,
-    ) {
-        sandpaper::finished(host, event);
+    fn world_closed(&self) {
+        symmetry::world_closed();
     }
 
-    /// What a filter's screen chose.
+    /// `ConfigureSymmetryWandPacket`, `ConfigureWorldshaperPacket`.
     fn client_message(
         &self,
         host: &mut dyn ServerHost,
@@ -249,26 +254,53 @@ impl Subsystem for Items {
         channel: &str,
         data: &[u8],
     ) -> bool {
-        if channel != filter_screen::CHANNEL {
-            return false;
+        match channel {
+            symmetry_screen::CHANNEL => symmetry::configure(host, player, data),
+            worldshaper_screen::CHANNEL => worldshaper::configure(host, player, data),
+            filter_screen::CHANNEL => filters::client_message(host, player, data),
+            _ => return false,
         }
-        filters::client_message(host, player, data);
         true
     }
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
-        filter_screen::server_message(host, channel, data)
+        symmetry::server_message(channel, data)
+            || filter_screen::server_message(host, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
+        symmetry::tick(host);
+        symmetry_screen::tick(host);
+        worldshaper::tick(&*host);
+        worldshaper_screen::tick(host);
         filter_screen::tick(host);
     }
 
     fn client_reset(&self) {
+        symmetry::reset();
+        symmetry_screen::reset();
+        worldshaper::reset();
+        worldshaper_screen::reset();
         filter_screen::reset();
     }
 
+    fn standalone_models(&self, models: &mut Vec<String>) {
+        models.extend(symmetry::MODELS.iter().map(|m| (*m).to_owned()));
+    }
+
+    fn models_baked(&self, host: &dyn ClientHost) {
+        symmetry::models_baked(host);
+    }
+
+    /// The mirrors (`SymmetryHandler.onRenderWorld`) and the worldshaper's outline.
+    fn render_level_stage(&self, host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
+        symmetry::render_level_stage(host, event);
+        worldshaper::render_level_stage(host, event);
+    }
+
     fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
+        symmetry_screen::screen_render_post(host, event);
+        worldshaper_screen::screen_render_post(host, event);
         filter_screen::screen_render_post(host, event);
     }
 
@@ -277,7 +309,13 @@ impl Subsystem for Items {
         host: &dyn ClientHost,
         event: &mut ScreenMouseButtonPressedPreEvent<'_>,
     ) -> Flow {
-        filter_screen::screen_mouse_pressed(host, event)
+        match symmetry_screen::screen_mouse_pressed(host, event) {
+            Flow::Continue => match worldshaper_screen::screen_mouse_pressed(host, event) {
+                Flow::Continue => filter_screen::screen_mouse_pressed(host, event),
+                cancel => cancel,
+            },
+            cancel => cancel,
+        }
     }
 
     fn screen_mouse_released(
@@ -285,7 +323,13 @@ impl Subsystem for Items {
         host: &dyn ClientHost,
         event: &mut ScreenMouseButtonReleasedPreEvent<'_>,
     ) -> Flow {
-        filter_screen::screen_mouse_released(host, event)
+        match symmetry_screen::screen_mouse_released(host, event) {
+            Flow::Continue => match worldshaper_screen::screen_mouse_released(host, event) {
+                Flow::Continue => filter_screen::screen_mouse_released(host, event),
+                cancel => cancel,
+            },
+            cancel => cancel,
+        }
     }
 
     fn screen_mouse_scrolled(
@@ -293,7 +337,13 @@ impl Subsystem for Items {
         host: &dyn ClientHost,
         event: &mut ScreenMouseScrolledPreEvent<'_>,
     ) -> Flow {
-        filter_screen::screen_mouse_scrolled(host, event)
+        match symmetry_screen::screen_mouse_scrolled(host, event) {
+            Flow::Continue => match worldshaper_screen::screen_mouse_scrolled(host, event) {
+                Flow::Continue => filter_screen::screen_mouse_scrolled(host, event),
+                cancel => cancel,
+            },
+            cancel => cancel,
+        }
     }
 
     fn screen_key_pressed(
@@ -305,13 +355,22 @@ impl Subsystem for Items {
     }
 
     fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
+        symmetry_screen::screen_closing(host, event);
+        worldshaper_screen::screen_closing(host, event);
         filter_screen::screen_closing(host, event);
+    }
+
+    /// `SandPaperItem.finishUsingItem`.
+    fn use_item_finished(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::LivingEntityUseItemFinishEvent<'_>,
+    ) {
+        sandpaper::finished(host, event);
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         filters::register_commands(event.commands);
-        symmetry::register_commands(event.commands);
-        worldshaper::register_commands(event.commands);
     }
 
     fn run_mod_command(
@@ -323,12 +382,6 @@ impl Subsystem for Items {
         let line = match command.literals.get(1).map(String::as_str) {
             Some("filter") if command.literals[0] == "create_debug" => {
                 filters::command(host, event)
-            }
-            Some("symmetry") if command.literals[0] == "create_debug" => {
-                symmetry::command(host, event)
-            }
-            Some("worldshaper") if command.literals[0] == "create_debug" => {
-                worldshaper::command(host, event)
             }
             _ => return Flow::Continue,
         };
