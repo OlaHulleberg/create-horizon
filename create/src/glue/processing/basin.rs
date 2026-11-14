@@ -492,10 +492,14 @@ pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
         let host = &*lv.host;
         let limit = |i: &str| stacks::limit(host, i);
         let tanks = basin_tanks(dim, basin_pos);
+        // `matchBasinRecipe`: the basin's filter on the recipe's result.
+        let filter = super::filtering::filter_at(dim, basin_pos);
         let found = recipes::with(|r| {
             basin::matching(&r.mixing, &slots, &tanks, heat, limit)
-                .first()
-                .copied()
+                .into_iter()
+                .find(|&i| {
+                    super::filtering::basin_recipe_passes(host, filter.as_ref(), &r.mixing[i])
+                })
         })
         .flatten();
         if let Some(i) = found {
@@ -536,8 +540,14 @@ fn press_on_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let crafted = compressible(lv, &slots);
     let host = &*lv.host;
     let limit = |i: &str| stacks::limit(host, i);
+    // `matchBasinRecipe`: the basin's filter on the recipe's result.
+    let filter = super::filtering::filter_at(dim, basin_pos);
+    let passes =
+        |c: &basin::Recipe| super::filtering::basin_recipe_passes(host, filter.as_ref(), c);
     let found = recipes::with(|r| {
-        let i = *basin::matching(&r.compacting, &slots, &tanks, heat, limit).first()?;
+        let i = basin::matching(&r.compacting, &slots, &tanks, heat, limit)
+            .into_iter()
+            .find(|&i| passes(&r.compacting[i]))?;
         Some((i, r.compacting[i].ingredients.len()))
     })
     .flatten();
@@ -545,6 +555,7 @@ fn press_on_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     // with the most ingredients first (`getMatchingRecipes`' order).
     let crafted = crafted
         .into_iter()
+        .filter(|c| passes(c))
         .find(|c| !basin::matching(std::slice::from_ref(c), &slots, &tanks, heat, limit).is_empty())
         .filter(|c| found.is_none_or(|(_, n)| c.ingredients.len() > n));
     PRESS_CRAFTED.with_borrow_mut(|m| match &crafted {

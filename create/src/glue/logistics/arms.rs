@@ -473,6 +473,13 @@ impl arm::World for ArmWorld<'_, '_> {
             Kind::Deployer => {
                 let mut d = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten()?;
                 let (item, count) = d.held.clone()?;
+                // `DeployerItemHandler.extractItem`: what its filter names stays in its hand.
+                let f = crate::glue::processing::machine_filter(dim, pos);
+                if f.is_some()
+                    && crate::glue::items::filters::passes_item(&*lv.host, f.as_ref(), &item)
+                {
+                    return None;
+                }
                 let n = count.min(amount);
                 if !simulate {
                     d.held = (count > n).then(|| (item.clone(), count - n));
@@ -717,6 +724,15 @@ impl arm::World for ArmWorld<'_, '_> {
                 else {
                     return count;
                 };
+                // `isItemValid`: only what its filter lets through.
+                let f = crate::glue::processing::machine_filter(dim, pos);
+                if !crate::glue::items::filters::passes_item(
+                    &*lv.host,
+                    f.as_ref(),
+                    create_engine::arm::item_id(item),
+                ) {
+                    return count;
+                }
                 let (now, left) = match d.held.clone() {
                     None => {
                         let n = count.min(max);

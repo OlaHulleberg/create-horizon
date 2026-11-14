@@ -46,6 +46,8 @@ mod crafter;
 mod crusher;
 mod deployer;
 mod fan;
+mod filtering;
+pub(crate) use filtering::filter_at as machine_filter;
 mod millstone;
 mod persist;
 mod press;
@@ -234,6 +236,12 @@ impl Subsystem for Processing {
                         super::client_table(&*host, |t| t.get(id).map(|(b, _)| b)).flatten()
                     });
                 if let Some(block) = block
+                    && client::filter_slot_click(&*host, block, &click)
+                {
+                    *event.cancellation_result = mod_api::InteractionResult::Success;
+                    return mod_api::Flow::Cancel;
+                }
+                if let Some(block) = block
                     && passes_item_use(&*host, block, click.stack)
                 {
                     *event.use_block = mod_api::TriState::False;
@@ -361,6 +369,13 @@ fn use_block(host: &mut dyn ServerHost, event: &mut RightClickBlockEvent<'_>) ->
         return mod_api::Flow::Continue;
     };
     let main = click.hand == mod_api::Hand::Main;
+    // A filter slot takes the click first (`ValueSettingsInputHandler`).
+    if matches!(block, Block::Basin | Block::MechanicalSaw | Block::Deployer)
+        && filtering::click(&mut lv, pos, &click)
+    {
+        *event.cancellation_result = mod_api::InteractionResult::Success;
+        return mod_api::Flow::Cancel;
+    }
     // The wrench (`WrenchItem.useOn`, not sneaking): a deployer's front half changes its mode
     // (`onWrenched`), a crafter's edge joins or parts its input (`EdgeInteractionHandler`).
     let wrench = click

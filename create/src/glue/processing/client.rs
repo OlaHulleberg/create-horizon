@@ -412,6 +412,19 @@ impl BlockEntityPart for MachineDraw {
             }
             _ => {}
         }
+        if matches!(block, Block::Basin | Block::MechanicalSaw | Block::Deployer) {
+            draw_machine_filter(
+                host,
+                event.draw,
+                block,
+                &info,
+                event.state,
+                &event.entity.nbt,
+            );
+        }
+        match block {
+            _ => {}
+        }
     }
 }
 
@@ -792,6 +805,90 @@ fn draw_crafter_grid(
         }
     }
     draw.pop();
+}
+
+/// Whether `click` on the processing block `block` lands on its filter slot and is the slot's
+/// (not a wrench's, an arm's or a clipboard's), which the client then takes as used.
+pub fn filter_slot_click(
+    host: &dyn ClientHost,
+    block: Block,
+    click: &mod_api::BlockClick<'_>,
+) -> bool {
+    if !matches!(block, Block::Basin | Block::MechanicalSaw | Block::Deployer) {
+        return false;
+    }
+    let Some(player) = host.player(click.player) else {
+        return false;
+    };
+    if !crate::glue::interaction::values::may_use_value_box(host, player) {
+        return false;
+    }
+    if click.stack.is_some_and(|s| {
+        matches!(
+            stacks::id(host, s).as_str(),
+            "create:wrench" | "create:mechanical_arm" | "create:clipboard"
+        )
+    }) {
+        return false;
+    }
+    let Some(state) = host
+        .level(host.dimension())
+        .and_then(|l| l.block_state(host, click.pos))
+    else {
+        return false;
+    };
+    let Some((_, info)) = states::id(state).and_then(|id| {
+        crate::glue::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
+    }) else {
+        return false;
+    };
+    let flipped = host
+        .block_state_string(state)
+        .is_some_and(|s| s.contains("flipped=true"));
+    let Some(face) = Dir::from_offset(click.hit.face) else {
+        return false;
+    };
+    super::filtering::hit(block, &info, flipped, click.pos, face, click.hit.point)
+}
+
+/// `FilteringRenderer` for the basin, upward saw and deployer: the filter (`logistics::FILTER`)
+/// in each slot, at half the value box's half scale for a flat item and its half scale for a
+/// block.
+fn draw_machine_filter(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    block: Block,
+    info: &StateInfo,
+    state: mod_api::BlockState,
+    nbt: &Compound,
+) {
+    let Some(Tag::String(id)) = nbt.get(&crate::glue::logistics::FILTER.into()) else {
+        return;
+    };
+    let id = id.to_string_lossy();
+    if id.is_empty() {
+        return;
+    }
+    let Some(stack) = stacks::stack(host, &id, 1) else {
+        return;
+    };
+    let flipped = host
+        .block_state_string(state)
+        .is_some_and(|s| s.contains("flipped=true"));
+    let solid = host.item_block(stack.item()).is_some();
+    let scale = 0.5 * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
+    for (_, slot, y_rot, x_rot) in super::filtering::drawn(block, info, flipped) {
+        draw.push();
+        draw.translate(slot.map(|v| v as f32));
+        draw.rotate_about([0.0, 1.0, 0.0], y_rot, [0.0; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], x_rot, [0.0; 3]);
+        draw.scale([scale; 3]);
+        if !solid {
+            draw.translate([0.0, 0.0, -0.15]);
+        }
+        draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+        draw.pop();
+    }
 }
 
 /// `SawRenderer.renderItems`: what an upward saw holds (`SAW_KEY`), lying on it and moving across

@@ -1237,9 +1237,13 @@ impl CreateWorld {
         }
         // The blocks whose filter slot `chute_filters` holds, by the blocks it stays with: a
         // brass funnel's filter goes with it onto a belt and off it again.
+        // The basin's, the saw's and the deployer's filters are kept there too.
         let family = |b: Option<Block>| match b {
             Some(Block::Chute | Block::SmartChute) => Some(0),
             Some(Block::BrassFunnel | Block::BrassBeltFunnel) => Some(1),
+            Some(Block::Basin) => Some(2),
+            Some(Block::MechanicalSaw) => Some(3),
+            Some(Block::Deployer) => Some(4),
             _ => None,
         };
         if family(kind(old)).is_some() && family(kind(new)) != family(kind(old)) {

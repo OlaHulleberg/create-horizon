@@ -936,11 +936,12 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             )),
             own(&[("waterlogged", bools)]),
         ),
-        // SawBlock (DirectionalAxisKineticBlock): facing, its shaft's axis, `flipped`; a full
-        // block here, so items land on top of it.
+        // SawBlock (DirectionalAxisKineticBlock): facing, its shaft's axis, `flipped`;
+        // AllShapes.CASING_12PX to its facing, so items land on its top at 12 px, under the
+        // blade, and its filter slot is in reach.
         "mechanical_saw" => (
             "minecraft:iron_block",
-            None,
+            Some(by_facing(&[[0., 0., 0., 16., 12., 16.]])),
             own(&[
                 ("axis_along_first", bools),
                 ("facing", facing),

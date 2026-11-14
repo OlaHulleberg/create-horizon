@@ -302,6 +302,22 @@ pub fn tick_deployers(lv: &mut ServerLevel<'_>) {
         let Some(facing) = lv.facing_of(pos, Block::Deployer) else {
             continue;
         };
+        // `WAITING`: a held stack its filter doesn't let through leaves its hand (the fake
+        // player's overflow, dropped at the deployer).
+        if let Some(f) = super::filtering::filter_at(dim, pos)
+            && let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten()
+            && let Some(held) = d.held.clone()
+            && !crate::glue::items::filters::passes_item(&*lv.host, Some(&f), &held.0)
+        {
+            let stack = held_stack(lv, &held, d.held_damage);
+            d.held = None;
+            d.held_damage = 0;
+            with_world(|w| w.set_deployer(dim, pos, d));
+            if let Some(s) = stack {
+                lv.spawn_stack(centre(pos), s, [0.0; 3]);
+            }
+            continue;
+        }
         let below = super::step(pos, facing, 2);
         if facing == Dir::Down && takes_from_side(dim, below) && mode == Mode::Use {
             continue;

@@ -282,6 +282,8 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
         match step {
             Step::Wait => {}
             Step::Start => {
+                let filter = super::filtering::filter_at(dim, pos);
+                let host = &*lv.host;
                 recipes::with(|r| {
                     // A sequenced assembly's cutting step alone, when the item is at one
                     // (`getRecipes`), for its processing time.
@@ -300,17 +302,20 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
                         saw.start(&[&time]);
                         return;
                     }
+                    // `outputMatchesFilter`.
                     let list: Vec<&Recipe> = r
                         .cutting
                         .matching(&item)
                         .into_iter()
                         .map(|i| r.cutting.get(i))
+                        .filter(|x| passes(host, filter.as_ref(), x))
                         .collect();
                     saw.start(&list);
                 });
             }
             Step::Apply => {
                 let mut rng = Rng::new(lv.seed_at(pos));
+                let filter = super::filtering::filter_at(dim, pos);
                 let host = &*lv.host;
                 recipes::with(|r| {
                     if let Some((a, _)) = sequenced::step_for(
@@ -322,8 +327,14 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
                         saw.apply_assembly(a, &mut rng);
                         return;
                     }
-                    let list = r.cutting.matching(&item);
-                    let recipe = list.get(saw.index).map(|&i| r.cutting.get(i));
+                    let list: Vec<&Recipe> = r
+                        .cutting
+                        .matching(&item)
+                        .into_iter()
+                        .map(|i| r.cutting.get(i))
+                        .filter(|x| passes(host, filter.as_ref(), x))
+                        .collect();
+                    let recipe = list.get(saw.index).copied();
                     saw.apply(recipe, |i: &str| stacks::limit(host, i), &mut rng);
                 });
             }
@@ -409,6 +420,11 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
         });
         Some(step)
     }
+}
+
+/// `RecipeConditions.outputMatchesFilter`: the saw's filter on a recipe's first result.
+fn passes(host: &dyn mod_api::Host, f: Option<&create_engine::filter::Filter>, r: &Recipe) -> bool {
+    super::filtering::result_passes(host, f, r.results.first().map(|o| o.item.as_str()), None)
 }
 
 /// The key of an upward saw's block entity data its clients draw its items from
