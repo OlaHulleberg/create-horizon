@@ -2832,6 +2832,9 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
             json!({ "minecraft:max_stack_size": b.stack }),
         );
     }
+    if *template == "minecraft:scaffolding" && b.name.ends_with("_scaffolding") {
+        scaffolding_shapes(&mut doc);
+    }
     let (declared, default) = match own {
         Some(Value::Object(o)) => fork_states(template, o),
         _ => (Map::new(), Map::new()),
@@ -2846,6 +2849,31 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
         doc.insert("default_state".into(), Value::Object(default));
     }
     Some(Value::Object(doc))
+}
+
+/// MetalScaffoldingBlock's shapes, declared: Horizon gives scaffolding's context-dependent
+/// collision (`ScaffoldingBlock.getCollisionShape`: solid only from above, unless descending)
+/// only to `minecraft:scaffolding` itself, and a copy without shapes of its own has no collision
+/// shape at all (placing one fails, and the game stops when an entity meets one). Its outline
+/// and collision here are ScaffoldingBlock's `STABLE_SHAPE` (with the bottom slab when
+/// `bottom`): it is stood on as vanilla's, but not climbed through from inside.
+fn scaffolding_shapes(doc: &mut Map<String, Value>) {
+    let stable = json!([
+        [0.0, 0.875, 0.0, 1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0, 0.125, 1.0, 0.125],
+        [0.875, 0.0, 0.0, 1.0, 1.0, 0.125],
+        [0.0, 0.0, 0.875, 0.125, 1.0, 1.0],
+        [0.875, 0.0, 0.875, 1.0, 1.0, 1.0]
+    ]);
+    let mut unstable = stable.clone();
+    if let Value::Array(boxes) = &mut unstable {
+        boxes.push(json!([0.0, 0.0, 0.0, 1.0, 0.125, 1.0]));
+    }
+    doc.insert(
+        "shapes".into(),
+        json!({ "properties": ["bottom"], "values": { "true": unstable }, "default": stable }),
+    );
+    doc.insert("collision_shapes".into(), json!({ "default": stable }));
 }
 
 /// Vanilla 26.3's state properties of the templates blocks with properties of their own are
