@@ -11,6 +11,9 @@
 //! The attributes that read a recipe book (`washable`, `hauntable`, `crushable`, `smeltable`,
 //! `smokable`, `blastable`) ask processing's recipes.
 //!
+//! The item tags `in_tag` offers for a reference item (`ItemStack.getTags`) are the tags it is in
+//! among those the server's data defines (`tags/item`, listed by a data reload listener).
+//!
 //! Left out: `max_enchanted`, which needs each enchantment's maximum level (the host answers it
 //! on the client only, `ItemsClientHost::enchantments`): it tests false.
 
@@ -783,8 +786,40 @@ fn attr_line(kind: &str, value: Option<String>) -> filter_screen::AttrLine {
     }
 }
 
+/// Every item tag the server's data defines, in resource order (`tags/item`), as the last data
+/// reload found them.
+static ITEM_TAGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Lists the item tags of each data load, for `in_tag`.
+struct ItemTagNames;
+
+impl mod_api::ServerReloadListener for ItemTagNames {
+    fn prepare(
+        &self,
+        context: &mod_api::ServerReloadContext,
+    ) -> Result<Box<dyn mod_api::ReloadApply>, mod_api::ReloadResourceError> {
+        let names: Vec<String> = context.list().map(ToString::to_string).collect();
+        Ok(<dyn mod_api::ReloadApply>::new(move || {
+            if let Ok(mut tags) = ITEM_TAGS.lock() {
+                *tags = names;
+            }
+        }))
+    }
+}
+
+/// Registers the item tag listing with each data load.
+pub(crate) fn add_reload_listeners(listeners: &mut dyn mod_api::ServerReloadListeners) {
+    let (Ok(id), Ok(converter)) = (
+        Identifier::parse("create:item_tag_names"),
+        mod_api::FileToIdConverter::json("tags/item"),
+    ) else {
+        return;
+    };
+    let _ = listeners.add_listener(id, converter, std::sync::Arc::new(ItemTagNames));
+}
+
 /// `ItemAttribute.getAllAttributes` of each type, in Create's registration order (the types
-/// this port reads; `in_tag` is not offered: see `filter_screen`).
+/// this port reads).
 fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrLine> {
     const SINGLETONS: [&str; 17] = [
         "placeable",
@@ -811,6 +846,18 @@ fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrL
         .filter(|n| Attribute::parse(n, None).is_ok_and(|a| looked.attribute(&a)))
         .map(|n| attr_line(&format!("create:{n}"), None))
         .collect();
+    // `InTagAttribute.Type.getAllAttributes`: the tags the item is in.
+    let tags = ITEM_TAGS.lock().map(|t| t.clone()).unwrap_or_default();
+    for tag in tags {
+        let inside = Identifier::parse(&tag)
+            .ok()
+            .and_then(|id| host.tags().key(&id))
+            .and_then(|k| host.tags().is_in_tag(stack.item(), k))
+            .unwrap_or(false);
+        if inside {
+            out.push(attr_line("create:in_tag", Some(tag)));
+        }
+    }
     let id = looked.id.clone();
     out.push(attr_line(
         "create:added_by",

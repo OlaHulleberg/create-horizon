@@ -82,6 +82,11 @@ pub(crate) enum Item {
 static KEYS: OnceLock<Vec<ItemKey>> = OnceLock::new();
 
 /// The key of `item`, once registration asked for it.
+/// The data reload listeners of the items (the item tags `in_tag` offers).
+pub(crate) fn add_reload_listeners(listeners: &mut dyn mod_api::ServerReloadListeners) {
+    filters::add_reload_listeners(listeners);
+}
+
 /// Create's tooltips on its items (`ClientEvents.addToItemTooltip`).
 pub(crate) fn item_tooltip(host: &dyn ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {
     tooltip::item_tooltip(host, event);

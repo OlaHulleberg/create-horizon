@@ -355,6 +355,14 @@ impl Hooks for Create {
         }
     }
 
+    fn add_server_reload_listeners(
+        &self,
+        _host: &dyn mod_api::Host,
+        event: &mut mod_api::AddServerReloadListenersEvent<'_>,
+    ) {
+        glue::items::add_reload_listeners(event.listeners);
+    }
+
     fn item_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {
         glue::items::item_tooltip(host, event);
     }
