@@ -167,9 +167,289 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
     }
 }
 
+/// A player's click on a brass tunnel's side filter slot (`SidedFilteringBehaviour` through
+/// `ValueSettingsInputHandler`, at `BrassTunnelFilterSlot`): the held item becomes that side's
+/// filter (a filter item taken from the hand, the one it held given back), an empty hand clears
+/// it. True when the click was a slot's.
+pub fn use_tunnel_filter(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    click: &mod_api::BlockClick<'_>,
+) -> bool {
+    use crate::glue::items::filters;
+    let Some((axis, shape)) = tunnel_state(lv, pos) else {
+        return false;
+    };
+    let Some(p) = lv.host.player(click.player) else {
+        return false;
+    };
+    if !crate::glue::interaction::values::may_use_value_box(&*lv.host, p) {
+        return false;
+    }
+    let held = click.stack.map(|s| super::items::id_of(&*lv.host, s));
+    if held
+        .as_deref()
+        .is_some_and(|h| matches!(h, "create:wrench" | "create:mechanical_arm"))
+    {
+        return false;
+    }
+    let Some(side) = Dir::from_offset(click.hit.face) else {
+        return false;
+    };
+    let Some(slot) = tunnel::filter_slot(axis, shape, side) else {
+        return false;
+    };
+    let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]));
+    if !create_engine::board::hits_box(slot, local) {
+        return false;
+    }
+    let filter = filters::take_filter(lv.host, p, click.hand);
+    let dim = lv.dim;
+    let old = with_world(|w| {
+        let d = &mut w.dims[dim];
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        match filter {
+            Some(f) => d.tunnel_filters.insert((pos, side), f),
+            None => d.tunnel_filters.remove(&(pos, side)),
+        }
+    })
+    .flatten();
+    show_tunnel_filters(lv, pos);
+    filters::return_filter(lv, p, pos, old);
+    true
+}
+
+/// The block entity key listing the items a brass tunnel's side filter slots show, by side
+/// (`Dir` order; an empty string: none), synced for its clients to draw.
+pub const SIDE_FILTERS: &str = "SideFilters";
+
+/// Shows the brass tunnel at `pos`'s side filters (`SIDE_FILTERS`).
+pub fn show_tunnel_filters(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    use crate::glue::items::filters;
+    let dim = lv.dim;
+    let ids: Vec<mod_api::Tag> = Dir::ALL
+        .iter()
+        .map(|side| {
+            let f =
+                with_world(|w| w.dims[dim].tunnel_filters.get(&(pos, *side)).cloned()).flatten();
+            let id = f
+                .and_then(|f| filters::filter_stack(&*lv.host, &f))
+                .map(|s| super::items::id_of(&*lv.host, &s))
+                .unwrap_or_default();
+            mod_api::Tag::String(id.as_str().into())
+        })
+        .collect();
+    if let Some(e) = lv.host.block_entity(lv.level, pos) {
+        let data = mod_api::Compound::from([(SIDE_FILTERS.into(), mod_api::Tag::List(ids))]);
+        let _ = e.merge_data(&mut *lv.host, data);
+    }
+}
+
+/// `selectionMode.withCallback`: the brass tunnel at `pos` and those connected with it take
+/// mode `mode`.
+pub fn set_brass_mode(lv: &ServerLevel<'_>, pos: [i32; 3], mode: tunnel::Mode) {
+    let group = match tunnel_state(lv, pos) {
+        Some((axis, _)) if brass_connected(lv, pos) => brass_group(lv, pos, axis),
+        _ => vec![pos],
+    };
+    let dim = lv.dim;
+    with_world(|w| {
+        for p in group {
+            if let Some(b) = w.dims[dim].brass.get_mut(&p) {
+                b.mode = mode;
+                w.mark_unsaved(dim, p);
+            }
+        }
+    });
+}
+
+/// `BrassTunnelBlockEntity.testFlapFilter`: whether `stack` (item `item`) may pass side `side` of
+/// the brass tunnel at `pos`: its filter there, else the filter of the block beside it there (a
+/// brass funnel's or smart chute's), else anything.
+pub fn flap_filter_passes(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir, item: &str) -> bool {
+    let dim = lv.dim;
+    let o = side.offset();
+    let beside = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+    with_world(|w| {
+        let d = &w.dims[dim];
+        let f = d
+            .tunnel_filters
+            .get(&(pos, side))
+            .or_else(|| d.chute_filters.get(&beside));
+        crate::glue::items::filters::passes_item(&*lv.host, f, item)
+    })
+    .unwrap_or(true)
+}
+
+/// `flapFilterEmpty`: no filter on side `side` of the brass tunnel at `pos`, nor beside it.
+fn flap_filter_empty(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> bool {
+    let dim = lv.dim;
+    let o = side.offset();
+    let beside = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+    with_world(|w| {
+        let d = &w.dims[dim];
+        !d.tunnel_filters.contains_key(&(pos, side)) && !d.chute_filters.contains_key(&beside)
+    })
+    .unwrap_or(true)
+}
+
+/// The brass tunnels connected with the one at `pos` across its axis, itself first
+/// (`gatherValidOutputs`' walk with `getAdjacent`).
+fn brass_group(lv: &ServerLevel<'_>, pos: [i32; 3], axis: Axis) -> Vec<[i32; 3]> {
+    let mut group = vec![pos];
+    for left in [true, false] {
+        let mut at = pos;
+        while let Some(next) = brass_adjacent(lv, at, axis, left) {
+            at = next;
+            group.push(at);
+        }
+    }
+    group
+}
+
+/// `addValidOutputsOf`: the sides of the brass tunnel at `t` its stack may go out by, as
+/// (tunnel, side): for the distributing tunnel itself (`own`) the sides across the belt first,
+/// then ahead; never back, never ahead of a still belt, not into a belt funnel pulling from that
+/// side; a side with something taking items there (`DirectBeltInputBehaviour`), or the way ahead
+/// when nothing solid stops it (the stack is thrown off the belt there).
+fn valid_outputs_of(lv: &ServerLevel<'_>, t: [i32; 3], own: bool) -> Vec<([i32; 3], Dir)> {
+    let dim = lv.dim;
+    let below = [t[0], t[1] - 1, t[2]];
+    let Some((c, _, seg)) = belt_segment(lv, below) else {
+        return Vec::new();
+    };
+    let Some((axis, shape)) = tunnel_state(lv, t) else {
+        return Vec::new();
+    };
+    let speed = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+    let movement = create_engine::belt::movement_facing(speed, seg.facing);
+    let open = tunnel::sides(axis, shape);
+    let order = [Dir::South, Dir::West, Dir::North, Dir::East];
+    let mut out = Vec::new();
+    for side_pass in [true, false] {
+        if !own && side_pass {
+            continue;
+        }
+        for d in order {
+            if d == movement && speed == 0.0 {
+                continue;
+            }
+            if own && side_pass == (d.axis() == movement.axis()) {
+                continue;
+            }
+            if d == movement.opposite() || !open.contains(&d) {
+                continue;
+            }
+            let o = d.offset();
+            let offset = [below[0] + o[0], below[1], below[2] + o[2]];
+            let funnel = super::funnel::funnel_at(lv, [offset[0], offset[1] + 1, offset[2]]);
+            if funnel.is_some_and(|f| {
+                f.belt == Some(create_engine::funnel::BeltShape::Pulling) && f.facing == d
+            }) {
+                continue;
+            }
+            if super::belt::direct_input_at(lv, offset) {
+                if super::belt::direct_input_accepts(lv, offset, d) {
+                    out.push((t, d));
+                }
+                continue;
+            }
+            if d == movement && !solid_toward(lv, offset, d.opposite()) {
+                out.push((t, d));
+            }
+        }
+    }
+    out
+}
+
+/// `BlockHelper.hasBlockSolidSide` of the block at `pos` on side `face`.
+fn solid_toward(lv: &ServerLevel<'_>, pos: [i32; 3], face: Dir) -> bool {
+    let face = match face {
+        Dir::Down => mod_api::BlockFace::Down,
+        Dir::Up => mod_api::BlockFace::Up,
+        Dir::North => mod_api::BlockFace::North,
+        Dir::South => mod_api::BlockFace::South,
+        Dir::West => mod_api::BlockFace::West,
+        Dir::East => mod_api::BlockFace::East,
+    };
+    lv.level
+        .block_face_sturdy(&*lv.host, pos, face, mod_api::SupportType::Full)
+        == Some(true)
+}
+
+/// `insertIntoTunnel`: `n` of the stack out of side `d` of the brass tunnel `t` (None: that side
+/// takes none of it, else what is left). Its filter must pass it; something taking items there
+/// takes what it does (and the flap swings out); else, ahead, the stack is thrown off the belt.
+fn insert_into_tunnel(
+    lv: &mut ServerLevel<'_>,
+    t: [i32; 3],
+    d: Dir,
+    item: &create_engine::belt::Item,
+    simulate: bool,
+) -> Option<u8> {
+    if !flap_filter_passes(lv, t, d, &item.item) {
+        return None;
+    }
+    let dim = lv.dim;
+    let below = [t[0], t[1] - 1, t[2]];
+    let (c, index, seg) = belt_segment(lv, below)?;
+    let o = d.offset();
+    let p = [below[0] + o[0], below[1], below[2] + o[2]];
+    if super::belt::direct_input_at(lv, p) {
+        if !super::belt::direct_input_accepts(lv, p, d) {
+            return None;
+        }
+        if simulate {
+            // A depot takes a stack only while empty; the rest are asked when it is handed on.
+            let depot = with_world(|w| w.dims[dim].depots.contains_key(&p)) == Some(true);
+            if depot && !depot_items(lv, p).is_empty() {
+                return Some(item.count);
+            }
+            return Some(0);
+        }
+        let left = insert_into(lv, p, d, item);
+        if left == Some(0) {
+            super::flaps::tunnel(lv, below, d, false);
+        }
+        return left;
+    }
+    let speed = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+    let movement = create_engine::belt::movement_facing(speed, seg.facing);
+    if d != movement || solid_toward(lv, p, d.opposite()) {
+        return None;
+    }
+    if !simulate {
+        super::flaps::tunnel(lv, below, d, true);
+        // Thrown off ahead of the segment, forward and a little up.
+        let length = with_world(|w| {
+            let dd = &w.dims[dim];
+            dd.belts.get(&c).map(|b| b.chain.len() as i32)
+        })
+        .flatten()
+        .unwrap_or(1);
+        let aware = create_engine::belt::direction_aware_speed(speed, seg.facing);
+        let extra = if aware > 0.0 { 1 } else { 0 };
+        let at = create_engine::belt::vector_for_offset(c, &seg, length, (index + extra) as f32);
+        let v = create_engine::belt::movement_speed(speed)
+            .abs()
+            .max(1.0 / 8.0);
+        let dv = d.offset();
+        let motion = [
+            f64::from(dv[0]) * f64::from(v),
+            1.0 / 8.0,
+            f64::from(dv[2]) * f64::from(v),
+        ];
+        if let Some(stack) = super::belt::belt_stack(lv, item) {
+            super::items::drop_stack(lv, [at[0], at[1] + 6.0 / 16.0, at[2]], motion, stack, 10);
+        }
+    }
+    Some(0)
+}
+
 /// Brass tunnels holding a stack (`BrassTunnelBlockEntity.tick`): two ticks after it arrives
-/// (then every `brassTunnelTimer` while some is left), the stack is split among the outputs
-/// beside and ahead of the segment: a belt or depot across each open side, the belt ahead.
+/// (then every `brassTunnelTimer` while some is left), the stack is split among the outputs of
+/// the tunnel and those connected with it, filtered sides first, as its mode says; synchronizing
+/// tunnels hand out only while every one of their group holds a stack.
 pub fn tick_brass(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let Some(list) = with_world(|w| w.dims[dim].brass_running.clone()) else {
@@ -184,10 +464,8 @@ pub fn tick_brass(lv: &mut ServerLevel<'_>) {
         if b.progress > 0 {
             b.progress -= 1;
         }
-        let belt = belt_segment(lv, below);
-        let rpm = belt
-            .as_ref()
-            .and_then(|(c, ..)| with_world(|w| w.speed(dim, *c)).flatten())
+        let rpm = belt_segment(lv, below)
+            .and_then(|(c, ..)| with_world(|w| w.speed(dim, c)).flatten())
             .unwrap_or(0.0);
         let save = |b: &tunnel::Brass| {
             with_world(|w| {
@@ -195,73 +473,64 @@ pub fn tick_brass(lv: &mut ServerLevel<'_>) {
                 if let Some(x) = d.brass.get_mut(&t) {
                     *x = b.clone();
                 }
-                if b.stack.is_none() {
+                if b.stack.is_none() && !b.synced {
                     d.brass_running.retain(|p| *p != t);
                 }
             });
         };
-        let (Some((_, _, seg)), Some((item, count))) = (belt, b.stack.clone()) else {
-            save(&b);
-            continue;
-        };
-        if rpm == 0.0 {
+        if rpm == 0.0 || b.stack.is_none() && !b.synced {
             save(&b);
             continue;
         }
-        let movement = create_engine::belt::movement_facing(rpm, seg.facing);
-        let Some((axis, shape)) = tunnel_state(lv, t) else {
+        let Some((axis, _)) = tunnel_state(lv, t) else {
             continue;
         };
-        // `gatherValidOutputs`: this tunnel's sides across first, then ahead (never back), then
-        // what lies ahead and beside the brass tunnels next to it across its axis
-        // (`addValidOutputsOf`), as targets beside a belt segment.
-        let open = tunnel::sides(axis, shape);
-        let order = [Dir::South, Dir::West, Dir::North, Dir::East];
-        let takes = |p: [i32; 3]| {
-            with_world(|w| {
-                w.dims[dim].depots.contains_key(&p) || w.dims[dim].belt_of.contains_key(&p)
-            }) == Some(true)
-        };
-        let beside = |at: [i32; 3], d: Dir| {
-            let o = d.offset();
-            [at[0] + o[0], at[1], at[2] + o[2]]
-        };
-        let mut outputs: Vec<([i32; 3], Dir)> = order
-            .iter()
-            .filter(|d| d.axis() != movement.axis())
-            .chain(order.iter().filter(|d| **d == movement))
-            .copied()
-            .filter(|d| open.contains(d) && Some(*d) != b.entered_from)
-            .filter(|d| takes(beside(below, *d)))
-            .map(|d| (below, d))
-            .collect();
-        for left in [true, false] {
-            let mut at = t;
-            while let Some(next) = brass_adjacent(lv, at, axis, left) {
-                at = next;
-                let Some((next_axis, next_shape)) = tunnel_state(lv, at) else {
-                    break;
-                };
-                let seg = [at[0], at[1] - 1, at[2]];
-                let Some((c, _, s)) = belt_segment(lv, seg) else {
+        if b.progress == -1 {
+            let group = brass_group(lv, t, axis);
+            if b.mode == tunnel::Mode::Synchronize {
+                // `syncedOutputActive`: all of the group full, or all empty.
+                let held: Vec<bool> = group
+                    .iter()
+                    .map(|p| {
+                        with_world(|w| w.dims[dim].brass.get(p).is_some_and(|x| x.stack.is_some()))
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                let (all_full, all_empty) = (held.iter().all(|h| *h), held.iter().all(|h| !*h));
+                if all_full || all_empty {
+                    with_world(|w| {
+                        let d = &mut w.dims[dim];
+                        for p in &group {
+                            if let Some(x) = d.brass.get_mut(p) {
+                                x.synced = !all_empty;
+                                if x.synced && !d.brass_running.contains(p) {
+                                    d.brass_running.push(*p);
+                                }
+                            }
+                        }
+                    });
+                    b.synced = !all_empty;
+                }
+                if !b.synced {
+                    save(&b);
                     continue;
-                };
-                let speed = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
-                let moving = create_engine::belt::movement_facing(speed, s.facing);
-                for d in order {
-                    if d == moving.opposite()
-                        || (d == moving && speed == 0.0)
-                        || !tunnel::sides(next_axis, next_shape).contains(&d)
-                        || !takes(beside(seg, d))
-                    {
-                        continue;
-                    }
-                    outputs.push((seg, d));
                 }
             }
-        }
-        if b.progress == -1 {
-            if outputs.is_empty() {
+            let Some((item, count)) = b.stack.clone() else {
+                save(&b);
+                continue;
+            };
+            let mut one = create_engine::belt::Item::new(&item, count, 180, false);
+            one.progress = b.stack_progress.clone();
+            let outputs: Vec<([i32; 3], Dir)> = group
+                .iter()
+                .enumerate()
+                .flat_map(|(i, g)| valid_outputs_of(lv, *g, i == 0))
+                .collect();
+            let any = outputs
+                .into_iter()
+                .any(|(g, d)| insert_into_tunnel(lv, g, d, &one, true).is_some());
+            if !any {
                 save(&b);
                 continue;
             }
@@ -278,35 +547,60 @@ pub fn tick_brass(lv: &mut ServerLevel<'_>) {
             save(&b);
             continue;
         }
-        // `insertIntoTunnel`: a depot takes a stack while empty, a belt one it has room for.
-        let left = tunnel::distribute(
-            count,
-            outputs.len(),
-            b.previous_output,
-            b.mode,
-            |i, n, simulate| {
-                let (at, d) = outputs[i];
-                let p = beside(at, d);
-                if simulate {
-                    let depot = with_world(|w| w.dims[dim].depots.contains_key(&p)) == Some(true);
-                    if depot && !depot_items(lv, p).is_empty() {
-                        return Some(n);
-                    }
-                    return Some(0);
+        let Some((item, count)) = b.stack.clone() else {
+            b.progress = -1;
+            save(&b);
+            continue;
+        };
+        let group = brass_group(lv, t, axis);
+        let mut one = create_engine::belt::Item::new(&item, count, 180, false);
+        one.progress = b.stack_progress.clone();
+        // `distributionTargets`: the filtered sides first, then the rest; never back out of
+        // the side it came in by.
+        let mut filtered = Vec::new();
+        let mut plain = Vec::new();
+        for (i, g) in group.iter().enumerate() {
+            for (g2, d) in valid_outputs_of(lv, *g, i == 0) {
+                if g2 == t && Some(d) == b.entered_from {
+                    continue;
                 }
-                let mut one = create_engine::belt::Item::new(&item, n, 180, false);
-                one.progress = b.stack_progress.clone();
-                insert_into(lv, p, d, &one)
-            },
-        );
+                if insert_into_tunnel(lv, g2, d, &one, true).is_none() {
+                    continue;
+                }
+                if flap_filter_empty(lv, g2, d) {
+                    plain.push((g2, d));
+                } else {
+                    filtered.push((g2, d));
+                }
+            }
+        }
+        let mut left = count;
+        for outputs in [filtered, plain] {
+            if left == 0 || outputs.is_empty() {
+                continue;
+            }
+            let random = super::items::random_angle(lv, t) as usize;
+            left = tunnel::distribute(
+                left,
+                outputs.len(),
+                b.previous_output,
+                b.mode,
+                random,
+                |i, n, simulate| {
+                    let (g, d) = outputs[i];
+                    let mut part = one.clone();
+                    part.count = n;
+                    insert_into_tunnel(lv, g, d, &part, simulate)
+                },
+            );
+            b.previous_output = (b.previous_output + 1) % outputs.len().max(1);
+        }
         b.stack = (left > 0).then(|| (item.clone(), left));
         if b.stack.is_none() {
             b.entered_from = None;
             b.stack_progress = None;
         }
-        b.previous_output = (b.previous_output + 1) % outputs.len().max(1);
         b.progress = -1;
         save(&b);
-        with_world(|w| w.mark_unsaved(dim, t));
     }
 }

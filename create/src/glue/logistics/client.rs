@@ -152,8 +152,10 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -
     }
 }
 
-/// The client's prediction of a click a belt takes as the server will (`BeltBlock.useItemOn`):
-/// water on a dyed belt washes it, so the bucket is not emptied on the client's word.
+/// The client's prediction of a click a logistics block takes as the server will: water on a
+/// dyed belt washes it (`BeltBlock.useItemOn`), so the bucket is not emptied on the client's
+/// word; a click on a filter slot (`ValueSettingsInputHandler` cancels it on both sides), so the
+/// other hand is not used after it.
 pub fn predict_click(
     host: &mut dyn ClientHost,
     event: &mut mod_api::RightClickBlockEvent<'_>,
@@ -171,7 +173,22 @@ pub fn predict_click(
     else {
         return mod_api::Flow::Continue;
     };
-    if !table_info(&*host, state).is_some_and(|(b, _)| b == Block::Belt) {
+    let Some((block, info)) = table_info(&*host, state) else {
+        return mod_api::Flow::Continue;
+    };
+    if filter_slot_hit(block, &info, click) {
+        let wrench_or_arm = click.stack.is_some_and(|s| {
+            matches!(
+                s.item().id(&*host).as_str(),
+                "create:wrench" | "create:mechanical_arm" | "create:clipboard"
+            )
+        });
+        if !wrench_or_arm {
+            *event.cancellation_result = mod_api::InteractionResult::Success;
+            return mod_api::Flow::Cancel;
+        }
+    }
+    if block != Block::Belt {
         return mod_api::Flow::Continue;
     }
     let id = click.stack.map(|s| s.item().id(&*host));
@@ -182,6 +199,31 @@ pub fn predict_click(
         return mod_api::Flow::Cancel;
     }
     mod_api::Flow::Continue
+}
+
+/// Whether `click` lands on a filter slot of the logistics block `block` (a brass funnel's, a
+/// smart chute's, a brass tunnel's side's).
+fn filter_slot_hit(
+    block: Block,
+    info: &create_engine::parts::StateInfo,
+    click: &mod_api::BlockClick<'_>,
+) -> bool {
+    let Some(side) = Dir::from_offset(click.hit.face) else {
+        return false;
+    };
+    let slot = match block {
+        Block::BrassFunnel | Block::BrassBeltFunnel => info
+            .facing
+            .and_then(|f| create_engine::funnel::filter_slot(f, info.belt_funnel, side)),
+        Block::SmartChute => create_engine::chute::filter_slot(side),
+        Block::BrassTunnel => match (info.axis, info.tunnel) {
+            (Some(a), Some(s)) => create_engine::tunnel::filter_slot(a, s, side),
+            _ => None,
+        },
+        _ => None,
+    };
+    let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(click.pos[i]));
+    slot.is_some_and(|s| create_engine::board::hits_box(s, local))
 }
 
 /// Depots' and belts' contents from the server.
@@ -690,7 +732,7 @@ impl BlockEntityPart for LogisticsEntity {
         draw_block_flaps(&mut *event.draw, host, block, &info, event.pos);
         if matches!(
             block,
-            Block::BrassFunnel | Block::BrassBeltFunnel | Block::SmartChute
+            Block::BrassFunnel | Block::BrassBeltFunnel | Block::SmartChute | Block::BrassTunnel
         ) {
             draw_filter(&mut *event.draw, host, block, &info, &event.entity.nbt);
             return;
@@ -1120,6 +1162,25 @@ fn draw_filter(
     info: &create_engine::parts::StateInfo,
     nbt: &Compound,
 ) {
+    // A brass tunnel's side filters (`tunnel::SIDE_FILTERS`), one per side.
+    if block == Block::BrassTunnel {
+        let (Some(axis), Some(shape)) = (info.axis, info.tunnel) else {
+            return;
+        };
+        let Some(Tag::List(ids)) = nbt.get(&super::tunnel::SIDE_FILTERS.into()) else {
+            return;
+        };
+        for side in [Dir::South, Dir::West, Dir::North, Dir::East] {
+            let Some(Tag::String(id)) = ids.get(side as usize) else {
+                continue;
+            };
+            let id = id.to_string_lossy();
+            if let Some(slot) = create_engine::tunnel::filter_slot(axis, shape, side) {
+                draw_filter_stack(draw, host, &id, side, slot, 0.0);
+            }
+        }
+        return;
+    }
     let Some(Tag::String(id)) = nbt.get(&super::FILTER.into()) else {
         return;
     };
@@ -1127,11 +1188,6 @@ fn draw_filter(
     if id.is_empty() {
         return;
     }
-    let Some(stack) = stack_of(host, &id, 1) else {
-        return;
-    };
-    let solid = block_item(host, &id);
-    let scale = 0.5 * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
     // A slot on the face of a block that occludes (a smart chute here) would take the dark light
     // inside it; the light outside isn't readable on a client, so it is drawn fully lit.
     if draw.light() == 0 {
@@ -1160,6 +1216,34 @@ fn draw_filter(
         let Some(slot) = slot else {
             continue;
         };
+        draw_filter_stack(draw, host, &id, side, slot, tilt);
+    }
+}
+
+/// One filter slot's item `id`, at `slot` on side `side` of the block, tilted back `tilt`
+/// degrees (`FilteringRenderer`).
+fn draw_filter_stack(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    id: &str,
+    side: Dir,
+    slot: [f64; 3],
+    tilt: f32,
+) {
+    if id.is_empty() {
+        return;
+    }
+    let Some(stack) = stack_of(host, id, 1) else {
+        return;
+    };
+    let solid = block_item(host, id);
+    let scale = 0.5 * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
+    // A slot on the face of a block that occludes (a smart chute here) would take the dark light
+    // inside it; the light outside isn't readable on a client, so it is drawn fully lit.
+    if draw.light() == 0 {
+        draw.set_light(0xF0F0);
+    }
+    {
         // `Sided.rotate`: the side's horizontal angle plus 180°, then 90° up for the top.
         let y_rot = match side {
             Dir::South | Dir::Up | Dir::Down => 0.0,

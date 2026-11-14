@@ -56,6 +56,7 @@ pub use arms::Arms;
 // stack placed on one needs.
 pub(crate) use belt::insert_into_from;
 pub(crate) use items::{random_angle, upright};
+pub(crate) use tunnel::set_brass_mode;
 
 use super::items::filters;
 use super::kinetics;
@@ -129,12 +130,14 @@ impl Subsystem for Logistics {
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         let (vaults, filters) = vaults_from_nbt(&*lv.host, data);
+        let side_filters = tunnel_filters_from_nbt(&*lv.host, data);
         let belts = belts_from_nbt(data);
         let brass = brass_from_nbt(data);
         let dim = lv.dim;
         with_world(|w| {
             w.dims[dim].vaults.load(vaults.into_iter());
             w.dims[dim].chute_filters.extend(filters);
+            w.dims[dim].tunnel_filters.extend(side_filters);
             w.load_belt_items(dim, belts.into_iter());
             w.load_brass(dim, brass.into_iter());
         });
@@ -143,6 +146,18 @@ impl Subsystem for Logistics {
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
         let dim = lv.dim;
         let (cx, cz) = (chunk[0], chunk[1]);
+        let side_filters = with_world(|w| {
+            let mut v: Vec<(([i32; 3], Dir), create_engine::filter::Filter)> = w.dims[dim]
+                .tunnel_filters
+                .iter()
+                .filter(|((p, _), _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+                .map(|(k, f)| (*k, f.clone()))
+                .collect();
+            v.sort_by_key(|e| (e.0.0, e.0.1 as u8));
+            v
+        })
+        .unwrap_or_default();
+        tunnel_filters_to_nbt(&*lv.host, data, &side_filters);
         let Some((vaults, filters, belts, brass)) = with_world(|w| {
             let mut filters: Vec<([i32; 3], create_engine::filter::Filter)> = w.dims[dim]
                 .chute_filters
@@ -401,6 +416,7 @@ impl Subsystem for Entities {
             BELT_CASING,
             BELT_COVERED,
             flaps::KEY,
+            tunnel::SIDE_FILTERS,
         ]
     }
 
@@ -483,6 +499,7 @@ fn use_block(
         Block::BrassFunnel | Block::BrassBeltFunnel => {
             funnel::use_funnel_filter(&mut lv, pos, click)
         }
+        Block::BrassTunnel => tunnel::use_tunnel_filter(&mut lv, pos, click),
         Block::Belt => belt::use_belt_with(
             &mut lv,
             pos,
@@ -756,6 +773,57 @@ fn vaults_to_nbt(
     }
 }
 
+/// Brass tunnels' side filters saved with a column: `tunnel_filters` holds x, y, z and the side
+/// of each, and its filter.
+fn tunnel_filters_to_nbt(
+    host: &dyn mod_api::Host,
+    own: &mut Compound,
+    filters: &[(([i32; 3], Dir), create_engine::filter::Filter)],
+) {
+    if filters.is_empty() {
+        return;
+    }
+    let mut c = Compound::new();
+    let pos = filters
+        .iter()
+        .flat_map(|((p, d), _)| [p[0], p[1], p[2], *d as i32])
+        .collect();
+    let items = filters
+        .iter()
+        .map(|(_, f)| filters::filter_to_nbt(host, f).unwrap_or_else(|| Tag::String("".into())))
+        .collect();
+    c.insert("pos".into(), Tag::IntArray(pos));
+    c.insert("items".into(), Tag::List(items));
+    own.insert("tunnel_filters".into(), Tag::Compound(c));
+}
+
+/// What `tunnel_filters_to_nbt` wrote.
+fn tunnel_filters_from_nbt(
+    host: &dyn mod_api::Host,
+    data: &Compound,
+) -> Vec<(([i32; 3], Dir), create_engine::filter::Filter)> {
+    let Some(Tag::Compound(c)) = data.get(&"tunnel_filters".into()) else {
+        return Vec::new();
+    };
+    let (Some(Tag::IntArray(pos)), Some(Tag::List(items))) =
+        (c.get(&"pos".into()), c.get(&"items".into()))
+    else {
+        return Vec::new();
+    };
+    pos.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(items)
+        .filter_map(|(p, i)| {
+            let side = *Dir::ALL.get(usize::try_from(p[3]).ok()?)?;
+            Some((
+                ([p[0], p[1], p[2]], side),
+                filters::filter_from_nbt(host, i)?,
+            ))
+        })
+        .collect()
+}
+
 /// What `vaults_to_nbt` wrote.
 #[allow(clippy::type_complexity)]
 fn vaults_from_nbt(
@@ -971,7 +1039,7 @@ fn brass_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::tunnel::Bras
                 create_engine::tunnel::Brass {
                     stack: (!item.is_empty() && n > 0).then_some((item, n)),
                     entered_from: Dir::ALL.get(v[4].clamp(0, 6) as usize).copied(),
-                    mode: create_engine::tunnel::Mode::ALL[v[3].clamp(0, 4) as usize],
+                    mode: create_engine::tunnel::Mode::ALL[v[3].clamp(0, 6) as usize],
                     ..Default::default()
                 },
             )

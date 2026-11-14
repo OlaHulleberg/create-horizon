@@ -455,6 +455,28 @@ pub fn direct_input_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     kept == Some(true) || funnel_at(lv, pos).is_some() || super::chute::chute_at(lv, pos).is_some()
 }
 
+/// `DirectBeltInputBehaviour.canInsertFromSide` of what takes items at `pos`, for an item moving
+/// toward `side`: a belt turning, not against it; a floor funnel inserting; a chute that may take
+/// items (`canDirectlyInsert`); a depot or drain always.
+pub fn direct_input_accepts(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> bool {
+    if let Some(f) = funnel_at(lv, pos) {
+        return f.belt.is_none() && !f.extracting && f.facing == Dir::Up;
+    }
+    if super::chute::chute_at(lv, pos).is_some() {
+        let above = [pos[0], pos[1] + 1, pos[2]];
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        return super::chute::chute_at(lv, above).is_none()
+            && !(super::chute::chute_motion(lv, pos) > 0.0
+                && super::chute::chute_at(lv, below).is_none());
+    }
+    if let Some((c, _, seg)) = belt_segment(lv, pos) {
+        let dim = lv.dim;
+        let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+        return rpm != 0.0 && belt::movement_facing(rpm, seg.facing) != side.opposite();
+    }
+    true
+}
+
 /// `FunnelBlockEntity`'s `DirectBeltInputBehaviour`: only an inserting floor funnel
 /// (`supportsDirectBeltInput`) takes what its filter passes while unpowered
 /// (`handleDirectBeltInput`), into the inventory under it. The count left.
@@ -888,6 +910,10 @@ impl BeltSide<'_, '_> {
         // axis, or a brass tunnel beside it) takes the whole stack while it holds none, and
         // holds back the next.
         if with_world(|w| w.dims[dim].brass.contains_key(&t)) == Some(true) {
+            // `stuckAtTunnel`: its filter on the side the item comes in by must pass it.
+            if !super::tunnel::flap_filter_passes(self.lv, t, movement.opposite(), &item.item) {
+                return true;
+            }
             if !shape.junction() && !super::tunnel::brass_connected(self.lv, t) {
                 return false;
             }

@@ -309,6 +309,8 @@ pub struct Dimension {
     pub chute_pulls: crate::chute::Pulls,
     /// Smart chutes' filters, saved with their column.
     pub chute_filters: HashMap<[i32; 3], crate::filter::Filter>,
+    /// Brass tunnels' side filters (`SidedFilteringBehaviour`), by tunnel and side.
+    pub tunnel_filters: HashMap<([i32; 3], crate::kinetics::Dir), crate::filter::Filter>,
     /// Filter items whose block was broken (`FilteringBehaviour.destroy`): the glue drops them.
     pub dropped_filters: Vec<([i32; 3], crate::filter::Filter)>,
     /// Item vault blocks and the vaults they form.
@@ -1371,6 +1373,18 @@ impl CreateWorld {
             }
             if d.chassis_range.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
+            // Its side filters go (a filter item drops, `FilteringBehaviour.destroy`).
+            for side in crate::kinetics::Dir::ALL {
+                if d.tunnel_filters.is_empty() {
+                    break;
+                }
+                if let Some(f) = d.tunnel_filters.remove(&(pos, side)) {
+                    d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+                    if f.is_filter_item() {
+                        d.dropped_filters.push((pos, f));
+                    }
+                }
             }
             if let Some(b) = d.brass.remove(&pos) {
                 d.brass_running.retain(|p| *p != pos);
