@@ -179,6 +179,20 @@ pub trait Subsystem: Sync {
         None
     }
 
+    /// Whether this subsystem's projectiles need `projectile_impact` (`Hooks::hears_projectile_impacts`).
+    fn hears_projectile_impacts(&self) -> bool {
+        false
+    }
+
+    /// `Hooks::projectile_impact`: a projectile hit something; cancel to take the hit.
+    fn projectile_impact(
+        &self,
+        _host: &mut dyn ServerHost,
+        _event: &mut mod_api::ProjectileImpactEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
     /// `Hooks::attack_entity`.
     fn attack_entity(
         &self,

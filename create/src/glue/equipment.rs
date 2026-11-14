@@ -429,6 +429,22 @@ fn breathe(host: &mut dyn ServerHost, player: PlayerRef, fire_resistant: bool) {
     }
 }
 
+/// `BacktankUtil.canAbsorbDamage`: a creative player, or the first worn tank with air paying
+/// `airInBacktank / uses` of it, spares an air-using tool its durability.
+pub(crate) fn absorb_damage(host: &mut dyn ServerHost, player: PlayerRef, uses: i32) -> bool {
+    if uses == 0 || player.is_creative(&*host) == Some(true) {
+        return true;
+    }
+    let Some(living) = host.living(player.entity()) else {
+        return false;
+    };
+    let Some(tank) = tanks(&*host, living).into_iter().find(|t| t.stored > 0) else {
+        return false;
+    };
+    consume_air(host, player, tank.slot, (eq::AIR_IN_BACKTANK / uses).max(1));
+    true
+}
+
 /// `BacktankUtil.consumeAir` on the tank in armour slot `slot`, with its warnings.
 fn consume_air(host: &mut dyn ServerHost, player: PlayerRef, slot: usize, amount: i32) {
     let Some(living) = host.living(player.entity()) else {

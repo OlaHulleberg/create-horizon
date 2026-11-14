@@ -74,6 +74,7 @@ use subsystem::Subsystem;
 /// equipment before the items; the kinetic world hears of a block change before the others.
 pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &equipment::Equipment,
+    &items::potato::PotatoCannon,
     &kinetics::Kinetics,
     &blocks::Blocks,
     &redstone::Redstone,

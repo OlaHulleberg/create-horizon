@@ -79,6 +79,15 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **`MinecartRef::set_carrying`** (a cart with a contraption counting as ridden) and **`EntityRef::move_by`**
   (moving a coupled cart off its rail with collisions).
 
+- **A mod's own projectile entity type with its own class** (Create's `create:potato_projectile`,
+  with its damage type `create:potato_cannon`): the potato cannon's shots are vanilla snowballs
+  carrying the ammunition, flown and hit by the glue, hurting as `minecraft:thrown`. Their flight
+  (gravity, drag, stuck to a target) is the glue's and is not saved: a shot in the air when the
+  world is saved comes back as a plain snowball. A way to read or keep a projectile's state
+  across a save (persistent data on `EntityRef`) would close it.
+- **A zombie villager's cure from code** (`ZombieVillager.mobInteract` with a golden apple, or
+  `startConverting`): a golden apple from the potato cannon gives its food effects instead.
+
 ### Client
 
 - **Setting the local player's air on its client** (or the server re-sending an unchanged air supply): the

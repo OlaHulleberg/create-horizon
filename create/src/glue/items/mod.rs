@@ -23,6 +23,8 @@ mod fertilizer;
 // The filter slots' helpers, for the subsystems whose blocks hold one.
 pub(crate) mod filters;
 mod nugget;
+// The potato cannon: a subsystem of its own (its projectiles' flight and hits).
+pub(crate) mod potato;
 mod sandpaper;
 mod sequenced;
 mod sword;

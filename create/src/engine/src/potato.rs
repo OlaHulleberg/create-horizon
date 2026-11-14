@@ -1,9 +1,8 @@
 //! Create's potato cannon (`PotatoCannonItem`, `PotatoCannonProjectileType`,
 //! `PotatoProjectileEntity`): its ammunition and the projectile's flight, damage and recovery.
 //!
-//! Only the rules: the projectile is an entity of Create's own type, which Horizon cannot
-//! register (NeoForge's `EntityType` registration, gap 3), so the cannon fires nothing yet.
-//! The types are Create's data (`data/create/create/potato_projectile/type/*.json`).
+//! Only the rules: the glue (`glue/items/potato.rs`) flies them as vanilla snowballs carrying
+//! the ammunition. The types are Create's data (`data/create/create/potato_projectile/type/*.json`).
 
 /// `CEquipment.maxPotatoCannonShots`'s default: shots a backtank's air pays for.
 pub const MAX_SHOTS: i32 = 200;
@@ -233,6 +232,40 @@ pub fn hit(t: &Type) -> (f32, f32, Option<i32>) {
     (t.damage as f32, t.knockback, invulnerable)
 }
 
+/// `onHitEntity`'s `knockback(knockback * 0.6, -motion.x, -motion.z)` on a target moving at
+/// `velocity` (`LivingEntity.knockback`, knockback resistance left out): half its horizontal
+/// motion plus the push along the shot's, and a hop when it stands on the ground. None when
+/// the shot has no horizontal motion or the strength is none.
+pub fn knockback(
+    velocity: [f64; 3],
+    shot: [f64; 3],
+    knockback: f32,
+    on_ground: bool,
+) -> Option<[f64; 3]> {
+    let strength = f64::from(knockback * 0.6);
+    let l = (shot[0] * shot[0] + shot[2] * shot[2]).sqrt();
+    if strength <= 0.0 || l < 1e-4 {
+        return None;
+    }
+    // `new Vec3(-motion.x, 0, -motion.z).normalize().scale(strength)`, subtracted.
+    let push = [shot[0] / l * strength, shot[2] / l * strength];
+    let y = if on_ground {
+        (velocity[1] / 2.0 + strength).min(0.4)
+    } else {
+        velocity[1]
+    };
+    Some([velocity[0] / 2.0 + push[0], y, velocity[2] / 2.0 + push[1]])
+}
+
+/// `ShootableGadgetItemMethods.applyCooldown`: a cannon in the other hand too shortens it.
+pub fn cooldown(t: &Type, gun_in_other_hand: bool) -> i32 {
+    if gun_in_other_hand {
+        t.reload_ticks * 2 / 3
+    } else {
+        t.reload_ticks
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +320,15 @@ mod tests {
             (2.0, 0.1, Some(15))
         );
         assert_eq!(hit(potato).2, None);
+    }
+
+    #[test]
+    fn hits_push_along_the_shot() {
+        // A potato (1.5) flying east at a standing target: half its motion plus 0.9 east, a hop.
+        let v = knockback([0.2, 0.0, 0.0], [2.5, -0.1, 0.0], 1.5, true).unwrap();
+        assert!((v[0] - 1.0).abs() < 1e-6 && (v[1] - 0.4).abs() < 1e-6 && v[2].abs() < 1e-9);
+        assert!(knockback([0.0; 3], [0.0, -1.0, 0.0], 1.5, true).is_none());
+        let berry = type_for("minecraft:sweet_berries").unwrap();
+        assert_eq!((cooldown(berry, false), cooldown(berry, true)), (10, 6));
     }
 }
