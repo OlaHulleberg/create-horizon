@@ -51,11 +51,14 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 - **Moving colliders**: players cannot stand on, or be pushed by, bearings' and pistons' structures, trains or
   minecart contraptions (`notes/moving-structures-note.md`).
-- **Mod entity types that are not template copies**, rideable by players: Create's seat entity is stood in by
-  a tagged display entity; carriage seats, riding a moving structure's seats and clicking its blocks are out.
-- **World-space drawing of any block state at a pose**: trains, minecart contraptions and couplings are
-  simulated, saved and driven, but not drawn. Moving structures anchored to a block entity are drawn by it,
-  lit with the anchor's light (no per-block light in a block entity's draw).
+- **Mod entity types that are not template copies**, rideable by players: Create's seat entity and carriage seats
+  are stood in by tagged item display entities; riding a moving structure's seats on bearings and pistons and
+  clicking its blocks are out.
+- **Display entities joining a level from a save**: `entity_join_level` is not told of them and
+  `LevelRef::entities_in` does not list them, so the trains' block displays and seat stand-ins that come back
+  with a chunk are found by a `kill` selector on a per-opening tag. Moving structures anchored to a block entity
+  are drawn by it, lit with the anchor's light (no per-block light in a block entity's draw); trains and cart
+  contraptions are drawn as vanilla block displays the server moves every tick.
 - **`MinecartRef::set_carrying`** (a cart with a contraption counting as ridden) and **`EntityRef::move_by`**
   (moving a coupled cart off its rail with collisions).
 
@@ -80,7 +83,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 - Fluids: the rest of Create's `use_plumbing` (copper casing on pipes, the smart pipe's filter slot,
   growing a whistle) and clicking fluid tanks (`use_tank`).
-- Carriage seats wait on rideable mod entities (above); the seat helpers they need come back with them.
 
 ## Not to send
 
