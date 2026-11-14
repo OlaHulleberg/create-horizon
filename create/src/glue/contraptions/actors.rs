@@ -2334,6 +2334,11 @@ impl BlockPart for MountedPart {
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
         let c = super::clicker(&*host, event.click);
+        // The main hand's empty click was the block's (`useWithoutItem` succeeds on the client
+        // too): the off hand is not tried after it.
+        if c.after_empty_main {
+            return Some(InteractionResult::Success);
+        }
         let pos = event.click.pos;
         let point = event.click.hit.point;
         in_click(host, event.click, |lv| use_mounted(lv, pos, point, &c))?
@@ -2497,6 +2502,45 @@ fn debug_controls(
     key: [i32; 3],
     filter: Option<Option<String>>,
 ) -> String {
+    toggle_controls(lv, player, key, filter, None)
+}
+
+/// A player's click on the contraption controls block at offset `local` of the structure the
+/// client drew at `anchor` (a piston, or the shaft a gantry carriage started on): as
+/// `/create_debug controls .. block` on that block (`ContraptionControlsMovingInteraction`).
+pub(super) fn click_moving_controls(
+    lv: &mut ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    anchor: [i32; 3],
+    local: [i32; 3],
+) {
+    let dim = lv.dim;
+    let key = with_world(|w| {
+        let d = &w.dims[dim];
+        if d.pistons.contains_key(&anchor) {
+            return Some(anchor);
+        }
+        d.gantries
+            .iter()
+            .find(|g| add(g.start, g.carriage_facing.opposite().offset()) == anchor)
+            .map(|g| g.start)
+    })
+    .flatten();
+    if let Some(key) = key {
+        toggle_controls(lv, Some(player), key, None, Some(local));
+    }
+}
+
+/// Turns the actors of the moving contraption `key` off or on as contraption controls do:
+/// `filter` names the kind (None: the filter of the controls block at offset `which`, or of
+/// the first it carries).
+fn toggle_controls(
+    lv: &mut ServerLevel<'_>,
+    player: Option<mod_api::PlayerRef>,
+    key: [i32; 3],
+    filter: Option<Option<String>>,
+    which: Option<[i32; 3]>,
+) -> String {
     let dim = lv.dim;
     let mut effects = Vec::new();
     let done = with_world(|w| {
@@ -2511,7 +2555,11 @@ fn debug_controls(
         let (filter, at) = match filter {
             Some(f) => (f, None),
             None => {
-                let Some((o, c)) = carried.controls.first() else {
+                let found = match which {
+                    Some(w) => carried.controls.iter().find(|(o, _)| *o == w),
+                    None => carried.controls.first(),
+                };
+                let Some((o, c)) = found else {
                     return Some(None);
                 };
                 (c.filter.clone(), Some(add(origin, *o)))

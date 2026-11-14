@@ -125,6 +125,39 @@ impl Subsystem for Contraptions {
         superglue::tick(lv);
     }
 
+    /// A click on contraption controls riding a moving structure (`CONTROLS_CHANNEL`).
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != draw::CONTROLS_CHANNEL {
+            return false;
+        }
+        let Some((anchor, local)) = draw::decode_click(data) else {
+            return true;
+        };
+        let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+            return true;
+        };
+        if let Some(mut lv) = ServerLevel::new(host, &dimension) {
+            actors::click_moving_controls(&mut lv, player, anchor, local);
+        }
+        true
+    }
+
+    /// The use key on contraption controls riding a moving structure (`ContraptionHandlerClient`
+    /// raycasts the structures the client draws).
+    fn interaction_key(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
+    ) -> Flow {
+        draw::use_key(host, event)
+    }
+
     fn server_message(
         &self,
         _host: &mut dyn mod_api::ClientHost,
