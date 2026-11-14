@@ -105,6 +105,8 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
             .flatten(),
         movable: !unmovable,
         chassis,
+        attached: crate::glue::contraptions::attached_sides(&name, &props),
+        unsupportive: crate::glue::contraptions::unsupportive_faces(&name, &props),
     })
 }
 

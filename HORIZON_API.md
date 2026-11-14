@@ -56,6 +56,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   minecart contraptions (`notes/moving-structures-note.md`).
 - **Mod entity types that are not template copies**, rideable by players: Create's seat entity is stood in by
   a tagged display entity; carriage seats, riding a moving structure's seats and clicking its blocks are out.
+- **Reading the client level's light** (`LevelRef::brightness` answers on the logical server only): a
+  moving structure's blocks are lit with the light the server read where they were last sent from,
+  not where they are each frame (`ContraptionRenderer`'s per-block world light).
 - **World-space drawing of any block state at a pose**: trains, minecart contraptions and couplings are
   simulated, saved and driven, but not drawn. Moving structures anchored to a block entity are drawn by it,
   lit with the anchor's light (no per-block light in a block entity's draw).

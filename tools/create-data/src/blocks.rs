@@ -2898,6 +2898,20 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     ) {
         props.insert("light".into(), json!(0));
     }
+    // BuilderTransformers.bearing and .mechanicalPiston, and AllBlocks.GANTRY_CARRIAGE:
+    // `noOcclusion`, so light reaches into them and what their block entities draw (a bearing's
+    // top, the structure it turns) is lit, and the faces beside them are drawn.
+    if matches!(
+        b.name.as_str(),
+        "mechanical_bearing"
+            | "windmill_bearing"
+            | "clockwork_bearing"
+            | "mechanical_piston"
+            | "sticky_mechanical_piston"
+            | "gantry_carriage"
+    ) {
+        props.insert("occludes".into(), json!(false));
+    }
     // AllBlocks' nixie tubes: `lightLevel($ -> 5)`.
     if b.name == "nixie_tube" || dyed(&b.name, "nixie_tube").is_some() {
         props.insert("light".into(), json!(5));

@@ -18,9 +18,11 @@
 //!   (`Contraption.seats`): there is no moving entity to pick or ride.
 //! - Moving block entities other than chests and barrels are refused, as the legacy did:
 //!   their block entity data has no general way to ride along. A bearing's structure carries
-//!   no storage, glue or controls, as the legacy's didn't.
-//! - The structure is lit with its anchor's light, not each block's own (one
-//!   `BlockEntityDrawContext` light per draw).
+//!   no storage or controls, as the legacy's didn't; its glue stays in the world while it turns
+//!   and goes back turned with it.
+//! - Each moving block is lit with the world's light where the structure was last sent from
+//!   (the server reads it: `LevelRef::brightness` is the server's only), not where it is each
+//!   frame.
 //! - A clockwork bearing's top turns at its kinetic speed, not with the hour hand
 //!   (`BearingRenderer`): the top is the kinetic block entity's part.
 
@@ -31,6 +33,7 @@ pub mod controller;
 pub mod draw;
 mod lifts;
 pub mod seats;
+mod superglue;
 
 use super::server::ServerLevel;
 use super::states;
@@ -40,9 +43,9 @@ use create_engine::Block;
 use create_engine::contraption::{Chassis, Found, Sticky};
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
-    BlockClick, BlockState, BlockUpdateFlags, Compound, Flow, Host, ItemStack, PlayerRef,
-    RandomSource, RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent,
-    ServerHost,
+    BlockClick, BlockState, BlockUpdateFlags, Compound, Flow, Host, ItemStack, LeftClickBlockEvent,
+    PlayerRef, RandomSource, RegisterCommandsEvent, Registrar, RegistrationContext,
+    RunModCommandEvent, ServerHost,
 };
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -58,12 +61,14 @@ impl Subsystem for Contraptions {
         bearings::register(r);
         lifts::register(r);
         actors::register(r);
+        superglue::register(r);
     }
 
     fn world_closed(&self) {
         bearings::forget();
         lifts::forget();
         actors::forget();
+        superglue::forget();
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -105,6 +110,14 @@ impl Subsystem for Contraptions {
         bearings::tick_pistons(lv);
         actors::tick_mounted(lv);
         lifts::tick_lifts(lv);
+    }
+
+    /// A left click with super glue in hand takes the glue off the block hit.
+    fn left_click_block(&self, host: &mut dyn ServerHost, event: &mut LeftClickBlockEvent) -> Flow {
+        if superglue::left_click(host, event) {
+            return Flow::Cancel;
+        }
+        Flow::Continue
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
@@ -320,26 +333,82 @@ impl ServerLevel<'_> {
     }
 }
 
-/// Puts `blocks` (world positions) back: where a cell is free, else dropped
-/// (`Contraption.addBlocksToWorld`); `free` says which cells take a block.
+/// Whether the block of state `id` is brittle (`BlockMovementChecks.isBrittle`): it hangs on to
+/// another and breaks without it.
+fn brittle_state(host: &dyn Host, id: u32) -> bool {
+    name_props(host, id).is_some_and(|(n, p)| brittle(&n, &p))
+}
+
+/// Blocks that can't be broken (`getDestroySpeed == -1`) and so are never replaced.
+fn unbreakable(name: &str) -> bool {
+    matches!(
+        name,
+        "minecraft:bedrock"
+            | "minecraft:barrier"
+            | "minecraft:end_portal_frame"
+            | "minecraft:end_portal"
+            | "minecraft:end_gateway"
+            | "minecraft:nether_portal"
+            | "minecraft:command_block"
+            | "minecraft:chain_command_block"
+            | "minecraft:repeating_command_block"
+            | "minecraft:structure_block"
+            | "minecraft:jigsaw"
+            | "minecraft:light"
+    )
+}
+
+/// Puts `blocks` (world positions) back (`Contraption.addBlocksToWorld`): the sturdy ones first,
+/// then the brittle ones that hang on them. A cell `free` says takes a block takes it; a block
+/// that can't be broken there, or a brittle block meeting something else, drops the moving
+/// block; anything else there is broken (dropping) for it.
 fn put_back_blocks(
     lv: &mut ServerLevel<'_>,
     blocks: &[([i32; 3], u32)],
     free: impl Fn(&ServerLevel<'_>, [i32; 3]) -> bool,
 ) {
-    for &(p, state) in blocks {
-        if free(lv, p) {
-            lv.set_num(p, state, super::server::update_all());
-        } else {
-            lv.drop_block(p, state);
+    let flags = super::server::update_all() | BlockUpdateFlags::MOVE_BY_PISTON;
+    for brittles in [false, true] {
+        for &(p, state) in blocks {
+            if brittle_state(&*lv.host, state) != brittles {
+                continue;
+            }
+            if !free(lv, p) {
+                let here = lv.block_name(p).unwrap_or_default();
+                if brittles || unbreakable(&here) {
+                    lv.drop_block(p, state);
+                    continue;
+                }
+                lv.destroy_block(p, true);
+            }
+            lv.set_num(p, state, flags);
         }
     }
 }
 
 /// Takes `blocks` (offsets from `base`) out of the world (`removeBlocksFromWorld`).
 fn take_blocks(lv: &mut ServerLevel<'_>, base: [i32; 3], blocks: &[([i32; 3], u32)]) {
-    for (o, _) in blocks {
-        lv.set_air(add(base, *o), super::server::UPDATE_CLIENTS);
+    let cells: Vec<([i32; 3], u32)> = blocks.iter().map(|(o, s)| (add(base, *o), *s)).collect();
+    remove_cells(lv, &cells);
+}
+
+/// `removeBlocksFromWorld` for blocks at world positions: brittle ones first, each left as air
+/// with no drops and no neighbour updates (nothing hanging on them breaks off), then their
+/// neighbours hear of it.
+fn remove_cells(lv: &mut ServerLevel<'_>, cells: &[([i32; 3], u32)]) {
+    let flags = BlockUpdateFlags::MOVE_BY_PISTON
+        | BlockUpdateFlags::SUPPRESS_DROPS
+        | BlockUpdateFlags::KNOWN_SHAPE
+        | BlockUpdateFlags::CLIENTS;
+    for brittles in [true, false] {
+        for &(p, state) in cells {
+            if brittle_state(&*lv.host, state) == brittles {
+                lv.set_air(p, flags);
+            }
+        }
+    }
+    for &(p, _) in cells {
+        lv.update_signal_neighbors(p);
     }
 }
 
@@ -426,12 +495,183 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
         sticker,
         movable: !unmovable,
         chassis,
+        attached: attached_sides(&name, &props),
+        unsupportive: unsupportive_faces(&name, &props),
     })
 }
 
-/// A block state turned `quarter`° about `axis` (`StructureTransform`): its `facing` or `axis`
-/// turned with it (`rotateFacing`: `getClockWise(axis)`, `rotation.ordinal()` times); a state
-/// that has no such turned form stays as it was.
+fn bits(dirs: &[Dir]) -> u8 {
+    dirs.iter().fold(0, |acc, d| acc | d.bit())
+}
+
+/// `BlockMovementChecksImpl.isBrittleFallback`: blocks that hang on to another and break
+/// without it.
+fn brittle(name: &str, props: &[(String, String)]) -> bool {
+    let id = name.strip_prefix("minecraft:").unwrap_or(name);
+    prop(props, "hanging").is_some()
+        || id == "ladder"
+        || torch(name)
+        || id.ends_with("_sign")
+        || id.ends_with("_pressure_plate")
+        || (prop(props, "face").is_some()
+            && !matches!(name, "minecraft:grindstone" | "create:packager_link"))
+        || (rail(name) && name != "create:cart_assembler")
+        || diode(name)
+        || id == "redstone_wire"
+        || wool_carpet(name)
+        || matches!(
+            name,
+            "create:steam_whistle" | "create:steam_whistle_extension" | "create:brass_funnel"
+        )
+}
+
+fn torch(name: &str) -> bool {
+    name.starts_with("minecraft:") && name.ends_with("torch")
+}
+
+fn rail(name: &str) -> bool {
+    matches!(
+        name,
+        "minecraft:rail"
+            | "minecraft:powered_rail"
+            | "minecraft:detector_rail"
+            | "minecraft:activator_rail"
+            | "create:controller_rail"
+    )
+}
+
+/// `DiodeBlock`: repeaters, comparators and Create's brass diodes and latches.
+fn diode(name: &str) -> bool {
+    matches!(
+        name,
+        "minecraft:repeater"
+            | "minecraft:comparator"
+            | "create:pulse_repeater"
+            | "create:pulse_extender"
+            | "create:pulse_timer"
+            | "create:powered_latch"
+            | "create:powered_toggle_latch"
+    )
+}
+
+/// `WoolCarpetBlock`: the sixteen wool carpets (not moss).
+fn wool_carpet(name: &str) -> bool {
+    name.starts_with("minecraft:") && name.ends_with("_carpet") && !name.ends_with("moss_carpet")
+}
+
+/// `AttachedActorBlock`: harvesters, ploughs and rollers, hanging on to the block behind them.
+fn attached_actor(name: &str) -> bool {
+    matches!(
+        name,
+        "create:mechanical_harvester" | "create:mechanical_plough" | "create:mechanical_roller"
+    )
+}
+
+/// `BlockMovementChecksImpl.isBlockAttachedTowardsFallback` (all but sails, fluid tanks and
+/// vaults, stickers and bogeys, which the search reads on their own): the sides a block hangs on
+/// to its neighbour by, a `Dir::bit` each.
+pub(crate) fn attached_sides(name: &str, props: &[(String, String)]) -> u8 {
+    use Dir::{Down, Up};
+    let facing = prop(props, "facing").and_then(dir_of);
+    let back = facing.map_or(0, |f| f.opposite().bit());
+    let id = name.strip_prefix("minecraft:").unwrap_or(name);
+    let wall_facing = |n: &str| n.ends_with("wall_torch") || n.ends_with("_wall_sign");
+    if id == "ladder" || wall_facing(id) {
+        return back;
+    }
+    if id.ends_with("_sign") && !id.ends_with("hanging_sign") {
+        return Down.bit();
+    }
+    if id.ends_with("_door") && prop(props, "half").is_some() {
+        return if prop(props, "half") == Some("lower") {
+            bits(&[Up, Down])
+        } else {
+            Down.bit()
+        };
+    }
+    if id.ends_with("_bed") {
+        let toward = if prop(props, "part") == Some("head") {
+            facing.map(Dir::opposite)
+        } else {
+            facing
+        };
+        return toward.map_or(0, Dir::bit);
+    }
+    if name == "create:redstone_link" || attached_actor(name) {
+        return back;
+    }
+    if matches!(name, "create:hand_crank" | "create:nozzle") {
+        return back;
+    }
+    if id.ends_with("_pressure_plate")
+        || id == "flower_pot"
+        || id.starts_with("potted_")
+        || diode(name)
+        || id == "redstone_wire"
+        || wool_carpet(name)
+        || torch(name)
+        || (rail(name) && name != "create:cart_assembler")
+        || name == "create:steam_whistle_extension"
+    {
+        return Down.bit();
+    }
+    if let Some(face) = prop(props, "face") {
+        return match face {
+            "ceiling" => Up.bit(),
+            "floor" => Down.bit(),
+            _ => back,
+        };
+    }
+    if let Some(h) = prop(props, "hanging") {
+        return if h == "true" { Up.bit() } else { Down.bit() };
+    }
+    if id == "bell" {
+        return match prop(props, "attachment") {
+            Some("floor") => Down.bit(),
+            Some("ceiling") => Up.bit(),
+            _ => facing.map_or(0, Dir::bit),
+        };
+    }
+    if name == "create:steam_whistle" {
+        return if flag(props, "wall") {
+            facing.map_or(0, Dir::bit)
+        } else {
+            Down.bit()
+        };
+    }
+    0
+}
+
+/// `BlockMovementChecksImpl.isNotSupportiveFallback` (but sails, read by the search): the faces
+/// of a block that push nothing in front of them, a `Dir::bit` each.
+pub(crate) fn unsupportive_faces(name: &str, props: &[(String, String)]) -> u8 {
+    let facing = prop(props, "facing").and_then(dir_of);
+    let front = facing.map_or(0, Dir::bit);
+    let across = |f: Dir| bits(&Dir::ALL) & !bits(&[f, f.opposite()]);
+    match name {
+        "create:mechanical_drill"
+        | "create:mechanical_bearing"
+        | "create:mechanical_saw"
+        | "create:portable_storage_interface" => front,
+        "create:cart_assembler" | "create:rope_pulley" => Dir::Down.bit(),
+        "create:mechanical_harvester" | "create:mechanical_plough" => front,
+        "create:piston_extension_pole" | "create:mechanical_piston_head" => {
+            facing.map_or(0, across)
+        }
+        "create:sticker" if !flag(props, "extended") => front,
+        _ if wool_carpet(name) => Dir::Up.bit(),
+        _ if name.ends_with("sliding_door") => 0,
+        _ if brittle(name, props) => bits(&Dir::ALL),
+        _ => 0,
+    }
+}
+
+/// A block state turned `quarter`° about `axis` (`StructureTransform.apply`): its `facing` or
+/// `axis` turned with it (`rotateFacing`: `getClockWise(axis)`, `rotation.ordinal()` times);
+/// about the vertical, also what vanilla's `BlockState.rotate` turns (a sign's `rotation`, the
+/// sides of fences, walls and panes, a rail's `shape`); a half turn about a level axis flips
+/// slabs and top or bottom halves; and Create's chassis turn their glued sides
+/// (`ITransformableBlock`). A state that has no such turned form stays as it was.
 fn turned_state(host: &dyn Host, state: u32, quarter: i32, axis: Axis) -> u32 {
     let turns = create_engine::contraption::clockwise_turns(quarter);
     if turns == 0 {
@@ -441,28 +681,149 @@ fn turned_state(host: &dyn Host, state: u32, quarter: i32, axis: Axis) -> u32 {
         return state;
     };
     let turn_dir = |d: Dir| (0..turns).fold(d, |d, _| create_engine::wrench::clockwise(d, axis));
-    if let Some(d) = prop(&props, "facing").and_then(dir_of) {
-        set_prop(&mut props, "facing", dir_name(turn_dir(d)));
-    } else if let Some(a) = prop(&props, "axis") {
+    let axis_name = |a: Axis| match a {
+        Axis::X => "x",
+        Axis::Y => "y",
+        Axis::Z => "z",
+    };
+    let old_axis = prop(&props, "axis").map(|a| axis_of(Some(a)));
+    let turned_axis = old_axis.map(|a| {
         let d = match a {
-            "x" => Dir::East,
-            "y" => Dir::Up,
-            _ => Dir::South,
+            Axis::X => Dir::East,
+            Axis::Y => Dir::Up,
+            Axis::Z => Dir::South,
         };
-        let name = match turn_dir(d).axis() {
-            Axis::X => "x",
-            Axis::Y => "y",
-            Axis::Z => "z",
+        turn_dir(d).axis()
+    });
+    let mut changed = Vec::<(String, String)>::new();
+    if let Some(d) = prop(&props, "facing").and_then(dir_of) {
+        changed.push(("facing".into(), dir_name(turn_dir(d)).into()));
+    } else if let Some(a) = turned_axis {
+        changed.push(("axis".into(), axis_name(a).into()));
+    }
+    // Sides named for directions (fences, walls, panes, vines, glass, chassis glue under
+    // their own names below): each takes the value of the side turned into its place.
+    let sides: Vec<(Dir, String)> = props
+        .iter()
+        .filter_map(|(k, v)| dir_of(k).map(|d| (d, v.clone())))
+        .collect();
+    if !sides.is_empty()
+        && sides
+            .iter()
+            .all(|(d, _)| sides.iter().any(|(e, _)| *e == turn_dir(*d)))
+    {
+        for (d, v) in &sides {
+            changed.push((dir_name(turn_dir(*d)).into(), v.clone()));
+        }
+    }
+    if axis == Axis::Y {
+        // `RotationSegment`: sixteen steps, four a quarter turn clockwise.
+        if let Some(r) = prop(&props, "rotation").and_then(|r| r.parse::<i32>().ok()) {
+            changed.push((
+                "rotation".into(),
+                ((r + 4 * i32::from(turns)) % 16).to_string(),
+            ));
+        }
+        if let Some(t) = prop(&props, "shape")
+            .filter(|_| rail(&name))
+            .and_then(|shape| turned_rail(shape, &turn_dir))
+        {
+            changed.push(("shape".into(), t));
+        }
+    } else if turns == 2 {
+        let flip = |v: &str| match v {
+            "top" => Some("bottom"),
+            "bottom" => Some("top"),
+            _ => None,
         };
-        set_prop(&mut props, "axis", name);
-    } else {
+        for key in ["type", "half"] {
+            if let Some(f) = prop(&props, key).and_then(flip) {
+                changed.push((key.into(), f.into()));
+            }
+        }
+    }
+    // RadialChassisBlock / LinearChassisBlock `transform`: the glued sides go where they turn.
+    if name == "create:radial_chassis"
+        && let (Some(from), Some(to)) = (old_axis, turned_axis)
+    {
+        for d in Dir::ALL {
+            if let Some(k) = create_engine::contraption::radial_side(to, d) {
+                changed.push((k.into(), "false".into()));
+            }
+        }
+        for d in Dir::ALL {
+            let Some(k) = create_engine::contraption::radial_side(from, d) else {
+                continue;
+            };
+            if flag(&props, k)
+                && let Some(n) = create_engine::contraption::radial_side(to, turn_dir(d))
+            {
+                changed.push((n.into(), "true".into()));
+            }
+        }
+    }
+    if matches!(
+        name.as_str(),
+        "create:linear_chassis" | "create:secondary_linear_chassis"
+    ) && let Some(from) = old_axis
+    {
+        let top = match from {
+            Axis::X => Dir::East,
+            Axis::Y => Dir::Up,
+            Axis::Z => Dir::South,
+        };
+        if !turn_dir(top).positive() {
+            let (t, b) = (flag(&props, "sticky_top"), flag(&props, "sticky_bottom"));
+            changed.push(("sticky_top".into(), b.to_string()));
+            changed.push(("sticky_bottom".into(), t.to_string()));
+        }
+    }
+    if changed.is_empty() {
         return state;
+    }
+    for (k, v) in changed {
+        set_prop(&mut props, &k, &v);
     }
     let p: Vec<(&str, &str)> = props
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     state_with(host, &name, &p).unwrap_or(state)
+}
+
+/// `RailShape` turned about the vertical (`BaseRailBlock.rotate`): each end's direction turned.
+fn turned_rail(shape: &str, turn: &impl Fn(Dir) -> Dir) -> Option<String> {
+    use Dir::{East, North, South, West};
+    let ends: (Dir, Dir, bool) = match shape {
+        "north_south" => (North, South, false),
+        "east_west" => (East, West, false),
+        "ascending_north" => (North, South, true),
+        "ascending_south" => (South, North, true),
+        "ascending_east" => (East, West, true),
+        "ascending_west" => (West, East, true),
+        "south_east" => (South, East, false),
+        "south_west" => (South, West, false),
+        "north_west" => (North, West, false),
+        "north_east" => (North, East, false),
+        _ => return None,
+    };
+    let (a, b) = (turn(ends.0), turn(ends.1));
+    if ends.2 {
+        return Some(format!("ascending_{}", dir_name(a)));
+    }
+    let straight = a.axis() == b.axis();
+    Some(if straight {
+        if a.axis() == Axis::Z {
+            "north_south"
+        } else {
+            "east_west"
+        }
+        .to_owned()
+    } else {
+        let ns = if a.axis() == Axis::Z { a } else { b };
+        let ew = if a.axis() == Axis::Z { b } else { a };
+        format!("{}_{}", dir_name(ns), dir_name(ew))
+    })
 }
 
 fn set_prop(props: &mut [(String, String)], key: &str, value: &str) {
@@ -476,6 +837,10 @@ struct Clicker {
     player: Option<PlayerRef>,
     sneaking: bool,
     held: Option<String>,
+    /// The off hand's turn after an empty main hand. Create's blocks answer an empty main hand
+    /// `SUCCESS` on the client too, so the off hand is never tried after it; here the client
+    /// can't know, tries the off hand, and an empty-hand action must not run twice.
+    after_empty_main: bool,
 }
 
 fn clicker(host: &dyn ServerHost, click: &BlockClick<'_>) -> Clicker {
@@ -484,10 +849,15 @@ fn clicker(host: &dyn ServerHost, click: &BlockClick<'_>) -> Clicker {
         .and_then(|p| p.entity().is_shift_key_down(host))
         .unwrap_or(false);
     let held = click.stack.map(|s| s.item().id(host));
+    let after_empty_main = click.hand == mod_api::Hand::Off
+        && player.is_none_or(|p| {
+            super::items::held(host, p, mod_api::Hand::Main).is_none_or(|s| s.count() == 0)
+        });
     Clicker {
         player,
         sneaking,
         held,
+        after_empty_main,
     }
 }
 

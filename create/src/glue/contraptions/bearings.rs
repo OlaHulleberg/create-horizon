@@ -198,7 +198,7 @@ impl BlockPart for WindmillPart {
         if c.sneaking {
             return Some(InteractionResult::Fail);
         }
-        if c.held.is_some() {
+        if c.held.is_some() || c.after_empty_main {
             return None;
         }
         let pos = event.click.pos;
@@ -497,6 +497,48 @@ fn put_back_turned(
         })
         .collect();
     put_back_blocks(lv, &turned, |lv, p| lv.is_free(p));
+    turn_glue(lv, bearing, &w.blocks, anchor, quarter, axis);
+}
+
+/// The glue a turning structure carries (`Contraption.superglue`) turns with it: the areas that
+/// held its blocks, which stay in the world while it turns, go back turned with the blocks
+/// (each shrunk to the blocks it holds, as `removeBlocksFromWorld` keeps them).
+fn turn_glue(
+    lv: &mut ServerLevel<'_>,
+    bearing: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+    anchor: [i32; 3],
+    quarter: i32,
+    axis: Axis,
+) {
+    if contraption::clockwise_turns(quarter) == 0 {
+        return;
+    }
+    let dim = lv.dim;
+    let world: Vec<[i32; 3]> = blocks.iter().map(|(o, _)| add(bearing, *o)).collect();
+    let turn = |p: [i32; 3]| {
+        let local = [0, 1, 2].map(|i| p[i] - anchor[i]);
+        add(anchor, contraption::rotate(local, quarter, axis))
+    };
+    with_world(|w| {
+        let areas = &mut w.dims[dim].glue;
+        let (used, shrunk) = create_engine::glue::carried(areas, &world, |p| p == bearing);
+        if used.is_empty() {
+            return;
+        }
+        let mut columns: Vec<(i32, i32)> = used.iter().map(|&i| areas[i].column()).collect();
+        for i in used.into_iter().rev() {
+            areas.remove(i);
+        }
+        for g in shrunk {
+            let t = create_engine::glue::Glue::span(turn(g.min), turn(g.max));
+            columns.push(t.column());
+            areas.push(t);
+        }
+        for (cx, cz) in columns {
+            super::super::persist::mark_unsaved(dim, [cx, cz]);
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -823,10 +865,12 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
         .iter()
         .map(|(l, _)| piston_world(c.anchor, *l, facing, c.progress))
         .collect();
-    let forced = if m > 0.0 { facing } else { facing.opposite() };
     let mut exclude = pole_worlds;
     exclude.push(pos);
-    let Ok(structure) = piston::gather(c.anchor, forced, &exclude, |p| found(lv, p)) else {
+    let gathered = piston::gather_piston(c.anchor, facing, m < 0.0, sticky, &exclude, |p| {
+        found(lv, p)
+    });
+    let Ok(structure) = gathered else {
         return;
     };
     let o = facing.offset();
@@ -847,12 +891,12 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
         .copied()
         .collect();
     let carried = actors::carry(lv, pos, origin, &local, |p| p == pos);
-    for (l, _) in &blocks {
-        let p = piston_world(c.anchor, *l, facing, c.progress);
-        if p != pos {
-            lv.set_air(p, update_all());
-        }
-    }
+    let cells: Vec<([i32; 3], u32)> = blocks
+        .iter()
+        .map(|(l, s)| (piston_world(c.anchor, *l, facing, c.progress), *s))
+        .filter(|(p, _)| *p != pos)
+        .collect();
+    super::remove_cells(lv, &cells);
     lv.set_property(pos, "state", "moving", update_all());
     with_world(|w| {
         w.dims[dim].pistons.insert(
@@ -880,12 +924,13 @@ fn disassemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         return;
     };
     let grid = m.offset.round() as i32;
-    for (l, s) in &m.blocks {
-        let p = piston_world(m.anchor, *l, facing, grid);
-        if p != pos {
-            lv.set_num(p, *s, update_all());
-        }
-    }
+    let cells: Vec<([i32; 3], u32)> = m
+        .blocks
+        .iter()
+        .map(|(l, s)| (piston_world(m.anchor, *l, facing, grid), *s))
+        .filter(|(p, _)| *p != pos)
+        .collect();
+    put_back_blocks(lv, &cells, |lv, p| lv.passable(p));
     let state = if grid > 0 { "extended" } else { "retracted" };
     lv.set_property(pos, "state", state, update_all());
     let o = facing.offset();
