@@ -1,0 +1,271 @@
+//! The handles of hand cranks and valve handles, drawn at an angle of their own
+//! (`HandCrankBlockEntity.getIndependentAngle`, `ValveHandleBlockEntity.getIndependentAngle`)
+//! rather than at their shaft's.
+//!
+//! A crank's handle chases its speed on the client (`chasingAngularVelocity`, a quarter of the
+//! way each tick) and stays where it stopped. A valve handle turns from 0 to its use's target (a
+//! quarter or half turn) over the ticks of the use, and stays there; while something else turns
+//! it, it turns with its network. What a use started (`ValveUse`) and the angle its value box set
+//! (`ScrollValue`, as Create saves `angleInput`) are kept in its block entity data, which its
+//! clients get.
+
+use super::super::kinetics::{self, axis_vector, speeds_of};
+use super::super::states;
+use create_engine::Block;
+use create_engine::client::{Draw, Model};
+use create_engine::dye;
+use create_engine::kinetics::Dir;
+use create_engine::valve;
+use mod_api::{
+    BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
+    BlockEntitySubmitEvent, BlockPart, ClientHost, Compound, ModBlockEntity, Registrar, Tag,
+};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+
+/// A valve handle's angle setting in its block entity data (`ScrollValueBehaviour`'s key).
+pub const SCROLL_VALUE: &str = "ScrollValue";
+
+/// What a valve handle's last use started: `Start` (game time), `Ticks`, `Target` (degrees),
+/// `Back` (used sneaking).
+pub const VALVE_USE: &str = "ValveUse";
+
+/// Ticks after a use's end during which the handle still stands at its target, not turning with
+/// its network: the speeds that stop it reach the client a tick or two after the use's time.
+const SETTLE: i64 = 3;
+
+/// A valve handle's angle setting: its value box's, else Create's 45°.
+pub fn valve_angle(data: &Compound) -> i32 {
+    match data.get(&SCROLL_VALUE.into()) {
+        Some(Tag::Int(v)) if *v != 0 => (*v).clamp(-180, 180),
+        _ => valve::DEFAULT_ANGLE,
+    }
+}
+
+/// The data a valve handle's use at game time `start` with angle `value` gives its block entity.
+pub fn valve_use(start: i64, value: i32, back: bool) -> Compound {
+    let used = Compound::from([
+        ("Start".into(), Tag::Long(start)),
+        ("Ticks".into(), Tag::Int(i32::from(valve::use_ticks(value)))),
+        ("Target".into(), Tag::Int(valve::target_angle(value))),
+        ("Back".into(), Tag::Byte(i8::from(back))),
+    ]);
+    Compound::from([(VALVE_USE.into(), Tag::Compound(used))])
+}
+
+/// A valve handle's last use: start, ticks, target, backwards.
+fn use_of(data: &Compound) -> Option<(i64, u8, i32, bool)> {
+    let Some(Tag::Compound(u)) = data.get(&VALVE_USE.into()) else {
+        return None;
+    };
+    let int = |k: &str| match u.get(&k.into()) {
+        Some(Tag::Int(v)) => Some(*v),
+        _ => None,
+    };
+    let start = match u.get(&"Start".into()) {
+        Some(Tag::Long(v)) => *v,
+        _ => return None,
+    };
+    let back = matches!(u.get(&"Back".into()), Some(Tag::Byte(b)) if *b != 0);
+    Some((
+        start,
+        int("Ticks")?.clamp(0, 255) as u8,
+        int("Target")?,
+        back,
+    ))
+}
+
+/// A crank's handle on a client: its angle, and the speed it chases at.
+#[derive(Clone, Copy, Default)]
+struct Crank {
+    angle: f32,
+    chase: f32,
+    moving: bool,
+}
+
+thread_local! {
+    static CRANKS: RefCell<HashMap<[i32; 3], Crank>> = RefCell::new(HashMap::new());
+    /// The client level's game time at its last tick.
+    static NOW: Cell<i64> = const { Cell::new(0) };
+}
+
+pub(super) fn register(r: &mut dyn Registrar) {
+    let Some(kind) = kinetics::kind() else {
+        return;
+    };
+    if let Err(e) = r.block_entity_part(&kind, Handles) {
+        crate::create_log!("[create] the handles' block entity part was refused: {e:?}");
+    }
+}
+
+pub(super) fn client_tick(host: &dyn ClientHost) {
+    if let Some(t) = host.level(host.dimension()).and_then(|l| l.game_time(host)) {
+        NOW.set(t);
+    }
+}
+
+pub(super) fn client_reset() {
+    CRANKS.with_borrow_mut(HashMap::clear);
+}
+
+/// Whether part `part` of `block` is a handle this module draws.
+pub(super) fn draws_itself(block: Block, part: &Draw) -> bool {
+    match block {
+        Block::HandCrank => matches!(part.model, Model::CrankHandle(_)),
+        b if dye::is_valve_handle(b) => part.model == Model::Own,
+        _ => false,
+    }
+}
+
+/// Whether the handle of `block` at `pos` moves this frame: a crank's while it turns or slows, a
+/// valve handle's while its use lasts.
+pub(super) fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
+    match block {
+        Block::HandCrank => {
+            let turning = speeds_of(&entity.nbt)[0] != 0.0;
+            turning || CRANKS.with_borrow(|c| c.get(&pos).is_some_and(|c| c.moving))
+        }
+        b if dye::is_valve_handle(b) => use_of(&entity.nbt)
+            .is_some_and(|(start, ticks, ..)| NOW.get() < start + i64::from(ticks) + SETTLE),
+        _ => false,
+    }
+}
+
+/// Draws the handles; ticks the cranks' on the client.
+struct Handles;
+
+#[mod_api::horizon_part]
+impl BlockPart for Handles {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for Handles {
+    fn block_entity_client_ticks(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut BlockEntityClientTicksEvent<'_>,
+    ) {
+        if event.block == "create:hand_crank" {
+            event.ticks = true;
+        }
+    }
+
+    /// `HandCrankBlockEntity.tick`: the handle's speed moves a quarter of the way to the
+    /// crank's (`convertToAngular(getSpeed())`), and its angle by that speed.
+    fn block_entity_client_tick(
+        &self,
+        _host: &mut dyn ClientHost,
+        event: &mut BlockEntityClientTickEvent<'_>,
+    ) {
+        if event.state.block() != states::key(Block::HandCrank) {
+            return;
+        }
+        let target = speeds_of(&event.entity.nbt)[0] * 0.3;
+        CRANKS.with_borrow_mut(|c| {
+            let c = c.entry(event.pos).or_default();
+            c.chase += (target - c.chase) / 4.0;
+            c.angle = (c.angle + c.chase).rem_euclid(360.0);
+            // Create chases for ever; a handle this slow no longer shows moving.
+            c.moving = target != 0.0 || c.chase.abs() > 0.005;
+            if !c.moving {
+                c.chase = 0.0;
+            }
+        });
+    }
+
+    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+        let Some(id) = states::id(event.state) else {
+            return;
+        };
+        let Some((block, info)) =
+            super::super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
+        else {
+            return;
+        };
+        let Some(facing) = info.facing else {
+            return;
+        };
+        if block == Block::HandCrank {
+            draw_crank(event, facing);
+        } else if dye::is_valve_handle(block) {
+            let text = host.block_state_string(event.state).unwrap_or_default();
+            let (_, own) = states::split(&text);
+            let speeds = speeds_of(&event.entity.nbt);
+            let Some(d) = create_engine::client::draws(block, &info, event.pos, speeds)
+                .into_iter()
+                .find(|d| d.model == Model::Own)
+            else {
+                return;
+            };
+            draw_valve(event, block, &own, facing, &d);
+        }
+    }
+}
+
+/// `HandCrankVisual.rotateCrank`: the handle turned about its facing's positive axis.
+fn draw_crank(event: &mut BlockEntitySubmitEvent<'_>, facing: Dir) {
+    let Some(part) = states::partial("part_hand_crank_handle") else {
+        return;
+    };
+    let target = speeds_of(&event.entity.nbt)[0];
+    let c = CRANKS.with_borrow_mut(|c| {
+        *c.entry(event.pos).or_insert_with(|| Crank {
+            moving: target != 0.0,
+            ..Crank::default()
+        })
+    });
+    let angle = if c.moving {
+        c.angle + event.draw.partial() * c.chase
+    } else {
+        c.angle
+    };
+    let draw = &mut *event.draw;
+    draw.push();
+    draw.rotate_about(axis_vector(facing.axis()), angle, [0.5; 3]);
+    draw.block(part, &[("facing", kinetics::dir_name(facing.opposite()))]);
+    draw.pop();
+    if !c.moving && target == 0.0 {
+        draw.keep();
+    }
+}
+
+/// `ValveHandleVisual.rotateCrank`: the handle turning through its use, standing at its target
+/// after, or turning with the network something else drives.
+fn draw_valve(
+    event: &mut BlockEntitySubmitEvent<'_>,
+    block: Block,
+    own: &[(&str, &str)],
+    facing: Dir,
+    d: &Draw,
+) {
+    let model = states::key(block);
+    let positive = Dir::from_axis(facing.axis(), true) == facing;
+    let now = event.draw.game_time();
+    let used = use_of(&event.entity.nbt);
+    let draw = &mut *event.draw;
+    match used {
+        Some((start, ticks, target, back)) if now < start + i64::from(ticks) + SETTLE => {
+            let elapsed = (now - start) as f32 + draw.partial();
+            let angle = valve::drawn_angle(target, ticks, elapsed, back, positive);
+            draw.push();
+            draw.rotate_about(axis_vector(d.axis), angle, [0.5; 3]);
+            draw.block(model, own);
+            draw.pop();
+        }
+        _ if d.rpm != 0.0 => {
+            draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
+            draw.block(model, own);
+            draw.still();
+            draw.keep();
+        }
+        _ => {
+            let angle = used.map_or(0.0, |(_, ticks, target, back)| {
+                valve::drawn_angle(target, ticks, f32::from(ticks), back, positive)
+            });
+            draw.push();
+            draw.rotate_about(axis_vector(d.axis), angle, [0.5; 3]);
+            draw.block(model, own);
+            draw.pop();
+            draw.keep();
+        }
+    }
+}

@@ -18,6 +18,28 @@ pub fn use_ticks(angle: i32) -> u8 {
     ((target / degrees_per_tick).ceil() as u8).saturating_add(2)
 }
 
+/// `activate`'s `targetAngle` from the server's `startAngle` (0 there: its `independentAngle` is
+/// only the client's): a quarter turn, or a half one past 135°, the way the angle is signed.
+/// The handle is drawn turning from 0 to it while in use and left there.
+pub fn target_angle(angle: i32) -> i32 {
+    let turn = if angle.unsigned_abs() > 135 { 180 } else { 90 };
+    turn * angle.signum()
+}
+
+/// The angle a valve handle is drawn at, in degrees about its facing's positive axis
+/// (`getIndependentAngle`): from 0 toward `target` over `total` ticks, `elapsed` (with the partial
+/// tick) of them gone; flipped when used backwards and for a facing toward an axis' negative end.
+pub fn drawn_angle(target: i32, total: u8, elapsed: f32, back: bool, positive_facing: bool) -> f32 {
+    let t = if total == 0 {
+        1.0
+    } else {
+        (elapsed / f32::from(total)).clamp(0.0, 1.0)
+    };
+    let back = if back { -1.0 } else { 1.0 };
+    let step = if positive_facing { 1.0 } else { -1.0 };
+    target as f32 * t * back * step
+}
+
 /// `ValveHandleBlockEntity.clockwise`: a negative angle, flipped when used sneaking.
 pub fn clockwise(angle: i32, backwards: bool) -> bool {
     (angle < 0) ^ backwards
@@ -36,5 +58,11 @@ mod tests {
         assert!(!clockwise(45, false));
         assert!(clockwise(45, true));
         assert!(clockwise(-45, false));
+        assert_eq!(target_angle(45), 90);
+        assert_eq!(target_angle(-136), -180);
+        assert_eq!(target_angle(135), 90);
+        assert_eq!(drawn_angle(90, 7, 3.5, false, true), 45.0);
+        assert_eq!(drawn_angle(90, 7, 9.0, true, false), 90.0);
+        assert_eq!(drawn_angle(-180, 21, 0.0, false, true), 0.0);
     }
 }

@@ -219,7 +219,7 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
             .into_iter()
             .map(|o| {
                 let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-                (o, super::waterwheels::flow_at(lv, at))
+                (o, super::sources::waterwheels::flow_at(lv, at))
             })
             .collect();
         let score = create_engine::waterwheel::flow_score(axis, &samples);

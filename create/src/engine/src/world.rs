@@ -2006,10 +2006,10 @@ impl CreateWorld {
 
     /// A player uses the valve handle at `pos` (`ValveHandleBlockEntity.activate`): not while
     /// something else turns it (`getTheoreticalSpeed`), while it turns or for its cooldown;
-    /// else it turns at 32 RPM, for as many ticks as its angle takes and two more, backwards when
-    /// `back` (sneaking), then waits 4 ticks. The angle is Create's default (45°: the value box
-    /// that sets it isn't here). False when it doesn't turn or there is no valve handle there.
-    pub fn use_valve(&mut self, dim: usize, pos: [i32; 3], back: bool) -> bool {
+    /// else it turns at 32 RPM, for as many ticks as its angle `value` (its value box's,
+    /// negative counter-clockwise) takes and two more, backwards when `back` (sneaking), then
+    /// waits 4 ticks. False when it doesn't turn or there is no valve handle there.
+    pub fn use_valve(&mut self, dim: usize, pos: [i32; 3], back: bool, value: i32) -> bool {
         let Some(&state) = self.dims[dim].states.get(&pos) else {
             return false;
         };
@@ -2028,7 +2028,6 @@ impl CreateWorld {
         if turning || d.cranks.contains_key(&pos) || d.valve_cooldowns.contains_key(&pos) {
             return false;
         }
-        let value = crate::valve::DEFAULT_ANGLE;
         d.cranks.insert(pos, crate::valve::use_ticks(value));
         d.valve_cooldowns.insert(pos, crate::valve::COOLDOWN);
         let crank = if crate::valve::clockwise(value, back) {
@@ -4256,8 +4255,8 @@ mod tests {
         w.block_changed(0, [0, 0, 0], 0, 10);
         w.block_changed(0, [1, 0, 0], 0, 11);
         w.tick(0, &mut Vec::new());
-        assert!(w.use_valve(0, [0, 0, 0], false));
-        assert!(!w.use_valve(0, [0, 0, 0], false), "not while it turns");
+        assert!(w.use_valve(0, [0, 0, 0], false, 45));
+        assert!(!w.use_valve(0, [0, 0, 0], false, 45), "not while it turns");
         w.tick(0, &mut Vec::new());
         // HandCrankBlockEntity.getGeneratedSpeed: 32 in its facing's direction.
         assert_eq!(w.speed(0, [1, 0, 0]), Some(-32.0));
@@ -4276,10 +4275,10 @@ mod tests {
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "stopped after 7");
         // The cooldown: 4, counted from the tick it stopped.
         for _ in 0..3 {
-            assert!(!w.use_valve(0, [0, 0, 0], true), "cooling down");
+            assert!(!w.use_valve(0, [0, 0, 0], true, 45), "cooling down");
             w.tick_cranks(0);
         }
-        assert!(w.use_valve(0, [0, 0, 0], true), "turns again, backwards");
+        assert!(w.use_valve(0, [0, 0, 0], true, 45), "turns again, backwards");
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(32.0));
         for _ in 0..7 {
@@ -4293,10 +4292,10 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_ne!(w.speed(0, [1, 0, 0]), Some(0.0));
         assert!(
-            !w.use_valve(0, [0, 0, 0], false),
+            !w.use_valve(0, [0, 0, 0], false, 45),
             "driven by another source"
         );
-        assert!(!w.use_valve(0, [1, 0, 0], false), "a shaft is no valve");
+        assert!(!w.use_valve(0, [1, 0, 0], false, 45), "a shaft is no valve");
         states::clear_range();
     }
 

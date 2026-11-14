@@ -481,6 +481,18 @@ pub fn motor_slot(facing: Dir, side: Dir) -> Option<[f64; 3]> {
     Some([0, 1, 2].map(|i| o[i] - f64::from(n[i]) / 16.0))
 }
 
+/// `ValveHandleValueBox` on `side` of a valve handle facing `facing`: on its handle, 4.5 px out
+/// of its facing side, the only side it has (`isSideActive`).
+pub fn valve_slot(facing: Dir, side: Dir) -> Option<[f64; 3]> {
+    (side == facing).then(|| sided_offset([0.5, 0.5, 4.5 / 16.0], side))
+}
+
+/// `ValveHandleValueBox.testHit`: within a third of a block (`scale / 1.5`) of the box.
+pub fn hits_valve_box(slot: [f64; 3], local: [f64; 3]) -> bool {
+    let d2: f64 = (0..3).map(|i| (local[i] - slot[i]).powi(2)).sum();
+    d2.sqrt() < 0.5 / 1.5
+}
+
 /// `BrassTunnelModeSlot` (a `CenteredSideValueBoxTransform`): 15.5 px out, on the top only.
 pub fn tunnel_mode_slot(side: Dir) -> Option<[f64; 3]> {
     (side == Dir::Up).then(|| sided_offset([0.5, 0.5, 15.5 / 16.0], side))

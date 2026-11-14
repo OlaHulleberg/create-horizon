@@ -7,136 +7,124 @@
 //! wheel models are partials (`part_water_wheel_<wood>`, `part_large_water_wheel_<wood>` and
 //! `_extension_<wood>`: Create's models with the wood's planks and log textures).
 
-use super::items;
-use super::kinetics::{self, axis_vector};
-use super::server::ServerLevel;
-use super::states;
-use super::subsystem::Subsystem;
-use super::world::with_world;
+use super::super::items;
+use super::super::kinetics::{self, axis_vector};
+use super::super::server::ServerLevel;
+use super::super::states;
+use super::super::world::with_world;
 use create_engine::Block;
 use create_engine::client::{Draw, Model};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::waterwheel::{DEFAULT_WOOD, wood_of_planks};
 use mod_api::{
     BlockEntityPart, BlockEntitySubmitEvent, BlockPart, BlockState, ClientHost, Compound, Flow,
-    Hand, HostBlockStates, HostSide, InteractionResult, ParticleKey, ParticleOptions, Registrar,
-    RegistrationContext, RightClickBlockEvent, ServerHost, SoundSource, Tag, UseItemOnEvent,
+    Hand, HostBlockStates, InteractionResult, ParticleKey, ParticleOptions, Registrar,
+    RightClickBlockEvent, ServerHost, SoundSource, Tag, UseItemOnEvent,
 };
 use std::sync::OnceLock;
 
 /// The key of a wheel's material in its block entity data (`WaterWheelBlockEntity.write`).
 pub const MATERIAL: &str = "Material";
 
-const SYNCED: &[&str] = &[MATERIAL];
-
 /// `minecraft:block`, for the material's break particles.
 static BLOCK_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
 
-pub struct Waterwheels;
-
-impl Subsystem for Waterwheels {
-    fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
-        for block in [
-            Block::WaterWheel,
-            Block::LargeWaterWheel,
-            Block::WaterWheelStructure,
-        ] {
-            r.block_part(states::key(block), Wheel);
-        }
-        let _ = BLOCK_PARTICLE.set(r.particle_key("minecraft:block"));
-        let Some(kind) = kinetics::kind() else {
-            return;
-        };
-        if let Err(e) = r.block_entity_part(&kind, Drawn) {
-            crate::create_log!("[create] the water wheels' block entity part was refused: {e:?}");
-        }
+/// The wheels' parts: their clicks and their drawing on the kinetic block entity type.
+pub(super) fn register(r: &mut dyn Registrar) {
+    for block in [
+        Block::WaterWheel,
+        Block::LargeWaterWheel,
+        Block::WaterWheelStructure,
+    ] {
+        r.block_part(states::key(block), Wheel);
     }
-
-    fn synced_keys(&self) -> &'static [&'static str] {
-        SYNCED
+    let _ = BLOCK_PARTICLE.set(r.particle_key("minecraft:block"));
+    let Some(kind) = kinetics::kind() else {
+        return;
+    };
+    if let Err(e) = r.block_entity_part(&kind, Drawn) {
+        crate::create_log!("[create] the water wheels' block entity part was refused: {e:?}");
     }
+}
 
-    fn draws_itself(&self, block: Block, part: &Draw) -> bool {
-        matches!(
-            (block, part.model),
-            (Block::WaterWheel, Model::WaterWheel(_)) | (Block::LargeWaterWheel, Model::Own)
-        )
+/// Whether part `part` of `block` is a wheel this module draws.
+pub(super) fn draws_itself(block: Block, part: &Draw) -> bool {
+    matches!(
+        (block, part.model),
+        (Block::WaterWheel, Model::WaterWheel(_)) | (Block::LargeWaterWheel, Model::Own)
+    )
+}
+
+/// Planks used on a wheel are the block's on the client too (`useItemOn` answers SUCCESS
+/// there), so they are not placed against it.
+pub(super) fn predict(host: &mut dyn ClientHost, event: &mut RightClickBlockEvent<'_>) -> Flow {
+    let click = event.click;
+    let Some(level) = host.level(host.dimension()) else {
+        return Flow::Continue;
+    };
+    let state = level
+        .block_state(&*host, click.pos)
+        .map_or(0, states::id_or_none);
+    if state == 0 {
+        return Flow::Continue;
     }
-
-    /// Planks used on a wheel are the block's on the client too (`useItemOn` answers SUCCESS
-    /// there), so they are not placed against it.
-    fn right_click_block(&self, host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
-        let HostSide::Client(host) = host else {
-            return Flow::Continue;
-        };
-        let click = event.click;
-        let Some(level) = host.level(host.dimension()) else {
-            return Flow::Continue;
-        };
-        let state = level
-            .block_state(&*host, click.pos)
-            .map_or(0, states::id_or_none);
-        if state == 0 {
-            return Flow::Continue;
-        }
-        let Some((block, facing)) =
-            super::client_table(&*host, |t| t.get(state).map(|(b, i)| (b, i.facing))).flatten()
-        else {
-            return Flow::Continue;
-        };
-        let master = match block {
-            Block::WaterWheel | Block::LargeWaterWheel => click.pos,
-            // The frame's wheel is where its facing points, or one further for a corner.
-            Block::WaterWheelStructure => {
-                let Some(master) = facing.and_then(|f| {
-                    let one = add(click.pos, f.offset());
-                    let at = |p: [i32; 3]| {
-                        let s = level.block_state(&*host, p).map_or(0, states::id_or_none);
-                        super::client_table(&*host, |t| t.get(s).map(|(b, i)| (b, i.facing)))
-                            .flatten()
-                    };
-                    match at(one)? {
-                        (Block::LargeWaterWheel, _) => Some(one),
-                        (Block::WaterWheelStructure, Some(g)) => {
-                            let two = add(one, g.offset());
-                            matches!(at(two), Some((Block::LargeWaterWheel, _))).then_some(two)
-                        }
-                        _ => None,
-                    }
-                }) else {
-                    return Flow::Continue;
+    let Some((block, facing)) =
+        super::super::client_table(&*host, |t| t.get(state).map(|(b, i)| (b, i.facing))).flatten()
+    else {
+        return Flow::Continue;
+    };
+    let master = match block {
+        Block::WaterWheel | Block::LargeWaterWheel => click.pos,
+        // The frame's wheel is where its facing points, or one further for a corner.
+        Block::WaterWheelStructure => {
+            let Some(master) = facing.and_then(|f| {
+                let one = add(click.pos, f.offset());
+                let at = |p: [i32; 3]| {
+                    let s = level.block_state(&*host, p).map_or(0, states::id_or_none);
+                    super::super::client_table(&*host, |t| t.get(s).map(|(b, i)| (b, i.facing)))
+                        .flatten()
                 };
-                master
-            }
-            _ => return Flow::Continue,
-        };
-        let Some(player) = host.player(click.player) else {
-            return Flow::Continue;
-        };
-        // The block's own use is skipped while sneaking with something in either hand.
-        let bypassed = items::sneaking(&*host, player)
-            && Hand::BOTH
-                .iter()
-                .any(|&h| items::held(&*host, player, h).is_some());
-        if bypassed {
-            return Flow::Continue;
+                match at(one)? {
+                    (Block::LargeWaterWheel, _) => Some(one),
+                    (Block::WaterWheelStructure, Some(g)) => {
+                        let two = add(one, g.offset());
+                        matches!(at(two), Some((Block::LargeWaterWheel, _))).then_some(two)
+                    }
+                    _ => None,
+                }
+            }) else {
+                return Flow::Continue;
+            };
+            master
         }
-        let Some(wood) = click
-            .stack
-            .and_then(|s| wood_of_planks(&s.item().id(&*host)))
-        else {
-            return Flow::Continue;
-        };
-        let now = host
-            .block_entity(level, master)
-            .and_then(|e| e.data(&*host))
-            .map_or(DEFAULT_WOOD, |d| wood_of(&d));
-        if now == wood {
-            return Flow::Continue;
-        }
-        *event.cancellation_result = InteractionResult::Success;
-        Flow::Cancel
+        _ => return Flow::Continue,
+    };
+    let Some(player) = host.player(click.player) else {
+        return Flow::Continue;
+    };
+    // The block's own use is skipped while sneaking with something in either hand.
+    let bypassed = items::sneaking(&*host, player)
+        && Hand::BOTH
+            .iter()
+            .any(|&h| items::held(&*host, player, h).is_some());
+    if bypassed {
+        return Flow::Continue;
     }
+    let Some(wood) = click
+        .stack
+        .and_then(|s| wood_of_planks(&s.item().id(&*host)))
+    else {
+        return Flow::Continue;
+    };
+    let now = host
+        .block_entity(level, master)
+        .and_then(|e| e.data(&*host))
+        .map_or(DEFAULT_WOOD, |d| wood_of(&d));
+    if now == wood {
+        return Flow::Continue;
+    }
+    *event.cancellation_result = InteractionResult::Success;
+    Flow::Cancel
 }
 
 fn add(a: [i32; 3], b: [i32; 3]) -> [i32; 3] {
@@ -267,7 +255,7 @@ impl BlockEntityPart for Drawn {
             return;
         };
         let Some((block, info)) =
-            super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
+            super::super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
         else {
             return;
         };

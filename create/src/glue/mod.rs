@@ -23,12 +23,12 @@ pub mod redstone;
 pub mod schematics;
 pub mod sequencer;
 pub mod server;
+pub mod sources;
 pub mod states;
 pub mod stock;
 pub mod subsystem;
 pub mod trains;
 pub mod transmission;
-pub mod waterwheels;
 pub mod world;
 
 use create_engine::world::StateTable;
@@ -96,7 +96,7 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &fluids::Tanks,
     &kinetics::Solve,
     &gauges::Gauges,
-    &waterwheels::Waterwheels,
+    &sources::Sources,
     &packages::Packages,
     &stock::Stock,
     &schematics::Schematics,

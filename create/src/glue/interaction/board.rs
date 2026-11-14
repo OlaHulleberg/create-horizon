@@ -198,6 +198,7 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
             create_engine::tunnel::OPTIONS.len() as i32,
         ),
         B::PulseRepeater | B::PulseExtender | B::PulseTimer => board::DIODE,
+        b if create_engine::dye::is_valve_handle(b) => board::VALVE_HANDLE,
         _ => return None,
     };
     let setting = match (block, seen.filter(|_| known)) {
@@ -212,6 +213,15 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
                 create_engine::kinetics::convert_to_direction(speed, f)
             }) as i32
         }
+        // The angle its block entity's data brought (`angleInput`).
+        (b, None) if create_engine::dye::is_valve_handle(b) => seen.unwrap_or_else(|| {
+            host.level(host.dimension())
+                .and_then(|l| host.block_entity(l, pos))
+                .and_then(|e| e.data(host))
+                .map_or(create_engine::valve::DEFAULT_ANGLE, |d| {
+                    super::super::sources::handles::valve_angle(&d)
+                })
+        }),
         (_, None) => seen.unwrap_or_else(|| {
             create_engine::world::diode_kind(block).map_or(0, |k| k.default_delay())
         }),
@@ -375,6 +385,8 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
             OPTIONS[s.value.clamp(0, OPTIONS.len() as i32 - 1) as usize].to_owned()
         } else if b == board::DIODE {
             board::diode_text(s)
+        } else if b == board::VALVE_HANDLE {
+            board::valve_text(s)
         } else {
             board::kinetic_text(s)
         }

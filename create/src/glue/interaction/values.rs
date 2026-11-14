@@ -66,6 +66,12 @@ pub(crate) fn value_box_hit(
     let Some((block, info)) = table.get(block_at(pos)) else {
         return false;
     };
+    if create_engine::dye::is_valve_handle(block) {
+        return info
+            .facing
+            .and_then(|f| board::valve_slot(f, side))
+            .is_some_and(|s| board::hits_valve_box(s, local));
+    }
     let slot = match (block, info.axis, info.tunnel) {
         (B::CreativeMotor, ..) => info.facing.and_then(|f| board::motor_slot(f, side)),
         // `BrassDiodeScrollSlot`: not a sided box, any face reaches it.
@@ -251,6 +257,41 @@ pub(super) fn value_settings_from_client(
                 }
                 w.dims[dim].diodes.get(&pos).map(|d| d.max)
             })
+        }
+        // `ValveHandleScrollValueBehaviour`: `onShortInteract` uses the handle as a click on it
+        // would (`ValveHandleBlock.clicked`); `setValueSettings` sets its angle, never 0.
+        b if create_engine::dye::is_valve_handle(b) => {
+            if short.is_some()
+                && let Some(state) = lv.block_state(pos)
+            {
+                let item =
+                    items::held(&*lv.host, player, Hand::Main).map(|s| s.item().id(&*lv.host));
+                let back = items::sneaking(&*lv.host, player);
+                super::super::blocks::use_valve_handle(
+                    &mut lv,
+                    player,
+                    pos,
+                    b,
+                    state,
+                    item.as_deref(),
+                    back,
+                );
+            }
+            let entity = lv.host.block_entity(lv.level, pos);
+            if let (Some(pick), Some(entity)) = (pick, entity) {
+                let value = board::kinetic_value(pick, 180);
+                let data = mod_api::Compound::from([(
+                    super::super::sources::handles::SCROLL_VALUE.into(),
+                    mod_api::Tag::Int(value),
+                )]);
+                let _ = entity.merge_data(&mut *lv.host, data);
+            }
+            Some(
+                lv.host
+                    .block_entity(lv.level, pos)
+                    .and_then(|e| e.data(&*lv.host))
+                    .map(|d| super::super::sources::handles::valve_angle(&d)),
+            )
         }
         _ => return,
     };

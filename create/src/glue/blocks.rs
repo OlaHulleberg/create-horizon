@@ -173,7 +173,7 @@ impl BlockPart for TemplateBlock {
 /// `ValveHandleBlock.onBlockActivated` → `clicked`: not for a player who may not build, nor a
 /// sneaking wrench; a dye of another colour recolours it (`DYED_VALVE_HANDLES`, its properties
 /// kept), else it turns (`activate`). The click is taken either way.
-fn use_valve_handle(
+pub(crate) fn use_valve_handle(
     lv: &mut ServerLevel<'_>,
     player: PlayerRef,
     pos: [i32; 3],
@@ -198,7 +198,18 @@ fn use_valve_handle(
         return Some(InteractionResult::Success);
     }
     let dim = lv.dim;
-    with_world(|w| w.use_valve(dim, pos, back));
+    let entity = lv.host.block_entity(lv.level, pos);
+    let value = entity
+        .and_then(|e| e.data(&*lv.host))
+        .map_or(create_engine::valve::DEFAULT_ANGLE, |d| {
+            super::sources::handles::valve_angle(&d)
+        });
+    if with_world(|w| w.use_valve(dim, pos, back, value)) == Some(true)
+        && let Some(entity) = entity
+    {
+        let used = super::sources::handles::valve_use(lv.game_time(), value, back);
+        let _ = entity.merge_data(&mut *lv.host, used);
+    }
     Some(InteractionResult::Success)
 }
 
