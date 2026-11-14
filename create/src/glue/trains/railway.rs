@@ -40,6 +40,7 @@ impl Subsystem for Trains {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         tracks::register(r);
         super::schedule_screen::register(r);
+        super::conductor::register(r);
         r.block_part(states::key(Block::TrackStation), assembly::Station);
         r.block_part(states::key(Block::Track), assembly::TrackClick);
         r.block_part(states::key(Block::TrackObserver), Observer);
@@ -54,6 +55,7 @@ impl Subsystem for Trains {
     fn world_closed(&self) {
         tracks::forget();
         assembly::forget();
+        super::conductor::forget();
         super::station_screen::forget();
         visuals::forget();
         riding::forget();
@@ -71,8 +73,14 @@ impl Subsystem for Trains {
         mod_api::Flow::Continue
     }
 
-    fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
-        let trains = saved::trains_from_nbt(&*lv.host, data);
+    fn chunk_load(&self, lv: &mut ServerLevel<'_>, chunk: [i32; 2], data: &Compound) {
+        let mut trains = saved::trains_from_nbt(&*lv.host, data);
+        let riders = saved::riders_from_nbt(data);
+        // Each is the column's it was saved with, until it moves: a train taken apart where it
+        // stood saves that column again, and unloads with it.
+        for t in &mut trains {
+            t.column = (chunk[0], chunk[1]);
+        }
         let names = saved::stations_from_nbt(data);
         let curves = saved::curves_from_nbt(data);
         if trains.is_empty() && names.is_empty() && curves.is_empty() {
@@ -80,7 +88,10 @@ impl Subsystem for Trains {
         }
         let dim = lv.dim;
         with_world(|w| {
-            w.load_trains(dim, trains);
+            let ids = w.load_trains(dim, trains);
+            for (id, r) in ids.into_iter().zip(riders) {
+                riding::riders_loaded(dim, id, r);
+            }
             w.dims[dim].railway.load_stations(names);
             for c in curves {
                 w.dims[dim].track_curves.add(c);
@@ -100,7 +111,10 @@ impl Subsystem for Trains {
             return;
         };
         if !trains.is_empty() {
-            data.insert("trains".into(), saved::trains_to_nbt(&*lv.host, &trains));
+            data.insert(
+                "trains".into(),
+                saved::trains_to_nbt(&*lv.host, &trains, &|id| riding::riders_of(dim, id)),
+            );
         }
         if !names.is_empty() {
             data.insert("station_names".into(), saved::stations_to_nbt(&names));
@@ -118,7 +132,19 @@ impl Subsystem for Trains {
         riding::tick(lv);
         super::controls::after_trains(lv);
         tracks::sync(lv);
+        super::conductor::tick(lv);
         super::station_screen::tick(lv);
+    }
+
+    fn entity_interact(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::EntityInteractEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
+        super::conductor::interact(host, event)
     }
 
     fn client_message(
@@ -353,6 +379,26 @@ fn tick_trains(lv: &mut ServerLevel<'_>) {
         .filter(|p| lv.has_neighbor_signal(*p))
         .collect();
     let seated = riding::passengers(dim);
+    if lv.game_time() % 40 == 0 {
+        with_world(|w| {
+            for t in &w.dims[dim].railway.trains {
+                crate::create_log!(
+                    "DEBUG trn2 train {} bound={} at={:?} nav={:?} sched={} rt={:?}",
+                    t.id,
+                    t.train.bound,
+                    t.train.at_station,
+                    t.train.nav.as_ref().map(|n| n.station),
+                    t.schedule.is_some(),
+                    (
+                        t.runtime.current,
+                        t.runtime.state,
+                        t.runtime.paused,
+                        t.runtime.cooldown
+                    )
+                );
+            }
+        });
+    }
     with_world(|w| {
         let r = &mut w.dims[dim].railway;
         r.day_time = day_time;

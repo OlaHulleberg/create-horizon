@@ -174,6 +174,8 @@ pub enum Edit {
     },
     /// The screen closed.
     Closed { pos: [i32; 3] },
+    /// `StationEditPacket.dropSchedule`: the present train's schedule comes back.
+    DropSchedule { pos: [i32; 3] },
 }
 
 impl Edit {
@@ -210,6 +212,10 @@ impl Edit {
                 out.push(3);
                 put_pos(&mut out, *pos);
             }
+            Edit::DropSchedule { pos } => {
+                out.push(4);
+                put_pos(&mut out, *pos);
+            }
         }
         out
     }
@@ -230,6 +236,7 @@ impl Edit {
                 icon: r.u8()?,
             },
             3 => Edit::Closed { pos: r.pos()? },
+            4 => Edit::DropSchedule { pos: r.pos()? },
             _ => return None,
         })
     }
@@ -312,7 +319,10 @@ pub fn open(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
         return;
     };
     let data = v.encode();
-    net::send_to_player(&mut *lv.host, player, CHANNEL, &data);
+    // The first byte: 1 opens the screen, 0 only updates an open one.
+    let mut opening = vec![1];
+    opening.extend_from_slice(&data);
+    net::send_to_player(&mut *lv.host, player, CHANNEL, &opening);
     let (uuid, dim) = (player.uuid(), lv.dim);
     WATCHING.with_borrow_mut(|w| {
         w.retain(|(u, ..)| *u != uuid);
@@ -349,7 +359,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
             })
         });
         if changed {
-            net::send_to_player(&mut *lv.host, player, CHANNEL, &data);
+            send_update(lv.host, player, &data);
         }
     }
 }
@@ -364,7 +374,8 @@ pub fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8])
         Edit::Configure { pos, .. }
         | Edit::Assemble { pos }
         | Edit::Train { pos, .. }
-        | Edit::Closed { pos } => *pos,
+        | Edit::Closed { pos }
+        | Edit::DropSchedule { pos } => *pos,
     };
     if let Edit::Closed { .. } = edit {
         let uuid = player.uuid();
@@ -420,6 +431,11 @@ pub fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8])
                 super::super::persist::mark_unsaved(dim, [c.0, c.1]);
             }
         }
+        Edit::DropSchedule { .. } => {
+            if let Some(train) = assembly::present_train(dim, pos) {
+                super::conductor::give_back_schedule(lv.host, player, dim, train);
+            }
+        }
         Edit::Closed { .. } => {}
     }
     // The screen hears at once.
@@ -431,8 +447,15 @@ pub fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8])
                 e.3.clone_from(&data);
             }
         });
-        net::send_to_player(&mut *lv.host, player, CHANNEL, &data);
+        send_update(lv.host, player, &data);
     }
+}
+
+/// A view for a screen already open (first byte 0).
+fn send_update(host: &mut dyn ServerHost, player: PlayerRef, view: &[u8]) {
+    let mut out = vec![0];
+    out.extend_from_slice(view);
+    net::send_to_player(host, player, CHANNEL, &out);
 }
 
 /// `updateName`: the station's name, saved with its column.
@@ -494,6 +517,9 @@ fn train_label(t: &TrainView) -> String {
 
 /// The server sent the station's view: the screen opens, or shows it.
 pub fn server_message(host: &mut dyn ClientHost, data: &[u8]) {
+    let Some((&opening, data)) = data.split_first() else {
+        return;
+    };
     let Some(view) = View::decode(data) else {
         return;
     };
@@ -519,7 +545,8 @@ pub fn server_message(host: &mut dyn ClientHost, data: &[u8]) {
         }
         _ => true,
     });
-    if !fresh {
+    // An update for a screen closed since is dropped.
+    if !fresh || opening == 0 {
         return;
     }
     OPEN.with_borrow_mut(|o| {
@@ -1116,6 +1143,14 @@ pub fn screen_mouse_pressed(
             return;
         }
         o.focus = Focus::None;
+        if let Some(t) = &o.view.train
+            && t.has_schedule
+            && inside(at(DROP_SCHEDULE, x, y), mouse)
+        {
+            click_sound(host);
+            send.push(Edit::DropSchedule { pos });
+            return;
+        }
         let to_assembly = match &o.view.train {
             None => o.view.orthogonal && inside(at(NEW_TRAIN, x, y), mouse),
             Some(t) => {

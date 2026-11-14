@@ -53,6 +53,14 @@ fn click_station(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<In
     }
     let dimension = click.dimension.key().id().to_owned();
     let mut lv = ServerLevel::new(host, &dimension)?;
+    // A schedule the station holds comes back to the player first.
+    let dim = lv.dim;
+    let held = with_world(|w| w.dims[dim].railway.auto_schedules.remove(&click.pos)).flatten();
+    if let Some(s) = held {
+        super::super::persist::mark_pos_unsaved(dim, click.pos);
+        super::conductor::give_schedule(lv.host, player, &s);
+        return Some(InteractionResult::SuccessServer);
+    }
     super::station_screen::open(&mut lv, player, click.pos);
     Some(InteractionResult::SuccessServer)
 }
@@ -73,6 +81,48 @@ impl BlockPart for Station {
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
         click_station(host, event.click)
+    }
+
+    /// `SharedDepotBlockMethods.onLanded` with the station's `DepotBehaviour`, which takes only
+    /// schedules: a schedule landing on a station with none becomes its auto-schedule.
+    fn item_after_vertical_collision(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::ItemAfterVerticalCollisionEvent<'_>,
+    ) -> mod_api::Flow {
+        let mod_api::HostSide::Server(host) = host else {
+            return mod_api::Flow::Continue;
+        };
+        if event.client {
+            return mod_api::Flow::Continue;
+        }
+        let Some(stack) = event.stack.as_ref() else {
+            return mod_api::Flow::Continue;
+        };
+        if stack.item().id(&*host) != "create:schedule" {
+            return mod_api::Flow::Continue;
+        }
+        let schedule = super::schedule_screen::schedule_of(stack).unwrap_or_default();
+        let Some(lv) = ServerLevel::new(host, event.dimension) else {
+            return mod_api::Flow::Continue;
+        };
+        let (dim, pos) = (lv.dim, event.block_pos);
+        let took = with_world(|w| {
+            let r = &mut w.dims[dim].railway;
+            if !r.stations.contains_key(&pos) || r.auto_schedules.contains_key(&pos) {
+                return false;
+            }
+            r.auto_schedules.insert(pos, schedule);
+            true
+        })
+        .unwrap_or(false);
+        if took {
+            super::super::persist::mark_pos_unsaved(dim, pos);
+            *event.stack = None;
+            // A train standing there takes it at once (`applyAutoSchedule` from the callback).
+            super::conductor::apply_auto(dim, pos, true);
+        }
+        mod_api::Flow::Continue
     }
 }
 
@@ -164,6 +214,18 @@ fn stopped_at(r: &create_engine::trains::Railway, pos: [i32; 3]) -> Option<usize
             && t.train.speed == 0.0
             && t.train.at_station == Some(pos)
     })
+}
+
+/// The id of the train standing at the station (`getPresentTrain`).
+pub fn present_train(dim: usize, pos: [i32; 3]) -> Option<u32> {
+    with_world(|w| {
+        let r = &w.dims[dim].railway;
+        r.trains
+            .iter()
+            .find(|t| t.train.bound && t.train.at_station == Some(pos))
+            .map(|t| t.id)
+    })
+    .flatten()
 }
 
 /// `Train.canDisassemble` for the train standing still at the station: each carriage level and
@@ -461,6 +523,19 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
     // A train assembled here: its comparators read `trainPresent` again.
     crate::glue::redstone::analog_touched(dim, pos);
     super::super::persist::mark_pos_unsaved(dim, pos);
+    // `Contraption.addPassengersToWorld`: mobs sitting on the carriages' seats ride along.
+    let mut riders = Vec::new();
+    for (c, (shape, car)) in laid.carriages.iter().zip(&cars).enumerate() {
+        let b = bogeys[shape.first].1;
+        for (o, s) in car {
+            let p = [b[0] + o[0], b[1] + o[1], b[2] + o[2]];
+            if super::car_state(*s).is_some_and(|st| super::riding::is_seat(&*lv.host, st))
+                && let Some(mob) = crate::glue::contraptions::seats::seated_mob(lv, p)
+            {
+                riders.push((c, *o, mob));
+            }
+        }
+    }
     let Some(air) = super::default_state(&*lv.host, "minecraft:air") else {
         return true;
     };
@@ -473,6 +548,14 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
         }
     }
     send_trains(lv, &[id], true);
+    for (c, local, mob) in riders {
+        let at = create_engine::train_controls::Target {
+            train: id,
+            car: c as u16,
+            local,
+        };
+        super::riding::sit_entity(lv.host, dim, mob, at);
+    }
     true
 }
 

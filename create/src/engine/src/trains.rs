@@ -1793,6 +1793,10 @@ pub struct Railway {
     /// The name of the train last taken apart at a station (`lastDisassembledTrainName`),
     /// given to the next one assembled there.
     pub prev_train_names: HashMap<[i32; 3], String>,
+    /// The schedule a station holds (`getAutoSchedule`), given to each train arriving there;
+    /// those of stations taken away, for the glue to drop.
+    pub auto_schedules: HashMap<[i32; 3], Schedule>,
+    pub dropped_schedules: Vec<([i32; 3], Schedule)>,
     /// The level's day time and the stations with a redstone signal, as the glue read them
     /// before the tick (the schedules' `TimeOfDayCondition`, `StationPoweredCondition`).
     pub day_time: i64,
@@ -1927,6 +1931,9 @@ impl Railway {
         let observer = self.observers.remove(&pos).is_some();
         self.assembling.remove(&pos);
         self.prev_train_names.remove(&pos);
+        if let Some(s) = self.auto_schedules.remove(&pos) {
+            self.dropped_schedules.push((pos, s));
+        }
         if self.tracks.remove(&pos).is_some()
             || self.stations.remove(&pos).is_some()
             || signal
@@ -1959,6 +1966,7 @@ impl Railway {
         });
         self.saved_names.retain(|p, _| out(p));
         self.assembling.retain(|p, _| out(p));
+        self.auto_schedules.retain(|p, _| out(p));
         self.prev_train_names.retain(|p, _| out(p));
         self.trains.retain(|t| t.column != (cx, cz));
         if (t, s, g) != (self.tracks.len(), self.stations.len(), self.signals.len()) {
@@ -1992,9 +2000,13 @@ impl Railway {
                 name: n.clone(),
                 assembling: self.assembling.get(p).copied(),
                 prev_train: self.prev_train_names.get(p).cloned(),
+                auto_schedule: self.auto_schedules.get(p).cloned(),
             })
             .filter(|s| {
-                s.name != DEFAULT_STATION_NAME || s.assembling.is_some() || s.prev_train.is_some()
+                s.name != DEFAULT_STATION_NAME
+                    || s.assembling.is_some()
+                    || s.prev_train.is_some()
+                    || s.auto_schedule.is_some()
             })
             .collect();
         out.sort_by_key(|s| s.pos);
@@ -2009,6 +2021,9 @@ impl Railway {
             }
             if let Some(n) = s.prev_train {
                 self.prev_train_names.insert(s.pos, n);
+            }
+            if let Some(a) = s.auto_schedule {
+                self.auto_schedules.insert(s.pos, a);
             }
             if s.name != DEFAULT_STATION_NAME {
                 self.load_names(std::iter::once((s.pos, s.name)));
@@ -2559,12 +2574,13 @@ impl Railway {
 }
 
 /// A station as its column saves it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SavedStation {
     pub pos: [i32; 3],
     pub name: String,
     pub assembling: Option<[i32; 3]>,
     pub prev_train: Option<String>,
+    pub auto_schedule: Option<Schedule>,
 }
 
 /// A saved train's motion (`Train.write`): its speed, whether its controls face both ways, its

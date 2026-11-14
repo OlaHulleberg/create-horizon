@@ -122,6 +122,20 @@ impl Subsystem for Seats {
     }
 }
 
+/// The mob (not a player) sitting on the seat block at `pos`, if any: a train assembled with
+/// the seat takes it along (`Contraption.addPassengersToWorld` / `getSeatMapping`).
+pub fn seated_mob(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<EntityRef> {
+    let seat = SEATS.with_borrow(|s| s.get(&(lv.dim, pos)).map(|s| (s.id, s.player)))?;
+    if seat.1 {
+        return None;
+    }
+    let stand = lv.host.entity(seat.0)?;
+    let riders = stand.passengers(&*lv.host)?;
+    riders
+        .into_iter()
+        .find(|r| kind_of(lv, *r) != "minecraft:player")
+}
+
 fn is_seat(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     lv.create_block(pos).is_some_and(dye::is_seat)
 }

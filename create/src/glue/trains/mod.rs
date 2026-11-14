@@ -34,6 +34,7 @@
 pub mod assembly;
 mod carts;
 mod client;
+mod conductor;
 mod controls;
 mod gui;
 mod railway;

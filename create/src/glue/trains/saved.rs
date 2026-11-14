@@ -18,7 +18,11 @@ fn ints<'a>(c: &'a Compound, k: &str) -> Option<&'a Vec<i32>> {
 /// Trains as saved (`Train.write`, here with the column their first carriage stands in): their
 /// points by the graph's nodes (and where they were), bogeys, carriages and their spacing,
 /// motion, destination, schedule, each carriage's blocks and the way it faced when assembled.
-pub fn trains_to_nbt(host: &dyn Host, all: &[TrainOnTrack]) -> Tag {
+pub fn trains_to_nbt(
+    host: &dyn Host,
+    all: &[TrainOnTrack],
+    riders: &dyn Fn(u32) -> Vec<(u16, [i32; 3], u128)>,
+) -> Tag {
     let f = |v: f64| (v as f32).to_bits() as i32;
     Tag::List(
         all.iter()
@@ -76,6 +80,25 @@ pub fn trains_to_nbt(host: &dyn Host, all: &[TrainOnTrack]) -> Tag {
                     c.insert("name".into(), Tag::String(t.name.as_str().into()));
                 }
                 c.insert("icon".into(), Tag::Int(i32::from(t.icon)));
+                // Who sits on its seats: carriage, seat, UUID as four ints.
+                let seated: Vec<i32> = riders(t.id)
+                    .into_iter()
+                    .flat_map(|(car, l, u)| {
+                        [
+                            i32::from(car),
+                            l[0],
+                            l[1],
+                            l[2],
+                            (u >> 96) as i32,
+                            (u >> 64) as i32,
+                            (u >> 32) as i32,
+                            u as i32,
+                        ]
+                    })
+                    .collect();
+                if !seated.is_empty() {
+                    c.insert("riders".into(), Tag::IntArray(seated));
+                }
                 c.insert(
                     "cars".into(),
                     Tag::List(
@@ -286,6 +309,34 @@ pub fn schedule_from_nbt(c: &Compound) -> Schedule {
     }
 }
 
+/// The riders saved with each train of the column, in the order of `trains_from_nbt`.
+pub fn riders_from_nbt(data: &Compound) -> Vec<Vec<(u16, [i32; 3], u128)>> {
+    let Some(Tag::List(list)) = data.get(&"trains".into()) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter(|t| matches!(t, Tag::Compound(c) if c.contains_key(&"carriages".into())))
+        .map(|t| {
+            let Tag::Compound(c) = t else {
+                return Vec::new();
+            };
+            ints(c, "riders").map_or_else(Vec::new, |v| {
+                v.as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|r| {
+                        let u = (u128::from(r[4] as u32) << 96)
+                            | (u128::from(r[5] as u32) << 64)
+                            | (u128::from(r[6] as u32) << 32)
+                            | u128::from(r[7] as u32);
+                        (r[0] as u16, [r[1], r[2], r[3]], u)
+                    })
+                    .collect()
+            })
+        })
+        .collect()
+}
+
 /// Trains saved with a column (`trains_to_nbt`); saves from before carriages (one block list,
 /// no `carriages`) are dropped.
 pub fn trains_from_nbt(host: &dyn Host, data: &Compound) -> Vec<TrainOnTrack> {
@@ -462,6 +513,9 @@ pub fn stations_to_nbt(list: &[SavedStation]) -> Tag {
                 if let Some(n) = &s.prev_train {
                     c.insert("prev_train".into(), Tag::String(n.as_str().into()));
                 }
+                if let Some(a) = &s.auto_schedule {
+                    c.insert("auto_schedule".into(), Tag::Compound(schedule_to_nbt(a)));
+                }
                 Tag::Compound(c)
             })
             .collect(),
@@ -485,6 +539,10 @@ pub fn stations_from_nbt(data: &Compound) -> Vec<SavedStation> {
                 assembling: ints(c, "assembling").and_then(|d| d.as_slice().try_into().ok()),
                 prev_train: match c.get(&"prev_train".into()) {
                     Some(Tag::String(n)) => Some(n.to_string_lossy()),
+                    _ => None,
+                },
+                auto_schedule: match c.get(&"auto_schedule".into()) {
+                    Some(Tag::Compound(a)) => Some(schedule_from_nbt(a)),
                     _ => None,
                 },
             })
