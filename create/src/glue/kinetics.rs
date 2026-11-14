@@ -398,6 +398,16 @@ fn model_block(
         Model::Shaft(a) => Some((states::key(Block::Shaft), Some(("axis", axis_name(a))))),
         Model::ShaftHalf(d) => part("part_shaft_half", dir_name(d)),
         Model::CrankHandle(d) => part("part_hand_crank_handle", dir_name(d)),
+        Model::CrankBase(d) => part("part_hand_crank_base", dir_name(d)),
+        Model::Cog { large, axis } => part(
+            if large {
+                "part_large_cogwheel_shaftless"
+            } else {
+                "part_cogwheel_shaftless"
+            },
+            dir_name(Dir::from_axis(axis, true)),
+        ),
+        Model::CogShaft(a) => part("part_cogwheel_shaft", dir_name(Dir::from_axis(a, true))),
         Model::WaterWheel(d) => part("part_water_wheel", dir_name(d)),
         Model::MillstoneCog => part("part_millstone_cog", "up"),
         Model::BearingTop(d) => part("part_bearing_top_wooden", dir_name(d)),

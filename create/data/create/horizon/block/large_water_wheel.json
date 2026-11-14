@@ -5,7 +5,8 @@
     "explosion_resistance": 2.0,
     "requires_tool": false,
     "sounds": "minecraft:stripped_spruce_wood",
-    "render_shape": "ENTITYBLOCK_ANIMATED"
+    "render_shape": "ENTITYBLOCK_ANIMATED",
+    "occludes": false
   },
   "item": true,
   "state_properties": {

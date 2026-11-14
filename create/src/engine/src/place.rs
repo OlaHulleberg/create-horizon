@@ -173,18 +173,79 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
     })
 }
 
+/// What a placement sees around the block besides shafts: the axis of a large cog right above
+/// it, of a small cog it was placed against (behind the clicked face), and of a rotation speed
+/// controller right below it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Nearby {
+    pub large_cog_above: Option<Axis>,
+    pub small_cog_clicked: Option<Axis>,
+    pub controller_below: Option<Axis>,
+}
+
 /// The axis Create gives `block` placed in `ctx`, and whether it stands `vertical` (a block with
-/// a horizontal axis), or None when its placement isn't Create's own. `shaft` as for `facing`;
-/// `cog_above` is the axis of a large cog right above it.
+/// a horizontal axis), or None when its placement isn't Create's own. `shaft` as for `facing`.
 pub fn axis(
     block: Block,
     ctx: Context,
     shaft: impl Fn(Dir) -> bool,
-    cog_above: Option<Axis>,
+    near: Nearby,
 ) -> Option<(Axis, bool)> {
     let across = |a: Axis| if a == Axis::X { Axis::Z } else { Axis::X };
     let facing = horizontal_direction(ctx.yaw).axis();
+    let cog_above = near.large_cog_above;
+    let nearest = ordered_by_nearest(ctx.yaw, ctx.pitch)[0].axis();
+    // RotatedPillarKineticBlock.getStateForPlacement: the axis of the shafts around it unless
+    // sneaking; sneaking beside one, the clicked face's; else the view's.
+    let pillar = || match preferred(false, &shaft) {
+        Some(p) if !ctx.sneaking => p.axis(),
+        Some(_) => ctx.clicked_face.axis(),
+        None => nearest,
+    };
     match block {
+        // ShaftBlock, FlywheelBlock, CrushingWheelBlock, LargeWaterWheelBlock (whose room the
+        // glue checks after).
+        Block::Shaft | Block::Flywheel | Block::CrushingWheel | Block::LargeWaterWheel => {
+            Some((pillar(), false))
+        }
+        // AbstractEncasedShaftBlock (encased shafts, clutch, gearshift): sneaking, the pillar's
+        // rule; else the shafts' axis or the view's.
+        Block::AndesiteEncasedShaft
+        | Block::BrassEncasedShaft
+        | Block::Clutch
+        | Block::Gearshift => Some((
+            if ctx.sneaking {
+                pillar()
+            } else {
+                preferred(false, &shaft).map_or(nearest, |d| d.axis())
+            },
+            false,
+        )),
+        // GearboxBlock: always upright; the vertical gearbox is its own item.
+        Block::Gearbox => Some((Axis::Y, false)),
+        // EncasedCogwheelBlock: the pillar's rule, or the axis of a small cog it was placed on.
+        Block::AndesiteEncasedCogwheel
+        | Block::BrassEncasedCogwheel
+        | Block::AndesiteEncasedLargeCogwheel
+        | Block::BrassEncasedLargeCogwheel => {
+            Some((near.small_cog_clicked.unwrap_or_else(pillar), false))
+        }
+        // CogWheelBlock.getAxisForPlacement: sneaking, the clicked face's; a large cog on a
+        // speed controller, across it; on a small cog, its axis; else the shafts' or the clicked
+        // face's.
+        Block::Cogwheel | Block::LargeCogwheel => {
+            let axis = if ctx.sneaking {
+                ctx.clicked_face.axis()
+            } else if let (Some(a), true) = (near.controller_below, block == Block::LargeCogwheel)
+            {
+                across(a)
+            } else if let Some(a) = near.small_cog_clicked {
+                a
+            } else {
+                preferred(false, &shaft).map_or(ctx.clicked_face.axis(), |d| d.axis())
+            };
+            Some((axis, false))
+        }
         // SpeedControllerBlock: across the large cog above it; else
         // HorizontalAxisKineticBlock's: the axis of the shafts beside it, else across the
         // player's facing (`getClockWise`).
@@ -204,10 +265,9 @@ pub fn axis(
         // ChainDriveBlock: the view's axis when sneaking, else the axis of the shafts around it
         // (`getPreferredAxis`), else the view's.
         Block::EncasedChainDrive | Block::AdjustableChainGearshift => {
-            let view = ordered_by_nearest(ctx.yaw, ctx.pitch)[0].axis();
             let axis = match preferred(false, &shaft) {
                 Some(p) if !ctx.sneaking => p.axis(),
-                _ => view,
+                _ => nearest,
             };
             Some((axis, false))
         }
@@ -217,7 +277,7 @@ pub fn axis(
         Block::SequencedGearshift => {
             let axis = match preferred(false, &shaft) {
                 Some(p) if !ctx.sneaking => p.axis(),
-                _ => ordered_by_nearest(ctx.yaw, ctx.pitch)[0].axis(),
+                _ => nearest,
             };
             Some(if axis == Axis::Y {
                 (facing, true)
@@ -462,38 +522,38 @@ mod tests {
         let b = Block::RotationSpeedController;
         // Looking south: across the view, on x; a large cog above on x: on z.
         assert_eq!(
-            axis(b, ctx(0.0, 0.0, false), none, None),
+            axis(b, ctx(0.0, 0.0, false), none, Nearby::default()),
             Some((Axis::X, false))
         );
         assert_eq!(
-            axis(b, ctx(0.0, 0.0, false), none, Some(Axis::X)),
+            axis(b, ctx(0.0, 0.0, false), none, Nearby { large_cog_above: Some(Axis::X), ..Nearby::default() }),
             Some((Axis::Z, false))
         );
         // A shaft to the north: along it.
         assert_eq!(
-            axis(b, ctx(0.0, 0.0, false), |d| d == Dir::North, None),
+            axis(b, ctx(0.0, 0.0, false), |d| d == Dir::North, Nearby::default()),
             Some((Axis::Z, false))
         );
         let s = Block::SequencedGearshift;
         // Looking down while facing west: vertical, its horizontal axis x.
         assert_eq!(
-            axis(s, ctx(90.0, 80.0, false), none, None),
+            axis(s, ctx(90.0, 80.0, false), none, Nearby::default()),
             Some((Axis::X, true))
         );
         // A shaft below: vertical; sneaking, the view's axis.
         let below = |d: Dir| d == Dir::Down;
         assert_eq!(
-            axis(s, ctx(0.0, 0.0, false), below, None),
+            axis(s, ctx(0.0, 0.0, false), below, Nearby::default()),
             Some((Axis::Z, true))
         );
         assert_eq!(
-            axis(s, ctx(0.0, 0.0, true), below, None),
+            axis(s, ctx(0.0, 0.0, true), below, Nearby::default()),
             Some((Axis::Z, false))
         );
-        assert_eq!(axis(Block::Shaft, ctx(0.0, 0.0, false), none, None), None);
+        assert_eq!(axis(Block::Belt, ctx(0.0, 0.0, false), none, Nearby::default()), None);
         // Requesters along the player's facing; tickers facing the player.
         assert_eq!(
-            axis(Block::RedstoneRequester, ctx(90.0, 0.0, false), none, None),
+            axis(Block::RedstoneRequester, ctx(90.0, 0.0, false), none, Nearby::default()),
             Some((Axis::X, false))
         );
         assert_eq!(
@@ -503,6 +563,64 @@ mod tests {
         assert_eq!(
             facing(Block::StockTicker, ctx(0.0, 0.0, true), none),
             Some(Dir::South)
+        );
+    }
+
+    #[test]
+    fn shafts_and_cogs_lie_as_create_places_them() {
+        let none = |_: Dir| false;
+        let near = Nearby::default();
+        let on = |face: Dir, sneaking: bool| Context {
+            yaw: 0.0,
+            pitch: 0.0,
+            sneaking,
+            clicked_face: face,
+        };
+        // A shaft on the floor, looking south: along the view, not the clicked face.
+        assert_eq!(
+            axis(Block::Shaft, on(Dir::Up, false), none, near),
+            Some((Axis::Z, false))
+        );
+        // Beside a shaft to the west: along it; sneaking, the clicked face's.
+        let west = |d: Dir| d == Dir::West;
+        assert_eq!(
+            axis(Block::Shaft, on(Dir::Up, false), west, near),
+            Some((Axis::X, false))
+        );
+        assert_eq!(
+            axis(Block::Shaft, on(Dir::Up, true), west, near),
+            Some((Axis::Y, false))
+        );
+        // A cog on the floor: the clicked face's; on a small cog, its axis.
+        assert_eq!(
+            axis(Block::Cogwheel, on(Dir::Up, false), none, near),
+            Some((Axis::Y, false))
+        );
+        let on_cog = Nearby {
+            small_cog_clicked: Some(Axis::X),
+            ..near
+        };
+        assert_eq!(
+            axis(Block::LargeCogwheel, on(Dir::Up, false), none, on_cog),
+            Some((Axis::X, false))
+        );
+        // A large cog on a speed controller along x: across it.
+        let on_controller = Nearby {
+            controller_below: Some(Axis::X),
+            ..near
+        };
+        assert_eq!(
+            axis(Block::LargeCogwheel, on(Dir::Up, false), none, on_controller),
+            Some((Axis::Z, false))
+        );
+        // Gearboxes stand upright; encased shafts take the view's axis.
+        assert_eq!(
+            axis(Block::Gearbox, on(Dir::North, false), none, near),
+            Some((Axis::Y, false))
+        );
+        assert_eq!(
+            axis(Block::Clutch, on(Dir::Up, false), none, near),
+            Some((Axis::Z, false))
         );
     }
 }
