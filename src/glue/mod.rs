@@ -2,6 +2,7 @@
 //! `lib.rs` hands every hook to all of them through `SUBSYSTEMS`.
 
 pub mod blocks;
+pub mod contraptions;
 pub mod copycat;
 pub mod decor;
 pub mod display;
@@ -55,6 +56,13 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &redstone::Redstone,
     &display::Display,
     &redstone::Comparators,
+    // Before the kinetic solve, as the legacy level tick ran them: what a speed change starts
+    // acts on the next tick.
+    &contraptions::controller::Controller,
+    &contraptions::Contraptions,
+    // After kinetics, whose block entity type it attaches its part to.
+    &contraptions::draw::Drawing,
+    &contraptions::seats::Seats,
 ];
 
 thread_local! {

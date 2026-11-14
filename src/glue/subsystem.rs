@@ -14,14 +14,15 @@
 use super::server::ServerLevel;
 use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityInteractEvent,
-    EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
-    InteractionKeyMappingTriggeredEvent, InteractionResult, LeftClickBlockEvent, LevelSaveEvent,
-    MouseScrollingEvent, MovementInputEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent,
-    PlayerRef, PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext,
-    RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent,
-    ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
-    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost,
+    EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
+    InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
+    LeftClickBlockEvent, LevelSaveEvent, MouseScrollingEvent, MovementInputEvent,
+    PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef, PlayerTickPostEvent,
+    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
+    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
+    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
+    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost,
 };
 
 pub trait Subsystem: Sync {
@@ -205,8 +206,25 @@ pub trait Subsystem: Sync {
         Flow::Continue
     }
 
+    /// `Hooks::entity_join_level`: an entity joins a server level.
+    fn entity_join_level(
+        &self,
+        _host: &mut dyn ServerHost,
+        _event: &mut EntityJoinLevelEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
     /// `Hooks::movement_input`, on the client: the local player's movement keys.
     fn movement_input(&self, _host: &dyn ClientHost, _event: &mut MovementInputEvent) {}
+    /// `Hooks::key_mapping_pre`, on the client: `Flow::Cancel` keeps the key from the game.
+    fn key_mapping_pre(
+        &self,
+        _host: &mut dyn ClientHost,
+        _event: &mut KeyMappingPreEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
 
     /// `Hooks::render_gui_post`: draw on the HUD.
     fn render_gui_post(&self, _host: &dyn ClientHost, _event: &mut RenderGuiPostEvent<'_>) {}

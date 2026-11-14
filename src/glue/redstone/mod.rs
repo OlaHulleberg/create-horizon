@@ -166,53 +166,6 @@ pub(crate) fn offset(pos: [i32; 3], d: Dir) -> [i32; 3] {
 }
 
 impl ServerLevel<'_> {
-    /// Sets boolean properties of the block at `pos` (`setBlock` with `flags`); whether its state
-    /// changed.
-    pub(crate) fn set_flags(
-        &mut self,
-        pos: [i32; 3],
-        props: &[(&str, bool)],
-        flags: BlockUpdateFlags,
-    ) -> bool {
-        let Some(state) = self.block_state(pos) else {
-            return false;
-        };
-        let mut next = state;
-        {
-            let facts = self.host.block_states();
-            for (k, v) in props {
-                if let Ok(s) = next.with(&facts, k, if *v { "true" } else { "false" }) {
-                    next = s;
-                }
-            }
-        }
-        next != state && self.set_state(pos, next, flags)
-    }
-
-    /// `Level.updateNeighborsAt`: the six neighbours of `pos` hear of it (a signal changed).
-    pub(crate) fn update_signal_neighbors(&mut self, pos: [i32; 3]) {
-        if let Some(state) = self.block_state(pos) {
-            let _ = self.level.update_neighbors(
-                &mut *self.host,
-                pos,
-                state,
-                NeighbourUpdate::Neighbours,
-            );
-        }
-    }
-
-    /// `Level.updateNeighbourForOutputSignal`: comparators beside `pos` read it again.
-    pub(crate) fn update_output_signal(&mut self, pos: [i32; 3]) {
-        if let Some(state) = self.block_state(pos) {
-            let _ = self.level.update_neighbors(
-                &mut *self.host,
-                pos,
-                state,
-                NeighbourUpdate::OutputSignal,
-            );
-        }
-    }
-
     /// The block name of `state` (`minecraft:redstone_wire`).
     pub(crate) fn state_name(&self, state: BlockState) -> Option<String> {
         use mod_api::BlockMetadata;

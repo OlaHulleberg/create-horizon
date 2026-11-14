@@ -6,7 +6,8 @@
 
 use super::states;
 use mod_api::{
-    BlockState, BlockUpdateFlags, Direction, HostBlockStates, LevelRef, PlayerRef, ServerHost,
+    BlockState, BlockUpdateFlags, Direction, HostBlockStates, LevelRef, NeighbourUpdate, PlayerRef,
+    ServerHost,
 };
 
 pub struct ServerLevel<'a> {
@@ -127,5 +128,52 @@ impl<'a> ServerLevel<'a> {
     pub fn run_command(&mut self, line: &str) -> bool {
         let line = format!("execute in {} run {line}", self.dimension);
         self.host.commands().run_command(&line)
+    }
+
+    /// Sets boolean properties of the block at `pos` (`setBlock` with `flags`); whether its state
+    /// changed.
+    pub fn set_flags(
+        &mut self,
+        pos: [i32; 3],
+        props: &[(&str, bool)],
+        flags: BlockUpdateFlags,
+    ) -> bool {
+        let Some(state) = self.block_state(pos) else {
+            return false;
+        };
+        let mut next = state;
+        {
+            let facts = self.host.block_states();
+            for (k, v) in props {
+                if let Ok(s) = next.with(&facts, k, if *v { "true" } else { "false" }) {
+                    next = s;
+                }
+            }
+        }
+        next != state && self.set_state(pos, next, flags)
+    }
+
+    /// `Level.updateNeighborsAt`: the six neighbours of `pos` hear of it (a signal changed).
+    pub fn update_signal_neighbors(&mut self, pos: [i32; 3]) {
+        if let Some(state) = self.block_state(pos) {
+            let _ = self.level.update_neighbors(
+                &mut *self.host,
+                pos,
+                state,
+                NeighbourUpdate::Neighbours,
+            );
+        }
+    }
+
+    /// `Level.updateNeighbourForOutputSignal`: comparators beside `pos` read it again.
+    pub fn update_output_signal(&mut self, pos: [i32; 3]) {
+        if let Some(state) = self.block_state(pos) {
+            let _ = self.level.update_neighbors(
+                &mut *self.host,
+                pos,
+                state,
+                NeighbourUpdate::OutputSignal,
+            );
+        }
     }
 }
