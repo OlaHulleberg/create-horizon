@@ -373,6 +373,132 @@ pub fn nixie(ctx: Context) -> (DoubleFace, Dir) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Placement helpers: a shaft or cog item clicked on a shaft or cog places next to it
+
+/// `IPlacementHelper.orderedByDistance`: the directions `keep` lets through, the one whose
+/// face lies nearest the hit first (`hit` relative to the block's centre); ties keep
+/// `Direction` order.
+pub fn ordered_by_distance(hit: [f64; 3], keep: impl Fn(Dir) -> bool) -> Vec<Dir> {
+    let mut dirs: Vec<(Dir, f64)> = Dir::ALL
+        .into_iter()
+        .filter(|d| keep(*d))
+        .map(|d| {
+            let o = d.offset();
+            let dist = (0..3)
+                .map(|i| (f64::from(o[i]) - hit[i]).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            (d, dist)
+        })
+        .collect();
+    dirs.sort_by(|a, b| a.1.total_cmp(&b.1));
+    dirs.into_iter().map(|d| d.0).collect()
+}
+
+fn add(p: [i32; 3], d: Dir) -> [i32; 3] {
+    let o = d.offset();
+    [p[0] + o[0], p[1] + o[1], p[2] + o[2]]
+}
+
+/// `AllConfigs.server().equipment.placementAssistRange`: how far a shaft line is extended.
+pub const PLACEMENT_ASSIST_RANGE: usize = 12;
+
+/// `ShaftBlock.PlacementHelper` (a `PoleHelper`): a shaft or cog item on a shaft along `axis`
+/// at `pos` goes at the free end of the shafts in line with it, the end nearest the hit first,
+/// with the same axis. `pole(p)` says whether `p` holds a shaft along `axis`, `free(p)` whether
+/// it can be replaced.
+pub fn pole_helper(
+    pos: [i32; 3],
+    axis: Axis,
+    hit: [f64; 3],
+    pole: impl Fn([i32; 3]) -> bool,
+    free: impl Fn([i32; 3]) -> bool,
+) -> Option<[i32; 3]> {
+    for dir in ordered_by_distance(hit, |d| d.axis() == axis) {
+        let mut at = add(pos, dir);
+        let mut poles = 0;
+        while pole(at) {
+            poles += 1;
+            at = add(at, dir);
+        }
+        if poles >= PLACEMENT_ASSIST_RANGE {
+            continue;
+        }
+        if free(at) {
+            return Some(at);
+        }
+    }
+    None
+}
+
+/// `DiagonalCogHelper.hitOnShaft`: the hit (relative to the block's corner) lies in the
+/// six-voxel pole along `axis`.
+fn hit_on_shaft(local: [f64; 3], axis: Axis) -> bool {
+    (0..3).all(|i| {
+        let along = [Axis::X, Axis::Y, Axis::Z][i] == axis;
+        let (lo, hi) = if along {
+            (0.0, 1.0)
+        } else {
+            (5.0 / 16.0, 11.0 / 16.0)
+        };
+        local[i] >= lo - 0.001 && local[i] <= hi + 0.001
+    })
+}
+
+/// The cog a cog helper clicked: whether it is large, and its axis.
+#[derive(Clone, Copy, Debug)]
+pub struct ClickedCog {
+    pub large: bool,
+    pub axis: Axis,
+}
+
+/// `CogwheelBlockItem.onItemUseFirst` with `SmallCogHelper` / `LargeCogHelper`: a cog item
+/// (`large` or small) clicked, not sneaking, on the cog `cog` at `pos`, the hit `local` to its
+/// corner. Where the new cog goes and its axis, or None to place as usual. `valid(p, large,
+/// axis)` is `isValidCogwheelPosition`, `free(p)` whether `p` can be replaced.
+pub fn cog_helper(
+    large: bool,
+    pos: [i32; 3],
+    cog: ClickedCog,
+    local: [f64; 3],
+    valid: impl Fn([i32; 3], bool, Axis) -> bool,
+    free: impl Fn([i32; 3]) -> bool,
+) -> Option<([i32; 3], Axis)> {
+    if hit_on_shaft(local, cog.axis) {
+        return None;
+    }
+    let hit = local.map(|v| v - 0.5);
+    let axis = cog.axis;
+    let except = |d: Dir| d.axis() != axis;
+    match (large, cog.large) {
+        // SmallCogHelper on a small cog: beside it in its plane, the side nearest the hit.
+        (false, false) => ordered_by_distance(hit, except).into_iter().find_map(|d| {
+            let at = add(pos, d);
+            (valid(at, false, axis) && free(at)).then_some((at, axis))
+        }),
+        // LargeCogHelper on a large cog: diagonally off its side nearest the hit, at right
+        // angles to it.
+        (true, true) => {
+            let side = ordered_by_distance(hit, |d| d.axis() == axis)[0];
+            ordered_by_distance(hit, except).into_iter().find_map(|d| {
+                let at = add(add(pos, d), side);
+                (valid(at, true, d.axis()) && free(at)).then_some((at, d.axis()))
+            })
+        }
+        // DiagonalCogHelper: a cog of the other size diagonally in the same plane.
+        _ => {
+            let closest = ordered_by_distance(hit, except)[0];
+            ordered_by_distance(hit, |d| except(d) && d.axis() != closest.axis())
+                .into_iter()
+                .find_map(|d| {
+                    let at = add(add(pos, d), closest);
+                    (free(at) && valid(at, cog.large, axis)).then_some((at, axis))
+                })
+        }
+    }
+}
+
 fn is_sail(block: Block) -> bool {
     block == Block::SailFrame || block.name().ends_with("_sail")
 }
@@ -564,6 +690,38 @@ mod tests {
             facing(Block::StockTicker, ctx(0.0, 0.0, true), none),
             Some(Dir::South)
         );
+    }
+
+    #[test]
+    fn helpers_extend_shafts_and_mesh_cogs() {
+        // Shafts at x 0..=2 on x; clicked at x 0 near its west end: the line grows west first.
+        let pole = |p: [i32; 3]| p[1] == 0 && p[2] == 0 && (0..=2).contains(&p[0]);
+        let at = pole_helper([0, 0, 0], Axis::X, [-0.4, 0.0, 0.0], pole, |_| true);
+        assert_eq!(at, Some([-1, 0, 0]));
+        // Near its east end: past the line's end.
+        let at = pole_helper([0, 0, 0], Axis::X, [0.4, 0.0, 0.0], pole, |_| true);
+        assert_eq!(at, Some([3, 0, 0]));
+        let valid = |_: [i32; 3], _: bool, _: Axis| true;
+        let small = ClickedCog {
+            large: false,
+            axis: Axis::Y,
+        };
+        // A small cog on a small cog's east rim: beside it to the east, same axis.
+        let at = cog_helper(false, [0, 0, 0], small, [0.95, 0.5, 0.5], valid, |_| true);
+        assert_eq!(at, Some(([1, 0, 0], Axis::Y)));
+        // Clicked on its shaft: as usual.
+        let at = cog_helper(false, [0, 0, 0], small, [0.5, 1.0, 0.5], valid, |_| true);
+        assert_eq!(at, None);
+        // A large cog on a small cog's east rim, a little north: diagonal, same axis.
+        let at = cog_helper(true, [0, 0, 0], small, [0.95, 0.5, 0.3], valid, |_| true);
+        assert_eq!(at, Some(([1, 0, -1], Axis::Y)));
+        // A large cog on a large cog's top, near its east rim: off the top, turned to x.
+        let large = ClickedCog {
+            large: true,
+            axis: Axis::Y,
+        };
+        let at = cog_helper(true, [0, 0, 0], large, [0.95, 0.6, 0.5], valid, |_| true);
+        assert_eq!(at, Some(([1, 1, 0], Axis::X)));
     }
 
     #[test]

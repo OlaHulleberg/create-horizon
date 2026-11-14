@@ -47,6 +47,20 @@ impl Subsystem for Kinetics {
         if let Err(e) = r.block_entity_part(&kind, KineticEntity) {
             crate::create_log!("[create] the kinetic block entity's part was refused: {e:?}");
         }
+        super::transmission::register(r);
+    }
+
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        _player: mod_api::PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        clicked: Dir,
+        _point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        super::transmission::wrench_used(lv, pos, block, clicked, sneaking)
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {

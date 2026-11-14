@@ -94,7 +94,11 @@ pub fn rotated(
             return out;
         }
     }
-    if let Some(a) = props.get("axis").and_then(|v| axis_of(v)) {
+    // No Create block has both an axis and a facing: an `axis` beside a `facing` is the
+    // template's (a gauge on stripped wood), not Create's `AXIS`.
+    if !props.contains_key("facing")
+        && let Some(a) = props.get("axis").and_then(|v| axis_of(v))
+    {
         out.insert("axis".into(), axis_name(turn_axis(a, about)).into());
         return out;
     }
@@ -104,12 +108,25 @@ pub fn rotated(
     let Some(mut f) = props.get("facing").and_then(|v| dir_of(v)) else {
         return out;
     };
+    // DirectionalAxisKineticBlock.AXIS_ALONG_FIRST_COORDINATE: cycled when clicked on the
+    // facing's own axis, and with each turn about y.
+    let along = props.get("axis_along_first").map(|v| v == "true");
+    let cycle = |out: &mut BTreeMap<String, String>| {
+        if let Some(a) = out.get("axis_along_first").map(|v| v == "true") {
+            out.insert("axis_along_first".into(), (!a).to_string());
+        }
+    };
     if f.axis() == about {
-        // A block with AXIS_ALONG_FIRST_COORDINATE would cycle it here; none is ported yet.
+        if along.is_some() {
+            cycle(&mut out);
+        }
         return out;
     }
     loop {
         f = clockwise(f, about);
+        if about == Axis::Y {
+            cycle(&mut out);
+        }
         if f.axis() != about {
             break;
         }
@@ -182,6 +199,32 @@ mod tests {
         assert_eq!(
             rotated(&props(&[("facing", "up")]), false, Dir::Down)["facing"],
             "up"
+        );
+    }
+
+    #[test]
+    fn gauges_turn_their_facing_and_cycle_their_shaft() {
+        // A gauge on stripped wood carries the template's `axis`: its facing turns instead.
+        let gauge = props(&[
+            ("axis", "y"),
+            ("facing", "north"),
+            ("axis_along_first", "false"),
+        ]);
+        let up = rotated(&gauge, false, Dir::Up);
+        assert_eq!((up["facing"].as_str(), up["axis"].as_str()), ("east", "y"));
+        // About y the shaft's flag flips with the facing, keeping it along the same world axis.
+        assert_eq!(up["axis_along_first"], "true");
+        // Clicked on its facing's own axis: only the shaft turns.
+        let front = rotated(&gauge, false, Dir::South);
+        assert_eq!(
+            (front["facing"].as_str(), front["axis_along_first"].as_str()),
+            ("north", "true")
+        );
+        // About x, the facing turns and the flag stays.
+        let side = rotated(&gauge, false, Dir::East);
+        assert_eq!(
+            (side["facing"].as_str(), side["axis_along_first"].as_str()),
+            ("down", "false")
         );
     }
 }
