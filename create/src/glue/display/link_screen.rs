@@ -355,7 +355,7 @@ fn draw(
                         false,
                     );
                 } else {
-                    if editing && (host_millis() / 300) % 2 == 0 {
+                    if editing && (host_millis() / 300).is_multiple_of(2) {
                         text.push('_');
                     }
                     draw.text(&text, [r[0] + 4.0, r[1] + 5.0], 0xFFFF_FFFF, true);

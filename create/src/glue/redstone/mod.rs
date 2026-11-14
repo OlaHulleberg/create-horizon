@@ -17,8 +17,10 @@
 //! Left out, the API having no way to do it:
 //! - A redstone link slot's item is drawn as a block item (`isGui3d`) when the item places a
 //!   block: the API does not say whether an item model is 3D (`ItemRenderer` `isGui3d`).
-//! - The threshold switch's screen: its thresholds are set with `/create_debug threshold`, as
-//!   the legacy glue did.
+//!
+//! Not ported yet (the API could do it): the threshold switch's screen (its thresholds are set
+//! with `/create_debug threshold`) and the brass diodes' progress indicator
+//! (`BrassDiodeRenderer`).
 
 mod analog;
 mod client;
