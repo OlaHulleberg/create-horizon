@@ -111,6 +111,15 @@ pub trait Subsystem: Sync {
         Flow::Continue
     }
 
+    /// `Hooks::block_drops`: a broken block's drops, before they are in the world.
+    fn block_drops(
+        &self,
+        _level: &dyn mod_api::LevelHost,
+        _event: &mut mod_api::BlockDropsEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
     /// `Hooks::entity_interact`: a player right-clicks an entity. The first `Some` wins.
     fn entity_interact(
         &self,

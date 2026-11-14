@@ -1,0 +1,260 @@
+//! Create's fluids in the game: pipes and pumps, tanks and boilers, valves, smart, glass and
+//! encased pipes, hose pulleys, creative fluid tanks, steam whistles, spouts and item drains.
+//! The rules are `create_engine::{fluids, tank, steam, hose, whistle, plumbing, spout, drain}`.
+//!
+//! What clients draw comes in each block entity's data, sent by `kinetics`: a tank controller's
+//! (or a creative tank's) contents under `Tank`, a hose pulley's hose under `Hose`; a valve's
+//! pointer follows the valve's own state and speed on the client (`client`).
+//!
+//! Left out:
+//! - The `FLUIDS` capability on Create's tanks, so other mods' handlers and Create's pumps reach
+//!   each other: the tanks' contents live in the engine's world, outside the game's transaction
+//!   journal, and a handler cannot learn that a transaction it wrote in was aborted to roll the
+//!   engine back (no close callback on `Transaction`). Pumps reach Create's own blocks and open
+//!   ends as the legacy glue did.
+//! - A spout's sequenced-assembly filling step (`SequencedAssemblyRecipe.getRecipe` on the item
+//!   held below it): the assemblies and their progress on a stack are processing's
+//!   (`sequenced_on_depot`, `sequenced_step_on_depot`), ported with it; plain `create:filling`
+//!   recipes are filled here.
+
+mod client;
+mod machines;
+mod pipes;
+mod plumbing;
+
+use super::server::ServerLevel;
+use super::subsystem::Subsystem;
+use super::world::with_world;
+use create_engine::Block;
+use create_engine::parts::StateInfo;
+use create_engine::tank::{Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
+use mod_api::{
+    BlockState, BlockUpdateFlags, Compound, HostBlockStates, ModBlockEntity, Registrar,
+    RegistrationContext, StateConstraint, Tag,
+};
+
+pub use client::animated;
+
+/// The key of a tank's contents in its block entity's data: fluid (255: none), amount, width,
+/// height, window; empty for a tank block that is no controller.
+pub const TANK: &str = "Tank";
+
+/// The key of a hose pulley's hose: offset, blocks a tick it moves, the game time it was at.
+pub const HOSE: &str = "Hose";
+
+pub struct Fluids;
+
+impl Subsystem for Fluids {
+    fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        client::register(r);
+    }
+
+    fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
+        let tanks = tanks_from_nbt(data);
+        let dim = lv.dim;
+        with_world(|w| w.load_tanks(dim, tanks.into_iter()));
+        plumbing::chunk_load(dim, data);
+    }
+
+    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+        let dim = lv.dim;
+        let tanks = with_world(|w| w.column_tanks(dim, chunk[0], chunk[1])).unwrap_or_default();
+        if !tanks.is_empty() {
+            // x, y, z, fluid, amount, width, height, windows for each controller
+            // (`FluidTankBlockEntity`'s `TankContent`, `Size`, `Height`, `Window`).
+            let v = tanks
+                .iter()
+                .flat_map(|(p, m)| {
+                    [
+                        p[0],
+                        p[1],
+                        p[2],
+                        i32::from(m.tank.fluid.map_or(255, |f| f.index())),
+                        m.tank.amount as i32,
+                        i32::from(m.width),
+                        i32::from(m.height),
+                        i32::from(m.window),
+                    ]
+                })
+                .collect();
+            data.insert("tank_multis".into(), Tag::IntArray(v));
+        }
+        plumbing::chunk_data_save(dim, chunk, data);
+    }
+
+    /// Before the solve, in the legacy order: pipes and pumps, boilers, valves, hoses and
+    /// whistles, tank block states, spouts and drains, then what clients must see again.
+    fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        pipes::tick_pipes(lv);
+        pipes::tick_boilers(lv);
+        plumbing::tick(lv);
+        pipes::tick_tank_states(lv);
+        machines::tick_spouts(lv);
+        machines::tick_drains(lv);
+        send_tank_changes(lv);
+    }
+
+    fn client_reset(&self) {
+        client::reset();
+    }
+}
+
+/// Tanks saved with a column: `tank_multis` holds x, y, z, fluid, amount, width, height,
+/// windows for each controller; `tanks` (before multiblock tanks) x, y, z, fluid, amount for
+/// one-block tanks.
+fn tanks_from_nbt(data: &Compound) -> Vec<([i32; 3], Multi)> {
+    let tank = |c: &[i32]| Tank {
+        fluid: Fluid::from_index(c[3].clamp(0, 255) as u8),
+        amount: c[4].max(0) as u32,
+    };
+    let mut out = Vec::new();
+    if let Some(Tag::IntArray(v)) = data.get(&"tank_multis".into()) {
+        out.extend(v.as_chunks::<8>().0.iter().map(|c| {
+            (
+                [c[0], c[1], c[2]],
+                Multi {
+                    tank: tank(c),
+                    width: c[5].clamp(1, MAX_WIDTH) as u8,
+                    height: c[6].clamp(1, MAX_HEIGHT) as u8,
+                    window: c[7] != 0,
+                },
+            )
+        }));
+    }
+    if let Some(Tag::IntArray(v)) = data.get(&"tanks".into()) {
+        out.extend(v.as_chunks::<5>().0.iter().map(|c| {
+            (
+                [c[0], c[1], c[2]],
+                Multi {
+                    tank: tank(c),
+                    ..Multi::default()
+                },
+            )
+        }));
+    }
+    out
+}
+
+/// Tanks whose contents changed: their comparators read them again (`onFluidStackChanged`:
+/// `setChanged`), and each controller's block entity shows its clients the tank (none for a
+/// block that is no controller anymore).
+fn send_tank_changes(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let changed = with_world(|w| {
+        let mut v = std::mem::take(&mut w.dims[dim].tank_changes);
+        v.sort();
+        v.dedup();
+        w.dims[dim].analog_checks.extend_from_slice(&v);
+        v.into_iter()
+            .map(|p| (p, w.dims[dim].tanks.multis.get(&p).copied()))
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    for (pos, m) in changed {
+        set_shown_tank(lv, pos, m.as_ref());
+    }
+}
+
+/// Puts tank `m` (none: no tank) in the data of the block entity at `pos`, for its clients.
+fn set_shown_tank(lv: &mut ServerLevel<'_>, pos: [i32; 3], m: Option<&Multi>) {
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let v = m.map_or_else(Vec::new, |m| {
+        vec![
+            i32::from(m.tank.fluid.map_or(255, Fluid::index)),
+            m.tank.amount as i32,
+            i32::from(m.width),
+            i32::from(m.height),
+            i32::from(m.window),
+        ]
+    });
+    let data = Compound::from([(TANK.into(), Tag::IntArray(v))]);
+    let _ = entity.merge_data(&mut *lv.host, data);
+}
+
+/// The tank a block entity shows its clients.
+fn shown_tank(entity: &ModBlockEntity) -> Option<Multi> {
+    let Some(Tag::IntArray(v)) = entity.nbt.get(&TANK.into()) else {
+        return None;
+    };
+    let &[fluid, amount, width, height, window] = v.as_slice() else {
+        return None;
+    };
+    Some(Multi {
+        tank: Tank {
+            fluid: Fluid::from_index(fluid.clamp(0, 255) as u8),
+            amount: amount.max(0) as u32,
+        },
+        width: width.clamp(1, MAX_WIDTH) as u8,
+        height: height.clamp(1, MAX_HEIGHT) as u8,
+        window: window != 0,
+    })
+}
+
+/// The Create block at `pos` and its state's facts.
+fn info_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Block, StateInfo)> {
+    let state = lv.block(pos);
+    if state == 0 {
+        return None;
+    }
+    with_world(|w| w.table.get(state).map(|(b, i)| (b, *i))).flatten()
+}
+
+/// The state of block `name` with `props`, the rest default.
+fn state_with(lv: &ServerLevel<'_>, name: &str, props: &[(&str, &str)]) -> Option<BlockState> {
+    let key = lv.host.block_key(name)?;
+    let constraints: Vec<StateConstraint> = props
+        .iter()
+        .map(|(k, v)| StateConstraint::new(*k, *v))
+        .collect();
+    BlockState::of(&lv.host.block_states(), key, &constraints).ok()
+}
+
+/// A property of the state at `pos` (`lit`, `waterlogged`).
+fn property(lv: &ServerLevel<'_>, pos: [i32; 3], key: &str) -> Option<String> {
+    lv.level.block_property(&*lv.host, pos, key)
+}
+
+/// `BlockState.canBeReplaced()` of the state at `pos`.
+fn replaceable(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    lv.block_state(pos)
+        .and_then(|s| lv.host.block_states().replaceable(s))
+        .unwrap_or(false)
+}
+
+/// The fluid in the block at `pos`: water or lava (Create's own have no blocks), and whether
+/// it is a source. None for no fluid or another.
+fn world_fluid(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Fluid, bool)> {
+    let f = lv.level.fluid_state(&*lv.host, pos)?;
+    if f.is_empty() {
+        return None;
+    }
+    let fluid = match f.fluid.id(&*lv.host).as_str() {
+        "minecraft:water" | "minecraft:flowing_water" => Fluid::Water,
+        "minecraft:lava" | "minecraft:flowing_lava" => Fluid::Lava,
+        _ => return None,
+    };
+    Some((fluid, f.is_source()))
+}
+
+/// Any fluid at all in the block at `pos` (`!getFluidState().isEmpty()`).
+fn has_fluid(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    lv.level
+        .fluid_state(&*lv.host, pos)
+        .is_some_and(|f| !f.is_empty())
+}
+
+fn offset(p: [i32; 3], d: create_engine::kinetics::Dir) -> [i32; 3] {
+    let o = d.offset();
+    [p[0] + o[0], p[1] + o[1], p[2] + o[2]]
+}
+
+fn flag(b: bool) -> &'static str {
+    if b { "true" } else { "false" }
+}
+
+/// Vanilla's `Block.UPDATE_ALL`.
+fn all() -> BlockUpdateFlags {
+    super::server::update_all()
+}

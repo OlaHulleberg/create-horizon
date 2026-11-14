@@ -227,7 +227,7 @@ fn current_speeds(lv: &ServerLevel<'_>, pos: [i32; 3]) -> [f32; 2] {
         .map_or([0.0; 2], |d| speeds_of(&d))
 }
 
-fn speeds_of(data: &Compound) -> [f32; 2] {
+pub fn speeds_of(data: &Compound) -> [f32; 2] {
     match data.get(&SPEEDS.into()) {
         Some(Tag::List(l)) => {
             let at = |i: usize| match l.get(i) {
@@ -287,8 +287,13 @@ impl BlockEntityPart for KineticEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let speeds = event.entity.nbt.get(&SPEEDS.into())?.clone();
-        Some(Compound::from([(SPEEDS.into(), speeds)]))
+        // The speeds, and what other subsystems keep in the same block entity for its clients.
+        let shown: Compound = [SPEEDS]
+            .iter()
+            .chain(super::gauges::SYNCED)
+            .filter_map(|&k| Some((k.into(), event.entity.nbt.get(&k.into())?.clone())))
+            .collect();
+        (!shown.is_empty()).then_some(shown)
     }
 
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
@@ -303,14 +308,24 @@ impl BlockEntityPart for KineticEntity {
         let speeds = speeds_of(&event.entity.nbt);
         let text = host.block_state_string(event.state).unwrap_or_default();
         let (_, own) = states::split(&text);
+        // Parts another subsystem draws itself (a gauge's dials, a flywheel's wheel), and blocks
+        // it animates this frame, drawn again each frame rather than kept.
+        let animated = super::gauges::animated(block, event.pos, event.entity);
         for d in client::draws(block, &info, event.pos, speeds) {
-            draw_part(event.draw, block, &own, &d);
+            if super::gauges::draws_itself(block, &d) {
+                continue;
+            }
+            if animated {
+                spin_part(event.draw, block, &own, &d);
+            } else {
+                draw_part(event.draw, block, &own, &d);
+            }
         }
     }
 }
 
 /// The unit vector of `axis`.
-fn axis_vector(axis: Axis) -> [f32; 3] {
+pub fn axis_vector(axis: Axis) -> [f32; 3] {
     match axis {
         Axis::X => [1.0, 0.0, 0.0],
         Axis::Y => [0.0, 1.0, 0.0],
@@ -383,6 +398,12 @@ pub fn draw_part(
     own: &[(&str, &str)],
     d: &Draw,
 ) {
+    spin_part(draw, block, own, d);
+    draw.keep();
+}
+
+/// `draw_part` without keeping the frame's drawing.
+fn spin_part(draw: &mut dyn BlockEntityDrawContext, block: Block, own: &[(&str, &str)], d: &Draw) {
     let Some((model, prop)) = model_block(block, d.model) else {
         return;
     };
@@ -392,5 +413,4 @@ pub fn draw_part(
         None => draw.block(states::key(model), own),
     };
     draw.still();
-    draw.keep();
 }

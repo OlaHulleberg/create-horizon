@@ -147,6 +147,10 @@ impl Hooks for Create {
         until_cancel(|s| s.break_block(host, event))
     }
 
+    fn block_drops(&self, level: &dyn LevelHost, event: &mut mod_api::BlockDropsEvent<'_>) -> Flow {
+        until_cancel(|s| s.block_drops(level, event))
+    }
+
     fn entity_interact(
         &self,
         mut host: HostSide,
