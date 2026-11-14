@@ -4,9 +4,15 @@
 //! assemblers with the contraptions and couplings of minecarts (`cart`, `mounted`, `coupling`).
 //!
 //! - [`Trains`] (`railway`, `tracks`, `assembly`, `saved`): the railway's tick, the stations'
-//!   assembly and the bogeys railway casing places at them, the track item's placement, the
-//!   curves and signal lights clients draw (both in the track blocks' own block entity data),
-//!   and the trains' save with their columns.
+//!   assembly mode and assembly, the bogeys clicked onto their assembly track, the track item's
+//!   placement, the curves and signal lights clients draw (both in the track blocks' own block
+//!   entity data), and the trains' save with their columns.
+//! - `station_screen`, `schedule_screen` (`gui`): the station's screens (`StationScreen`,
+//!   `AssemblyScreen`: its name, assembly, the train's name) and the schedule's editor
+//!   (`ScheduleScreen`), drawn as the mod's own screens.
+//! - `conductor`: schedules handed to a mob on a carriage seat behind controls, or held by a
+//!   station for the trains arriving there; `relocate`: moving a standing train with the
+//!   wrench.
 //! - `visuals`: trains and cart contraptions as players see them, each block a vanilla block
 //!   display the server moves with its carriage, bogey or cart (`CarriageContraptionVisual`,
 //!   `StandardBogeyVisual`, `OrientedContraptionEntity`'s drawing).
@@ -17,6 +23,16 @@
 //! - [`Carts`] (`carts`): cart assemblers acting on the carts that pass them, contraptions
 //!   riding carts, their items, couplings, and their save with the world.
 //!
+//! Left out for now, not for want of API: the station's flag and the highlight of its assembly
+//! track (`StationRenderer`), the line of where a relocated train's wheels would go
+//! (`TrainRelocator`'s preview), the schedule item's tooltip of its stops, and train doors'
+//! control (`DoorControl`: the station screen shows its default, all doors open). The schedule
+//! editor is a mod screen without Create's menu (`ScheduleMenu`, the player's inventory and
+//! ghost slots), so the conditions set with items (`ItemThresholdCondition`,
+//! `FluidThresholdCondition`, `CargoThresholdCondition`, `RedstoneLinkCondition`) are not
+//! offered, nor `StationUnloadedCondition` (a train unloads with its column here) and the
+//! package instructions.
+//!
 //! What the mod API cannot do, and is left out (each with the legacy call it replaced):
 //!
 //! - **Drawing couplings' connectors** (`CouplingRenderer`): the cable between two carts bends
@@ -24,10 +40,6 @@
 //! - **Standing on and colliding with carriages** (`entity_collisions`, `ContraptionCollider`):
 //!   the API has collision exclusions (boxes where blocks don't stop a player), not moving
 //!   colliders. Needs `notes/moving-structures-note.md`'s level colliders.
-//! - **The `create_debug` commands** (`assemble`, `drive`, `schedule`, `station_name`,
-//!   `curve`, `train`): the command subsystem's, which can call `assembly::use_station` and
-//!   the railway as the legacy did. The schedule item hands itself to a seated conductor
-//!   (`items::schedule`, through [`seat_of`] and [`conductor_seat`]).
 //! - **Taking the controls' keys from the game** is done with `movement_input` (the player
 //!   neither walks, jumps nor sneaks), as Create's `setDown(false)` does; `input_key` can't
 //!   consume a key, so a key bound to something else still does it.
@@ -35,10 +47,15 @@
 pub mod assembly;
 mod carts;
 mod client;
+mod conductor;
 mod controls;
+mod gui;
 mod railway;
+mod relocate;
 mod riding;
 mod saved;
+mod schedule_screen;
+mod station_screen;
 mod structure;
 mod tracks;
 mod visuals;
@@ -46,7 +63,6 @@ mod visuals;
 pub use carts::Carts;
 pub use controls::TrainControls;
 pub use railway::Trains;
-pub use riding::{conductor_seat, seat_of};
 
 use super::states;
 use mod_api::{BlockState, Host, HostBlockStates, PlayerRef, ServerHost, Text};

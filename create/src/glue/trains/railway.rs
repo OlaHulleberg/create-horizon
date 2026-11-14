@@ -14,9 +14,11 @@ use super::{assembly, riding, saved, tracks, visuals};
 use create_engine::Block;
 use create_engine::trains::{CURVE_UPDATE_TICKS, Event, Run};
 use mod_api::{
-    BlockClick, BlockPart, BlockSignalEvent, ClientHost, Compound, Host, InteractionResult,
-    IsSignalSourceEvent, LevelHost, PlayerRef, Registrar, RegistrationContext, ServerHost,
-    UseItemOnEvent, UseWithoutItemEvent,
+    BlockClick, BlockPart, BlockSignalEvent, ClientHost, Compound, Flow, Host, InteractionResult,
+    IsSignalSourceEvent, LevelHost, PlayerRef, Registrar, RegistrationContext,
+    ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost, UseItemOnEvent, UseWithoutItemEvent,
 };
 use std::cell::RefCell;
 
@@ -37,6 +39,8 @@ thread_local! {
 impl Subsystem for Trains {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         tracks::register(r);
+        super::schedule_screen::register(r);
+        super::conductor::register(r);
         r.block_part(states::key(Block::TrackStation), assembly::Station);
         r.block_part(states::key(Block::Track), assembly::TrackClick);
         r.block_part(states::key(Block::TrackObserver), Observer);
@@ -50,6 +54,10 @@ impl Subsystem for Trains {
 
     fn world_closed(&self) {
         tracks::forget();
+        assembly::forget();
+        super::conductor::forget();
+        super::relocate::forget();
+        super::station_screen::forget();
         visuals::forget();
         riding::forget();
     }
@@ -66,17 +74,26 @@ impl Subsystem for Trains {
         mod_api::Flow::Continue
     }
 
-    fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
-        let trains = saved::trains_from_nbt(&*lv.host, data);
-        let names = saved::station_names_from_nbt(data);
+    fn chunk_load(&self, lv: &mut ServerLevel<'_>, chunk: [i32; 2], data: &Compound) {
+        let mut trains = saved::trains_from_nbt(&*lv.host, data);
+        let riders = saved::riders_from_nbt(data);
+        // Each is the column's it was saved with, until it moves: a train taken apart where it
+        // stood saves that column again, and unloads with it.
+        for t in &mut trains {
+            t.column = (chunk[0], chunk[1]);
+        }
+        let names = saved::stations_from_nbt(data);
         let curves = saved::curves_from_nbt(data);
         if trains.is_empty() && names.is_empty() && curves.is_empty() {
             return;
         }
         let dim = lv.dim;
         with_world(|w| {
-            w.load_trains(dim, trains);
-            w.dims[dim].railway.load_names(names.into_iter());
+            let ids = w.load_trains(dim, trains);
+            for (id, r) in ids.into_iter().zip(riders) {
+                riding::riders_loaded(dim, id, r);
+            }
+            w.dims[dim].railway.load_stations(names);
             for c in curves {
                 w.dims[dim].track_curves.add(c);
             }
@@ -88,17 +105,20 @@ impl Subsystem for Trains {
         let Some((trains, names, curves)) = with_world(|w| {
             (
                 w.column_trains(dim, chunk[0], chunk[1]),
-                w.dims[dim].railway.column_names(chunk[0], chunk[1]),
+                w.dims[dim].railway.column_stations(chunk[0], chunk[1]),
                 w.dims[dim].track_curves.column(chunk[0], chunk[1]),
             )
         }) else {
             return;
         };
         if !trains.is_empty() {
-            data.insert("trains".into(), saved::trains_to_nbt(&*lv.host, &trains));
+            data.insert(
+                "trains".into(),
+                saved::trains_to_nbt(&*lv.host, &trains, &|id| riding::riders_of(dim, id)),
+            );
         }
         if !names.is_empty() {
-            data.insert("station_names".into(), saved::station_names_to_nbt(&names));
+            data.insert("station_names".into(), saved::stations_to_nbt(&names));
         }
         if !curves.is_empty() {
             data.insert("track_curves".into(), saved::curves_to_nbt(&curves));
@@ -113,19 +133,111 @@ impl Subsystem for Trains {
         riding::tick(lv);
         super::controls::after_trains(lv);
         tracks::sync(lv);
+        super::conductor::tick(lv);
+        super::station_screen::tick(lv);
+    }
+
+    fn entity_interact(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::EntityInteractEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
+        super::conductor::interact(host, event)
+    }
+
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        match channel {
+            super::station_screen::CHANNEL => {
+                super::station_screen::client_message(host, player, data);
+            }
+            super::schedule_screen::CHANNEL => {
+                super::schedule_screen::client_message(host, player, data);
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         match channel {
             TRAIN_CHANNEL => super::client::trains_from_server(&*host, data),
             STATES_CHANNEL => super::client::states_from_server(&*host, data),
+            super::station_screen::CHANNEL => super::station_screen::server_message(host, data),
+            super::schedule_screen::CHANNEL => super::schedule_screen::server_message(host, data),
             _ => return false,
         }
         true
     }
 
+    fn client_tick(&self, host: &mut dyn ClientHost) {
+        super::station_screen::tick_client(host);
+        super::schedule_screen::tick_client(host);
+    }
+
     fn client_reset(&self) {
         super::client::reset();
+        super::station_screen::reset();
+        super::schedule_screen::reset();
+    }
+
+    fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
+        super::station_screen::screen_render_post(host, event);
+        super::schedule_screen::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> Flow {
+        if super::station_screen::screen_mouse_pressed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        super::schedule_screen::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_scrolled(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseScrolledPreEvent<'_>,
+    ) -> Flow {
+        super::schedule_screen::screen_mouse_scrolled(host, event)
+    }
+
+    fn screen_key_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenKeyPressedPreEvent<'_>,
+    ) -> Flow {
+        if super::station_screen::screen_key_pressed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        super::schedule_screen::screen_key_pressed(host, event)
+    }
+
+    fn screen_char_typed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenCharTypedPreEvent<'_>,
+    ) -> Flow {
+        if super::station_screen::screen_char_typed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        super::schedule_screen::screen_char_typed(host, event)
+    }
+
+    fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
+        super::station_screen::screen_closing(host, event);
+        super::schedule_screen::screen_closing(host, event);
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
@@ -250,6 +362,32 @@ fn tick_trains(lv: &mut ServerLevel<'_>) {
         return;
     }
     let tick = lv.game_time().max(0) as u64;
+    // What the schedules' conditions read: the day time, the stations trains stand at with a
+    // redstone signal, each train's seated players.
+    let day_time = lv.level.day_time(&*lv.host).unwrap_or(0);
+    let standing: Vec<[i32; 3]> = with_world(|w| {
+        w.dims[dim]
+            .railway
+            .trains
+            .iter()
+            .filter(|t| t.schedule.is_some())
+            .filter_map(|t| t.train.at_station)
+            .collect()
+    })
+    .unwrap_or_default();
+    let powered: std::collections::HashSet<[i32; 3]> = standing
+        .into_iter()
+        .filter(|p| lv.has_neighbor_signal(*p))
+        .collect();
+    let seated = riding::passengers(dim);
+    with_world(|w| {
+        let r = &mut w.dims[dim].railway;
+        r.day_time = day_time;
+        r.powered = powered;
+        for t in &mut r.trains {
+            t.players = seated.get(&t.id).copied().unwrap_or(0);
+        }
+    });
     let mut events = EVENTS.take();
     let mut observed = Vec::new();
     let (due, fresh, lights) = with_world(|w| {

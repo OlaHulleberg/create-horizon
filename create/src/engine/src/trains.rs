@@ -12,7 +12,7 @@
 use crate::bezier::Vec3;
 use crate::graph::{Graph, Point};
 use crate::network::{Key, Mark, Network, SignalType, key_position, side_of};
-use crate::schedule::{Order, Runtime, Schedule, station_matches};
+use crate::schedule::{Inputs, Order, Runtime, Schedule, station_matches};
 use crate::track::TrackShape;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
@@ -733,6 +733,61 @@ impl Train {
         Some(t)
     }
 
+    /// `TrainRelocator.relocate`: the train put back on the track with its front bogey on the
+    /// track block `block`, facing along the track the way nearest `look`, each wheel point as
+    /// far behind as it was assembled; standing still, bound nowhere. False (and the train
+    /// unchanged) when the block is no track or a wheel would leave the track.
+    pub fn relocate(&mut self, net: &Network, block: [i32; 3], look: Vec3) -> bool {
+        let g = &net.graph;
+        let Some(loc) = net.blocks.get(&block) else {
+            return false;
+        };
+        let centre = Point {
+            edge: loc.edge,
+            position: loc.position,
+            blocked: false,
+        };
+        let Some(front) = net.locate(centre.at(g), look) else {
+            return false;
+        };
+        // The bogeys' places behind the front one: each carriage's first bogey its spacing
+        // (`carriageSpacing`) behind the one before, its second its bogey spacing on; each
+        // bogey with its two wheels.
+        let mut places = Vec::with_capacity(self.bogeys.len());
+        let mut at = 0;
+        for (c, shape) in self.carriages.iter().enumerate() {
+            if c > 0 {
+                at += self.spacing.get(c - 1).copied().unwrap_or(0);
+            }
+            places.push(at);
+            if shape.two {
+                places.push(at + shape.bogey_spacing);
+            }
+        }
+        let mut points = Vec::with_capacity(self.points.len());
+        for place in places.iter().take(self.bogeys.len()) {
+            for d in [-WHEEL_SPACING / 2.0, WHEEL_SPACING / 2.0] {
+                let mut p = front;
+                p.travel_signed(g, -(f64::from(*place) + d), |_, _| 0);
+                if p.blocked {
+                    return false;
+                }
+                points.push(p);
+            }
+        }
+        if points.len() != self.points.len() {
+            return false;
+        }
+        self.points = points;
+        self.speed = 0.0;
+        self.nav = None;
+        self.at_station = None;
+        self.manual = None;
+        self.bound = true;
+        self.remember(net);
+        true
+    }
+
     /// A train of single-bogey carriages on the track blocks `under` (front first), facing
     /// `front` (a unit along the track), driven both ways: each bogey's wheels a wheel spacing
     /// apart about its block's centre. None when a wheel would be off the track.
@@ -1431,6 +1486,12 @@ pub struct TrainOnTrack {
     pub sent_tick: u64,
     pub sent_edge: usize,
     pub fresh: bool,
+    /// Its name (`Train.name`; empty: `train.unnamed`) and icon (`TrainIconType`: 0
+    /// traditional, 1 electric, 2 modern).
+    pub name: String,
+    pub icon: u8,
+    /// Players seated on it (`countPlayerPassengers`), as the glue last counted them.
+    pub players: i32,
 }
 
 impl TrainOnTrack {
@@ -1781,6 +1842,20 @@ pub struct Railway {
     pub signals: HashMap<[i32; 3], SignalBlock>,
     /// Names saved with a column, waiting for their station block.
     pub saved_names: HashMap<[i32; 3], String>,
+    /// Stations in assembly mode (`StationBlock.ASSEMBLING`), each with its assembly
+    /// direction (a unit along x or z from its track); no train is sent to them.
+    pub assembling: HashMap<[i32; 3], [i32; 3]>,
+    /// The name of the train last taken apart at a station (`lastDisassembledTrainName`),
+    /// given to the next one assembled there.
+    pub prev_train_names: HashMap<[i32; 3], String>,
+    /// The schedule a station holds (`getAutoSchedule`), given to each train arriving there;
+    /// those of stations taken away, for the glue to drop.
+    pub auto_schedules: HashMap<[i32; 3], Schedule>,
+    pub dropped_schedules: Vec<([i32; 3], Schedule)>,
+    /// The level's day time and the stations with a redstone signal, as the glue read them
+    /// before the tick (the schedules' `TimeOfDayCondition`, `StationPoweredCondition`).
+    pub day_time: i64,
+    pub powered: std::collections::HashSet<[i32; 3]>,
     pub trains: Vec<TrainOnTrack>,
     pub net: Network,
     pub occupancy: Occupancy,
@@ -1909,6 +1984,11 @@ impl Railway {
             self.lights_changed.push((pos, None));
         }
         let observer = self.observers.remove(&pos).is_some();
+        self.assembling.remove(&pos);
+        self.prev_train_names.remove(&pos);
+        if let Some(s) = self.auto_schedules.remove(&pos) {
+            self.dropped_schedules.push((pos, s));
+        }
         if self.tracks.remove(&pos).is_some()
             || self.stations.remove(&pos).is_some()
             || signal
@@ -1940,6 +2020,9 @@ impl Railway {
             keep
         });
         self.saved_names.retain(|p, _| out(p));
+        self.assembling.retain(|p, _| out(p));
+        self.auto_schedules.retain(|p, _| out(p));
+        self.prev_train_names.retain(|p, _| out(p));
         self.trains.retain(|t| t.column != (cx, cz));
         if (t, s, g) != (self.tracks.len(), self.stations.len(), self.signals.len()) {
             self.dirty = true;
@@ -1956,6 +2039,51 @@ impl Railway {
             .collect();
         out.sort();
         out
+    }
+
+    /// What a column saves of its stations: each one's name, its assembly direction while in
+    /// assembly mode, and the name of the train last taken apart there; only those with
+    /// something to save.
+    pub fn column_stations(&self, cx: i32, cz: i32) -> Vec<SavedStation> {
+        let in_column = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (cx, cz);
+        let mut out: Vec<SavedStation> = self
+            .stations
+            .iter()
+            .filter(|(p, _)| in_column(p))
+            .map(|(p, n)| SavedStation {
+                pos: *p,
+                name: n.clone(),
+                assembling: self.assembling.get(p).copied(),
+                prev_train: self.prev_train_names.get(p).cloned(),
+                auto_schedule: self.auto_schedules.get(p).cloned(),
+            })
+            .filter(|s| {
+                s.name != DEFAULT_STATION_NAME
+                    || s.assembling.is_some()
+                    || s.prev_train.is_some()
+                    || s.auto_schedule.is_some()
+            })
+            .collect();
+        out.sort_by_key(|s| s.pos);
+        out
+    }
+
+    /// Stations saved with a column that joined, before their blocks are found.
+    pub fn load_stations(&mut self, saved: Vec<SavedStation>) {
+        for s in saved {
+            if let Some(d) = s.assembling {
+                self.assembling.insert(s.pos, d);
+            }
+            if let Some(n) = s.prev_train {
+                self.prev_train_names.insert(s.pos, n);
+            }
+            if let Some(a) = s.auto_schedule {
+                self.auto_schedules.insert(s.pos, a);
+            }
+            if s.name != DEFAULT_STATION_NAME {
+                self.load_names(std::iter::once((s.pos, s.name)));
+            }
+        }
     }
 
     /// Station names saved with a column that joined, before its blocks are found.
@@ -2039,16 +2167,19 @@ impl Railway {
         self.net.stations.iter().position(|(p, _)| *p == pos)
     }
 
-    /// The stations whose names match a schedule's filter.
+    /// The stations whose names match a schedule's filter (none in assembly mode:
+    /// `GlobalStation.assembling`).
     pub fn matching(&self, filter: &str) -> Vec<usize> {
         self.net
             .stations
             .iter()
             .enumerate()
             .filter(|(_, (p, _))| {
-                self.stations
-                    .get(p)
-                    .is_some_and(|name| station_matches(filter, name))
+                !self.assembling.contains_key(p)
+                    && self
+                        .stations
+                        .get(p)
+                        .is_some_and(|name| station_matches(filter, name))
             })
             .map(|(i, _)| i)
             .collect()
@@ -2185,32 +2316,6 @@ impl Railway {
         t.train.reserved.clear();
         t.runtime.paused = true;
         true
-    }
-
-    /// `ScheduleRuntime.setSchedule` (not automatic): train `id` follows `schedule` from entry
-    /// `progress` (clamped to its entries), running, waiting to set off. False when there is
-    /// no such train.
-    pub fn set_schedule(&mut self, id: u32, schedule: Schedule, progress: usize) -> bool {
-        let Some(t) = self.trains.iter_mut().find(|t| t.id == id) else {
-            return false;
-        };
-        let mut runtime = Runtime::new();
-        runtime.current = progress.min(schedule.entries.len().saturating_sub(1));
-        t.runtime = runtime;
-        t.schedule = Some(schedule);
-        true
-    }
-
-    /// `ScheduleRuntime.returnSchedule` and `discardSchedule`: train `id`'s schedule taken
-    /// back with the entry it was at, its navigation cancelled. None without one.
-    pub fn take_schedule(&mut self, id: u32) -> Option<(Schedule, usize)> {
-        let t = self.trains.iter_mut().find(|t| t.id == id)?;
-        let schedule = t.schedule.take()?;
-        let at = t.runtime.current;
-        t.runtime = Runtime::new();
-        t.train.nav = None;
-        t.train.reserved.clear();
-        Some((schedule, at))
     }
 
     /// The controls of train `id` let go (`ControlsServerHandler` dropped its keys): it runs
@@ -2444,7 +2549,20 @@ impl Railway {
                 continue;
             };
             let t = &mut self.trains[i];
-            let order = t.runtime.tick(&schedule, t.train.nav.is_some(), t.idle);
+            let inputs = Inputs {
+                idle_cargo: t.idle,
+                day_time: self.day_time,
+                players: t.players,
+                powered: t
+                    .train
+                    .at_station
+                    .is_some_and(|p| self.powered.contains(&p)),
+            };
+            let order = t.runtime.tick(&schedule, t.train.nav.is_some(), inputs);
+            if let Order::Throttle(p) = order {
+                // `ChangeThrottleInstruction`: `train.throttle`.
+                t.train.throttle = f64::from(p.clamp(5, 100)) / 100.0;
+            }
             if let Order::Navigate(filter) = order {
                 let targets = self.matching(&filter);
                 let here = self.trains[i].train.at_station;
@@ -2510,6 +2628,16 @@ impl Railway {
     }
 }
 
+/// A station as its column saves it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SavedStation {
+    pub pos: [i32; 3],
+    pub name: String,
+    pub assembling: Option<[i32; 3]>,
+    pub prev_train: Option<String>,
+    pub auto_schedule: Option<Schedule>,
+}
+
 /// A saved train's motion (`Train.write`): its speed, whether its controls face both ways, its
 /// heading, the station it stands at and the station it is bound for, with whether it reached
 /// it backwards (`behind`), and its throttle (`Throttle`). Saved as 14 ints: speed (f32 bits),
@@ -2569,7 +2697,7 @@ mod tests {
     use super::*;
 
     use crate::network::SignalType;
-    use crate::schedule::{Condition, Entry, SECONDS};
+    use crate::schedule::{Condition, Entry, TimeUnit};
     use crate::track_curves::{Curves, Saved};
 
     #[test]
@@ -2664,6 +2792,9 @@ mod tests {
             sent_tick: 0,
             sent_edge: 0,
             fresh: true,
+            name: String::new(),
+            icon: 0,
+            players: 0,
         });
         r.trains.len() - 1
     }
@@ -2852,17 +2983,23 @@ mod tests {
         r.trains[i].train.at_station = Some([-30, 64, 1]);
         r.trains[i].schedule = Some(Schedule {
             entries: vec![
-                Entry {
-                    station: "South".into(),
-                    conditions: vec![vec![Condition::Delay(2 * SECONDS)]],
-                },
-                Entry {
-                    station: "W*".into(),
-                    conditions: vec![vec![Condition::Delay(2 * SECONDS)]],
-                },
+                Entry::station(
+                    "South",
+                    vec![vec![Condition::Delay {
+                        value: 2,
+                        unit: TimeUnit::Seconds,
+                    }]],
+                ),
+                Entry::station(
+                    "W*",
+                    vec![vec![Condition::Delay {
+                        value: 2,
+                        unit: TimeUnit::Seconds,
+                    }]],
+                ),
             ],
             cyclic: true,
-            source: Vec::new(),
+            saved_progress: 0,
         });
         let mut events = Vec::new();
         let mut visits = Vec::new();
@@ -3006,6 +3143,9 @@ mod tests {
             sent_tick: 0,
             sent_edge: 0,
             fresh: true,
+            name: String::new(),
+            icon: 0,
+            players: 0,
         });
         r.trains.len() - 1
     }
@@ -3466,6 +3606,42 @@ mod tests {
     }
 
     #[test]
+    fn a_train_relocates_onto_a_track_facing_the_look() {
+        let mut r = straight(100);
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[8, 64, 0], [12, 64, 0]], [1.0, 0.0, 0.0]);
+        let before = r.trains[a].train.points.len();
+        let g = r.net.graph.clone();
+        let t = &mut r.trains[a].train;
+        // Looking toward -x: the front at block 40, the second bogey four blocks east of it.
+        assert!(t.relocate(&r.net, [40, 64, 0], [-1.0, 0.0, 0.0]));
+        assert_eq!(t.points.len(), before);
+        let xs: Vec<f64> = t.points.iter().map(|p| p.at(&g)[0]).collect();
+        assert!((xs[0] - 39.5).abs() < 1.0e-6 && (xs[1] - 41.5).abs() < 1.0e-6, "{xs:?}");
+        assert!((xs[2] - 43.5).abs() < 1.0e-6 && (xs[3] - 45.5).abs() < 1.0e-6, "{xs:?}");
+        // Off the end of the track: refused, the train as it was.
+        let kept = t.points.clone();
+        assert!(!t.relocate(&r.net, [98, 64, 0], [-1.0, 0.0, 0.0]));
+        assert!(!t.relocate(&r.net, [8, 70, 0], [1.0, 0.0, 0.0]));
+        assert_eq!(t.points, kept);
+        // Along z, looking north (-z) at a slant: the train behind, to the south.
+        let mut r = Railway::default();
+        let mut tracks = HashMap::new();
+        line(&mut tracks, [0, 64, -50], [0, 0, 1], 100, TrackShape::Zo);
+        for (p, s) in tracks {
+            r.set_track(p, s);
+        }
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[0, 64, 0], [0, 64, 4]], [0.0, 0.0, -1.0]);
+        let g = r.net.graph.clone();
+        let t = &mut r.trains[a].train;
+        assert!(t.relocate(&r.net, [0, 64, 5], [-0.7, 0.0, -0.7]));
+        let zs: Vec<f64> = t.points.iter().map(|p| p.at(&g)[2]).collect();
+        assert!(zs[0] < zs[1] && zs[1] < zs[2] && zs[2] < zs[3], "{zs:?}");
+        assert!((zs[0] - 4.5).abs() < 1.0e-6, "{zs:?}");
+    }
+
+    #[test]
     fn the_hud_s_throttle_caps_the_speed_by_hand() {
         use crate::train_controls::{Driving, FORWARD};
         let mut r = straight(600);
@@ -3485,36 +3661,6 @@ mod tests {
     }
 
     #[test]
-    fn a_schedule_handed_over_runs_from_its_progress_and_comes_back_where_it_was() {
-        let mut r = straight(600);
-        r.ensure(&Curves::default());
-        let a = assemble(&mut r, &[[8, 64, 0]], [1.0, 0.0, 0.0]);
-        let id = r.trains[a].id;
-        let entry = |s: &str| Entry {
-            station: s.into(),
-            conditions: vec![vec![Condition::Delay(SECONDS)]],
-        };
-        let s = Schedule {
-            entries: vec![entry("A"), entry("B")],
-            cyclic: true,
-            source: vec![1, 2, 3],
-        };
-        // A saved progress past the end is clamped to the last entry.
-        assert!(r.set_schedule(id, s.clone(), 7));
-        assert_eq!(r.trains[a].runtime.current, 1);
-        assert!(!r.trains[a].runtime.paused);
-        let (back, at) = r.take_schedule(id).unwrap();
-        assert_eq!((back, at), (s, 1));
-        assert!(r.trains[a].schedule.is_none() && r.trains[a].train.nav.is_none());
-        assert!(r.take_schedule(id).is_none());
-        assert!(!r.set_schedule(id + 100, Schedule {
-            entries: Vec::new(),
-            cyclic: true,
-            source: Vec::new(),
-        }, 0));
-    }
-
-    #[test]
     fn a_player_s_keys_drive_the_train_as_create_s_controls() {
         use crate::train_controls::{BACK, Driving, FORWARD, JUMP, Prompt};
         let w = 1 << FORWARD;
@@ -3531,7 +3677,7 @@ mod tests {
         r.trains[a].schedule = Some(Schedule {
             entries: Vec::new(),
             cyclic: false,
-            source: Vec::new(),
+            saved_progress: 0,
         });
         assert!(r.start_controlling(id));
         assert!(r.trains[a].runtime.paused, "the schedule pauses");

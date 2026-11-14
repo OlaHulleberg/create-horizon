@@ -1,10 +1,10 @@
 //! What trains, station names and curves keep with their columns, in the legacy layouts
 //! (`trains`, `station_names`, `track_curves` of the column's compound).
 
-use create_engine::schedule::{Condition, Entry, Runtime, Schedule, State};
+use create_engine::schedule::{Condition, Entry, Instruction, Runtime, Schedule, State, TimeUnit};
 use create_engine::track_curves::Saved;
 use create_engine::trains::{
-    BogeySize, CarriageShape, Nav, Placed, SavedMotion, Train, TrainOnTrack,
+    BogeySize, CarriageShape, Nav, Placed, SavedMotion, SavedStation, Train, TrainOnTrack,
 };
 use mod_api::{Compound, Host, Tag};
 
@@ -18,7 +18,11 @@ fn ints<'a>(c: &'a Compound, k: &str) -> Option<&'a Vec<i32>> {
 /// Trains as saved (`Train.write`, here with the column their first carriage stands in): their
 /// points by the graph's nodes (and where they were), bogeys, carriages and their spacing,
 /// motion, destination, schedule, each carriage's blocks and the way it faced when assembled.
-pub fn trains_to_nbt(host: &dyn Host, all: &[TrainOnTrack]) -> Tag {
+pub fn trains_to_nbt(
+    host: &dyn Host,
+    all: &[TrainOnTrack],
+    riders: &dyn Fn(u32) -> Vec<(u16, [i32; 3], u128)>,
+) -> Tag {
     let f = |v: f64| (v as f32).to_bits() as i32;
     Tag::List(
         all.iter()
@@ -72,6 +76,29 @@ pub fn trains_to_nbt(host: &dyn Host, all: &[TrainOnTrack]) -> Tag {
                     throttle: t.train.throttle,
                 };
                 c.insert("motion".into(), Tag::IntArray(motion.encode()));
+                if !t.name.is_empty() {
+                    c.insert("name".into(), Tag::String(t.name.as_str().into()));
+                }
+                c.insert("icon".into(), Tag::Int(i32::from(t.icon)));
+                // Who sits on its seats: carriage, seat, UUID as four ints.
+                let seated: Vec<i32> = riders(t.id)
+                    .into_iter()
+                    .flat_map(|(car, l, u)| {
+                        [
+                            i32::from(car),
+                            l[0],
+                            l[1],
+                            l[2],
+                            (u >> 96) as i32,
+                            (u >> 64) as i32,
+                            (u >> 32) as i32,
+                            u as i32,
+                        ]
+                    })
+                    .collect();
+                if !seated.is_empty() {
+                    c.insert("riders".into(), Tag::IntArray(seated));
+                }
                 c.insert(
                     "cars".into(),
                     Tag::List(
@@ -103,38 +130,19 @@ pub fn trains_to_nbt(host: &dyn Host, all: &[TrainOnTrack]) -> Tag {
                     ),
                 );
                 if let Some(s) = &t.schedule {
-                    c.insert(
-                        "schedule".into(),
-                        Tag::List(
-                            s.entries
-                                .iter()
-                                .map(|e| {
-                                    let mut entry = Compound::new();
-                                    entry.insert(
-                                        "station".into(),
-                                        Tag::String(e.station.as_str().into()),
-                                    );
-                                    entry.insert(
-                                        "conditions".into(),
-                                        Tag::IntArray(conditions_to_ints(&e.conditions)),
-                                    );
-                                    Tag::Compound(entry)
-                                })
-                                .collect(),
-                        ),
-                    );
-                    if !s.source.is_empty() {
-                        c.insert("schedule_item".into(), Tag::ByteArray(s.source.clone()));
-                    }
+                    c.insert("schedule2".into(), Tag::Compound(schedule_to_nbt(s)));
                     c.insert(
                         "runtime".into(),
                         Tag::IntArray(vec![
-                            i32::from(s.cyclic),
+                            i32::from(t.runtime.auto),
                             t.runtime.current as i32,
                             t.runtime.state as i32,
                             i32::from(t.runtime.paused),
                         ]),
                     );
+                    if !t.runtime.title.is_empty() {
+                        c.insert("title".into(), Tag::String(t.runtime.title.as_str().into()));
+                    }
                 }
                 Tag::Compound(c)
             })
@@ -142,43 +150,191 @@ pub fn trains_to_nbt(host: &dyn Host, all: &[TrainOnTrack]) -> Tag {
     )
 }
 
-/// A schedule entry's condition groups as ints: each group's length, then each condition's kind
-/// (0 delay, 1 idle cargo) and ticks.
-fn conditions_to_ints(groups: &[Vec<Condition>]) -> Vec<i32> {
-    let mut out = Vec::new();
-    for g in groups {
-        out.push(g.len() as i32);
-        for c in g {
-            match c {
-                Condition::Delay(t) => out.extend([0, *t]),
-                Condition::IdleCargo(t) => out.extend([1, *t]),
+/// A schedule as Create writes it (`Schedule.write`): `Entries`, each with its `Instruction`
+/// and `Conditions` (groups of `{Id, Data}`), `Cyclic` and `Progress`; each part's `Data` keyed
+/// as Create keys it.
+pub fn schedule_to_nbt(s: &Schedule) -> Compound {
+    let part = |id: &str, data: Compound| {
+        let mut c = Compound::new();
+        c.insert(
+            "Id".into(),
+            Tag::String(format!("create:{id}").as_str().into()),
+        );
+        c.insert("Data".into(), Tag::Compound(data));
+        Tag::Compound(c)
+    };
+    let mut entries = Vec::new();
+    for e in &s.entries {
+        let mut data = Compound::new();
+        match &e.instruction {
+            Instruction::Destination(t) | Instruction::Rename(t) => {
+                data.insert("Text".into(), Tag::String(t.as_str().into()));
+            }
+            Instruction::Throttle(v) => {
+                data.insert("Value".into(), Tag::Int(*v));
             }
         }
+        let mut entry = Compound::new();
+        entry.insert("Instruction".into(), part(e.instruction.id(), data));
+        let groups = e
+            .conditions
+            .iter()
+            .map(|g| {
+                Tag::List(
+                    g.iter()
+                        .map(|c| {
+                            let mut d = Compound::new();
+                            let mut int = |k: &str, v: i32| {
+                                d.insert(k.into(), Tag::Int(v));
+                            };
+                            match *c {
+                                Condition::Delay { value, unit }
+                                | Condition::Idle { value, unit } => {
+                                    int("Value", value);
+                                    int("TimeUnit", unit.ordinal());
+                                }
+                                Condition::TimeOfDay {
+                                    hour,
+                                    minute,
+                                    rotation,
+                                } => {
+                                    int("Hour", hour);
+                                    int("Minute", minute);
+                                    int("Rotation", rotation);
+                                }
+                                Condition::PlayerCount { count, exact } => {
+                                    int("Count", count);
+                                    int("Exact", i32::from(exact));
+                                }
+                                Condition::Powered => {}
+                            }
+                            part(c.id(), d)
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        entry.insert("Conditions".into(), Tag::List(groups));
+        entries.push(Tag::Compound(entry));
     }
-    out
+    let mut c = Compound::new();
+    c.insert("Entries".into(), Tag::List(entries));
+    c.insert("Cyclic".into(), Tag::Byte(i8::from(s.cyclic)));
+    c.insert("Progress".into(), Tag::Int(s.saved_progress as i32));
+    c
 }
 
-fn conditions_from_ints(v: &[i32]) -> Vec<Vec<Condition>> {
-    let mut out = Vec::new();
-    let mut k = 0;
-    while k < v.len() {
-        let n = v[k].max(0) as usize;
-        k += 1;
-        let mut g = Vec::with_capacity(n);
-        for _ in 0..n {
-            if k + 1 >= v.len() {
-                break;
+/// A schedule as [`schedule_to_nbt`] wrote it; parts of a type the port doesn't run are left
+/// out.
+pub fn schedule_from_nbt(c: &Compound) -> Schedule {
+    let int = |c: &Compound, k: &str| match c.get(&k.into()) {
+        Some(Tag::Int(i)) => *i,
+        Some(Tag::Byte(b)) => i32::from(*b),
+        _ => 0,
+    };
+    let text = |c: &Compound, k: &str| match c.get(&k.into()) {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    let part = |t: &Tag| -> Option<(String, Compound)> {
+        let Tag::Compound(p) = t else { return None };
+        let id = text(p, "Id");
+        let id = id.strip_prefix("create:").unwrap_or(&id).to_owned();
+        let data = match p.get(&"Data".into()) {
+            Some(Tag::Compound(d)) => d.clone(),
+            _ => Compound::new(),
+        };
+        Some((id, data))
+    };
+    let mut entries = Vec::new();
+    if let Some(Tag::List(list)) = c.get(&"Entries".into()) {
+        for e in list {
+            let Tag::Compound(e) = e else { continue };
+            let Some((id, d)) = e.get(&"Instruction".into()).and_then(part) else {
+                continue;
+            };
+            let instruction = match id.as_str() {
+                "destination" => Instruction::Destination(text(&d, "Text")),
+                "rename" => Instruction::Rename(text(&d, "Text")),
+                "throttle" => Instruction::Throttle(int(&d, "Value").clamp(5, 100)),
+                _ => continue,
+            };
+            let mut conditions = Vec::new();
+            if let Some(Tag::List(groups)) = e.get(&"Conditions".into()) {
+                for g in groups {
+                    let Tag::List(g) = g else { continue };
+                    let group: Vec<Condition> = g
+                        .iter()
+                        .filter_map(part)
+                        .filter_map(|(id, d)| {
+                            let unit = TimeUnit::from_ordinal(int(&d, "TimeUnit"));
+                            Some(match id.as_str() {
+                                "delay" => Condition::Delay {
+                                    value: int(&d, "Value"),
+                                    unit,
+                                },
+                                "idle" => Condition::Idle {
+                                    value: int(&d, "Value"),
+                                    unit,
+                                },
+                                "time_of_day" => Condition::TimeOfDay {
+                                    hour: int(&d, "Hour"),
+                                    minute: int(&d, "Minute"),
+                                    rotation: int(&d, "Rotation"),
+                                },
+                                "player_count" => Condition::PlayerCount {
+                                    count: int(&d, "Count"),
+                                    exact: int(&d, "Exact") != 0,
+                                },
+                                "powered" => Condition::Powered,
+                                _ => return None,
+                            })
+                        })
+                        .collect();
+                    if !group.is_empty() {
+                        conditions.push(group);
+                    }
+                }
             }
-            g.push(if v[k] == 1 {
-                Condition::IdleCargo(v[k + 1])
-            } else {
-                Condition::Delay(v[k + 1])
+            entries.push(Entry {
+                instruction,
+                conditions,
             });
-            k += 2;
         }
-        out.push(g);
     }
-    out
+    Schedule {
+        saved_progress: int(c, "Progress").max(0) as usize,
+        cyclic: int(c, "Cyclic") != 0,
+        entries,
+    }
+}
+
+/// The riders saved with each train of the column, in the order of `trains_from_nbt`.
+pub fn riders_from_nbt(data: &Compound) -> Vec<Vec<(u16, [i32; 3], u128)>> {
+    let Some(Tag::List(list)) = data.get(&"trains".into()) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter(|t| matches!(t, Tag::Compound(c) if c.contains_key(&"carriages".into())))
+        .map(|t| {
+            let Tag::Compound(c) = t else {
+                return Vec::new();
+            };
+            ints(c, "riders").map_or_else(Vec::new, |v| {
+                v.as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|r| {
+                        let u = (u128::from(r[4] as u32) << 96)
+                            | (u128::from(r[5] as u32) << 64)
+                            | (u128::from(r[6] as u32) << 32)
+                            | u128::from(r[7] as u32);
+                        (r[0] as u16, [r[1], r[2], r[3]], u)
+                    })
+                    .collect()
+            })
+        })
+        .collect()
 }
 
 /// Trains saved with a column (`trains_to_nbt`); saves from before carriages (one block list,
@@ -258,36 +414,18 @@ pub fn trains_from_nbt(host: &dyn Host, data: &Compound) -> Vec<TrainOnTrack> {
                         .collect()
                 })
                 .collect();
-            let mut schedule = match c.get(&"schedule".into()) {
-                Some(Tag::List(entries)) => Some(Schedule {
-                    entries: entries
-                        .iter()
-                        .filter_map(|e| {
-                            let Tag::Compound(e) = e else { return None };
-                            let Some(Tag::String(station)) = e.get(&"station".into()) else {
-                                return None;
-                            };
-                            let conditions = ints(e, "conditions")
-                                .map_or_else(Vec::new, |v| conditions_from_ints(v));
-                            Some(Entry {
-                                station: station.to_string_lossy(),
-                                conditions,
-                            })
-                        })
-                        .collect(),
-                    cyclic: true,
-                    source: match c.get(&"schedule_item".into()) {
-                        Some(Tag::ByteArray(b)) => b.clone(),
-                        _ => Vec::new(),
-                    },
-                }),
+            let schedule = match c.get(&"schedule2".into()) {
+                Some(Tag::Compound(s)) => Some(schedule_from_nbt(s)),
                 _ => None,
             };
             let mut runtime = Runtime::new();
-            if let (Some(s), Some(r)) = (&mut schedule, ints(c, "runtime"))
+            if let Some(Tag::String(t)) = c.get(&"title".into()) {
+                runtime.title = t.to_string_lossy();
+            }
+            if let (Some(s), Some(r)) = (&schedule, ints(c, "runtime"))
                 && r.len() >= 4
             {
-                s.cyclic = r[0] != 0;
+                runtime.auto = r[0] != 0;
                 runtime.current = r[1].max(0) as usize;
                 // In transit it looks for its way again; waiting, it waits anew.
                 runtime.state = match r[2] {
@@ -346,25 +484,45 @@ pub fn trains_from_nbt(host: &dyn Host, data: &Compound) -> Vec<TrainOnTrack> {
                 sent_tick: 0,
                 sent_edge: usize::MAX,
                 fresh: true,
+                name: match c.get(&"name".into()) {
+                    Some(Tag::String(n)) => n.to_string_lossy(),
+                    _ => String::new(),
+                },
+                icon: match c.get(&"icon".into()) {
+                    Some(Tag::Int(i)) => (*i).clamp(0, 2) as u8,
+                    _ => 0,
+                },
+                players: 0,
             })
         })
         .collect()
 }
 
-pub fn station_names_to_nbt(list: &[([i32; 3], String)]) -> Tag {
+/// The column's stations: position, name, the assembly direction while in assembly mode
+/// (`assembling`) and the name of the train last taken apart there (`prev_train`).
+pub fn stations_to_nbt(list: &[SavedStation]) -> Tag {
     Tag::List(
         list.iter()
-            .map(|(p, n)| {
+            .map(|s| {
                 let mut c = Compound::new();
-                c.insert("pos".into(), Tag::IntArray(p.to_vec()));
-                c.insert("name".into(), Tag::String(n.as_str().into()));
+                c.insert("pos".into(), Tag::IntArray(s.pos.to_vec()));
+                c.insert("name".into(), Tag::String(s.name.as_str().into()));
+                if let Some(d) = s.assembling {
+                    c.insert("assembling".into(), Tag::IntArray(d.to_vec()));
+                }
+                if let Some(n) = &s.prev_train {
+                    c.insert("prev_train".into(), Tag::String(n.as_str().into()));
+                }
+                if let Some(a) = &s.auto_schedule {
+                    c.insert("auto_schedule".into(), Tag::Compound(schedule_to_nbt(a)));
+                }
                 Tag::Compound(c)
             })
             .collect(),
     )
 }
 
-pub fn station_names_from_nbt(data: &Compound) -> Vec<([i32; 3], String)> {
+pub fn stations_from_nbt(data: &Compound) -> Vec<SavedStation> {
     let Some(Tag::List(list)) = data.get(&"station_names".into()) else {
         return Vec::new();
     };
@@ -374,8 +532,20 @@ pub fn station_names_from_nbt(data: &Compound) -> Vec<([i32; 3], String)> {
             let (Some(p), Some(Tag::String(n))) = (ints(c, "pos"), c.get(&"name".into())) else {
                 return None;
             };
-            let p: [i32; 3] = p.as_slice().try_into().ok()?;
-            Some((p, n.to_string_lossy()))
+            let pos: [i32; 3] = p.as_slice().try_into().ok()?;
+            Some(SavedStation {
+                pos,
+                name: n.to_string_lossy(),
+                assembling: ints(c, "assembling").and_then(|d| d.as_slice().try_into().ok()),
+                prev_train: match c.get(&"prev_train".into()) {
+                    Some(Tag::String(n)) => Some(n.to_string_lossy()),
+                    _ => None,
+                },
+                auto_schedule: match c.get(&"auto_schedule".into()) {
+                    Some(Tag::Compound(a)) => Some(schedule_from_nbt(a)),
+                    _ => None,
+                },
+            })
         })
         .collect()
 }
@@ -428,17 +598,52 @@ pub fn curves_from_nbt(data: &Compound) -> Vec<Saved> {
 
 #[cfg(test)]
 mod tests {
-    use super::{conditions_from_ints, conditions_to_ints, curves_of, curves_to_nbt};
-    use create_engine::schedule::Condition;
+    use super::{curves_of, curves_to_nbt, schedule_from_nbt, schedule_to_nbt};
+    use create_engine::schedule::{Condition, Entry, Instruction, Schedule, TimeUnit};
     use create_engine::track_curves::Saved;
 
     #[test]
-    fn schedule_conditions_keep_their_groups() {
-        let groups = vec![
-            vec![Condition::Delay(100)],
-            vec![Condition::IdleCargo(40), Condition::Delay(20)],
-        ];
-        assert_eq!(conditions_from_ints(&conditions_to_ints(&groups)), groups);
+    fn schedules_keep_their_entries_and_conditions() {
+        let s = Schedule {
+            entries: vec![
+                Entry::station(
+                    "Mine*",
+                    vec![
+                        vec![Condition::Delay {
+                            value: 5,
+                            unit: TimeUnit::Seconds,
+                        }],
+                        vec![
+                            Condition::Idle {
+                                value: 2,
+                                unit: TimeUnit::Minutes,
+                            },
+                            Condition::TimeOfDay {
+                                hour: 13,
+                                minute: 30,
+                                rotation: 2,
+                            },
+                            Condition::PlayerCount {
+                                count: 3,
+                                exact: true,
+                            },
+                            Condition::Powered,
+                        ],
+                    ],
+                ),
+                Entry {
+                    instruction: Instruction::Throttle(40),
+                    conditions: Vec::new(),
+                },
+                Entry {
+                    instruction: Instruction::Rename("Express".into()),
+                    conditions: Vec::new(),
+                },
+            ],
+            cyclic: true,
+            saved_progress: 1,
+        };
+        assert_eq!(schedule_from_nbt(&schedule_to_nbt(&s)), s);
     }
 
     #[test]

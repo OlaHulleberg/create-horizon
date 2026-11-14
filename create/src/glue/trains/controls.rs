@@ -177,8 +177,17 @@ fn interaction(host: &mut dyn ClientHost, event: &mut InteractionKeyMappingTrigg
     } else {
         4.5
     };
-    if let Some(CrosshairTarget::Block { hit, .. }) = host.crosshair_target() {
-        let d: f64 = (0..3).map(|i| (hit.point[i] - eye[i]).powi(2)).sum();
+    // `getRayInputs`: no further than what the crosshair is on, a block or an entity (a mob on
+    // a carriage seat is clicked, not the seat).
+    let point = match host.crosshair_target() {
+        Some(CrosshairTarget::Block { hit, .. }) => Some(hit.point),
+        // An entity under the crosshair (a conductor on a carriage seat) is what is clicked:
+        // it stands before the carriage's blocks behind it.
+        Some(CrosshairTarget::Entity { .. }) => return Flow::Continue,
+        _ => None,
+    };
+    if let Some(point) = point {
+        let d: f64 = (0..3).map(|i| (point[i] - eye[i]).powi(2)).sum();
         reach = d.sqrt().min(reach);
     }
     let target = std::array::from_fn(|i| eye[i] + look[i] * reach);
@@ -566,6 +575,13 @@ fn click(host: &mut dyn ServerHost, dim: usize, player: u128, at: Target, wrench
     let reach = eye_and_reach(pos, creative).1 + 10.0 + size;
     let d2: f64 = (0..3).map(|i| (f.pivot[i] - pos[i]).powi(2)).sum();
     if d2 > reach * reach {
+        return;
+    }
+    // `handleSpecialInteractions`: the wrench picks the train to move (`carriageWrenched`).
+    if wrench {
+        if let Some(p) = host.player(player) {
+            super::relocate::wrenched(host, dim, p, at.train, f.pivot);
+        }
         return;
     }
     let controls = state(id).is_some_and(|s| s.block() == states::key(Block::Controls));

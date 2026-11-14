@@ -22,14 +22,98 @@ struct Seated {
     dim: usize,
     at: Target,
     stand: u32,
+    /// The rider's UUID, saved with the train.
+    rider: u128,
 }
 
 thread_local! {
     static SEATED: RefCell<Vec<Seated>> = const { RefCell::new(Vec::new()) };
+    /// Riders saved with a train that came back (`Contraption.seatMapping`), by level, seat and
+    /// UUID, sat down again once they are found near their seat (a player when they join).
+    static PENDING: RefCell<Vec<(usize, Target, u128)>> = const { RefCell::new(Vec::new()) };
 }
 
 pub fn forget() {
     SEATED.with_borrow_mut(Vec::clear);
+    PENDING.with_borrow_mut(Vec::clear);
+}
+
+/// The riders of train `train` in level `dim`, to save with it: carriage, seat and UUID.
+pub fn riders_of(dim: usize, train: u32) -> Vec<(u16, [i32; 3], u128)> {
+    SEATED.with_borrow(|s| {
+        s.iter()
+            .filter(|s| s.dim == dim && s.at.train == train)
+            .map(|s| (s.at.car, s.at.local, s.rider))
+            .collect()
+    })
+}
+
+/// Riders of a train loaded as `train` in level `dim`, to sit down again.
+pub fn riders_loaded(dim: usize, train: u32, riders: Vec<(u16, [i32; 3], u128)>) {
+    PENDING.with_borrow_mut(|p| {
+        p.extend(
+            riders
+                .into_iter()
+                .map(|(car, local, uuid)| (dim, Target { train, car, local }, uuid)),
+        )
+    });
+}
+
+/// Each second: the riders waiting for their seat sit down when found near it (players
+/// anywhere in the level); those of a train gone are forgotten.
+fn seat_pending(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    if PENDING.with_borrow(|p| p.iter().all(|p| p.0 != dim)) || lv.game_time() % 20 != 0 {
+        return;
+    }
+    let waiting: Vec<(Target, u128)> = PENDING.with_borrow(|p| {
+        p.iter()
+            .filter(|p| p.0 == dim)
+            .map(|p| (p.1, p.2))
+            .collect()
+    });
+    for (at, uuid) in waiting {
+        let exists = with_world(|w| w.dims[dim].railway.trains.iter().any(|t| t.id == at.train))
+            .unwrap_or(false);
+        let Some(f) = frame(dim, at) else {
+            if !exists {
+                PENDING.with_borrow_mut(|p| p.retain(|p| !(p.0 == dim && p.1 == at)));
+            }
+            continue;
+        };
+        let rider = match lv.host.player(uuid) {
+            Some(p) => Some(p.entity()),
+            None => {
+                let c = f.seat(at.local);
+                let near = lv
+                    .level
+                    .entities_in(
+                        &*lv.host,
+                        [c[0] - 4.0, c[1] - 4.0, c[2] - 4.0],
+                        [c[0] + 4.0, c[1] + 4.0, c[2] + 4.0],
+                    )
+                    .unwrap_or_default();
+                near.into_iter()
+                    .find(|e| e.uuid(&mut *lv.host) == Some(uuid))
+            }
+        };
+        let Some(rider) = rider else {
+            continue;
+        };
+        PENDING.with_borrow_mut(|p| p.retain(|p| !(p.0 == dim && p.1 == at)));
+        sit_entity(lv.host, dim, rider, at);
+    }
+}
+
+/// The players seated on each train of level `dim` (`countPlayerPassengers`).
+pub fn passengers(dim: usize) -> std::collections::HashMap<u32, i32> {
+    let mut out = std::collections::HashMap::new();
+    SEATED.with_borrow(|s| {
+        for s in s.iter().filter(|s| s.dim == dim) {
+            *out.entry(s.at.train).or_insert(0) += 1;
+        }
+    });
+    out
 }
 
 /// Whether the carriage block `at` is a seat (`SeatBlock`), by its state.
@@ -70,26 +154,31 @@ fn stand_nbt() -> Compound {
 }
 
 /// `addSittingPassenger`: `player` sits on the carriage's seat `at`, unless someone else does
-/// (a mob sitting there is put off for a player in Create; riders here are only players).
+/// (a mob sitting there is put off for a player in Create; riders here keep their seat).
 /// A player on another seat moves to this one.
 pub fn sit(host: &mut dyn ServerHost, dim: usize, player: u128, at: Target) {
+    let Some(p) = host.player(player) else {
+        return;
+    };
+    sit_entity(host, dim, p.entity(), at);
+}
+
+/// `rider` (a player, or a mob a train took along from a seat) sits on the carriage's seat
+/// `at`. Whether it sat.
+pub fn sit_entity(host: &mut dyn ServerHost, dim: usize, rider: EntityRef, at: Target) -> bool {
     let taken = SEATED.with_borrow(|s| {
         s.iter().any(|s| {
             s.dim == dim && s.at.train == at.train && s.at.car == at.car && s.at.local == at.local
         })
     });
     if taken {
-        return;
+        return false;
     }
     let Some(f) = frame(dim, at) else {
-        return;
+        return false;
     };
-    let Some(p) = host.player(player) else {
-        return;
-    };
-    let rider = p.entity();
-    let Some(dimension) = p.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
-        return;
+    let Some(dimension) = rider.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+        return false;
     };
     if rider.vehicle(&*host).is_some() {
         rider.stop_riding(host);
@@ -101,17 +190,32 @@ pub fn sit(host: &mut dyn ServerHost, dim: usize, player: u128, at: Target) {
         stand_nbt(),
     );
     let Some(id) = got else {
-        return;
+        return false;
     };
     let Some(stand) = host.entity(id) else {
-        return;
+        return false;
     };
     let rode = rider.start_riding(host, stand, true);
     if !rode {
         stand.discard(host);
-        return;
+        return false;
     }
-    SEATED.with_borrow_mut(|s| s.push(Seated { dim, at, stand: id }));
+    let uuid = rider.uuid(host).unwrap_or(0);
+    SEATED.with_borrow_mut(|s| {
+        s.push(Seated {
+            dim,
+            at,
+            stand: id,
+            rider: uuid,
+        })
+    });
+    true
+}
+
+/// The carriage seat entity `rider` sits on, if it rides one of ours.
+pub fn seat_of(host: &dyn ServerHost, rider: EntityRef) -> Option<Target> {
+    let vehicle = rider.vehicle(host)?.id();
+    SEATED.with_borrow(|s| s.iter().find(|s| s.stand == vehicle).map(|s| s.at))
 }
 
 /// A rider got off `vehicle`: if it is one of ours, it moves first to where Create lets them off
@@ -146,6 +250,7 @@ pub fn train_gone(lv: &mut ServerLevel<'_>, train: u32) {
 /// The level's tick, after the trains moved: stand-ins that came back go, each seat in use
 /// moves to its seat, and goes when it has no rider or its train is gone.
 pub fn tick(lv: &mut ServerLevel<'_>) {
+    seat_pending(lv);
     let dim = lv.dim;
     let seated: Vec<Seated> =
         SEATED.with_borrow(|s| s.iter().filter(|s| s.dim == dim).copied().collect());
@@ -171,58 +276,4 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
             }
         }
     }
-}
-
-/// The carriage seat `entity` sits on (`Contraption.getSeatMapping`): its level and the
-/// carriage's block. None for an entity on no carriage's seat.
-pub fn seat_of(host: &dyn ServerHost, entity: EntityRef) -> Option<(usize, Target)> {
-    let vehicle = entity.vehicle(host)?;
-    SEATED.with_borrow(|s| {
-        s.iter()
-            .find(|s| s.stand == vehicle.id())
-            .map(|s| (s.dim, s.at))
-    })
-}
-
-/// `CarriageContraption.inControl`: whether the carriage's seat `at` is a conductor's
-/// (`conductorSeats`): train controls beside it, along the way the train was assembled, facing
-/// it.
-pub fn conductor_seat(host: &dyn mod_api::Host, dim: usize, at: Target) -> bool {
-    let beside: Vec<([i32; 2], u32)> = with_world(|w| {
-        let t = w.dims[dim]
-            .railway
-            .trains
-            .iter()
-            .find(|t| t.id == at.train)?;
-        let car = t.cars.get(usize::from(at.car))?;
-        let [hx, hz] = t.heading;
-        Some(
-            [[hx, hz], [-hx, -hz]]
-                .into_iter()
-                .filter_map(|[dx, dz]| {
-                    let p = [at.local[0] + dx, at.local[1], at.local[2] + dz];
-                    car.iter()
-                        .find(|(o, _)| *o == p)
-                        .map(|(_, id)| ([dx, dz], *id))
-                })
-                .collect(),
-        )
-    })
-    .flatten()
-    .unwrap_or_default();
-    let controls = super::super::states::key(create_engine::Block::Controls);
-    beside.into_iter().any(|([dx, dz], id)| {
-        let Some(state) = super::car_state(id) else {
-            return false;
-        };
-        // Facing the seat: the opposite of the way from the seat to the controls.
-        let toward = match [-dx, -dz] {
-            [1, _] => "east",
-            [-1, _] => "west",
-            [_, 1] => "south",
-            _ => "north",
-        };
-        state.block() == controls
-            && super::property(host, state, "facing").is_some_and(|f| f == toward)
-    })
 }

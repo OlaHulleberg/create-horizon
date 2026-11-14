@@ -20,8 +20,8 @@
 //!   advancement: as in the legacy glue.
 //! - Super glue's selection (`SuperGlueSelectionHandler`) is the contraptions' to port: what it
 //!   makes (`SuperGlueEntity` areas) is found and saved with contraptions (`contraption_found`,
-//!   `sticky_sides`, `create_glue`). The train schedule (`schedule`,
-//!   `schedule_screen`) hands itself to a train through the trains' seats.
+//!   `sticky_sides`, `create_glue`). The train schedule and its screen are the trains'
+//!   (`trains::schedule_screen`, `trains::conductor`).
 
 mod belt_connector;
 mod fertilizer;
@@ -33,8 +33,6 @@ mod nugget;
 // The potato cannon: a subsystem of its own (its projectiles' flight and hits).
 pub(crate) mod potato;
 mod sandpaper;
-mod schedule;
-mod schedule_screen;
 mod sequenced;
 mod sword;
 mod symmetry;
@@ -47,11 +45,10 @@ use super::server::ServerLevel;
 use super::subsystem::Subsystem;
 use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityPlaceEvent, Flow, Hand, Host,
-    HostSide, ItemKey, ItemStack, LeftClickBlockEvent, PlayerRef, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RenderLevelStageEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
-    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
-    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
-    ServerHost, Tag, Text,
+    ItemKey, ItemStack, LeftClickBlockEvent, PlayerRef, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RenderLevelStageEvent, RunModCommandEvent, ScreenClosingEvent,
+    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, Tag, Text,
 };
 use std::sync::OnceLock;
 
@@ -205,8 +202,6 @@ impl Subsystem for Items {
             let key = r.item_key(id);
             r.item_part(key, filters::FilterPart);
         }
-        let key = r.item_key(schedule::ITEM);
-        r.item_part(key, schedule::SchedulePart);
         for id in sandpaper::IDS {
             let key = r.item_key(id);
             r.item_part(key, sandpaper::SandPaper);
@@ -265,7 +260,6 @@ impl Subsystem for Items {
             symmetry_screen::CHANNEL => symmetry::configure(host, player, data),
             worldshaper_screen::CHANNEL => worldshaper::configure(host, player, data),
             filter_screen::CHANNEL => filters::client_message(host, player, data),
-            schedule_screen::CHANNEL => schedule::client_message(host, player, data),
             _ => return false,
         }
         true
@@ -274,7 +268,6 @@ impl Subsystem for Items {
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         symmetry::server_message(channel, data)
             || filter_screen::server_message(host, channel, data)
-            || schedule_screen::server_message(host, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
@@ -283,7 +276,6 @@ impl Subsystem for Items {
         worldshaper::tick(&*host);
         worldshaper_screen::tick(host);
         filter_screen::tick(host);
-        schedule_screen::tick(host);
     }
 
     fn client_reset(&self) {
@@ -292,7 +284,6 @@ impl Subsystem for Items {
         worldshaper::reset();
         worldshaper_screen::reset();
         filter_screen::reset();
-        schedule_screen::reset();
     }
 
     fn standalone_models(&self, models: &mut Vec<String>) {
@@ -313,7 +304,6 @@ impl Subsystem for Items {
         symmetry_screen::screen_render_post(host, event);
         worldshaper_screen::screen_render_post(host, event);
         filter_screen::screen_render_post(host, event);
-        schedule_screen::screen_render_post(host, event);
     }
 
     fn screen_mouse_pressed(
@@ -324,8 +314,7 @@ impl Subsystem for Items {
         let screens: [for<'e> fn(
             &dyn ClientHost,
             &mut ScreenMouseButtonPressedPreEvent<'e>,
-        ) -> Flow; 4] = [
-            schedule_screen::screen_mouse_pressed,
+        ) -> Flow; 3] = [
             symmetry_screen::screen_mouse_pressed,
             worldshaper_screen::screen_mouse_pressed,
             filter_screen::screen_mouse_pressed,
@@ -345,8 +334,7 @@ impl Subsystem for Items {
         let screens: [for<'e> fn(
             &dyn ClientHost,
             &mut ScreenMouseButtonReleasedPreEvent<'e>,
-        ) -> Flow; 4] = [
-            schedule_screen::screen_mouse_released,
+        ) -> Flow; 3] = [
             symmetry_screen::screen_mouse_released,
             worldshaper_screen::screen_mouse_released,
             filter_screen::screen_mouse_released,
@@ -364,8 +352,7 @@ impl Subsystem for Items {
         event: &mut ScreenMouseScrolledPreEvent<'_>,
     ) -> Flow {
         let screens: [for<'e> fn(&dyn ClientHost, &mut ScreenMouseScrolledPreEvent<'e>) -> Flow;
-            4] = [
-            schedule_screen::screen_mouse_scrolled,
+            3] = [
             symmetry_screen::screen_mouse_scrolled,
             worldshaper_screen::screen_mouse_scrolled,
             filter_screen::screen_mouse_scrolled,
@@ -382,34 +369,13 @@ impl Subsystem for Items {
         host: &dyn ClientHost,
         event: &mut ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
-        match schedule_screen::screen_key_pressed(host, event) {
-            Flow::Continue => filter_screen::screen_key_pressed(host, event),
-            flow => flow,
-        }
+        filter_screen::screen_key_pressed(host, event)
     }
 
     fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
         symmetry_screen::screen_closing(host, event);
         worldshaper_screen::screen_closing(host, event);
         filter_screen::screen_closing(host, event);
-        schedule_screen::screen_closing(host, event);
-    }
-
-    fn screen_char_typed(
-        &self,
-        host: &dyn ClientHost,
-        event: &mut ScreenCharTypedPreEvent<'_>,
-    ) -> Flow {
-        schedule_screen::screen_char_typed(host, event)
-    }
-
-    /// A schedule handed to a conductor, or taken back from one.
-    fn entity_interact(
-        &self,
-        host: HostSide,
-        event: &mut mod_api::EntityInteractEvent<'_>,
-    ) -> Option<mod_api::InteractionResult> {
-        schedule::entity_interact(host, event)
     }
 
     /// `SandPaperItem.finishUsingItem`.
