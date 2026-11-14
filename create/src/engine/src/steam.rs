@@ -161,6 +161,93 @@ impl Boiler {
     }
 }
 
+impl Boiler {
+    /// `BoilerData.addToGoggleTooltip` (en_us) for a boiler of `size` blocks: its status, its
+    /// size, water and heat bars, and what its engines give (or the water it lacks). None while
+    /// it is no boiler.
+    pub fn tooltip(&self, size: i32) -> Option<Vec<crate::gauge::Line>> {
+        use crate::gauge::{goggles, number};
+        if !self.is_active() {
+            return None;
+        }
+        let for_size = max_heat_for_size(size);
+        let for_water = self.max_heat_for_water();
+        let heat = if self.passive_heat { 1 } else { self.active_heat };
+        let min = heat.min(for_water.min(for_size));
+        let max = heat.max(for_water.max(for_size));
+        let level = self.active_heat.min(for_water.min(for_size));
+        let status = if self.is_passive(size) {
+            "Passive".to_string()
+        } else if level == 0 {
+            "Idle".to_string()
+        } else if level == MAX_LEVEL {
+            "Max".to_string()
+        } else {
+            format!("Lvl {level}")
+        };
+        let mut lines = vec![goggles(
+            0,
+            vec![
+                ("Boiler Status:  ".into(), 0xFFFFFF),
+                (status, 0x55FF55),
+            ],
+        )];
+        // `componentHelper` / `barComponent`.
+        let bars = |label: &str, dots: &str, v: i32| {
+            let n = |k: i32| "|".repeat(k.max(0) as usize);
+            vec![
+                (label.to_string(), 0xAAAAAA),
+                (dots.to_string(), 0x555555),
+                (n((min - 1).max(0)), 0x00AA00),
+                (n(if min > 0 { 1 } else { 0 }), 0x55FF55),
+                (n((v - min).max(0)), 0x00AA00),
+                (n((max - v).max(0)), 0xAA0000),
+                (
+                    n((MAX_LEVEL - max).min((max / 5 + 1) * 5 - max).max(0)),
+                    0x555555,
+                ),
+            ]
+        };
+        lines.push(goggles(1, bars("Size", "....... ", for_size)));
+        lines.push(goggles(1, bars("Water", "... ", for_water)));
+        lines.push(goggles(1, bars("Heat", "...... ", heat)));
+        if self.attached_engines == 0 {
+            return Some(lines);
+        }
+        lines.push(vec![]);
+        if for_size > 0 && for_water == 0 && heat > 0 {
+            lines.push(goggles(0, vec![("Water input rate".into(), 0xAAAAAA)]));
+            lines.push(goggles(
+                1,
+                vec![
+                    (format!("{}mB", number(f64::from(self.water_supply))), 0x5555FF),
+                    (" / ".into(), 0xAAAAAA),
+                    (
+                        format!("{}mB per Tick", number(f64::from(WATER_SUPPLY_PER_LEVEL))),
+                        0x555555,
+                    ),
+                ],
+            ));
+            return Some(lines);
+        }
+        let su = f64::from(self.engine_efficiency(size))
+            * 16.0
+            * f64::from(level.max(self.attached_engines))
+            * f64::from(crate::Block::SteamEngine.capacity());
+        let via = if self.attached_engines == 1 {
+            "via 1 engine".to_string()
+        } else {
+            format!("via {} engines", self.attached_engines)
+        };
+        lines.push(goggles(0, vec![("Kinetic Stress Capacity:".into(), 0xAAAAAA)]));
+        lines.push(goggles(
+            1,
+            vec![(format!("{}su ", number(su)), 0x55FFFF), (via, 0x555555)],
+        ));
+        Some(lines)
+    }
+}
+
 /// `getMaxHeatLevelForBoilerSize`: a level per 4 blocks of tank.
 pub fn max_heat_for_size(size: i32) -> i32 {
     MAX_LEVEL.min(size / 4)

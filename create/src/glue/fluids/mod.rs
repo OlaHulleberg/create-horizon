@@ -15,6 +15,7 @@
 
 mod clicks;
 mod client;
+mod goggles;
 mod machines;
 mod pipes;
 mod place;
@@ -30,6 +31,8 @@ use mod_api::{
     BlockState, BlockUpdateFlags, Compound, Flow, HostBlockStates, HostSide, ModBlockEntity,
     Registrar, RegistrationContext, RightClickBlockEvent, StateConstraint, Tag,
 };
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 pub use client::animated;
 
@@ -102,12 +105,28 @@ impl Subsystem for Fluids {
         client::reset();
     }
 
+    /// What clients see of tanks, spouts, drains, boilers and hoses, sent with their chunks too.
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[TANK, HOSE, BOILER]
+    }
+
     /// The client's prediction of a click its block takes (`clicks`).
     fn right_click_block(&self, host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
         match host {
             HostSide::Client(host) => clicks::predict(host, event),
             HostSide::Server(_) => Flow::Continue,
         }
+    }
+
+    /// Tanks' and boilers', spouts' and drains' goggle lines (`goggles`).
+    fn goggle_tooltip(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        pos: [i32; 3],
+        block: Block,
+        lines: &mut Vec<Vec<(String, u32)>>,
+    ) {
+        goggles::tooltip(host, pos, block, lines);
     }
 
     /// The wrench on a pipe or a whistle, not sneaking (legacy `use_item_on`'s
@@ -149,6 +168,81 @@ pub struct Tanks;
 impl Subsystem for Tanks {
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         send_tank_changes(lv);
+        send_shown(lv);
+    }
+
+    fn world_closed(&self) {
+        SHOWN.with_borrow_mut(HashMap::clear);
+    }
+}
+
+/// The key of a boiler's state in its controller's block entity data, for the goggles: active
+/// heat, passive (0 or 1), water supply (`f32` bits), engines, whistles.
+pub const BOILER: &str = "Boiler";
+
+thread_local! {
+    /// What each spout's, drain's and boiler's block entity last showed its clients, by level
+    /// and position.
+    static SHOWN: RefCell<HashMap<(usize, [i32; 3], &'static str), Vec<i32>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Spouts' and item drains' contents (fluid, amount, capacity, under `TANK`) and boilers'
+/// states (`BOILER`) to their block entities' clients when they changed (`notifyUpdate`).
+fn send_shown(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let now: Vec<([i32; 3], &'static str, Vec<i32>)> = with_world(|w| {
+        let d = &w.dims[dim];
+        let fluid = |f: Option<(Fluid, u32)>, capacity: u32| match f {
+            Some((f, n)) => vec![i32::from(f.index()), n as i32, capacity as i32],
+            None => vec![255, 0, capacity as i32],
+        };
+        let spouts = d
+            .spouts
+            .iter()
+            .map(|(p, s)| (*p, TANK, fluid(s.fluid, create_engine::spout::CAPACITY)));
+        let drains = d
+            .drains
+            .iter()
+            .map(|(p, s)| (*p, TANK, fluid(s.fluid, create_engine::drain::CAPACITY)));
+        let boilers = d.boilers.iter().map(|(p, b)| {
+            let b = &b.data;
+            let v = vec![
+                b.active_heat,
+                i32::from(b.passive_heat),
+                b.water_supply.to_bits() as i32,
+                b.attached_engines,
+                b.attached_whistles,
+            ];
+            (*p, BOILER, v)
+        });
+        spouts.chain(drains).chain(boilers).collect()
+    })
+    .unwrap_or_default();
+    let changed: Vec<_> = SHOWN.with_borrow_mut(|shown| {
+        // Gone (a boiler no more, a drain broken): shown as nothing.
+        let mut changed: Vec<_> = shown
+            .keys()
+            .filter(|(d, p, k)| *d == dim && !now.iter().any(|(q, j, _)| q == p && j == k))
+            .map(|(_, p, k)| (*p, *k, Vec::new()))
+            .collect();
+        for (p, k, _) in &changed {
+            shown.remove(&(dim, *p, *k));
+        }
+        for (p, k, v) in now {
+            if shown.get(&(dim, p, k)) != Some(&v) {
+                shown.insert((dim, p, k), v.clone());
+                changed.push((p, k, v));
+            }
+        }
+        changed
+    });
+    for (pos, key, v) in changed {
+        let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+            continue;
+        };
+        let data = Compound::from([(key.into(), Tag::IntArray(v))]);
+        let _ = entity.merge_data(&mut *lv.host, data);
     }
 }
 
@@ -228,7 +322,12 @@ fn set_shown_tank(lv: &mut ServerLevel<'_>, pos: [i32; 3], m: Option<&Multi>) {
 
 /// The tank a block entity shows its clients.
 fn shown_tank(entity: &ModBlockEntity) -> Option<Multi> {
-    let Some(Tag::IntArray(v)) = entity.nbt.get(&TANK.into()) else {
+    tank_in(&entity.nbt)
+}
+
+/// The tank block entity data `data` shows.
+fn tank_in(data: &Compound) -> Option<Multi> {
+    let Some(Tag::IntArray(v)) = data.get(&TANK.into()) else {
         return None;
     };
     let &[fluid, amount, width, height, window] = v.as_slice() else {
