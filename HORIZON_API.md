@@ -49,6 +49,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 ### Entities and moving structures
 
+- **A native mod's damage types**: Create's `data/create/damage_type/*.json` (`crush`, `mechanical_saw`,
+  `fan_fire`...) shipped with the mod are not registered (`EntityRef::hurt` with `create:crush` is refused), so
+  crushing wheels hurt with vanilla's `cramming`, which also goes through armour.
 - **Moving colliders**: players cannot stand on, or be pushed by, bearings' and pistons' structures, trains or
   minecart contraptions (`notes/moving-structures-note.md`).
 - **Mod entity types that are not template copies**, rideable by players: Create's seat entity is stood in by
