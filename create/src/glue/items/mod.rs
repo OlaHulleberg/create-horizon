@@ -28,7 +28,7 @@ mod sequenced;
 mod sword;
 mod symmetry;
 mod worldshaper;
-mod wrench;
+pub(crate) mod wrench;
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;

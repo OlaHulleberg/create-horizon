@@ -195,6 +195,41 @@ pub fn flatten_composite(doc: &mut Value) {
     obj.insert("elements".into(), Value::Array(elements));
 }
 
+/// `GearboxBlock.getDrops`: a gearbox on a horizontal axis drops one vertical gearbox, whatever
+/// the loot table says (no explosion decay); an upright one keeps the table's drop.
+pub fn gearbox_drops(doc: &mut Value) {
+    let Some(pool) = doc
+        .get_mut("pools")
+        .and_then(Value::as_array_mut)
+        .and_then(|p| p.first_mut())
+    else {
+        return;
+    };
+    if let Some(conditions) = pool.get_mut("conditions").and_then(Value::as_array_mut) {
+        conditions.push(serde_json::json!({
+            "type": "minecraft:block_state_property",
+            "block": "create:gearbox",
+            "properties": { "axis": "y" }
+        }));
+    }
+    let horizontal = serde_json::json!({
+        "bonus_rolls": 0.0,
+        "conditions": [{
+            "type": "minecraft:inverted",
+            "term": {
+                "type": "minecraft:block_state_property",
+                "block": "create:gearbox",
+                "properties": { "axis": "y" }
+            }
+        }],
+        "entries": [{ "type": "minecraft:item", "name": "create:vertical_gearbox" }],
+        "rolls": 1.0
+    });
+    if let Some(pools) = doc.get_mut("pools").and_then(Value::as_array_mut) {
+        pools.push(horizontal);
+    }
+}
+
 pub fn convert_loot(v: &mut Value) {
     match v {
         Value::Object(o) => {
@@ -481,6 +516,9 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             let mut doc: Value =
                 serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
             convert_loot(&mut doc);
+            if path == "data/create/loot_table/blocks/gearbox.json" {
+                gearbox_drops(&mut doc);
+            }
             put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
             copied += 1;
         } else {
@@ -635,6 +673,20 @@ mod tests {
             "minecraft:random_chance"
         );
         assert!(pool["entries"][0].get("functions").is_none());
+    }
+
+    #[test]
+    fn horizontal_gearboxes_drop_vertical_gearboxes() {
+        let mut t = json!({"type": "minecraft:block", "pools": [{
+            "conditions": [{"type": "minecraft:survives_explosion"}],
+            "entries": [{"type": "minecraft:item", "name": "create:gearbox"}],
+            "rolls": 1.0}]});
+        gearbox_drops(&mut t);
+        let pools = t["pools"].as_array().unwrap();
+        assert_eq!(pools.len(), 2);
+        assert_eq!(pools[0]["conditions"][1]["properties"]["axis"], "y");
+        assert_eq!(pools[1]["conditions"][0]["type"], "minecraft:inverted");
+        assert_eq!(pools[1]["entries"][0]["name"], "create:vertical_gearbox");
     }
 
     #[test]

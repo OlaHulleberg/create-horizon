@@ -97,12 +97,16 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     }
     if let Some(next) = turned(&lv, pos, clicked) {
         lv.set_state(pos, next, update_all());
-        // `IWrenchable.playRotateSound`: `WRENCH_ROTATE` (the wooden trapdoor's close at .25 and
-        // 1.25 times) at a pitch of `nextFloat() + .5`.
-        let pitch = random(&mut lv) + 0.5;
-        sound(&mut lv, "create:wrench_rotate", pos, 0.25, 1.25 * pitch);
+        rotate_sound(&mut lv, pos);
     }
     Some(InteractionResult::Success)
+}
+
+/// `IWrenchable.playRotateSound`: `WRENCH_ROTATE` (the wooden trapdoor's close at .25 and 1.25
+/// times) at a pitch of `nextFloat() + .5`.
+pub(crate) fn rotate_sound(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let pitch = random(lv) + 0.5;
+    sound(lv, "create:wrench_rotate", pos, 0.25, 1.25 * pitch);
 }
 
 /// Whether `state` is in `create:wrench_pickup` (`WrenchItem.canWrenchPickup`).

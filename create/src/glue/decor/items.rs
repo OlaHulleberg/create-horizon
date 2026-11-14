@@ -201,7 +201,8 @@ fn place_item(lv: &mut ServerLevel<'_>, player: PlayerRef, event: &UseOnEvent<'_
         let axis = decor::vertical_gearbox_axis(&shafts, facing);
         (
             state_with(&*lv.host, Block::Gearbox, &[("axis", axis_name(axis))]),
-            "minecraft:block.wood.place",
+            // The gearbox's sounds are andesite's (`SharedProperties.stone`).
+            "minecraft:block.stone.place",
         )
     } else {
         // `BlazeBurnerBlock.getStateForPlacement`: no blaze, facing the player.

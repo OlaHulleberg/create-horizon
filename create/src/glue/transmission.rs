@@ -26,6 +26,28 @@ pub fn register(r: &mut dyn Registrar) {
             r.block_part(states::key(block), Clicked);
         }
     }
+    r.block_part(states::key(Block::Gearbox), GearboxPick);
+}
+
+/// `GearboxBlock.getCloneItemStack`: a gearbox on a horizontal axis is picked as the vertical
+/// gearbox. (Its drops are the loot table's, which `create-data prepare` gives the same rule.)
+struct GearboxPick;
+
+#[mod_api::horizon_part]
+impl mod_api::BlockPart for GearboxPick {
+    fn clone_item_stack(
+        &self,
+        host: &dyn mod_api::Host,
+        event: &mut mod_api::CloneItemStackEvent<'_>,
+    ) -> Option<ItemStack> {
+        let axis = with_world(|w| w.table.get(states::id(event.state)?).and_then(|(_, i)| i.axis))
+            .flatten()?;
+        if axis == Axis::Y {
+            return None;
+        }
+        let key = host.item_key(&mod_api::Identifier::parse("create:vertical_gearbox").ok()?)?;
+        ItemStack::new(key, 1)
+    }
 }
 
 /// Blocks with a cog of their own (`ICogWheel`).
@@ -356,6 +378,7 @@ pub fn wrench_used(
             let facts = lv.host.block_states();
             if let Ok(next) = state.with(&facts, "vertical", v) {
                 lv.set_state(pos, next, update_all());
+                super::items::wrench::rotate_sound(lv, pos);
             }
             return true;
         }
@@ -387,6 +410,7 @@ pub fn wrench_used(
         };
         if let Ok(next) = state.with(&facts, key, if on { "false" } else { "true" }) {
             lv.set_state(pos, next, update_all());
+            super::items::wrench::rotate_sound(lv, pos);
         }
         return true;
     }
@@ -408,8 +432,11 @@ pub fn wrench_used(
         .with(&facts, "axis", axis_name(turned.axis()))
         .and_then(|s| s.with(&facts, "top_shaft", flag(top)))
         .and_then(|s| s.with(&facts, "bottom_shaft", flag(bottom)));
-    if let Ok(next) = next {
+    if let Ok(next) = next
+        && next != state
+    {
         lv.set_state(pos, next, update_all());
+        super::items::wrench::rotate_sound(lv, pos);
     }
     true
 }
