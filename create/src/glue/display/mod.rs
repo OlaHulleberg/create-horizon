@@ -1,11 +1,23 @@
 //! Create's display links, display boards and nixie tubes (and the clipboard): links read the
-//! block they are attached to and write its text to nixie tubes, signs and display boards; the
-//! boards' flaps turn toward their text and the tubes glow on clients (`client`).
+//! block they are attached to and write its text to nixie tubes, signs, lecterns' books and
+//! display boards; the boards' flaps turn toward their text and the tubes glow on clients
+//! (`client`). A board's lines also take dyes, glow ink, name tags and clipboards by hand.
+//!
+//! The sources: speedometers and stressometers, target blocks' redstone power, cuckoo clocks'
+//! time and stopwatch, item names along depots, belts and ejectors, nixie tubes' text, a smart
+//! observer's item and fluid counts and lists, a threshold switch's fill level, who sits on a
+//! seat, a tunnel's accumulated items and throughput (told by the belt, `items_through_tunnel`)
+//! and an enchanting table's max cost.
+//!
+//! Not ported (the API could do it): the boiler, elevator floor (elevator contacts' names and
+//! screen), station summary, train status, observed train name, package address and factory
+//! gauge sources, and a display board's placement helper.
 //!
 //! Left out, the API having no way to do it:
+//! - The scoreboard and death count sources: the API reads no scoreboard objectives.
 //! - Text read on the server in the game's language: the server has no language of its own
 //!   to ask, so a display source's words and an item's name are Create's en_us text (an item's
-//!   name its id's path in words); clients draw the boards' flap characters in their own.
+//!   name its id's path in capitalised words); clients draw the boards' flap characters in their own.
 //! - The display boards' text alpha (`.85`, `.975` when glowing): a block entity's text is
 //!   drawn opaque.
 

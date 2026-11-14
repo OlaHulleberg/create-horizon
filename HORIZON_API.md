@@ -15,6 +15,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A moment before a chunk is saved** ((removed)). The glue writes each changed
   column's data into its chunk attachment at the end of the tick that changed it (`glue/persist.rs`);
   a pre-save hook would let it write only when the game saves.
+- **The server's tick freeze** (`TickRateManager.runsNormally`): under `/tick freeze` Create's block
+  entities stop, but a mod's level tick still runs, so the glue's machines go on (`glue/redstone`).
+- **Reading the scoreboard** (objectives and their scores): Create's scoreboard and death count display
+  sources (`ScoreboardDisplaySource`, `DeathCounterDisplaySource`) are left out (`glue/display`).
 - **A world-open phase.** `world_lifecycle` reports only failures and closing; Create's world opens at the
   first `level_load`.
 - **Block-state facts:** `isRedstoneConductor` and `isSolidRender` (cart assemblers, stock links, schematic

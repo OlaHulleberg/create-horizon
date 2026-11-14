@@ -7,18 +7,26 @@
 //! ticks are taken from the repeater they are built on, and run in the level tick here
 //! (`ticks`), as do lamps, links, rails and cuckoo clocks; levers, observers and switches look
 //! after the solve (`detectors`); comparators last (`analog`, the `Comparators` subsystem).
-//! What clients draw (link frequencies, lever handles, cuckoo hands, doors and figures) is in
-//! `client`, sent on the legacy channels.
+//! What clients draw (link frequencies, lever handles and indicators, brass diodes' progress
+//! indicators, cuckoo hands, doors and figures) is in `client`, sent on the legacy channels or
+//! in the block entity's data (`ticks::DIODE_SHOWN`); clocks and levers ease on the client's
+//! block entity ticks, and clocks tick there.
 //!
 //! A smart observer's or threshold switch's filter is read, set by hand, saved and tested by the
 //! items port's filter helpers (`items::filters`), as the legacy glue's were; the filters of
-//! broken detectors (`detectors.dropped`) are dropped there too.
+//! broken detectors (`detectors.dropped`) are dropped there too. The threshold switch's screen
+//! is `switch_screen`; the clipboard's copying and pasting of these blocks' settings is
+//! `clipboard_values`.
 //!
 //! Left out, the API having no way to do it:
 //! - A redstone link slot's item is drawn as a block item (`isGui3d`) when the item places a
 //!   block: the API does not say whether an item model is 3D (`ItemRenderer` `isGui3d`).
+//! - `/tick freeze` holds Create's block entities, but the glue's level tick still runs: the API
+//!   does not say whether the server's ticks are frozen (`TickRateManager.runsNormally`).
 //!
-//! The threshold switch's screen is `switch_screen`.
+//! Not ported (the API could do it): a rope pulley as a threshold switch's target
+//! (`ThresholdSwitchObservable`), a belt as one (its item handler), and the switch screen's
+//! link to Ponder.
 
 mod analog;
 mod client;

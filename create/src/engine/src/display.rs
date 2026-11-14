@@ -3114,6 +3114,111 @@ mod tests {
     }
 
     #[test]
+    fn an_item_list_sorts_shortens_and_lays_out_its_entries() {
+        let stats = Stats {
+            rows: 2,
+            columns: 13,
+        };
+        let mut config = Config::default();
+        let reading = Reading::Entries(vec![
+            (5, "Redstone".into()),
+            (1024, "Cobblestone".into()),
+            (20, "Oak Planks".into()),
+        ]);
+        let line = provide_line(
+            Source::ListItems,
+            &mut config,
+            &reading,
+            Target::Board,
+            stats,
+            &Lang::EN_US,
+        );
+        // The largest first, as many as the target has rows.
+        let entries = line.entries.clone().unwrap();
+        assert_eq!(entries, vec![(1024, "Cobblestone".into()), (20, "Oak Planks".into())]);
+        let flap = provide_flap_text(Source::ListItems, &config, &line);
+        assert_eq!(flap[0], vec!["1", "k ", "Cobblestone "]);
+        // A sign reads them in one line each; a full number keeps its digits.
+        config.format = 1;
+        let text = provide_text(Source::ListItems, &config, &line, Target::Sign { hanging: false });
+        assert_eq!(text, vec!["1024 Cobblestone ", "20 Oak Planks "]);
+        // ValueList_true_0: three digits right-aligned, a suffix, then the name.
+        let mut b = Board::default();
+        b.set_status(true, 3, 1);
+        let config = Config::default();
+        assert!(accept_flap_text(
+            &mut b,
+            0,
+            &flap[..1],
+            Source::ListItems,
+            &config,
+            false,
+            1024,
+            |_| false
+        ));
+        let l = &b.lines()[0];
+        assert_eq!(l.key, "ValueList_true_0");
+        assert_eq!(l.sections.len(), 3);
+        assert!(l.sections[0].right_aligned);
+        assert_eq!(l.sections[0].cycle, Cycle::Number);
+        assert_eq!(l.sections[1].cycle, Cycle::ShortenedNumbers);
+        // The line past the list is cleared.
+        assert_eq!(b.lines()[1].sections[0].text.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn fluids_read_in_buckets_once_shortened() {
+        assert_eq!(fluid_string(1500, true, &Lang::EN_US), "1.5 B");
+        assert_eq!(fluid_string(1500, false, &Lang::EN_US), "1500 mB");
+        assert_eq!(fluid_string(999, true, &Lang::EN_US), "999 mB");
+    }
+
+    #[test]
+    fn a_tunnel_s_throughput_averages_its_arrivals_and_goes_quiet() {
+        let mut t = Throughput::default();
+        t.received(4, 0);
+        assert_eq!(t.rate, None, "the first only marks the time");
+        t.received(4, 20);
+        t.received(4, 40);
+        // 4 items every 20 ticks: 4 a second, 240 a minute.
+        assert_eq!(t.line(0, 40), "4");
+        assert_eq!(t.line(1, 40), "240");
+        // Long after the last stack: the rate once more, then 0.
+        assert_eq!(t.line(0, 400), "4");
+        assert_eq!(t.line(0, 400), "0");
+    }
+
+    #[test]
+    fn an_enchanting_table_s_cost_follows_its_bookshelves() {
+        assert_eq!(bookshelf_offsets().len(), 32);
+        assert_eq!(enchant_cost(15, 0, 0), 30);
+        assert_eq!(enchant_cost(20, 7, 15), 30);
+        assert_eq!(enchant_cost(0, 7, 0), 8);
+    }
+
+    #[test]
+    fn a_board_line_takes_its_colour_glow_and_text_by_hand() {
+        let mut b = Board::default();
+        b.set_status(true, 2, 2);
+        assert_eq!(b.line_index_at(10, 10.9), 0);
+        assert_eq!(b.line_index_at(10, 10.2), 1);
+        assert_eq!(b.line_index_at(10, 9.6), 2);
+        assert_eq!(b.line_index_at(10, 9.0), 3, "the bottom edge stays on the board");
+        b.set_colour(1, crate::dye::DyeColor::Red);
+        b.set_colour(2, crate::dye::DyeColor::White);
+        assert!(b.colour[1].is_some());
+        assert_eq!(b.colour[2], None);
+        b.set_glowing(3);
+        assert!(b.glowing[3]);
+        assert!(b.apply_text_manually(0, Some("Hello")));
+        assert!(b.manual[0]);
+        assert_eq!(b.lines()[0].sections[0].text.as_deref(), Some("Hello"));
+        assert!(b.apply_text_manually(0, None));
+        assert!(!b.manual[0]);
+        assert!(!b.apply_text_manually(9, None));
+    }
+
+    #[test]
     fn flaps_spin_to_new_text_then_settle() {
         let mut s = Section::new(4.0 * MONOSPACE, Cycle::Numeric, false, false);
         s.text = Some("12".into());
