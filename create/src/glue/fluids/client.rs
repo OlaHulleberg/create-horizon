@@ -69,6 +69,7 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
         }),
         Block::HosePulley => shown_hose(entity).is_some_and(|(_, v, _)| v != 0.0),
         Block::ItemDrain => super::drawn::animated(entity),
+        Block::SteamEngine => super::engine::animated(entity),
         _ => false,
     }
 }
@@ -152,6 +153,7 @@ impl BlockEntityPart for FluidEntity {
         match block {
             Block::FluidTank | Block::CreativeFluidTank => draw_tank(host, event),
             Block::ItemDrain => super::drawn::draw(host, event),
+            Block::SteamEngine => super::engine::draw(host, event, &info),
             Block::HosePulley => draw_hose(event),
             Block::FluidValve => {
                 super::rims::draw(event);

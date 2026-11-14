@@ -16,6 +16,7 @@
 mod clicks;
 mod client;
 mod drawn;
+mod engine;
 mod goggles;
 mod machines;
 mod pipes;
@@ -106,6 +107,7 @@ impl Subsystem for Fluids {
         machines::tick_drains(lv);
         rims::tick(lv);
         drawn::send(lv);
+        engine::tick(lv);
     }
 
     fn client_reset(&self) {
@@ -113,18 +115,32 @@ impl Subsystem for Fluids {
     }
 
     /// The pipes beside a Create block that changed draw their pieces again (`rims`).
-    fn block_changed(&self, dim: usize, pos: [i32; 3], _old: u32, _new: u32) {
+    fn block_changed(&self, dim: usize, pos: [i32; 3], _old: u32, new: u32) {
+        engine::changed(dim, pos, new);
         rims::changed(dim, pos);
     }
 
     fn world_closed(&self) {
         rims::reset();
         drawn::reset();
+        engine::reset();
     }
 
     /// What clients see of tanks, spouts, drains, boilers and hoses, sent with their chunks too.
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[TANK, HOSE, BOILER, rims::RIMS, drawn::DRAIN_ITEM]
+        &[
+            TANK,
+            HOSE,
+            BOILER,
+            rims::RIMS,
+            drawn::DRAIN_ITEM,
+            engine::ENGINE_SPEED,
+        ]
+    }
+
+    /// A powered shaft's engines draw its new speed.
+    fn speed_changed(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], speed: f32) {
+        engine::shaft_speed_changed(lv, pos, speed);
     }
 
     /// The client's prediction of a click its block takes (`clicks`).

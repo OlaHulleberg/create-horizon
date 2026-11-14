@@ -358,19 +358,35 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         ),
         // SteamEngineBlock (FaceAttachedHorizontalDirectionalBlock): on the floor, a wall or the
         // ceiling of a tank, copper's properties; its placement on a tank is the glue's. Content
-        // shapes select by one property: AllShapes.STEAM_ENGINE / STEAM_ENGINE_CEILING's base
-        // and column by `face` (their cross-piece turns with `facing`), a full block on a wall
-        // (STEAM_ENGINE_WALL turns with `facing`). Defaults first: FLOOR, NORTH.
+        // shapes select by `face` and `facing`: AllShapes.STEAM_ENGINE / STEAM_ENGINE_CEILING's
+        // base and column (their cross-piece left out), and STEAM_ENGINE_WALL turned to `facing`,
+        // so light reaches the piston it draws. Defaults first: FLOOR, NORTH.
         "steam_engine" => {
             let px = |b: &[Px]| -> Value {
                 json!(b.iter().map(|b| b.map(|v| v / 16.0)).collect::<Vec<_>>())
             };
+            // STEAM_ENGINE_WALL written facing north (`forHorizontal(SOUTH)` turned about).
+            let wall: [Px; 3] = [
+                [1., 1., 13., 15., 15., 16.],
+                [3., 3., 1., 13., 13., 16.],
+                [1., 4., 3., 15., 12., 11.],
+            ];
+            let walls = by_horizontal(&wall);
+            let mut values = Map::new();
+            for facing in ["north", "south", "west", "east"] {
+                values.insert(
+                    format!("floor,{facing}"),
+                    px(&[[1., 0., 1., 15., 3., 15.], [3., 0., 3., 13., 15., 13.]]),
+                );
+                values.insert(
+                    format!("ceiling,{facing}"),
+                    px(&[[1., 13., 1., 15., 16., 15.], [3., 1., 3., 13., 16., 13.]]),
+                );
+                values.insert(format!("wall,{facing}"), walls["values"][facing].clone());
+            }
             (
                 "minecraft:copper_block",
-                Some(json!({ "property": "face", "values": {
-                    "floor": px(&[[1., 0., 1., 15., 3., 15.], [3., 0., 3., 13., 15., 13.]]),
-                    "ceiling": px(&[[1., 13., 1., 15., 16., 15.], [3., 1., 3., 13., 16., 13.]]),
-                    "wall": px(&[[0., 0., 0., 16., 16., 16.]]) } })),
+                Some(json!({ "properties": ["face", "facing"], "values": values })),
                 own(&[
                     ("face", &["floor", "wall", "ceiling"]),
                     ("facing", &["north", "south", "west", "east"]),
@@ -2348,7 +2364,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 94] = [
+pub const PARTIALS: [(&str, &str, &str); 97] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -2638,6 +2654,11 @@ pub const PARTIALS: [(&str, &str, &str); 94] = [
     ),
     // PipeAttachmentModel's pieces (`AllPartialModels.PIPE_ATTACHMENTS`, one model per side)
     // and the casing of a pipe junction (`FLUID_PIPE_CASING`), drawn as they are.
+    // SteamEngineRenderer's piston, linkage and shaft connector, posed by the glue from their
+    // `up` state.
+    ("part_engine_piston", "create:block/steam_engine/piston", "up"),
+    ("part_engine_linkage", "create:block/steam_engine/linkage", "up"),
+    ("part_engine_connector", "create:block/steam_engine/shaft_connector", "up"),
     ("part_pipe_casing", "create:block/fluid_pipe/casing", "up"),
     ("part_pipe_connection_down", "create:block/fluid_pipe/connection/down", "up"),
     ("part_pipe_connection_up", "create:block/fluid_pipe/connection/up", "up"),
