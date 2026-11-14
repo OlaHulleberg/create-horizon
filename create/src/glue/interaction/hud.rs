@@ -3,8 +3,7 @@
 //! (`GoggleOverlayRenderer`).
 
 use super::super::items::{self, Item};
-use super::board::{block_at, holds_wrench, seen, speed_at};
-use create_engine::Block as B;
+use super::board::{self, block_at, speed_at};
 use mod_api::{ClientHost, CrosshairTarget, DrawContext, EquipmentSlot};
 
 /// The block under the crosshair, when it is Create's.
@@ -17,61 +16,48 @@ fn aimed(host: &dyn ClientHost) -> Option<[i32; 3]> {
     Some([pos.x, pos.y, pos.z])
 }
 
-/// `ValueSettingsClient.render` for a scroll value (`KineticScrollValueBehaviour`,
-/// `ScrollOptionBehaviour`, `ChassisScrollValueBehaviour`): its label over the hotbar, centred,
-/// with the value and how to change it here (the wheel; holding use opens Create 6's value
-/// board).
+/// `ValueSettingsClient.render` for the value box under the crosshair (`ScrollValueRenderer`
+/// and `showHoverTip`): its label and "Click and hold to edit", centred over the hotbar, fading
+/// in over five ticks once looked at for six.
 pub(super) fn value_tip(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
-    let Some(pos) = aimed(host) else {
+    let now = host
+        .level(host.dimension())
+        .and_then(|l| l.game_time(host))
+        .unwrap_or(0);
+    let Some((pos, title)) = board::hovered_box(host) else {
+        TIP.set(None);
         return;
     };
-    let Some(player) = host.local_player() else {
-        return;
-    };
-    let wrench = holds_wrench(host, player);
-    let Some((block, facing)) = super::super::client_table(host, |t| {
-        t.get(block_at(host, pos)).map(|(b, i)| (b, i.facing))
-    })
-    .flatten() else {
-        return;
-    };
-    let (label, value) = match block {
-        // The setting, from the speed the motor gives along its axis.
-        B::CreativeMotor => {
-            let speed = speed_at(host, pos);
-            let setting = facing.map_or(speed, |f| {
-                create_engine::kinetics::convert_to_direction(speed, f)
-            });
-            ("Generated Speed in RPM", format!("{setting:.0}"))
+    let since = match TIP.get() {
+        Some((at, t)) if at == pos => t,
+        _ => {
+            TIP.set(Some((pos, now)));
+            now
         }
-        // `ChassisScrollValueBehaviour` (with the wrench).
-        B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis if wrench => (
-            "Range of Sticky Sides",
-            seen(pos)
-                .unwrap_or(create_engine::contraption::CHASSIS_RANGE)
-                .to_string(),
-        ),
-        // `BrassTunnelBlockEntity.selectionMode`.
-        B::BrassTunnel => (
-            "Distribution Method",
-            create_engine::tunnel::Mode::ALL[seen(pos).unwrap_or(0).clamp(0, 4) as usize]
-                .label()
-                .to_owned(),
-        ),
-        _ => return,
     };
-    let lines = [
-        (label.to_owned(), 0xFB_DC7D),
-        (value, 0xFF_FFFF),
-        ("Scroll to change".to_owned(), 0xFF_FFFF),
-    ];
+    // `hoverWarmup`: six ticks before it shows, then five to fade in.
+    let shown = now - since - 6;
+    if shown < 0 {
+        return;
+    }
+    let alpha = ((shown as f32 + 1.0) / 5.0).min(1.0);
+    let a = ((alpha * 255.0) as u32).max(5) << 24;
+    let hint = host
+        .translate("create.gui.value_settings.hold_to_edit")
+        .unwrap_or_else(|| "Click and hold to edit".into());
+    let lines = [(title.to_owned(), 0xFB_DC7D), (hint, 0xFF_FFFF)];
     let [width, height] = draw.size();
     let mut y = height - 75.0 - lines.len() as f32 * 12.0;
     for (text, rgb) in &lines {
         let w = draw.text_width(text);
-        draw.text(text, [width / 2.0 - w / 2.0, y], 0xFF00_0000 | rgb, true);
+        draw.text(text, [(width / 2.0 - w / 2.0).floor(), y], a | rgb, true);
         y += 12.0;
     }
+}
+
+std::thread_local! {
+    /// The value box looked at, and since when (game time).
+    static TIP: std::cell::Cell<Option<([i32; 3], i64)>> = const { std::cell::Cell::new(None) };
 }
 
 /// `LangNumberFormat`: grouped thousands, at most two decimals (en_us).
