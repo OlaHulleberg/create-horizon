@@ -678,3 +678,113 @@ impl belt::Surroundings for BeltSide<'_, '_> {
             .find_map(|s| s.belt_process(self.lv, at, item, locked))
     }
 }
+
+thread_local! {
+    /// Entities inside a belt segment this tick (`BeltBlock.entityInside`), by level: noted in
+    /// the entity's move, where it can't be moved, and carried at the end of the level's tick.
+    static PASSENGERS: std::cell::RefCell<Vec<(usize, [i32; 3], u32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `BeltBlock.entityInside` for an entity that is not an item (items land on the belt): noted
+/// to be carried.
+pub fn passenger_inside(dim: usize, pos: [i32; 3], entity: u32) {
+    PASSENGERS.with_borrow_mut(|p| p.push((dim, pos, entity)));
+}
+
+/// `BeltMovementHandler.transportEntity` for the entities other than players on this level's
+/// belts: each is moved as the belt runs (`passenger_motion`), up and down slopes and toward the
+/// middle. The mod API moves an entity only by its motion (`EntityRef::set_velocity`), so a
+/// passenger is given the belt's motion each tick rather than moved by it; mobs are not slowed
+/// (Create's slowness).
+pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let mut mine: Vec<([i32; 3], u32)> = PASSENGERS.with_borrow_mut(|p| {
+        if p.is_empty() {
+            return Vec::new();
+        }
+        let mine = p
+            .iter()
+            .filter(|e| e.0 == dim)
+            .map(|e| (e.1, e.2))
+            .collect();
+        p.retain(|e| e.0 != dim);
+        mine
+    });
+    if mine.is_empty() {
+        return;
+    }
+    // One belt segment per entity: the one it stands in (`lastCollidedPos`).
+    mine.sort_by_key(|e| e.1);
+    mine.dedup_by_key(|e| e.1);
+    for (pos, id) in mine {
+        let Some(e) = lv.host.entity(id) else {
+            continue;
+        };
+        // Items land on the belt; players are carried by their own clients
+        // (`carry_local_player`), which move them.
+        let kind = e.kind(&*lv.host).unwrap_or_default();
+        if kind == "minecraft:item" || kind == "minecraft:player" {
+            continue;
+        }
+        let Some((c, _, seg)) = belt_segment(lv, pos) else {
+            continue;
+        };
+        let (Some(feet), Some(v)) = (e.position(&*lv.host), e.velocity(&*lv.host)) else {
+            continue;
+        };
+        let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+        let Some(m) = belt::passenger_motion(&seg, pos, feet, rpm, false) else {
+            continue;
+        };
+        // On a slope its motion carries it up or down against gravity (0.08 a tick).
+        let vy = if m[1] != 0.0 { m[1] + 0.08 } else { v[1] };
+        e.set_velocity(&mut *lv.host, [m[0], vy, m[2]]);
+    }
+}
+
+/// Ground friction a walking entity's motion keeps each tick (a block's 0.6 times 0.91).
+const GROUND_FRICTION: f64 = 0.6 * 0.91;
+
+/// `BeltMovementHandler.transportEntity` for the window's own player, which its client moves:
+/// standing on a running belt (not sneaking, not flying), it is pushed so that it goes the belt's
+/// way at the belt's speed on top of its own walking (a steady push `m (1 - friction)` moves it
+/// `m` a tick more).
+pub fn carry_local_player(host: &mut dyn mod_api::ClientHost) {
+    let Some(player) = host.local_player() else {
+        return;
+    };
+    let e = player.entity();
+    let (Some(feet), Some(level)) = (e.position(&*host), player.level(&*host)) else {
+        return;
+    };
+    if e.is_shift_key_down(&*host) == Some(true)
+        || player.abilities(&*host).is_some_and(|a| a.flying)
+    {
+        return;
+    }
+    let pos = [feet[0], feet[1] - 1.0e-5, feet[2]].map(|v| v.floor() as i32);
+    let Some(seg) = level
+        .block_state(&*host, pos)
+        .and_then(super::super::states::id)
+        .and_then(|id| {
+            super::super::client_table(&*host, |t| t.get(id).and_then(|(_, i)| i.belt)).flatten()
+        })
+    else {
+        return;
+    };
+    let rpm = super::super::kinetics::shown_speeds(&*host, level, pos)[0];
+    let Some(m) = belt::passenger_motion(&seg, pos, feet, rpm, false) else {
+        return;
+    };
+    let keep = 1.0 - GROUND_FRICTION;
+    host.push_player([
+        (m[0] * keep) as f32,
+        if m[1] > 0.0 {
+            (m[1] + 0.08) as f32
+        } else {
+            (m[1] * keep) as f32
+        },
+        (m[2] * keep) as f32,
+    ]);
+}

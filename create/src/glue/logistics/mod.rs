@@ -165,6 +165,7 @@ impl Subsystem for Logistics {
         tunnel::tick_brass(lv);
         depot::tick_depots(lv);
         belt::tick_belts(lv);
+        belt::transport_passengers(lv);
     }
 
     /// `onWrenched` of Create's logistics blocks (sneaking, they are picked up as any block):
@@ -268,6 +269,7 @@ impl Subsystem for Logistics {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick_client_depots(host);
         client::tick_client_belts(host);
+        belt::carry_local_player(host);
     }
 
     fn client_reset(&self) {
@@ -440,6 +442,29 @@ impl BlockPart for LogisticsBlock {
         };
         item_landed(&mut lv, event.block_pos, event.item_pos, event.stack);
         Flow::Continue
+    }
+
+    /// `BeltBlock.entityInside`: what stands on a belt is carried at the end of the tick.
+    fn entity_inside(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::EntityInsideEvent<'_>,
+    ) {
+        if event.kind == "minecraft:item" {
+            return;
+        }
+        let Some(id) = states::id(event.state) else {
+            return;
+        };
+        let belt = with_world(|w| w.table.get(id).map(|(b, _)| b == Block::Belt)).flatten();
+        if belt != Some(true) {
+            return;
+        }
+        let Some(dim) = super::world::level_index(event.dimension) else {
+            return;
+        };
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        belt::passenger_inside(dim, pos, event.entity as u32);
     }
 
     fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut ContentsChangedEvent) {
