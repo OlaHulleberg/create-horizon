@@ -20,6 +20,9 @@ pub enum Kind {
     Harvester,
     Plough,
     Roller,
+    /// A deployer (`DeployerMovementBehaviour`): its fake player uses what it holds on, or
+    /// punches, each block two ahead of it.
+    Deployer,
     /// A portable storage interface (`fluid`: the fluid one).
     Interface {
         fluid: bool,
@@ -35,6 +38,7 @@ impl Kind {
             crate::Block::MechanicalHarvester => Kind::Harvester,
             crate::Block::MechanicalPlough => Kind::Plough,
             crate::Block::MechanicalRoller => Kind::Roller,
+            crate::Block::Deployer => Kind::Deployer,
             crate::Block::PortableStorageInterface => Kind::Interface { fluid: false },
             crate::Block::PortableFluidInterface => Kind::Interface { fluid: true },
             _ => return None,
@@ -46,6 +50,7 @@ impl Kind {
         match self {
             Kind::Drill | Kind::Saw => 0.65,
             Kind::Harvester | Kind::Plough | Kind::Roller => 0.45,
+            Kind::Deployer => 2.0,
             Kind::Interface { .. } => crate::psi::REACH,
         }
     }
@@ -58,6 +63,7 @@ impl Kind {
             Kind::Harvester => "create:mechanical_harvester",
             Kind::Plough => "create:mechanical_plough",
             Kind::Roller => "create:mechanical_roller",
+            Kind::Deployer => "create:deployer",
             Kind::Interface { fluid: false } => "create:portable_storage_interface",
             Kind::Interface { fluid: true } => "create:portable_fluid_interface",
         }
@@ -172,6 +178,9 @@ pub struct Actor {
     pub reference: Option<[i32; 3]>,
     /// An interface's `WorkingPos`.
     pub interface: crate::psi::Moving,
+    /// A deployer's `Timer`: the ticks it has waited, stalled on a block it breaks, since its
+    /// last punch.
+    pub timer: i32,
 }
 
 impl Actor {
@@ -195,6 +204,7 @@ impl Actor {
             mode: RollingMode::TunnelPave,
             reference: None,
             interface: crate::psi::Moving::default(),
+            timer: 0,
         }
     }
 }
@@ -215,6 +225,12 @@ pub enum Effect {
     Pave([i32; 3]),
     /// The plough's hoe used on the top of the block (`useOn`).
     Till([i32; 3]),
+    /// A deployer's `visitNewPosition` at a block (`activate`, then `stall` while its fake
+    /// player breaks a block).
+    Deploy([i32; 3]),
+    /// A stalled deployer's `tick`, 20 ticks after its last punch: it punches the block it
+    /// breaks again.
+    Redeploy,
 }
 
 /// What an actor reads of the world.
@@ -597,7 +613,24 @@ impl Actor {
         if self.kind.breaks() {
             self.tick_breaking(facing_now, lower, probe, effects);
         }
+        if self.kind == Kind::Deployer {
+            self.tick_deployer(effects);
+        }
         self.stall
+    }
+
+    /// `DeployerMovementBehaviour.tick`: stalled on a block its fake player breaks, it punches
+    /// it again every 21st tick (its caller sets `stall` from what the punch left).
+    fn tick_deployer(&mut self, effects: &mut Vec<Effect>) {
+        if !self.stall {
+            return;
+        }
+        if self.timer < 20 {
+            self.timer += 1;
+            return;
+        }
+        self.timer = 0;
+        effects.push(Effect::Redeploy);
     }
 
     /// `visitNewPosition`.
@@ -610,6 +643,10 @@ impl Actor {
     ) {
         if self.kind == Kind::Harvester {
             effects.push(Effect::Harvest(pos));
+            return;
+        }
+        if self.kind == Kind::Deployer {
+            effects.push(Effect::Deploy(pos));
             return;
         }
         if self.kind == Kind::Roller {
@@ -730,6 +767,7 @@ impl Actor {
         }
         // An interface's `reset`.
         self.interface.working = None;
+        self.timer = 0;
         self.stall = false;
     }
 }

@@ -37,6 +37,9 @@ type Mounted = Vec<([i32; 3], Stored)>;
 /// A roller's settings: its pave material and its mode.
 type RollerSettings = (Option<String>, actors::RollingMode);
 
+/// A moving contraption's other block entities: each block's offset and what it held.
+type Carrying = Vec<([i32; 3], BlockData)>;
+
 /// A chest's or barrel's slots.
 const STORAGE_SLOTS: u32 = 27;
 
@@ -48,6 +51,31 @@ thread_local! {
     static NEXT_BREAKER: Cell<i32> = const { Cell::new(0) };
     /// Rollers placed this tick (`setPlacedBy` → `searchForSharedValues`).
     static ROLLERS_PLACED: RefCell<Vec<(usize, [i32; 3])>> = const { RefCell::new(Vec::new()) };
+    /// What the other block entities of moving contraptions held, by dimension and
+    /// contraption, as `STORAGE`: each block's offset and its data.
+    static HELD: RefCell<HashMap<(usize, [i32; 3]), Carrying>> = RefCell::new(HashMap::new());
+}
+
+/// What a carried block's block entity held besides mounted storage
+/// (`StructureBlockInfo.nbt`: `Contraption.addBlock` keeps every block entity's data, and
+/// `addBlocksToWorld` loads it into the block entity placed back): a Create block entity's item
+/// slots (a depot's stack), a deployer's hand and mode, a tank controller's fluid, or another
+/// block entity's saved data (a furnace's items, a sign's text).
+#[derive(Clone, Debug, Default)]
+struct BlockData {
+    slots: Vec<Option<ItemStack>>,
+    data: Option<Compound>,
+    deployer: Option<create_engine::deployer::Deployer>,
+    tank: Option<create_engine::tank::Multi>,
+}
+
+impl BlockData {
+    fn is_empty(&self) -> bool {
+        self.slots.iter().all(Option::is_none)
+            && self.data.is_none()
+            && self.deployer.is_none()
+            && self.tank.is_none()
+    }
 }
 
 /// The world closed: what moving contraptions carried goes with it.
@@ -55,6 +83,7 @@ pub(super) fn forget() {
     STORAGE.with_borrow_mut(HashMap::clear);
     NEXT_BREAKER.set(0);
     ROLLERS_PLACED.with_borrow_mut(Vec::clear);
+    HELD.with_borrow_mut(HashMap::clear);
 }
 
 pub(super) fn register(r: &mut dyn Registrar) {
@@ -636,13 +665,183 @@ pub(super) fn carry_storage(
 ) {
     let dim = lv.dim;
     let mut stored = Vec::new();
+    let mut held = Vec::new();
     for (o, _) in blocks {
-        if let Some(s) = take_storage(lv, add(origin, *o)) {
+        let p = add(origin, *o);
+        if let Some(s) = take_storage(lv, p) {
             stored.push((*o, s));
+        } else if let Some(d) = take_block_data(lv, p) {
+            held.push((*o, d));
         }
     }
     if !stored.is_empty() {
         STORAGE.with_borrow_mut(|m| m.insert((dim, key), stored));
+    }
+    if !held.is_empty() {
+        HELD.with_borrow_mut(|m| m.insert((dim, key), held));
+    }
+}
+
+/// Whether the block entity at `pos` is one of Create's (its state the engine's, its stacks
+/// its declared slots), not another's whose saved data rides.
+fn create_entity(lv: &ServerLevel<'_>, e: mod_api::BlockEntityRef) -> bool {
+    e.kind(&*lv.host)
+        .is_some_and(|k| k.id(&*lv.host).starts_with("create:"))
+}
+
+/// What the block entity at `pos` held, taken out of it and the engine's tables before its
+/// block leaves (so nothing drops as it goes): its item slots or saved data, a deployer's
+/// state, a tank's part of its tank. None when it held nothing.
+fn take_block_data(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<BlockData> {
+    let dim = lv.dim;
+    let mut out = BlockData::default();
+    let block = lv.create_block(pos);
+    match block {
+        Some(Block::Deployer) => {
+            out.deployer = with_world(|w| {
+                let d = &mut w.dims[dim];
+                d.deploying.retain(|p| *p != pos);
+                d.deployers.remove(&pos)
+            })
+            .flatten();
+        }
+        Some(Block::FluidTank) => {
+            out.tank = with_world(|w| w.dims[dim].tanks.take(pos)).flatten();
+        }
+        _ => {}
+    }
+    if let Some(e) = lv.host.block_entity(lv.level, pos) {
+        if create_entity(lv, e) {
+            let mut slots: Vec<Option<ItemStack>> = Vec::new();
+            while let Ok(s) = e.item_slot(&*lv.host, slots.len() as u32) {
+                slots.push(s);
+            }
+            if slots.iter().any(Option::is_some) {
+                let _ = lv.host.transaction(|host, tx| {
+                    for (i, s) in slots.iter().enumerate() {
+                        if s.is_some() {
+                            let _ = e.set_item_slot(host, tx, i as u32, None);
+                        }
+                    }
+                    Ok::<(), ()>(())
+                });
+                out.slots = slots;
+            }
+        } else if block.is_none()
+            && let Some(data) = e.data(&*lv.host)
+        {
+            // Emptied, so its block leaving spills nothing (`removeBlocksFromWorld` clears
+            // containers first).
+            let _ = e.replace_data(&mut *lv.host, Compound::new());
+            out.data = Some(data);
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// What contraption `key`'s deployers and tanks held waits for their blocks to be put back,
+/// each at `place(offset)` (`addBlocksToWorld` places a block with its block entity's data):
+/// a deployer placed there takes its state, a tank its part of its tank, which forms nothing
+/// new. Called before the blocks go back.
+pub(super) fn expect_back(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    place: impl Fn([i32; 3]) -> [i32; 3],
+) {
+    use create_engine::tank;
+    let dim = lv.dim;
+    let list = HELD.with_borrow(|m| m.get(&(dim, key)).cloned());
+    let Some(list) = list else {
+        return;
+    };
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        for (o, data) in &list {
+            if let Some(dp) = &data.deployer {
+                let mut dp = dp.clone();
+                dp.breaking = None;
+                d.deployer_saved_insert(place(*o), dp);
+            }
+            let Some(m) = data.tank else {
+                continue;
+            };
+            // The tank's blocks where they go: still a tank as wide and tall (moved, or turned
+            // about the vertical) keeps its shape, its corner the controller; else each block
+            // is a tank of its own, the controller's holding what one block can.
+            let cells: Vec<[i32; 3]> = tank::blocks(*o, m.width, m.height).map(&place).collect();
+            let corner = cells.iter().fold(cells[0], |c, p| {
+                [c[0].min(p[0]), c[1].min(p[1]), c[2].min(p[2])]
+            });
+            let same = tank::blocks(corner, m.width, m.height).all(|q| cells.contains(&q));
+            let at = if same { corner } else { place(*o) };
+            for q in cells {
+                d.tanks.arriving.insert(q, None);
+            }
+            let mut m = m;
+            if !same {
+                m.width = 1;
+                m.height = 1;
+                m.tank.truncate(tank::CAPACITY);
+            }
+            d.tanks.arriving.insert(at, Some(m));
+        }
+    });
+}
+
+/// What contraption `key`'s other block entities held, back in theirs now at `place(offset)`:
+/// slots into a Create block entity's slots, saved data loaded into another's; a deployer's
+/// stack, or slots with nowhere to go, drop there.
+fn release_held(lv: &mut ServerLevel<'_>, key: [i32; 3], place: impl Fn([i32; 3]) -> [i32; 3]) {
+    let dim = lv.dim;
+    let list = HELD
+        .with_borrow_mut(|m| m.remove(&(dim, key)))
+        .unwrap_or_default();
+    for (o, data) in list {
+        let p = place(o);
+        // A deployer or tank that didn't go back leaves what waited for it.
+        let left = with_world(|w| {
+            let d = &mut w.dims[dim];
+            d.tanks.arriving.remove(&p);
+            d.deployer_saved_remove(p)
+        })
+        .flatten();
+        if let Some((item, n)) = left.and_then(|d| d.held)
+            && let Some(s) = stack_of(lv, &item)
+        {
+            let mut s = s;
+            let _ = s.set_count(u32::from(n));
+            lv.drop_stack(center(p), [0.0; 3], s, 10);
+        }
+        let entity = lv.host.block_entity(lv.level, p);
+        if let Some(saved) = data.data {
+            if let Some(e) = entity
+                && !create_entity(lv, e)
+            {
+                let _ = e.replace_data(&mut *lv.host, saved);
+            }
+            continue;
+        }
+        if data.slots.is_empty() {
+            continue;
+        }
+        let mut left = Vec::new();
+        match entity.filter(|e| create_entity(lv, *e)) {
+            Some(e) => {
+                let _ = lv.host.transaction(|host, tx| {
+                    for (i, s) in data.slots.into_iter().enumerate() {
+                        let Some(stack) = s else { continue };
+                        if e.set_item_slot(host, tx, i as u32, Some(stack.clone())) != Ok(true) {
+                            left.push(stack);
+                        }
+                    }
+                    Ok::<(), ()>(())
+                });
+            }
+            None => left.extend(data.slots.into_iter().flatten()),
+        }
+        for stack in left {
+            lv.drop_stack(center(p), [0.0; 3], stack, 10);
+        }
     }
 }
 
@@ -654,6 +853,7 @@ pub(super) fn release_storage(
     place: impl Fn([i32; 3]) -> [i32; 3],
 ) {
     let dim = lv.dim;
+    release_held(lv, key, &place);
     let stored = STORAGE
         .with_borrow_mut(|m| m.remove(&(dim, key)))
         .unwrap_or_default();
@@ -674,29 +874,61 @@ pub(super) fn release_storage(
 /// its slots (`ItemStack.CODEC`, `Slot`). None when it carries none.
 pub(super) fn storage_to_nbt(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<Tag> {
     let dim = lv.dim;
-    STORAGE.with_borrow(|m| {
-        let list = m.get(&(dim, key))?;
-        let blocks = list
+    let slots_nbt = |o: &[i32; 3], slots: &[Option<ItemStack>]| {
+        let items = slots
             .iter()
-            .map(|(o, slots)| {
-                let items = slots
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, s)| {
-                        let mut c = s.as_ref()?.to_nbt(&*lv.host)?;
-                        c.insert("Slot".into(), Tag::Int(i as i32));
-                        Some(Tag::Compound(c))
-                    })
-                    .collect();
-                let mut c = Compound::new();
-                c.insert("pos".into(), Tag::IntArray(o.to_vec()));
-                c.insert("size".into(), Tag::Int(slots.len() as i32));
-                c.insert("items".into(), Tag::List(items));
-                Tag::Compound(c)
+            .enumerate()
+            .filter_map(|(i, s)| {
+                let mut c = s.as_ref()?.to_nbt(&*lv.host)?;
+                c.insert("Slot".into(), Tag::Int(i as i32));
+                Some(Tag::Compound(c))
             })
             .collect();
-        Some(Tag::List(blocks))
-    })
+        let mut c = Compound::new();
+        c.insert("pos".into(), Tag::IntArray(o.to_vec()));
+        c.insert("size".into(), Tag::Int(slots.len() as i32));
+        c.insert("items".into(), Tag::List(items));
+        c
+    };
+    let mut blocks: Vec<Tag> = STORAGE.with_borrow(|m| {
+        m.get(&(dim, key)).map_or_else(Vec::new, |list| {
+            list.iter()
+                .map(|(o, slots)| Tag::Compound(slots_nbt(o, slots)))
+                .collect()
+        })
+    });
+    // Other block entities' data: marked `held`, with a deployer's and a tank's state.
+    HELD.with_borrow(|m| {
+        for (o, d) in m.get(&(dim, key)).into_iter().flatten() {
+            let mut c = slots_nbt(o, &d.slots);
+            let mut held = Compound::new();
+            if let Some(data) = &d.data {
+                held.insert("data".into(), Tag::Compound(data.clone()));
+            }
+            if let Some(dp) = &d.deployer {
+                held.insert(
+                    "deployer".into(),
+                    crate::glue::processing::deployers_to_nbt(&[([0; 3], dp.clone())]),
+                );
+            }
+            if let Some(t) = d.tank {
+                let fluid = t.tank.fluid.map_or(255, |f| i32::from(f.index()));
+                held.insert(
+                    "tank".into(),
+                    Tag::IntArray(vec![
+                        i32::from(t.width),
+                        i32::from(t.height),
+                        i32::from(t.window),
+                        fluid,
+                        t.tank.amount as i32,
+                    ]),
+                );
+            }
+            c.insert("held".into(), Tag::Compound(held));
+            blocks.push(Tag::Compound(c));
+        }
+    });
+    (!blocks.is_empty()).then_some(Tag::List(blocks))
 }
 
 /// What [`storage_to_nbt`] saved, carried again by contraption `key`.
@@ -705,6 +937,7 @@ pub(super) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<
         return;
     };
     let mut stored: Mounted = Vec::new();
+    let mut held: Vec<([i32; 3], BlockData)> = Vec::new();
     for b in list {
         let Tag::Compound(b) = b else { continue };
         let (Some(Tag::IntArray(p)), Some(Tag::List(items))) =
@@ -727,10 +960,48 @@ pub(super) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<
                 *slot = ItemStack::from_nbt(&*lv.host, c);
             }
         }
-        stored.push(([x, y, z], slots));
+        let Some(Tag::Compound(h)) = b.get(&"held".into()) else {
+            stored.push(([x, y, z], slots));
+            continue;
+        };
+        let mut d = BlockData {
+            slots: if slots.iter().any(Option::is_some) {
+                slots
+            } else {
+                Vec::new()
+            },
+            ..BlockData::default()
+        };
+        if let Some(Tag::Compound(data)) = h.get(&"data".into()) {
+            d.data = Some(data.clone());
+        }
+        if let Some(t) = h.get(&"deployer".into()) {
+            let c = Compound::from([("deployers".into(), t.clone())]);
+            d.deployer = crate::glue::processing::deployers_from_nbt(&c)
+                .into_iter()
+                .next()
+                .map(|e| e.1);
+        }
+        if let Some(Tag::IntArray(t)) = h.get(&"tank".into())
+            && let [w, hh, win, f, n] = t[..]
+        {
+            d.tank = Some(create_engine::tank::Multi {
+                width: w.clamp(1, 3) as u8,
+                height: hh.clamp(1, 32) as u8,
+                window: win != 0,
+                tank: create_engine::tank::Tank {
+                    fluid: create_engine::tank::Fluid::from_index(f.clamp(0, 255) as u8),
+                    amount: n.max(0) as u32,
+                },
+            });
+        }
+        held.push(([x, y, z], d));
     }
     if !stored.is_empty() {
         STORAGE.with_borrow_mut(|m| m.insert((lv.dim, key), stored));
+    }
+    if !held.is_empty() {
+        HELD.with_borrow_mut(|m| m.insert((lv.dim, key), held));
     }
 }
 
@@ -749,6 +1020,7 @@ pub(super) fn release(
         a.cancel(&mut effects);
     }
     apply_cracks(lv, &carried.actors, &effects);
+    cancel_deployers(lv, key, carried);
     let at = |o: [i32; 3]| add(origin, o);
     // Block entity data back with the blocks put back: rollers' settings, and contraption
     // controls off as the contraption has their kind (`ContraptionControlsMovement.stopMoving`).
@@ -1166,12 +1438,35 @@ pub(super) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
 
 /// A turning contraption's actors stop (`stopMoving`): what they were breaking is left as it
 /// was, its cracks gone.
-pub(super) fn cancel_actors(lv: &mut ServerLevel<'_>, carried: &mut Carried) {
+pub(super) fn cancel_actors(lv: &mut ServerLevel<'_>, key: [i32; 3], carried: &mut Carried) {
     let mut effects = Vec::new();
     for a in carried.actors.iter_mut() {
         a.cancel(&mut effects);
     }
     apply_cracks(lv, &carried.actors, &effects);
+    cancel_deployers(lv, key, carried);
+}
+
+/// `DeployerMovementBehaviour.cancelStall` as contraption `key` stops: what its deployers'
+/// fake players were breaking is left as it was, their cracks gone.
+fn cancel_deployers(lv: &mut ServerLevel<'_>, key: [i32; 3], carried: &Carried) {
+    let dim = lv.dim;
+    for a in carried.actors.iter().filter(|a| a.kind == Kind::Deployer) {
+        let broke = HELD.with_borrow_mut(|m| {
+            let d = m
+                .get_mut(&(dim, key))?
+                .iter_mut()
+                .find(|(o, _)| *o == a.local)?
+                .1
+                .deployer
+                .as_mut()?;
+            d.breaking.take().map(|(p, _)| p)
+        });
+        if let Some(p) = broke {
+            lv.level
+                .set_break_progress(&mut *lv.host, a.breaker_id, p, -1);
+        }
+    }
 }
 
 /// `tickActors` for a bearing's structure turned `deg` about `axis` through the bearing at
@@ -1210,7 +1505,7 @@ pub fn tick_posed_actors(
         a.turns = *turns;
         let position = actors::posed_position(a, pivot, turns);
         let facing = actors::posed_facing(a.facing, turns);
-        stalled |= a.tick(
+        let mut stall = a.tick(
             position,
             facing,
             actors::CONTROLLED_LOWER,
@@ -1219,8 +1514,12 @@ pub fn tick_posed_actors(
         );
         let a = carried.actors[i].clone();
         for e in effects {
-            apply(lv, key, &a, e);
+            if let Some(s) = apply(lv, key, &a, e) {
+                carried.actors[i].stall = s;
+                stall = s;
+            }
         }
+        stalled |= stall;
     }
     stalled
 }
@@ -1263,7 +1562,7 @@ pub fn tick_actors(
             stalled |= tick_interface(lv, key, a, position, fluid);
             continue;
         }
-        stalled |= a.tick(
+        let mut stall = a.tick(
             position,
             facing,
             actors::CONTROLLED_LOWER,
@@ -1272,13 +1571,18 @@ pub fn tick_actors(
         );
         let a = carried.actors[i].clone();
         for e in effects {
-            apply(lv, key, &a, e);
+            if let Some(s) = apply(lv, key, &a, e) {
+                carried.actors[i].stall = s;
+                stall = s;
+            }
         }
+        stalled |= stall;
     }
     stalled
 }
 
-fn apply(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, e: Effect) {
+/// What an actor's effect does in the world; a deployer's says whether it stalls now.
+fn apply(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, e: Effect) -> Option<bool> {
     match e {
         Effect::Crack(p, stage) => {
             lv.level
@@ -1324,7 +1628,118 @@ fn apply(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, e: Effect) {
         Effect::Pave(p) => pave(lv, key, a, p),
         Effect::Harvest(p) => harvest(lv, key, a, p),
         Effect::Till(p) => till(lv, p),
+        Effect::Deploy(p) => return Some(deploy(lv, key, a, Some(p))),
+        Effect::Redeploy => return Some(deploy(lv, key, a, None)),
     }
+    None
+}
+
+/// `DeployerMovementBehaviour.shouldActivate` (`DeployerHandler.shouldActivate` with no
+/// facing): not with a block item at its own block, nor a bucket at its fluid's source.
+fn deployer_should_use(lv: &ServerLevel<'_>, held: Option<&(String, u8)>, at: [i32; 3]) -> bool {
+    let Some((item, _)) = held else {
+        return true;
+    };
+    if let Some(block) = item_key_of(lv, item).and_then(|k| lv.host.item_block(k))
+        && lv.level.block(&*lv.host, at) == Some(block)
+    {
+        return false;
+    }
+    let fluid = match item.as_str() {
+        "minecraft:water_bucket" => "minecraft:water",
+        "minecraft:lava_bucket" => "minecraft:lava",
+        _ => return true,
+    };
+    lv.block_name(at).as_deref() != Some(fluid)
+        || lv.property(at, "level").is_some_and(|l| l != "0")
+}
+
+/// `ItemHelper.extract(storage, filter, 1, false)` for a deployer's empty hand: one of the first
+/// stack in contraption `key`'s storage (its filter not ported: anything passes).
+fn take_one(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<ItemStack> {
+    let dim = lv.dim;
+    STORAGE.with_borrow_mut(|m| {
+        let list = m.get_mut(&(dim, key))?;
+        for (_, s) in list.iter_mut() {
+            for slot in s.iter_mut() {
+                let Some(stack) = slot.as_ref() else {
+                    continue;
+                };
+                let mut one = stack.clone();
+                let _ = one.set_count(1);
+                *slot = slot.take().and_then(|s| s.shrink(1));
+                return Some(one);
+            }
+        }
+        None
+    })
+}
+
+/// A deployer riding contraption `key` (`DeployerMovementBehaviour`): at a block it reaches
+/// (`at`), or (None) at the block its fake player breaks, 20 ticks after its last punch
+/// (`tick`). An empty hand takes an item from the contraption's storage (`tryGrabbingItem`); a
+/// using deployer does nothing where `shouldActivate` says no; its fake player acts as a
+/// standing deployer's from where the deployer is now (`activate`), and what it ended with
+/// besides its hand goes into the storage or drops (`tryDisposeOfExcess`). Whether it stalls
+/// the contraption (its fake player breaks a block).
+fn deploy(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, at: Option<[i32; 3]>) -> bool {
+    use create_engine::deployer::Mode;
+    let dim = lv.dim;
+    let found = HELD.with_borrow(|m| {
+        m.get(&(dim, key))?
+            .iter()
+            .find(|(o, _)| *o == a.local)?
+            .1
+            .deployer
+            .clone()
+    });
+    let Some(mut d) = found else {
+        return false;
+    };
+    let Some(pos) = at.or(d.breaking.map(|b| b.0)) else {
+        return false;
+    };
+    if d.held.is_none()
+        && let Some(s) = take_one(lv, key)
+    {
+        d.held = Some((item_id(lv, &s), 1));
+        d.held_damage = s.damage();
+    }
+    let facing = actors::posed_facing(a.facing, &a.turns);
+    let mut stall = false;
+    let mut other = Vec::new();
+    if d.mode == Mode::Punch || deployer_should_use(lv, d.held.as_ref(), pos) {
+        // The deployer two back from the block it reaches, as `context.position - facing × 2`.
+        let o = facing.offset();
+        let origin = [0, 1, 2].map(|i| pos[i] - 2 * o[i]);
+        other =
+            crate::glue::processing::activate_deployer(lv, origin, facing, &mut d, a.breaker_id);
+        stall = d.breaking.is_some();
+        // `tryHarvestBlock`: the broken block's drops go into the fake player's inventory
+        // (the game's break drops them where the block was).
+        if d.mode == Mode::Punch && !stall {
+            let lo = pos.map(|v| f64::from(v) - 0.25);
+            let hi = pos.map(|v| f64::from(v) + 1.25);
+            for drop in lv.items_in(lo, hi) {
+                if drop.item.age(&*lv.host) == Some(0) {
+                    other.push(drop.stack.clone());
+                    lv.set_dropped(&drop, None, [0.0; 3]);
+                }
+            }
+        }
+    }
+    HELD.with_borrow_mut(|m| {
+        if let Some(e) = m
+            .get_mut(&(dim, key))
+            .and_then(|l| l.iter_mut().find(|(o, _)| *o == a.local))
+        {
+            e.1.deployer = Some(d);
+        }
+    });
+    for s in other {
+        collect(lv, key, a, s);
+    }
+    stall
 }
 
 /// The plough's hoe on the block a ray down from the block's centre hits (it, if it has a

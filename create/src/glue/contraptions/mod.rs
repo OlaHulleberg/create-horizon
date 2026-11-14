@@ -536,9 +536,8 @@ fn chassis_range(dim: usize, p: [i32; 3]) -> i32 {
 }
 
 /// What a structure search finds at `p` (`contraption_found`): None for air and fluids. Blocks
-/// Create can't move (unbreakable ones) and blocks whose block entity would be lost (moving
-/// block entities isn't ported: refused rather than emptied; Create's own state-keeping blocks
-/// and chests and barrels ride) are unmovable.
+/// Create can't move (unbreakable ones) are unmovable; block entities ride with what they hold
+/// (`actors::carry_storage`).
 pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
     let id = lv.state_num(p)?;
     let (name, props) = name_props(&*lv.host, id)?;
@@ -550,11 +549,6 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
     let sail_facing = sail
         .then(|| prop(&props, "facing").and_then(dir_of))
         .flatten();
-    let foreign_entity = lv
-        .host
-        .block_entity(lv.level, p)
-        .is_some_and(|e| e.kind(&*lv.host) != super::kinetics::kind())
-        && !actors::is_storage(lv, p);
     let unmovable = matches!(
         name.as_str(),
         "minecraft:bedrock"
@@ -565,7 +559,7 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
             | "minecraft:repeating_command_block"
             | "minecraft:structure_block"
             | "minecraft:jigsaw"
-    ) || foreign_entity;
+    );
     let sticker = (name == "create:sticker" && flag(&props, "extended"))
         .then(|| prop(&props, "facing").and_then(dir_of))
         .flatten();
@@ -594,9 +588,40 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
         sticker,
         movable: !unmovable,
         chassis,
-        attached: attached_sides(&name, &props),
+        attached: attached_sides(&name, &props) | joined_sides(lv.dim, p, &name),
         unsupportive: unsupportive_faces(&name, &props),
     })
+}
+
+/// `BlockMovementChecksImpl.isBlockAttachedTowardsFallback` for fluid tanks and item vaults
+/// (`ConnectivityHandler.isConnected`): the sides where the block beside is part of the same
+/// tank or vault, a `Dir::bit` each.
+fn joined_sides(dim: usize, p: [i32; 3], name: &str) -> u8 {
+    let tank = name == "create:fluid_tank";
+    if !tank && name != "create:item_vault" {
+        return 0;
+    }
+    with_world(|w| {
+        let d = &w.dims[dim];
+        let of = |q: [i32; 3]| {
+            if tank {
+                d.tanks.parts.get(&q).copied()
+            } else {
+                d.vaults.controller_of(q)
+            }
+        };
+        let Some(own) = of(p) else {
+            return 0;
+        };
+        Dir::ALL.into_iter().fold(0, |acc, dir| {
+            if of(add(p, dir.offset())) == Some(own) {
+                acc | dir.bit()
+            } else {
+                acc
+            }
+        })
+    })
+    .unwrap_or(0)
 }
 
 fn bits(dirs: &[Dir]) -> u8 {

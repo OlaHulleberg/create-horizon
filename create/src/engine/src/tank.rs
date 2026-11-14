@@ -362,7 +362,7 @@ impl Tank {
     }
 
     /// `applyFluidTankSize`: what is over `capacity` is lost.
-    fn truncate(&mut self, capacity: u32) {
+    pub fn truncate(&mut self, capacity: u32) {
         if self.amount > capacity {
             self.drain_amount(self.amount - capacity);
         }
@@ -468,6 +468,10 @@ pub struct Tanks {
     pub cleared: Vec<[i32; 3]>,
     /// Tanks that look for a tank to form again (`updateConnectivity`).
     pending: Vec<[i32; 3]>,
+    /// Tank blocks a moving contraption is about to put back, with what their block entity
+    /// held (a controller's tank; None for another block of it): placed, they take it, as a
+    /// block entity loaded with its data does, and form nothing.
+    pub arriving: HashMap<[i32; 3], Option<Multi>>,
 }
 
 fn add(p: [i32; 3], x: i32, y: i32, z: i32) -> [i32; 3] {
@@ -559,6 +563,11 @@ impl Tanks {
         if self.parts.contains_key(&p) {
             return;
         }
+        if let Some(saved) = self.arriving.remove(&p) {
+            self.load(p, saved);
+            self.touched.push(p);
+            return;
+        }
         self.parts.insert(p, p);
         self.multis.insert(p, Multi::default());
         self.touched.push(p);
@@ -582,6 +591,17 @@ impl Tanks {
             self.split_at(c, m, false);
         }
         self.settle();
+    }
+
+    /// A moving contraption takes the tank block at `p` with it (`Contraption.addBlock` keeps
+    /// its block entity's data): it leaves its tank without splitting it. A controller's tank
+    /// goes with it; None for another block.
+    pub fn take(&mut self, p: [i32; 3]) -> Option<Multi> {
+        let c = self.parts.remove(&p)?;
+        if c != p {
+            return None;
+        }
+        self.multis.remove(&p)
     }
 
     /// A column unloaded: its blocks and controllers go; blocks elsewhere of a tank whose

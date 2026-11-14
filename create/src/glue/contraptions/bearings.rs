@@ -241,6 +241,7 @@ fn put_back(lv: &mut ServerLevel<'_>, bearing: [i32; 3], w: &create_engine::worl
         .iter()
         .map(|(o, s)| (add(bearing, *o), *s))
         .collect();
+    actors::expect_back(lv, bearing, |o| add(bearing, o));
     put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
     actors::release_storage(lv, bearing, |o| add(bearing, o));
 }
@@ -405,7 +406,7 @@ pub(super) fn tick_bearing_actors(lv: &mut ServerLevel<'_>) {
             }
         };
         let (Some(facing), Some(mut turn)) = (facing, turn) else {
-            actors::cancel_actors(lv, &mut carried);
+            actors::cancel_actors(lv, pos, &mut carried);
             continue;
         };
         let rpm = speed(dim, pos);
@@ -463,7 +464,7 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
             Some(Some(turn)) if rpm == 0.0 && may_place(dim, pos, turn.angle_at(now)) => {
                 if let Some((mut c, _)) = BEARING_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos)))
                 {
-                    actors::cancel_actors(lv, &mut c);
+                    actors::cancel_actors(lv, pos, &mut c);
                 }
                 let quarter = contraption::quarter(turn.angle_at(now));
                 if let Some(w) = with_world(|w| w.windmill_disassembled(dim, pos, state)).flatten()
@@ -533,11 +534,13 @@ fn put_back_turned(
             )
         })
         .collect();
-    put_back_blocks(lv, &turned, |lv, p| lv.is_free(p));
-    actors::release_storage(lv, bearing, |o| {
+    let turn = |o: [i32; 3]| {
         let local = [o[0] - f[0], o[1] - f[1], o[2] - f[2]];
         add(anchor, contraption::rotate(local, quarter, axis))
-    });
+    };
+    actors::expect_back(lv, bearing, turn);
+    put_back_blocks(lv, &turned, |lv, p| lv.is_free(p));
+    actors::release_storage(lv, bearing, turn);
     turn_glue(lv, bearing, &w.blocks, anchor, quarter, axis);
 }
 
@@ -738,6 +741,7 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                     .iter()
                     .map(|(o, id)| (add(add(g.start, *o), shift), *id))
                     .collect();
+                actors::expect_back(lv, g.start, |o| add(at, o));
                 put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
                 actors::release(lv, g.start, at, &mut g.carried);
                 show_gantry(lv, &g, true);
@@ -1104,6 +1108,9 @@ fn put_back_piston(
         .map(|(l, s)| (piston_world(m.anchor, *l, facing, grid), *s))
         .filter(|(p, _)| *p != pos)
         .collect();
+    let o = facing.offset();
+    let origin = [0, 1, 2].map(|a| m.anchor[a] + o[a] * grid);
+    actors::expect_back(lv, pos, |l| add(origin, l));
     put_back_blocks(lv, &cells, |lv, p| lv.passable(p));
     if own {
         let rpm = speed(lv.dim, pos);
@@ -1112,8 +1119,6 @@ fn put_back_piston(
         let state = if grid > 0 { "extended" } else { "retracted" };
         lv.set_property(pos, "state", state, update_all());
     }
-    let o = facing.offset();
-    let origin = [0, 1, 2].map(|a| m.anchor[a] + o[a] * grid);
     actors::release(lv, pos, origin, &mut m.carried);
     draw::hide(lv, pos);
     super::super::persist::mark_pos_unsaved(lv.dim, pos);

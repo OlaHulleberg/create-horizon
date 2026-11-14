@@ -75,7 +75,13 @@ fn speed(dim: usize, pos: [i32; 3]) -> f32 {
 
 /// Blocks a structure took go back: each where it was, or dropped where something else took
 /// its place (`Contraption.addBlocksToWorld`).
-fn lift_put_back(lv: &mut ServerLevel<'_>, blocks: &[([i32; 3], u32)]) {
+fn lift_put_back(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    origin: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+) {
+    actors::expect_back(lv, key, |o| add(origin, o));
     super::put_back_blocks(lv, blocks, |lv, p| lv.passable(p));
 }
 
@@ -121,7 +127,7 @@ pub(super) fn tick_lifts(lv: &mut ServerLevel<'_>) {
             // A clock's hands go back turned to 0, where they started.
             Held::Clock(_) => Some(pos),
         };
-        lift_put_back(lv, &held.put_back(pos));
+        lift_put_back(lv, pos, origin.unwrap_or(pos), &held.put_back(pos));
         // What rode with it (its storage too, kept apart from its actors) goes back.
         if let Some(origin) = origin {
             let mut carried = PULLEY_CARRIED
@@ -319,7 +325,7 @@ fn disassemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     CLOCK_SHOWN.with_borrow_mut(|s| s.remove(&(dim, pos)));
     let held = Held::Clock(c);
-    lift_put_back(lv, &held.put_back(pos));
+    lift_put_back(lv, pos, pos, &held.put_back(pos));
     actors::release_storage(lv, pos, |o| add(pos, o));
     draw::hide(lv, pos);
     mark_unsaved(lv, pos);
@@ -557,7 +563,7 @@ fn stop_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], grid: i32) {
     p.offset = grid as f32;
     let origin = p.placed_at(create_engine::pulley::grid_offset(p.offset, p.range));
     let held = Held::Pulley(p);
-    lift_put_back(lv, &held.put_back(pos));
+    lift_put_back(lv, pos, origin, &held.put_back(pos));
     // What rode with it goes back with its blocks (`disassemble`).
     let mut carried = PULLEY_CARRIED
         .with_borrow_mut(|c| c.remove(&(dim, pos)))
@@ -803,7 +809,7 @@ fn disassemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     let origin = e.placed_at();
     let held = Held::Elevator(e);
-    lift_put_back(lv, &held.put_back(pos));
+    lift_put_back(lv, pos, origin, &held.put_back(pos));
     if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
         actors::release(lv, pos, origin, &mut carried);
     }
