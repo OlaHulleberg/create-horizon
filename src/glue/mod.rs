@@ -7,6 +7,7 @@ pub mod persist;
 pub mod server;
 pub mod states;
 pub mod subsystem;
+pub mod trains;
 pub mod world;
 
 use create_engine::world::StateTable;
@@ -17,7 +18,12 @@ use std::collections::HashSet;
 use subsystem::Subsystem;
 
 /// Every subsystem, in the order their level ticks run.
-pub static SUBSYSTEMS: &[&dyn Subsystem] = &[&kinetics::Kinetics];
+pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
+    &kinetics::Kinetics,
+    &trains::Carts,
+    &trains::Trains,
+    &trains::TrainControls,
+];
 
 thread_local! {
     /// The columns of each level whose saved data the subsystems have been given.
