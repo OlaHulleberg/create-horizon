@@ -141,5 +141,8 @@
   "default_state": {
     "axis_along_first": "false",
     "facing": "up"
+  },
+  "components": {
+    "!minecraft:cooking_fuel": {}
   }
 }

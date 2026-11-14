@@ -71,6 +71,8 @@ pub const ITEMS_KEY: &str = "BasinItems";
 /// The key of a mixer's block entity data its clients run its head from: `T`, its running ticks
 /// when told, and `S`, the game time it was told at; none when it rests.
 pub const MIXER_KEY: &str = "Mixer";
+/// A blaze burner's blaze wears goggles (`BlazeBurnerBlockEntity.goggles`).
+pub const GOGGLES_KEY: &str = "Goggles";
 
 /// A running mixer's running ticks as its clients were last told, and the game time then.
 type Told = (i32, i64);
@@ -626,10 +628,25 @@ pub fn use_burner(
 ) -> bool {
     use burner::Fuel;
     let dim = lv.dim;
-    let Some(stack) = stack else {
+    let Some((_, info)) = lv.info(pos) else {
         return false;
     };
-    let Some((_, info)) = lv.info(pos) else {
+    // Goggles go on a blaze, and come off with an empty hand (the goggles stay in hand).
+    let lit = info.heat.is_some_and(|h| h != Heat::None);
+    let held_goggles = stack.is_some_and(|s| stacks::id(&*lv.host, s) == "create:goggles");
+    if lit && (held_goggles || stack.is_none()) {
+        let wearing = lv
+            .entity_at(pos)
+            .and_then(|e| e.data(&*lv.host))
+            .is_some_and(|d| d.contains_key(&GOGGLES_KEY.into()));
+        if wearing == held_goggles {
+            return false;
+        }
+        let value = held_goggles.then_some(Tag::Byte(1));
+        set_shown(lv, pos, &[(GOGGLES_KEY, value)]);
+        return true;
+    }
+    let Some(stack) = stack else {
         return false;
     };
     let held = stacks::id(&*lv.host, stack);
@@ -649,7 +666,10 @@ pub fn use_burner(
     // `isCreativeFuel`: the creative blaze cake sets the next heat for good, never used up.
     if held == "create:creative_blaze_cake" {
         let Some(heat) = with_world(|w| {
-            let next = w.dims[dim].burners.get_mut(&pos)?.creative_fuel();
+            let next = w.dims[dim]
+                .burners
+                .get_mut(&pos)?
+                .creative_fuel(info.heat.unwrap_or(Heat::Smouldering));
             w.mark_unsaved(dim, pos);
             Some(next)
         })

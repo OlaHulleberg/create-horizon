@@ -1,0 +1,55 @@
+{
+  "textures": {
+    "normal": "create:block/blaze_burner_flame_scroll",
+    "superheated": "create:block/blaze_burner_flame_superheated_scroll",
+    "particle": "create:block/blaze_burner_flame_scroll"
+  },
+  "elements": [
+    {
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        1,
+        1,
+        1
+      ],
+      "faces": {
+        "up": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": "#normal"
+        }
+      }
+    },
+    {
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        1,
+        1,
+        1
+      ],
+      "faces": {
+        "up": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": "#superheated"
+        }
+      }
+    }
+  ]
+}

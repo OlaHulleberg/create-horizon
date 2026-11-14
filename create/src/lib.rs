@@ -140,6 +140,26 @@ impl Hooks for Create {
         }
     }
 
+    fn standalone_models(
+        &self,
+        _context: &RegistrationContext,
+        event: &mut mod_api::StandaloneModelsEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.standalone_models(event.models);
+        }
+    }
+
+    fn model_baking_completed(
+        &self,
+        host: &mut dyn ClientHost,
+        _event: &mut mod_api::ModelBakingCompletedEvent,
+    ) {
+        for s in SUBSYSTEMS {
+            s.models_baked(host);
+        }
+    }
+
     fn entity_place(&self, host: &mut dyn ServerHost, event: &mut EntityPlaceEvent) -> Flow {
         until_cancel(|s| s.entity_place(host, event))
     }

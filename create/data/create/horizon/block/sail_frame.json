@@ -89,5 +89,8 @@
   },
   "default_state": {
     "facing": "up"
+  },
+  "components": {
+    "!minecraft:cooking_fuel": {}
   }
 }

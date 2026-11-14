@@ -101,5 +101,8 @@
         0.875
       ]
     ]
+  },
+  "components": {
+    "!minecraft:cooking_fuel": {}
   }
 }

@@ -132,6 +132,13 @@ pub trait Subsystem: Sync {
     /// The client left its world: drop what it kept.
     fn client_reset(&self) {}
 
+    /// `Hooks::standalone_models`: models no blockstate names that this subsystem draws
+    /// (`mymod:block/x`), baked with every resource load.
+    fn standalone_models(&self, _models: &mut Vec<String>) {}
+
+    /// `Hooks::model_baking_completed`: resolve the standalone models drawn from now on.
+    fn models_baked(&self, _host: &mut dyn ClientHost) {}
+
     /// `Hooks::entity_place`: a block is about to be placed.
     fn entity_place(&self, _host: &mut dyn ServerHost, _event: &mut EntityPlaceEvent) -> Flow {
         Flow::Continue

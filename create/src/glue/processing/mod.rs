@@ -34,6 +34,7 @@
 //! `IDLE`).
 
 mod basin;
+mod burner_draw;
 mod client;
 mod containers;
 mod crafter;
@@ -89,6 +90,7 @@ impl Subsystem for Processing {
             basin::ITEMS_KEY,
             basin::FLUIDS_KEY,
             basin::MIXER_KEY,
+            basin::GOGGLES_KEY,
             crafter::CRAFTER_KEY,
         ]
     }
@@ -170,6 +172,15 @@ impl Subsystem for Processing {
 
     fn client_reset(&self) {
         client::reset();
+    }
+
+    fn standalone_models(&self, models: &mut Vec<String>) {
+        models.push(burner_draw::FLAME_MODEL.to_owned());
+        models.push(burner_draw::FLAME_SCROLLS_MODEL.to_owned());
+    }
+
+    fn models_baked(&self, host: &mut dyn ClientHost) {
+        burner_draw::models_baked(host);
     }
 
     fn right_click_block(

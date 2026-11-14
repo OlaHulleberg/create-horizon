@@ -14,5 +14,8 @@
   },
   "default_state": {
     "entity": "false"
+  },
+  "components": {
+    "!minecraft:cooking_fuel": {}
   }
 }

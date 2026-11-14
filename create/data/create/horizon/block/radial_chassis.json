@@ -26,5 +26,8 @@
     "sticky_north": "false",
     "sticky_south": "false",
     "sticky_west": "false"
+  },
+  "components": {
+    "!minecraft:cooking_fuel": {}
   }
 }

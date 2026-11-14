@@ -43,5 +43,8 @@
   },
   "default_state": {
     "axis": "y"
+  },
+  "components": {
+    "!minecraft:cooking_fuel": {}
   }
 }

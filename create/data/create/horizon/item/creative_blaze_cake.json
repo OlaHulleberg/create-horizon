@@ -1,3 +1,9 @@
 {
-  "template": "minecraft:stick"
+  "template": "minecraft:stick",
+  "components": {
+    "minecraft:cooking_fuel": {
+      "burn_time": 2147483647,
+      "speed_multiplier": "minecraft:cooking/speed_default"
+    }
+  }
 }

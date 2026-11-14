@@ -1,4 +1,7 @@
 {
   "template": "minecraft:stick",
-  "rarity": "uncommon"
+  "rarity": "uncommon",
+  "components": {
+    "!minecraft:cooking_fuel": {}
+  }
 }
