@@ -840,7 +840,11 @@ pub(crate) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
 /// `AbstractFilterScreen.renderBg`, the slots and widgets, the cursor and the tooltips.
 fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32; 2]) {
     let l = layout(o.attribute);
-    let c = l.corner(draw.size());
+    let size = draw.size();
+    let c = l.corner(size);
+    // `Screen.renderBackground` in a world: the blur, then the dark translucent menu background.
+    host.apply_screen_blur();
+    draw.draw_menu_background([0.0, 0.0, size[0], size[1]], true);
     // The player's inventory panel and its label.
     let p = l.inventory_panel(c);
     draw.sprite(
