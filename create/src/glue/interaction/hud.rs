@@ -109,6 +109,7 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
         return;
     }
     let Some(pos) = aimed(host) else {
+        HOVER.set(None);
         return;
     };
     let Some((block, impact, capacity)) = super::super::client_table(host, |t| {
@@ -126,47 +127,106 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
     if impact != 0.0 {
         lines.push(vec![("    Kinetic Stats:".into(), 0xFFFFFF)]);
         lines.push(vec![("    Kinetic Stress Impact:".into(), 0xAAAAAA)]);
-        lines.push(vec![(
-            format!("     {}su at current speed", number(impact * speed.abs())),
-            0x55FFFF,
-        )]);
+        lines.push(vec![
+            (format!("     {}su", number(impact * speed.abs())), 0x55FFFF),
+            (" at current speed".into(), 0x555555),
+        ]);
     }
     if capacity != 0.0 {
         lines.push(vec![("    Generator Stats:".into(), 0xFFFFFF)]);
         lines.push(vec![("    Kinetic Stress Capacity:".into(), 0xAAAAAA)]);
-        lines.push(vec![(
-            format!("     {}su at current speed", number(capacity * speed.abs())),
-            0x55FFFF,
-        )]);
+        lines.push(vec![
+            (format!("     {}su", number(capacity * speed.abs())), 0x55FFFF),
+            (" at current speed".into(), 0x555555),
+        ]);
     }
     for s in super::super::SUBSYSTEMS {
         s.goggle_tooltip(host, pos, block, &mut lines);
     }
     if lines.is_empty() {
+        HOVER.set(None);
         return;
     }
+    // `hoverTicks`: how long this block has been looked at, for the fade in.
+    let now = host
+        .level(host.dimension())
+        .and_then(|l| l.game_time(host))
+        .unwrap_or(0);
+    let since = match HOVER.get() {
+        Some((at, start)) if at == pos => start,
+        _ => {
+            HOVER.set(Some((pos, now)));
+            now
+        }
+    };
+    let fade = ((now - since) as f32 / 24.0).clamp(0.0, 1.0);
     let line_width = |draw: &dyn DrawContext, l: &[(String, u32)]| -> f32 {
         l.iter().map(|(t, _)| draw.text_width(t)).sum()
     };
     let [width, height] = draw.size();
-    // RemovedGuiUtils.drawHoveringText at (width / 2 + 20, height / 2): vanilla's tooltip box.
     let w = lines
         .iter()
         .map(|l| line_width(draw, l))
-        .fold(0.0f32, f32::max);
-    let h = lines.len() as f32 * 10.0 - 2.0;
-    let x = (width / 2.0 + 20.0).min(width - w - 20.0) + 4.0;
-    let y = (height / 2.0).min(height - h - 20.0) + 4.0;
-    draw.fill([x - 3.0, y - 4.0, w + 6.0, h + 8.0], 0xF010_0010);
-    draw.fill([x - 3.0, y - 3.0, w + 6.0, 1.0], 0x5050_00FF);
-    draw.fill([x - 3.0, y + h + 2.0, w + 6.0, 1.0], 0x5028_007F);
+        .fold(0.0f32, f32::max)
+        .ceil();
+    // The title line, then a gap of two, then ten a line.
+    let h = 8.0 + if lines.len() > 1 { 2.0 + (lines.len() - 1) as f32 * 10.0 } else { 0.0 };
+    // At (width / 2 + overlayOffsetX 20, height / 2 + overlayOffsetY 0), kept on screen, sliding in
+    // from 8 px right while it fades.
+    let slide = (1.0 - fade).powi(3) * 8.0;
+    let pos_x = (width / 2.0 + 20.0).min(width - w - 20.0).floor() + slide;
+    let pos_y = (height / 2.0).min(height - h - 20.0).floor();
+    // RemovedGuiUtils.drawHoveringText at the point given: the box 12 right and 12 up of it, in
+    // vanilla's tooltip colours (the background at three quarters of its alpha).
+    let (x, y) = (pos_x + 12.0, pos_y - 12.0);
+    let alpha = |argb: u32| {
+        let a = ((argb >> 24) as f32 * fade).round() as u32;
+        (a << 24) | (argb & 0xFF_FFFF)
+    };
+    let background = alpha(0xB410_0010);
+    let (top, bottom) = (alpha(0x5050_00FF), alpha(0x5028_007F));
+    draw.fill([x - 3.0, y - 4.0, w + 6.0, 1.0], background);
+    draw.fill([x - 3.0, y + h + 3.0, w + 6.0, 1.0], background);
+    draw.fill([x - 3.0, y - 3.0, w + 6.0, h + 6.0], background);
+    draw.fill([x - 4.0, y - 3.0, 1.0, h + 6.0], background);
+    draw.fill([x + w + 3.0, y - 3.0, 1.0, h + 6.0], background);
+    // The sides' borders fade from the top colour to the bottom one.
+    let rows = (h + 4.0) as u32;
+    for row in 0..rows {
+        let c = mix_argb(top, bottom, row as f32 / rows.max(1) as f32);
+        let at = y - 2.0 + row as f32;
+        draw.fill([x - 3.0, at, 1.0, 1.0], c);
+        draw.fill([x + w + 2.0, at, 1.0, 1.0], c);
+    }
+    draw.fill([x - 3.0, y - 3.0, w + 6.0, 1.0], top);
+    draw.fill([x - 3.0, y + h + 2.0, w + 6.0, 1.0], bottom);
+    // The goggles over the box's corner (z 450 over the tooltip's 400).
+    if let Some(goggles) = items::key(Item::Goggles) {
+        draw.item(goggles, [pos_x + 10.0, pos_y - 16.0], 16.0);
+    }
+    let text_alpha = ((255.0 * fade) as u32).max(5) << 24;
     for (i, line) in lines.iter().enumerate() {
         let mut dx = 0.0;
+        let ty = y + i as f32 * 10.0 + if i > 0 { 2.0 } else { 0.0 };
         for (text, rgb) in line {
-            draw.text(text, [x + dx, y + i as f32 * 10.0], 0xFF00_0000 | rgb, true);
+            draw.text(text, [x + dx, ty], text_alpha | rgb, true);
             dx += draw.text_width(text);
         }
     }
+}
+
+std::thread_local! {
+    /// The block the goggles' overlay shows, and the game time it was first shown.
+    static HOVER: std::cell::Cell<Option<([i32; 3], i64)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Each channel of `a` moved `t` of the way to `b`'s (`fillGradient`'s vertical blend).
+fn mix_argb(a: u32, b: u32, t: f32) -> u32 {
+    let ch = |s: u32| {
+        let (x, y) = (((a >> s) & 0xFF) as f32, ((b >> s) & 0xFF) as f32);
+        ((x + (y - x) * t).round() as u32 & 0xFF) << s
+    };
+    ch(24) | ch(16) | ch(8) | ch(0)
 }
 
 #[cfg(test)]
