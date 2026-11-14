@@ -12,6 +12,7 @@
 pub mod client;
 mod clipboard;
 mod link_item;
+mod link_screen;
 
 use super::items::filters;
 use super::net;
@@ -97,21 +98,28 @@ impl Subsystem for Display {
         channel: &str,
         data: &[u8],
     ) -> bool {
+        if channel == link_screen::CHANNEL {
+            configure_from_client(host, player, data);
+            return true;
+        }
         clipboard::client_message(host, player, channel, data)
     }
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         client::server_message(host, channel, data)
             || clipboard::server_message(host, channel, data)
+            || link_screen::server_message(host, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick(host);
         clipboard::tick(host);
+        link_screen::tick(host);
     }
 
     fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
         clipboard::screen_render_post(host, event);
+        link_screen::screen_render_post(host, event);
     }
 
     fn screen_mouse_pressed(
@@ -119,6 +127,9 @@ impl Subsystem for Display {
         host: &dyn ClientHost,
         event: &mut ScreenMouseButtonPressedPreEvent<'_>,
     ) -> Flow {
+        if link_screen::screen_mouse_pressed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
         clipboard::screen_mouse_pressed(host, event)
     }
 
@@ -135,6 +146,9 @@ impl Subsystem for Display {
         host: &dyn ClientHost,
         event: &mut ScreenMouseScrolledPreEvent<'_>,
     ) -> Flow {
+        if link_screen::screen_mouse_scrolled(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
         clipboard::screen_mouse_scrolled(host, event)
     }
 
@@ -143,6 +157,9 @@ impl Subsystem for Display {
         host: &dyn ClientHost,
         event: &mut ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
+        if link_screen::screen_key_pressed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
         clipboard::screen_key_pressed(host, event)
     }
 
@@ -151,16 +168,21 @@ impl Subsystem for Display {
         host: &dyn ClientHost,
         event: &mut ScreenCharTypedPreEvent<'_>,
     ) -> Flow {
+        if link_screen::screen_char_typed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
         clipboard::screen_char_typed(host, event)
     }
 
     fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
         clipboard::screen_closing(host, event);
+        link_screen::screen_closing(host, event);
     }
 
     fn client_reset(&self) {
         client::reset();
         clipboard::reset();
+        link_screen::reset();
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
@@ -1147,6 +1169,37 @@ struct DisplayBlock;
 
 #[mod_api::horizon_part]
 impl BlockPart for DisplayBlock {
+    /// `DisplayLinkBlock.useWithoutItem` takes any hand (the item's own use passes to it).
+    fn use_item_on(
+        &self,
+        _host: &mut dyn ServerHost,
+        event: &mut UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let (block, _) = states::id(event.state).and_then(info)?;
+        (block == Block::DisplayLink).then_some(InteractionResult::TryWithEmptyHand)
+    }
+
+    /// `DisplayLinkBlock.useWithoutItem`: not sneaking, its screen opens (`displayScreen`), or
+    /// the player is told it has no target.
+    fn use_without_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseWithoutItemEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let (block, _) = states::id(event.state).and_then(info)?;
+        if block != Block::DisplayLink {
+            return None;
+        }
+        let player = host.player(event.click.player)?;
+        if super::items::sneaking(&*host, player) {
+            return None;
+        }
+        let dimension = event.click.dimension.key().id().to_owned();
+        let mut lv = ServerLevel::new(host, &dimension)?;
+        open_screen(&mut lv, player, event.click.pos);
+        Some(InteractionResult::SuccessServer)
+    }
+
     fn state_for_placement(
         &self,
         level: &dyn LevelHost,
@@ -1179,6 +1232,125 @@ impl BlockPart for DisplayBlock {
         )?;
         Some(Some(state))
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The link's screen
+
+/// What the screen opens with: the link's sources, settings, target and line.
+fn open_screen(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let Some((facing, _)) = link_at(lv, pos) else {
+        return;
+    };
+    let link = with_world(|w| w.dims[dim].displays.links.get(&pos).cloned())
+        .flatten()
+        .unwrap_or_default();
+    if link.target_offset == [0, 0, 0] {
+        super::items::action_bar(&mut *lv.host, player, "create.display_link.invalid");
+        return;
+    }
+    let target_pos = link.target(pos);
+    let target = target_at(lv, target_pos);
+    let sources = sources_at(lv, display::source_pos(pos, facing)).to_vec();
+    let source = link
+        .source
+        .and_then(|s| sources.iter().position(|a| *a == s))
+        .unwrap_or(0);
+    let rows = target.map_or(0, |t| stats_of(lv, target_pos, t).rows);
+    let labels = sources
+        .iter()
+        .map(|s| target.is_some_and(|t| s.allows_labeling(t)))
+        .collect();
+    let config = if link.source.is_some_and(|s| sources.get(source) == Some(&s)) {
+        link.config.clone()
+    } else {
+        Config::default()
+    };
+    let settings = link_screen::Settings {
+        pos,
+        sources,
+        source,
+        config,
+        target: match target {
+            None => 0,
+            Some(Target::Nixie) => 1,
+            Some(_) => 2,
+        },
+        rows,
+        line: link.target_line.min(rows.max(1) - 1).max(0),
+        labels,
+        source_pos: display::source_pos(pos, facing),
+        target_pos,
+    };
+    net::send_to_player(
+        &mut *lv.host,
+        player,
+        link_screen::CHANNEL,
+        &settings.encode(),
+    );
+}
+
+/// `DisplayLinkConfigurationPacket.applySettings`: a link given another source starts from the
+/// settings sent; the same source merges them; then the line, and the link refreshes
+/// (`updateGatheredData`). Only for a player near the link (`BlockEntityConfigurationPacket`).
+fn configure_from_client(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
+    let Some(s) = link_screen::Settings::decode(data) else {
+        return;
+    };
+    let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+        return;
+    };
+    let Some(at) = player.entity().position(&*host) else {
+        return;
+    };
+    let near = (0..3)
+        .map(|i| (at[i] - (f64::from(s.pos[i]) + 0.5)).powi(2))
+        .sum::<f64>()
+        < 20.0 * 20.0;
+    if !near {
+        return;
+    }
+    let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+        return;
+    };
+    let pos = s.pos;
+    let Some((facing, _)) = link_at(&lv, pos) else {
+        return;
+    };
+    let available = sources_at(&lv, display::source_pos(pos, facing));
+    let source = s
+        .sources
+        .get(s.source)
+        .copied()
+        .filter(|x| available.contains(x));
+    let dim = lv.dim;
+    let now = lv.game_time();
+    with_world(|w| {
+        let d = &mut w.dims[dim].displays;
+        let Some(l) = d.links.get_mut(&pos) else {
+            return;
+        };
+        l.target_line = s.line.max(0);
+        match source {
+            Some(src) if l.source != Some(src) => {
+                l.source = Some(src);
+                l.config = s.config.clone();
+            }
+            Some(_) => {
+                l.config.label = s.config.label.clone();
+                l.config.directional = s.config.directional;
+                l.config.mode = s.config.mode;
+                l.config.cycle = s.config.cycle;
+            }
+            None => {}
+        }
+        l.last = None;
+        d.schedule(pos, now);
+    });
+    mark(&lv, pos);
+    update(&mut lv, pos);
+    send_changed(&mut lv);
 }
 
 // ---------------------------------------------------------------------------------------------
