@@ -15,6 +15,7 @@ use create_engine::depot;
 use create_engine::ejector;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::math::{Mat4, Vec3};
+use create_engine::place::mth_sin;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockEntityRenderBoundingBoxEvent,
     BlockEntitySubmitEvent, BlockPart, ClientHost, Compound, Host, ItemDisplayContext, Tag,
@@ -40,6 +41,16 @@ struct ClientArm {
     shown: arm::Shown,
     progress: f32,
     prev: f32,
+}
+
+/// Whether the ejector at `pos` this client shows has its plate down and charged (an unknown
+/// one counts as charged).
+pub(crate) fn ejector_charged(pos: [i32; 3]) -> bool {
+    CLIENT.with_borrow(|c| {
+        c.ejectors
+            .get(&pos)
+            .is_none_or(|e| e.shown.state == ejector::State::Charged)
+    })
 }
 
 /// An ejector a client draws: the server's last word and ticks since.
@@ -103,6 +114,283 @@ pub fn reset_arms() {
         c.arms.clear();
         c.ejectors.clear();
     });
+    SELECTED.with_borrow_mut(Vec::clear);
+}
+
+thread_local! {
+    /// The arm points this client's player chose with the arm item, and whether each is an input.
+    static SELECTED: RefCell<Vec<([i32; 3], bool)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The server's word on the arm points this player chose.
+pub fn selection_message(mut data: &[u8]) {
+    let list = arm::decode_points(&mut data).unwrap_or_default();
+    SELECTED.with_borrow_mut(|s| *s = list);
+}
+
+thread_local! {
+    /// The block this player chose as the next ejector's target (`EjectorTargetHandler`'s
+    /// `currentSelection`, kept on the server), and the hovered block the arc was last made for.
+    static EJECTOR_SEL: std::cell::Cell<Option<[i32; 3]>> = const { std::cell::Cell::new(None) };
+    static ARC: RefCell<Option<([i32; 3], ejector::Launcher)>> = const { RefCell::new(None) };
+}
+
+static DUST: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
+
+/// The particle the ejector's arc is drawn with.
+pub fn register_particles(r: &mut dyn mod_api::Registrar) {
+    let _ = DUST.set(r.particle_key("minecraft:dust"));
+}
+
+/// The server's word on this player's ejector target (none: an empty message).
+pub fn ejector_target_message(data: &[u8]) {
+    let pos = (data.len() == 12).then(|| {
+        let int = |i: usize| i32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+        [int(0), int(4), int(8)]
+    });
+    EJECTOR_SEL.set(pos);
+    ARC.with_borrow_mut(|a| *a = None);
+}
+
+/// What the main hand holds, by id.
+fn main_hand(host: &dyn ClientHost) -> Option<String> {
+    let player = host.local_player()?;
+    super::super::items::held(host, player, mod_api::Hand::Main).map(|s| s.item().id(host))
+}
+
+/// The target of the ejector a wrench looks at (`checkForWrench`): `h` ahead along its facing
+/// and `v` up, none while it targets itself.
+fn wrench_target(host: &dyn ClientHost) -> Option<[i32; 3]> {
+    let Some(mod_api::CrosshairTarget::Block { pos, .. }) = host.crosshair_target() else {
+        return None;
+    };
+    let at = [pos.x, pos.y, pos.z];
+    let state = host.level(host.dimension())?.block_state(host, at)?;
+    let (block, info) = table_info(host, state)?;
+    if block != Block::WeightedEjector {
+        return None;
+    }
+    let (h, v) = CLIENT.with_borrow(|c| c.ejectors.get(&at).map(|e| (e.shown.h, e.shown.v)))?;
+    let o = info.facing?.offset();
+    let t = [at[0] + o[0] * h, at[1] + v, at[2] + o[2] * h];
+    (t != at).then_some(t)
+}
+
+/// `EjectorTargetHandler.drawArc`, each client tick: with the ejector in hand (or a wrench on
+/// an ejector), dust along the arc from where an ejector would stand to the target, green when
+/// straight in line, red when not.
+pub fn tick_ejector_arc(host: &mut dyn ClientHost) {
+    let held = main_hand(&*host);
+    let wrench = held.as_deref() == Some("create:wrench");
+    let selection = match held.as_deref() {
+        Some("create:weighted_ejector") => EJECTOR_SEL.get(),
+        _ if wrench => wrench_target(&*host),
+        _ => None,
+    };
+    let Some(sel) = selection else {
+        return;
+    };
+    let Some(mod_api::CrosshairTarget::Block { pos, hit, .. }) = host.crosshair_target() else {
+        return;
+    };
+    let mut pos = [pos.x, pos.y, pos.z];
+    if !wrench {
+        pos = [0, 1, 2].map(|k| pos[k] + hit.face[k]);
+    }
+    let Some((valid, d, launcher)) = arc_for(sel, pos) else {
+        return;
+    };
+    let Some(&dust) = DUST.get() else {
+        return;
+    };
+    let total = launcher.total_ticks() + 3.0;
+    let segments = (total as i32) / 3 + 1;
+    let offset = total / f64::from(segments);
+    let color: u32 = if valid.0 { 0x9E_DE73 } else { 0xFF_7171 };
+    let rgb = [16, 8, 0].map(|s| ((color >> s) & 255) as f32 / 255.0);
+    let options = mod_api::ParticleOptions::dust(dust, rgb, 1.0);
+    let now = host
+        .level(host.dimension())
+        .and_then(|l| l.game_time(&*host))
+        .unwrap_or(0) as f64;
+    for i in 0..segments {
+        let ticks = ((now / 3.0) % offset) + f64::from(i) * offset;
+        let v = launcher.global_pos(ticks, d, pos);
+        let at = [
+            v[0] + f64::from(valid.1[0]),
+            v[1],
+            v[2] + f64::from(valid.1[2]),
+        ];
+        host.add_particle(&options, at, [0.0; 3]);
+    }
+}
+
+/// The arc from `pos` to `sel` (`drawArc`): whether `pos` is straight in line, the offset to
+/// the nearest place that is, the direction thrown, and its launcher.
+fn arc_for(sel: [i32; 3], pos: [i32; 3]) -> Option<((bool, [i32; 3]), Dir, ejector::Launcher)> {
+    let diff = [0, 1, 2].map(|k| sel[k] - pos[k]);
+    let valid_x = if diff[2].abs() > diff[0].abs() {
+        0
+    } else {
+        diff[0]
+    };
+    let valid_z = if diff[2].abs() < diff[0].abs() {
+        0
+    } else {
+        diff[2]
+    };
+    let valid_pos = [sel[0] - valid_x, sel[1] - diff[1], sel[2] - valid_z];
+    // `getValidTargetDirection(validPos)`.
+    let (dx, dz) = (sel[0] - valid_pos[0], sel[2] - valid_pos[2]);
+    if (dx, dz) == (0, 0) || dx.abs() > ejector::MAX_DISTANCE || dz.abs() > ejector::MAX_DISTANCE {
+        return None;
+    }
+    let d = match (dx, dz) {
+        (0, z) if z < 0 => Dir::North,
+        (0, _) => Dir::South,
+        (x, 0) if x < 0 => Dir::West,
+        (_, 0) => Dir::East,
+        _ => return None,
+    };
+    let launcher = ejector::Launcher::new((valid_x + valid_z).abs(), diff[1]);
+    let valid = diff[0] == valid_x && diff[2] == valid_z;
+    let off = [diff[0] - valid_x, 0, diff[2] - valid_z];
+    Some(((valid, off), d, launcher))
+}
+
+/// `EjectorTargetHandler.drawOutline` (the target, in its shape's bounds) and the arc's start
+/// (`chaseAABB("valid", ..)`: a flat square where the ejector would stand).
+fn draw_ejector_target(host: &dyn ClientHost, lines: &mut Vec<mod_api::WorldLine>) {
+    let held = main_hand(host);
+    let wrench = held.as_deref() == Some("create:wrench");
+    let sel = match held.as_deref() {
+        Some("create:weighted_ejector") => EJECTOR_SEL.get(),
+        _ if wrench => wrench_target(host),
+        _ => None,
+    };
+    let Some(sel) = sel else {
+        return;
+    };
+    let boxes = host
+        .level(host.dimension())
+        .and_then(|l| l.block_state(host, sel))
+        .and_then(|s| host.state_outline(s))
+        .unwrap_or_default();
+    let (mut lo, mut hi) = ([1.0f64; 3], [0.0f64; 3]);
+    for b in &boxes {
+        for k in 0..3 {
+            lo[k] = lo[k].min(b[k]);
+            hi[k] = hi[k].max(b[k + 3]);
+        }
+    }
+    if boxes.is_empty() {
+        (lo, hi) = ([0.0; 3], [1.0; 3]);
+    }
+    let min = [0, 1, 2].map(|k| f64::from(sel[k]) + lo[k] - 0.002);
+    let max = [0, 1, 2].map(|k| f64::from(sel[k]) + hi[k] + 0.002);
+    box_lines(lines, min, max, 0xFFFF_CB74);
+    let Some(mod_api::CrosshairTarget::Block { pos, hit, .. }) = host.crosshair_target() else {
+        return;
+    };
+    let mut pos = [pos.x, pos.y, pos.z];
+    if !wrench {
+        pos = [0, 1, 2].map(|k| pos[k] + hit.face[k]);
+    }
+    if let Some(((valid, off), _, _)) = arc_for(sel, pos) {
+        let at = [pos[0] + off[0], pos[1], pos[2] + off[2]].map(f64::from);
+        let color = if valid { 0xFF9E_DE73 } else { 0xFFFF_7171 };
+        box_lines(lines, at, [at[0] + 1.0, at[1], at[2] + 1.0], color);
+    }
+}
+
+/// `Mode.TAKE`'s and `Mode.DEPOSIT`'s colours.
+const TAKE_COLOR: u32 = 0xFF7F_CDE0;
+const DEPOSIT_COLOR: u32 = 0xFFDD_C166;
+
+/// `ArmInteractionPointHandler.drawOutlines`: with the arm item in the main hand, the points
+/// chosen for it; with a wrench, the points of the arm looked at (`checkForWrench`). Each is
+/// outlined by its block's shape, in its mode's colour.
+pub fn draw_arm_points(host: &dyn ClientHost, event: &mut mod_api::RenderLevelStageEvent<'_>) {
+    if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
+        return;
+    }
+    let Some(player) = host.local_player() else {
+        return;
+    };
+    let held =
+        super::super::items::held(host, player, mod_api::Hand::Main).map(|s| s.item().id(host));
+    let points = match held.as_deref() {
+        Some("create:mechanical_arm") => SELECTED.with_borrow(Clone::clone),
+        Some("create:wrench") => {
+            let Some(mod_api::CrosshairTarget::Block { pos, .. }) = host.crosshair_target() else {
+                return;
+            };
+            let at = [pos.x, pos.y, pos.z];
+            CLIENT
+                .with_borrow(|c| c.arms.get(&at).map(|a| a.shown.points.clone()))
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    let level = host.level(host.dimension());
+    let mut lines = Vec::new();
+    for (p, input) in points {
+        let boxes = level
+            .and_then(|l| l.block_state(host, p))
+            .and_then(|s| host.state_outline(s))
+            .unwrap_or_default();
+        let (mut lo, mut hi) = ([1.0f64; 3], [0.0f64; 3]);
+        for b in &boxes {
+            for k in 0..3 {
+                lo[k] = lo[k].min(b[k]);
+                hi[k] = hi[k].max(b[k + 3]);
+            }
+        }
+        if boxes.is_empty() {
+            (lo, hi) = ([0.0; 3], [1.0; 3]);
+        }
+        let min = [0, 1, 2].map(|k| f64::from(p[k]) + lo[k] - 0.002);
+        let max = [0, 1, 2].map(|k| f64::from(p[k]) + hi[k] + 0.002);
+        let color = if input { TAKE_COLOR } else { DEPOSIT_COLOR };
+        box_lines(&mut lines, min, max, color);
+    }
+    draw_ejector_target(host, &mut lines);
+    if !lines.is_empty() {
+        let _ = event.draw.lines(&lines);
+    }
+}
+
+/// The twelve edges of a box, as Create's outliner draws them (1/16 of a block wide).
+pub(crate) fn box_lines(
+    lines: &mut Vec<mod_api::WorldLine>,
+    min: [f64; 3],
+    max: [f64; 3],
+    color: u32,
+) {
+    let c = |x: usize, y: usize, z: usize| {
+        [
+            if x == 0 { min[0] } else { max[0] },
+            if y == 0 { min[1] } else { max[1] },
+            if z == 0 { min[2] } else { max[2] },
+        ]
+    };
+    for i in 0..2 {
+        for j in 0..2 {
+            for (a, b) in [
+                (c(0, i, j), c(1, i, j)),
+                (c(i, 0, j), c(i, 1, j)),
+                (c(i, j, 0), c(i, j, 1)),
+            ] {
+                lines.push(mod_api::WorldLine::new(
+                    a,
+                    b,
+                    color,
+                    2.0,
+                    mod_api::WorldDepth::Tested,
+                ));
+            }
+        }
+    }
 }
 
 fn speed(pos: [i32; 3]) -> f32 {
@@ -1072,6 +1360,7 @@ fn draw_arm(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, pos: [i32; 3
         c.arms.get(&pos).map(|a| {
             let shown = arm::Shown {
                 held: a.shown.held.clone(),
+                points: Vec::new(),
                 ..a.shown
             };
             (shown, a.prev + (a.progress - a.prev) * t)
@@ -1079,7 +1368,23 @@ fn draw_arm(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, pos: [i32; 3
     }) else {
         return;
     };
-    let now = arm::at_progress(s.from, s.from_base, s.to, progress);
+    let mut now = arm::at_progress(s.from, s.from_base, s.to, progress);
+    // `rave`: a dancing arm that turns sways to the music (Create also tints it with a rainbow,
+    // which a partial block drawn here cannot take).
+    let speed = CLIENT.with_borrow(|c| c.speeds.get(&pos).copied().unwrap_or(0.0));
+    if s.phase == arm::Phase::Dancing && speed != 0.0 {
+        let seed = (pos[0].wrapping_mul(31) ^ pos[1].wrapping_mul(17) ^ pos[2]).rem_euclid(64);
+        let r = draw.game_time() as f32 + t + seed as f32;
+        let lerp = |p: f32, a: f32, b: f32| a + (b - a) * p;
+        let lower = lerp((mth_sin(r / 4.0) + 1.0) / 2.0, -45.0, 15.0);
+        let upper = lerp((mth_sin(r / 8.0) + 1.0) / 4.0, -45.0, 95.0);
+        now = arm::Angles {
+            base: (r * 10.0) % 360.0,
+            lower: lower + 135.0,
+            upper: upper + 90.0,
+            head: -lower,
+        };
+    }
     let held = s.held.as_ref().map(|i| block_item(host, i));
     let p = arm::poses(&now, s.ceiling, held);
     let sign = if s.ceiling { -1.0 } else { 1.0 };

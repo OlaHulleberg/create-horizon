@@ -127,7 +127,14 @@ fn hits_value_box(host: &dyn ClientHost, pos: [i32; 3], face: [i32; 3], point: [
     };
     let local = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]));
     super::super::client_table(host, |t| {
-        value_box_hit(t, |p| block_at(host, p), pos, side, local)
+        value_box_hit(
+            t,
+            |p| block_at(host, p),
+            crate::glue::logistics::client::ejector_charged,
+            pos,
+            side,
+            local,
+        )
     }) == Some(true)
 }
 
@@ -176,7 +183,7 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
 
 /// A board's pick for the block's setting `v` (`getValueSettings`): a motor's speed, an option.
 fn board_pick(b: Board, v: i32) -> Settings {
-    if b.icons {
+    if b.icons || b == board::EJECTOR {
         Settings { row: 0, value: v }
     } else if b == board::DIODE {
         board::diode_settings(v)
@@ -204,6 +211,8 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
         B::PulseRepeater | B::PulseExtender | B::PulseTimer => board::DIODE,
         b if create_engine::dye::is_valve_handle(b) => board::VALVE_HANDLE,
         B::WindmillBearing => board::WINDMILL,
+        B::MechanicalArm => board::ARM_MODE,
+        B::WeightedEjector => board::EJECTOR,
         _ => return None,
     };
     let setting = match (block, seen.filter(|_| known)) {
@@ -235,6 +244,8 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
                     super::super::sources::handles::valve_angle(&d)
                 })
         }),
+        // Round robin and any stack size, until the server says.
+        (B::MechanicalArm | B::WeightedEjector, None) => 0,
         (_, None) => seen.unwrap_or_else(|| {
             create_engine::world::diode_kind(block).map_or(0, |k| k.default_delay())
         }),
@@ -377,8 +388,8 @@ fn opaque(rgb: u32) -> u32 {
 /// (`AllGuiTextures.VALUE_SETTINGS_*`). Whether a board is open.
 pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
     use create_engine::tunnel::OPTIONS;
-    let Some((b, pick, ticks)) =
-        BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.pick, o.ticks)))
+    let Some((b, pick, ticks, pos)) =
+        BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.pick, o.ticks, o.pos)))
     else {
         return false;
     };
@@ -395,12 +406,16 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
     let tip = board::release_to_confirm(&key);
     let names: &[&str] = if b == board::WINDMILL {
         &board::WINDMILL_DIRECTIONS
+    } else if block_of(host, pos) == Some(B::MechanicalArm) {
+        &board::ARM_MODES
     } else {
         &OPTIONS
     };
     let text = |s: Settings| {
         if b.icons {
             names[s.value.clamp(0, names.len() as i32 - 1) as usize].to_owned()
+        } else if b == board::EJECTOR {
+            board::ejector_text(s)
         } else if b == board::DIODE {
             board::diode_text(s)
         } else if b == board::VALVE_HANDLE {

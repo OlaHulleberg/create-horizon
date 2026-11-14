@@ -2,8 +2,18 @@
 //! hold (`ArmBlockEntity.tick`), the ejector's launches and landings (`EjectorBlockEntity.tick`),
 //! their redstone, their saved data, and what clients draw (`create:arm`, `create:ejector`).
 //!
-//! An arm's points are chosen with the arm item in Create (`ArmInteractionPointHandler`); the
-//! legacy glue stood in for that with a debug command, which the commands port keeps.
+//! An arm's points are chosen with the arm item (`ArmInteractionPointHandler`): the selection is
+//! kept on the server and sent to the player's client, which outlines it while the arm is in
+//! hand (and an arm's points while a wrench looks at it). Every point type of Create 6 works:
+//! depots, ejectors and stations, belts, chutes, funnels, basins, millstones, crafters,
+//! deployers, blaze burners, crushing wheels, packagers, saws facing up, campfires,
+//! composters, jukeboxes (the arm dances while one plays) and respawn anchors. Stacks keep their
+//! components through an arm or ejector (`items::key_of`), which belts still cannot carry.
+//! The weighted ejector's target outline and arc are drawn as `EjectorTargetHandler` draws them.
+//!
+//! Left out: the rainbow tint of a dancing arm (a partial block is drawn untinted), goggles on
+//! an arm (`ARM_CLAW_BASE_GOGGLES` is not among the partial blocks), and dropping a chosen point
+//! or ejector target with a left click (see HORIZON_API.md).
 
 use super::super::net;
 use super::super::server::ServerLevel;
@@ -88,11 +98,32 @@ impl Subsystem for Arms {
         channel: &str,
         data: &[u8],
     ) -> bool {
+        if channel == POINTS {
+            super::client::selection_message(data);
+            return true;
+        }
+        if channel == EJECTOR_TARGET_CHANNEL {
+            super::client::ejector_target_message(data);
+            return true;
+        }
         super::client::arms_message(host, channel, data)
+    }
+
+    fn render_level_stage(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        super::client::draw_arm_points(host, event);
     }
 
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
         super::client::tick_client_arms(host);
+        super::client::tick_ejector_arc(host);
+    }
+
+    fn register(&self, r: &mut dyn mod_api::Registrar, _cx: &mod_api::RegistrationContext) {
+        super::client::register_particles(r);
     }
 
     fn client_reset(&self) {
@@ -101,32 +132,121 @@ impl Subsystem for Arms {
 }
 
 /// The arm interaction point type of `block` (`ArmInteractionPointType.getPrimaryType`, in
-/// Create's registry order): the types whose blocks this port has.
+/// Create's registry order). A saw is one only facing up and turning (`SawType`).
 pub fn point_kind(block: Block) -> Option<Kind> {
     Some(match block {
         Block::Basin => Kind::Basin,
         Block::Belt => Kind::Belt,
+        // `AllBlocks.BLAZE_BURNER`: not the lit burner.
+        Block::BlazeBurner => Kind::BlazeBurner,
         Block::Chute | Block::SmartChute => Kind::Chute,
         Block::MechanicalCrafter => Kind::Crafter,
+        Block::CrushingWheelController => Kind::CrushingWheels,
         Block::Deployer => Kind::Deployer,
-        Block::Depot | Block::WeightedEjector => Kind::Depot,
+        Block::Depot | Block::WeightedEjector | Block::TrackStation => Kind::Depot,
         Block::AndesiteFunnel
         | Block::BrassFunnel
         | Block::AndesiteBeltFunnel
         | Block::BrassBeltFunnel => Kind::Funnel,
         Block::Millstone => Kind::Millstone,
+        Block::Packager | Block::Repackager => Kind::Packager,
+        Block::MechanicalSaw => Kind::Saw,
         _ => return None,
     })
 }
 
-/// The block at `pos` as an arm interaction point.
+/// The vanilla blocks Create's arm works with, by id (`CampfireType`: any `CampfireBlock`,
+/// `ComposterType`, `JukeboxType`, `RespawnAnchorType`).
+pub fn vanilla_point_kind(name: &str) -> Option<Kind> {
+    Some(match name {
+        "minecraft:campfire" | "minecraft:soul_campfire" => Kind::Campfire,
+        "minecraft:composter" => Kind::Composter,
+        "minecraft:jukebox" => Kind::Jukebox,
+        "minecraft:respawn_anchor" => Kind::RespawnAnchor,
+        _ => return None,
+    })
+}
+
+/// The block at `pos` as an arm interaction point (`canCreatePoint`).
 pub fn arm_point(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Point> {
-    let (block, info) = info_at(lv, pos)?;
+    let Some((block, info)) = info_at(lv, pos) else {
+        let kind = vanilla_point_kind(&lv.block_name(pos)?)?;
+        return Some(Point {
+            pos,
+            kind,
+            facing: None,
+        });
+    };
+    let kind = point_kind(block)?;
+    if kind == Kind::Saw {
+        let dim = lv.dim;
+        let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
+        if info.facing != Some(Dir::Up) || speed == 0.0 {
+            return None;
+        }
+    }
     Some(Point {
         pos,
-        kind: point_kind(block)?,
+        kind,
         facing: info.facing,
     })
+}
+
+/// A property of the block at `pos` (`has_record`, `charge`).
+fn property(lv: &ServerLevel<'_>, pos: [i32; 3], key: &str) -> Option<String> {
+    let text = lv.host.block_state_string(lv.block_state(pos)?)?;
+    let (_, props) = super::super::states::split(&text);
+    props
+        .into_iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v.to_owned())
+}
+
+/// The first stack the container at `pos` would give through `side`, looked at only.
+fn peek(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    side: mod_api::Direction,
+) -> Option<mod_api::ItemStack> {
+    let from = items::items_at(lv, pos, Some(side))?;
+    let host = &mut *lv.host;
+    (0..from.size(host)).find_map(|i| {
+        let r = from.resource(host, i)?;
+        let n = from.amount(host, i);
+        (n > 0).then(|| r.to_stack(n)).flatten()
+    })
+}
+
+/// `DeployerFakePlayer`'s stand-in for an arm's use of a vanilla block: the arm's own fake
+/// player.
+const ARM_FAKE: (u128, &str) = (0x9e2f_aded_cafe_4ec2_c314_dad1_29ae_9720, "Mechanical Arm");
+
+/// The arm's fake player uses `stack` on the top of the block at `pos` (a campfire's
+/// `placeFood`, a jukebox's record): what is left of the stack.
+fn use_on_top(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    stack: mod_api::ItemStack,
+) -> Option<mod_api::ItemStack> {
+    let Some(fake) = lv.host.fake_player(lv.level, ARM_FAKE.0, ARM_FAKE.1) else {
+        return Some(stack);
+    };
+    let eye = [
+        f64::from(pos[0]) + 0.5,
+        f64::from(pos[1]) + 1.7,
+        f64::from(pos[2]) + 0.5,
+    ];
+    let setup = mod_api::PlayerActionSetup::new(Some(stack.clone()), eye, 0.0, 90.0, false);
+    let hit = mod_api::BlockHit::new([eye[0], f64::from(pos[1]) + 1.0, eye[2]], [0, 1, 0], false);
+    let action = mod_api::PlayerAction::UseOn {
+        hand: mod_api::Hand::Main,
+        pos,
+        hit,
+    };
+    match fake.perform_action_scoped(&mut *lv.host, action, setup) {
+        Ok(result) => result.held,
+        Err(_) => Some(stack),
+    }
 }
 
 /// Whether the depot at `pos` takes items: always, unless it is an ejector that is not charged
@@ -144,7 +264,7 @@ pub fn ejector_accepts(dim: usize, pos: [i32; 3]) -> bool {
 /// A block entity's slot, as (item, count).
 fn slot_at(lv: &ServerLevel<'_>, pos: [i32; 3], slot: usize) -> Option<Stack> {
     let s = items::slot(lv, pos, slot as u32)?;
-    Some((items::id_of(&*lv.host, &s), s.count().min(255) as u8))
+    Some((items::key_of(&*lv.host, &s), s.count().min(255) as u8))
 }
 
 /// Takes up to `amount` from a block entity's slot (or only looks, `simulate`).
@@ -156,7 +276,7 @@ fn take_slot(
     simulate: bool,
 ) -> Option<Stack> {
     let held = items::slot(lv, pos, slot as u32)?;
-    let item = items::id_of(&*lv.host, &held);
+    let item = items::key_of(&*lv.host, &held);
     let n = (held.count().min(255) as u8).min(amount);
     if n == 0 {
         return None;
@@ -245,11 +365,19 @@ impl arm::World for ArmWorld<'_, '_> {
         }
     }
 
+    /// `checkForMusic`: a jukebox point with a record in it.
+    fn playing(&mut self, p: &Point) -> bool {
+        p.kind == Kind::Jukebox && property(self.lv, p.pos, "has_record").as_deref() == Some("true")
+    }
+
     fn slots(&mut self, p: &Point) -> usize {
         match p.kind {
             // DepotItemHandler: the held stack and eight outputs.
             Kind::Depot => create_engine::depot::SLOTS,
             Kind::Belt | Kind::Chute | Kind::Deployer | Kind::Crafter => 1,
+            // PackagerItemHandler: its box; the jukebox's record; the composter's bone meal
+            // (Create's two slots, of which only the bottom's gives).
+            Kind::Packager | Kind::Jukebox | Kind::Composter => 1,
             // The millstone's input and its nine outputs; the basin's nine and nine.
             Kind::Millstone => 10,
             Kind::Basin => create_engine::basin::SLOTS,
@@ -295,7 +423,7 @@ impl arm::World for ArmWorld<'_, '_> {
             Kind::Chute => {
                 let s = chute_stack(lv, pos)?;
                 let n = (s.count().min(255) as u8).min(amount);
-                let out = (items::id_of(&*lv.host, &s), n);
+                let out = (items::key_of(&*lv.host, &s), n);
                 if !simulate {
                     set_chute_stack(lv, pos, s.shrink(u32::from(n)));
                     with_world(|w| w.dims[dim].chute_pulls.wake(pos));
@@ -313,6 +441,34 @@ impl arm::World for ArmWorld<'_, '_> {
             }
             // CrafterPoint lets the arm take a crafter's item.
             Kind::Crafter => take_slot(lv, pos, 0, amount, simulate),
+            Kind::Packager => {
+                let b = crate::glue::packages::arm_extract(lv, pos, simulate)?;
+                Some((items::key_of(&*lv.host, &b), b.count().min(255) as u8))
+            }
+            // JukeboxPoint.extract: the record, while it has one (`removeItem` stops it).
+            Kind::Jukebox => {
+                if property(lv, pos, "has_record").as_deref() != Some("true") {
+                    return None;
+                }
+                let up = mod_api::Direction::Up;
+                let record = peek(lv, pos, up)?;
+                let out = (items::key_of(&*lv.host, &record), 1);
+                if !simulate {
+                    items::take_from(lv, pos, up, |_| true, 1)?;
+                }
+                Some(out)
+            }
+            // ComposterPoint.extract: what its bottom gives (the bone meal of a full one).
+            Kind::Composter => {
+                let side = mod_api::Direction::Down;
+                let s = peek(lv, pos, side)?;
+                let n = (s.count().min(255) as u8).min(amount);
+                let out = (items::key_of(&*lv.host, &s), n);
+                if !simulate {
+                    items::take_from(lv, pos, side, |_| true, u32::from(n))?;
+                }
+                Some(out)
+            }
             // DeployerItemHandler: its held stack.
             Kind::Deployer => {
                 let mut d = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten()?;
@@ -335,7 +491,8 @@ impl arm::World for ArmWorld<'_, '_> {
         match p.kind {
             Kind::Depot => depot_insert(lv, pos, item, count, simulate),
             // ItemHandlerBeltSegment.insertItem: onto the segment from above while nothing just
-            // put there is in the way.
+            // put there is in the way. The belts carry items without components only.
+            Kind::Belt if item.contains('#') => count,
             Kind::Belt => put_on_from_above(lv, pos, item, count, None, simulate).unwrap_or(count),
             // ChuteItemHandler: while it is empty and takes the item, a stack from the top.
             Kind::Chute => {
@@ -375,6 +532,164 @@ impl arm::World for ArmWorld<'_, '_> {
                     .map_or(0, |l| l.count().min(255) as u8)
             }
             Kind::Millstone => put_slots(lv, pos, 0..1, item, count, simulate),
+            // BlazeBurnerPoint: one at a time (`tryInsert` uses one up); a container left over
+            // (a lava bucket's) comes back to the arm while it held only one, else drops.
+            Kind::BlazeBurner => {
+                let Some(one) = items::stack_of(&*lv.host, item, 1) else {
+                    return count;
+                };
+                let Some(rest) =
+                    crate::glue::processing::basin::feed_burner(lv, pos, &one, false, simulate)
+                else {
+                    return count;
+                };
+                if !simulate && let Some(r) = rest.filter(|_| count > 1) {
+                    let at = pos.map(f64::from);
+                    items::drop_stack(lv, at, [0.0; 3], r, 10);
+                }
+                count - 1
+            }
+            // CrushingWheelPoint: the controller's inventory takes a stack while empty.
+            Kind::CrushingWheels => {
+                let empty = with_world(|w| {
+                    w.dims[dim]
+                        .crushers
+                        .get(&pos)
+                        .is_some_and(|(c, _)| !c.occupied())
+                })
+                .unwrap_or(false);
+                if !empty {
+                    return count;
+                }
+                if !simulate {
+                    let id = create_engine::arm::item_id(item);
+                    let time = crate::glue::processing::recipes::with(|r| {
+                        create_engine::crusher::recipe(&r.crushing, &r.milling, id).map(|x| x.time)
+                    })
+                    .flatten();
+                    with_world(|w| {
+                        if let Some((c, _)) = w.dims[dim].crushers.get_mut(&pos) {
+                            create_engine::crusher::intake(c, id, count, time);
+                        }
+                        w.mark_unsaved(dim, pos);
+                    });
+                }
+                0
+            }
+            // A saw facing up takes a stack while it holds nothing (`SawBlockEntity`'s
+            // inventory, through `DepotPoint`).
+            Kind::Saw => {
+                let free = with_world(|w| {
+                    w.dims[dim]
+                        .saws
+                        .get(&pos)
+                        .is_none_or(|s| s.slots.is_empty())
+                })
+                .unwrap_or(false);
+                if !free {
+                    return count;
+                }
+                if !simulate {
+                    let mut stack = items::stack_of(&*lv.host, item, u32::from(count));
+                    crate::glue::processing::saw::saw_take(lv, pos, &mut stack);
+                    return stack.map_or(0, |s| s.count().min(255) as u8);
+                }
+                0
+            }
+            // PackagerItemHandler.insertItem: one package, unwrapped.
+            Kind::Packager => {
+                let Some(one) = items::stack_of(&*lv.host, item, 1) else {
+                    return count;
+                };
+                if crate::glue::packages::arm_insert(lv, pos, &one, simulate) {
+                    count - 1
+                } else {
+                    count
+                }
+            }
+            // CampfirePoint: one cookable item into a free spot (`placeFood`).
+            Kind::Campfire => {
+                let Some(one) = items::stack_of(&*lv.host, item, 1) else {
+                    return count;
+                };
+                let kind = mod_api::Identifier::parse("minecraft:campfire_cooking").ok();
+                let cookable = kind.is_some_and(|k| {
+                    lv.level
+                        .recipe_for(&*lv.host, &k, &mod_api::RecipeInput::Single(one.clone()))
+                        .ok()
+                        .flatten()
+                        .is_some()
+                });
+                let held = items::entity(lv, pos)
+                    .and_then(|e| e.data(&*lv.host))
+                    .map_or(0, |d| crate::glue::packages::list(&d, "Items").len());
+                if !cookable || held >= 4 {
+                    return count;
+                }
+                if !simulate && use_on_top(lv, pos, one).is_some() {
+                    return count;
+                }
+                count - 1
+            }
+            // ComposterPoint.insert: into its top.
+            Kind::Composter => {
+                let Some(stack) = items::stack_of(&*lv.host, item, u32::from(count)) else {
+                    return count;
+                };
+                let up = mod_api::Direction::Up;
+                if simulate {
+                    let room = items::insert_room(lv, pos, up, &stack).unwrap_or(0);
+                    return count - room.min(u32::from(count)) as u8;
+                }
+                items::insert_item(lv, pos, up, stack).map_or(0, |l| l.count().min(255) as u8)
+            }
+            // JukeboxPoint.insert: a record into an empty jukebox.
+            Kind::Jukebox => {
+                let Some(one) = items::stack_of(&*lv.host, item, 1) else {
+                    return count;
+                };
+                let playable = lv
+                    .host
+                    .item_default_component(one.item(), "minecraft:jukebox_playable")
+                    .is_some();
+                if !playable || property(lv, pos, "has_record").as_deref() != Some("false") {
+                    return count;
+                }
+                // Through the jukebox's item handler (`setTheItem`: it plays).
+                let up = mod_api::Direction::Up;
+                let went = if simulate {
+                    items::insert_room(lv, pos, up, &one).unwrap_or(0)
+                } else {
+                    1 - items::insert_item(lv, pos, up, one).map_or(0, |l| l.count())
+                };
+                if went == 0 {
+                    return count;
+                }
+                count - 1
+            }
+            // RespawnAnchorPoint: glowstone charges it, up to 4 (`RespawnAnchorBlock.charge`).
+            Kind::RespawnAnchor => {
+                let charge: u8 = property(lv, pos, "charge")
+                    .and_then(|c| c.parse().ok())
+                    .unwrap_or(4);
+                if create_engine::arm::item_id(item) != "minecraft:glowstone" || charge >= 4 {
+                    return count;
+                }
+                if !simulate {
+                    let next = (charge + 1).to_string();
+                    lv.set_property(pos, "charge", &next, crate::glue::server::update_all());
+                    let at = pos.map(|v| f64::from(v) + 0.5);
+                    lv.level.play_sound(
+                        &mut *lv.host,
+                        "minecraft:block.respawn_anchor.charge",
+                        at,
+                        mod_api::SoundSource::Blocks,
+                        1.0,
+                        1.0,
+                    );
+                }
+                count - 1
+            }
             Kind::Basin => {
                 let left = put_slots(lv, pos, create_engine::basin::INPUTS, item, count, simulate);
                 if !simulate && left != count {
@@ -421,7 +736,6 @@ impl arm::World for ArmWorld<'_, '_> {
                 }
                 left
             }
-            _ => count,
         }
     }
 
@@ -660,6 +974,7 @@ fn send_arms(lv: &mut ServerLevel<'_>, players: &[PlayerRef], list: &[[i32; 3]])
                 to: None,
                 from_base: 0.0,
                 held: None,
+                points: Vec::new(),
             })
         })
         .collect();
@@ -1108,17 +1423,19 @@ pub fn select_point(
     let click = event.click;
     let selected = match host {
         mod_api::HostSide::Client(host) => {
-            click.hand == mod_api::Hand::Main
-                && is_arm_item(&*host, click.stack)
-                && host
-                    .level(host.dimension())
-                    .and_then(|l| l.block_state(&*host, click.pos))
-                    .and_then(super::super::states::id)
-                    .and_then(|id| {
-                        super::super::client_table(&*host, |t| t.get(id).map(|(b, _)| b)).flatten()
-                    })
-                    .and_then(point_kind)
-                    .is_some()
+            let state = host
+                .level(host.dimension())
+                .and_then(|l| l.block_state(&*host, click.pos));
+            let kind = state.and_then(|state| match super::super::states::id(state) {
+                Some(id) => super::super::client_table(&*host, |t| t.get(id).map(|(b, _)| b))
+                    .flatten()
+                    .and_then(point_kind),
+                None => {
+                    let text = host.block_state_string(state)?;
+                    vanilla_point_kind(super::super::states::split(&text).0)
+                }
+            });
+            click.hand == mod_api::Hand::Main && is_arm_item(&*host, click.stack) && kind.is_some()
         }
         mod_api::HostSide::Server(host) => select_on_server(host, click),
     };
@@ -1144,9 +1461,16 @@ fn select_on_server(host: &mut dyn ServerHost, click: &mod_api::BlockClick<'_>) 
     if player.entity().spectator(&*lv.host) == Some(true) {
         return false;
     }
-    let (Some(point), Some((block, _))) = (arm_point(&lv, click.pos), info_at(&lv, click.pos))
-    else {
+    let Some(point) = arm_point(&lv, click.pos) else {
         return false;
+    };
+    // `state.getBlock().getName()`.
+    let name_key = match lv.block_name(click.pos) {
+        Some(name) => {
+            let (ns, path) = name.split_once(':').unwrap_or(("minecraft", &name));
+            format!("block.{ns}.{path}")
+        }
+        None => return false,
     };
     // `cycleMode`: a new point starts as an output and turns at once; a deposit-only point
     // stays an output.
@@ -1165,18 +1489,31 @@ fn select_on_server(host: &mut dyn ServerHost, click: &mod_api::BlockClick<'_>) 
         }
         entry.1
     });
+    send_selection(lv.host, player);
     let (key, color) = if take {
         ("create.mechanical_arm.extract_from", "#7FCDE0")
     } else {
         ("create.mechanical_arm.deposit_to", "#DDC166")
     };
-    let name = coloured(
-        mod_api::Text::translate(format!("block.create.{}", block.name()), Vec::new()),
-        "white",
-    );
+    let name = coloured(mod_api::Text::translate(name_key, Vec::new()), "white");
     let line = coloured(mod_api::Text::translate(key, vec![name]), color);
     let _ = player.action_bar(&mut *lv.host, line);
     true
+}
+
+/// The arm points the player chose, to their client, which outlines them while the arm is in
+/// hand (`ArmInteractionPointHandler.drawOutlines`).
+pub const POINTS: &str = "create:arm_points";
+
+fn send_selection(host: &mut dyn ServerHost, player: PlayerRef) {
+    let list: Vec<([i32; 3], bool)> = SELECTION.with_borrow(|s| {
+        s.get(&player.uuid())
+            .map(|l| l.iter().map(|(p, take)| (p.pos, *take)).collect())
+            .unwrap_or_default()
+    });
+    let mut data = Vec::new();
+    arm::encode_points(&mut data, &list);
+    net::send_to_player(host, player, POINTS, &data);
 }
 
 /// `text` in colour `color`.
@@ -1213,6 +1550,7 @@ pub fn arm_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEvent) 
     let Some(mut chosen) = SELECTION.with_borrow_mut(|s| s.remove(&uuid)) else {
         return;
     };
+    send_selection(host, player);
     let pos = [event.pos.x, event.pos.y, event.pos.z];
     // `BlockPos.closerThan(pos, range)`.
     let near = |p: [i32; 3]| {
@@ -1267,6 +1605,10 @@ pub fn arm_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEvent) 
     });
 }
 
+/// The ejector target a player chose, to their client (none: empty), which outlines it and
+/// draws the arc while the ejector is in hand.
+pub const EJECTOR_TARGET_CHANNEL: &str = "create:ejector_target";
+
 /// Create's default `maxEjectorDistance`.
 const MAX_EJECTOR_DISTANCE: i32 = 32;
 
@@ -1305,6 +1647,8 @@ pub fn select_ejector_target(
             if selected {
                 EJECTOR_TARGET.with_borrow_mut(|t| t.insert(click.player, click.pos));
                 if let Some(p) = host.player(click.player) {
+                    let data: Vec<u8> = click.pos.iter().flat_map(|v| v.to_le_bytes()).collect();
+                    net::send_to_player(host, p, EJECTOR_TARGET_CHANNEL, &data);
                     let line = coloured(
                         mod_api::Text::translate("create.weighted_ejector.target_set", Vec::new()),
                         "gold",
@@ -1360,6 +1704,7 @@ pub fn ejector_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEve
     };
     let pos = [event.pos.x, event.pos.y, event.pos.z];
     let target = EJECTOR_TARGET.with_borrow_mut(|t| t.remove(&player.uuid()));
+    net::send_to_player(host, player, EJECTOR_TARGET_CHANNEL, &[]);
     let direction = target.and_then(|t| ejector_direction(pos, t));
     let (Some(target), Some(direction)) = (target, direction) else {
         let key = if target.is_none() {
