@@ -320,26 +320,82 @@ impl ServerLevel<'_> {
     }
 }
 
-/// Puts `blocks` (world positions) back: where a cell is free, else dropped
-/// (`Contraption.addBlocksToWorld`); `free` says which cells take a block.
+/// Whether the block of state `id` is brittle (`BlockMovementChecks.isBrittle`): it hangs on to
+/// another and breaks without it.
+fn brittle_state(host: &dyn Host, id: u32) -> bool {
+    name_props(host, id).is_some_and(|(n, p)| brittle(&n, &p))
+}
+
+/// Blocks that can't be broken (`getDestroySpeed == -1`) and so are never replaced.
+fn unbreakable(name: &str) -> bool {
+    matches!(
+        name,
+        "minecraft:bedrock"
+            | "minecraft:barrier"
+            | "minecraft:end_portal_frame"
+            | "minecraft:end_portal"
+            | "minecraft:end_gateway"
+            | "minecraft:nether_portal"
+            | "minecraft:command_block"
+            | "minecraft:chain_command_block"
+            | "minecraft:repeating_command_block"
+            | "minecraft:structure_block"
+            | "minecraft:jigsaw"
+            | "minecraft:light"
+    )
+}
+
+/// Puts `blocks` (world positions) back (`Contraption.addBlocksToWorld`): the sturdy ones first,
+/// then the brittle ones that hang on them. A cell `free` says takes a block takes it; a block
+/// that can't be broken there, or a brittle block meeting something else, drops the moving
+/// block; anything else there is broken (dropping) for it.
 fn put_back_blocks(
     lv: &mut ServerLevel<'_>,
     blocks: &[([i32; 3], u32)],
     free: impl Fn(&ServerLevel<'_>, [i32; 3]) -> bool,
 ) {
-    for &(p, state) in blocks {
-        if free(lv, p) {
-            lv.set_num(p, state, super::server::update_all());
-        } else {
-            lv.drop_block(p, state);
+    let flags = super::server::update_all() | BlockUpdateFlags::MOVE_BY_PISTON;
+    for brittles in [false, true] {
+        for &(p, state) in blocks {
+            if brittle_state(&*lv.host, state) != brittles {
+                continue;
+            }
+            if !free(lv, p) {
+                let here = lv.block_name(p).unwrap_or_default();
+                if brittles || unbreakable(&here) {
+                    lv.drop_block(p, state);
+                    continue;
+                }
+                lv.destroy_block(p, true);
+            }
+            lv.set_num(p, state, flags);
         }
     }
 }
 
 /// Takes `blocks` (offsets from `base`) out of the world (`removeBlocksFromWorld`).
 fn take_blocks(lv: &mut ServerLevel<'_>, base: [i32; 3], blocks: &[([i32; 3], u32)]) {
-    for (o, _) in blocks {
-        lv.set_air(add(base, *o), super::server::UPDATE_CLIENTS);
+    let cells: Vec<([i32; 3], u32)> = blocks.iter().map(|(o, s)| (add(base, *o), *s)).collect();
+    remove_cells(lv, &cells);
+}
+
+/// `removeBlocksFromWorld` for blocks at world positions: brittle ones first, each left as air
+/// with no drops and no neighbour updates (nothing hanging on them breaks off), then their
+/// neighbours hear of it.
+fn remove_cells(lv: &mut ServerLevel<'_>, cells: &[([i32; 3], u32)]) {
+    let flags = BlockUpdateFlags::MOVE_BY_PISTON
+        | BlockUpdateFlags::SUPPRESS_DROPS
+        | BlockUpdateFlags::KNOWN_SHAPE
+        | BlockUpdateFlags::CLIENTS;
+    for brittles in [true, false] {
+        for &(p, state) in cells {
+            if brittle_state(&*lv.host, state) == brittles {
+                lv.set_air(p, flags);
+            }
+        }
+    }
+    for &(p, _) in cells {
+        lv.update_signal_neighbors(p);
     }
 }
 
@@ -426,7 +482,175 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
         sticker,
         movable: !unmovable,
         chassis,
+        attached: attached_sides(&name, &props),
+        unsupportive: unsupportive_faces(&name, &props),
     })
+}
+
+fn bits(dirs: &[Dir]) -> u8 {
+    dirs.iter().fold(0, |acc, d| acc | d.bit())
+}
+
+/// `BlockMovementChecksImpl.isBrittleFallback`: blocks that hang on to another and break
+/// without it.
+fn brittle(name: &str, props: &[(String, String)]) -> bool {
+    let id = name.strip_prefix("minecraft:").unwrap_or(name);
+    prop(props, "hanging").is_some()
+        || id == "ladder"
+        || torch(name)
+        || id.ends_with("_sign")
+        || id.ends_with("_pressure_plate")
+        || (prop(props, "face").is_some()
+            && !matches!(name, "minecraft:grindstone" | "create:packager_link"))
+        || (rail(name) && name != "create:cart_assembler")
+        || diode(name)
+        || id == "redstone_wire"
+        || wool_carpet(name)
+        || matches!(
+            name,
+            "create:steam_whistle" | "create:steam_whistle_extension" | "create:brass_funnel"
+        )
+}
+
+fn torch(name: &str) -> bool {
+    name.starts_with("minecraft:") && name.ends_with("torch")
+}
+
+fn rail(name: &str) -> bool {
+    matches!(
+        name,
+        "minecraft:rail"
+            | "minecraft:powered_rail"
+            | "minecraft:detector_rail"
+            | "minecraft:activator_rail"
+            | "create:controller_rail"
+    )
+}
+
+/// `DiodeBlock`: repeaters, comparators and Create's brass diodes and latches.
+fn diode(name: &str) -> bool {
+    matches!(
+        name,
+        "minecraft:repeater"
+            | "minecraft:comparator"
+            | "create:pulse_repeater"
+            | "create:pulse_extender"
+            | "create:pulse_timer"
+            | "create:powered_latch"
+            | "create:powered_toggle_latch"
+    )
+}
+
+/// `WoolCarpetBlock`: the sixteen wool carpets (not moss).
+fn wool_carpet(name: &str) -> bool {
+    name.starts_with("minecraft:") && name.ends_with("_carpet") && !name.ends_with("moss_carpet")
+}
+
+/// `AttachedActorBlock`: harvesters, ploughs and rollers, hanging on to the block behind them.
+fn attached_actor(name: &str) -> bool {
+    matches!(
+        name,
+        "create:mechanical_harvester" | "create:mechanical_plough" | "create:mechanical_roller"
+    )
+}
+
+/// `BlockMovementChecksImpl.isBlockAttachedTowardsFallback` (all but sails, fluid tanks and
+/// vaults, stickers and bogeys, which the search reads on their own): the sides a block hangs on
+/// to its neighbour by, a `Dir::bit` each.
+pub(crate) fn attached_sides(name: &str, props: &[(String, String)]) -> u8 {
+    use Dir::{Down, Up};
+    let facing = prop(props, "facing").and_then(dir_of);
+    let back = facing.map_or(0, |f| f.opposite().bit());
+    let id = name.strip_prefix("minecraft:").unwrap_or(name);
+    let wall_facing = |n: &str| n.ends_with("wall_torch") || n.ends_with("_wall_sign");
+    if id == "ladder" || wall_facing(id) {
+        return back;
+    }
+    if id.ends_with("_sign") && !id.ends_with("hanging_sign") {
+        return Down.bit();
+    }
+    if id.ends_with("_door") && prop(props, "half").is_some() {
+        return if prop(props, "half") == Some("lower") {
+            bits(&[Up, Down])
+        } else {
+            Down.bit()
+        };
+    }
+    if id.ends_with("_bed") {
+        let toward = if prop(props, "part") == Some("head") {
+            facing.map(Dir::opposite)
+        } else {
+            facing
+        };
+        return toward.map_or(0, Dir::bit);
+    }
+    if name == "create:redstone_link" || attached_actor(name) {
+        return back;
+    }
+    if matches!(name, "create:hand_crank" | "create:nozzle") {
+        return back;
+    }
+    if id.ends_with("_pressure_plate")
+        || id == "flower_pot"
+        || id.starts_with("potted_")
+        || diode(name)
+        || id == "redstone_wire"
+        || wool_carpet(name)
+        || torch(name)
+        || (rail(name) && name != "create:cart_assembler")
+        || name == "create:steam_whistle_extension"
+    {
+        return Down.bit();
+    }
+    if let Some(face) = prop(props, "face") {
+        return match face {
+            "ceiling" => Up.bit(),
+            "floor" => Down.bit(),
+            _ => back,
+        };
+    }
+    if let Some(h) = prop(props, "hanging") {
+        return if h == "true" { Up.bit() } else { Down.bit() };
+    }
+    if id == "bell" {
+        return match prop(props, "attachment") {
+            Some("floor") => Down.bit(),
+            Some("ceiling") => Up.bit(),
+            _ => facing.map_or(0, Dir::bit),
+        };
+    }
+    if name == "create:steam_whistle" {
+        return if flag(props, "wall") {
+            facing.map_or(0, Dir::bit)
+        } else {
+            Down.bit()
+        };
+    }
+    0
+}
+
+/// `BlockMovementChecksImpl.isNotSupportiveFallback` (but sails, read by the search): the faces
+/// of a block that push nothing in front of them, a `Dir::bit` each.
+pub(crate) fn unsupportive_faces(name: &str, props: &[(String, String)]) -> u8 {
+    let facing = prop(props, "facing").and_then(dir_of);
+    let front = facing.map_or(0, Dir::bit);
+    let across = |f: Dir| bits(&Dir::ALL) & !bits(&[f, f.opposite()]);
+    match name {
+        "create:mechanical_drill"
+        | "create:mechanical_bearing"
+        | "create:mechanical_saw"
+        | "create:portable_storage_interface" => front,
+        "create:cart_assembler" | "create:rope_pulley" => Dir::Down.bit(),
+        "create:mechanical_harvester" | "create:mechanical_plough" => front,
+        "create:piston_extension_pole" | "create:mechanical_piston_head" => {
+            facing.map_or(0, across)
+        }
+        "create:sticker" if !flag(props, "extended") => front,
+        _ if wool_carpet(name) => Dir::Up.bit(),
+        _ if name.ends_with("sliding_door") => 0,
+        _ if brittle(name, props) => bits(&Dir::ALL),
+        _ => 0,
+    }
 }
 
 /// A block state turned `quarter`° about `axis` (`StructureTransform`): its `facing` or `axis`
@@ -476,6 +700,10 @@ struct Clicker {
     player: Option<PlayerRef>,
     sneaking: bool,
     held: Option<String>,
+    /// The off hand's turn after an empty main hand. Create's blocks answer an empty main hand
+    /// `SUCCESS` on the client too, so the off hand is never tried after it; here the client
+    /// can't know, tries the off hand, and an empty-hand action must not run twice.
+    after_empty_main: bool,
 }
 
 fn clicker(host: &dyn ServerHost, click: &BlockClick<'_>) -> Clicker {
@@ -484,10 +712,15 @@ fn clicker(host: &dyn ServerHost, click: &BlockClick<'_>) -> Clicker {
         .and_then(|p| p.entity().is_shift_key_down(host))
         .unwrap_or(false);
     let held = click.stack.map(|s| s.item().id(host));
+    let after_empty_main = click.hand == mod_api::Hand::Off
+        && player.is_none_or(|p| {
+            super::items::held(host, p, mod_api::Hand::Main).is_none_or(|s| s.count() == 0)
+        });
     Clicker {
         player,
         sneaking,
         held,
+        after_empty_main,
     }
 }
 

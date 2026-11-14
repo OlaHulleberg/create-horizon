@@ -882,7 +882,7 @@ impl BlockPart for LiftPart {
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
         let c = clicker(&*host, event.click);
-        if c.sneaking || c.held.is_some() {
+        if c.sneaking || c.held.is_some() || c.after_empty_main {
             return None;
         }
         let pos = event.click.pos;

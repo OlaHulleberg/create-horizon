@@ -179,7 +179,15 @@ fn blocks_tags(
 fn light_near(lv: &ServerLevel<'_>, p: [i32; 3]) -> u32 {
     use mod_api::LightLayer;
     let (mut sky, mut block) = (0, 0);
-    for o in [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]] {
+    for o in [
+        [0, 0, 0],
+        [1, 0, 0],
+        [-1, 0, 0],
+        [0, 1, 0],
+        [0, -1, 0],
+        [0, 0, 1],
+        [0, 0, -1],
+    ] {
         let q = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
         let at = |layer| lv.level.brightness(&*lv.host, layer, q).unwrap_or(0);
         sky = sky.max(at(LightLayer::Sky));

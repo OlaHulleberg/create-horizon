@@ -198,7 +198,7 @@ impl BlockPart for WindmillPart {
         if c.sneaking {
             return Some(InteractionResult::Fail);
         }
-        if c.held.is_some() {
+        if c.held.is_some() || c.after_empty_main {
             return None;
         }
         let pos = event.click.pos;
@@ -823,10 +823,12 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
         .iter()
         .map(|(l, _)| piston_world(c.anchor, *l, facing, c.progress))
         .collect();
-    let forced = if m > 0.0 { facing } else { facing.opposite() };
     let mut exclude = pole_worlds;
     exclude.push(pos);
-    let Ok(structure) = piston::gather(c.anchor, forced, &exclude, |p| found(lv, p)) else {
+    let gathered = piston::gather_piston(c.anchor, facing, m < 0.0, sticky, &exclude, |p| {
+        found(lv, p)
+    });
+    let Ok(structure) = gathered else {
         return;
     };
     let o = facing.offset();
@@ -847,12 +849,12 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
         .copied()
         .collect();
     let carried = actors::carry(lv, pos, origin, &local, |p| p == pos);
-    for (l, _) in &blocks {
-        let p = piston_world(c.anchor, *l, facing, c.progress);
-        if p != pos {
-            lv.set_air(p, update_all());
-        }
-    }
+    let cells: Vec<([i32; 3], u32)> = blocks
+        .iter()
+        .map(|(l, s)| (piston_world(c.anchor, *l, facing, c.progress), *s))
+        .filter(|(p, _)| *p != pos)
+        .collect();
+    super::remove_cells(lv, &cells);
     lv.set_property(pos, "state", "moving", update_all());
     with_world(|w| {
         w.dims[dim].pistons.insert(
@@ -880,12 +882,13 @@ fn disassemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         return;
     };
     let grid = m.offset.round() as i32;
-    for (l, s) in &m.blocks {
-        let p = piston_world(m.anchor, *l, facing, grid);
-        if p != pos {
-            lv.set_num(p, *s, update_all());
-        }
-    }
+    let cells: Vec<([i32; 3], u32)> = m
+        .blocks
+        .iter()
+        .map(|(l, s)| (piston_world(m.anchor, *l, facing, grid), *s))
+        .filter(|(p, _)| *p != pos)
+        .collect();
+    put_back_blocks(lv, &cells, |lv, p| lv.passable(p));
     let state = if grid > 0 { "extended" } else { "retracted" };
     lv.set_property(pos, "state", state, update_all());
     let o = facing.offset();

@@ -20,6 +20,12 @@ pub struct Found {
     pub glued: u8,
     /// An extended sticker's facing (`StickerBlock.EXTENDED`): it takes the block it faces.
     pub sticker: Option<Dir>,
+    /// The sides it hangs on to the block beside (`BlockMovementChecks.isBlockAttachedTowards`
+    /// for all but sails: a torch down, a ladder or button the way it faces), a `Dir::bit` each.
+    pub attached: u8,
+    /// The faces that push nothing in front of them (`BlockMovementChecks.isNotSupportive`: a
+    /// drill's head, a sail's flat sides, anything brittle), a `Dir::bit` each.
+    pub unsupportive: u8,
 }
 
 /// `Contraption.moveBlock`'s extended sticker: the block it faces joins the frontier (an
@@ -209,14 +215,20 @@ fn add(a: [i32; 3], b: [i32; 3]) -> [i32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
-/// `BlockMovementChecks.isBlockAttachedTowards` for what is ported: a sail holds on to the
-/// blocks beside it in its own plane.
-fn attached_towards(f: &Found, toward: Dir) -> bool {
-    f.sail_facing.is_some_and(|d| toward.axis() != d.axis())
+/// `BlockMovementChecks.isBlockAttachedTowards`: a sail holds on to the blocks beside it in its
+/// own plane; other blocks to the sides they hang on (`Found::attached`).
+pub(crate) fn attached_towards(f: &Found, toward: Dir) -> bool {
+    f.attached & toward.bit() != 0 || f.sail_facing.is_some_and(|d| toward.axis() != d.axis())
+}
+
+/// `BlockMovementChecks.isNotSupportive`: the face `facing` of the block pushes nothing.
+pub(crate) fn not_supportive(f: &Found, facing: Dir) -> bool {
+    f.unsupportive & facing.bit() != 0
+        || f.sail_facing.is_some_and(|d| facing.axis() == d.axis())
 }
 
 /// `canStickTo` both ways (removed).
-fn sticks(a: &Found, b: &Found) -> bool {
+pub(crate) fn sticks(a: &Found, b: &Found) -> bool {
     let either = a.sticky.is_some() || b.sticky.is_some();
     let clash = matches!(
         (a.sticky, b.sticky),

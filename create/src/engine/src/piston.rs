@@ -117,7 +117,63 @@ pub fn gather(
     exclude: &[[i32; 3]],
     at: impl Fn([i32; 3]) -> Option<Found>,
 ) -> Result<Vec<([i32; 3], u32)>, Refused> {
-    let mut frontier = VecDeque::from([start]);
+    search(start, VecDeque::from([start]), Some(forced), exclude, at)
+}
+
+/// `kinetics.maxChassisRange`: how far ahead an extending piston pushes a line of blocks.
+pub const MAX_CHASSIS_RANGE: i32 = 16;
+
+/// `PistonContraption.assemble` (`searchMovedStructure` from the anchor in front of the head,
+/// forced along `facing` while it extends, none while it retracts) with its
+/// `addToInitialFrontier`: extending, the line of blocks ahead (up to `maxChassisDistance`)
+/// until air, a brittle block or a face that pushes nothing; retracting, a sticky piston's
+/// block in front of its head alone, and a plain piston's nothing. Offsets from `start`.
+pub fn gather_piston(
+    start: [i32; 3],
+    facing: Dir,
+    retracting: bool,
+    sticky: bool,
+    exclude: &[[i32; 3]],
+    at: impl Fn([i32; 3]) -> Option<Found>,
+) -> Result<Vec<([i32; 3], u32)>, Refused> {
+    let mut frontier = VecDeque::new();
+    if retracting && !sticky {
+        return Ok(Vec::new());
+    }
+    for offset in 0..=MAX_CHASSIS_RANGE {
+        if offset == 1 && retracting {
+            break;
+        }
+        let p = add(start, facing, offset);
+        let Some(f) = at(p) else {
+            break;
+        };
+        // `isBrittle` (but carpet): every face pushes nothing.
+        if f.unsupportive == 0x3F {
+            break;
+        }
+        if !f.movable {
+            if retracting {
+                break;
+            }
+            return Err(Refused::Unmovable(p));
+        }
+        frontier.push_back(p);
+        if crate::contraption::not_supportive(&f, facing) {
+            break;
+        }
+    }
+    search(start, frontier, (!retracting).then_some(facing), exclude, at)
+}
+
+/// `Contraption.searchMovedStructure` from `frontier`, pushing ahead in `forced`.
+fn search(
+    start: [i32; 3],
+    mut frontier: VecDeque<[i32; 3]>,
+    forced: Option<Dir>,
+    exclude: &[[i32; 3]],
+    at: impl Fn([i32; 3]) -> Option<Found>,
+) -> Result<Vec<([i32; 3], u32)>, Refused> {
     let mut visited: HashSet<[i32; 3]> = HashSet::new();
     let mut blocks = Vec::new();
     while let Some(pos) = frontier.pop_front() {
@@ -131,7 +187,7 @@ pub fn gather(
             return Err(Refused::Unmovable(pos));
         }
         if let Some(c) = found.chassis {
-            for p in crate::contraption::chassis_reach(pos, c, Some(forced), &at) {
+            for p in crate::contraption::chassis_reach(pos, c, forced, &at) {
                 if !visited.contains(&p) && !exclude.contains(&p) {
                     frontier.push_back(p);
                 }
@@ -151,13 +207,19 @@ pub fn gather(
                 continue;
             };
             if !other.movable {
-                if d == forced {
+                if Some(d) == forced {
                     return Err(Refused::Unmovable(next));
                 }
                 continue;
             }
-            let stick = found.sticky.is_some() || other.sticky.is_some();
-            if stick || d == forced || crate::contraption::glued_toward(&found, d) {
+            // `Contraption.moveBlock`: what sticks, what hangs on to this block, glue, and the
+            // block pushed in front unless this face pushes nothing.
+            use crate::contraption::{attached_towards, glued_toward, not_supportive, sticks};
+            if sticks(&found, &other)
+                || attached_towards(&other, d.opposite())
+                || glued_toward(&found, d)
+                || (Some(d) == forced && !not_supportive(&found, d))
+            {
                 frontier.push_back(next);
             }
         }
@@ -273,5 +335,40 @@ mod tests {
         assert_eq!(movement(-64.0, Dir::East, 0.0, 3), 0.125);
         assert_eq!(movement(-64.0, Dir::East, 2.95, 3), 0.049999952);
         assert_eq!(movement(64.0, Dir::North, 1.0, 3), -0.125);
+    }
+
+    #[test]
+    fn a_plain_piston_pulls_nothing_back_and_a_sticky_one_its_front_block() {
+        // Stone in a row at x 1..3 in front of a head facing east; a torch on the first.
+        let at = |p: [i32; 3]| match p {
+            [1..=3, 0, 0] => Some(Found {
+                state: 1,
+                movable: true,
+                ..Default::default()
+            }),
+            [1, 1, 0] => Some(Found {
+                state: 2,
+                movable: true,
+                attached: Dir::Down.bit(),
+                unsupportive: 0x3F,
+                ..Default::default()
+            }),
+            _ => None,
+        };
+        let mut out = gather_piston([1, 0, 0], Dir::East, false, false, &[], at).unwrap();
+        out.sort();
+        assert_eq!(
+            out,
+            vec![([0, 0, 0], 1), ([0, 1, 0], 2), ([1, 0, 0], 1), ([2, 0, 0], 1)],
+            "extending pushes the row and what hangs on it"
+        );
+        assert!(
+            gather_piston([1, 0, 0], Dir::East, true, false, &[], at)
+                .unwrap()
+                .is_empty()
+        );
+        let mut back = gather_piston([1, 0, 0], Dir::East, true, true, &[], at).unwrap();
+        back.sort();
+        assert_eq!(back, vec![([0, 0, 0], 1), ([0, 1, 0], 2)]);
     }
 }
