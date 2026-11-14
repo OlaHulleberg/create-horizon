@@ -20,6 +20,7 @@ mod machines;
 mod pipes;
 mod place;
 mod plumbing;
+mod rims;
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
@@ -99,15 +100,25 @@ impl Subsystem for Fluids {
         pipes::tick_tank_states(lv);
         machines::tick_spouts(lv);
         machines::tick_drains(lv);
+        rims::tick(lv);
     }
 
     fn client_reset(&self) {
         client::reset();
     }
 
+    /// The pipes beside a Create block that changed draw their pieces again (`rims`).
+    fn block_changed(&self, dim: usize, pos: [i32; 3], _old: u32, _new: u32) {
+        rims::changed(dim, pos);
+    }
+
+    fn world_closed(&self) {
+        rims::reset();
+    }
+
     /// What clients see of tanks, spouts, drains, boilers and hoses, sent with their chunks too.
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[TANK, HOSE, BOILER]
+        &[TANK, HOSE, BOILER, rims::RIMS]
     }
 
     /// The client's prediction of a click its block takes (`clicks`).

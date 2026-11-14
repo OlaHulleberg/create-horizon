@@ -151,7 +151,15 @@ impl BlockEntityPart for FluidEntity {
         match block {
             Block::FluidTank | Block::CreativeFluidTank => draw_tank(host, event),
             Block::HosePulley => draw_hose(event),
-            Block::FluidValve => draw_pointer(event, &info),
+            Block::FluidValve => {
+                super::rims::draw(event);
+                draw_pointer(event, &info);
+            }
+            Block::FluidPipe
+            | Block::EncasedFluidPipe
+            | Block::GlassFluidPipe
+            | Block::SmartFluidPipe
+            | Block::MechanicalPump => super::rims::draw(event),
             _ => {}
         }
     }

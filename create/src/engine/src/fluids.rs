@@ -467,9 +467,215 @@ pub fn pointer_offset(pipe: Axis, shaft: Axis) -> f32 {
     }
 }
 
+/// A block as `PipeAttachmentModel` sees it, for the pieces drawn on a pipe's sides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Piped {
+    /// A fluid pipe and its open sides (`Dir::bit`).
+    Pipe(u8),
+    /// An encased pipe and its open sides.
+    Encased(u8),
+    /// A glass pipe, a smart pipe or a fluid valve, along an axis (`IAxisPipe`).
+    Glass(Axis),
+    Smart(Axis),
+    Valve(Axis),
+    /// A pump, its facing.
+    Pump(Dir),
+    /// Anything else: whether it holds fluid toward the pipe (`hasFluidCapability`), and
+    /// whether it is a hose pulley.
+    Other { fluid: bool, hose: bool },
+}
+
+/// `FluidTransportBehaviour.AttachmentTypes`: the pieces drawn on a side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rim {
+    None,
+    Connection,
+    DetailedConnection,
+    Rim,
+    PartialRim,
+    Drain,
+    PartialDrain,
+}
+
+/// `ComponentPartials`: the pieces of an attachment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RimPiece {
+    Connection,
+    RimConnector,
+    Rim,
+    Drain,
+}
+
+impl Rim {
+    pub const ALL: [Rim; 7] = [
+        Rim::None,
+        Rim::Connection,
+        Rim::DetailedConnection,
+        Rim::Rim,
+        Rim::PartialRim,
+        Rim::Drain,
+        Rim::PartialDrain,
+    ];
+
+    /// `AttachmentTypes.partials`.
+    pub fn pieces(self) -> &'static [RimPiece] {
+        match self {
+            Rim::None => &[],
+            Rim::Connection => &[RimPiece::Connection],
+            Rim::DetailedConnection => &[RimPiece::RimConnector],
+            Rim::Rim => &[RimPiece::RimConnector, RimPiece::Rim],
+            Rim::PartialRim => &[RimPiece::Rim],
+            Rim::Drain => &[RimPiece::RimConnector, RimPiece::Drain],
+            Rim::PartialDrain => &[RimPiece::Drain],
+        }
+    }
+
+    /// `withoutConnector`.
+    fn without_connector(self) -> Rim {
+        match self {
+            Rim::Rim => Rim::PartialRim,
+            Rim::Drain => Rim::PartialDrain,
+            r => r,
+        }
+    }
+}
+
+impl Piped {
+    /// `canHaveFlowToward`.
+    fn flows_toward(self, d: Dir) -> bool {
+        match self {
+            Piped::Pipe(s) | Piped::Encased(s) => s & d.bit() != 0,
+            Piped::Glass(a) | Piped::Smart(a) | Piped::Valve(a) => d.axis() == a,
+            Piped::Pump(f) => f.axis() == d.axis(),
+            Piped::Other { .. } => false,
+        }
+    }
+
+    /// `IAxisPipe.getAxisOf`.
+    fn axis(self) -> Option<Axis> {
+        match self {
+            Piped::Glass(a) | Piped::Smart(a) | Piped::Valve(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Whether a block draws pieces on its sides (`PipeAttachmentModel`).
+    pub fn draws_rims(self) -> bool {
+        !matches!(self, Piped::Other { .. })
+    }
+}
+
+/// `getRenderedRimAttachment` of block `own` on its side `d`, with `n` the block beside it
+/// there (`FluidTransportBehaviour`, overridden by `FluidPipeBlockEntity`,
+/// `StraightPipeBlockEntity` and `PumpBlockEntity`).
+pub fn rim(own: Piped, d: Dir, n: Piped) -> Rim {
+    let base = if !own.flows_toward(d) {
+        Rim::None
+    } else {
+        match n {
+            Piped::Pump(f) if f == d.opposite() => Rim::None,
+            Piped::Encased(s) if s & d.opposite().bit() != 0 => Rim::Rim,
+            Piped::Other { fluid: true, hose: false } => Rim::Drain,
+            _ => Rim::Rim,
+        }
+    };
+    match own {
+        Piped::Pipe(sides) | Piped::Encased(sides) => {
+            if matches!(own, Piped::Encased(_)) && base != Rim::Drain {
+                return Rim::None;
+            }
+            if base == Rim::Rim {
+                if !matches!(n, Piped::Pipe(_) | Piped::Encased(_) | Piped::Glass(_))
+                    && n.flows_toward(d.opposite())
+                {
+                    return Rim::DetailedConnection;
+                }
+                // `shouldDrawRim`: not toward another plain pipe.
+                if matches!(n, Piped::Pipe(_)) {
+                    return if straight_axis(sides) == Some(d.axis()) {
+                        Rim::Connection
+                    } else {
+                        Rim::DetailedConnection
+                    };
+                }
+            }
+            if base == Rim::None && matches!(own, Piped::Pipe(_)) && sides & d.bit() != 0 {
+                return Rim::DetailedConnection;
+            }
+            base
+        }
+        Piped::Glass(axis) | Piped::Smart(axis) | Piped::Valve(axis) => {
+            if base == Rim::Rim && matches!(own, Piped::Valve(_)) {
+                return Rim::None;
+            }
+            if base == Rim::Rim && !matches!(own, Piped::Glass(_)) && matches!(n, Piped::Glass(_))
+            {
+                return Rim::PartialRim;
+            }
+            if base == Rim::Rim && matches!(n, Piped::Pipe(_)) {
+                return Rim::None;
+            }
+            if n.axis() == Some(axis) {
+                return Rim::None;
+            }
+            if let Piped::Valve(a) = n
+                && a == d.axis()
+            {
+                return Rim::None;
+            }
+            base.without_connector()
+        }
+        Piped::Pump(_) if base == Rim::Rim => Rim::None,
+        _ => base,
+    }
+}
+
+/// `FluidPipeBlock.shouldDrawCasing`: a pipe joined on more than two sides around an axis.
+pub fn draws_casing(sides: u8) -> bool {
+    [Axis::X, Axis::Y, Axis::Z].into_iter().any(|a| {
+        Dir::ALL
+            .into_iter()
+            .filter(|d| d.axis() != a && sides & d.bit() != 0)
+            .count()
+            > 2
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rims_follow_create() {
+        let x = Dir::East.bit() | Dir::West.bit();
+        // A straight pipe between two pipes: plain connections.
+        assert_eq!(rim(Piped::Pipe(x), Dir::East, Piped::Pipe(x)), Rim::Connection);
+        // Into a tank: a drain; an open end: a rim; a closed side: nothing.
+        let tank = Piped::Other { fluid: true, hose: false };
+        let air = Piped::Other { fluid: false, hose: false };
+        assert_eq!(rim(Piped::Pipe(x), Dir::East, tank), Rim::Drain);
+        assert_eq!(rim(Piped::Pipe(x), Dir::East, air), Rim::Rim);
+        assert_eq!(rim(Piped::Pipe(x), Dir::Up, air), Rim::None);
+        // A pump beside the pipe, either way: the pipe joins it with its detailed connector.
+        assert_eq!(
+            rim(Piped::Pipe(x), Dir::East, Piped::Pump(Dir::West)),
+            Rim::DetailedConnection
+        );
+
+        assert_eq!(
+            rim(Piped::Pipe(x), Dir::East, Piped::Pump(Dir::East)),
+            Rim::DetailedConnection
+        );
+        // A pump's own side: a drain into a tank, nothing else.
+        assert_eq!(rim(Piped::Pump(Dir::East), Dir::East, tank), Rim::Drain);
+        assert_eq!(rim(Piped::Pump(Dir::East), Dir::East, air), Rim::None);
+        // Glass pipes in a row: nothing between them; a rim without its connector at an end.
+        assert_eq!(rim(Piped::Glass(Axis::X), Dir::East, Piped::Glass(Axis::X)), Rim::None);
+        assert_eq!(rim(Piped::Glass(Axis::X), Dir::East, air), Rim::PartialRim);
+        assert!(draws_casing(x | Dir::Up.bit() | Dir::North.bit()));
+        assert!(draws_casing(x | Dir::Up.bit()), "a T joint");
+        assert!(!draws_casing(Dir::East.bit() | Dir::Up.bit()), "a bend");
+    }
 
     fn end(pos: [i32; 3], tank: bool, pressure: f32) -> End {
         End {
