@@ -245,6 +245,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_fan_blowing_up_a_column_carries_its_stacks_up() {
+        // No fans: gravity's 4 chutes a second down.
+        assert_eq!(item_motion(0.0, 0.0), MOTION);
+        // A fan at 64 RPM under the column: one chute a second up (64 / 64 / 20 a tick).
+        assert!((item_motion(64.0, 0.0) - 0.05).abs() < 1e-6);
+        // Up past the middle only when the way above takes it; out past the top.
+        assert_eq!(step(0.45, 0.1, false), Fall::At(0.5));
+        assert_eq!(step(0.95, 0.1, true), Fall::Out);
+    }
+
+    #[test]
     fn a_stack_falls_through_in_five_ticks_or_waits_in_the_middle() {
         let mut p = 1.0;
         let mut ticks = 0;

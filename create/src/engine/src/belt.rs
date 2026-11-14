@@ -1213,6 +1213,21 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_belt_carries_what_stands_on_top_of_it_its_way() {
+        let seg = Segment {
+            facing: Dir::South,
+            slope: Slope::Horizontal,
+            part: Part::Middle,
+        };
+        // 48 RPM south: a tenth of a block a tick south, pulled a little toward the middle.
+        let m = passenger_motion(&seg, [0, 64, 0], [0.6, 64.8125, 0.5], 48.0, false).unwrap();
+        assert!((m[2] - 0.1).abs() < 1e-6 && m[0] < 0.0 && m[1] == 0.0);
+        // Nothing for one inside the belt, or on a belt too slow.
+        assert!(passenger_motion(&seg, [0, 64, 0], [0.5, 64.1, 0.5], 48.0, false).is_none());
+        assert!(passenger_motion(&seg, [0, 64, 0], [0.5, 64.8, 0.5], 0.5, false).is_none());
+    }
+
     struct Open(Ending);
     impl Surroundings for Open {
         fn ending(&mut self) -> Ending {
