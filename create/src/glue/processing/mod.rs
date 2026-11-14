@@ -24,6 +24,14 @@
 //! - The deployer's slower digging of a block whose drops need another tool
 //!   (`requiresCorrectToolForDrops` and `isCorrectToolForDrops`): no query for either, so it
 //!   digs every block at its harvestable speed (the drops still follow the game's rules).
+//! - A hopper putting into a millstone what it can't mill (`MillstoneInventoryHandler`'s
+//!   `canProcess`): `ModContainer` has no per-slot insert check.
+//! - Create's own damage types (`create:crush`): a native mod's are not registered, so the
+//!   crushing wheels deal vanilla's cramming.
+//!
+//! Not drawn yet: the items a saw facing up is cutting (`SawRenderer.renderItems`) and a grid's
+//! items moving between mechanical crafters (`MechanicalCrafterRenderer.renderItems` past
+//! `IDLE`).
 
 mod basin;
 mod client;

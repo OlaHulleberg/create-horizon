@@ -1,12 +1,16 @@
 //! What a client draws of the machines beyond their turning parts (`kinetics`): the press's
-//! head on its stroke (`MechanicalPressRenderer`), the deployer's pole and hand
-//! (`DeployerRenderer`), the mixer's pole and head (`MechanicalMixerRenderer`).
+//! head on its stroke (`MechanicalPressRenderer`), the deployer's pole, hand and held item
+//! (`DeployerRenderer`), the mixer's pole and head (`MechanicalMixerRenderer`), a basin's
+//! contents (`BasinRenderer`), the saw's blade (`SawRenderer.renderBlade`) and the mechanical
+//! crafter's cog, lid, belts or arrow and slot item (`MechanicalCrafterRenderer`).
 //!
 //! The press's cycle and the deployer's stroke come from the server when they change
 //! (`create:press`, `create:deployer`); the client runs them on between messages, as Create's
 //! does, and draws them each frame. The mixer's head goes down and up with its cycle
 //! (`getRenderedHeadOffset`), which the server keeps in its block entity's data, the head turning
-//! with the mixer. A basin's fluids and items (`BasinRenderer`) come with its block entity's data.
+//! with the mixer. A basin's fluids and items and a crafter's phase and item come with their
+//! block entity's data too (a client's block entity has no slots): a change of it draws them
+//! again.
 
 use super::basin as basin_glue;
 use super::stacks;
