@@ -39,6 +39,8 @@ pub struct Recipes {
     pub sequenced: Vec<sequenced::Assembly>,
     /// `create:mechanical_crafting`, shaped.
     pub mechanical_crafting: Vec<create_engine::crafter::Shaped>,
+    /// `create:sandpaper_polishing` (sand paper in a player's hands).
+    pub polishing: Book,
 }
 
 impl Recipes {
@@ -105,6 +107,7 @@ pub fn publish(host: &dyn Host) {
         filling: read_filling(host),
         sequenced: read_sequenced(host),
         mechanical_crafting: read_mechanical_crafting(host),
+        polishing: read_book(host, "create:sandpaper_polishing"),
     };
     RECIPES.with_borrow_mut(|r| *r = Some(next));
 }

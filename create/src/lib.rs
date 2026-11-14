@@ -248,6 +248,18 @@ impl Hooks for Create {
         }
     }
 
+    fn living_entity_use_item_finish(
+        &self,
+        host: HostSide,
+        event: &mut mod_api::LivingEntityUseItemFinishEvent<'_>,
+    ) {
+        if let HostSide::Server(host) = host {
+            for s in SUBSYSTEMS {
+                s.use_item_finished(&mut *host, event);
+            }
+        }
+    }
+
     fn render_level_stage(
         &self,
         host: &dyn ClientHost,

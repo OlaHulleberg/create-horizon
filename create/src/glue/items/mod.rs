@@ -23,6 +23,7 @@ mod fertilizer;
 // The filter slots' helpers, for the subsystems whose blocks hold one.
 pub(crate) mod filters;
 mod nugget;
+mod sandpaper;
 mod sequenced;
 mod sword;
 mod symmetry;
@@ -180,6 +181,10 @@ impl Subsystem for Items {
         r.item_part(k[Item::Worldshaper as usize], worldshaper::Shaper);
         r.item_part(k[Item::BeltConnector as usize], belt_connector::Connector);
         r.item_part(k[Item::TreeFertilizer as usize], fertilizer::Fertilizer);
+        for id in sandpaper::IDS {
+            let key = r.item_key(id);
+            r.item_part(key, sandpaper::SandPaper);
+        }
         for id in sequenced::IDS {
             let key = r.item_key(id);
             r.item_part(key, sequenced::Transitional);
@@ -215,6 +220,15 @@ impl Subsystem for Items {
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         filters::level_tick(lv);
+    }
+
+    /// `SandPaperItem.finishUsingItem`.
+    fn use_item_finished(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::LivingEntityUseItemFinishEvent<'_>,
+    ) {
+        sandpaper::finished(host, event);
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
