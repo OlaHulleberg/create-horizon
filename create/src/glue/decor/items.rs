@@ -166,6 +166,41 @@ fn axis_name(a: Axis) -> &'static str {
     }
 }
 
+/// `BlockItem.canPlace` (`Level.isUnobstructed`) for a full block at `at`: no entity that
+/// blocks building (`Entity.blocksBuilding`: living ones, not spectators; minecarts, boats,
+/// falling blocks and primed TNT) overlaps it.
+fn obstructed(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
+    let lo = at.map(f64::from);
+    let hi = lo.map(|v| v + 1.0);
+    let host = &*lv.host;
+    let spectators: Vec<_> = lv
+        .players()
+        .into_iter()
+        .filter(|p| p.game_mode(host) == Some(mod_api::GameMode::Spectator))
+        .map(|p| p.entity())
+        .collect();
+    lv.level
+        .entities_in(host, lo, hi)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| !spectators.contains(e))
+        .filter(|e| {
+            e.bounding_box(host).is_some_and(|[min, max]| {
+                (0..3).all(|i| min[i] < hi[i] && max[i] > lo[i])
+            })
+        })
+        .any(|e| {
+            host.living(e).is_some()
+                || e.kind(host).is_some_and(|k| {
+                    k.ends_with("minecart")
+                        || k.ends_with("boat")
+                        || k.ends_with("raft")
+                        || k == "minecraft:falling_block"
+                        || k == "minecraft:tnt"
+                })
+        })
+}
+
 /// `VerticalGearboxItem` and `BlazeBurnerBlockItem.empty` place their block as a block item does
 /// (into the clicked block when it can be replaced, else beside it): a gearbox on Create's axis,
 /// an empty blaze burner facing the player.
@@ -185,7 +220,7 @@ fn place_item(lv: &mut ServerLevel<'_>, player: PlayerRef, event: &UseOnEvent<'_
     } else {
         [pos[0] + f[0], pos[1] + f[1], pos[2] + f[2]]
     };
-    if !replaceable(at) {
+    if !replaceable(at) || obstructed(lv, at) {
         return;
     }
     let yaw = player.entity().rotation(&*lv.host).map_or(0.0, |r| r[0]);
