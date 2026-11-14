@@ -130,6 +130,13 @@ impl<'a> ServerLevel<'a> {
         self.host.commands().run_command(&line)
     }
 
+    /// The block's id at `p` (`minecraft:fire`).
+    pub fn block_name(&self, p: [i32; 3]) -> Option<String> {
+        let state = self.block_state(p)?;
+        let text = self.host.block_state_string(state)?;
+        Some(states::split(&text).0.to_owned())
+    }
+
     /// Sets boolean properties of the block at `pos` (`setBlock` with `flags`); whether its state
     /// changed.
     pub fn set_flags(

@@ -254,11 +254,6 @@ impl ServerLevel<'_> {
         name_props(&*self.host, self.state_num(pos)?)
     }
 
-    /// The name of the block at `pos`.
-    pub fn block_name(&self, pos: [i32; 3]) -> Option<String> {
-        self.name_props(pos).map(|(n, _)| n)
-    }
-
     /// Sets numbered state `id` at `pos`.
     pub fn set_num(&mut self, pos: [i32; 3], id: u32, flags: BlockUpdateFlags) -> bool {
         match unnum(id) {

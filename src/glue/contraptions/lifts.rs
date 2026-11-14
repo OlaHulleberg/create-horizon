@@ -86,7 +86,7 @@ fn mark_unsaved(lv: &ServerLevel<'_>, pos: [i32; 3]) {
 
 impl ServerLevel<'_> {
     /// The level's lowest `y` and height.
-    fn shape(&self) -> (i32, i32) {
+    fn build_range(&self) -> (i32, i32) {
         self.level.height(&*self.host).unwrap_or((-64, 384))
     }
 }
@@ -429,7 +429,7 @@ fn assemble_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
         i += 1;
     }
     let offset = i - 1;
-    let range = pulley::extension_range(pos[1], lv.shape().0);
+    let range = pulley::extension_range(pos[1], lv.build_range().0);
     if (offset >= range && rpm > 0.0) || (offset <= 0 && rpm < 0.0) {
         return;
     }
@@ -678,7 +678,7 @@ fn assemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
     }
     take_blocks(lv, anchor, &blocks);
-    let (min_y, height) = lv.shape();
+    let (min_y, height) = lv.build_range();
     let range = pulley::extension_range(pos[1], min_y);
     let e = Elevator::new(pos[1], anchor, offset, range, column, contact_y, blocks);
     let target = e.floor_now(pos[1]);

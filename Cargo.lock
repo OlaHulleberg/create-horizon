@@ -28,6 +28,7 @@ version = "0.1.0"
 dependencies = [
  "create-engine",
  "horizon-mod-api",
+ "serde_json",
 ]
 
 [[package]]

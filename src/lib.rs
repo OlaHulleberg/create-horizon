@@ -20,7 +20,7 @@ use mod_api::{
     RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
     ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
     ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
-    ServerHost, WorldLifecycleEvent, WorldPhase,
+    ServerHost, TagsUpdatedEvent, WorldLifecycleEvent, WorldPhase,
 };
 
 #[derive(Default)]
@@ -64,6 +64,15 @@ impl Hooks for Create {
             }
         }
         world::level_index(event.dimension);
+    }
+
+    fn tags_updated(&self, host: HostSide, _event: &mut TagsUpdatedEvent) {
+        let HostSide::Server(host) = host else {
+            return;
+        };
+        for s in SUBSYSTEMS {
+            s.tags_updated(host);
+        }
     }
 
     fn chunk_load(&self, host: &mut dyn ServerHost, event: &mut ChunkLoadEvent<'_>) {

@@ -376,7 +376,6 @@ fn model_block(
         Model::CrankHandle(d) => part("part_hand_crank_handle", dir_name(d)),
         Model::WaterWheel(d) => part("part_water_wheel", dir_name(d)),
         Model::MillstoneCog => part("part_millstone_cog", "up"),
-        Model::PressHead(d) => part("part_press_head", dir_name(d)),
         Model::BearingTop(d) => part("part_bearing_top_wooden", dir_name(d)),
         Model::BearingTopMetal(d) => part("part_bearing_top", dir_name(d)),
         Model::FanPropeller(d) => part("part_fan_propeller", dir_name(d)),
@@ -392,8 +391,13 @@ fn model_block(
         Model::GaugeDial(d) => part("part_gauge_dial", dir_name(d)),
         Model::ArmCog => part("part_arm_cog", "up"),
         Model::HoseCoil(d) => part("part_hose_coil", dir_name(d)),
-        // Posed partials (belts, the mixer's pole and head) are drawn by their own systems.
-        Model::Belt(..) | Model::BeltPulley(_) | Model::MixerPole | Model::MixerHead => None,
+        // Posed partials (belts, the mixer's pole and head) and the press head on its stroke
+        // are drawn by their own systems.
+        Model::Belt(..)
+        | Model::BeltPulley(_)
+        | Model::MixerPole
+        | Model::MixerHead
+        | Model::PressHead(_) => None,
     }
 }
 

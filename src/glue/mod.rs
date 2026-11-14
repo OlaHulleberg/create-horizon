@@ -16,6 +16,7 @@ pub mod logistics;
 pub mod net;
 pub mod packages;
 pub mod persist;
+pub mod processing;
 pub mod redstone;
 pub mod schematics;
 pub mod server;
@@ -34,6 +35,7 @@ use subsystem::Subsystem;
 
 /// Every subsystem, in the order their level ticks run.
 pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
+    &processing::Processing,
     &kinetics::Kinetics,
     &packages::Packages,
     &stock::Stock,
