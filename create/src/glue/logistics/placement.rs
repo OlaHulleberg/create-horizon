@@ -166,8 +166,42 @@ impl BlockPart for Placement {
                 let s = set(s, "extracting", flag(!c.sneaking));
                 return Some(Some(s));
             }
-            // ChuteBlock.getStateForPlacement: down (diagonal chutes are not in the port).
-            Block::Chute => return Some(Some(set(default, "facing", "down"))),
+            // ChuteBlock.getStateForPlacement: down, or, placed against a block's side while not
+            // sneaking, facing that side (diagonal) when a chute is there for it to lead into
+            // (`updateChuteState`).
+            Block::Chute => {
+                let facing_at = |p: [i32; 3]| {
+                    let (b, i) = level.block_state(p).and_then(states::id).and_then(table)?;
+                    match b {
+                        Block::Chute => Some(i.facing.unwrap_or(Dir::Down)),
+                        Block::SmartChute => Some(Dir::Down),
+                        _ => None,
+                    }
+                };
+                let facing = if clicked_face.axis() != Axis::Y && !c.sneaking {
+                    clicked_face
+                } else {
+                    Dir::Down
+                };
+                let above = [pos[0], pos[1] + 1, pos[2]];
+                let funnel_down = level
+                    .block_state(above)
+                    .and_then(states::id)
+                    .and_then(table)
+                    .is_some_and(|(b, i)| {
+                        matches!(b, Block::AndesiteFunnel | Block::BrassFunnel)
+                            && i.facing == Some(Dir::Down)
+                    });
+                let (f, shape) = create_engine::chute::update_state(
+                    pos,
+                    facing,
+                    create_engine::chute::Shape::Normal,
+                    facing_at,
+                    funnel_down,
+                );
+                let s = set(default, "facing", super::super::kinetics::dir_name(f));
+                return Some(Some(set(s, "shape", shape.name())));
+            }
             // HorizontalKineticBlock.getStateForPlacement: facing the player.
             Block::WeightedEjector => {
                 let f = create_engine::place::horizontal_direction(c.yaw).opposite();

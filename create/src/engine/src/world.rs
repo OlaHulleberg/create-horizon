@@ -309,6 +309,9 @@ pub struct Dimension {
     pub chute_pulls: crate::chute::Pulls,
     /// Smart chutes' filters, saved with their column.
     pub chute_filters: HashMap<[i32; 3], crate::filter::Filter>,
+    /// Chutes whose shape or facing is looked at again after the tick
+    /// (`AbstractChuteBlock.updateDiagonalNeighbour` and `onRemove` schedule them a tick).
+    pub chute_shapes: Vec<[i32; 3]>,
     /// Brass tunnels' side filters (`SidedFilteringBehaviour`), by tunnel and side.
     pub tunnel_filters: HashMap<([i32; 3], crate::kinetics::Dir), crate::filter::Filter>,
     /// Filter items whose block was broken (`FilteringBehaviour.destroy`): the glue drops them.
@@ -1090,6 +1093,29 @@ impl CreateWorld {
                 self.dims[dim]
                     .door_changes
                     .push((pos, was.unwrap_or(false)));
+            }
+        }
+        // `AbstractChuteBlock.onPlace` / `onRemove`: the chute a chute leads into, and the
+        // diagonal chutes over a chute that went, look at their shape again.
+        let chute = |s: u32| {
+            self.table
+                .get(s)
+                .filter(|(b, _)| matches!(b, Block::Chute | Block::SmartChute))
+                .map(|(_, i)| i.facing.unwrap_or(crate::kinetics::Dir::Down))
+        };
+        if let Some(f) = chute(new).or(chute(old))
+            && chute(old).is_none() != chute(new).is_none()
+        {
+            let d = &mut self.dims[dim];
+            d.chute_shapes.push(crate::chute::target(pos, f));
+            for side in [
+                crate::kinetics::Dir::South,
+                crate::kinetics::Dir::West,
+                crate::kinetics::Dir::North,
+                crate::kinetics::Dir::East,
+            ] {
+                let o = side.offset();
+                d.chute_shapes.push([pos[0] + o[0], pos[1] + 1, pos[2] + o[2]]);
             }
         }
         // A still hose turning forwards waits for the block below its end (`lazyTick`).

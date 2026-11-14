@@ -28,7 +28,7 @@
 //!   every state), as `BeltModel` would draw it.
 //! - Players riding a belt are pushed by their own client (`push_player`), other entities by
 //!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`.
-//! - Diagonal chutes, a chute's window or casing drawn as Create joins them, and vaults' and
+//! - A chute's window or casing drawn as Create joins them, and vaults' and
 //!   casings' connected textures are not in the port.
 //! - A brass tunnel's mode value box and the comparators beside a vault's other blocks are the
 //!   interaction and redstone subsystems'; a brass tunnel's side filters are not in the port.
@@ -186,6 +186,7 @@ impl Subsystem for Logistics {
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         chute::tick_vaults(lv);
+        chute::tick_chute_shapes(lv);
         chute::tick_chutes(lv);
         funnel::tick_funnel_shapes(lv);
         funnel::tick_funnels(lv);
@@ -495,7 +496,10 @@ fn use_block(
             depot::use_depot(&mut lv, pos, face, click.player, main)
         }
         Block::MechanicalArm => arms::use_arm(&mut lv, pos, click.player),
-        Block::SmartChute => chute::use_smart_chute(&mut lv, pos, click),
+        Block::SmartChute => {
+            chute::use_smart_chute(&mut lv, pos, click) || chute::use_chute(&mut lv, pos, click)
+        }
+        Block::Chute => chute::use_chute(&mut lv, pos, click),
         Block::BrassFunnel | Block::BrassBeltFunnel => {
             funnel::use_funnel_filter(&mut lv, pos, click)
         }
@@ -555,7 +559,8 @@ impl BlockPart for LogisticsBlock {
         Flow::Continue
     }
 
-    /// `BeltBlock.updateShape` from above: a cased belt looks at its cover again.
+    /// `updateShape` from above: a cased belt looks at its cover again (`BeltBlock`), a chute
+    /// at its shape (`AbstractChuteBlock`).
     fn update_shape(
         &self,
         _level: &mut dyn mod_api::LevelTicksHost,
@@ -564,13 +569,17 @@ impl BlockPart for LogisticsBlock {
         if event.direction != mod_api::Direction::Up {
             return None;
         }
-        let belt = states::id(event.state)
-            .and_then(|id| with_world(|w| w.table.get(id).map(|(b, _)| b == Block::Belt)))
+        let block = states::id(event.state)
+            .and_then(|id| with_world(|w| w.table.get(id).map(|(b, _)| b)))
             .flatten();
-        if belt == Some(true)
-            && let Some(dim) = super::world::level_index(event.dimension.key().id())
-        {
-            belt::cover_check(dim, [event.pos.x, event.pos.y, event.pos.z]);
+        let dim = super::world::level_index(event.dimension.key().id())?;
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        match block {
+            Some(Block::Belt) => belt::cover_check(dim, pos),
+            Some(Block::Chute) => {
+                with_world(|w| w.dims[dim].chute_shapes.push(pos));
+            }
+            _ => {}
         }
         None
     }
