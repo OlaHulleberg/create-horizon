@@ -248,11 +248,25 @@ pub fn can_disassemble(dim: usize, pos: [i32; 3]) -> bool {
 /// `tryDisassembleTrain`: the train standing at the station goes back into the world, each
 /// carriage where it stands (turned to its quarter); its name is kept for the next train
 /// assembled there. False when there is none, or it is not square to the grid.
-pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
+pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<PlayerRef>) -> bool {
     let dim = lv.dim;
     railway_ready(dim);
     if !can_disassemble(dim, pos) {
         return false;
+    }
+    // `dropSchedule`: the train's schedule to the player's empty hand, else dropped above the
+    // station.
+    if let Some(train) = present_train(dim, pos)
+        && let Some(Some(s)) = super::conductor::take_schedule(dim, train)
+    {
+        let empty_hand = player.is_some_and(|p| {
+            crate::glue::items::held(&*lv.host, p, mod_api::Hand::Main)
+                .is_none_or(|s| s.count() == 0)
+        });
+        match player {
+            Some(p) if empty_hand => super::conductor::give_schedule(lv.host, p, &s),
+            _ => super::conductor::drop_schedule(lv, [pos[0], pos[1] + 1, pos[2]], &s),
+        }
     }
     let stopped = with_world(|w| {
         let r = &mut w.dims[dim].railway;
@@ -318,7 +332,7 @@ pub fn enter_assembly(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Pl
         return false;
     }
     if with_world(|w| stopped_at(&w.dims[dim].railway, pos).is_some()) == Some(true)
-        && !disassemble(lv, pos)
+        && !disassemble(lv, pos, player)
     {
         return false;
     }

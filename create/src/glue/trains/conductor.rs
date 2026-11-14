@@ -130,9 +130,7 @@ pub fn interact(
     })
     .flatten()?;
     if let Some(stack) = holding {
-        let Some(schedule) = schedule_of(&stack) else {
-            return None;
-        };
+        let schedule = schedule_of(&stack)?;
         if !conductor {
             say(host, player, "create.schedule.non_controlling_seat");
             sound_at(host, player, "create:deny", 1.0, 1.0);
@@ -257,7 +255,6 @@ pub fn apply_auto(dim: usize, pos: [i32; 3], now: bool) -> bool {
         Some(t.column)
     })
     .flatten();
-    crate::create_log!("DEBUG trn2 apply_auto {pos:?} now={now} applied={applied:?}");
     if let Some(c) = applied {
         super::super::persist::mark_unsaved(dim, [c.0, c.1]);
     }
@@ -329,18 +326,23 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
     let dropped = with_world(|w| std::mem::take(&mut w.dims[dim].railway.dropped_schedules))
         .unwrap_or_default();
     for (pos, s) in dropped {
-        let Some(key) = mod_api::Identifier::parse("create:schedule")
-            .ok()
-            .and_then(|i| lv.host.item_key(&i))
-        else {
-            continue;
-        };
-        let stack = with_schedule(&mod_api::ItemStack::of(key), &s);
-        let p = pos.map(|v| f64::from(v) + 0.5);
-        let _ = lv
-            .level
-            .spawn_item(&mut *lv.host, p[0], p[1], p[2], stack, 10);
+        drop_schedule(lv, pos, &s);
     }
+}
+
+/// A schedule item holding `s` dropped at block `pos` (`Containers.dropItemStack`).
+pub fn drop_schedule(lv: &mut ServerLevel<'_>, pos: [i32; 3], s: &Schedule) {
+    let Some(key) = mod_api::Identifier::parse("create:schedule")
+        .ok()
+        .and_then(|i| lv.host.item_key(&i))
+    else {
+        return;
+    };
+    let stack = with_schedule(&mod_api::ItemStack::of(key), s);
+    let p = pos.map(|v| f64::from(v) + 0.5);
+    let _ = lv
+        .level
+        .spawn_item(&mut *lv.host, p[0], p[1], p[2], stack, 10);
 }
 
 /// The train's schedule into `player`'s inventory (`placeItemBackInInventory`), with

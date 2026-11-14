@@ -379,26 +379,6 @@ fn tick_trains(lv: &mut ServerLevel<'_>) {
         .filter(|p| lv.has_neighbor_signal(*p))
         .collect();
     let seated = riding::passengers(dim);
-    if lv.game_time() % 40 == 0 {
-        with_world(|w| {
-            for t in &w.dims[dim].railway.trains {
-                crate::create_log!(
-                    "DEBUG trn2 train {} bound={} at={:?} nav={:?} sched={} rt={:?}",
-                    t.id,
-                    t.train.bound,
-                    t.train.at_station,
-                    t.train.nav.as_ref().map(|n| n.station),
-                    t.schedule.is_some(),
-                    (
-                        t.runtime.current,
-                        t.runtime.state,
-                        t.runtime.paused,
-                        t.runtime.cooldown
-                    )
-                );
-            }
-        });
-    }
     with_world(|w| {
         let r = &mut w.dims[dim].railway;
         r.day_time = day_time;
