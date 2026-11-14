@@ -8,6 +8,7 @@
 
 mod blocks;
 mod common_tags;
+mod ct;
 mod equipment;
 mod java;
 mod prepare;

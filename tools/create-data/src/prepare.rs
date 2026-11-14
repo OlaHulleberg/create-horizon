@@ -507,6 +507,14 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             }
         }
     }
+    // Connected textures, as Fusion's: re-cut sheets, connecting models, their blockstates.
+    let read = |p: &str| -> Option<Vec<u8>> {
+        fs::read(tmp.join(p)).ok().or_else(|| files.get(p).cloned())
+    };
+    let (ct_files, ct_left_out) = crate::ct::files(&read);
+    for (rel, bytes) in &ct_files {
+        put(rel, bytes)?;
+    }
     // NeoForge's common tags Create's recipes name and nobody else defines here.
     let mut common = 0;
     for (_, rel, doc) in common_tag_files() {
@@ -551,6 +559,8 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     report.insert("worldgen_left_out".into(), json!(worldgen_left_out));
     report.insert("files_copied".into(), json!(copied));
     report.insert("common_tags_added".into(), json!(common));
+    report.insert("connected_texture_files".into(), json!(ct_files.len()));
+    report.insert("connected_textures_left_out".into(), json!(ct_left_out));
     Ok(serde_json::to_string_pretty(&Value::Object(report)).unwrap())
 }
 
