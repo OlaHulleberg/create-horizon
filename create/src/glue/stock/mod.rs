@@ -13,6 +13,7 @@
 //! a level's own host): a link whose column loaded before then is not counted as unloaded.
 
 mod keeper;
+mod requester;
 
 use super::packages::{self as packages, add, block_of, body, command_player, coords, feedback};
 use super::packages::{debug_verb, ints, list, pos_of, text};
@@ -437,10 +438,11 @@ impl Subsystem for Stock {
         channel: &str,
         data: &[u8],
     ) -> bool {
-        if channel != keeper::CHANNEL {
-            return false;
+        match channel {
+            keeper::CHANNEL => keeper::client_message(host, player, data),
+            requester::CHANNEL => requester::client_message(host, player, data),
+            _ => return false,
         }
-        keeper::client_message(host, player, data);
         true
     }
 
@@ -451,14 +453,17 @@ impl Subsystem for Stock {
         data: &[u8],
     ) -> bool {
         keeper::server_message(host, channel, data)
+            || requester::server_message(host, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
         keeper::tick(host);
+        requester::tick(host);
     }
 
     fn client_reset(&self) {
         keeper::reset();
+        requester::reset();
     }
 
     fn screen_render_post(
@@ -467,6 +472,7 @@ impl Subsystem for Stock {
         event: &mut mod_api::ScreenRenderPostEvent<'_>,
     ) {
         keeper::screen_render_post(host, event);
+        requester::screen_render_post(host, event);
     }
 
     fn screen_mouse_pressed(
@@ -474,7 +480,10 @@ impl Subsystem for Stock {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenMouseButtonPressedPreEvent<'_>,
     ) -> Flow {
-        keeper::screen_mouse_pressed(host, event)
+        if keeper::screen_mouse_pressed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        requester::screen_mouse_pressed(host, event)
     }
 
     fn screen_mouse_scrolled(
@@ -482,7 +491,10 @@ impl Subsystem for Stock {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenMouseScrolledPreEvent<'_>,
     ) -> Flow {
-        keeper::screen_mouse_scrolled(host, event)
+        if keeper::screen_mouse_scrolled(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        requester::screen_mouse_scrolled(host, event)
     }
 
     fn screen_key_pressed(
@@ -490,7 +502,10 @@ impl Subsystem for Stock {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
-        keeper::screen_key_pressed(host, event)
+        if keeper::screen_key_pressed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        requester::screen_key_pressed(host, event)
     }
 
     fn screen_char_typed(
@@ -498,7 +513,10 @@ impl Subsystem for Stock {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenCharTypedPreEvent<'_>,
     ) -> Flow {
-        keeper::screen_char_typed(host, event)
+        if keeper::screen_char_typed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        requester::screen_char_typed(host, event)
     }
 
     fn screen_closing(
@@ -507,6 +525,7 @@ impl Subsystem for Stock {
         event: &mut mod_api::ScreenClosingEvent<'_>,
     ) {
         keeper::screen_closing(host, event);
+        requester::screen_closing(host, event);
     }
 
     /// `StockTickerInteractionHandler.interactWithLogisticsManager`: a mob seated beside a
@@ -1284,21 +1303,15 @@ impl BlockPart for StockBlock {
             tune(host, player, event.click.hand, stack, event.click.pos);
             return Some(InteractionResult::Success);
         }
-        let b = block_of(states::id(event.state)?)?;
-        // `StockTickerBlock.useItemOn`: without a keeper, it says so (with one, Create's
-        // category editor would open: not ported).
-        if b == Block::StockTicker {
-            let player = host.player(event.click.player)?;
-            let dimension = player.dimension(&*host)?.to_string();
-            let lv = ServerLevel::new(host, &dimension)?;
-            if !keeper::keeper_present(&lv, event.click.pos) {
-                let line =
-                    mod_api::Text::translate("create.stock_ticker.keeper_missing", Vec::new());
-                let _ = player.action_bar(lv.host, line);
-            }
-            return Some(InteractionResult::Success);
-        }
-        matches!(b, Block::StockLink | Block::FactoryGauge).then_some(InteractionResult::Success)
+        own_use(host, event.state, event.click)
+    }
+
+    fn use_without_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::UseWithoutItemEvent<'_>,
+    ) -> Option<InteractionResult> {
+        own_use(host, event.state, event.click)
     }
 
     fn has_analog_output(&self, _level: &dyn LevelHost, event: &mut HasAnalogOutputEvent) {
@@ -1319,6 +1332,38 @@ impl BlockPart for StockBlock {
             event.output = if lit { 15 } else { 0 };
         }
     }
+}
+
+/// A click on a link, gauge, requester or ticker, after a linking item's: a requester opens its
+/// screen (`RedstoneRequesterBlockEntity.use`); a ticker without a keeper says so
+/// (`StockTickerBlock.useItemOn`; with one, Create's category editor would open: not ported);
+/// links and gauges take the click (their screens are not ported).
+fn own_use(
+    host: &mut dyn ServerHost,
+    state: mod_api::BlockState,
+    click: &mod_api::BlockClick<'_>,
+) -> Option<InteractionResult> {
+    let b = block_of(states::id(state)?)?;
+    let player = host.player(click.player)?;
+    if b == Block::RedstoneRequester {
+        if player.entity().is_shift_key_down(&*host) == Some(true) {
+            return None;
+        }
+        let dimension = player.dimension(&*host)?.to_string();
+        let mut lv = ServerLevel::new(host, &dimension)?;
+        requester::open(&mut lv, player, click.pos);
+        return Some(InteractionResult::Success);
+    }
+    if b == Block::StockTicker {
+        let dimension = player.dimension(&*host)?.to_string();
+        let lv = ServerLevel::new(host, &dimension)?;
+        if !keeper::keeper_present(&lv, click.pos) {
+            let line = mod_api::Text::translate("create.stock_ticker.keeper_missing", Vec::new());
+            let _ = player.action_bar(lv.host, line);
+        }
+        return Some(InteractionResult::Success);
+    }
+    matches!(b, Block::StockLink | Block::FactoryGauge).then_some(InteractionResult::Success)
 }
 
 /// The items placing links, tickers, gauges and requesters (`LogisticallyLinkedBlockItem`):

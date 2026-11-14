@@ -31,11 +31,11 @@ const COLS: usize = 9;
 // ---------------------------------------------------------------------------------------------
 // Wire
 
-fn put_i32(out: &mut Vec<u8>, v: i32) {
+pub(super) fn put_i32(out: &mut Vec<u8>, v: i32) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 
-fn put_str(out: &mut Vec<u8>, s: &str) {
+pub(super) fn put_str(out: &mut Vec<u8>, s: &str) {
     let b = &s.as_bytes()[..s.len().min(255)];
     out.push(b.len() as u8);
     out.extend_from_slice(b);
@@ -54,7 +54,7 @@ fn stack_from_bytes(host: &dyn Host, bytes: &[u8]) -> Option<ItemStack> {
     ItemStack::from_nbt(host, &nbt)
 }
 
-fn put_stack(host: &dyn Host, out: &mut Vec<u8>, stack: &ItemStack, count: u32) -> bool {
+pub(super) fn put_stack(host: &dyn Host, out: &mut Vec<u8>, stack: &ItemStack, count: u32) -> bool {
     let Some(nbt) = stack_bytes(host, stack) else {
         return false;
     };
@@ -64,10 +64,10 @@ fn put_stack(host: &dyn Host, out: &mut Vec<u8>, stack: &ItemStack, count: u32) 
     true
 }
 
-struct Reader<'a>(&'a [u8]);
+pub(super) struct Reader<'a>(pub(super) &'a [u8]);
 
 impl Reader<'_> {
-    fn bytes(&mut self, n: usize) -> Option<&[u8]> {
+    pub(super) fn bytes(&mut self, n: usize) -> Option<&[u8]> {
         if self.0.len() < n {
             return None;
         }
@@ -75,21 +75,21 @@ impl Reader<'_> {
         self.0 = b;
         Some(a)
     }
-    fn u8(&mut self) -> Option<u8> {
+    pub(super) fn u8(&mut self) -> Option<u8> {
         self.bytes(1).map(|b| b[0])
     }
-    fn i32(&mut self) -> Option<i32> {
+    pub(super) fn i32(&mut self) -> Option<i32> {
         self.bytes(4)
             .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
-    fn str(&mut self) -> Option<String> {
+    pub(super) fn str(&mut self) -> Option<String> {
         let n = usize::from(self.u8()?);
         String::from_utf8(self.bytes(n)?.to_vec()).ok()
     }
-    fn pos(&mut self) -> Option<[i32; 3]> {
+    pub(super) fn pos(&mut self) -> Option<[i32; 3]> {
         Some([self.i32()?, self.i32()?, self.i32()?])
     }
-    fn stack(&mut self, host: &dyn Host) -> Option<(ItemStack, u32)> {
+    pub(super) fn stack(&mut self, host: &dyn Host) -> Option<(ItemStack, u32)> {
         let count = self.i32()? as u32;
         let n = self.bytes(2).map(|b| u16::from_le_bytes([b[0], b[1]]))?;
         let nbt = self.bytes(usize::from(n))?;
