@@ -170,6 +170,50 @@ pub(super) fn detects(lv: &mut ServerLevel<'_>, at: [i32; 3], observer: bool) ->
         .is_some()
 }
 
+/// What a smart observer's display sources read of its target (`InvManipulationBehaviour`,
+/// `TankManipulationBehaviour`, through the observer's filter): each matching stack's item id
+/// and count of an item handler, and the matching fluid of a tank; None where there is none.
+#[derive(Default)]
+pub(crate) struct Observed {
+    pub(crate) items: Option<Vec<(String, u32)>>,
+    pub(crate) fluids: Option<Vec<(create_engine::tank::Fluid, u32)>>,
+}
+
+/// `Observed` for the smart observer at `pos`.
+pub(crate) fn observed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Observed {
+    let Some((Block::ContentObserver, info)) = block_at(lv, pos) else {
+        return Observed::default();
+    };
+    let (Some(t), Some(f)) = (info.target, info.facing) else {
+        return Observed::default();
+    };
+    let target = observe::target_pos(pos, t, f);
+    let (seen, _) = seen_at(lv, target, false);
+    let dim = lv.dim;
+    let filter = with_world(|w| w.dims[dim].detectors.filter(pos).cloned()).flatten();
+    let passes = filters::Detector {
+        host: &*lv.host,
+        filter: filter.as_ref(),
+    };
+    use create_engine::filter::Passes;
+    Observed {
+        items: seen.inventory.map(|(slots, _)| {
+            slots
+                .into_iter()
+                .filter_map(|s| Some((s.item?, s.count)))
+                .filter(|(item, n)| *n > 0 && passes.item(item))
+                .collect()
+        }),
+        fluids: seen.tank.map(|(fluid, amount, _)| {
+            fluid
+                .filter(|f| amount > 0 && passes.fluid(*f))
+                .map(|f| (f, amount))
+                .into_iter()
+                .collect()
+        }),
+    }
+}
+
 /// The stack in slot `slot` of the block entity at `pos`.
 pub(crate) fn slot_stack(lv: &ServerLevel<'_>, pos: [i32; 3], slot: u32) -> Option<ItemStack> {
     let entity = lv.host.block_entity(lv.level, pos)?;

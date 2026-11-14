@@ -210,13 +210,28 @@ impl Subsystem for Display {
 const LANG: Lang<'static> = Lang::EN_US;
 
 /// `ItemStack.getHoverName` of an item id, as the server can name it: Create's en_us text of
-/// its `item.` then `block.` key, else its path in words.
+/// its `item.` then `block.` key, else its path in capitalised words (as most English names
+/// read).
 fn item_name(id: &str) -> String {
     let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
     ["item", "block"]
         .iter()
         .find_map(|p| display::en_us(&format!("{p}.{ns}.{path}")))
-        .map_or_else(|| path.replace('_', " "), str::to_owned)
+        .map_or_else(|| title_words(path), str::to_owned)
+}
+
+/// `oak_planks` as `Oak Planks`.
+fn title_words(path: &str) -> String {
+    path.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The value of property `key` of the block at `pos`.
@@ -319,6 +334,15 @@ fn sources_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> &'static [Source] {
         Some(Block::Depot | Block::Belt | Block::WeightedEjector) => &[Source::ItemNames],
         Some(Block::CuckooClock) => &[Source::TimeOfDay, Source::StopWatch],
         Some(b) if display::is_nixie(b) => &[Source::NixieTube],
+        // AllBlocks.SMART_OBSERVER (its package address source is not ported).
+        Some(Block::ContentObserver) => &[
+            Source::CountItems,
+            Source::ListItems,
+            Source::CountFluids,
+            Source::ListFluids,
+        ],
+        Some(Block::StockpileSwitch) => &[Source::FillLevel],
+        Some(b) if create_engine::dye::is_seat(b) => &[Source::EntityName],
         // AllDisplaySources.REDSTONE_POWER `associate(Blocks.TARGET)`.
         None if block_name(lv, pos) == "minecraft:target" => &[Source::RedstonePower],
         _ => &[],
@@ -326,12 +350,16 @@ fn sources_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> &'static [Source] {
 }
 
 /// `DisplayTarget.get`: by block first (display boards), then by block entity (nixie tubes,
-/// signs). Lecterns are not targets yet.
+/// signs, lecterns).
 fn target_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Target> {
     match block_at(lv, pos).map(|(b, _)| b) {
         Some(Block::DisplayBoard) => return Some(Target::Board),
         Some(b) if display::is_nixie(b) => return Some(Target::Nixie),
-        _ => {}
+        Some(_) => return None,
+        None => {}
+    }
+    if block_name(lv, pos) == "minecraft:lectern" {
+        return Some(Target::Lectern);
     }
     sign_at(lv, pos).map(|(hanging, _, _)| Target::Sign { hanging })
 }
@@ -362,6 +390,11 @@ fn stats_of(lv: &ServerLevel<'_>, pos: [i32; 3], target: Target) -> Stats {
             rows: 4,
             columns: 15,
         },
+        // LecternDisplayTarget.provideStats.
+        Target::Lectern => Stats {
+            rows: 50,
+            columns: 256,
+        },
         // NixieTubeDisplayTarget.getWidth: two characters a tube.
         Target::Nixie => Stats {
             rows: 1,
@@ -378,7 +411,7 @@ fn stats_of(lv: &ServerLevel<'_>, pos: [i32; 3], target: Target) -> Stats {
 }
 
 /// What a source reads from the world now.
-fn read_source(lv: &ServerLevel<'_>, pos: [i32; 3], source: Source) -> Reading {
+fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Reading {
     let dim = lv.dim;
     let (link_facing, _) = link_at(lv, pos).unwrap_or((Dir::Up, false));
     let at = display::source_pos(pos, link_facing);
@@ -469,6 +502,46 @@ fn read_source(lv: &ServerLevel<'_>, pos: [i32; 3], source: Source) -> Reading {
         } else {
             None
         }),
+        // ItemCountDisplaySource and ItemListDisplaySource (`CountedItemStackList`: one entry
+        // an item).
+        Source::CountItems | Source::ListItems => {
+            let items = super::redstone::observed(lv, at).items;
+            if source == Source::CountItems {
+                return Reading::Count(items.map(|i| i.iter().map(|(_, n)| i64::from(*n)).sum()));
+            }
+            let mut entries: Vec<(i64, String)> = Vec::new();
+            for (id, n) in items.unwrap_or_default() {
+                let name = item_name(&id);
+                match entries.iter_mut().find(|e| e.1 == name) {
+                    Some(e) => e.0 += i64::from(n),
+                    None => entries.push((i64::from(n), name)),
+                }
+            }
+            Reading::Entries(entries)
+        }
+        // FluidAmountDisplaySource and FluidListDisplaySource.
+        Source::CountFluids | Source::ListFluids => {
+            let fluids = super::redstone::observed(lv, at).fluids;
+            if source == Source::CountFluids {
+                return Reading::Fluid(fluids.map(|f| f.iter().map(|(_, n)| i64::from(*n)).sum()));
+            }
+            Reading::Entries(
+                fluids
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(f, n)| (i64::from(n), f.name().to_owned()))
+                    .collect(),
+            )
+        }
+        // FillLevelDisplaySource.getProgress: `max(0, (level - min) / (max - min))`.
+        Source::FillLevel => Reading::Fill(
+            with_world(|w| {
+                let s = w.dims[dim].detectors.switches.get(&at)?;
+                Some(((s.level - s.min) as f32 / (s.max - s.min) as f32).max(0.0))
+            })
+            .flatten(),
+        ),
+        Source::EntityName => Reading::Text(super::contraptions::seats::rider_name(lv, at)),
     }
 }
 
@@ -560,6 +633,115 @@ fn write_sign(
     }
 }
 
+/// `LecternDisplayTarget.acceptText`: the lectern's book takes the text a page a line from
+/// page `line` (blank pages before it, at most 50); a book and quill is signed first
+/// ("Printed Book" by "Data Gatherer"). Through `/data`, which updates the lectern.
+fn write_lectern(
+    lv: &mut ServerLevel<'_>,
+    link: [i32; 3],
+    target: [i32; 3],
+    line: i32,
+    text: &[String],
+) {
+    let dim = lv.dim;
+    let Some(data) = lv
+        .host
+        .block_entity(lv.level, target)
+        .and_then(|e| e.data(&*lv.host))
+    else {
+        return;
+    };
+    let Some(Tag::Compound(book)) = data.get(&"Book".into()) else {
+        return;
+    };
+    let id = match book.get(&"id".into()) {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => return,
+    };
+    let components = match book.get(&"components".into()) {
+        Some(Tag::Compound(c)) => c.clone(),
+        _ => Compound::new(),
+    };
+    // A page's text, whether it is filtered or not.
+    let page_text = |t: &Tag| -> String {
+        match t {
+            Tag::Compound(c) if c.get(&"raw".into()).is_some() => {
+                c.get(&"raw".into()).map(message_text).unwrap_or_default()
+            }
+            other => message_text(other),
+        }
+    };
+    let pages_of = |key: &str| -> Vec<String> {
+        match components.get(&key.into()) {
+            Some(Tag::Compound(c)) => match c.get(&"pages".into()) {
+                Some(Tag::List(l)) => l.iter().map(page_text).collect(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
+    };
+    let (written, mut pages) = match id.as_str() {
+        "minecraft:written_book" => (true, pages_of("minecraft:written_book_content")),
+        "minecraft:writable_book" => (false, pages_of("minecraft:writable_book_content")),
+        _ => return,
+    };
+    let before = pages.clone();
+    let mut i = 0i32;
+    while i - line < text.len() as i32 && i < 50 {
+        let at = i as usize;
+        if pages.len() <= at {
+            pages.push(if i < line {
+                String::new()
+            } else {
+                text[(i - line) as usize].clone()
+            });
+        } else if i >= line {
+            let reserved = {
+                let lv = &*lv;
+                with_world(|w| {
+                    let table = &w.table;
+                    let d = &mut w.dims[dim].displays;
+                    if i == line {
+                        d.reserve(target, i, link);
+                        false
+                    } else {
+                        // `isReserved(i - line, ..)`, as Create asks it.
+                        d.is_reserved(target, i - line, link, |p| is_link(table, lv, p))
+                    }
+                })
+            };
+            if reserved == Some(true) {
+                break;
+            }
+            pages[at] = text[(i - line) as usize].clone();
+        }
+        i += 1;
+    }
+    if written && pages == before {
+        return;
+    }
+    let list = pages
+        .iter()
+        .map(|p| format!("{{raw:{}}}", quoted(p)))
+        .collect::<Vec<_>>()
+        .join(",");
+    let command = if written {
+        format!(
+            "data modify block {} {} {} Book.components.\"minecraft:written_book_content\".pages \
+             set value [{list}]",
+            target[0], target[1], target[2]
+        )
+    } else {
+        format!(
+            "data modify block {} {} {} Book set value {{id:\"minecraft:written_book\",count:1,\
+             components:{{\"minecraft:written_book_content\":{{title:{{raw:\"Printed Book\"}},\
+             author:\"Data Gatherer\",generation:0,resolved:1b,pages:[{list}]}}}}}}",
+            target[0], target[1], target[2]
+        )
+    };
+    lv.run_command(&command);
+}
+
 /// `DisplayLinkBlockEntity.updateGatheredData`: the source's text written to the target.
 fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
@@ -642,6 +824,10 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             let text = display::provide_text(source, &config, &line, target);
             write_sign(lv, pos, target_pos, link.target_line, &text);
         }
+        Target::Lectern => {
+            let text = display::provide_text(source, &config, &line, target);
+            write_lectern(lv, pos, target_pos, link.target_line, &text);
+        }
         Target::Board => {
             let Some(controller) = controller_of(lv, target_pos) else {
                 return;
@@ -654,6 +840,11 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                 return;
             }
             let text = display::provide_flap_text(source, &config, &line);
+            // `flapDisplayContext`: a list's largest amount.
+            let highest = line
+                .entries
+                .as_ref()
+                .map_or(0, |e| e.iter().map(|x| x.0).max().unwrap_or(0));
             let line_at = link.target_line;
             let changed = {
                 let lv = &*lv;
@@ -676,6 +867,7 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                         source,
                         &config,
                         line.numeric,
+                        highest,
                         |l| reserved.get(l).copied().unwrap_or(false),
                     );
                     if changed {
@@ -1279,6 +1471,7 @@ fn open_screen(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
         target: match target {
             None => 0,
             Some(Target::Nixie) => 1,
+            Some(Target::Lectern) => 3,
             Some(_) => 2,
         },
         rows,
@@ -1346,6 +1539,7 @@ fn configure_from_client(host: &mut dyn ServerHost, player: PlayerRef, data: &[u
                 l.config.directional = s.config.directional;
                 l.config.mode = s.config.mode;
                 l.config.cycle = s.config.cycle;
+                l.config.format = s.config.format;
             }
             None => {}
         }
@@ -1484,6 +1678,7 @@ fn bind(lv: &mut ServerLevel<'_>, pos: [i32; 3], target: [i32; 3], words: &[&str
             l.config.directional = config.directional;
             l.config.mode = config.mode;
             l.config.cycle = config.cycle;
+            l.config.format = config.format;
         }
         l.last = None;
         d.schedule(pos, now);
@@ -1613,6 +1808,21 @@ fn displays_chunk_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
             c.insert("texts".into(), Tag::List(texts));
             own.insert("links".into(), Tag::Compound(c));
         }
+        // A list's number format, where it is not the first: x, y, z, Format.
+        let formats: Vec<i32> = {
+            let mut l: Vec<(&[i32; 3], &Link)> = d
+                .links
+                .iter()
+                .filter(|(p, l)| inside(p) && l.config.format != 0)
+                .collect();
+            l.sort_by_key(|(p, _)| **p);
+            l.into_iter()
+                .flat_map(|(p, l)| [p[0], p[1], p[2], l.config.format])
+                .collect()
+        };
+        if !formats.is_empty() {
+            own.insert("link_formats".into(), Tag::IntArray(formats));
+        }
         // Tubes with custom text: x, y, z, index; the text.
         let mut nixies: Vec<_> = d
             .nixies
@@ -1741,11 +1951,19 @@ fn displays_from_nbt(dim: usize, data: &Compound) {
                         mode: v[8],
                         cycle: v[9],
                         start_time: (v[10] != 0).then_some(start),
+                        format: 0,
                     },
                     due: None,
                     last: None,
                 };
                 d.links.insert([v[0], v[1], v[2]], link);
+            }
+        }
+        if let Some(Tag::IntArray(v)) = data.get(&"link_formats".into()) {
+            for f in v.as_chunks::<4>().0 {
+                if let Some(l) = d.links.get_mut(&[f[0], f[1], f[2]]) {
+                    l.config.format = f[3];
+                }
             }
         }
         if let Some((nums, texts)) = part("nixies") {
@@ -1788,7 +2006,7 @@ fn displays_from_nbt(dim: usize, data: &Compound) {
                         };
                         let text = texts.next().unwrap_or_default();
                         let cycle = display::Cycle::ALL
-                            .get(cycle.clamp(0, 3) as usize)
+                            .get(cycle.clamp(0, display::Cycle::ALL.len() as i32 - 1) as usize)
                             .copied()
                             .unwrap_or(display::Cycle::Alphabet);
                         let mut sec = display::Section::new(
