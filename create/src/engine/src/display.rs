@@ -66,6 +66,35 @@ pub fn en_us(key: &str) -> Option<&'static str> {
         "create.display_link.invalid" => "Link has no valid target, try placing it again",
         "create.display_link.too_far" => "Targeted position is too far from here",
         "create.display_link.no_source" => "Not a Display Source",
+        "create.display_source.boiler_status" => "Boiler Status",
+        "create.display_source.boiler.not_enough_space" => "Not enough space ",
+        "create.display_source.boiler.for_boiler_status" => "for Boiler Status",
+        "create.display_source.current_floor" => "Elevator Location",
+        "create.display_source.train_status" => "Train Schedule Status",
+        "create.display_source.observed_train_name" => "Detected Train Name",
+        "create.display_source.read_package_address" => "Read Package Address",
+        "create.boiler.status" => "Boiler Status:  %1$s",
+        "create.boiler.status_short" => "Boiler:  %1$s",
+        "create.boiler.passive" => "Passive",
+        "create.boiler.idle" => "Idle",
+        "create.boiler.max_lvl" => "Max",
+        "create.boiler.lvl" => "Lvl %1$s",
+        "create.boiler.size" => "Size",
+        "create.boiler.size_dots" => "....... ",
+        "create.boiler.water" => "Water",
+        "create.boiler.water_dots" => "... ",
+        "create.boiler.heat" => "Heat",
+        "create.boiler.heat_dots" => "...... ",
+        "create.schedule.condition.delay.status" => "Departs in %1$s",
+        "create.schedule.condition.idle.status" => "Cargo Idle for %1$s",
+        "create.schedule.condition.player_count.status" => "Passengers: %1$s/%2$s",
+        "create.schedule.condition.powered.status" => "Waiting for redstone",
+        "create.schedule.condition.time_of_day.status" => "Departs at ",
+        "create.schedule.condition.time_of_day.digital_format" => "%1$s:%3$s %4$s",
+        "create.generic.daytime.minute" => "Minute",
+        "create.generic.daytime.second" => "Second",
+        "create.generic.unit.minutes" => "Minutes",
+        "create.generic.unit.seconds" => "Seconds",
         _ => return None,
     })
 }
@@ -119,10 +148,20 @@ pub enum Source {
     AccumulateItems,
     ItemThroughput,
     EnchantPower,
+    /// A fluid tank's boiler (`BoilerDisplaySource`).
+    Boiler,
+    /// An elevator contact's floor (`CurrentFloorDisplaySource`).
+    CurrentFloor,
+    /// A station's train's schedule status (`TrainStatusDisplaySource`).
+    TrainStatus,
+    /// A track observer's train (`ObservedTrainNameSource`).
+    ObservedTrainName,
+    /// A smart observer's package's address (`PackageAddressDisplaySource`).
+    PackageAddress,
 }
 
 impl Source {
-    pub const ALL: [Source; 16] = [
+    pub const ALL: [Source; 21] = [
         Source::KineticSpeed,
         Source::KineticStress,
         Source::RedstonePower,
@@ -139,6 +178,11 @@ impl Source {
         Source::AccumulateItems,
         Source::ItemThroughput,
         Source::EnchantPower,
+        Source::Boiler,
+        Source::CurrentFloor,
+        Source::TrainStatus,
+        Source::ObservedTrainName,
+        Source::PackageAddress,
     ];
 
     /// Its registry id's path (`create:<id>`).
@@ -160,6 +204,11 @@ impl Source {
             Source::AccumulateItems => "accumulate_items",
             Source::ItemThroughput => "item_throughput",
             Source::EnchantPower => "enchant_power",
+            Source::Boiler => "boiler",
+            Source::CurrentFloor => "current_floor",
+            Source::TrainStatus => "train_status",
+            Source::ObservedTrainName => "observed_train_name",
+            Source::PackageAddress => "read_package_address",
         }
     }
 
@@ -212,14 +261,20 @@ impl Source {
             Source::AccumulateItems => "create.display_source.accumulate_items",
             Source::ItemThroughput => "create.display_source.item_throughput",
             Source::EnchantPower => "create.display_source.max_enchant_level",
+            Source::Boiler => "create.display_source.boiler_status",
+            Source::CurrentFloor => "create.display_source.current_floor",
+            Source::TrainStatus => "create.display_source.train_status",
+            Source::ObservedTrainName => "create.display_source.observed_train_name",
+            Source::PackageAddress => "create.display_source.read_package_address",
         }
     }
 
-    /// `getPassiveRefreshTicks`: 100, the stopwatch 20, the tunnels' counts 200 (every source
-    /// here resets passively).
+    /// `getPassiveRefreshTicks`: 100, the stopwatch 20, the tunnels' counts 200, a track
+    /// observer's train name 400 (every source here resets passively).
     pub fn refresh_ticks(self) -> i64 {
         match self {
             Source::StopWatch => 20,
+            Source::ObservedTrainName => 400,
             Source::AccumulateItems | Source::ItemThroughput => 200,
             _ => 100,
         }
@@ -231,6 +286,8 @@ impl Source {
         match self {
             Source::NixieTube => target != Target::Nixie,
             Source::ListItems | Source::ListFluids => false,
+            // `allowsLabeling` false; the boiler is no `SingleLineDisplaySource`.
+            Source::CurrentFloor | Source::TrainStatus | Source::Boiler => false,
             _ => true,
         }
     }
@@ -238,7 +295,10 @@ impl Source {
     /// Whether it gives one line (`SingleLineDisplaySource`), not a list
     /// (`ValueListDisplaySource`).
     pub fn single_line(self) -> bool {
-        !matches!(self, Source::ListItems | Source::ListFluids)
+        !matches!(
+            self,
+            Source::ListItems | Source::ListFluids | Source::Boiler
+        )
     }
 }
 
@@ -385,6 +445,227 @@ pub enum Reading {
     Text(Option<String>),
     /// The game time (a tunnel's counts are kept in the link's config).
     Now(i64),
+    /// A fluid tank's boiler (None: not a tank).
+    Boiler(Option<BoilerView>),
+}
+
+/// What `BoilerDisplaySource` reads of a boiler (`BoilerData` after `calcMinMaxForSize`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoilerView {
+    pub passive: bool,
+    pub active_heat: i32,
+    pub for_size: i32,
+    pub for_water: i32,
+}
+
+impl BoilerView {
+    /// `getHeatComponent`'s level: 1 while passive.
+    fn heat(&self) -> i32 {
+        if self.passive { 1 } else { self.active_heat }
+    }
+
+    fn min(&self) -> i32 {
+        self.heat().min(self.for_water.min(self.for_size))
+    }
+
+    fn max(&self) -> i32 {
+        self.heat().max(self.for_water.max(self.for_size))
+    }
+
+    /// `getHeatLevelTextComponent`.
+    fn level_text(&self, lang: &Lang) -> String {
+        let level = self.active_heat.min(self.for_water.min(self.for_size));
+        // `isPassive()`: after `calcMinMaxForSize`.
+        if self.passive && self.for_size > 0 && self.for_water > 0 {
+            lang.get("create.boiler.passive")
+        } else if level == 0 {
+            lang.get("create.boiler.idle")
+        } else if level == 18 {
+            lang.get("create.boiler.max_lvl")
+        } else {
+            lang.get("create.boiler.lvl").replace("%1$s", &level.to_string())
+        }
+    }
+
+    /// `blockComponent`: the board's blocks.
+    fn blocks(&self, level: i32) -> String {
+        let (min, max) = (self.min(), self.max());
+        let n = |k: i32| k.max(0) as usize;
+        format!(
+            "{}{}{}",
+            "\u{2588}".repeat(n(min)),
+            "\u{2592}".repeat(n(level - min)),
+            "\u{2591}".repeat(n(max - level))
+        )
+    }
+
+    /// `barComponent`: the goggles' bars (their colours are not kept).
+    fn bars(&self, level: i32) -> String {
+        let (min, max) = (self.min(), self.max());
+        let n = (min - 1).max(0)
+            + i32::from(min > 0)
+            + (level - min).max(0)
+            + (max - level).max(0)
+            + (18 - max).min((max / 5 + 1) * 5 - max).max(0);
+        "|".repeat(n.max(0) as usize)
+    }
+
+    /// The size, water and heat rows: (label key, level).
+    fn rows(&self) -> [(&'static str, i32); 3] {
+        [
+            ("size", self.for_size),
+            ("water", self.for_water),
+            ("heat", self.heat()),
+        ]
+    }
+}
+
+/// `TrainStatusDisplaySource.provideLine` for the train at a station: None (`EMPTY_LINE`)
+/// without a schedule, paused, not waiting at a station, or on a schedule's last entry that
+/// doesn't loop; else `ScheduleRuntime.getWaitingStatus`, the status of the first condition
+/// group's current condition (empty when there is none). `day_time` is the level's.
+pub fn train_status(
+    schedule: Option<&crate::schedule::Schedule>,
+    runtime: &crate::schedule::Runtime,
+    players: i32,
+    day_time: i64,
+    lang: &Lang,
+) -> Option<String> {
+    use crate::schedule::{Condition, State, rotation_ticks};
+    let schedule = schedule?;
+    if runtime.paused || runtime.state != State::PostTransit {
+        return None;
+    }
+    if runtime.current + 1 == schedule.entries.len() && !schedule.cyclic {
+        return None;
+    }
+    let conditions = &schedule.entries.get(runtime.current)?.conditions;
+    let (Some(list), Some(&(progress, time))) = (conditions.first(), runtime.progress.first())
+    else {
+        return Some(String::new());
+    };
+    let Some(condition) = list.get(progress) else {
+        return Some(String::new());
+    };
+    let status = |id: &str| lang.get(&format!("create.schedule.condition.{id}.status"));
+    Some(match *condition {
+        // TimedWaitCondition.getWaitingStatus.
+        Condition::Delay { value, unit } | Condition::Idle { value, unit } => {
+            let left = Condition::ticks(value, unit) - time;
+            let minutes = left >= 20 * 60;
+            let num = if minutes {
+                (left as f32 / (20.0 * 60.0)).floor() as i32
+            } else {
+                ((left as f32 / 100.0).ceil() * 5.0) as i32
+            };
+            let key = match (minutes, num == 1) {
+                (true, true) => "create.generic.daytime.minute",
+                (true, false) => "create.generic.unit.minutes",
+                (false, true) => "create.generic.daytime.second",
+                (false, false) => "create.generic.unit.seconds",
+            };
+            status(condition.id()).replace("%1$s", &format!("{num} {}", lang.get(key)))
+        }
+        Condition::PlayerCount { count, .. } => status("player_count")
+            .replace("%1$s", &players.to_string())
+            .replace("%2$s", &count.to_string()),
+        Condition::Powered => status("powered"),
+        // TimeOfDayCondition.getWaitingStatus.
+        Condition::TimeOfDay {
+            hour,
+            minute,
+            rotation,
+        } => {
+            let rotation = rotation_ticks(rotation) as i32;
+            let now = (day_time % i64::from(rotation)) as i32;
+            let target = ((((hour + 18) % 24) * 1000) as f32 + (minute as f32 / 60.0 * 1000.0).ceil())
+                as i32
+                % rotation;
+            let mut diff = target - now;
+            if diff < 0 {
+                diff += rotation;
+            }
+            let departure = ((day_time + i64::from(diff)) as i32) % 24000;
+            let h = (departure / 1000 + 6) % 24;
+            let m = (departure % 1000) * 60 / 1000;
+            let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+            let half = lang.get(if h > 11 {
+                "create.generic.daytime.pm"
+            } else {
+                "create.generic.daytime.am"
+            });
+            let digital = lang
+                .get("create.schedule.condition.time_of_day.digital_format")
+                .replace("%1$s", &h12.to_string())
+                .replace("%2$s", &h.to_string())
+                .replace("%3$s", &format!("{m:02}"))
+                .replace("%4$s", &half);
+            format!("{}{digital}", status("time_of_day"))
+        }
+    })
+}
+
+/// `BoilerDisplaySource.provideText` (`stats.maxRows`, a lectern's book in one page) and
+/// `provideFlapDisplayText` (a board `columns` wide): the lines for other targets, and the
+/// board's (each its sections), and whether the board's are the boiler's own (`Boiler` layout on
+/// all but the first line) or only "not enough space".
+pub fn boiler_text(
+    boiler: Option<&BoilerView>,
+    target: Target,
+    stats: Stats,
+    lang: &Lang,
+) -> (Vec<String>, Vec<Vec<String>>, bool) {
+    let space = lang.get("create.display_source.boiler.not_enough_space");
+    let for_status = lang.get("create.display_source.boiler.for_boiler_status");
+    let flap_no_space = vec![vec![space.clone()], vec![for_status.clone()]];
+    let text = if stats.rows < 2 {
+        vec![format!("{space}{for_status}")]
+    } else if stats.rows < 4 {
+        vec![space.clone(), for_status.clone()]
+    } else {
+        match boiler {
+            // `Stream.of(EMPTY)`: one entry of no lines.
+            None => vec![String::new()],
+            Some(b) => {
+                let mut lines = vec![lang.get("create.boiler.status_short").replace("%1$s", &b.level_text(lang))];
+                for (label, level) in b.rows() {
+                    lines.push(format!(
+                        "{}{}{}",
+                        lang.get(&format!("create.boiler.{label}")),
+                        lang.get(&format!("create.boiler.{label}_dots")),
+                        b.bars(level)
+                    ));
+                }
+                if target == Target::Lectern {
+                    vec![lines.join("\n")]
+                } else {
+                    lines
+                }
+            }
+        }
+    };
+    if stats.rows < 4 {
+        return (text, flap_no_space, false);
+    }
+    let Some(b) = boiler else {
+        return (text, vec![vec![]], false);
+    };
+    let labels: Vec<String> = b
+        .rows()
+        .iter()
+        .map(|(l, _)| lang.get(&format!("create.boiler.{l}")))
+        .collect();
+    let width = labels.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let mut flap = vec![vec![lang.get("create.boiler.status").replace("%1$s", &b.level_text(lang))]];
+    for ((_, level), label) in b.rows().iter().zip(&labels) {
+        let pad = " ".repeat(width - label.chars().count());
+        flap.push(vec![format!("{pad}{label}"), b.blocks(*level)]);
+    }
+    let bar = flap[1][1].chars().count() as f32;
+    if (stats.columns as f32) * MONOSPACE < 6.0 * MONOSPACE + bar * WIDE_MONOSPACE {
+        return (text, flap_no_space, false);
+    }
+    (text, flap, true)
 }
 
 /// One line a source gives: None is `EMPTY_LINE`; `numeric` is `flapDisplayContext` (a nixie
@@ -396,6 +677,9 @@ pub struct Line {
     /// A list's entries, largest first and as many as the target shows
     /// (`ValueListDisplaySource.provideEntries`).
     pub entries: Option<Vec<(i64, String)>>,
+    /// A source of several lines (the boiler): the lines for signs, tubes and books, and the
+    /// board's with whether they are its own layout (`boiler_text`).
+    pub rows: Option<(Vec<String>, Vec<Vec<String>>, bool)>,
 }
 
 /// `TimeOfDayDisplaySource.EMPTY_TIME`.
@@ -543,6 +827,23 @@ pub fn provide_line(
         }
         // ValueListDisplaySource.provideEntries: the largest first, as many as the target has
         // rows (a lectern's eight to a page).
+        (Source::Boiler, Reading::Boiler(b)) => {
+            return Line {
+                text: None,
+                numeric: false,
+                entries: None,
+                rows: Some(boiler_text(b.as_ref(), target, stats, lang)),
+            };
+        }
+        // CurrentFloorDisplaySource, TrainStatusDisplaySource, ObservedTrainNameSource and
+        // PackageAddressDisplaySource: their text, or `EMPTY_LINE`.
+        (
+            Source::CurrentFloor
+            | Source::TrainStatus
+            | Source::ObservedTrainName
+            | Source::PackageAddress,
+            Reading::Text(t),
+        ) => t.clone(),
         (Source::ListItems | Source::ListFluids, Reading::Entries(e)) => {
             let rows = stats.rows.max(0) as usize
                 * if target == Target::Lectern {
@@ -557,6 +858,7 @@ pub fn provide_line(
                 text: None,
                 numeric: false,
                 entries: Some(e),
+                rows: None,
             };
         }
         _ => None,
@@ -565,6 +867,7 @@ pub fn provide_line(
         text,
         numeric,
         entries: None,
+        rows: None,
     }
 }
 
@@ -714,6 +1017,9 @@ pub fn stopwatch(diff: i64) -> String {
 
 /// `SingleLineDisplaySource.provideText`: the label before the line, `EMPTY` for no line.
 pub fn provide_text(source: Source, config: &Config, line: &Line, target: Target) -> Vec<String> {
+    if let Some((text, _, _)) = &line.rows {
+        return text.clone();
+    }
     if let Some(entries) = &line.entries {
         return list_text(source, config, entries, target, &Lang::EN_US);
     }
@@ -751,6 +1057,9 @@ pub fn list_text(
 /// `SingleLineDisplaySource.provideFlapDisplayText`: the label and the value as two sections; a
 /// list's entries' parts (`ValueListDisplaySource.provideFlapDisplayText`).
 pub fn provide_flap_text(source: Source, config: &Config, line: &Line) -> Vec<Vec<String>> {
+    if let Some((_, flap, _)) = &line.rows {
+        return flap.clone();
+    }
     if let Some(entries) = &line.entries {
         return entries
             .iter()
@@ -1177,7 +1486,12 @@ pub fn load_flap_layout(
         }
         Source::TimeOfDay | Source::StopWatch => "Instant",
         Source::NixieTube if numeric => "Number",
-        Source::NixieTube => "Default",
+        Source::NixieTube
+        | Source::CurrentFloor
+        | Source::TrainStatus
+        | Source::ObservedTrainName
+        | Source::PackageAddress
+        | Source::Boiler => "Default",
     };
     let value = |size: i32| -> Section {
         let width = size as f32 * MONOSPACE;
@@ -1221,6 +1535,37 @@ pub fn load_flap_layout(
     } else {
         layout.configure(&name, vec![label_section]);
     }
+}
+
+/// `BoilerDisplaySource.loadFlapDisplayLayout` for the `index`th line of its text: the first
+/// line, and any while there is not enough space (`own` false), the default layout; the others
+/// a label `label` characters wide and wide pixel flaps for the rest (`getMaxCharCount(1)`).
+pub fn load_boiler_layout(
+    layout: &mut Layout,
+    index: usize,
+    own: bool,
+    label: i32,
+    max_chars: i32,
+    max_chars_gap: i32,
+) {
+    if index == 0 || !own {
+        if !layout.is_layout("Default") {
+            layout.load_default(max_chars);
+        }
+        return;
+    }
+    if layout.is_layout("Boiler") {
+        return;
+    }
+    let label_width = (label as f32 * MONOSPACE) as i32 as f32;
+    let space = max_chars_gap as f32 * MONOSPACE;
+    layout.configure(
+        "Boiler",
+        vec![
+            Section::new(label_width, Cycle::Alphabet, false, true),
+            Section::new(space - label_width, Cycle::Pixel, false, false).wide(),
+        ],
+    );
 }
 
 /// `ValueListDisplaySource.loadFlapDisplayLayout` (items: the value first) and
@@ -1320,7 +1665,15 @@ pub fn accept_flap_text(
         };
         let layout = &mut lines[i + line];
         let before = layout.clone();
-        if source.single_line() {
+        if source == Source::Boiler {
+            // Its own text is four lines, the label padded to the widest (`labelWidth`).
+            let own = text.len() == 4;
+            let label = text
+                .get(1)
+                .and_then(|r| r.first())
+                .map_or(0, |l| l.chars().count() as i32);
+            load_boiler_layout(layout, i, own, label, max, max_list);
+        } else if source.single_line() {
             load_flap_layout(layout, source, config, numeric, max);
         } else {
             load_list_layout(layout, source, config, highest, max_list);
@@ -1638,6 +1991,7 @@ impl Link {
                 text: None,
                 numeric: false,
                 entries: None,
+                rows: None,
             };
         };
         let line = provide_line(source, &mut self.config, &reading, target, stats, lang);
@@ -3059,6 +3413,7 @@ mod tests {
                 text: Some("64 RPM".into()),
                 numeric: false,
                 entries: None,
+                rows: None,
             },
         );
         assert!(accept_flap_text(

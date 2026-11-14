@@ -65,6 +65,7 @@ use std::sync::RwLock;
 pub use super::kinetics::dir_name;
 // The chassis group a value box scrolls the range of (legacy `contraptions::chassis_group`).
 pub use bearings::chassis_group;
+pub(crate) use lifts::contact_floor;
 
 pub struct Contraptions;
 
@@ -86,12 +87,14 @@ impl Subsystem for Contraptions {
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         bearings::chunk_load(lv, data);
         lifts::chunk_load(lv, data);
+        lifts::contacts_load(lv, data);
         actors::glue_chunk_load(&*lv.host, lv.dim, data);
     }
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
         bearings::chunk_save(lv, chunk, data);
         lifts::chunk_save(lv, chunk, data);
+        lifts::contacts_save(lv, chunk, data);
         actors::glue_chunk_save(&*lv.host, lv.dim, chunk, data);
     }
 

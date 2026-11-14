@@ -23,6 +23,7 @@
 
 pub mod client;
 pub(crate) mod clipboard;
+pub(crate) mod contact_screen;
 mod link_item;
 mod link_screen;
 
@@ -119,23 +120,30 @@ impl Subsystem for Display {
             configure_from_client(host, player, data);
             return true;
         }
+        if channel == contact_screen::CHANNEL {
+            contact_screen::client_message(host, player, data);
+            return true;
+        }
         clipboard::client_message(host, player, channel, data)
     }
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         client::server_message(host, channel, data)
+            || contact_screen::server_message(host, channel, data)
             || clipboard::server_message(host, channel, data)
             || link_screen::server_message(host, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick(host);
+        contact_screen::tick(host);
         clipboard::tick(host);
         link_screen::tick(host);
     }
 
     fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
         clipboard::screen_render_post(host, event);
+        contact_screen::screen_render_post(host, event);
         link_screen::screen_render_post(host, event);
     }
 
@@ -144,7 +152,9 @@ impl Subsystem for Display {
         host: &dyn ClientHost,
         event: &mut ScreenMouseButtonPressedPreEvent<'_>,
     ) -> Flow {
-        if link_screen::screen_mouse_pressed(host, event) == Flow::Cancel {
+        if link_screen::screen_mouse_pressed(host, event) == Flow::Cancel
+            || contact_screen::screen_mouse_pressed(host, event) == Flow::Cancel
+        {
             return Flow::Cancel;
         }
         clipboard::screen_mouse_pressed(host, event)
@@ -163,7 +173,9 @@ impl Subsystem for Display {
         host: &dyn ClientHost,
         event: &mut ScreenMouseScrolledPreEvent<'_>,
     ) -> Flow {
-        if link_screen::screen_mouse_scrolled(host, event) == Flow::Cancel {
+        if link_screen::screen_mouse_scrolled(host, event) == Flow::Cancel
+            || contact_screen::screen_mouse_scrolled(host, event) == Flow::Cancel
+        {
             return Flow::Cancel;
         }
         clipboard::screen_mouse_scrolled(host, event)
@@ -174,7 +186,9 @@ impl Subsystem for Display {
         host: &dyn ClientHost,
         event: &mut ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
-        if link_screen::screen_key_pressed(host, event) == Flow::Cancel {
+        if link_screen::screen_key_pressed(host, event) == Flow::Cancel
+            || contact_screen::screen_key_pressed(host, event) == Flow::Cancel
+        {
             return Flow::Cancel;
         }
         clipboard::screen_key_pressed(host, event)
@@ -185,7 +199,9 @@ impl Subsystem for Display {
         host: &dyn ClientHost,
         event: &mut ScreenCharTypedPreEvent<'_>,
     ) -> Flow {
-        if link_screen::screen_char_typed(host, event) == Flow::Cancel {
+        if link_screen::screen_char_typed(host, event) == Flow::Cancel
+            || contact_screen::screen_char_typed(host, event) == Flow::Cancel
+        {
             return Flow::Cancel;
         }
         clipboard::screen_char_typed(host, event)
@@ -193,12 +209,14 @@ impl Subsystem for Display {
 
     fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
         clipboard::screen_closing(host, event);
+        contact_screen::screen_closing(host, event);
         link_screen::screen_closing(host, event);
     }
 
     fn client_reset(&self) {
         client::reset();
         clipboard::reset();
+        contact_screen::reset();
         link_screen::reset();
     }
 
@@ -351,13 +369,18 @@ fn sources_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> &'static [Source] {
         Some(Block::Depot | Block::Belt | Block::WeightedEjector) => &[Source::ItemNames],
         Some(Block::CuckooClock) => &[Source::TimeOfDay, Source::StopWatch],
         Some(b) if display::is_nixie(b) => &[Source::NixieTube],
-        // AllBlocks.SMART_OBSERVER (its package address source is not ported).
         Some(Block::ContentObserver) => &[
             Source::CountItems,
             Source::ListItems,
             Source::CountFluids,
             Source::ListFluids,
+            Source::PackageAddress,
         ],
+        Some(Block::FluidTank) => &[Source::Boiler],
+        Some(Block::ElevatorContact) => &[Source::CurrentFloor],
+        // AllBlocks.TRACK_STATION: its station summary is not ported.
+        Some(Block::TrackStation) => &[Source::TrainStatus],
+        Some(Block::TrackObserver) => &[Source::ObservedTrainName],
         Some(Block::StockpileSwitch) => &[Source::FillLevel],
         Some(Block::AndesiteTunnel | Block::BrassTunnel) => {
             &[Source::AccumulateItems, Source::ItemThroughput]
@@ -593,12 +616,86 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
         }
         // The tunnels' counts are the link's own (`itemReceived`).
         Source::AccumulateItems | Source::ItemThroughput => Reading::Now(lv.game_time()),
+        Source::Boiler => Reading::Boiler(boiler_view(lv, at)),
+        Source::CurrentFloor => Reading::Text(super::contraptions::contact_floor(lv, at)),
+        Source::TrainStatus => Reading::Text(super::trains::waiting_status(lv, at)),
+        Source::ObservedTrainName => Reading::Text(super::trains::observed_train_name(lv, at)),
+        Source::PackageAddress => Reading::Text(package_address(lv, at)),
     }
 }
 
 /// `DisplayLinkBlock.sendToGatherers(.., itemReceived, AccumulatedItemCountDisplaySource)`:
 /// `amount` items went into the tunnel at `tunnel`; the links attached to it counting them (not
 /// powered) count them and refresh.
+/// `BoilerDisplaySource.getComponents`: the boiler of the tank at `pos` (its controller's), as
+/// `calcMinMaxForSize` leaves it; a tank with no engine or whistle has the empty boiler data.
+fn boiler_view(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<display::BoilerView> {
+    use create_engine::steam;
+    let dim = lv.dim;
+    with_world(|w| {
+        let d = &w.dims[dim];
+        let (controller, multi) = d.tanks.get(pos)?;
+        let size = multi.blocks();
+        let empty = steam::Boiler::default();
+        let b = d.boilers.get(&controller).map_or(&empty, |b| &b.data);
+        Some(display::BoilerView {
+            passive: b.passive_heat,
+            active_heat: b.active_heat,
+            for_size: steam::max_heat_for_size(size),
+            for_water: b.max_heat_for_water(),
+        })
+    })
+    .flatten()
+}
+
+/// `PackageAddressDisplaySource.provideLine`: the address of the first package passing the
+/// smart observer's filter in the inventory it looks at, else on the chain conveyor there.
+fn package_address(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<String> {
+    let Some((Block::ContentObserver, info)) = block_at(lv, pos) else {
+        return None;
+    };
+    let target = create_engine::observe::target_pos(pos, info.target?, info.facing?);
+    let dim = lv.dim;
+    let filter = with_world(|w| w.dims[dim].detectors.filter(pos).cloned()).flatten();
+    let passes = |lv: &ServerLevel<'_>, stack: &ItemStack| {
+        use create_engine::filter::Passes;
+        let id = stack.item().id(&*lv.host);
+        create_engine::package::is_package(&id)
+            && filters::Detector {
+                host: &*lv.host,
+                filter: filter.as_ref(),
+            }
+            .item(&id)
+    };
+    match lv
+        .level
+        .capability(&mut *lv.host, &mod_api::ITEMS, target, None)
+    {
+        Some(handler) => {
+            let size = handler.size(&mut *lv.host);
+            for i in 0..size {
+                if handler.amount(&mut *lv.host, i) == 0 {
+                    continue;
+                }
+                let Some(stack) = handler
+                    .resource(&mut *lv.host, i)
+                    .and_then(|r| r.to_stack(1))
+                else {
+                    continue;
+                };
+                if passes(lv, &stack) {
+                    return Some(filters::address(&stack));
+                }
+            }
+            None
+        }
+        None => super::packages::looping_packages(dim, target)
+            .into_iter()
+            .find(|s| passes(lv, s))
+            .map(|s| filters::address(&s)),
+    }
+}
+
 pub(crate) fn items_through_tunnel(lv: &mut ServerLevel<'_>, tunnel: [i32; 3], amount: i32) {
     let dim = lv.dim;
     let now = lv.game_time();
@@ -1269,6 +1366,20 @@ fn nixie_power(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> i32 {
 }
 
 /// The links beside `pos`, by their facing (for `notifyGatherers`).
+/// `DisplayLinkBlock.notifyGatherers`: the links attached to `pos` refresh now.
+pub(crate) fn notify_gatherers(lv: &ServerLevel<'_>, pos: [i32; 3]) {
+    let links = links_beside(lv, pos);
+    if links.is_empty() {
+        return;
+    }
+    let dim = lv.dim;
+    with_world(|w| {
+        w.dims[dim]
+            .displays
+            .notify_gatherers(pos, |q| links.get(&q).copied())
+    });
+}
+
 fn links_beside(lv: &ServerLevel<'_>, pos: [i32; 3]) -> HashMap<[i32; 3], Dir> {
     Dir::ALL
         .into_iter()
@@ -1691,10 +1802,11 @@ fn place_board(
         ("down", "false"),
         ("waterlogged", if water { "true" } else { "false" }),
     ];
-    let Some(state) = lv
-        .block_state(pos)
-        .and_then(|s| props.iter().try_fold(s, |s, (k, v)| s.with(&facts, k, v).ok()))
-    else {
+    let Some(state) = lv.block_state(pos).and_then(|s| {
+        props
+            .iter()
+            .try_fold(s, |s, (k, v)| s.with(&facts, k, v).ok())
+    }) else {
         return InteractionResult::Pass;
     };
     lv.set_state(at, state, update_all());
