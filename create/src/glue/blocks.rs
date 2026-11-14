@@ -17,8 +17,8 @@ use create_engine::door::{Door, Slide};
 use create_engine::dye::{self, DyeColor};
 use mod_api::{
     BlockEntityPart, BlockPart, BlockState, Hand, Host, HostTransaction, InteractionResult,
-    ItemStack, MenuClosedEvent, MenuReplace, PlayerRef, Registrar, RegistrationContext, Screen,
-    ScreenEvent, ServerHost, SoundSource, Text, UseItemOnEvent, UseWithoutItemEvent,
+    ItemStack, MenuClosedEvent, PlayerRef, Registrar, RegistrationContext, Screen, ScreenEvent,
+    ServerHost, SoundSource, UseItemOnEvent, UseWithoutItemEvent,
 };
 
 use super::processing::TOOLBOX_TYPE;
@@ -250,10 +250,8 @@ fn use_toolbox(
 }
 
 /// `PostboxBlock.useWithoutItem` → `PackagePortBlockEntity.use`: the main hand's click, not
-/// sneaking, opens its menu: two rows (`PackagePortMenu`'s 18 slots) showing the packages the
-/// port holds (packages' `port_stacks`, as the legacy `native_open_menu` did; its clicks are not
-/// bound to the port). `startOpen`: the first menu open on a postbox opens it, and one the player
-/// had open in that window shuts.
+/// sneaking, opens its screen (packages' `port_screen`); it shows open until the screen closes
+/// (`startOpen`, `stopOpen`).
 fn use_postbox(
     lv: &mut ServerLevel<'_>,
     player: PlayerRef,
@@ -265,30 +263,15 @@ fn use_postbox(
     if back || hand != Hand::Main {
         return None;
     }
-    let dim = lv.dim;
-    let title = Text::translate(format!("block.create.{}", block.name()), Vec::new());
-    let stacks = super::packages::port_stacks(dim, pos);
-    let window = lv
-        .host
-        .open_menu(player.uuid(), 2, title, stacks, MenuReplace::CloseFirst)
-        .ok()
-        .flatten();
-    let Some(window) = window else {
-        return Some(InteractionResult::Success);
-    };
-    let Some((first, left)) = with_world(|w| w.postboxes.opened(player.uuid(), window, dim, pos))
-    else {
-        return Some(InteractionResult::Success);
-    };
-    if let Some((d, at)) = left
-        && d == dim
-    {
-        set_postbox_open(lv, at, false);
-    }
-    if first {
-        set_postbox_open(lv, pos, true);
-    }
+    let _ = block;
+    super::packages::port_screen::open(lv, player, pos, false);
+    set_postbox_open(lv, pos, true);
     Some(InteractionResult::Success)
+}
+
+/// The port screen of the postbox at `pos` closed: it shuts.
+pub(crate) fn postbox_closed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    set_postbox_open(lv, pos, false);
 }
 
 /// `PostboxBlockEntity.onOpenChange`: `open` set (`setBlockAndUpdate`) with a barrel's sound, if

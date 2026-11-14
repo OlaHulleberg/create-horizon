@@ -23,6 +23,7 @@
 
 pub mod body;
 mod inv;
+pub(crate) mod port_screen;
 
 use super::server::{ServerLevel, UPDATE_CLIENTS};
 use super::states;
@@ -84,19 +85,6 @@ pub fn with<R>(dim: usize, f: impl FnOnce(&mut Pk) -> R) -> R {
         }
         f(&mut levels[dim])
     })
-}
-
-/// A postbox's packages, for its menu (`blocks`; shown, not taken from: the menu's clicks are
-/// not bound to the port), as many as the port has slots.
-pub fn port_stacks(dim: usize, pos: [i32; 3]) -> Vec<Option<ItemStack>> {
-    let mut v = with(dim, |pk| {
-        pk.ports
-            .get(&pos)
-            .map(create_engine::port::Port::stacks)
-            .unwrap_or_default()
-    });
-    v.resize(create_engine::port::SLOTS, None);
-    v
 }
 
 fn present() -> bool {
@@ -255,6 +243,10 @@ impl Subsystem for Packages {
         channel: &str,
         data: &[u8],
     ) -> bool {
+        if channel == port_screen::CHANNEL {
+            port_screen::client_message(host, player, data);
+            return true;
+        }
         if channel != create_engine::client::CHANNEL || data != b"sync" || !present() {
             return false;
         }
@@ -276,7 +268,10 @@ impl Subsystem for Packages {
         false
     }
 
-    fn server_message(&self, _host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
+    fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
+        if port_screen::server_message(host, channel, data) {
+            return true;
+        }
         if channel != chain::CHANNEL {
             return false;
         }
@@ -295,12 +290,50 @@ impl Subsystem for Packages {
 
     /// Once in each world, the client asks for what it draws.
     fn client_tick(&self, host: &mut dyn ClientHost) {
+        port_screen::tick(host);
         if !SYNCED.get() && net::send_to_server(host, create_engine::client::CHANNEL, b"sync") {
             SYNCED.set(true);
         }
     }
 
+    fn screen_render_post(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenRenderPostEvent<'_>,
+    ) {
+        port_screen::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> Flow {
+        port_screen::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_key_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenKeyPressedPreEvent<'_>,
+    ) -> Flow {
+        port_screen::screen_key_pressed(host, event)
+    }
+
+    fn screen_char_typed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenCharTypedPreEvent<'_>,
+    ) -> Flow {
+        port_screen::screen_char_typed(host, event)
+    }
+
+    fn screen_closing(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenClosingEvent<'_>) {
+        port_screen::screen_closing(host, event);
+    }
+
     fn client_reset(&self) {
+        port_screen::reset();
         SHOWN.with_borrow_mut(HashMap::clear);
         SYNCED.set(false);
     }
@@ -1366,6 +1399,24 @@ pub fn arm_extract(lv: &mut ServerLevel<'_>, pos: [i32; 3], simulate: bool) -> O
     Some(b.stack)
 }
 
+/// `PackagePortBlockEntity.use`: the main hand's click, not sneaking, opens the port's screen.
+pub(crate) fn use_port(
+    host: &mut dyn ServerHost,
+    click: &mod_api::BlockClick<'_>,
+) -> Option<InteractionResult> {
+    let player = host.player(click.player)?;
+    if player.entity().is_shift_key_down(&*host) == Some(true) {
+        return None;
+    }
+    if click.hand != Hand::Main {
+        return Some(InteractionResult::Success);
+    }
+    let dimension = click.dimension.key().id().to_owned();
+    let mut lv = ServerLevel::new(host, &dimension)?;
+    port_screen::open(&mut lv, player, click.pos, false);
+    Some(InteractionResult::Success)
+}
+
 /// Packagers', frogports' and postboxes' own moments: a packager's click, and what comparators
 /// read of each.
 struct PackageBlock;
@@ -1378,10 +1429,32 @@ impl BlockPart for PackageBlock {
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
         let b = block_of(states::id(event.state)?)?;
+        if b == Block::PackageFrogport {
+            let held = event.click.stack.map(|s| s.item().id(&*host));
+            // The wrench and the frogport's own item (choosing a target) pass.
+            if matches!(
+                held.as_deref(),
+                Some("create:wrench" | "create:package_frogport")
+            ) {
+                return None;
+            }
+            return use_port(host, event.click);
+        }
         if !is_packager(b) {
             return None;
         }
         use_packager(host, event)
+    }
+
+    fn use_without_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::UseWithoutItemEvent<'_>,
+    ) -> Option<InteractionResult> {
+        if block_of(states::id(event.state)?)? != Block::PackageFrogport {
+            return None;
+        }
+        use_port(host, event.click)
     }
 
     fn has_analog_output(&self, _level: &dyn LevelHost, event: &mut HasAnalogOutputEvent) {

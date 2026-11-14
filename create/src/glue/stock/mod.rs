@@ -12,7 +12,7 @@
 //! The overworld's saved networks are read at its first tick (an attachment is reached through
 //! a level's own host): a link whose column loaded before then is not counted as unloaded.
 
-mod keeper;
+pub(crate) mod keeper;
 mod requester;
 
 use super::packages::{self as packages, add, block_of, body, command_player, coords, feedback};
