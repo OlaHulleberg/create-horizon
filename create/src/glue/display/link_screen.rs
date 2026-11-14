@@ -85,6 +85,7 @@ impl Settings {
         put_i32(&mut out, self.config.mode);
         put_i32(&mut out, self.config.cycle);
         put_i32(&mut out, self.config.format);
+        put_i32(&mut out, self.config.interval);
         out.push(self.target);
         put_i32(&mut out, self.rows);
         put_i32(&mut out, self.line);
@@ -112,6 +113,8 @@ impl Settings {
             cycle: r.i32()?,
             start_time: None,
             format: r.i32()?,
+            interval: r.i32()?,
+            ..Config::default()
         };
         Some(Settings {
             pos,
@@ -175,6 +178,15 @@ pub(super) fn choice(source: Source) -> Option<(&'static str, &'static [&'static
             ],
             120.0,
         ),
+        Source::ItemThroughput => (
+            "Interval",
+            &[
+                "create.display_source.item_throughput.interval.second",
+                "create.display_source.item_throughput.interval.minute",
+                "create.display_source.item_throughput.interval.hour",
+            ],
+            80.0,
+        ),
         // ValueListDisplaySource.addFullNumberConfig, on the first row.
         Source::ListItems | Source::ListFluids => (
             "Format",
@@ -198,6 +210,7 @@ fn choice_value<'a>(config: &'a mut Config, key: &str) -> &'a mut i32 {
         "Directional" => &mut config.directional,
         "Mode" => &mut config.mode,
         "Format" => &mut config.format,
+        "Interval" => &mut config.interval,
         _ => &mut config.cycle,
     }
 }

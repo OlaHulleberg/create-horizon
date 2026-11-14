@@ -46,6 +46,12 @@ pub fn en_us(key: &str) -> Option<&'static str> {
         "create.display_source.fill_level.percent" => "Percent",
         "create.display_source.fill_level.progress_bar" => "Progress Bar",
         "create.display_source.entity_name" => "Entity Name",
+        "create.display_source.accumulate_items" => "Accumulate Item Count",
+        "create.display_source.item_throughput" => "Item Throughput",
+        "create.display_source.item_throughput.interval" => "Interval",
+        "create.display_source.item_throughput.interval.second" => "per Second",
+        "create.display_source.item_throughput.interval.minute" => "per Minute",
+        "create.display_source.item_throughput.interval.hour" => "per Hour",
         "create.display_source.value_list.display" => "Value Display",
         "create.display_source.value_list.shortened" => "Shortened",
         "create.display_source.value_list.full_number" => "Full Number",
@@ -109,10 +115,12 @@ pub enum Source {
     ListFluids,
     FillLevel,
     EntityName,
+    AccumulateItems,
+    ItemThroughput,
 }
 
 impl Source {
-    pub const ALL: [Source; 13] = [
+    pub const ALL: [Source; 15] = [
         Source::KineticSpeed,
         Source::KineticStress,
         Source::RedstonePower,
@@ -126,6 +134,8 @@ impl Source {
         Source::ListFluids,
         Source::FillLevel,
         Source::EntityName,
+        Source::AccumulateItems,
+        Source::ItemThroughput,
     ];
 
     /// Its registry id's path (`create:<id>`).
@@ -144,6 +154,8 @@ impl Source {
             Source::ListFluids => "list_fluids",
             Source::FillLevel => "fill_level",
             Source::EntityName => "entity_name",
+            Source::AccumulateItems => "accumulate_items",
+            Source::ItemThroughput => "item_throughput",
         }
     }
 
@@ -166,6 +178,12 @@ impl Source {
             "content_observer_source_list_fluids" => Some(Source::ListFluids),
             "stockpile_switch_source_fill_level" => Some(Source::FillLevel),
             _ if id.ends_with("_seat_source_entity_name") => Some(Source::EntityName),
+            "andesite_tunnel_source_accumulate_items" | "brass_tunnel_source_accumulate_items" => {
+                Some(Source::AccumulateItems)
+            }
+            "andesite_tunnel_source_item_throughput" | "brass_tunnel_source_item_throughput" => {
+                Some(Source::ItemThroughput)
+            }
             _ => None,
         })
     }
@@ -186,13 +204,17 @@ impl Source {
             Source::ListFluids => "create.display_source.list_fluids",
             Source::FillLevel => "create.display_source.fill_level",
             Source::EntityName => "create.display_source.entity_name",
+            Source::AccumulateItems => "create.display_source.accumulate_items",
+            Source::ItemThroughput => "create.display_source.item_throughput",
         }
     }
 
-    /// `getPassiveRefreshTicks`: 100, the stopwatch 20 (every source here resets passively).
+    /// `getPassiveRefreshTicks`: 100, the stopwatch 20, the tunnels' counts 200 (every source
+    /// here resets passively).
     pub fn refresh_ticks(self) -> i64 {
         match self {
             Source::StopWatch => 20,
+            Source::AccumulateItems | Source::ItemThroughput => 200,
             _ => 100,
         }
     }
@@ -225,6 +247,66 @@ pub struct Config {
     pub start_time: Option<i64>,
     /// A list's `Format`: 0 shortens its numbers.
     pub format: i32,
+    /// A tunnel's `Collected` items (`AccumulatedItemCountDisplaySource`).
+    pub collected: i32,
+    /// `ItemThroughputDisplaySource`: its `Interval` (per second, minute, hour) and what it
+    /// keeps of the items it was told of.
+    pub interval: i32,
+    pub throughput: Throughput,
+}
+
+/// `ItemThroughputDisplaySource`'s source config: `LastReceived`, `LastReceivedAmount`,
+/// `PrevRates` (`POOL_SIZE` of them, -1 unset), `Index`, `Rate` and `Inactive`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Throughput {
+    pub last_received: Option<i64>,
+    pub last_amount: i32,
+    pub rates: Vec<f32>,
+    pub index: i32,
+    pub rate: Option<f32>,
+    pub inactive: bool,
+}
+
+/// `ItemThroughputDisplaySource.POOL_SIZE`.
+pub const POOL_SIZE: usize = 10;
+
+impl Throughput {
+    /// `itemReceived`: `amount` items at game time `now`; the rate is the mean of the last ten
+    /// arrivals' items per tick.
+    pub fn received(&mut self, amount: i32, now: i64) {
+        let Some(previous) = self.last_received else {
+            self.last_received = Some(now);
+            return;
+        };
+        if self.rates.len() != POOL_SIZE {
+            self.rates = vec![-1.0; POOL_SIZE];
+        }
+        let index = self.index.rem_euclid(POOL_SIZE as i32) as usize;
+        self.rates[index] = (f64::from(amount) / (now - previous) as f64) as f32;
+        let valid: Vec<f32> = self.rates.iter().copied().filter(|r| *r >= 0.0).collect();
+        self.rate = (!valid.is_empty()).then(|| valid.iter().sum::<f32>() / valid.len() as f32);
+        self.inactive = false;
+        self.last_amount = amount;
+        self.last_received = Some(now);
+        self.index = index as i32 + 1;
+    }
+
+    /// `provideLine`: the rate per interval (`20 * 60^interval` ticks); 0 once no items came
+    /// for twice the time one stack takes at that rate.
+    pub fn line(&mut self, interval: i32, now: i64) -> String {
+        if self.inactive {
+            return "0".to_owned();
+        }
+        let ticks = 20.0 * 60f64.powi(interval);
+        let rate = f64::from(self.rate.unwrap_or(0.0)) * ticks;
+        if rate > 0.0 {
+            let diff = (now - self.last_received.unwrap_or(0)) as i32;
+            if diff > 0 && f64::from(diff) > f64::from(self.last_amount) / rate * 2.0 {
+                self.inactive = true;
+            }
+        }
+        number(rate)
+    }
 }
 
 impl Config {
@@ -237,6 +319,7 @@ impl Config {
             "Mode" => self.mode = int(),
             "Cycle" => self.cycle = int(),
             "Format" => self.format = int(),
+            "Interval" => self.interval = int(),
             _ => return false,
         }
         true
@@ -294,6 +377,8 @@ pub enum Reading {
     Fill(Option<f32>),
     /// A line of text (None: `EMPTY_LINE`): the name of who sits on a seat.
     Text(Option<String>),
+    /// The game time (a tunnel's counts are kept in the link's config).
+    Now(i64),
 }
 
 /// One line a source gives: None is `EMPTY_LINE`; `numeric` is `flapDisplayContext` (a nixie
@@ -442,6 +527,11 @@ pub fn provide_line(
         // FillLevelDisplaySource.getProgress.
         (Source::FillLevel, Reading::Fill(p)) => percent_or_bar(source, config, *p, target, stats, lang),
         (Source::EntityName, Reading::Text(t)) => t.clone(),
+        (Source::AccumulateItems, _) => Some(config.collected.to_string()),
+        (Source::ItemThroughput, Reading::Now(now)) => {
+            let interval = config.interval;
+            Some(config.throughput.line(interval, *now))
+        }
         // ValueListDisplaySource.provideEntries: the largest first, as many as the target has
         // rows (a lectern's eight to a page).
         (Source::ListItems | Source::ListFluids, Reading::Entries(e)) => {
@@ -1039,7 +1129,11 @@ pub fn load_flap_layout(
     };
     let progress_bar = progress_bar || source == Source::FillLevel && config.mode != 0;
     let key = match source {
-        Source::KineticSpeed | Source::ItemNames | Source::CountItems => "Number",
+        Source::KineticSpeed
+        | Source::ItemNames
+        | Source::CountItems
+        | Source::AccumulateItems
+        | Source::ItemThroughput => "Number",
         Source::KineticStress | Source::RedstonePower | Source::FillLevel if progress_bar => {
             "Progress"
         }
@@ -1059,7 +1153,9 @@ pub fn load_flap_layout(
             | Source::KineticStress
             | Source::RedstonePower
             | Source::FillLevel
-            | Source::CountItems => Section::new(width, Cycle::Numeric, false, false),
+            | Source::CountItems
+            | Source::AccumulateItems
+            | Source::ItemThroughput => Section::new(width, Cycle::Numeric, false, false),
             Source::NixieTube if numeric => Section::new(width, Cycle::Numeric, false, false),
             Source::TimeOfDay | Source::StopWatch => {
                 Section::new(width, Cycle::Instant, false, false)

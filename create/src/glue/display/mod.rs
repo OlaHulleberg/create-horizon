@@ -342,6 +342,9 @@ fn sources_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> &'static [Source] {
             Source::ListFluids,
         ],
         Some(Block::StockpileSwitch) => &[Source::FillLevel],
+        Some(Block::AndesiteTunnel | Block::BrassTunnel) => {
+            &[Source::AccumulateItems, Source::ItemThroughput]
+        }
         Some(b) if create_engine::dye::is_seat(b) => &[Source::EntityName],
         // AllDisplaySources.REDSTONE_POWER `associate(Blocks.TARGET)`.
         None if block_name(lv, pos) == "minecraft:target" => &[Source::RedstonePower],
@@ -542,6 +545,40 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
             .flatten(),
         ),
         Source::EntityName => Reading::Text(super::contraptions::seats::rider_name(lv, at)),
+        // The tunnels' counts are the link's own (`itemReceived`).
+        Source::AccumulateItems | Source::ItemThroughput => Reading::Now(lv.game_time()),
+    }
+}
+
+/// `DisplayLinkBlock.sendToGatherers(.., itemReceived, AccumulatedItemCountDisplaySource)`:
+/// `amount` items went into the tunnel at `tunnel`; the links attached to it counting them (not
+/// powered) count them and refresh.
+pub(crate) fn items_through_tunnel(lv: &mut ServerLevel<'_>, tunnel: [i32; 3], amount: i32) {
+    let dim = lv.dim;
+    let now = lv.game_time();
+    for d in Dir::ALL {
+        let p = super::redstone::offset(tunnel, d);
+        let Some((facing, powered)) = link_at(lv, p) else {
+            continue;
+        };
+        if powered || display::source_pos(p, facing) != tunnel {
+            continue;
+        }
+        let counted = with_world(|w| {
+            let l = w.dims[dim].displays.links.get_mut(&p)?;
+            match l.source? {
+                Source::AccumulateItems => l.config.collected += amount,
+                Source::ItemThroughput => l.config.throughput.received(amount, now),
+                _ => return None,
+            }
+            l.last = None;
+            Some(())
+        })
+        .flatten();
+        if counted.is_some() {
+            mark(lv, p);
+            update(lv, p);
+        }
     }
 }
 
@@ -1018,9 +1055,16 @@ fn tick_displays(lv: &mut ServerLevel<'_>) {
                     let d = &mut w.dims[dim].displays;
                     let l = d.links.get_mut(&pos)?;
                     l.source?;
-                    // `onSignalReset`: the stopwatch starts again.
+                    // `onSignalReset`: the stopwatch starts again; a tunnel's count goes.
                     if l.source == Some(Source::StopWatch) {
                         l.config.start_time = Some(now);
+                        l.last = None;
+                    }
+                    if matches!(
+                        l.source,
+                        Some(Source::AccumulateItems | Source::ItemThroughput)
+                    ) {
+                        l.config.collected = 0;
                         l.last = None;
                     }
                     d.schedule(pos, now);
@@ -1444,7 +1488,10 @@ impl BlockPart for DisplayBlock {
 /// a clipboard's last viewed entries write it by hand, a dye colours it; the text ones only
 /// while the board turns fast enough. Not while sneaking. Placing more boards from one in hand
 /// (its placement helper) is left out.
-fn use_board(host: &mut dyn ServerHost, click: &mod_api::BlockClick<'_>) -> Option<InteractionResult> {
+fn use_board(
+    host: &mut dyn ServerHost,
+    click: &mod_api::BlockClick<'_>,
+) -> Option<InteractionResult> {
     let player = host.player(click.player)?;
     if super::items::sneaking(&*host, player) {
         return None;
@@ -1677,6 +1724,7 @@ fn configure_from_client(host: &mut dyn ServerHost, player: PlayerRef, data: &[u
                 l.config.mode = s.config.mode;
                 l.config.cycle = s.config.cycle;
                 l.config.format = s.config.format;
+                l.config.interval = s.config.interval;
             }
             None => {}
         }
@@ -1816,6 +1864,7 @@ fn bind(lv: &mut ServerLevel<'_>, pos: [i32; 3], target: [i32; 3], words: &[&str
             l.config.mode = config.mode;
             l.config.cycle = config.cycle;
             l.config.format = config.format;
+            l.config.interval = config.interval;
         }
         l.last = None;
         d.schedule(pos, now);
@@ -1945,20 +1994,35 @@ fn displays_chunk_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
             c.insert("texts".into(), Tag::List(texts));
             own.insert("links".into(), Tag::Compound(c));
         }
-        // A list's number format, where it is not the first: x, y, z, Format.
-        let formats: Vec<i32> = {
+        // A list's number format, a tunnel's count and a throughput's interval, where any is
+        // set: x, y, z, Format, Collected, Interval.
+        let extra: Vec<i32> = {
             let mut l: Vec<(&[i32; 3], &Link)> = d
                 .links
                 .iter()
-                .filter(|(p, l)| inside(p) && l.config.format != 0)
+                .filter(|(p, l)| {
+                    inside(p)
+                        && (l.config.format != 0
+                            || l.config.collected != 0
+                            || l.config.interval != 0)
+                })
                 .collect();
             l.sort_by_key(|(p, _)| **p);
             l.into_iter()
-                .flat_map(|(p, l)| [p[0], p[1], p[2], l.config.format])
+                .flat_map(|(p, l)| {
+                    [
+                        p[0],
+                        p[1],
+                        p[2],
+                        l.config.format,
+                        l.config.collected,
+                        l.config.interval,
+                    ]
+                })
                 .collect()
         };
-        if !formats.is_empty() {
-            own.insert("link_formats".into(), Tag::IntArray(formats));
+        if !extra.is_empty() {
+            own.insert("link_extra".into(), Tag::IntArray(extra));
         }
         // Tubes with custom text: x, y, z, index; the text.
         let mut nixies: Vec<_> = d
@@ -2088,7 +2152,7 @@ fn displays_from_nbt(dim: usize, data: &Compound) {
                         mode: v[8],
                         cycle: v[9],
                         start_time: (v[10] != 0).then_some(start),
-                        format: 0,
+                        ..Config::default()
                     },
                     due: None,
                     last: None,
@@ -2096,10 +2160,12 @@ fn displays_from_nbt(dim: usize, data: &Compound) {
                 d.links.insert([v[0], v[1], v[2]], link);
             }
         }
-        if let Some(Tag::IntArray(v)) = data.get(&"link_formats".into()) {
-            for f in v.as_chunks::<4>().0 {
+        if let Some(Tag::IntArray(v)) = data.get(&"link_extra".into()) {
+            for f in v.as_chunks::<6>().0 {
                 if let Some(l) = d.links.get_mut(&[f[0], f[1], f[2]]) {
                     l.config.format = f[3];
+                    l.config.collected = f[4];
+                    l.config.interval = f[5];
                 }
             }
         }
