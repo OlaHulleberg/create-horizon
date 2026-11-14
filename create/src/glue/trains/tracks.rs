@@ -14,8 +14,9 @@ use create_engine::track_render::{Mat4, Piece, segment_parts};
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart,
     BlockEntityRenderBoundingBoxEvent, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent,
-    BlockPart, BlockState, ClientHost, Compound, Host, HostBlockStates, HostSide,
-    InteractionResult, ItemPart, Registrar, Tag, Text, UseOnEvent,
+    BlockFace, BlockPart, BlockState, ClientHost, Compound, Host, HostBlockStates, HostSide,
+    InteractionResult, ItemPart, OnBlockPlacedByEvent, Registrar, ServerHost, SupportType, Tag,
+    Text, UseOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -72,6 +73,70 @@ impl ItemPart for TrackItem {
         use_track(&mut lv, player, event.pos, event.face)
             .then_some(InteractionResult::SuccessServer)
     }
+
+    /// `TrackBlock.getStateForPlacement` with a player: the straight or diagonal shape nearest
+    /// their horizontal look, an orthogonal one becoming a ramp up toward a side whose block has
+    /// a sturdy top under no sturdy bottom.
+    fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
+        let Some(player) = event.placer else {
+            return;
+        };
+        if shape_of(&*host, event.state).is_none() {
+            return;
+        }
+        let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+            return;
+        };
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return;
+        };
+        let pos = event.pos;
+        let Some(shape) = placement_shape(&lv, player, pos) else {
+            return;
+        };
+        if let Some(next) = super::with_props(&*lv.host, event.state, &[("shape", shape.name())])
+            && next != event.state
+        {
+            lv.set_state(pos, next, update_all());
+        }
+    }
+}
+
+/// `TrackBlock.getStateForPlacement` for `player` placing track at `pos`: the straight or
+/// diagonal shape nearest their horizontal look, an orthogonal one becoming a ramp up toward a
+/// side whose block has a sturdy top under no sturdy bottom.
+fn placement_shape(
+    lv: &ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    pos: [i32; 3],
+) -> Option<TrackShape> {
+    let look = player.entity().view_vector(&*lv.host)?;
+    let flat = placement_look(look, player.entity().rotation(&*lv.host));
+    let straight = TrackShape::for_placement(flat, |_| false);
+    let sturdy = |p: [i32; 3], face: BlockFace| {
+        lv.level
+            .block_face_sturdy(&*lv.host, p, face, SupportType::Full)
+            .unwrap_or(false)
+    };
+    Some(TrackShape::for_placement(flat, |negative| {
+        let Some(axis) = straight.axes().first() else {
+            return false;
+        };
+        let k = if negative { -1.0 } else { 1.0 };
+        let o: [i32; 3] = std::array::from_fn(|i| pos[i] + (axis[i] * k).round() as i32);
+        sturdy(o, BlockFace::Up) && !sturdy([o[0], o[1] + 1, o[2]], BlockFace::Down)
+    }))
+}
+
+/// `getStateForPlacement`'s look: the horizontal part of the view, normalized; straight up or
+/// down, (0, 0, 1) turned by the yaw.
+fn placement_look(view: [f64; 3], rotation: Option<[f32; 2]>) -> [f64; 3] {
+    let len = (view[0] * view[0] + view[2] * view[2]).sqrt();
+    if len > 1.0e-5 {
+        return [view[0] / len, 0.0, view[2] / len];
+    }
+    let yaw = f64::from(rotation.map_or(0.0, |r| r[0])).to_radians();
+    [-yaw.sin(), 0.0, yaw.cos()]
 }
 
 fn say(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, key: &str) {
@@ -129,7 +194,9 @@ fn use_track(
             } else {
                 [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]]
             };
-            let shape = TrackShape::for_placement(look, |_| false);
+            let Some(shape) = placement_shape(lv, player, p) else {
+                return true;
+            };
             let Some(s) = lv
                 .host
                 .block_state_default(states::key(Block::Track))
