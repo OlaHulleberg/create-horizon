@@ -1878,7 +1878,7 @@ pub(super) fn register_commands(event: &mut RegisterCommandsEvent<'_>) {
     for usage in [
         "create_debug glue <from:block_pos> <to:block_pos>",
         "create_debug roller <pos:block_pos> <mode:word>",
-        "create_debug controls <pos:block_pos> <filter:greedy>",
+        "create_debug controls <pos:block_pos> <filter:text>",
     ] {
         event.commands.push(Command::op(usage, 2));
     }

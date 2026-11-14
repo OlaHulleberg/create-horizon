@@ -174,7 +174,7 @@ impl Subsystem for Controller {
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         event.commands.push(Command::op(
-            "create_debug controller <button:integer> <items:greedy>",
+            "create_debug controller <button:integer> <items:text>",
             2,
         ));
     }
