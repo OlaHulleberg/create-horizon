@@ -355,6 +355,32 @@ pub fn wrench_used(
     let Some(axis) = info.axis else {
         return false;
     };
+    // ChainDriveBlock.getRotatedBlockState: a drive in a chain turns about the chain's axis,
+    // staying in it (its neighbours reshape it after, `updateAfterWrenched`); one alone turns
+    // about the clicked face's, as any axis block.
+    if matches!(
+        block,
+        Block::EncasedChainDrive | Block::AdjustableChainGearshift
+    ) && !sneaking
+    {
+        if info.chain.unwrap_or_default() == create_engine::chain::Part::None {
+            return false;
+        }
+        let about = create_engine::chain::connection_axis(axis, info.along_first);
+        let turned = create_engine::wrench::clockwise(Dir::from_axis(axis, true), about).axis();
+        let facts = lv.host.block_states();
+        if turned != axis
+            && let Ok(next) = state.with(&facts, "axis", axis_name(turned))
+        {
+            lv.set_state(pos, next, update_all());
+            // `Block.updateFromNeighbourShapes`: its part from the drives beside it.
+            if let Some(id) = states::id(next) {
+                with_world(|w| w.neighbor_changed(lv.dim, pos, id));
+            }
+            super::items::wrench::rotate_sound(lv, pos);
+        }
+        return true;
+    }
     let encased_cog = matches!(
         block,
         Block::AndesiteEncasedCogwheel
