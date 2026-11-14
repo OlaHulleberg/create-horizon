@@ -392,5 +392,8 @@ pub fn draw_part(
         None => draw.block(states::key(model), own),
     };
     draw.still();
-    draw.keep();
+    // Arms and ejectors move their own parts every frame (`logistics::client`).
+    if !matches!(block, Block::MechanicalArm | Block::WeightedEjector) {
+        draw.keep();
+    }
 }

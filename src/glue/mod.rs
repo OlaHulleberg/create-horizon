@@ -2,6 +2,7 @@
 //! `lib.rs` hands every hook to all of them through `SUBSYSTEMS`.
 
 pub mod kinetics;
+pub mod logistics;
 pub mod net;
 pub mod persist;
 pub mod server;
@@ -17,7 +18,13 @@ use std::collections::HashSet;
 use subsystem::Subsystem;
 
 /// Every subsystem, in the order their level ticks run.
-pub static SUBSYSTEMS: &[&dyn Subsystem] = &[&kinetics::Kinetics];
+pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
+    &logistics::Logistics,
+    &logistics::Arms,
+    &kinetics::Kinetics,
+    // After `Kinetics`, which declares the block entity type it adds to.
+    &logistics::Entities,
+];
 
 thread_local! {
     /// The columns of each level whose saved data the subsystems have been given.
