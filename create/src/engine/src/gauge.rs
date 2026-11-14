@@ -444,8 +444,11 @@ pub fn tooltip(kind: Kind, s: &Shown) -> Vec<Line> {
             lines.push(goggles(0, vec![("Rotation Speed".into(), GRAY)]));
             // `SpeedLevel.getFormattedSpeedText(speed, isOverStressed())`.
             let level = SpeedLevel::of(s.speed);
+            // Overstressed: dark grey and struck through (`ChatFormatting.STRIKETHROUGH`, drawn
+            // from its formatting code).
             let text = format!(
-                "{}{} ({} RPM) ",
+                "{}{}{} ({} RPM) ",
+                if s.overstressed { "\u{a7}m" } else { "" },
                 progress_bar(3, level as usize),
                 level.name(),
                 number(f64::from(s.speed.abs()))
