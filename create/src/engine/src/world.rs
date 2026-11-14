@@ -1093,8 +1093,14 @@ impl CreateWorld {
         if let Some((gone, _)) = self.table.get(old)
             && Some(gone) != self.table.get(new).map(|(b, _)| b)
         {
+            // A nixie tube dyed another colour keeps its block entity (`withColor`).
+            let recoloured = crate::display::is_nixie(gone)
+                && self
+                    .table
+                    .get(new)
+                    .is_some_and(|(b, _)| crate::display::is_nixie(b));
             let d = &mut self.dims[dim];
-            if d.displays.removed(pos, gone) {
+            if !recoloured && d.displays.removed(pos, gone) {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
             let had = match gone {
@@ -2116,6 +2122,9 @@ impl CreateWorld {
             }
             Some(Block::RedstoneLink) => self.dims[dim].link_checks.push(pos),
             Some(Block::DisplayLink) => self.dims[dim].displays.checks.push(pos),
+            Some(b) if crate::display::is_nixie(b) => {
+                self.dims[dim].displays.nixie_checks.push(pos)
+            }
             Some(Block::ContentObserver | Block::StockpileSwitch) => {
                 self.dims[dim].detectors.neighbor_changed(pos)
             }

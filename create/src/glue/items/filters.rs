@@ -164,7 +164,7 @@ pub(crate) fn filter_from_nbt(host: &dyn Host, tag: &Tag) -> Option<Filter> {
 }
 
 /// The value of component `id` the stack has: its own, else its item's default.
-fn component(host: &dyn Host, stack: &ItemStack, id: &str) -> Option<Tag> {
+pub(crate) fn component(host: &dyn Host, stack: &ItemStack, id: &str) -> Option<Tag> {
     if let Some(patch) = stack.components().map(|c| c.as_nbt()) {
         if patch.contains_key(&format!("!{id}").as_str().into()) {
             return None;
@@ -189,7 +189,7 @@ fn enchantment_ids(tag: Option<Tag>) -> Vec<String> {
 }
 
 /// The plain text of a `custom_name` component.
-fn plain_name(tag: Option<Tag>) -> Option<String> {
+pub(crate) fn plain_name(tag: Option<Tag>) -> Option<String> {
     match tag? {
         Tag::String(s) => Some(s.to_string_lossy()),
         Tag::Compound(c) => text(c.get(&"text".into())),
