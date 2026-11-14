@@ -7,6 +7,7 @@ use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::super::world::{level_index, with_world};
 use super::saved;
+use crate::glue::items;
 use create_engine::Block;
 use create_engine::track::{self, End, Failure, Request, TrackShape};
 use create_engine::track_curves::Saved;
@@ -58,14 +59,24 @@ fn shape_of(host: &dyn Host, state: BlockState) -> Option<TrackShape> {
 /// it (`select`; a junction can't start a curve); the next, on another track or where a new
 /// one goes (`getPlacementState`), joins the two as `TrackPlacement.tryConnect` decides and lays
 /// the track (`placeTracks`); sneaking with a pick clears it. Create's message for a failure
-/// shows on the action bar. The items a survival player spends are not taken yet.
+/// shows on the action bar. Outside creative the tracks laid are paid for (`pay_tracks`).
 struct TrackItem;
 
 #[mod_api::horizon_part]
 impl ItemPart for TrackItem {
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
-        let HostSide::Server(host) = host else {
-            return None;
+        let host = match host {
+            HostSide::Server(host) => host,
+            // The client's `useOn`: a pick or a join is the server's, so the client places no
+            // block of its own for it (the stack shows a pick; a click on track makes one).
+            HostSide::Client(host) => {
+                let picked = items::custom(event.stack).contains_key(&SELECTION.into());
+                let on_track = host
+                    .level(host.dimension())
+                    .and_then(|l| l.block_state(&*host, event.pos))
+                    .is_some_and(|s| s.block() == states::key(Block::Track));
+                return (picked || on_track).then_some(InteractionResult::Success);
+            }
         };
         let player = host.player(event.player)?;
         let dimension = player.level(&*host)?.dimension().id(&*host)?;
@@ -177,10 +188,12 @@ fn use_track(
         }
         let end = End::select(pos, shape, look);
         TRACK_FROM.with_borrow_mut(|m| m.insert(uuid, (dim, end)));
+        mark_selection(lv, player, Some(pos));
         return true;
     };
     if entity.is_shift_key_down(&*lv.host) == Some(true) {
         TRACK_FROM.with_borrow_mut(|m| m.remove(&uuid));
+        mark_selection(lv, player, None);
         say(lv, player, "track.selection_cleared");
         return true;
     }
@@ -207,12 +220,13 @@ fn use_track(
             (p, s)
         }
     };
-    let laid = lay_track(lv, from, pos2, state2, look);
+    let laid = lay_track(lv, from, pos2, state2, look, player);
     if let Ok(Some(m)) | Err(Some(m)) = laid {
         say(lv, player, &format!("track.{}", m.key()));
     }
     if laid.is_ok() {
         TRACK_FROM.with_borrow_mut(|m| m.remove(&uuid));
+        mark_selection(lv, player, None);
     }
     true
 }
@@ -227,6 +241,7 @@ fn lay_track(
     pos2: [i32; 3],
     state2: BlockState,
     look: [f64; 3],
+    player: mod_api::PlayerRef,
 ) -> Result<Option<Failure>, Option<Failure>> {
     let Some(shape2) = shape_of(&*lv.host, state2) else {
         return Err(None);
@@ -247,6 +262,24 @@ fn lay_track(
     );
     if !info.valid {
         return Err(info.message);
+    }
+    // `tryConnect` outside creative: the player pays a track for each one laid where the block
+    // is replaceable, and half a track per sleeper segment of the curve, from their stacks of
+    // the held track (the selected slot after the others, then the off hand), or nothing is
+    // laid.
+    if player.is_creative(&*lv.host) != Some(true) {
+        let facts = lv.host.block_states();
+        let straight: i32 = (0..2)
+            .flat_map(|i| info.straight(i).collect::<Vec<_>>())
+            .filter(|&p| {
+                lv.block_state(p)
+                    .is_some_and(|s| facts.replaceable(s) == Some(true))
+            })
+            .count() as i32;
+        let need = straight + info.turn_tracks();
+        if !pay_tracks(lv, player, need) {
+            return Err(Some(Failure::NotEnoughTracks));
+        }
     }
     // `placeTracks`: each end's state (a T junction's straight part) along its run.
     for (i, state) in [state1, state2].into_iter().enumerate() {
@@ -297,6 +330,90 @@ fn lay_track(
         w.mark_unsaved(dim, saved.to);
     });
     Ok(info.message)
+}
+
+/// The key in the track stack's custom data marking its pick (`TRACK_CONNECTING_FROM`).
+const SELECTION: &str = "create:track_connecting_from";
+
+/// `minecraft:enchantment_glint_override`: a picking track shines (`isFoil`).
+struct Glint;
+
+impl mod_api::Component for Glint {
+    type Value = bool;
+    fn id(&self) -> &str {
+        "minecraft:enchantment_glint_override"
+    }
+    fn decode(&self, value: &Tag) -> Option<bool> {
+        match value {
+            Tag::Byte(b) => Some(*b != 0),
+            _ => None,
+        }
+    }
+    fn encode(&self, value: bool) -> Tag {
+        Tag::Byte(i8::from(value))
+    }
+}
+
+/// Marks the track in `player`'s main hand as picking the track at `from`
+/// (`TRACK_CONNECTING_FROM`, which makes it shine), or not.
+fn mark_selection(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, from: Option<[i32; 3]>) {
+    use mod_api::Hand;
+    let Some(mut stack) = items::held(&*lv.host, player, Hand::Main) else {
+        return;
+    };
+    if stack.item().id(&*lv.host) != "create:track" {
+        return;
+    }
+    items::set_custom(
+        &mut stack,
+        &[(SELECTION, from.map(|p| Tag::IntArray(p.to_vec())))],
+    );
+    if from.is_some() {
+        let _ = stack.set(&Glint, true);
+    } else {
+        stack.remove(&Glint);
+    }
+    items::set_held(lv.host, player, Hand::Main, Some(stack));
+}
+
+/// Takes `need` of the held track item from `player` (`tryConnect`'s two passes: counted first,
+/// then taken from the inventory with the selected slot last, then the off hand). False, with
+/// nothing taken, when they have too few.
+fn pay_tracks(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, need: i32) -> bool {
+    use items::{held, set_held};
+    use mod_api::Hand;
+    let Some(item) = held(&*lv.host, player, Hand::Main).map(|s| s.item()) else {
+        return false;
+    };
+    let selected = player.selected_slot(&*lv.host).map(|s| s as u32);
+    let mut slots: Vec<(u32, mod_api::ItemStack)> = player
+        .inventory_slots(&*lv.host)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, s)| s.item() == item)
+        .collect();
+    slots.sort_by_key(|(i, _)| Some(*i) == selected);
+    let offhand = held(&*lv.host, player, Hand::Off).filter(|s| s.item() == item);
+    let have: i32 = slots.iter().map(|(_, s)| s.count() as i32).sum::<i32>()
+        + offhand.as_ref().map_or(0, |s| s.count() as i32);
+    if have < need {
+        return false;
+    }
+    let mut left = need;
+    for (i, s) in slots {
+        if left <= 0 {
+            break;
+        }
+        let take = left.min(s.count() as i32);
+        left -= take;
+        let _ = player.set_inventory_slot(lv.host, i, s.shrink(take as u32));
+    }
+    if left > 0
+        && let Some(s) = offhand
+    {
+        set_held(lv.host, player, Hand::Off, s.shrink(left as u32));
+    }
+    true
 }
 
 /// Curves that changed since the last tick: a track left with none is no longer `turn`
