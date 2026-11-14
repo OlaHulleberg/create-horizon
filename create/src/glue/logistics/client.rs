@@ -63,6 +63,8 @@ struct Client {
     ticks: u64,
     /// The belt partials' models, resolved when first drawn (and again once stale).
     models: HashMap<&'static str, mod_api::ModelRef>,
+    /// Belt segments drawn dyed, by position: what a click with water predicts.
+    dyed: std::collections::HashSet<[i32; 3]>,
 }
 
 thread_local! {
@@ -77,6 +79,7 @@ pub fn reset_logistics() {
         c.belts.clear();
         c.speeds.clear();
         c.block_items.clear();
+        c.dyed.clear();
     });
 }
 
@@ -127,6 +130,38 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -
         }),
         _ => false,
     }
+}
+
+/// The client's prediction of a click a belt takes as the server will (`BeltBlock.useItemOn`):
+/// water on a dyed belt washes it, so the bucket is not emptied on the client's word.
+pub fn predict_click(
+    host: &mut dyn ClientHost,
+    event: &mut mod_api::RightClickBlockEvent<'_>,
+) -> mod_api::Flow {
+    let click = event.click;
+    let Some(player) = host.player(click.player) else {
+        return mod_api::Flow::Continue;
+    };
+    if crate::glue::items::sneaking(&*host, player) {
+        return mod_api::Flow::Continue;
+    }
+    let Some(state) = host
+        .level(host.dimension())
+        .and_then(|l| l.block_state(&*host, click.pos))
+    else {
+        return mod_api::Flow::Continue;
+    };
+    if !table_info(&*host, state).is_some_and(|(b, _)| b == Block::Belt) {
+        return mod_api::Flow::Continue;
+    }
+    let id = click.stack.map(|s| s.item().id(&*host));
+    let water = id.as_deref() == Some("minecraft:water_bucket");
+    let dyed = CLIENT.with_borrow(|c| c.dyed.contains(&click.pos));
+    if water && dyed {
+        *event.cancellation_result = mod_api::InteractionResult::Success;
+        return mod_api::Flow::Cancel;
+    }
+    mod_api::Flow::Continue
 }
 
 /// Depots' and belts' contents from the server.
@@ -497,6 +532,13 @@ impl BlockEntityPart for LogisticsEntity {
                     _ => None,
                 }
                 .filter(|c| !c.is_empty());
+                CLIENT.with_borrow_mut(|c| {
+                    if color.is_some() {
+                        c.dyed.insert(pos);
+                    } else {
+                        c.dyed.remove(&pos);
+                    }
+                });
                 draw_segment(draw, host, block, &info, pos, speeds, color.as_deref());
                 draw_belt_items(draw, host, pos, partial_tick);
             }

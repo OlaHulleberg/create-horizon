@@ -24,6 +24,31 @@ pub enum Part {
     Pulley,
 }
 
+impl Slope {
+    /// Its state value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Slope::Horizontal => "horizontal",
+            Slope::Upward => "upward",
+            Slope::Downward => "downward",
+            Slope::Vertical => "vertical",
+            Slope::Sideways => "sideways",
+        }
+    }
+}
+
+impl Part {
+    /// Its state value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Part::Start => "start",
+            Part::Middle => "middle",
+            Part::End => "end",
+            Part::Pulley => "pulley",
+        }
+    }
+}
+
 /// One belt block's state: `horizontal_facing`, `slope`, `part`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Segment {
@@ -98,6 +123,66 @@ impl Segment {
             _ => {}
         }
         Some(p)
+    }
+
+    /// `BeltHelper.getBeltVector`: from one segment to the next toward the end.
+    pub fn vector(&self) -> [i32; 3] {
+        if self.slope == Slope::Vertical {
+            return [0, if self.facing.positive() { 1 } else { -1 }, 0];
+        }
+        let n = self.facing.offset();
+        let up = match self.slope {
+            Slope::Upward => 1,
+            Slope::Downward => -1,
+            _ => 0,
+        };
+        [n[0], up, n[2]]
+    }
+
+    /// `BeltSlicer.hoveringEnd`: a click at `hit` (from the block's centre) on a start or end
+    /// segment is on its outer half.
+    pub fn hovering_end(&self, hit: [f64; 3]) -> bool {
+        if !matches!(self.part, Part::Start | Part::End) {
+            return false;
+        }
+        let v = self.vector();
+        let dot: f64 = (0..3).map(|i| hit[i] * f64::from(v[i])).sum();
+        (dot > 0.0) == (self.part == Part::End)
+    }
+
+    /// `BeltSlicer.beltStatesCompatible`: a belt `other` may join this one end to end.
+    pub fn compatible(&self, other: &Segment) -> bool {
+        match self.slope {
+            Slope::Upward | Slope::Downward => {
+                let flipped = if self.slope == Slope::Upward {
+                    Slope::Downward
+                } else {
+                    Slope::Upward
+                };
+                if other.slope == flipped {
+                    return self.facing == other.facing.opposite();
+                }
+                other.slope == self.slope && self.facing == other.facing
+            }
+            _ => other.slope == self.slope && other.facing.axis() == self.facing.axis(),
+        }
+    }
+
+    /// `BeltSlicer.flipBelt`: the same segment seen from the other end.
+    pub fn flipped(&self) -> Segment {
+        Segment {
+            facing: self.facing.opposite(),
+            slope: match self.slope {
+                Slope::Upward => Slope::Downward,
+                Slope::Downward => Slope::Upward,
+                s => s,
+            },
+            part: match self.part {
+                Part::End => Part::Start,
+                Part::Start => Part::End,
+                p => p,
+            },
+        }
     }
 
     /// `BeltBlock.getRotationAxis`.

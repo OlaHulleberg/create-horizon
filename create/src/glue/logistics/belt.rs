@@ -31,23 +31,36 @@ pub fn belt_segment(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<([i32; 3], i3
     Some((c, index, seg))
 }
 
-/// `BeltBlock.useItemOn` for a player who may build and is not sneaking: an empty main hand
-/// takes the segment's items (`use_belt`), a shaft makes a middle segment a pulley (used up
-/// outside creative), a casing cases the segment (`setCasingType`, nothing used up). True when
-/// the click was the belt's. Dyes, packages and the belt connector's and wrench's slicing are
-/// not in the port.
+/// `BeltBlock.useItemOn` for a player who may build and is not sneaking, clicked on `hit` (the
+/// face and the point): a wrench or a belt connector slices the belt (`slicer`), a dye or water
+/// colours or washes it, an empty main hand takes the segment's items (`use_belt`), a shaft makes
+/// a middle segment a pulley (used up outside creative), a casing cases the segment
+/// (`setCasingType`, nothing used up). True when the click was the belt's. Packages are not in
+/// the port.
 pub fn use_belt_with(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     player: u128,
     hand: mod_api::Hand,
     held: Option<&str>,
+    hit: (Dir, [f64; 3]),
 ) -> bool {
     let Some(p) = lv.host.player(player) else {
         return false;
     };
     if crate::glue::items::sneaking(&*lv.host, p) || p.may_build(&*lv.host) != Some(true) {
         return false;
+    }
+    // `BeltSlicer`: from the clicked point, measured from the block's centre.
+    let local = [0, 1, 2].map(|i| hit.1[i] - f64::from(pos[i]) - 0.5);
+    match held {
+        Some("create:wrench") => {
+            return super::slicer::use_wrench(lv, pos, p, hit.0, local).is_some();
+        }
+        Some("create:belt_connector") => {
+            return super::slicer::use_connector(lv, pos, p, local).is_some();
+        }
+        _ => {}
     }
     // A dye colours the whole belt, water washes it (`applyColor`); neither is used up.
     if let Some(h) = held {
@@ -142,8 +155,7 @@ pub fn set_casing(lv: &mut ServerLevel<'_>, pos: [i32; 3], cased: bool) {
 
 /// `BeltBlock.onWrenched` after `BeltSlicer.useWrench` passed it on: a casing comes off when a
 /// side or the bottom is clicked; a pulley clicked on a side becomes a middle segment again, its
-/// shaft back to the player outside creative. True when the wrench did something; the slicing
-/// (shortening a belt from its end, splitting it) is not in the port, so other clicks do nothing.
+/// shaft back to the player outside creative. True when the wrench did something.
 pub fn wrench_belt(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
@@ -409,7 +421,8 @@ fn chute_direct_input(
     let above = [pos[0], pos[1] + 1, pos[2]];
     let below = [pos[0], pos[1] - 1, pos[2]];
     if super::chute::chute_at(lv, above).is_some()
-        || (super::chute::chute_motion(lv, pos) > 0.0 && super::chute::chute_at(lv, below).is_none())
+        || (super::chute::chute_motion(lv, pos) > 0.0
+            && super::chute::chute_at(lv, below).is_none())
     {
         return item.count;
     }
@@ -427,7 +440,7 @@ fn chute_direct_input(
 }
 
 /// `BeltInventory.eject`: an item thrown off the end, forward and a little up.
-fn eject_from_belt(
+pub(super) fn eject_item(
     lv: &mut ServerLevel<'_>,
     controller: [i32; 3],
     seg: &belt::Segment,
@@ -482,7 +495,7 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
         }
     }
     for (c, seg, length, item) in drops {
-        eject_from_belt(lv, c, &seg, length, 0.0, &item);
+        eject_item(lv, c, &seg, length, 0.0, &item);
     }
     let busy = with_world(|w| w.busy_belts(dim)).unwrap_or_default();
     for c in busy {
@@ -522,7 +535,7 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
             }
         });
         for item in &ticked.ejected {
-            eject_from_belt(lv, c, &seg, length, rpm, item);
+            eject_item(lv, c, &seg, length, rpm, item);
         }
     }
     let changed = with_world(|w| {

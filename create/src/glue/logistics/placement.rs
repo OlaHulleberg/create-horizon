@@ -156,11 +156,12 @@ impl BlockPart for Placement {
                         .and_then(table)
                         .is_some_and(|(b, _)| super::funnel::is_funnel(b))
                 };
-                let facing = create_engine::place::nearest_looking_directions(ctx, c.replace_clicked)
-                    .into_iter()
-                    .map(Dir::opposite)
-                    .find(|f| !funnel(beside(f.opposite())))
-                    .unwrap_or(Dir::Up);
+                let facing =
+                    create_engine::place::nearest_looking_directions(ctx, c.replace_clicked)
+                        .into_iter()
+                        .map(Dir::opposite)
+                        .find(|f| !funnel(beside(f.opposite())))
+                        .unwrap_or(Dir::Up);
                 let s = set(default, "facing", super::super::kinetics::dir_name(facing));
                 let s = set(s, "extracting", flag(!c.sneaking));
                 return Some(Some(s));

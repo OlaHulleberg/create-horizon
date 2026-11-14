@@ -22,10 +22,8 @@
 //!   (`arms::select_point`, `arms::select_ejector_target`), but the outlines Create's client draws
 //!   around the chosen blocks are not, and left-clicking a point to drop it is out: the mod API's
 //!   `left_click_block` names no player.
-//! - Belts: a dye, the belt connector's lengthening and the wrench's shortening and splitting
-//!   (`BeltSlicer`) are not in the port; a brass casing is drawn with the andesite casing's
-//!   texture (Create's `BeltModel` retextures the block model; the mod API cannot), and a sloped
-//!   belt collides as a flat one (`BeltShapes` by facing, slope and part are not declared yet,
+//! - Belts: a brass casing is drawn with the andesite casing's texture (Create's `BeltModel`
+//!   retextures the block model; the mod API cannot), and a sloped belt collides as a flat one (`BeltShapes` by facing, slope and part are not declared yet,
 //!   though content shapes can select by several properties).
 //! - Players riding a belt are pushed by their own client (`push_player`), other entities by
 //!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`.
@@ -47,6 +45,7 @@ mod funnel;
 mod handlers;
 mod items;
 mod placement;
+mod slicer;
 mod tunnel;
 
 pub use arms::Arms;
@@ -278,6 +277,18 @@ impl Subsystem for Logistics {
         client::logistics_message(host, channel, data)
     }
 
+    /// The client's prediction of a click a belt takes (`client::predict_click`).
+    fn right_click_block(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::RightClickBlockEvent<'_>,
+    ) -> mod_api::Flow {
+        match host {
+            mod_api::HostSide::Client(host) => client::predict_click(host, event),
+            mod_api::HostSide::Server(_) => mod_api::Flow::Continue,
+        }
+    }
+
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick_client_depots(host);
         client::tick_client_belts(host);
@@ -291,7 +302,11 @@ impl Subsystem for Logistics {
     /// The belt partials, drawn with their texture scrolling, and the model naming the
     /// scrolling sprites (so the block sprites hold them).
     fn standalone_models(&self, models: &mut Vec<String>) {
-        models.extend(create_engine::belt::PARTIAL_MODELS.iter().map(|m| (*m).to_owned()));
+        models.extend(
+            create_engine::belt::PARTIAL_MODELS
+                .iter()
+                .map(|m| (*m).to_owned()),
+        );
         models.push("create:block/belt_scroll_sprites".to_owned());
     }
 }
@@ -440,7 +455,14 @@ fn use_block(
         Block::BrassFunnel | Block::BrassBeltFunnel => {
             funnel::use_funnel_filter(&mut lv, pos, click)
         }
-        Block::Belt => belt::use_belt_with(&mut lv, pos, click.player, click.hand, held.as_deref()),
+        Block::Belt => belt::use_belt_with(
+            &mut lv,
+            pos,
+            click.player,
+            click.hand,
+            held.as_deref(),
+            (Dir::ALL[face as usize], click.hit.point),
+        ),
         _ => false,
     };
     used.then_some(InteractionResult::Success)

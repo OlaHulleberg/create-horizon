@@ -146,6 +146,9 @@ pub struct Dimension {
     pub belt_drops: Vec<([i32; 3], crate::belt::Segment, i32, crate::belt::Item)>,
     /// Items saved with a belt, kept until its chain is whole again after loading.
     belt_saved: HashMap<[i32; 3], crate::belt::Inventory>,
+    /// Belt segments the belt slicer takes away (`UPDATE_MOVE_BY_PISTON`): their removal
+    /// breaks no neighbour and drops nothing.
+    belt_quiet: std::collections::HashSet<[i32; 3]>,
     /// Latches whose inputs may have changed, looked at after the tick
     /// (`checkTickOnNeighbor`), and their scheduled ticks (position, game time due).
     pub latch_checks: Vec<[i32; 3]>,
@@ -2504,6 +2507,9 @@ impl CreateWorld {
     /// next to it break in turn (a pulley leaves its shaft).
     fn belt_removed(&mut self, dim: usize, pos: [i32; 3], seg: crate::belt::Segment) {
         let d = &mut self.dims[dim];
+        if d.belt_quiet.remove(&pos) {
+            return;
+        }
         if let Some(c) = d.belt_of.remove(&pos)
             && let Some(belt) = d.belts.remove(&c)
         {
@@ -2599,6 +2605,43 @@ impl CreateWorld {
                 self.place(dim, p, state);
             }
         }
+    }
+
+    /// `BeltSlicer`'s first step (`detachKinetics`, `beltLength = 0` on every segment): the belt
+    /// with segment `pos` is taken apart, its chain and items handed back; its segments form
+    /// belts again after the tick, from their states then (`settle_belts`).
+    pub fn take_belt(&mut self, dim: usize, pos: [i32; 3]) -> Option<([i32; 3], Belt)> {
+        let d = &mut self.dims[dim];
+        let c = *d.belt_of.get(&pos)?;
+        let b = d.belts.remove(&c)?;
+        for p in &b.chain {
+            d.belt_of.remove(p);
+            d.belt_dirty.push(*p);
+        }
+        d.belt_changes.push(c);
+        Some((c, b))
+    }
+
+    /// The belt segment at `pos` leaves without breaking its neighbours or dropping anything
+    /// (the slicer's `UPDATE_MOVE_BY_PISTON`).
+    pub fn remove_belt_quietly(&mut self, dim: usize, pos: [i32; 3]) {
+        self.dims[dim].belt_quiet.insert(pos);
+    }
+
+    /// The belt whose controller will be `controller` takes `items` once its chain forms; its
+    /// segments `chain` look for their chain after the tick.
+    pub fn reform_belt(
+        &mut self,
+        dim: usize,
+        controller: [i32; 3],
+        chain: &[[i32; 3]],
+        items: crate::belt::Inventory,
+    ) {
+        let d = &mut self.dims[dim];
+        if !items.is_empty() {
+            d.belt_saved.insert(controller, items);
+        }
+        d.belt_dirty.extend_from_slice(chain);
     }
 
     /// Items saved with belts in a column (`chunk_data_save`), for when their chains form.
