@@ -76,6 +76,15 @@ use mod_api::{
 pub struct Processing;
 
 impl Subsystem for Processing {
+    fn animated(
+        &self,
+        block: create_engine::Block,
+        _pos: [i32; 3],
+        _entity: &mod_api::ModBlockEntity,
+    ) -> bool {
+        moving(block)
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         containers::register(r);
         client::register(r);

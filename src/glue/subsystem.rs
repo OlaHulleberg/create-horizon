@@ -61,6 +61,34 @@ pub trait Subsystem: Sync {
     /// this tick's solve.
     fn speed_changed(&self, _lv: &mut ServerLevel<'_>, _pos: [i32; 3], _speed: f32) {}
 
+    /// The keys of a `create:kinetic` block entity's data this subsystem keeps for clients
+    /// (sent with the parts' speeds in its update tag).
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Whether this subsystem draws part `part` of `block` itself, so the kinetic renderer
+    /// leaves it out (a gauge's dial, a flywheel's easing wheel).
+    fn draws_itself(
+        &self,
+        _block: create_engine::Block,
+        _part: &create_engine::client::Draw,
+    ) -> bool {
+        false
+    }
+
+    /// Whether this subsystem animates the `create:kinetic` block entity at `pos` this frame
+    /// (a moving arm, a sliding structure): its drawing is then not kept, and every part on it is
+    /// drawn again next frame.
+    fn animated(
+        &self,
+        _block: create_engine::Block,
+        _pos: [i32; 3],
+        _entity: &mod_api::ModBlockEntity,
+    ) -> bool {
+        false
+    }
+
     /// After a server level's tick.
     fn level_tick(&self, _lv: &mut ServerLevel<'_>) {}
 

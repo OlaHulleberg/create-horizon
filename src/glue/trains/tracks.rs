@@ -460,8 +460,8 @@ impl BlockEntityPart for TrackEntity {
             } else {
                 "part_signal_indicator_off"
             };
-            if let Some(b) = Block::from_name(name) {
-                event.draw.block(states::key(b), &[("facing", "up")]);
+            if let Some(b) = states::partial(name) {
+                event.draw.block(b, &[("facing", "up")]);
                 event.draw.keep();
             }
             return;
@@ -470,7 +470,7 @@ impl BlockEntityPart for TrackEntity {
         if curves.is_empty() {
             return;
         }
-        let part = |name: &str| Block::from_name(name).map(states::key);
+        let part = states::partial;
         let (Some(tie), Some(left), Some(right)) = (
             part("part_track_tie"),
             part("part_track_segment_left"),

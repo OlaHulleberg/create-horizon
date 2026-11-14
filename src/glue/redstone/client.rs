@@ -211,8 +211,8 @@ fn speed_of(nbt: &mod_api::Compound) -> f32 {
 
 /// Draws block `name` (`part_cuckoo_pig`, one of the content's part models) facing up.
 fn draw_part(draw: &mut dyn BlockEntityDrawContext, name: &str) {
-    if let Some(b) = Block::from_name(name) {
-        draw.block(states::key(b), &[("facing", "up")]);
+    if let Some(b) = states::partial(name) {
+        draw.block(b, &[("facing", "up")]);
     }
 }
 

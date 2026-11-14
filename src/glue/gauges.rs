@@ -35,6 +35,18 @@ pub const SYNCED: &[&str] = &[GAUGE, super::fluids::TANK, super::fluids::HOSE];
 pub struct Gauges;
 
 impl Subsystem for Gauges {
+    fn synced_keys(&self) -> &'static [&'static str] {
+        SYNCED
+    }
+
+    fn draws_itself(&self, block: Block, part: &Draw) -> bool {
+        draws_itself(block, part)
+    }
+
+    fn animated(&self, block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
+        animated(block, pos, entity)
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let Some(kind) = kinetics::kind() else {
             return;
@@ -270,7 +282,7 @@ fn draw_dials_at(
     progress: f32,
 ) {
     let axis = create_engine::parts::directional_axis(facing, along_first);
-    let Some(dial) = Block::from_name("part_gauge_dial") else {
+    let Some(dial) = states::partial("part_gauge_dial") else {
         return;
     };
     for face in dial_faces(facing, axis) {
@@ -279,7 +291,7 @@ fn draw_dials_at(
         draw.push();
         draw.translate(pose.offset);
         draw.rotate_about(axis_vector(pose.axis), pose.angle, [0.5; 3]);
-        draw.block(states::key(dial), &[("facing", kinetics::dir_name(face))]);
+        draw.block(dial, &[("facing", kinetics::dir_name(face))]);
         draw.pop();
     }
 }

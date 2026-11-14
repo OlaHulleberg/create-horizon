@@ -264,6 +264,10 @@ fn player_dimension(host: &dyn Host, player: PlayerRef) -> Option<String> {
 pub struct Decor;
 
 impl Subsystem for Decor {
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[BRACKET]
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         clicks::register(r);
         place::register(r);

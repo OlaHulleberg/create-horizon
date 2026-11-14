@@ -16,9 +16,8 @@ use create_engine::actors::Carried;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::lifts::Held;
 use mod_api::{
-    BlockPart, BlockSignalEvent, BlockState, Compound, HostBlockStates, InteractionResult,
-    IsSignalSourceEvent, LevelHost, NeighbourUpdate, Registrar, ServerHost, StateForPlacementEvent,
-    Tag, UseItemOnEvent,
+    BlockPart, BlockSignalEvent, BlockState, Compound, InteractionResult, IsSignalSourceEvent,
+    LevelHost, Registrar, ServerHost, StateForPlacementEvent, Tag, UseItemOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;

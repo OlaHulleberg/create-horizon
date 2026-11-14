@@ -40,14 +40,26 @@ use create_engine::Block;
 use create_engine::kinetics::Dir;
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockState, BlockUpdateFlags, ClientHost, Compound, Direction, Flow, HostBlockStates,
-    NeighbourUpdate, PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext,
-    RunModCommandEvent, ServerHost,
+    BlockState, ClientHost, Compound, Direction, Flow, HostBlockStates, PlayerRef,
+    RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent, ServerHost,
 };
 
 pub struct Redstone;
 
 impl Subsystem for Redstone {
+    /// A cuckoo clock's hands and doors are drawn each frame (`client`).
+    fn animated(
+        &self,
+        block: create_engine::Block,
+        _pos: [i32; 3],
+        _entity: &mod_api::ModBlockEntity,
+    ) -> bool {
+        matches!(
+            block,
+            create_engine::Block::CuckooClock | create_engine::Block::MysteriousCuckooClock
+        )
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         parts::register(r);
         analog::register(r);

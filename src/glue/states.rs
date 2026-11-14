@@ -22,6 +22,84 @@ pub const FIRST: u32 = 1 << 20;
 /// The key of each of Create's blocks, by `Block as usize`, requested in `register`.
 static KEYS: OnceLock<Vec<BlockKey>> = OnceLock::new();
 
+/// The content's partial-model blocks (`create:part_*`): never placed, one model per state, drawn
+/// by block entity renderers for the parts that move on their own (a shaft half, a press head).
+/// They are not engine blocks. Sorted, as `data/create/horizon/block/part_*.json`.
+pub const PARTIALS: &[&str] = &[
+    "part_analog_lever_handle",
+    "part_arm_base",
+    "part_arm_claw_base",
+    "part_arm_cog",
+    "part_arm_lower_body",
+    "part_arm_lower_claw_grip",
+    "part_arm_upper_body",
+    "part_arm_upper_claw_grip",
+    "part_bearing_top",
+    "part_bearing_top_wooden",
+    "part_belt_diagonal_end",
+    "part_belt_diagonal_middle",
+    "part_belt_diagonal_start",
+    "part_belt_end",
+    "part_belt_end_bottom",
+    "part_belt_middle",
+    "part_belt_middle_bottom",
+    "part_belt_pulley",
+    "part_belt_start",
+    "part_belt_start_bottom",
+    "part_bogey_drive",
+    "part_bogey_drive_wheel",
+    "part_bogey_frame",
+    "part_bogey_wheel",
+    "part_cogwheel_shaftless",
+    "part_coupling_attachment",
+    "part_coupling_connector",
+    "part_coupling_ring",
+    "part_cuckoo_creeper",
+    "part_cuckoo_hour_hand",
+    "part_cuckoo_left_door",
+    "part_cuckoo_minute_hand",
+    "part_cuckoo_pig",
+    "part_cuckoo_right_door",
+    "part_deployer_hand_holding",
+    "part_deployer_hand_pointing",
+    "part_deployer_pole",
+    "part_drill_head",
+    "part_ejector_top",
+    "part_fan_propeller",
+    "part_fluid_chocolate",
+    "part_fluid_honey",
+    "part_fluid_lava",
+    "part_fluid_milk",
+    "part_fluid_valve_pointer",
+    "part_fluid_water",
+    "part_gauge_dial",
+    "part_gauge_head_speed",
+    "part_gauge_head_stress",
+    "part_hand_crank_handle",
+    "part_hose_coil",
+    "part_hose_half",
+    "part_hose_half_magnet",
+    "part_hose_magnet",
+    "part_hose_rope",
+    "part_millstone_cog",
+    "part_mixer_head",
+    "part_mixer_pole",
+    "part_press_head",
+    "part_pump_cog",
+    "part_schematicannon_connector",
+    "part_schematicannon_pipe",
+    "part_shaft_half",
+    "part_signal_indicator_off",
+    "part_signal_indicator_on",
+    "part_track_segment_left",
+    "part_track_segment_right",
+    "part_track_tie",
+    "part_water_wheel",
+];
+
+/// The key of each of `PARTIALS`, requested in `register`.
+static PARTIAL_KEYS: OnceLock<Vec<BlockKey>> = OnceLock::new();
+
 /// Requests the key of every block the engine knows (`create:<name>`).
 pub fn register(r: &mut dyn Registrar) {
     let keys = Block::NAMES
@@ -30,6 +108,18 @@ pub fn register(r: &mut dyn Registrar) {
         .collect();
     // A second registration (a second game in the process) asks for the same keys.
     let _ = KEYS.set(keys);
+    let partials = PARTIALS
+        .iter()
+        .map(|name| r.block_key(&format!("create:{name}")))
+        .collect();
+    let _ = PARTIAL_KEYS.set(partials);
+}
+
+/// The key of partial model `name` (`part_shaft_half`, or with its `create:` namespace).
+pub fn partial(name: &str) -> Option<BlockKey> {
+    let name = name.strip_prefix("create:").unwrap_or(name);
+    let i = PARTIALS.binary_search(&name).ok()?;
+    PARTIAL_KEYS.get()?.get(i).copied()
 }
 
 /// The key of `block`. Panics before `register`, which runs before any world.
@@ -158,7 +248,23 @@ pub fn state(id: u32) -> Option<BlockState> {
 
 #[cfg(test)]
 mod tests {
-    use super::split;
+    use super::{PARTIALS, split};
+
+    #[test]
+    fn partials_are_the_content_s_part_blocks_sorted() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/data/create/horizon/block");
+        let mut declared: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter_map(|n| Some(n.strip_suffix(".json")?.to_owned()))
+            .filter(|n| n.starts_with("part_"))
+            .collect();
+        declared.sort();
+        assert_eq!(
+            PARTIALS,
+            declared.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn splits_state_strings() {

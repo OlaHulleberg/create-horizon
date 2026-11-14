@@ -44,6 +44,19 @@ static REVISION: AtomicI32 = AtomicI32::new(1);
 pub struct Drawing;
 
 impl Subsystem for Drawing {
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[KEY]
+    }
+
+    fn animated(
+        &self,
+        _block: create_engine::Block,
+        _pos: [i32; 3],
+        entity: &mod_api::ModBlockEntity,
+    ) -> bool {
+        moving(&entity.nbt)
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let Some(kind) = super::super::kinetics::kind() else {
             eprintln!("[create] contraptions: the kinetic block entity type is not registered yet");

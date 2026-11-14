@@ -14,8 +14,8 @@ use create_engine::kinetics::{Axis, Dir, Event};
 use create_engine::world::keeps_state;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart, BlockEntitySubmitEvent,
-    BlockEntityTypeKey, BlockEntityUpdateTagEvent, BlockPart, ClientHost, Compound, HostSide,
-    Registrar, RegistrationContext, Tag,
+    BlockEntityTypeKey, BlockEntityUpdateTagEvent, BlockKey, BlockPart, ClientHost, Compound,
+    HostSide, Registrar, RegistrationContext, Tag,
 };
 use std::sync::OnceLock;
 
@@ -296,10 +296,13 @@ impl BlockEntityPart for KineticEntity {
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
         // The speeds, and what other subsystems keep in the same block entity for its clients.
-        let shown: Compound = [SPEEDS, super::decor::BRACKET]
-            .iter()
-            .chain(super::gauges::SYNCED)
-            .filter_map(|&k| Some((k.into(), event.entity.nbt.get(&k.into())?.clone())))
+        let shown: Compound = std::iter::once(SPEEDS)
+            .chain(
+                super::SUBSYSTEMS
+                    .iter()
+                    .flat_map(|s| s.synced_keys().iter().copied()),
+            )
+            .filter_map(|k| Some((k.into(), event.entity.nbt.get(&k.into())?.clone())))
             .collect();
         (!shown.is_empty()).then_some(shown)
     }
@@ -316,18 +319,20 @@ impl BlockEntityPart for KineticEntity {
         let speeds = speeds_of(&event.entity.nbt);
         let text = host.block_state_string(event.state).unwrap_or_default();
         let (_, own) = states::split(&text);
-        // Parts another subsystem draws itself (a gauge's dials, a flywheel's wheel), and blocks
-        // it animates this frame, drawn again each frame rather than kept.
-        let animated = super::gauges::animated(block, event.pos, event.entity);
+        // Parts another subsystem draws itself (a gauge's dials, a flywheel's wheel) are left
+        // to it; a block another subsystem animates this frame is drawn again next frame, the
+        // rest kept turning on the animation clock until the block entity changes.
+        let systems = super::SUBSYSTEMS;
         for d in client::draws(block, &info, event.pos, speeds) {
-            if super::gauges::draws_itself(block, &d) {
-                continue;
+            if !systems.iter().any(|s| s.draws_itself(block, &d)) {
+                draw_turning(event.draw, block, &own, &d);
             }
-            if animated {
-                spin_part(event.draw, block, &own, &d);
-            } else {
-                draw_part(event.draw, block, &own, &d);
-            }
+        }
+        if !systems
+            .iter()
+            .any(|s| s.animated(block, event.pos, event.entity))
+        {
+            event.draw.keep();
         }
     }
 }
@@ -365,13 +370,13 @@ pub fn dir_name(d: Dir) -> &'static str {
 fn model_block(
     block: Block,
     model: Model,
-) -> Option<(Block, Option<(&'static str, &'static str)>)> {
+) -> Option<(BlockKey, Option<(&'static str, &'static str)>)> {
     let part = |name: &str, facing: &'static str| {
-        Block::from_name(name).map(|b| (b, Some(("facing", facing))))
+        states::partial(name).map(|b| (b, Some(("facing", facing))))
     };
     match model {
-        Model::Own => Some((block, None)),
-        Model::Shaft(a) => Some((Block::Shaft, Some(("axis", axis_name(a))))),
+        Model::Own => Some((states::key(block), None)),
+        Model::Shaft(a) => Some((states::key(Block::Shaft), Some(("axis", axis_name(a))))),
         Model::ShaftHalf(d) => part("part_shaft_half", dir_name(d)),
         Model::CrankHandle(d) => part("part_hand_crank_handle", dir_name(d)),
         Model::WaterWheel(d) => part("part_water_wheel", dir_name(d)),
@@ -403,26 +408,20 @@ fn model_block(
 
 /// Draws one turning part of `block` (whose state has the properties `own`): its model at
 /// rest, turning at its speed about its axis through the block's centre (`rpm * 0.3` degrees a
-/// tick), from its starting angle. Kept until the block entity changes.
-pub fn draw_part(
+/// tick), from its starting angle.
+pub fn draw_turning(
     draw: &mut dyn BlockEntityDrawContext,
     block: Block,
     own: &[(&str, &str)],
     d: &Draw,
 ) {
-    spin_part(draw, block, own, d);
-    draw.keep();
-}
-
-/// `draw_part` without keeping the frame's drawing.
-fn spin_part(draw: &mut dyn BlockEntityDrawContext, block: Block, own: &[(&str, &str)], d: &Draw) {
     let Some((model, prop)) = model_block(block, d.model) else {
         return;
     };
     draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
     match prop {
-        Some(p) => draw.block(states::key(model), &[p]),
-        None => draw.block(states::key(model), own),
+        Some(p) => draw.block(model, &[p]),
+        None => draw.block(model, own),
     };
     draw.still();
 }

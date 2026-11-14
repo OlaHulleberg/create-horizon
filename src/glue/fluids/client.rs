@@ -193,11 +193,11 @@ fn draw_tank(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
             Fluid::Water => "part_fluid_water",
             Fluid::Lava => "part_fluid_lava",
         };
-        if let Some(part) = Block::from_name(name) {
+        if let Some(part) = states::partial(name) {
             draw.push();
             draw.translate(min);
             draw.scale([max[0] - min[0], max[1] - min[1], max[2] - min[2]]);
-            draw.block(states::key(part), &[("facing", "up")]);
+            draw.block(part, &[("facing", "up")]);
             draw.pop();
         }
     }
@@ -224,12 +224,12 @@ fn draw_hose(event: &mut BlockEntitySubmitEvent<'_>) {
             Piece::HalfRope(d) => ("part_hose_half", d),
             Piece::Rope(_, d) => ("part_hose_rope", d),
         };
-        let Some(part) = Block::from_name(name) else {
+        let Some(part) = states::partial(name) else {
             continue;
         };
         draw.push();
         draw.translate([0.0, -down, 0.0]);
-        draw.block(states::key(part), &[("facing", "up")]);
+        draw.block(part, &[("facing", "up")]);
         draw.pop();
     }
     if per_tick == 0.0 {
@@ -244,7 +244,7 @@ fn draw_pointer(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
     let Some(facing) = info.facing else {
         return;
     };
-    let Some(part) = Block::from_name("part_fluid_valve_pointer") else {
+    let Some(part) = states::partial("part_fluid_valve_pointer") else {
         return;
     };
     let (angle, moving) = VALVES
@@ -285,7 +285,7 @@ fn draw_pointer(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
     draw.rotate_about([0.0, 1.0, 0.0], yaw, c);
     draw.rotate_about([1.0, 0.0, 0.0], pitch, c);
     draw.rotate_about([0.0, 1.0, 0.0], pointer_offset(pipe, shaft), c);
-    draw.block(states::key(part), &[("facing", dir_name(Dir::Up))]);
+    draw.block(part, &[("facing", dir_name(Dir::Up))]);
     draw.pop();
     if !moving {
         draw.keep();

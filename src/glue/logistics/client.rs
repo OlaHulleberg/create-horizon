@@ -409,9 +409,8 @@ fn axis_vector(axis: Axis) -> [f32; 3] {
 
 /// A partial model's block (`create:part_*`), at its `up` state.
 fn partial(draw: &mut dyn BlockEntityDrawContext, name: &str) {
-    let name = name.strip_prefix("create:").unwrap_or(name);
-    if let Some(b) = Block::from_name(name) {
-        draw.block(states::key(b), &[("facing", "up")]);
+    if let Some(b) = states::partial(name) {
+        draw.block(b, &[("facing", "up")]);
     }
 }
 

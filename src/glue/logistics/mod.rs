@@ -202,6 +202,19 @@ impl Subsystem for Logistics {
 pub struct Entities;
 
 impl Subsystem for Entities {
+    /// Arms and ejectors move their own parts every frame (`client`).
+    fn animated(
+        &self,
+        block: create_engine::Block,
+        _pos: [i32; 3],
+        _entity: &mod_api::ModBlockEntity,
+    ) -> bool {
+        matches!(
+            block,
+            create_engine::Block::MechanicalArm | create_engine::Block::WeightedEjector
+        )
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let Some(kind) = kinetics::kind() else {
             eprintln!("[create] no kinetic block entity type: logistics has no renderer");
