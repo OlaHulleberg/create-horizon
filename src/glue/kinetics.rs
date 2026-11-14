@@ -296,7 +296,7 @@ impl BlockEntityPart for KineticEntity {
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
         // The speeds, and what other subsystems keep in the same block entity for its clients.
-        let shown: Compound = [SPEEDS]
+        let shown: Compound = [SPEEDS, super::decor::BRACKET]
             .iter()
             .chain(super::gauges::SYNCED)
             .filter_map(|&k| Some((k.into(), event.entity.nbt.get(&k.into())?.clone())))

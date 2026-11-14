@@ -1,11 +1,14 @@
 //! The game glue: Create's engine driven through the mod API. Each subsystem is one module;
 //! `lib.rs` hands every hook to all of them through `SUBSYSTEMS`.
 
-pub mod interaction;
-pub mod items;
+pub mod blocks;
+pub mod copycat;
+pub mod decor;
 pub mod equipment;
 pub mod fluids;
 pub mod gauges;
+pub mod interaction;
+pub mod items;
 pub mod kinetics;
 pub mod logistics;
 pub mod net;
@@ -44,6 +47,9 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &equipment::Equipment,
     &fluids::Fluids,
     &gauges::Gauges,
+    &blocks::Blocks,
+    &decor::Decor,
+    &copycat::Copycats,
 ];
 
 thread_local! {

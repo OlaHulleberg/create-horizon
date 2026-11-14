@@ -14,10 +14,10 @@ use mod_api::{
     EntityMountEvent, EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent,
     InteractionKeyMappingTriggeredEvent, InteractionResult, LeftClickBlockEvent, LevelHost,
     LevelLoadEvent, LevelSaveEvent, LevelTickPostEvent, LevelTicksHost, MouseScrollingEvent,
-    MovementInputEvent, NeighborChangedEvent, PlayerLoggedInEvent, PlayerTickPostEvent,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
-    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost, WorldLifecycleEvent,
-    WorldPhase,
+    MovementInputEvent, NeighborChangedEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent,
+    PlayerLoggedInEvent, PlayerTickPostEvent, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
+    RunModCommandEvent, ServerHost, WorldLifecycleEvent, WorldPhase,
 };
 
 #[derive(Default)]
@@ -223,6 +223,26 @@ impl Hooks for Create {
     fn render_gui_post(&self, host: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
         for s in SUBSYSTEMS {
             s.render_gui_post(host, event);
+        }
+    }
+
+    fn player_container_open(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut PlayerContainerOpenEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.player_container_open(host, event);
+        }
+    }
+
+    fn player_container_close(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut PlayerContainerCloseEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.player_container_close(host, event);
         }
     }
 

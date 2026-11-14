@@ -16,9 +16,9 @@ use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityInteractEvent,
     EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
     InteractionKeyMappingTriggeredEvent, InteractionResult, LeftClickBlockEvent, LevelSaveEvent,
-    MouseScrollingEvent, MovementInputEvent, PlayerRef, PlayerTickPostEvent, RegisterCommandsEvent,
-    Registrar, RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
-    RunModCommandEvent, ServerHost,
+    MouseScrollingEvent, MovementInputEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent,
+    PlayerRef, PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext,
+    RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost,
 };
 
 pub trait Subsystem: Sync {
@@ -233,6 +233,22 @@ pub trait Subsystem: Sync {
         _pos: [i32; 3],
         _block: create_engine::Block,
         _lines: &mut Vec<Vec<(String, u32)>>,
+    ) {
+    }
+
+    /// `Hooks::player_container_open`: a player opened a menu.
+    fn player_container_open(
+        &self,
+        _host: &mut dyn ServerHost,
+        _event: &mut PlayerContainerOpenEvent<'_>,
+    ) {
+    }
+
+    /// `Hooks::player_container_close`: a player's menu closed.
+    fn player_container_close(
+        &self,
+        _host: &mut dyn ServerHost,
+        _event: &mut PlayerContainerCloseEvent<'_>,
     ) {
     }
 }
