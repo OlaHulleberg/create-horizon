@@ -230,11 +230,22 @@ impl Subsystem for Equipment {
     }
 }
 
-/// `BacktankBlock.setPlacedBy`: a placed backtank takes the stack's air and Capacity level.
+/// `BacktankBlock.setPlacedBy`: a placed backtank takes the stack's air and Capacity level. The
+/// item always shows its air as a bar (`BacktankItem.isBarVisible`, `getBarWidth`).
 struct PlacedBacktank;
+
+/// `BacktankItem.BAR_COLOR`.
+const BAR_COLOR: u32 = 0xEFEFEF;
 
 #[mod_api::horizon_part]
 impl ItemPart for PlacedBacktank {
+    fn item_bar(&self, _host: &dyn mod_api::ClientHost, event: &mut mod_api::ItemBarEvent<'_>) {
+        let max = eq::max_air(capacity(event.stack));
+        let air = eq::air(stack_air(event.stack), capacity(event.stack));
+        let width = (13.0 * (air as f32 / max as f32).clamp(0.0, 1.0)).round() as i32;
+        *event.bar = Some((width, BAR_COLOR));
+    }
+
     fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
         if backtank_block(event.state).is_none() {
             return;

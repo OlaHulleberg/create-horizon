@@ -313,6 +313,62 @@ pub fn smart_pipe_axis(on_wall: bool, facing: Dir) -> Axis {
     if on_wall { Axis::Y } else { facing.axis() }
 }
 
+/// `SmartFluidPipeBlockEntity.SmartPipeFilterSlot`: where its filter's value box is (in the
+/// block, `getLocalOffset`), its turn about y (`angleY`) and its tilt about x (`rotate`), in
+/// degrees, for a smart pipe on `face` facing `facing`.
+pub fn smart_pipe_filter_slot(face: crate::steam::Face, facing: Dir) -> ([f64; 3], f32, f32) {
+    use crate::steam::Face;
+    let (y, z) = match face {
+        Face::Ceiling => (0.55, 4.6),
+        Face::Wall => (11.4, 0.55),
+        Face::Floor => (15.45, 4.625),
+    };
+    // `AngleHelper.horizontalAngle` (`toYRot`, negated along x), plus 180 on a wall.
+    let mut angle: f32 = match facing {
+        Dir::West => -90.0,
+        Dir::North => 180.0,
+        Dir::East => -270.0,
+        _ => 0.0,
+    };
+    if face == Face::Wall {
+        angle += 180.0;
+    }
+    // `VecHelper.rotateCentered(voxelSpace(8, y, z), angle, Y)`.
+    let (x, z) = (8.0 / 16.0 - 0.5, z / 16.0 - 0.5);
+    let r = f64::from(angle).to_radians();
+    let (sin, cos) = r.sin_cos();
+    let offset = [x * cos + z * sin + 0.5, y / 16.0, z * cos - x * sin + 0.5];
+    let tilt = if face == Face::Ceiling { -45.0 } else { 45.0 };
+    (offset, angle, tilt)
+}
+
+/// `ValueBoxTransform.testHit` on the smart pipe's filter slot: `local` (the hit in the block)
+/// within half the box's scale (`getScale() * 1.02`) of it.
+pub fn smart_pipe_filter_hit(face: crate::steam::Face, facing: Dir, local: [f64; 3]) -> bool {
+    let (slot, _, _) = smart_pipe_filter_slot(face, facing);
+    let d2: f64 = (0..3).map(|i| (local[i] - slot[i]).powi(2)).sum();
+    d2.sqrt() < f64::from(SMART_PIPE_SLOT_SCALE) / 2.0
+}
+
+/// `SmartPipeFilterSlot.getScale`: the value box's half a block, times 1.02.
+pub const SMART_PIPE_SLOT_SCALE: f32 = 0.5 * 1.02;
+
+/// A smart pipe's filter (`FilteringBehaviour.forFluids`): the item set in its slot, and the
+/// fluid it holds (`FilterItemStack.fluid`: none for an item that holds none, which passes
+/// nothing).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SmartFilter {
+    pub item: String,
+    pub fluid: Option<Fluid>,
+}
+
+impl SmartFilter {
+    /// What it lets through.
+    pub fn gate(&self) -> Gate {
+        self.fluid.map_or(Gate::Closed, Gate::Only)
+    }
+}
+
 /// `SmartFluidPipeBlock.getStateForPlacement`: with pipes (or anything a pipe joins) along one
 /// axis around it, a smart pipe turns to that axis: on a wall facing back for up and down
 /// (`face`, `facing` as placed, turned), else on the floor (a wall becomes the floor) facing
@@ -644,6 +700,21 @@ pub fn draws_casing(sides: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_smart_pipe_slot_sits_on_its_slanted_side() {
+        use crate::steam::Face;
+        // Facing south (the model unturned), the slot is toward the north (z 4.625 / 16).
+        let (south, _, tilt) = smart_pipe_filter_slot(Face::Floor, Dir::South);
+        assert!((south[2] - 4.625 / 16.0).abs() < 1e-6 && tilt == 45.0);
+        // Facing east (the model turned y 270), the north side is the west.
+        let (east, _, _) = smart_pipe_filter_slot(Face::Floor, Dir::East);
+        assert!(east[0] < 0.5 && (east[2] - 0.5).abs() < 1e-6);
+        let (west, _, _) = smart_pipe_filter_slot(Face::Floor, Dir::West);
+        assert!(west[0] > 0.5);
+        assert!(smart_pipe_filter_hit(Face::Floor, Dir::East, east));
+        assert!(!smart_pipe_filter_hit(Face::Floor, Dir::East, [0.5, 0.5, 0.5]));
+    }
 
     #[test]
     fn rims_follow_create() {

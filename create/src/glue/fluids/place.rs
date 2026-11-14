@@ -227,3 +227,142 @@ impl BlockPart for Placement {
         (placed != state).then_some(Some(placed))
     }
 }
+
+/// `FluidTankItem.tryMultiPlace`: a tank placed by a player (not sneaking) on the top or bottom
+/// of a tank wider than one fills the rest of that layer with tanks, when the layer is free
+/// and the player has the tanks (creative: always). Done in the level's next tick, as the
+/// placement is not finished yet (its stack not used up).
+pub(super) struct TankItem;
+
+/// Tank layers to fill: level, the player, the hand holding the tanks, the positions.
+type Layer = (usize, mod_api::PlayerRef, mod_api::Hand, Vec<[i32; 3]>);
+
+thread_local! {
+    static LAYERS: std::cell::RefCell<Vec<Layer>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(super) fn reset() {
+    LAYERS.with_borrow_mut(Vec::clear);
+}
+
+#[mod_api::horizon_part]
+impl mod_api::ItemPart for TankItem {
+    fn on_block_placed_by(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::OnBlockPlacedByEvent<'_>,
+    ) {
+        use super::super::items;
+        let Some(player) = event.placer else {
+            return;
+        };
+        if items::sneaking(&*host, player) {
+            return;
+        }
+        let up = match event.face {
+            mod_api::BlockFace::Up => true,
+            mod_api::BlockFace::Down => false,
+            _ => return,
+        };
+        let Some(dim) = player
+            .dimension(&*host)
+            .and_then(|d| level_index(&d.to_string()))
+        else {
+            return;
+        };
+        let pos = event.pos;
+        let on = [pos[0], pos[1] + if up { -1 } else { 1 }, pos[2]];
+        let Some((c, m)) = with_world(|w| w.tank(dim, on)).flatten() else {
+            return;
+        };
+        if m.width == 1 {
+            return;
+        }
+        let start_y = if up {
+            c[1] + i32::from(m.height)
+        } else {
+            c[1] - 1
+        };
+        if start_y != pos[1] {
+            return;
+        }
+        let Some(level) = player.level(&*host) else {
+            return;
+        };
+        let mut free = Vec::new();
+        for x in 0..i32::from(m.width) {
+            for z in 0..i32::from(m.width) {
+                let p = [c[0] + x, start_y, c[2] + z];
+                if p == pos {
+                    continue;
+                }
+                let Some(state) = level.block_state(&*host, p) else {
+                    return;
+                };
+                let tank = states::id(state).is_some_and(|id| {
+                    with_world(|w| w.table.get(id).map(|(b, _)| b))
+                        .flatten()
+                        .is_some_and(|b| b == Block::FluidTank)
+                });
+                if tank {
+                    continue;
+                }
+                if mod_api::HostBlockStates::block_states(&*host).replaceable(state) != Some(true) {
+                    return;
+                }
+                free.push(p);
+            }
+        }
+        if free.is_empty() {
+            return;
+        }
+        // The stack still holds the tank just placed (it is used up after this).
+        let tank_key = event.stack.item();
+        let hand = [mod_api::Hand::Main, mod_api::Hand::Off]
+            .into_iter()
+            .find(|h| items::held(&*host, player, *h).is_some_and(|s| s.item() == tank_key));
+        let Some(hand) = hand else {
+            return;
+        };
+        if !items::creative(&*host, player) && event.stack.count() < free.len() as u32 + 1 {
+            return;
+        }
+        LAYERS.with_borrow_mut(|l| l.push((dim, player, hand, free)));
+    }
+}
+
+/// The tank layers asked for in this level: each free place takes a tank (`super.place` with
+/// the tank sound silenced), the player's stack one each outside creative.
+pub(super) fn tick_layers(lv: &mut super::ServerLevel<'_>) {
+    use super::super::items;
+    let dim = lv.dim;
+    let layers: Vec<Layer> = LAYERS.with_borrow_mut(|l| {
+        if l.is_empty() {
+            return Vec::new();
+        }
+        let (here, rest): (Vec<_>, Vec<_>) = l.drain(..).partition(|e| e.0 == dim);
+        *l = rest;
+        here
+    });
+    for (_, player, hand, free) in layers {
+        let Some(state) = super::state_with(lv, "create:fluid_tank", &[]) else {
+            continue;
+        };
+        let creative = items::creative(&*lv.host, player);
+        for p in free {
+            if !super::replaceable(lv, p) {
+                continue;
+            }
+            if !creative {
+                let has = items::held(&*lv.host, player, hand).is_some_and(|s| {
+                    super::machines::item_name(&*lv.host, &s) == "create:fluid_tank"
+                });
+                if !has {
+                    break;
+                }
+                items::shrink_held(lv.host, player, hand, 1);
+            }
+            lv.set_state(p, state, super::all());
+        }
+    }
+}

@@ -23,10 +23,31 @@ pub fn id_of(host: &dyn Host, stack: &ItemStack) -> String {
     stack.item().id(host)
 }
 
-/// `count` of item `id`, without components; None for an unknown item or a zero count.
+/// `count` of item `id`, without components (but a potion named with its contents,
+/// `tank::potion_item`, as a spout fills one on a belt); None for an unknown item or a zero
+/// count.
 pub fn stack_of(host: &dyn Host, id: &str, count: u32) -> Option<ItemStack> {
+    let (id, potion) = match create_engine::tank::split_potion_item(id) {
+        Some((id, potion)) => (id, Some(potion)),
+        None => (id, None),
+    };
     let key = host.item_key(&Identifier::parse(id).ok()?)?;
-    ItemStack::new(key, count)
+    let mut stack = ItemStack::new(key, count)?;
+    if let Some(potion) = potion {
+        let contents =
+            mod_api::Compound::from([("potion".into(), mod_api::Tag::String(potion.into()))]);
+        let patch = mod_api::Compound::from([(
+            "minecraft:potion_contents".into(),
+            mod_api::Tag::Compound(contents),
+        )]);
+        let _ = stack.set_components(patch);
+    }
+    Some(stack)
+}
+
+/// Item `id` without the contents a potion is named with (`tank::potion_item`).
+fn base(id: &str) -> &str {
+    create_engine::tank::split_potion_item(id).map_or(id, |(item, _)| item)
 }
 
 /// Whether item `id` is in item tag `tag`.
@@ -51,7 +72,7 @@ pub fn upright(host: &dyn Host, id: &str) -> bool {
 
 /// A stack's limit (at most 64).
 pub fn stack_limit(host: &dyn Host, id: &str) -> u8 {
-    Identifier::parse(id)
+    Identifier::parse(base(id))
         .ok()
         .and_then(|i| host.item_key(&i))
         .and_then(|k| host.max_stack_size(k))
@@ -62,7 +83,7 @@ pub fn stack_limit(host: &dyn Host, id: &str) -> u8 {
 /// Whether `id` draws as a block (`BakedModel.isGui3d`). The mod API does not say; a block's
 /// item stands in for it.
 pub fn is_block_item(host: &dyn Host, id: &str) -> bool {
-    Identifier::parse(id)
+    Identifier::parse(base(id))
         .ok()
         .and_then(|i| host.item_key(&i))
         .is_some_and(|k| host.item_block(k).is_some())

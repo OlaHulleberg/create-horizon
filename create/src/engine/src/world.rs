@@ -3153,6 +3153,24 @@ impl CreateWorld {
         self.dims[dim].tanks.get(pos).map(|(c, m)| (c, *m))
     }
 
+    /// `FluidTankBlock.onWrenched` (`toggleWindows`): the tank at `pos` shows its windows or hides
+    /// them, unless it is an active boiler. Whether it changed.
+    pub fn toggle_tank_windows(&mut self, dim: usize, pos: [i32; 3]) -> bool {
+        let d = &mut self.dims[dim];
+        let Some((c, m)) = d.tanks.get_mut(pos) else {
+            return false;
+        };
+        if d.boilers.get(&c).is_some_and(|b| b.data.is_active()) {
+            return false;
+        }
+        m.window = !m.window;
+        let (width, height) = (m.width, m.height);
+        d.tank_states.extend(crate::tank::blocks(c, width, height));
+        d.tank_changes.push(c);
+        d.unsaved.push((c[0] >> 4, c[2] >> 4));
+        true
+    }
+
     /// The `top`, `bottom` and `shape` the tank block at `pos` should have.
     pub fn tank_shape(&self, dim: usize, pos: [i32; 3]) -> Option<crate::tank::BlockShape> {
         self.dims[dim].tanks.block_shape(pos)

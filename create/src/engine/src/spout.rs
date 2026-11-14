@@ -36,20 +36,30 @@ pub struct Filling {
 pub const BOTTLE: u32 = 250;
 
 /// What a glass bottle filled with water becomes (`PotionFluidHandler.fillBottle`): a potion,
-/// its contents water (the glue gives the stack its `potion_contents`).
-pub const WATER_BOTTLE: &str = "minecraft:potion";
+/// its contents water (named as `tank::potion_item` does; the glue gives the stack its
+/// `potion_contents`).
+pub const WATER_BOTTLE: &str = "minecraft:potion|minecraft:water";
 
 /// `GenericItemFilling.getRequiredAmountForItem` and `fillItem`: a filling recipe for the item
-/// and fluid, a glass bottle filled with water, else an empty bucket taking a bucket's worth.
-/// How much it takes and what it becomes.
+/// and fluid; a glass bottle filled with water, builder's tea or a potion
+/// (`canFillGlassBottleInternally`); else an empty bucket taking a bucket's worth of a fluid
+/// with a bucket. How much it takes and what it becomes.
 pub fn filling(item: &str, fluid: Fluid, recipes: &[Filling]) -> Option<(u32, String)> {
     if let Some(r) = recipes.iter().find(|r| r.item == item && r.fluid == fluid) {
         return Some((r.amount, r.result.clone()));
     }
     if item == "minecraft:glass_bottle" {
-        return (fluid == Fluid::Water).then(|| (BOTTLE, WATER_BOTTLE.to_owned()));
+        return match fluid {
+            Fluid::Water => Some((BOTTLE, WATER_BOTTLE.to_owned())),
+            Fluid::Tea => Some((BOTTLE, "create:builders_tea".to_owned())),
+            Fluid::Potion(p) => Some((BOTTLE, p.item())),
+            _ => None,
+        };
     }
-    (item == "minecraft:bucket").then(|| (BUCKET, fluid.bucket().to_owned()))
+    if item != "minecraft:bucket" {
+        return None;
+    }
+    fluid.bucket().map(|b| (BUCKET, b.to_owned()))
 }
 
 /// `whenItemHeld` and `tick` for a held `item`: what it became when it is filled now.

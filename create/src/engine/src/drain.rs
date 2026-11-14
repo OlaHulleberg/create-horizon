@@ -43,9 +43,17 @@ pub struct Emptying {
     pub leftover: Option<String>,
 }
 
-/// `GenericItemEmptying.emptyItem`: a `create:emptying` recipe for the item (`recipes`, by
+/// `GenericItemEmptying.emptyItem`: a potion's quarter bucket leaving its glass bottle
+/// (`PotionFluidHandler.emptyPotion`), a `create:emptying` recipe for the item (`recipes`, by
 /// item), else a filled bucket's worth leaving the bucket.
 pub fn contents(item: &str, recipes: &[(String, Emptying)]) -> Option<Emptying> {
+    if let Some(fluid) = crate::tank::potion_fluid(item) {
+        return Some(Emptying {
+            fluid,
+            amount: crate::spout::BOTTLE,
+            leftover: Some("minecraft:glass_bottle".into()),
+        });
+    }
     if let Some((_, e)) = recipes.iter().find(|(i, _)| i == item) {
         return Some(e.clone());
     }

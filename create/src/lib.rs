@@ -105,6 +105,17 @@ impl Hooks for Create {
         }
     }
 
+    fn fluid_tick(&self, level: &dyn LevelHost, event: &mut mod_api::FluidTickEvent<'_>) -> Flow {
+        for s in SUBSYSTEMS {
+            s.fluid_tick(level, event);
+        }
+        if event.cancelled {
+            Flow::Cancel
+        } else {
+            Flow::Continue
+        }
+    }
+
     fn level_tick_post(&self, host: HostSide, event: &mut LevelTickPostEvent) {
         let HostSide::Server(host) = host else {
             return;

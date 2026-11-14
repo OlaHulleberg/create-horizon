@@ -92,6 +92,15 @@ pub trait Subsystem: Sync {
     /// After a server level's tick.
     fn level_tick(&self, _lv: &mut ServerLevel<'_>) {}
 
+    /// A world fluid's scheduled tick is about to run (`FlowingFluid.tick`): set `cancelled` to
+    /// skip it. Read-only: what changes is done from the next `level_tick`.
+    fn fluid_tick(
+        &self,
+        _level: &dyn mod_api::LevelHost,
+        _event: &mut mod_api::FluidTickEvent<'_>,
+    ) {
+    }
+
     /// An item on the belt segment at `segment` reaches its middle (`locked` false:
     /// `BeltProcessingBehaviour.handleReceivedItem`) or is held there (`handleHeldItem`): what
     /// a machine above it does. The first subsystem to answer acts; None when it has none there.

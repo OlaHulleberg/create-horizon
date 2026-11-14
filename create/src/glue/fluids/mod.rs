@@ -21,6 +21,7 @@ pub(crate) mod client;
 mod drawn;
 mod engine;
 mod goggles;
+mod lava;
 mod machines;
 mod pipes;
 mod place;
@@ -62,6 +63,8 @@ impl Subsystem for Fluids {
         for block in clicks::CLICKED {
             r.block_part(super::states::key(block), clicks::Clicks);
         }
+        let tank = r.item_key("create:fluid_tank");
+        r.item_part(tank, place::TankItem);
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -103,6 +106,8 @@ impl Subsystem for Fluids {
     /// whistles, tank block states, spouts and drains. What clients must see again is `Tanks`',
     /// later.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        lava::tick(lv);
+        place::tick_layers(lv);
         pipes::tick_pipes(lv);
         pipes::tick_boilers(lv);
         plumbing::tick(lv);
@@ -118,6 +123,12 @@ impl Subsystem for Fluids {
         client::reset();
     }
 
+    /// Honey and chocolate meeting lava (`AllFluids.registerFluidInteractions`), looked at when
+    /// either ticks (`lava`).
+    fn fluid_tick(&self, level: &dyn mod_api::LevelHost, event: &mut mod_api::FluidTickEvent<'_>) {
+        lava::fluid_tick(level, event);
+    }
+
     /// The pipes beside a Create block that changed draw their pieces again (`rims`).
     fn block_changed(&self, dim: usize, pos: [i32; 3], _old: u32, new: u32) {
         engine::changed(dim, pos, new);
@@ -125,6 +136,8 @@ impl Subsystem for Fluids {
     }
 
     fn world_closed(&self) {
+        lava::reset();
+        place::reset();
         rims::reset();
         drawn::reset();
         engine::reset();
@@ -139,6 +152,7 @@ impl Subsystem for Fluids {
             rims::RIMS,
             drawn::DRAIN_ITEM,
             engine::ENGINE_SPEED,
+            plumbing::FILTER,
         ]
     }
 
@@ -166,7 +180,7 @@ impl Subsystem for Fluids {
         goggles::tooltip(host, pos, block, lines);
     }
 
-    /// The wrench on a pipe or a whistle, not sneaking (legacy `use_item_on`'s
+    /// The wrench on a tank, a pipe or a whistle, not sneaking (legacy `use_item_on`'s
     /// `wrench_pipe` / `wrench_whistle`, after a bracket came off: `decor`'s part).
     fn wrench_used(
         &self,
@@ -178,9 +192,17 @@ impl Subsystem for Fluids {
         point: [f64; 3],
         sneaking: bool,
     ) -> bool {
-        !sneaking
-            && (plumbing::wrench_pipe(lv, pos, block, clicked, point)
-                || plumbing::wrench_whistle(lv, pos, block))
+        if sneaking {
+            return false;
+        }
+        // `FluidTankBlock.onWrenched`: the tank's windows on or off (none on an active boiler).
+        if matches!(block, Block::FluidTank | Block::CreativeFluidTank) {
+            let dim = lv.dim;
+            with_world(|w| w.toggle_tank_windows(dim, pos));
+            return true;
+        }
+        plumbing::wrench_pipe(lv, pos, block, clicked, point)
+            || plumbing::wrench_whistle(lv, pos, block)
     }
 
     /// A spout two above belt segment `segment` (`SpoutBlockEntity`'s

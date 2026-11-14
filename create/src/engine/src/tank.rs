@@ -6,7 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// The fluids a tank can hold: vanilla's, Create's honey and chocolate, and milk.
+/// The fluids a tank can hold: vanilla's, Create's honey and chocolate, milk, Create's virtual
+/// builder's tea and potions (`AllFluids.TEA`, `AllFluids.POTION`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Fluid {
     Water,
@@ -16,22 +17,225 @@ pub enum Fluid {
     Chocolate,
     /// NeoForge's milk (`NeoForgeMod.MILK`), which Create enables.
     Milk,
+    /// Builder's tea (`create:tea`): no bucket, no block.
+    Tea,
+    /// A potion (`PotionFluid`): which of `POTIONS`, and the bottle it came from. A regular
+    /// water bottle is plain water (`PotionFluidHandler.getFluidFromPotion`).
+    Potion(Potion),
+}
+
+/// A potion fluid's contents (`PotionContents` of a registered potion; custom effects are not
+/// kept) and its bottle (`POTION_FLUID_BOTTLE_TYPE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Potion {
+    /// Its index in [`POTIONS`].
+    pub potion: u8,
+    pub bottle: Bottle,
+}
+
+/// `PotionFluid.BottleType`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Bottle {
+    Regular,
+    Splash,
+    Lingering,
+}
+
+impl Bottle {
+    pub const ALL: [Bottle; 3] = [Bottle::Regular, Bottle::Splash, Bottle::Lingering];
+    /// `PotionFluidHandler.bottleTypeFromItem`.
+    pub fn of_item(item: &str) -> Option<Bottle> {
+        Some(match item {
+            "minecraft:potion" => Bottle::Regular,
+            "minecraft:splash_potion" => Bottle::Splash,
+            "minecraft:lingering_potion" => Bottle::Lingering,
+            _ => return None,
+        })
+    }
+    /// `PotionFluidHandler.itemFromBottleType`.
+    pub fn item(self) -> &'static str {
+        match self {
+            Bottle::Regular => "minecraft:potion",
+            Bottle::Splash => "minecraft:splash_potion",
+            Bottle::Lingering => "minecraft:lingering_potion",
+        }
+    }
+    /// The word its bottles are named with (`item.minecraft.splash_potion...`).
+    fn kind(self) -> &'static str {
+        match self {
+            Bottle::Regular => "Potion",
+            Bottle::Splash => "Splash Potion",
+            Bottle::Lingering => "Lingering Potion",
+        }
+    }
+}
+
+/// The registered potions (`minecraft:potion` registry, vanilla's order) and their colours
+/// (`PotionContents.getColor`: the effects' colours weighed by amplifier; none's water blue).
+pub const POTIONS: [(&str, u32); 46] = [
+    ("minecraft:water", 0x385DC6),
+    ("minecraft:mundane", 0x385DC6),
+    ("minecraft:thick", 0x385DC6),
+    ("minecraft:awkward", 0x385DC6),
+    ("minecraft:night_vision", 0xC2FF66),
+    ("minecraft:long_night_vision", 0xC2FF66),
+    ("minecraft:invisibility", 0xF6F6F6),
+    ("minecraft:long_invisibility", 0xF6F6F6),
+    ("minecraft:leaping", 0xFDFF84),
+    ("minecraft:long_leaping", 0xFDFF84),
+    ("minecraft:strong_leaping", 0xFDFF84),
+    ("minecraft:fire_resistance", 0xFF9900),
+    ("minecraft:long_fire_resistance", 0xFF9900),
+    ("minecraft:swiftness", 0x33EBFF),
+    ("minecraft:long_swiftness", 0x33EBFF),
+    ("minecraft:strong_swiftness", 0x33EBFF),
+    ("minecraft:slowness", 0x8BAFE0),
+    ("minecraft:long_slowness", 0x8BAFE0),
+    ("minecraft:strong_slowness", 0x8BAFE0),
+    // Slowness IV and resistance III: (0x8BAFE0 * 4 + 0x9146F0 * 3) / 7; the strong one's
+    // slowness VI and resistance IV weigh 6 and 4.
+    ("minecraft:turtle_master", 0x8D82E6),
+    ("minecraft:long_turtle_master", 0x8D82E6),
+    ("minecraft:strong_turtle_master", 0x8D84E6),
+    ("minecraft:water_breathing", 0x98DAC0),
+    ("minecraft:long_water_breathing", 0x98DAC0),
+    ("minecraft:healing", 0xF82423),
+    ("minecraft:strong_healing", 0xF82423),
+    ("minecraft:harming", 0xA9656A),
+    ("minecraft:strong_harming", 0xA9656A),
+    ("minecraft:poison", 0x87A363),
+    ("minecraft:long_poison", 0x87A363),
+    ("minecraft:strong_poison", 0x87A363),
+    ("minecraft:regeneration", 0xCD5CAB),
+    ("minecraft:long_regeneration", 0xCD5CAB),
+    ("minecraft:strong_regeneration", 0xCD5CAB),
+    ("minecraft:strength", 0xFFC700),
+    ("minecraft:long_strength", 0xFFC700),
+    ("minecraft:strong_strength", 0xFFC700),
+    ("minecraft:weakness", 0x484D48),
+    ("minecraft:long_weakness", 0x484D48),
+    ("minecraft:luck", 0x59C106),
+    ("minecraft:slow_falling", 0xF3CFB9),
+    ("minecraft:long_slow_falling", 0xF3CFB9),
+    ("minecraft:wind_charged", 0xBDC9FF),
+    ("minecraft:weaving", 0x78695A),
+    ("minecraft:oozing", 0x99FFA3),
+    ("minecraft:infested", 0x8C9B8C),
+];
+
+/// The first index of the potions in [`Fluid::index`]: 3 bottles each from it.
+const FIRST_POTION: u8 = 6;
+
+impl Potion {
+    /// The potion with registry id `id` in `bottle`.
+    pub fn of(id: &str, bottle: Bottle) -> Option<Potion> {
+        let potion = POTIONS.iter().position(|(p, _)| *p == id)? as u8;
+        Some(Potion { potion, bottle })
+    }
+    /// Its potion's registry id.
+    pub fn id(self) -> &'static str {
+        POTIONS[usize::from(self.potion)].0
+    }
+    /// `PotionContents.getColor`, 0xRRGGBB.
+    pub fn color(self) -> u32 {
+        POTIONS[usize::from(self.potion)].1
+    }
+    /// The filled bottle (`PotionFluidHandler.fillBottle`), named as [`potion_item`] does.
+    pub fn item(self) -> String {
+        potion_item(self.bottle.item(), self.id())
+    }
+    /// Its English name, as its bottle's (`item.minecraft.potion.effect.*`).
+    pub fn name(self) -> String {
+        let base = self.id().trim_start_matches("minecraft:");
+        let base = base
+            .strip_prefix("long_")
+            .or_else(|| base.strip_prefix("strong_"))
+            .unwrap_or(base);
+        let title = |w: &str| {
+            let mut c = w.chars();
+            c.next()
+                .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+                .unwrap_or_default()
+        };
+        match base {
+            "water" => match self.bottle {
+                Bottle::Regular => "Water Bottle".into(),
+                b => format!("{} Water Bottle", b.kind().trim_end_matches(" Potion")),
+            },
+            "mundane" | "thick" | "awkward" => format!("{} {}", title(base), self.bottle.kind()),
+            b => {
+                let of = match b {
+                    "turtle_master" => "the Turtle Master".to_owned(),
+                    "wind_charged" => "Wind Charging".to_owned(),
+                    "infested" => "Infestation".to_owned(),
+                    b => b.split('_').map(title).collect::<Vec<_>>().join(" "),
+                };
+                format!("{} of {of}", self.bottle.kind())
+            }
+        }
+    }
+}
+
+/// How the engine names a potion item with its contents: the item, a bar, the potion
+/// (`minecraft:potion|minecraft:swiftness`); the glue gives the stack its `potion_contents`.
+pub fn potion_item(item: &str, potion: &str) -> String {
+    format!("{item}|{potion}")
+}
+
+/// A potion item named as [`potion_item`] does: the item and its potion.
+pub fn split_potion_item(item: &str) -> Option<(&str, &str)> {
+    let (item, potion) = item.split_once('|')?;
+    Bottle::of_item(item)?;
+    Some((item, potion))
+}
+
+/// `PotionFluidHandler.getFluidFromPotionItem` for a potion item named as [`potion_item`]
+/// does: a regular water bottle is water, any other its potion fluid. None for anything else.
+pub fn potion_fluid(item: &str) -> Option<Fluid> {
+    let (item, potion) = split_potion_item(item)?;
+    let bottle = Bottle::of_item(item)?;
+    if potion == "minecraft:water" && bottle == Bottle::Regular {
+        return Some(Fluid::Water);
+    }
+    Potion::of(potion, bottle).map(Fluid::Potion)
 }
 
 impl Fluid {
-    pub const ALL: [Fluid; 5] = [
+    /// The fluids with a fixed index (all but the potions).
+    pub const ALL: [Fluid; 6] = [
         Fluid::Water,
         Fluid::Lava,
         Fluid::Honey,
         Fluid::Chocolate,
         Fluid::Milk,
+        Fluid::Tea,
     ];
 
+    /// Its number in saved data and on the wire (255 is no fluid).
     pub fn index(self) -> u8 {
-        self as u8
+        match self {
+            Fluid::Water => 0,
+            Fluid::Lava => 1,
+            Fluid::Honey => 2,
+            Fluid::Chocolate => 3,
+            Fluid::Milk => 4,
+            Fluid::Tea => 5,
+            Fluid::Potion(p) => FIRST_POTION + p.potion * 3 + p.bottle as u8,
+        }
     }
     pub fn from_index(i: u8) -> Option<Fluid> {
-        Fluid::ALL.get(usize::from(i)).copied()
+        if let Some(f) = Fluid::ALL.get(usize::from(i)) {
+            return Some(*f);
+        }
+        let n = i.checked_sub(FIRST_POTION)?;
+        let potion = n / 3;
+        if usize::from(potion) >= POTIONS.len() {
+            return None;
+        }
+        Some(Fluid::Potion(Potion {
+            potion,
+            bottle: Bottle::ALL[usize::from(n % 3)],
+        }))
     }
     /// Its registry id.
     pub fn id(self) -> &'static str {
@@ -41,6 +245,8 @@ impl Fluid {
             Fluid::Honey => "create:honey",
             Fluid::Chocolate => "create:chocolate",
             Fluid::Milk => "minecraft:milk",
+            Fluid::Tea => "create:tea",
+            Fluid::Potion(_) => "create:potion",
         }
     }
     /// A recipe's fluid by id or by its tag (`c:honey`, `c:milk`, `minecraft:water`...).
@@ -51,36 +257,43 @@ impl Fluid {
             "create:honey" | "c:honey" => Fluid::Honey,
             "create:chocolate" | "c:chocolate" => Fluid::Chocolate,
             "minecraft:milk" | "c:milk" => Fluid::Milk,
+            "create:tea" | "c:tea" => Fluid::Tea,
             _ => return None,
         })
     }
-    /// The bucket that holds it.
-    pub fn bucket(self) -> &'static str {
-        match self {
+    /// The bucket that holds it; none for tea and potions (virtual fluids).
+    pub fn bucket(self) -> Option<&'static str> {
+        Some(match self {
             Fluid::Water => "minecraft:water_bucket",
             Fluid::Lava => "minecraft:lava_bucket",
             Fluid::Honey => "create:honey_bucket",
             Fluid::Chocolate => "create:chocolate_bucket",
             Fluid::Milk => "minecraft:milk_bucket",
-        }
+            Fluid::Tea | Fluid::Potion(_) => return None,
+        })
     }
     pub fn of_bucket(item: &str) -> Option<Fluid> {
-        Fluid::ALL.into_iter().find(|f| f.bucket() == item)
+        Fluid::ALL.into_iter().find(|f| f.bucket() == Some(item))
     }
     /// Its name (en_us).
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> String {
         match self {
-            Fluid::Water => "Water",
-            Fluid::Lava => "Lava",
-            Fluid::Honey => "Honey",
-            Fluid::Chocolate => "Chocolate",
-            Fluid::Milk => "Milk",
+            Fluid::Water => "Water".into(),
+            Fluid::Lava => "Lava".into(),
+            Fluid::Honey => "Honey".into(),
+            Fluid::Chocolate => "Chocolate".into(),
+            Fluid::Milk => "Milk".into(),
+            Fluid::Tea => "Builder's Tea".into(),
+            Fluid::Potion(p) => p.name(),
         }
     }
-    /// Whether it can be let out into the world as a source block: all but milk, which has no
-    /// block (`NeoForgeMod.MILK`'s fluid type is not placeable).
+    /// Whether it can be let out into the world as a source block: water, lava, honey and
+    /// chocolate (milk, tea and potions have no block).
     pub fn placeable(self) -> bool {
-        self != Fluid::Milk
+        matches!(
+            self,
+            Fluid::Water | Fluid::Lava | Fluid::Honey | Fluid::Chocolate
+        )
     }
 }
 
@@ -682,6 +895,39 @@ pub fn decode(data: &[u8]) -> Vec<([i32; 3], Option<Multi>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_fluid_keeps_its_index() {
+        for i in 0..=255u8 {
+            if let Some(f) = Fluid::from_index(i) {
+                assert_eq!(f.index(), i);
+            }
+        }
+        assert_eq!(Fluid::from_index(5), Some(Fluid::Tea));
+        let swift = Fluid::Potion(Potion::of("minecraft:swiftness", Bottle::Regular).unwrap());
+        assert_eq!(Fluid::from_index(swift.index()), Some(swift));
+        assert!(Fluid::from_index(6 + 46 * 3).is_none());
+    }
+
+    #[test]
+    fn potion_items_name_their_fluid() {
+        // A regular water bottle is plain water; a splash one is a potion fluid.
+        assert_eq!(
+            potion_fluid("minecraft:potion|minecraft:water"),
+            Some(Fluid::Water)
+        );
+        let splash = potion_fluid("minecraft:splash_potion|minecraft:water").unwrap();
+        assert!(matches!(splash, Fluid::Potion(p) if p.bottle == Bottle::Splash));
+        let Some(Fluid::Potion(p)) = potion_fluid("minecraft:lingering_potion|minecraft:long_swiftness")
+        else {
+            panic!("a lingering potion holds its potion");
+        };
+        assert_eq!(p.item(), "minecraft:lingering_potion|minecraft:long_swiftness");
+        assert_eq!(p.name(), "Lingering Potion of Swiftness");
+        assert_eq!(potion_fluid("minecraft:glass_bottle"), None);
+        assert_eq!(Fluid::Tea.bucket(), None);
+        assert!(!Fluid::Potion(p).placeable());
+    }
 
     fn water(amount: u32) -> Tank {
         Tank {
