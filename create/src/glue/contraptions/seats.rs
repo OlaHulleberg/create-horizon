@@ -24,9 +24,9 @@ use create_engine::Block;
 use create_engine::dye::{self, DyeColor};
 use create_engine::{seat, turntable};
 use mod_api::{
-    BlockPart, ClientHost, EntityInsideEvent, EntityJoinLevelEvent, EntityMountEvent, EntityRef,
-    Flow, InteractionResult, LevelRandomHost, Registrar, RegistrationContext, ServerHost,
-    UseItemOnEvent,
+    BlockPart, ClientHost, Compound, EntityInsideEvent, EntityJoinLevelEvent, EntityMountEvent,
+    EntityRef, Flow, InteractionResult, LevelRandomHost, Registrar, RegistrationContext,
+    ServerHost, Tag, UseItemOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -132,26 +132,12 @@ fn kind_of(lv: &ServerLevel<'_>, e: EntityRef) -> String {
 
 /// A stand-in at `at`: an empty item display tagged as Create's seat.
 fn spawn_seat(lv: &mut ServerLevel<'_>, at: [f64; 3]) -> Option<EntityRef> {
-    let line = format!(
-        "summon minecraft:item_display {} {} {} {{Tags:[\"{TAG}\"]}}",
-        at[0], at[1], at[2]
-    );
-    if !lv.run_command(&line) {
-        return None;
-    }
-    let taken: Vec<u32> = SEATS.with_borrow(|s| s.values().map(|s| s.id).collect());
-    let lo = at.map(|v| v - 0.01);
-    let hi = at.map(|v| v + 0.01);
-    lv.level
-        .entities_in(&*lv.host, lo, hi)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|e| {
-            !taken.contains(&e.id())
-                && e.kind(&*lv.host).as_deref() == Some("minecraft:item_display")
-                && e.tags(&*lv.host)
-                    .is_some_and(|t| t.iter().any(|t| t == TAG))
-        })
+    let nbt = Compound::from([("Tags".into(), Tag::List(vec![Tag::String(TAG.into())]))]);
+    let dimension = lv.dimension.to_owned();
+    let id = lv
+        .host
+        .summon(&dimension, "minecraft:item_display", at, nbt)?;
+    lv.host.entity(id)
 }
 
 /// `SeatBlock.sitDown`: a seat at the block, `rider` on it (off what it rode first, as
