@@ -178,6 +178,22 @@ impl Hooks for Create {
         until_cancel(|s| s.attack_entity(host, event))
     }
 
+    fn hears_projectile_impacts(
+        &self,
+        _host: &dyn mod_api::Host,
+        event: &mut mod_api::HearsProjectileImpactsEvent,
+    ) {
+        event.hears |= SUBSYSTEMS.iter().any(|s| s.hears_projectile_impacts());
+    }
+
+    fn projectile_impact(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ProjectileImpactEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.projectile_impact(host, event))
+    }
+
     fn entity_mount(&self, host: &mut dyn ServerHost, event: &mut EntityMountEvent<'_>) -> Flow {
         until_cancel(|s| s.entity_mount(host, event))
     }
