@@ -1194,6 +1194,11 @@ impl CreateWorld {
             let had = match gone {
                 Block::AnalogLever => d.levers.removed(pos),
                 Block::ContentObserver | Block::StockpileSwitch => d.detectors.removed(pos),
+                // Replaced by another of Create's blocks (which keeps the kinetic block entity
+                // type): the drain, spout or saw that was there is gone, as on its removal.
+                Block::ItemDrain => d.drains.remove(&pos).is_some(),
+                Block::Spout => d.spouts.remove(&pos).is_some(),
+                Block::MechanicalSaw => d.saws.remove(&pos).is_some(),
                 _ => false,
             };
             if had {
@@ -4085,6 +4090,25 @@ mod tests {
         states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         CreateWorld::new(table)
+    }
+
+    #[test]
+    fn a_drain_replaced_by_another_block_of_create_s_is_gone() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:item_drain", vec![]),
+            ("create:andesite_funnel", vec![("facing", "up")]),
+        ];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let (drain, funnel) = (2, 3);
+        let pos = [0, 64, 0];
+        w.block_changed(0, pos, 0, drain);
+        assert!(w.dims[0].drains.contains_key(&pos));
+        w.block_changed(0, pos, drain, funnel);
+        assert!(!w.dims[0].drains.contains_key(&pos));
+        states::clear_range();
     }
 
     #[test]
