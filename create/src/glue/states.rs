@@ -85,6 +85,7 @@ pub const PARTIALS: &[&str] = &[
     "part_cuckoo_right_door",
     "part_deployer_hand_holding",
     "part_deployer_hand_pointing",
+    "part_deployer_hand_punching",
     "part_deployer_pole",
     "part_drill_head",
     "part_ejector_top",

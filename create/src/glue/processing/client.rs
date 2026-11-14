@@ -466,7 +466,13 @@ fn draw_deployer(
     draw.push();
     draw.translate([o[0] * at, o[1] * at, o[2] * at]);
     draw_partial(draw, Partial::DeployerPole, dir_name(s.facing));
-    draw_partial(draw, hand, dir_name(s.facing));
+    // `getHandPose`: a fist in punch mode.
+    match states::partial("part_deployer_hand_punching").filter(|_| s.punch) {
+        Some(fist) => {
+            draw.block(fist, &[("facing", dir_name(s.facing))]);
+        }
+        None => draw_partial(draw, hand, dir_name(s.facing)),
+    }
     draw.pop();
     let Some(stack) = s.held.as_deref().and_then(|id| stacks::stack(host, id, 1)) else {
         return;
