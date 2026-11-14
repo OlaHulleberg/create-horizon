@@ -5,8 +5,11 @@
 //! entities' slots (depots, ejectors, vaults, chutes: `block_container`), which they give and
 //! take through `ITEMS` (`handlers`), and they reach every other inventory through `ITEMS` in
 //! transactions (`items`). Clients get their contents on Create's channels (`create:depot`,
-//! `create:belt`, `create:arm`, `create:ejector`) and draw them from the kinetic block
-//! entity's renderer (`client`): again each frame while they move, else when they change.
+//! `create:belt`, `create:arm`, `create:ejector`), or as synced block entity keys (belts' dye
+//! and casing, funnels' and tunnels' flaps, filters, a windowed chute's stack), and draw them
+//! from the kinetic block entity's renderer (`client`): again each frame while they move, else
+//! when they change. Belts' segments scroll their texture and wear their casing through standalone
+//! models drawn with the terrain's sprites (`standalone_models`, `terrain_model` with a UV shift).
 //!
 //! Left out, for want of an API or because another subsystem owns it:
 //! - `BakedModel.isGui3d` (how a stack lies on a belt or depot) is not in the mod API: an item
@@ -28,10 +31,13 @@
 //!   every state), as `BeltModel` would draw it.
 //! - Players riding a belt are pushed by their own client (`push_player`), other entities by
 //!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`.
-//! - A chute's window or casing drawn as Create joins them, and vaults' and
-//!   casings' connected textures are not in the port.
+//! - Item vaults' connected textures (`ItemVaultCTBehaviour`) are not drawn: a vault is a terrain
+//!   model per block, and drawing one by its block entity would need a UV shift per face of one
+//!   model (`TerrainModelOptions` takes one sprite's).
+//! - A filter slot's amount board (`FilteringBehaviour`'s "up to" / "exactly" count) is not in
+//!   the port: brass funnels and smart chutes move up to a stack of what their filter passes.
 //! - A brass tunnel's mode value box and the comparators beside a vault's other blocks are the
-//!   interaction and redstone subsystems'; a brass tunnel's side filters are not in the port.
+//!   interaction and redstone subsystems'.
 //!
 //! The kinetic block entity type is declared by `Kinetics`; `Entities`, after it, adds the
 //! handlers and the renderer to it. Belts' segments and pulleys are posed partials that
