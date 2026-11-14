@@ -16,9 +16,10 @@ use create_engine::Block;
 use create_engine::door::{Door, Slide};
 use create_engine::dye::{self, DyeColor};
 use mod_api::{
-    BlockEntityPart, BlockPart, BlockState, Hand, Host, HostTransaction, InteractionResult,
-    ItemStack, MenuClosedEvent, MenuReplace, PlayerRef, Registrar, RegistrationContext, Screen,
-    ScreenEvent, ServerHost, SoundSource, Text, UseItemOnEvent, UseWithoutItemEvent,
+    BlockEntityPart, BlockPart, BlockState, Compound, Hand, Host, HostTransaction,
+    InteractionResult, ItemStack, MenuClosedEvent, MenuReplace, PlayerRef, Registrar,
+    RegistrationContext, Screen, ScreenEvent, ServerHost, SoundSource, Text, UseItemOnEvent,
+    UseWithoutItemEvent,
 };
 
 use super::processing::TOOLBOX_TYPE;
@@ -193,7 +194,20 @@ pub(crate) fn use_valve_handle(
         .and_then(|c| dye::recoloured(block, c))
     {
         if let Some(next) = recoloured_state(&*lv.host, state, to) {
+            // `ValveHandleBlock.onRemove`: another valve handle keeps the block entity, and so
+            // its angle.
+            let kept = lv
+                .host
+                .block_entity(lv.level, pos)
+                .and_then(|e| e.data(&*lv.host))
+                .and_then(|d| {
+                    let key = super::sources::handles::SCROLL_VALUE;
+                    Some(Compound::from([(key.into(), d.get(&key.into())?.clone())]))
+                });
             lv.set_state(pos, next, update_all());
+            if let (Some(kept), Some(entity)) = (kept, lv.host.block_entity(lv.level, pos)) {
+                let _ = entity.merge_data(&mut *lv.host, kept);
+            }
         }
         return Some(InteractionResult::Success);
     }
