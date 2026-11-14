@@ -66,6 +66,16 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 ### Client
 
+- **Setting the local player's air on its client** (or the server re-sending an unchanged air supply): the
+  diving helmet keeps a diver's air full on the server, but the client's bubbles still run down.
+- **Changing a worn stack's data in place** (`ItemStack` mutation without `setItemSlot`): a backtank's air,
+  written each second it is used, plays the armour's equip sound each time.
+- **A placement answering another block's state**: `state_for_placement` ignores a state of another block,
+  so a shaft placed in front of a steam engine becomes its powered shaft a tick later
+  (`ShaftBlock.pickCorrectShaftType`), from any placement, not only a player's.
+- **An item's own renderer** (`BlockEntityWithoutLevelRenderer`): the extendo grip is drawn as its plain item
+  model, not Create's extending arm.
+
 - **Whether an item's model is 3D** (`BakedModel.isGui3d`): belts, depots, placards and link slots approximate
   it by "the item places a block".
 - **Keeping only some of a block entity's drawing**: `keep()` keeps everything drawn for it, so a block with
@@ -89,8 +99,8 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 ## Left out of the port, not for want of API
 
-- Fluids: the rest of Create's `use_plumbing` (copper casing on pipes, the smart pipe's filter slot,
-  growing a whistle) and clicking fluid tanks (`use_tank`).
+- Fluids: the smart pipe's filter is set by a click anywhere on the pipe, not only on its filter slot;
+  potion fluids (`PotionFluid`, potions in spouts, drains and tanks) and builder's tea.
 - Carriage seats wait on rideable mod entities (above); the seat helpers they need come back with them.
 
 ## Not to send

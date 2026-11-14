@@ -3,7 +3,7 @@
 //! (`create_engine::place`): item vaults, nixie tubes, gauges, and the blocks with a facing or
 //! an axis. Blocks whose placement reads or writes another subsystem's state (display links and
 //! boards, steam engines, controller rails, redstone contacts, smart observers and threshold
-//! switches, fluid valves, pipes, hose pulleys and whistles) are placed by those subsystems.
+//! switches, fluid valves, pipes, pumps, hose pulleys and whistles) are placed by those subsystems.
 
 use super::super::states;
 use super::super::world::{level_index, with_world};
@@ -28,6 +28,7 @@ fn placed_elsewhere(block: Block) -> bool {
             | Block::HosePulley
             | Block::SteamWhistle
             | Block::FluidPipe
+            | Block::MechanicalPump
     )
 }
 

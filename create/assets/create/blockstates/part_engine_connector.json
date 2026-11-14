@@ -1,0 +1,30 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/steam_engine/shaft_connector",
+      "x": 90
+    },
+    "facing=east": {
+      "model": "create:block/steam_engine/shaft_connector",
+      "x": 90,
+      "y": 90
+    },
+    "facing=south": {
+      "model": "create:block/steam_engine/shaft_connector",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create:block/steam_engine/shaft_connector",
+      "x": 90,
+      "y": 270
+    },
+    "facing=up": {
+      "model": "create:block/steam_engine/shaft_connector"
+    },
+    "facing=down": {
+      "model": "create:block/steam_engine/shaft_connector",
+      "x": 180
+    }
+  }
+}

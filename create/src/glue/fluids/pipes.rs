@@ -257,7 +257,7 @@ fn fill_end(
     let have = pump.out.filter(|o| o.0 == fluid).map_or(0, |o| o.1);
     let total = have + n;
     if !fluid.placeable() {
-        // Create's own fluids have no blocks in the world yet.
+        // Milk has no block.
         return 0;
     }
     if total < BUCKET {

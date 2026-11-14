@@ -8,7 +8,11 @@
 //! input: a client can neither read the local player's input (`xxa`, `zza`) nor set its motion
 //! (`set_velocity` is the server's). The extendo grip wears on a landed hit only when the grip is
 //! the stack that hit (`hurt_enemy` is a part of the hitting item), not when it is in the off hand
-//! behind another weapon.
+//! behind another weapon. The helmet keeps the wearer's air full on the server only: a client
+//! cannot set its own player's air (`set_air_supply` is the server's), and the server's value
+//! never changes, so the client's bubbles still run down (no damage is taken). Using a backtank's
+//! air rewrites the worn stack (`set_equipment`), which plays its equip sound each second: Create
+//! changes the stack in place, which the API has no way to do.
 
 use super::server::ServerLevel;
 use super::states;

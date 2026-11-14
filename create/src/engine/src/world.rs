@@ -1117,6 +1117,13 @@ impl CreateWorld {
                 .get(s)
                 .is_some_and(|(b, _)| b == Block::FluidTank)
         };
+        // `ShaftBlock.pickCorrectShaftType`: a shaft placed in front of a steam engine is its
+        // powered shaft (the swap `shaft_changes` makes; a placement can't answer another block).
+        if self.table.get(new).is_some_and(|(b, _)| b == Block::Shaft)
+            && self.table.get(old).map(|(b, _)| b) != Some(Block::Shaft)
+        {
+            self.dims[dim].engine_shafts.push(pos);
+        }
         let (was_tank, is_tank) = (tank(old), tank(new));
         if was_tank != is_tank {
             if is_tank {

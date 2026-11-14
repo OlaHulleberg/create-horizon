@@ -1,16 +1,35 @@
-//! Create's item drain (`ItemDrainBlockEntity`, `GenericItemEmptying`): items on it are emptied
-//! into its 1,500 mB tank, one per 20-tick cycle, when the tank has room.
+//! Create's item drain (`ItemDrainBlockEntity`, `GenericItemEmptying`): a stack put on it
+//! travels across it the way it came in, an eighth of a block a tick; an item that holds a fluid
+//! stops in the middle, is emptied into the 1,500 mB tank over a 20-tick cycle (waiting while
+//! the tank has no room) and goes on as what is left of it; at the far side the stack is handed
+//! on (`DirectBeltInputBehaviour`) or thrown off.
 
+use crate::kinetics::Dir;
 use crate::spout::FILLING_TIME;
 use crate::tank::{BUCKET, Fluid};
 
 /// `SmartFluidTankBehaviour.single(this, 1500)`.
 pub const CAPACITY: u32 = 1500;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// `itemMovementPerTick`.
+pub const SPEED: f32 = 1.0 / 8.0;
+
+/// The stack on a drain (`heldItem`, a `TransportedItemStack`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Held {
+    pub item: String,
+    pub count: u8,
+    /// How far across it is (`beltPosition`), 0 to 1, and where it was a tick ago.
+    pub position: f32,
+    pub prev: f32,
+    /// The way it travels (`insertedFrom`): it leaves by that side.
+    pub from: Dir,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Drain {
-    /// The held stack (`heldItem`).
-    pub held: Option<(String, u8)>,
+    pub held: Option<Held>,
+    /// `processingTicks`: counting down while an item is emptied.
     pub processing: i32,
     pub fluid: Option<(Fluid, u32)>,
 }
@@ -37,39 +56,99 @@ pub fn contents(item: &str, recipes: &[(String, Emptying)]) -> Option<Emptying> 
     })
 }
 
-/// A tick (`tick`, `continueProcessing`): when one item of the held stack was emptied now, what
-/// is left of it (the caller throws it off: an empty bucket, a glass bottle), or None.
-pub fn tick(d: &mut Drain, recipes: &[(String, Emptying)]) -> Option<Option<String>> {
-    let Some((item, count)) = d.held.clone() else {
-        d.processing = 0;
-        return None;
-    };
-    let Emptying {
-        fluid,
-        amount,
-        leftover,
-    } = contents(&item, recipes)?;
-    if d.processing == 0 {
-        d.processing = FILLING_TIME;
-        return None;
+/// `tryInsertingFromSide`: `count` of `item` coming in travelling toward `side`. Only while the
+/// drain holds nothing; of a stack that can be emptied it takes one. How many it took.
+pub fn insert(
+    d: &mut Drain,
+    item: &str,
+    count: u8,
+    side: Dir,
+    recipes: &[(String, Emptying)],
+) -> u8 {
+    if d.held.is_some() || count == 0 {
+        return 0;
     }
-    d.processing -= 1;
-    let room = d
-        .fluid
-        .is_none_or(|(f, n)| f == fluid && n + amount <= CAPACITY);
-    if d.processing > 5 {
+    let taken = if count > 1 && contents(item, recipes).is_some() {
+        1
+    } else {
+        count
+    };
+    let position = if side.axis() == crate::kinetics::Axis::Y {
+        0.5
+    } else {
+        0.0
+    };
+    d.held = Some(Held {
+        item: item.to_owned(),
+        count: taken,
+        position,
+        prev: position,
+        from: side,
+    });
+    taken
+}
+
+/// What a tick did that the world must know of.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Tick {
+    /// Nothing to tell (it moved, or waits).
+    Idle,
+    /// The held item was emptied into the tank (`notifyUpdate`).
+    Emptied,
+    /// The stack reached the far side: hand it on that way, or throw it off.
+    Out(Dir),
+}
+
+/// `tick` and `continueProcessing` on the server.
+pub fn tick(d: &mut Drain, recipes: &[(String, Emptying)]) -> Tick {
+    let Some(held) = d.held.as_mut() else {
+        d.processing = 0;
+        return Tick::Idle;
+    };
+    if d.processing > 0 {
+        held.prev = 0.5;
+        d.processing -= 1;
+        if d.processing < 5 {
+            return Tick::Idle;
+        }
+        let Some(e) = contents(&held.item, recipes) else {
+            d.processing = 0;
+            return Tick::Idle;
+        };
+        let room = d
+            .fluid
+            .is_none_or(|(f, n)| f == e.fluid && n + e.amount <= CAPACITY);
+        if d.processing > 5 {
+            if !room {
+                d.processing = FILLING_TIME;
+            }
+            return Tick::Idle;
+        }
         if !room {
             d.processing = FILLING_TIME;
+            return Tick::Idle;
         }
-        return None;
+        d.fluid = Some((e.fluid, d.fluid.map_or(0, |f| f.1) + e.amount));
+        match e.leftover {
+            Some(left) => held.item = left,
+            None => d.held = None,
+        }
+        return Tick::Emptied;
     }
-    if d.processing != 5 || !room {
-        return None;
+    held.prev = held.position;
+    held.position += SPEED;
+    if held.position > 1.0 {
+        held.position = 1.0;
+        return Tick::Out(held.from);
     }
-    d.fluid = Some((fluid, d.fluid.map_or(0, |f| f.1) + amount));
-    d.held = (count > 1).then(|| (item, count - 1));
-    d.processing = 0;
-    Some(leftover)
+    if held.prev < 0.5 && held.position >= 0.5 {
+        if contents(&held.item, recipes).is_none() {
+            return Tick::Idle;
+        }
+        held.position = 0.5;
+        d.processing = FILLING_TIME;
+    }
+    Tick::Idle
 }
 
 /// Drained by a pump: up to `amount`.
@@ -80,27 +159,54 @@ pub fn drain(d: &mut Drain, amount: u32) -> Option<(Fluid, u32)> {
     (out > 0).then_some((fluid, out))
 }
 
+/// Whether the drain's stack moves this tick (clients draw it each frame).
+pub fn moving(d: &Drain) -> bool {
+    d.held
+        .as_ref()
+        .is_some_and(|h| h.position != h.prev || d.processing > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn run(d: &mut Drain, recipes: &[(String, Emptying)], ticks: usize) -> Vec<Tick> {
+        (0..ticks)
+            .map(|_| tick(d, recipes))
+            .filter(|t| *t != Tick::Idle)
+            .collect()
+    }
+
     #[test]
-    fn buckets_empty_one_cycle_each_until_full() {
+    fn a_bucket_crosses_is_emptied_in_the_middle_and_leaves() {
+        let mut d = Drain::default();
+        assert_eq!(insert(&mut d, "minecraft:water_bucket", 2, Dir::East, &[]), 1);
+        assert_eq!(insert(&mut d, "minecraft:stone", 1, Dir::East, &[]), 0);
+        // Four ticks to the middle, the 20-tick cycle emptying at its 5th-last.
+        let events = run(&mut d, &[], 4 + 15);
+        assert_eq!(events, vec![Tick::Emptied]);
+        assert_eq!(d.fluid, Some((Fluid::Water, 1000)));
+        assert_eq!(d.held.as_ref().unwrap().item, "minecraft:bucket");
+        assert_eq!(d.held.as_ref().unwrap().position, 0.5);
+        // The cycle's end, then four more ticks to the far side.
+        let events = run(&mut d, &[], 5 + 5);
+        assert_eq!(events, vec![Tick::Out(Dir::East)]);
+    }
+
+    #[test]
+    fn it_waits_for_room_and_passes_other_items() {
         let mut d = Drain {
-            held: Some(("minecraft:water_bucket".into(), 2)),
+            fluid: Some((Fluid::Water, 1000)),
             ..Drain::default()
         };
-        let emptied = (0..100).filter(|_| tick(&mut d, &[]).is_some()).count();
-        assert_eq!(emptied, 1, "1,500 mB: room for one bucket");
-        assert_eq!(d.fluid, Some((Fluid::Water, 1000)));
+        insert(&mut d, "minecraft:water_bucket", 1, Dir::North, &[]);
+        assert!(run(&mut d, &[], 200).is_empty(), "no room: it waits");
         assert_eq!(drain(&mut d, 600), Some((Fluid::Water, 600)));
-        let left = (0..40).find_map(|_| tick(&mut d, &[]));
-        assert_eq!(
-            left,
-            Some(Some("minecraft:bucket".into())),
-            "room again for the second"
-        );
-        assert_eq!(d.held, None);
+        assert_eq!(run(&mut d, &[], 40)[0], Tick::Emptied);
+        let mut d = Drain::default();
+        insert(&mut d, "minecraft:stone", 5, Dir::West, &[]);
+        assert_eq!(d.held.as_ref().unwrap().count, 5);
+        assert_eq!(run(&mut d, &[], 9), vec![Tick::Out(Dir::West)]);
     }
 
     #[test]
@@ -114,13 +220,10 @@ mod tests {
                 leftover: Some("minecraft:glass_bottle".into()),
             },
         )];
-        let mut d = Drain {
-            held: Some(("minecraft:honey_bottle".into(), 7)),
-            ..Drain::default()
-        };
-        let bottles = (0..400).filter_map(|_| tick(&mut d, &recipes)).count();
-        assert_eq!(bottles, 6, "1,500 mB holds six bottles");
-        assert_eq!(d.fluid, Some((Fluid::Honey, 1500)));
-        assert_eq!(d.held, Some(("minecraft:honey_bottle".into(), 1)));
+        let mut d = Drain::default();
+        assert_eq!(insert(&mut d, "minecraft:honey_bottle", 7, Dir::South, &recipes), 1);
+        assert_eq!(run(&mut d, &recipes, 30)[0], Tick::Emptied);
+        assert_eq!(d.fluid, Some((Fluid::Honey, 250)));
+        assert_eq!(d.held.as_ref().unwrap().item, "minecraft:glass_bottle");
     }
 }

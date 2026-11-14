@@ -68,6 +68,9 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
                 .is_some_and(|v| v.pointer.moving() || v.prev != v.pointer.angle())
         }),
         Block::HosePulley => shown_hose(entity).is_some_and(|(_, v, _)| v != 0.0),
+        Block::ItemDrain => super::drawn::animated(entity),
+        Block::SteamEngine => super::engine::animated(entity),
+        Block::Spout => super::spouted::animated(entity),
         _ => false,
     }
 }
@@ -150,8 +153,19 @@ impl BlockEntityPart for FluidEntity {
         };
         match block {
             Block::FluidTank | Block::CreativeFluidTank => draw_tank(host, event),
+            Block::ItemDrain => super::drawn::draw(host, event),
+            Block::SteamEngine => super::engine::draw(host, event, &info),
+            Block::Spout => super::spouted::draw(host, event),
             Block::HosePulley => draw_hose(event),
-            Block::FluidValve => draw_pointer(event, &info),
+            Block::FluidValve => {
+                super::rims::draw(event);
+                draw_pointer(event, &info);
+            }
+            Block::FluidPipe
+            | Block::EncasedFluidPipe
+            | Block::GlassFluidPipe
+            | Block::SmartFluidPipe
+            | Block::MechanicalPump => super::rims::draw(event),
             _ => {}
         }
     }
@@ -170,21 +184,33 @@ fn draw_tank(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
     let Some(fluid) = m.tank.fluid else {
         return;
     };
+    fluid_part(host, event, fluid, min, max, m.tank.amount);
+    event.draw.keep();
+}
+
+/// A box of `fluid` from `min` to `max` in the block: drawn as the game draws a still fluid
+/// (water in its default colour), else the fluid's still texture on a block model stretched to
+/// the box.
+pub(super) fn fluid_part(
+    host: &dyn ClientHost,
+    event: &mut BlockEntitySubmitEvent<'_>,
+    fluid: Fluid,
+    min: [f32; 3],
+    max: [f32; 3],
+    amount: u32,
+) {
     let draw = &mut *event.draw;
     let bounds = [min[0], min[1], min[2], max[0], max[1], max[2]];
-    let drawn = match fluid {
-        Fluid::Water | Fluid::Lava => host.fluid_key(fluid.id()).is_some_and(|key| {
-            let options = FluidBoxOptions::new(true, 0.0);
-            let options = if fluid == Fluid::Water {
-                options.with_argb(0xFF3F_76E4)
-            } else {
-                options
-            };
-            draw.fluid_box(&FluidStack::new(key, m.tank.amount), bounds, options)
-                .is_ok()
-        }),
-        _ => false,
-    };
+    let drawn = host.fluid_key(fluid.id()).is_some_and(|key| {
+        let options = FluidBoxOptions::new(true, 0.0);
+        let options = if fluid == Fluid::Water {
+            options.with_argb(0xFF3F_76E4)
+        } else {
+            options
+        };
+        draw.fluid_box(&FluidStack::new(key, amount.max(1)), bounds, options)
+            .is_ok()
+    });
     if !drawn {
         let name = match fluid {
             Fluid::Honey => "part_fluid_honey",
@@ -201,7 +227,6 @@ fn draw_tank(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
             draw.pop();
         }
     }
-    draw.keep();
 }
 
 /// `AbstractPulleyRenderer`: the magnet (or its half near the top) at the hose's end, gliding

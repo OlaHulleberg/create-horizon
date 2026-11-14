@@ -2,21 +2,31 @@
 //! encased pipes, hose pulleys, creative fluid tanks, steam whistles, spouts and item drains.
 //! The rules are `create_engine::{fluids, tank, steam, hose, whistle, plumbing, spout, drain}`.
 //!
-//! What clients draw comes in each block entity's data, sent by `kinetics`: a tank controller's
-//! (or a creative tank's) contents under `Tank`, a hose pulley's hose under `Hose`; a valve's
-//! pointer follows the valve's own state and speed on the client (`client`).
+//! What clients draw and the goggles read comes in each block entity's data (`synced_keys`): a
+//! tank controller's (or a creative tank's, spout's or drain's) contents under `Tank`, a boiler's
+//! state, a hose pulley's hose, a pipe's rims, a drain's stack, an engine's shaft speed and a
+//! spout's cycle; a valve's pointer follows the valve's own state and speed on the client.
 //!
 //! Left out:
+//! - Potion fluids (`PotionFluid`): a spout fills glass bottles with water only, and drains and
+//!   tanks take no potions.
 //! - The `FLUIDS` capability on Create's tanks, so other mods' handlers and Create's pumps reach
 //!   each other: the tanks' contents live in the engine's world, outside the game's transaction
 //!   journal, and a handler cannot learn that a transaction it wrote in was aborted to roll the
 //!   engine back (no close callback on `Transaction`). Pumps reach Create's own blocks and open
 //!   ends as the legacy glue did.
 
+mod clicks;
 mod client;
+mod drawn;
+mod engine;
+mod goggles;
 mod machines;
 mod pipes;
+mod place;
 mod plumbing;
+mod rims;
+mod spouted;
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
@@ -25,11 +35,14 @@ use create_engine::Block;
 use create_engine::parts::StateInfo;
 use create_engine::tank::{Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
 use mod_api::{
-    BlockState, BlockUpdateFlags, Compound, HostBlockStates, ModBlockEntity, Registrar,
-    RegistrationContext, StateConstraint, Tag,
+    BlockState, BlockUpdateFlags, Compound, Flow, HostBlockStates, HostSide, ModBlockEntity,
+    Registrar, RegistrationContext, RightClickBlockEvent, StateConstraint, Tag,
 };
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 pub use client::animated;
+pub(crate) use machines::insert_into_drain;
 
 /// The key of a tank's contents in its block entity's data: fluid (255: none), amount, width,
 /// height, window; empty for a tank block that is no controller.
@@ -43,10 +56,12 @@ pub struct Fluids;
 impl Subsystem for Fluids {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         client::register(r);
-        r.block_part(
-            super::states::key(Block::CreativeFluidTank),
-            plumbing::CreativeTank,
-        );
+        for block in place::PLACED {
+            r.block_part(super::states::key(block), place::Placement);
+        }
+        for block in clicks::CLICKED {
+            r.block_part(super::states::key(block), clicks::Clicks);
+        }
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -54,6 +69,7 @@ impl Subsystem for Fluids {
         let dim = lv.dim;
         with_world(|w| w.load_tanks(dim, tanks.into_iter()));
         plumbing::chunk_load(dim, data);
+        machines::chunk_load(dim, data);
     }
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
@@ -80,6 +96,7 @@ impl Subsystem for Fluids {
             data.insert("tank_multis".into(), Tag::IntArray(v));
         }
         plumbing::chunk_data_save(dim, chunk, data);
+        machines::chunk_data_save(dim, chunk, data);
     }
 
     /// Before the solve, in the legacy order: pipes and pumps, boilers, valves, hoses and
@@ -92,10 +109,61 @@ impl Subsystem for Fluids {
         pipes::tick_tank_states(lv);
         machines::tick_spouts(lv);
         machines::tick_drains(lv);
+        rims::tick(lv);
+        drawn::send(lv);
+        engine::tick(lv);
     }
 
     fn client_reset(&self) {
         client::reset();
+    }
+
+    /// The pipes beside a Create block that changed draw their pieces again (`rims`).
+    fn block_changed(&self, dim: usize, pos: [i32; 3], _old: u32, new: u32) {
+        engine::changed(dim, pos, new);
+        rims::changed(dim, pos);
+    }
+
+    fn world_closed(&self) {
+        rims::reset();
+        drawn::reset();
+        engine::reset();
+    }
+
+    /// What clients see of tanks, spouts, drains, boilers and hoses, sent with their chunks too.
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[
+            TANK,
+            HOSE,
+            BOILER,
+            rims::RIMS,
+            drawn::DRAIN_ITEM,
+            engine::ENGINE_SPEED,
+        ]
+    }
+
+    /// A powered shaft's engines draw its new speed.
+    fn speed_changed(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], speed: f32) {
+        engine::shaft_speed_changed(lv, pos, speed);
+    }
+
+    /// The client's prediction of a click its block takes (`clicks`).
+    fn right_click_block(&self, host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
+        match host {
+            HostSide::Client(host) => clicks::predict(host, event),
+            HostSide::Server(_) => Flow::Continue,
+        }
+    }
+
+    /// Tanks' and boilers', spouts' and drains' goggle lines (`goggles`).
+    fn goggle_tooltip(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        pos: [i32; 3],
+        block: Block,
+        lines: &mut Vec<Vec<(String, u32)>>,
+    ) {
+        goggles::tooltip(host, pos, block, lines);
     }
 
     /// The wrench on a pipe or a whistle, not sneaking (legacy `use_item_on`'s
@@ -137,6 +205,101 @@ pub struct Tanks;
 impl Subsystem for Tanks {
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         send_tank_changes(lv);
+        send_shown(lv);
+    }
+
+    fn world_closed(&self) {
+        SHOWN.with_borrow_mut(HashMap::clear);
+    }
+}
+
+/// The key of a boiler's state in its controller's block entity data, for the goggles: active
+/// heat, passive (0 or 1), water supply (`f32` bits), engines, whistles.
+pub const BOILER: &str = "Boiler";
+
+/// The key of the game time a spout's filling cycle started, while it runs, for its clients.
+pub const SPOUT_START: &str = "SpoutStart";
+
+/// A block entity's key by level and position.
+type ShownKey = (usize, [i32; 3], &'static str);
+
+thread_local! {
+    /// What each spout's, drain's and boiler's block entity last showed its clients, by level
+    /// and position.
+    static SHOWN: RefCell<HashMap<ShownKey, Vec<i32>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Spouts' and item drains' contents (fluid, amount, capacity, under `TANK`) and boilers'
+/// states (`BOILER`) to their block entities' clients when they changed (`notifyUpdate`).
+fn send_shown(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let time = lv.game_time();
+    let now: Vec<([i32; 3], &'static str, Vec<i32>)> = with_world(|w| {
+        let d = &w.dims[dim];
+        let fluid = |f: Option<(Fluid, u32)>, capacity: u32| match f {
+            Some((f, n)) => vec![i32::from(f.index()), n as i32, capacity as i32],
+            None => vec![255, 0, capacity as i32],
+        };
+        let spouts = d
+            .spouts
+            .iter()
+            .map(|(p, s)| (*p, TANK, fluid(s.fluid, create_engine::spout::CAPACITY)));
+        let drains = d
+            .drains
+            .iter()
+            .map(|(p, s)| (*p, TANK, fluid(s.fluid, create_engine::drain::CAPACITY)));
+        let boilers = d.boilers.iter().map(|(p, b)| {
+            let b = &b.data;
+            let v = vec![
+                b.active_heat,
+                i32::from(b.passive_heat),
+                b.water_supply.to_bits() as i32,
+                b.attached_engines,
+                b.attached_whistles,
+            ];
+            (*p, BOILER, v)
+        });
+        // A spout working shows when its cycle started (`processingTicks`).
+        let working = d
+            .spouts
+            .iter()
+            .filter(|(_, s)| s.processing >= 0)
+            .map(|(p, s)| {
+                let start = time - i64::from(create_engine::spout::FILLING_TIME - s.processing);
+                (*p, SPOUT_START, vec![start as i32])
+            });
+        spouts.chain(drains).chain(boilers).chain(working).collect()
+    })
+    .unwrap_or_default();
+    let changed: Vec<_> = SHOWN.with_borrow_mut(|shown| {
+        // Gone (a boiler no more, a drain broken): shown as nothing.
+        let mut changed: Vec<_> = shown
+            .keys()
+            .filter(|(d, p, k)| *d == dim && !now.iter().any(|(q, j, _)| q == p && j == k))
+            .map(|(_, p, k)| (*p, *k, Vec::new()))
+            .collect();
+        for (p, k, _) in &changed {
+            shown.remove(&(dim, *p, *k));
+        }
+        for (p, k, v) in now {
+            if shown.get(&(dim, p, k)) != Some(&v) {
+                shown.insert((dim, p, k), v.clone());
+                changed.push((p, k, v));
+            }
+        }
+        changed
+    });
+    for (pos, key, v) in changed {
+        // A spout's or drain's contents are saved with its column.
+        if key == TANK {
+            with_world(|w| w.mark_unsaved(dim, pos));
+        }
+        let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+            continue;
+        };
+        let data = Compound::from([(key.into(), Tag::IntArray(v))]);
+        let _ = entity.merge_data(&mut *lv.host, data);
     }
 }
 
@@ -216,7 +379,12 @@ fn set_shown_tank(lv: &mut ServerLevel<'_>, pos: [i32; 3], m: Option<&Multi>) {
 
 /// The tank a block entity shows its clients.
 fn shown_tank(entity: &ModBlockEntity) -> Option<Multi> {
-    let Some(Tag::IntArray(v)) = entity.nbt.get(&TANK.into()) else {
+    tank_in(&entity.nbt)
+}
+
+/// The tank block entity data `data` shows.
+fn tank_in(data: &Compound) -> Option<Multi> {
+    let Some(Tag::IntArray(v)) = data.get(&TANK.into()) else {
         return None;
     };
     let &[fluid, amount, width, height, window] = v.as_slice() else {
@@ -264,8 +432,8 @@ fn replaceable(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         .unwrap_or(false)
 }
 
-/// The fluid in the block at `pos`: water or lava (Create's own have no blocks), and whether
-/// it is a source. None for no fluid or another.
+/// The fluid in the block at `pos`: water, lava, honey or chocolate, and whether it is a
+/// source. None for no fluid or another.
 fn world_fluid(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Fluid, bool)> {
     let f = lv.level.fluid_state(&*lv.host, pos)?;
     if f.is_empty() {
@@ -274,6 +442,8 @@ fn world_fluid(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Fluid, bool)> {
     let fluid = match f.fluid.id(&*lv.host).as_str() {
         "minecraft:water" | "minecraft:flowing_water" => Fluid::Water,
         "minecraft:lava" | "minecraft:flowing_lava" => Fluid::Lava,
+        "create:honey" | "create:flowing_honey" => Fluid::Honey,
+        "create:chocolate" | "create:flowing_chocolate" => Fluid::Chocolate,
         _ => return None,
     };
     Some((fluid, f.is_source()))

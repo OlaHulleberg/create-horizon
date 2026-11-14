@@ -6,12 +6,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// The fluids a tank can hold without fluids of its own yet (gap 5): vanilla's.
+/// The fluids a tank can hold: vanilla's, Create's honey and chocolate, and milk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Fluid {
     Water,
     Lava,
-    /// Create's own (`AllFluids`): kept in its machines; no fluid blocks in the world yet.
+    /// Create's own (`AllFluids`), with their blocks in the world (`create:honey`).
     Honey,
     Chocolate,
     /// NeoForge's milk (`NeoForgeMod.MILK`), which Create enables.
@@ -67,9 +67,20 @@ impl Fluid {
     pub fn of_bucket(item: &str) -> Option<Fluid> {
         Fluid::ALL.into_iter().find(|f| f.bucket() == item)
     }
-    /// Whether it can be let out into the world as a source block (vanilla's fluids only here).
+    /// Its name (en_us).
+    pub fn name(self) -> &'static str {
+        match self {
+            Fluid::Water => "Water",
+            Fluid::Lava => "Lava",
+            Fluid::Honey => "Honey",
+            Fluid::Chocolate => "Chocolate",
+            Fluid::Milk => "Milk",
+        }
+    }
+    /// Whether it can be let out into the world as a source block: all but milk, which has no
+    /// block (`NeoForgeMod.MILK`'s fluid type is not placeable).
     pub fn placeable(self) -> bool {
-        matches!(self, Fluid::Water | Fluid::Lava)
+        self != Fluid::Milk
     }
 }
 
@@ -921,4 +932,30 @@ mod tests {
         t.load([5, 1, 5], None);
         assert_eq!(size(&t, [5, 1, 5]), ([5, 1, 5], 1, 1));
     }
+}
+
+/// `IHaveGoggleInformation.containedFluidTooltip` for one tank (en_us): its fluid and amount of
+/// its capacity, or only its capacity while empty.
+pub fn tooltip(tank: Tank, capacity: u32) -> Vec<crate::gauge::Line> {
+    use crate::gauge::{goggles, number};
+    let mb = |v: u32| format!("{}mB", number(f64::from(v)));
+    let mut lines = vec![goggles(0, vec![("Fluid Container Info:".into(), 0xFFFFFF)])];
+    match tank.fluid.filter(|_| tank.amount > 0) {
+        Some(f) => {
+            lines.push(goggles(1, vec![(f.name().into(), 0xAAAAAA)]));
+            lines.push(goggles(
+                1,
+                vec![
+                    (mb(tank.amount), 0xFFAA00),
+                    (" / ".into(), 0xAAAAAA),
+                    (mb(capacity), 0x555555),
+                ],
+            ));
+        }
+        None => lines.push(goggles(
+            1,
+            vec![("Capacity: ".into(), 0xAAAAAA), (mb(capacity), 0xFFAA00)],
+        )),
+    }
+    lines
 }

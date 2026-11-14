@@ -32,12 +32,22 @@ pub struct Filling {
     pub result: String,
 }
 
+/// `PotionFluidHandler.getRequiredAmountForFilledBottle`: a glass bottle takes a quarter bucket.
+pub const BOTTLE: u32 = 250;
+
+/// What a glass bottle filled with water becomes (`PotionFluidHandler.fillBottle`): a potion,
+/// its contents water (the glue gives the stack its `potion_contents`).
+pub const WATER_BOTTLE: &str = "minecraft:potion";
+
 /// `GenericItemFilling.getRequiredAmountForItem` and `fillItem`: a filling recipe for the item
-/// and fluid, else an empty bucket taking a bucket's worth. How much it takes and what it
-/// becomes.
+/// and fluid, a glass bottle filled with water, else an empty bucket taking a bucket's worth.
+/// How much it takes and what it becomes.
 pub fn filling(item: &str, fluid: Fluid, recipes: &[Filling]) -> Option<(u32, String)> {
     if let Some(r) = recipes.iter().find(|r| r.item == item && r.fluid == fluid) {
         return Some((r.amount, r.result.clone()));
+    }
+    if item == "minecraft:glass_bottle" {
+        return (fluid == Fluid::Water).then(|| (BOTTLE, WATER_BOTTLE.to_owned()));
     }
     (item == "minecraft:bucket").then(|| (BUCKET, fluid.bucket().to_owned()))
 }
@@ -65,9 +75,10 @@ pub fn step(s: &mut Spout, item: Option<&str>, recipes: &[Filling]) -> Option<St
 }
 
 /// `FillingBySpout.canItemBeFilled`: a filling recipe takes the item (with any fluid), or it is
-/// an empty bucket.
+/// an empty bucket or a glass bottle.
 pub fn fillable(item: &str, recipes: &[Filling]) -> bool {
-    item == "minecraft:bucket" || recipes.iter().any(|r| r.item == item)
+    matches!(item, "minecraft:bucket" | "minecraft:glass_bottle")
+        || recipes.iter().any(|r| r.item == item)
 }
 
 /// What a spout does to a stack on the belt below.
@@ -142,6 +153,17 @@ mod tests {
         assert_eq!(filled, "minecraft:water_bucket");
         assert_eq!(s.fluid, None);
         assert!(step(&mut s, Some("minecraft:stone"), &[]).is_none());
+    }
+
+    #[test]
+    fn a_glass_bottle_takes_a_quarter_bucket_of_water() {
+        let mut s = Spout::default();
+        fill(&mut s, Fluid::Water, 1000);
+        let made = (0..200)
+            .filter_map(|_| step(&mut s, Some("minecraft:glass_bottle"), &[]))
+            .count();
+        assert_eq!(made, 4);
+        assert!(filling("minecraft:glass_bottle", Fluid::Lava, &[]).is_none());
     }
 
     #[test]
