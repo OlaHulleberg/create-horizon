@@ -8,6 +8,9 @@
     "render_shape": "ENTITYBLOCK_ANIMATED"
   },
   "item": true,
+  "components": {
+    "minecraft:rarity": "common"
+  },
   "shapes": {
     "properties": [
       "facing"

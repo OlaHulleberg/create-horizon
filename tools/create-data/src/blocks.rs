@@ -2947,6 +2947,24 @@ pub fn fluid_models() -> [(&'static str, Value); 5] {
     ]
 }
 
+/// The rarity of Create's block items (`AllBlocks`: `.properties(p -> p.rarity(..))`).
+fn create_rarity(name: &str) -> &'static str {
+    match name {
+        "creative_motor" | "creative_fluid_tank" => "epic",
+        "experience_block" => "uncommon",
+        _ => "common",
+    }
+}
+
+/// The rarity of the item of a template block the declarations use (`Items`): the heavy core's
+/// is epic, the others' common.
+fn template_rarity(template: &str) -> &'static str {
+    match template {
+        "minecraft:heavy_core" => "epic",
+        _ => "common",
+    }
+}
+
 /// The woods a water wheel takes (`#minecraft:planks`, `create:water_wheel_planks`): each one's
 /// name and its log's side and top textures (`WaterWheelRenderer.getLogBlockState`: `<wood>_log`,
 /// `<wood>_stem` or `<wood>_block`).
@@ -3171,6 +3189,17 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
             "components".into(),
             json!({ "minecraft:max_stack_size": b.stack }),
         );
+    }
+    // A block item takes its template's rarity (the heavy core's is epic): Create's own, where
+    // they differ (`Item.Properties.rarity`).
+    let rarity = create_rarity(&b.name);
+    if *item && template_rarity(template) != rarity {
+        let components = doc
+            .entry("components")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("components are an object");
+        components.insert("minecraft:rarity".into(), json!(rarity));
     }
     if *template == "minecraft:scaffolding" && b.name.ends_with("_scaffolding") {
         scaffolding_shapes(&mut doc);

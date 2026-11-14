@@ -7,6 +7,9 @@
     "sounds": "minecraft:stone"
   },
   "item": true,
+  "components": {
+    "minecraft:rarity": "common"
+  },
   "shapes": {
     "properties": [
       "waterlogged"

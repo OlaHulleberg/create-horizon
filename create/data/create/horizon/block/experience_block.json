@@ -6,5 +6,8 @@
     "requires_tool": true,
     "sounds": "minecraft:gold_block"
   },
-  "item": true
+  "item": true,
+  "components": {
+    "minecraft:rarity": "uncommon"
+  }
 }
