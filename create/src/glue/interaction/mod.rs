@@ -91,6 +91,15 @@ impl Subsystem for Interaction {
         hud::goggle_overlay(host, event.draw);
     }
 
+    /// The highlighted value box's outline.
+    fn render_level_stage(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        hud::value_box_outline(host, event);
+    }
+
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         commands::register(event.commands);
     }

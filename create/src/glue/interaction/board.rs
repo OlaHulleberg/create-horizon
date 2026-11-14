@@ -120,6 +120,26 @@ pub(super) fn hovered_box(host: &dyn ClientHost) -> Option<([i32; 3], &'static s
     Some((pos, board_of(host, pos, false)?.board.title))
 }
 
+/// The value box under the crosshair, for its outline: the block, the side it is on and its
+/// centre in the block (`ScrollValueRenderer.tick`'s highlighted box).
+pub(super) fn hovered_slot(host: &dyn ClientHost) -> Option<([i32; 3], Dir, [f64; 3])> {
+    let Some(CrosshairTarget::Block { pos, hit, .. }) = host.crosshair_target() else {
+        return None;
+    };
+    let pos = [pos.x, pos.y, pos.z];
+    let side = Dir::from_offset(hit.face)?;
+    let player = host.local_player()?;
+    if !may_use_value_box(host, player) {
+        return None;
+    }
+    let local = [0, 1, 2].map(|i| hit.point[i] - f64::from(pos[i]));
+    let slot = super::super::client_table(host, |t| {
+        super::values::value_box_slot(t, |p| block_at(host, p), pos, side)
+    })
+    .flatten()?;
+    create_engine::board::hits_box(slot, local).then_some((pos, side, slot))
+}
+
 /// Whether the hit `hit` on the block at `pos` lands on its active value box.
 fn hits_value_box(host: &dyn ClientHost, pos: [i32; 3], face: [i32; 3], point: [f64; 3]) -> bool {
     let Some(side) = Dir::from_offset(face) else {

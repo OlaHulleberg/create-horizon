@@ -289,3 +289,51 @@ mod tests {
         assert_eq!(number(1234567.0), "1,234,567");
     }
 }
+
+/// `ValueBox.render` of the highlighted box (`passive(false)`): Create's white
+/// `VALUE_BOX_HOVER` frame round the box, half a block across on the face it is on, a hair out
+/// from it. Its value's text and icon on the face are left out: world drawing takes no text.
+pub(super) fn value_box_outline(
+    host: &dyn ClientHost,
+    event: &mut mod_api::RenderLevelStageEvent<'_>,
+) {
+    use mod_api::{RenderLevelStage, WorldDepth, WorldLine};
+    if event.stage != RenderLevelStage::AfterTranslucentBlocks {
+        return;
+    }
+    let Some((pos, side, slot)) = super::board::hovered_slot(host) else {
+        return;
+    };
+    let n = side.offset();
+    let axis = (0..3).find(|i| n[*i] != 0).unwrap_or(1);
+    let (u, v) = match axis {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let centre: [f64; 3] = [0, 1, 2].map(|i| f64::from(pos[i]) + slot[i] + f64::from(n[i]) * 0.002);
+    let corner = |a: f64, b: f64| {
+        let mut c = centre;
+        c[u] += a * 0.25;
+        c[v] += b * 0.25;
+        c
+    };
+    let square = [
+        corner(-1.0, -1.0),
+        corner(1.0, -1.0),
+        corner(1.0, 1.0),
+        corner(-1.0, 1.0),
+    ];
+    let lines: Vec<WorldLine> = (0..4)
+        .map(|i| {
+            WorldLine::new(
+                square[i],
+                square[(i + 1) % 4],
+                0xFFFF_FFFF,
+                2.0,
+                WorldDepth::Tested,
+            )
+        })
+        .collect();
+    let _ = event.draw.lines(&lines);
+}

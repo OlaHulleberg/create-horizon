@@ -63,9 +63,18 @@ pub(crate) fn value_box_hit(
     side: Dir,
     local: [f64; 3],
 ) -> bool {
-    let Some((block, info)) = table.get(block_at(pos)) else {
-        return false;
-    };
+    value_box_slot(table, block_at, pos, side).is_some_and(|s| board::hits_box(s, local))
+}
+
+/// The centre of the active value box on `side` of the block at `pos`, in the block's own
+/// coordinates (`ValueBoxTransform.getLocalOffset`), if it has one there.
+pub(crate) fn value_box_slot(
+    table: &StateTable,
+    block_at: impl Fn([i32; 3]) -> u32,
+    pos: [i32; 3],
+    side: Dir,
+) -> Option<[f64; 3]> {
+    let (block, info) = table.get(block_at(pos))?;
     let slot = match (block, info.axis, info.tunnel) {
         (B::CreativeMotor, ..) => info.facing.and_then(|f| board::motor_slot(f, side)),
         // `BrassDiodeScrollSlot`: not a sided box, any face reaches it.
@@ -87,7 +96,7 @@ pub(crate) fn value_box_hit(
         }
         _ => None,
     };
-    slot.is_some_and(|s| board::hits_box(s, local))
+    slot
 }
 
 /// `ValueSettingsInputHandler.onBlockActivated` on the server: a click on an active value box is
