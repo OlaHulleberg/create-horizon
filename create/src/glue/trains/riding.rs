@@ -32,6 +32,17 @@ pub fn forget() {
     SEATED.with_borrow_mut(Vec::clear);
 }
 
+/// The players seated on each train of level `dim` (`countPlayerPassengers`).
+pub fn passengers(dim: usize) -> std::collections::HashMap<u32, i32> {
+    let mut out = std::collections::HashMap::new();
+    SEATED.with_borrow(|s| {
+        for s in s.iter().filter(|s| s.dim == dim) {
+            *out.entry(s.at.train).or_insert(0) += 1;
+        }
+    });
+    out
+}
+
 /// Whether the carriage block `at` is a seat (`SeatBlock`), by its state.
 pub fn is_seat(host: &dyn ServerHost, state: mod_api::BlockState) -> bool {
     super::state_parts(host, state)

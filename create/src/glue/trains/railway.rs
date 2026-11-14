@@ -17,8 +17,8 @@ use mod_api::{
     BlockClick, BlockPart, BlockSignalEvent, ClientHost, Compound, Flow, Host, InteractionResult,
     IsSignalSourceEvent, LevelHost, PlayerRef, Registrar, RegistrationContext,
     ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenRenderPostEvent, ServerHost, UseItemOnEvent,
-    UseWithoutItemEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost, UseItemOnEvent, UseWithoutItemEvent,
 };
 use std::cell::RefCell;
 
@@ -39,6 +39,7 @@ thread_local! {
 impl Subsystem for Trains {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         tracks::register(r);
+        super::schedule_screen::register(r);
         r.block_part(states::key(Block::TrackStation), assembly::Station);
         r.block_part(states::key(Block::Track), assembly::TrackClick);
         r.block_part(states::key(Block::TrackObserver), Observer);
@@ -131,6 +132,9 @@ impl Subsystem for Trains {
             super::station_screen::CHANNEL => {
                 super::station_screen::client_message(host, player, data);
             }
+            super::schedule_screen::CHANNEL => {
+                super::schedule_screen::client_message(host, player, data);
+            }
             _ => return false,
         }
         true
@@ -141,6 +145,7 @@ impl Subsystem for Trains {
             TRAIN_CHANNEL => super::client::trains_from_server(&*host, data),
             STATES_CHANNEL => super::client::states_from_server(&*host, data),
             super::station_screen::CHANNEL => super::station_screen::server_message(host, data),
+            super::schedule_screen::CHANNEL => super::schedule_screen::server_message(host, data),
             _ => return false,
         }
         true
@@ -148,15 +153,18 @@ impl Subsystem for Trains {
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         super::station_screen::tick_client(host);
+        super::schedule_screen::tick_client(host);
     }
 
     fn client_reset(&self) {
         super::client::reset();
         super::station_screen::reset();
+        super::schedule_screen::reset();
     }
 
     fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
         super::station_screen::screen_render_post(host, event);
+        super::schedule_screen::screen_render_post(host, event);
     }
 
     fn screen_mouse_pressed(
@@ -164,7 +172,18 @@ impl Subsystem for Trains {
         host: &dyn ClientHost,
         event: &mut ScreenMouseButtonPressedPreEvent<'_>,
     ) -> Flow {
-        super::station_screen::screen_mouse_pressed(host, event)
+        if super::station_screen::screen_mouse_pressed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        super::schedule_screen::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_scrolled(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseScrolledPreEvent<'_>,
+    ) -> Flow {
+        super::schedule_screen::screen_mouse_scrolled(host, event)
     }
 
     fn screen_key_pressed(
@@ -172,7 +191,10 @@ impl Subsystem for Trains {
         host: &dyn ClientHost,
         event: &mut ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
-        super::station_screen::screen_key_pressed(host, event)
+        if super::station_screen::screen_key_pressed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        super::schedule_screen::screen_key_pressed(host, event)
     }
 
     fn screen_char_typed(
@@ -180,11 +202,15 @@ impl Subsystem for Trains {
         host: &dyn ClientHost,
         event: &mut ScreenCharTypedPreEvent<'_>,
     ) -> Flow {
-        super::station_screen::screen_char_typed(host, event)
+        if super::station_screen::screen_char_typed(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        super::schedule_screen::screen_char_typed(host, event)
     }
 
     fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
         super::station_screen::screen_closing(host, event);
+        super::schedule_screen::screen_closing(host, event);
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
@@ -309,6 +335,32 @@ fn tick_trains(lv: &mut ServerLevel<'_>) {
         return;
     }
     let tick = lv.game_time().max(0) as u64;
+    // What the schedules' conditions read: the day time, the stations trains stand at with a
+    // redstone signal, each train's seated players.
+    let day_time = lv.level.day_time(&*lv.host).unwrap_or(0);
+    let standing: Vec<[i32; 3]> = with_world(|w| {
+        w.dims[dim]
+            .railway
+            .trains
+            .iter()
+            .filter(|t| t.schedule.is_some())
+            .filter_map(|t| t.train.at_station)
+            .collect()
+    })
+    .unwrap_or_default();
+    let powered: std::collections::HashSet<[i32; 3]> = standing
+        .into_iter()
+        .filter(|p| lv.has_neighbor_signal(*p))
+        .collect();
+    let seated = riding::passengers(dim);
+    with_world(|w| {
+        let r = &mut w.dims[dim].railway;
+        r.day_time = day_time;
+        r.powered = powered;
+        for t in &mut r.trains {
+            t.players = seated.get(&t.id).copied().unwrap_or(0);
+        }
+    });
     let mut events = EVENTS.take();
     let mut observed = Vec::new();
     let (due, fresh, lights) = with_world(|w| {

@@ -39,6 +39,7 @@ mod gui;
 mod railway;
 mod riding;
 mod saved;
+mod schedule_screen;
 mod station_screen;
 mod structure;
 mod tracks;

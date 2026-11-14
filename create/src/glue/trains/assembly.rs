@@ -446,6 +446,7 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
             fresh: true,
             name,
             icon: 0,
+            players: 0,
         };
         t.column = t.column_on(&r.net);
         r.trains.push(t);

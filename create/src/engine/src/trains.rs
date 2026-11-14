@@ -12,7 +12,7 @@
 use crate::bezier::Vec3;
 use crate::graph::{Graph, Point};
 use crate::network::{Key, Mark, Network, SignalType, key_position, side_of};
-use crate::schedule::{Order, Runtime, Schedule, station_matches};
+use crate::schedule::{Inputs, Order, Runtime, Schedule, station_matches};
 use crate::track::TrackShape;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
@@ -1435,6 +1435,8 @@ pub struct TrainOnTrack {
     /// traditional, 1 electric, 2 modern).
     pub name: String,
     pub icon: u8,
+    /// Players seated on it (`countPlayerPassengers`), as the glue last counted them.
+    pub players: i32,
 }
 
 impl TrainOnTrack {
@@ -1791,6 +1793,10 @@ pub struct Railway {
     /// The name of the train last taken apart at a station (`lastDisassembledTrainName`),
     /// given to the next one assembled there.
     pub prev_train_names: HashMap<[i32; 3], String>,
+    /// The level's day time and the stations with a redstone signal, as the glue read them
+    /// before the tick (the schedules' `TimeOfDayCondition`, `StationPoweredCondition`).
+    pub day_time: i64,
+    pub powered: std::collections::HashSet<[i32; 3]>,
     pub trains: Vec<TrainOnTrack>,
     pub net: Network,
     pub occupancy: Occupancy,
@@ -2473,7 +2479,20 @@ impl Railway {
                 continue;
             };
             let t = &mut self.trains[i];
-            let order = t.runtime.tick(&schedule, t.train.nav.is_some(), t.idle);
+            let inputs = Inputs {
+                idle_cargo: t.idle,
+                day_time: self.day_time,
+                players: t.players,
+                powered: t
+                    .train
+                    .at_station
+                    .is_some_and(|p| self.powered.contains(&p)),
+            };
+            let order = t.runtime.tick(&schedule, t.train.nav.is_some(), inputs);
+            if let Order::Throttle(p) = order {
+                // `ChangeThrottleInstruction`: `train.throttle`.
+                t.train.throttle = f64::from(p.clamp(5, 100)) / 100.0;
+            }
             if let Order::Navigate(filter) = order {
                 let targets = self.matching(&filter);
                 let here = self.trains[i].train.at_station;
@@ -2607,7 +2626,7 @@ mod tests {
     use super::*;
 
     use crate::network::SignalType;
-    use crate::schedule::{Condition, Entry, SECONDS};
+    use crate::schedule::{Condition, Entry, TimeUnit};
     use crate::track_curves::{Curves, Saved};
 
     #[test]
@@ -2704,6 +2723,7 @@ mod tests {
             fresh: true,
             name: String::new(),
             icon: 0,
+            players: 0,
         });
         r.trains.len() - 1
     }
@@ -2892,16 +2912,23 @@ mod tests {
         r.trains[i].train.at_station = Some([-30, 64, 1]);
         r.trains[i].schedule = Some(Schedule {
             entries: vec![
-                Entry {
-                    station: "South".into(),
-                    conditions: vec![vec![Condition::Delay(2 * SECONDS)]],
-                },
-                Entry {
-                    station: "W*".into(),
-                    conditions: vec![vec![Condition::Delay(2 * SECONDS)]],
-                },
+                Entry::station(
+                    "South",
+                    vec![vec![Condition::Delay {
+                        value: 2,
+                        unit: TimeUnit::Seconds,
+                    }]],
+                ),
+                Entry::station(
+                    "W*",
+                    vec![vec![Condition::Delay {
+                        value: 2,
+                        unit: TimeUnit::Seconds,
+                    }]],
+                ),
             ],
             cyclic: true,
+            saved_progress: 0,
         });
         let mut events = Vec::new();
         let mut visits = Vec::new();
@@ -3047,6 +3074,7 @@ mod tests {
             fresh: true,
             name: String::new(),
             icon: 0,
+            players: 0,
         });
         r.trains.len() - 1
     }
@@ -3542,6 +3570,7 @@ mod tests {
         r.trains[a].schedule = Some(Schedule {
             entries: Vec::new(),
             cyclic: false,
+            saved_progress: 0,
         });
         assert!(r.start_controlling(id));
         assert!(r.trains[a].runtime.paused, "the schedule pauses");
