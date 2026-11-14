@@ -1,6 +1,7 @@
 //! The game glue: Create's engine driven through the mod API. Each subsystem is one module;
 //! `lib.rs` hands every hook to all of them through `SUBSYSTEMS`.
 
+pub mod copycat;
 pub mod kinetics;
 pub mod net;
 pub mod persist;
@@ -17,7 +18,7 @@ use std::collections::HashSet;
 use subsystem::Subsystem;
 
 /// Every subsystem, in the order their level ticks run.
-pub static SUBSYSTEMS: &[&dyn Subsystem] = &[&kinetics::Kinetics];
+pub static SUBSYSTEMS: &[&dyn Subsystem] = &[&kinetics::Kinetics, &copycat::Copycats];
 
 thread_local! {
     /// The columns of each level whose saved data the subsystems have been given.
