@@ -127,6 +127,12 @@ fn compile(create: &Path, repo: &Path) {
         write(&decl_dir.join(format!("block/{name}.json")), &pretty(&decl));
         write(&states_dir.join(format!("{name}.json")), &pretty(&states));
     }
+    let wheels = blocks::wheel_partials();
+    for (name, model, _) in &wheels {
+        let (decl, states) = blocks::partial_files(model, "up");
+        write(&decl_dir.join(format!("block/{name}.json")), &pretty(&decl));
+        write(&states_dir.join(format!("{name}.json")), &pretty(&states));
+    }
     write(
         &states_dir.join("blaze_burner.json"),
         &pretty(&blocks::blaze_burner_states()),
@@ -134,6 +140,10 @@ fn compile(create: &Path, repo: &Path) {
     let models_dir = out.join("assets/create/models/block");
     for (name, model) in blocks::fluid_models() {
         write(&models_dir.join(format!("{name}.json")), &pretty(&model));
+    }
+    for (_, model, json) in &wheels {
+        let file = model.trim_start_matches("create:block/");
+        write(&models_dir.join(format!("{file}.json")), &pretty(json));
     }
 
     // Items that are not blocks: plain ingredients now, the rest with their subsystem.

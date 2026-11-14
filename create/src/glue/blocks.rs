@@ -16,9 +16,10 @@ use create_engine::Block;
 use create_engine::door::{Door, Slide};
 use create_engine::dye::{self, DyeColor};
 use mod_api::{
-    BlockEntityPart, BlockPart, BlockState, Hand, Host, HostTransaction, InteractionResult,
-    ItemStack, MenuClosedEvent, MenuReplace, PlayerRef, Registrar, RegistrationContext, Screen,
-    ScreenEvent, ServerHost, SoundSource, Text, UseItemOnEvent, UseWithoutItemEvent,
+    BlockEntityPart, BlockPart, BlockState, Compound, Hand, Host, HostTransaction,
+    InteractionResult, ItemStack, MenuClosedEvent, MenuReplace, PlayerRef, Registrar,
+    RegistrationContext, Screen, ScreenEvent, ServerHost, SoundSource, Text, UseItemOnEvent,
+    UseWithoutItemEvent,
 };
 
 use super::processing::TOOLBOX_TYPE;
@@ -173,7 +174,7 @@ impl BlockPart for TemplateBlock {
 /// `ValveHandleBlock.onBlockActivated` → `clicked`: not for a player who may not build, nor a
 /// sneaking wrench; a dye of another colour recolours it (`DYED_VALVE_HANDLES`, its properties
 /// kept), else it turns (`activate`). The click is taken either way.
-fn use_valve_handle(
+pub(crate) fn use_valve_handle(
     lv: &mut ServerLevel<'_>,
     player: PlayerRef,
     pos: [i32; 3],
@@ -193,12 +194,36 @@ fn use_valve_handle(
         .and_then(|c| dye::recoloured(block, c))
     {
         if let Some(next) = recoloured_state(&*lv.host, state, to) {
+            // `ValveHandleBlock.onRemove`: another valve handle keeps the block entity, and so
+            // its angle.
+            let kept = lv
+                .host
+                .block_entity(lv.level, pos)
+                .and_then(|e| e.data(&*lv.host))
+                .and_then(|d| {
+                    let key = super::sources::handles::SCROLL_VALUE;
+                    Some(Compound::from([(key.into(), d.get(&key.into())?.clone())]))
+                });
             lv.set_state(pos, next, update_all());
+            if let (Some(kept), Some(entity)) = (kept, lv.host.block_entity(lv.level, pos)) {
+                let _ = entity.merge_data(&mut *lv.host, kept);
+            }
         }
         return Some(InteractionResult::Success);
     }
     let dim = lv.dim;
-    with_world(|w| w.use_valve(dim, pos, back));
+    let entity = lv.host.block_entity(lv.level, pos);
+    let value = entity
+        .and_then(|e| e.data(&*lv.host))
+        .map_or(create_engine::valve::DEFAULT_ANGLE, |d| {
+            super::sources::handles::valve_angle(&d)
+        });
+    if with_world(|w| w.use_valve(dim, pos, back, value)) == Some(true)
+        && let Some(entity) = entity
+    {
+        let used = super::sources::handles::valve_use(lv.game_time(), value, back);
+        let _ = entity.merge_data(&mut *lv.host, used);
+    }
     Some(InteractionResult::Success)
 }
 

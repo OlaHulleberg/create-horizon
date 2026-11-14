@@ -8,6 +8,9 @@
     "light": 5
   },
   "item": true,
+  "components": {
+    "minecraft:rarity": "common"
+  },
   "shapes": {
     "properties": [
       "facing"

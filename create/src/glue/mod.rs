@@ -23,6 +23,7 @@ pub mod redstone;
 pub mod schematics;
 pub mod sequencer;
 pub mod server;
+pub mod sources;
 pub mod states;
 pub mod stock;
 pub mod subsystem;
@@ -95,6 +96,7 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &fluids::Tanks,
     &kinetics::Solve,
     &gauges::Gauges,
+    &sources::Sources,
     &packages::Packages,
     &stock::Stock,
     &schematics::Schematics,

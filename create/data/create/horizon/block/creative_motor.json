@@ -7,6 +7,9 @@
     "sounds": "minecraft:andesite"
   },
   "item": true,
+  "components": {
+    "minecraft:rarity": "epic"
+  },
   "shapes": {
     "properties": [
       "facing"

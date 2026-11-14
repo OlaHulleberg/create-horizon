@@ -52,6 +52,16 @@ impl SpeedLevel {
         }
     }
 
+    /// `SpeedLevel.getParticleSpeed`: how fast its rotation indicators circle.
+    pub fn particle_speed(self) -> i32 {
+        match self {
+            SpeedLevel::None => 0,
+            SpeedLevel::Slow => 10,
+            SpeedLevel::Medium => 20,
+            SpeedLevel::Fast => 30,
+        }
+    }
+
     /// `SpeedLevel.getTextColor` (ChatFormatting DARK_GRAY, GREEN, AQUA, LIGHT_PURPLE).
     pub fn text_color(self) -> u32 {
         match self {
@@ -132,6 +142,16 @@ pub fn mix_colors(a: u32, b: u32, w: f32) -> u32 {
         .wrapping_add(mix(ch(a, 16), ch(b, 16)) << 16)
         .wrapping_add(mix(ch(a, 8), ch(b, 8)) << 8)
         .wrapping_add(mix(ch(a, 0), ch(b, 0)))) as u32
+}
+
+/// `IRotate.getMinimumRequiredSpeedLevel`'s speed (`SpeedLevel.getSpeedValue`) for the blocks
+/// that ask more than any (`MechanicalMixerBlock`, `FlapDisplayBlock`: `MEDIUM`).
+pub fn minimum_speed(block: crate::Block) -> Option<f32> {
+    matches!(
+        block,
+        crate::Block::MechanicalMixer | crate::Block::DisplayBoard
+    )
+    .then_some(MEDIUM_SPEED)
 }
 
 /// `SpeedGaugeBlockEntity.getDialTarget`: 0 to .45 below medium speed, to .75 below fast, to
@@ -444,8 +464,11 @@ pub fn tooltip(kind: Kind, s: &Shown) -> Vec<Line> {
             lines.push(goggles(0, vec![("Rotation Speed".into(), GRAY)]));
             // `SpeedLevel.getFormattedSpeedText(speed, isOverStressed())`.
             let level = SpeedLevel::of(s.speed);
+            // Overstressed: dark grey and struck through (`ChatFormatting.STRIKETHROUGH`, drawn
+            // from its formatting code).
             let text = format!(
-                "{}{} ({} RPM) ",
+                "{}{}{} ({} RPM) ",
+                if s.overstressed { "\u{a7}m" } else { "" },
                 progress_bar(3, level as usize),
                 level.name(),
                 number(f64::from(s.speed.abs()))

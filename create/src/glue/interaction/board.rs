@@ -165,6 +165,9 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
             .iter()
             .any(|&h| items::held(&*host, player, h).is_some());
     if !bypassed && crank::answers(&*host, player, block) {
+        if block == B::HandCrank {
+            super::super::sources::handles::cranked(click.pos);
+        }
         *event.cancellation_result = InteractionResult::Success;
         return Flow::Cancel;
     }
@@ -199,6 +202,8 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
             create_engine::tunnel::OPTIONS.len() as i32,
         ),
         B::PulseRepeater | B::PulseExtender | B::PulseTimer => board::DIODE,
+        b if create_engine::dye::is_valve_handle(b) => board::VALVE_HANDLE,
+        B::WindmillBearing => board::WINDMILL,
         _ => return None,
     };
     let setting = match (block, seen.filter(|_| known)) {
@@ -215,6 +220,21 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
         }
         // `SpeedControllerBlockEntity.DEFAULT_SPEED` until the server tells its target.
         (B::RotationSpeedController, None) => seen.unwrap_or(16),
+        (B::WindmillBearing, None) => seen.unwrap_or_else(|| {
+            host.level(host.dimension())
+                .and_then(|l| host.block_entity(l, pos))
+                .and_then(|e| e.data(host))
+                .map_or(0, |d| super::super::sources::handles::scroll_option(&d))
+        }),
+        // The angle its block entity's data brought (`angleInput`).
+        (b, None) if create_engine::dye::is_valve_handle(b) => seen.unwrap_or_else(|| {
+            host.level(host.dimension())
+                .and_then(|l| host.block_entity(l, pos))
+                .and_then(|e| e.data(host))
+                .map_or(create_engine::valve::DEFAULT_ANGLE, |d| {
+                    super::super::sources::handles::valve_angle(&d)
+                })
+        }),
         (_, None) => seen.unwrap_or_else(|| {
             create_engine::world::diode_kind(block).map_or(0, |k| k.default_delay())
         }),
@@ -373,11 +393,18 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
         .and_then(|m| host.text_string(&m.label).ok())
         .unwrap_or_else(|| "Use".to_owned());
     let tip = board::release_to_confirm(&key);
+    let names: &[&str] = if b == board::WINDMILL {
+        &board::WINDMILL_DIRECTIONS
+    } else {
+        &OPTIONS
+    };
     let text = |s: Settings| {
         if b.icons {
-            OPTIONS[s.value.clamp(0, OPTIONS.len() as i32 - 1) as usize].to_owned()
+            names[s.value.clamp(0, names.len() as i32 - 1) as usize].to_owned()
         } else if b == board::DIODE {
             board::diode_text(s)
+        } else if b == board::VALVE_HANDLE {
+            board::valve_text(s)
         } else {
             board::kinetic_text(s)
         }

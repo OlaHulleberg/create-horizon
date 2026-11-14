@@ -124,9 +124,22 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
             lines.push(at_speed(impact * speed.abs()));
         }
         if capacity != 0.0 {
+            // `GeneratingKineticBlockEntity.addToGoggleTooltip`: the capacity at the speed it
+            // generates (`stressBase *= generated / speed`), none while its network is still.
+            let generated = host
+                .level(host.dimension())
+                .and_then(|l| host.block_entity(l, pos))
+                .and_then(|e| e.data(host))
+                .and_then(|d| super::super::sources::generated_of(&d))
+                .unwrap_or(speed);
+            let total = if speed == 0.0 {
+                0.0
+            } else {
+                capacity * generated.abs()
+            };
             lines.push(vec![("    Generator Stats:".into(), 0xFFFFFF)]);
             lines.push(vec![("    Kinetic Stress Capacity:".into(), 0xAAAAAA)]);
-            lines.push(at_speed(capacity * speed.abs()));
+            lines.push(at_speed(total));
         }
         for s in super::super::SUBSYSTEMS {
             s.goggle_tooltip(host, pos, block, &mut lines);
@@ -144,6 +157,24 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
             "It appears that this contraption is _overstressed_. Add more sources or _slow_ \
              _down_ the components with a high _stress_ _impact_.",
         ));
+    } else if let Some(required) = create_engine::gauge::minimum_speed(block) {
+        // `notFastEnough`: turning (`getSpeed`), but slower than its speed level asks.
+        let turning = host.level(host.dimension()).map_or(0.0, |l| {
+            super::super::kinetics::shown_speeds(host, l, pos)[0]
+        });
+        if turning != 0.0 && turning.abs() < required {
+            if !lines.is_empty() {
+                lines.push(Vec::new());
+            }
+            lines.push(vec![("    Speed Requirement:".into(), 0xFFAA00)]);
+            let name = host
+                .translate(&format!("block.create.{}", block.name()))
+                .unwrap_or_else(|| block.name().to_owned());
+            lines.extend(cut_hint(
+                draw,
+                &format!("It appears that this _{name}_ is _not_ rotating with _enough_ _speed_."),
+            ));
+        }
     }
     if lines.is_empty() {
         HOVER.set(None);

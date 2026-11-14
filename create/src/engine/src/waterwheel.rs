@@ -152,6 +152,23 @@ pub fn generated_speed(score: i32, size: i32) -> f32 {
     (score.clamp(-1, 1) * 8) as f32 / size as f32
 }
 
+/// The woods a wheel can be made of (`create:water_wheel_planks`: `#minecraft:planks`), sorted;
+/// each has a partial of its own for each wheel model (`part_<wheel>_<wood>`).
+pub const WOODS: [&str; 12] = [
+    "acacia", "bamboo", "birch", "cherry", "crimson", "dark_oak", "jungle", "mangrove", "oak",
+    "pale_oak", "spruce", "warped",
+];
+
+/// A new wheel's material (`material = Blocks.SPRUCE_PLANKS.defaultBlockState()`).
+pub const DEFAULT_WOOD: &str = "spruce";
+
+/// The wood of planks block or item `id` (`minecraft:oak_planks`), when a wheel takes it
+/// (`applyMaterialIfValid`: `WATER_WHEEL_PLANKS`).
+pub fn wood_of_planks(id: &str) -> Option<&'static str> {
+    let wood = id.strip_prefix("minecraft:")?.strip_suffix("_planks")?;
+    WOODS.iter().copied().find(|w| *w == wood)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +196,15 @@ mod tests {
         assert_eq!(generated_speed(-3, 1), -8.0);
         assert_eq!(generated_speed(1, 2), 4.0);
         assert_eq!(small_offsets(Axis::Y).len(), 4);
+    }
+
+    #[test]
+    fn wheels_take_vanilla_planks_only() {
+        assert_eq!(wood_of_planks("minecraft:oak_planks"), Some("oak"));
+        assert_eq!(wood_of_planks("minecraft:pale_oak_planks"), Some("pale_oak"));
+        assert_eq!(wood_of_planks("minecraft:oak_log"), None);
+        assert_eq!(wood_of_planks("create:oak_planks"), None);
+        assert!(WOODS.is_sorted() && WOODS.contains(&DEFAULT_WOOD));
     }
 
     #[test]

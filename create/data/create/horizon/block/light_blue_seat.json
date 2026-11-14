@@ -5,6 +5,9 @@
     "explosion_resistance": 2.0
   },
   "item": true,
+  "components": {
+    "minecraft:rarity": "common"
+  },
   "shapes": {
     "properties": [
       "waterlogged"

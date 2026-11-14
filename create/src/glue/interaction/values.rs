@@ -66,9 +66,16 @@ pub(crate) fn value_box_hit(
     let Some((block, info)) = table.get(block_at(pos)) else {
         return false;
     };
+    if create_engine::dye::is_valve_handle(block) {
+        return info
+            .facing
+            .and_then(|f| board::valve_slot(f, side))
+            .is_some_and(|s| board::hits_valve_box(s, local));
+    }
     let slot = match (block, info.axis, info.tunnel) {
         (B::CreativeMotor, ..) => info.facing.and_then(|f| board::motor_slot(f, side)),
         (B::RotationSpeedController, Some(axis), _) => board::controller_slot(axis, side),
+        (B::WindmillBearing, ..) => info.facing.and_then(|f| board::bearing_slot(f, side)),
         // `BrassDiodeScrollSlot`: not a sided box, any face reaches it.
         (B::PulseRepeater | B::PulseExtender | B::PulseTimer, ..) => {
             Some(create_engine::diode::SLOT)
@@ -252,6 +259,59 @@ pub(super) fn value_settings_from_client(
                 }
                 w.dims[dim].diodes.get(&pos).map(|d| d.max)
             })
+        }
+        // `WindmillBearingBlockEntity.movementDirection`: clockwise (0) or not, kept as its
+        // block entity's `ScrollValue`; a running windmill turns the other way at once.
+        B::WindmillBearing => {
+            let entity = lv.host.block_entity(lv.level, pos);
+            let now = entity
+                .and_then(|e| e.data(&*lv.host))
+                .map_or(0, |d| super::super::sources::handles::scroll_option(&d));
+            let picked = pick.and_then(|s| board::option_value(s, now, 2));
+            if let (Some(v), Some(entity)) = (picked, entity) {
+                let data = mod_api::Compound::from([(
+                    super::super::sources::handles::SCROLL_VALUE.into(),
+                    mod_api::Tag::Int(v),
+                )]);
+                let _ = entity.merge_data(&mut *lv.host, data);
+                with_world(|w| w.set_windmill_direction(dim, pos, v == 0));
+            }
+            Some(picked.or(Some(now)))
+        }
+        // `ValveHandleScrollValueBehaviour`: `onShortInteract` uses the handle as a click on it
+        // would (`ValveHandleBlock.clicked`); `setValueSettings` sets its angle, never 0.
+        b if create_engine::dye::is_valve_handle(b) => {
+            if short.is_some()
+                && let Some(state) = lv.block_state(pos)
+            {
+                let item =
+                    items::held(&*lv.host, player, Hand::Main).map(|s| s.item().id(&*lv.host));
+                let back = items::sneaking(&*lv.host, player);
+                super::super::blocks::use_valve_handle(
+                    &mut lv,
+                    player,
+                    pos,
+                    b,
+                    state,
+                    item.as_deref(),
+                    back,
+                );
+            }
+            let entity = lv.host.block_entity(lv.level, pos);
+            if let (Some(pick), Some(entity)) = (pick, entity) {
+                let value = board::kinetic_value(pick, 180);
+                let data = mod_api::Compound::from([(
+                    super::super::sources::handles::SCROLL_VALUE.into(),
+                    mod_api::Tag::Int(value),
+                )]);
+                let _ = entity.merge_data(&mut *lv.host, data);
+            }
+            Some(
+                lv.host
+                    .block_entity(lv.level, pos)
+                    .and_then(|e| e.data(&*lv.host))
+                    .map(|d| super::super::sources::handles::valve_angle(&d)),
+            )
         }
         _ => return,
     };

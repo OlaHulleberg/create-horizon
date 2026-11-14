@@ -7,6 +7,9 @@
     "sounds": "minecraft:netherite_block"
   },
   "item": true,
+  "components": {
+    "minecraft:rarity": "common"
+  },
   "shapes": {
     "properties": [
       "powered"

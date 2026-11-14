@@ -530,6 +530,12 @@ impl Kinetics {
         })
     }
 
+    /// The speed a part generates (`getGeneratedSpeed`), 0 for one that does not.
+    pub fn generated(&self, pos: [i32; 3], sub: u8) -> Option<f32> {
+        let id = *self.at.get(&pos)?.get(sub as usize)?;
+        (id != NONE).then(|| self.nodes[id as usize].part.generated)
+    }
+
     pub fn speed(&self, pos: [i32; 3], sub: u8) -> Option<f32> {
         let id = *self.at.get(&pos)?.get(sub as usize)?;
         (id != NONE).then(|| self.nodes[id as usize].speed)

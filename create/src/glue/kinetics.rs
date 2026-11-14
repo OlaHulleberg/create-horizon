@@ -26,8 +26,8 @@ pub const TYPE: &str = "create:kinetic";
 const SPEEDS: &str = "Speeds";
 /// The keys of its first part's theoretical speed (`getTheoreticalSpeed`, what the goggles
 /// show) and of whether its network is overstressed (`isOverStressed`).
-const THEORY: &str = "Theory";
-const OVER: &str = "Over";
+pub const THEORY: &str = "Theory";
+pub const OVER: &str = "Over";
 /// Whether a speed controller shows its bracket (`SpeedControllerBlockEntity.hasBracket`).
 const BRACKET: &str = "Bracket";
 
@@ -219,11 +219,7 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
             .into_iter()
             .map(|o| {
                 let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-                let flow = lv
-                    .level
-                    .fluid_flow(&*lv.host, at)
-                    .map_or([0.0; 3], |v| [v.x, v.y, v.z]);
-                (o, flow)
+                (o, super::sources::waterwheels::flow_at(lv, at))
             })
             .collect();
         let score = create_engine::waterwheel::flow_score(axis, &samples);
