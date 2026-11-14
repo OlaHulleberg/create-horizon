@@ -6,12 +6,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// The fluids a tank can hold without fluids of its own yet (gap 5): vanilla's.
+/// The fluids a tank can hold: vanilla's, Create's honey and chocolate, and milk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Fluid {
     Water,
     Lava,
-    /// Create's own (`AllFluids`): kept in its machines; no fluid blocks in the world yet.
+    /// Create's own (`AllFluids`), with their blocks in the world (`create:honey`).
     Honey,
     Chocolate,
     /// NeoForge's milk (`NeoForgeMod.MILK`), which Create enables.
@@ -77,9 +77,10 @@ impl Fluid {
             Fluid::Milk => "Milk",
         }
     }
-    /// Whether it can be let out into the world as a source block (vanilla's fluids only here).
+    /// Whether it can be let out into the world as a source block: all but milk, which has no
+    /// block (`NeoForgeMod.MILK`'s fluid type is not placeable).
     pub fn placeable(self) -> bool {
-        matches!(self, Fluid::Water | Fluid::Lava)
+        self != Fluid::Milk
     }
 }
 

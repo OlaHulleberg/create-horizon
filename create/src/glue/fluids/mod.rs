@@ -426,8 +426,8 @@ fn replaceable(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         .unwrap_or(false)
 }
 
-/// The fluid in the block at `pos`: water or lava (Create's own have no blocks), and whether
-/// it is a source. None for no fluid or another.
+/// The fluid in the block at `pos`: water, lava, honey or chocolate, and whether it is a
+/// source. None for no fluid or another.
 fn world_fluid(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Fluid, bool)> {
     let f = lv.level.fluid_state(&*lv.host, pos)?;
     if f.is_empty() {
@@ -436,6 +436,8 @@ fn world_fluid(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Fluid, bool)> {
     let fluid = match f.fluid.id(&*lv.host).as_str() {
         "minecraft:water" | "minecraft:flowing_water" => Fluid::Water,
         "minecraft:lava" | "minecraft:flowing_lava" => Fluid::Lava,
+        "create:honey" | "create:flowing_honey" => Fluid::Honey,
+        "create:chocolate" | "create:flowing_chocolate" => Fluid::Chocolate,
         _ => return None,
     };
     Some((fluid, f.is_source()))
