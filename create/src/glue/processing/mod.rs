@@ -121,6 +121,7 @@ impl Subsystem for Processing {
         saw::clear();
         basin::clear();
         spoutput::clear();
+        crafter::clear();
     }
 
     fn tags_updated(&self, host: &mut dyn ServerHost) {

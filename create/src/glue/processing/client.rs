@@ -77,6 +77,11 @@ pub fn register(r: &mut dyn Registrar) {
 pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
     match block {
         Block::MechanicalPress | Block::Deployer | Block::BlazeBurner => true,
+        // A crafter's grid moves while it exports or crafts.
+        Block::MechanicalCrafter => matches!(
+            entity.nbt.get(&super::crafter::CRAFTER_KEY.into()),
+            Some(Tag::Compound(c)) if matches!(c.get(&"P".into()), Some(Tag::Int(3 | 5)))
+        ),
         Block::MechanicalSaw => matches!(
             entity.nbt.get(&super::saw::SAW_KEY.into()),
             Some(Tag::Compound(c)) if c.contains_key(&"Items".into())
@@ -635,9 +640,11 @@ fn draw_crafter(
     } else {
         posed(draw, "part_crafter_arrow");
     }
-    if phase == IDLE
-        && let Some(stack) = item.as_deref().and_then(|i| stacks::stack(host, i, 1))
-    {
+    if phase != IDLE {
+        draw_crafter_grid(host, draw, facing, pointing, phase, nbt);
+        return;
+    }
+    if let Some(stack) = item.as_deref().and_then(|i| stacks::stack(host, i, 1)) {
         let f = facing.offset().map(|v| v as f32 * 0.58 + 0.5);
         draw.push();
         draw.translate(f);
@@ -648,6 +655,137 @@ fn draw_crafter(
         draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
         draw.pop();
     }
+}
+
+/// The cells of a crafter's grid its block entity data holds under `key` of `CRAFTER_KEY`.
+fn crafter_cells(c: &Compound, key: &str) -> Vec<((i32, i32), String)> {
+    let Some(Tag::List(list)) = c.get(&key.into()) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|t| {
+            let Tag::Compound(e) = t else { return None };
+            let (Some(Tag::Int(x)), Some(Tag::Int(y)), Some(Tag::String(id))) =
+                (e.get(&"x".into()), e.get(&"y".into()), e.get(&"id".into()))
+            else {
+                return None;
+            };
+            Some(((*x, *y), id.to_string().ok()?))
+        })
+        .collect()
+}
+
+/// `MechanicalCrafterRenderer.renderSafe`/`renderItems` past `IDLE`: the grid's items on the
+/// crafter's face, sliding on to the crafter it points at while exporting, and while crafting
+/// gathering, shrinking away and the result spinning up in their place. Its `countDown` runs on
+/// from the server's word at the phase's start (`S`, `D`) at the crafter's speed.
+fn draw_crafter_grid(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    facing: Dir,
+    pointing: &str,
+    phase: i32,
+    nbt: &Compound,
+) {
+    const EXPORTING: i32 = 3;
+    const CRAFTING: i32 = 5;
+    const INSERTING: i32 = 6;
+    let Some(Tag::Compound(c)) = nbt.get(&super::crafter::CRAFTER_KEY.into()) else {
+        return;
+    };
+    let began = match c.get(&"S".into()) {
+        Some(Tag::Long(t)) => *t,
+        _ => draw.game_time(),
+    };
+    let start = match c.get(&"D".into()) {
+        Some(Tag::Int(d)) => *d,
+        _ => 0,
+    };
+    let speed = create_engine::crafter::count_down_speed(kinetics::speeds_of(nbt)[0]) as f32;
+    let count_down = (start as f32 - speed * (draw.game_time() - began).max(0) as f32).max(0.0);
+    let partial = draw.partial();
+    let pointing_v = create_engine::crafter::Pointing::read(pointing)
+        .unwrap_or(create_engine::crafter::Pointing::Up);
+    let o = facing.offset().map(|v| v as f32);
+    let mut vec = [0.5 + o[0] * 0.58, 0.5 + o[1] * 0.58, 0.5 + o[2] * 0.58];
+    if phase == EXPORTING {
+        let t = create_engine::crafter::target(facing, pointing_v).offset();
+        let progress = ((1000.0 - count_down + speed * partial) / 1000.0).clamp(0.0, 1.0);
+        for i in 0..3 {
+            vec[i] += t[i] as f32 * progress * 0.75;
+        }
+    }
+    draw.push();
+    draw.translate(vec);
+    draw.scale([0.5; 3]);
+    draw.rotate_about([0.0, 1.0, 0.0], horizontal_angle(facing), [0.0; 3]);
+    let mut items = crafter_cells(c, "G");
+    let mut distance = 0.5f32;
+    draw.push();
+    if phase == CRAFTING {
+        items = crafter_cells(c, "B");
+        let progress = ((2000.0 - count_down + speed * partial) / 1000.0).clamp(0.0, 1.0);
+        let early = (progress * 2.0).clamp(0.0, 1.0);
+        let late = (progress * 2.0 - 1.0).clamp(0.0, 1.0);
+        draw.scale([1.0 - late; 3]);
+        // `calcStats`: the grid's extent.
+        let min_x = items.iter().map(|((x, _), _)| *x).min().unwrap_or(0) as f32;
+        let max_x = items.iter().map(|((x, _), _)| *x).max().unwrap_or(0) as f32;
+        let min_y = items.iter().map(|((_, y), _)| *y).min().unwrap_or(0) as f32;
+        let max_y = items.iter().map(|((_, y), _)| *y).max().unwrap_or(0) as f32;
+        let (width, height) = (max_x - min_x + 1.0, max_y - min_y + 1.0);
+        let cx = (-min_x + (-width + 1.0) / 2.0) * early;
+        let cy = (-min_y + (-height + 1.0) / 2.0) * early;
+        draw.translate([cx * 0.5, cy * 0.5, 0.0]);
+        distance += (-4.0 * (progress - 0.5) * (progress - 0.5) + 1.0) * 0.25;
+    }
+    let only_first = phase == INSERTING || (phase == CRAFTING && count_down < 1000.0);
+    let offset = if phase == EXPORTING {
+        match pointing_v {
+            create_engine::crafter::Pointing::Up => -1,
+            create_engine::crafter::Pointing::Left => 2,
+            create_engine::crafter::Pointing::Right => -2,
+            create_engine::crafter::Pointing::Down => 1,
+        }
+    } else {
+        0
+    };
+    for ((x, y), id) in &items {
+        if only_first && (*x != 0 || *y != 0) {
+            continue;
+        }
+        let Some(stack) = stacks::stack(host, id, 1) else {
+            continue;
+        };
+        draw.push();
+        draw.translate([*x as f32 * distance, *y as f32 * distance, 0.0]);
+        draw.rotate_about([0.0, 1.0, 0.0], 180.0, [0.0; 3]);
+        draw.translate([0.0, 0.0, (x + y * 3 + offset * 9) as f32 / 1024.0]);
+        draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+        draw.pop();
+    }
+    draw.pop();
+    if phase == CRAFTING {
+        let progress = ((1000.0 - count_down + speed * partial) / 1000.0).clamp(0.0, 1.0);
+        let early = (progress * 2.0).clamp(0.0, 1.0);
+        let late = (progress * 2.0 - 1.0).clamp(0.0, 1.0);
+        draw.rotate_about([0.0, 0.0, 1.0], early * 2.0 * 360.0, [0.0; 3]);
+        draw.scale([early * 1.125; 3]);
+        draw.scale([1.0 + (1.0 - late) * 0.125; 3]);
+        for ((x, y), id) in crafter_cells(c, "G") {
+            if x != 0 || y != 0 {
+                continue;
+            }
+            let Some(stack) = stacks::stack(host, &id, 1) else {
+                continue;
+            };
+            draw.push();
+            draw.rotate_about([0.0, 1.0, 0.0], 180.0, [0.0; 3]);
+            draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+            draw.pop();
+        }
+    }
+    draw.pop();
 }
 
 /// `SawRenderer.renderItems`: what an upward saw holds (`SAW_KEY`), lying on it and moving across
