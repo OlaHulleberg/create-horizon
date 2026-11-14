@@ -349,6 +349,15 @@ fn compile(create: &Path, repo: &Path) {
         write(&decl_dir.join(format!("fluid/{name}.json")), &pretty(&doc));
     }
 
+    // AllEntityTypes.POTATO_PROJECTILE as a thrown item projectile (a copy of the snowball,
+    // drawn as the ammunition it carries) bound to the cannon, whose use the native mod answers
+    // so the copy's own throwing never runs; its hits are the native mod's (no damage of its own).
+    let doc = json!({ "template": "minecraft:snowball", "item": "create:potato_cannon", "damage": 0.0 });
+    write(
+        &decl_dir.join("entity_type/potato_projectile.json"),
+        &pretty(&doc),
+    );
+
     // AllFluids' blocks and buckets come with their fluids (`world`), not as declarations.
 
     // PackageStyles.STYLES' items (AllItems registers them in a loop, so the Java scan misses

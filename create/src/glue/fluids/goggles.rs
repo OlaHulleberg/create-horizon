@@ -62,7 +62,7 @@ fn boiler_at(host: &dyn ClientHost, c: [i32; 3]) -> Option<create_engine::steam:
     let Some(Tag::IntArray(v)) = data.get(&BOILER.into()) else {
         return None;
     };
-    let &[heat, passive, water, engines, whistles] = v.as_slice() else {
+    let &[heat, passive, water, engines, whistles, ..] = v.as_slice() else {
         return None;
     };
     Some(create_engine::steam::Boiler {

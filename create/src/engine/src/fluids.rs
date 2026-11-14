@@ -231,6 +231,66 @@ pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> C
     out
 }
 
+/// The pipes `shown` picks (glass pipes, which draw the fluid in them) on the way from the pump
+/// out of its `side` to each end `reach` finds the same way (breadth first, the first way
+/// found), by the end's position.
+pub fn shown_on_the_way(
+    pump: [i32; 3],
+    side: Dir,
+    cell: impl Fn([i32; 3]) -> Cell,
+    shown: impl Fn([i32; 3]) -> bool,
+) -> Vec<([i32; 3], Vec<[i32; 3]>)> {
+    let first = step(pump, side);
+    let first_cell = cell(first);
+    let piped = |c: Cell| matches!(c, Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..));
+    if !piped(first_cell) || !connects(first_cell, side) {
+        return Vec::new();
+    }
+    let mut parent: std::collections::HashMap<[i32; 3], [i32; 3]> =
+        std::collections::HashMap::new();
+    let mut ends: Vec<([i32; 3], [i32; 3])> = Vec::new();
+    let mut frontier = std::collections::VecDeque::from([(1, first)]);
+    let mut visited = std::collections::HashSet::from([first]);
+    while let Some((distance, at)) = frontier.pop_front() {
+        let sides = openings(cell(at));
+        for d in Dir::ALL {
+            if sides & d.bit() == 0 {
+                continue;
+            }
+            let next = step(at, d);
+            if next == pump {
+                continue;
+            }
+            let next_cell = cell(next);
+            match next_cell {
+                Cell::Tank | Cell::Open => ends.push((next, at)),
+                Cell::Port(s) if s == d.opposite() => ends.push((next, at)),
+                c if piped(c) && openings(c) & d.opposite().bit() != 0 => {
+                    if distance + 1 >= PUMP_RANGE || !visited.insert(next) {
+                        continue;
+                    }
+                    parent.insert(next, at);
+                    frontier.push_back((distance + 1, next));
+                }
+                _ => {}
+            }
+        }
+    }
+    ends.into_iter()
+        .map(|(end, last)| {
+            let mut way = Vec::new();
+            let mut at = Some(last);
+            while let Some(p) = at {
+                if shown(p) {
+                    way.push(p);
+                }
+                at = parent.get(&p).copied();
+            }
+            (end, way)
+        })
+        .collect()
+}
+
 /// `PipeConnection.manageFlows`: how far a flow gets across half a pipe in a tick at
 /// `pressure` (`1/32 + clamp(pressure / 128, 0, 1) * 31/32`).
 pub fn flow_speed(pressure: f32) -> f32 {
@@ -311,6 +371,62 @@ pub fn valve_pipe_axis(facing: Dir, along_first: bool) -> Axis {
 /// `SmartFluidPipeBlock.getPipeAxis`: up and down on a wall, else along its facing.
 pub fn smart_pipe_axis(on_wall: bool, facing: Dir) -> Axis {
     if on_wall { Axis::Y } else { facing.axis() }
+}
+
+/// `SmartFluidPipeBlockEntity.SmartPipeFilterSlot`: where its filter's value box is (in the
+/// block, `getLocalOffset`), its turn about y (`angleY`) and its tilt about x (`rotate`), in
+/// degrees, for a smart pipe on `face` facing `facing`.
+pub fn smart_pipe_filter_slot(face: crate::steam::Face, facing: Dir) -> ([f64; 3], f32, f32) {
+    use crate::steam::Face;
+    let (y, z) = match face {
+        Face::Ceiling => (0.55, 4.6),
+        Face::Wall => (11.4, 0.55),
+        Face::Floor => (15.45, 4.625),
+    };
+    // `AngleHelper.horizontalAngle` (`toYRot`, negated along x), plus 180 on a wall.
+    let mut angle: f32 = match facing {
+        Dir::West => -90.0,
+        Dir::North => 180.0,
+        Dir::East => -270.0,
+        _ => 0.0,
+    };
+    if face == Face::Wall {
+        angle += 180.0;
+    }
+    // `VecHelper.rotateCentered(voxelSpace(8, y, z), angle, Y)`.
+    let (x, z) = (8.0 / 16.0 - 0.5, z / 16.0 - 0.5);
+    let r = f64::from(angle).to_radians();
+    let (sin, cos) = r.sin_cos();
+    let offset = [x * cos + z * sin + 0.5, y / 16.0, z * cos - x * sin + 0.5];
+    let tilt = if face == Face::Ceiling { -45.0 } else { 45.0 };
+    (offset, angle, tilt)
+}
+
+/// `ValueBoxTransform.testHit` on the smart pipe's filter slot: `local` (the hit in the block)
+/// within half the box's scale (`getScale() * 1.02`) of it.
+pub fn smart_pipe_filter_hit(face: crate::steam::Face, facing: Dir, local: [f64; 3]) -> bool {
+    let (slot, _, _) = smart_pipe_filter_slot(face, facing);
+    let d2: f64 = (0..3).map(|i| (local[i] - slot[i]).powi(2)).sum();
+    d2.sqrt() < f64::from(SMART_PIPE_SLOT_SCALE) / 2.0
+}
+
+/// `SmartPipeFilterSlot.getScale`: the value box's half a block, times 1.02.
+pub const SMART_PIPE_SLOT_SCALE: f32 = 0.5 * 1.02;
+
+/// A smart pipe's filter (`FilteringBehaviour.forFluids`): the item set in its slot, and the
+/// fluid it holds (`FilterItemStack.fluid`: none for an item that holds none, which passes
+/// nothing).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SmartFilter {
+    pub item: String,
+    pub fluid: Option<Fluid>,
+}
+
+impl SmartFilter {
+    /// What it lets through.
+    pub fn gate(&self) -> Gate {
+        self.fluid.map_or(Gate::Closed, Gate::Only)
+    }
 }
 
 /// `SmartFluidPipeBlock.getStateForPlacement`: with pipes (or anything a pipe joins) along one
@@ -644,6 +760,21 @@ pub fn draws_casing(sides: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_smart_pipe_slot_sits_on_its_slanted_side() {
+        use crate::steam::Face;
+        // Facing south (the model unturned), the slot is toward the north (z 4.625 / 16).
+        let (south, _, tilt) = smart_pipe_filter_slot(Face::Floor, Dir::South);
+        assert!((south[2] - 4.625 / 16.0).abs() < 1e-6 && tilt == 45.0);
+        // Facing east (the model turned y 270), the north side is the west.
+        let (east, _, _) = smart_pipe_filter_slot(Face::Floor, Dir::East);
+        assert!(east[0] < 0.5 && (east[2] - 0.5).abs() < 1e-6);
+        let (west, _, _) = smart_pipe_filter_slot(Face::Floor, Dir::West);
+        assert!(west[0] > 0.5);
+        assert!(smart_pipe_filter_hit(Face::Floor, Dir::East, east));
+        assert!(!smart_pipe_filter_hit(Face::Floor, Dir::East, [0.5, 0.5, 0.5]));
+    }
 
     #[test]
     fn rims_follow_create() {

@@ -111,6 +111,50 @@ impl Hooks for Create {
         }
     }
 
+    fn register_entity_renderers(
+        &self,
+        _context: &RegistrationContext,
+        event: &mut mod_api::RegisterEntityRenderersEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.register_entity_renderers(event);
+        }
+    }
+
+    fn hears_projectile_impacts(
+        &self,
+        _host: &dyn mod_api::Host,
+        event: &mut mod_api::HearsProjectileImpactsEvent,
+    ) {
+        if SUBSYSTEMS.iter().any(|s| s.hears_projectile_impacts()) {
+            event.hears = true;
+        }
+    }
+
+    fn projectile_impact(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ProjectileImpactEvent<'_>,
+    ) -> Flow {
+        for s in SUBSYSTEMS {
+            if s.projectile_impact(host, event) == Flow::Cancel {
+                return Flow::Cancel;
+            }
+        }
+        Flow::Continue
+    }
+
+    fn fluid_tick(&self, level: &dyn LevelHost, event: &mut mod_api::FluidTickEvent<'_>) -> Flow {
+        for s in SUBSYSTEMS {
+            s.fluid_tick(level, event);
+        }
+        if event.cancelled {
+            Flow::Cancel
+        } else {
+            Flow::Continue
+        }
+    }
+
     fn level_tick_post(&self, host: HostSide, event: &mut LevelTickPostEvent) {
         let HostSide::Server(host) = host else {
             return;

@@ -442,6 +442,10 @@ pub struct Pump {
     pub out: Option<(crate::tank::Fluid, u32)>,
     /// Ticks it has pumped since its pipes last changed (its flows' progress).
     pub pumped: u32,
+    /// The glass pipes behind it and in front of it on the way to each end, by the end
+    /// (`fluids::shown_on_the_way`): they draw what flows through them.
+    pub shown_pull: Vec<([i32; 3], Vec<[i32; 3]>)>,
+    pub shown_push: Vec<([i32; 3], Vec<[i32; 3]>)>,
 }
 
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
@@ -3305,6 +3309,24 @@ impl CreateWorld {
     /// The tank the block at `pos` is part of: its controller and tank.
     pub fn tank(&self, dim: usize, pos: [i32; 3]) -> Option<([i32; 3], crate::tank::Multi)> {
         self.dims[dim].tanks.get(pos).map(|(c, m)| (c, *m))
+    }
+
+    /// `FluidTankBlock.onWrenched` (`toggleWindows`): the tank at `pos` shows its windows or hides
+    /// them, unless it is an active boiler. Whether it changed.
+    pub fn toggle_tank_windows(&mut self, dim: usize, pos: [i32; 3]) -> bool {
+        let d = &mut self.dims[dim];
+        let Some((c, m)) = d.tanks.get_mut(pos) else {
+            return false;
+        };
+        if d.boilers.get(&c).is_some_and(|b| b.data.is_active()) {
+            return false;
+        }
+        m.window = !m.window;
+        let (width, height) = (m.width, m.height);
+        d.tank_states.extend(crate::tank::blocks(c, width, height));
+        d.tank_changes.push(c);
+        d.unsaved.push((c[0] >> 4, c[2] >> 4));
+        true
     }
 
     /// The `top`, `bottom` and `shape` the tank block at `pos` should have.

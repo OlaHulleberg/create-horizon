@@ -7,9 +7,12 @@
 //! state, a hose pulley's hose, a pipe's rims, a drain's stack, an engine's shaft speed and a
 //! spout's cycle; a valve's pointer follows the valve's own state and speed on the client.
 //!
+//! Potions and builder's tea are fluids too (`tank::Fluid::Potion`, `Tea`): drains and tanks take
+//! potions as their potion fluid (a regular water bottle as water), spouts fill bottles with it;
+//! the engine names a potion item with its contents (`tank::potion_item`).
+//!
 //! Left out:
-//! - Potion fluids (`PotionFluid`): a spout fills glass bottles with water only, and drains and
-//!   tanks take no potions.
+//! - Creative fluid tanks wider or taller than one block (Create joins them as it does tanks).
 //! - The `FLUIDS` capability on Create's tanks, so other mods' handlers and Create's pumps reach
 //!   each other: the tanks' contents live in the engine's world, outside the game's transaction
 //!   journal, and a handler cannot learn that a transaction it wrote in was aborted to roll the
@@ -20,7 +23,9 @@ mod clicks;
 pub(crate) mod client;
 mod drawn;
 mod engine;
+mod glass;
 mod goggles;
+mod lava;
 mod machines;
 mod pipes;
 mod place;
@@ -68,6 +73,8 @@ impl Subsystem for Fluids {
         for block in clicks::CLICKED {
             r.block_part(super::states::key(block), clicks::Clicks);
         }
+        let tank = r.item_key("create:fluid_tank");
+        r.item_part(tank, place::TankItem);
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -109,6 +116,8 @@ impl Subsystem for Fluids {
     /// whistles, tank block states, spouts and drains. What clients must see again is `Tanks`',
     /// later.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        lava::tick(lv);
+        place::tick_layers(lv);
         pipes::tick_pipes(lv);
         pipes::tick_boilers(lv);
         plumbing::tick(lv);
@@ -116,12 +125,19 @@ impl Subsystem for Fluids {
         machines::tick_spouts(lv);
         machines::tick_drains(lv);
         rims::tick(lv);
+        glass::send(lv);
         drawn::send(lv);
         engine::tick(lv);
     }
 
     fn client_reset(&self) {
         client::reset();
+    }
+
+    /// Honey and chocolate meeting lava (`AllFluids.registerFluidInteractions`), looked at when
+    /// either ticks (`lava`).
+    fn fluid_tick(&self, level: &dyn mod_api::LevelHost, event: &mut mod_api::FluidTickEvent<'_>) {
+        lava::fluid_tick(level, event);
     }
 
     /// The pipes beside a Create block that changed draw their pieces again (`rims`).
@@ -131,6 +147,9 @@ impl Subsystem for Fluids {
     }
 
     fn world_closed(&self) {
+        lava::reset();
+        glass::reset();
+        place::reset();
         rims::reset();
         drawn::reset();
         engine::reset();
@@ -145,6 +164,9 @@ impl Subsystem for Fluids {
             rims::RIMS,
             drawn::DRAIN_ITEM,
             engine::ENGINE_SPEED,
+            plumbing::FILTER,
+            plumbing::WHISTLE,
+            glass::FLOW,
         ]
     }
 
@@ -172,7 +194,7 @@ impl Subsystem for Fluids {
         goggles::tooltip(host, pos, block, lines);
     }
 
-    /// The wrench on a pipe or a whistle, not sneaking (legacy `use_item_on`'s
+    /// The wrench on a tank, a pipe or a whistle, not sneaking (legacy `use_item_on`'s
     /// `wrench_pipe` / `wrench_whistle`, after a bracket came off: `decor`'s part).
     fn wrench_used(
         &self,
@@ -184,9 +206,17 @@ impl Subsystem for Fluids {
         point: [f64; 3],
         sneaking: bool,
     ) -> bool {
-        !sneaking
-            && (plumbing::wrench_pipe(lv, pos, block, clicked, point)
-                || plumbing::wrench_whistle(lv, pos, block))
+        if sneaking {
+            return false;
+        }
+        // `FluidTankBlock.onWrenched`: the tank's windows on or off (none on an active boiler).
+        if matches!(block, Block::FluidTank | Block::CreativeFluidTank) {
+            let dim = lv.dim;
+            with_world(|w| w.toggle_tank_windows(dim, pos));
+            return true;
+        }
+        plumbing::wrench_pipe(lv, pos, block, clicked, point)
+            || plumbing::wrench_whistle(lv, pos, block)
     }
 
     /// A spout two above belt segment `segment` (`SpoutBlockEntity`'s
@@ -256,6 +286,7 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
             .iter()
             .map(|(p, s)| (*p, TANK, fluid(s.fluid, create_engine::drain::CAPACITY)));
         let boilers = d.boilers.iter().map(|(p, b)| {
+            let width = d.tanks.multis.get(p).map_or(1, |m| i32::from(m.width));
             let b = &b.data;
             let v = vec![
                 b.active_heat,
@@ -263,6 +294,8 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
                 b.water_supply.to_bits() as i32,
                 b.attached_engines,
                 b.attached_whistles,
+                // The tank's width, for its sides' occlusion below.
+                width,
             ];
             (*p, BOILER, v)
         });
@@ -278,6 +311,19 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
         spouts.chain(drains).chain(boilers).chain(working).collect()
     })
     .unwrap_or_default();
+    // A boiler's sides its gauges are hidden on (`updateOcclusion`: something solid beside the
+    // middle of its bottom layer), in place of its width.
+    let now: Vec<_> = now
+        .into_iter()
+        .map(|(p, k, mut v)| {
+            if k == BOILER
+                && let Some(width) = v.pop()
+            {
+                v.push(boiler_occlusion(lv, p, width));
+            }
+            (p, k, v)
+        })
+        .collect();
     let changed: Vec<_> = SHOWN.with_borrow_mut(|shown| {
         // Gone (a boiler no more, a drain broken): shown as nothing.
         let mut changed: Vec<_> = shown
@@ -307,6 +353,34 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
         let data = Compound::from([(key.into(), Tag::IntArray(v))]);
         let _ = entity.merge_data(&mut *lv.host, data);
     }
+}
+
+/// `BoilerData.updateOcclusion` on the server: a bit per horizontal side (`get2DDataValue`:
+/// south, west, north, east) where a block with collision stands beside the middle of the
+/// boiler's bottom layer (its middle block, or two for an even width), hiding that side's gauge.
+fn boiler_occlusion(lv: &ServerLevel<'_>, c: [i32; 3], width: i32) -> i32 {
+    let middle: Vec<i32> = if width % 2 == 1 {
+        vec![width / 2]
+    } else {
+        vec![width / 2 - 1, width / 2]
+    };
+    let sides: [(i32, i32); 4] = [(0, 1), (-1, 0), (0, -1), (1, 0)];
+    let mut bits = 0;
+    for (i, (dx, dz)) in sides.into_iter().enumerate() {
+        let hidden = middle.iter().any(|m| {
+            let (x, z) = match (dx, dz) {
+                (1, _) => (width, *m),
+                (-1, _) => (-1, *m),
+                (_, 1) => (*m, width),
+                _ => (*m, -1),
+            };
+            crate::glue::logistics::has_collision(lv, [c[0] + x, c[1], c[2] + z])
+        });
+        if hidden {
+            bits |= 1 << i;
+        }
+    }
+    bits
 }
 
 /// Tanks saved with a column: `tank_multis` holds x, y, z, fluid, amount, width, height,

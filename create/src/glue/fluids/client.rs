@@ -26,6 +26,8 @@ pub(super) fn register(r: &mut dyn Registrar) {
     if let Err(e) = r.block_entity_part(&kind, FluidEntity) {
         crate::create_log!("[create] the fluids' block entity part was refused: {e:?}");
     }
+    // Equipment registers before kinetics makes the type.
+    super::super::equipment::register_cogs(r, &kind);
 }
 
 /// A valve's pointer on a client: where it is, where it was a tick ago, the speed it last
@@ -71,6 +73,7 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
         Block::ItemDrain => super::drawn::animated(entity),
         Block::SteamEngine => super::engine::animated(entity),
         Block::Spout => super::spouted::animated(entity),
+        Block::SteamWhistle => whistle_blows(entity).is_some_and(|(on, _)| on),
         _ => false,
     }
 }
@@ -153,6 +156,7 @@ impl BlockEntityPart for FluidEntity {
         };
         match block {
             Block::FluidTank | Block::CreativeFluidTank => draw_tank(host, event),
+            Block::SteamWhistle => draw_whistle(event, &info),
             Block::ItemDrain => super::drawn::draw(host, event),
             Block::SteamEngine => super::engine::draw(host, event, &info),
             Block::Spout => super::spouted::draw(host, event),
@@ -161,11 +165,17 @@ impl BlockEntityPart for FluidEntity {
                 super::rims::draw(event);
                 draw_pointer(event, &info);
             }
-            Block::FluidPipe
-            | Block::EncasedFluidPipe
-            | Block::GlassFluidPipe
-            | Block::SmartFluidPipe
-            | Block::MechanicalPump => super::rims::draw(event),
+            Block::SmartFluidPipe => {
+                super::rims::draw(event);
+                draw_pipe_filter(host, event, &info);
+            }
+            Block::GlassFluidPipe => {
+                super::rims::draw(event);
+                super::glass::draw(host, event, &info);
+            }
+            Block::FluidPipe | Block::EncasedFluidPipe | Block::MechanicalPump => {
+                super::rims::draw(event)
+            }
             _ => {}
         }
     }
@@ -178,6 +188,11 @@ fn draw_tank(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
     let Some(m) = shown_tank(event.entity) else {
         return;
     };
+    if !m.window {
+        draw_boiler(event, &m);
+        event.draw.keep();
+        return;
+    }
     let Some((min, max)) = create_engine::tank::fluid_box(&m) else {
         return;
     };
@@ -211,13 +226,38 @@ pub(crate) fn fluid_box(
         draw.fluid_box(&FluidStack::new(key, amount.max(1)), bounds, options)
             .is_ok()
     });
-    if !drawn {
+    if drawn {
+        return;
+    }
+    // Create's virtual fluids: their still texture tinted, builder's tea as it is and a potion
+    // in its colour (`PotionFluidType.getTintColor`).
+    let tinted = match fluid {
+        Fluid::Tea => Some(("create:block/fluid/tea_still", 0xFF_FFFF)),
+        Fluid::Potion(p) => Some(("create:block/fluid/potion_still", p.color())),
+        _ => None,
+    };
+    if let Some((sprite, tint)) = tinted {
+        let size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+        // Up to a block, a face shows the part of the texture its place covers; a bigger box
+        // stretches the texture over each face, as the other fluids' models do.
+        let face = if size.iter().all(|s| *s <= 1.0) {
+            mod_api::CubeFace::new(sprite)
+        } else {
+            mod_api::CubeFace::new(sprite).with_uv([0.0, 0.0, 16.0, 16.0])
+        };
+        let from = min.map(|v| v * 16.0);
+        let to = max.map(|v| v * 16.0);
+        draw.cube(from, to, [Some(face); 6], tint);
+        return;
+    }
+    {
         let name = match fluid {
             Fluid::Honey => "part_fluid_honey",
             Fluid::Chocolate => "part_fluid_chocolate",
             Fluid::Milk => "part_fluid_milk",
             Fluid::Water => "part_fluid_water",
             Fluid::Lava => "part_fluid_lava",
+            Fluid::Tea | Fluid::Potion(_) => return,
         };
         if let Some(part) = states::partial(name) {
             draw.push();
@@ -314,5 +354,156 @@ fn draw_pointer(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
     draw.pop();
     if !moving {
         draw.keep();
+    }
+}
+
+/// `FilteringRenderer` on a smart pipe: the item in its filter slot (`SmartPipeFilterSlot`'s
+/// place, turn and tilt, the value box's scale), drawn as `ValueBoxRenderer
+/// .renderItemIntoValueBox` does: a block at its full size, a flat item at half pushed back.
+fn draw_pipe_filter(
+    host: &dyn ClientHost,
+    event: &mut BlockEntitySubmitEvent<'_>,
+    info: &StateInfo,
+) {
+    let Some(Tag::String(id)) = event.entity.nbt.get(&super::plumbing::FILTER.into()) else {
+        return;
+    };
+    let id = id.to_string_lossy();
+    let (Some(face), Some(facing)) = (info.face, info.facing) else {
+        return;
+    };
+    let Some(stack) = super::super::logistics::items::stack_of(host, &id, 1) else {
+        return;
+    };
+    let solid = super::super::logistics::items::is_block_item(host, &id);
+    let (slot, angle, tilt) = create_engine::fluids::smart_pipe_filter_slot(face, facing);
+    let scale =
+        create_engine::fluids::SMART_PIPE_SLOT_SCALE * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
+    let draw = &mut *event.draw;
+    draw.push();
+    draw.translate(slot.map(|v| v as f32));
+    draw.rotate_about([0.0, 1.0, 0.0], angle, [0.0; 3]);
+    draw.rotate_about([1.0, 0.0, 0.0], tilt, [0.0; 3]);
+    draw.scale([scale; 3]);
+    if !solid {
+        draw.translate([0.0, 0.0, -0.15]);
+    }
+    draw.item(&stack, mod_api::ItemDisplayContext::Fixed, None, 0);
+    draw.pop();
+}
+
+/// Whether a whistle blows, and the game time it started or stopped (`plumbing::WHISTLE`).
+fn whistle_blows(entity: &ModBlockEntity) -> Option<(bool, i64)> {
+    let Some(Tag::IntArray(v)) = entity.nbt.get(&super::plumbing::WHISTLE.into()) else {
+        return None;
+    };
+    match v.as_slice() {
+        [on, at] => Some((*on != 0, i64::from(*at))),
+        _ => None,
+    }
+}
+
+/// `WhistleRenderer`: the mouth for the whistle's size, turned to its facing, lifted by its
+/// `animation` (chasing 1 by half the way a tick while it blows, falling 0.4 a tick after) and,
+/// once more than half open, wiggling eight ticks a cycle times 4 less its size's ordinal.
+fn draw_whistle(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
+    use create_engine::whistle::Size;
+    let size = info.size.unwrap_or_default();
+    let name = match size {
+        Size::Small => "part_whistle_mouth_small",
+        Size::Medium => "part_whistle_mouth_medium",
+        Size::Large => "part_whistle_mouth_large",
+    };
+    let Some(part) = states::partial(name) else {
+        return;
+    };
+    let Some(facing) = info.facing else {
+        return;
+    };
+    let draw = &mut *event.draw;
+    let now = draw.game_time() as f32 + draw.partial();
+    let (on, at) = whistle_blows(event.entity).unwrap_or((false, 0));
+    let t = (now - at as f32).max(0.0);
+    let mut offset = if on {
+        1.0 - 0.5f32.powf(t)
+    } else {
+        (1.0 - 0.4 * t).max(0.0)
+    };
+    if on && offset > 0.5 {
+        let ordinal = match size {
+            Size::Small => 0.0,
+            Size::Medium => 1.0,
+            Size::Large => 2.0,
+        };
+        let wiggle = now / 8.0;
+        offset -= (wiggle * std::f32::consts::TAU * (4.0 - ordinal)).sin() / 16.0;
+    }
+    draw.push();
+    draw.translate([0.0, offset * 4.0 / 16.0, 0.0]);
+    draw.block(part, &[("facing", dir_name(facing))]);
+    draw.pop();
+    if !on {
+        draw.keep();
+    }
+}
+
+/// `FluidTankRenderer.renderAsBoiler`: on each side its gauge is not hidden on, the gauge and its
+/// dial at the middle of the bottom layer, the dial turned by the boiler's level (a passive
+/// boiler an eighth, else its heat over the most its size allows). The dial is drawn at that
+/// level, without `gauge`'s chase to it.
+fn draw_boiler(event: &mut BlockEntitySubmitEvent<'_>, m: &create_engine::tank::Multi) {
+    let Some(Tag::IntArray(v)) = event.entity.nbt.get(&super::BOILER.into()) else {
+        return;
+    };
+    let &[heat, passive, water, engines, whistles, occluded] = v.as_slice() else {
+        return;
+    };
+    let boiler = create_engine::steam::Boiler {
+        active_heat: heat,
+        passive_heat: passive != 0,
+        water_supply: f32::from_bits(water as u32),
+        attached_engines: engines,
+        attached_whistles: whistles,
+        ..Default::default()
+    };
+    if !boiler.is_active() {
+        return;
+    }
+    let (Some(gauge), Some(dial)) = (
+        states::partial("part_boiler_gauge"),
+        states::partial("part_boiler_gauge_dial"),
+    ) else {
+        return;
+    };
+    let size = i32::from(m.width) * i32::from(m.width) * i32::from(m.height);
+    let for_size = create_engine::steam::max_heat_for_size(size);
+    let progress = if boiler.is_passive(size) {
+        1.0 / 8.0
+    } else if for_size == 0 {
+        0.0
+    } else {
+        boiler.level(size) as f32 / for_size as f32
+    };
+    let w = f32::from(m.width);
+    let draw = &mut *event.draw;
+    // `Iterate.horizontalDirections` by `get2DDataValue` (south, west, north, east) and their
+    // `toYRot`.
+    for (i, y_rot) in [0.0f32, 90.0, 180.0, 270.0].into_iter().enumerate() {
+        if occluded & (1 << i) != 0 {
+            continue;
+        }
+        draw.push();
+        draw.translate([w / 2.0, 0.5, w / 2.0]);
+        draw.rotate_about([0.0, 1.0, 0.0], -y_rot - 90.0, [0.0; 3]);
+        draw.translate([-0.5, -0.5, -0.5]);
+        draw.translate([w / 2.0 - 6.0 / 16.0, 0.0, 0.0]);
+        draw.block(gauge, &[("facing", "south")]);
+        draw.rotate_about(
+            [1.0, 0.0, 0.0],
+            -145.0 * progress + 90.0,
+            [0.0, 6.0 / 16.0, 8.0 / 16.0],
+        );
+        draw.block(dial, &[("facing", "south")]);
+        draw.pop();
     }
 }

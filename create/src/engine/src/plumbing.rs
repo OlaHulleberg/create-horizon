@@ -23,7 +23,9 @@ pub struct Plumbing {
     pub valve_moving: Vec<[i32; 3]>,
     /// Smart fluid pipes' filters (`FilteringBehaviour.forFluids`), saved with their column;
     /// those saved for pipes not loaded yet are kept as they are.
-    pub filters: HashMap<[i32; 3], Fluid>,
+    pub filters: HashMap<[i32; 3], crate::fluids::SmartFilter>,
+    /// Smart pipes whose filter clients must draw again.
+    pub filter_changes: Vec<[i32; 3]>,
     /// Hose pulleys, those moving or searching (the only ones that tick), the speeds they were
     /// given in a solve (their `onSpeedChanged` reads the world: the glue's), and the blocks
     /// under still hoses turning forwards that wake them when they change (`lazyTick`).
@@ -98,7 +100,10 @@ impl Plumbing {
         if self.valves.remove(&pos).is_some() {
             self.valve_moving.retain(|p| *p != pos);
         }
-        saved |= self.filters.remove(&pos).is_some();
+        if self.filters.remove(&pos).is_some() {
+            self.filter_changes.push(pos);
+            saved = true;
+        }
         if self.hoses.remove(&pos).is_some() {
             self.hose_busy.retain(|p| *p != pos);
             self.hose_waits.retain(|_, h| *h != pos);

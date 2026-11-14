@@ -63,7 +63,9 @@ impl BlockPart for Clicks {
                     .then(|| encase(&mut lv, click.pos, block))
                     .is_some()
             }
-            Block::SmartFluidPipe => use_smart_pipe(&mut lv, click.pos, player, held.as_ref()),
+            Block::SmartFluidPipe => {
+                use_smart_pipe(&mut lv, click.pos, player, held.as_ref(), click.hit.point)
+            }
             Block::SteamWhistle | Block::SteamWhistleExtension => {
                 let held = held.as_ref()?;
                 held.item().id(&*lv.host) == "create:steam_whistle"
@@ -147,7 +149,7 @@ fn use_tank(
     if !creative && !creative_tank {
         return false;
     }
-    let id = held.item().id(&*lv.host);
+    let id = super::machines::item_name(&*lv.host, held);
     // ITEM_TO_TANK.
     if let Some(e) = emptying(&id) {
         let took = if creative_tank {
@@ -244,7 +246,7 @@ fn use_drain(
     held: Option<&ItemStack>,
 ) -> bool {
     let dim = lv.dim;
-    let id = held.map(|s| s.item().id(&*lv.host));
+    let id = held.map(|s| super::machines::item_name(&*lv.host, s));
     if let Some(id) = &id
         && emptying(id).is_none()
         && is_block_item(&*lv.host, id)
@@ -319,32 +321,58 @@ fn encase(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block) {
     );
 }
 
-/// The smart pipe's filter (`FilteringBehaviour.forFluids`, as Create's filter slot sets it):
-/// a filled bucket sets it to its fluid, an empty hand clears it; the pipes look again
-/// (`onFilterChanged`). A wrench, another item or sneaking passes.
+/// Whether a click at `point` (in the world) on the smart pipe at `pos` lands on its filter's
+/// slot (`ValueSettingsInputHandler.onBlockActivated`: `testHit`).
+fn on_filter_slot(info: &create_engine::parts::StateInfo, pos: [i32; 3], point: [f64; 3]) -> bool {
+    let (Some(face), Some(facing)) = (info.face, info.facing) else {
+        return false;
+    };
+    let local = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]));
+    create_engine::fluids::smart_pipe_filter_hit(face, facing, local)
+}
+
+/// The smart pipe's filter slot (`FilteringBehaviour.onShortInteract`, `forFluids`): a click
+/// on the slot with any item but a wrench or an arm sets the filter to it (its fluid, if it
+/// holds one: none passes nothing), an empty hand clears it; the pipes look again
+/// (`onFilterChanged`). A click elsewhere on the pipe, or by a player who may not use value
+/// boxes (sneaking), passes.
 fn use_smart_pipe(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     player: PlayerRef,
     held: Option<&ItemStack>,
+    point: [f64; 3],
 ) -> bool {
     if !super::super::interaction::values::may_use_value_box(&*lv.host, player) {
         return false;
     }
-    let id = held.map(|s| s.item().id(&*lv.host));
-    let fluid = id.as_deref().and_then(Fluid::of_bucket);
-    if id.is_some() && fluid.is_none() {
+    let Some((_, info)) = info_at(lv, pos) else {
+        return false;
+    };
+    if !on_filter_slot(&info, pos, point) {
         return false;
     }
+    let id = held.map(|s| super::machines::item_name(&*lv.host, s));
+    if id
+        .as_deref()
+        .is_some_and(|i| matches!(i, "create:wrench" | "create:mechanical_arm"))
+    {
+        return false;
+    }
+    let filter = id.map(|item| {
+        let fluid = emptying(&item).map(|e| e.fluid);
+        create_engine::fluids::SmartFilter { item, fluid }
+    });
     let dim = lv.dim;
     with_world(|w| {
         let d = &mut w.dims[dim];
-        let changed = match fluid {
-            Some(f) => d.plumbing.filters.insert(pos, f) != Some(f),
+        let changed = match filter {
+            Some(f) => d.plumbing.filters.insert(pos, f.clone()) != Some(f),
             None => d.plumbing.filters.remove(&pos).is_some(),
         };
         if changed {
             d.pipes_changed = true;
+            d.plumbing.filter_changes.push(pos);
             d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         }
     });
@@ -399,7 +427,15 @@ pub(super) fn predict(host: &mut dyn ClientHost, event: &mut RightClickBlockEven
         Block::FluidTank => fluid_item && items::creative(&*host, player),
         Block::ItemDrain => fluid_item || !id.as_deref().is_some_and(|i| is_block_item(&*host, i)),
         Block::FluidPipe | Block::GlassFluidPipe => id.as_deref() == Some("create:copper_casing"),
-        Block::SmartFluidPipe => id.as_deref().is_some_and(|i| Fluid::of_bucket(i).is_some()),
+        Block::SmartFluidPipe => {
+            let info =
+                super::super::client_table(&*host, |t| t.get(state).map(|(_, i)| *i)).flatten();
+            info.is_some_and(|i| on_filter_slot(&i, click.pos, click.hit.point))
+                && !id
+                    .as_deref()
+                    .is_some_and(|i| matches!(i, "create:wrench" | "create:mechanical_arm"))
+                && super::super::interaction::values::may_use_value_box(&*host, player)
+        }
         Block::SteamWhistle | Block::SteamWhistleExtension => {
             id.as_deref() == Some("create:steam_whistle")
         }
@@ -419,7 +455,12 @@ fn holds_fluid(item: &str) -> bool {
         || item.ends_with("_bucket")
         || matches!(
             item,
-            "minecraft:glass_bottle" | "minecraft:potion" | "minecraft:honey_bottle"
+            "minecraft:glass_bottle"
+                | "minecraft:potion"
+                | "minecraft:splash_potion"
+                | "minecraft:lingering_potion"
+                | "minecraft:honey_bottle"
+                | "create:builders_tea"
         )
         || Fluid::of_bucket(item).is_some()
 }

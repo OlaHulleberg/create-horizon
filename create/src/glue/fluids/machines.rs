@@ -12,17 +12,48 @@ use create_engine::tank::Fluid;
 use create_engine::{belt, sequenced};
 use mod_api::{Compound, HostTransaction, Identifier, ItemStack, ServerHost, Tag};
 
-/// `count` of `item`; a filled water bottle (`spout::WATER_BOTTLE`) holds water
-/// (`PotionContents` of `Potions.WATER`).
+/// `count` of `item`; a potion named with its contents (`tank::potion_item`, as a filled water
+/// bottle, `spout::WATER_BOTTLE`) holds them (`PotionContents` of its potion).
 pub(super) fn stack_of(host: &dyn ServerHost, item: &str, count: u32) -> Option<ItemStack> {
-    let key = host.item_key(&Identifier::parse(item).ok()?)?;
+    let (id, potion) = match create_engine::tank::split_potion_item(item) {
+        Some((id, potion)) => (id, Some(potion)),
+        None => (item, None),
+    };
+    let key = host.item_key(&Identifier::parse(id).ok()?)?;
     let mut stack = ItemStack::new(key, count)?;
-    if item == spout::WATER_BOTTLE {
-        let contents = Compound::from([("potion".into(), Tag::String("minecraft:water".into()))]);
+    if let Some(potion) = potion {
+        let contents = Compound::from([("potion".into(), Tag::String(potion.into()))]);
         let patch = Compound::from([("minecraft:potion_contents".into(), Tag::Compound(contents))]);
         let _ = stack.set_components(patch);
     }
     Some(stack)
+}
+
+/// The item a stack is to spouts, drains and tanks: its id, and a potion's contents with it
+/// (`tank::potion_item`) when they are a registered potion without custom effects. None for a
+/// stack with other components, which they don't take apart from potions.
+pub(super) fn item_name(host: &dyn mod_api::Host, stack: &ItemStack) -> String {
+    let id = stack.item().id(host);
+    if create_engine::tank::Bottle::of_item(&id).is_none() {
+        return id;
+    }
+    let potion = stack.components().and_then(|c| {
+        match c.as_nbt().get(&"minecraft:potion_contents".into()) {
+            Some(Tag::Compound(p)) if p.get(&"custom_effects".into()).is_none() => {
+                match p.get(&"potion".into()) {
+                    Some(Tag::String(s)) => Some(s.to_string_lossy()),
+                    _ => None,
+                }
+            }
+            // `PotionContents`' codec writes a lone potion as its id.
+            Some(Tag::String(s)) => Some(s.to_string_lossy()),
+            _ => None,
+        }
+    });
+    match potion {
+        Some(p) => create_engine::tank::potion_item(&id, &p),
+        None => id,
+    }
 }
 
 /// A sequenced assembly's filling step for `item` at `progress`: the assembly, the step's
@@ -75,7 +106,7 @@ pub(super) fn tick_spouts(lv: &mut ServerLevel<'_>) {
         // The depot's held stack (slot 0).
         let held = entity
             .and_then(|e| e.item_slot(&*lv.host, 0).ok().flatten())
-            .map(|stack| (stack.item().id(&*lv.host), stack.count()));
+            .map(|stack| (item_name(&*lv.host, &stack), stack.count()));
         let sequenced = held
             .as_ref()
             .and_then(|_| processing::sequenced_on_depot(lv, depot, "create:filling", None))
@@ -117,7 +148,18 @@ pub(super) fn tick_spouts(lv: &mut ServerLevel<'_>) {
                 }
             }
             (Some(out), None, Some((item, count)), Some(entity)) => {
-                fill_held(lv.host, entity, &item, count, &out);
+                if let Some(over) = fill_held(lv.host, entity, &item, count, &out) {
+                    // `applyToAllItems`: what the outputs can't take is dropped on the depot.
+                    let c = depot.map(f64::from);
+                    let _ = lv.level.spawn_item(
+                        &mut *lv.host,
+                        c[0] + 0.5,
+                        c[1] + 1.0,
+                        c[2] + 0.5,
+                        over,
+                        10,
+                    );
+                }
                 with_world(|w| w.depot_changed(dim, depot));
             }
             _ => {}
@@ -185,27 +227,27 @@ pub(super) fn spout_on_belt(
 }
 
 /// `convertToAndLeaveHeld`: one of the `count` held `item`s becomes `out`; the rest stays held,
-/// the filled one goes to the outputs as the depot stacks them (`insertItemStacked`).
+/// the filled one goes to the outputs as the depot stacks them (`insertItemStacked`). The filled
+/// stack when the outputs are full, for the caller to drop.
 fn fill_held(
     host: &mut dyn ServerHost,
     entity: mod_api::BlockEntityRef,
     item: &str,
     count: u32,
     out: &str,
-) {
-    let Some(filled) = stack_of(&*host, out, 1) else {
-        return;
-    };
+) -> Option<ItemStack> {
+    let filled = stack_of(&*host, out, 1)?;
     let rest = if count > 1 {
         stack_of(&*host, item, count - 1)
     } else {
         None
     };
+    let mut over = None;
     let _ = host.transaction(|host, tx| {
         match rest {
             None => {
                 entity
-                    .set_item_slot(host, tx, 0, Some(filled))
+                    .set_item_slot(host, tx, 0, Some(filled.clone()))
                     .map_err(|_| ())?;
             }
             Some(rest) => {
@@ -230,13 +272,16 @@ fn fill_held(
                         .map_err(|_| ())?;
                 } else if let Some((i, _)) = slots.iter().find(|(_, s)| s.is_none()) {
                     entity
-                        .set_item_slot(host, tx, *i, Some(filled))
+                        .set_item_slot(host, tx, *i, Some(filled.clone()))
                         .map_err(|_| ())?;
+                } else {
+                    over = Some(filled.clone());
                 }
             }
         }
         Ok::<(), ()>(())
     });
+    over
 }
 
 /// Item drains holding a stack (`ItemDrainBlockEntity.tick`): it moves across, is emptied in
@@ -356,11 +401,12 @@ pub(super) fn drain_landed(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut 
     let Some(s) = stack.as_ref() else {
         return;
     };
-    if s.components().is_some() || s.damage() != 0 {
+    // A stack with components is taken only as a potion (named with them).
+    let id = item_name(&*lv.host, s);
+    if (s.components().is_some() && !id.contains('|')) || s.damage() != 0 {
         return;
     }
     let side = create_engine::kinetics::Dir::North;
-    let id = s.item().id(&*lv.host);
     let count = s.count().min(64) as u8;
     let Some(left) = insert_into_drain(lv, pos, side, &id, count) else {
         return;

@@ -41,15 +41,17 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   scaffolding declares the stable shape, so it is stood on but not climbed through from inside; a declaration
   field (or class-based lookup) for scaffolding's context rule would close it.
 - **Fluid interactions in content declarations**: honey and chocolate meeting lava (obsidian from a source,
-  limestone or scoria from flowing lava, `registerFluidInteractions`) have no declaration.
+  limestone or scoria from flowing lava, `registerFluidInteractions`) have no declaration; the glue finds them
+  when the lava or the honey next ticks (`fluid_tick`) and turns the lava in the level's next tick, where
+  Create's happen at once on the neighbour's change.
 
 ### Containers, items and transactions
 
 - **Rolling back mod-owned state with a transaction.** A handler cannot learn that its transaction aborted,
   so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, packagers and
   frogports offer no `ITEMS` handlers to hoppers, funnels and chutes, and a portable storage interface
-  offers its contraption's storage to Create's chutes and funnels only, not to hoppers. A close/abort callback on `Transaction`
-  (or a journal for mod state) would close both.
+  offers its contraption's storage to Create's chutes and funnels only, not to hoppers. A close/abort callback
+  on `Transaction` (or a journal for mod state) would close them.
 - **A notice for any container's contents changing.** `contents_changed` reaches only the changed block's own
   parts, so a chute under a vanilla container and a frogport above an inventory re-check on a timer instead.
 - **An empty stack from `menu_quick_move`**: the clicked slot keeps what is left of `stack`, and an
@@ -117,8 +119,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **The player in `left_click_block`**: an arm's chosen point and an ejector's target can't be dropped
   by left-clicking them with the item.
 - **A terrain model that reads its neighbours** (Create's `CTModel` and `CTSpriteShifter`, connected textures):
-  casings side by side (gearboxes, encased shafts and cogs, the casings themselves) keep each its own frame,
-  where Create's `EncasedCTBehaviour` and `EncasedCogCTBehaviour` join them into one. A model hook given the
+  casings side by side (gearboxes, encased shafts and cogs, the casings themselves) and fluid tanks wider than
+  one keep each its own frame, where Create's `EncasedCTBehaviour`, `EncasedCogCTBehaviour` and
+  `FluidTankCTBehaviour` join them into one. A model hook given the
   neighbouring states (or a sprite shift per face) would close it.
 - **The level's redstone in `state_for_placement`** (`LevelHost` has no `has_neighbor_signal`): a clutch,
   gearshift or adjustable chain gearshift placed beside power is placed unpowered and takes `powered` in the
@@ -139,8 +142,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - Contraptions: a deployer on a moving contraption does nothing (`DeployerMovementBehaviour`), and moving
   block entities other than mounted storage (chests, barrels, vaults, toolboxes) keep only their block (a
   depot's item, a deployer's held item, a tank's fluid are not carried).
-- Fluids: the smart pipe's filter is set by a click anywhere on the pipe, not only on its filter slot;
-  potion fluids (`PotionFluid`, potions in spouts, drains and tanks) and builder's tea.
+- Fluids: creative fluid tanks stay one block each (Create's join into tanks up to 3 wide); potion fluids
+  keep registered potions only (custom effects are lost), and belts carry only the potions a spout fills on
+  them (the logistics glue keeps no components on belts); the boiler's gauge is drawn at its level without
+  its swing, and its steam sounds are not played; glass pipes show a steady stream, not its growth, and open
+  pipe ends have no flow particles.
+- Equipment: the potato cannon's shots fly as snowballs (not by their ammunition's gravity and drag), never
+  stick, and the food, chorus fruit, golden apple and suspicious stew effects are not ported.
 
 ## Not to send
 

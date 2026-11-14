@@ -107,6 +107,10 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
     if changed || !pump.found {
         pump.pull = fluids::reach(pos, facing.opposite(), speed, |p| pipe_cell(lv, p));
         pump.push = fluids::reach(pos, facing, speed, |p| pipe_cell(lv, p));
+        let glass = |p| info_at(lv, p).is_some_and(|(b, _)| b == Block::GlassFluidPipe);
+        pump.shown_pull =
+            fluids::shown_on_the_way(pos, facing.opposite(), |p| pipe_cell(lv, p), glass);
+        pump.shown_push = fluids::shown_on_the_way(pos, facing, |p| pipe_cell(lv, p), glass);
         pump.found = true;
         // `FluidNetwork.reset`: the flows start again from the pump.
         pump.pumped = 0;
@@ -174,14 +178,33 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
                 to.passes(fluid) && pumped >= fluids::arrival_ticks(&from, to, speed)
             };
             let count = push.iter().filter(reaches).count();
+            let mut filled = Vec::new();
             let moved = fluids::share(count, n, |k, give| {
                 let Some(to) = push.iter().filter(reaches).nth(k) else {
                     return 0;
                 };
-                fill_end(lv, to, fluid, give, &mut pump)
+                let took = fill_end(lv, to, fluid, give, &mut pump);
+                if took > 0 {
+                    filled.push(to.pos);
+                }
+                took
             });
             pump.push = push;
             if moved > 0 {
+                // The glass pipes on the way show the fluid going through.
+                let ways = pump
+                    .shown_pull
+                    .iter()
+                    .filter(|(end, _)| *end == from.pos)
+                    .chain(
+                        pump.shown_push
+                            .iter()
+                            .filter(|(end, _)| filled.contains(end)),
+                    );
+                let now = lv.game_time();
+                for (_, way) in ways {
+                    super::glass::flowing(dim, way, fluid, now);
+                }
                 if special.is_some() {
                     plumbing::take(lv, from.pos, moved);
                 } else if from_basin {

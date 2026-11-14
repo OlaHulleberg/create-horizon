@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/steam_engine/gauge",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/steam_engine/gauge",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/steam_engine/gauge"
+    },
+    "facing=west": {
+      "model": "create:block/steam_engine/gauge",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/steam_engine/gauge",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/steam_engine/gauge",
+      "x": 270
+    }
+  }
+}

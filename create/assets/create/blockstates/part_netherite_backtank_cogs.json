@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/netherite_backtank/block_cogs"
+    },
+    "facing=east": {
+      "model": "create:block/netherite_backtank/block_cogs",
+      "y": 90
+    },
+    "facing=south": {
+      "model": "create:block/netherite_backtank/block_cogs",
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create:block/netherite_backtank/block_cogs",
+      "y": 270
+    },
+    "facing=up": {
+      "model": "create:block/netherite_backtank/block_cogs",
+      "x": 270
+    },
+    "facing=down": {
+      "model": "create:block/netherite_backtank/block_cogs",
+      "x": 90
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/steam_engine/gauge_dial",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/steam_engine/gauge_dial",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/steam_engine/gauge_dial"
+    },
+    "facing=west": {
+      "model": "create:block/steam_engine/gauge_dial",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/steam_engine/gauge_dial",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/steam_engine/gauge_dial",
+      "x": 270
+    }
+  }
+}

@@ -316,8 +316,11 @@ pub fn use_basin(
     if held != "minecraft:bucket" {
         return false;
     }
-    let full =
-        |t: &[Option<(Fluid, u32)>; 2]| t.iter().position(|s| s.is_some_and(|(_, n)| n >= BUCKET));
+    // A bucket takes only a fluid that has one (not tea or a potion).
+    let full = |t: &[Option<(Fluid, u32)>; 2]| {
+        t.iter()
+            .position(|s| s.is_some_and(|(f, n)| n >= BUCKET && f.bucket().is_some()))
+    };
     let take = |t: &mut [Option<(Fluid, u32)>; 2]| {
         let i = full(t)?;
         let (f, n) = t[i]?;
@@ -330,7 +333,7 @@ pub fn use_basin(
     with_world(|w| w.set_basin_fluids(dim, pos, tanks));
     if !creative {
         lv.take_held(player, 1);
-        if let Some(b) = stacks::stack(&*lv.host, fluid.bucket(), 1) {
+        if let Some(b) = fluid.bucket().and_then(|b| stacks::stack(&*lv.host, b, 1)) {
             lv.give(player, b);
         }
     }

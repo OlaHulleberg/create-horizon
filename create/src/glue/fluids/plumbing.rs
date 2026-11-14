@@ -7,7 +7,7 @@ use super::pipes::{connect_pipe, pipe_sides_at, pipe_sides_of};
 use super::{HOSE, all, flag, info_at, offset, property, state_with, world_fluid};
 use crate::glue::kinetics::dir_name;
 use create_engine::Block;
-use create_engine::fluids::{Cell, Gate};
+use create_engine::fluids::{Cell, Gate, SmartFilter};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
 use create_engine::tank::{CAPACITY, Fluid, Multi, Tank};
@@ -38,10 +38,11 @@ pub(super) fn plumbing_cell(
         // SmartPipeBehaviour: only its filter's fluid passes.
         Block::SmartFluidPipe => {
             let wall = info.face == Some(create_engine::steam::Face::Wall);
-            let filter = with_world(|w| w.dims[dim].plumbing.filters.get(&pos).copied()).flatten();
+            let gate =
+                with_world(|w| w.dims[dim].plumbing.filters.get(&pos).map(|f| f.gate())).flatten();
             Cell::Axis(
                 smart_pipe_axis(wall, info.facing?),
-                filter.map_or(Gate::Open, Gate::Only),
+                gate.unwrap_or(Gate::Open),
             )
         }
         Block::HosePulley => Cell::Port(create_engine::hose::pipe_side(info.facing?)),
@@ -338,10 +339,32 @@ fn settle_hose(dim: usize, pos: [i32; 3], hose: create_engine::hose::Hose, chang
     });
 }
 
-/// Creative tanks shown as full tanks of their fluid (`FluidTankRenderer`), and hoses, to their
-/// block entities' clients when they changed.
+/// Creative tanks shown as full tanks of their fluid (`FluidTankRenderer`), hoses and smart
+/// pipes' filters (`FILTER`: the slot's item, empty for none), to their block entities' clients
+/// when they changed.
 fn send_changes(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    let filters = with_world(|w| {
+        let p = &mut w.dims[dim].plumbing;
+        let mut v = std::mem::take(&mut p.filter_changes);
+        v.sort();
+        v.dedup();
+        v.into_iter()
+            .map(|q| (q, p.filters.get(&q).map(|f| f.item.clone())))
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    for (pos, item) in filters {
+        if !lv.is_loaded(pos) {
+            continue;
+        }
+        let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+            continue;
+        };
+        let item = item.unwrap_or_default();
+        let data = Compound::from([(FILTER.into(), Tag::String(item.as_str().into()))]);
+        let _ = entity.merge_data(&mut *lv.host, data);
+    }
     let (tanks, hoses) = with_world(|w| {
         let p = &mut w.dims[dim].plumbing;
         let take = |v: &mut Vec<[i32; 3]>| {
@@ -672,18 +695,35 @@ fn tick_whistles(lv: &mut ServerLevel<'_>) {
                 }
             });
         }
-        with_world(|w| {
+        let was = with_world(|w| {
             let p = &mut w.dims[dim].plumbing;
-            p.whistles.insert(pos, wh);
+            let was = p.whistles.insert(pos, wh).is_some_and(|o| o.sounding);
             p.whistling.retain(|q| *q != pos);
             if wh.sounding {
                 p.whistling.push(pos);
             }
-        });
+            was
+        })
+        .unwrap_or(false);
+        if was != wh.sounding
+            && let Some(entity) = lv.host.block_entity(lv.level, pos)
+        {
+            // `WhistleBlockEntity.tick`'s `powered` on its clients, and since when.
+            let v = vec![i32::from(wh.sounding), lv.game_time() as i32];
+            let data = Compound::from([(WHISTLE.into(), Tag::IntArray(v))]);
+            let _ = entity.merge_data(&mut *lv.host, data);
+        }
     }
 }
 
-/// Smart pipe filters (x, y, z, fluid), hoses (x, y, z, offset × 1000, fluid, amount) and
+/// The key of whether a whistle blows, and the game time it started or stopped, in its block
+/// entity's data for its clients (`WhistleRenderer`'s mouth).
+pub const WHISTLE: &str = "Whistle";
+
+/// The key of a smart pipe's filter item in its block entity's data, for its clients.
+pub const FILTER: &str = "PipeFilter";
+
+/// Smart pipe filters (x, y, z, fluid; 255: none, and their items under `filter_items`), hoses (x, y, z, offset × 1000, fluid, amount) and
 /// creative tanks (x, y, z, fluid; 255: none) saved with a column, under `create_fluids`.
 const KEY: &str = "create_fluids";
 
@@ -696,7 +736,7 @@ pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) 
             .filters
             .iter()
             .filter(|(q, _)| here(q))
-            .map(|(q, f)| (*q, *f))
+            .map(|(q, f)| (*q, f.clone()))
             .collect();
         filters.sort_by_key(|e| e.0);
         let mut hoses: Vec<_> = p
@@ -729,9 +769,15 @@ pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) 
     let mut own = Compound::new();
     let v: Vec<i32> = filters
         .iter()
-        .flat_map(|(p, f)| [p[0], p[1], p[2], index(Some(*f))])
+        .flat_map(|(p, f)| [p[0], p[1], p[2], index(f.fluid)])
         .collect();
     own.insert("filters".into(), Tag::IntArray(v));
+    // The items in the filters' slots, in the same order.
+    let items: Vec<Tag> = filters
+        .iter()
+        .map(|(_, f)| Tag::String(f.item.as_str().into()))
+        .collect();
+    own.insert("filter_items".into(), Tag::List(items));
     let v: Vec<i32> = hoses
         .iter()
         .flat_map(|(p, o, t)| {
@@ -765,14 +811,30 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
     };
     let fluid = |i: i32| Fluid::from_index(i.clamp(0, 255) as u8);
     let filters = ints("filters");
+    let filter_items: Vec<String> = match own.get(&"filter_items".into()) {
+        Some(Tag::List(l)) => l
+            .iter()
+            .map(|t| match t {
+                Tag::String(s) => s.to_string_lossy(),
+                _ => String::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     let hoses = ints("hoses");
     let creative = ints("creative_tanks");
     with_world(|w| {
         let p = &mut w.dims[dim].plumbing;
-        for c in filters.as_chunks::<4>().0 {
-            if let Some(f) = fluid(c[3]) {
-                p.filters.insert([c[0], c[1], c[2]], f);
-            }
+        for (i, c) in filters.as_chunks::<4>().0.iter().enumerate() {
+            let fluid = fluid(c[3]);
+            // Saved before the slot's item was: its fluid's bucket.
+            let item = filter_items
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| fluid.and_then(Fluid::bucket).unwrap_or_default().to_owned());
+            let pos = [c[0], c[1], c[2]];
+            p.filters.insert(pos, SmartFilter { item, fluid });
+            p.filter_changes.push(pos);
         }
         for c in hoses.as_chunks::<6>().0 {
             let tank = Tank {

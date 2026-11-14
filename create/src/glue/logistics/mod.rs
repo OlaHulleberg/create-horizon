@@ -51,7 +51,7 @@ mod depot;
 mod flaps;
 mod funnel;
 mod handlers;
-mod items;
+pub(crate) mod items;
 mod placement;
 mod slicer;
 mod tunnel;

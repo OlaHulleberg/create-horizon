@@ -46,7 +46,8 @@ pub fn key_of(host: &dyn Host, stack: &ItemStack) -> String {
     key
 }
 
-/// `count` of item `id` (or of a stack named by `key_of`, its components kept); None for an
+/// `count` of item `id` (or of a stack named by `key_of`, its components kept; or a potion
+/// named with its contents, `tank::potion_item`, as a spout fills one on a belt); None for an
 /// unknown item or a zero count.
 pub fn stack_of(host: &dyn Host, id: &str, count: u32) -> Option<ItemStack> {
     if let Some((_, hex)) = id.split_once('#') {
@@ -60,13 +61,29 @@ pub fn stack_of(host: &dyn Host, id: &str, count: u32) -> Option<ItemStack> {
         let stack = ItemStack::from_nbt(host, &nbt)?;
         return with_count(&stack, count);
     }
+    let (id, potion) = match create_engine::tank::split_potion_item(id) {
+        Some((id, potion)) => (id, Some(potion)),
+        None => (id, None),
+    };
     let key = host.item_key(&Identifier::parse(id).ok()?)?;
-    ItemStack::new(key, count)
+    let mut stack = ItemStack::new(key, count)?;
+    if let Some(potion) = potion {
+        let contents =
+            mod_api::Compound::from([("potion".into(), mod_api::Tag::String(potion.into()))]);
+        let patch = mod_api::Compound::from([(
+            "minecraft:potion_contents".into(),
+            mod_api::Tag::Compound(contents),
+        )]);
+        let _ = stack.set_components(patch);
+    }
+    Some(stack)
 }
 
-/// The item id of a stack's name (`key_of`).
+/// The item id of a stack's name (`key_of`), or of a potion named with its contents
+/// (`tank::potion_item`).
 fn base(id: &str) -> &str {
-    create_engine::arm::item_id(id)
+    let id = create_engine::arm::item_id(id);
+    create_engine::tank::split_potion_item(id).map_or(id, |(item, _)| item)
 }
 
 /// Whether item `id` is in item tag `tag`.

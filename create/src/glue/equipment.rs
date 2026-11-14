@@ -1,6 +1,6 @@
 //! Create's equipment (`create_engine::equipment` holds the rules): backtanks filled by their
-//! shaft, their air kept on the item, the diving helmet's breathing and the extendo grip's reach
-//! and wear. Free when unused: a player's tick reads their armour and hands and looks each item
+//! shaft, their air kept on the item (and shown as its bar), the diving helmet's breathing, the
+//! extendo grip's reach and wear, and the potato cannon (`potato`). Free when unused: a player's tick reads their armour and hands and looks each item
 //! up once (the gear each item is, cached by key), and only backtanks with something to do tick.
 //!
 //! Left out, for want of the API: the diving boots' sinking (`DivingBootsItem
@@ -30,6 +30,8 @@ use mod_api::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
+
+mod potato;
 
 /// The column's own data key: Create's equipment state beside the rest of Create's.
 const KEY: &str = "create_equipment";
@@ -71,9 +73,45 @@ impl Subsystem for Equipment {
         let _ = BACKTANK_ITEMS.set(keys);
         let grip = r.item_key("create:extendo_grip");
         r.item_part(grip, GripHit);
+        let cannon = r.item_key("create:potato_cannon");
+        r.item_part(cannon, potato::Cannon);
+    }
+
+    /// A potato shot's hit (`potato`).
+    fn projectile_impact(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ProjectileImpactEvent<'_>,
+    ) -> Flow {
+        Equipment::potato_impact(host, event)
+    }
+
+    fn hears_projectile_impacts(&self) -> bool {
+        potato::hears()
+    }
+
+    fn server_message(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != potato::SHOT {
+            return false;
+        }
+        potato::shot_seen(&*host, data);
+        true
+    }
+
+    fn register_entity_renderers(&self, event: &mut mod_api::RegisterEntityRenderersEvent<'_>) {
+        event.renderers.register(
+            potato::PROJECTILE.into(),
+            std::sync::Arc::new(potato::Shown),
+        );
     }
 
     fn world_closed(&self) {
+        potato::reset();
         GEAR.with_borrow_mut(HashMap::clear);
         REACH.with_borrow_mut(Vec::clear);
         BREAKING.with_borrow_mut(HashMap::clear);
@@ -230,11 +268,22 @@ impl Subsystem for Equipment {
     }
 }
 
-/// `BacktankBlock.setPlacedBy`: a placed backtank takes the stack's air and Capacity level.
+/// `BacktankBlock.setPlacedBy`: a placed backtank takes the stack's air and Capacity level. The
+/// item always shows its air as a bar (`BacktankItem.isBarVisible`, `getBarWidth`).
 struct PlacedBacktank;
+
+/// `BacktankItem.BAR_COLOR`.
+const BAR_COLOR: u32 = 0xEFEFEF;
 
 #[mod_api::horizon_part]
 impl ItemPart for PlacedBacktank {
+    fn item_bar(&self, _host: &dyn mod_api::ClientHost, event: &mut mod_api::ItemBarEvent<'_>) {
+        let max = eq::max_air(capacity(event.stack));
+        let air = eq::air(stack_air(event.stack), capacity(event.stack));
+        let width = (13.0 * (air as f32 / max as f32).clamp(0.0, 1.0)).round() as i32;
+        *event.bar = Some((width, BAR_COLOR));
+    }
+
     fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
         if backtank_block(event.state).is_none() {
             return;
@@ -284,6 +333,11 @@ fn gear(host: &dyn ServerHost, stack: Option<ItemStack>) -> Gear {
     let g = Gear::of(&key.id(host));
     GEAR.with_borrow_mut(|c| c.insert(key, g));
     g
+}
+
+/// The gear a stack is, on either side.
+fn gear_of(host: &dyn mod_api::Host, stack: &ItemStack) -> Gear {
+    Gear::of(&stack.item().id(host))
 }
 
 fn backtank_block(state: mod_api::BlockState) -> Option<(Block, bool)> {
@@ -555,5 +609,68 @@ fn wear_extendo(host: &mut dyn ServerHost, player: PlayerRef) {
             EquipmentSlot::OffHand
         };
         living.hurt_and_break(host, slot, 1);
+    }
+}
+
+/// The backtanks' drawing on Create's block entity type, registered once kinetics made it.
+pub(crate) fn register_cogs(r: &mut dyn Registrar, kind: &mod_api::BlockEntityTypeKey) {
+    if let Err(e) = r.block_entity_part(kind, BacktankCogs) {
+        crate::create_log!("[create] the backtanks' block entity part was refused: {e:?}");
+    }
+}
+
+/// `BacktankRenderer`: the cogs on a backtank's back, turned to its facing (as modelled, north)
+/// and spinning about their own axis (x, through 6.5 and 11 sixteenths) at a quarter of its
+/// speed in degrees a tick.
+struct BacktankCogs;
+
+#[mod_api::horizon_part]
+impl mod_api::BlockPart for BacktankCogs {}
+
+#[mod_api::horizon_part]
+impl mod_api::BlockEntityPart for BacktankCogs {
+    fn block_entity_submit(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let Some(id) = states::id(event.state) else {
+            return;
+        };
+        let Some((block, info)) =
+            super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
+        else {
+            return;
+        };
+        let name = match block {
+            Block::CopperBacktank => "part_copper_backtank_cogs",
+            Block::NetheriteBacktank => "part_netherite_backtank_cogs",
+            _ => return,
+        };
+        let (Some(part), Some(facing)) = (states::partial(name), info.facing) else {
+            return;
+        };
+        use create_engine::kinetics::Dir;
+        // Quarter turns clockwise (seen from above) from north to the facing: (x, z) about the
+        // centre becomes (-z, x) each.
+        let turns = match facing {
+            Dir::East => 1,
+            Dir::South => 2,
+            Dir::West => 3,
+            _ => 0,
+        };
+        let turn = |v: [f32; 2]| (0..turns).fold(v, |[x, z], _| [-z, x]);
+        let [ax, az] = turn([1.0, 0.0]);
+        let [px, pz] = turn([0.0, 11.0 / 16.0 - 0.5]);
+        let speed = super::kinetics::speeds_of(&event.entity.nbt)[0];
+        let draw = &mut *event.draw;
+        draw.spin(
+            [ax, 0.0, az],
+            [px + 0.5, 6.5 / 16.0, pz + 0.5],
+            speed / 4.0,
+            0.0,
+        );
+        draw.block(part, &[("facing", super::kinetics::dir_name(facing))]);
+        draw.still();
     }
 }
