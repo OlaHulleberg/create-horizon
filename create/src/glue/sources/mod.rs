@@ -7,20 +7,91 @@ pub mod handles;
 pub mod stress;
 pub mod waterwheels;
 
+use super::server::ServerLevel;
 use super::subsystem::Subsystem;
+use super::world::with_world;
 use create_engine::Block;
 use create_engine::client::Draw;
+use create_engine::dye;
 use mod_api::{
-    ClientHost, Flow, HostSide, ModBlockEntity, Registrar, RegistrationContext,
-    RightClickBlockEvent,
+    ClientHost, Compound, Flow, HostSide, ModBlockEntity, Registrar, RegistrationContext,
+    RightClickBlockEvent, Tag,
 };
+use std::cell::RefCell;
 
 /// The block entity data keys the sources' clients read.
 const SYNCED: &[&str] = &[
     waterwheels::MATERIAL,
     handles::VALVE_USE,
     handles::SCROLL_VALUE,
+    GENERATED,
 ];
+
+/// The speed a source generates (`getGeneratedSpeed`) in its block entity data, for the goggles
+/// (`GeneratingKineticBlockEntity.addToGoggleTooltip` counts its capacity at that speed).
+pub const GENERATED: &str = "Gen";
+
+thread_local! {
+    /// Sources placed or loaded since the last level tick, by level.
+    static PLACED: RefCell<Vec<(usize, [i32; 3])>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Whether `block` generates (`GeneratingKineticBlockEntity`).
+fn generates(block: Block) -> bool {
+    block.capacity() > 0.0 || block == Block::PoweredShaft || dye::is_valve_handle(block)
+}
+
+/// After the solve: each source whose settings changed, or that came into the level, tells its
+/// clients the speed it generates now.
+fn tell_generated(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let mut due =
+        with_world(|w| std::mem::take(&mut w.dims[dim].generator_changes)).unwrap_or_default();
+    PLACED.with_borrow_mut(|p| {
+        p.retain(|(d, pos)| {
+            if *d == dim {
+                due.push(*pos);
+            }
+            *d != dim
+        })
+    });
+    if due.is_empty() {
+        return;
+    }
+    due.sort();
+    due.dedup();
+    for pos in due {
+        let Some(generated) = with_world(|w| {
+            let (block, _) = w.table.get(w.state_at(dim, pos)?)?;
+            generates(block).then(|| w.dims[dim].kinetics.generated(pos, 0).unwrap_or(0.0))
+        })
+        .flatten() else {
+            continue;
+        };
+        let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+            continue;
+        };
+        let told = entity
+            .data(&*lv.host)
+            .and_then(|d| match d.get(&GENERATED.into()) {
+                Some(Tag::Float(bits)) => Some(f32::from_bits(*bits)),
+                _ => None,
+            });
+        if told != Some(generated) {
+            let data = Compound::from([(GENERATED.into(), Tag::Float(generated.to_bits()))]);
+            let _ = entity.merge_data(&mut *lv.host, data);
+        }
+    }
+}
+
+/// The speed the source whose block entity data is `data` generates, as its clients last
+/// heard.
+pub fn generated_of(data: &Compound) -> Option<f32> {
+    match data.get(&GENERATED.into()) {
+        Some(Tag::Float(bits)) => Some(f32::from_bits(*bits)),
+        _ => None,
+    }
+}
 
 pub struct Sources;
 
@@ -33,6 +104,17 @@ impl Subsystem for Sources {
 
     fn synced_keys(&self) -> &'static [&'static str] {
         SYNCED
+    }
+
+    fn block_changed(&self, dim: usize, pos: [i32; 3], _old: u32, new: u32) {
+        let source = with_world(|w| w.table.get(new).is_some_and(|(b, _)| generates(b)));
+        if source == Some(true) {
+            PLACED.with_borrow_mut(|p| p.push((dim, pos)));
+        }
+    }
+
+    fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        tell_generated(lv);
     }
 
     fn draws_itself(&self, block: Block, part: &Draw) -> bool {

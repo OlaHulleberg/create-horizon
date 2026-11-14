@@ -94,6 +94,9 @@ pub struct Dimension {
     pub doors: HashMap<[i32; 3], crate::door::Slide>,
     /// Millstones and their state (`MillstoneBlockEntity.timer`, last recipe).
     pub millstones: HashMap<[i32; 3], crate::processing::Millstone>,
+    /// Blocks whose settings changed (a generator's speed may have): the sources tell their
+    /// clients what they generate.
+    pub generator_changes: Vec<[i32; 3]>,
     /// Water wheels, to look at their flow every 60 ticks (`lazyTick`), staggered by position.
     wheels: Vec<[i32; 3]>,
     /// Water wheels to look at now: placed, or a neighbour changed.
@@ -1744,6 +1747,7 @@ impl CreateWorld {
     /// A block entity setting that changes a part (a motor's speed), then re-places the block.
     pub fn set_settings(&mut self, dim: usize, pos: [i32; 3], state: u32, settings: Settings) {
         self.dims[dim].settings.insert(pos, settings);
+        self.dims[dim].generator_changes.push(pos);
         if self.table.is_kinetic(state) {
             self.place(dim, pos, state);
         }

@@ -124,9 +124,22 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
             lines.push(at_speed(impact * speed.abs()));
         }
         if capacity != 0.0 {
+            // `GeneratingKineticBlockEntity.addToGoggleTooltip`: the capacity at the speed it
+            // generates (`stressBase *= generated / speed`), none while its network is still.
+            let generated = host
+                .level(host.dimension())
+                .and_then(|l| host.block_entity(l, pos))
+                .and_then(|e| e.data(host))
+                .and_then(|d| super::super::sources::generated_of(&d))
+                .unwrap_or(speed);
+            let total = if speed == 0.0 {
+                0.0
+            } else {
+                capacity * generated.abs()
+            };
             lines.push(vec![("    Generator Stats:".into(), 0xFFFFFF)]);
             lines.push(vec![("    Kinetic Stress Capacity:".into(), 0xAAAAAA)]);
-            lines.push(at_speed(capacity * speed.abs()));
+            lines.push(at_speed(total));
         }
         for s in super::super::SUBSYSTEMS {
             s.goggle_tooltip(host, pos, block, &mut lines);
