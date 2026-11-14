@@ -185,9 +185,8 @@ fn obstructed(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
         .into_iter()
         .filter(|e| !spectators.contains(e))
         .filter(|e| {
-            e.bounding_box(host).is_some_and(|[min, max]| {
-                (0..3).all(|i| min[i] < hi[i] && max[i] > lo[i])
-            })
+            e.bounding_box(host)
+                .is_some_and(|[min, max]| (0..3).all(|i| min[i] < hi[i] && max[i] > lo[i]))
         })
         .any(|e| {
             host.living(e).is_some()

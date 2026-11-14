@@ -22,7 +22,7 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   (deployers dig every block at its harvestable speed); the weathering-copper class and age; a block's class
   (copycats guess stairs, bars and trapdoors from tags and ids).
 - **A state's numeric id**, for `level_event(2001, ..)` (block-break particles on a wrenched copycat, a
-  belt's casing taken off).
+  belt's casing taken off, an encased shaft's or cog's casing taken off with the wrench).
 - **The neighbour-shape update of a state placed by code** (`updateShape` against its neighbours): mirrored
   placements of the wand of symmetry skip it.
 - **Waterlogging in `state_for_placement`**: the event carries no fluid at the position, so rails and display
@@ -106,6 +106,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   by left-clicking them with the item.
 - **Retexturing a block's terrain model** (Create's `BeltModel`): a belt with a brass casing shows the
   andesite casing's texture.
+- **A terrain model that reads its neighbours** (Create's `CTModel` and `CTSpriteShifter`, connected textures):
+  casings side by side (gearboxes, encased shafts and cogs, the casings themselves) keep each its own frame,
+  where Create's `EncasedCTBehaviour` and `EncasedCogCTBehaviour` join them into one. A model hook given the
+  neighbouring states (or a sprite shift per face) would close it.
+- **The level's redstone in `state_for_placement`** (`LevelHost` has no `has_neighbor_signal`): a clutch,
+  gearshift or adjustable chain gearshift placed beside power is placed unpowered and takes `powered` in the
+  same tick's level tick (`GearshiftBlock.getStateForPlacement` reads it at once).
 - **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
   light inside the chute is dark.
 - **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).

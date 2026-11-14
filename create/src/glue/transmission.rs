@@ -5,7 +5,12 @@
 //! shaft or cog next to it: the shaft line extended (`ShaftBlock.PlacementHelper`) and cogs
 //! meshing beside or diagonally (`CogwheelBlockItem`'s `SmallCogHelper`, `LargeCogHelper`,
 //! `DiagonalCogHelper`). The helpers' ghost preview is client drawing Create does every frame;
-//! it is left out.
+//! it is left out. Also the wrench on chain drives in a chain (`ChainDriveBlock`'s turn about
+//! the chain) and on sequenced gearshifts (`onWrenched`), and a horizontal gearbox picked as the
+//! vertical gearbox (`getCloneItemStack`).
+//!
+//! Left out for want of API: the break particles of a casing taken off (`levelEvent(2001)` needs
+//! a state's numeric id) and connected casing textures (`CTModel`), see `HORIZON_API.md`.
 
 use super::items::{creative, sneaking};
 use super::server::{ServerLevel, update_all};
@@ -40,8 +45,12 @@ impl mod_api::BlockPart for GearboxPick {
         host: &dyn mod_api::Host,
         event: &mut mod_api::CloneItemStackEvent<'_>,
     ) -> Option<ItemStack> {
-        let axis = with_world(|w| w.table.get(states::id(event.state)?).and_then(|(_, i)| i.axis))
-            .flatten()?;
+        let axis = with_world(|w| {
+            w.table
+                .get(states::id(event.state)?)
+                .and_then(|(_, i)| i.axis)
+        })
+        .flatten()?;
         if axis == Axis::Y {
             return None;
         }
