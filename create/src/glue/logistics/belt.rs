@@ -31,6 +31,104 @@ pub fn belt_segment(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<([i32; 3], i3
     Some((c, index, seg))
 }
 
+/// `BeltBlock.useItemOn` for a player who may build and is not sneaking: an empty main hand
+/// takes the segment's items (`use_belt`), a shaft makes a middle segment a pulley (used up
+/// outside creative), a casing cases the segment (`setCasingType`, nothing used up). True when
+/// the click was the belt's. Dyes, packages and the belt connector's and wrench's slicing are
+/// not in the port.
+pub fn use_belt_with(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    player: u128,
+    hand: mod_api::Hand,
+    held: Option<&str>,
+) -> bool {
+    let Some(p) = lv.host.player(player) else {
+        return false;
+    };
+    if crate::glue::items::sneaking(&*lv.host, p) || p.may_build(&*lv.host) != Some(true) {
+        return false;
+    }
+    match held {
+        None => hand == mod_api::Hand::Main && use_belt(lv, pos, player),
+        Some("create:shaft") => {
+            let Some((_, _, seg)) = belt_segment(lv, pos) else {
+                return false;
+            };
+            if seg.part != belt::Part::Middle {
+                return false;
+            }
+            if !crate::glue::items::creative(&*lv.host, p) {
+                crate::glue::items::shrink_held(&mut *lv.host, p, hand, 1);
+            }
+            lv.set_property(pos, "part", "pulley", update_all());
+            true
+        }
+        Some("create:andesite_casing" | "create:brass_casing") => {
+            set_casing(lv, pos, true);
+            // The casing's place sound (wood), at 0.8 of its pitch.
+            let at = pos.map(|v| f64::from(v) + 0.5);
+            lv.level.play_sound(
+                &mut *lv.host,
+                "minecraft:block.wood.place",
+                at,
+                mod_api::SoundSource::Blocks,
+                1.0,
+                0.8,
+            );
+            true
+        }
+        _ => false,
+    }
+}
+
+/// `BeltBlockEntity.setCasingType`: cases the segment at `pos` or takes its casing off. Belts
+/// draw their casing as their block model, so a brass casing shows the andesite one's texture
+/// (Create's `BeltModel` swaps it; the mod API cannot retexture a block's terrain model), and the
+/// casing's break particles are left out (the mod API has no state's numeric id).
+pub fn set_casing(lv: &mut ServerLevel<'_>, pos: [i32; 3], cased: bool) {
+    let flag = if cased { "true" } else { "false" };
+    lv.set_property(pos, "casing", flag, update_all());
+}
+
+/// `BeltBlock.onWrenched` after `BeltSlicer.useWrench` passed it on: a casing comes off when a
+/// side or the bottom is clicked; a pulley clicked on a side becomes a middle segment again, its
+/// shaft back to the player outside creative. True when the wrench did something; the slicing
+/// (shortening a belt from its end, splitting it) is not in the port, so other clicks do nothing.
+pub fn wrench_belt(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    player: mod_api::PlayerRef,
+    clicked: Dir,
+) -> bool {
+    let Some((_, _, seg)) = belt_segment(lv, pos) else {
+        return false;
+    };
+    let cased = lv
+        .block_state(pos)
+        .and_then(|s| {
+            s.property(&lv.host.block_states(), "casing")
+                .ok()
+                .flatten()
+                .map(|v| v == "true")
+        })
+        .unwrap_or(false);
+    if cased && clicked != Dir::Up {
+        set_casing(lv, pos, false);
+        return true;
+    }
+    if seg.part == belt::Part::Pulley && clicked.axis() != Axis::Y {
+        lv.set_property(pos, "part", "middle", update_all());
+        if !crate::glue::items::creative(&*lv.host, player)
+            && let Some(shaft) = items::stack_of(&*lv.host, "create:shaft", 1)
+        {
+            crate::glue::items::give_back(&mut *lv.host, player, shaft);
+        }
+        return true;
+    }
+    false
+}
+
 /// `BeltBlock.useItemOn` with an empty main hand: every item within reach of the segment's
 /// centre goes to the player. True when the click was the belt's.
 pub fn use_belt(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> bool {

@@ -54,8 +54,8 @@ use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockPart, ClientHost, Compound, ContentsChangedEvent, Flow, Hand, HostSide, ITEMS,
-    InteractionResult, ItemAfterVerticalCollisionEvent, ModContainer, PlayerRef, Registrar,
+    BlockPart, ClientHost, Compound, ContentsChangedEvent, Flow, Hand, HostBlockStates, HostSide,
+    ITEMS, InteractionResult, ItemAfterVerticalCollisionEvent, ModContainer, PlayerRef, Registrar,
     RegistrationContext, ServerHost, Tag, UseItemOnEvent, UseWithoutItemEvent,
 };
 
@@ -165,6 +165,81 @@ impl Subsystem for Logistics {
         tunnel::tick_brass(lv);
         depot::tick_depots(lv);
         belt::tick_belts(lv);
+    }
+
+    /// `onWrenched` of Create's logistics blocks (sneaking, they are picked up as any block):
+    /// a funnel toggles extracting, a belt funnel its shape, a chute its window or casing, a
+    /// tunnel its window; a belt loses its casing or pulley (`belt::wrench_belt`). Each of them
+    /// is never turned.
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        player: PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        clicked: Dir,
+        _point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        if sneaking {
+            return false;
+        }
+        let prop = |lv: &ServerLevel<'_>, key: &str| -> Option<String> {
+            let state = lv.block_state(pos)?;
+            let facts = lv.host.block_states();
+            state
+                .property(&facts, key)
+                .ok()
+                .flatten()
+                .map(str::to_owned)
+        };
+        let set = |lv: &mut ServerLevel<'_>, key: &str, value: &str| {
+            lv.set_property(pos, key, value, super::server::update_all());
+        };
+        match block {
+            Block::Belt => {
+                belt::wrench_belt(lv, pos, player, clicked);
+            }
+            // FunnelBlock.onWrenched: `cycle(EXTRACTING)`.
+            Block::AndesiteFunnel | Block::BrassFunnel => {
+                let extracting = prop(lv, "extracting").as_deref() == Some("true");
+                set(lv, "extracting", if extracting { "false" } else { "true" });
+            }
+            // BeltFunnelBlock.onWrenched: pulling and pushing swap, extended and retracted
+            // swap (a funnel over a sloped belt stays retracted).
+            Block::AndesiteBeltFunnel | Block::BrassBeltFunnel => {
+                let sloped = belt::belt_segment(lv, [pos[0], pos[1] - 1, pos[2]])
+                    .is_some_and(|(_, _, s)| s.slope != create_engine::belt::Slope::Horizontal);
+                let next = match prop(lv, "shape").as_deref() {
+                    Some("pulling") => "pushing",
+                    Some("pushing") => "pulling",
+                    Some("extended") => "retracted",
+                    Some("retracted") if !sloped => "extended",
+                    _ => return true,
+                };
+                set(lv, "shape", next);
+            }
+            // ChuteBlock.onWrenched: an encased chute loses its casing; a vertical one swaps
+            // its window; an intersection passes.
+            Block::Chute => {
+                let down = prop(lv, "facing").as_deref() == Some("down");
+                match prop(lv, "shape").as_deref() {
+                    Some("intersection") => {}
+                    Some("encased") => set(lv, "shape", "normal"),
+                    Some("normal") if down => set(lv, "shape", "window"),
+                    Some(_) if down => set(lv, "shape", "normal"),
+                    _ => {}
+                }
+            }
+            // BeltTunnelBlock.onWrenched: a straight tunnel's window opens or closes.
+            Block::AndesiteTunnel | Block::BrassTunnel => match prop(lv, "shape").as_deref() {
+                Some("window") => set(lv, "shape", "closed"),
+                Some("closed") => set(lv, "shape", "window"),
+                _ => {}
+            },
+            _ => return false,
+        }
+        true
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
@@ -316,15 +391,7 @@ fn use_block(
         }
         Block::MechanicalArm => arms::use_arm(&mut lv, pos, click.player),
         Block::SmartChute => chute::use_smart_chute(&mut lv, pos, click),
-        // `BeltBlock.useItemOn` with an empty main hand, not sneaking.
-        Block::Belt if held.is_none() && main => {
-            let sneaking = lv
-                .host
-                .player(click.player)
-                .and_then(|p| p.is_secondary_use_active(&*lv.host))
-                .unwrap_or(false);
-            !sneaking && belt::use_belt(&mut lv, pos, click.player)
-        }
+        Block::Belt => belt::use_belt_with(&mut lv, pos, click.player, click.hand, held.as_deref()),
         _ => false,
     };
     used.then_some(InteractionResult::Success)

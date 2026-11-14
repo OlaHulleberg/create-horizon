@@ -884,6 +884,10 @@ impl CreateWorld {
             // Placed or changed (extracting, powered, shape): looked at again.
             d.funnels.insert(pos, 0);
             d.funnel_timers.at(0, pos);
+            // `FunnelItem.getPlacementState`: a funnel placed over a belt is its belt funnel.
+            if matches!(block, Block::AndesiteFunnel | Block::BrassFunnel) {
+                d.funnel_shapes.push(pos);
+            }
         }
         if block == Block::MechanicalArm {
             d.arms.placed(pos, info.ceiling);
