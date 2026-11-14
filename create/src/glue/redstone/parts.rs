@@ -13,7 +13,7 @@ use crate::glue::world::{level_index, try_with_world, with_world};
 use create_engine::Block;
 use create_engine::kinetics::Dir;
 use mod_api::{
-    BlockClick, BlockPart, BlockSignalEvent, BlockState, Flow, InteractionResult,
+    BlockClick, BlockPart, BlockSignalEvent, BlockState, ContentsChangedEvent, Flow, InteractionResult,
     IsSignalSourceEvent, LevelHost, LevelWriteHost, MinecartPassEvent, Registrar, ServerHost,
     StateForPlacementEvent, TickBlockEvent, UseItemOnEvent, UseWithoutItemEvent,
 };
@@ -38,6 +38,13 @@ pub(super) fn register(r: &mut dyn Registrar) {
     for block in BLOCKS {
         r.block_part(states::key(block), RedstoneBlock);
     }
+    for name in VANILLA_CONTAINERS {
+        let key = r.block_key(name);
+        r.block_part(key, WatchedContainer);
+    }
+    for tag in ["minecraft:shulker_boxes", "minecraft:copper_chests"] {
+        r.block_part_tag(tag, WatchedContainer);
+    }
 }
 
 /// The engine's index of a level a hook names, without touching a world borrowed by a write
@@ -45,6 +52,48 @@ pub(super) fn register(r: &mut dyn Registrar) {
 pub(crate) fn dim_of(dimension: &str) -> Option<usize> {
     try_with_world(|_| ())?;
     level_index(dimension)
+}
+
+/// Vanilla's containers (with the shulker boxes and copper chests of their tags): smart observers
+/// and threshold switches looking at one look again as soon as its contents change, as Create's
+/// do each tick (`VersionedInventoryTrackerBehaviour`), not only every lazy interval.
+const VANILLA_CONTAINERS: [&str; 12] = [
+    "minecraft:chest",
+    "minecraft:trapped_chest",
+    "minecraft:barrel",
+    "minecraft:hopper",
+    "minecraft:dropper",
+    "minecraft:dispenser",
+    "minecraft:furnace",
+    "minecraft:blast_furnace",
+    "minecraft:smoker",
+    "minecraft:brewing_stand",
+    "minecraft:crafter",
+    "minecraft:chiseled_bookshelf",
+];
+
+/// The part on vanilla's containers: their changes reach the detectors watching them.
+struct WatchedContainer;
+
+#[mod_api::horizon_part]
+impl BlockPart for WatchedContainer {
+    fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut ContentsChangedEvent) {
+        // Most containers have no detector on them: nothing more than this look.
+        let watched = try_with_world(|w| w.dims.iter().any(|d| !d.detectors.watching.is_empty()));
+        if watched != Some(true) {
+            return;
+        }
+        let Some(dim) = event
+            .level
+            .dimension()
+            .id(&*host)
+            .and_then(|d| dim_of(&d))
+        else {
+            return;
+        };
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        with_world(|w| w.detectors_contents_changed(dim, pos));
+    }
 }
 
 struct RedstoneBlock;
