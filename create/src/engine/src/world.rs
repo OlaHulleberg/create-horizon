@@ -912,8 +912,19 @@ impl CreateWorld {
         if block == Block::Spout {
             d.spouts.entry(pos).or_default();
         }
-        if block == Block::MechanicalDrill {
+        // Block breakers: the drill, and the saw facing sideways (`SawBlockEntity` cuts only then).
+        if block == Block::MechanicalDrill
+            || (block == Block::MechanicalSaw
+                && info
+                    .facing
+                    .is_some_and(|f| f.axis() != crate::kinetics::Axis::Y))
+        {
             d.drills.entry(pos).or_default();
+            // A breaker loaded already turning gets no speed change: it looks at its speed
+            // itself until one comes (a stopped one does nothing).
+            if !d.drilling.contains(&pos) {
+                d.drilling.push(pos);
+            }
         }
         if block == Block::MechanicalPump {
             d.pumps.entry(pos).or_default();

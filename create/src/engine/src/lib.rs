@@ -90,6 +90,7 @@ pub mod symmetry;
 pub mod tank;
 pub mod toolbox;
 pub mod track;
+pub mod tree;
 pub mod track_curves;
 pub mod track_render;
 pub mod train_controls;

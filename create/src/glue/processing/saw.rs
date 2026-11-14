@@ -7,10 +7,10 @@ use super::{recipes, stacks};
 use crate::glue::logistics::{insert_into_from, random_angle, upright};
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
-use create_engine::kinetics::Dir;
+use create_engine::kinetics::{Axis, Dir};
 use create_engine::processing::{Recipe, Rng};
 use create_engine::saw::{self, Step};
-use create_engine::{belt, drill, sequenced};
+use create_engine::{Block, belt, drill, sequenced, tree};
 use mod_api::{HostBlockStates, ItemStack};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -25,9 +25,11 @@ pub fn clear() {
     SAW_INDEX.with_borrow_mut(HashMap::clear);
 }
 
-/// Turning drills (`BlockBreakingKineticBlockEntity.tick`): the block in front breaks in steps
-/// (`isBreakable`: not air, a fluid, unbreakable or `create:non_breakable`), dropping what it
-/// drops; a drill that broke one looks again at its next lazy tick (every 10 ticks).
+/// Turning drills and sideways saws (`BlockBreakingKineticBlockEntity.tick`): the block in front
+/// breaks in steps (`isBreakable`: not air, a fluid, unbreakable or `create:non_breakable`; for a
+/// saw also `isSawable`), its cracks showing (`destroyBlockProgress`), its drops left in its
+/// middle; a saw fells what stood on it (`TreeCutter`). A breaker that broke one looks again at
+/// its next lazy tick (every 10 ticks).
 pub fn tick_drills(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let drills = with_world(|w| w.dims[dim].drilling.clone()).unwrap_or_default();
@@ -36,16 +38,24 @@ pub fn tick_drills(lv: &mut ServerLevel<'_>) {
     }
     let lazy = lv.game_time() % 10 == 0;
     for pos in drills {
-        let Some(facing) = lv.info(pos).and_then(|(_, i)| i.facing) else {
+        let Some((block, facing)) = lv.info(pos).and_then(|(b, i)| Some((b, i.facing?))) else {
             continue;
         };
+        let saw = block == Block::MechanicalSaw;
+        if saw && facing.axis() == Axis::Y {
+            continue;
+        }
         let at = super::step(pos, facing, 1);
         let fluid = lv
             .level
             .fluid_state(&*lv.host, at)
             .is_some_and(|f| f.amount > 0)
             && lv.replaceable(at);
-        let hardness = if lv.is_air(at) || fluid || lv.block_tagged(at, "create:non_breakable") {
+        let hardness = if lv.is_air(at)
+            || fluid
+            || lv.block_tagged(at, "create:non_breakable")
+            || (saw && !sawable(lv, at))
+        {
             None
         } else {
             lv.block_state(at)
@@ -63,9 +73,129 @@ pub fn tick_drills(lv: &mut ServerLevel<'_>) {
         .flatten() else {
             continue;
         };
-        if step == drill::Step::Broken {
-            // Level.destroyBlock with drops (`BlockHelper.destroyBlock`).
-            lv.destroy_block(at, true);
+        let breaker = breaker_id(pos);
+        match step {
+            drill::Step::Wait => {}
+            drill::Step::Progress(stage) => {
+                lv.level
+                    .set_break_progress(&mut *lv.host, breaker, at, stage);
+            }
+            drill::Step::Reset => {
+                lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
+            }
+            drill::Step::Broken => {
+                lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
+                let broken = cell(lv, at);
+                // `onBlockBroken`: the drops left at the block's middle, standing still.
+                let centre = at.map(|v| f64::from(v) + 0.5);
+                for s in destroy_collect(lv, at) {
+                    lv.spawn_stack(centre, s, [0.0; 3]);
+                }
+                if saw {
+                    fell(lv, pos, at, broken);
+                }
+            }
+        }
+    }
+}
+
+/// A machine's stable negative breaker id for its cracks (`NEXT_BREAKER_ID` in Create).
+fn breaker_id(pos: [i32; 3]) -> i32 {
+    let h = (pos[0].wrapping_mul(73_856_093) ^ pos[1].wrapping_mul(19_349_663))
+        ^ pos[2].wrapping_mul(83_492_791);
+    -((h & 0x3fff_ffff) + 1)
+}
+
+/// Breaks the block at `at` with its drops, which come back rather than falling as items.
+fn destroy_collect(lv: &mut ServerLevel<'_>, at: [i32; 3]) -> Vec<ItemStack> {
+    lv.level
+        .destroy_block(&mut *lv.host, at, true, None, true)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// `SawBlockEntity.isSawable`: logs, leaves, roots, bamboo, cactus, sugar cane, kelp, chorus
+/// plants and `create:solid_crops` (pumpkins, melons); not saplings.
+fn sawable(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
+    if lv.block_tagged(at, "minecraft:saplings") {
+        return false;
+    }
+    let c = cell(lv, at);
+    c.log
+        || c.root
+        || c.vertical
+        || lv.block_tagged(at, "minecraft:leaves")
+        || lv.block_tagged(at, "create:solid_crops")
+        || lv.block_name(at).as_deref() == Some("minecraft:chorus_plant")
+}
+
+/// What `TreeCutter` reads of the block at `p`.
+fn cell(lv: &ServerLevel<'_>, p: [i32; 3]) -> tree::Cell {
+    let name = lv.block_name(p).unwrap_or_default();
+    let leaf = if name == "minecraft:scaffolding" {
+        None
+    } else {
+        lv.property(p, "distance").and_then(|d| d.parse().ok())
+    };
+    tree::Cell {
+        log: lv.block_tagged(p, "minecraft:logs")
+            || lv.block_tagged(p, "create:slimy_logs")
+            || name == "minecraft:mushroom_stem",
+        root: lv.block_tagged(p, "create:roots"),
+        leaf,
+        vertical: matches!(
+            name.as_str(),
+            "minecraft:bamboo"
+                | "minecraft:cactus"
+                | "minecraft:sugar_cane"
+                | "minecraft:kelp_plant"
+                | "minecraft:kelp"
+        ),
+        chorus: matches!(
+            name.as_str(),
+            "minecraft:chorus_plant" | "minecraft:chorus_flower"
+        ),
+        attachment: lv.block_tagged(p, "create:tree_attachments"),
+        non_decaying: match name.as_str() {
+            "minecraft:red_mushroom_block" => 2,
+            "minecraft:brown_mushroom_block"
+            | "minecraft:weeping_vines"
+            | "minecraft:weeping_vines_plant" => 3,
+            _ if lv.block_tagged(p, "minecraft:wart_blocks") => 3,
+            _ => -1,
+        },
+    }
+}
+
+/// `TreeCutter.findTree(..).destroyBlocks(.., dropItemFromCutTree)`: what stood on the block the
+/// saw at `saw` cut at `at` falls, each block's drops flying on from its middle the way the saw
+/// faces, the faster the farther it was.
+fn fell(lv: &mut ServerLevel<'_>, saw: [i32; 3], at: [i32; 3], broken: tree::Cell) {
+    let (min_y, height) = lv.level.height(&*lv.host).unwrap_or((-64, 384));
+    let top = min_y + height;
+    let found = tree::find(at, broken, height, |p| {
+        if p[1] < min_y || p[1] >= top || !lv.is_loaded(p) {
+            return tree::Cell {
+                non_decaying: -1,
+                ..tree::Cell::default()
+            };
+        }
+        cell(lv, p)
+    });
+    let push = [at[0] - saw[0], at[1] - saw[1], at[2] - saw[2]].map(f64::from);
+    for (p, _) in found.blocks() {
+        if lv.is_air(p) {
+            continue;
+        }
+        let distance = (0..3)
+            .map(|i| f64::from(p[i] - at[i]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let centre = p.map(|v| f64::from(v) + 0.5);
+        let v = push.map(|c| c * distance / 20.0);
+        for s in destroy_collect(lv, p) {
+            lv.spawn_stack(centre, s, v);
         }
     }
 }
