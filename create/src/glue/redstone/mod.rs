@@ -18,9 +18,7 @@
 //! - A redstone link slot's item is drawn as a block item (`isGui3d`) when the item places a
 //!   block: the API does not say whether an item model is 3D (`ItemRenderer` `isGui3d`).
 //!
-//! Not ported yet (the API could do it): the threshold switch's screen (its thresholds are set
-//! with `/create_debug threshold`) and the brass diodes' progress indicator
-//! (`BrassDiodeRenderer`).
+//! The threshold switch's screen is `switch_screen`.
 
 mod analog;
 mod client;
@@ -28,11 +26,13 @@ mod detectors;
 mod parts;
 pub(crate) mod pose;
 mod saved;
+mod switch_screen;
 mod ticks;
 
 pub use analog::{Comparators, analog_touched};
 pub(crate) use detectors::{item_id, slot_stack};
 pub(crate) use parts::with_properties;
+pub(crate) use ticks::show_diode;
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
@@ -42,7 +42,9 @@ use create_engine::kinetics::Dir;
 use create_engine::parts::StateInfo;
 use mod_api::{
     BlockState, ClientHost, Compound, Direction, Flow, HostBlockStates, PlayerRef,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent, ServerHost,
+    RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent, ScreenClosingEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost,
 };
 
 pub struct Redstone;
@@ -59,7 +61,13 @@ impl Subsystem for Detectors {
 }
 
 impl Subsystem for Redstone {
-    /// A cuckoo clock's hands and doors are drawn each frame (`client`).
+    /// A brass diode's count, for its indicator (`ticks::DIODE_SHOWN`).
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[ticks::DIODE_SHOWN]
+    }
+
+    /// A cuckoo clock's hands and doors, and a brass diode's indicator, are drawn each frame
+    /// (`client`).
     fn animated(
         &self,
         block: create_engine::Block,
@@ -68,7 +76,11 @@ impl Subsystem for Redstone {
     ) -> bool {
         matches!(
             block,
-            create_engine::Block::CuckooClock | create_engine::Block::MysteriousCuckooClock
+            create_engine::Block::CuckooClock
+                | create_engine::Block::MysteriousCuckooClock
+                | create_engine::Block::PulseRepeater
+                | create_engine::Block::PulseExtender
+                | create_engine::Block::PulseTimer
         )
     }
 
@@ -139,14 +151,51 @@ impl Subsystem for Redstone {
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         client::server_message(host, channel, data)
+            || switch_screen::server_message(host, channel, data)
+    }
+
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        switch_screen::client_message(host, player, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick(host);
+        switch_screen::tick(host);
     }
 
     fn client_reset(&self) {
         client::reset();
+        switch_screen::reset();
+    }
+
+    fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
+        switch_screen::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> Flow {
+        switch_screen::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_scrolled(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseScrolledPreEvent<'_>,
+    ) -> Flow {
+        switch_screen::screen_mouse_scrolled(host, event)
+    }
+
+    fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
+        switch_screen::screen_closing(host, event);
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {

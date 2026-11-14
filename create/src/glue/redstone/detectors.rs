@@ -84,9 +84,8 @@ pub(super) fn use_lever(lv: &mut ServerLevel<'_>, pos: [i32; 3], back: bool, wre
 
 /// A click on a smart observer or threshold switch: on its filter slot
 /// (`FilteredDetectorFilterSlot`, `FilteringBehaviour.onShortInteract`) the held stack becomes
-/// its filter (`filters::take_filter`), an empty hand clears it; elsewhere a switch opens its screen (none here: the
-/// thresholds are set with `/create_debug threshold`), which takes the click all the same.
-/// True when it was taken.
+/// its filter (`filters::take_filter`), an empty hand clears it; elsewhere a switch opens its
+/// screen (`switch_screen`). True when it was taken.
 pub(super) fn use_detector(
     lv: &mut ServerLevel<'_>,
     click: &BlockClick<'_>,
@@ -134,7 +133,10 @@ pub(super) fn use_detector(
         filters::return_filter(lv, player, pos, old);
         return true;
     }
-    // ThresholdSwitchBlock.useItemOn: SUCCESS (the screen, on the client).
+    // ThresholdSwitchBlock.useItemOn: SUCCESS, and the screen.
+    if switch && let Some(player) = lv.host.player(click.player) {
+        super::switch_screen::open(lv, player, pos);
+    }
     switch
 }
 
@@ -217,7 +219,11 @@ fn container_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Vec<Slot>>
 
 /// What the detector at `pos` finds at `target`, and how it is watched from now on. The
 /// target's own item id is read only for an observer with a filter.
-fn seen_at(lv: &mut ServerLevel<'_>, target: [i32; 3], block_item: bool) -> (Seen, Watch) {
+pub(super) fn seen_at(
+    lv: &mut ServerLevel<'_>,
+    target: [i32; 3],
+    block_item: bool,
+) -> (Seen, Watch) {
     let dim = lv.dim;
     let mut seen = Seen {
         block_item: if block_item {
@@ -556,15 +562,31 @@ fn set_threshold(lv: &mut ServerLevel<'_>, pos: [i32; 3], values: &str) -> Strin
     let (Some(off), Some(on)) = (num(0), num(1)) else {
         return THRESHOLD_USAGE.into();
     };
+    if configure(lv, pos, off, on, flag(2), flag(3)) {
+        format!("threshold switch: off below {off}, on above {on}")
+    } else {
+        "no threshold switch there".into()
+    }
+}
+
+/// `ConfigureThresholdSwitchPacket.applySettings` on the switch at `pos`: its thresholds,
+/// `setInverted` (the output follows at once) and `inStacks`; it looks at its target again.
+/// False when there is no switch.
+pub(super) fn configure(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    off: i32,
+    on: i32,
+    inverted: bool,
+    stacks: bool,
+) -> bool {
     let dim = lv.dim;
     let changed = with_world(|w| {
         let d = &mut w.dims[dim];
         let s = d.detectors.switches.get_mut(&pos)?;
         s.off_below = off;
         s.on_above = on;
-        s.in_stacks = flag(3);
-        let inverted = flag(2);
-        // `setInverted`: the output follows at once.
+        s.in_stacks = stacks;
         let follows = inverted != s.inverted && {
             s.inverted = inverted;
             s.power_after_delay()
@@ -573,16 +595,14 @@ fn set_threshold(lv: &mut ServerLevel<'_>, pos: [i32; 3], values: &str) -> Strin
         Some(follows)
     })
     .flatten();
-    match changed {
-        Some(follows) => {
-            persist::mark_pos_unsaved(dim, pos);
-            if follows {
-                lv.update_signal_neighbors(pos);
-            }
-            format!("threshold switch: off below {off}, on above {on}")
-        }
-        None => "no threshold switch there".into(),
+    let Some(follows) = changed else {
+        return false;
+    };
+    persist::mark_pos_unsaved(dim, pos);
+    if follows {
+        lv.update_signal_neighbors(pos);
     }
+    true
 }
 
 /// `/create_debug redstone_state`'s line.
@@ -620,5 +640,11 @@ fn redstone_state(d: &create_engine::world::Dimension, pos: [i32; 3], now: i64) 
             s.filter.as_ref().map_or("none".into(), Filter::describe)
         );
     }
-    "no analog lever, smart observer or threshold switch there".into()
+    if let Some(x) = d.diodes.get(&pos) {
+        return format!(
+            "brass diode: {:?}, state {} of {}, powered {}, powering {}, running {}",
+            x.kind, x.state, x.max, x.powered, x.powering, x.running
+        );
+    }
+    "no analog lever, smart observer, threshold switch or brass diode there".into()
 }

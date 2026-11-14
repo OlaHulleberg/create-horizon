@@ -13,8 +13,8 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::steam::Face;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost,
-    Identifier, ItemDisplayContext, ItemStack, ParticleKey, ParticleOptions, Registrar, SoundPlay,
-    Tag,
+    Compound, CubeFace, Identifier, ItemDisplayContext, ItemStack, ParticleKey, ParticleOptions,
+    Registrar, SoundPlay, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -178,6 +178,9 @@ impl BlockEntityPart for RedstoneEntity {
         match block {
             Block::RedstoneLink => draw_link(host, event.draw, pos),
             Block::AnalogLever => draw_lever(event.draw, pos),
+            Block::PulseRepeater | Block::PulseExtender | Block::PulseTimer => {
+                draw_diode_indicator(event.draw, block, &event.entity.nbt);
+            }
             Block::CuckooClock | Block::MysteriousCuckooClock => {
                 let Some(facing) = facing else {
                     return;
@@ -244,6 +247,46 @@ fn draw_link(host: &dyn ClientHost, draw: &mut dyn BlockEntityDrawContext, pos: 
         );
         draw.pop();
     }
+}
+
+/// `BrassDiodeRenderer`: the indicator (`AllPartialModels.FLEXPEATER_INDICATOR`, the model
+/// `diodes/indicator`) over the diode, from dark to bright red as its count nears its delay. The
+/// count goes on from what the server last put in the block entity (`ticks::DIODE_SHOWN`).
+fn draw_diode_indicator(draw: &mut dyn BlockEntityDrawContext, block: Block, nbt: &Compound) {
+    use create_engine::diode::{self, Kind};
+    let kind = match block {
+        Block::PulseExtender => Kind::Extender,
+        Block::PulseTimer => Kind::Timer,
+        _ => Kind::Repeater,
+    };
+    let progress = match nbt.get(&super::ticks::DIODE_SHOWN.into()) {
+        Some(Tag::LongArray(v)) if v.len() == 4 => diode::progress_after(
+            kind,
+            v[0] as i32,
+            v[1] as i32,
+            v[2] != 0,
+            draw.game_time() - v[3],
+        ),
+        _ => 0.0,
+    };
+    const SPRITE: &str = "create:block/diodes/pulse_repeater/idle";
+    let face = |uv: [f32; 4]| Some(CubeFace::new(SPRITE).with_uv(uv));
+    // (removed)
+    let lo = 0.0;
+    let hi = 0.0;
+    draw.cube(
+        [lo, 0.0, lo],
+        [hi, 0.0, hi],
+        [
+            None,
+            face([0.0, 0.0, 0.0, 0.0]),
+            face([0.0, 0.0, 0.0, 0.0]),
+            face([0.0, 0.0, 0.0, 0.0]),
+            face([0.0, 0.0, 0.0, 0.0]),
+            face([0.0, 0.0, 0.0, 0.0]),
+        ],
+        diode::indicator_color(progress),
+    );
 }
 
 /// `AnalogLeverRenderer`'s handle, turned by the lever's state.

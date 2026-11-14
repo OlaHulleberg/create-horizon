@@ -245,12 +245,16 @@ pub(super) fn value_settings_from_client(
             if short == Some(false) {
                 toggle_diode(&mut lv, pos, inverted, facing);
             }
-            with_world(|w| {
+            let max = with_world(|w| {
                 if let Some(pick) = pick {
                     w.set_diode_delay(dim, pos, board::diode_value(pick));
                 }
                 w.dims[dim].diodes.get(&pos).map(|d| d.max)
-            })
+            });
+            if pick.is_some() {
+                crate::glue::redstone::show_diode(&mut lv, pos);
+            }
+            max
         }
         _ => return,
     };
