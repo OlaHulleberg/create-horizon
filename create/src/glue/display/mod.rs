@@ -11,6 +11,7 @@
 
 pub mod client;
 mod clipboard;
+mod link_item;
 
 use super::items::filters;
 use super::net;
@@ -28,12 +29,11 @@ use create_engine::display::{
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockClick, BlockPart, BlockState, ClientHost, Command, CommandArgumentValue, Compound, Flow,
-    InteractionResult, ItemStack, LevelHost, UseItemOnEvent, UseWithoutItemEvent,
-    PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent,
-    ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    InteractionResult, ItemStack, LevelHost, PlayerRef, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RunModCommandEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
+    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, StateForPlacementEvent, Tag,
-    Text,
+    Text, UseItemOnEvent, UseWithoutItemEvent,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -51,6 +51,20 @@ impl Subsystem for Display {
         }
         client::register(r);
         clipboard::register(r, cx);
+        link_item::register(r);
+    }
+
+    fn world_closed(&self) {
+        link_item::forget();
+    }
+
+    fn right_click_block(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::RightClickBlockEvent<'_>,
+    ) -> Flow {
+        link_item::right_click_block(&host, event);
+        Flow::Continue
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -739,6 +753,7 @@ fn tick_boards(lv: &mut ServerLevel<'_>, checks: Vec<[i32; 3]>) {
 /// due or told by their source refresh, and clients hear of tubes and boards that changed.
 /// Nothing runs when nothing is due.
 fn tick_displays(lv: &mut ServerLevel<'_>) {
+    link_item::take_placed(lv);
     let dim = lv.dim;
     let now = lv.game_time();
     if with_world(|w| w.dims[dim].displays.idle(now)).unwrap_or(true) {

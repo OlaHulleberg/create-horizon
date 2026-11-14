@@ -13,9 +13,10 @@ use crate::glue::world::{level_index, try_with_world, with_world};
 use create_engine::Block;
 use create_engine::kinetics::Dir;
 use mod_api::{
-    BlockClick, BlockPart, BlockSignalEvent, BlockState, ContentsChangedEvent, Flow, InteractionResult,
-    IsSignalSourceEvent, LevelHost, LevelWriteHost, MinecartPassEvent, Registrar, ServerHost,
-    StateForPlacementEvent, TickBlockEvent, UseItemOnEvent, UseWithoutItemEvent,
+    BlockClick, BlockPart, BlockSignalEvent, BlockState, ContentsChangedEvent, Flow,
+    InteractionResult, IsSignalSourceEvent, LevelHost, LevelWriteHost, MinecartPassEvent,
+    Registrar, ServerHost, StateForPlacementEvent, TickBlockEvent, UseItemOnEvent,
+    UseWithoutItemEvent,
 };
 use std::cell::RefCell;
 
@@ -83,12 +84,7 @@ impl BlockPart for WatchedContainer {
         if watched != Some(true) {
             return;
         }
-        let Some(dim) = event
-            .level
-            .dimension()
-            .id(&*host)
-            .and_then(|d| dim_of(&d))
-        else {
+        let Some(dim) = event.level.dimension().id(&*host).and_then(|d| dim_of(&d)) else {
             return;
         };
         let pos = [event.pos.x, event.pos.y, event.pos.z];
