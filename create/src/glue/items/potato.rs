@@ -20,6 +20,12 @@
 //! - A powered wither's immunity, knockback resistance, the main arm (the barrel is on the right
 //!   of a right-handed player), the swap between two cannons (`SHAPER_SWAP`), the recoil and
 //!   barrel particles (`PotatoCannonPacket`), the air-flow trail and the advancements.
+//!
+//! The snowball is summoned with its item (`/summon`'s compound): a projectile spawned from a
+//! rotation carries its own type's item. During its hit on an entity the snowball can't be
+//! reached (`host.entity` answers None), so that hit is applied by its id and the snowball's own
+//! hit ends it: a sticky shot doesn't stick to an entity, and an item left behind is dropped
+//! where the hit was.
 
 use super::super::server::ServerLevel;
 use super::super::subsystem::Subsystem;
@@ -94,7 +100,9 @@ impl Subsystem for PotatoCannon {
         let Some(shot) = SHOTS.with_borrow_mut(|s| s.remove(&event.projectile)) else {
             return Flow::Continue;
         };
-        event.cancelled = true;
+        // During an entity hit the snowball can't be reached (`host.entity` answers None for
+        // it): the hit is applied here and the snowball's own hit ends it.
+        event.cancelled = host.entity(event.projectile).is_some();
         let keep = impact(host, event, shot);
         if let Some(shot) = keep {
             SHOTS.with_borrow_mut(|s| s.insert(event.projectile, shot));
@@ -260,23 +268,37 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
         .as_ref()
         .map_or(0.0, |c| potato::recovery_chance(recovery_level(c)));
     let shot_stack = one(&ammo_stack);
-    let Ok(snowball) = Identifier::parse(SHOT) else {
+    let Some(item) = shot_stack.to_nbt(&*lv.host) else {
         return false;
     };
+    // The owner as `/summon`'s int-array UUID.
+    let owner = player.uuid();
+    let uuid: Vec<i32> = (0..4)
+        .map(|i| (owner >> (96 - 32 * i)) as u32 as i32)
+        .collect();
     for (i, m) in motions.into_iter().enumerate() {
-        let Some(p) =
-            lv.host
-                .spawn_projectile_from_rotation(living, &snowball, &shot_stack, 0.0, 0.0, 0.0)
+        // Create's first tick moves it by `fly(motion)`, from the barrel. A thrown item of
+        // vanilla's showing the ammo (`ThrowableItemProjectile`'s `Item`), summoned whole: the
+        // projectile spawn takes no item to show.
+        let first = potato::fly(m, t);
+        let v = snowball_velocity(first);
+        let nbt = Compound::from([
+            ("Item".into(), Tag::Compound(item.clone())),
+            ("Owner".into(), Tag::IntArray(uuid.clone())),
+            ("Tags".into(), Tag::List(vec![Tag::String(TAG.into())])),
+            (
+                "Motion".into(),
+                Tag::List(v.iter().map(|c| Tag::Double(c.to_bits())).collect()),
+            ),
+        ]);
+        let Some(e) = lv
+            .host
+            .summon(&dimension, SHOT, barrel, nbt)
+            .and_then(|id| lv.host.entity(id))
         else {
             crate::create_log!("[create] a potato cannon's shot was refused");
             continue;
         };
-        let e = p.entity();
-        // Create's first tick moves it by `fly(motion)`, from the barrel.
-        let first = potato::fly(m, t);
-        e.teleport_to(&mut *lv.host, barrel, None);
-        e.set_velocity(&mut *lv.host, snowball_velocity(first));
-        e.add_tag(&mut *lv.host, TAG);
         SHOTS.with_borrow_mut(|s| {
             s.insert(
                 e.id(),
@@ -404,18 +426,36 @@ fn leave_item(lv: &mut ServerLevel<'_>, projectile: EntityRef, shot: &Shot) {
     }
 }
 
+/// `leave_item` where an entity was hit, the snowball out of reach: the item summoned there.
+fn leave_item_at(lv: &mut ServerLevel<'_>, at: [f64; 3], shot: &Shot) {
+    let stack = if f64::from(random(lv)) <= f64::from(shot.recovery) {
+        Some(shot.stack.clone())
+    } else {
+        shot.kind.drop.and_then(|id| {
+            let key = lv.host.item_key(&Identifier::parse(id).ok()?)?;
+            ItemStack::new(key, 1)
+        })
+    };
+    if let Some(item) = stack.and_then(|s| s.to_nbt(&*lv.host)) {
+        let nbt = Compound::from([("Item".into(), Tag::Compound(item))]);
+        let dimension = lv.dimension.to_owned();
+        lv.host.summon(&dimension, "minecraft:item", at, nbt);
+    }
+}
+
 /// `onHitEntity` / `onHitBlock`; the shot back when it flies on or sticks.
 fn impact(
     host: &mut dyn ServerHost,
     event: &ProjectileImpactEvent<'_>,
     mut shot: Shot,
 ) -> Option<Shot> {
-    let projectile = host.entity(event.projectile)?;
+    let projectile = host.entity(event.projectile);
     let mut lv = ServerLevel::new(host, event.dimension)?;
     if shot.stuck.is_some() {
         return Some(shot);
     }
     let Some(target_id) = event.entity else {
+        let projectile = projectile?;
         // `onHitBlock`.
         pop(&mut lv, &shot, event.at);
         if !block_hit(&mut lv, &shot, event) {
@@ -440,26 +480,20 @@ fn impact(
     }
     let enderman = event.entity_kind == "minecraft:enderman";
     let (damage, knockback, invulnerable) = potato::hit(shot.kind);
-    let hurt = target.hurt(
-        lv.host,
-        "minecraft:thrown",
-        damage,
-        Some(projectile),
-        shot.owner,
-    );
+    let hurt = target.hurt(lv.host, "minecraft:thrown", damage, projectile, shot.owner);
     if hurt != Some(true) {
-        projectile.discard(lv.host);
+        discard(&mut lv, projectile);
         return None;
     }
     if enderman {
         return Some(shot);
     }
     if !entity_hit(&mut lv, &shot, target) {
-        leave_item(&mut lv, projectile, &shot);
+        leave_item_at(&mut lv, event.at, &shot);
     }
     // A thing not living (a boat, a minecart) only takes the hit.
     if lv.host.living(target).is_none() {
-        projectile.discard(lv.host);
+        discard(&mut lv, projectile);
         return None;
     }
     if let Some(ticks) = invulnerable {
@@ -470,7 +504,10 @@ fn impact(
     if let Some(v) = potato::knockback(velocity, shot.motion, knockback, ground) {
         target.set_velocity(lv.host, v);
     }
-    if shot.kind.sticky && alive(&*lv.host, target) {
+    if shot.kind.sticky
+        && alive(&*lv.host, target)
+        && let Some(projectile) = projectile
+    {
         let (Some(at), Some(own)) = (target.position(&*lv.host), projectile.position(&*lv.host))
         else {
             projectile.discard(lv.host);
@@ -484,8 +521,15 @@ fn impact(
         ));
         return Some(shot);
     }
-    projectile.discard(lv.host);
+    discard(&mut lv, projectile);
     None
+}
+
+/// The snowball gone, when it can be reached (else its own hit ends it).
+fn discard(lv: &mut ServerLevel<'_>, projectile: Option<EntityRef>) {
+    if let Some(p) = projectile {
+        p.discard(lv.host);
+    }
 }
 
 /// The argument of the type's action named `name` (`"set_on_fire 60"` gives `"60"`).
