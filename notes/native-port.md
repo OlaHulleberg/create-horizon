@@ -1,11 +1,11 @@
 # Porting the glue to the mod API
 
 The mod used to be a horizon-mixins bundle whose glue (~43k lines, `mixins/create/` before
-commit `137d74d`) called the game's internals (`Game`, `game.world`, `game.native_*`). It is now a
+commit `76762d7`) called the game's internals (`Game`, `game.world`, `game.native_*`). It is now a
 native mod in `create/`: `create/src/lib.rs` implements `mod_api::Hooks`, the glue under
 `create/src/glue/` reaches the game only through `mod_api`, and the engine (`create/src/engine`,
 crate `create-engine`) is unchanged rules with no game types. Paths below are under `create/`.
-The legacy glue is in git history (`git show 137d74d:legacy/glue/<file>`) as the reference for what
+The legacy glue is in git history (`git show 76762d7:legacy/glue/<file>`) as the reference for what
 each subsystem did.
 
 ## Layout
