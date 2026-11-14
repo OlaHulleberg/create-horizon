@@ -13,6 +13,7 @@ pub mod server;
 pub mod states;
 pub mod stock;
 pub mod subsystem;
+pub mod trains;
 pub mod world;
 
 use create_engine::world::StateTable;
@@ -34,6 +35,9 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &logistics::Arms,
     // After `Kinetics`, which declares the block entity type it adds to.
     &logistics::Entities,
+    &trains::Carts,
+    &trains::Trains,
+    &trains::TrainControls,
 ];
 
 thread_local! {

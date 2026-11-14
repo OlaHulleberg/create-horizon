@@ -11,10 +11,11 @@ use glue::{SUBSYSTEMS, persist, states, world};
 use mod_api::{
     AttackEntityEvent, BlockChangedEvent, BlockPart, BreakBlockEvent, ChunkLoadEvent,
     ChunkUnloadEvent, ClientHost, ClientLevelUnloadEvent, ClientTickPostEvent, EntityInteractEvent,
-    EntityMountEvent, EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent, InteractionResult,
-    LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent, LevelTickPostEvent,
-    LevelTicksHost, MouseScrollingEvent, NeighborChangedEvent, PlayerLoggedInEvent,
-    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
+    EntityMountEvent, EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent,
+    InteractionKeyMappingTriggeredEvent, InteractionResult, LeftClickBlockEvent, LevelHost,
+    LevelLoadEvent, LevelSaveEvent, LevelTickPostEvent, LevelTicksHost, MouseScrollingEvent,
+    MovementInputEvent, NeighborChangedEvent, PlayerLoggedInEvent, PlayerTickPostEvent,
+    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost, WorldLifecycleEvent,
     WorldPhase,
 };
@@ -199,6 +200,20 @@ impl Hooks for Create {
 
     fn mouse_scrolling(&self, host: &mut dyn ClientHost, event: &mut MouseScrollingEvent) -> Flow {
         until_cancel(|s| s.mouse_scrolling(host, event))
+    }
+
+    fn interaction_key_mapping_triggered(
+        &self,
+        host: &mut dyn ClientHost,
+        event: &mut InteractionKeyMappingTriggeredEvent,
+    ) -> Flow {
+        until_cancel(|s| s.interaction_key(host, event))
+    }
+
+    fn movement_input(&self, host: &dyn ClientHost, event: &mut MovementInputEvent) {
+        for s in SUBSYSTEMS {
+            s.movement_input(host, event);
+        }
     }
 
     fn render_gui_post(&self, host: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {

@@ -14,10 +14,11 @@
 use super::server::ServerLevel;
 use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityInteractEvent,
-    EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent, InteractionResult,
-    LeftClickBlockEvent, LevelSaveEvent, MouseScrollingEvent, PlayerRef, PlayerTickPostEvent,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
-    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost,
+    EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
+    InteractionKeyMappingTriggeredEvent, InteractionResult, LeftClickBlockEvent, LevelSaveEvent,
+    MouseScrollingEvent, MovementInputEvent, PlayerRef, PlayerTickPostEvent, RegisterCommandsEvent,
+    Registrar, RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
+    RunModCommandEvent, ServerHost,
 };
 
 pub trait Subsystem: Sync {
@@ -181,6 +182,19 @@ pub trait Subsystem: Sync {
     ) -> Flow {
         Flow::Continue
     }
+
+    /// `Hooks::interaction_key_mapping_triggered`, on the client: `Flow::Cancel` when the
+    /// click was taken.
+    fn interaction_key(
+        &self,
+        _host: &mut dyn ClientHost,
+        _event: &mut InteractionKeyMappingTriggeredEvent,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::movement_input`, on the client: the local player's movement keys.
+    fn movement_input(&self, _host: &dyn ClientHost, _event: &mut MovementInputEvent) {}
 
     /// `Hooks::render_gui_post`: draw on the HUD.
     fn render_gui_post(&self, _host: &dyn ClientHost, _event: &mut RenderGuiPostEvent<'_>) {}
