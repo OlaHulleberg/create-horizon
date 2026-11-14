@@ -322,6 +322,9 @@ impl BlockEntityPart for MachineDraw {
                 }
             }
             Block::Basin => draw_basin(host, event.draw, event.pos, &event.entity.nbt),
+            Block::MechanicalCrafter => {
+                draw_crafter(host, event.draw, event.pos, &event.entity.nbt);
+            }
             Block::MechanicalSaw => {
                 let speed = kinetics::speeds_of(&event.entity.nbt)[0];
                 draw_saw_blade(event.draw, &info, speed);
@@ -437,6 +440,138 @@ fn draw_deployer(
     };
     draw.item(&stack, context, None, 0);
     draw.pop();
+}
+
+/// A crafter's facing and pointing as the client sees the block at `pos`; None for any other.
+fn crafter_seen(host: &dyn ClientHost, pos: [i32; 3]) -> Option<(Dir, &'static str)> {
+    let state = host.level(host.dimension())?.block_state(host, pos)?;
+    let id = states::id(state)?;
+    let (block, info) = crate::glue::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i)))??;
+    if block != Block::MechanicalCrafter {
+        return None;
+    }
+    let text = host.block_state_string(state)?;
+    let pointing = states::split(&text)
+        .1
+        .into_iter()
+        .find(|(k, _)| *k == "pointing")
+        .map(|(_, v)| match v {
+            "left" => "left",
+            "down" => "down",
+            "right" => "right",
+            _ => "up",
+        })?;
+    Some((info.facing?, pointing))
+}
+
+/// `Pointing.getXRotation`.
+fn pointing_x(pointing: &str) -> f32 {
+    match pointing {
+        "left" => 270.0,
+        "down" => 180.0,
+        "right" => 90.0,
+        _ => 0.0,
+    }
+}
+
+/// `AngleHelper.horizontalAngle`: 0 for south, turning clockwise from above, x negated.
+fn horizontal_angle(d: Dir) -> f32 {
+    match d {
+        Dir::West => -90.0,
+        Dir::North => 180.0,
+        Dir::East => -270.0,
+        _ => 0.0,
+    }
+}
+
+/// `MechanicalCrafterRenderer`: its cog turning on its facing's axis; its lid while covered or
+/// at work (not crafting or putting out); the belt toward the crafter it points at, else its
+/// arrow (`renderAndTransform`); the item in its slot while idle. The items of a grid moving
+/// between crafters are not drawn.
+fn draw_crafter(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    pos: [i32; 3],
+    nbt: &Compound,
+) {
+    let Some((facing, pointing)) = crafter_seen(host, pos) else {
+        return;
+    };
+    let (phase, covered, item) = match nbt.get(&super::crafter::CRAFTER_KEY.into()) {
+        Some(Tag::Compound(c)) => (
+            match c.get(&"P".into()) {
+                Some(Tag::Int(p)) => *p,
+                _ => 0,
+            },
+            matches!(c.get(&"C".into()), Some(Tag::Byte(1))),
+            match c.get(&"I".into()) {
+                Some(Tag::String(s)) => s.to_string().ok(),
+                _ => None,
+            },
+        ),
+        _ => (0, false, None),
+    };
+    const IDLE: i32 = 0;
+    const CRAFTING: i32 = 5;
+    const INSERTING: i32 = 6;
+    let axis = facing.axis();
+    // The shaftless cog, its y axis turned onto the facing's.
+    if let Some(cog) = states::partial("part_cogwheel_shaftless") {
+        let rpm = kinetics::speeds_of(nbt)[0];
+        let phase = create_engine::client::rotation_offset(Block::MechanicalCrafter, axis, pos);
+        draw.push();
+        if rpm != 0.0 {
+            draw.spin(kinetics::axis_vector(axis), [0.5; 3], rpm * 0.3, phase);
+        }
+        match axis {
+            create_engine::kinetics::Axis::X => draw.rotate_about([0.0, 0.0, 1.0], 90.0, [0.5; 3]),
+            create_engine::kinetics::Axis::Z => draw.rotate_about([1.0, 0.0, 0.0], 90.0, [0.5; 3]),
+            create_engine::kinetics::Axis::Y => {}
+        }
+        draw.block(cog, &[("facing", "up")]);
+        draw.still();
+        draw.pop();
+    }
+    let posed = |draw: &mut dyn BlockEntityDrawContext, name: &str| {
+        if let Some(part) = states::partial(name) {
+            draw.push();
+            draw.rotate_about([0.0, 1.0, 0.0], horizontal_angle(facing) + 90.0, [0.5; 3]);
+            draw.rotate_about([1.0, 0.0, 0.0], pointing_x(pointing), [0.5; 3]);
+            draw.block(part, &[("facing", "up")]);
+            draw.pop();
+        }
+    };
+    if (covered || phase != IDLE) && phase != CRAFTING && phase != INSERTING {
+        posed(draw, "part_crafter_lid");
+    }
+    // `isValidTarget`: a crafter facing the same way, not pointing straight back.
+    let target = create_engine::crafter::target(
+        facing,
+        create_engine::crafter::Pointing::read(pointing)
+            .unwrap_or(create_engine::crafter::Pointing::Up),
+    );
+    let o = target.offset();
+    let valid = crafter_seen(host, [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]])
+        .is_some_and(|(f, p)| f == facing && (pointing_x(p) - pointing_x(pointing)).abs() != 180.0);
+    if valid {
+        posed(draw, "part_crafter_belt");
+        posed(draw, "part_crafter_belt_frame");
+    } else {
+        posed(draw, "part_crafter_arrow");
+    }
+    if phase == IDLE
+        && let Some(stack) = item.as_deref().and_then(|i| stacks::stack(host, i, 1))
+    {
+        let f = facing.offset().map(|v| v as f32 * 0.58 + 0.5);
+        draw.push();
+        draw.translate(f);
+        draw.scale([0.5; 3]);
+        draw.rotate_about([0.0, 1.0, 0.0], horizontal_angle(facing), [0.0; 3]);
+        draw.translate([0.0, 0.0, -1.0 / 256.0]);
+        draw.rotate_about([0.0, 1.0, 0.0], 180.0, [0.0; 3]);
+        draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+        draw.pop();
+    }
 }
 
 /// `SawRenderer.renderBlade`: the blade turned to the saw's facing, its texture running forward,

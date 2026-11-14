@@ -82,7 +82,7 @@ thread_local! {
 
 /// Puts each value under its key in the data of the block entity at `pos` (none: takes it
 /// away), which sends it to its clients; nothing when it holds them already.
-fn set_shown(lv: &mut ServerLevel<'_>, pos: [i32; 3], values: &[(&str, Option<Tag>)]) {
+pub(super) fn set_shown(lv: &mut ServerLevel<'_>, pos: [i32; 3], values: &[(&str, Option<Tag>)]) {
     let Some(entity) = lv.entity_at(pos) else {
         return;
     };

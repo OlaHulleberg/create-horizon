@@ -74,10 +74,15 @@ impl Subsystem for Processing {
         client::animated(block, entity)
     }
 
-    /// A basin's stacks (`entity.items` is empty on a client) and tanks, and a mixer's cycle,
-    /// which their clients draw.
+    /// A basin's stacks (`entity.items` is empty on a client) and tanks, a mixer's cycle and a
+    /// crafter's phase, cover and item, which their clients draw.
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[basin::ITEMS_KEY, basin::FLUIDS_KEY, basin::MIXER_KEY]
+        &[
+            basin::ITEMS_KEY,
+            basin::FLUIDS_KEY,
+            basin::MIXER_KEY,
+            crafter::CRAFTER_KEY,
+        ]
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {

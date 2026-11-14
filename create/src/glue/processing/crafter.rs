@@ -327,6 +327,8 @@ pub fn use_crafter(
     if click.hit.face != facing.offset() || !main {
         return false;
     }
+    // Its slot or cover may change: its clients are told.
+    SHOW.with_borrow_mut(|s| s.push((dim, pos)));
     let held = click.stack.cloned();
     let held_id = held.as_ref().map(|h| stacks::id(&*lv.host, h));
     if held_id.as_deref() == Some("create:mechanical_arm") {
@@ -520,11 +522,73 @@ fn insert_item(lv: &mut ServerLevel<'_>, t: [i32; 3], face: Direction, item: &st
         .unwrap_or(0)
 }
 
+/// The key of a crafter's block entity data its clients draw it from: `P`, its phase; `C`,
+/// whether it is covered; `I`, the item in its slot.
+pub const CRAFTER_KEY: &str = "Crafter";
+
+thread_local! {
+    /// Crafters a player clicked, by dimension: their slot or cover may have changed.
+    static SHOW: std::cell::RefCell<Vec<(usize, [i32; 3])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Mechanical crafters (`run_crafters`), then those looked at or at work tell their clients
+/// what they show (`CRAFTER_KEY`).
+pub fn tick_crafters(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let mut touched = with_world(|w| {
+        let d = &w.dims[dim];
+        if d.crafter_checks.is_empty() && d.crafting.is_empty() {
+            Vec::new()
+        } else {
+            d.crafter_checks
+                .iter()
+                .chain(&d.crafting)
+                .copied()
+                .collect()
+        }
+    })
+    .unwrap_or_default();
+    SHOW.with_borrow_mut(|s| {
+        s.retain(|&(d, p)| {
+            if d == dim {
+                touched.push(p);
+            }
+            d != dim
+        })
+    });
+    run_crafters(lv);
+    if let Some(now) = with_world(|w| w.dims[dim].crafting.clone()) {
+        touched.extend(now);
+    }
+    touched.sort();
+    touched.dedup();
+    for pos in touched {
+        if crafter_at(lv, pos).is_none() {
+            continue;
+        }
+        let phase = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.phase))
+            .flatten()
+            .unwrap_or_default();
+        let mut c = mod_api::Compound::from([
+            ("P".into(), mod_api::Tag::Int(phase as i32)),
+            (
+                "C".into(),
+                mod_api::Tag::Byte(i8::from(crafter_covered(dim, pos))),
+            ),
+        ]);
+        if let Some(item) = crafter_slot(lv, pos) {
+            c.insert("I".into(), mod_api::Tag::String(item.as_str().into()));
+        }
+        super::basin::set_shown(lv, pos, &[(CRAFTER_KEY, Some(mod_api::Tag::Compound(c)))]);
+    }
+}
+
 /// Mechanical crafters: those looked at start their chain when every one holds an item
 /// (`checkCompletedRecipe`, `begin`); those at work run `tick`'s phases: the grid assembles,
 /// is passed on to the crafter pointed at (`EXPORTING`, 1000), the last one crafts (2000) and
 /// puts the result out. Nothing runs without one of them.
-pub fn tick_crafters(lv: &mut ServerLevel<'_>) {
+fn run_crafters(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let Some((mut checks, drops, working, power)) = with_world(|w| {
         let d = &mut w.dims[dim];

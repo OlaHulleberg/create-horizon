@@ -2845,10 +2845,14 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     ) {
         props.insert("render_shape".into(), json!("INVISIBLE"));
     }
-    // Declared full cubes whose Create shape is a 12 px casing (`CASING_12PX`): they hide no
-    // neighbour's face and let light through, so the floor under a saw shows and the parts
-    // their block entity draws inside them (a saw's blade) are lit.
-    if matches!(b.name.as_str(), "mechanical_saw" | "mechanical_drill") {
+    // Declared full cubes whose Create block occludes nothing (the crafter's and mixer's
+    // `noOcclusion`) or is a 12 px casing (`CASING_12PX`: saw, drill): they hide no neighbour's
+    // face and let light through, so the floor under a saw shows and the parts their block
+    // entity draws inside them (a blade, a crafter's belts) are lit.
+    if matches!(
+        b.name.as_str(),
+        "mechanical_saw" | "mechanical_drill" | "mechanical_crafter" | "mechanical_mixer"
+    ) {
         props.insert("occludes".into(), json!(false));
     }
     // AllBlocks.ROSE_QUARTZ_LAMP: `mapColor(TERRACOTTA_PINK)` (MapColor id 42); its light by
