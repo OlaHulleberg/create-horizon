@@ -23,6 +23,9 @@ pub enum Kind {
     /// A deployer (`DeployerMovementBehaviour`): its fake player uses what it holds on, or
     /// punches, each block two ahead of it.
     Deployer,
+    /// A redstone contact (`ContactMovementBehaviour`): it powers a stationary contact facing
+    /// it as it passes.
+    Contact,
     /// A portable storage interface (`fluid`: the fluid one).
     Interface {
         fluid: bool,
@@ -39,6 +42,7 @@ impl Kind {
             crate::Block::MechanicalPlough => Kind::Plough,
             crate::Block::MechanicalRoller => Kind::Roller,
             crate::Block::Deployer => Kind::Deployer,
+            crate::Block::RedstoneContact => Kind::Contact,
             crate::Block::PortableStorageInterface => Kind::Interface { fluid: false },
             crate::Block::PortableFluidInterface => Kind::Interface { fluid: true },
             _ => return None,
@@ -51,6 +55,7 @@ impl Kind {
             Kind::Drill | Kind::Saw => 0.65,
             Kind::Harvester | Kind::Plough | Kind::Roller => 0.45,
             Kind::Deployer => 2.0,
+            Kind::Contact => 0.65,
             Kind::Interface { .. } => crate::psi::REACH,
         }
     }
@@ -64,6 +69,7 @@ impl Kind {
             Kind::Plough => "create:mechanical_plough",
             Kind::Roller => "create:mechanical_roller",
             Kind::Deployer => "create:deployer",
+            Kind::Contact => "create:redstone_contact",
             Kind::Interface { fluid: false } => "create:portable_storage_interface",
             Kind::Interface { fluid: true } => "create:portable_fluid_interface",
         }
@@ -231,6 +237,12 @@ pub enum Effect {
     /// A stalled deployer's `tick`, 20 ticks after its last punch: it punches the block it
     /// breaks again.
     Redeploy,
+    /// A moving contact reaches a block (`visitNewPosition`): a redstone contact there facing it
+    /// is powered.
+    Contact([i32; 3]),
+    /// A stationary contact a moving one powered is left (`deactivateLastVisitedContact`): it
+    /// looks at what it faces again a tick later.
+    ContactLeft([i32; 3]),
 }
 
 /// What an actor reads of the world.
@@ -649,6 +661,18 @@ impl Actor {
             effects.push(Effect::Deploy(pos));
             return;
         }
+        if self.kind == Kind::Contact {
+            // Not where it started moving from.
+            if self.first_movement {
+                return;
+            }
+            if let Some(last) = self.reference.take() {
+                effects.push(Effect::ContactLeft(last));
+            }
+            effects.push(Effect::Contact(pos));
+            self.reference = Some(pos);
+            return;
+        }
         if self.kind == Kind::Roller {
             self.roller_visit(pos, probe, effects);
             return;
@@ -764,6 +788,12 @@ impl Actor {
     pub fn cancel(&mut self, effects: &mut Vec<Effect>) {
         if let Some(b) = self.breaking.take() {
             effects.push(Effect::Crack(b.pos, -1));
+        }
+        // A contact's `stopMoving`.
+        if self.kind == Kind::Contact
+            && let Some(last) = self.reference.take()
+        {
+            effects.push(Effect::ContactLeft(last));
         }
         // An interface's `reset`.
         self.interface.working = None;

@@ -1015,11 +1015,7 @@ pub(super) fn release(
     carried: &mut Carried,
 ) {
     let dim = lv.dim;
-    let mut effects = Vec::new();
-    for a in carried.actors.iter_mut() {
-        a.cancel(&mut effects);
-    }
-    apply_cracks(lv, &carried.actors, &effects);
+    stop_actors(lv, &mut carried.actors);
     cancel_deployers(lv, key, carried);
     let at = |o: [i32; 3]| add(origin, o);
     // Block entity data back with the blocks put back: rollers' settings, and contraption
@@ -1322,11 +1318,42 @@ fn sawable(lv: &ServerLevel<'_>, pos: [i32; 3], name: &str) -> bool {
 // What actors do
 
 /// `destroyBlockProgress` for a breaker's cracks.
-fn apply_cracks(lv: &mut ServerLevel<'_>, list: &[Actor], effects: &[Effect]) {
-    let id = list.first().map_or(0, |a| a.breaker_id);
-    for e in effects {
-        if let Effect::Crack(p, stage) = e {
-            lv.level.set_break_progress(&mut *lv.host, id, *p, *stage);
+/// Each actor's `stopMoving` (`cancelStall`): a breaker's cracks go, a contact it powered looks
+/// again.
+fn stop_actors(lv: &mut ServerLevel<'_>, list: &mut [Actor]) {
+    for a in list.iter_mut() {
+        let mut effects = Vec::new();
+        a.cancel(&mut effects);
+        for e in effects {
+            match e {
+                Effect::Crack(p, stage) => {
+                    lv.level
+                        .set_break_progress(&mut *lv.host, a.breaker_id, p, stage);
+                }
+                Effect::ContactLeft(p) => contact_left(lv, p),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// `deactivateLastVisitedContact`: the contact at `p` looks at what it faces a tick later.
+fn contact_left(lv: &mut ServerLevel<'_>, p: [i32; 3]) {
+    let dim = lv.dim;
+    let now = lv.game_time();
+    with_world(|w| w.dims[dim].lifts.schedule(p, now));
+}
+
+/// `ContactMovementBehaviour.visitNewPosition`: a redstone contact at `p` facing the moving
+/// contact (which faces `facing` now) is powered.
+fn contact_reached(lv: &mut ServerLevel<'_>, p: [i32; 3], facing: Dir) {
+    if let Some((Block::RedstoneContact, info)) = create_info(lv.block(p))
+        && info.facing == Some(facing.opposite())
+    {
+        let dim = lv.dim;
+        with_world(|w| w.dims[dim].lifts.contact_held.insert(p));
+        if !info.powered {
+            lv.set_flags(p, &[("powered", true)], update_all());
         }
     }
 }
@@ -1439,11 +1466,7 @@ pub(super) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
 /// A turning contraption's actors stop (`stopMoving`): what they were breaking is left as it
 /// was, its cracks gone.
 pub(super) fn cancel_actors(lv: &mut ServerLevel<'_>, key: [i32; 3], carried: &mut Carried) {
-    let mut effects = Vec::new();
-    for a in carried.actors.iter_mut() {
-        a.cancel(&mut effects);
-    }
-    apply_cracks(lv, &carried.actors, &effects);
+    stop_actors(lv, &mut carried.actors);
     cancel_deployers(lv, key, carried);
 }
 
@@ -1629,6 +1652,8 @@ fn apply(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, e: Effect) -> Optio
         Effect::Harvest(p) => harvest(lv, key, a, p),
         Effect::Till(p) => till(lv, p),
         Effect::Deploy(p) => return Some(deploy(lv, key, a, Some(p))),
+        Effect::Contact(p) => contact_reached(lv, p, actors::posed_facing(a.facing, &a.turns)),
+        Effect::ContactLeft(p) => contact_left(lv, p),
         Effect::Redeploy => return Some(deploy(lv, key, a, None)),
     }
     None
@@ -2508,7 +2533,17 @@ fn debug_controls(
         }
         None => return format!("no moving contraption at {} {} {}", key[0], key[1], key[2]),
     };
-    apply_cracks(lv, &list, &effects);
+    // The actors turned off stop (`cancelStall`): cracks go, contacts look again.
+    for e in effects {
+        match e {
+            Effect::Crack(p, stage) => {
+                let id = list.first().map_or(0, |a| a.breaker_id);
+                lv.level.set_break_progress(&mut *lv.host, id, p, stage);
+            }
+            Effect::ContactLeft(p) => contact_left(lv, p),
+            _ => {}
+        }
+    }
     if let Some(at) = at {
         controls_status(lv, player, at, filter.as_deref(), !disable);
     }

@@ -860,8 +860,10 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let valid = contact_faces_back(&|p| lv.block_state(p), pos, facing);
+        // A contact a moving one powers stays powered until that one leaves it.
+        let held = with_world(|w| w.dims[dim].lifts.contact_held.contains(&pos)) == Some(true);
         match block {
-            Block::RedstoneContact if info.powered != valid => {
+            Block::RedstoneContact if info.powered != valid && !(info.powered && held) => {
                 lv.set_flags(pos, &[("powered", valid)], update_all());
             }
             Block::ElevatorContact => {
@@ -874,8 +876,6 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
                 }
                 // `updateShape` (the block it faces changed): a contact an elevator lit keeps
                 // its light through other neighbour changes.
-                let held =
-                    with_world(|w| w.dims[dim].lifts.contact_held.contains(&pos)) == Some(true);
                 if info.powering != valid && !(info.powering && held) {
                     with_world(|w| w.dims[dim].lifts.schedule(pos, now));
                 }
@@ -884,9 +884,21 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
         }
     }
     for (pos, _) in due {
-        let Some((Block::ElevatorContact, info)) = create_info(lv.block(pos)) else {
-            continue;
+        let (block, info) = match create_info(lv.block(pos)) {
+            Some((b @ (Block::ElevatorContact | Block::RedstoneContact), i)) => (b, i),
+            _ => continue,
         };
+        // `RedstoneContactBlock.tick`: a contact a moving one left powers while one faces it.
+        if block == Block::RedstoneContact {
+            with_world(|w| w.dims[dim].lifts.contact_held.remove(&pos));
+            let valid = info
+                .facing
+                .is_some_and(|f| contact_faces_back(&|p| lv.block_state(p), pos, f));
+            if info.powered != valid {
+                lv.set_flags(pos, &[("powered", valid)], update_all());
+            }
+            continue;
+        }
         let lit = with_world(|w| w.dims[dim].lifts.contact_lit.remove(&pos)) == Some(true);
         let should = lit
             || info
