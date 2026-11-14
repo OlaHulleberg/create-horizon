@@ -47,6 +47,14 @@ impl Subsystem for Blocks {
         tick_doors(lv);
     }
 
+    fn screen_render_post(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenRenderPostEvent<'_>,
+    ) {
+        toolbox_totals(host, event);
+    }
+
     /// `PostboxBlockEntity.stopOpen`: the last menu closed on a postbox shuts it (legacy
     /// `menu_closed`).
     fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut MenuClosedEvent) {
@@ -626,6 +634,67 @@ impl BlockEntityPart for ToolboxMenu {
             TOOLBOX_CONFIRM_BUTTON => host.close_menu(event.context.player),
             TOOLBOX_DEPOSIT_BUTTON => deposit_all(host, event),
             _ => {}
+        }
+    }
+}
+
+/// `ToolboxScreen.renderBg`: each compartment shows its first stack with the compartment's total
+/// (`totalCountInCompartment`) for its count. The screen's slots draw their own stack's count, so
+/// over a compartment holding more than its first stack the slot is drawn again: the
+/// background under it, the stack with the total, and the hover highlight. Not while a stack is
+/// carried over it.
+fn toolbox_totals(host: &dyn mod_api::ClientHost, event: &mut mod_api::ScreenRenderPostEvent<'_>) {
+    use create_engine::toolbox::{STACKS_PER_COMPARTMENT, STORED};
+    let Some(pos) = host.screen_pos() else {
+        return;
+    };
+    let toolbox = host
+        .level(host.dimension())
+        .and_then(|l| l.block_state(host, pos))
+        .map(states::id_or_none)
+        .and_then(|id| super::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten())
+        .is_some_and(dye::is_toolbox);
+    if !toolbox {
+        return;
+    }
+    let Some(menu) = host.local_player().and_then(|p| p.container_menu(host)) else {
+        return;
+    };
+    let Some(boxes) = menu.slot_boxes(host) else {
+        return;
+    };
+    let carried = menu.carried(host).flatten().is_some();
+    let mouse = event.screen.mouse;
+    let [ox, oy] = [event.screen.rect[0], event.screen.rect[1]];
+    for first in (0..STORED).step_by(STACKS_PER_COMPARTMENT) {
+        let Some(Some([x, y, w, h])) = boxes.get(first).copied() else {
+            continue;
+        };
+        let Some(stack) = menu.slot(host, first).flatten() else {
+            continue;
+        };
+        let total: u32 = (first..first + STACKS_PER_COMPARTMENT)
+            .filter_map(|i| menu.slot(host, i).flatten())
+            .map(|s| s.count())
+            .sum();
+        if total == stack.count() {
+            continue;
+        }
+        let hovered = (x..x + w).contains(&mouse[0]) && (y..y + h).contains(&mouse[1]);
+        if hovered && carried {
+            continue;
+        }
+        let draw = &mut *event.draw;
+        // The background under the slot (`AllGuiTextures.TOOLBOX`, 30 px in).
+        draw.sprite(
+            "create:gui/toolbox",
+            [x - ox - 30.0, y - oy, 16.0, 16.0],
+            [x, y, 16.0, 16.0],
+            None,
+        );
+        draw.gui_draw_item_with(&stack, [x, y], Some(&total.to_string()));
+        if hovered {
+            draw.fill([x, y, 16.0, 16.0], 0x80FF_FFFF);
         }
     }
 }
