@@ -520,6 +520,7 @@ fn has_state(block: Block) -> bool {
             | Block::PortableStorageInterface
             | Block::PortableFluidInterface
             | Block::ContraptionControls
+            | Block::LecternController
             | Block::MechanicalRoller
             | Block::ControllerRail
             | Block::CartAssembler
