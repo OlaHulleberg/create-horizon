@@ -56,7 +56,7 @@ pub(super) struct CopycatBlock;
 impl BlockPart for CopycatBlock {
     /// `CopycatBlock.useItemOn`: a block it takes becomes its material (one consumed, none in
     /// creative), the same block again turns it (`cycleMaterial`); anything else passes to the
-    /// item's own use. The wrench takes the material off (`onWrenched`).
+    /// item's own use (the wrench's is `Copycats::wrench_used`).
     fn use_item_on(
         &self,
         host: &mut dyn ServerHost,
@@ -69,7 +69,7 @@ impl BlockPart for CopycatBlock {
         let mut lv = ServerLevel::new(host, &dimension)?;
         let pos = click.pos;
         if stack.item().id(&*lv.host) == "create:wrench" {
-            return wrench(&mut lv, pos, player).then_some(InteractionResult::Success);
+            return None;
         }
         let shape = shape_of(&*lv.host, event.state)?;
         let clicked = Dir::from_offset(click.hit.face);
@@ -165,7 +165,7 @@ impl BlockPart for CopycatBlock {
 
 /// `CopycatBlock.onWrenched`: the material comes off, its item back to the player (not in
 /// creative). False when it holds none (`PASS`).
-fn wrench(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: PlayerRef) -> bool {
+pub(super) fn wrench(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: PlayerRef) -> bool {
     let dim = lv.dim;
     let Some(had) = with(dim, |d| {
         let c = d.copycats.get_mut(&pos)?;

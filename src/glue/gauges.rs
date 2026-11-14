@@ -82,6 +82,27 @@ impl Subsystem for Gauges {
     fn client_reset(&self) {
         CLIENT.with_borrow_mut(|c| *c = Client::default());
     }
+
+    /// `GaugeBlockEntity.addToGoggleTooltip`: what the server last said of the gauge, in its
+    /// block entity's data (legacy `goggle_overlay`'s gauge lines).
+    fn goggle_tooltip(
+        &self,
+        host: &dyn ClientHost,
+        pos: [i32; 3],
+        block: Block,
+        lines: &mut Vec<Vec<(String, u32)>>,
+    ) {
+        let Some(kind) = create_engine::world::gauge_kind(block) else {
+            return;
+        };
+        let shown = host
+            .level(host.dimension())
+            .and_then(|l| host.block_entity(l, pos))
+            .and_then(|e| e.data(host))
+            .and_then(|d| shown_of(&d))
+            .unwrap_or_default();
+        lines.extend(create_engine::gauge::tooltip(kind, &shown));
+    }
 }
 
 fn shown_to_tag(s: &Shown) -> Tag {

@@ -1,8 +1,11 @@
 //! `WrenchItem.useOn` on a Create block: sneaking, `onSneakWrenched` (its drops to the player
 //! unless creative, the block gone without drops); else `onWrenched`, turned about the axis of
 //! the face clicked. Belts (their own wrench use) and other blocks are left alone; a block a
-//! subsystem wrenches its own way (`Subsystem::wrench_used`: a crafter's edge, a copycat's
-//! material, a deployer's mode, a bracket, a pipe's glass, a whistle's size) answers first.
+//! subsystem wrenches its own way answers first (`Subsystem::wrench_used`: a copycat's material,
+//! a pipe's glass, a whistle's size). What takes the click before the wrench's use (the legacy
+//! `use_item_on` order) is each block's own: a crafter's edge and a deployer's mode
+//! (processing's `right_click_block`), a bracket (decor's part), a cart assembler (trains'
+//! part), a redstone link (redstone's part).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
@@ -69,7 +72,7 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     let clicked = Dir::from_offset(event.face)?;
     let back = sneaking(&*lv.host, player);
     for s in super::super::SUBSYSTEMS {
-        if s.wrench_used(&mut lv, player, pos, block, clicked, back) {
+        if s.wrench_used(&mut lv, player, pos, block, clicked, event.hit.point, back) {
             return Some(InteractionResult::Success);
         }
     }

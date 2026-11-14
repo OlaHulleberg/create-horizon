@@ -3,10 +3,12 @@
 
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
-use super::pipes::pipe_sides_at;
+use super::pipes::{connect_pipe, pipe_sides_at, pipe_sides_of};
 use super::{HOSE, all, flag, info_at, offset, property, state_with, world_fluid};
+use crate::glue::kinetics::dir_name;
 use create_engine::Block;
 use create_engine::fluids::{Cell, Gate};
+use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
 use create_engine::tank::{CAPACITY, Fluid, Multi, Tank};
 use mod_api::{BlockShapeKind, Compound, HostBlockStates, SoundSource, Tag};
@@ -386,6 +388,119 @@ fn send_changes(lv: &mut ServerLevel<'_>) {
         let data = Compound::from([(HOSE.into(), Tag::List(v))]);
         let _ = entity.merge_data(&mut *lv.host, data);
     }
+}
+
+/// `WrenchItem` on a fluid pipe, glass pipe or encased pipe (`onWrenched`, legacy
+/// `wrench_pipe`); true when it was one. A straight pipe (or, bent, the axis of the face centre
+/// nearest the click at `point`, across the clicked face) becomes a glass pipe; a glass pipe a
+/// plain one again; an encased pipe loses its casing. A wrench on the pipe's own axis passes.
+pub(super) fn wrench_pipe(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    block: Block,
+    clicked: Dir,
+    point: [f64; 3],
+) -> bool {
+    let Some((_, info)) = info_at(lv, pos) else {
+        return false;
+    };
+    let Some(state) = lv.block_state(pos) else {
+        return false;
+    };
+    match block {
+        Block::FluidPipe => {
+            let sides = pipe_sides_of(lv, state);
+            let axis = create_engine::fluids::straight_axis(sides).or_else(|| {
+                let local = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]));
+                let dist = |d: &Dir| {
+                    let o = d.offset();
+                    (0..3)
+                        .map(|i| (local[i] - (0.5 + f64::from(o[i]) * 0.5)).powi(2))
+                        .sum::<f64>()
+                };
+                Dir::ALL
+                    .into_iter()
+                    .filter(|d| d.axis() != clicked.axis())
+                    .min_by(|a, b| dist(a).total_cmp(&dist(b)))
+                    .map(|d| d.axis())
+            });
+            // `PASS`: nothing happens.
+            let Some(axis) = axis.filter(|a| *a != clicked.axis()) else {
+                return true;
+            };
+            let props = [
+                ("axis", axis_name(axis)),
+                ("waterlogged", flag(info.waterlogged)),
+            ];
+            if let Some(next) = state_with(lv, "create:glass_fluid_pipe", &props) {
+                lv.set_state(pos, next, all());
+            }
+            true
+        }
+        // AxisPipeBlock.toRegularPipe: open both ways along its axis, then connected as a pipe
+        // (`updateBlockState`, preferring the axis' positive end), waterlogging kept.
+        Block::GlassFluidPipe => {
+            let Some(axis) = info.axis else {
+                return true;
+            };
+            let props: Vec<(&str, &str)> = Dir::ALL
+                .into_iter()
+                .map(|d| (dir_name(d), flag(d.axis() == axis)))
+                .chain([("waterlogged", flag(info.waterlogged))])
+                .collect();
+            if let Some(next) = state_with(lv, "create:fluid_pipe", &props) {
+                lv.set_state(pos, next, all());
+                connect_pipe(lv, pos, Some(Dir::from_axis(axis, true)));
+            }
+            true
+        }
+        // EncasedPipeBlock.onWrenched: a pipe with its sides, connected again preferring the
+        // first open side.
+        Block::EncasedFluidPipe => {
+            let sides = pipe_sides_of(lv, state);
+            let first = Dir::ALL
+                .into_iter()
+                .find(|d| sides & d.bit() != 0)
+                .unwrap_or(Dir::Up);
+            let props: Vec<(&str, &str)> = Dir::ALL
+                .into_iter()
+                .map(|d| (dir_name(d), flag(sides & d.bit() != 0)))
+                .collect();
+            if let Some(next) = state_with(lv, "create:fluid_pipe", &props) {
+                lv.set_state(pos, next, all());
+                connect_pipe(lv, pos, Some(first));
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn axis_name(a: Axis) -> &'static str {
+    match a {
+        Axis::X => "x",
+        Axis::Y => "y",
+        Axis::Z => "z",
+    }
+}
+
+/// `WrenchItem` on a whistle or extension (legacy `wrench_whistle`): its size cycles
+/// (`getRotatedBlockState`), an extension's whistle's; the extensions follow (`updateShape`).
+/// True when it was one.
+pub(super) fn wrench_whistle(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block) -> bool {
+    let root = match block {
+        Block::SteamWhistle => Some(pos),
+        Block::SteamWhistleExtension => whistle_root(lv, pos),
+        _ => return false,
+    };
+    let Some(root) = root else {
+        return true;
+    };
+    let Some(size) = info_at(lv, root).and_then(|(_, i)| i.size) else {
+        return true;
+    };
+    lv.set_property(root, "size", size.cycled().name(), all());
+    true
 }
 
 /// The stack of extensions on a whistle (`findRoot` from an extension): the first block below

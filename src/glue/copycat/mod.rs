@@ -129,6 +129,26 @@ fn with_prop(
 pub struct Copycats;
 
 impl Subsystem for Copycats {
+    /// The wrench on a copycat (legacy `use_item_on`'s copycat case): `CopycatBlock.onWrenched`
+    /// takes its material off and it never turns; `onSneakWrenched` takes it off before the
+    /// wrench picks the block up.
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        player: mod_api::PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        _clicked: create_engine::kinetics::Dir,
+        _point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        if !matches!(block, Block::CopycatPanel | Block::CopycatStep) {
+            return false;
+        }
+        parts::wrench(lv, pos, player);
+        !sneaking
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         for block in [Block::CopycatPanel, Block::CopycatStep] {
             r.block_part(states::key(block), parts::CopycatBlock);

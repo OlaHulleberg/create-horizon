@@ -94,6 +94,23 @@ impl Subsystem for Fluids {
         client::reset();
     }
 
+    /// The wrench on a pipe or a whistle, not sneaking (legacy `use_item_on`'s
+    /// `wrench_pipe` / `wrench_whistle`, after a bracket came off: `decor`'s part).
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        _player: mod_api::PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        clicked: create_engine::kinetics::Dir,
+        point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        !sneaking
+            && (plumbing::wrench_pipe(lv, pos, block, clicked, point)
+                || plumbing::wrench_whistle(lv, pos, block))
+    }
+
     /// A spout two above belt segment `segment` (`SpoutBlockEntity`'s
     /// `BeltProcessingBehaviour`); the deployers and presses are processing's.
     fn belt_process(
