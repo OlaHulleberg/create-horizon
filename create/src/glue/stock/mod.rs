@@ -418,6 +418,7 @@ impl Subsystem for Stock {
         }
         for item in [
             "create:stock_link",
+            "create:stock_ticker",
             "create:factory_gauge",
             "create:redstone_requester",
         ] {
@@ -572,6 +573,20 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     });
     for (_, pos, was, is) in changes {
         block_moved(lv, dim, pos, was, is);
+    }
+    // Blocks placed from a linking item join their network now they are known.
+    let joins: Vec<(Option<Network>, [i32; 3], u128)> = JOINS.with_borrow_mut(|j| {
+        let (mine, rest): (Vec<_>, Vec<_>) =
+            std::mem::take(j).into_iter().partition(|x| x.0 == dim);
+        *j = rest;
+        mine.into_iter()
+            .map(|(_, net, pos, p)| (net, pos, p))
+            .collect()
+    });
+    for (net, pos, player) in joins {
+        let net = net.unwrap_or_else(|| new_network(lv));
+        let text = st::network_text(net);
+        let _ = set_network(lv, dim, pos, &[text.as_str()], Some(player));
     }
     if !present() {
         return;
@@ -1082,12 +1097,32 @@ struct StockBlock;
 #[mod_api::horizon_part]
 impl BlockPart for StockBlock {
     /// A right click on a stock link or a gauge does nothing here (their screens are
-    /// commands): the click is used, so the block's template does nothing either.
+    /// commands): the click is used, so the block's template does nothing either. A linking
+    /// item goes on to its own use (tuning it to the block's network).
     fn use_item_on(
         &self,
-        _host: &mut dyn ServerHost,
+        host: &mut dyn ServerHost,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let linking = event.click.stack.is_some_and(|s| {
+            matches!(
+                s.item().id(&*host).as_str(),
+                "create:stock_link"
+                    | "create:stock_ticker"
+                    | "create:factory_gauge"
+                    | "create:redstone_requester"
+            )
+        });
+        if linking {
+            // `LogisticallyLinkedBlockItem.useOn` (the block has no use of its own).
+            let player = host.player(event.click.player)?;
+            if player.entity().is_shift_key_down(&*host) == Some(true) {
+                return None;
+            }
+            let stack = event.click.stack?.clone();
+            tune(host, player, event.click.hand, stack, event.click.pos);
+            return Some(InteractionResult::Success);
+        }
         let b = block_of(states::id(event.state)?)?;
         matches!(b, Block::StockLink | Block::FactoryGauge).then_some(InteractionResult::Success)
     }
@@ -1112,22 +1147,186 @@ impl BlockPart for StockBlock {
     }
 }
 
-/// The items placing links, gauges and requesters: their placement (`getStateForPlacement`).
+/// The items placing links, tickers, gauges and requesters (`LogisticallyLinkedBlockItem`):
+/// their placement (`getStateForPlacement`), joining the network the item was tuned to (or a
+/// new one); a click on a linked block tunes the item to its network, a click in the air clears
+/// it. The network is kept in the stack's custom data (`Freq`), which also makes it glint.
 struct StockItem;
+
+/// The key of a tuned item's network in its custom data.
+const FREQ: &str = "Freq";
+
+type Join = (usize, Option<Network>, [i32; 3], u128);
+
+thread_local! {
+    /// Blocks placed from a linking item, joined at their level's next tick.
+    static JOINS: RefCell<Vec<Join>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The network a tuned stack is tuned to.
+fn tuned(stack: &ItemStack) -> Option<Network> {
+    match super::items::custom(stack).get(&FREQ.into()) {
+        Some(Tag::String(s)) => Some(st::network_id(&s.to_string_lossy())),
+        _ => None,
+    }
+}
+
+/// `UUID.randomUUID()` for `new_network_started`, from the level's random.
+fn new_network(lv: &mut ServerLevel<'_>) -> Network {
+    use mod_api::RandomSource;
+    let half = |lv: &mut ServerLevel<'_>| {
+        lv.level
+            .with_random(&mut *lv.host, |r| r.next_long())
+            .unwrap_or(0) as u64
+    };
+    (u128::from(half(lv)) << 64) | u128::from(half(lv))
+}
+
+/// `assignFrequency`: the held linking item tuned to the network of the block at `pos`.
+fn tune(
+    host: &mut dyn ServerHost,
+    player: mod_api::PlayerRef,
+    hand: mod_api::Hand,
+    mut stack: ItemStack,
+    pos: [i32; 3],
+) -> Option<()> {
+    let dimension = player.dimension(&*host)?.to_string();
+    let dim = level_index(&dimension)?;
+    let net = network_at(dim, pos)?;
+    super::items::set_custom(
+        &mut stack,
+        &[(
+            FREQ,
+            Some(Tag::String(st::network_text(net).as_str().into())),
+        )],
+    );
+    let _ = stack.set(&Glint, true);
+    super::items::set_held(host, player, hand, Some(stack));
+    let _ = player.action_bar(
+        host,
+        mod_api::Text::translate("create.logistically_linked.tuned", Vec::new()),
+    );
+    Some(())
+}
+
+fn linked_block(b: Block) -> bool {
+    matches!(
+        b,
+        Block::StockLink | Block::StockTicker | Block::RedstoneRequester | Block::FactoryGauge
+    )
+}
 
 #[mod_api::horizon_part]
 impl ItemPart for StockItem {
     fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
-        let Some(dimension) = event
-            .placer
-            .and_then(|p| p.dimension(&*host))
-            .map(|d| d.to_string())
-        else {
+        let Some(player) = event.placer else {
             return;
         };
-        if let Some(mut lv) = ServerLevel::new(host, &dimension) {
-            place_block(&mut lv, event.pos);
+        let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+            return;
+        };
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return;
+        };
+        place_block(&mut lv, event.pos);
+        let net = tuned(event.stack);
+        // `useOn`: `connected`, or `new_network_started`.
+        let key = if net.is_some() {
+            "create.logistically_linked.connected"
+        } else {
+            "create.logistically_linked.new_network_started"
+        };
+        let _ = player.action_bar(&mut *lv.host, mod_api::Text::translate(key, Vec::new()));
+        JOINS.with_borrow_mut(|j| j.push((lv.dim, net, event.pos, player.uuid())));
+    }
+
+    /// `LogisticallyLinkedBlockItem.useOn` on a linked block, not sneaking: tuned to its network
+    /// (`assignFrequency`).
+    fn use_on(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::UseOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        match host {
+            mod_api::HostSide::Client(host) => {
+                let player = host.player(event.player)?;
+                if player.entity().is_shift_key_down(&*host) == Some(true) {
+                    return None;
+                }
+                let state = host
+                    .level(host.dimension())?
+                    .block_state(&*host, event.pos)?;
+                let b = states::id(state).and_then(block_of)?;
+                linked_block(b).then_some(InteractionResult::Success)
+            }
+            mod_api::HostSide::Server(host) => {
+                let player = host.player(event.player)?;
+                if player.entity().is_shift_key_down(&*host) == Some(true) {
+                    return None;
+                }
+                let dimension = player.dimension(&*host)?.to_string();
+                let lv = ServerLevel::new(host, &dimension)?;
+                if !linked_block(block_at(&lv, event.pos)?) {
+                    return None;
+                }
+                tune(host, player, event.hand, event.stack.clone(), event.pos);
+                Some(InteractionResult::Success)
+            }
         }
+    }
+
+    /// `LogisticallyLinkedBlockItem.use`: a tuned item used in the air forgets its network.
+    fn use_item(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::UseItemEvent<'_>,
+    ) -> Option<InteractionResult> {
+        tuned(event.stack)?;
+        if let mod_api::HostSide::Server(host) = host
+            && let Some(player) = host.player(event.player)
+        {
+            let mut stack = event.stack.clone();
+            super::items::set_custom(&mut stack, &[(FREQ, None)]);
+            stack.remove(&Glint);
+            super::items::set_held(host, player, event.hand, Some(stack));
+            let _ = player.action_bar(
+                host,
+                mod_api::Text::translate("create.logistically_linked.cleared", Vec::new()),
+            );
+        }
+        Some(InteractionResult::Success)
+    }
+
+    /// `appendHoverText` of a tuned item.
+    fn tooltip(&self, _host: &dyn mod_api::ClientHost, event: &mut mod_api::TooltipEvent<'_>) {
+        if tuned(event.stack).is_some() {
+            let line = |key: &str| mod_api::Text::translate(key, Vec::new());
+            event
+                .lines
+                .push((line("create.logistically_linked.tooltip"), 0xFFAA00));
+            event
+                .lines
+                .push((line("create.logistically_linked.tooltip_clear"), 0xAAAAAA));
+        }
+    }
+}
+
+/// `minecraft:enchantment_glint_override`: a tuned item glints (`isFoil`).
+struct Glint;
+
+impl mod_api::Component for Glint {
+    type Value = bool;
+    fn id(&self) -> &str {
+        "minecraft:enchantment_glint_override"
+    }
+    fn decode(&self, value: &Tag) -> Option<bool> {
+        match value {
+            Tag::Byte(b) => Some(*b != 0),
+            _ => None,
+        }
+    }
+    fn encode(&self, value: bool) -> Tag {
+        Tag::Byte(i8::from(value))
     }
 }
 
