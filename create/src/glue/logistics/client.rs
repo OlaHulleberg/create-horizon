@@ -757,50 +757,6 @@ fn draw_ejector(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::decompose;
-    use create_engine::math::{Mat4, Quat, Vec3};
-
-    /// The decomposed pose put back together moves points where the pose does.
-    #[test]
-    fn poses_decompose_into_move_turn_and_scale() {
-        let poses = [
-            Mat4::from_translation(Vec3::new(0.5, 15.0 / 16.0, 0.5))
-                * Mat4::from_rotation_y(37f32.to_radians())
-                * Mat4::from_rotation_x(200f32.to_radians())
-                * Mat4::from_scale(Vec3::new(0.5, 0.5, 0.5)),
-            Mat4::from_rotation_z(180f32.to_radians()) * Mat4::from_rotation_y(90f32.to_radians()),
-            create_engine::belt::segment_pose(&create_engine::belt::Segment {
-                facing: create_engine::kinetics::Dir::East,
-                slope: create_engine::belt::Slope::Sideways,
-                part: create_engine::belt::Part::Middle,
-            }),
-            Mat4::from_translation(Vec3::new(1.0, -2.0, 3.0)),
-        ];
-        for m in poses {
-            let (at, turn, s) = decompose(m).expect("a pose");
-            for p in [
-                Vec3::new(0.0, 0.0, 0.0),
-                Vec3::new(1.0, 0.25, -0.5),
-                Vec3::new(-0.3, 0.9, 0.1),
-            ] {
-                let scaled = Vec3::new(p.x * s[0], p.y * s[1], p.z * s[2]);
-                let turned = match turn {
-                    Some((axis, deg)) => {
-                        let axis = Vec3::new(axis[0], axis[1], axis[2]).normalize();
-                        Quat::from_axis_angle(axis, deg.to_radians()) * scaled
-                    }
-                    None => scaled,
-                };
-                let got = turned + Vec3::new(at[0], at[1], at[2]);
-                let want = m.transform_point3(p);
-                assert!((got - want).length() < 1e-4, "{got:?} != {want:?}");
-            }
-        }
-    }
-}
-
 /// Draws the filter a brass funnel or a smart chute shows in its slot (`FilteringRenderer`),
 /// from its block entity's `FILTER`: on each side the slot is on, turned to face out of it
 /// (`ValueBoxTransform.Sided.rotate`; a horizontal funnel's tilted back 22.5°), at half the
@@ -870,5 +826,49 @@ fn draw_filter(
         }
         draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
         draw.pop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decompose;
+    use create_engine::math::{Mat4, Quat, Vec3};
+
+    /// The decomposed pose put back together moves points where the pose does.
+    #[test]
+    fn poses_decompose_into_move_turn_and_scale() {
+        let poses = [
+            Mat4::from_translation(Vec3::new(0.5, 15.0 / 16.0, 0.5))
+                * Mat4::from_rotation_y(37f32.to_radians())
+                * Mat4::from_rotation_x(200f32.to_radians())
+                * Mat4::from_scale(Vec3::new(0.5, 0.5, 0.5)),
+            Mat4::from_rotation_z(180f32.to_radians()) * Mat4::from_rotation_y(90f32.to_radians()),
+            create_engine::belt::segment_pose(&create_engine::belt::Segment {
+                facing: create_engine::kinetics::Dir::East,
+                slope: create_engine::belt::Slope::Sideways,
+                part: create_engine::belt::Part::Middle,
+            }),
+            Mat4::from_translation(Vec3::new(1.0, -2.0, 3.0)),
+        ];
+        for m in poses {
+            let (at, turn, s) = decompose(m).expect("a pose");
+            for p in [
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.25, -0.5),
+                Vec3::new(-0.3, 0.9, 0.1),
+            ] {
+                let scaled = Vec3::new(p.x * s[0], p.y * s[1], p.z * s[2]);
+                let turned = match turn {
+                    Some((axis, deg)) => {
+                        let axis = Vec3::new(axis[0], axis[1], axis[2]).normalize();
+                        Quat::from_axis_angle(axis, deg.to_radians()) * scaled
+                    }
+                    None => scaled,
+                };
+                let got = turned + Vec3::new(at[0], at[1], at[2]);
+                let want = m.transform_point3(p);
+                assert!((got - want).length() < 1e-4, "{got:?} != {want:?}");
+            }
+        }
     }
 }
