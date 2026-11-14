@@ -14,8 +14,9 @@ use super::{assembly, riding, saved, tracks, visuals};
 use create_engine::Block;
 use create_engine::trains::{CURVE_UPDATE_TICKS, Event, Run};
 use mod_api::{
-    BlockClick, BlockPart, ClientHost, Compound, Host, InteractionResult, PlayerRef, Registrar,
-    RegistrationContext, ServerHost, UseItemOnEvent, UseWithoutItemEvent,
+    BlockClick, BlockPart, BlockSignalEvent, ClientHost, Compound, Host, InteractionResult,
+    IsSignalSourceEvent, LevelHost, PlayerRef, Registrar, RegistrationContext, ServerHost,
+    UseItemOnEvent, UseWithoutItemEvent,
 };
 use std::cell::RefCell;
 
@@ -346,6 +347,21 @@ impl BlockPart for Observer {
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
         use_observer(host, event.click)
+    }
+
+    /// `TrackObserverBlock.isSignalSource`: always.
+    fn is_signal_source(&self, _level: &dyn LevelHost, event: &mut IsSignalSourceEvent) {
+        event.source = true;
+    }
+
+    /// `TrackObserverBlock.getSignal`: 15 while powered, to every side (no direct signal).
+    fn block_signal(&self, level: &dyn LevelHost, event: &mut BlockSignalEvent) {
+        let powered = level
+            .state_string(event.state)
+            .is_some_and(|s| s.contains("powered=true"));
+        if !event.direct && powered {
+            event.signal = 15;
+        }
     }
 }
 
