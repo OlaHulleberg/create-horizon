@@ -31,6 +31,7 @@ pub mod controller;
 pub mod draw;
 mod lifts;
 pub mod seats;
+mod superglue;
 
 use super::server::ServerLevel;
 use super::states;
@@ -40,9 +41,9 @@ use create_engine::Block;
 use create_engine::contraption::{Chassis, Found, Sticky};
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
-    BlockClick, BlockState, BlockUpdateFlags, Compound, Flow, Host, ItemStack, PlayerRef,
-    RandomSource, RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent,
-    ServerHost,
+    BlockClick, BlockState, BlockUpdateFlags, Compound, Flow, Host, ItemStack, LeftClickBlockEvent,
+    PlayerRef, RandomSource, RegisterCommandsEvent, Registrar, RegistrationContext,
+    RunModCommandEvent, ServerHost,
 };
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -58,12 +59,14 @@ impl Subsystem for Contraptions {
         bearings::register(r);
         lifts::register(r);
         actors::register(r);
+        superglue::register(r);
     }
 
     fn world_closed(&self) {
         bearings::forget();
         lifts::forget();
         actors::forget();
+        superglue::forget();
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -105,6 +108,14 @@ impl Subsystem for Contraptions {
         bearings::tick_pistons(lv);
         actors::tick_mounted(lv);
         lifts::tick_lifts(lv);
+    }
+
+    /// A left click with super glue in hand takes the glue off the block hit.
+    fn left_click_block(&self, host: &mut dyn ServerHost, event: &mut LeftClickBlockEvent) -> Flow {
+        if superglue::left_click(host, event) {
+            return Flow::Cancel;
+        }
+        Flow::Continue
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {

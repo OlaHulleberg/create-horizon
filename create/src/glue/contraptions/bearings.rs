@@ -497,6 +497,48 @@ fn put_back_turned(
         })
         .collect();
     put_back_blocks(lv, &turned, |lv, p| lv.is_free(p));
+    turn_glue(lv, bearing, &w.blocks, anchor, quarter, axis);
+}
+
+/// The glue a turning structure carries (`Contraption.superglue`) turns with it: the areas that
+/// held its blocks, which stay in the world while it turns, go back turned with the blocks
+/// (each shrunk to the blocks it holds, as `removeBlocksFromWorld` keeps them).
+fn turn_glue(
+    lv: &mut ServerLevel<'_>,
+    bearing: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+    anchor: [i32; 3],
+    quarter: i32,
+    axis: Axis,
+) {
+    if contraption::clockwise_turns(quarter) == 0 {
+        return;
+    }
+    let dim = lv.dim;
+    let world: Vec<[i32; 3]> = blocks.iter().map(|(o, _)| add(bearing, *o)).collect();
+    let turn = |p: [i32; 3]| {
+        let local = [0, 1, 2].map(|i| p[i] - anchor[i]);
+        add(anchor, contraption::rotate(local, quarter, axis))
+    };
+    with_world(|w| {
+        let areas = &mut w.dims[dim].glue;
+        let (used, shrunk) = create_engine::glue::carried(areas, &world, |p| p == bearing);
+        if used.is_empty() {
+            return;
+        }
+        let mut columns: Vec<(i32, i32)> = used.iter().map(|&i| areas[i].column()).collect();
+        for i in used.into_iter().rev() {
+            areas.remove(i);
+        }
+        for g in shrunk {
+            let t = create_engine::glue::Glue::span(turn(g.min), turn(g.max));
+            columns.push(t.column());
+            areas.push(t);
+        }
+        for (cx, cz) in columns {
+            super::super::persist::mark_unsaved(dim, [cx, cz]);
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 //! What moving contraptions carry besides their blocks, and Create's glue and stickers: super
-//! glue areas the structure search reads (set by `/create_debug glue`, standing in for the
-//! item's selection), the sticker's redstone, actors (drills, saws, harvesters, ploughs,
+//! glue areas the structure search reads (set by the glue item, `superglue`, or
+//! `/create_debug glue`), the sticker's redstone, actors (drills, saws, harvesters, ploughs,
 //! rollers, interfaces) ticked only while their contraption moves, mounted storage (chests and
 //! barrels) that keeps its items and takes what the actors collect, and contraption controls
 //! (`/create_debug controls`). Create's rules are in `create_engine::glue` and
@@ -149,7 +149,7 @@ fn stack_of(lv: &ServerLevel<'_>, id: &str) -> Option<ItemStack> {
 // Glue
 
 /// `SuperGlueEntity.isSideSticky` for the glue selection: the sides of a block already sticky.
-fn sticky_sides(lv: &ServerLevel<'_>, p: [i32; 3]) -> u8 {
+pub(super) fn sticky_sides(lv: &ServerLevel<'_>, p: [i32; 3]) -> u8 {
     let Some((name, props)) = lv.name_props(p) else {
         return 0;
     };
