@@ -2696,6 +2696,75 @@ mod tests {
     }
 
     #[test]
+    fn a_boiler_reads_as_boiler_display_source_writes_it() {
+        let lang = Lang::EN_US;
+        // A 4-block tank on lava with one engine and no water: passive heat, size 1.
+        let b = BoilerView {
+            passive: true,
+            active_heat: 0,
+            for_size: 1,
+            for_water: 0,
+        };
+        let sign = Stats { rows: 4, columns: 15 };
+        let (text, _, _) = boiler_text(Some(&b), Target::Sign { hanging: false }, sign, &lang);
+        assert_eq!(text[0], "Boiler:  Idle");
+        // min 0, max 1: no green, one dark red for the size's missing level, four greys.
+        assert_eq!(text[1], "Size....... |||||");
+        assert_eq!(text[3], "Heat...... |||||");
+        let board = Stats { rows: 4, columns: 22 };
+        let (_, flap, _) = boiler_text(Some(&b), Target::Board, board, &lang);
+        assert_eq!(flap[0], vec!["Boiler Status:  Idle".to_string()]);
+        assert_eq!(flap[1], vec![" Size".to_string(), "\u{2592}".to_string()]);
+        assert_eq!(flap[2], vec!["Water".to_string(), "\u{2591}".to_string()]);
+        // Too few rows: the two lines of "not enough space".
+        let small = Stats { rows: 2, columns: 22 };
+        let (text, flap, _) = boiler_text(Some(&b), Target::Board, small, &lang);
+        assert_eq!(text, vec!["Not enough space ", "for Boiler Status"]);
+        assert_eq!(flap.len(), 2);
+        let one = Stats { rows: 1, columns: 22 };
+        let (text, _, _) = boiler_text(Some(&b), Target::Nixie, one, &lang);
+        assert_eq!(text, vec!["Not enough space for Boiler Status"]);
+    }
+
+    #[test]
+    fn a_waiting_train_tells_its_status() {
+        use crate::schedule::{Condition, Entry, Runtime, Schedule, State, TimeUnit};
+        let lang = Lang::EN_US;
+        let schedule = Schedule {
+            entries: vec![
+                Entry::station(
+                    "A",
+                    vec![vec![Condition::Delay {
+                        value: 30,
+                        unit: TimeUnit::Seconds,
+                    }]],
+                ),
+                Entry::station("B", vec![vec![Condition::Powered]]),
+            ],
+            cyclic: true,
+            saved_progress: 0,
+        };
+        let mut r = Runtime {
+            state: State::PostTransit,
+            progress: vec![(0, 100)],
+            ..Runtime::default()
+        };
+        // 500 ticks left: 25 seconds.
+        assert_eq!(
+            train_status(Some(&schedule), &r, 0, 0, &lang).as_deref(),
+            Some("Departs in 25 Seconds")
+        );
+        r.current = 1;
+        assert_eq!(
+            train_status(Some(&schedule), &r, 0, 0, &lang).as_deref(),
+            Some("Waiting for redstone")
+        );
+        r.state = State::InTransit;
+        assert_eq!(train_status(Some(&schedule), &r, 0, 0, &lang), None);
+        assert_eq!(train_status(None, &r, 0, 0, &lang), None);
+    }
+
+    #[test]
     fn boards_draw_their_flaps_as_flap_display_renderer_does() {
         let at = |m: crate::math::Mat4| m.transform_point3(crate::math::Vec3::ZERO);
         let near =
