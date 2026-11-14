@@ -232,6 +232,7 @@ fn put_back(lv: &mut ServerLevel<'_>, bearing: [i32; 3], w: &create_engine::worl
         .map(|(o, s)| (add(bearing, *o), *s))
         .collect();
     put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
+    actors::release_storage(lv, bearing, |o| add(bearing, o));
 }
 
 /// The facing of the Create block `block` at `pos`.
@@ -294,6 +295,7 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
         let Ok((blocks, sails)) = gathered else {
             continue;
         };
+        actors::carry_storage(lv, pos, pos, &blocks);
         take_blocks(lv, pos, &blocks);
         // `RotationDirection` on its value box: clockwise unless set otherwise.
         let w = create_engine::world::Windmill {
@@ -477,6 +479,7 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                 let Ok((blocks, sails)) = gathered else {
                     continue;
                 };
+                actors::carry_storage(lv, pos, pos, &blocks);
                 take_blocks(lv, pos, &blocks);
                 let w = create_engine::world::Windmill {
                     blocks,
@@ -521,6 +524,10 @@ fn put_back_turned(
         })
         .collect();
     put_back_blocks(lv, &turned, |lv, p| lv.is_free(p));
+    actors::release_storage(lv, bearing, |o| {
+        let local = [o[0] - f[0], o[1] - f[1], o[2] - f[2]];
+        add(anchor, contraption::rotate(local, quarter, axis))
+    });
     turn_glue(lv, bearing, &w.blocks, anchor, quarter, axis);
 }
 
@@ -1172,6 +1179,9 @@ fn windmills_to_nbt(
             .map(|(p, w)| {
                 let mut c = Compound::new();
                 c.insert("pos".into(), Tag::IntArray(p.to_vec()));
+                if let Some(t) = actors::storage_to_nbt(lv, *p) {
+                    c.insert("storage".into(), t);
+                }
                 c.insert(
                     "blocks".into(),
                     Tag::IntArray(w.blocks.iter().flat_map(|(o, _)| *o).collect()),
@@ -1260,6 +1270,9 @@ fn pistons_to_nbt(lv: &ServerLevel<'_>, all: &[([i32; 3], create_engine::world::
                 let facing = Dir::ALL.iter().position(|d| Some(*d) == m.facing)?;
                 let mut c = Compound::new();
                 c.insert("pos".into(), Tag::IntArray(p.to_vec()));
+                if let Some(t) = actors::storage_to_nbt(lv, *p) {
+                    c.insert("storage".into(), t);
+                }
                 structure_to_nbt(lv, &mut c, &m.blocks);
                 c.insert(
                     "piston".into(),
@@ -1301,8 +1314,10 @@ fn pistons_from_nbt(
             };
             let blocks = structure_from_nbt(lv, c)?;
             let carried = actors::bearing_actors(&blocks);
+            let pos = [*p.first()?, *p.get(1)?, *p.get(2)?];
+            actors::storage_from_nbt(lv, pos, c.get(&"storage".into()));
             Some((
-                [*p.first()?, *p.get(1)?, *p.get(2)?],
+                pos,
                 create_engine::world::Moving {
                     anchor: [ax, ay, az],
                     blocks,
@@ -1354,8 +1369,10 @@ fn windmills_from_nbt(
                     ))
                 })
                 .collect();
+            let pos = [*p.first()?, *p.get(1)?, *p.get(2)?];
+            actors::storage_from_nbt(lv, pos, c.get(&"storage".into()));
             Some((
-                [*p.first()?, *p.get(1)?, *p.get(2)?],
+                pos,
                 create_engine::world::Windmill {
                     blocks,
                     sails: (*sails.first()?).max(0) as u32,

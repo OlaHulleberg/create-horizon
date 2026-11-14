@@ -118,12 +118,15 @@ pub(super) fn tick_lifts(lv: &mut ServerLevel<'_>) {
                 Some(p.placed_at(create_engine::pulley::grid_offset(p.offset, p.range)))
             }
             Held::Elevator(e) => Some(e.placed_at()),
-            _ => None,
+            // A clock's hands go back turned to 0, where they started.
+            Held::Clock(_) => Some(pos),
         };
         lift_put_back(lv, &held.put_back(pos));
-        if let Some(origin) = origin
-            && let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos)))
-        {
+        // What rode with it (its storage too, kept apart from its actors) goes back.
+        if let Some(origin) = origin {
+            let mut carried = PULLEY_CARRIED
+                .with_borrow_mut(|c| c.remove(&(dim, pos)))
+                .unwrap_or_default();
             actors::release(lv, pos, origin, &mut carried);
         }
         draw::hide(lv, pos);
@@ -281,6 +284,11 @@ fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32
     let Ok(Some(hands)) = create_engine::clock::gather(pos, facing, |p| found(lv, p)) else {
         return;
     };
+    let mut all = hands.hour.clone();
+    if let Some((_, m)) = &hands.minute {
+        all.extend(m.iter().copied());
+    }
+    actors::carry_storage(lv, pos, pos, &all);
     take_blocks(lv, pos, &hands.hour);
     if let Some((_, m)) = &hands.minute {
         take_blocks(lv, pos, m);
@@ -312,6 +320,7 @@ fn disassemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     CLOCK_SHOWN.with_borrow_mut(|s| s.remove(&(dim, pos)));
     let held = Held::Clock(c);
     lift_put_back(lv, &held.put_back(pos));
+    actors::release_storage(lv, pos, |o| add(pos, o));
     draw::hide(lv, pos);
     mark_unsaved(lv, pos);
 }
@@ -1092,6 +1101,10 @@ pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compo
         .map(|((pos, held), target)| {
             let mut c = Compound::new();
             c.insert("pos".into(), Tag::IntArray(pos.to_vec()));
+            // What its storage blocks hold (`MountedStorageManager`).
+            if let Some(t) = actors::storage_to_nbt(lv, *pos) {
+                c.insert("storage".into(), t);
+            }
             let (kind, nums) = match held {
                 Held::Clock(k) => {
                     blocks_tags(&mut c, "", &k.hour);
@@ -1209,6 +1222,7 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
             };
             let kind = *kind.first()?;
             let pos = [*p.first()?, *p.get(1)?, *p.get(2)?];
+            actors::storage_from_nbt(lv, pos, c.get(&"storage".into()));
             let at = |i: usize| n.get(i).copied();
             let mut call = None;
             let held = match kind {

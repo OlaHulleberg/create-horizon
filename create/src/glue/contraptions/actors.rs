@@ -541,15 +541,7 @@ pub(super) fn carry(
     if !carried.controls.is_empty() || carried.actors.iter().any(|a| a.kind == Kind::Roller) {
         mark_pos_unsaved(dim, origin);
     }
-    let mut stored = Vec::new();
-    for (o, _) in blocks {
-        if let Some(s) = take_storage(lv, at(*o)) {
-            stored.push((*o, s));
-        }
-    }
-    if !stored.is_empty() {
-        STORAGE.with_borrow_mut(|m| m.insert((dim, key), stored));
-    }
+    carry_storage(lv, key, origin, blocks);
     let world: Vec<[i32; 3]> = blocks.iter().map(|(o, _)| at(*o)).collect();
     let taken = with_world(|w| {
         let areas = &mut w.dims[dim].glue;
@@ -568,6 +560,109 @@ pub(super) fn carry(
         }
     }
     carried
+}
+
+/// `MountedStorageManager` as a contraption assembles: the items of its storage blocks
+/// (`blocks`, offsets from `origin`) leave them and ride with contraption `key`.
+pub(super) fn carry_storage(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    origin: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+) {
+    let dim = lv.dim;
+    let mut stored = Vec::new();
+    for (o, _) in blocks {
+        if let Some(s) = take_storage(lv, add(origin, *o)) {
+            stored.push((*o, s));
+        }
+    }
+    if !stored.is_empty() {
+        STORAGE.with_borrow_mut(|m| m.insert((dim, key), stored));
+    }
+}
+
+/// The items contraption `key` carried back into its storage blocks, each now at `place(offset)`
+/// (dropped there when no storage block took its place).
+pub(super) fn release_storage(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    place: impl Fn([i32; 3]) -> [i32; 3],
+) {
+    let dim = lv.dim;
+    let stored = STORAGE
+        .with_borrow_mut(|m| m.remove(&(dim, key)))
+        .unwrap_or_default();
+    for (o, s) in stored {
+        let p = place(o);
+        // A fresh storage block where it went back: it takes the carried items.
+        if is_storage(lv, p) {
+            put_storage(lv, p, s);
+            continue;
+        }
+        for stack in s.into_iter().flatten() {
+            lv.drop_stack(center(p), [0.0; 3], stack, 10);
+        }
+    }
+}
+
+/// The items contraption `key` carries, as a save keeps them: each storage block's offset and
+/// its slots (`ItemStack.CODEC`, `Slot`). None when it carries none.
+pub(super) fn storage_to_nbt(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<Tag> {
+    let dim = lv.dim;
+    STORAGE.with_borrow(|m| {
+        let list = m.get(&(dim, key))?;
+        let blocks = list
+            .iter()
+            .map(|(o, slots)| {
+                let items = slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, s)| {
+                        let mut c = s.as_ref()?.to_nbt(&*lv.host)?;
+                        c.insert("Slot".into(), Tag::Int(i as i32));
+                        Some(Tag::Compound(c))
+                    })
+                    .collect();
+                let mut c = Compound::new();
+                c.insert("pos".into(), Tag::IntArray(o.to_vec()));
+                c.insert("items".into(), Tag::List(items));
+                Tag::Compound(c)
+            })
+            .collect();
+        Some(Tag::List(blocks))
+    })
+}
+
+/// What [`storage_to_nbt`] saved, carried again by contraption `key`.
+pub(super) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<&Tag>) {
+    let Some(Tag::List(list)) = tag else {
+        return;
+    };
+    let mut stored: Mounted = Vec::new();
+    for b in list {
+        let Tag::Compound(b) = b else { continue };
+        let (Some(Tag::IntArray(p)), Some(Tag::List(items))) =
+            (b.get(&"pos".into()), b.get(&"items".into()))
+        else {
+            continue;
+        };
+        let [x, y, z] = p[..] else { continue };
+        let mut slots: Stored = vec![None; STORAGE_SLOTS as usize];
+        for item in items {
+            let Tag::Compound(c) = item else { continue };
+            let Some(Tag::Int(i)) = c.get(&"Slot".into()) else {
+                continue;
+            };
+            if let Some(slot) = slots.get_mut(*i as usize) {
+                *slot = ItemStack::from_nbt(&*lv.host, c);
+            }
+        }
+        stored.push(([x, y, z], slots));
+    }
+    if !stored.is_empty() {
+        STORAGE.with_borrow_mut(|m| m.insert((lv.dim, key), stored));
+    }
 }
 
 /// What a contraption carried goes back with its blocks (`addBlocksToWorld`, `stop`): its
@@ -608,20 +703,7 @@ pub(super) fn release(
     if settled {
         mark_pos_unsaved(dim, origin);
     }
-    let stored = STORAGE
-        .with_borrow_mut(|m| m.remove(&(dim, key)))
-        .unwrap_or_default();
-    for (o, s) in stored {
-        let p = at(o);
-        // A fresh storage block where it went back: it takes the carried items.
-        if is_storage(lv, p) {
-            put_storage(lv, p, s);
-            continue;
-        }
-        for stack in s.into_iter().flatten() {
-            lv.drop_stack(center(p), [0.0; 3], stack, 10);
-        }
-    }
+    release_storage(lv, key, at);
     if carried.glue.is_empty() {
         return;
     }
@@ -992,8 +1074,8 @@ fn collect(lv: &mut ServerLevel<'_>, key: [i32; 3], actor: &Actor, stack: ItemSt
 }
 
 /// The actors of a bearing's structure (its blocks' offsets from the bearing and states):
-/// breakers, harvesters, ploughs and rollers, each a breaker of its own. Its storage, glue and
-/// controls don't ride a bearing.
+/// breakers, harvesters, ploughs and rollers, each a breaker of its own. Its storage rides it
+/// apart (`carry_storage`); its glue and controls don't.
 pub(super) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
     let mut carried = Carried::default();
     for (o, state) in blocks {
