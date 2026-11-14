@@ -360,7 +360,9 @@ fn draw_crank(event: &mut BlockEntitySubmitEvent<'_>, facing: Dir) {
     let draw = &mut *event.draw;
     draw.push();
     draw.rotate_about(axis_vector(facing.axis()), angle, [0.5; 3]);
-    draw.block(part, &[("facing", kinetics::dir_name(facing.opposite()))]);
+    // `rotateTo(0, 0, -1 -> facing)`: the model's north (its grip's end) points the crank's
+    // way, which is the partial's `facing` variant.
+    draw.block(part, &[("facing", kinetics::dir_name(facing))]);
     draw.pop();
     if !c.moving && target == 0.0 {
         draw.keep();

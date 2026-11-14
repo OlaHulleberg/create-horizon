@@ -113,9 +113,17 @@ pub fn rotation_offset(block: Block, axis: Axis, pos: [i32; 3]) -> f32 {
         .filter(|&&a| a != axis)
         .map(|&a| Axis::of(pos, a))
         .sum();
-    if sum % 2 == 0 {
-        22.5
-    } else if matches!(
+    // `PoweredShaftBlockEntity.getRotationAngleOffset`: a half turn on even coordinates along
+    // its axis, so engines side by side drive their shafts out of step.
+    let powered = if block == Block::PoweredShaft && Axis::of(pos, axis) % 2 == 0 {
+        180.0
+    } else {
+        0.0
+    };
+    powered
+        + if sum % 2 == 0 {
+            22.5
+        } else if matches!(
         block,
         Block::LargeCogwheel | Block::AndesiteEncasedLargeCogwheel | Block::BrassEncasedLargeCogwheel
     ) {
@@ -552,7 +560,7 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                     },
                     Draw {
                         slot: 1,
-                        model: Model::CrankHandle(f.opposite()),
+                        model: Model::CrankHandle(f),
                         axis: f.axis(),
                         rpm: speeds[0],
                         phase: 0.0,
@@ -699,7 +707,7 @@ mod tests {
         let d = draws(Block::HandCrank, &s, [0, 0, 0], [-32.0, 0.0]);
         assert_eq!(d.len(), 2);
         assert_eq!(d[0].model, Model::CrankBase(Dir::West));
-        assert_eq!(d[1].model, Model::CrankHandle(Dir::East));
+        assert_eq!(d[1].model, Model::CrankHandle(Dir::West));
         assert!(d.iter().all(|x| x.axis == Axis::X && x.rpm == -32.0));
     }
 
