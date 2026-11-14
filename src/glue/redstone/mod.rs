@@ -45,6 +45,17 @@ use mod_api::{
 
 pub struct Redstone;
 
+/// Smart observers and threshold switches looking at their targets (legacy `tick_detectors`):
+/// late in the level tick, after the machines, belts and arms moved items and before `fluids`'
+/// `Tanks` hands on the tick's tank changes, which they read.
+pub struct Detectors;
+
+impl Subsystem for Detectors {
+    fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        detectors::tick_detectors(lv);
+    }
+}
+
 impl Subsystem for Redstone {
     /// A cuckoo clock's hands and doors are drawn each frame (`client`).
     fn animated(
@@ -98,7 +109,6 @@ impl Subsystem for Redstone {
         ticks::tick_cuckoos(lv);
         ticks::tick_links(lv);
         analog::take_touched(lv);
-        detectors::tick_detectors(lv);
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {

@@ -310,28 +310,6 @@ fn observer_powered(state: u32) -> Option<bool> {
     .flatten()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::decode_state_names;
-
-    #[test]
-    fn state_names_read_back() {
-        let mut d = Vec::new();
-        for (id, text) in [(3u32, "minecraft:oak_planks"), (7, "minecraft:stone")] {
-            d.extend_from_slice(&id.to_le_bytes());
-            d.extend_from_slice(&(text.len() as u16).to_le_bytes());
-            d.extend_from_slice(text.as_bytes());
-        }
-        assert_eq!(
-            decode_state_names(&d),
-            vec![
-                (3, "minecraft:oak_planks".to_owned()),
-                (7, "minecraft:stone".to_owned())
-            ]
-        );
-    }
-}
-
 /// A track observer's part: the click on its filter slot.
 struct Observer;
 
@@ -398,4 +376,26 @@ fn use_observer(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<Int
     persist::mark_pos_unsaved(dim, pos);
     filters::return_filter(&mut lv, player, pos, old);
     Some(InteractionResult::Success)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_state_names;
+
+    #[test]
+    fn state_names_read_back() {
+        let mut d = Vec::new();
+        for (id, text) in [(3u32, "minecraft:oak_planks"), (7, "minecraft:stone")] {
+            d.extend_from_slice(&id.to_le_bytes());
+            d.extend_from_slice(&(text.len() as u16).to_le_bytes());
+            d.extend_from_slice(text.as_bytes());
+        }
+        assert_eq!(
+            decode_state_names(&d),
+            vec![
+                (3, "minecraft:oak_planks".to_owned()),
+                (7, "minecraft:stone".to_owned())
+            ]
+        );
+    }
 }

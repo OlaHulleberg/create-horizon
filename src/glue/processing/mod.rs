@@ -106,9 +106,8 @@ impl Subsystem for Processing {
         persist::save(lv.dim, chunk, data);
     }
 
-    /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers,
-    /// then (after the vaults and chutes) drills and saws, then (after the depots and belts)
-    /// presses and deployers.
+    /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
+    /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         crafter::tick_crafters(lv);
         millstone::tick_millstones(lv);
@@ -116,10 +115,6 @@ impl Subsystem for Processing {
         crusher::tick_crushers(lv);
         basin::tick_burners(lv);
         basin::tick_mixers(lv);
-        saw::tick_drills(lv);
-        saw::tick_saws(lv);
-        press::tick_presses(lv);
-        deployer::tick_deployers(lv);
     }
 
     /// `BeltProcessingBehaviour` of the machine two above belt segment `segment` (the legacy
@@ -166,6 +161,20 @@ impl Subsystem for Processing {
             return mod_api::Flow::Continue;
         };
         use_block(host, event)
+    }
+}
+
+/// The drills and saws (after the vaults and chutes in the legacy order), then the presses and
+/// deployers, which work the depots and belts logistics moved this tick (`DepotBehaviour.tick`
+/// before `PressingBehaviour.tick`, as the legacy `tick_depots`, `tick_belts`, `tick_presses`).
+pub struct Tools;
+
+impl Subsystem for Tools {
+    fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        saw::tick_drills(lv);
+        saw::tick_saws(lv);
+        press::tick_presses(lv);
+        deployer::tick_deployers(lv);
     }
 }
 

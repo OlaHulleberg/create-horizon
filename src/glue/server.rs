@@ -62,14 +62,6 @@ impl<'a> ServerLevel<'a> {
             .unwrap_or(false)
     }
 
-    /// Sets engine state `id` at `pos`.
-    pub fn set_block(&mut self, pos: [i32; 3], id: u32, flags: BlockUpdateFlags) -> bool {
-        match states::state(id) {
-            Some(state) => self.set_state(pos, state, flags),
-            None => false,
-        }
-    }
-
     /// Sets one property of the state at `pos` (`state.setValue(..)` then `setBlock`). False when
     /// the block has no such property or value, or nothing changed.
     pub fn set_property(

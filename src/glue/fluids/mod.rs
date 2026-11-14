@@ -83,7 +83,8 @@ impl Subsystem for Fluids {
     }
 
     /// Before the solve, in the legacy order: pipes and pumps, boilers, valves, hoses and
-    /// whistles, tank block states, spouts and drains, then what clients must see again.
+    /// whistles, tank block states, spouts and drains. What clients must see again is `Tanks`',
+    /// later.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         pipes::tick_pipes(lv);
         pipes::tick_boilers(lv);
@@ -91,7 +92,6 @@ impl Subsystem for Fluids {
         pipes::tick_tank_states(lv);
         machines::tick_spouts(lv);
         machines::tick_drains(lv);
-        send_tank_changes(lv);
     }
 
     fn client_reset(&self) {
@@ -126,6 +126,17 @@ impl Subsystem for Fluids {
     ) -> Option<create_engine::belt::Process> {
         let above = [segment[0], segment[1] + 2, segment[2]];
         machines::spout_on_belt(lv, above, item, locked)
+    }
+}
+
+/// The tanks whose contents changed this tick, to their comparators and clients (legacy
+/// `send_tank_changes`): after redstone's `Detectors`, which read the changes, and before the
+/// solve.
+pub struct Tanks;
+
+impl Subsystem for Tanks {
+    fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        send_tank_changes(lv);
     }
 }
 

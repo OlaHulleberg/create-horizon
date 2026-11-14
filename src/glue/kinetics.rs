@@ -79,8 +79,21 @@ impl Subsystem for Kinetics {
         with_world(|w| w.neighbor_changed(dim, pos, state));
     }
 
+    /// Before the rest of the level tick (legacy `level_tick_post`'s head): cranks and valves
+    /// turning down, water wheels, split shafts following redstone, chain drives and sequenced
+    /// gearshifts. The solve is `Solve`'s, later.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
-        tick(lv);
+        tick_inputs(lv);
+    }
+}
+
+/// The kinetic solve, after every tick that may change what turns (legacy `level_tick_post`:
+/// `settle_belts`, `w.tick`, its events).
+pub struct Solve;
+
+impl Subsystem for Solve {
+    fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        tick_solve(lv);
     }
 }
 
@@ -97,10 +110,10 @@ fn settings_from_nbt(data: &Compound) -> Vec<([i32; 3], i32)> {
     }
 }
 
-/// A level's kinetic tick: cranks and valves turning down, split shafts following redstone,
-/// the network solved, the blocks Create breaks broken, and every changed part's speed put in
-/// its block entity's data for its clients.
-fn tick(lv: &mut ServerLevel<'_>) {
+/// What feeds a level's solve: cranks and valves turning down, water wheels' flow, split shafts
+/// following redstone (set before solving, so the change turns the network in this tick's
+/// solve), chain drives' places and sequenced gearshifts.
+fn tick_inputs(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     with_world(|w| w.tick_cranks(dim));
     // Water wheels whose surroundings changed, and one in 60 of the others each tick.
@@ -151,6 +164,12 @@ fn tick(lv: &mut ServerLevel<'_>) {
         lv.set_property(pos, "part", drive.part.name(), super::server::update_all());
     }
     tick_sequencers(lv);
+}
+
+/// A level's solve: the network solved, the blocks Create breaks broken, and every changed
+/// part's speed put in its block entity's data for its clients.
+fn tick_solve(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
     let mut events = Vec::new();
     let Some((removed, unsaved)) = with_world(|w| {
         w.settle_belts(dim);

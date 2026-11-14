@@ -33,38 +33,72 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use subsystem::Subsystem;
 
-/// Every subsystem, in the order their level ticks run.
+/// Every subsystem, in the order their level ticks run: the legacy level tick's
+/// (`legacy/glue/level_tick.rs`, and `runtime.rs` `level_tick_post` within it).
+///
+/// Before the kinetic solve, so that what they change turns in this tick's solve:
+/// - `Equipment`: backtanks fill (the legacy's first, ahead of Create's own tick).
+/// - `Kinetics`: cranks and valves turn down, water wheels, clutches and gearshifts follow
+///   redstone, chain drives, sequenced gearshifts. It declares the `create:kinetic` block entity
+///   type in `register`, so whatever attaches to `kinetics::kind()` there comes after it.
+/// - `Blocks`: sliding doors (postboxes open and shut at their menu, not here).
+/// - `Redstone`: latches, controller rails, diodes, lamps, cuckoo clocks, links, then the
+///   contents touched since the last tick.
+/// - `Controller` (linked controllers), `Display` (display links), `Contraptions` (bearings,
+///   their actors, gantries, windmills, stickers, pistons, mounted interfaces, lifts) and its
+///   `Drawing`.
+/// - `Processing`: crafters, millstones, fans, crushers, blaze burners, mixers.
+/// - `Fluids`: pipes and pumps, boilers, valves and hoses, tank states, spouts, drains.
+/// - `Carts`, then `Trains` (the controls, the trains, the HUD, curves) and `TrainControls`.
+/// - `Logistics`: vaults, chutes, funnels, tunnels, brass tunnels, depots, belts (whose
+///   machines answer `belt_process`), and `Entities`, its part of the kinetic type.
+/// - `processing::Tools`: drills, saws, then presses and deployers on what the depots and belts
+///   did this tick.
+/// - `Arms`: mechanical arms, weighted ejectors.
+/// - `redstone::Detectors`: smart observers and threshold switches, reading this tick's tank
+///   changes before `fluids::Tanks` hands them on (and drains them).
+/// - `kinetics::Solve`: belts settle, the network is solved, speeds go to clients.
+///
+/// After the solve:
+/// - `Gauges`: dials the solve moved.
+/// - `Packages`, `Stock`, `Schematics`, `Decor`, `Seats`, `Copycats`, `Items`: the legacy's
+///   subsystems ticked after Create's own.
+/// - `Comparators`, last: comparators beside every block whose output changed read it again.
+///
+/// The same order is the order the shared moments ask them in: the wheel goes to the train
+/// controls before the value boxes; a left click to decor before the items; a placement to the
+/// equipment before the items; the kinetic world hears of a block change before the others.
 pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
-    &processing::Processing,
+    &equipment::Equipment,
     &kinetics::Kinetics,
-    &packages::Packages,
-    &stock::Stock,
-    &schematics::Schematics,
-    &interaction::Interaction,
-    &items::Items,
-    &logistics::Logistics,
-    &logistics::Arms,
-    // After `Kinetics`, which declares the block entity type it adds to.
-    &logistics::Entities,
+    &blocks::Blocks,
+    &redstone::Redstone,
+    &contraptions::controller::Controller,
+    &display::Display,
+    &contraptions::Contraptions,
+    &contraptions::draw::Drawing,
+    &processing::Processing,
+    &fluids::Fluids,
     &trains::Carts,
     &trains::Trains,
     &trains::TrainControls,
-    &equipment::Equipment,
-    &fluids::Fluids,
+    &interaction::Interaction,
+    &logistics::Logistics,
+    &logistics::Entities,
+    &processing::Tools,
+    &logistics::Arms,
+    &redstone::Detectors,
+    &fluids::Tanks,
+    &kinetics::Solve,
     &gauges::Gauges,
-    &blocks::Blocks,
+    &packages::Packages,
+    &stock::Stock,
+    &schematics::Schematics,
     &decor::Decor,
-    &copycat::Copycats,
-    &redstone::Redstone,
-    &display::Display,
-    &redstone::Comparators,
-    // Before the kinetic solve, as the legacy level tick ran them: what a speed change starts
-    // acts on the next tick.
-    &contraptions::controller::Controller,
-    &contraptions::Contraptions,
-    // After kinetics, whose block entity type it attaches its part to.
-    &contraptions::draw::Drawing,
     &contraptions::seats::Seats,
+    &copycat::Copycats,
+    &items::Items,
+    &redstone::Comparators,
 ];
 
 thread_local! {
