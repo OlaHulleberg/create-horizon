@@ -12,6 +12,7 @@ mod equipment;
 mod java;
 mod prepare;
 mod shapes;
+mod tabs;
 
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -96,6 +97,7 @@ fn compile(create: &Path, repo: &Path) {
     let _ = fs::remove_dir_all(&decl_dir);
     let mut pending: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut declared = Vec::new();
+    let mut block_items = Vec::new();
     for b in &all {
         let d = blocks::decide(b, &shapes);
         match blocks::declaration(b, &d) {
@@ -105,6 +107,9 @@ fn compile(create: &Path, repo: &Path) {
                     &pretty(&doc),
                 );
                 declared.push(b.name.clone());
+                if doc["item"] == true {
+                    block_items.push(b.name.clone());
+                }
             }
             None => {
                 if let blocks::Decision::Pending(why) = d {
@@ -146,6 +151,12 @@ fn compile(create: &Path, repo: &Path) {
             } else {
                 json!({ "template": "minecraft:stick" })
             };
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
+        } else if facts.class.as_deref() == Some("SequencedAssemblyItem") {
+            // SequencedAssemblyItem: a sequenced assembly's transitional item, `stacksTo(1)`;
+            // its progress bar is the native mod's.
+            let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
         } else if name == "goggles" {
@@ -260,7 +271,7 @@ fn compile(create: &Path, repo: &Path) {
         } else if matches!(name.as_str(), "schematic" | "schematic_and_quill") {
             // SchematicItem, SchematicAndQuillItem: `stacksTo(1)`; a schematic's file, anchor,
             // rotation and mirror are kept in `minecraft:custom_data` by the native mod, which
-            // stands in for their clicks (`/create_debug schematic`).
+            // works their clicks.
             let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
@@ -318,6 +329,16 @@ fn compile(create: &Path, repo: &Path) {
         let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
         write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
         items.push(name.to_owned());
+    }
+
+    // AllCreativeModeTabs: the base and palettes tabs (with AllFluids' buckets).
+    let mut tab_items = items.clone();
+    tab_items.extend(["honey_bucket".to_owned(), "chocolate_bucket".to_owned()]);
+    for (name, doc) in tabs::tabs(&java_root, &block_items, &tab_items) {
+        write(
+            &decl_dir.join(format!("creative_tab/{name}.json")),
+            &pretty(&doc),
+        );
     }
 
     // The engine's table: every Create block, in registry order, as a `Block` enum.

@@ -1651,8 +1651,8 @@ pub fn nixie_texts(
     right: &str,
     width: impl Fn(&str) -> f32,
 ) -> Vec<TubeText> {
-    use Face as DoubleFace;
     use crate::math::{Mat4, Vec3};
+    use Face as DoubleFace;
     let y_rot = horizontal_angle(facing) - 90.0
         + if face == DoubleFace::WallReversed {
             180.0
@@ -1874,7 +1874,8 @@ mod tests {
     #[test]
     fn boards_draw_their_flaps_as_flap_display_renderer_does() {
         let at = |m: crate::math::Mat4| m.transform_point3(crate::math::Vec3::ZERO);
-        let near = |a: crate::math::Vec3, b: [f32; 3]| (a - crate::math::Vec3::from(b)).length() < 1e-5;
+        let near =
+            |a: crate::math::Vec3, b: [f32; 3]| (a - crate::math::Vec3::from(b)).length() < 1e-5;
         let options: Vec<Vec<String>> =
             Cycle::ALL.iter().map(|c| c.options(&Lang::EN_US)).collect();
         // A board one block wide facing south: four flaps (28 px); "AB" settled, two lines.

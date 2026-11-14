@@ -305,7 +305,7 @@ impl Subsystem for Packages {
         SYNCED.set(false);
     }
 
-    /// Our debug commands, standing in for the clipboard and signs (`address`), the frogport
+    /// Our debug commands, standing in for the clipboard (`address`; signs are read), the frogport
     /// item's selection (`frogport`) and the chain item (`chain`, `unchain`).
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         for usage in [
@@ -758,6 +758,7 @@ fn packed_stack(
 /// `PackagerBlockEntity.attemptToSend(null)`: the inventory behind packed into one box (a
 /// package there goes as it is), addressed with the packager's address, sliding out.
 fn attempt_send(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
+    update_sign_address(lv, dim, pos);
     if with(dim, |pk| pk.packager(pos).repackager) {
         attempt_repackage(lv, dim, pos);
         return;
@@ -877,6 +878,86 @@ fn unwrap_whole(
 /// `RepackagerBlockEntity.attemptToSend`: a package without order data in the inventory behind
 /// goes out as it is (with the sign's address); else, once every fragment of an order is there,
 /// they are taken and the order goes out repacked (`PackageRepackageHelper`), queued.
+/// `PackagerBlockEntity.updateSignAddress`: the text of a sign on any side of the packager (its
+/// front, else its back; the lines joined by spaces) is its address, the last side found
+/// winning. With no sign written, the address set before (`/create_debug address`) stays.
+fn update_sign_address(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
+    let mut found = None;
+    for d in Dir::ALL {
+        let o = d.offset();
+        let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+        if let Some(text) = sign_text(lv, at) {
+            found = Some(text);
+        }
+    }
+    if let Some(address) = found {
+        with(dim, |pk| pk.packager(pos).address = address);
+    }
+}
+
+/// The written text of the sign at `pos` (`getSign`): its front's lines, else its back's.
+fn sign_text(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<String> {
+    let host: &dyn mod_api::Host = &*lv.host;
+    let state = lv.block_state(pos)?;
+    if host.block_in_tag(state.block(), "minecraft:all_signs") != Some(true) {
+        return None;
+    }
+    let data = lv.host.block_entity(lv.level, pos)?.data(host)?;
+    for side in ["front_text", "back_text"] {
+        let Some(Tag::Compound(text)) = data.get(&side.into()) else {
+            continue;
+        };
+        let Some(Tag::List(messages)) = text.get(&"messages".into()) else {
+            continue;
+        };
+        let mut address = String::new();
+        for m in messages {
+            let line = component_text(m);
+            if !line.trim().is_empty() {
+                address.push_str(line.trim());
+                address.push(' ');
+            }
+        }
+        if !address.trim().is_empty() {
+            return Some(address.trim().to_owned());
+        }
+    }
+    None
+}
+
+/// A text component's plain text, as a sign keeps it: a string (JSON or plain) or a compound
+/// with `text` and `extra`.
+fn component_text(tag: &Tag) -> String {
+    match tag {
+        Tag::String(s) => {
+            let s = s.to_string_lossy();
+            match s.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+                Some(inner) => inner.replace("\\\"", "\"").replace("\\\\", "\\"),
+                None if s.starts_with('{') => s
+                    .split("\"text\":\"")
+                    .skip(1)
+                    .filter_map(|r| r.split('"').next())
+                    .collect(),
+                None => s,
+            }
+        }
+        Tag::Compound(c) => {
+            let mut out = match c.get(&"text".into()) {
+                Some(Tag::String(t)) => t.to_string_lossy(),
+                _ => String::new(),
+            };
+            if let Some(Tag::List(extra)) = c.get(&"extra".into()) {
+                for e in extra {
+                    out.push_str(&component_text(e));
+                }
+            }
+            out
+        }
+        Tag::List(parts) => parts.iter().map(component_text).collect(),
+        _ => String::new(),
+    }
+}
+
 fn attempt_repackage(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
     if !with(dim, |pk| {
         let k = pk.packager(pos);

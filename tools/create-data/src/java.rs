@@ -60,13 +60,18 @@ pub fn read_items(java_root: &Path) -> BTreeMap<String, JavaFacts> {
             facts.food = facts.food || text_has_food(&text, &name);
             out.entry(name).or_insert(facts);
         }
-        for marker in ["= ingredient(\"", " ingredient(\"", "taggedIngredient(\""] {
+        for (marker, class) in [
+            ("= ingredient(\"", "Item"),
+            (" ingredient(\"", "Item"),
+            ("taggedIngredient(\"", "Item"),
+            ("sequencedIngredient(\"", "SequencedAssemblyItem"),
+        ] {
             let mut rest = text.as_str();
             while let Some(at) = rest.find(marker) {
                 let after = &rest[at + marker.len()..];
                 let Some(end) = after.find('"') else { break };
                 out.entry(after[..end].to_string()).or_insert(JavaFacts {
-                    class: Some("Item".into()),
+                    class: Some(class.into()),
                     ..JavaFacts::default()
                 });
                 rest = &after[end..];

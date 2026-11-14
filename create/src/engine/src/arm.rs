@@ -6,8 +6,8 @@
 //! lazy tick comes round), and clients see it again only when its target or phase changes.
 
 use crate::kinetics::Dir;
-use crate::place::{mth_cos, mth_sin};
 use crate::math::{Mat4, Vec3};
+use crate::place::{mth_cos, mth_sin};
 use std::collections::HashMap;
 
 /// `mechanicalArmRange`: points must lie closer than this to the arm.

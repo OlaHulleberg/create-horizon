@@ -1,6 +1,8 @@
-//! `WrenchItem.useOn` on a Create block: sneaking, `onSneakWrenched` (its drops to the player
-//! unless creative, the block gone without drops); else `onWrenched`, turned about the axis of
-//! the face clicked. Blocks not Create's are left alone; a block a subsystem wrenches its own way
+//! `WrenchItem.useOn` on an `IWrenchable` Create block: sneaking, `onSneakWrenched` (its drops to
+//! the player unless creative, the block gone without drops); else `onWrenched`, turned about the
+//! axis of the face clicked, with Create's sounds. Any other block in `create:wrench_pickup`
+//! (bars, rails, redstone parts...) is picked up the same way when sneaking
+//! (`onItemUseOnOther`); the rest are left alone. A block a subsystem wrenches its own way
 //! answers first (`Subsystem::wrench_used`: a copycat's material, a pipe's glass, a whistle's
 //! size, a belt's casing, a funnel's mode). What takes the click before the wrench's use (the legacy
 //! `use_item_on` order) is each block's own: a crafter's edge and a deployer's mode
@@ -41,7 +43,13 @@ fn predict(host: &mut dyn ClientHost, event: &UseOnEvent<'_>) -> Option<Interact
         .level(host.dimension())?
         .block_state(&*host, event.pos)
         .and_then(states::id)?;
-    let block = super::super::client_table(&*host, |t| t.get(state).map(|(b, _)| b)).flatten()?;
+    let block = super::super::client_table(&*host, |t| t.get(state).map(|(b, _)| b)).flatten();
+    let Some(block) = block.filter(|b| create_engine::wrench::wrenchable(b.name())) else {
+        let level = host.level(host.dimension())?;
+        let state = level.block_state(&*host, event.pos)?;
+        return (sneaking(&*host, player) && pickup(&*host, state))
+            .then_some(InteractionResult::Success);
+    };
     Some(if block == Block::Nozzle && !sneaking(&*host, player) {
         InteractionResult::Fail
     } else {
@@ -59,32 +67,28 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     let mut lv = ServerLevel::new(host, &dimension)?;
     let pos = event.pos;
     let id = lv.block(pos);
-    if id == 0 {
-        return None;
-    }
-    let block = with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten()?;
-    let clicked = Dir::from_offset(event.face)?;
+    let block = (id != 0)
+        .then(|| with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten())
+        .flatten()
+        .filter(|b| create_engine::wrench::wrenchable(b.name()));
     let back = sneaking(&*lv.host, player);
+    let Some(block) = block else {
+        // `onItemUseOnOther`: any block in `create:wrench_pickup`, sneaking.
+        let state = lv.block_state(pos)?;
+        if !back || !pickup(&*lv.host, state) {
+            return None;
+        }
+        remove(&mut lv, player, pos, event.stack);
+        return Some(InteractionResult::Success);
+    };
+    let clicked = Dir::from_offset(event.face)?;
     for s in super::super::SUBSYSTEMS {
         if s.wrench_used(&mut lv, player, pos, block, clicked, event.hit.point, back) {
             return Some(InteractionResult::Success);
         }
     }
     if back {
-        // `onSneakWrenched`: `Block.getDrops` with the wrench, back into the inventory outside
-        // creative, then `destroyBlock(pos, false)`.
-        if !super::creative(&*lv.host, player) {
-            let drops = lv
-                .level
-                .block_drops(&mut *lv.host, pos, Some(event.stack), Some(player.entity()))
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            for d in drops {
-                give_back(lv.host, player, d);
-            }
-        }
-        lv.destroy_block(pos, false);
+        remove(&mut lv, player, pos, event.stack);
         return Some(InteractionResult::Success);
     }
     // `NozzleBlock.onWrenched`: FAIL (it is only picked up).
@@ -93,8 +97,64 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     }
     if let Some(next) = turned(&lv, pos, clicked) {
         lv.set_state(pos, next, update_all());
+        // `IWrenchable.playRotateSound`: `WRENCH_ROTATE` (the wooden trapdoor's close at .25 and
+        // 1.25 times) at a pitch of `nextFloat() + .5`.
+        let pitch = random(&mut lv) + 0.5;
+        sound(&mut lv, "create:wrench_rotate", pos, 0.25, 1.25 * pitch);
     }
     Some(InteractionResult::Success)
+}
+
+/// Whether `state` is in `create:wrench_pickup` (`WrenchItem.canWrenchPickup`).
+fn pickup(host: &dyn mod_api::Host, state: mod_api::BlockState) -> bool {
+    host.block_in_tag(state.block(), "create:wrench_pickup") == Some(true)
+}
+
+/// `onSneakWrenched` and `onItemUseOnOther`: `Block.getDrops` with the wrench, back into the
+/// inventory outside creative, `destroyBlock(pos, false)`, then `WRENCH_REMOVE` (an item pickup
+/// and a netherite block's hit, each at .25 and .75 times) at a pitch of `nextFloat() * .5 + .5`.
+fn remove(
+    lv: &mut ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    pos: [i32; 3],
+    wrench: &mod_api::ItemStack,
+) {
+    if !super::creative(&*lv.host, player) {
+        let drops = lv
+            .level
+            .block_drops(&mut *lv.host, pos, Some(wrench), Some(player.entity()))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        for d in drops {
+            give_back(lv.host, player, d);
+        }
+    }
+    lv.destroy_block(pos, false);
+    let pitch = random(lv) * 0.5 + 0.5;
+    for name in ["create:wrench_remove", "create:wrench_remove_compounded_1"] {
+        sound(lv, name, pos, 0.25, 0.75 * pitch);
+    }
+}
+
+/// `Create.RANDOM.nextFloat()`, from the level's random.
+fn random(lv: &mut ServerLevel<'_>) -> f32 {
+    use mod_api::RandomSource;
+    lv.level
+        .with_random(&mut *lv.host, |r| r.next_float())
+        .unwrap_or(0.5)
+}
+
+fn sound(lv: &mut ServerLevel<'_>, name: &str, pos: [i32; 3], volume: f32, pitch: f32) {
+    let at = pos.map(|v| f64::from(v) + 0.5);
+    lv.level.play_sound(
+        &mut *lv.host,
+        name,
+        at,
+        mod_api::SoundSource::Blocks,
+        volume,
+        pitch,
+    );
 }
 
 /// `IWrenchable.getRotatedBlockState`: the state at `pos` turned about the clicked face's axis,

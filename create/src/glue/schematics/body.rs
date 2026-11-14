@@ -125,6 +125,29 @@ pub fn write_structure(host: &dyn Host, rel: &str, tag: &Nbt) -> Result<u64, Str
     Ok(gz.len() as u64)
 }
 
+/// The schematics saved in `schematics/` (`ClientSchematicLoader.refresh`: its `.nbt` files, by
+/// name).
+pub fn local_files(host: &dyn Host) -> Vec<String> {
+    let Ok(folder) = ConfigPath::new(ROOT) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut after: Option<String> = None;
+    while let Ok(page) = files(host).list(&folder, after.as_deref(), 256) {
+        let Some(last) = page.last().map(|e| e.name.clone()) else {
+            break;
+        };
+        out.extend(
+            page.into_iter()
+                .map(|e| e.name)
+                .filter(|n| n.ends_with(".nbt")),
+        );
+        after = Some(last);
+    }
+    out.sort();
+    out
+}
+
 pub fn exists(host: &dyn Host, rel: &str) -> bool {
     path(rel).is_some_and(|p| matches!(files(host).stat(&p), Ok(Some(_))))
 }

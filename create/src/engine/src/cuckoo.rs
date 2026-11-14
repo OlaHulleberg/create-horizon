@@ -138,7 +138,8 @@ pub fn door_pose(facing: Dir, left: bool, angle: f32) -> YPose {
 /// pose and the shift along the turned x.
 pub fn figure_pose(facing: Dir, offset: f32) -> YPose {
     let (turn, ry) = clock_turn(facing);
-    let o = crate::math::Mat4::from_rotation_y(ry).transform_vector3(crate::math::Vec3::new(offset, 0.0, 0.0));
+    let o = crate::math::Mat4::from_rotation_y(ry)
+        .transform_vector3(crate::math::Vec3::new(offset, 0.0, 0.0));
     YPose {
         pose: turn,
         angle: 0.0,
@@ -250,7 +251,8 @@ mod tests {
             for left in [true, false] {
                 let d = door_pose(facing, left, 135.0);
                 let (turn, _) = clock_turn(facing);
-                let hinge = crate::math::Vec3::new(2.0 / 16.0, 0.3, if left { 6.0 } else { 10.0 } / 16.0);
+                let hinge =
+                    crate::math::Vec3::new(2.0 / 16.0, 0.3, if left { 6.0 } else { 10.0 } / 16.0);
                 let c = crate::math::Vec3::splat(0.5);
                 let gpu = |v: crate::math::Vec3| {
                     crate::math::Mat4::from_rotation_y(d.angle.to_radians())

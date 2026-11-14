@@ -261,6 +261,22 @@ pub trait Subsystem: Sync {
     /// `Hooks::render_gui_post`: draw on the HUD.
     fn render_gui_post(&self, _host: &dyn ClientHost, _event: &mut RenderGuiPostEvent<'_>) {}
 
+    /// `Hooks::living_entity_use_item_finish`, on the server: an item's use ran its time.
+    fn use_item_finished(
+        &self,
+        _host: &mut dyn ServerHost,
+        _event: &mut mod_api::LivingEntityUseItemFinishEvent<'_>,
+    ) {
+    }
+
+    /// `Hooks::render_level_stage`: draw in the world at one stage of the frame.
+    fn render_level_stage(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+    }
+
     /// The wrench used on this subsystem's Create block `block` at `pos`, `clicked` the face at
     /// `point` (`IWrenchable.onWrenched`, or `onSneakWrenched` when `sneaking`), on the server:
     /// true when the block took it its own way, and the wrench then neither turns nor picks it

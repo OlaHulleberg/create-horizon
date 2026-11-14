@@ -314,16 +314,29 @@ mod tests {
     #[test]
     fn rotations_are_right_handed() {
         let q = std::f32::consts::FRAC_PI_2;
-        assert!(close(Mat4::from_rotation_y(q).transform_vector3(Vec3::X), -Vec3::Z));
-        assert!(close(Mat4::from_rotation_x(q).transform_vector3(Vec3::Y), Vec3::Z));
-        assert!(close(Mat4::from_rotation_z(q).transform_vector3(Vec3::X), Vec3::Y));
+        assert!(close(
+            Mat4::from_rotation_y(q).transform_vector3(Vec3::X),
+            -Vec3::Z
+        ));
+        assert!(close(
+            Mat4::from_rotation_x(q).transform_vector3(Vec3::Y),
+            Vec3::Z
+        ));
+        assert!(close(
+            Mat4::from_rotation_z(q).transform_vector3(Vec3::X),
+            Vec3::Y
+        ));
         assert!(close(Quat::from_axis_angle(Vec3::Z, q) * Vec3::X, Vec3::Y));
     }
 
     #[test]
     fn products_apply_right_to_left() {
-        let m = Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)) * Mat4::from_scale(Vec3::splat(2.0));
-        assert!(close(m.transform_point3(Vec3::ONE), Vec3::new(3.0, 2.0, 2.0)));
+        let m =
+            Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)) * Mat4::from_scale(Vec3::splat(2.0));
+        assert!(close(
+            m.transform_point3(Vec3::ONE),
+            Vec3::new(3.0, 2.0, 2.0)
+        ));
         assert!(close(m.transform_vector3(Vec3::ONE), Vec3::splat(2.0)));
     }
 }

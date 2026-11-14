@@ -74,12 +74,6 @@ pub(super) fn block_of(host: &dyn ClientHost, pos: [i32; 3]) -> Option<B> {
     super::super::client_table(host, |t| t.get(state).map(|(b, _)| b)).flatten()
 }
 
-/// The speed shown by the part in slot 0 of the block at `pos`.
-pub(super) fn speed_at(host: &dyn ClientHost, pos: [i32; 3]) -> f32 {
-    host.level(host.dimension())
-        .map_or(0.0, |l| kinetics::shown_speeds(host, l, pos)[0])
-}
-
 /// A setting the server sent: the value box and an open board or held press show it.
 pub(super) fn values_from_server(data: &[u8]) {
     let w: Vec<i32> = data
@@ -110,6 +104,20 @@ pub(super) fn values_from_server(data: &[u8]) {
             open.known = true;
         }
     });
+}
+
+/// The value box under the crosshair, when the player may use it: its block and its board's
+/// title.
+pub(super) fn hovered_box(host: &dyn ClientHost) -> Option<([i32; 3], &'static str)> {
+    let Some(CrosshairTarget::Block { pos, hit, .. }) = host.crosshair_target() else {
+        return None;
+    };
+    let pos = [pos.x, pos.y, pos.z];
+    let player = host.local_player()?;
+    if !may_use_value_box(host, player) || !hits_value_box(host, pos, hit.face, hit.point) {
+        return None;
+    }
+    Some((pos, board_of(host, pos, false)?.board.title))
 }
 
 /// Whether the hit `hit` on the block at `pos` lands on its active value box.
@@ -195,7 +203,11 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
     let setting = match (block, seen.filter(|_| known)) {
         (_, Some(v)) => v,
         (B::CreativeMotor, None) => {
-            let speed = speed_at(host, pos);
+            // The speed the network turns it at (`getTheoreticalSpeed`, an overstressed
+            // network's too).
+            let speed = host
+                .level(host.dimension())
+                .map_or(0.0, |l| kinetics::shown_theory(host, l, pos).0);
             facing.map_or(speed, |f| {
                 create_engine::kinetics::convert_to_direction(speed, f)
             }) as i32
@@ -310,23 +322,20 @@ pub(super) fn wheel(host: &mut dyn ClientHost, steps: i32) -> Flow {
         }
         return Flow::Cancel;
     }
+    // Create 6 edits values on the board only: the wheel over a block scrolls the hotbar. The
+    // chassis' range, whose board (with the wrench) is not ported, keeps the wheel.
     let Some(CrosshairTarget::Block { pos, .. }) = host.crosshair_target() else {
         return Flow::Continue;
     };
     let pos = [pos.x, pos.y, pos.z];
-    let Some(block) = block_of(&*host, pos) else {
-        return Flow::Continue;
-    };
     let wrench = host.local_player().is_some_and(|p| holds_wrench(&*host, p));
-    let scrolls = matches!(
-        block,
-        B::CreativeMotor | B::RotationSpeedController | B::BrassTunnel
-    ) || wrench
-        && matches!(
-            block,
+    let chassis = block_of(&*host, pos).is_some_and(|b| {
+        matches!(
+            b,
             B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis
-        );
-    if !scrolls {
+        )
+    });
+    if !(wrench && chassis) {
         return Flow::Continue;
     }
     if steps != 0 {

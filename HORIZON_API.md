@@ -33,6 +33,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **`lightning_strike` names no level**, so lightning cannot clear Create's copper from the glue. Emitting
   `neoforge:oxidizables` / `neoforge:waxables` data maps for Create's copper (`tools/create-data`) would let the
   fork's own weathering, waxing and lightning handle it.
+- **Scaffolding's collision for a templated block**: Horizon gives `ScaffoldingBlock.getCollisionShape` (solid
+  only from above, unless descending) and its dynamic shape only to `minecraft:scaffolding` by name; a copy
+  without declared shapes has none (placing it fails, and an entity touching it stops the game). Create's metal
+  scaffolding declares the stable shape, so it is stood on but not climbed through from inside; a declaration
+  field (or class-based lookup) for scaffolding's context rule would close it.
 - **Fluid interactions in content declarations**: honey and chocolate meeting lava (obsidian from a source,
   limestone or scoria from flowing lava, `registerFluidInteractions`) have no declaration.
 
@@ -44,6 +49,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   (or a journal for mod state) would close both.
 - **A notice for any container's contents changing.** `contents_changed` reaches only the changed block's own
   parts, so a chute under a vanilla container and a frogport above an inventory re-check on a timer instead.
+- **An empty stack from `menu_quick_move`**: the clicked slot keeps what is left of `stack`, and an
+  `ItemStack` is never empty, so a part cannot move a whole stack to a slot of its choosing (the
+  schematicannon's gunpowder slot); an `Option<ItemStack>` there would close it.
 - **Per-slot insert rules on `ModContainer`**: "insert only while empty" (depot, ejector, crafter, chute) and
   the toolbox's one item kind per compartment.
 - **Enchantment maximum levels on the server** (the `max_enchanted` filter attribute).
