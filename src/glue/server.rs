@@ -1,0 +1,131 @@
+//! One server level as Create's glue sees it: the host, the level's handle and its engine index,
+//! with the reads and writes the glue makes in engine terms (positions as `[i32; 3]`, states as
+//! engine ids). Every subsystem works through this rather than the raw API, so the conversions
+//! live in one place. Subsystems add their own methods in their own modules
+//! (`impl ServerLevel<'_> { .. }`).
+
+use super::states;
+use mod_api::{
+    BlockState, BlockUpdateFlags, Direction, HostBlockStates, LevelRef, PlayerRef, ServerHost,
+};
+
+pub struct ServerLevel<'a> {
+    pub host: &'a mut dyn ServerHost,
+    pub level: LevelRef,
+    /// The engine's index of this level.
+    pub dim: usize,
+    /// `minecraft:overworld`.
+    pub dimension: &'a str,
+}
+
+/// Vanilla's `Block.UPDATE_CLIENTS`.
+pub const UPDATE_CLIENTS: BlockUpdateFlags = BlockUpdateFlags::CLIENTS;
+
+/// Vanilla's `Block.UPDATE_ALL`: neighbours and clients.
+pub fn update_all() -> BlockUpdateFlags {
+    BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS
+}
+
+impl<'a> ServerLevel<'a> {
+    /// The level `dimension` names, when it is open and Create's world is.
+    pub fn new(host: &'a mut dyn ServerHost, dimension: &'a str) -> Option<ServerLevel<'a>> {
+        let dim = super::world::level_index(dimension)?;
+        let level = host.level(dimension)?;
+        Some(ServerLevel {
+            host,
+            level,
+            dim,
+            dimension,
+        })
+    }
+
+    /// The state at `pos`, or `None` where the level has none loaded.
+    pub fn block_state(&self, pos: [i32; 3]) -> Option<BlockState> {
+        self.level.block_state(&*self.host, pos)
+    }
+
+    /// The engine id at `pos`: Create's state, or 0 for anything else (or nothing loaded).
+    pub fn block(&self, pos: [i32; 3]) -> u32 {
+        self.block_state(pos).map_or(0, states::id_or_none)
+    }
+
+    /// Whether `pos` is in a loaded chunk.
+    pub fn is_loaded(&self, pos: [i32; 3]) -> bool {
+        self.level.is_loaded(&*self.host, pos)
+    }
+
+    /// Sets the state at `pos` (`Level.setBlock`). True when the block changed.
+    pub fn set_state(&mut self, pos: [i32; 3], state: BlockState, flags: BlockUpdateFlags) -> bool {
+        self.level
+            .set_block(&mut *self.host, pos, state, flags)
+            .unwrap_or(false)
+    }
+
+    /// Sets engine state `id` at `pos`.
+    pub fn set_block(&mut self, pos: [i32; 3], id: u32, flags: BlockUpdateFlags) -> bool {
+        match states::state(id) {
+            Some(state) => self.set_state(pos, state, flags),
+            None => false,
+        }
+    }
+
+    /// Sets one property of the state at `pos` (`state.setValue(..)` then `setBlock`). False when
+    /// the block has no such property or value, or nothing changed.
+    pub fn set_property(
+        &mut self,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+        flags: BlockUpdateFlags,
+    ) -> bool {
+        let Some(state) = self.block_state(pos) else {
+            return false;
+        };
+        let Ok(next) = state.with(&self.host.block_states(), key, value) else {
+            return false;
+        };
+        next != state && self.set_state(pos, next, flags)
+    }
+
+    /// `Level.hasNeighborSignal`.
+    pub fn has_neighbor_signal(&self, pos: [i32; 3]) -> bool {
+        self.level.has_neighbor_signal(&*self.host, pos)
+    }
+
+    /// `Level.getBestNeighborSignal`.
+    pub fn best_neighbor_signal(&self, pos: [i32; 3]) -> i32 {
+        self.level
+            .best_neighbor_signal(&*self.host, pos)
+            .unwrap_or(0)
+    }
+
+    /// `Level.getSignal(pos, direction)`.
+    pub fn signal(&self, pos: [i32; 3], direction: Direction) -> i32 {
+        self.level.signal(&*self.host, pos, direction).unwrap_or(0)
+    }
+
+    /// `Level.destroyBlock(pos, drops)`.
+    pub fn destroy_block(&mut self, pos: [i32; 3], drops: bool) -> bool {
+        matches!(
+            self.level
+                .destroy_block(&mut *self.host, pos, drops, None, false),
+            Ok(Some(_))
+        )
+    }
+
+    /// The level's game time.
+    pub fn game_time(&self) -> i64 {
+        self.level.game_time(&*self.host).unwrap_or(0)
+    }
+
+    /// The players in this level.
+    pub fn players(&self) -> Vec<PlayerRef> {
+        self.level.online_players(&*self.host).unwrap_or_default()
+    }
+
+    /// Runs a command as the server, in this level (`execute in <dimension> run ..`).
+    pub fn run_command(&mut self, line: &str) -> bool {
+        let line = format!("execute in {} run {line}", self.dimension);
+        self.host.commands().run_command(&line)
+    }
+}

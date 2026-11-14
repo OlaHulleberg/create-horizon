@@ -1,6 +1,6 @@
 /target/
+/.horizon/
+/tools/create-data/target/
 __pycache__/
 *.pyc
-.horizon-cache/
 saves/
-horizon-player.txt

@@ -1,0 +1,15 @@
+id = "create"
+name = "Create"
+version = "6.0.11"
+description = "Create 6.0.11 for Horizon: kinetics, processing, logistics and contraptions as a native mod"
+authors = ["The Create Team / The Creators of Create"]
+# Native mod: Rust in src/ compiled by the launcher against the game build [native] pins, beside
+# the generated content declarations in data/ and assets/.
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "42c5f703e3a0414297c1e1f00d62d4d4b4b2e580"
+mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"
