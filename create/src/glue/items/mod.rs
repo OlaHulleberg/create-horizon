@@ -23,6 +23,7 @@ mod fertilizer;
 // The filter slots' helpers, for the subsystems whose blocks hold one.
 pub(crate) mod filters;
 mod nugget;
+mod sequenced;
 mod sword;
 mod symmetry;
 mod worldshaper;
@@ -179,6 +180,10 @@ impl Subsystem for Items {
         r.item_part(k[Item::Worldshaper as usize], worldshaper::Shaper);
         r.item_part(k[Item::BeltConnector as usize], belt_connector::Connector);
         r.item_part(k[Item::TreeFertilizer as usize], fertilizer::Fertilizer);
+        for id in sequenced::IDS {
+            let key = r.item_key(id);
+            r.item_part(key, sequenced::Transitional);
+        }
     }
 
     /// `SymmetryHandler.onBlockPlaced`.

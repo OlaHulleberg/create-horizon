@@ -148,6 +148,12 @@ fn compile(create: &Path, repo: &Path) {
             };
             write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
             items.push(name.clone());
+        } else if facts.class.as_deref() == Some("SequencedAssemblyItem") {
+            // SequencedAssemblyItem: a sequenced assembly's transitional item, `stacksTo(1)`;
+            // its progress bar is the native mod's.
+            let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
+            write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
+            items.push(name.clone());
         } else if name == "goggles" {
             // GogglesItem: `stacksTo(1)`, worn on the head (`Equipable`); its overlay is the
             // native mod's.
