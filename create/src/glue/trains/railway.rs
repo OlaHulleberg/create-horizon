@@ -37,6 +37,7 @@ impl Subsystem for Trains {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         tracks::register(r);
         r.block_part(states::key(Block::TrackStation), assembly::Station);
+        r.block_part(states::key(Block::Track), assembly::TrackClick);
         r.block_part(states::key(Block::TrackObserver), Observer);
         let Some(kind) = kinetics::kind() else {
             return;

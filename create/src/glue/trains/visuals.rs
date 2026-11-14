@@ -13,7 +13,7 @@ use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use create_engine::train_controls::Frame;
 use create_engine::trains::{BogeySize, yaw_pitch};
-use mod_api::{Compound, ServerHost, Tag};
+use mod_api::{Compound, ServerHost, Tag, Transformation};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -28,13 +28,21 @@ const GLIDE: i32 = 2;
 struct Shown {
     displays: Vec<(u32, Part)>,
     last: Option<([f64; 3], f32, f32)>,
+    /// A bogey's wheels' turn (`CarriageBogey.wheelAngle`), degrees, and the radius they
+    /// roll on.
+    wheel: f64,
+    radius: f64,
 }
 
 /// A display's place: its point in the carriage's (or bogey's) space, from which the display
-/// stands, turned with it.
+/// stands, turned with it; its model's offset and turn there, and whether it is a wheel,
+/// turning about its axle as the bogey rolls.
 #[derive(Clone, Copy)]
 struct Part {
     at: [f64; 3],
+    translation: [f32; 3],
+    left: [f32; 4],
+    wheel: bool,
 }
 
 /// What a carriage or bogey is: `(level, train, false, carriage)` or `(level, train, true,
@@ -68,6 +76,8 @@ struct Now {
     pitch: f32,
     /// The rotation from the display's turn to the carriage's (its left rotation's half).
     turn: f64,
+    /// The way it runs (its front).
+    front: [f64; 3],
     loaded: bool,
 }
 
@@ -97,6 +107,12 @@ fn turn_y(v: [f64; 3], deg: f64) -> [f64; 3] {
 fn turn_x(v: [f64; 3], deg: f64) -> [f64; 3] {
     let (s, c) = deg.to_radians().sin_cos();
     [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c]
+}
+
+/// The quaternion of `deg` about the x axis, `[x, y, z, w]`.
+fn quat_x(deg: f64) -> [f32; 4] {
+    let (s, c) = (deg.to_radians() / 2.0).sin_cos();
+    [s as f32, 0.0, 0.0, c as f32]
 }
 
 /// The quaternion of `deg` about up, `[x, y, z, w]`.
@@ -150,6 +166,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                     yaw,
                     pitch,
                     turn: -a,
+                    front,
                     loaded: false,
                 });
             }
@@ -167,6 +184,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                         .atan2(f64::from(t.heading[1]))
                         .to_degrees()
                         - a,
+                    front,
                     loaded: false,
                 });
             }
@@ -206,14 +224,35 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
         if !moved {
             continue;
         }
-        let displays: Vec<(u32, Part)> = SHOWN.with_borrow_mut(|s| {
+        let (displays, wheel) = SHOWN.with_borrow_mut(|s| {
             let v = s.get_mut(&n.key).expect("known");
+            // `CarriageBogey.updateAngles`: the wheels turn by the distance rolled, forward
+            // along the bogey's way, over their circumference.
+            if let Some((was, _, _)) = v.last
+                && v.radius > 0.0
+            {
+                let d: [f64; 3] = std::array::from_fn(|i| n.at[i] - was[i]);
+                let along = d[0] * n.front[0] + d[1] * n.front[1] + d[2] * n.front[2];
+                v.wheel = (v.wheel + (along / v.radius).to_degrees()).rem_euclid(360.0);
+            }
             v.last = Some(pose);
-            v.displays.clone()
+            (v.displays.clone(), v.wheel)
         });
         for (id, part) in displays {
-            if let Some(e) = lv.host.entity(id) {
-                e.teleport_to(lv.host, place(n, part), Some([n.yaw, n.pitch]));
+            let Some(e) = lv.host.entity(id) else {
+                continue;
+            };
+            e.teleport_to(lv.host, place(n, part), Some([n.yaw, n.pitch]));
+            if part.wheel
+                && let Some(d) = lv.host.display(e)
+            {
+                let mut t = Transformation::IDENTITY;
+                t.translation = part.translation;
+                t.left_rotation = part.left;
+                t.right_rotation = quat_x(wheel);
+                d.set_start_interpolation(lv.host, 0);
+                d.set_interpolation_duration(lv.host, 1);
+                d.set_transformation(lv.host, t);
             }
         }
     }
@@ -221,7 +260,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
 
 /// A display to make: its block and properties, its point in the carriage's space, and its
 /// model's corner from there.
-type Shape = (String, Vec<(String, String)>, [f64; 3], [f64; 3]);
+type Shape = (String, Vec<(String, String)>, [f64; 3], [f64; 3], bool);
 
 /// The displays of a carriage or bogey, made where it stands now.
 fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
@@ -230,6 +269,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
     // Each display: its state, its point in the carriage's space, and its own turn about that
     // point (the partials' quarter) with the offset of its model's origin from the point.
     let mut parts: Vec<Shape> = Vec::new();
+    let mut radius = 0.0;
     if bogey {
         let Some(size) = with_world(|w| {
             let t = w.dims[dim].railway.trains.iter().find(|t| t.id == train)?;
@@ -239,8 +279,11 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             return Shown {
                 displays: Vec::new(),
                 last: None,
+                wheel: 0.0,
+                radius: 0.0,
             };
         };
+        radius = size.wheel_radius();
         // `StandardBogeyVisual`: a small bogey's frame with a wheel 12 px up a block before
         // and behind; a large one's drive with its wheels a block up.
         let (frame, wheel, wheels): (&str, &str, &[[f64; 3]]) = match size {
@@ -256,9 +299,9 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             ),
         };
         let up = vec![("facing".to_owned(), "up".to_owned())];
-        parts.push((frame.to_owned(), up.clone(), [0.0; 3], [0.0; 3]));
+        parts.push((frame.to_owned(), up.clone(), [0.0; 3], [0.0; 3], false));
         for w in wheels {
-            parts.push((wheel.to_owned(), up.clone(), *w, [0.0; 3]));
+            parts.push((wheel.to_owned(), up.clone(), *w, [0.0; 3], true));
         }
     } else {
         let blocks = with_world(|w| {
@@ -280,30 +323,34 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             // `Frame::to_world`: block `o` spans `o` to `o + 1`, the bogey's block a block
             // over the pivot, its centre over it.
             let centre = [f64::from(o[0]), f64::from(o[1]) + 1.5, f64::from(o[2])];
-            parts.push((name, props, centre, [-0.5; 3]));
+            parts.push((name, props, centre, [-0.5; 3], false));
         }
     }
     let mut displays = Vec::new();
-    for (name, props, at, origin) in parts {
+    for (name, props, at, origin, wheel) in parts {
         // The part's point in the display's turned space (the carriage's space turned back by
         // the heading's quarter), the model's corner from there, and the quarter as the
         // display's left rotation.
         let part = Part {
             at: turn_y(at, n.turn),
+            translation: turn_y(origin, n.turn).map(|v| v as f32),
+            left: quat_y(n.turn),
+            wheel,
         };
-        let translation = turn_y(origin, n.turn);
-        let nbt = display_nbt(&name, &props, translation, quat_y(n.turn), n.yaw, n.pitch);
+        let nbt = display_nbt(&name, &props, part.translation, part.left, n.yaw, n.pitch);
         let pos = place(n, part);
-        let got = lv
+        if let Some(id) = lv
             .host
-            .summon(lv.dimension, "minecraft:block_display", pos, nbt);
-        if let Some(id) = got {
+            .summon(lv.dimension, "minecraft:block_display", pos, nbt)
+        {
             displays.push((id, part));
         }
     }
     Shown {
         displays,
         last: Some((n.at, n.yaw, n.pitch)),
+        wheel: 0.0,
+        radius,
     }
 }
 
@@ -313,7 +360,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
 fn display_nbt(
     name: &str,
     props: &[(String, String)],
-    translation: [f64; 3],
+    translation: [f32; 3],
     left: [f32; 4],
     yaw: f32,
     pitch: f32,
@@ -330,7 +377,7 @@ fn display_nbt(
         state.insert("Properties".into(), Tag::Compound(p));
     }
     let mut transformation = Compound::new();
-    transformation.insert("translation".into(), floats(&translation.map(|v| v as f32)));
+    transformation.insert("translation".into(), floats(&translation));
     transformation.insert("left_rotation".into(), floats(&left));
     transformation.insert("scale".into(), floats(&[1.0, 1.0, 1.0]));
     transformation.insert("right_rotation".into(), floats(&[0.0, 0.0, 0.0, 1.0]));
