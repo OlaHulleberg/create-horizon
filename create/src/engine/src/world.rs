@@ -1133,8 +1133,18 @@ impl CreateWorld {
                 .filter(|(b, _)| matches!(b, Block::Chute | Block::SmartChute))
                 .map(|(_, i)| i.facing.unwrap_or(crate::kinetics::Dir::Down))
         };
-        if let Some(f) = chute(new).or(chute(old))
-            && chute(old).is_none() != chute(new).is_none()
+        // `onPlace` runs for any new state of a chute (a diagonal chute turned toward another
+        // leads into it now); `onRemove` only when the block changes.
+        if let Some(f) = chute(new)
+            && old != new
+        {
+            self.dims[dim]
+                .chute_shapes
+                .push(crate::chute::target(pos, f));
+        }
+        let kind_of = |s: u32| self.table.get(s).map(|(b, _)| b);
+        if let Some(f) = chute(old)
+            && kind_of(old) != kind_of(new)
         {
             let d = &mut self.dims[dim];
             d.chute_shapes.push(crate::chute::target(pos, f));
