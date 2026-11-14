@@ -28,6 +28,14 @@ const SPEEDS: &str = "Speeds";
 /// show) and of whether its network is overstressed (`isOverStressed`).
 const THEORY: &str = "Theory";
 const OVER: &str = "Over";
+/// Whether a speed controller shows its bracket (`SpeedControllerBlockEntity.hasBracket`).
+const BRACKET: &str = "Bracket";
+
+thread_local! {
+    /// Speed controllers to look at again: one, or the large cog over one, came or went.
+    static BRACKETS: std::cell::RefCell<Vec<(usize, [i32; 3])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
 
 static KIND: OnceLock<BlockEntityTypeKey> = OnceLock::new();
 
@@ -141,7 +149,21 @@ impl Subsystem for Kinetics {
     }
 
     fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
-        with_world(|w| w.block_changed(dim, pos, old, new));
+        let watched = with_world(|w| {
+            w.block_changed(dim, pos, old, new);
+            [old, new].iter().any(|&s| {
+                matches!(
+                    w.table.get(s).map(|(b, _)| b),
+                    Some(Block::LargeCogwheel | Block::RotationSpeedController)
+                )
+            })
+        });
+        if watched == Some(true) {
+            BRACKETS.with_borrow_mut(|b| {
+                b.push((dim, pos));
+                b.push((dim, [pos[0], pos[1] - 1, pos[2]]));
+            });
+        }
     }
 
     fn neighbor_changed(&self, dim: usize, pos: [i32; 3], state: u32) {
@@ -233,6 +255,42 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
         lv.set_property(pos, "part", drive.part.name(), super::server::update_all());
     }
     tick_sequencers(lv);
+    tick_brackets(lv);
+}
+
+/// `SpeedControllerBlockEntity.updateBracket`: a controller under a large cog on a horizontal
+/// axis (`isCogwheelPresent`) shows its bracket; its block entity's data tells its clients.
+fn tick_brackets(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let due: Vec<[i32; 3]> = BRACKETS.with_borrow_mut(|b| {
+        let (now, later): (Vec<_>, Vec<_>) = b.drain(..).partition(|(d, _)| *d == dim);
+        *b = later;
+        now.into_iter().map(|(_, p)| p).collect()
+    });
+    for pos in due {
+        let Some(bracket) = with_world(|w| {
+            (w.block_at(dim, pos) == Some(Block::RotationSpeedController)).then(|| {
+                w.state_at(dim, [pos[0], pos[1] + 1, pos[2]])
+                    .and_then(|s| w.table.get(s))
+                    .is_some_and(|(b, i)| {
+                        b == Block::LargeCogwheel && i.axis.is_some_and(|a| a != Axis::Y)
+                    })
+            })
+        })
+        .flatten() else {
+            continue;
+        };
+        let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+            continue;
+        };
+        let shown = entity
+            .data(&*lv.host)
+            .is_some_and(|d| matches!(d.get(&BRACKET.into()), Some(Tag::Byte(1))));
+        if shown != bracket {
+            let data = Compound::from([(BRACKET.into(), Tag::Byte(i8::from(bracket)))]);
+            let _ = entity.merge_data(&mut *lv.host, data);
+        }
+    }
 }
 
 /// A level's solve: the network solved, the blocks Create breaks broken, and every changed
@@ -419,7 +477,7 @@ impl BlockEntityPart for KineticEntity {
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
         // The speeds, and what other subsystems keep in the same block entity for its clients.
-        let shown: Compound = [SPEEDS, THEORY, OVER]
+        let shown: Compound = [SPEEDS, THEORY, OVER, BRACKET]
             .into_iter()
             .chain(
                 super::SUBSYSTEMS
@@ -451,6 +509,20 @@ impl BlockEntityPart for KineticEntity {
             if !systems.iter().any(|s| s.draws_itself(block, &d)) {
                 draw_turning(event.draw, block, &own, &d);
             }
+        }
+        // SpeedControllerRenderer: the bracket a block up, turned across the controller's axis.
+        if block == Block::RotationSpeedController
+            && matches!(event.entity.nbt.get(&BRACKET.into()), Some(Tag::Byte(1)))
+            && let Some(part) = states::partial("part_speed_controller_bracket")
+        {
+            let draw = &mut *event.draw;
+            draw.push();
+            draw.translate([0.0, 1.0, 0.0]);
+            if info.axis != Some(Axis::X) {
+                draw.rotate_about([0.0, 1.0, 0.0], 90.0, [0.5; 3]);
+            }
+            draw.block(part, &[("facing", "up")]);
+            draw.pop();
         }
         if !systems
             .iter()

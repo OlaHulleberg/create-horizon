@@ -94,6 +94,7 @@ pub const PARTIALS: &[&str] = &[
     "part_shaft_half",
     "part_signal_indicator_off",
     "part_signal_indicator_on",
+    "part_speed_controller_bracket",
     "part_track_segment_left",
     "part_track_segment_right",
     "part_track_tie",

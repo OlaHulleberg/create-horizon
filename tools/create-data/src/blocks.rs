@@ -2344,7 +2344,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 72] = [
+pub const PARTIALS: [(&str, &str, &str); 73] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -2421,6 +2421,12 @@ pub const PARTIALS: [(&str, &str, &str); 72] = [
     ("part_cogwheel_shaft", "create:block/cogwheel_shaft", "up"),
     // HandCrankVisual: the crank's base (`HAND_CRANK_BASE`), turned to its facing.
     ("part_hand_crank_base", "create:block/hand_crank/block", "up"),
+    // SpeedControllerRenderer: the bracket over the controller under a large cog.
+    (
+        "part_speed_controller_bracket",
+        "create:block/rotation_speed_controller/bracket",
+        "up",
+    ),
     (
         "part_mixer_pole",
         "create:block/mechanical_mixer/pole",
