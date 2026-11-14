@@ -90,38 +90,82 @@ pub(super) fn is_storage(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         && lv.host.block_entity(lv.level, pos).is_some()
 }
 
-/// The items of the chest, trapped chest or barrel at `pos`, taken out of it (it is left empty,
-/// so it spills nothing when its block goes); None for any other block.
+/// The `ITEMS` handler of the block at `pos`.
+fn items_at(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<mod_api::Capability<dyn mod_api::ResourceHandler<mod_api::ItemResource>>> {
+    lv.level.capability(&mut *lv.host, &mod_api::ITEMS, pos, None)
+}
+
+/// The items of the chest, trapped chest or barrel at `pos`, taken out of it through its
+/// `ITEMS` handler (it is left empty, so it spills nothing when its block goes); None for any
+/// other block. (A vanilla container's slots are not a mod block entity's own item slots.)
 fn take_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Stored> {
     if !is_storage(lv, pos) {
         return None;
     }
-    let entity = lv.host.block_entity(lv.level, pos)?;
-    let stored: Stored = (0..STORAGE_SLOTS)
-        .map(|i| entity.item_slot(&*lv.host, i).ok().flatten())
+    let items = items_at(lv, pos)?;
+    let host = &mut *lv.host;
+    let size = items.size(host).min(STORAGE_SLOTS as usize);
+    let view: Vec<Option<(mod_api::ItemResource, u32)>> = (0..size)
+        .map(|i| {
+            items
+                .resource(host, i)
+                .map(|r| (r, items.amount(host, i)))
+                .filter(|(_, n)| *n > 0)
+        })
         .collect();
-    let _ = lv.host.transaction(|host, tx| {
-        for (i, s) in stored.iter().enumerate() {
-            if s.is_some() {
-                entity.set_item_slot(host, tx, i as u32, None)?;
-            }
+    let taken = host.transaction(|host, tx| {
+        let mut out: Stored = Vec::with_capacity(size);
+        for (i, slot) in view.iter().enumerate() {
+            out.push(slot.as_ref().and_then(|(r, n)| {
+                let got = items.extract(host, tx, i, r, *n);
+                r.to_stack(got)
+            }));
         }
-        Ok::<(), mod_api::BlockEntityItemError>(())
+        Ok::<Stored, ()>(out)
     });
+    let mut stored = taken.ok()?;
+    stored.resize(STORAGE_SLOTS as usize, None);
     Some(stored)
 }
 
-/// The carried items back in the storage block now at `pos` (`addBlocksToWorld`).
+/// The carried items back in the storage block now at `pos` (`addBlocksToWorld`), each in its
+/// slot through the block's `ITEMS` handler; what does not go in drops there.
 fn put_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3], stored: Stored) {
-    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+    let Some(items) = items_at(lv, pos) else {
+        for stack in stored.into_iter().flatten() {
+            lv.drop_stack(center(pos), [0.0; 3], stack, 10);
+        }
         return;
     };
-    let _ = lv.host.transaction(|host, tx| {
-        for (i, s) in stored.into_iter().enumerate() {
-            entity.set_item_slot(host, tx, i as u32, s)?;
-        }
-        Ok::<(), mod_api::BlockEntityItemError>(())
-    });
+    let left: Vec<ItemStack> = lv
+        .host
+        .transaction(|host, tx| {
+            let mut left = Vec::new();
+            for (i, s) in stored.into_iter().enumerate() {
+                let Some(stack) = s else {
+                    continue;
+                };
+                let resource = mod_api::ItemResource::of(&stack);
+                let n = stack.count();
+                let mut went = items.insert(host, tx, i, &resource, n);
+                if went < n {
+                    went += items.insert_any(host, tx, &resource, n - went);
+                }
+                if went < n
+                    && let Some(rest) = resource.to_stack(n - went)
+                {
+                    left.push(rest);
+                }
+            }
+            Ok::<Vec<ItemStack>, ()>(left)
+        })
+        .unwrap_or_default();
+    for stack in left {
+        lv.drop_stack(center(pos), [0.0; 3], stack, 10);
+    }
 }
 
 /// A chest slot's limit for a stack (`min(64, getMaxStackSize)`).
@@ -899,23 +943,36 @@ fn collect(lv: &mut ServerLevel<'_>, key: [i32; 3], actor: &Actor, stack: ItemSt
         let Some(list) = m.get_mut(&(dim, key)) else {
             return Some(stack);
         };
-        let mut stack = stack;
+        // `ItemHandlerHelper.insertItem`: slot by slot, onto the same items or into an empty
+        // slot. A stack can't hold none, so what is left is counted beside it.
+        let mut left = stack.count();
         for (_, s) in list.iter_mut() {
-            match actors::insert(
-                s,
-                stack.clone(),
-                ItemStack::count,
-                |s, n| {
-                    let _ = s.set_count(n.max(1));
-                },
-                same_stack,
-                |_| limit,
-            ) {
-                Some(rest) => stack = rest,
-                None => return None,
+            for slot in s.iter_mut() {
+                if left == 0 {
+                    return None;
+                }
+                match slot {
+                    None => {
+                        let put = left.min(limit);
+                        let mut s = stack.clone();
+                        let _ = s.set_count(put);
+                        *slot = Some(s);
+                        left -= put;
+                    }
+                    Some(s) if same_stack(s, &stack) => {
+                        let put = left.min(limit.saturating_sub(s.count()));
+                        let _ = s.set_count(s.count() + put);
+                        left -= put;
+                    }
+                    _ => {}
+                }
             }
         }
-        Some(stack)
+        (left > 0).then(|| {
+            let mut s = stack;
+            let _ = s.set_count(left);
+            s
+        })
     });
     let Some(stack) = left else {
         return;
