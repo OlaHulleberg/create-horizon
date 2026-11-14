@@ -851,6 +851,51 @@ impl Board {
         }
     }
 
+    /// `getLineIndexAt`: the line at height `y` of a controller at height `top` (within its
+    /// lines; Create's own clamp lets the board's bottom edge read one past the last).
+    pub fn line_index_at(&self, top: i32, y: f64) -> usize {
+        let n = (self.y_size * 2).max(1);
+        ((2.0 * (f64::from(top) - y + 1.0)).floor() as i32).clamp(0, n - 1) as usize
+    }
+
+    /// `applyTextManually`: a line's text set by hand (its default layout, the manual flag), or
+    /// cleared (None). Whether the line exists.
+    pub fn apply_text_manually(&mut self, line: usize, text: Option<&str>) -> bool {
+        let max = self.max_chars();
+        let lines = self.lines();
+        let Some(layout) = lines.get_mut(line) else {
+            return false;
+        };
+        if !layout.is_layout("Default") {
+            layout.load_default(max);
+        }
+        if let Some(s) = layout.sections.first_mut() {
+            s.set_text(text.unwrap_or(""));
+        }
+        if let Some(m) = self.manual.get_mut(line) {
+            *m = text.is_some();
+        }
+        true
+    }
+
+    /// `setColour`: white is no colour.
+    pub fn set_colour(&mut self, line: usize, colour: crate::dye::DyeColor) {
+        let id = crate::dye::DyeColor::ALL
+            .iter()
+            .position(|c| *c == colour)
+            .and_then(|i| u8::try_from(i).ok());
+        if let Some(c) = self.colour.get_mut(line) {
+            *c = id.filter(|_| colour != crate::dye::DyeColor::White);
+        }
+    }
+
+    /// `setGlowing`.
+    pub fn set_glowing(&mut self, line: usize) {
+        if let Some(g) = self.glowing.get_mut(line) {
+            *g = true;
+        }
+    }
+
     /// `updateControllerStatus` once the new values are known: true when anything changed.
     pub fn set_status(&mut self, controller: bool, x_size: i32, y_size: i32) -> bool {
         if self.controller == controller && self.x_size == x_size && self.y_size == y_size {

@@ -1365,14 +1365,19 @@ struct DisplayBlock;
 
 #[mod_api::horizon_part]
 impl BlockPart for DisplayBlock {
-    /// `DisplayLinkBlock.useWithoutItem` takes any hand (the item's own use passes to it).
+    /// `DisplayLinkBlock.useWithoutItem` takes any hand (the item's own use passes to it); a
+    /// display board takes a click on one of its lines (`FlapDisplayBlock.useItemOn`).
     fn use_item_on(
         &self,
-        _host: &mut dyn ServerHost,
+        host: &mut dyn ServerHost,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
         let (block, _) = states::id(event.state).and_then(info)?;
-        (block == Block::DisplayLink).then_some(InteractionResult::TryWithEmptyHand)
+        match block {
+            Block::DisplayLink => Some(InteractionResult::TryWithEmptyHand),
+            Block::DisplayBoard => use_board(host, event.click),
+            _ => None,
+        }
     }
 
     /// `DisplayLinkBlock.useWithoutItem`: not sneaking, its screen opens (`displayScreen`), or
@@ -1434,6 +1439,138 @@ impl BlockPart for DisplayBlock {
 // The link's screen
 
 /// What the screen opens with: the link's sources, settings, target and line.
+/// `FlapDisplayBlock.useItemOn` on the controller's line under the click (an eighth into the
+/// board): an empty hand takes back a line's own text, glow ink lights it, a named name tag or
+/// a clipboard's last viewed entries write it by hand, a dye colours it; the text ones only
+/// while the board turns fast enough. Not while sneaking. Placing more boards from one in hand
+/// (its placement helper) is left out.
+fn use_board(host: &mut dyn ServerHost, click: &mod_api::BlockClick<'_>) -> Option<InteractionResult> {
+    let player = host.player(click.player)?;
+    if super::items::sneaking(&*host, player) {
+        return None;
+    }
+    let dimension = click.dimension.key().id().to_owned();
+    let mut lv = ServerLevel::new(host, &dimension)?;
+    let dim = lv.dim;
+    let pos = click.pos;
+    let controller = controller_of(&lv, pos)?;
+    let y = click.hit.point[1] - f64::from(click.hit.face[1]) * 0.125;
+    let line = with_world(|w| {
+        w.dims[dim]
+            .displays
+            .boards
+            .get(&controller)
+            .map(|b| b.line_index_at(controller[1], y))
+    })
+    .flatten()?;
+    let running = with_world(|w| w.speed(dim, controller))
+        .flatten()
+        .is_some_and(|s| s.abs() >= create_engine::gauge::MEDIUM_SPEED);
+    let stack = click.stack;
+    let item = stack.map(|s| s.item().id(&*lv.host));
+    // Create answers on the client too, so the off hand is never tried after a main hand the
+    // board took; this client can't know, and tries it.
+    if click.hand == mod_api::Hand::Off {
+        let main = super::items::held(&*lv.host, player, mod_api::Hand::Main);
+        let main_id = main.as_ref().map(|s| s.item().id(&*lv.host));
+        let took = match main_id.as_deref() {
+            None => running,
+            Some("minecraft:glow_ink_sac") => true,
+            Some("minecraft:name_tag" | "create:clipboard") => running,
+            Some(id) => create_engine::dye::DyeColor::of_item(id).is_some(),
+        };
+        if took {
+            return None;
+        }
+    }
+    let sound = |lv: &mut ServerLevel<'_>, s: &str| lv.play_block_sound(s, pos, 1.0, 1.0);
+    let changed = match item.as_deref() {
+        None => {
+            if !running {
+                return None;
+            }
+            board_edit(dim, controller, |b| {
+                b.apply_text_manually(line, None);
+            })
+        }
+        Some("minecraft:glow_ink_sac") => {
+            sound(&mut lv, "minecraft:item.glow_ink_sac.use");
+            board_edit(dim, controller, |b| b.set_glowing(line))
+        }
+        Some(id) => {
+            let stack = stack?;
+            let name = if id == "minecraft:name_tag" {
+                filters::plain_name(filters::component(
+                    &*lv.host,
+                    stack,
+                    "minecraft:custom_name",
+                ))
+            } else {
+                None
+            };
+            let clipboard = id == "create:clipboard";
+            let dye = create_engine::dye::DyeColor::of_item(id);
+            if !clipboard && name.is_none() && dye.is_none() {
+                return None;
+            }
+            if dye.is_none() && !running {
+                return None;
+            }
+            if clipboard {
+                // `ClipboardEntry.getLastViewedEntries`: each line of each entry of the page
+                // last opened, from the clicked line down.
+                let content = clipboard::content(stack);
+                let page = usize::try_from(content.previously_opened_page)
+                    .unwrap_or(0)
+                    .min(content.pages.len().saturating_sub(1));
+                let lines: Vec<String> = content
+                    .pages
+                    .get(page)
+                    .map(|p| {
+                        p.iter()
+                            .flat_map(|e| e.text.split('\n').map(str::to_owned).collect::<Vec<_>>())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                board_edit(dim, controller, |b| {
+                    for (i, text) in lines.iter().enumerate() {
+                        b.apply_text_manually(line + i, Some(text));
+                    }
+                })
+            } else {
+                if let Some(name) = &name {
+                    board_edit(dim, controller, |b| {
+                        b.apply_text_manually(line, Some(name));
+                    });
+                }
+                if let Some(dye) = dye {
+                    sound(&mut lv, "minecraft:item.dye.use");
+                    board_edit(dim, controller, |b| b.set_colour(line, dye));
+                }
+                true
+            }
+        }
+    };
+    if changed {
+        mark(&lv, controller);
+        send_changed(&mut lv);
+    }
+    Some(InteractionResult::Success)
+}
+
+/// A change to the board controller at `pos`, shown to its clients.
+fn board_edit(dim: usize, pos: [i32; 3], f: impl FnOnce(&mut Board)) -> bool {
+    with_world(|w| {
+        let d = &mut w.dims[dim].displays;
+        let b = d.boards.get_mut(&pos)?;
+        f(b);
+        d.shown.push(pos);
+        Some(())
+    })
+    .flatten()
+    .is_some()
+}
+
 fn open_screen(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
     let dim = lv.dim;
     let Some((facing, _)) = link_at(lv, pos) else {
