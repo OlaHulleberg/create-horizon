@@ -1,5 +1,7 @@
-//! The cardboard sword: it bonks instead of hurting (`CardboardSwordItem`). Its knockback and
-//! the slowness it gives animals are not ported, as in the legacy glue. Its click on a block
+//! The cardboard sword: it bonks instead of hurting (`CardboardSwordItem`), knocking the target
+//! back as a blow would and slowing the attacker. Left out: the slowness it gives creatures
+//! (`MobCategory.CREATURE`/`MISC`: no API names an entity type's category), knockback
+//! enchantments and resistance, and stopping the attacker's sprint. Its click on a block
 //! (`cardboardSwordsMakeNoiseOnClick`, a sound only the clicking client plays) is heard here
 //! from the server, so the players near it hear it too: `left_click_block` is the server's.
 
@@ -47,14 +49,13 @@ pub(super) fn attack(host: &mut dyn ServerHost, event: &AttackEntityEvent<'_>) -
     {
         return Flow::Continue;
     }
-    let living = u32::try_from(event.entity)
+    let Some(target) = u32::try_from(event.entity)
         .ok()
         .and_then(|id| host.entity(id))
-        .and_then(|e| host.living(e))
-        .is_some();
-    if !living {
+        .filter(|e| host.living(*e).is_some())
+    else {
         return Flow::Continue;
-    }
+    };
     if let (Some(level), Some(at)) = (player.level(&*host), player.entity().position(&*host)) {
         level.play_sound(
             host,
@@ -65,5 +66,31 @@ pub(super) fn attack(host: &mut dyn ServerHost, event: &AttackEntityEvent<'_>) -
             1.85,
         );
     }
+    knock_back(host, player, target);
     Flow::Cancel
+}
+
+/// The knockback of `player.attack()`, without the hurt: `ATTACK_KNOCKBACK` (0) + 2, one more
+/// for a sprinting blow, through `LivingEntity.knockback(strength / 2, sin yaw, -cos yaw)`;
+/// then the attacker's own motion is cut to 0.6 across.
+fn knock_back(host: &mut dyn ServerHost, player: mod_api::PlayerRef, target: mod_api::EntityRef) {
+    let attacker = player.entity();
+    let yaw = attacker.rotation(&*host).map_or(0.0, |r| r[0]).to_radians();
+    let sprinting = attacker.is_sprinting(&*host).unwrap_or(false);
+    let strength = if sprinting { 3.0 } else { 2.0 } * 0.5;
+    let (x, z) = (f64::from(yaw.sin()), f64::from(-yaw.cos()));
+    let len = (x * x + z * z).sqrt().max(1e-9);
+    let push = [x / len * strength, z / len * strength];
+    if let Some(old) = target.velocity(&*host) {
+        let on_ground = target.on_ground(&*host).unwrap_or(false);
+        let y = if on_ground {
+            (old[1] / 2.0 + strength).min(0.4)
+        } else {
+            old[1]
+        };
+        target.set_velocity(host, [old[0] / 2.0 - push[0], y, old[2] / 2.0 - push[1]]);
+    }
+    if let Some(v) = attacker.velocity(&*host) {
+        attacker.set_velocity(host, [v[0] * 0.6, v[1], v[2] * 0.6]);
+    }
 }

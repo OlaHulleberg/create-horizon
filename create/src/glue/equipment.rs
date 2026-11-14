@@ -1,7 +1,8 @@
 //! Create's equipment (`create_engine::equipment` holds the rules): backtanks filled by their
-//! shaft, their air kept on the item (and shown as its bar), the diving helmet's breathing, the
-//! extendo grip's reach and wear, and the potato cannon (`potato`). Free when unused: a player's tick reads their armour and hands and looks each item
-//! up once (the gear each item is, cached by key), and only backtanks with something to do tick.
+//! shaft, their air kept on the item (and shown as its bar, and on a potato cannon's while it
+//! uses it: `backtank_bar`), the diving helmet's breathing, the extendo grip's reach and wear.
+//! Free when unused: a player's tick reads their armour and hands and looks each item up once
+//! (the gear each item is, cached by key), and only backtanks with something to do tick.
 //!
 //! Left out, for want of the API: the diving boots' sinking (`DivingBootsItem
 //! .accelerateDescentUnderwater`), which moves the local player on its client from its movement
@@ -30,8 +31,6 @@ use mod_api::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
-
-mod potato;
 
 /// The column's own data key: Create's equipment state beside the rest of Create's.
 const KEY: &str = "create_equipment";
@@ -73,45 +72,9 @@ impl Subsystem for Equipment {
         let _ = BACKTANK_ITEMS.set(keys);
         let grip = r.item_key("create:extendo_grip");
         r.item_part(grip, GripHit);
-        let cannon = r.item_key("create:potato_cannon");
-        r.item_part(cannon, potato::Cannon);
-    }
-
-    /// A potato shot's hit (`potato`).
-    fn projectile_impact(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::ProjectileImpactEvent<'_>,
-    ) -> Flow {
-        Equipment::potato_impact(host, event)
-    }
-
-    fn hears_projectile_impacts(&self) -> bool {
-        potato::hears()
-    }
-
-    fn server_message(
-        &self,
-        host: &mut dyn mod_api::ClientHost,
-        channel: &str,
-        data: &[u8],
-    ) -> bool {
-        if channel != potato::SHOT {
-            return false;
-        }
-        potato::shot_seen(&*host, data);
-        true
-    }
-
-    fn register_entity_renderers(&self, event: &mut mod_api::RegisterEntityRenderersEvent<'_>) {
-        event.renderers.register(
-            potato::PROJECTILE.into(),
-            std::sync::Arc::new(potato::Shown),
-        );
     }
 
     fn world_closed(&self) {
-        potato::reset();
         GEAR.with_borrow_mut(HashMap::clear);
         REACH.with_borrow_mut(Vec::clear);
         BREAKING.with_borrow_mut(HashMap::clear);
@@ -530,7 +493,7 @@ fn consume_air(host: &mut dyn ServerHost, player: PlayerRef, slot: usize, amount
 
 /// `BacktankUtil.canAbsorbDamage`: creative players pay nothing; else the emptiest worn tank
 /// pays `cost` air, or nothing absorbs it.
-fn absorb(host: &mut dyn ServerHost, player: PlayerRef, uses_per_tank: i32) -> bool {
+pub(crate) fn absorb(host: &mut dyn ServerHost, player: PlayerRef, uses_per_tank: i32) -> bool {
     if uses_per_tank == 0 || player.is_creative(&*host) == Some(true) {
         return true;
     }
@@ -673,4 +636,25 @@ impl mod_api::BlockEntityPart for BacktankCogs {
         draw.block(part, &[("facing", super::kinetics::dir_name(facing))]);
         draw.still();
     }
+}
+
+/// `BacktankUtil.isBarVisible` / `getBarWidth` for an air-using tool held by the local player:
+/// the worn backtanks' air as a bar while there is any.
+pub(crate) fn backtank_bar(host: &dyn mod_api::ClientHost) -> Option<(i32, u32)> {
+    let player = host.local_player()?;
+    let living = host.living(player.entity())?;
+    let (mut air, mut max) = (0, 0);
+    for slot in ARMOR {
+        if let Some(s) = living.equipment(host, slot)
+            && matches!(gear_of(host, &s), Gear::Backtank(_))
+        {
+            let cap = capacity(&s);
+            air += eq::air(stack_air(&s), cap);
+            max += eq::max_air(cap);
+        }
+    }
+    (air > 0 && max > 0).then(|| {
+        let width = (13.0 * (air as f32 / max as f32).clamp(0.0, 1.0)).round() as i32;
+        (width, BAR_COLOR)
+    })
 }

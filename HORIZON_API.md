@@ -72,7 +72,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   minecart contraptions (`notes/moving-structures-note.md`).
 - **Mod entity types that are not template copies**, rideable by players: Create's seat entity and carriage seats
   are stood in by tagged item display entities; riding a moving structure's seats on bearings and pistons and
-  clicking its blocks are out.
+  clicking its blocks are out. Only players sit on a carriage's seats, so a train's conductor (handed its
+  schedule) is a seated player, never a mob, and the client, which can't read the stand-ins' tags, takes a
+  schedule used on anyone seated as handed over.
 - **Reading the client level's light** (`LevelRef::brightness` answers on the logical server only): a
   moving structure's blocks are lit with the light the server read where they were last sent from,
   not where they are each frame (`ContraptionRenderer`'s per-block world light).
@@ -85,6 +87,15 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   each tick, and players by a push from their own client (`push_player`), where Create moves them.
 - **`MinecartRef::set_carrying`** (a cart with a contraption counting as ridden) and **`EntityRef::move_by`**
   (moving a coupled cart off its rail with collisions).
+- **A mod's own projectile entity type with its own class** (Create's `create:potato_projectile`,
+  with its damage type `create:potato_cannon`): the potato cannon's shots are vanilla snowballs
+  carrying the ammunition, flown and hit by the glue, hurting as `minecraft:thrown` (a declared copy of
+  the snowball draws as the item it is bound to, not the ammunition each shot carries). Their flight
+  (gravity, drag, stuck to a target) is the glue's and is not saved: a shot in the air when the
+  world is saved comes back as a plain snowball. A way to read or keep a projectile's state
+  across a save (persistent data on `EntityRef`) would close it.
+- **A zombie villager's cure from code** (`ZombieVillager.mobInteract` with a golden apple, or
+  `startConverting`): a golden apple from the potato cannon gives its food effects instead.
 
 ### Client
 
@@ -132,7 +143,32 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   with one shift per sprite; they are not drawn.
 - **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
   light inside the chute is dark.
+- **The local player's inventory slots on its client** (`player_inventory_slots` answers on the server only;
+  `player_inventory` on a client lists stacks without their slots): the wand of symmetry's mirrors, drawn for
+  every wand in the hotbar (`SymmetryHandler.onRenderWorld`), are sent to the client by the server.
+- **A turned item in a screen** (`GuiGameElement.of(stack).rotate(..)`): the wand of symmetry's screen draws the
+  wand flat.
 - **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).
+- **A screen layout for a mod menu opened without a block** (`player_open_mod_menu` with no `pos`: the
+  client's `open_native_screen` returns without a `Screen`): the filters' and the schedule's screens are the mod's own screen,
+  and clicking an inventory slot carries a ghost copy, not the stack (Create's menus carry the real one). A
+  `Screen` for a menu type (not only a block entity's), or a `screen` part hook keyed by menu, would close it.
+- **An item's tags** (`ItemStack.getTags`) and **an item's tooltip lines**: the attribute filter offers no
+  `in_tag` attributes for its reference item, and the filters' screens show a slot's name, not its tooltip.
+- **A block state's model drawn in the world without a block entity** (`SchematicRenderer`'s ghost blocks):
+  a deployed schematic is outlined, not drawn; `draw_model_instances` takes only registered standalone models,
+  not any block state's.
+- **Text and sprites on a block face in the world** outside a block entity's draw: a value box's value and icon
+  (`ValueBox.renderContents`) are left out; only its outline is drawn.
+- **Block textures in `draw_scene`**: the wand of symmetry's mirror preview (a part block's model in a scene)
+  shows nothing in game, while a toolbox's draws; the scene looks its sprites up in the GUI atlas
+  (`native_scene.rs`), which likely lacks textures that no item uses. Not confirmed further.
+- **A slot's count text and a slot holding more than 99**: a toolbox compartment holds 4 stacks (256), Create's
+  screen shows the compartment's total on its one slot; here a slot shows its own stack, and the other three are
+  filled by the deposit button and hoppers, not by clicks.
+- **A clip rectangle in `DrawContext`** (`GuiGraphics.enableScissor`): the schedule's cards scrolled past its
+  panel are covered by the panel's frame drawn again, and a card's condition groups that don't fit across it are
+  left out until scrolled to, where Create cuts them at the card's edge.
 - **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
 
 ## Left out of the port, not for want of API
@@ -147,8 +183,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   them (the logistics glue keeps no components on belts); the boiler's gauge is drawn at its level without
   its swing, and its steam sounds are not played; glass pipes show a steady stream, not its growth, and open
   pipe ends have no flow particles.
-- Equipment: the potato cannon's shots fly as snowballs (not by their ammunition's gravity and drag), never
-  stick, and the food, chorus fruit, golden apple and suspicious stew effects are not ported.
 
 ## Not to send
 

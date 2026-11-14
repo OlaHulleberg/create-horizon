@@ -9,6 +9,7 @@ description = "Compiles Create's MIT data into the mod's tables, and assembles t
 [dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+png = "0.17"
 
 # Not part of the mod: a host tool with its own lock.
 [workspace]

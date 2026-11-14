@@ -493,8 +493,9 @@ impl BlockPart for ToolboxMenu {}
 
 #[mod_api::horizon_part]
 impl BlockEntityPart for ToolboxMenu {
-    /// A toolbox's screen shows its eight compartments as columns of four stacks, the container's
-    /// four slots past Create's 32 hidden (the server's menu leaves them out too).
+    /// A toolbox's screen (`ToolboxScreen`) shows each compartment by its first stack round the
+    /// toolbox's picture; the other stacks and the container's four slots past Create's 32 are
+    /// hidden (the server's menu leaves them out too).
     fn screen(&self, _host: &dyn Host, event: &mut ScreenEvent<'_>) -> Option<Screen> {
         use create_engine::toolbox;
         let block = event
@@ -510,10 +511,201 @@ impl BlockEntityPart for ToolboxMenu {
             slots: (0..toolbox::SLOTS).map(toolbox::slot_position).collect(),
             inventory_y: toolbox::INVENTORY_Y,
             inventory_x: toolbox::INVENTORY_X,
-            own_labels: false,
-            own_background: false,
+            own_labels: true,
+            own_background: true,
             recipe_book: None,
             recipe_book_toggle: None,
         })
+    }
+
+    /// `ToolboxScreen.renderBg`: the toolbox's background with its name, the player's inventory
+    /// under it, the deposit button and the confirm button.
+    fn screen_draw(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenDrawEvent<'_>,
+    ) {
+        use create_engine::toolbox::{BACKGROUND, SCREEN_HEIGHT};
+        let Some(block) = toolbox_block(event.block) else {
+            return;
+        };
+        let [ox, oy] = event.origin;
+        let draw = &mut *event.draw;
+        let bx = ox + 30.0;
+        draw.sprite(
+            "create:gui/toolbox",
+            [0.0, 0.0, BACKGROUND[0], BACKGROUND[1]],
+            [bx, oy, BACKGROUND[0], BACKGROUND[1]],
+            None,
+        );
+        let title = host
+            .translate(&format!("block.create.{}", block.name()))
+            .unwrap_or_default();
+        draw.text(&title, [bx + 15.0, oy + 4.0], 0xFF59_2424, false);
+        let iy = oy + SCREEN_HEIGHT - 108.0;
+        draw.sprite(
+            "create:gui/player_inventory",
+            [0.0, 0.0, 176.0, 108.0],
+            [ox, iy, 176.0, 108.0],
+            None,
+        );
+        draw.text(
+            &host.translate("container.inventory").unwrap_or_default(),
+            [ox + 8.0, iy + 6.0],
+            0xFF40_4040,
+            false,
+        );
+        // `renderToolbox`: the toolbox, 50 px a block, right of the background's foot.
+        if let Some(state) = host.block_state_id(event.block) {
+            draw.draw_scene(
+                [
+                    bx + BACKGROUND[0],
+                    oy + 116.0,
+                    bx + BACKGROUND[0] + 72.0,
+                    oy + 184.0,
+                ],
+                &[mod_api::SceneBlock::new([0, 0, 0], state, None)],
+                mod_api::SceneView::new([0.5, 0.5, 0.5], -202.0, 22.0, 50.0),
+            );
+        }
+        for (at, icon) in [(TOOLBOX_DEPOSIT, I_TOOLBOX), (toolbox_confirm(), I_CONFIRM)] {
+            let (x, y) = (ox + at[0], oy + at[1]);
+            draw.sprite(
+                "create:gui/widgets",
+                [0.0, 0.0, 18.0, 18.0],
+                [x, y, 18.0, 18.0],
+                None,
+            );
+            draw.sprite(
+                "create:gui/icons",
+                [icon[0], icon[1], 16.0, 16.0],
+                [x + 1.0, y + 1.0, 16.0, 16.0],
+                None,
+            );
+        }
+    }
+
+    /// The deposit button (`ToolboxDisposeAllPacket`) and the confirm button (closes).
+    fn screen_click(
+        &self,
+        _host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenClickEvent<'_>,
+    ) -> Option<i32> {
+        toolbox_block(event.block)?;
+        if event.right {
+            return None;
+        }
+        if on_button(TOOLBOX_DEPOSIT, event.at) {
+            Some(TOOLBOX_DEPOSIT_BUTTON)
+        } else if on_button(toolbox_confirm(), event.at) {
+            Some(TOOLBOX_CONFIRM_BUTTON)
+        } else {
+            None
+        }
+    }
+
+    /// The deposit button's `create.toolbox.depositBox`.
+    fn screen_tooltip(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenTooltipEvent<'_>,
+    ) {
+        if toolbox_block(event.block).is_some() && on_button(TOOLBOX_DEPOSIT, event.at) {
+            event.lines.push(
+                host.translate("create.toolbox.depositBox")
+                    .unwrap_or_default(),
+            );
+        }
+    }
+
+    fn menu_button(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<'_>) {
+        if event.entity.id() != TOOLBOX_TYPE {
+            return;
+        }
+        match event.context.id {
+            TOOLBOX_CONFIRM_BUTTON => host.close_menu(event.context.player),
+            TOOLBOX_DEPOSIT_BUTTON => deposit_all(host, event),
+            _ => {}
+        }
+    }
+}
+
+/// `AllIcons.I_TOOLBOX` and `I_CONFIRM` in `icons.png`.
+const I_TOOLBOX: [f32; 2] = [176.0, 48.0];
+const I_CONFIRM: [f32; 2] = [0.0, 16.0];
+/// The deposit button, `(30 + 81, 69)` in the window.
+const TOOLBOX_DEPOSIT: [f32; 2] = [111.0, 69.0];
+const TOOLBOX_DEPOSIT_BUTTON: i32 = 0;
+const TOOLBOX_CONFIRM_BUTTON: i32 = 1;
+
+/// The toolbox named by a screen's `block`, if it is one.
+fn toolbox_block(block: &str) -> Option<Block> {
+    block
+        .strip_prefix("create:")
+        .and_then(Block::from_name)
+        .filter(|b| dye::is_toolbox(*b))
+}
+
+/// Whether `at` is on the 18 px button at `button`.
+fn on_button(button: [f32; 2], at: [f32; 2]) -> bool {
+    (button[0]..button[0] + 18.0).contains(&at[0]) && (button[1]..button[1] + 18.0).contains(&at[1])
+}
+
+/// The confirm button: `30 + BG.width - 33`, `BG.height - 24`.
+fn toolbox_confirm() -> [f32; 2] {
+    let bg = create_engine::toolbox::BACKGROUND;
+    [30.0 + bg[0] - 33.0, bg[1] - 24.0]
+}
+
+/// `ToolboxDisposeAllPacket`: each of the player's 36 stacks goes into the compartment that
+/// already holds its kind (`inLimitedMode`), onto its stacks and then its empty stacks
+/// (`insertItemStacked`).
+fn deposit_all(host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<'_>) {
+    use create_engine::toolbox::{STACKS_PER_COMPARTMENT, STORED};
+    let Some(player) = host.player(event.context.player) else {
+        return;
+    };
+    let Some(slots) = player.inventory_slots(&*host) else {
+        return;
+    };
+    let items = &mut event.entity.items;
+    for (slot, stack) in slots.into_iter().filter(|(s, _)| *s < 36) {
+        let mut left = stack.count();
+        let max = host.max_stack_size(stack.item()).unwrap_or(64);
+        for c in 0..STORED / STACKS_PER_COMPARTMENT {
+            let range = c * STACKS_PER_COMPARTMENT..(c + 1) * STACKS_PER_COMPARTMENT;
+            // The compartment's kind: its first stack that holds anything.
+            let kind = range.clone().find_map(|i| items.get(i).cloned().flatten());
+            if !kind.is_some_and(|k| k.item() == stack.item() && k.same_components(&stack)) {
+                continue;
+            }
+            for i in range.clone() {
+                if let Some(Some(held)) = items.get_mut(i) {
+                    let room = max.saturating_sub(held.count()).min(left);
+                    if room > 0 && held.set_count(held.count() + room).is_ok() {
+                        left -= room;
+                    }
+                }
+            }
+            for i in range {
+                if left == 0 {
+                    break;
+                }
+                if let Some(empty @ None) = items.get_mut(i) {
+                    let n = left.min(max);
+                    let mut put = stack.clone();
+                    if put.set_count(n).is_ok() {
+                        left -= n;
+                        *empty = Some(put);
+                    }
+                }
+            }
+            break;
+        }
+        if left != stack.count() {
+            let mut rest = stack;
+            let rest = (left > 0 && rest.set_count(left).is_ok()).then_some(rest);
+            let _ = player.set_inventory_slot(host, slot, rest);
+        }
     }
 }

@@ -37,8 +37,8 @@
 //! items moving between mechanical crafters (`MechanicalCrafterRenderer.renderItems` past
 //! `IDLE`).
 
-pub(crate) mod basin;
 mod application;
+pub(crate) mod basin;
 mod burner_draw;
 mod client;
 mod containers;

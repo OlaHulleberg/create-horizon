@@ -111,39 +111,6 @@ impl Hooks for Create {
         }
     }
 
-    fn register_entity_renderers(
-        &self,
-        _context: &RegistrationContext,
-        event: &mut mod_api::RegisterEntityRenderersEvent<'_>,
-    ) {
-        for s in SUBSYSTEMS {
-            s.register_entity_renderers(event);
-        }
-    }
-
-    fn hears_projectile_impacts(
-        &self,
-        _host: &dyn mod_api::Host,
-        event: &mut mod_api::HearsProjectileImpactsEvent,
-    ) {
-        if SUBSYSTEMS.iter().any(|s| s.hears_projectile_impacts()) {
-            event.hears = true;
-        }
-    }
-
-    fn projectile_impact(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::ProjectileImpactEvent<'_>,
-    ) -> Flow {
-        for s in SUBSYSTEMS {
-            if s.projectile_impact(host, event) == Flow::Cancel {
-                return Flow::Cancel;
-            }
-        }
-        Flow::Continue
-    }
-
     fn fluid_tick(&self, level: &dyn LevelHost, event: &mut mod_api::FluidTickEvent<'_>) -> Flow {
         for s in SUBSYSTEMS {
             s.fluid_tick(level, event);
@@ -246,6 +213,22 @@ impl Hooks for Create {
 
     fn attack_entity(&self, host: &mut dyn ServerHost, event: &mut AttackEntityEvent<'_>) -> Flow {
         until_cancel(|s| s.attack_entity(host, event))
+    }
+
+    fn hears_projectile_impacts(
+        &self,
+        _host: &dyn mod_api::Host,
+        event: &mut mod_api::HearsProjectileImpactsEvent,
+    ) {
+        event.hears |= SUBSYSTEMS.iter().any(|s| s.hears_projectile_impacts());
+    }
+
+    fn projectile_impact(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ProjectileImpactEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.projectile_impact(host, event))
     }
 
     fn entity_mount(&self, host: &mut dyn ServerHost, event: &mut EntityMountEvent<'_>) -> Flow {

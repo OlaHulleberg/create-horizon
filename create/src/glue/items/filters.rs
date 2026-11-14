@@ -1,9 +1,12 @@
 //! Filters (`FilterItemStack`, `create-engine`'s `filter`): what a filter slot's stack is, a
 //! stack tested against it, a filter taken from a hand into a slot and given back
 //! (`FilteringBehaviour.onShortInteract`), the filter items of broken blocks dropped
-//! (`FilteringBehaviour.destroy`), and `/create_debug filter` standing in for the filters'
-//! screens. A filter's settings are kept in the stack's custom data under Create's component
-//! names, its list as `ItemContainerContents` (`Slot` and the stack's own NBT).
+//! (`FilteringBehaviour.destroy`), and the list and attribute filters' screens opened from the
+//! hand (`FilterItem.use`, drawn by `filter_screen`) and what they chose written back
+//! (`FilterScreenPacket`, the menus' `saveData`). A filter's settings are kept in the stack's
+//! custom data under Create's component names, its list as `ItemContainerContents` (`Slot` and
+//! the stack's own NBT). `/create_debug filter` sets a filter in a slot or hand for tests, and
+//! is the package filter's address until its screen is ported.
 //!
 //! The attributes that read a recipe book (`washable`, `hauntable`, `crushable`, `smeltable`,
 //! `smokable`, `blastable`) ask processing's recipes.
@@ -11,17 +14,20 @@
 //! Left out: `max_enchanted`, which needs each enchantment's maximum level (the host answers it
 //! on the client only, `ItemsClientHost::enchantments`): it tests false.
 
+use super::super::net;
 use super::super::processing::recipes::{self, Recipes};
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
+use super::filter_screen;
 use super::{creative, custom, give_back, held, set_custom, set_held, set_slot, slot_stack};
 use create_engine::filter::{
     self, ATTRIBUTES_KEY, Attribute, BLACKLIST_KEY, Filter, ITEMS_KEY, LIST_SLOTS, MODE_KEY, Mode,
     Passes, Probe, RESPECT_NBT_KEY, Spec,
 };
 use mod_api::{
-    CommandArgumentValue, CommandSource, Compound, Hand, Host, Identifier, ItemStack, PlayerRef,
-    RunModCommandEvent, ServerHost, SoundSource, Tag,
+    CommandArgumentValue, CommandSource, Compound, Hand, Host, HostSide, Identifier,
+    InteractionResult, ItemPart, ItemStack, PlayerRef, RunModCommandEvent, ServerHost, SoundSource,
+    Tag, UseItemEvent, UseOnEvent,
 };
 use std::rc::Rc;
 
@@ -552,23 +558,29 @@ pub(super) fn command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>)
     line
 }
 
-/// The attribute filter's screen: its mode and attributes (`ItemAttributeEntry`'s codec:
+/// An attribute filter's mode and attributes (`ItemAttributeEntry`'s codec:
 /// `{attribute: {type, value}, inverted}`).
 fn set_attributes(stack: &mut ItemStack, mode: Mode, tests: &[(Attribute, bool)]) {
+    let raw: Vec<(String, Option<String>, bool)> = tests
+        .iter()
+        .map(|(a, inverted)| (a.id(), a.value(), *inverted))
+        .collect();
+    write_attributes(stack, mode, &raw);
+}
+
+/// `set_attributes` of saved type ids and values (a `book_copy`'s generation an int).
+fn write_attributes(stack: &mut ItemStack, mode: Mode, tests: &[(String, Option<String>, bool)]) {
     let list = tests
         .iter()
-        .map(|(a, inverted)| {
+        .map(|(kind, value, inverted)| {
             let mut attribute = Compound::new();
-            attribute.insert("type".into(), Tag::String(a.id().as_str().into()));
-            match a {
-                Attribute::BookCopy(g) => {
-                    attribute.insert("value".into(), Tag::Int(*g));
-                }
-                _ => {
-                    if let Some(v) = a.value() {
-                        attribute.insert("value".into(), Tag::String(v.as_str().into()));
-                    }
-                }
+            attribute.insert("type".into(), Tag::String(kind.as_str().into()));
+            if let Some(v) = value {
+                let v = match (kind.as_str(), v.parse::<i32>()) {
+                    ("create:book_copy", Ok(g)) => Tag::Int(g),
+                    _ => Tag::String(v.as_str().into()),
+                };
+                attribute.insert("value".into(), v);
             }
             let mut e = Compound::new();
             e.insert("attribute".into(), Tag::Compound(attribute));
@@ -583,4 +595,317 @@ fn set_attributes(stack: &mut ItemStack, mode: Mode, tests: &[(Attribute, bool)]
             (ATTRIBUTES_KEY, Some(Tag::List(list))),
         ],
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The screens (`FilterItem.use`, `FilterScreenPacket`, the menus' `saveData`)
+
+/// The list and attribute filters' items: right-clicked with the main hand, not sneaking, they
+/// open their screen, in the air or on a block that took no click of its own
+/// (`FilterItem.use` / `useOn`; a block's filter slot takes the click before the item).
+pub(super) struct FilterPart;
+
+#[mod_api::horizon_part]
+impl ItemPart for FilterPart {
+    fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
+        used(host, event.player, event.hand)
+    }
+
+    fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
+        used(host, event.player, event.hand)
+    }
+}
+
+/// `FilterItem.use`: success (and the screen, on the server) for the main hand when not
+/// sneaking; a pass otherwise.
+fn used(host: HostSide, player: u128, hand: Hand) -> Option<InteractionResult> {
+    if hand != Hand::Main {
+        return None;
+    }
+    match host {
+        HostSide::Server(host) => {
+            let player = host.player(player)?;
+            if super::sneaking(&*host, player) {
+                return None;
+            }
+            open_screen(host, player);
+        }
+        HostSide::Client(host) => {
+            let player = host.local_player()?;
+            if super::sneaking(&*host, player) {
+                return None;
+            }
+        }
+    }
+    Some(InteractionResult::Success)
+}
+
+/// What the server keeps of a screen it opened: the filter's item, the inventory sent, the
+/// filter's own list and the attributes it had.
+struct Session {
+    item: mod_api::ItemKey,
+    attribute: bool,
+    inventory: Vec<(u32, ItemStack)>,
+    list: Vec<Option<ItemStack>>,
+    had: Vec<(String, Option<String>)>,
+}
+
+thread_local! {
+    static SESSIONS: std::cell::RefCell<std::collections::HashMap<u128, Session>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// `player.openMenu(filter)`: the screen, with the held filter's settings and a copy of the
+/// inventory.
+fn open_screen(host: &mut dyn ServerHost, player: PlayerRef) {
+    let Some(stack) = held(&*host, player, Hand::Main) else {
+        return;
+    };
+    let attribute = match filter::FilterItem::of(&stack.item().id(&*host)) {
+        Some(filter::FilterItem::List) => false,
+        Some(filter::FilterItem::Attribute) => true,
+        _ => return,
+    };
+    let h: &dyn Host = &*host;
+    let inventory: Vec<(u32, ItemStack)> = player
+        .inventory_slots(h)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(slot, _)| *slot < 36)
+        .collect();
+    let c = custom(&stack);
+    let list = if attribute {
+        Vec::new()
+    } else {
+        decode_items(h, c.get(&ITEMS_KEY.into()), LIST_SLOTS)
+    };
+    let s = spec(h, &stack);
+    let had: Vec<(String, Option<String>, bool)> = s.attributes.clone().unwrap_or_default();
+    let opened = filter_screen::Opened {
+        attribute,
+        selected: player.selected_slot(h).unwrap_or(0) as u8,
+        inventory: inventory
+            .iter()
+            .filter_map(|(slot, st)| {
+                let attrs = if attribute {
+                    attributes_of(h, st)
+                } else {
+                    Vec::new()
+                };
+                Some((*slot as u8, filter_screen::stack_bytes(h, st)?, attrs))
+            })
+            .collect(),
+        list: list
+            .iter()
+            .enumerate()
+            .filter_map(|(i, st)| Some((i as u8, filter_screen::stack_bytes(h, st.as_ref()?)?)))
+            .collect(),
+        deny: s.blacklist,
+        respect: s.respect_nbt,
+        mode: s
+            .mode
+            .as_deref()
+            .and_then(Mode::parse)
+            .and_then(|m| Mode::ALL.iter().position(|a| *a == m))
+            .unwrap_or(0) as u8,
+        chosen: had
+            .iter()
+            .map(|(kind, value, inverted)| (attr_line(kind, value.clone()), *inverted))
+            .collect(),
+    };
+    SESSIONS.with_borrow_mut(|m| {
+        m.insert(
+            player.uuid(),
+            Session {
+                item: stack.item(),
+                attribute,
+                inventory,
+                list,
+                had: had.into_iter().map(|(k, v, _)| (k, v)).collect(),
+            },
+        )
+    });
+    net::send_to_player(host, player, filter_screen::CHANNEL, &opened.encode());
+}
+
+/// How an attribute reads (`getTranslationKey`, `getTranslationParameters`).
+fn attr_line(kind: &str, value: Option<String>) -> filter_screen::AttrLine {
+    let name = kind.strip_prefix("create:").unwrap_or(kind);
+    let (key, arg, arg_key) = match name {
+        "in_tag" => (
+            name.to_owned(),
+            value
+                .as_ref()
+                .map(|v| format!("#{}", v.trim_start_matches('#'))),
+            false,
+        ),
+        // `ModInfo.getDisplayName`, else the id capitalised.
+        "added_by" => (
+            name.to_owned(),
+            value.as_deref().map(|m| match m {
+                "minecraft" => "Minecraft".to_owned(),
+                m => {
+                    let mut c = m.chars();
+                    c.next()
+                        .map(|f| f.to_uppercase().chain(c).collect())
+                        .unwrap_or_default()
+                }
+            }),
+            false,
+        ),
+        "has_enchant" => (
+            name.to_owned(),
+            value.as_deref().map(|e| {
+                let (ns, path) = e.split_once(':').unwrap_or(("minecraft", e));
+                format!("enchantment.{ns}.{path}")
+            }),
+            true,
+        ),
+        "book_copy" => (
+            match value.as_deref().and_then(|v| v.parse::<i32>().ok()) {
+                Some(0) => "book_copy_original",
+                Some(1) => "book_copy_first",
+                Some(2) => "book_copy_second",
+                _ => "book_copy_tattered",
+            }
+            .to_owned(),
+            None,
+            false,
+        ),
+        _ => (name.to_owned(), value.clone(), false),
+    };
+    filter_screen::AttrLine {
+        kind: kind.to_owned(),
+        value,
+        key,
+        arg,
+        arg_key,
+    }
+}
+
+/// `ItemAttribute.getAllAttributes` of each type, in Create's registration order (the types
+/// this port reads; `in_tag` is not offered: see `filter_screen`).
+fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrLine> {
+    const SINGLETONS: [&str; 17] = [
+        "placeable",
+        "consumable",
+        "enchanted",
+        "max_enchanted",
+        "renamed",
+        "damaged",
+        "badly_damaged",
+        "not_stackable",
+        "equipable",
+        "furnace_fuel",
+        "washable",
+        "hauntable",
+        "crushable",
+        "smeltable",
+        "smokable",
+        "blastable",
+        "compostable",
+    ];
+    let looked = Looked::new(host, stack);
+    let mut out: Vec<filter_screen::AttrLine> = SINGLETONS
+        .iter()
+        .filter(|n| Attribute::parse(n, None).is_ok_and(|a| looked.attribute(&a)))
+        .map(|n| attr_line(&format!("create:{n}"), None))
+        .collect();
+    let id = looked.id.clone();
+    out.push(attr_line(
+        "create:added_by",
+        Some(id.split_once(':').map_or("minecraft", |s| s.0).to_owned()),
+    ));
+    let which = if id == "minecraft:enchanted_book" {
+        "minecraft:stored_enchantments"
+    } else {
+        "minecraft:enchantments"
+    };
+    for e in enchantment_ids(component(host, stack, which)) {
+        out.push(attr_line("create:has_enchant", Some(e)));
+    }
+    let renamed = stack
+        .components()
+        .is_some_and(|c| c.as_nbt().contains_key(&"minecraft:custom_name".into()));
+    if renamed
+        && let Some(name) =
+            plain_name(component(host, stack, "minecraft:custom_name")).filter(|n| !n.is_empty())
+    {
+        out.push(attr_line("create:has_name", Some(name)));
+    }
+    if let Some(Tag::Compound(w)) = component(host, stack, "minecraft:written_book_content") {
+        if let Some(author) = text(w.get(&"author".into())).filter(|a| !a.is_empty()) {
+            out.push(attr_line("create:book_author", Some(author)));
+        }
+        let generation = match w.get(&"generation".into()) {
+            Some(Tag::Int(i)) => *i,
+            _ => 0,
+        };
+        out.push(attr_line("create:book_copy", Some(generation.to_string())));
+    }
+    out
+}
+
+/// What the screen chose, written into the held filter (`FilterScreenPacket` and `saveData`):
+/// only while the main hand still holds the filter it opened for (`stillValid`).
+pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
+    let Some(chosen) = filter_screen::Chosen::decode(data) else {
+        return;
+    };
+    let Some(session) = SESSIONS.with_borrow_mut(|m| m.remove(&player.uuid())) else {
+        return;
+    };
+    let Some(mut stack) = held(&*host, player, Hand::Main) else {
+        return;
+    };
+    if stack.item() != session.item || chosen.attribute != session.attribute {
+        return;
+    }
+    if session.attribute {
+        let mode = Mode::ALL
+            .get(usize::from(chosen.mode))
+            .copied()
+            .unwrap_or(Mode::WhitelistDisj);
+        // The attributes offered (or kept from before): nothing else is written.
+        let tests: Vec<(String, Option<String>, bool)> = chosen
+            .attributes
+            .into_iter()
+            .filter(|(kind, value, _)| {
+                session.had.iter().any(|(k, v)| k == kind && v == value)
+                    || Attribute::parse(kind, value.as_deref()).is_ok()
+            })
+            .collect();
+        write_attributes(&mut stack, mode, &tests);
+    } else {
+        let h: &dyn Host = &*host;
+        let slots: Vec<Option<ItemStack>> = (0..LIST_SLOTS)
+            .map(|i| {
+                let mut s = match chosen.list.get(i).copied().flatten()? {
+                    filter_screen::Ghost::Inventory(slot) => session
+                        .inventory
+                        .iter()
+                        .find(|(s, _)| *s == u32::from(slot))
+                        .map(|(_, st)| st.clone()),
+                    filter_screen::Ghost::Own(j) => {
+                        session.list.get(usize::from(j)).cloned().flatten()
+                    }
+                }?;
+                let _ = s.set_count(1);
+                Some(s)
+            })
+            .collect();
+        let list = slots
+            .iter()
+            .any(Option::is_some)
+            .then(|| encode_items(h, &slots));
+        set_custom(
+            &mut stack,
+            &[
+                (ITEMS_KEY, list),
+                (RESPECT_NBT_KEY, Some(Tag::Byte(i8::from(chosen.respect)))),
+                (BLACKLIST_KEY, Some(Tag::Byte(i8::from(chosen.deny)))),
+            ],
+        );
+    }
+    set_held(host, player, Hand::Main, Some(stack));
 }

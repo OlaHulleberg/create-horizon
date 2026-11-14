@@ -2187,6 +2187,32 @@ impl Railway {
         true
     }
 
+    /// `ScheduleRuntime.setSchedule` (not automatic): train `id` follows `schedule` from entry
+    /// `progress` (clamped to its entries), running, waiting to set off. False when there is
+    /// no such train.
+    pub fn set_schedule(&mut self, id: u32, schedule: Schedule, progress: usize) -> bool {
+        let Some(t) = self.trains.iter_mut().find(|t| t.id == id) else {
+            return false;
+        };
+        let mut runtime = Runtime::new();
+        runtime.current = progress.min(schedule.entries.len().saturating_sub(1));
+        t.runtime = runtime;
+        t.schedule = Some(schedule);
+        true
+    }
+
+    /// `ScheduleRuntime.returnSchedule` and `discardSchedule`: train `id`'s schedule taken
+    /// back with the entry it was at, its navigation cancelled. None without one.
+    pub fn take_schedule(&mut self, id: u32) -> Option<(Schedule, usize)> {
+        let t = self.trains.iter_mut().find(|t| t.id == id)?;
+        let schedule = t.schedule.take()?;
+        let at = t.runtime.current;
+        t.runtime = Runtime::new();
+        t.train.nav = None;
+        t.train.reserved.clear();
+        Some((schedule, at))
+    }
+
     /// The controls of train `id` let go (`ControlsServerHandler` dropped its keys): it runs
     /// on by itself again, coasting or navigating.
     pub fn release(&mut self, id: u32) {
@@ -2836,6 +2862,7 @@ mod tests {
                 },
             ],
             cyclic: true,
+            source: Vec::new(),
         });
         let mut events = Vec::new();
         let mut visits = Vec::new();
@@ -3458,6 +3485,36 @@ mod tests {
     }
 
     #[test]
+    fn a_schedule_handed_over_runs_from_its_progress_and_comes_back_where_it_was() {
+        let mut r = straight(600);
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[8, 64, 0]], [1.0, 0.0, 0.0]);
+        let id = r.trains[a].id;
+        let entry = |s: &str| Entry {
+            station: s.into(),
+            conditions: vec![vec![Condition::Delay(SECONDS)]],
+        };
+        let s = Schedule {
+            entries: vec![entry("A"), entry("B")],
+            cyclic: true,
+            source: vec![1, 2, 3],
+        };
+        // A saved progress past the end is clamped to the last entry.
+        assert!(r.set_schedule(id, s.clone(), 7));
+        assert_eq!(r.trains[a].runtime.current, 1);
+        assert!(!r.trains[a].runtime.paused);
+        let (back, at) = r.take_schedule(id).unwrap();
+        assert_eq!((back, at), (s, 1));
+        assert!(r.trains[a].schedule.is_none() && r.trains[a].train.nav.is_none());
+        assert!(r.take_schedule(id).is_none());
+        assert!(!r.set_schedule(id + 100, Schedule {
+            entries: Vec::new(),
+            cyclic: true,
+            source: Vec::new(),
+        }, 0));
+    }
+
+    #[test]
     fn a_player_s_keys_drive_the_train_as_create_s_controls() {
         use crate::train_controls::{BACK, Driving, FORWARD, JUMP, Prompt};
         let w = 1 << FORWARD;
@@ -3474,6 +3531,7 @@ mod tests {
         r.trains[a].schedule = Some(Schedule {
             entries: Vec::new(),
             cyclic: false,
+            source: Vec::new(),
         });
         assert!(r.start_controlling(id));
         assert!(r.trains[a].runtime.paused, "the schedule pauses");

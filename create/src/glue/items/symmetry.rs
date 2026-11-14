@@ -1,49 +1,83 @@
 //! The wand of symmetry: its click moves the mirror (`SymmetryWandItem.useOn`), its use in the
-//! air turns it off (`use`), and every enabled wand in the hotbar copies a player's placements
-//! and breaks to their mirror images (`SymmetryHandler`). Its screen is stood in for by
-//! `/create_debug symmetry`, writing the held wand's mirror. The mirror is kept in the stack's
-//! custom data under Create's component names (`SYMMETRY_WAND`, `SYMMETRY_WAND_ENABLE`).
+//! air turns it off (`use`), its sneaking use opens its screen on the client
+//! (`symmetry_screen`, `openWandGUI`; the mirror comes back in `ConfigureSymmetryWandPacket`),
+//! and every enabled wand in the hotbar copies a player's placements and breaks to their mirror
+//! images (`SymmetryHandler`). The mirror is kept in the stack's custom data under Create's
+//! component names (`SYMMETRY_WAND`, `SYMMETRY_WAND_ENABLE`).
+//!
+//! The client draws each enabled mirror of a wand in its hotbar (`SymmetryHandler.onRenderWorld`:
+//! the mirror's model bobbing over its block, turned to its orientation) and sends up end rod
+//! particles from it every ten ticks (`onClientTick`). A client reads no inventory slots of its
+//! own player, so the server tells it the hotbar's mirrors (`MIRRORS`), every ten ticks when they
+//! changed and at once when a click or the screen moves one. The model is drawn with the light
+//! of the block the mirror stands in when the client can read it (`LevelRef::brightness`
+//! answers on the logical server only), else as in open daylight.
 
+use super::super::net;
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
-use super::{
-    Item, creative, custom, held, is, set_custom, set_held, set_slot, slot_stack, sneaking,
-};
+use super::symmetry_screen::{self as screen, Configure};
+use super::{Item, creative, custom, held, is, set_custom, set_held, sneaking};
 use create_engine::symmetry::{self, ENABLE_KEY, Kind, MIRROR_KEY, Wand};
 use mod_api::{
-    BlockState, BreakBlockEvent, CommandSource, Compound, EntityPlaceEvent, Hand, Host,
-    HostBlockStates, HostSide, InteractionResult, ItemPart, ItemStack, PlayerRef,
-    RunModCommandEvent, ServerHost, Tag, UseItemEvent, UseOnEvent,
+    BlockState, BreakBlockEvent, ClientHost, Compound, EntityPlaceEvent, Hand, Host,
+    HostBlockStates, HostSide, Identifier, InteractionResult, ItemPart, ItemStack, LightCoords,
+    LightLayer, ModelInstance, ModelRef, Overlay, ParticleKey, ParticleOptions, PlayerRef,
+    RenderLevelStage, RenderLevelStageEvent, ServerHost, Tag, UseItemEvent, UseOnEvent,
 };
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 
 pub(super) struct WandPart;
 
 #[mod_api::horizon_part]
 impl ItemPart for WandPart {
-    /// `SymmetryWandItem.useOn` (not sneaking, main hand): the mirror moves before the clicked
-    /// face. Sneaking opens its screen on the client (the command stands in for it).
+    /// `SymmetryWandItem.useOn`: sneaking opens its screen on the client; otherwise (main hand)
+    /// the mirror moves before the clicked face.
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
-        if let HostSide::Server(host) = host {
-            clicked(host, event);
+        match host {
+            HostSide::Server(host) => {
+                clicked(host, event);
+            }
+            HostSide::Client(host) => {
+                if client_sneaking(&*host) {
+                    screen::request(event.stack.clone(), event.hand);
+                }
+            }
         }
         Some(InteractionResult::Success)
     }
 
-    /// `SymmetryWandItem.use` not sneaking: the mirror off.
+    /// `SymmetryWandItem.use`: sneaking opens its screen on the client; otherwise the mirror
+    /// off.
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
-        if let HostSide::Server(host) = host
-            && let Some(player) = host.player(event.player)
-            && !sneaking(&*host, player)
-        {
-            let mut stack = event.stack.clone();
-            let mut w = wand(&stack);
-            w.used();
-            set_wand(&mut stack, &w);
-            set_held(host, player, event.hand, Some(stack));
+        match host {
+            HostSide::Server(host) => {
+                if let Some(player) = host.player(event.player)
+                    && !sneaking(&*host, player)
+                {
+                    let mut stack = event.stack.clone();
+                    let mut w = wand(&stack);
+                    w.used();
+                    set_wand(&mut stack, &w);
+                    set_held(host, player, event.hand, Some(stack));
+                    sync_player(host, player, true);
+                }
+            }
+            HostSide::Client(host) => {
+                if client_sneaking(&*host) {
+                    screen::request(event.stack.clone(), event.hand);
+                }
+            }
         }
         Some(InteractionResult::Success)
     }
+}
+
+fn client_sneaking(host: &dyn ClientHost) -> bool {
+    host.local_player()
+        .and_then(|p| p.entity().is_shift_key_down(host))
+        == Some(true)
 }
 
 fn clicked(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<()> {
@@ -62,6 +96,7 @@ fn clicked(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<()> {
     w.clicked(at, symmetry::faces_z(yaw), yaw);
     set_wand(&mut stack, &w);
     set_held(host, player, event.hand, Some(stack));
+    sync_player(host, player, true);
     Some(())
 }
 
@@ -78,7 +113,7 @@ fn text(t: Option<&Tag>) -> Option<String> {
 
 /// The wand's mirror and its `SYMMETRY_WAND_ENABLE` (`checkComponents`: an empty mirror at the
 /// origin, disabled, when it has none).
-fn wand(stack: &ItemStack) -> Wand {
+pub(super) fn wand(stack: &ItemStack) -> Wand {
     let c = custom(stack);
     let Some(Tag::Compound(m)) = c.get(&MIRROR_KEY.into()) else {
         return Wand::blank();
@@ -274,72 +309,322 @@ pub(super) fn broken(host: &mut dyn ServerHost, event: &BreakBlockEvent<'_>) -> 
     Some(())
 }
 
-pub(super) fn register_commands(commands: &mut Vec<mod_api::Command>) {
-    // The wand of symmetry's screen and click: its mirror's place, type and orientation.
-    commands.push(mod_api::Command::op("create_debug symmetry <args:text>", 2));
-}
-
-/// `create_debug symmetry <slot> <x> <y> <z> <plane|cross_plane|triple_plane|empty>
-/// [orientation]`: the screen's mirror and orientation, at a place the wand's click would put
-/// it, enabled as that click enables it.
-pub(super) fn command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) -> String {
-    const USAGE: &str = "usage: create_debug symmetry <hand|offhand|slot> <x> <y> <z> <plane|cross_plane|triple_plane|empty> [orientation]";
-    let CommandSource::Player { player, .. } = event.source else {
-        return "symmetry: only a player has a wand".into();
+/// `ConfigureSymmetryWandPacket.handle`: the screen's mirror into the wand still in that hand
+/// (`configureSettings`), where the wand's mirror stands (the origin for an empty one).
+pub(super) fn configure(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
+    let Some(Configure {
+        hand,
+        kind,
+        orientation,
+    }) = Configure::decode(data)
+    else {
+        return;
     };
-    let player = *player;
-    let rest = match event.command.argument("args") {
-        Some(mod_api::CommandArgumentValue::String(s)) => s.clone(),
-        _ => return USAGE.into(),
+    let Some(mut stack) = held(&*host, player, hand) else {
+        return;
     };
-    let words: Vec<&str> = rest.split_whitespace().collect();
-    if words.len() < 5 {
-        return USAGE.into();
-    }
-    let here = player.entity().position(&*host);
-    let mut at = [0i32; 3];
-    for i in 0..3 {
-        let t = words[1 + i];
-        at[i] = match t.strip_prefix('~') {
-            Some(o) => here.map_or(0, |h| h[i].floor() as i32) + o.parse::<i32>().unwrap_or(0),
-            None => match t.parse() {
-                Ok(v) => v,
-                Err(_) => return USAGE.into(),
-            },
-        };
-    }
-    let kind = Kind::parse(words[4]);
-    let orientation = words
-        .get(5)
-        .and_then(|o| o.parse::<usize>().ok())
-        .unwrap_or(0);
-    let Some((slot, stack)) = slot_stack(&*host, player, words[0]) else {
-        return USAGE.into();
-    };
-    let Some(mut stack) = stack else {
-        return format!("symmetry: nothing in {}", words[0]);
-    };
-    if !is(Some(&stack), Item::WandOfSymmetry) {
-        return format!(
-            "symmetry: {} holds {}, not a wand",
-            words[0],
-            stack.item().id(&*host)
-        );
+    if !is(Some(&stack), Item::WandOfSymmetry) || kind == Kind::Empty {
+        return;
     }
     let mut w = wand(&stack);
     w.kind = kind;
-    w.position = at.map(f64::from);
-    w.mirror_enable = true;
     w.set_orientation(orientation);
-    w.enabled = kind != Kind::Empty;
     set_wand(&mut stack, &w);
-    set_slot(host, player, slot, stack);
-    format!(
-        "symmetry: {} at {} {} {} orientation {}",
-        kind.name(),
-        at[0],
-        at[1],
-        at[2],
-        w.orientation
-    )
+    set_held(host, player, hand, Some(stack));
+    sync_player(host, player, true);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The mirrors a client draws
+
+/// Server to client: the enabled mirrors of the wands in the player's hotbar.
+pub(super) const MIRRORS: &str = "create:symmetry_mirrors";
+
+/// A mirror as drawn: its type, orientation and place.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Shown {
+    kind: Kind,
+    orientation: usize,
+    position: [f64; 3],
+}
+
+fn encode(mirrors: &[Shown]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + mirrors.len() * 26);
+    out.push(mirrors.len().min(9) as u8);
+    for m in mirrors.iter().take(9) {
+        out.push(Kind::ALL.iter().position(|k| *k == m.kind).unwrap_or(0) as u8);
+        out.push(m.orientation.min(255) as u8);
+        for v in m.position {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    out
+}
+
+fn decode(data: &[u8]) -> Option<Vec<Shown>> {
+    let (&n, mut rest) = data.split_first()?;
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let (head, tail) = rest.split_at_checked(26)?;
+        let f = |i: usize| {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&head[2 + 8 * i..10 + 8 * i]);
+            f64::from_le_bytes(b)
+        };
+        out.push(Shown {
+            kind: *Kind::ALL.get(usize::from(head[0]))?,
+            orientation: usize::from(head[1]),
+            position: [f(0), f(1), f(2)],
+        });
+        rest = tail;
+    }
+    rest.is_empty().then_some(out)
+}
+
+thread_local! {
+    /// On the server: what each player's client was last sent.
+    static SENT: RefCell<HashMap<u128, Vec<Shown>>> = RefCell::new(HashMap::new());
+}
+
+/// The enabled, non-empty mirrors of the wands in `player`'s hotbar.
+fn shown(host: &dyn Host, player: PlayerRef) -> Vec<Shown> {
+    hotbar_wands(host, player)
+        .into_iter()
+        .filter(|w| w.is_enabled() && w.kind != Kind::Empty)
+        .map(|w| Shown {
+            kind: w.kind,
+            orientation: w.orientation,
+            position: w.position,
+        })
+        .collect()
+}
+
+/// Sends `player`'s client its mirrors when they changed (or always, `force`).
+fn sync_player(host: &mut dyn ServerHost, player: PlayerRef, force: bool) {
+    let now = shown(&*host, player);
+    let uuid = player.uuid();
+    let changed = SENT.with_borrow_mut(|sent| {
+        let before = sent.get(&uuid);
+        if !force && before == Some(&now) || before.is_none() && now.is_empty() {
+            return false;
+        }
+        sent.insert(uuid, now.clone());
+        true
+    });
+    if changed {
+        net::send_to_player(host, player, MIRRORS, &encode(&now));
+    }
+}
+
+/// Every ten ticks, the mirrors of the level's players to their clients, when they changed.
+pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
+    if lv.game_time() % 10 != 0 {
+        return;
+    }
+    for player in lv.players() {
+        sync_player(lv.host, player, false);
+    }
+}
+
+pub(super) fn world_closed() {
+    SENT.with_borrow_mut(HashMap::clear);
+}
+
+/// The mirrors' models (`AllPartialModels.SYMMETRY_*`), registered as standalone models.
+pub(super) const MODELS: [&str; 3] = [
+    "create:block/symmetry_effect/plane",
+    "create:block/symmetry_effect/crossplane",
+    "create:block/symmetry_effect/tripleplane",
+];
+
+/// The client's view of the mirrors.
+#[derive(Default)]
+struct Client {
+    mirrors: Vec<Shown>,
+    models: HashMap<&'static str, ModelRef>,
+    ticks: u64,
+    rng: Option<create_engine::processing::Rng>,
+}
+
+thread_local! {
+    static CLIENT: RefCell<Client> = RefCell::new(Client::default());
+}
+
+static END_ROD: std::sync::OnceLock<ParticleKey> = std::sync::OnceLock::new();
+
+pub(super) fn register(r: &mut dyn mod_api::Registrar) {
+    let _ = END_ROD.set(r.particle_key("minecraft:end_rod"));
+}
+
+/// `model_baking_completed`: the models looked up once, until the next bake.
+pub(super) fn models_baked(host: &dyn ClientHost) {
+    let mut found = HashMap::new();
+    for id in MODELS {
+        let model = Identifier::parse(id)
+            .ok()
+            .and_then(|i| host.render_assets().model(&i).ok());
+        match model {
+            Some(m) => {
+                found.insert(id, m);
+            }
+            None => crate::create_log!("[create] the symmetry mirror's model {id} is missing"),
+        }
+    }
+    CLIENT.with_borrow_mut(|c| c.models = found);
+}
+
+pub(super) fn reset() {
+    CLIENT.with_borrow_mut(|c| {
+        c.mirrors.clear();
+        c.ticks = 0;
+    });
+}
+
+pub(super) fn server_message(channel: &str, data: &[u8]) -> bool {
+    if channel != MIRRORS {
+        return false;
+    }
+    if let Some(m) = decode(data) {
+        CLIENT.with_borrow_mut(|c| c.mirrors = m);
+    }
+    true
+}
+
+/// `SymmetryHandler.onClientTick`: every ten ticks, an end rod particle rising from near the
+/// middle of each mirror's block, a quarter up.
+pub(super) fn tick(host: &mut dyn ClientHost) {
+    let Some(&end_rod) = END_ROD.get() else {
+        return;
+    };
+    let puffs = CLIENT.with_borrow_mut(|c| {
+        c.ticks += 1;
+        if c.ticks % 10 != 0 || c.mirrors.is_empty() {
+            return Vec::new();
+        }
+        let rng = c
+            .rng
+            .get_or_insert_with(|| create_engine::processing::Rng::new(0x5EED_5133));
+        c.mirrors
+            .iter()
+            .map(|m| {
+                let ox = (f64::from(rng.next_float()) - 0.5) * 0.3;
+                let oz = (f64::from(rng.next_float()) - 0.5) * 0.3;
+                let up = f64::from(rng.next_float()) / 8.0;
+                (
+                    [
+                        m.position[0] + 0.5 + ox,
+                        m.position[1] + 0.25,
+                        m.position[2] + 0.5 + oz,
+                    ],
+                    up,
+                )
+            })
+            .collect()
+    });
+    for (at, up) in puffs {
+        host.add_particle(&ParticleOptions::simple(end_rod), at, [0.0, up, 0.0]);
+    }
+}
+
+/// `applyModelTransform`'s turn about the block's middle, as a row-major 3×4 transform.
+fn model_turn(degrees: f32) -> [f32; 12] {
+    let (s, c) = degrees.to_radians().sin_cos();
+    [
+        c,
+        0.0,
+        s,
+        0.5 - 0.5 * c - 0.5 * s,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        -s,
+        0.0,
+        c,
+        0.5 + 0.5 * s - 0.5 * c,
+    ]
+}
+
+/// `SymmetryHandler.onRenderWorld`: each mirror's model over its block, `sin(t / 16) / 5`
+/// plus 0.2 up, turned to its orientation.
+pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
+    if event.stage != RenderLevelStage::AfterOpaqueBlocks {
+        return;
+    }
+    CLIENT.with_borrow(|c| {
+        if c.mirrors.is_empty() {
+            return;
+        }
+        let t = event.view.game_time as f64 + f64::from(event.view.partial_tick);
+        let bob = (t / 16.0).sin() / 5.0;
+        let level = host.level(host.dimension());
+        for m in &c.mirrors {
+            let Some((id, degrees)) = m.kind.model(m.orientation) else {
+                continue;
+            };
+            let Some(&model) = c.models.get(id) else {
+                continue;
+            };
+            let block = m.position.map(|v| v.floor() as i32);
+            let light = level
+                .and_then(|l| {
+                    let b = l.brightness(host, LightLayer::Block, block)?;
+                    let s = l.brightness(host, LightLayer::Sky, block)?;
+                    LightCoords::new(b.clamp(0, 15) as u8, s.clamp(0, 15) as u8)
+                })
+                .unwrap_or(LightCoords::new(0, 15).unwrap_or(LightCoords::FULL_BRIGHT));
+            let origin = [
+                f64::from(block[0]),
+                f64::from(block[1]) + bob + 0.2,
+                f64::from(block[2]),
+            ];
+            let instance = ModelInstance::new(
+                origin,
+                model_turn(degrees),
+                0xFFFF_FFFF,
+                light,
+                Overlay::NONE,
+            );
+            if let Err(e) = event.draw.draw_model_instances(model, &[instance]) {
+                crate::create_log!("[create] the symmetry mirror could not be drawn: {e:?}");
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mirrors_cross_the_wire() {
+        let m = vec![
+            Shown {
+                kind: Kind::CrossPlane,
+                orientation: 1,
+                position: [1.0, -64.0, 30_000_000.0],
+            },
+            Shown {
+                kind: Kind::Plane,
+                orientation: 0,
+                position: [0.0; 3],
+            },
+        ];
+        assert_eq!(decode(&encode(&m)), Some(m));
+        assert_eq!(decode(&[1, 0]), None);
+        assert_eq!(decode(&encode(&[])), Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_quarter_turn_keeps_the_block_in_place() {
+        let t = model_turn(90.0);
+        // The corner (0, 0, 0) goes to (0, 0, 1), (1, 0, 0) to (0, 0, 0).
+        let apply = |p: [f32; 3]| {
+            [0, 1, 2]
+                .map(|r| t[4 * r] * p[0] + t[4 * r + 1] * p[1] + t[4 * r + 2] * p[2] + t[4 * r + 3])
+        };
+        let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
+        assert!(near(apply([0.0, 0.0, 0.0]), [0.0, 0.0, 1.0]));
+        assert!(near(apply([1.0, 0.0, 0.0]), [0.0, 0.0, 0.0]));
+    }
 }

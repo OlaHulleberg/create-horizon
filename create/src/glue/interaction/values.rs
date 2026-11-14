@@ -67,13 +67,37 @@ pub(crate) fn value_box_hit(
     let Some((block, info)) = table.get(block_at(pos)) else {
         return false;
     };
+    // Boxes tested by their own reach.
     if create_engine::dye::is_valve_handle(block) {
         return info
             .facing
             .and_then(|f| board::valve_slot(f, side))
             .is_some_and(|s| board::hits_valve_box(s, local));
     }
-    let slot = match (block, info.axis, info.tunnel) {
+    if block == B::MechanicalRoller {
+        return info.facing.is_some_and(|f| {
+            let (slot, r) = create_engine::actors::roller_slot(f, false);
+            let d2: f64 = (0..3).map(|i| (local[i] - slot[i]).powi(2)).sum();
+            d2.sqrt() < r
+        });
+    }
+    value_box_slot(table, block_at, charged, pos, side).is_some_and(|s| board::hits_box(s, local))
+}
+
+/// The centre of the active value box on `side` of the block at `pos`, in the block's own
+/// coordinates (`ValueBoxTransform.getLocalOffset`), if it has one there.
+pub(crate) fn value_box_slot(
+    table: &StateTable,
+    block_at: impl Fn([i32; 3]) -> u32,
+    charged: impl Fn([i32; 3]) -> bool,
+    pos: [i32; 3],
+    side: Dir,
+) -> Option<[f64; 3]> {
+    let (block, info) = table.get(block_at(pos))?;
+    if create_engine::dye::is_valve_handle(block) {
+        return info.facing.and_then(|f| board::valve_slot(f, side));
+    }
+    match (block, info.axis, info.tunnel) {
         (B::CreativeMotor, ..) => info.facing.and_then(|f| board::motor_slot(f, side)),
         (B::RotationSpeedController, Some(axis), _) => board::controller_slot(axis, side),
         // `IBearingBlockEntity.getMovementModeSlot`, the windmill's direction and the clock's
@@ -89,13 +113,9 @@ pub(crate) fn value_box_hit(
         // `PulleyBlockEntity.getMovementModeSlot`: on top.
         (B::RopePulley, ..) => (side == Dir::Up).then(|| board::centred_slot(side)),
         // `RollerBlockEntity.RollerValueBox(-3)`: the mode, beside its filter, from any side.
-        (B::MechanicalRoller, ..) => {
-            return info.facing.is_some_and(|f| {
-                let (slot, r) = create_engine::actors::roller_slot(f, false);
-                let d2: f64 = (0..3).map(|i| (local[i] - slot[i]).powi(2)).sum();
-                d2.sqrt() < r
-            });
-        }
+        (B::MechanicalRoller, ..) => info
+            .facing
+            .map(|f| create_engine::actors::roller_slot(f, false).0),
         // `BrassDiodeScrollSlot`: not a sided box, any face reaches it.
         (B::PulseRepeater | B::PulseExtender | B::PulseTimer, ..) => {
             Some(create_engine::diode::SLOT)
@@ -120,8 +140,7 @@ pub(crate) fn value_box_hit(
                 .flatten()
         }
         _ => None,
-    };
-    slot.is_some_and(|s| board::hits_box(s, local))
+    }
 }
 
 /// The title and option names of a block's `ScrollOptionBehaviour` (an icons board).

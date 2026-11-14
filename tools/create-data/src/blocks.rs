@@ -2374,7 +2374,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 136] = [
+pub const PARTIALS: [(&str, &str, &str); 139] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -2993,6 +2993,23 @@ pub const PARTIALS: [(&str, &str, &str); 136] = [
     (
         "part_pipe_drain_east",
         "create:block/fluid_pipe/drain/east",
+        "up",
+    ),
+    // AllPartialModels.SYMMETRY_*: the wand of symmetry's mirrors, as its screen's preview
+    // draws them (a scene of one block); the world's are standalone models.
+    (
+        "part_symmetry_plane",
+        "create:block/symmetry_effect/plane",
+        "up",
+    ),
+    (
+        "part_symmetry_crossplane",
+        "create:block/symmetry_effect/crossplane",
+        "up",
+    ),
+    (
+        "part_symmetry_tripleplane",
+        "create:block/symmetry_effect/tripleplane",
         "up",
     ),
 ];
