@@ -391,11 +391,8 @@ pub(super) fn drain_landed(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut 
     let Some(s) = stack.as_ref() else {
         return;
     };
-    // A stack with components is taken only as a potion (named with them).
-    let id = item_name(&*lv.host, s);
-    if (s.components().is_some() && !id.contains('|')) || s.damage() != 0 {
-        return;
-    }
+    // Any stack, named with its components as the belts name it (a potion with its contents).
+    let id = crate::glue::logistics::items::key_of(&*lv.host, s);
     let side = create_engine::kinetics::Dir::North;
     let count = s.count().min(64) as u8;
     let Some(left) = insert_into_drain(lv, pos, side, &id, count) else {
