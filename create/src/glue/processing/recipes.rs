@@ -31,6 +31,8 @@ pub struct Recipes {
     pub blasting: Book,
     /// The deployer's: `create:deploying`, then `create:item_application` (automatable ones).
     pub deploying: Vec<deployer::Recipe>,
+    /// `create:item_application`, the manual-only ones too: a player's item on a block.
+    pub manual_application: Vec<deployer::Recipe>,
     /// The item drain's and the spout's: `create:emptying`, `create:filling` with the fluids
     /// the machines carry (the fluids subsystem's machines read them).
     pub emptying: Vec<(String, drain::Emptying)>,
@@ -106,8 +108,9 @@ pub fn publish(host: &dyn Host) {
         blasting: read_cooking(host, "minecraft:blasting"),
         deploying: ["create:deploying", "create:item_application"]
             .into_iter()
-            .flat_map(|k| read_application(host, k))
+            .flat_map(|k| read_application(host, k, false))
             .collect(),
+        manual_application: read_application(host, "create:item_application", true),
         emptying: read_emptying(host),
         filling: read_filling(host),
         sequenced: read_sequenced(host),
@@ -310,10 +313,10 @@ fn read_basin(host: &dyn Host, kind: &str) -> Vec<basin::Recipe> {
 
 /// `ItemApplicationRecipe`s: the item worked on, the one held, the results; `_manual_only`
 /// ones left out (`CAN_BE_AUTOMATED`).
-fn read_application(host: &dyn Host, kind: &str) -> Vec<deployer::Recipe> {
+fn read_application(host: &dyn Host, kind: &str, manual: bool) -> Vec<deployer::Recipe> {
     host.recipes_of_type(kind)
         .iter()
-        .filter(|r| !r.id.ends_with("_manual_only"))
+        .filter(|r| manual || !r.id.ends_with("_manual_only"))
         .filter_map(|r| {
             let json = &*r.json;
             let mut ingredients = json["ingredients"]

@@ -33,6 +33,7 @@
 //! items moving between mechanical crafters (`MechanicalCrafterRenderer.renderItems` past
 //! `IDLE`).
 
+mod application;
 mod basin;
 mod burner_draw;
 mod client;
@@ -189,7 +190,12 @@ impl Subsystem for Processing {
         event: &mut RightClickBlockEvent<'_>,
     ) -> mod_api::Flow {
         match host {
-            HostSide::Server(host) => use_block(host, event),
+            HostSide::Server(host) => {
+                if application::apply_in_world(host, event) {
+                    return mod_api::Flow::Cancel;
+                }
+                use_block(host, event)
+            }
             HostSide::Client(host) => {
                 let click = event.click;
                 let block = host

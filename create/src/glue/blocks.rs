@@ -89,10 +89,25 @@ pub(crate) fn recoloured_state(
     state: BlockState,
     to: Block,
 ) -> Option<BlockState> {
+    copied_state(host, state, states::key(to))
+}
+
+/// `BlockHelper.copyProperties(state, to.defaultBlockState())` for any block `to`: the
+/// properties `to` has take the state's values, the rest keep their defaults.
+pub(crate) fn copied_state(
+    host: &dyn Host,
+    state: BlockState,
+    to: mod_api::BlockKey,
+) -> Option<BlockState> {
     let text = host.block_state_string(state)?;
     let (_, props) = states::split(&text);
-    let base = host.block_state_default(states::key(to))?;
-    with_props(host, base, &props)
+    let base = host.block_state_default(to)?;
+    let facts = mod_api::HostBlockStates::block_states(host);
+    Some(
+        props
+            .iter()
+            .fold(base, |s, (k, v)| s.with(&facts, k, v).unwrap_or(s)),
+    )
 }
 
 fn sneaking(host: &dyn Host, player: PlayerRef) -> bool {
