@@ -584,6 +584,10 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         let f = funnel_at(self.lv, pos)?;
         let behind = create_engine::funnel::behind(pos, f.facing);
         let stack = belt_stack(self.lv, item)?;
+        // `filtering.test`: a brass funnel lets only what its filter passes in.
+        if !super::funnel::funnel_passes(self.lv, pos, &stack) {
+            return Some(item.count);
+        }
         let left = items::insert_item(self.lv, behind, face(f.facing), stack);
         Some(left.map_or(0, |l| l.count().min(255) as u8))
     }

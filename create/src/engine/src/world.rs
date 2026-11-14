@@ -1145,9 +1145,14 @@ impl CreateWorld {
             // `ItemVaultBlock.onRemove`: its vault splits.
             self.dims[dim].vaults.removed(pos);
         }
-        if matches!(kind(old), Some(Block::Chute | Block::SmartChute))
-            && !matches!(kind(new), Some(Block::Chute | Block::SmartChute))
-        {
+        // The blocks whose filter slot `chute_filters` holds, by the blocks it stays with: a
+        // brass funnel's filter goes with it onto a belt and off it again.
+        let family = |b: Option<Block>| match b {
+            Some(Block::Chute | Block::SmartChute) => Some(0),
+            Some(Block::BrassFunnel | Block::BrassBeltFunnel) => Some(1),
+            _ => None,
+        };
+        if family(kind(old)).is_some() && family(kind(new)) != family(kind(old)) {
             let d = &mut self.dims[dim];
             d.chute_pulls.forget(pos);
             if let Some(f) = d.chute_filters.remove(&pos) {

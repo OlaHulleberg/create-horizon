@@ -391,6 +391,9 @@ fn use_block(
         }
         Block::MechanicalArm => arms::use_arm(&mut lv, pos, click.player),
         Block::SmartChute => chute::use_smart_chute(&mut lv, pos, click),
+        Block::BrassFunnel | Block::BrassBeltFunnel => {
+            funnel::use_funnel_filter(&mut lv, pos, click)
+        }
         Block::Belt => belt::use_belt_with(&mut lv, pos, click.player, click.hand, held.as_deref()),
         _ => false,
     };
@@ -525,7 +528,7 @@ fn item_landed(
             let Some(f) = funnel::funnel_at(lv, spot) else {
                 return;
             };
-            if f.extracting || f.powered {
+            if f.extracting || f.powered || !funnel::funnel_passes(lv, spot, &s) {
                 return;
             }
             let behind = create_engine::funnel::behind(spot, f.facing);
