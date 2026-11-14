@@ -313,7 +313,34 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
         arms_touched(dim, &[], &changed);
         let players = lv.players();
         send_belts(lv, &players, &changed);
+        // A belt that starts carrying is drawn again (its drawing was kept while empty).
+        for c in changed {
+            let carrying = with_world(|w| {
+                w.dims[dim]
+                    .belts
+                    .get(&c)
+                    .is_some_and(|b| !b.items.is_empty())
+            })
+            .unwrap_or(false);
+            let was = CARRYING.with_borrow_mut(|s| {
+                if carrying {
+                    !s.insert((dim, c))
+                } else {
+                    s.remove(&(dim, c));
+                    true
+                }
+            });
+            if !was {
+                super::touch_shown(lv, c);
+            }
+        }
     }
+}
+
+thread_local! {
+    /// Belts (by level and controller) last sent carrying items.
+    static CARRYING: std::cell::RefCell<std::collections::HashSet<(usize, [i32; 3])>> =
+        std::cell::RefCell::default();
 }
 
 fn axis_name(a: Axis) -> &'static str {

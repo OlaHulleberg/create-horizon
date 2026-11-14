@@ -135,6 +135,9 @@ pub fn tick_depots(lv: &mut ServerLevel<'_>) {
     }
     let players = lv.players();
     send_depots(lv, &players, &changed);
+    for &pos in &changed {
+        super::touch_shown(lv, pos);
+    }
 }
 
 /// The depots `depots` to `players`.

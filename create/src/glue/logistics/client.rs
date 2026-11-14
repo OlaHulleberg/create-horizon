@@ -105,6 +105,23 @@ fn table_info(
     super::super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
 }
 
+/// Whether the logistics block at `pos` is drawn again next frame instead of kept: an
+/// ejector or arm (they move their own parts), a depot whose held stack slides, a belt's
+/// controller carrying items. The server touches the block entity (`SHOWN`) when what a kept
+/// drawing shows changes, so it is drawn once more from the contents it sent first.
+pub fn animated(block: Block, pos: [i32; 3]) -> bool {
+    match block {
+        Block::MechanicalArm | Block::WeightedEjector => true,
+        Block::Depot => CLIENT.with_borrow(|c| c.sliding.contains(&pos)),
+        Block::Belt => CLIENT.with_borrow(|c| {
+            c.belts
+                .get(&pos)
+                .is_some_and(|b| !b.contents.items.is_empty())
+        }),
+        _ => false,
+    }
+}
+
 /// Depots' and belts' contents from the server.
 pub fn logistics_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
     match channel {
