@@ -166,7 +166,12 @@ pub fn tabs(java: &Path, blocks: &[String], items: &[String]) -> Vec<(&'static s
         if !palettes {
             // `makeOrderings`: the empty blaze burner before the burner, the schedule before the
             // station, the vertical gearbox after the gearbox, packages after the packager.
-            reorder(&mut out, "create:empty_blaze_burner", "create:blaze_burner", 0);
+            reorder(
+                &mut out,
+                "create:empty_blaze_burner",
+                "create:blaze_burner",
+                0,
+            );
             reorder(&mut out, "create:schedule", "create:track_station", 0);
             reorder(&mut out, "create:vertical_gearbox", "create:gearbox", 1);
             let boxes: Vec<String> = out
