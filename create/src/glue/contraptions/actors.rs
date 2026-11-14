@@ -1547,9 +1547,10 @@ pub fn tick_posed_actors(
     stalled
 }
 
-/// `ContraptionCollider.isCollidingWithWorld` for a breaker: the contraption's block at `local`
-/// is a breaker (drill, saw, plough, roller) that can break the block at `cell`, so it doesn't
-/// stop the contraption there (`canBreak`).
+/// `ContraptionCollider.isCollidingWithWorld` for an actor: the contraption's block at `local`
+/// doesn't stop the contraption at `cell` when it is a breaker (drill, saw, plough, roller) that
+/// can break the block there (`canBreak`), or a harvester that can harvest it (`isValidCrop`,
+/// `isValidOther`); no block passes cocoa.
 pub(super) fn breaker_clears(
     lv: &ServerLevel<'_>,
     key: [i32; 3],
@@ -1558,12 +1559,46 @@ pub(super) fn breaker_clears(
     cell: [i32; 3],
 ) -> bool {
     use actors::Probe;
+    if lv.block_name(cell).as_deref() == Some("minecraft:cocoa") {
+        return true;
+    }
     let reader = Reader { lv, key };
     carried
         .actors
         .iter()
-        .find(|a| a.local == local && a.kind.breaks())
-        .is_some_and(|a| reader.breakable(a.kind, cell).is_some())
+        .find(|a| a.local == local)
+        .is_some_and(|a| match a.kind {
+            Kind::Harvester => harvestable(lv, cell),
+            k if k.breaks() => reader.breakable(k, cell).is_some(),
+            _ => false,
+        })
+}
+
+/// A block state's properties by name.
+type Props = Vec<(String, String)>;
+
+/// What a harvester reads of the plant at `p`.
+fn reached(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<(String, Props, actors::Reached)> {
+    let (name, props) = lv.name_props(p)?;
+    if AIRS.contains(&name.as_str()) {
+        return None;
+    }
+    let bush = lv.in_tag(p, "minecraft:flowers") || lv.in_tag(p, "minecraft:saplings");
+    let age = prop(&props, "age")
+        .and_then(|v| v.parse::<u8>().ok())
+        .zip(actors::age_max(&name));
+    let r = actors::Reached {
+        plant: actors::plant_of(&name, bush),
+        age,
+        no_collision: lv.collision(p).is_empty(),
+        leaves: lv.in_tag(p, "minecraft:leaves"),
+    };
+    Some((name, props, r))
+}
+
+/// `isValidCrop || isValidOther` for the block at `p`.
+fn harvestable(lv: &ServerLevel<'_>, p: [i32; 3]) -> bool {
+    reached(lv, p).is_some_and(|(_, _, r)| actors::valid_crop(&r) || actors::valid_other(&r))
 }
 
 /// `AbstractContraptionEntity.tickActors` for a translating contraption whose offset 0 is at
@@ -1807,21 +1842,8 @@ const PLOUGH_PLAYER: u128 = 0x9e2f_aded_cafe_4ec2_c314_dad1_29ae_971e;
 
 /// `HarvesterMovementBehaviour.visitNewPosition` on the server.
 fn harvest(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, p: [i32; 3]) {
-    let Some((name, props)) = lv.name_props(p) else {
+    let Some((name, props, reached)) = reached(lv, p) else {
         return;
-    };
-    if AIRS.contains(&name.as_str()) {
-        return;
-    }
-    let bush = lv.in_tag(p, "minecraft:flowers") || lv.in_tag(p, "minecraft:saplings");
-    let age = prop(&props, "age")
-        .and_then(|v| v.parse::<u8>().ok())
-        .zip(actors::age_max(&name));
-    let reached = actors::Reached {
-        plant: actors::plant_of(&name, bush),
-        age,
-        no_collision: lv.collision(p).is_empty(),
-        leaves: lv.in_tag(p, "minecraft:leaves"),
     };
     let Some((replant, shears, _chance)) =
         actors::harvest(&reached, lv.in_tag(p, "create:non_harvestable"))
