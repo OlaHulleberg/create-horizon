@@ -1,6 +1,8 @@
 //! The game glue: Create's engine driven through the mod API. Each subsystem is one module;
 //! `lib.rs` hands every hook to all of them through `SUBSYSTEMS`.
 
+pub mod interaction;
+pub mod items;
 pub mod kinetics;
 pub mod net;
 pub mod packages;
@@ -25,6 +27,8 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &packages::Packages,
     &stock::Stock,
     &schematics::Schematics,
+    &interaction::Interaction,
+    &items::Items,
 ];
 
 thread_local! {
