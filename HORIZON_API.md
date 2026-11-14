@@ -128,10 +128,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **The player in `left_click_block`**: an arm's chosen point and an ejector's target can't be dropped
   by left-clicking them with the item.
 - **A terrain model that reads its neighbours** (Create's `CTModel` and `CTSpriteShifter`, connected textures):
-  casings side by side (gearboxes, encased shafts and cogs, the casings themselves) and fluid tanks wider than
-  one keep each its own frame, where Create's `EncasedCTBehaviour`, `EncasedCogCTBehaviour` and
-  `FluidTankCTBehaviour` join them into one. A model hook given the
-  neighbouring states (or a sprite shift per face) would close it.
+  casings, framed glass, windows and layered stone join through the connected-texture rules `create-data
+  prepare` writes, but gearboxes, encased shafts and cogs and fluid tanks wider than one keep each its own
+  frame, where Create's `EncasedCTBehaviour`, `EncasedCogCTBehaviour` and `FluidTankCTBehaviour` join them
+  into one (their models are not plain cubes a rule can retexture). A model hook given the neighbouring
+  states (or a sprite shift per face) would close it.
 - **The level's redstone in `state_for_placement`** (`LevelHost` has no `has_neighbor_signal`): a clutch,
   gearshift or adjustable chain gearshift placed beside power is placed unpowered and takes `powered` in the
   same tick's level tick (`GearshiftBlock.getStateForPlacement` reads it at once).

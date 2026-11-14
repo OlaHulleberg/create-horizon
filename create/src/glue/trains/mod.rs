@@ -25,7 +25,7 @@
 //!
 //! Left out for now, not for want of API: the station's flag and the highlight of its assembly
 //! track (`StationRenderer`), the line of where a relocated train's wheels would go
-//! (`TrainRelocator`'s preview), the schedule item's tooltip of its stops, and train doors'
+//! (`TrainRelocator`'s preview), and train doors'
 //! control (`DoorControl`: the station screen shows its default, all doors open). The schedule
 //! editor is a mod screen without Create's menu (`ScheduleMenu`, the player's inventory and
 //! ghost slots), so the conditions set with items (`ItemThresholdCondition`,
