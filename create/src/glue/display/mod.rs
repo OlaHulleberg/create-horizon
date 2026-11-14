@@ -1532,8 +1532,8 @@ impl BlockPart for DisplayBlock {
 /// `FlapDisplayBlock.useItemOn` on the controller's line under the click (an eighth into the
 /// board): an empty hand takes back a line's own text, glow ink lights it, a named name tag or
 /// a clipboard's last viewed entries write it by hand, a dye colours it; the text ones only
-/// while the board turns fast enough. Not while sneaking. Placing more boards from one in hand
-/// (its placement helper) is left out.
+/// while the board turns fast enough; a display board goes beside it (`place_board`). Not while
+/// sneaking.
 fn use_board(
     host: &mut dyn ServerHost,
     click: &mod_api::BlockClick<'_>,
@@ -1546,6 +1546,11 @@ fn use_board(
     let mut lv = ServerLevel::new(host, &dimension)?;
     let dim = lv.dim;
     let pos = click.pos;
+    if let Some(stack) = click.stack
+        && stack.item().id(&*lv.host) == "create:display_board"
+    {
+        return Some(place_board(&mut lv, player, click, stack));
+    }
     let controller = controller_of(&lv, pos)?;
     let y = click.hit.point[1] - f64::from(click.hit.face[1]) * 0.125;
     let line = with_world(|w| {
@@ -1649,6 +1654,57 @@ fn use_board(
         send_changed(&mut lv);
     }
     Some(InteractionResult::Success)
+}
+
+/// `FlapDisplayBlock.PlacementHelper`: a display board clicked on one goes on its nearest free
+/// side across its facing (`orderedByDistanceExceptAxis`), facing the same way; none free, the
+/// click is taken and nothing is placed (`PlacementOffset.fail`). Its column's connections
+/// follow from the placement, as any board's.
+fn place_board(
+    lv: &mut ServerLevel<'_>,
+    player: PlayerRef,
+    click: &mod_api::BlockClick<'_>,
+    stack: &ItemStack,
+) -> InteractionResult {
+    let pos = click.pos;
+    let Some(facing) = board_at(lv, pos).map(|b| b.facing) else {
+        return InteractionResult::Pass;
+    };
+    if player.may_build(&*lv.host) != Some(true) {
+        return InteractionResult::Pass;
+    }
+    let hit = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]) - 0.5);
+    let free = create_engine::place::ordered_by_distance(hit, |d| d.axis() != facing.axis())
+        .into_iter()
+        .map(|d| super::redstone::offset(pos, d))
+        .find(|p| lv.free(*p));
+    let Some(at) = free else {
+        return InteractionResult::Pass;
+    };
+    let water = lv
+        .block_state(at)
+        .and_then(|s| lv.host.block_state_string(s))
+        .is_some_and(|t| t.starts_with("minecraft:water"));
+    let facts = mod_api::HostBlockStates::block_states(&*lv.host);
+    let props = [
+        ("up", "false"),
+        ("down", "false"),
+        ("waterlogged", if water { "true" } else { "false" }),
+    ];
+    let Some(state) = lv
+        .block_state(pos)
+        .and_then(|s| props.iter().try_fold(s, |s, (k, v)| s.with(&facts, k, v).ok()))
+    else {
+        return InteractionResult::Pass;
+    };
+    lv.set_state(at, state, update_all());
+    lv.place_sound(at);
+    if player.is_creative(&*lv.host) != Some(true)
+        && let Some(living) = lv.host.living(player.entity())
+    {
+        let _ = living.set_hand_item(&mut *lv.host, click.hand, stack.clone().shrink(1));
+    }
+    InteractionResult::Success
 }
 
 /// A change to the board controller at `pos`, shown to its clients.

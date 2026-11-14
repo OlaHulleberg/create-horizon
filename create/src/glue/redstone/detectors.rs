@@ -358,6 +358,94 @@ pub(super) fn seen_at(
     }
 }
 
+/// What a threshold switch finds at `target` (`updateCurrentLevel`), and how it is watched: a
+/// rope pulley is a `ThresholdSwitchObservable` (its rope's end from the bottom of the world
+/// up to the pulley), read every `lazyTick` as it moves; a belt segment's item handler
+/// (`ItemHandlerBeltSegment`) is one slot holding the stack over that segment, also read every
+/// `lazyTick` (it has no inventory version); else what a smart observer sees.
+pub(crate) fn switch_seen(lv: &mut ServerLevel<'_>, target: [i32; 3]) -> (Seen, Watch) {
+    let dim = lv.dim;
+    match block_at(lv, target) {
+        Some((Block::RopePulley, _)) => {
+            let seen = Seen {
+                custom: Some(pulley_reading(lv, target)),
+                ..Seen::default()
+            };
+            (seen, Watch::Lazy)
+        }
+        // `BeltBlock.canTransportObjects`: not a vertical or sideways belt.
+        Some((Block::Belt, info)) => {
+            let transports = info.belt.is_some_and(|b| {
+                !matches!(
+                    b.slope,
+                    create_engine::belt::Slope::Vertical | create_engine::belt::Slope::Sideways
+                )
+            });
+            if !transports {
+                return (Seen::default(), Watch::Notified);
+            }
+            // `BeltInventory.getStackAtOffset`: the first stack past the segment's start and
+            // not past its end.
+            let stack = with_world(|w| {
+                let d = &w.dims[dim];
+                let c = d.belt_of.get(&target)?;
+                let belt = d.belts.get(c)?;
+                let offset = belt.chain.iter().position(|q| *q == target)? as f32;
+                belt.items
+                    .items
+                    .iter()
+                    .find(|i| i.position <= offset + 1.0 && i.position > offset)
+                    .map(|i| (i.item.clone(), u32::from(i.count)))
+            })
+            .flatten();
+            let slot = match stack {
+                Some((item, count)) => Slot {
+                    max_stack: u32::from(crate::glue::logistics::items::stack_limit(
+                        &*lv.host, &item,
+                    )),
+                    item: Some(item),
+                    count,
+                },
+                None => Slot {
+                    item: None,
+                    count: 0,
+                    max_stack: 64,
+                },
+            };
+            let seen = Seen {
+                inventory: Some((vec![slot], 64)),
+                ..Seen::default()
+            };
+            (seen, Watch::Lazy)
+        }
+        _ => seen_at(lv, target, false),
+    }
+}
+
+/// `PulleyBlockEntity` as a `ThresholdSwitchObservable`: (the level's lowest y, the pulley's y
+/// less its offset, the pulley's y). A running pulley's offset is where it is
+/// (`getInterpolatedOffset(.5)`), a still one's the rope and magnet hanging from it.
+fn pulley_reading(lv: &ServerLevel<'_>, pos: [i32; 3]) -> (i32, i32, i32) {
+    let dim = lv.dim;
+    let min = lv.level.height(&*lv.host).map_or(-64, |h| h.0);
+    let running = with_world(|w| w.dims[dim].lifts.pulleys.get(&pos).map(|p| p.offset)).flatten();
+    let offset = running.map_or_else(
+        || {
+            let mut i = 1;
+            while i <= create_engine::pulley::MAX_ROPE_LENGTH
+                && lv
+                    .block_name([pos[0], pos[1] - i, pos[2]])
+                    .is_some_and(|n| n == "create:rope" || n == "create:pulley_magnet")
+            {
+                i += 1;
+            }
+            i - 1
+        },
+        |o| o as i32,
+    );
+    (min, pos[1] - offset, pos[1])
+}
+
 /// A smart observer's or threshold switch's look at its target (`SmartObserverBlockEntity
 /// .tick`, `ThresholdSwitchBlockEntity.updateCurrentLevel`).
 fn look(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) {
@@ -391,18 +479,12 @@ fn look(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) {
             }
         }
         Block::StockpileSwitch => {
-            let (seen, watch) = seen_at(lv, target, false);
+            let (seen, watch) = switch_seen(lv, target);
             let passes = filters::Detector {
                 host: &*lv.host,
                 filter: filter.as_ref(),
             };
             let reading = observe::fill_level(&passes, &seen);
-            // A belt is no inventory: the switch looks at it as at any other block.
-            let watch = if watch == Watch::Belt {
-                Watch::Notified
-            } else {
-                watch
-            };
             let Some((u, changed)) = with_world(|w| {
                 let d = &mut w.dims[dim];
                 d.detectors.watch(pos, watch, now);

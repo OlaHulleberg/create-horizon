@@ -129,6 +129,9 @@ pub struct Seen {
     pub inventory: Option<(Vec<Slot>, u32)>,
     /// A fluid handler's tank: its fluid, amount and capacity.
     pub tank: Option<(Option<Fluid>, u32, u32)>,
+    /// A `ThresholdSwitchObservable` (a rope pulley): its (min, current, max), read before
+    /// any handler.
+    pub custom: Option<(i32, i32, i32)>,
 }
 
 /// `SmartObserverBlockEntity.tick`'s finding: activate for `n` ticks, or nothing.
@@ -164,6 +167,9 @@ pub fn observe(filter: impl Passes, seen: &Seen) -> Option<u8> {
 /// `ThresholdSwitchBlockEntity.updateCurrentLevel`'s reading of an item and a fluid handler:
 /// (min, level, max), None when the target has neither.
 pub fn fill_level(filter: impl Passes, seen: &Seen) -> Option<(i32, i32, i32)> {
+    if let Some(custom) = seen.custom {
+        return Some(custom);
+    }
     if seen.inventory.is_none() && seen.tank.is_none() {
         return None;
     }
