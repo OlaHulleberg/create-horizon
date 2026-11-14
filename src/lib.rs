@@ -9,10 +9,14 @@ mod glue;
 use glue::server::ServerLevel;
 use glue::{SUBSYSTEMS, persist, states, world};
 use mod_api::{
-    BlockChangedEvent, BlockPart, ChunkLoadEvent, ChunkUnloadEvent, ClientHost,
-    ClientLevelUnloadEvent, ClientTickPostEvent, Hooks, HostSide, LevelHost, LevelLoadEvent,
-    LevelTickPostEvent, LevelTicksHost, NeighborChangedEvent, PlayerLoggedInEvent, Registrar,
-    RegistrationContext, ServerHost, WorldLifecycleEvent, WorldPhase,
+    AttackEntityEvent, BlockChangedEvent, BlockPart, BreakBlockEvent, ChunkLoadEvent,
+    ChunkUnloadEvent, ClientHost, ClientLevelUnloadEvent, ClientTickPostEvent, EntityInteractEvent,
+    EntityMountEvent, EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent, InteractionResult,
+    LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent, LevelTickPostEvent,
+    LevelTicksHost, MouseScrollingEvent, NeighborChangedEvent, PlayerLoggedInEvent,
+    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
+    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost, WorldLifecycleEvent,
+    WorldPhase,
 };
 
 #[derive(Default)]
@@ -123,6 +127,86 @@ impl Hooks for Create {
         }
     }
 
+    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut EntityPlaceEvent) -> Flow {
+        until_cancel(|s| s.entity_place(host, event))
+    }
+
+    fn right_click_block(&self, mut host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
+        until_cancel(|s| s.right_click_block(reborrow(&mut host), event))
+    }
+
+    fn right_click_item(&self, mut host: HostSide, event: &mut RightClickItemEvent<'_>) -> Flow {
+        until_cancel(|s| s.right_click_item(reborrow(&mut host), event))
+    }
+
+    fn left_click_block(&self, host: &mut dyn ServerHost, event: &mut LeftClickBlockEvent) -> Flow {
+        until_cancel(|s| s.left_click_block(host, event))
+    }
+
+    fn break_block(&self, host: &mut dyn ServerHost, event: &mut BreakBlockEvent<'_>) -> Flow {
+        until_cancel(|s| s.break_block(host, event))
+    }
+
+    fn entity_interact(
+        &self,
+        mut host: HostSide,
+        event: &mut EntityInteractEvent<'_>,
+    ) -> Option<InteractionResult> {
+        SUBSYSTEMS
+            .iter()
+            .find_map(|s| s.entity_interact(reborrow(&mut host), event))
+    }
+
+    fn attack_entity(&self, host: &mut dyn ServerHost, event: &mut AttackEntityEvent<'_>) -> Flow {
+        until_cancel(|s| s.attack_entity(host, event))
+    }
+
+    fn entity_mount(&self, host: &mut dyn ServerHost, event: &mut EntityMountEvent<'_>) -> Flow {
+        until_cancel(|s| s.entity_mount(host, event))
+    }
+
+    fn player_tick_post(&self, mut host: HostSide, event: &mut PlayerTickPostEvent) {
+        for s in SUBSYSTEMS {
+            s.player_tick(reborrow(&mut host), event);
+        }
+    }
+
+    fn register_commands(&self, host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+        for s in SUBSYSTEMS {
+            s.register_commands(host, event);
+        }
+    }
+
+    fn run_mod_command(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut RunModCommandEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.run_mod_command(host, event))
+    }
+
+    fn level_save(&self, host: &mut dyn ServerHost, event: &mut LevelSaveEvent<'_>) {
+        for s in SUBSYSTEMS {
+            s.level_save(host, event);
+        }
+    }
+
+    fn input_key(&self, host: &mut dyn ClientHost, event: &mut InputKeyEvent<'_>) {
+        for s in SUBSYSTEMS {
+            s.input_key(host, event);
+        }
+    }
+
+    fn mouse_scrolling(&self, host: &mut dyn ClientHost, event: &mut MouseScrollingEvent) -> Flow {
+        until_cancel(|s| s.mouse_scrolling(host, event))
+    }
+
+    fn render_gui_post(&self, host: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
+        for s in SUBSYSTEMS {
+            s.render_gui_post(host, event);
+        }
+    }
+
     fn client_level_unload(
         &self,
         host: &mut dyn ClientHost,
@@ -132,7 +216,26 @@ impl Hooks for Create {
     }
 }
 
-/// Every Create block's part: the moments that belong to one block.
+/// Asks each subsystem in order until one cancels.
+fn until_cancel(mut f: impl FnMut(&dyn glue::subsystem::Subsystem) -> Flow) -> Flow {
+    for s in SUBSYSTEMS {
+        if let Flow::Cancel = f(*s) {
+            return Flow::Cancel;
+        }
+    }
+    Flow::Continue
+}
+
+/// The same host again, for the next subsystem.
+fn reborrow<'a>(host: &'a mut HostSide<'_>) -> HostSide<'a> {
+    match host {
+        HostSide::Server(h) => HostSide::Server(&mut **h),
+        HostSide::Client(h) => HostSide::Client(&mut **h),
+    }
+}
+
+/// Every Create block's part: the engine's per-block moments. Subsystems attach their own
+/// parts to their own blocks for the rest.
 struct CreateBlock;
 
 #[mod_api::horizon_part]
