@@ -405,7 +405,10 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             let mut doc: Value =
                 serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
             if convert_worldgen(path, &mut doc, &unplaced) {
-                put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
+                // 26.3 reads configured features from `worldgen/feature/` (1.21.1's
+                // `worldgen/configured_feature/`).
+                let path = path.replace("/worldgen/configured_feature/", "/worldgen/feature/");
+                put(&path, &serde_json::to_vec_pretty(&doc).unwrap())?;
                 copied += 1;
             } else {
                 worldgen_left_out += 1;
