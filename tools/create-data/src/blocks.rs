@@ -2947,6 +2947,59 @@ pub fn fluid_models() -> [(&'static str, Value); 5] {
     ]
 }
 
+/// The woods a water wheel takes (`#minecraft:planks`, `create:water_wheel_planks`): each one's
+/// name and its log's side and top textures (`WaterWheelRenderer.getLogBlockState`: `<wood>_log`,
+/// `<wood>_stem` or `<wood>_block`).
+pub const WHEEL_WOODS: [(&str, &str, &str); 12] = [
+    ("acacia", "acacia_log", "acacia_log_top"),
+    ("bamboo", "bamboo_block", "bamboo_block_top"),
+    ("birch", "birch_log", "birch_log_top"),
+    ("cherry", "cherry_log", "cherry_log_top"),
+    ("crimson", "crimson_stem", "crimson_stem_top"),
+    ("dark_oak", "dark_oak_log", "dark_oak_log_top"),
+    ("jungle", "jungle_log", "jungle_log_top"),
+    ("mangrove", "mangrove_log", "mangrove_log_top"),
+    ("oak", "oak_log", "oak_log_top"),
+    ("pale_oak", "pale_oak_log", "pale_oak_log_top"),
+    ("spruce", "spruce_log", "spruce_log_top"),
+    ("warped", "warped_stem", "warped_stem_top"),
+];
+
+/// `WaterWheelRenderer`'s models in each wood (`generateModel`: the oak planks, log and log top
+/// sprites swapped for the wood's): partials named `part_<wheel>_<wood>`, each a model that takes
+/// Create's wheel and gives it the wood's textures. Each points up, as Create's wheel models do.
+pub fn wheel_partials() -> Vec<(String, String, Value)> {
+    let wheels = [
+        ("water_wheel", "create:block/water_wheel/wheel"),
+        ("large_water_wheel", "create:block/large_water_wheel/block"),
+        (
+            "large_water_wheel_extension",
+            "create:block/large_water_wheel/block_extension",
+        ),
+    ];
+    let mut out = Vec::new();
+    for (wheel, parent) in wheels {
+        for (wood, log, top) in WHEEL_WOODS {
+            let planks = format!("minecraft:block/{wood}_planks");
+            let model = json!({
+                "parent": parent,
+                "textures": {
+                    "planks": planks,
+                    "log": format!("minecraft:block/{log}"),
+                    "log_top": format!("minecraft:block/{top}"),
+                    "particle": planks,
+                }
+            });
+            out.push((
+                format!("part_{wheel}_{wood}"),
+                format!("create:block/horizon_{wheel}_{wood}"),
+                model,
+            ));
+        }
+    }
+    out
+}
+
 /// The blockstate rotation (x, y) that turns a model pointing `from` to point `to`: y turns
 /// clockwise seen from above (north, east, south, west), x turns about the x axis.
 fn rotation(from: &str, to: &str) -> (i32, i32) {

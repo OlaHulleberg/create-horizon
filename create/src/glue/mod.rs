@@ -28,6 +28,7 @@ pub mod stock;
 pub mod subsystem;
 pub mod trains;
 pub mod transmission;
+pub mod waterwheels;
 pub mod world;
 
 use create_engine::world::StateTable;
@@ -95,6 +96,7 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &fluids::Tanks,
     &kinetics::Solve,
     &gauges::Gauges,
+    &waterwheels::Waterwheels,
     &packages::Packages,
     &stock::Stock,
     &schematics::Schematics,

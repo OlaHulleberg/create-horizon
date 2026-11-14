@@ -1,0 +1,9 @@
+{
+  "parent": "create:block/water_wheel/wheel",
+  "textures": {
+    "planks": "minecraft:block/jungle_planks",
+    "log": "minecraft:block/jungle_log",
+    "log_top": "minecraft:block/jungle_log_top",
+    "particle": "minecraft:block/jungle_planks"
+  }
+}
