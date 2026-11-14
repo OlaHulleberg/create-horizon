@@ -65,7 +65,19 @@ struct Client {
     models: HashMap<&'static str, mod_api::ModelRef>,
     /// Belt segments drawn dyed, by position: what a click with water predicts.
     dyed: std::collections::HashSet<[i32; 3]>,
+    /// Flaps swinging back to rest, by block and side (`flaps::FUNNEL` for a funnel's): where
+    /// they were a tick ago and are now (`LerpedFloat` chasing 0 at 0.05, exponentially).
+    flaps: HashMap<([i32; 3], u8), (f32, f32)>,
+    /// The count of flaps each funnel and tunnel drawn has had (`flaps::KEY`).
+    flapped: HashMap<[i32; 3], i32>,
 }
+
+/// The flaps' models (`AllPartialModels.FUNNEL_FLAP`, `BELT_FUNNEL_FLAP`, `BELT_TUNNEL_FLAP`).
+pub const FLAP_MODELS: [&str; 3] = [
+    "create:block/funnel/flap",
+    "create:block/belt_funnel/flap",
+    "create:block/belt_tunnel/flap",
+];
 
 thread_local! {
     static CLIENT: RefCell<Client> = RefCell::new(Client::default());
@@ -80,6 +92,8 @@ pub fn reset_logistics() {
         c.speeds.clear();
         c.block_items.clear();
         c.dyed.clear();
+        c.flaps.clear();
+        c.flapped.clear();
     });
 }
 
@@ -120,6 +134,12 @@ fn table_info(
 pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
     match block {
         Block::MechanicalArm | Block::WeightedEjector => true,
+        Block::AndesiteFunnel
+        | Block::BrassFunnel
+        | Block::AndesiteBeltFunnel
+        | Block::BrassBeltFunnel
+        | Block::AndesiteTunnel
+        | Block::BrassTunnel => flapping(pos),
         Block::Depot => CLIENT.with_borrow(|c| c.sliding.contains(&pos)),
         // A turning belt scrolls its texture every frame.
         Block::Belt => CLIENT.with_borrow(|c| {
@@ -176,6 +196,165 @@ pub fn logistics_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8])
             true
         }
         _ => false,
+    }
+}
+
+/// Flaps swing back toward rest (`tickChaser`); those at rest are forgotten.
+pub fn tick_client_flaps() {
+    CLIENT.with_borrow_mut(|c| {
+        c.flaps.retain(|_, (prev, now)| {
+            *prev = *now;
+            if (*now).abs() <= 1.0e-5 {
+                *now = 0.0;
+                return *prev != 0.0;
+            }
+            *now -= *now * 0.05;
+            true
+        });
+    });
+}
+
+/// The flaps the server noted on the block entity at `pos` since it was last drawn start to
+/// swing (`flap`: out 1, in -1); those of a block first seen are past.
+fn new_flaps(pos: [i32; 3], data: &Compound) {
+    let Some((serial, flaps)) = super::flaps::read(data) else {
+        return;
+    };
+    CLIENT.with_borrow_mut(|c| {
+        let seen = c.flapped.insert(pos, serial);
+        if seen.is_none_or(|s| s == serial) {
+            return;
+        }
+        for (side, inward) in flaps {
+            let e = c.flaps.entry((pos, side)).or_insert((0.0, 0.0));
+            e.1 = if inward { -1.0 } else { 1.0 };
+        }
+    });
+}
+
+/// Whether a flap of the funnel or tunnel at `pos` swings.
+fn flapping(pos: [i32; 3]) -> bool {
+    CLIENT.with_borrow(|c| c.flaps.keys().any(|(p, _)| *p == pos))
+}
+
+/// `FlapStuffs.renderFlaps`: four flaps of model `file` on side `side` of the block, swung by
+/// the flap's value, `z` further out, hinged at `pivot` (in pixels).
+#[allow(clippy::too_many_arguments)]
+fn draw_flaps(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    file: &'static str,
+    pos: [i32; 3],
+    key: u8,
+    side: Dir,
+    z: f32,
+    pivot: [f32; 3],
+) {
+    let t = draw.partial();
+    let f = CLIENT.with_borrow(|c| {
+        c.flaps
+            .get(&(pos, key))
+            .map_or(0.0, |(prev, now)| prev + (now - prev) * t)
+    });
+    // AngleHelper.horizontalAngle of the side's opposite.
+    let o = side.opposite();
+    let y_rot = match o {
+        Dir::South => 0.0,
+        Dir::West => 90.0,
+        Dir::North => 180.0,
+        Dir::East => 270.0,
+        _ => 0.0,
+    };
+    let angle: f32 = if o.axis() == Axis::X { -y_rot } else { y_rot };
+    let pivot = pivot.map(|v| v / 16.0);
+    draw.push();
+    draw.rotate_about([0.0, 1.0, 0.0], angle, [0.5; 3]);
+    draw.translate([0.075 / 16.0, 0.0, z]);
+    for segment in 0..4 {
+        draw.push();
+        draw.rotate_about([1.0, 0.0, 0.0], super::flaps::flap_angle(f, segment), pivot);
+        terrain(draw, host, file, mod_api::TerrainModelOptions::default());
+        draw.pop();
+        draw.translate([-3.05 / 16.0, 0.0, 0.0]);
+    }
+    draw.pop();
+}
+
+/// The flaps of the funnel or tunnel `block` at `pos` (`FunnelRenderer`, `BeltTunnelRenderer`).
+fn draw_block_flaps(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    block: Block,
+    info: &create_engine::parts::StateInfo,
+    pos: [i32; 3],
+) {
+    use super::flaps::FUNNEL;
+    match block {
+        Block::AndesiteFunnel | Block::BrassFunnel => {
+            if let Some(f) = info.facing.filter(|f| f.axis() != Axis::Y) {
+                let file = FLAP_MODELS[0];
+                draw_flaps(
+                    draw,
+                    host,
+                    file,
+                    pos,
+                    FUNNEL,
+                    f,
+                    1.0 / 16.0,
+                    [0.0, 10.0, 9.5],
+                );
+            }
+        }
+        Block::AndesiteBeltFunnel | Block::BrassBeltFunnel => {
+            use create_engine::funnel::BeltShape;
+            if let Some(f) = info.facing {
+                // `getFlapOffset`, negated.
+                let z = match info.belt_funnel.unwrap_or_default() {
+                    BeltShape::Extended => -8.0 / 16.0,
+                    BeltShape::Pulling | BeltShape::Pushing => 2.0 / 16.0,
+                    BeltShape::Retracted => 0.0,
+                };
+                let file = FLAP_MODELS[1];
+                draw_flaps(draw, host, file, pos, FUNNEL, f, z, [0.0, 10.0, 9.5]);
+            }
+        }
+        Block::AndesiteTunnel | Block::BrassTunnel => {
+            let (Some(axis), Some(shape)) = (info.axis, info.tunnel) else {
+                return;
+            };
+            let level = host.level(host.dimension());
+            for side in create_engine::tunnel::sides(axis, shape) {
+                // A flap might be hidden: by a tunnel next to it, or an extended belt funnel
+                // facing it.
+                let o = side.offset();
+                let next = [pos[0] + o[0], pos[1], pos[2] + o[2]];
+                let hidden = level
+                    .and_then(|l| l.block_state(host, next))
+                    .and_then(|s| table_info(host, s))
+                    .is_some_and(|(b, i)| match b {
+                        Block::AndesiteTunnel | Block::BrassTunnel => true,
+                        Block::AndesiteBeltFunnel | Block::BrassBeltFunnel => {
+                            i.belt_funnel == Some(create_engine::funnel::BeltShape::Extended)
+                                && i.facing == Some(side.opposite())
+                        }
+                        _ => false,
+                    });
+                if !hidden {
+                    let file = FLAP_MODELS[2];
+                    draw_flaps(
+                        draw,
+                        host,
+                        file,
+                        pos,
+                        side as u8,
+                        side,
+                        0.0,
+                        [0.0, 10.0, 1.0],
+                    );
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -507,6 +686,8 @@ impl BlockEntityPart for LogisticsEntity {
         let Some((block, info)) = table_info(host, event.state) else {
             return;
         };
+        new_flaps(event.pos, &event.entity.nbt);
+        draw_block_flaps(&mut *event.draw, host, block, &info, event.pos);
         if matches!(
             block,
             Block::BrassFunnel | Block::BrassBeltFunnel | Block::SmartChute

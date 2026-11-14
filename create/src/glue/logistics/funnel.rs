@@ -222,6 +222,7 @@ fn push_onto_depot(
     };
     let dim = lv.dim;
     with_world(|w| w.depot_put(dim, below, Some(held)));
+    super::flaps::funnel(lv, pos, false);
     Some(Some(true))
 }
 
@@ -265,6 +266,7 @@ fn pull_from_depot(
         if slot == 0 && emptied {
             with_world(|w| w.depot_put(dim, below, None));
         }
+        super::flaps::funnel(lv, pos, true);
         return Some(Some(true));
     }
     Some(None)
@@ -468,6 +470,7 @@ fn extract_in_front(
         return Some(None);
     };
     items::drop_stack(lv, at, v, stack, 0);
+    super::flaps::funnel(lv, pos, false);
     Some(Some(true))
 }
 
@@ -517,5 +520,6 @@ fn push_onto_belt(
             items::drop_stack(lv, at, [0.0; 3], rest, 0);
         }
     }
+    super::flaps::funnel(lv, pos, false);
     Some(Some(true))
 }

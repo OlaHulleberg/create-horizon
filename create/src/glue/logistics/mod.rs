@@ -42,6 +42,7 @@ mod belt;
 mod chute;
 mod client;
 mod depot;
+mod flaps;
 mod funnel;
 mod handlers;
 mod items;
@@ -179,6 +180,7 @@ impl Subsystem for Logistics {
         belt::tick_covers(lv);
         belt::tick_belts(lv);
         belt::transport_passengers(lv);
+        flaps::send(lv);
     }
 
     /// `onWrenched` of Create's logistics blocks (sneaking, they are picked up as any block):
@@ -294,6 +296,7 @@ impl Subsystem for Logistics {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick_client_depots(host);
         client::tick_client_belts(host);
+        client::tick_client_flaps();
         belt::carry_local_player(host);
     }
 
@@ -320,6 +323,7 @@ impl Subsystem for Logistics {
                 .map(|m| (*m).to_owned()),
         );
         models.push("create:block/belt_scroll_sprites".to_owned());
+        models.extend(client::FLAP_MODELS.iter().map(|m| (*m).to_owned()));
     }
 }
 
@@ -390,7 +394,14 @@ impl Subsystem for Entities {
     }
 
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[SHOWN, FILTER, BELT_COLOR, BELT_CASING, BELT_COVERED]
+        &[
+            SHOWN,
+            FILTER,
+            BELT_COLOR,
+            BELT_CASING,
+            BELT_COVERED,
+            flaps::KEY,
+        ]
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
@@ -660,7 +671,11 @@ fn item_landed(
                 return;
             }
             let behind = create_engine::funnel::behind(spot, f.facing);
+            let count = s.count();
             *stack = items::insert_item(lv, behind, items::face(f.facing), s);
+            if stack.as_ref().is_none_or(|l| l.count() != count) {
+                flaps::funnel(lv, spot, true);
+            }
         }
         Block::Depot => {
             // DirectBeltInputBehaviour from above: only into an empty depot (an ejector's while
