@@ -7,7 +7,9 @@
 use super::super::persist;
 use super::super::server::ServerLevel;
 use super::super::states;
-use super::{block_of, creative, dir, flag, girders, player_dimension, prop, with, with_props};
+use super::{
+    add, block_of, creative, dir, flag, girders, player_dimension, prop, with, with_props,
+};
 use create_engine::Block;
 use create_engine::decor;
 use create_engine::kinetics::{Axis, Dir};
@@ -187,13 +189,36 @@ impl ItemPart for Placed {
                 let Some(axis) = info.axis else {
                     return;
                 };
-                let facts = lv.host.block_states();
-                let free = create_engine::waterwheel::plane(axis).into_iter().all(|o| {
-                    let p = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-                    lv.block_state(p)
-                        .is_some_and(|s| facts.replaceable(s) == Some(true))
-                });
-                if !free {
+                let fits = |lv: &ServerLevel<'_>, at: [i32; 3]| {
+                    let facts = lv.host.block_states();
+                    let free = |p: [i32; 3]| {
+                        lv.block_state(p)
+                            .is_some_and(|s| facts.replaceable(s) == Some(true))
+                    };
+                    let behind = add(at, Dir::from_axis(axis, false));
+                    create_engine::waterwheel::plane(axis)
+                        .into_iter()
+                        .all(|o| free([at[0] + o[0], at[1] + o[1], at[2] + o[2]]))
+                        && block_of(lv.block(behind))
+                            .is_none_or(|(b, _)| b != Block::LargeWaterWheel)
+                };
+                if !fits(&lv, pos) {
+                    // `LargeWaterWheelBlockItem.place`: refused against a face across its axis,
+                    // it tries once more a block further out.
+                    // (The first try leaves nothing behind.)
+                    let further = add(pos, clicked);
+                    if clicked.axis() != axis
+                        && let Some(air) = lv.host.block_state_id("minecraft:air")
+                        && lv.put(pos, air)
+                        && lv
+                            .block_state(further)
+                            .is_some_and(|s| lv.host.block_states().replaceable(s) == Some(true))
+                        && fits(&lv, further)
+                    {
+                        lv.put(further, event.state);
+                        lv.place_sound(further);
+                        return;
+                    }
                     refuse(&mut lv, pos, event.placer, event.stack);
                     if let Some(p) = event.placer {
                         let line = Text::translate(

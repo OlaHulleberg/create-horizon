@@ -8,6 +8,7 @@ use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::{
     Timer, add, block_of, dir, flag, girders, player_dimension, sneaking, stack_of, use_one, with,
+    with_props,
 };
 use create_engine::Block;
 use create_engine::decor;
@@ -34,7 +35,15 @@ pub(super) fn register(r: &mut dyn Registrar) {
         if block.name().ends_with("_table_cloth") {
             r.block_part(states::key(block), TableCloth);
         }
+        if is_sail(block) {
+            r.block_part(states::key(block), Sail);
+        }
     }
+}
+
+/// `SailBlock`: the sail frame and the sails of every colour.
+fn is_sail(block: Block) -> bool {
+    block == Block::SailFrame || block.name().ends_with("_sail")
 }
 
 /// A click's player and level.
@@ -481,6 +490,120 @@ impl mod_api::BlockPart for TableCloth {
         lv.put(at, state);
         lv.block_sound("minecraft:block.wool.place", at, 1.0, 0.8);
         use_one(&mut *lv.host, player, click.hand, stack);
+        Some(InteractionResult::Success)
+    }
+}
+
+/// Sails and sail frames: `SailBlock.useItemOn`.
+struct Sail;
+
+#[mod_api::horizon_part]
+impl mod_api::BlockPart for Sail {
+    /// Not sneaking, a sail or sail frame goes on the nearest free side of the clicked one in
+    /// its plane, facing its way (`SailBlock.PlacementHelper`); shears make sails frames and a
+    /// dye gives cloth sails its colour (`applyDye`).
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let click = event.click;
+        let stack = click.stack?;
+        let item = stack.item();
+        let id = item.id(&*host);
+        let mut dimension = String::new();
+        let (player, mut lv) = clicked(host, click, &mut dimension)?;
+        let pos = click.pos;
+        let (block, info) = lv
+            .block_state(pos)
+            .and_then(states::id)
+            .and_then(block_of)?;
+        let facing = info.facing?;
+        let hit = local(click).map(|v| v - 0.5);
+        let helped = id == "create:white_sail" || id == "create:sail_frame";
+        if helped && !sneaking(&*lv.host, player) && player.may_build(&*lv.host) == Some(true) {
+            let facts = lv.host.block_states();
+            let free =
+                create_engine::place::ordered_by_distance(hit, |d| d.axis() != facing.axis())
+                    .into_iter()
+                    .map(|d| add(pos, d))
+                    .find(|p| {
+                        lv.block_state(*p)
+                            .is_some_and(|s| facts.replaceable(s) == Some(true))
+                    });
+            let facing_name = super::super::kinetics::dir_name(facing);
+            let state = lv
+                .host
+                .item_block(item)
+                .and_then(|b| lv.host.block_state_default(b))
+                .and_then(|s| with_props(&*lv.host, s, &[("facing", facing_name)]));
+            if let (Some(at), Some(state)) = (free, state) {
+                lv.put(at, state);
+                lv.place_sound(at);
+                use_one(&mut *lv.host, player, click.hand, stack);
+            }
+            return Some(InteractionResult::Success);
+        }
+        let color = match id.as_str() {
+            "minecraft:shears" => None,
+            _ if block == Block::SailFrame => return None,
+            other => Some(
+                other
+                    .strip_prefix("minecraft:")?
+                    .strip_suffix("_dye")?
+                    .to_owned(),
+            ),
+        };
+        let pitch = match color {
+            None => 1.0,
+            Some(_) => {
+                use mod_api::RandomSource;
+                let r = lv
+                    .level
+                    .with_random(&mut *lv.host, |r| r.next_float())
+                    .unwrap_or(0.5);
+                1.1 - r * 0.2
+            }
+        };
+        let sound = match color {
+            None => "minecraft:entity.sheep.shear",
+            Some(_) => "minecraft:item.dye.use",
+        };
+        lv.block_sound(sound, pos, 1.0, pitch);
+        let name = match &color {
+            None => "create:sail_frame".to_owned(),
+            Some(c) => format!("create:{c}_sail"),
+        };
+        let facing_name = super::super::kinetics::dir_name(facing);
+        let Some(new_state) = lv
+            .host
+            .block_state_id(&format!("{name}[facing={facing_name}]"))
+        else {
+            return Some(InteractionResult::Success);
+        };
+        let state = lv.block_state(pos)?;
+        let targets = {
+            let lv = &lv;
+            create_engine::decor::sail_dye_targets(
+                pos,
+                facing.axis(),
+                hit,
+                state != new_state,
+                color.is_some(),
+                |p| {
+                    let s = lv.block_state(p)?;
+                    let (b, i) = states::id(s).and_then(block_of)?;
+                    is_sail(b).then_some(create_engine::decor::SailSide {
+                        frame: b == Block::SailFrame,
+                        same_facing: i.facing == Some(facing),
+                        same_state: s == state,
+                    })
+                },
+            )
+        };
+        for at in targets {
+            lv.put(at, new_state);
+        }
         Some(InteractionResult::Success)
     }
 }
