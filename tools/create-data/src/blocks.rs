@@ -3022,8 +3022,22 @@ pub const PARTIALS: [(&str, &str, &str); 139] = [
 /// block sprites hold them.
 pub fn sprite_models() -> [(&'static str, Value); 1] {
     const DYES: [&str; 16] = [
-        "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
-        "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black",
+        "white",
+        "orange",
+        "magenta",
+        "light_blue",
+        "yellow",
+        "lime",
+        "pink",
+        "gray",
+        "light_gray",
+        "cyan",
+        "purple",
+        "blue",
+        "brown",
+        "green",
+        "red",
+        "black",
     ];
     let mut sprites = vec![
         "create:block/belt_scroll".to_owned(),
