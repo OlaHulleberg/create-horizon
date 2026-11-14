@@ -68,6 +68,7 @@ pub(crate) fn value_box_hit(
     };
     let slot = match (block, info.axis, info.tunnel) {
         (B::CreativeMotor, ..) => info.facing.and_then(|f| board::motor_slot(f, side)),
+        (B::RotationSpeedController, Some(axis), _) => board::controller_slot(axis, side),
         // `BrassDiodeScrollSlot`: not a sided box, any face reaches it.
         (B::PulseRepeater | B::PulseExtender | B::PulseTimer, ..) => {
             Some(create_engine::diode::SLOT)
