@@ -52,6 +52,10 @@ pub const fn kinetic(title: &'static str) -> Board {
 /// `create.kinetics.creative_motor.rotation_speed`).
 pub const MOTOR: Board = kinetic("Generated Speed in RPM");
 
+/// The rotation speed controller's board (`SpeedControllerBlockEntity.targetSpeed`,
+/// `create.kinetics.speed_controller.rotation_speed`).
+pub const CONTROLLER: Board = kinetic("Targeted Speed in RPM");
+
 /// `ChassisScrollValueBehaviour.createBoard`: one row, columns for ranges 1 to `max_range`
 /// (`maxChassisRange`, 16 by default), each its own milestone.
 pub const fn chassis(title: &'static str, max_range: i32) -> Board {
@@ -481,6 +485,15 @@ pub fn motor_slot(facing: Dir, side: Dir) -> Option<[f64; 3]> {
     Some([0, 1, 2].map(|i| o[i] - f64::from(n[i]) / 16.0))
 }
 
+/// `SpeedControllerBlockEntity.ControllerValueBoxTransform` on `side` of a controller along
+/// `axis`: at (8, 11, 15.5) px on the two sides across its axis, none on the top or bottom.
+pub fn controller_slot(axis: Axis, side: Dir) -> Option<[f64; 3]> {
+    if side.axis() == Axis::Y || side.axis() == axis {
+        return None;
+    }
+    Some(sided_offset([0.5, 11.0 / 16.0, 15.5 / 16.0], side))
+}
+
 /// `BrassTunnelModeSlot` (a `CenteredSideValueBoxTransform`): 15.5 px out, on the top only.
 pub fn tunnel_mode_slot(side: Dir) -> Option<[f64; 3]> {
     (side == Dir::Up).then(|| sided_offset([0.5, 0.5, 15.5 / 16.0], side))
@@ -683,6 +696,12 @@ mod tests {
         assert_eq!(motor_slot(Dir::North, Dir::South), None);
         assert!(motor_slot(Dir::Up, Dir::East).is_some());
         assert_eq!(motor_slot(Dir::Up, Dir::Down), None);
+        let south = controller_slot(Axis::X, Dir::South).unwrap();
+        assert!((south[1] - 11.0 / 16.0).abs() < 1e-9 && (south[2] - 15.5 / 16.0).abs() < 1e-9);
+        let west = controller_slot(Axis::Z, Dir::West).unwrap();
+        assert!((west[0] - 0.5 / 16.0).abs() < 1e-9 && (west[2] - 0.5).abs() < 1e-9);
+        assert_eq!(controller_slot(Axis::X, Dir::East), None);
+        assert_eq!(controller_slot(Axis::X, Dir::Up), None);
         assert!(hits_box(top, px(8.0, 12.5, 12.9)));
         assert!(!hits_box(top, px(8.0, 12.5, 13.0)));
         // A brass tunnel's mode is picked on its top.

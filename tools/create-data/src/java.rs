@@ -262,6 +262,7 @@ fn facts(body: &str) -> JavaFacts {
         // `BuilderTransformers.encasedBase` (under the encased shafts and cogwheels), `bearing`
         // and `mechanicalPiston` set it in their own chains.
         no_occlusion: body.contains("noOcclusion()")
+            || body.contains("Properties::noOcclusion")
             || [
                 "BuilderTransformers.encasedShaft(",
                 "BuilderTransformers.encasedCogwheel(",

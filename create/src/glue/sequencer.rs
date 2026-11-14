@@ -1,8 +1,9 @@
 //! The sequenced gearshift's instructions: its screen (`SequencedGearshiftScreen`), opened by a
 //! click on the block (`SequencedGearshiftBlock.useItemOn`), and what it sends back
 //! (`ConfigureSequencedGearshiftPacket`), kept in the block entity's data as Create keeps them
-//! (`Instructions`, read again when the block entity loads). The running instruction itself
-//! is not saved: a gearshift loads idle.
+//! (`Instructions`, read again when the block entity loads), with where its sequence is
+//! (`InstructionIndex` and the rest, saved at each step: progress inside a turn or delay is
+//! the step's, as the API has no moment before a chunk is saved).
 //!
 //! The screen draws Create's `sequencer` texture, a row per instruction with its three inputs
 //! (kind, value, speed and direction) that the mouse wheel changes (`ScrollInput`), their
@@ -108,6 +109,62 @@ pub fn loaded(host: &dyn Host, dim: usize, pos: [i32; 3], entity: BlockEntityRef
     if !list.is_empty() {
         with_world(|w| w.set_sequencer_instructions(dim, pos, list, false));
     }
+    if let Some(run) = run_of_tag(&data) {
+        with_world(|w| w.restore_sequencer(dim, pos, run));
+    }
+}
+
+/// `InstructionIndex` and the rest of `SequencedGearshiftBlockEntity.write`'s running state.
+const RUN_KEYS: [&str; 5] = [
+    "InstructionIndex",
+    "InstructionDuration",
+    "InstructionProgress",
+    "Timer",
+    "PrevPowered",
+];
+
+fn run_of_tag(data: &Compound) -> Option<seq::Run> {
+    let int = |k: &str| match data.get(&k.into()) {
+        Some(Tag::Int(v)) => Some(*v),
+        _ => None,
+    };
+    let progress = match data.get(&RUN_KEYS[2].into()) {
+        Some(Tag::Float(bits)) => f32::from_bits(*bits),
+        _ => 0.0,
+    };
+    Some(seq::Run {
+        current: int(RUN_KEYS[0])?,
+        duration: int(RUN_KEYS[1]).unwrap_or(-1),
+        progress,
+        timer: int(RUN_KEYS[3]).unwrap_or(0),
+        powered_before: matches!(data.get(&RUN_KEYS[4].into()), Some(Tag::Byte(b)) if *b != 0),
+    })
+}
+
+/// The sequence of the gearshift at `pos` saved with its block entity where it changed (each
+/// step, each power change): a gearshift loads where it was, waiting at an await too. The
+/// progress inside a turn or delay is saved as it was at the step (the game has no moment
+/// before a chunk is saved to write it then).
+pub fn save_run(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let Some(run) = with_world(|w| w.sequencer_run(dim, pos)).flatten() else {
+        return;
+    };
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let saved = entity.data(&*lv.host).as_ref().and_then(run_of_tag);
+    if saved == Some(run) {
+        return;
+    }
+    let data = Compound::from([
+        (RUN_KEYS[0].into(), Tag::Int(run.current)),
+        (RUN_KEYS[1].into(), Tag::Int(run.duration)),
+        (RUN_KEYS[2].into(), Tag::Float(run.progress.to_bits())),
+        (RUN_KEYS[3].into(), Tag::Int(run.timer)),
+        (RUN_KEYS[4].into(), Tag::Byte(i8::from(run.powered_before))),
+    ]);
+    let _ = entity.merge_data(&mut *lv.host, data);
 }
 
 struct Gearshift;

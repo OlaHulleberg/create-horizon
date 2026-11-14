@@ -192,6 +192,7 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
     let seen = seen(pos);
     let b = match block {
         B::CreativeMotor => board::MOTOR,
+        B::RotationSpeedController => board::CONTROLLER,
         // `BrassTunnelBlockEntity.selectionMode` (`logistics.when_multiple_outputs_available`).
         B::BrassTunnel => board::options(
             "Distribution Method",
@@ -212,6 +213,8 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
                 create_engine::kinetics::convert_to_direction(speed, f)
             }) as i32
         }
+        // `SpeedControllerBlockEntity.DEFAULT_SPEED` until the server tells its target.
+        (B::RotationSpeedController, None) => seen.unwrap_or(16),
         (_, None) => seen.unwrap_or_else(|| {
             create_engine::world::diode_kind(block).map_or(0, |k| k.default_delay())
         }),
