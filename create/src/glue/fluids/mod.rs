@@ -15,6 +15,7 @@
 
 mod clicks;
 mod client;
+mod drawn;
 mod goggles;
 mod machines;
 mod pipes;
@@ -36,6 +37,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 pub use client::animated;
+pub(crate) use machines::insert_into_drain;
 
 /// The key of a tank's contents in its block entity's data: fluid (255: none), amount, width,
 /// height, window; empty for a tank block that is no controller.
@@ -62,6 +64,7 @@ impl Subsystem for Fluids {
         let dim = lv.dim;
         with_world(|w| w.load_tanks(dim, tanks.into_iter()));
         plumbing::chunk_load(dim, data);
+        machines::chunk_load(dim, data);
     }
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
@@ -88,6 +91,7 @@ impl Subsystem for Fluids {
             data.insert("tank_multis".into(), Tag::IntArray(v));
         }
         plumbing::chunk_data_save(dim, chunk, data);
+        machines::chunk_data_save(dim, chunk, data);
     }
 
     /// Before the solve, in the legacy order: pipes and pumps, boilers, valves, hoses and
@@ -101,6 +105,7 @@ impl Subsystem for Fluids {
         machines::tick_spouts(lv);
         machines::tick_drains(lv);
         rims::tick(lv);
+        drawn::send(lv);
     }
 
     fn client_reset(&self) {
@@ -114,11 +119,12 @@ impl Subsystem for Fluids {
 
     fn world_closed(&self) {
         rims::reset();
+        drawn::reset();
     }
 
     /// What clients see of tanks, spouts, drains, boilers and hoses, sent with their chunks too.
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[TANK, HOSE, BOILER, rims::RIMS]
+        &[TANK, HOSE, BOILER, rims::RIMS, drawn::DRAIN_ITEM]
     }
 
     /// The client's prediction of a click its block takes (`clicks`).
@@ -249,6 +255,10 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
         changed
     });
     for (pos, key, v) in changed {
+        // A spout's or drain's contents are saved with its column.
+        if key == TANK {
+            with_world(|w| w.mark_unsaved(dim, pos));
+        }
         let Some(entity) = lv.host.block_entity(lv.level, pos) else {
             continue;
         };

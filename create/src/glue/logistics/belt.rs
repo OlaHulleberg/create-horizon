@@ -133,6 +133,12 @@ pub fn insert_into_from(
     item: &belt::Item,
     from_belt: bool,
 ) -> Option<u8> {
+    // An item drain takes it as a depot would (the fluids subsystem's).
+    if let Some(left) =
+        super::super::fluids::insert_into_drain(lv, next, side, &item.item, item.count)
+    {
+        return Some(left);
+    }
     let dim = lv.dim;
     let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
     if is_depot {

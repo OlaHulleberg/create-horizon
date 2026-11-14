@@ -19,8 +19,9 @@ use create_engine::drain::Emptying;
 use create_engine::kinetics::Dir;
 use create_engine::tank::Fluid;
 use mod_api::{
-    BlockPart, ClientHost, Flow, Hand, InteractionResult, ItemStack, PlayerRef,
-    RightClickBlockEvent, ServerHost, SoundSource, UseItemOnEvent,
+    BlockPart, ClientHost, Flow, Hand, HostSide, InteractionResult,
+    ItemAfterVerticalCollisionEvent, ItemStack, PlayerRef, RightClickBlockEvent, ServerHost,
+    SoundSource, UseItemOnEvent,
 };
 
 /// The blocks whose clicks are this module's.
@@ -71,6 +72,27 @@ impl BlockPart for Clicks {
             _ => false,
         };
         used.then_some(InteractionResult::Success)
+    }
+
+    /// An item landing on a drain (`ItemDrainBlock.updateEntityAfterFallOn`).
+    fn item_after_vertical_collision(
+        &self,
+        host: HostSide,
+        event: &mut ItemAfterVerticalCollisionEvent<'_>,
+    ) -> Flow {
+        let HostSide::Server(host) = host else {
+            return Flow::Continue;
+        };
+        if event.client {
+            return Flow::Continue;
+        }
+        let Some(mut lv) = ServerLevel::new(host, event.dimension) else {
+            return Flow::Continue;
+        };
+        if info_at(&lv, event.block_pos).map(|(b, _)| b) == Some(Block::ItemDrain) {
+            super::machines::drain_landed(&mut lv, event.block_pos, event.stack);
+        }
+        Flow::Continue
     }
 }
 

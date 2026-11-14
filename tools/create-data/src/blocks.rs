@@ -894,8 +894,13 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
                 ("waterlogged", bools),
             ]),
         ),
-        // ItemDrainBlock: a full block here, so items land on top of it.
-        "item_drain" => ("minecraft:iron_block", None, None),
+        // ItemDrainBlock: AllShapes.CASING_13PX, so items land on its grate and light reaches
+        // the fluid and the stack drawn in it.
+        "item_drain" => (
+            "minecraft:iron_block",
+            Some(json!({ "default": [[0.0, 0.0, 0.0, 1.0, 0.8125, 1.0]] })),
+            None,
+        ),
         // SpoutBlock: a copper-propertied block, AllShapes.SPOUT approximated by its body.
         "spout" => (
             "minecraft:copper_block",

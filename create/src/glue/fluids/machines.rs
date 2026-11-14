@@ -10,7 +10,7 @@ use super::super::world::with_world;
 use create_engine::spout::{self, Filling};
 use create_engine::tank::Fluid;
 use create_engine::{belt, sequenced};
-use mod_api::{HostTransaction, Identifier, ItemStack, ServerHost};
+use mod_api::{Compound, HostTransaction, Identifier, ItemStack, ServerHost, Tag};
 
 pub(super) fn stack_of(host: &dyn ServerHost, item: &str, count: u32) -> Option<ItemStack> {
     let key = host.item_key(&Identifier::parse(item).ok()?)?;
@@ -229,10 +229,11 @@ fn fill_held(
     });
 }
 
-/// Item drains holding items (`ItemDrainBlockEntity.tick`): a filled bucket is emptied into the
-/// tank each cycle while it has room; the empty bucket is thrown off on top; anything else is
-/// let go the same way.
+/// Item drains holding a stack (`ItemDrainBlockEntity.tick`): it moves across, is emptied in
+/// the middle, and at the far side is handed on to a belt, depot or drain there
+/// (`DirectBeltInputBehaviour`), or thrown off when nothing solid is in its way; else it waits.
 pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
+    use create_engine::drain::Tick;
     let dim = lv.dim;
     let drains: Vec<[i32; 3]> = with_world(|w| {
         w.dims[dim]
@@ -246,43 +247,116 @@ pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
     if drains.is_empty() {
         return;
     }
+    let emptying = recipes::with(|r| r.emptying.clone()).unwrap_or_default();
     for pos in drains {
-        let Some(out) = recipes::with(|r| {
-            let emptying = &r.emptying[..];
-            with_world(|w| {
-                let d = w.dims[dim].drains.get_mut(&pos)?;
-                let held = d.held.clone();
-                if held
-                    .as_ref()
-                    .is_some_and(|h| create_engine::drain::contents(&h.0, emptying).is_none())
-                {
-                    d.held = None;
-                    return held;
-                }
-                let before = d.fluid;
-                let out = create_engine::drain::tick(d, emptying);
-                if d.fluid != before {
-                    w.dims[dim].analog_checks.push(pos);
-                }
-                out?.map(|left| (left, 1))
-            })
-            .flatten()
+        let Some(t) = with_world(|w| {
+            let d = w.dims[dim].drains.get_mut(&pos)?;
+            let t = create_engine::drain::tick(d, &emptying);
+            if t == Tick::Emptied {
+                w.dims[dim].analog_checks.push(pos);
+                w.mark_unsaved(dim, pos);
+            }
+            Some(t)
         })
         .flatten() else {
             continue;
         };
-        let Some(stack) = stack_of(&*lv.host, &out.0, u32::from(out.1)) else {
+        let Tick::Out(side) = t else {
             continue;
         };
-        let (x, y, z) = (
-            f64::from(pos[0]) + 0.5,
-            f64::from(pos[1]) + 1.0,
-            f64::from(pos[2]) + 0.5,
-        );
-        // `summon minecraft:item ~ ~1 ~ {PickupDelay:20}`: no motion.
-        let _ = lv
-            .level
-            .spawn_item_with_motion(&mut *lv.host, x, y, z, stack, [0.0; 3], 20);
+        let Some(held) =
+            with_world(|w| w.dims[dim].drains.get(&pos).and_then(|d| d.held.clone())).flatten()
+        else {
+            continue;
+        };
+        let next = super::offset(pos, side);
+        let left = match insert_into_drain(lv, next, side, &held.item, held.count) {
+            Some(left) => Some(left),
+            None => {
+                let item = create_engine::belt::Item::new(&held.item, held.count, 0, false);
+                crate::glue::logistics::insert_into_from(lv, next, side, &item, false)
+            }
+        };
+        let left = match left {
+            Some(left) => left,
+            // No input there: thrown off over an open side, else it waits.
+            None if !crate::glue::logistics::has_collision(lv, next) => {
+                if let Some(stack) = stack_of(&*lv.host, &held.item, u32::from(held.count)) {
+                    let o = side.offset().map(f64::from);
+                    let at = [
+                        f64::from(pos[0]) + 0.5 + o[0] * 0.75,
+                        f64::from(pos[1]) + 0.5 + o[1] * 0.75 + 6.0 / 16.0,
+                        f64::from(pos[2]) + 0.5 + o[2] * 0.75,
+                    ];
+                    let motion = [o[0] / 8.0, o[1] / 8.0 + 1.0 / 8.0, o[2] / 8.0];
+                    let _ = lv.level.spawn_item_with_motion(
+                        &mut *lv.host,
+                        at[0],
+                        at[1],
+                        at[2],
+                        stack,
+                        motion,
+                        10,
+                    );
+                }
+                0
+            }
+            None => continue,
+        };
+        if left != held.count {
+            with_world(|w| {
+                if let Some(d) = w.dims[dim].drains.get_mut(&pos) {
+                    match d.held.as_mut() {
+                        Some(h) if left > 0 => h.count = left,
+                        _ => d.held = None,
+                    }
+                }
+                w.mark_unsaved(dim, pos);
+            });
+        }
+    }
+}
+
+/// `count` of `item` coming into the drain at `pos` travelling toward `side`
+/// (`tryInsertingFromSide`): how many are left over. None when no drain is there.
+pub(crate) fn insert_into_drain(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    side: create_engine::kinetics::Dir,
+    item: &str,
+    count: u8,
+) -> Option<u8> {
+    let dim = lv.dim;
+    let emptying = recipes::with(|r| r.emptying.clone()).unwrap_or_default();
+    with_world(|w| {
+        let d = w.dims[dim].drains.get_mut(&pos)?;
+        let took = create_engine::drain::insert(d, item, count, side, &emptying);
+        if took > 0 {
+            w.mark_unsaved(dim, pos);
+        }
+        Some(count - took)
+    })
+    .flatten()
+}
+
+/// `ItemDrainBlock.updateEntityAfterFallOn`: a stack landing on a drain goes in travelling the
+/// way the item moved, north for one that fell straight (`Direction.getNearest` of no motion,
+/// which is what the landing event gives); what it can't take stays an item.
+pub(super) fn drain_landed(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut Option<ItemStack>) {
+    let Some(s) = stack.as_ref() else {
+        return;
+    };
+    if s.components().is_some() || s.damage() != 0 {
+        return;
+    }
+    let side = create_engine::kinetics::Dir::North;
+    let id = s.item().id(&*lv.host);
+    let count = s.count().min(64) as u8;
+    let Some(left) = insert_into_drain(lv, pos, side, &id, count) else {
+        return;
+    };
+    if left != count {
+        *stack = s.clone().shrink(u32::from(count - left));
     }
 }
 
@@ -294,13 +368,121 @@ pub(super) fn give_back_drained(
     player: mod_api::PlayerRef,
 ) {
     let dim = lv.dim;
-    let Some((item, count)) =
+    let Some(held) =
         with_world(|w| w.dims[dim].drains.get_mut(&pos).and_then(|d| d.held.take())).flatten()
     else {
         return;
     };
     with_world(|w| w.mark_unsaved(dim, pos));
-    if let Some(stack) = stack_of(&*lv.host, &item, u32::from(count)) {
+    if let Some(stack) = stack_of(&*lv.host, &held.item, u32::from(held.count)) {
         super::super::items::give_back(lv.host, player, stack);
     }
+}
+
+/// Spouts' and drains' tanks and drains' stacks saved with a column, under `create_machines`
+/// (`SmartFluidTankBehaviour`'s and `ItemDrainBlockEntity`'s `HeldItem`, `ProcessingTicks`):
+/// `spouts` and `drains` hold x, y, z, fluid (255: none), amount each; `drain_items` a compound
+/// per held stack.
+const KEY: &str = "create_machines";
+
+pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
+    let here = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
+    let tank = |p: &[i32; 3], f: Option<(Fluid, u32)>| {
+        let (fluid, n) = f.map_or((255, 0), |(f, n)| (i32::from(f.index()), n as i32));
+        [p[0], p[1], p[2], fluid, n]
+    };
+    let Some((spouts, drains, items)) = with_world(|w| {
+        let d = &w.dims[dim];
+        let mut spouts: Vec<_> = d.spouts.iter().filter(|(p, _)| here(p)).collect();
+        spouts.sort_by_key(|e| e.0);
+        let mut drains: Vec<_> = d.drains.iter().filter(|(p, _)| here(p)).collect();
+        drains.sort_by_key(|e| e.0);
+        let items: Vec<Tag> = drains
+            .iter()
+            .filter_map(|(p, dr)| {
+                let h = dr.held.as_ref()?;
+                Some(Tag::Compound(Compound::from([
+                    ("Pos".into(), Tag::IntArray(p.to_vec())),
+                    ("Item".into(), Tag::String(h.item.as_str().into())),
+                    ("Count".into(), Tag::Int(i32::from(h.count))),
+                    ("BeltPosition".into(), Tag::Float(h.position.to_bits())),
+                    ("From".into(), Tag::Int(h.from as i32)),
+                    ("ProcessingTicks".into(), Tag::Int(dr.processing)),
+                ])))
+            })
+            .collect();
+        let spouts: Vec<i32> = spouts.iter().flat_map(|(p, s)| tank(p, s.fluid)).collect();
+        let drains: Vec<i32> = drains.iter().flat_map(|(p, s)| tank(p, s.fluid)).collect();
+        Some((spouts, drains, items))
+    })
+    .flatten() else {
+        return;
+    };
+    if spouts.is_empty() && drains.is_empty() {
+        return;
+    }
+    let own = Compound::from([
+        ("spouts".into(), Tag::IntArray(spouts)),
+        ("drains".into(), Tag::IntArray(drains)),
+        ("drain_items".into(), Tag::List(items)),
+    ]);
+    data.insert(KEY.into(), Tag::Compound(own));
+}
+
+/// What a column saved of its spouts and drains, put back (the blocks found later keep it).
+pub(super) fn chunk_load(dim: usize, data: &Compound) {
+    let Some(Tag::Compound(own)) = data.get(&KEY.into()) else {
+        return;
+    };
+    let ints = |k: &str| match own.get(&k.into()) {
+        Some(Tag::IntArray(v)) => v.clone(),
+        _ => Vec::new(),
+    };
+    let fluid =
+        |c: &[i32]| Fluid::from_index(c[3].clamp(0, 255) as u8).map(|f| (f, c[4].max(0) as u32));
+    let (spouts, drains) = (ints("spouts"), ints("drains"));
+    let items = match own.get(&"drain_items".into()) {
+        Some(Tag::List(l)) => l.clone(),
+        _ => Vec::new(),
+    };
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        for c in spouts.as_chunks::<5>().0 {
+            d.spouts.entry([c[0], c[1], c[2]]).or_default().fluid = fluid(c);
+        }
+        for c in drains.as_chunks::<5>().0 {
+            d.drains.entry([c[0], c[1], c[2]]).or_default().fluid = fluid(c);
+        }
+        for t in items {
+            let Tag::Compound(c) = t else {
+                continue;
+            };
+            let get = |k: &str| c.get(&k.into());
+            let (Some(Tag::IntArray(p)), Some(Tag::String(item))) = (get("Pos"), get("Item"))
+            else {
+                continue;
+            };
+            let &[x, y, z] = p.as_slice() else {
+                continue;
+            };
+            let int = |k: &str| match get(k) {
+                Some(Tag::Int(v)) => *v,
+                _ => 0,
+            };
+            let position = match get("BeltPosition") {
+                Some(Tag::Float(b)) => f32::from_bits(*b),
+                _ => 0.0,
+            };
+            let from = create_engine::kinetics::Dir::ALL[int("From").clamp(0, 5) as usize];
+            let dr = d.drains.entry([x, y, z]).or_default();
+            dr.processing = int("ProcessingTicks");
+            dr.held = Some(create_engine::drain::Held {
+                item: item.to_string_lossy(),
+                count: int("Count").clamp(1, 64) as u8,
+                position,
+                prev: position,
+                from,
+            });
+        }
+    });
 }
