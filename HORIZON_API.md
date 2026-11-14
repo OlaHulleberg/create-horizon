@@ -122,6 +122,16 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   `Screen` for a menu type (not only a block entity's), or a `screen` part hook keyed by menu, would close it.
 - **An item's tags** (`ItemStack.getTags`) and **an item's tooltip lines**: the attribute filter offers no
   `in_tag` attributes for its reference item, and the filters' screens show a slot's name, not its tooltip.
+- **A block state's model drawn in the world without a block entity** (`SchematicRenderer`'s ghost blocks):
+  a deployed schematic is outlined, not drawn; `draw_model_instances` takes only registered standalone models,
+  not any block state's.
+- **Text and sprites on a block face in the world** outside a block entity's draw: a value box's value and icon
+  (`ValueBox.renderContents`) are left out; only its outline is drawn.
+- **Block textures in `draw_scene`**: the scene finds its sprites in the GUI atlas, so a model whose textures no
+  item uses (the wand of symmetry's mirror preview) draws nothing.
+- **A slot's count text and a slot holding more than 99**: a toolbox compartment holds 4 stacks (256), Create's
+  screen shows the compartment's total on its one slot; here a slot shows its own stack, and the other three are
+  filled by the deposit button and hoppers, not by clicks.
 - **A clip rectangle in `DrawContext`** (`GuiGraphics.enableScissor`): the schedule's cards scrolled past its
   panel are covered by the panel's frame drawn again, and a card's condition groups that don't fit across it are
   left out until scrolled to, where Create cuts them at the card's edge.
