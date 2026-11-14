@@ -75,7 +75,7 @@ pub(crate) fn value_box_slot(
     side: Dir,
 ) -> Option<[f64; 3]> {
     let (block, info) = table.get(block_at(pos))?;
-    let slot = match (block, info.axis, info.tunnel) {
+    match (block, info.axis, info.tunnel) {
         (B::CreativeMotor, ..) => info.facing.and_then(|f| board::motor_slot(f, side)),
         // `BrassDiodeScrollSlot`: not a sided box, any face reaches it.
         (B::PulseRepeater | B::PulseExtender | B::PulseTimer, ..) => {
@@ -95,8 +95,7 @@ pub(crate) fn value_box_slot(
                 .flatten()
         }
         _ => None,
-    };
-    slot
+    }
 }
 
 /// `ValueSettingsInputHandler.onBlockActivated` on the server: a click on an active value box is

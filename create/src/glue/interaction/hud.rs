@@ -277,19 +277,6 @@ fn cut_hint(draw: &dyn DrawContext, text: &str) -> Vec<Vec<(String, u32)>> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::number;
-
-    #[test]
-    fn numbers_group_thousands_and_keep_two_decimals() {
-        assert_eq!(number(4096.0), "4,096");
-        assert_eq!(number(12.5), "12.5");
-        assert_eq!(number(0.126), "0.13");
-        assert_eq!(number(1234567.0), "1,234,567");
-    }
-}
-
 /// `ValueBox.render` of the highlighted box (`passive(false)`): Create's white
 /// `VALUE_BOX_HOVER` frame round the box, half a block across on the face it is on, a hair out
 /// from it. Its value's text and icon on the face are left out: world drawing takes no text.
@@ -336,4 +323,17 @@ pub(super) fn value_box_outline(
         })
         .collect();
     let _ = event.draw.lines(&lines);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::number;
+
+    #[test]
+    fn numbers_group_thousands_and_keep_two_decimals() {
+        assert_eq!(number(4096.0), "4,096");
+        assert_eq!(number(12.5), "12.5");
+        assert_eq!(number(0.126), "0.13");
+        assert_eq!(number(1234567.0), "1,234,567");
+    }
 }
