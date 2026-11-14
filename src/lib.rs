@@ -14,7 +14,7 @@ use mod_api::{
     EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent,
     InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
     LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent, LevelTickPostEvent,
-    LevelTicksHost, MouseScrollingEvent, MovementInputEvent, NeighborChangedEvent,
+    LevelTicksHost, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent, NeighborChangedEvent,
     PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerLoggedInEvent, PlayerTickPostEvent,
     RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
@@ -271,6 +271,12 @@ impl Hooks for Create {
     ) {
         for s in SUBSYSTEMS {
             s.player_container_close(host, event);
+        }
+    }
+
+    fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut MenuClosedEvent) {
+        for s in SUBSYSTEMS {
+            s.menu_closed(host, event);
         }
     }
 

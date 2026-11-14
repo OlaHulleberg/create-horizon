@@ -10,16 +10,15 @@
 //! The clicks on the machines are the shared `right_click_block` (as in the legacy glue), the
 //! wrench's on a deployer and a crafter's edge among them; items landing on a basin or a saw
 //! are those blocks' `item_after_vertical_collision`. Some functions here are what other
-//! subsystems call, as the legacy glue's siblings did: the belt callbacks (`deployer_on_belt`,
-//! `spout_on_belt`, `sequenced_on_belt`), the depot's for the spout (`sequenced_*`), basins'
-//! heat and tanks, and the crafter's item handler (`crafter_handler_insert`).
+//! subsystems call, as the legacy glue's siblings did: the sequenced assembly steps the spout
+//! runs on a belt or depot (`sequenced_*`, `belt_left`), basins' tanks, a stack's sequenced
+//! progress. The machines over a belt answer `Subsystem::belt_process`; a crafter's group takes
+//! items through its `ITEMS` handler (`crafter::provide_items`, the legacy
+//! `crafter_handler_insert`), whoever puts them in.
 //! The saw, the crushing wheels and the crafter hand their results to a belt or depot beside
 //! them through logistics' `insert_into_from`, as in the legacy glue.
 //!
 //! Left out, the API having no way yet:
-//! - Hoppers putting into a depot, a weighted ejector, a mechanical crafter or a chute only
-//!   while it holds nothing (the legacy `ModContainer::only_when_empty`): `ModContainer` has no
-//!   such rule, so the game's handler takes into the input slot whenever it has room.
 //! - A toolbox's one item kind per compartment: `ModContainer` has no per-slot insert check
 //!   (left out in the legacy glue too).
 //! - The deployer's slower digging of a block whose drops need another tool
@@ -41,6 +40,7 @@ mod saw;
 mod stacks;
 
 pub use client::moving;
+pub use containers::TOOLBOX_TYPE;
 pub use press::transitional_of;
 // What the other subsystems call (the legacy glue's siblings did): fluids (the spout on a belt
 // or depot runs a sequenced assembly's filling step, pumps reach basins' tanks), logistics (a
@@ -77,6 +77,10 @@ impl Subsystem for Processing {
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         containers::register(r);
+        // The crafter's group inventory, ahead of the game's plain slot (it is the kinetic type's,
+        // declared by `Kinetics`).
+        let kind = r.block_entity_type_key(super::kinetics::TYPE);
+        r.block_entity_capability_before_game(&mod_api::ITEMS, &kind, crafter::provide_items);
         client::register(r);
         for block in [Block::Basin, Block::MechanicalSaw] {
             r.block_part(super::states::key(block), Landing);

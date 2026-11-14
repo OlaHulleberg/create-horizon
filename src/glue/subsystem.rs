@@ -16,7 +16,7 @@ use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityInteractEvent,
     EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
     InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
-    LeftClickBlockEvent, LevelSaveEvent, MouseScrollingEvent, MovementInputEvent,
+    LeftClickBlockEvent, LevelSaveEvent, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent,
     PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef, PlayerTickPostEvent,
     RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
@@ -304,6 +304,9 @@ pub trait Subsystem: Sync {
         _event: &mut PlayerContainerCloseEvent<'_>,
     ) {
     }
+    /// `Hooks::menu_closed`: a menu a mod opened (`open_menu`) closed.
+    fn menu_closed(&self, _host: &mut dyn ServerHost, _event: &mut MenuClosedEvent) {}
+
     /// `Hooks::screen_render_post`: draw over the open screen (the mod's own, `mod_screen`).
     fn screen_render_post(&self, _host: &dyn ClientHost, _event: &mut ScreenRenderPostEvent<'_>) {}
 

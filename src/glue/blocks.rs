@@ -4,12 +4,9 @@
 //! menu's screen laid out as compartments), postboxes (`open` while their menu is) and the train
 //! and framed glass trapdoors. Rules live in `create_engine`.
 //!
-//! Left out, for want of API:
-//! - The toolbox's screen is attached to the block entity type `create:toolbox`, which the
-//!   processing port declares with the toolbox's slots (legacy `block_entity_container`); a
-//!   different id there must be followed here.
-//! - A postbox's menu is the block entity's own (`PlayerRef::open_menu`), with the slots the
-//!   package port declares for it (legacy `native_open_menu(.., port_stacks)`).
+//! The toolboxes' block entity type, `create:toolbox`, is processing's, with the slots
+//! (legacy `block_entity_container`); their menu's screen and its recolouring are here (legacy
+//! `screen`). A postbox's packages are the packages port's (`port_stacks`).
 
 use super::server::{ServerLevel, UPDATE_CLIENTS, update_all};
 use super::states;
@@ -20,13 +17,11 @@ use create_engine::door::{Door, Slide};
 use create_engine::dye::{self, DyeColor};
 use mod_api::{
     BlockEntityPart, BlockPart, BlockState, Hand, Host, HostTransaction, InteractionResult,
-    ItemStack, PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef, Registrar,
-    RegistrationContext, Screen, ScreenEvent, ServerHost, SoundSource, UseItemOnEvent,
-    UseWithoutItemEvent,
+    ItemStack, MenuClosedEvent, MenuReplace, PlayerRef, Registrar, RegistrationContext, Screen,
+    ScreenEvent, ServerHost, SoundSource, Text, UseItemOnEvent, UseWithoutItemEvent,
 };
 
-/// The toolboxes' block entity type, declared with their slots by the processing port.
-const TOOLBOX_TYPE: &str = "create:toolbox";
+use super::processing::TOOLBOX_TYPE;
 
 pub struct Blocks;
 
@@ -52,43 +47,11 @@ impl Subsystem for Blocks {
         tick_doors(lv);
     }
 
-    /// `PostboxBlockEntity.startOpen`: the first menu open on a postbox opens it.
-    fn player_container_open(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut PlayerContainerOpenEvent<'_>,
-    ) {
-        let Some(pos) = event.pos else {
-            return;
-        };
-        let Some(mut lv) = ServerLevel::new(host, event.dimension) else {
-            return;
-        };
-        if !block_at(&lv, pos).is_some_and(|(b, _, _)| dye::is_postbox(b)) {
-            return;
-        }
-        let dim = lv.dim;
-        let Some((first, left)) = with_world(|w| w.postboxes.opened(event.player, 0, dim, pos))
+    /// `PostboxBlockEntity.stopOpen`: the last menu closed on a postbox shuts it (legacy
+    /// `menu_closed`).
+    fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut MenuClosedEvent) {
+        let Some(Some((dim, at))) = with_world(|w| w.postboxes.closed(event.uuid, event.window))
         else {
-            return;
-        };
-        if let Some((d, at)) = left
-            && d == dim
-        {
-            set_postbox_open(&mut lv, at, false);
-        }
-        if first {
-            set_postbox_open(&mut lv, pos, true);
-        }
-    }
-
-    /// `PostboxBlockEntity.stopOpen`: the last menu closed on a postbox shuts it.
-    fn player_container_close(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut PlayerContainerCloseEvent<'_>,
-    ) {
-        let Some(Some((dim, at))) = with_world(|w| w.postboxes.closed(event.player, 0)) else {
             return;
         };
         let Some(dimension) = super::world::level_id(dim) else {
@@ -194,7 +157,7 @@ impl BlockPart for TemplateBlock {
         if dye::is_sliding_door(block) {
             use_door(&mut lv, click.pos, block, &info)
         } else if dye::is_postbox(block) {
-            use_postbox(&mut lv, player, click.pos, click.hand, back)
+            use_postbox(&mut lv, player, click.pos, block, click.hand, back)
         } else if matches!(block, Block::TrainTrapdoor | Block::FramedGlassTrapdoor) {
             use_trapdoor(&mut lv, click.pos, state, info.open)
         } else {
@@ -283,19 +246,44 @@ fn use_toolbox(
 }
 
 /// `PostboxBlock.useWithoutItem` → `PackagePortBlockEntity.use`: the main hand's click, not
-/// sneaking, opens its menu.
+/// sneaking, opens its menu: two rows (`PackagePortMenu`'s 18 slots) showing the packages the
+/// port holds (packages' `port_stacks`, as the legacy `native_open_menu` did; its clicks are not
+/// bound to the port). `startOpen`: the first menu open on a postbox opens it, and one the player
+/// had open in that window shuts.
 fn use_postbox(
     lv: &mut ServerLevel<'_>,
     player: PlayerRef,
     pos: [i32; 3],
+    block: Block,
     hand: Hand,
     back: bool,
 ) -> Option<InteractionResult> {
     if back || hand != Hand::Main {
         return None;
     }
-    let be = lv.host.block_entity(lv.level, pos)?;
-    let _ = player.open_menu(&mut *lv.host, be);
+    let dim = lv.dim;
+    let title = Text::translate(format!("block.create.{}", block.name()), Vec::new());
+    let stacks = super::packages::port_stacks(dim, pos);
+    let window = lv
+        .host
+        .open_menu(player.uuid(), 2, title, stacks, MenuReplace::CloseFirst)
+        .ok()
+        .flatten();
+    let Some(window) = window else {
+        return Some(InteractionResult::Success);
+    };
+    let Some((first, left)) = with_world(|w| w.postboxes.opened(player.uuid(), window, dim, pos))
+    else {
+        return Some(InteractionResult::Success);
+    };
+    if let Some((d, at)) = left
+        && d == dim
+    {
+        set_postbox_open(lv, at, false);
+    }
+    if first {
+        set_postbox_open(lv, pos, true);
+    }
     Some(InteractionResult::Success)
 }
 

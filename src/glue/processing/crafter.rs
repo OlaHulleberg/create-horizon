@@ -11,8 +11,8 @@ use create_engine::crafter::{self, Phase, Pointing};
 use create_engine::kinetics::Dir;
 use create_engine::{Block, belt, crafter_input};
 use mod_api::{
-    BlockClick, BlockFace, Direction, HostTransaction, ITEMS, ItemResource, ItemStack, PlayerRef,
-    SupportType,
+    BlockClick, BlockFace, BlockSide, Direction, HostTransaction, ITEMS, ItemResource, ItemStack,
+    LevelRef, PlayerRef, ResourceHandler, ServerHost, SupportType, Transaction,
 };
 
 /// A mechanical crafter's facing and pointing; None for any other block.
@@ -147,6 +147,105 @@ pub fn crafter_handler_insert(
     let mut rest = stack;
     let _ = rest.set_count(left);
     Some(rest)
+}
+
+/// A crafter's `ITEMS` handler (`MechanicalCrafterBlockEntity`'s capability: a
+/// `CombinedInvWrapper` over its group's `Inventory`s; the legacy `crafter_handler_insert` that
+/// funnels, arms, chutes and hoppers put through): one item into each crafter of the group that
+/// is idle, uncovered and empty (`Inventory.insertItem`); nothing comes out. None for any other
+/// block of the kinetic type.
+pub fn provide_items(
+    host: &mut dyn ServerHost,
+    side: BlockSide,
+) -> Option<Box<dyn ResourceHandler<ItemResource>>> {
+    let dimension = side.level.dimension().id(&*host)?;
+    let lv = ServerLevel::new(host, &dimension)?;
+    crafter_at(&lv, side.pos)?;
+    let group = crafter_group(&lv, side.pos);
+    Some(Box::new(CrafterItems {
+        level: side.level,
+        dim: lv.dim,
+        group,
+    }))
+}
+
+struct CrafterItems {
+    level: LevelRef,
+    dim: usize,
+    group: Vec<[i32; 3]>,
+}
+
+impl CrafterItems {
+    fn held(&self, host: &dyn mod_api::Host, index: usize) -> Option<ItemStack> {
+        let p = *self.group.get(index)?;
+        host.block_entity(self.level, p)?
+            .item_slot(host, 0)
+            .ok()
+            .flatten()
+    }
+}
+
+impl ResourceHandler<ItemResource> for CrafterItems {
+    fn size(&self, _host: &mut dyn ServerHost) -> usize {
+        self.group.len()
+    }
+    fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<ItemResource> {
+        self.held(&*host, index).map(|s| ItemResource::of(&s))
+    }
+    fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
+        self.held(&*host, index).map_or(0, |s| s.count())
+    }
+    /// `Inventory`'s slot limit: one item.
+    fn capacity(&self, _host: &mut dyn ServerHost, _index: usize, _: &ItemResource) -> u32 {
+        1
+    }
+    fn insert(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        index: usize,
+        resource: &ItemResource,
+        amount: u32,
+    ) -> u32 {
+        let Some(&p) = self.group.get(index) else {
+            return 0;
+        };
+        // `if (phase != Phase.IDLE) return stack; if (covered) return stack;`
+        let idle = with_world(|w| w.dims[self.dim].crafters.get(&p).map(|c| c.phase))
+            .flatten()
+            .is_none_or(|ph| ph == Phase::Idle);
+        if amount == 0
+            || !idle
+            || crafter_covered(self.dim, p)
+            || self.held(&*host, index).is_some()
+        {
+            return 0;
+        }
+        // The grid keeps items by id: a stack with components stays out.
+        let Some(one) = resource.to_stack(1) else {
+            return 0;
+        };
+        if one.components().is_some() || one.damage() != 0 {
+            return 0;
+        }
+        let Some(e) = host.block_entity(self.level, p) else {
+            return 0;
+        };
+        match e.set_item_slot(host, tx, 0, Some(one)) {
+            Ok(_) => 1,
+            Err(_) => 0,
+        }
+    }
+    fn extract(
+        &self,
+        _host: &mut dyn ServerHost,
+        _tx: &Transaction,
+        _index: usize,
+        _resource: &ItemResource,
+        _amount: u32,
+    ) -> u32 {
+        0
+    }
 }
 
 /// `EdgeInteractionHandler` with the wrench on a crafter (not sneaking): a click at `point` on

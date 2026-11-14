@@ -86,6 +86,19 @@ pub fn with<R>(dim: usize, f: impl FnOnce(&mut Pk) -> R) -> R {
     })
 }
 
+/// A postbox's packages, for its menu (`blocks`; shown, not taken from: the menu's clicks are
+/// not bound to the port), as many as the port has slots.
+pub fn port_stacks(dim: usize, pos: [i32; 3]) -> Vec<Option<ItemStack>> {
+    let mut v = with(dim, |pk| {
+        pk.ports
+            .get(&pos)
+            .map(create_engine::port::Port::stacks)
+            .unwrap_or_default()
+    });
+    v.resize(create_engine::port::SLOTS, None);
+    v
+}
+
 fn present() -> bool {
     PACKAGES.with_borrow(Option::is_some)
 }
