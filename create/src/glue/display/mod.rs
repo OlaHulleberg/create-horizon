@@ -71,6 +71,11 @@ impl Subsystem for Display {
         link_item::forget();
     }
 
+    /// A display board's flaps turning are drawn each frame (`client`).
+    fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+        block == Block::DisplayBoard && client::animated(pos, entity)
+    }
+
     fn right_click_block(
         &self,
         host: mod_api::HostSide,

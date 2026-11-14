@@ -176,6 +176,13 @@ pub(super) fn server_message(host: &mut dyn ClientHost, channel: &str, data: &[u
     true
 }
 
+/// Whether the board at `pos` has flaps turning on a running board: drawn again every frame
+/// (`FlapDisplayRenderer` turns them by the render time), its last frame kept once they settle.
+pub(super) fn animated(pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+    speed_of(&entity.nbt).abs() >= create_engine::gauge::MEDIUM_SPEED
+        && DISPLAYS.with_borrow(|d| d.active.contains(&pos))
+}
+
 /// `FlapDisplayBlockEntity.tick` on a client, for boards with flaps still turning (while
 /// running: `isSpeedRequirementFulfilled`): instant over 128 rpm; the flaps' sounds.
 pub(super) fn tick(host: &mut dyn ClientHost) {
