@@ -165,6 +165,9 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
             .iter()
             .any(|&h| items::held(&*host, player, h).is_some());
     if !bypassed && crank::answers(&*host, player, block) {
+        if block == B::HandCrank {
+            super::super::sources::handles::cranked(click.pos);
+        }
         *event.cancellation_result = InteractionResult::Success;
         return Flow::Cancel;
     }

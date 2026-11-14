@@ -21,7 +21,7 @@ use create_engine::valve;
 use mod_api::{
     BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
     BlockEntitySubmitEvent, BlockPart, CanSurviveEvent, ClientHost, Compound, LevelHost,
-    ModBlockEntity, Registrar, Tag,
+    ModBlockEntity, Registrar, SoundPlay, SoundSource, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -86,12 +86,19 @@ fn use_of(data: &Compound) -> Option<(i64, u8, i32, bool)> {
     ))
 }
 
-/// A crank's handle on a client: its angle, and the speed it chases at.
+/// A crank's handle on a client: its angle, the speed it chases at, and the ticks left of its
+/// use as this client knows it (`inUse`: 10 from its own player's click, else while it generates).
 #[derive(Clone, Copy, Default)]
 struct Crank {
     angle: f32,
     chase: f32,
     moving: bool,
+    in_use: u8,
+}
+
+/// This client's player turned the crank at `pos` (`HandCrankBlockEntity.turn`: `inUse = 10`).
+pub(crate) fn cranked(pos: [i32; 3]) {
+    CRANKS.with_borrow_mut(|c| c.entry(pos).or_default().in_use = 10);
 }
 
 thread_local! {
@@ -258,13 +265,40 @@ impl BlockEntityPart for Handles {
     /// crank's (`convertToAngular(getSpeed())`), and its angle by that speed.
     fn block_entity_client_tick(
         &self,
-        _host: &mut dyn ClientHost,
+        host: &mut dyn ClientHost,
         event: &mut BlockEntityClientTickEvent<'_>,
     ) {
         if event.state.block() != states::key(Block::HandCrank) {
             return;
         }
         let target = speeds_of(&event.entity.nbt)[0] * 0.3;
+        let generating = super::generated_of(&event.entity.nbt).is_some_and(|g| g != 0.0);
+        let in_use = CRANKS.with_borrow_mut(|c| {
+            let c = c.entry(event.pos).or_default();
+            // Another player's crank: in use while it generates, at half its time.
+            if c.in_use == 0 && generating {
+                c.in_use = 5;
+            }
+            let in_use = c.in_use;
+            c.in_use = c.in_use.saturating_sub(1);
+            in_use
+        });
+        // `tickAudio`: every ten ticks while in use, the cranking sound (wood placed and a
+        // wooden button let go), louder and lower the newer the turn.
+        if in_use > 0 && NOW.get().rem_euclid(10) == 0 {
+            let center = event.pos.map(|v| f64::from(v) + 0.5);
+            let volume = f32::from(in_use) / 2.5;
+            let pitch = 0.65 + f32::from(10 - in_use.min(10)) / 10.0;
+            for (sound, v, p) in [
+                ("minecraft:block.wood.place", 0.075, 0.5),
+                ("minecraft:block.wooden_button.click_off", 0.025, 0.5),
+            ] {
+                let play = SoundPlay::at(sound, SoundSource::Blocks, center)
+                    .with_volume(v * volume)
+                    .with_pitch(p * pitch);
+                let _ = host.play_local_sound(&play, 0);
+            }
+        }
         CRANKS.with_borrow_mut(|c| {
             let c = c.entry(event.pos).or_default();
             c.chase += (target - c.chase) / 4.0;
