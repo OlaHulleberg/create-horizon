@@ -12,6 +12,8 @@
 //! The overworld's saved networks are read at its first tick (an attachment is reached through
 //! a level's own host): a link whose column loaded before then is not counted as unloaded.
 
+mod keeper;
+
 use super::packages::{self as packages, add, block_of, body, command_player, coords, feedback};
 use super::packages::{debug_verb, ints, list, pos_of, text};
 use super::server::{ServerLevel, UPDATE_CLIENTS, update_all};
@@ -413,6 +415,7 @@ impl Subsystem for Stock {
             Block::StockLink,
             Block::FactoryGauge,
             Block::RedstoneRequester,
+            Block::StockTicker,
         ] {
             r.block_part(states::key(b), StockBlock);
         }
@@ -425,6 +428,149 @@ impl Subsystem for Stock {
             let key = r.item_key(item);
             r.item_part(key, StockItem);
         }
+    }
+
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: mod_api::PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != keeper::CHANNEL {
+            return false;
+        }
+        keeper::client_message(host, player, data);
+        true
+    }
+
+    fn server_message(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        keeper::server_message(host, channel, data)
+    }
+
+    fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
+        keeper::tick(host);
+    }
+
+    fn client_reset(&self) {
+        keeper::reset();
+    }
+
+    fn screen_render_post(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenRenderPostEvent<'_>,
+    ) {
+        keeper::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> Flow {
+        keeper::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_scrolled(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenMouseScrolledPreEvent<'_>,
+    ) -> Flow {
+        keeper::screen_mouse_scrolled(host, event)
+    }
+
+    fn screen_key_pressed(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenKeyPressedPreEvent<'_>,
+    ) -> Flow {
+        keeper::screen_key_pressed(host, event)
+    }
+
+    fn screen_char_typed(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenCharTypedPreEvent<'_>,
+    ) -> Flow {
+        keeper::screen_char_typed(host, event)
+    }
+
+    fn screen_closing(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenClosingEvent<'_>,
+    ) {
+        keeper::screen_closing(host, event);
+    }
+
+    /// `StockTickerInteractionHandler.interactWithLogisticsManager`: a mob seated beside a
+    /// ticker is its keeper; clicking it opens the ticker's request screen.
+    fn entity_interact(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::EntityInteractEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
+        if event.hand != mod_api::Hand::Main || event.kind == "minecraft:player" {
+            return None;
+        }
+        let player = host.players().acting_player()?;
+        if player.entity().spectator(&*host) == Some(true) {
+            return None;
+        }
+        let dimension = player.level(&*host)?.dimension().id(&*host)?;
+        let mut lv = ServerLevel::new(host, &dimension)?;
+        let entity = lv.host.entity(event.entity as u32)?;
+        let ticker = keeper::ticker_beside(&lv, entity)?;
+        keeper::open(&mut lv, player, ticker);
+        Some(InteractionResult::Success)
+    }
+
+    /// `BlazeBurnerBlock.useItemOn`: a burner beside a stock ticker is its keeper (goggles still
+    /// go on it).
+    fn right_click_block(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::RightClickBlockEvent<'_>,
+    ) -> Flow {
+        let mod_api::HostSide::Server(host) = host else {
+            return Flow::Continue;
+        };
+        let click = event.click;
+        if click.hand != mod_api::Hand::Main
+            || click
+                .stack
+                .is_some_and(|s| s.item().id(&*host) == "create:goggles")
+        {
+            return Flow::Continue;
+        }
+        let dimension = click.dimension.key().id().to_owned();
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return Flow::Continue;
+        };
+        if block_at(&lv, click.pos) != Some(Block::BlazeBurner) {
+            return Flow::Continue;
+        }
+        // `BlazeBurnerBlockEntity.getStockTicker`: a ticker on one of its sides.
+        let ticker = Dir::ALL
+            .into_iter()
+            .filter(|d| d.axis() != create_engine::kinetics::Axis::Y)
+            .map(|d| add(click.pos, d.offset()))
+            .find(|p| block_at(&lv, *p) == Some(Block::StockTicker));
+        let (Some(ticker), Some(player)) = (ticker, lv.host.player(click.player)) else {
+            return Flow::Continue;
+        };
+        keeper::open(&mut lv, player, ticker);
+        *event.cancellation_result = InteractionResult::Success;
+        Flow::Cancel
     }
 
     fn world_closed(&self) {
@@ -587,6 +733,21 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
         let net = net.unwrap_or_else(|| new_network(lv));
         let text = st::network_text(net);
         let _ = set_network(lv, dim, pos, &[text.as_str()], Some(player));
+    }
+    let programmed: Vec<_> = PROGRAMMED.with_borrow_mut(|p| {
+        let (mine, rest): (Vec<_>, Vec<_>) =
+            std::mem::take(p).into_iter().partition(|x| x.0 == dim);
+        *p = rest;
+        mine
+    });
+    for (_, pos, r) in programmed {
+        with(dim, |n| {
+            if let Some(q) = n.requesters.get_mut(&pos) {
+                q.r.order = r.order;
+                q.r.address = r.address;
+                n.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
+        });
     }
     if !present() {
         return;
@@ -1124,6 +1285,19 @@ impl BlockPart for StockBlock {
             return Some(InteractionResult::Success);
         }
         let b = block_of(states::id(event.state)?)?;
+        // `StockTickerBlock.useItemOn`: without a keeper, it says so (with one, Create's
+        // category editor would open: not ported).
+        if b == Block::StockTicker {
+            let player = host.player(event.click.player)?;
+            let dimension = player.dimension(&*host)?.to_string();
+            let lv = ServerLevel::new(host, &dimension)?;
+            if !keeper::keeper_present(&lv, event.click.pos) {
+                let line =
+                    mod_api::Text::translate("create.stock_ticker.keeper_missing", Vec::new());
+                let _ = player.action_bar(lv.host, line);
+            }
+            return Some(InteractionResult::Success);
+        }
         matches!(b, Block::StockLink | Block::FactoryGauge).then_some(InteractionResult::Success)
     }
 
@@ -1182,6 +1356,81 @@ fn new_network(lv: &mut ServerLevel<'_>) -> Network {
     (u128::from(half(lv)) << 64) | u128::from(half(lv))
 }
 
+/// The key of a programmed requester's order in its item's custom data (Create's
+/// `AUTO_REQUEST_DATA` component: the order and its address).
+const AUTO_REQUEST: &str = "AutoRequest";
+
+/// `RedstoneRequesterBlock.programRequester`: the redstone requester in `player`'s main hand
+/// keeps `order` and `address`, and is tuned to the ticker's network (its `Freq`).
+pub(super) fn program_requester(
+    lv: &mut ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    order: &Order<Key>,
+    address: &str,
+) {
+    let Some(mut stack) = super::items::held(&*lv.host, player, mod_api::Hand::Main) else {
+        return;
+    };
+    if stack.item().id(&*lv.host) != "create:redstone_requester" {
+        return;
+    }
+    let data = Tag::compound([
+        (
+            "EncodedRequest",
+            body::order_nbt(&*lv.host, &order_stack(order)),
+        ),
+        ("EncodedAddress", Tag::String(address.into())),
+    ]);
+    let net = OPENED.get().and_then(|pos| network_at(lv.dim, pos));
+    let mut entries = vec![(AUTO_REQUEST, Some(data))];
+    let freq = net.map(|n| Tag::String(st::network_text(n).as_str().into()));
+    if freq.is_some() {
+        entries.push((FREQ, freq));
+    }
+    super::items::set_custom(&mut stack, &entries);
+    if net.is_some() {
+        let _ = stack.set(&Glint, true);
+    }
+    super::items::set_held(lv.host, player, mod_api::Hand::Main, Some(stack));
+}
+
+/// A requester placed from a programmed item: its level, position and order.
+type Programmed = (usize, [i32; 3], Requester<Key>);
+
+thread_local! {
+    /// The ticker whose screen programs a requester (set while its order is handled).
+    static OPENED: Cell<Option<[i32; 3]>> = const { Cell::new(None) };
+    /// Requesters placed from a programmed item, set up at their level's next tick.
+    static PROGRAMMED: RefCell<Vec<Programmed>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The ticker `keeper::order` acts for, while `f` runs.
+pub(super) fn for_ticker<R>(pos: [i32; 3], f: impl FnOnce() -> R) -> R {
+    OPENED.set(Some(pos));
+    let r = f();
+    OPENED.set(None);
+    r
+}
+
+/// `AutoRequestData.readFromItem`: the order a programmed requester item carries.
+fn programmed(host: &dyn mod_api::Host, stack: &ItemStack) -> Option<Requester<Key>> {
+    let Some(Tag::Compound(c)) = super::items::custom(stack)
+        .get(&AUTO_REQUEST.into())
+        .cloned()
+    else {
+        return None;
+    };
+    let order = c
+        .get(&"EncodedRequest".into())
+        .and_then(|t| body::order_from_nbt(host, t))
+        .map(|o| order_key(&o))?;
+    Some(Requester {
+        order,
+        address: text(c.get(&"EncodedAddress".into())),
+        ..Requester::default()
+    })
+}
+
 /// `assignFrequency`: the held linking item tuned to the network of the block at `pos`.
 fn tune(
     host: &mut dyn ServerHost,
@@ -1229,6 +1478,10 @@ impl ItemPart for StockItem {
             return;
         };
         place_block(&mut lv, event.pos);
+        // `RedstoneRequesterBlock.setPlacedBy`.
+        if let Some(r) = programmed(&*lv.host, event.stack) {
+            PROGRAMMED.with_borrow_mut(|p| p.push((lv.dim, event.pos, r)));
+        }
         let net = tuned(event.stack);
         // `useOn`: `connected`, or `new_network_started`.
         let key = if net.is_some() {
