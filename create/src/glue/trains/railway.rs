@@ -10,12 +10,13 @@ use super::super::server::{ServerLevel, update_all};
 use super::super::subsystem::Subsystem;
 use super::super::world::with_world;
 use super::super::{kinetics, persist, states};
-use super::{assembly, saved, tracks};
+use super::{assembly, riding, saved, tracks, visuals};
 use create_engine::Block;
 use create_engine::trains::{CURVE_UPDATE_TICKS, Event, Run};
 use mod_api::{
-    BlockClick, BlockPart, ClientHost, Compound, Host, InteractionResult, PlayerRef, Registrar,
-    RegistrationContext, ServerHost, UseItemOnEvent, UseWithoutItemEvent,
+    BlockClick, BlockPart, BlockSignalEvent, ClientHost, Compound, Host, InteractionResult,
+    IsSignalSourceEvent, LevelHost, PlayerRef, Registrar, RegistrationContext, ServerHost,
+    UseItemOnEvent, UseWithoutItemEvent,
 };
 use std::cell::RefCell;
 
@@ -37,6 +38,7 @@ impl Subsystem for Trains {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         tracks::register(r);
         r.block_part(states::key(Block::TrackStation), assembly::Station);
+        r.block_part(states::key(Block::Track), assembly::TrackClick);
         r.block_part(states::key(Block::TrackObserver), Observer);
         let Some(kind) = kinetics::kind() else {
             return;
@@ -48,6 +50,20 @@ impl Subsystem for Trains {
 
     fn world_closed(&self) {
         tracks::forget();
+        visuals::forget();
+        riding::forget();
+    }
+
+    /// A rider getting off a carriage's seat is let off where Create lets them off.
+    fn entity_mount(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityMountEvent<'_>,
+    ) -> mod_api::Flow {
+        if !event.mounting && event.vehicle_kind == "minecraft:item_display" {
+            riding::dismounted(host, event.vehicle);
+        }
+        mod_api::Flow::Continue
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -93,6 +109,8 @@ impl Subsystem for Trains {
         // The controls drive before the trains move; their HUD hears of the move after.
         super::controls::before_trains(lv);
         tick_trains(lv);
+        visuals::tick(lv);
+        riding::tick(lv);
         super::controls::after_trains(lv);
         tracks::sync(lv);
     }
@@ -329,6 +347,21 @@ impl BlockPart for Observer {
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
         use_observer(host, event.click)
+    }
+
+    /// `TrackObserverBlock.isSignalSource`: always.
+    fn is_signal_source(&self, _level: &dyn LevelHost, event: &mut IsSignalSourceEvent) {
+        event.source = true;
+    }
+
+    /// `TrackObserverBlock.getSignal`: 15 while powered, to every side (no direct signal).
+    fn block_signal(&self, level: &dyn LevelHost, event: &mut BlockSignalEvent) {
+        let powered = level
+            .state_string(event.state)
+            .is_some_and(|s| s.contains("powered=true"));
+        if !event.direct && powered {
+            event.signal = 15;
+        }
     }
 }
 

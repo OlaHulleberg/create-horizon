@@ -1176,16 +1176,38 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     if overworld && !CARTS.with_borrow(|c| c.loaded) {
         load(lv);
     }
+    let mut carts = HashMap::new();
     if !CARTS.with_borrow(State::idle) {
         tick_stations(lv);
         let tick = lv.game_time();
         if tick % 20 == 0 {
             find_carts(lv);
         }
-        let carts = follow(lv);
+        carts = follow(lv);
         tick_mounted(lv, &carts);
         tick_couplings(lv, &carts);
     }
+    // The contraptions as players see them, half a block over their carts.
+    let dim = lv.dim;
+    CARTS.with_borrow(|c| {
+        let list = c
+            .mounted
+            .iter()
+            .filter(|(u, on)| on.dim == dim && carts.contains_key(u))
+            .map(|(u, on)| {
+                let p = carts[u].pos;
+                (
+                    *u,
+                    [p[0], p[1] + 0.5, p[2]],
+                    on.m.angle(),
+                    on.m.turn.pitch,
+                    mounted::y_rot(on.m.initial),
+                    on.m.blocks.as_slice(),
+                )
+            })
+            .collect();
+        super::visuals::carts(lv, list);
+    });
     if overworld && CARTS.with_borrow(|c| c.dirty) {
         save(lv);
     }

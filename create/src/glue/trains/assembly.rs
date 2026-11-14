@@ -13,7 +13,9 @@ use create_engine::trains::{
     AssemblyError, BogeySize, MAX_ASSEMBLY_LENGTH, MAX_BOGEY_COUNT, Structure, Train, TrainOnTrack,
     layout,
 };
-use mod_api::{BlockPart, InteractionResult, PlayerRef, ServerHost, Text, UseWithoutItemEvent};
+use mod_api::{
+    BlockPart, HostBlockStates, InteractionResult, PlayerRef, ServerHost, Text, UseWithoutItemEvent,
+};
 use std::collections::HashMap;
 
 /// The station block's part: its click.
@@ -115,6 +117,7 @@ pub fn use_station(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
             }
             super::super::persist::mark_unsaved(dim, [t.column.0, t.column.1]);
             super::controls::disassembled(lv, t.id);
+            super::riding::train_gone(lv, t.id);
             send_train_clear(lv, t.id);
             return;
         }
@@ -267,4 +270,163 @@ pub fn use_station(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
         }
     }
     send_trains(lv, &[id], true);
+}
+
+/// The track blocks' part: a click with railway casing places a bogey at a station.
+pub struct TrackClick;
+
+#[mod_api::horizon_part]
+impl BlockPart for TrackClick {
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let click = event.click;
+        let stack = click.stack?;
+        if stack.item().id(&*host) != "create:railway_casing" {
+            return None;
+        }
+        let player = host.player(click.player)?;
+        let dimension = click.dimension.key().id().to_owned();
+        let mut lv = ServerLevel::new(host, &dimension)?;
+        track_clicked(&mut lv, player, click.hand, click.pos)
+            .then_some(InteractionResult::SuccessServer)
+    }
+}
+
+/// `StationBlockEntity.trackClicked` for the station whose assembly track holds `pos` (the
+/// straight track beside a station with no train at it, on toward the clicked side): at a
+/// place a bogey may stand (`isValidBogeyOffset`: the first right after the station's track,
+/// the others three on from it and two clear of each other), a small bogey goes on the track
+/// (what stood there broken, one casing used outside creative); elsewhere a bogey within a
+/// block of the click changes size. Create takes any item in creative while the station's
+/// screen holds it in assembly mode; with no screen here the casing is always needed.
+fn track_clicked(
+    lv: &mut ServerLevel<'_>,
+    player: PlayerRef,
+    hand: mod_api::Hand,
+    pos: [i32; 3],
+) -> bool {
+    use create_engine::track::TrackShape;
+    let dim = lv.dim;
+    railway_ready(dim);
+    // The station and the way from its track to the click.
+    let found = with_world(|w| {
+        let r = &w.dims[dim].railway;
+        let shape = *r.tracks.get(&pos)?;
+        let along = match shape {
+            TrackShape::Xo => 0,
+            TrackShape::Zo => 2,
+            _ => return None,
+        };
+        r.stations.keys().find_map(|&st| {
+            let target = create_engine::network::target_track(&r.tracks, st)?;
+            if r.tracks.get(&target) != Some(&shape) || target[1] != pos[1] {
+                return None;
+            }
+            let other = 2 - along;
+            if target[other] != pos[other] || target[along] == pos[along] {
+                return None;
+            }
+            let mut d = [0, 0, 0];
+            d[along] = (pos[along] - target[along]).signum();
+            let offset = (pos[along] - target[along]).abs() - 1;
+            // The run of track between them is the station's.
+            let run = (1..=offset + 1).all(|i| {
+                let p = [target[0] + d[0] * i, target[1], target[2] + d[2] * i];
+                r.tracks.get(&p) == Some(&shape)
+            });
+            let busy = r.trains.iter().any(|t| t.train.at_station == Some(st));
+            (run && !busy && offset < MAX_ASSEMBLY_LENGTH - 1).then_some((target, d, offset, shape))
+        })
+    })
+    .flatten();
+    let Some((target, d, offset, shape)) = found else {
+        return false;
+    };
+    // `refreshAssemblyInfo`'s bogeys on that side.
+    let mut bogeys = Vec::new();
+    for i in 0..MAX_ASSEMBLY_LENGTH - 1 {
+        let p = [
+            target[0] + d[0] * (i + 1),
+            target[1],
+            target[2] + d[2] * (i + 1),
+        ];
+        if with_world(|w| w.dims[dim].railway.tracks.get(&p) != Some(&shape)) != Some(false) {
+            break;
+        }
+        if bogeys.len() < MAX_BOGEY_COUNT && bogey_size(lv.block([p[0], p[1] + 1, p[2]])).is_some()
+        {
+            bogeys.push(i);
+        }
+    }
+    let valid = !((offset < 3 || bogeys.is_empty()) && offset != 0)
+        && !bogeys.iter().any(|&j| offset >= j - 2 && offset <= j + 2);
+    if !valid {
+        // A bogey by the click changes size (`getNextSize`: small, large, small).
+        for i in -1..=1 {
+            let p = [pos[0] + d[0] * i, pos[1] + 1, pos[2] + d[2] * i];
+            let next = match bogey_size(lv.block(p)) {
+                Some(BogeySize::Small) => "create:large_bogey",
+                Some(BogeySize::Large) => "create:small_bogey",
+                None => continue,
+            };
+            let Some(state) = lv.block_state(p) else {
+                continue;
+            };
+            let axis = super::property(&*lv.host, state, "axis").unwrap_or_else(|| "z".into());
+            let Some(next) = super::default_state(&*lv.host, next)
+                .and_then(|s| super::with_props(&*lv.host, s, &[("axis", axis.as_str())]))
+            else {
+                continue;
+            };
+            lv.set_state(p, next, update_all());
+            // `IWrenchable.playRotateSound`.
+            lv.level.play_sound(
+                &mut *lv.host,
+                "create:wrench_rotate",
+                p.map(|v| f64::from(v) + 0.5),
+                mod_api::SoundSource::Blocks,
+                1.0,
+                1.0,
+            );
+            return true;
+        }
+        return false;
+    }
+    let up = [pos[0], pos[1] + 1, pos[2]];
+    let unbreakable = lv
+        .block_state(up)
+        .and_then(|s| lv.host.block_states().destroy_speed(s))
+        .is_some_and(|h| h < 0.0);
+    if unbreakable {
+        return false;
+    }
+    lv.destroy_block(up, true);
+    // `TrackBlock.getBogeyAnchor`: a small bogey along the track.
+    let axis = if d[0] != 0 { "x" } else { "z" };
+    let Some(bogey) = super::default_state(&*lv.host, "create:small_bogey")
+        .and_then(|s| super::with_props(&*lv.host, s, &[("axis", axis)]))
+    else {
+        return false;
+    };
+    lv.set_state(up, bogey, update_all());
+    super::action_bar(
+        lv.host,
+        player,
+        Text::translate("create.train_assembly.bogey_created", Vec::new()),
+    );
+    lv.level.play_sound(
+        &mut *lv.host,
+        "minecraft:block.netherite_block.place",
+        pos.map(|v| f64::from(v) + 0.5),
+        mod_api::SoundSource::Blocks,
+        1.0,
+        0.8,
+    );
+    if player.is_creative(&*lv.host) != Some(true) {
+        crate::glue::items::shrink_held(lv.host, player, hand, 1);
+    }
+    true
 }

@@ -62,14 +62,17 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 - **Moving colliders**: players cannot stand on, or be pushed by, bearings' and pistons' structures, trains or
   minecart contraptions (`notes/moving-structures-note.md`).
-- **Mod entity types that are not template copies**, rideable by players: Create's seat entity is stood in by
-  a tagged display entity; carriage seats, riding a moving structure's seats and clicking its blocks are out.
+- **Mod entity types that are not template copies**, rideable by players: Create's seat entity and carriage seats
+  are stood in by tagged item display entities; riding a moving structure's seats on bearings and pistons and
+  clicking its blocks are out.
 - **Reading the client level's light** (`LevelRef::brightness` answers on the logical server only): a
   moving structure's blocks are lit with the light the server read where they were last sent from,
   not where they are each frame (`ContraptionRenderer`'s per-block world light).
-- **World-space drawing of any block state at a pose**: trains, minecart contraptions and couplings are
-  simulated, saved and driven, but not drawn. Moving structures anchored to a block entity are drawn by it,
-  lit with the anchor's light (no per-block light in a block entity's draw).
+- **Display entities joining a level from a save**: `entity_join_level` is not told of them and
+  `LevelRef::entities_in` does not list them, so the trains' block displays and seat stand-ins that come back
+  with a chunk are found by a `kill` selector on a per-opening tag. Moving structures anchored to a block entity
+  are drawn by it, lit with the anchor's light (no per-block light in a block entity's draw); trains and cart
+  contraptions are drawn as vanilla block displays the server moves every tick.
 - **`EntityRef::move_by` for any entity** (`Entity.move`): belts carry mobs by setting their motion
   each tick, and players by a push from their own client (`push_player`), where Create moves them.
 - **`MinecartRef::set_carrying`** (a cart with a contraption counting as ridden) and **`EntityRef::move_by`**
@@ -86,7 +89,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   (`ShaftBlock.pickCorrectShaftType`), from any placement, not only a player's.
 - **An item's own renderer** (`BlockEntityWithoutLevelRenderer`): the extendo grip is drawn as its plain item
   model, not Create's extending arm.
-
 - **Whether an item's model is 3D** (`BakedModel.isGui3d`): belts, depots, placards and link slots approximate
   it by "the item places a block".
 - **Keeping only some of a block entity's drawing**: `keep()` keeps everything drawn for it, so a block with
@@ -112,7 +114,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 - Fluids: the smart pipe's filter is set by a click anywhere on the pipe, not only on its filter slot;
   potion fluids (`PotionFluid`, potions in spouts, drains and tanks) and builder's tea.
-- Carriage seats wait on rideable mod entities (above); the seat helpers they need come back with them.
 
 ## Not to send
 

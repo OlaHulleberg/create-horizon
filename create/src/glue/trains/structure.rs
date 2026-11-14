@@ -98,7 +98,13 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
             "minecraft:honey_block" => Some(Sticky::Honey),
             _ => None,
         },
-        glued: with_world(|w| create_engine::glue::glued_faces(&w.dims[dim].glue, p)).unwrap_or(0),
+        glued: with_world(|w| create_engine::glue::glued_faces(&w.dims[dim].glue, p)).unwrap_or(0)
+            // `AbstractBogeyBlock.getStickySurfaces`: a bogey holds the block on top of it.
+            | if matches!(name.as_str(), "create:small_bogey" | "create:large_bogey") {
+                Dir::Up.bit()
+            } else {
+                0
+            },
         // An extended sticker's facing (`StickerBlock.EXTENDED`).
         sticker: (name == "create:sticker" && prop("extended") == Some("true"))
             .then(|| prop("facing").and_then(dir_named))

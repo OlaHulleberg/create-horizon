@@ -554,8 +554,7 @@ fn use_controls(
 
 /// `ContraptionInteractionPacket.handle`: the clicking player within their reach, 10 and the
 /// carriage's widest side of it (Create takes 3 off without a line of sight; not here), then
-/// the carriage's block: its controls (not with a wrench). A seat's click is left out (see the
-/// parent module).
+/// the carriage's block: its controls (not with a wrench), else a seat to sit on.
 fn click(host: &mut dyn ServerHost, dim: usize, player: u128, at: Target, wrench: bool) {
     let Some((_, pos, spectator, creative)) = server_player(&*host, player) else {
         return;
@@ -572,6 +571,11 @@ fn click(host: &mut dyn ServerHost, dim: usize, player: u128, at: Target, wrench
     let controls = state(id).is_some_and(|s| s.block() == states::key(Block::Controls));
     if controls && !wrench {
         use_controls(host, dim, player, spectator, at, id);
+        return;
+    }
+    // `handlePlayerInteraction`'s seat: the player sits on it (not a spectator).
+    if !spectator && state(id).is_some_and(|s| super::riding::is_seat(&*host, s)) {
+        super::riding::sit(host, dim, player, at);
     }
 }
 

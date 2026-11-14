@@ -4,8 +4,14 @@
 //! assemblers with the contraptions and couplings of minecarts (`cart`, `mounted`, `coupling`).
 //!
 //! - [`Trains`] (`railway`, `tracks`, `assembly`, `saved`): the railway's tick, the stations'
-//!   assembly, the track item's placement, the curves and signal lights clients draw (both in
-//!   the track blocks' own block entity data), and the trains' save with their columns.
+//!   assembly and the bogeys railway casing places at them, the track item's placement, the
+//!   curves and signal lights clients draw (both in the track blocks' own block entity data),
+//!   and the trains' save with their columns.
+//! - `visuals`: trains and cart contraptions as players see them, each block a vanilla block
+//!   display the server moves with its carriage, bogey or cart (`CarriageContraptionVisual`,
+//!   `StandardBogeyVisual`, `OrientedContraptionEntity`'s drawing).
+//! - `riding`: carriage seats, a player sitting on an item display stand-in the server keeps on
+//!   the seat.
 //! - [`TrainControls`] (`controls`, `client`): clicks on carriages, driving by the controls'
 //!   keys and the train HUD.
 //! - [`Carts`] (`carts`): cart assemblers acting on the carts that pass them, contraptions
@@ -13,25 +19,11 @@
 //!
 //! What the mod API cannot do, and is left out (each with the legacy call it replaced):
 //!
-//! - **Drawing trains, cart contraptions and couplings.** The legacy glue baked each carriage's
-//!   blocks into one instanced part model gliding on the GPU (`native_part_model_compound`,
-//!   `native_part_glide`), as it did a cart's contraption and a coupling's connector. The API
-//!   draws block models only inside a block entity's own submit (`BlockEntityDrawContext`,
-//!   culled with that block entity) and, in the world, standalone models resolved by id
-//!   (`WorldDrawContext::draw_model_instances`, instance groups): neither draws an arbitrary
-//!   block state (any block a carriage carries) at a moving pose. Needs a world draw of block
-//!   states (`WorldDrawContext::draw_block(state, pose)` or block-state `ModelRef`s). Clients still
-//!   keep each train's carriages and poses, for clicks on them and the HUD's arrow.
+//! - **Drawing couplings' connectors** (`CouplingRenderer`): the cable between two carts bends
+//!   along a curve no block model draws.
 //! - **Standing on and colliding with carriages** (`entity_collisions`, `ContraptionCollider`):
 //!   the API has collision exclusions (boxes where blocks don't stop a player), not moving
 //!   colliders. Needs `notes/moving-structures-note.md`'s level colliders.
-//! - **Sitting on a carriage's seats** (`native_spawn_seat`, `native_move_seat`,
-//!   `native_start_riding` on the game's seat stand-in; `tick_seats`, `entity_mount`'s dismount
-//!   place, a train's riders boarding and alighting at assembly, `seat_loaded`): a mod can't
-//!   spawn a rideable entity of its own (`LevelRef::spawn_mob` takes mobs only, mod entity
-//!   types are templates of `minecraft:snowball`, and `ServerHost::summon` makes vanilla
-//!   entities, which would ride as themselves). Needs a mod entity type a player rides, which
-//!   the world's seats (`create_seats`) need too.
 //! - **The `create_debug` commands** (`assemble`, `drive`, `schedule`, `station_name`,
 //!   `curve`, `train`; `hand_schedule` for the schedule item): the command subsystem's, which
 //!   can call `assembly::use_station` and the railway as the legacy did.
@@ -44,9 +36,11 @@ mod carts;
 mod client;
 mod controls;
 mod railway;
+mod riding;
 mod saved;
 mod structure;
 mod tracks;
+mod visuals;
 
 pub use carts::Carts;
 pub use controls::TrainControls;
