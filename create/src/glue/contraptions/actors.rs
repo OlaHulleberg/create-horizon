@@ -95,7 +95,8 @@ fn items_at(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
 ) -> Option<mod_api::Capability<dyn mod_api::ResourceHandler<mod_api::ItemResource>>> {
-    lv.level.capability(&mut *lv.host, &mod_api::ITEMS, pos, None)
+    lv.level
+        .capability(&mut *lv.host, &mod_api::ITEMS, pos, None)
 }
 
 /// The items of the chest, trapped chest or barrel at `pos`, taken out of it through its

@@ -18,9 +18,11 @@
 //!   (`Contraption.seats`): there is no moving entity to pick or ride.
 //! - Moving block entities other than chests and barrels are refused, as the legacy did:
 //!   their block entity data has no general way to ride along. A bearing's structure carries
-//!   no storage, glue or controls, as the legacy's didn't.
-//! - The structure is lit with its anchor's light, not each block's own (one
-//!   `BlockEntityDrawContext` light per draw).
+//!   no storage or controls, as the legacy's didn't; its glue stays in the world while it turns
+//!   and goes back turned with it.
+//! - Each moving block is lit with the world's light where the structure was last sent from
+//!   (the server reads it: `LevelRef::brightness` is the server's only), not where it is each
+//!   frame.
 //! - A clockwork bearing's top turns at its kinetic speed, not with the hour hand
 //!   (`BearingRenderer`): the top is the kinetic block entity's part.
 
