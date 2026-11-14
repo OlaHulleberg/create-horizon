@@ -1,5 +1,9 @@
 //! What clients draw of steam engines (`SteamEngineRenderer`): the piston, its linkage and the
-//! connector on the powered shaft two blocks in front, moving with the shaft's turn.
+//! connector on the powered shaft two blocks in front, moving with the shaft's turn; and once a
+//! turn the steam it lets out (`SteamEngineBlockEntity.spawnParticles`): a jet drawn as Create's
+//! `SteamJetParticle` draws its quads (by the engine, lit as the engine, while it is drawn) and
+//! the boiler's hiss and steam sounds, at most four a side each two ticks (`SoundPool`), at the
+//! volume of a boiler with up to eleven engines.
 
 use super::super::server::ServerLevel;
 use super::super::states;
@@ -205,4 +209,177 @@ pub(super) fn draw(
         draw.block(p, &[("facing", "up")]);
         draw.pop();
     }
+    let now = draw.animation_time() as f32;
+    if speed != 0.0 && stroked(event.pos, angle.to_degrees()) {
+        let (jet, volume) = (new_jet(facing, now), 3.0 / 2.0);
+        JETS.with_borrow_mut(|j| j.entry(event.pos).or_default().push(jet));
+        // `BoilerData`'s sound for the side: the candle's hiss and Create's steam, four at most
+        // each two ticks a side (`SoundPool(4, 2, ..)`).
+        let window = (now / 2.0).floor() as i64;
+        let pooled = POOL.with_borrow_mut(|pool| {
+            let (w, n) = pool.entry(facing as u8).or_insert((window, 0));
+            if *w != window {
+                *w = window;
+                *n = 0;
+            }
+            *n += 1;
+            *n <= 4
+        });
+        if !pooled {
+            draw_jets(draw, event.pos, now);
+            return;
+        }
+        let at = event.pos.map(f64::from);
+        let r = next_float();
+        let hiss = mod_api::SoundPlay::at(
+            "minecraft:block.candle.extinguish",
+            mod_api::SoundSource::Blocks,
+            at,
+        )
+        .with_volume(volume)
+        .with_pitch(1.18 - r * 0.25);
+        let _ = host.play_local_sound(&hiss, 0);
+        let steam = mod_api::SoundPlay::at(
+            "create:steam",
+            mod_api::SoundSource::Blocks,
+            at.map(|v| v + 0.5),
+        )
+        .with_volume(volume / 16.0)
+        .with_pitch(0.8);
+        let _ = host.play_local_sound(&steam, 0);
+    }
+    draw_jets(draw, event.pos, now);
+}
+
+/// `SteamJetParticle`'s life in ticks, and its sprites (`particles/steam_jet.json`).
+const JET_LIFETIME: f32 = 21.0;
+const JET_SPRITES: u32 = 23;
+
+/// A steam jet an engine let out (`SteamJetParticle`): where in the engine's block, when (on
+/// the animation clock), its roll about its own axis and the way it points.
+#[derive(Clone, Copy, Debug)]
+struct Jet {
+    at: [f32; 3],
+    start: f32,
+    roll: f32,
+    yaw: f32,
+    pitch: f32,
+}
+
+thread_local! {
+    /// The engines' last stroke angle (`prevAngle`) and their jets, by engine.
+    static PREV: std::cell::RefCell<std::collections::HashMap<[i32; 3], f32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static JETS: std::cell::RefCell<std::collections::HashMap<[i32; 3], Vec<Jet>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The sounds played each side in the current two ticks, by side.
+    static POOL: std::cell::RefCell<std::collections::HashMap<u8, (i64, u32)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The client level's random source, for the jets.
+    static RNG: std::cell::RefCell<create_engine::processing::Rng> =
+        std::cell::RefCell::new(create_engine::processing::Rng::new(0x057E_A3E7));
+}
+
+fn next_float() -> f32 {
+    RNG.with_borrow_mut(|r| r.next_float())
+}
+
+/// `SteamEngineBlockEntity.spawnParticles`' timing: the shaft's turn (`getTargetAngle`, in
+/// degrees) shifted by 75° passes 180° (or -180° turning back) once a turn, when the piston
+/// lets its steam out.
+fn stroked(pos: [i32; 3], target: f32) -> bool {
+    let mut angle = target
+        + if target < 0.0 {
+            -180.0 + 75.0
+        } else {
+            360.0 - 75.0
+        };
+    angle %= 360.0;
+    PREV.with_borrow_mut(|prev| {
+        let p = prev.insert(pos, angle).unwrap_or(angle);
+        if angle >= 0.0 {
+            p > 180.0 && angle < 180.0
+        } else {
+            p < -180.0 && angle > -180.0
+        }
+    })
+}
+
+/// Catnip's `VecHelper.rotate` (degrees).
+fn rotate(v: [f32; 3], deg: f32, axis: Axis) -> [f32; 3] {
+    let a = deg.to_radians();
+    let (sin, cos) = (a.sin(), a.cos());
+    let [x, y, z] = v;
+    match axis {
+        Axis::X => [x, y * cos - z * sin, z * cos + y * sin],
+        Axis::Y => [x * cos + z * sin, y, z * cos - x * sin],
+        Axis::Z => [x * cos - y * sin, y * cos + x * sin, z],
+    }
+}
+
+/// The jet `spawnParticles` adds: half a block out of the engine's front, a little off its
+/// axis at random, pointing out and back toward the boiler (its velocity, which only aims it).
+fn new_jet(facing: Dir, now: f32) -> Jet {
+    // `VecHelper.offsetRandomly(ZERO, random, 1).multiply(1, 1, 0).normalize().scale(.5)`.
+    let (rx, ry) = ((next_float() - 0.5) * 2.0, (next_float() - 0.5) * 2.0);
+    let _ = next_float();
+    let len = (rx * rx + ry * ry).sqrt().max(1.0e-4);
+    let v = [rx / len * 0.5, ry / len * 0.5, 1.0];
+    let offset = rotate(
+        rotate(v, vertical_angle(facing), Axis::X),
+        horizontal_angle(facing),
+        Axis::Y,
+    );
+    let n = facing.offset().map(|c| c as f32);
+    let m = [0, 1, 2].map(|i| offset[i] - n[i] * 0.75);
+    let roll = next_float() * std::f32::consts::PI;
+    Jet {
+        at: offset.map(|c| c * 0.5 + 0.5),
+        start: now,
+        roll,
+        yaw: m[0].atan2(m[2]) - std::f32::consts::PI,
+        pitch: m[1].atan2((m[0] * m[0] + m[2] * m[2]).sqrt()) - std::f32::consts::FRAC_PI_2,
+    }
+}
+
+/// `SteamJetParticle.render`: four quads about the jet's axis, each from its origin out along
+/// it, the sprite of its age (`setSpriteFromAge`).
+fn draw_jets(draw: &mut dyn mod_api::BlockEntityDrawContext, pos: [i32; 3], now: f32) {
+    JETS.with_borrow_mut(|all| {
+        let Some(jets) = all.get_mut(&pos) else {
+            return;
+        };
+        jets.retain(|j| now >= j.start && now - j.start < JET_LIFETIME);
+        if jets.is_empty() {
+            all.remove(&pos);
+            return;
+        }
+        for j in jets.iter() {
+            let age = (now - j.start).floor();
+            let frame = (age as u32 * (JET_SPRITES - 1) / JET_LIFETIME as u32).min(JET_SPRITES - 1);
+            let sprite = format!("create:particle/steam_jet_{frame}");
+            for i in 0..4 {
+                let turn = 2.0 * j.roll + std::f32::consts::FRAC_PI_2 * i as f32;
+                let corner = |x: f32, y: f32| {
+                    // Ry(turn), then Rx(pitch), then Ry(yaw), as the quaternion's product.
+                    let (s, c) = turn.sin_cos();
+                    let p = [x * c, y + 1.0, -x * s];
+                    let (s, c) = j.pitch.sin_cos();
+                    let p = [p[0], p[1] * c - p[2] * s, p[1] * s + p[2] * c];
+                    let (s, c) = j.yaw.sin_cos();
+                    let p = [p[0] * c + p[2] * s, p[1], -p[0] * s + p[2] * c];
+                    [0, 1, 2].map(|k| j.at[k] + p[k] * 0.375)
+                };
+                // The particle's corners (-1,-1) (-1,1) (1,1) (1,-1) take u1v1, u1v0, u0v0 and
+                // u0v1: from the front, (1,1) is the texture's top left.
+                let corners = [
+                    corner(1.0, 1.0),
+                    corner(1.0, -1.0),
+                    corner(-1.0, -1.0),
+                    corner(-1.0, 1.0),
+                ];
+                draw.quad(&sprite, corners, [0.0, 0.0, 16.0, 16.0], 0xFF_FFFF);
+            }
+        }
+    });
 }
