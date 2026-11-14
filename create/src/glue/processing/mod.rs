@@ -39,7 +39,6 @@ pub mod recipes;
 mod saw;
 mod stacks;
 
-pub use client::moving;
 pub use containers::TOOLBOX_TYPE;
 pub use press::transitional_of;
 // What the other subsystems call (the legacy glue's siblings did): fluids (the spout on a belt
@@ -70,9 +69,15 @@ impl Subsystem for Processing {
         &self,
         block: create_engine::Block,
         _pos: [i32; 3],
-        _entity: &mod_api::ModBlockEntity,
+        entity: &mod_api::ModBlockEntity,
     ) -> bool {
-        moving(block)
+        client::animated(block, entity)
+    }
+
+    /// A basin's stacks (`entity.items` is empty on a client) and tanks, and a mixer's cycle,
+    /// which their clients draw.
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[basin::ITEMS_KEY, basin::FLUIDS_KEY, basin::MIXER_KEY]
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
@@ -116,6 +121,7 @@ impl Subsystem for Processing {
         crusher::tick_crushers(lv);
         basin::tick_burners(lv);
         basin::tick_mixers(lv);
+        basin::show_basins(lv);
     }
 
     /// `BeltProcessingBehaviour` of the machine two above belt segment `segment` (the legacy

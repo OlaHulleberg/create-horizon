@@ -135,6 +135,7 @@ fn contents_changed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         }
         Block::Basin => {
             with_world(|w| w.dims[dim].mixer_checks.push([pos[0], pos[1] + 2, pos[2]]));
+            super::basin::basin_changed(dim, pos);
         }
         _ => {}
     }

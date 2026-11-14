@@ -171,6 +171,21 @@ fn draw_tank(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         return;
     };
     let draw = &mut *event.draw;
+    fluid_box(host, draw, fluid, m.tank.amount, min, max);
+    draw.keep();
+}
+
+/// A fluid's box from `min` to `max` (in blocks from the block's corner), as `FluidRenderer`
+/// draws one. Water and lava are drawn as the game draws a still fluid (water in its default
+/// colour); Create's own as their fluid's still texture on a block model stretched to the box.
+pub(crate) fn fluid_box(
+    host: &dyn ClientHost,
+    draw: &mut dyn mod_api::BlockEntityDrawContext,
+    fluid: Fluid,
+    amount: u32,
+    min: [f32; 3],
+    max: [f32; 3],
+) {
     let bounds = [min[0], min[1], min[2], max[0], max[1], max[2]];
     let drawn = match fluid {
         Fluid::Water | Fluid::Lava => host.fluid_key(fluid.id()).is_some_and(|key| {
@@ -180,7 +195,7 @@ fn draw_tank(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
             } else {
                 options
             };
-            draw.fluid_box(&FluidStack::new(key, m.tank.amount), bounds, options)
+            draw.fluid_box(&FluidStack::new(key, amount), bounds, options)
                 .is_ok()
         }),
         _ => false,
@@ -201,7 +216,6 @@ fn draw_tank(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
             draw.pop();
         }
     }
-    draw.keep();
 }
 
 /// `AbstractPulleyRenderer`: the magnet (or its half near the top) at the hose's end, gliding

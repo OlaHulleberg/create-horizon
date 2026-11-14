@@ -149,10 +149,43 @@ impl BlockPart for Placement {
             })
         })
         .flatten();
-        if let Some(f) = facing
-            && info.facing != Some(f)
-        {
+        // Set even when it is the default state's: a template's own placement (the basin's
+        // barrel) would otherwise turn it.
+        if let Some(f) = facing {
             state = set(state, "facing", super::super::kinetics::dir_name(f));
+            changed = true;
+        }
+        let flag = |b: bool| if b { "true" } else { "false" };
+        if let Some(f) = facing
+            && matches!(block, Block::Deployer | Block::MechanicalSaw)
+        {
+            let along = with_world(|w| {
+                create_engine::place::along_first(f, ctx, |side| {
+                    w.has_shaft_towards(dim, beside(side), side.opposite())
+                })
+            })
+            .unwrap_or(false);
+            state = set(state, "axis_along_first", flag(along));
+            if block == Block::MechanicalSaw {
+                state = set(
+                    state,
+                    "flipped",
+                    flag(create_engine::place::saw_flipped(f, ctx)),
+                );
+            }
+            changed = true;
+        }
+        if block == Block::MechanicalCrafter {
+            // Placed against another crafter, it takes that one's facing.
+            let against = level
+                .block_state(beside(clicked_face.opposite()))
+                .and_then(states::id)
+                .and_then(table)
+                .filter(|(b, _)| *b == Block::MechanicalCrafter)
+                .and_then(|(_, i)| i.facing);
+            let (f, pointing) = create_engine::place::crafter(ctx, against);
+            state = set(state, "facing", super::super::kinetics::dir_name(f));
+            state = set(state, "pointing", pointing);
             changed = true;
         }
         // Create's axis blocks: chain drives, the speed controller, the sequenced gearshift.

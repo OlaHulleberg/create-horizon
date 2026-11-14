@@ -102,7 +102,17 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
         Block::WindmillBearing
         | Block::WaterWheel
         | Block::MechanicalBearing
-        | Block::ClockworkBearing => directional(preferred(false, shaft)),
+        | Block::ClockworkBearing
+        | Block::MechanicalDrill => directional(preferred(false, shaft)),
+        // DirectionalAxisKineticBlock.getFacingForPlacement (deployer, saw): away from the
+        // player's view; sneaking, toward it.
+        Block::Deployer | Block::MechanicalSaw if ctx.sneaking => nearest,
+        Block::Deployer | Block::MechanicalSaw => nearest.opposite(),
+        // HorizontalKineticBlock (the mechanical crafter, when not placed against another):
+        // facing the player.
+        Block::MechanicalCrafter => horizontal_direction(ctx.yaw).opposite(),
+        // BasinBlock has no placement of its own: its default state, outputting down.
+        Block::Basin => Dir::Down,
         // HorizontalKineticBlock (the elevator pulley): facing the player.
         Block::ElevatorPulley => horizontal_direction(ctx.yaw).opposite(),
         // WrenchableDirectionalBlock (the elevator contact): toward the player's view.
@@ -173,6 +183,56 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
     })
 }
 
+/// `DirectionalAxisKineticBlock.getStateForPlacement`'s `AXIS_ALONG_FIRST_COORDINATE` for a block
+/// facing `facing`: sideways, its shaft across the facing on the ground (along x when facing
+/// along z), turned up when a shaft is above or below; facing up or down, across the player's
+/// facing, or along the shafts beside it on one axis.
+pub fn along_first(facing: Dir, ctx: Context, shaft: impl Fn(Dir) -> bool) -> bool {
+    let axis = facing.axis();
+    if axis != Axis::Y {
+        if shaft(Dir::Up) || shaft(Dir::Down) {
+            return axis == Axis::X;
+        }
+        return axis == Axis::Z;
+    }
+    match preferred(true, shaft) {
+        Some(side) => side.axis() == Axis::X,
+        None => horizontal_direction(ctx.yaw).axis() == Axis::X,
+    }
+}
+
+/// `SawBlock.getStateForPlacement`'s `FLIPPED`: facing up or down, placed by a player facing a
+/// positive direction (east or south).
+pub fn saw_flipped(facing: Dir, ctx: Context) -> bool {
+    facing.axis() == Axis::Y && horizontal_direction(ctx.yaw).positive()
+}
+
+/// `MechanicalCrafterBlock.getStateForPlacement`: against another crafter (not sneaking) its
+/// facing, else facing the player; and its pointing toward the face clicked
+/// (`pointingFromFacing`), or up when the clicked face is its own facing. `against`: the facing
+/// of the crafter clicked on.
+pub fn crafter(ctx: Context, against: Option<Dir>) -> (Dir, &'static str) {
+    let face = ctx.clicked_face;
+    let pointing = |facing: Dir| {
+        let positive = facing.positive();
+        match face {
+            Dir::Down => "up",
+            Dir::East | Dir::North if positive => "left",
+            Dir::East | Dir::North => "right",
+            Dir::West | Dir::South if positive => "right",
+            Dir::West | Dir::South => "left",
+            Dir::Up => "down",
+        }
+    };
+    match against {
+        Some(facing) if !ctx.sneaking => (facing, pointing(facing)),
+        _ => {
+            let facing = horizontal_direction(ctx.yaw).opposite();
+            (facing, if facing == face { "up" } else { pointing(facing) })
+        }
+    }
+}
+
 /// The axis Create gives `block` placed in `ctx`, and whether it stands `vertical` (a block with
 /// a horizontal axis), or None when its placement isn't Create's own. `shaft` as for `facing`;
 /// `cog_above` is the axis of a large cog right above it.
@@ -224,6 +284,16 @@ pub fn axis(
             } else {
                 (axis, false)
             })
+        }
+        // RotatedPillarKineticBlock (the crushing wheel): the axis of the shafts around it,
+        // else the view's; sneaking by a shaft, the clicked face's.
+        Block::CrushingWheel => {
+            let axis = match preferred(false, &shaft) {
+                Some(p) if !ctx.sneaking => p.axis(),
+                Some(_) => ctx.clicked_face.axis(),
+                None => ordered_by_nearest(ctx.yaw, ctx.pitch)[0].axis(),
+            };
+            Some((axis, false))
         }
         // RedstoneRequesterBlock: the axis of the player's horizontal facing.
         Block::RedstoneRequester => Some((facing, false)),
@@ -328,6 +398,28 @@ mod tests {
             sneaking,
             clicked_face: Dir::Up,
         }
+    }
+
+    #[test]
+    fn deployers_saws_and_crafters_turn_as_create_places_them() {
+        // Looking north and a little down: a deployer faces back south, its shaft along x.
+        let c = ctx(180.0, 30.0, false);
+        assert_eq!(facing(Block::Deployer, c, |_| false), Some(Dir::South));
+        assert!(along_first(Dir::South, c, |_| false));
+        // A shaft below turns it up.
+        assert!(!along_first(Dir::South, c, |d| d == Dir::Down));
+        // Facing up, across the player's facing; a saw placed facing south is flipped.
+        assert!(!along_first(Dir::Up, c, |_| false));
+        assert!(saw_flipped(Dir::Up, ctx(0.0, 90.0, false)));
+        // A crafter on the floor faces the player and points into the floor; one placed on the
+        // east face of another takes its facing and points left.
+        assert_eq!(crafter(c, None), (Dir::South, "down"));
+        let east = Context {
+            clicked_face: Dir::East,
+            ..c
+        };
+        assert_eq!(crafter(east, Some(Dir::South)), (Dir::South, "left"));
+        assert_eq!(facing(Block::Basin, c, |_| false), Some(Dir::Down));
     }
 
     #[test]

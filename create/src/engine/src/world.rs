@@ -263,6 +263,8 @@ pub struct Dimension {
     pub brass_running: Vec<[i32; 3]>,
     /// Basins' fluid tanks (`BasinBlockEntity`'s inputs and outputs).
     pub basin_fluids: HashMap<[i32; 3], crate::basin::Tanks>,
+    /// Basins whose tanks changed: their clients are told (taken by the glue).
+    pub basin_changes: Vec<[i32; 3]>,
     /// Linear chassis ranges set with the wrench (`ChassisScrollValueBehaviour`; others 8).
     pub chassis_range: HashMap<[i32; 3], i32>,
     pub tunnels_new: Vec<[i32; 3]>,
@@ -2836,7 +2838,8 @@ impl CreateWorld {
         }
     }
 
-    /// A basin's tanks changed: its mixer or press looks again, its column is saved.
+    /// A basin's tanks changed: its mixer or press looks again, its clients are told, its
+    /// column is saved.
     pub fn set_basin_fluids(&mut self, dim: usize, pos: [i32; 3], t: crate::basin::Tanks) {
         let d = &mut self.dims[dim];
         if t == crate::basin::Tanks::default() {
@@ -2845,6 +2848,7 @@ impl CreateWorld {
             d.basin_fluids.insert(pos, t);
         }
         d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
+        d.basin_changes.push(pos);
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }
 

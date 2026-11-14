@@ -284,9 +284,49 @@ impl Mixer {
     }
 }
 
+/// The mixer's `runningTicks` a client works out `elapsed` ticks after it was told `told`, as
+/// the client's own `tick` runs it on: down to the bottom (20), where it waits for the server,
+/// then up again to 40.
+pub fn shown_ticks(told: i32, elapsed: i64) -> i32 {
+    let elapsed = elapsed.clamp(0, 40) as i32;
+    match told {
+        t if t < 20 => (t + elapsed).min(20),
+        20 => 20,
+        t => (t + elapsed).min(40),
+    }
+}
+
+/// `MechanicalMixerBlockEntity.getRenderedHeadOffset`: how far the head is lowered, in blocks,
+/// at `ticks` of a running cycle and `partial` of the frame (7/16 at rest).
+pub fn head_offset(running: bool, ticks: i32, partial: f32) -> f32 {
+    let ease = |num: f32| (2.0 - (num * std::f32::consts::PI).cos()) / 2.0 - 0.5;
+    let offset = if !running {
+        0.0
+    } else if ticks < 20 {
+        ease((ticks as f32 + partial) / 20.0)
+    } else if ticks == 20 {
+        1.0
+    } else {
+        ease(((40 - ticks) as f32 - partial) / 20.0)
+    };
+    offset + 7.0 / 16.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shown_head_goes_down_waits_and_comes_up() {
+        assert_eq!(shown_ticks(0, 5), 5);
+        assert_eq!(shown_ticks(0, 30), 20, "it waits at the bottom");
+        assert_eq!(shown_ticks(20, 100), 20);
+        assert_eq!(shown_ticks(21, 10), 31);
+        assert_eq!(shown_ticks(21, 30), 40);
+        assert_eq!(head_offset(false, 0, 0.0), 7.0 / 16.0);
+        assert_eq!(head_offset(true, 20, 0.5), 1.0 + 7.0 / 16.0);
+        assert!((head_offset(true, 0, 0.0) - 7.0 / 16.0).abs() < 1e-6);
+    }
 
     fn alloy() -> Recipe {
         Recipe {

@@ -9,7 +9,7 @@ use create_engine::basin::{self, MixStep};
 use create_engine::fan::Heat;
 use create_engine::processing::{Output, Rng, Slot};
 use create_engine::{Block, burner, press};
-use mod_api::{ItemStack, PlayerRef};
+use mod_api::{Compound, ItemStack, PlayerRef, Tag};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -26,6 +26,7 @@ thread_local! {
 pub fn clear() {
     PRESS_CRAFTED.with_borrow_mut(HashMap::clear);
     COMPRESSED.with_borrow_mut(HashMap::clear);
+    MIXER_SHOWN.with_borrow_mut(HashMap::clear);
 }
 
 /// The recipes were read again: what was worked out from them goes.
@@ -61,6 +62,138 @@ pub fn basin_tanks(dim: usize, pos: [i32; 3]) -> basin::Tanks {
         .unwrap_or_default()
 }
 
+/// The key of a basin's block entity data its clients read its tanks from: fluid index (-1 for
+/// none) and amount of the inputs, then the outputs.
+pub const FLUIDS_KEY: &str = "BasinFluids";
+/// The key of a basin's block entity data its clients read its stacks from (`id`, `count`), in
+/// slot order: a client's block entity has no slots.
+pub const ITEMS_KEY: &str = "BasinItems";
+/// The key of a mixer's block entity data its clients run its head from: `T`, its running ticks
+/// when told, and `S`, the game time it was told at; none when it rests.
+pub const MIXER_KEY: &str = "Mixer";
+
+/// A running mixer's running ticks as its clients were last told, and the game time then.
+type Told = (i32, i64);
+
+thread_local! {
+    /// What each running mixer's clients were last told, by dimension and mixer.
+    static MIXER_SHOWN: RefCell<HashMap<(usize, [i32; 3]), Told>> = RefCell::new(HashMap::new());
+}
+
+/// Puts each value under its key in the data of the block entity at `pos` (none: takes it
+/// away), which sends it to its clients; nothing when it holds them already.
+fn set_shown(lv: &mut ServerLevel<'_>, pos: [i32; 3], values: &[(&str, Option<Tag>)]) {
+    let Some(entity) = lv.entity_at(pos) else {
+        return;
+    };
+    let Some(mut data) = entity.data(&*lv.host) else {
+        return;
+    };
+    let mut changed = false;
+    for (key, value) in values {
+        if data.get(&(*key).into()) == value.as_ref() {
+            continue;
+        }
+        changed = true;
+        match value {
+            Some(v) => {
+                data.insert((*key).into(), v.clone());
+            }
+            None => {
+                data.remove(&(*key).into());
+            }
+        }
+    }
+    if changed {
+        let _ = entity.replace_data(&mut *lv.host, data);
+    }
+}
+
+/// The basins whose tanks or slots changed this tick tell their clients (`FLUIDS_KEY`,
+/// `ITEMS_KEY`).
+pub fn show_basins(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let changed = with_world(|w| {
+        let c = &mut w.dims[dim].basin_changes;
+        if c.is_empty() {
+            Vec::new()
+        } else {
+            std::mem::take(c)
+        }
+    })
+    .unwrap_or_default();
+    let mut changed = changed;
+    changed.sort();
+    changed.dedup();
+    for pos in changed {
+        if !lv.is_loaded(pos) || !basin_at(lv, pos) {
+            continue;
+        }
+        let t = basin_tanks(dim, pos);
+        let fluids = (t != basin::Tanks::default()).then(|| {
+            Tag::IntArray(
+                t.input
+                    .iter()
+                    .chain(t.output.iter())
+                    .flat_map(|s| match s {
+                        Some((f, n)) => [i32::from(f.index()), *n as i32],
+                        None => [-1, 0],
+                    })
+                    .collect(),
+            )
+        });
+        let host = &*lv.host;
+        let items: Vec<Tag> = lv
+            .slots(pos, basin::SLOTS)
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .map(|s| {
+                Tag::Compound(Compound::from([
+                    (
+                        "id".into(),
+                        Tag::String(stacks::id(host, &s).as_str().into()),
+                    ),
+                    ("count".into(), Tag::Int(s.count() as i32)),
+                ]))
+            })
+            .collect();
+        let items = (!items.is_empty()).then_some(Tag::List(items));
+        set_shown(lv, pos, &[(FLUIDS_KEY, fluids), (ITEMS_KEY, items)]);
+    }
+}
+
+/// Its basin's slots changed (taken from or put in): its clients are told.
+pub fn basin_changed(dim: usize, pos: [i32; 3]) {
+    with_world(|w| w.dims[dim].basin_changes.push(pos));
+}
+
+/// Tells a mixer's clients its cycle (`MIXER_KEY`) when they would work out another one than
+/// the server's (`basin::shown_ticks`): when it starts, leaves the bottom, stays down for the
+/// next recipe or stops.
+fn show_mixer(lv: &mut ServerLevel<'_>, pos: [i32; 3], m: &basin::Mixer) {
+    let dim = lv.dim;
+    let now = lv.game_time();
+    let told = MIXER_SHOWN.with_borrow(|s| s.get(&(dim, pos)).copied());
+    let value = if !m.running {
+        if told.is_none() {
+            return;
+        }
+        MIXER_SHOWN.with_borrow_mut(|s| s.remove(&(dim, pos)));
+        None
+    } else {
+        if told.is_some_and(|(t, at)| basin::shown_ticks(t, now - at) == m.running_ticks) {
+            return;
+        }
+        MIXER_SHOWN.with_borrow_mut(|s| s.insert((dim, pos), (m.running_ticks, now)));
+        Some(Tag::Compound(Compound::from([
+            ("T".into(), Tag::Int(m.running_ticks)),
+            ("S".into(), Tag::Long(now)),
+        ])))
+    };
+    set_shown(lv, pos, &[(MIXER_KEY, value)]);
+}
+
 /// The slots of the basin at `pos`, all 18.
 fn basin_slots(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Vec<Slot>> {
     lv.read_slots(pos, 0, basin::SLOTS)
@@ -77,6 +210,7 @@ fn write_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3], before: &[Slot], after: 
         .collect();
     if !changes.is_empty() {
         lv.set_slots(pos, &changes);
+        basin_changed(lv.dim, pos);
     }
 }
 
@@ -142,6 +276,7 @@ pub fn use_basin(
             .map(|(i, _)| (i, None))
             .collect();
         if !taken.is_empty() && lv.set_slots(pos, &taken) {
+            basin_changed(dim, pos);
             for s in slots.into_iter().flatten() {
                 lv.give(player, s);
             }
@@ -270,6 +405,7 @@ pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
                 d.mixing.retain(|p| *p != pos);
             }
         });
+        show_mixer(lv, pos, &m);
     }
     checks.sort();
     checks.dedup();
@@ -289,6 +425,7 @@ pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
                     w.dims[dim].mixers.insert(pos, m);
                     w.dims[dim].mixing.retain(|p| *p != pos);
                 });
+                show_mixer(lv, pos, &m);
             }
             continue;
         }
@@ -317,6 +454,7 @@ pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
                     d.mixing.push(pos);
                 }
             });
+            show_mixer(lv, pos, &m);
         }
     }
 }

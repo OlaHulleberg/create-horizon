@@ -4,17 +4,21 @@
 //!
 //! The press's cycle and the deployer's stroke come from the server when they change
 //! (`create:press`, `create:deployer`); the client runs them on between messages, as Create's
-//! does, and draws them each frame. The mixer's pole and head stand at their resting height
-//! (`getRenderedHeadOffset` is 7/16 when not running), the head turning with the mixer.
+//! does, and draws them each frame. The mixer's head goes down and up with its cycle
+//! (`getRenderedHeadOffset`), which the server keeps in its block entity's data, the head turning
+//! with the mixer. A basin's fluids and items (`BasinRenderer`) come with its block entity's data.
 
+use super::basin as basin_glue;
+use super::stacks;
 use crate::glue::kinetics::{self, dir_name};
 use crate::glue::states;
 use create_engine::client::{self as parts, Model};
 use create_engine::kinetics::Dir;
+use create_engine::tank::Fluid;
 use create_engine::{Block, deployer, press};
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockKey, BlockPart,
-    ClientHost, Registrar,
+    ClientHost, Compound, ItemDisplayContext, ModBlockEntity, Registrar, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -64,8 +68,132 @@ pub fn register(r: &mut dyn Registrar) {
 }
 
 /// Whether the client draws `block` moving each frame: its block entity's drawing is not kept.
-pub fn moving(block: Block) -> bool {
-    matches!(block, Block::MechanicalPress | Block::Deployer)
+/// The press and deployer always; a mixer while it runs; a basin whose items bob on its fluid.
+pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
+    match block {
+        Block::MechanicalPress | Block::Deployer => true,
+        Block::MechanicalMixer => entity.nbt.contains_key(&basin_glue::MIXER_KEY.into()),
+        Block::Basin => {
+            entity.nbt.contains_key(&basin_glue::FLUIDS_KEY.into())
+                && !basin_items(&entity.nbt).is_empty()
+        }
+        _ => false,
+    }
+}
+
+/// A basin's stacks its block entity's data holds (`ITEMS_KEY`), in slot order.
+fn basin_items(nbt: &Compound) -> Vec<(String, u32)> {
+    let Some(Tag::List(list)) = nbt.get(&basin_glue::ITEMS_KEY.into()) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|t| {
+            let Tag::Compound(c) = t else {
+                return None;
+            };
+            let Some(Tag::String(id)) = c.get(&"id".into()) else {
+                return None;
+            };
+            let Some(Tag::Int(n)) = c.get(&"count".into()) else {
+                return None;
+            };
+            Some((id.to_string().ok()?, (*n).max(0) as u32))
+        })
+        .collect()
+}
+
+/// A basin's tanks its block entity's data holds: (fluid, amount) of the inputs, then outputs.
+fn basin_fluids(nbt: &Compound) -> Vec<(Fluid, u32)> {
+    let Some(Tag::IntArray(v)) = nbt.get(&basin_glue::FLUIDS_KEY.into()) else {
+        return Vec::new();
+    };
+    v.as_chunks::<2>()
+        .0
+        .iter()
+        .filter_map(|c| {
+            let fluid = Fluid::from_index(u8::try_from(c[0]).ok()?)?;
+            (c[1] > 0).then_some((fluid, c[1] as u32))
+        })
+        .collect()
+}
+
+/// `BasinRenderer`: the fluids side by side across the basin, as high as they fill it, and the
+/// items in a ring on the bottom or bobbing on the fluid, a stack's every eight one more.
+fn draw_basin(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    pos: [i32; 3],
+    nbt: &Compound,
+) {
+    // `renderFluids`.
+    let fluids = basin_fluids(nbt);
+    let total: u32 = fluids.iter().map(|f| f.1).sum();
+    let mut fluid_top = 0.0f32;
+    if total >= 1 {
+        let level = (total as f32 / 2000.0).clamp(0.0, 1.0);
+        let level = 1.0 - (1.0 - level) * (1.0 - level);
+        let (y_min, z_min, z_max) = (2.0 / 16.0, 2.0 / 16.0, 14.0 / 16.0);
+        let y_max = y_min + 12.0 / 16.0 * level;
+        let mut x_min = 2.0 / 16.0;
+        for (fluid, units) in &fluids {
+            let partial = (*units as f32 / total as f32).clamp(0.0, 1.0);
+            let x_max = x_min + partial * 12.0 / 16.0;
+            crate::glue::fluids::client::fluid_box(
+                host,
+                draw,
+                *fluid,
+                *units,
+                [x_min, y_min, z_min],
+                [x_max, y_max, z_max],
+            );
+            x_min = x_max;
+        }
+        fluid_top = y_max;
+    }
+    let items = basin_items(nbt);
+    if items.is_empty() {
+        return;
+    }
+    let level = (fluid_top - 0.3).clamp(0.125, 0.6);
+    // `RandomSource.create(pos.hashCode())`.
+    let hash = (pos[1].wrapping_add(pos[2].wrapping_mul(31)))
+        .wrapping_mul(31)
+        .wrapping_add(pos[0]);
+    let mut r = create_engine::depot::JavaRandom::new(i64::from(hash));
+    let mut count = items.len();
+    let base_x = if count == 1 { 0.0 } else { 0.125 };
+    let partition = 360.0 / count as f32;
+    let time = draw.game_time() as f32 + draw.partial();
+    draw.push();
+    draw.translate([0.5, 0.2, 0.5]);
+    for (id, n) in items {
+        let Some(stack) = stacks::stack(host, &id, 1) else {
+            count -= 1;
+            continue;
+        };
+        let angle = partition * count as f32;
+        draw.push();
+        if fluid_top > 0.0 {
+            let bob = ((time / 12.0 + angle).sin() + 1.5) / 32.0;
+            draw.translate([0.0, bob, 0.0]);
+        }
+        // `VecHelper.rotate(baseVector, angle, Y)`.
+        let (s, c) = angle.to_radians().sin_cos();
+        draw.translate([base_x * c, level, -base_x * s]);
+        draw.rotate_about([0.0, 1.0, 0.0], angle + 35.0, [0.0; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], 65.0, [0.0; 3]);
+        for _ in 0..=n / 8 {
+            let mut o = || (r.next_float() - 0.5) * 2.0 / 16.0;
+            let v = [o(), o(), o()];
+            draw.push();
+            draw.translate(v);
+            draw.item(&stack, ItemDisplayContext::Ground, None, 0);
+            draw.pop();
+        }
+        draw.pop();
+        count -= 1;
+    }
+    draw.pop();
 }
 
 /// The server's word on presses or deployers. True for those channels.
@@ -182,12 +310,14 @@ impl BlockEntityPart for MachineDraw {
             Block::Deployer => draw_deployer(event.draw, event.pos),
             Block::MechanicalMixer => {
                 let speeds = kinetics::speeds_of(&event.entity.nbt);
+                let offset = mixer_head_offset(&event.entity.nbt, &*event.draw);
                 for d in parts::draws(block, &info, event.pos, speeds) {
                     if matches!(d.model, Model::MixerPole | Model::MixerHead) {
-                        draw_mixer_part(event.draw, &d);
+                        draw_mixer_part(event.draw, &d, offset);
                     }
                 }
             }
+            Block::Basin => draw_basin(host, event.draw, event.pos, &event.entity.nbt),
             _ => {}
         }
     }
@@ -243,15 +373,35 @@ fn draw_deployer(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3]) {
     draw.pop();
 }
 
-/// The mixer's pole or head at rest, 7/16 down; the head turns with the mixer.
-fn draw_mixer_part(draw: &mut dyn BlockEntityDrawContext, d: &parts::Draw) {
+/// The mixer's head lowered as its cycle has it this frame (`getRenderedHeadOffset`), from what
+/// the server last told of it (`MIXER_KEY`) run on by the game time; 7/16 at rest.
+fn mixer_head_offset(nbt: &Compound, draw: &dyn BlockEntityDrawContext) -> f32 {
+    let Some(Tag::Compound(c)) = nbt.get(&basin_glue::MIXER_KEY.into()) else {
+        return create_engine::basin::head_offset(false, 0, 0.0);
+    };
+    let (Some(Tag::Int(told)), Some(Tag::Long(at))) = (c.get(&"T".into()), c.get(&"S".into()))
+    else {
+        return create_engine::basin::head_offset(false, 0, 0.0);
+    };
+    let ticks = create_engine::basin::shown_ticks(*told, draw.game_time() - at);
+    // At the bottom the head waits for the server; past 40 the cycle is over.
+    let partial = if ticks == 20 || ticks >= 40 {
+        0.0
+    } else {
+        draw.partial()
+    };
+    create_engine::basin::head_offset(ticks < 40, ticks, partial)
+}
+
+/// The mixer's pole or head `offset` down; the head turns with the mixer.
+fn draw_mixer_part(draw: &mut dyn BlockEntityDrawContext, d: &parts::Draw, offset: f32) {
     let partial = if d.model == Model::MixerPole {
         Partial::MixerPole
     } else {
         Partial::MixerHead
     };
     draw.push();
-    draw.translate([0.0, -7.0 / 16.0, 0.0]);
+    draw.translate([0.0, -offset, 0.0]);
     if d.rpm != 0.0 {
         draw.spin([0.0, 1.0, 0.0], [0.5; 3], d.rpm * 0.3, d.phase);
     }
