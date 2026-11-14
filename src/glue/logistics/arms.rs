@@ -306,7 +306,7 @@ impl arm::World for ArmWorld<'_, '_> {
             Kind::Depot => depot_insert(lv, pos, item, count, simulate),
             // ItemHandlerBeltSegment.insertItem: onto the segment from above while nothing just
             // put there is in the way.
-            Kind::Belt => put_on_from_above(lv, pos, item, count, simulate).unwrap_or(count),
+            Kind::Belt => put_on_from_above(lv, pos, item, count, None, simulate).unwrap_or(count),
             // ChuteItemHandler: while it is empty and takes the item, a stack from the top.
             Kind::Chute => {
                 let Some((block, powered)) = chute_at(lv, pos) else {
@@ -693,7 +693,7 @@ fn land(
         }
         return Some(count - n);
     }
-    put_on_from_above(lv, target, item, count, simulate)
+    put_on_from_above(lv, target, item, count, None, simulate)
 }
 
 impl ejector::World for EjectorWorld<'_, '_> {

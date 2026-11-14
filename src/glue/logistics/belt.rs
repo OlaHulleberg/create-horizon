@@ -56,19 +56,29 @@ pub fn use_belt(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> bool {
     true
 }
 
-/// A belt item as a stack.
+/// A belt item as a stack, its sequenced assembly progress with it (legacy `belt_stack`).
 pub fn belt_stack(lv: &ServerLevel<'_>, item: &belt::Item) -> Option<ItemStack> {
-    items::stack_of(&*lv.host, &item.item, u32::from(item.count))
+    let mut stack = items::stack_of(&*lv.host, &item.item, u32::from(item.count))?;
+    if let Some((_, p, fraction)) = item
+        .progress
+        .as_ref()
+        .and_then(crate::glue::processing::transitional_of)
+    {
+        crate::glue::processing::set_sequenced_progress(&mut stack, &p.id, p.step, fraction);
+    }
+    Some(stack)
 }
 
-/// Puts `count` of item `id` (an angle drawn for it) onto belt segment `pos` from above
-/// (`ItemHandlerBeltSegment.insertItem`: `canInsertAt(segment)`). The count left; None when no
-/// belt that carries items is there. `simulate`: only how much it would take.
+/// Puts `count` of item `id` (an angle drawn for it, a sequenced assembly's `progress` with it)
+/// onto belt segment `pos` from above (`ItemHandlerBeltSegment.insertItem`:
+/// `canInsertAt(segment)`). The count left; None when no belt that carries items is there.
+/// `simulate`: only how much it would take.
 pub fn put_on_from_above(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     id: &str,
     count: u8,
+    progress: Option<create_engine::sequenced::Progress>,
     simulate: bool,
 ) -> Option<u8> {
     let (c, index, seg) = belt_segment(lv, pos)?;
@@ -91,6 +101,7 @@ pub fn put_on_from_above(
             return Some(());
         }
         let mut i = belt::Item::new(id, n, angle, up);
+        i.progress = progress;
         i.inserted_at = index;
         i.inserted_from = Some(Dir::Up);
         i.position = index as f32 + 0.5 + if b.items.positive { -1.0 } else { 1.0 } / 16.0;

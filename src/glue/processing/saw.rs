@@ -2,8 +2,9 @@
 //! (`BlockBreakingKineticBlockEntity`), and the saw facing up cutting what lands on it
 //! (`SawBlockEntity`).
 
-use super::belt_input::{insert_into_from, random_angle, takes_from_side, upright};
+use super::takes_from_side;
 use super::{recipes, stacks};
+use crate::glue::logistics::{insert_into_from, random_angle, upright};
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::kinetics::Dir;

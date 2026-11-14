@@ -13,9 +13,10 @@
 //!   with a block stands in for it (`items::is_block_item`).
 //! - Item attributes in smart chute filters (`ItemAttribute.appliesTo`) read processing
 //!   recipes; none applies here.
-//! - Sequenced assembly progress on stacks entering or leaving a belt, the machines above a
-//!   belt or depot (presses, deployers, spouts: `Subsystem::belt_process`), and items landing
-//!   on basins, saws and item drains are the processing and fluids subsystems'.
+//! - The machines above a belt or depot (presses, deployers, spouts: `Subsystem::belt_process`),
+//!   and items landing on basins, saws and item drains are the processing and fluids
+//!   subsystems'. A sequenced assembly's progress on a stack (processing's `stacks`) goes with
+//!   it onto and off a belt, as the legacy glue's `belt_stack` and `stack_progress` did.
 //! - Containers that are not Create's (vanilla's, other mods') say nothing to Create when they
 //!   change (`contents_changed` reaches only a block's own parts), so a chute under one looks
 //!   again every `RETRY` ticks.
@@ -40,6 +41,11 @@ mod placement;
 mod tunnel;
 
 pub use arms::Arms;
+// What the processing machines hand their results to beside them (the legacy logistics glue's
+// siblings called these): a belt or depot taking a stack from a side, and the two facts every
+// stack placed on one needs.
+pub(crate) use belt::insert_into_from;
+pub(crate) use items::{random_angle, upright};
 
 use super::kinetics;
 use super::server::ServerLevel;
@@ -413,8 +419,11 @@ fn item_landed(
         _ => return,
     };
     // A depot and a chute hold the whole stack, components and all; a belt carries items
-    // without them.
-    if block == Block::Belt && items::has_components(&s) {
+    // without them, but for a sequenced assembly's transitional item (its progress with it).
+    let progress = (block == Block::Belt && !s.is_damaged())
+        .then(|| crate::glue::processing::sequenced_progress(&s))
+        .flatten();
+    if block == Block::Belt && items::has_components(&s) && progress.is_none() {
         return;
     }
     match block {
@@ -460,7 +469,7 @@ fn item_landed(
         _ => {
             let id = items::id_of(&*lv.host, &s);
             let count = s.count().min(u32::from(items::stack_limit(&*lv.host, &id))) as u8;
-            if let Some(left) = belt::put_on_from_above(lv, spot, &id, count, false)
+            if let Some(left) = belt::put_on_from_above(lv, spot, &id, count, progress, false)
                 && left < count
             {
                 *stack = s.shrink(u32::from(count - left));

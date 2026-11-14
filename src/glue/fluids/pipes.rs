@@ -1,6 +1,7 @@
 //! Pipes and pumps (`FluidPropagator`, `FluidNetwork`), boilers and steam engines, and tank
 //! blocks' states.
 
+use super::super::processing;
 use super::super::server::{ServerLevel, UPDATE_CLIENTS};
 use super::super::world::with_world;
 use super::{all, flag, has_fluid, info_at, plumbing, replaceable, state_with, world_fluid};
@@ -127,7 +128,7 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
             offer
         } else if from_basin {
             // A basin gives from its outputs.
-            let mut t = basin_tanks(dim, from.pos);
+            let mut t = processing::basin_tanks(dim, from.pos);
             create_engine::basin::drain(&mut t.output, amount)
         } else if drained_from_drain {
             with_world(|w| {
@@ -184,7 +185,7 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
                 if special.is_some() {
                     plumbing::take(lv, from.pos, moved);
                 } else if from_basin {
-                    let mut t = basin_tanks(dim, from.pos);
+                    let mut t = processing::basin_tanks(dim, from.pos);
                     create_engine::basin::drain(&mut t.output, moved);
                     with_world(|w| w.set_basin_fluids(dim, from.pos, t));
                 } else if drained_from_drain {
@@ -208,13 +209,6 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
     });
 }
 
-/// A basin's tanks (none: empty).
-fn basin_tanks(dim: usize, pos: [i32; 3]) -> create_engine::basin::Tanks {
-    with_world(|w| w.dims[dim].basin_fluids.get(&pos).copied())
-        .flatten()
-        .unwrap_or_default()
-}
-
 /// Up to `n` mB of `fluid` into end `to` of `pump`'s pipes in front: a hose pulley's or creative
 /// tank's sink, a basin's inputs, a boiler's supply, a spout's tank, a tank's, or an open end's
 /// space (a source placed per bucket, `provideFluidToSpace`). How much it took.
@@ -232,7 +226,7 @@ fn fill_end(
         }
         if info_at(lv, to.pos).map(|(b, _)| b) == Some(Block::Basin) {
             // A basin takes into its inputs.
-            let mut t = basin_tanks(dim, to.pos);
+            let mut t = processing::basin_tanks(dim, to.pos);
             let took = create_engine::basin::fill(&mut t.input, fluid, n);
             if took > 0 {
                 with_world(|w| w.set_basin_fluids(dim, to.pos, t));

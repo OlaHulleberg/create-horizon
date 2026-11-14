@@ -13,8 +13,8 @@
 //! subsystems call, as the legacy glue's siblings did: the belt callbacks (`deployer_on_belt`,
 //! `spout_on_belt`, `sequenced_on_belt`), the depot's for the spout (`sequenced_*`), basins'
 //! heat and tanks, and the crafter's item handler (`crafter_handler_insert`).
-//! `belt_input` holds the legacy logistics glue's `insert_into_from` (a belt or depot taking a
-//! stack from a side), which the saw, the crushing wheels and the crafter hand their results to.
+//! The saw, the crushing wheels and the crafter hand their results to a belt or depot beside
+//! them through logistics' `insert_into_from`, as in the legacy glue.
 //!
 //! Left out, the API having no way yet:
 //! - Hoppers putting into a depot, a weighted ejector, a mechanical crafter or a chute only
@@ -27,7 +27,6 @@
 //!   digs every block at its harvestable speed (the drops still follow the game's rules).
 
 mod basin;
-mod belt_input;
 mod client;
 mod containers;
 mod crafter;
@@ -43,22 +42,13 @@ mod stacks;
 
 pub use client::moving;
 pub use press::transitional_of;
-// What the other subsystems call (the legacy glue's siblings did): fluids (the spout and the
-// drain on depots, basins' tanks), logistics (belt processing, arms and funnels into crafters).
-#[allow(unused_imports)]
-pub use basin::{basin_at, basin_heat, basin_tanks};
-#[allow(unused_imports)]
-pub use crafter::{
-    crafter_at, crafter_covered, crafter_group, crafter_handler_insert, crafter_slot,
-};
-#[allow(unused_imports)]
-pub use deployer::{deployer_above, deployer_on_belt};
-#[allow(unused_imports)]
+// What the other subsystems call (the legacy glue's siblings did): fluids (the spout on a belt
+// or depot runs a sequenced assembly's filling step, pumps reach basins' tanks), logistics (a
+// stack's sequenced progress onto and off a belt).
+pub use basin::basin_tanks;
 pub use press::{
-    belt_left, on_belt, sequenced_for, sequenced_on_belt, sequenced_on_depot,
-    sequenced_step_on_depot, spout_on_belt,
+    belt_left, sequenced_for, sequenced_on_belt, sequenced_on_depot, sequenced_step_on_depot,
 };
-#[allow(unused_imports)]
 pub use stacks::{sequenced_progress, set_sequenced_progress};
 
 use super::server::ServerLevel;
@@ -126,6 +116,24 @@ impl Subsystem for Processing {
         saw::tick_saws(lv);
         press::tick_presses(lv);
         deployer::tick_deployers(lv);
+    }
+
+    /// `BeltProcessingBehaviour` of the machine two above belt segment `segment` (the legacy
+    /// `BeltSide.process`): a deployer facing down (`BeltDeployerCallbacks`), else a press
+    /// (`BeltPressingCallbacks`). A spout's is `fluids`'.
+    fn belt_process(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        segment: [i32; 3],
+        item: &mut create_engine::belt::Item,
+        locked: bool,
+    ) -> Option<create_engine::belt::Process> {
+        if let Some((d, rpm)) = deployer::deployer_above(lv, segment) {
+            return Some(deployer::deployer_on_belt(
+                lv, segment, item, locked, d, rpm,
+            ));
+        }
+        press::press_on_belt(lv, segment, item, locked)
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
@@ -331,6 +339,14 @@ impl ServerLevel<'_> {
     pub fn seed_at(&self, pos: [i32; 3]) -> u64 {
         self.game_time() as u64 ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9) ^ (pos[2] as u64) << 20
     }
+}
+
+/// Whether a depot or a belt is at `p` (`DirectBeltInputBehaviour` there).
+pub(crate) fn takes_from_side(dim: usize, p: [i32; 3]) -> bool {
+    with_world(|w| {
+        let d = &w.dims[dim];
+        d.depots.contains_key(&p) || d.belt_of.contains_key(&p)
+    }) == Some(true)
 }
 
 /// `pos` moved `n` along `d`.

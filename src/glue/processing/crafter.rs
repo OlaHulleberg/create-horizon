@@ -2,8 +2,9 @@
 //! `ConnectedInputHandler`): crafters pointing at each other pass their items along as one
 //! grid, the last crafts it and puts the result out.
 
-use super::belt_input::{insert_into_from, random_angle, takes_from_side, upright};
 use super::stacks;
+use super::takes_from_side;
+use crate::glue::logistics::{insert_into_from, random_angle, upright};
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::crafter::{self, Phase, Pointing};

@@ -33,9 +33,7 @@ pub struct Recipes {
     pub deploying: Vec<deployer::Recipe>,
     /// The item drain's and the spout's: `create:emptying`, `create:filling` with the fluids
     /// the machines carry (the fluids subsystem's machines read them).
-    #[allow(dead_code)]
     pub emptying: Vec<(String, drain::Emptying)>,
-    #[allow(dead_code)]
     pub filling: Vec<spout::Filling>,
     /// `create:sequenced_assembly`: steps the machines ask for first.
     pub sequenced: Vec<sequenced::Assembly>,

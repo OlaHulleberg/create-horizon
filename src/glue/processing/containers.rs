@@ -6,7 +6,7 @@
 //! The slots are on the blocks' block entities: the `create:kinetic` type for all but the
 //! toolboxes, which keep no other state and have their own type, `create:toolbox`.
 
-use super::belt_input::{random_angle, upright};
+use crate::glue::logistics::{random_angle, upright};
 use crate::glue::server::ServerLevel;
 use crate::glue::states;
 use crate::glue::world::with_world;

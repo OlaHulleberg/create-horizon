@@ -12,10 +12,6 @@
 //!   journal, and a handler cannot learn that a transaction it wrote in was aborted to roll the
 //!   engine back (no close callback on `Transaction`). Pumps reach Create's own blocks and open
 //!   ends as the legacy glue did.
-//! - A spout's sequenced-assembly filling step (`SequencedAssemblyRecipe.getRecipe` on the item
-//!   held below it): the assemblies and their progress on a stack are processing's
-//!   (`sequenced_on_depot`, `sequenced_step_on_depot`), ported with it; plain `create:filling`
-//!   recipes are filled here.
 
 mod client;
 mod machines;
@@ -96,6 +92,19 @@ impl Subsystem for Fluids {
 
     fn client_reset(&self) {
         client::reset();
+    }
+
+    /// A spout two above belt segment `segment` (`SpoutBlockEntity`'s
+    /// `BeltProcessingBehaviour`); the deployers and presses are processing's.
+    fn belt_process(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        segment: [i32; 3],
+        item: &mut create_engine::belt::Item,
+        locked: bool,
+    ) -> Option<create_engine::belt::Process> {
+        let above = [segment[0], segment[1] + 2, segment[2]];
+        machines::spout_on_belt(lv, above, item, locked)
     }
 }
 

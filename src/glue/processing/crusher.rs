@@ -1,9 +1,10 @@
 //! Crushing wheels (`CrushingWheelBlock`) and the controller between two of them
 //! (`CrushingWheelControllerBlockEntity`): the item it draws in, crushes and lets out.
 
-use super::belt_input::{insert_into_from, random_angle, takes_from_side, upright};
+use super::takes_from_side;
 use super::{recipes, stacks};
 use crate::glue::kinetics::dir_name;
+use crate::glue::logistics::{insert_into_from, random_angle, upright};
 use crate::glue::server::{ServerLevel, update_all};
 use crate::glue::world::with_world;
 use create_engine::kinetics::{Axis, Dir};

@@ -4,8 +4,8 @@
 //! Not here (nor in the legacy glue): the processing types' effects on living entities
 //! (`affectEntity`: fire, freezing water, haunting).
 
-use super::belt_input::{random_angle, upright};
 use super::{recipes, stacks};
+use crate::glue::logistics::{random_angle, upright};
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::fan::{self, Catalyst, Current, Heat, Kind, Way};
@@ -492,7 +492,7 @@ fn fan_current(
         for below in 0..2 {
             let p = at(i);
             let p = [p[0], p[1] - below, p[2]];
-            if super::belt_input::takes_from_side(dim, p) {
+            if super::takes_from_side(dim, p) {
                 handlers.push((p, catalyst_at(lv, p).or(segment)));
             }
             if facing.axis() == Axis::Y {

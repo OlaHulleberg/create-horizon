@@ -10,7 +10,7 @@
 //! (`requiresCorrectToolForDrops`), the API having no query for it, so every block digs at its
 //! harvestable speed.
 
-use super::belt_input::takes_from_side;
+use super::takes_from_side;
 use super::{press, recipes, stacks};
 use crate::glue::net;
 use crate::glue::server::ServerLevel;
@@ -168,7 +168,6 @@ pub fn deployer_on_depot(lv: &mut ServerLevel<'_>, depot: [i32; 3]) -> bool {
 /// at `rpm`): the deployer starts its stroke on a stack its held item applies to (a sequenced
 /// assembly's deploying step first) and, back at the top of it, turns one of the stack into the
 /// results (`activate`).
-#[allow(dead_code)] // Logistics' belt processing (`BeltProcessingBehaviour`) calls it.
 pub fn deployer_on_belt(
     lv: &mut ServerLevel<'_>,
     at: [i32; 3],

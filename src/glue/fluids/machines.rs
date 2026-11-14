@@ -1,144 +1,51 @@
-//! Spouts and item drains, and the `create:filling` / `create:emptying` recipes they run.
+//! Spouts and item drains, and the `create:filling` / `create:emptying` recipes they run (read
+//! with processing's recipes, one store as in the legacy glue). A sequenced assembly's filling
+//! step comes first (`SequencedAssemblyRecipe.getRecipe`): the assemblies and the progress on a
+//! stack are processing's.
 
+use super::super::processing::{self, recipes};
+use super::super::redstone::analog_touched;
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
-use create_engine::drain::Emptying;
-use create_engine::spout::Filling;
+use create_engine::spout::{self, Filling};
 use create_engine::tank::Fluid;
-use mod_api::{HostTransaction, Identifier, ItemStack, Recipe, ServerHost};
-use std::cell::RefCell;
-use std::sync::Arc;
-
-/// The filling and emptying recipes, and the game's tables they were read from: `/reload`
-/// builds new ones.
-struct Recipes {
-    tables: [Arc<[Recipe]>; 2],
-    emptying: Vec<(String, Emptying)>,
-    filling: Vec<Filling>,
-}
-
-thread_local! {
-    static RECIPES: RefCell<Option<Recipes>> = const { RefCell::new(None) };
-}
-
-/// Reads the recipes the first time a spout or drain needs them, and again after `/reload`.
-fn ensure_recipes(host: &dyn ServerHost) {
-    let tables = [
-        host.recipes_of_type("create:emptying"),
-        host.recipes_of_type("create:filling"),
-    ];
-    let same = RECIPES.with_borrow(|r| {
-        r.as_ref()
-            .is_some_and(|r| r.tables.iter().zip(&tables).all(|(a, b)| Arc::ptr_eq(a, b)))
-    });
-    if same {
-        return;
-    }
-    let emptying = read_emptying(host, &tables[0]);
-    let filling = read_filling(host, &tables[1]);
-    RECIPES.with_borrow_mut(|r| {
-        *r = Some(Recipes {
-            tables,
-            emptying,
-            filling,
-        })
-    });
-}
-
-/// A recipe's fluid and amount: `{"amount", "fluid" | "tag" | "id"}`.
-fn recipe_fluid(json: &mod_api::serde_json::Value) -> Option<(Fluid, u32)> {
-    let amount = u32::try_from(json["amount"].as_u64()?).ok()?;
-    let id = json["fluid"]
-        .as_str()
-        .or_else(|| json["tag"].as_str())
-        .or_else(|| json["id"].as_str())?;
-    Some((Fluid::of_id(id)?, amount))
-}
-
-/// The items an ingredient's JSON accepts.
-fn ingredient_items(host: &dyn ServerHost, json: &mod_api::serde_json::Value) -> Vec<String> {
-    let Ok(Some(i)) = host.recipe_ingredient(&json.to_string()) else {
-        return Vec::new();
-    };
-    if i.order.is_empty() {
-        i.items.into_iter().collect()
-    } else {
-        i.order
-    }
-}
-
-fn result_item(host: &dyn ServerHost, json: &mod_api::serde_json::Value) -> Option<String> {
-    let stack = host.recipe_result(&json.to_string()).ok()??;
-    Some(stack.item().id(host))
-}
-
-/// `create:emptying`: an item, the fluid it gives and what is left.
-fn read_emptying(host: &dyn ServerHost, recipes: &[Recipe]) -> Vec<(String, Emptying)> {
-    let mut out = Vec::new();
-    for r in recipes {
-        let json = &*r.json;
-        let Some(ingredient) = json["ingredients"].get(0) else {
-            continue;
-        };
-        let items = ingredient_items(host, ingredient);
-        let results = json["results"].as_array().cloned().unwrap_or_default();
-        let Some((fluid, amount)) = results.iter().find_map(recipe_fluid) else {
-            continue;
-        };
-        let leftover = results
-            .iter()
-            .find(|o| o.get("amount").is_none())
-            .and_then(|o| result_item(host, o));
-        for item in items {
-            out.push((
-                item,
-                Emptying {
-                    fluid,
-                    amount,
-                    leftover: leftover.clone(),
-                },
-            ));
-        }
-    }
-    out
-}
-
-/// `create:filling`: an item and a fluid, what it becomes.
-fn read_filling(host: &dyn ServerHost, recipes: &[Recipe]) -> Vec<Filling> {
-    let mut out = Vec::new();
-    for r in recipes {
-        let json = &*r.json;
-        let Some(ingredient) = json["ingredients"].get(0) else {
-            continue;
-        };
-        let Some((fluid, amount)) = json["ingredients"].get(1).and_then(recipe_fluid) else {
-            continue;
-        };
-        let Some(result) = json["results"].get(0).and_then(|o| result_item(host, o)) else {
-            continue;
-        };
-        for item in ingredient_items(host, ingredient) {
-            out.push(Filling {
-                item,
-                fluid,
-                amount,
-                result: result.clone(),
-            });
-        }
-    }
-    out
-}
+use create_engine::{belt, sequenced};
+use mod_api::{HostTransaction, Identifier, ItemStack, ServerHost};
 
 fn stack_of(host: &dyn ServerHost, item: &str, count: u32) -> Option<ItemStack> {
     let key = host.item_key(&Identifier::parse(item).ok()?)?;
     ItemStack::new(key, count)
 }
 
+/// A sequenced assembly's filling step for `item` at `progress`: the assembly, the step's
+/// fluid and amount.
+fn sequenced_filling(
+    item: &str,
+    progress: Option<&sequenced::Progress>,
+) -> Option<(sequenced::Assembly, Fluid, u32)> {
+    let (a, step) = processing::sequenced_for(item, progress, "create:filling", None)?;
+    let (fluid, amount) = step.fluid?;
+    Some((a, Fluid::of_id(&fluid)?, amount))
+}
+
+/// The step as the one filling recipe the spout may run: `item` with the step's fluid becomes
+/// the assembly's transitional item.
+fn step_filling(item: &str, a: &sequenced::Assembly, fluid: Fluid, amount: u32) -> [Filling; 1] {
+    [Filling {
+        item: item.to_string(),
+        fluid,
+        amount,
+        result: a.transitional.clone(),
+    }]
+}
+
 /// Spouts holding fluid (`SpoutBlockEntity.whenItemHeld` on the depot two below, `tick`): the
-/// held item is filled after the 20-tick cycle (at its 5th-last tick).
+/// held item is filled after the 20-tick cycle (at its 5th-last tick); a sequenced assembly's
+/// filling step first, when the spout holds that step's fluid, the step done as processing does
+/// it on a depot.
 pub(super) fn tick_spouts(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let spouts: Vec<([i32; 3], create_engine::spout::Spout)> = with_world(|w| {
+    let spouts: Vec<([i32; 3], spout::Spout)> = with_world(|w| {
         w.dims[dim]
             .spouts
             .iter()
@@ -147,10 +54,9 @@ pub(super) fn tick_spouts(lv: &mut ServerLevel<'_>) {
             .collect()
     })
     .unwrap_or_default();
-    if spouts.is_empty() {
+    if spouts.is_empty() || !recipes::ready() {
         return;
     }
-    ensure_recipes(&*lv.host);
     for (pos, mut s) in spouts {
         let before = s.fluid;
         let depot = [pos[0], pos[1] - 2, pos[2]];
@@ -162,20 +68,112 @@ pub(super) fn tick_spouts(lv: &mut ServerLevel<'_>) {
         let held = entity
             .and_then(|e| e.item_slot(&*lv.host, 0).ok().flatten())
             .map(|stack| (stack.item().id(&*lv.host), stack.count()));
-        let filled = RECIPES.with_borrow(|r| {
-            let r = r.as_ref()?;
+        let sequenced = held
+            .as_ref()
+            .and_then(|_| processing::sequenced_on_depot(lv, depot, "create:filling", None))
+            .and_then(|(a, progress, step)| {
+                let (fluid, amount) = step.fluid?;
+                let fluid = Fluid::of_id(&fluid)?;
+                (s.fluid.map(|f| f.0) == Some(fluid)).then_some((a, progress, fluid, amount))
+            });
+        let filled = recipes::with(|r| {
             let item = held.as_ref().map(|h| h.0.as_str());
-            create_engine::spout::step(&mut s, item, &r.filling)
-        });
-        if let (Some(out), Some((item, count)), Some(entity)) = (filled, held, entity) {
-            fill_held(lv.host, entity, &item, count, &out);
-            with_world(|w| w.depot_changed(dim, depot));
+            match &sequenced {
+                Some((a, _, fluid, amount)) => {
+                    let step = step_filling(item?, a, *fluid, *amount);
+                    spout::step(&mut s, item, &step)
+                }
+                None => spout::step(&mut s, item, &r.filling),
+            }
+        })
+        .flatten();
+        match (filled, &sequenced, held, entity) {
+            (Some(_), Some((a, progress, _, _)), Some((_, count)), _) => {
+                let state =
+                    with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten();
+                if let Some(state) = state {
+                    let count = count.min(255) as u8;
+                    let next = processing::sequenced_step_on_depot(
+                        lv,
+                        depot,
+                        count,
+                        state,
+                        a,
+                        progress.as_ref(),
+                    );
+                    with_world(|w| {
+                        if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
+                            *h = Some(next);
+                        }
+                    });
+                }
+            }
+            (Some(out), None, Some((item, count)), Some(entity)) => {
+                fill_held(lv.host, entity, &item, count, &out);
+                with_world(|w| w.depot_changed(dim, depot));
+            }
+            _ => {}
         }
         with_world(|w| w.dims[dim].spouts.insert(pos, s));
         if s.fluid != before {
-            with_world(|w| w.dims[dim].analog_checks.push(pos));
+            analog_touched(dim, pos);
         }
     }
+}
+
+/// The spout's belt callbacks (`SpoutBlockEntity`'s `BeltProcessingBehaviour`) for a stack on
+/// the belt segment two under the spout `above`: None without a spout there; held while it can
+/// be filled, one of it filled at the cycle's end (a sequenced assembly's filling step first,
+/// with that step's fluid).
+pub(super) fn spout_on_belt(
+    lv: &mut ServerLevel<'_>,
+    above: [i32; 3],
+    item: &mut belt::Item,
+    locked: bool,
+) -> Option<belt::Process> {
+    use belt::Process;
+    use spout::OnBelt;
+    let dim = lv.dim;
+    let mut s = with_world(|w| w.dims[dim].spouts.get(&above).copied()).flatten()?;
+    if !recipes::ready() {
+        return Some(Process::Pass);
+    }
+    let sequenced = sequenced_filling(&item.item, item.progress.as_ref());
+    let before = s.fluid;
+    let result = recipes::with(|r| match &sequenced {
+        Some((a, fluid, amount)) => {
+            let step = step_filling(&item.item, a, *fluid, *amount);
+            spout::on_belt(&mut s, &item.item, &step, locked)
+        }
+        None => spout::on_belt(&mut s, &item.item, &r.filling, locked),
+    })?;
+    with_world(|w| w.dims[dim].spouts.insert(above, s));
+    if s.fluid != before {
+        analog_touched(dim, above);
+    }
+    Some(match result {
+        OnBelt::Pass => Process::Pass,
+        OnBelt::Hold => Process::Hold,
+        OnBelt::Fill(out) => {
+            let outputs = match &sequenced {
+                Some((a, _, _)) => {
+                    let at = [above[0], above[1] - 2, above[2]];
+                    processing::sequenced_on_belt(lv, at, item, a)
+                }
+                None => {
+                    let mut o = item.clone();
+                    o.item = out;
+                    o.count = 1;
+                    o.progress = None;
+                    vec![o]
+                }
+            };
+            Process::Convert {
+                held: processing::belt_left(item),
+                outputs,
+            }
+        }
+    })
 }
 
 /// `convertToAndLeaveHeld`: one of the `count` held `item`s becomes `out`; the rest stays held,
@@ -248,10 +246,9 @@ pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
     if drains.is_empty() {
         return;
     }
-    ensure_recipes(&*lv.host);
     for pos in drains {
-        let Some(out) = RECIPES.with_borrow(|r| {
-            let emptying = r.as_ref().map_or(&[][..], |r| &r.emptying[..]);
+        let Some(out) = recipes::with(|r| {
+            let emptying = &r.emptying[..];
             with_world(|w| {
                 let d = w.dims[dim].drains.get_mut(&pos)?;
                 let held = d.held.clone();
@@ -270,7 +267,8 @@ pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
                 out?.map(|left| (left, 1))
             })
             .flatten()
-        }) else {
+        })
+        .flatten() else {
             continue;
         };
         let Some(stack) = stack_of(&*lv.host, &out.0, u32::from(out.1)) else {

@@ -2,12 +2,12 @@
 //! what a machine does to a depot's held stack or a belt's (`BeltProcessingBehaviour`): the
 //! processing results, a sequenced assembly's steps. The press over a basin is `basin`'s.
 
-use super::belt_input::{random_angle, upright};
 use super::{recipes, stacks};
+use crate::glue::logistics::{random_angle, upright};
 use crate::glue::net;
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
-use create_engine::{belt, depot, press, processing, sequenced, spout, tank};
+use create_engine::{belt, depot, press, processing, sequenced};
 use mod_api::{PlayerRef, ServerHost};
 
 /// Depots that ask their press, then running presses: `DepotBehaviour.tick` with
@@ -207,6 +207,86 @@ pub fn press_on_depot(
     results_on_depot(lv, depot, count, held, results)
 }
 
+/// `BeltPressingCallbacks` for a stack on the belt segment at `at` under the press two above
+/// (`BeltProcessingBehaviour` of `PressingBehaviour`): None without a press there. An item
+/// arriving (`onItemReceived`) passes a blocked press (`isBlocked`) and one standing still, is
+/// held while the press runs, and starts it when a recipe takes it (a sequenced assembly's
+/// pressing step first); held (`whenItemHeld`), at the head's lowest point one of it becomes the
+/// recipe's rolled results, at rest where they lie (locked, a random angle).
+pub fn press_on_belt(
+    lv: &mut ServerLevel<'_>,
+    at: [i32; 3],
+    item: &mut belt::Item,
+    locked: bool,
+) -> Option<belt::Process> {
+    use belt::Process;
+    use press::{CYCLE, Mode};
+    let dim = lv.dim;
+    let above = [at[0], at[1] + 2, at[2]];
+    let mut p = with_world(|w| w.dims[dim].presses.get(&above).copied()).flatten()?;
+    if !locked && lv.blocked([at[0], at[1] + 1, at[2]]) {
+        return None;
+    }
+    if lv.speed(above) == 0.0 {
+        return Some(Process::Pass);
+    }
+    let sequenced = sequenced_for(&item.item, item.progress.as_ref(), "create:pressing", None);
+    if !locked {
+        if p.running {
+            return Some(Process::Hold);
+        }
+        let fits = sequenced.is_some()
+            || recipes::with(|r| r.pressing.find_single(&item.item).is_some()) == Some(true);
+        if !fits {
+            return Some(Process::Pass);
+        }
+        p.start(Mode::Belt);
+        with_world(|w| {
+            w.dims[dim].presses.insert(above, p);
+            w.dims[dim].press_changes.push(above);
+        });
+        return Some(Process::Hold);
+    }
+    if !p.running {
+        return Some(Process::Pass);
+    }
+    if p.ticks != CYCLE / 2 {
+        return Some(Process::Hold);
+    }
+    let mut outputs = match &sequenced {
+        Some((a, _)) => sequenced_on_belt(lv, at, item, a),
+        None => {
+            let seed = lv.game_time() as u64 ^ (at[0] as u64).wrapping_mul(0x9E37_79B9);
+            let results = recipes::with(|r| {
+                let id = r.pressing.find_single(&item.item)?;
+                Some(processing::roll(
+                    r.pressing.get(id),
+                    &mut processing::Rng::new(seed),
+                ))
+            })
+            .flatten()?;
+            results
+                .into_iter()
+                .map(|(name, n)| {
+                    let mut out = item.clone();
+                    out.item = name;
+                    out.count = n;
+                    out.progress = None;
+                    out
+                })
+                .collect()
+        }
+    };
+    for o in &mut outputs {
+        o.locked = true;
+        o.angle = random_angle(lv, at);
+    }
+    Some(Process::Convert {
+        held: belt_left(item),
+        outputs,
+    })
+}
+
 /// The transitional item of the assembly an item's progress names, with the progress and the
 /// fraction of the steps done (`SequencedAssembly.progress`).
 pub fn transitional_of(p: &sequenced::Progress) -> Option<(String, &sequenced::Progress, f32)> {
@@ -262,7 +342,6 @@ pub fn sequenced_for(
 
 /// One of a belt stack through a sequenced step (`advance`): the transitional item a step on,
 /// its progress with it, or a result of the pool.
-#[allow(dead_code)] // Logistics' belt processing (`BeltProcessingBehaviour`) calls it.
 pub fn sequenced_on_belt(
     lv: &ServerLevel<'_>,
     at: [i32; 3],
@@ -286,76 +365,11 @@ pub fn sequenced_on_belt(
 }
 
 /// The rest of a belt stack after one of it was processed (`convertToAndLeaveHeld`).
-#[allow(dead_code)] // Logistics' belt processing (`BeltProcessingBehaviour`) calls it.
 pub fn belt_left(item: &belt::Item) -> Option<belt::Item> {
     (item.count > 1).then(|| {
         let mut left = item.clone();
         left.count -= 1;
         left
-    })
-}
-
-/// The spout's belt callbacks for a stack on the belt at `at` under the spout `above`: held
-/// while it can be filled, one of it filled at the cycle's end (a sequenced assembly's filling
-/// step first, with that step's fluid).
-#[allow(dead_code)] // Logistics' belt processing (`BeltProcessingBehaviour`) calls it.
-pub fn spout_on_belt(
-    lv: &mut ServerLevel<'_>,
-    above: [i32; 3],
-    item: &mut belt::Item,
-    locked: bool,
-) -> Option<belt::Process> {
-    use belt::Process;
-    use spout::OnBelt;
-    let dim = lv.dim;
-    let mut s = with_world(|w| w.dims[dim].spouts.get(&above).copied()).flatten()?;
-    if !recipes::ready() {
-        return Some(Process::Pass);
-    }
-    let sequenced = sequenced_for(&item.item, item.progress.as_ref(), "create:filling", None)
-        .and_then(|(a, step)| {
-            let (fluid, amount) = step.fluid?;
-            let fluid = tank::Fluid::of_id(&fluid)?;
-            Some((a, fluid, amount))
-        });
-    let before = s.fluid;
-    let result = recipes::with(|r| match &sequenced {
-        Some((a, fluid, amount)) => {
-            let step = [spout::Filling {
-                item: item.item.clone(),
-                fluid: *fluid,
-                amount: *amount,
-                result: a.transitional.clone(),
-            }];
-            spout::on_belt(&mut s, &item.item, &step, locked)
-        }
-        None => spout::on_belt(&mut s, &item.item, &r.filling, locked),
-    })?;
-    with_world(|w| w.dims[dim].spouts.insert(above, s));
-    if s.fluid != before {
-        with_world(|w| w.dims[dim].analog_checks.push(above));
-    }
-    Some(match result {
-        OnBelt::Pass => Process::Pass,
-        OnBelt::Hold => Process::Hold,
-        OnBelt::Fill(out) => {
-            let outputs = match &sequenced {
-                Some((a, _, _)) => {
-                    sequenced_on_belt(lv, [above[0], above[1] - 2, above[2]], item, a)
-                }
-                None => {
-                    let mut o = item.clone();
-                    o.item = out;
-                    o.count = 1;
-                    o.progress = None;
-                    vec![o]
-                }
-            };
-            Process::Convert {
-                held: belt_left(item),
-                outputs,
-            }
-        }
     })
 }
 
@@ -501,7 +515,6 @@ pub fn results_on_depot(
 
 /// A belt's results as items on it: the angle each comes to rest at (upright items face the
 /// belt's way), unlocked (`BeltDeployerCallbacks`).
-#[allow(dead_code)] // Logistics' belt processing (`BeltProcessingBehaviour`) calls it.
 pub fn on_belt(lv: &ServerLevel<'_>, at: [i32; 3], outputs: Vec<belt::Item>) -> Vec<belt::Item> {
     outputs
         .into_iter()
