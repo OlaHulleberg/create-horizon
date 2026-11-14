@@ -88,7 +88,9 @@ impl Subsystem for Kinetics {
 fn settings_from_nbt(data: &Compound) -> Vec<([i32; 3], i32)> {
     match data.get(&"motors".into()) {
         Some(Tag::IntArray(v)) => v
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| ([c[0], c[1], c[2]], c[3]))
             .collect(),
         _ => Vec::new(),

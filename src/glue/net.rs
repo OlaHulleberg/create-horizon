@@ -55,7 +55,7 @@ impl IPayloadHandler for FromClient {
         let host = cx.server_host().map_err(|e| format!("{e:?}"))?;
         if super::world::is_open() {
             for s in self.0 {
-                if s.from_client(host, player, &channel, &data) {
+                if s.client_message(host, player, &channel, &data) {
                     break;
                 }
             }
@@ -74,7 +74,7 @@ impl IPayloadHandler for FromServer {
         };
         let host = cx.client_host().map_err(|e| format!("{e:?}"))?;
         for s in self.0 {
-            if s.from_server(host, &channel, &data) {
+            if s.server_message(host, &channel, &data) {
                 break;
             }
         }

@@ -48,7 +48,7 @@ pub trait Subsystem: Sync {
 
     /// Bytes on one of Create's channels from a player's client. True when this subsystem owns
     /// `channel` (the others are not asked).
-    fn from_client(
+    fn client_message(
         &self,
         _host: &mut dyn ServerHost,
         _player: PlayerRef,
@@ -60,7 +60,7 @@ pub trait Subsystem: Sync {
 
     /// Bytes on one of Create's channels from the server, on the client. True when this
     /// subsystem owns `channel`.
-    fn from_server(&self, _host: &mut dyn ClientHost, _channel: &str, _data: &[u8]) -> bool {
+    fn server_message(&self, _host: &mut dyn ClientHost, _channel: &str, _data: &[u8]) -> bool {
         false
     }
 
