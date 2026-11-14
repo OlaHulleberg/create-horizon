@@ -363,6 +363,24 @@ impl Hooks for Create {
         glue::items::add_reload_listeners(event.listeners);
     }
 
+    fn register_range_select_item_model_property(
+        &self,
+        _context: &RegistrationContext,
+        event: &mut mod_api::RegisterRangeSelectItemModelPropertyEvent<'_>,
+    ) {
+        glue::items::spin_properties(event.properties);
+    }
+
+    fn item_model_range_property(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ItemModelRangePropertyEvent<'_>,
+    ) {
+        if let Some(frame) = glue::items::spin(host, event.property) {
+            event.value = frame;
+        }
+    }
+
     fn item_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {
         glue::items::item_tooltip(host, event);
     }

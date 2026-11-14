@@ -87,6 +87,31 @@ pub(crate) fn add_reload_listeners(listeners: &mut dyn mod_api::ServerReloadList
     filters::add_reload_listeners(listeners);
 }
 
+/// The numeric item model properties that turn the partial models of Create's item renderers
+/// (`create-data`'s `SPINNERS`): the frame of a whole turn cut in `SPIN_FRAMES`, at the speed
+/// each renderer turns it (`WrenchItemRenderer`: `ScrollValueHandler`'s passive scroll, half a
+/// degree a tick; `PotatoCannonItemRenderer`: -2.5 degrees a tick; `WorldshaperItemRenderer`:
+/// -25 degrees a second). Left out: the extra turns of a scroll on a value board
+/// (`wrenchCog.bump`), a shot and the worldshaper's use (their hand animations).
+const SPINS: [(&str, f64); 3] = [
+    ("create:wrench_gear", 10.0),
+    ("create:potato_cannon_cog", -50.0),
+    ("create:worldshaper_accelerator", -25.0),
+];
+const SPIN_FRAMES: f64 = 64.0;
+
+pub(crate) fn spin_properties(properties: &mut Vec<String>) {
+    properties.extend(SPINS.iter().map(|(id, _)| (*id).to_owned()));
+}
+
+/// The frame a turning part shows now.
+pub(crate) fn spin(host: &dyn ClientHost, property: &str) -> Option<f32> {
+    let (_, speed) = SPINS.iter().find(|(id, _)| *id == property)?;
+    let seconds = host.millis() as f64 / 1000.0;
+    let angle = (seconds * speed).rem_euclid(360.0);
+    Some((angle / 360.0 * SPIN_FRAMES).floor() as f32)
+}
+
 /// Create's tooltips on its items (`ClientEvents.addToItemTooltip`).
 pub(crate) fn item_tooltip(host: &dyn ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {
     tooltip::item_tooltip(host, event);

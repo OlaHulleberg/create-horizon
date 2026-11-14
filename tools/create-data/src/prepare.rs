@@ -148,11 +148,66 @@ pub fn convert_recipe(mut doc: Value) -> Option<Value> {
 /// A 1.21.1 loot table as 26.3 writes it, the form Horizon reads: a condition names its kind in
 /// `type` (1.21.1: `condition`), a function in `type` (1.21.1: `function`), and a pool's or
 /// entry's functions are its `modifier` list (1.21.1: `functions`).
+/// The partial models Create's item renderers turn: item, part, the numeric item model property
+/// that picks its frame (the glue's `items::spin`), the axis and the pivot in model pixels
+/// (`WrenchItemRenderer`: the gear about y, 1 px off the centre; `PotatoCannonItemRenderer`: the
+/// cog about z, half a pixel up; `WorldshaperItemRenderer`: the accelerator about z, 2.5 px
+/// down).
+pub const SPINNERS: [(&str, &str, &str, char, [f64; 3]); 3] = [
+    ("wrench", "gear", "create:wrench_gear", 'y', [9.0, 7.0, 8.0]),
+    (
+        "potato_cannon",
+        "cog",
+        "create:potato_cannon_cog",
+        'z',
+        [8.0, 8.5, 8.0],
+    ),
+    (
+        "handheld_worldshaper",
+        "accelerator",
+        "create:worldshaper_accelerator",
+        'z',
+        [8.0, 5.5, 8.0],
+    ),
+];
+
+/// The frames a turning partial model is cut into, a whole turn.
+pub const SPIN_FRAMES: usize = 64;
+
+/// Frame `frame` of a turning partial model: each element turned about the pivot by the frame's
+/// angle on top of its own turn about the same axis (the parts' elements turn about that axis
+/// through the pivot, or not at all).
+fn spin_frame(doc: &Value, axis: char, pivot: [f64; 3], frame: usize) -> Value {
+    let turn = frame as f64 * 360.0 / SPIN_FRAMES as f64;
+    let mut out = doc.clone();
+    let axis_name = axis.to_string();
+    if let Some(elements) = out.get_mut("elements").and_then(Value::as_array_mut) {
+        for e in elements {
+            let (own, origin) = match e.get("rotation") {
+                Some(r) if r.get("axis").and_then(Value::as_str) == Some(axis_name.as_str()) => (
+                    r.get("angle").and_then(Value::as_f64).unwrap_or(0.0),
+                    r.get("origin").cloned(),
+                ),
+                Some(_) => continue,
+                None => (0.0, None),
+            };
+            let origin = if own == 0.0 {
+                json!(pivot)
+            } else {
+                origin.unwrap_or(json!(pivot))
+            };
+            let angle = (own + turn + 180.0).rem_euclid(360.0) - 180.0;
+            e["rotation"] = json!({ "angle": angle, "axis": axis_name, "origin": origin });
+        }
+    }
+    out
+}
+
 /// The item models of Create's `CustomRenderedItemModelRenderer`s, as 26.3 item definitions: the
-/// item's own model with the partial models its renderer draws over it, at rest (a definition
-/// turns nothing: the wand's bits, the wrench's gear, the cannon's cog and the worldshaper's
-/// accelerator stand still), and the cardboard sword's held model outside the GUI
-/// (`CardboardSwordItemRenderer`). None for an item drawn by its plain model.
+/// item's own model with the partial models its renderer draws over it, the turning ones
+/// (`SPINNERS`) as a frame picked by their property (the wand's bits, which turn about another
+/// axis than their own elements', stand still), and the cardboard sword's held model outside the
+/// GUI (`CardboardSwordItemRenderer`). None for an item drawn by its plain model.
 fn custom_rendered(name: &str) -> Option<Value> {
     let model =
         |m: &str| json!({ "type": "minecraft:model", "model": format!("create:item/{name}/{m}") });
@@ -175,8 +230,19 @@ fn custom_rendered(name: &str) -> Option<Value> {
         }
         _ => return None,
     };
+    let part = |p: &&str| match SPINNERS.iter().find(|s| s.0 == name && s.1 == *p) {
+        Some((_, _, property, ..)) => json!({
+            "type": "minecraft:range_dispatch",
+            "property": property,
+            "entries": (0..SPIN_FRAMES)
+                .map(|i| json!({ "threshold": i as f64, "model": model(&format!("{p}_spin/{i}")) }))
+                .collect::<Vec<_>>(),
+            "fallback": model(p),
+        }),
+        None => model(p),
+    };
     Some(
-        json!({ "type": "minecraft:composite", "models": parts.iter().map(|p| model(p)).collect::<Vec<_>>() }),
+        json!({ "type": "minecraft:composite", "models": parts.iter().map(part).collect::<Vec<_>>() }),
     )
 }
 
@@ -591,6 +657,19 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         if !files.contains_key(&rel) {
             put(&rel, &serde_json::to_vec_pretty(&doc).unwrap())?;
             common += 1;
+        }
+    }
+    // The frames of the partial models Create's item renderers turn.
+    for (item, part, _, axis, pivot) in SPINNERS {
+        let rel = format!("assets/create/models/item/{item}/{part}.json");
+        let Some(doc) = read(&rel).and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else {
+            continue;
+        };
+        for frame in 0..SPIN_FRAMES {
+            put(
+                &format!("assets/create/models/item/{item}/{part}_spin/{frame}.json"),
+                &serde_json::to_vec_pretty(&spin_frame(&doc, axis, pivot, frame)).unwrap(),
+            )?;
         }
     }
     // 26.3 finds an item's model through `assets/<ns>/items/<id>.json`; 1.21.1 had none.
