@@ -96,15 +96,23 @@ fn radial_reach(
             }
             let d: [i32; 3] = std::array::from_fn(|i| p[i] - pos[i]);
             let dist = f64::from(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-            if dist >= limit || at(p).is_none() {
+            if dist >= limit {
                 continue;
             }
+            // `isMovementNecessary`, and nothing brittle.
+            let Some(f) = at(p).filter(|f| f.unsupportive != 0x3F) else {
+                continue;
+            };
             visited.insert(p);
             if p != pos && !out.contains(&p) {
                 out.push(p);
             }
             for offset in Dir::ALL {
-                if offset.axis() == c.axis {
+                // Back through the chassis only the way of this glued side.
+                if offset.axis() == c.axis
+                    || (p == pos && offset != facing)
+                    || not_supportive(&f, offset)
+                {
                     continue;
                 }
                 frontier.push_back(add(p, offset.offset()));
@@ -178,10 +186,14 @@ pub fn chassis_reach(
         let o = facing.offset();
         for i in 1..=c.range {
             let current = [pos[0] + o[0] * i, pos[1] + o[1] * i, pos[2] + o[2] * i];
-            if at(current).is_none() {
+            // Up to air, a brittle block, or a face that pushes nothing on.
+            let Some(f) = at(current).filter(|f| f.unsupportive != 0x3F) else {
+                break;
+            };
+            out.push(current);
+            if not_supportive(&f, facing) {
                 break;
             }
-            out.push(current);
         }
     }
     out
@@ -639,5 +651,31 @@ mod tests {
             gather_windmill([0, 0, 0], Dir::North, stuck),
             Err(Refused::Unmovable([0, 0, -1]))
         );
+    }
+
+    #[test]
+    fn a_radial_chassis_takes_only_what_its_glued_side_reaches() {
+        // A radial chassis on y at the origin glued north, stone north and south of it.
+        let chassis = Chassis {
+            secondary: false,
+            axis: crate::kinetics::Axis::Y,
+            sticky_top: false,
+            sticky_bottom: false,
+            range: 2,
+            radial: Some(Dir::North.bit()),
+        };
+        let at = |p: [i32; 3]| match p {
+            [0, 0, 0] => Some(Found {
+                movable: true,
+                chassis: Some(chassis),
+                ..Default::default()
+            }),
+            [0, 0, -1] | [0, 0, 1] => Some(Found {
+                movable: true,
+                ..Default::default()
+            }),
+            _ => None,
+        };
+        assert_eq!(chassis_reach([0, 0, 0], chassis, None, &at), vec![[0, 0, -1]]);
     }
 }

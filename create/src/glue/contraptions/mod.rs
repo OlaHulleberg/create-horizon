@@ -664,9 +664,12 @@ pub(crate) fn unsupportive_faces(name: &str, props: &[(String, String)]) -> u8 {
     }
 }
 
-/// A block state turned `quarter`° about `axis` (`StructureTransform`): its `facing` or `axis`
-/// turned with it (`rotateFacing`: `getClockWise(axis)`, `rotation.ordinal()` times); a state
-/// that has no such turned form stays as it was.
+/// A block state turned `quarter`° about `axis` (`StructureTransform.apply`): its `facing` or
+/// `axis` turned with it (`rotateFacing`: `getClockWise(axis)`, `rotation.ordinal()` times);
+/// about the vertical, also what vanilla's `BlockState.rotate` turns (a sign's `rotation`, the
+/// sides of fences, walls and panes, a rail's `shape`); a half turn about a level axis flips
+/// slabs and top or bottom halves; and Create's chassis turn their glued sides
+/// (`ITransformableBlock`). A state that has no such turned form stays as it was.
 fn turned_state(host: &dyn Host, state: u32, quarter: i32, axis: Axis) -> u32 {
     let turns = create_engine::contraption::clockwise_turns(quarter);
     if turns == 0 {
@@ -676,28 +679,149 @@ fn turned_state(host: &dyn Host, state: u32, quarter: i32, axis: Axis) -> u32 {
         return state;
     };
     let turn_dir = |d: Dir| (0..turns).fold(d, |d, _| create_engine::wrench::clockwise(d, axis));
-    if let Some(d) = prop(&props, "facing").and_then(dir_of) {
-        set_prop(&mut props, "facing", dir_name(turn_dir(d)));
-    } else if let Some(a) = prop(&props, "axis") {
+    let axis_name = |a: Axis| match a {
+        Axis::X => "x",
+        Axis::Y => "y",
+        Axis::Z => "z",
+    };
+    let old_axis = prop(&props, "axis").map(|a| axis_of(Some(a)));
+    let turned_axis = old_axis.map(|a| {
         let d = match a {
-            "x" => Dir::East,
-            "y" => Dir::Up,
-            _ => Dir::South,
+            Axis::X => Dir::East,
+            Axis::Y => Dir::Up,
+            Axis::Z => Dir::South,
         };
-        let name = match turn_dir(d).axis() {
-            Axis::X => "x",
-            Axis::Y => "y",
-            Axis::Z => "z",
+        turn_dir(d).axis()
+    });
+    let mut changed = Vec::<(String, String)>::new();
+    if let Some(d) = prop(&props, "facing").and_then(dir_of) {
+        changed.push(("facing".into(), dir_name(turn_dir(d)).into()));
+    } else if let Some(a) = turned_axis {
+        changed.push(("axis".into(), axis_name(a).into()));
+    }
+    // Sides named for directions (fences, walls, panes, vines, glass, chassis glue under
+    // their own names below): each takes the value of the side turned into its place.
+    let sides: Vec<(Dir, String)> = props
+        .iter()
+        .filter_map(|(k, v)| dir_of(k).map(|d| (d, v.clone())))
+        .collect();
+    if !sides.is_empty()
+        && sides
+            .iter()
+            .all(|(d, _)| sides.iter().any(|(e, _)| *e == turn_dir(*d)))
+    {
+        for (d, v) in &sides {
+            changed.push((dir_name(turn_dir(*d)).into(), v.clone()));
+        }
+    }
+    if axis == Axis::Y {
+        // `RotationSegment`: sixteen steps, four a quarter turn clockwise.
+        if let Some(r) = prop(&props, "rotation").and_then(|r| r.parse::<i32>().ok()) {
+            changed.push((
+                "rotation".into(),
+                ((r + 4 * i32::from(turns)) % 16).to_string(),
+            ));
+        }
+        if let Some(t) = prop(&props, "shape")
+            .filter(|_| rail(&name))
+            .and_then(|shape| turned_rail(shape, &turn_dir))
+        {
+            changed.push(("shape".into(), t));
+        }
+    } else if turns == 2 {
+        let flip = |v: &str| match v {
+            "top" => Some("bottom"),
+            "bottom" => Some("top"),
+            _ => None,
         };
-        set_prop(&mut props, "axis", name);
-    } else {
+        for key in ["type", "half"] {
+            if let Some(f) = prop(&props, key).and_then(flip) {
+                changed.push((key.into(), f.into()));
+            }
+        }
+    }
+    // RadialChassisBlock / LinearChassisBlock `transform`: the glued sides go where they turn.
+    if name == "create:radial_chassis"
+        && let (Some(from), Some(to)) = (old_axis, turned_axis)
+    {
+        for d in Dir::ALL {
+            if let Some(k) = create_engine::contraption::radial_side(to, d) {
+                changed.push((k.into(), "false".into()));
+            }
+        }
+        for d in Dir::ALL {
+            let Some(k) = create_engine::contraption::radial_side(from, d) else {
+                continue;
+            };
+            if flag(&props, k)
+                && let Some(n) = create_engine::contraption::radial_side(to, turn_dir(d))
+            {
+                changed.push((n.into(), "true".into()));
+            }
+        }
+    }
+    if matches!(
+        name.as_str(),
+        "create:linear_chassis" | "create:secondary_linear_chassis"
+    ) && let Some(from) = old_axis
+    {
+        let top = match from {
+            Axis::X => Dir::East,
+            Axis::Y => Dir::Up,
+            Axis::Z => Dir::South,
+        };
+        if !turn_dir(top).positive() {
+            let (t, b) = (flag(&props, "sticky_top"), flag(&props, "sticky_bottom"));
+            changed.push(("sticky_top".into(), b.to_string()));
+            changed.push(("sticky_bottom".into(), t.to_string()));
+        }
+    }
+    if changed.is_empty() {
         return state;
+    }
+    for (k, v) in changed {
+        set_prop(&mut props, &k, &v);
     }
     let p: Vec<(&str, &str)> = props
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     state_with(host, &name, &p).unwrap_or(state)
+}
+
+/// `RailShape` turned about the vertical (`BaseRailBlock.rotate`): each end's direction turned.
+fn turned_rail(shape: &str, turn: &impl Fn(Dir) -> Dir) -> Option<String> {
+    use Dir::{East, North, South, West};
+    let ends: (Dir, Dir, bool) = match shape {
+        "north_south" => (North, South, false),
+        "east_west" => (East, West, false),
+        "ascending_north" => (North, South, true),
+        "ascending_south" => (South, North, true),
+        "ascending_east" => (East, West, true),
+        "ascending_west" => (West, East, true),
+        "south_east" => (South, East, false),
+        "south_west" => (South, West, false),
+        "north_west" => (North, West, false),
+        "north_east" => (North, East, false),
+        _ => return None,
+    };
+    let (a, b) = (turn(ends.0), turn(ends.1));
+    if ends.2 {
+        return Some(format!("ascending_{}", dir_name(a)));
+    }
+    let straight = a.axis() == b.axis();
+    Some(if straight {
+        if a.axis() == Axis::Z {
+            "north_south"
+        } else {
+            "east_west"
+        }
+        .to_owned()
+    } else {
+        let ns = if a.axis() == Axis::Z { a } else { b };
+        let ew = if a.axis() == Axis::Z { b } else { a };
+        format!("{}_{}", dir_name(ns), dir_name(ew))
+    })
 }
 
 fn set_prop(props: &mut [(String, String)], key: &str, value: &str) {
