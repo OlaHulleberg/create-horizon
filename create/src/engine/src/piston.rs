@@ -108,6 +108,44 @@ pub fn collect(
     })
 }
 
+/// `TranslatingContraption.createColliders`: the blocks of a structure (offsets) with no block
+/// of it next to them going `dir`, the ones that meet the world first.
+pub fn colliders(blocks: &[([i32; 3], u32)], dir: Dir) -> Vec<[i32; 3]> {
+    let set: HashSet<[i32; 3]> = blocks.iter().map(|(p, _)| *p).collect();
+    blocks
+        .iter()
+        .map(|(p, _)| *p)
+        .filter(|p| !set.contains(&add(*p, dir, 1)))
+        .collect()
+}
+
+/// `ContraptionCollider.collideBlocks` for a piston's structure (offsets from `anchor` at
+/// offset 0, along `facing`) moved to offset `to` going `dir`: the world cells its leading
+/// blocks enter (`BlockPos.containing(position)`, a block further on going a positive way),
+/// each with its block's offset.
+pub fn entered_cells(
+    anchor: [i32; 3],
+    facing: Dir,
+    to: f32,
+    dir: Dir,
+    colliders: &[[i32; 3]],
+) -> Vec<([i32; 3], [i32; 3])> {
+    let f = facing.offset();
+    let mut grid = [0, 1, 2].map(|i| (anchor[i] as f32 + f[i] as f32 * to).floor() as i32);
+    if dir.positive() {
+        grid = add(grid, dir, 1);
+    }
+    colliders
+        .iter()
+        .map(|l| ([grid[0] + l[0], grid[1] + l[1], grid[2] + l[2]], *l))
+        .collect()
+}
+
+/// `LinearActuatorBlockEntity.getGridOffset`.
+pub fn grid_offset(offset: f32, range: i32) -> f32 {
+    ((offset + 0.5) as i32).clamp(0, range) as f32
+}
+
 /// `Contraption.searchMovedStructure` from `start` with a forced direction: blocks stuck to each
 /// other (slime, honey) and the block ahead in `forced` move together; an unmovable block ahead
 /// refuses the move. Offsets from `start`, and states.

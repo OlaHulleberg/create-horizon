@@ -29,11 +29,18 @@ thread_local! {
         RefCell::new(HashMap::new());
     /// The structures whose actors were looked for (once each: assembled or loaded).
     static BEARINGS_LOOKED: RefCell<HashSet<(usize, [i32; 3])>> = RefCell::new(HashSet::new());
+    /// Pistons that stopped of themselves (at an end, against the world) at a speed: the
+    /// block updates of their stop are no speed change (`assembleNextTick` is only set by
+    /// `onSpeedChanged`), so they don't start again from them: the speed and game time of the
+    /// stop, for the checks of the next few ticks.
+    static PISTONS_STOPPED: RefCell<HashMap<(usize, [i32; 3]), (f32, i64)>> =
+        RefCell::new(HashMap::new());
 }
 
 pub(super) fn forget() {
     BEARING_CARRIED.with_borrow_mut(HashMap::clear);
     BEARINGS_LOOKED.with_borrow_mut(HashSet::clear);
+    PISTONS_STOPPED.with_borrow_mut(HashMap::clear);
 }
 
 pub(super) fn register(r: &mut dyn Registrar) {
@@ -799,7 +806,18 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
         })
         .flatten()
         .is_some();
+        let now = lv.game_time();
+        let unchanged = PISTONS_STOPPED.with_borrow_mut(|m| {
+            let same = m
+                .get(&(dim, pos))
+                .is_some_and(|&(r, t)| r == rpm && now - t <= 3);
+            if !same {
+                m.remove(&(dim, pos));
+            }
+            same && !running
+        });
         match (running, rpm != 0.0) {
+            (false, true) if unchanged => {}
             (false, true) => assemble_piston(lv, pos, rpm),
             (true, false) => try_disassemble_piston(lv, pos),
             (true, true) => show_piston(lv, pos),
@@ -822,6 +840,19 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
         // Its actors first (the contraption entity ticks before the piston's block entity);
         // while one stalls, the piston holds (`isStalled`).
         let stalled = tick_piston_actors(lv, pos, facing);
+        // `moveAndCollideContraption`: moved into the world, it stops at the whole offset it
+        // came from (`collided`).
+        if !stalled && piston_collides(lv, pos, facing, rpm) {
+            with_world(|w| {
+                if let Some(m) = w.dims[dim].pistons.get_mut(&pos) {
+                    use create_engine::piston::{grid_offset, movement};
+                    let v = movement(rpm, facing, m.offset, m.range);
+                    m.offset = grid_offset(grid_offset(m.offset, m.range) - v, m.range);
+                }
+            });
+            try_disassemble_piston(lv, pos);
+            continue;
+        }
         let end = with_world(|w| {
             let m = w.dims[dim].pistons.get_mut(&pos)?;
             if !stalled {
@@ -841,6 +872,29 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
             super::super::persist::mark_pos_unsaved(dim, pos);
         }
     }
+}
+
+/// Whether piston `pos`'s structure, moved on a tick at `rpm`, meets the world
+/// (`ContraptionCollider.isCollidingWithWorld`): a cell its leading blocks enter holds a block
+/// with a collision shape that can't be replaced, and that no breaker there can break.
+fn piston_collides(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32) -> bool {
+    use create_engine::piston::{colliders, entered_cells, movement};
+    let dim = lv.dim;
+    let Some(m) = with_world(|w| w.dims[dim].pistons.get(&pos).cloned()).flatten() else {
+        return false;
+    };
+    let v = movement(rpm, facing, m.offset, m.range);
+    if v == 0.0 {
+        return false;
+    }
+    let dir = if v > 0.0 { facing } else { facing.opposite() };
+    let to = m.offset + v;
+    let leading = colliders(&m.blocks, dir);
+    entered_cells(m.anchor, facing, to, dir, &leading)
+        .into_iter()
+        .any(|(cell, local)| {
+            !lv.moved_through(cell) && !actors::breaker_clears(lv, pos, &m.carried, local, cell)
+        })
 }
 
 /// `LinearActuatorBlockEntity.tryDisassemble`: by its movement mode, a stopped piston puts its
@@ -1027,6 +1081,9 @@ fn put_back_piston(
         .collect();
     put_back_blocks(lv, &cells, |lv, p| lv.passable(p));
     if own {
+        let rpm = speed(lv.dim, pos);
+        let now = lv.game_time();
+        PISTONS_STOPPED.with_borrow_mut(|s| s.insert((lv.dim, pos), (rpm, now)));
         let state = if grid > 0 { "extended" } else { "retracted" };
         lv.set_property(pos, "state", state, update_all());
     }

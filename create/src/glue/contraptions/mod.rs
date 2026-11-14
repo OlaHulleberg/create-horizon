@@ -344,6 +344,15 @@ impl ServerLevel<'_> {
             .is_some_and(|n| n == "minecraft:air" || n == "minecraft:cave_air")
     }
 
+    /// A cell a moving structure passes without colliding (`isCollidingWithWorld`): a block
+    /// that can be replaced, or one with no collision shape (and nothing unloaded).
+    fn moved_through(&self, pos: [i32; 3]) -> bool {
+        self.replaceable(pos)
+            || self
+                .shape(pos, mod_api::BlockShapeKind::Collision)
+                .is_empty()
+    }
+
     /// A cell a moving structure passes (air, or a fluid; `canBeReplaced` with no collision).
     fn passable(&self, pos: [i32; 3]) -> bool {
         self.block_name(pos).is_some_and(|n| {
