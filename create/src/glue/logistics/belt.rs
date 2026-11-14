@@ -600,9 +600,10 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         let movement = self.movement();
         let dim = self.lv.dim;
         // A brass tunnel that distributes (`hasDistributionBehaviour`: an open side across its
-        // axis) takes the whole stack while it holds none, and holds back the next.
+        // axis, or a brass tunnel beside it) takes the whole stack while it holds none, and
+        // holds back the next.
         if with_world(|w| w.dims[dim].brass.contains_key(&t)) == Some(true) {
-            if !shape.junction() {
+            if !shape.junction() && !super::tunnel::brass_connected(self.lv, t) {
                 return false;
             }
             let took = with_world(|w| {

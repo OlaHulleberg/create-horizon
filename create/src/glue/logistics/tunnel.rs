@@ -20,6 +20,49 @@ pub fn tunnel_state(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Axis, tunnel
         .then_some((info.axis?, info.tunnel?))
 }
 
+/// The brass tunnel's axis at `pos`, if a brass tunnel is there.
+fn brass_axis(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Axis> {
+    let (block, info) = info_at(lv, pos)?;
+    (block == Block::BrassTunnel).then_some(info.axis?)
+}
+
+/// `BeltTunnelBlockEntity.flaps` not empty: an open side of the tunnel at `pos` (axis `axis`,
+/// shape `shape`) that no tunnel continues.
+fn has_flaps(lv: &ServerLevel<'_>, pos: [i32; 3], axis: Axis, shape: tunnel::Shape) -> bool {
+    tunnel::sides(axis, shape).into_iter().any(|d| {
+        let o = d.offset();
+        tunnel_state(lv, [pos[0] + o[0], pos[1], pos[2] + o[2]]).is_none()
+    })
+}
+
+/// `BrassTunnelBlockEntity.getAdjacent`: the brass tunnel of the same axis beside the one at
+/// `pos` across its axis (`left`: counterclockwise from the axis' positive way).
+fn brass_adjacent(lv: &ServerLevel<'_>, pos: [i32; 3], axis: Axis, left: bool) -> Option<[i32; 3]> {
+    let side = match (axis, left) {
+        (Axis::X, true) => Dir::North,
+        (Axis::X, false) => Dir::South,
+        (_, true) => Dir::East,
+        (_, false) => Dir::West,
+    };
+    let o = side.offset();
+    let next = [pos[0] + o[0], pos[1], pos[2] + o[2]];
+    (brass_axis(lv, next) == Some(axis)).then_some(next)
+}
+
+/// `BrassTunnelBlockEntity.isConnected` on either side: a brass tunnel beside it, both with
+/// flaps (`determineIfConnected`).
+pub fn brass_connected(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    let Some((axis, shape)) = tunnel_state(lv, pos) else {
+        return false;
+    };
+    has_flaps(lv, pos, axis, shape)
+        && [true, false].into_iter().any(|left| {
+            brass_adjacent(lv, pos, axis, left).is_some_and(|a| {
+                tunnel_state(lv, a).is_some_and(|(ax, sh)| has_flaps(lv, a, ax, sh))
+            })
+        })
+}
+
 /// Andesite tunnels: those just placed case their belt (`BeltTunnelItem`); those whose
 /// surroundings changed break without a cased, flat belt below (`canSurvive`) or take the shape
 /// the belts and depots beside their segment give (`updateShape`, `getTunnelState`).
@@ -166,23 +209,54 @@ pub fn tick_brass(lv: &mut ServerLevel<'_>) {
         let Some((axis, shape)) = tunnel_state(lv, t) else {
             continue;
         };
-        // `addValidOutputsOf`: the sides across first, then ahead; never back.
+        // `gatherValidOutputs`: this tunnel's sides across first, then ahead (never back), then
+        // what lies ahead and beside the brass tunnels next to it across its axis
+        // (`addValidOutputsOf`), as targets beside a belt segment.
         let open = tunnel::sides(axis, shape);
         let order = [Dir::South, Dir::West, Dir::North, Dir::East];
-        let outputs: Vec<Dir> = order
+        let takes = |p: [i32; 3]| {
+            with_world(|w| {
+                w.dims[dim].depots.contains_key(&p) || w.dims[dim].belt_of.contains_key(&p)
+            }) == Some(true)
+        };
+        let beside = |at: [i32; 3], d: Dir| {
+            let o = d.offset();
+            [at[0] + o[0], at[1], at[2] + o[2]]
+        };
+        let mut outputs: Vec<([i32; 3], Dir)> = order
             .iter()
             .filter(|d| d.axis() != movement.axis())
             .chain(order.iter().filter(|d| **d == movement))
             .copied()
             .filter(|d| open.contains(d) && Some(*d) != b.entered_from)
-            .filter(|d| {
-                let o = d.offset();
-                let p = [below[0] + o[0], below[1], below[2] + o[2]];
-                with_world(|w| {
-                    w.dims[dim].depots.contains_key(&p) || w.dims[dim].belt_of.contains_key(&p)
-                }) == Some(true)
-            })
+            .filter(|d| takes(beside(below, *d)))
+            .map(|d| (below, d))
             .collect();
+        for left in [true, false] {
+            let mut at = t;
+            while let Some(next) = brass_adjacent(lv, at, axis, left) {
+                at = next;
+                let Some((next_axis, next_shape)) = tunnel_state(lv, at) else {
+                    break;
+                };
+                let seg = [at[0], at[1] - 1, at[2]];
+                let Some((c, _, s)) = belt_segment(lv, seg) else {
+                    continue;
+                };
+                let speed = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+                let moving = create_engine::belt::movement_facing(speed, s.facing);
+                for d in order {
+                    if d == moving.opposite()
+                        || (d == moving && speed == 0.0)
+                        || !tunnel::sides(next_axis, next_shape).contains(&d)
+                        || !takes(beside(seg, d))
+                    {
+                        continue;
+                    }
+                    outputs.push((seg, d));
+                }
+            }
+        }
         if b.progress == -1 {
             if outputs.is_empty() {
                 save(&b);
@@ -208,9 +282,8 @@ pub fn tick_brass(lv: &mut ServerLevel<'_>) {
             b.previous_output,
             b.mode,
             |i, n, simulate| {
-                let d = outputs[i];
-                let o = d.offset();
-                let p = [below[0] + o[0], below[1], below[2] + o[2]];
+                let (at, d) = outputs[i];
+                let p = beside(at, d);
                 if simulate {
                     let depot = with_world(|w| w.dims[dim].depots.contains_key(&p)) == Some(true);
                     if depot && !depot_items(lv, p).is_empty() {
