@@ -113,8 +113,13 @@ impl Subsystem for Sources {
         }
     }
 
+    fn neighbor_changed(&self, dim: usize, pos: [i32; 3], state: u32) {
+        handles::neighbor_changed(dim, pos, state);
+    }
+
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         tell_generated(lv);
+        handles::level_tick(lv);
     }
 
     fn draws_itself(&self, block: Block, part: &Draw) -> bool {

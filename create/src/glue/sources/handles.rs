@@ -10,7 +10,9 @@
 //! clients get.
 
 use super::super::kinetics::{self, axis_vector, speeds_of};
+use super::super::server::ServerLevel;
 use super::super::states;
+use super::super::world::with_world;
 use create_engine::Block;
 use create_engine::client::{Draw, Model};
 use create_engine::dye;
@@ -18,7 +20,8 @@ use create_engine::kinetics::Dir;
 use create_engine::valve;
 use mod_api::{
     BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
-    BlockEntitySubmitEvent, BlockPart, ClientHost, Compound, ModBlockEntity, Registrar, Tag,
+    BlockEntitySubmitEvent, BlockPart, CanSurviveEvent, ClientHost, Compound, LevelHost,
+    ModBlockEntity, Registrar, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -98,6 +101,11 @@ thread_local! {
 }
 
 pub(super) fn register(r: &mut dyn Registrar) {
+    for &block in Block::ALL.iter() {
+        if block == Block::HandCrank || dye::is_valve_handle(block) {
+            r.block_part(states::key(block), Supported);
+        }
+    }
     let Some(kind) = kinetics::kind() else {
         return;
     };
@@ -136,6 +144,95 @@ pub(super) fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> 
         b if dye::is_valve_handle(b) => use_of(&entity.nbt)
             .is_some_and(|(start, ticks, ..)| NOW.get() < start + i64::from(ticks) + SETTLE),
         _ => false,
+    }
+}
+
+thread_local! {
+    /// Cranks and valve handles that may have lost what holds them, by level.
+    static SUPPORT_CHECKS: RefCell<Vec<(usize, [i32; 3])>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A neighbour of the Create block `state` at `pos` changed: a crank or valve handle looks at
+/// what it hangs on in the level tick (`HandCrankBlock.neighborChanged`).
+pub(super) fn neighbor_changed(dim: usize, pos: [i32; 3], state: u32) {
+    let handle = with_world(|w| {
+        w.table
+            .get(state)
+            .is_some_and(|(b, _)| b == Block::HandCrank || dye::is_valve_handle(b))
+    });
+    if handle == Some(true) {
+        SUPPORT_CHECKS.with_borrow_mut(|c| c.push((dim, pos)));
+    }
+}
+
+/// `HandCrankBlock.neighborChanged`: a crank or valve handle whose block behind it has no
+/// collision shape left (`canSurvive`) breaks with its drops.
+pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let due: Vec<[i32; 3]> = SUPPORT_CHECKS.with_borrow_mut(|c| {
+        if c.is_empty() {
+            return Vec::new();
+        }
+        let (now, later): (Vec<_>, Vec<_>) = c.drain(..).partition(|(d, _)| *d == dim);
+        *c = later;
+        now.into_iter().map(|(_, p)| p).collect()
+    });
+    for pos in due {
+        let facing = with_world(|w| {
+            let (b, i) = w.table.get(lv.block(pos))?;
+            (b == Block::HandCrank || dye::is_valve_handle(b))
+                .then_some(i.facing)
+                .flatten()
+        })
+        .flatten();
+        let Some(facing) = facing else {
+            continue;
+        };
+        let o = facing.opposite().offset();
+        let behind = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]].map(f64::from);
+        // The block behind's collision shape: any box within it.
+        const IN: f64 = 1.0 / 64.0;
+        let aabb = [
+            behind[0] + IN,
+            behind[1] + IN,
+            behind[2] + IN,
+            behind[0] + 1.0 - IN,
+            behind[1] + 1.0 - IN,
+            behind[2] + 1.0 - IN,
+        ];
+        let empty = lv
+            .level
+            .collision_boxes(&*lv.host, aabb)
+            .is_some_and(|b| b.is_empty());
+        if empty {
+            lv.destroy_block(pos, true);
+        }
+    }
+}
+
+/// `HandCrankBlock.canSurvive` as one is placed: not against air or a fluid. (A level read here
+/// has no collision shapes; the neighbour check above has.)
+struct Supported;
+
+#[mod_api::horizon_part]
+impl BlockPart for Supported {
+    fn can_survive(&self, level: &dyn LevelHost, event: &mut CanSurviveEvent) -> Option<bool> {
+        let id = states::id(event.state)?;
+        let facing = with_world(|w| w.table.get(id).and_then(|(_, i)| i.facing)).flatten()?;
+        let o = facing.opposite().offset();
+        let p = [event.pos.x + o[0], event.pos.y + o[1], event.pos.z + o[2]];
+        let behind = level.block_state(p)?;
+        let name = level.state_block(behind)?;
+        let holds = !matches!(
+            name,
+            "minecraft:air"
+                | "minecraft:cave_air"
+                | "minecraft:void_air"
+                | "minecraft:water"
+                | "minecraft:lava"
+                | "minecraft:bubble_column"
+        );
+        (!holds).then_some(false)
     }
 }
 
