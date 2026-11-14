@@ -286,13 +286,63 @@ pub(super) fn value_settings_from_client(
     let Some(mut lv) = ServerLevel::new(host, &dimension) else {
         return;
     };
-    let dim = lv.dim;
-    let state = lv.block(pos);
-    let Some((block, inverted, facing)) =
-        with_world(|w| w.table.get(state).map(|(b, i)| (b, i.inverted, i.facing))).flatten()
-    else {
+    let Some(value) = settings_at(&mut lv, player, pos, pick, short) else {
         return;
     };
+    net::send_to_player(
+        lv.host,
+        player,
+        VALUE,
+        &encode(&[pos[0], pos[1], pos[2], value]),
+    );
+}
+
+/// `ScrollValueBehaviour.getClipboardKey` of a block whose value box `settings_at` serves: the
+/// motors' `KineticScrollValueBehaviour` ("Speed"), a `ScrollOptionBehaviour`'s enum's name, the
+/// diode's "Timings", any other "Settings".
+pub(crate) fn clipboard_key(block: B) -> Option<&'static str> {
+    Some(match block {
+        B::CreativeMotor | B::RotationSpeedController => "Speed",
+        B::MechanicalArm | B::BrassTunnel => "SelectionMode",
+        B::MechanicalBearing => "RotationMode",
+        B::MechanicalPiston | B::StickyMechanicalPiston | B::RopePulley => "MovementMode",
+        B::WindmillBearing => "RotationDirection",
+        B::ClockworkBearing => "ClockHands",
+        B::MechanicalRoller => "RollingMode",
+        B::PulseRepeater | B::PulseExtender | B::PulseTimer => "Timings",
+        B::WeightedEjector => "Settings",
+        b if create_engine::dye::is_valve_handle(b) => "Settings",
+        _ => return None,
+    })
+}
+
+/// `getValueSettings` of a block's value `v` as its board shows it: an option or an ejector's
+/// stack size on row 0, a diode's delay on its unit's row, a speed or angle by its sign.
+pub(crate) fn board_pick(block: B, v: i32) -> board::Settings {
+    if option_names(block).is_some() || block == B::WeightedEjector {
+        board::Settings { row: 0, value: v }
+    } else if create_engine::world::diode_kind(block).is_some() {
+        board::diode_settings(v)
+    } else {
+        board::kinetic_settings(v)
+    }
+}
+
+/// The value box of the block at `pos` (`setValueSettings` with `pick`; `onShortInteract` for a
+/// `short` click, with whether a wrench is held): its value after, None when the block has no
+/// box served here.
+pub(crate) fn settings_at(
+    lv: &mut ServerLevel<'_>,
+    player: PlayerRef,
+    pos: [i32; 3],
+    pick: Option<board::Settings>,
+    short: Option<bool>,
+) -> Option<i32> {
+    let dim = lv.dim;
+    let state = lv.block(pos);
+    let (block, inverted, facing) =
+        with_world(|w| w.table.get(state).map(|(b, i)| (b, i.inverted, i.facing))).flatten()?;
+    let lv = &mut *lv;
     use create_engine::tunnel::{self, Mode};
     let value = match block {
         B::CreativeMotor | B::RotationSpeedController => with_world(|w| {
@@ -335,7 +385,7 @@ pub(super) fn value_settings_from_client(
                 board::option_value(s, now.unwrap_or(0), tunnel::OPTIONS.len() as i32)
             });
             if let Some(mode) = picked.and_then(Mode::from_option) {
-                crate::glue::logistics::set_brass_mode(&lv, pos, mode);
+                crate::glue::logistics::set_brass_mode(lv, pos, mode);
             }
             Some(
                 with_world(|w| w.dims[dim].brass.get(&pos).map(|b| b.mode.index() as i32))
@@ -353,18 +403,18 @@ pub(super) fn value_settings_from_client(
         | B::MechanicalRoller => {
             use crate::glue::contraptions::{scroll_option, set_scroll_option};
             let count = option_names(block).map_or(1, |(_, o)| o.len() as i32);
-            let now = scroll_option(&lv, pos, block);
+            let now = scroll_option(lv, pos, block);
             if let Some(v) = pick.and_then(|s| board::option_value(s, now, count)) {
-                set_scroll_option(&mut lv, pos, block, v);
+                set_scroll_option(lv, pos, block, v);
             }
-            Some(Some(scroll_option(&lv, pos, block)))
+            Some(Some(scroll_option(lv, pos, block)))
         }
         // `BrassDiodeScrollValueBehaviour`: `onShortInteract` toggles the diode (`toggle`: not
         // with a wrench; sneaking and no building were never a short click); `setValueSettings`
         // sets its delay.
         B::PulseRepeater | B::PulseExtender | B::PulseTimer => {
             if short == Some(false) {
-                toggle_diode(&mut lv, pos, inverted, facing);
+                toggle_diode(lv, pos, inverted, facing);
             }
             let max = with_world(|w| {
                 if let Some(pick) = pick {
@@ -373,7 +423,7 @@ pub(super) fn value_settings_from_client(
                 w.dims[dim].diodes.get(&pos).map(|d| d.max)
             });
             if pick.is_some() {
-                crate::glue::redstone::show_diode(&mut lv, pos);
+                crate::glue::redstone::show_diode(lv, pos);
             }
             max
         }
@@ -387,7 +437,7 @@ pub(super) fn value_settings_from_client(
                     items::held(&*lv.host, player, Hand::Main).map(|s| s.item().id(&*lv.host));
                 let back = items::sneaking(&*lv.host, player);
                 super::super::blocks::use_valve_handle(
-                    &mut lv,
+                    lv,
                     player,
                     pos,
                     b,
@@ -412,17 +462,9 @@ pub(super) fn value_settings_from_client(
                     .map(|d| super::super::sources::handles::valve_angle(&d)),
             )
         }
-        _ => return,
+        _ => return None,
     };
-    let Some(value) = value.flatten() else {
-        return;
-    };
-    net::send_to_player(
-        lv.host,
-        player,
-        VALUE,
-        &encode(&[pos[0], pos[1], pos[2], value]),
-    );
+    value.flatten()
 }
 
 /// `BrassDiodeBlock.toggle`: `inverted` flips (`setBlock(.., UPDATE_ALL)`, its output with it:

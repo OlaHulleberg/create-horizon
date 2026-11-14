@@ -1,18 +1,25 @@
 //! The clipboard's copying and pasting of block settings (`ClipboardValueSettingsHandler`) on
-//! the redstone blocks whose behaviours are `ClipboardCloneable`: a brass diode's `Block`
-//! (inverted) and `Timings` (its delay's board row and value), a redstone link's `Frequencies`
-//! and a smart observer's or threshold switch's `Filtering` (its filter). A right click with a
-//! clipboard copies them into its `copied_values`; a left click pastes them. Not while sneaking.
+//! the blocks whose behaviours are `ClipboardCloneable`: a brass diode's `Block` (inverted) and
+//! `Timings` (its delay's board row and value), a redstone link's `Frequencies`, the `Filtering`
+//! (its filter) of a smart observer, threshold switch, brass funnel or smart chute, and the
+//! value boxes served by `interaction::values` (each `ValueSettingsBehaviour`'s board row and
+//! value under its key: a motor's `Speed`, an arm's or tunnel's `SelectionMode`, the movement
+//! modes, an ejector's or valve handle's `Settings`...). A right click with a clipboard copies
+//! them into its `copied_values`; a left click pastes them. Not while sneaking. Looking at such
+//! a block with a clipboard in hand shows what a click does over the hotbar (`clientTick`'s
+//! `showHoverTip`).
 //!
 //! The server sees the right click (`right_click_block`); a left click has no player on the
 //! server's hook, so the client takes the attack on such a block (`interaction_key`) and asks
 //! the server on `CHANNEL`, which checks reach as `BlockEntityConfigurationPacket`s do.
 //!
-//! Left out: the other subsystems' cloneable behaviours (value boxes, funnel filters...), the
-//! hover tip naming the actions, and copying from a placed clipboard.
+//! Left out: the cloneable behaviours of boxes not served by `interaction::values` (a brass
+//! funnel's or chute's filter count, a chassis' range, a tunnel's side filters, a deployer's
+//! filter), and copying from a placed clipboard.
 
 use super::block_at;
 use crate::glue::display::clipboard;
+use crate::glue::interaction::values;
 use crate::glue::items::{self, filters};
 use crate::glue::persist;
 use crate::glue::server::ServerLevel;
@@ -31,10 +38,23 @@ pub(super) const CHANNEL: &str = "create:clipboard_paste";
 /// Whether `block` has settings the clipboard copies.
 fn cloneable(block: Block) -> bool {
     create_engine::world::diode_kind(block).is_some()
-        || matches!(
-            block,
-            Block::RedstoneLink | Block::ContentObserver | Block::StockpileSwitch
-        )
+        || detector(block)
+        || chute_filtered(block)
+        || values::clipboard_key(block).is_some()
+        || block == Block::RedstoneLink
+}
+
+/// A smart observer's or threshold switch's filter (`detectors`).
+fn detector(block: Block) -> bool {
+    matches!(block, Block::ContentObserver | Block::StockpileSwitch)
+}
+
+/// A filter kept with the chutes' (`chute_filters`): a brass funnel's or smart chute's.
+fn chute_filtered(block: Block) -> bool {
+    matches!(
+        block,
+        Block::BrassFunnel | Block::BrassBeltFunnel | Block::SmartChute
+    )
 }
 
 fn int(c: &Compound, key: &str) -> Option<i32> {
@@ -69,10 +89,25 @@ fn stack_item(tag: &Compound) -> String {
 }
 
 /// `writeToClipboard` of the block's cloneable behaviours, each under its key.
-fn write(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Compound> {
+fn write(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) -> Option<Compound> {
     let (block, info) = block_at(lv, pos)?;
     let dim = lv.dim;
     let mut tag = Compound::new();
+    if create_engine::world::diode_kind(block).is_none()
+        && let Some(key) = values::clipboard_key(block)
+    {
+        // ValueSettingsBehaviour.writeToClipboard: its board's row and value.
+        let v = values::settings_at(lv, player, pos, None, None)?;
+        let s = values::board_pick(block, v);
+        tag.insert(
+            key.into(),
+            Tag::Compound(Compound::from([
+                ("Value".into(), Tag::Int(s.value)),
+                ("Row".into(), Tag::Int(s.row)),
+            ])),
+        );
+        return Some(tag);
+    }
     if create_engine::world::diode_kind(block).is_some() {
         // BrassDiodeBlockEntity: `Inverted`; BrassDiodeScrollValueBehaviour (`Timings`): the
         // board's row and value of its delay.
@@ -105,7 +140,11 @@ fn write(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Compound> {
         );
     } else {
         // FilteringBehaviour: no value settings on a detector, its filter.
-        let filter = with_world(|w| w.dims[dim].detectors.filter(pos).cloned()).flatten();
+        let filter = if chute_filtered(block) {
+            with_world(|w| w.dims[dim].chute_filters.get(&pos).cloned()).flatten()
+        } else {
+            with_world(|w| w.dims[dim].detectors.filter(pos).cloned()).flatten()
+        };
         let saved = filter
             .and_then(|f| filters::filter_to_nbt(&*lv.host, &f))
             .unwrap_or(Tag::Compound(Compound::new()));
@@ -123,6 +162,19 @@ fn read(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3], tag: &Compou
         return false;
     };
     let dim = lv.dim;
+    if create_engine::world::diode_kind(block).is_none()
+        && let Some(key) = values::clipboard_key(block)
+    {
+        // ValueSettingsBehaviour.readFromClipboard: `setValueSettings` with the row and value.
+        let Some(t) = sub(tag, key) else {
+            return false;
+        };
+        let (Some(value), Some(row)) = (int(t, "Value"), int(t, "Row")) else {
+            return false;
+        };
+        let pick = create_engine::board::Settings { row, value };
+        return values::settings_at(lv, player, pos, Some(pick), None).is_some();
+    }
     if create_engine::world::diode_kind(block).is_some() {
         let mut any = false;
         if let Some(Tag::Byte(b)) = sub(tag, "Block").and_then(|c| c.get(&"Inverted".into())) {
@@ -192,6 +244,27 @@ fn read(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3], tag: &Compou
             return false;
         };
         let _ = player.set_inventory_slot(&mut *lv.host, slot, s.shrink(1));
+    }
+    if chute_filtered(block) {
+        let shown = filter.clone();
+        let old = with_world(|w| {
+            let d = &mut w.dims[dim];
+            let old = match filter {
+                Some(f) => d.chute_filters.insert(pos, f),
+                None => d.chute_filters.remove(&pos),
+            };
+            // A funnel looks at its inventory again (`invVersionTracker.reset`).
+            if let Some(due) = d.funnels.get_mut(&pos) {
+                *due = 0;
+                d.funnel_timers.at(0, pos);
+            }
+            old
+        })
+        .flatten();
+        persist::mark_pos_unsaved(dim, pos);
+        crate::glue::logistics::show_filter(lv, pos, shown.as_ref());
+        filters::return_filter(lv, player, pos, old);
+        return true;
     }
     let old = with_world(|w| w.dims[dim].detectors.set_filter(pos, filter));
     let old = match old {
@@ -275,7 +348,7 @@ pub(super) fn right_click_block(mut host: HostSide, event: &mut RightClickBlockE
     if !block_at(&lv, click.pos).is_some_and(|(b, _)| cloneable(b)) {
         return Flow::Continue;
     }
-    if let Some(tag) = write(&lv, click.pos) {
+    if let Some(tag) = write(&mut lv, player, click.pos) {
         let stack = clipboard::with_copied_values(&*lv.host, stack, tag);
         items::set_held(&mut *lv.host, player, click.hand, Some(stack));
         tell(&mut lv, player, click.pos, false);
@@ -373,4 +446,53 @@ pub(super) fn client_message(
         tell(&mut lv, player, pos, true);
     }
     true
+}
+
+/// Whether `tag` holds what one of the cloneable behaviours of `block` reads
+/// (`readFromClipboard`'s simulation).
+fn pastes(block: Block, tag: &Compound) -> bool {
+    let has = |key: &str, fields: &[&str]| {
+        sub(tag, key).is_some_and(|c| fields.iter().all(|f| c.get(&(*f).into()).is_some()))
+    };
+    if create_engine::world::diode_kind(block).is_some() {
+        return has("Block", &["Inverted"]) || has("Timings", &["Value", "Row"]);
+    }
+    if let Some(key) = values::clipboard_key(block) {
+        return has(key, &["Value", "Row"]);
+    }
+    if block == Block::RedstoneLink {
+        return has("Frequencies", &["First", "Last"]);
+    }
+    (detector(block) || chute_filtered(block)) && has("Filtering", &["Filter"])
+}
+
+/// `ClipboardValueSettingsHandler.clientTick`: with a clipboard in the main hand on a block it
+/// can copy from or paste to, what a click does (`showHoverTip`), shown as the value boxes' tip
+/// is.
+pub(crate) fn hover_tip(host: &dyn ClientHost) -> Option<([i32; 3], Vec<String>)> {
+    let player = host.local_player()?;
+    let stack = items::held(host, player, Hand::Main)?;
+    if stack.item().id(host) != "create:clipboard" {
+        return None;
+    }
+    let Some(CrosshairTarget::Block { pos, .. }) = host.crosshair_target() else {
+        return None;
+    };
+    let pos = [pos.x, pos.y, pos.z];
+    let block = super::client_block_of(host, pos).filter(|b| cloneable(*b))?;
+    let line = |key: &str, mapping: Option<&str>| {
+        let args = mapping
+            .map(|m| vec![Text::new(mod_api::text::TextContent::Keybind(m.into()))])
+            .unwrap_or_default();
+        host.text_string(&Text::translate(key, args))
+            .unwrap_or_else(|_| key.to_owned())
+    };
+    let mut tip = vec![
+        line("create.clipboard.actions", None),
+        line("create.clipboard.to_copy", Some("key.use")),
+    ];
+    if clipboard::copied_values(&stack).is_some_and(|t| pastes(block, &t)) {
+        tip.push(line("create.clipboard.to_paste", Some("key.attack")));
+    }
+    Some((pos, tip))
 }
