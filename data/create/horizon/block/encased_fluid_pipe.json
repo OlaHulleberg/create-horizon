@@ -8,29 +8,31 @@
   },
   "item": false,
   "state_properties": {
-    "down": [
-      "false",
-      "true"
-    ],
-    "east": [
-      "false",
-      "true"
-    ],
-    "north": [
-      "false",
-      "true"
-    ],
-    "south": [
-      "false",
-      "true"
-    ],
-    "up": [
-      "false",
-      "true"
-    ],
-    "west": [
-      "false",
-      "true"
-    ]
+    "down": {
+      "type": "boolean"
+    },
+    "east": {
+      "type": "boolean"
+    },
+    "north": {
+      "type": "boolean"
+    },
+    "south": {
+      "type": "boolean"
+    },
+    "up": {
+      "type": "boolean"
+    },
+    "west": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "down": "false",
+    "east": "false",
+    "north": "false",
+    "south": "false",
+    "up": "false",
+    "west": "false"
   }
 }

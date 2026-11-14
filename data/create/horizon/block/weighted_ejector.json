@@ -4,12 +4,13 @@
     "hardness": 1.5,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:andesite",
-    "analog_output": true
+    "sounds": "minecraft:andesite"
   },
   "item": true,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "north": [
         [
@@ -51,18 +52,24 @@
           1.0
         ]
       ]
-    }
+    },
+    "default": [
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.8125,
+        1.0
+      ]
+    ]
   },
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "waterlogged": "false"
   }
 }

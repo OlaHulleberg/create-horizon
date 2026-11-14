@@ -8,9 +8,11 @@
   },
   "item": true,
   "state_properties": {
-    "powered": [
-      "false",
-      "true"
-    ]
+    "powered": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "powered": "false"
   }
 }

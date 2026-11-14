@@ -8,31 +8,11 @@
   },
   "item": true,
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "half": [
-      "lower",
-      "upper"
-    ],
-    "hinge": [
-      "left",
-      "right"
-    ],
-    "open": [
-      "false",
-      "true"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ],
-    "visible": [
-      "true",
-      "false"
-    ]
+    "visible": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "visible": "true"
   }
 }

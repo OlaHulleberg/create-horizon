@@ -9,13 +9,19 @@
     "minecraft:max_stack_size": 1
   },
   "state_properties": {
-    "axis": [
-      "z",
-      "x"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "axis": {
+      "type": "enum",
+      "values": [
+        "z",
+        "x"
+      ]
+    },
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "axis": "z",
+    "waterlogged": "false"
   }
 }

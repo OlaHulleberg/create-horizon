@@ -4,18 +4,23 @@
     "hardness": 3.0,
     "explosion_resistance": 1200.0,
     "requires_tool": true,
-    "sounds": "minecraft:netherite_block",
-    "analog_output": true
+    "sounds": "minecraft:netherite_block"
   },
   "item": true,
   "state_properties": {
-    "axis": [
-      "x",
-      "z"
-    ],
-    "large": [
-      "false",
-      "true"
-    ]
+    "axis": {
+      "type": "enum",
+      "values": [
+        "x",
+        "z"
+      ]
+    },
+    "large": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "axis": "x",
+    "large": "false"
   }
 }

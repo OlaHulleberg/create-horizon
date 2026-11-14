@@ -8,17 +8,19 @@
   },
   "item": true,
   "state_properties": {
-    "activate": [
-      "false",
-      "true"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ],
-    "powering": [
-      "false",
-      "true"
-    ]
+    "activate": {
+      "type": "boolean"
+    },
+    "powered": {
+      "type": "boolean"
+    },
+    "powering": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "activate": "false",
+    "powered": "false",
+    "powering": "false"
   }
 }

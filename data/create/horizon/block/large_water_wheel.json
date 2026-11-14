@@ -5,18 +5,24 @@
     "explosion_resistance": 2.0,
     "requires_tool": false,
     "sounds": "minecraft:stripped_spruce_wood",
-    "render_shape": "entityblock_animated"
+    "render_shape": "ENTITYBLOCK_ANIMATED"
   },
   "item": true,
   "state_properties": {
-    "axis": [
-      "y",
-      "x",
-      "z"
-    ],
-    "extension": [
-      "false",
-      "true"
-    ]
+    "axis": {
+      "type": "enum",
+      "values": [
+        "y",
+        "x",
+        "z"
+      ]
+    },
+    "extension": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "axis": "y",
+    "extension": "false"
   }
 }

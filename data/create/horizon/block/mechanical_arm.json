@@ -8,7 +8,9 @@
   },
   "item": true,
   "shapes": {
-    "property": "ceiling",
+    "properties": [
+      "ceiling"
+    ],
     "values": {
       "false": [
         [
@@ -65,9 +67,11 @@
     }
   },
   "state_properties": {
-    "ceiling": [
-      "false",
-      "true"
-    ]
+    "ceiling": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "ceiling": "false"
   }
 }

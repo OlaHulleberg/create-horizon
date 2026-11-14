@@ -1,8 +1,0 @@
-{
-  "template": "minecraft:water",
-  "properties": {
-    "hardness": 100.0,
-    "explosion_resistance": 100.0
-  },
-  "item": false
-}

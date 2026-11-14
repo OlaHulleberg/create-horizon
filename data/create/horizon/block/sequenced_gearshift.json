@@ -4,26 +4,35 @@
     "hardness": 1.5,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:andesite",
-    "analog_output": true
+    "sounds": "minecraft:andesite"
   },
   "item": true,
   "state_properties": {
-    "axis": [
-      "x",
-      "z"
-    ],
-    "state": [
-      "0",
-      "1",
-      "2",
-      "3",
-      "4",
-      "5"
-    ],
-    "vertical": [
-      "false",
-      "true"
-    ]
+    "axis": {
+      "type": "enum",
+      "values": [
+        "x",
+        "z"
+      ]
+    },
+    "state": {
+      "type": "enum",
+      "values": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    "vertical": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "axis": "x",
+    "state": "0",
+    "vertical": "false"
   }
 }

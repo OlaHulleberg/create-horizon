@@ -8,25 +8,31 @@
   },
   "item": true,
   "state_properties": {
-    "axis_along_first": [
-      "false",
-      "true"
-    ],
-    "facing": [
-      "up",
-      "down",
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "flipped": [
-      "false",
-      "true"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "axis_along_first": {
+      "type": "boolean"
+    },
+    "facing": {
+      "type": "enum",
+      "values": [
+        "up",
+        "down",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "flipped": {
+      "type": "boolean"
+    },
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "axis_along_first": "false",
+    "facing": "up",
+    "flipped": "false",
+    "waterlogged": "false"
   }
 }

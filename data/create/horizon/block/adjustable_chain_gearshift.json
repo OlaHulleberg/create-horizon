@@ -8,24 +8,26 @@
   },
   "item": true,
   "state_properties": {
-    "axis": [
-      "x",
-      "y",
-      "z"
-    ],
-    "axis_along_first": [
-      "false",
-      "true"
-    ],
-    "part": [
-      "none",
-      "start",
-      "middle",
-      "end"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ]
+    "axis_along_first": {
+      "type": "boolean"
+    },
+    "part": {
+      "type": "enum",
+      "values": [
+        "none",
+        "start",
+        "middle",
+        "end"
+      ]
+    },
+    "powered": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "axis": "x",
+    "axis_along_first": "false",
+    "part": "none",
+    "powered": "false"
   }
 }

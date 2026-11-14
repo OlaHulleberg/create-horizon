@@ -8,7 +8,9 @@
   },
   "item": false,
   "shapes": {
-    "property": "axis",
+    "properties": [
+      "axis"
+    ],
     "values": {
       "x": [
         [
@@ -43,18 +45,20 @@
     }
   },
   "state_properties": {
-    "alt": [
-      "false",
-      "true"
-    ],
-    "axis": [
-      "y",
-      "x",
-      "z"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "alt": {
+      "type": "boolean"
+    },
+    "axis": {
+      "type": "enum",
+      "values": [
+        "y",
+        "x",
+        "z"
+      ]
+    }
+  },
+  "default_state": {
+    "alt": "false",
+    "axis": "y"
   }
 }

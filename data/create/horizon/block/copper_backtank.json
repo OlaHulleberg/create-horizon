@@ -4,8 +4,7 @@
     "hardness": 3.0,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:copper_block",
-    "analog_output": true
+    "sounds": "minecraft:copper_block"
   },
   "item": true,
   "components": {
@@ -36,7 +35,9 @@
     }
   },
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "north": [
         [
@@ -113,15 +114,21 @@
     }
   },
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "facing": "north",
+    "waterlogged": "false"
   }
 }

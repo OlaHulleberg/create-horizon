@@ -8,7 +8,9 @@
   },
   "item": true,
   "shapes": {
-    "property": "size",
+    "properties": [
+      "size"
+    ],
     "values": {
       "small": [
         [
@@ -91,24 +93,34 @@
     }
   },
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ],
-    "size": [
-      "medium",
-      "small",
-      "large"
-    ],
-    "wall": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "powered": {
+      "type": "boolean"
+    },
+    "size": {
+      "type": "enum",
+      "values": [
+        "medium",
+        "small",
+        "large"
+      ]
+    },
+    "wall": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "facing": "north",
+    "powered": "false",
+    "size": "medium",
+    "wall": "false"
   }
 }

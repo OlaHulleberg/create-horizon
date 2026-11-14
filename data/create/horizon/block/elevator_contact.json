@@ -9,25 +9,31 @@
   },
   "item": true,
   "state_properties": {
-    "calling": [
-      "false",
-      "true"
-    ],
-    "facing": [
-      "south",
-      "up",
-      "down",
-      "north",
-      "west",
-      "east"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ],
-    "powering": [
-      "false",
-      "true"
-    ]
+    "calling": {
+      "type": "boolean"
+    },
+    "facing": {
+      "type": "enum",
+      "values": [
+        "south",
+        "up",
+        "down",
+        "north",
+        "west",
+        "east"
+      ]
+    },
+    "powered": {
+      "type": "boolean"
+    },
+    "powering": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "calling": "false",
+    "facing": "south",
+    "powered": "false",
+    "powering": "false"
   }
 }

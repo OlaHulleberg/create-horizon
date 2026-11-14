@@ -8,24 +8,16 @@
   },
   "item": true,
   "state_properties": {
-    "face": [
-      "floor",
-      "wall",
-      "ceiling"
-    ],
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ],
-    "written": [
-      "false",
-      "true"
-    ]
+    "waterlogged": {
+      "type": "boolean"
+    },
+    "written": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "face": "floor",
+    "waterlogged": "false",
+    "written": "false"
   }
 }

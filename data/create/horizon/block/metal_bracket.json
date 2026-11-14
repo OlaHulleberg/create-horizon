@@ -8,22 +8,32 @@
   },
   "item": true,
   "state_properties": {
-    "axis_along_first": [
-      "false",
-      "true"
-    ],
-    "facing": [
-      "down",
-      "up",
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "type": [
-      "pipe",
-      "cog",
-      "shaft"
-    ]
+    "axis_along_first": {
+      "type": "boolean"
+    },
+    "facing": {
+      "type": "enum",
+      "values": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "type": {
+      "type": "enum",
+      "values": [
+        "pipe",
+        "cog",
+        "shaft"
+      ]
+    }
+  },
+  "default_state": {
+    "axis_along_first": "false",
+    "facing": "down",
+    "type": "pipe"
   }
 }

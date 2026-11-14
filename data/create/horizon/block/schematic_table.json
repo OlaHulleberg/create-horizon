@@ -6,7 +6,9 @@
   },
   "item": true,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "north": [
         [
@@ -80,14 +82,24 @@
           1.0
         ]
       ]
-    }
-  },
-  "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
+    },
+    "default": [
+      [
+        0.25,
+        0.0,
+        0.25,
+        0.75,
+        0.75,
+        0.75
+      ],
+      [
+        0.0,
+        0.6875,
+        0.125,
+        1.0,
+        0.875,
+        0.875
+      ]
     ]
   }
 }

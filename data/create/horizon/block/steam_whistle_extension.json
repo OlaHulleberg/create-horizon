@@ -8,7 +8,9 @@
   },
   "item": false,
   "shapes": {
-    "property": "shape",
+    "properties": [
+      "shape"
+    ],
     "values": {
       "single": [
         [
@@ -43,15 +45,25 @@
     }
   },
   "state_properties": {
-    "shape": [
-      "single",
-      "double",
-      "double_connected"
-    ],
-    "size": [
-      "medium",
-      "small",
-      "large"
-    ]
+    "shape": {
+      "type": "enum",
+      "values": [
+        "single",
+        "double",
+        "double_connected"
+      ]
+    },
+    "size": {
+      "type": "enum",
+      "values": [
+        "medium",
+        "small",
+        "large"
+      ]
+    }
+  },
+  "default_state": {
+    "shape": "single",
+    "size": "medium"
   }
 }

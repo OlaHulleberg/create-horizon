@@ -9,24 +9,38 @@
   },
   "item": true,
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "level": [
-      "0",
-      "1",
-      "2",
-      "3",
-      "4",
-      "5"
-    ],
-    "target": [
-      "wall",
-      "floor",
-      "ceiling"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "level": {
+      "type": "enum",
+      "values": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    "target": {
+      "type": "enum",
+      "values": [
+        "wall",
+        "floor",
+        "ceiling"
+      ]
+    }
+  },
+  "default_state": {
+    "facing": "north",
+    "level": "0",
+    "target": "wall"
   }
 }

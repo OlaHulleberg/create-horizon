@@ -2,16 +2,22 @@
   "template": "minecraft:stone",
   "item": false,
   "properties": {
-    "render_shape": "invisible"
+    "render_shape": "INVISIBLE"
   },
   "state_properties": {
-    "facing": [
-      "north",
-      "east",
-      "south",
-      "west",
-      "up",
-      "down"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "east",
+        "south",
+        "west",
+        "up",
+        "down"
+      ]
+    }
+  },
+  "default_state": {
+    "facing": "north"
   }
 }

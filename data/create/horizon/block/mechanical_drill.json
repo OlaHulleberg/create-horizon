@@ -8,17 +8,23 @@
   },
   "item": true,
   "state_properties": {
-    "facing": [
-      "up",
-      "down",
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "up",
+        "down",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "facing": "up",
+    "waterlogged": "false"
   }
 }

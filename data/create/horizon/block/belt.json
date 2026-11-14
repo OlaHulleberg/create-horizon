@@ -4,11 +4,13 @@
     "hardness": 0.8,
     "explosion_resistance": 0.8,
     "sounds": "minecraft:white_wool",
-    "render_shape": "entityblock_animated"
+    "render_shape": "ENTITYBLOCK_ANIMATED"
   },
   "item": false,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "north": [
         [
@@ -53,32 +55,46 @@
     }
   },
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "slope": [
-      "horizontal",
-      "upward",
-      "downward",
-      "vertical",
-      "sideways"
-    ],
-    "part": [
-      "start",
-      "middle",
-      "end",
-      "pulley"
-    ],
-    "casing": [
-      "false",
-      "true"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "slope": {
+      "type": "enum",
+      "values": [
+        "horizontal",
+        "upward",
+        "downward",
+        "vertical",
+        "sideways"
+      ]
+    },
+    "part": {
+      "type": "enum",
+      "values": [
+        "start",
+        "middle",
+        "end",
+        "pulley"
+      ]
+    },
+    "casing": {
+      "type": "boolean"
+    },
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "facing": "north",
+    "slope": "horizontal",
+    "part": "start",
+    "casing": "false",
+    "waterlogged": "false"
   }
 }

@@ -5,17 +5,23 @@
     "explosion_resistance": 2.0,
     "requires_tool": false,
     "sounds": "minecraft:stripped_spruce_wood",
-    "render_shape": "invisible"
+    "render_shape": "INVISIBLE"
   },
   "item": false,
   "state_properties": {
-    "facing": [
-      "down",
-      "up",
-      "north",
-      "south",
-      "west",
-      "east"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "down",
+        "up",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    }
+  },
+  "default_state": {
+    "facing": "down"
   }
 }

@@ -9,7 +9,9 @@
     "minecraft:max_stack_size": 1
   },
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "down": [
         [
@@ -122,17 +124,27 @@
     }
   },
   "state_properties": {
-    "facing": [
-      "up",
-      "down",
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "type": [
-      "normal",
-      "sticky"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "up",
+        "down",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "type": {
+      "type": "enum",
+      "values": [
+        "normal",
+        "sticky"
+      ]
+    }
+  },
+  "default_state": {
+    "facing": "up",
+    "type": "normal"
   }
 }

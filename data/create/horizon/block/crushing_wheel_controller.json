@@ -3,28 +3,36 @@
   "properties": {
     "hardness": 0.0,
     "explosion_resistance": 0.0,
-    "render_shape": "invisible"
+    "render_shape": "INVISIBLE"
   },
   "item": false,
   "shapes": {
-    "property": "valid",
+    "properties": [
+      "valid"
+    ],
     "values": {
       "false": [],
       "true": []
     }
   },
   "state_properties": {
-    "facing": [
-      "up",
-      "down",
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "valid": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "up",
+        "down",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "valid": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "facing": "up",
+    "valid": "false"
   }
 }

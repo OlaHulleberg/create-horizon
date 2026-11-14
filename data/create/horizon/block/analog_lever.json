@@ -5,17 +5,7 @@
     "explosion_resistance": 0.5
   },
   "item": true,
-  "state_properties": {
-    "face": [
-      "floor",
-      "wall",
-      "ceiling"
-    ],
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ]
+  "default_state": {
+    "face": "floor"
   }
 }

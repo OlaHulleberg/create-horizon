@@ -8,7 +8,9 @@
   },
   "item": true,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "north": [
         [
@@ -53,23 +55,29 @@
     }
   },
   "state_properties": {
-    "down": [
-      "false",
-      "true"
-    ],
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "up": [
-      "false",
-      "true"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "down": {
+      "type": "boolean"
+    },
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "up": {
+      "type": "boolean"
+    },
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "down": "false",
+    "facing": "north",
+    "up": "false",
+    "waterlogged": "false"
   }
 }

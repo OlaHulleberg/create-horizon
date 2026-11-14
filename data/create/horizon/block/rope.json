@@ -7,7 +7,9 @@
   },
   "item": false,
   "shapes": {
-    "property": "waterlogged",
+    "properties": [
+      "waterlogged"
+    ],
     "values": {
       "false": [
         [

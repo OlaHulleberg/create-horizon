@@ -8,7 +8,9 @@
   },
   "item": true,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "down": [
         [
@@ -121,21 +123,23 @@
     }
   },
   "state_properties": {
-    "facing": [
-      "up",
-      "down",
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "up",
+        "down",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "powered": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "facing": "up",
+    "powered": "false"
   }
 }

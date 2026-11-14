@@ -1,10 +1,10 @@
 //! `create-data compile`: reads Create's MIT data (`src/generated/`) and registration Java once,
-//! and writes the port's committed outputs: the content mod's block and item declarations
-//! (`content/data/create/horizon/`) and the engine's typed block table
-//! (`mixins/create/engine/src/generated.rs`).
+//! and writes the mod's committed outputs: its block and item declarations
+//! (`data/create/horizon/`), the partial models' block states (`assets/create/`) and the engine's
+//! typed block table (`src/engine/src/generated.rs`).
 //!
-//! `create-data prepare`: builds the playable content mod from a Create jar (or folders standing in
-//! for one), converting 1.21.1 formats to 26.3. See `prepare.rs`.
+//! `create-data prepare`: assembles the playable native mod from this repository and a Create jar
+//! (or folders standing in for one), converting 1.21.1 formats to 26.3. See `prepare.rs`.
 
 mod blocks;
 mod common_tags;
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 fn usage() -> ! {
     eprintln!(
         "usage:\n  create-data compile --create <Create checkout> --out <mod repo root>\n  \
-         create-data prepare --out <content mod folder> <jar or folder>..."
+         create-data prepare --out <mod folder> <jar or folder>..."
     );
     std::process::exit(2)
 }
@@ -57,8 +57,8 @@ fn main() {
             if sources.is_empty() {
                 usage();
             }
-            let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-            match prepare::prepare(&content, &sources, &out) {
+            let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            match prepare::prepare(&repo, &sources, &out) {
                 Ok(report) => println!("{report}"),
                 Err(e) => {
                     eprintln!("create-data prepare: {e}");
@@ -91,7 +91,7 @@ fn compile(create: &Path, out: &Path) {
     let all = blocks::read_blocks(&generated, &block_java);
     let shapes = BTreeMap::new();
 
-    let decl_dir = out.join("content/data/create/horizon");
+    let decl_dir = out.join("data/create/horizon");
     let _ = fs::remove_dir_all(&decl_dir);
     let mut pending: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut declared = Vec::new();
@@ -114,7 +114,7 @@ fn compile(create: &Path, out: &Path) {
     }
 
     // Partial models as hidden blocks, with their own blockstates.
-    let states_dir = out.join("content/assets/create/blockstates");
+    let states_dir = out.join("assets/create/blockstates");
     let _ = fs::remove_dir_all(&states_dir);
     for (name, model, points) in blocks::PARTIALS {
         let (decl, states) = blocks::partial_files(model, points);
@@ -125,7 +125,7 @@ fn compile(create: &Path, out: &Path) {
         &states_dir.join("blaze_burner.json"),
         &pretty(&blocks::blaze_burner_states()),
     );
-    let models_dir = out.join("content/assets/create/models/block");
+    let models_dir = out.join("assets/create/models/block");
     for (name, model) in blocks::fluid_models() {
         write(&models_dir.join(format!("{name}.json")), &pretty(&model));
     }
@@ -308,14 +308,7 @@ fn compile(create: &Path, out: &Path) {
         write(&decl_dir.join(format!("fluid/{name}.json")), &pretty(&doc));
     }
 
-    // AllFluids' buckets (registered with their fluids, not in the item list): held by the
-    // native mod's tanks, spouts and drains; their fluid has no block in the world yet (gap 5),
-    // so they place nothing.
-    for name in ["honey_bucket", "chocolate_bucket"] {
-        let doc = json!({ "template": "minecraft:stick", "max_stack_size": 1 });
-        write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
-        items.push(name.to_owned());
-    }
+    // AllFluids' blocks and buckets come with their fluids (`world`), not as declarations.
 
     // PackageStyles.STYLES' items (AllItems registers them in a loop, so the Java scan misses
     // them): `stacksTo(1)`; their address and contents are the native mod's, kept in
@@ -325,14 +318,6 @@ fn compile(create: &Path, out: &Path) {
         write(&decl_dir.join(format!("item/{name}.json")), &pretty(&doc));
         items.push(name.to_owned());
     }
-
-    write(
-        &out.join("content/horizon-mod.toml"),
-        b"id = \"create\"\nname = \"Create\"\nversion = \"6.0.11\"\n\
-description = \"Create's blocks, items and data for the Horizon port (behaviour is the native mod)\"\n\
-authors = [\"The Create Team / The Creators of Create\"]\napi = \"0.2\"\nside = \"both\"\n\
-capabilities = [\"registries\"]\n",
-    );
 
     // The engine's table: every Create block, in registry order, as a `Block` enum.
     let mut rs = String::from(
@@ -393,7 +378,7 @@ capabilities = [\"registries\"]\n",
          pub fn has_block_entity(self) -> bool {\n        \
          Self::WITH_ENTITY.binary_search(&self).is_ok()\n    }\n}\n",
     );
-    let generated = out.join("mixins/create/engine/src/generated.rs");
+    let generated = out.join("src/engine/src/generated.rs");
     write(&generated, rs.as_bytes());
     // Keep the committed file in rustfmt's layout, so regenerating it changes nothing.
     let formatted = std::process::Command::new("rustfmt")

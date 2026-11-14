@@ -1,8 +1,10 @@
 //! The one-time prepare step. A Create jar holds MIT data (`data/`, generated `assets/`) and All
 //! Rights Reserved assets (textures, hand-written models, sounds); neither ships with the port. This
-//! reads them from the player's own jar (or folders laid out like one) and writes the content mod
-//! Horizon loads: the port's declarations (`content/`), Create's data converted from 1.21.1 to
-//! 26.3, and its assets with the item model definitions 26.3 needs. Reading a zip runs no Java.
+//! reads them from the player's own jar (or folders laid out like one) and writes the native mod
+//! the launcher builds: this repository's crate (`horizon-mod.toml`, `Cargo.toml`, `src/`) and
+//! declarations (`data/`, `assets/`), Create's data converted from 1.21.1 to 26.3, and its assets
+//! with the item model definitions 26.3 needs. Reading a zip runs no Java. The folder holds
+//! Create's assets: it is for the player's own game, never for redistribution.
 
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -314,7 +316,16 @@ fn common_tag_files() -> impl Iterator<Item = (&'static str, String, Value)> {
     })
 }
 
-pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String, String> {
+/// The repository's files that make up the mod's crate and package, besides `data/` and `assets/`.
+const CRATE_FILES: &[&str] = &[
+    "horizon-mod.toml",
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+];
+
+pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, String> {
     let files = read_sources(sources)?;
     if !files
         .keys()
@@ -329,8 +340,21 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
         fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
         fs::write(&p, bytes).map_err(|e| format!("{}: {e}", p.display()))
     };
+    let mut crate_files = BTreeMap::new();
+    walk(repo, &repo.join("src"), &mut crate_files)?;
+    for name in CRATE_FILES {
+        let p = repo.join(name);
+        crate_files.insert(
+            (*name).to_owned(),
+            fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?,
+        );
+    }
+    for (rel, bytes) in &crate_files {
+        put(rel, bytes)?;
+    }
     let mut ours = BTreeMap::new();
-    walk(content, content, &mut ours)?;
+    walk(repo, &repo.join("data"), &mut ours)?;
+    walk(repo, &repo.join("assets"), &mut ours)?;
     for (rel, bytes) in &ours {
         put(rel, bytes)?;
     }
@@ -430,6 +454,17 @@ pub fn prepare(content: &Path, sources: &[PathBuf], out: &Path) -> Result<String
         let doc = json!({ "model": { "type": "minecraft:model", "model": target } });
         put(
             &format!("assets/create/items/{name}.json"),
+            &serde_json::to_vec_pretty(&doc).unwrap(),
+        )?;
+    }
+    // A fluid in the world brings its bucket, `<fluid>_bucket`, whose model is Create's.
+    for name in ours.keys().filter_map(|k| {
+        k.strip_prefix("data/create/horizon/fluid/")?
+            .strip_suffix(".json")
+    }) {
+        let doc = json!({ "model": { "type": "minecraft:model", "model": format!("create:item/{name}_bucket") } });
+        put(
+            &format!("assets/create/items/{name}_bucket.json"),
             &serde_json::to_vec_pretty(&doc).unwrap(),
         )?;
     }

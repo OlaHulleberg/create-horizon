@@ -258,18 +258,10 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
     if let Some(d) = copycats(b) {
         return d;
     }
-    // AllFluids' `standardFluid` blocks: `LiquidBlock`s, water's states; how they flow is
-    // their fluid declaration's (`fluid_declarations`).
+    // AllFluids' `standardFluid` blocks (`LiquidBlock`s) come with their fluid declaration's
+    // `world` (`fluid_declarations`), as their buckets do.
     if matches!(n, "honey" | "chocolate") {
-        return Decision::Declared {
-            template: "minecraft:water",
-            sounds,
-            requires_tool: None,
-            shapes: None,
-            own: None,
-            animated: false,
-            item: false,
-        };
+        return Decision::Pending("declared by its fluid".into());
     }
     // Blocks with behaviour of their own wait for the phase that ports it.
     if let Some(reason) = later_phase(b) {
@@ -2046,7 +2038,8 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
 /// `SharedProperties::softMetal`, gold's sounds and tool): the panel (`CopycatPanelBlock`: facing,
 /// up by default, waterlogged; AllShapes.CASING_3PX) and the step (`CopycatStepBlock`: half,
 /// facing, south by default, waterlogged; AllShapes.STEP_BOTTOM / STEP_TOP) on the heavy core's
-/// template, drawn by the glue as their material cut to their shape (`dynamic_model`); the
+/// template, drawn by their block entity as their material cut to their shape (`render_shape`
+/// `entityblock_animated`: no model of their own in the chunk mesh); the
 /// copycat base (the material shown without one) and the copycat bars (`WrenchableDirectionalBlock`,
 /// the model a panel of bars shows), neither with an item.
 fn copycats(b: &CreateBlock) -> Option<Decision> {
@@ -2299,29 +2292,26 @@ pub const HEATS: &[&str] = &["none", "smouldering", "fading", "kindled", "seethi
 /// The blaze burner's blockstate: Create draws the cage as its model and the blaze in its
 /// renderer (`BlazeBurnerRenderer`: the head chosen by heat, turned to `horizontalAngle(facing) +
 /// 180`); here the head at rest is part of the block's model, by heat and facing.
-/// AllFluids' honey and chocolate as Horizon fluid declarations: `levelDecreasePerBlock(2)`,
-/// `tickRate(25)`, `slopeFindDistance(3)`, `registerFluidInteractions` with lava (obsidian from a
-/// source, limestone or scoria from flowing lava), Create's still and flowing textures, untinted
-/// (`SolidRenderedPlaceableFluidType.getTintColor`).
+/// AllFluids' honey and chocolate as Horizon fluid declarations (`data/<id>/horizon/fluid/`):
+/// in the world (`levelDecreasePerBlock(2)`, `tickRate(25)`, `slopeFindDistance(3)`, with their
+/// buckets), drawn with Create's still texture, untinted
+/// (`SolidRenderedPlaceableFluidType.getTintColor`). Create's flowing texture is the client's
+/// fluid model (`register_fluid_models`); its lava interactions (`registerFluidInteractions`:
+/// obsidian from a source, limestone or scoria from flowing lava) have no declaration here.
 pub fn fluid_declarations() -> [(&'static str, Value); 2] {
-    let fluid = |name: &str, flowing_stone: &str| {
+    let fluid = |name: &str| {
         json!({
-            "block": format!("create:{name}"),
-            "bucket": format!("create:{name}_bucket"),
-            "tick_delay": 25,
-            "drop_off": 2,
-            "slope_find_distance": 3,
-            "lava_source": "minecraft:obsidian",
-            "lava_flowing": format!("create:{flowing_stone}"),
-            "still_texture": format!("create:block/fluid/{name}_still"),
-            "flowing_texture": format!("create:block/fluid/{name}_flow"),
-            "tint": 0xFF_FFFF
+            "sprite": format!("create:block/fluid/{name}_still"),
+            "tint": 0xFFFF_FFFF_u32,
+            "world": {
+                "tick_delay": 25,
+                "drop_off": 2,
+                "slope_find_distance": 3,
+                "bucket": true
+            }
         })
     };
-    [
-        ("honey", fluid("honey", "limestone")),
-        ("chocolate", fluid("chocolate", "scoria")),
-    ]
+    [("honey", fluid("honey")), ("chocolate", fluid("chocolate"))]
 }
 
 pub fn blaze_burner_states() -> Value {
@@ -2722,7 +2712,7 @@ pub fn partial_files(model: &str, points: &str) -> (Value, Value) {
     let decl = json!({
         "template": "minecraft:stone",
         "item": false,
-        "properties": { "render_shape": "invisible" },
+        "properties": { "render_shape": "INVISIBLE" },
         "state_properties": { "facing": ["north", "east", "south", "west", "up", "down"] }
     });
     let turn = |x: i32, y: i32| {
@@ -2770,48 +2760,6 @@ fn later_phase(b: &CreateBlock) -> Option<String> {
     (!decorative.contains(&class)).then(|| format!("{class}: ported with its subsystem"))
 }
 
-/// Create's blocks of this port whose class answers `hasAnalogOutputSignal` with true (Create
-/// 6.0.11: `ItemVaultBlock`, `ToolboxBlock`, `DepotBlock`, `EjectorBlock`, `BasinBlock`,
-/// `FrogportBlock`, `PostboxBlock`, `PackagerBlock` (and the re-packager, its subclass),
-/// `RedstoneRequesterBlock`, `ItemDrainBlock`, `SpoutBlock`, `FluidTankBlock`, `BacktankBlock`,
-/// `GaugeBlock`, `SequencedGearshiftBlock`, `BlazeBurnerBlock`, `LitBlazeBurnerBlock`,
-/// `SignalBlock`, `StationBlock`); the glue answers for each
-/// (`create_engine::comparator::has_analog_output`), with the portable storage interfaces and
-/// the controller rail, and the lectern controller (`LecternBlock`'s, which it answers with 15).
-pub const ANALOG_OUTPUT: [&str; 25] = [
-    "item_vault",
-    "depot",
-    "weighted_ejector",
-    "basin",
-    "package_frogport",
-    "packager",
-    "repackager",
-    "redstone_requester",
-    "item_drain",
-    "spout",
-    "fluid_tank",
-    "creative_fluid_tank",
-    "copper_backtank",
-    "netherite_backtank",
-    "speedometer",
-    "stressometer",
-    "sequenced_gearshift",
-    "blaze_burner",
-    "lit_blaze_burner",
-    "track_signal",
-    "track_station",
-    "controller_rail",
-    "portable_storage_interface",
-    "portable_fluid_interface",
-    "lectern_controller",
-];
-
-fn analog_output(name: &str) -> bool {
-    ANALOG_OUTPUT.contains(&name)
-        || dyed(name, "toolbox").is_some()
-        || dyed(name, "postbox").is_some()
-}
-
 /// The declaration file for a declared block.
 pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     let Decision::Declared {
@@ -2836,13 +2784,13 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
         props.insert("sounds".into(), json!(s));
     }
     if *animated {
-        props.insert("render_shape".into(), json!("entityblock_animated"));
+        props.insert("render_shape".into(), json!("ENTITYBLOCK_ANIMATED"));
     }
     if matches!(
         b.name.as_str(),
         "crushing_wheel_controller" | "water_wheel_structure" | "fake_track"
     ) {
-        props.insert("render_shape".into(), json!("invisible"));
+        props.insert("render_shape".into(), json!("INVISIBLE"));
     }
     // AllBlocks.ROSE_QUARTZ_LAMP: `mapColor(TERRACOTTA_PINK)` (MapColor id 42); its light by
     // `powering` is per state, which a declaration can't give: none.
@@ -2866,23 +2814,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     if b.name == "nixie_tube" || dyed(&b.name, "nixie_tube").is_some() {
         props.insert("light".into(), json!(5));
     }
-    // Copycats draw their material through the glue (`CopycatModel`'s `ModelData`).
+    // Copycats draw their material through their block entity (`CopycatModel`'s `ModelData`),
+    // with no model of their own in the chunk mesh.
     if matches!(b.name.as_str(), "copycat_panel" | "copycat_step") {
-        props.insert("dynamic_model".into(), json!(true));
-    }
-    // Comparators read the block (`hasAnalogOutputSignal`), through the glue's answer.
-    if analog_output(&b.name) {
-        props.insert("analog_output".into(), json!(true));
-    }
-    // `BlockBehaviour.entityInside`: seats seat the mobs that land on them, turntables turn what
-    // stands on them (`native_entity_inside`).
-    if b.name == "turntable" || dyed(&b.name, "seat").is_some() {
-        props.insert("entity_inside".into(), json!(true));
-    }
-    // ControllerRailBlock and CartAssemblerBlock (BaseRailBlock): rails to minecarts, which they
-    // push or load (`onMinecartPass`, `native_minecart_pass`).
-    if matches!(b.name.as_str(), "controller_rail" | "cart_assembler") {
-        props.insert("rail".into(), json!(true));
+        props.insert("render_shape".into(), json!("ENTITYBLOCK_ANIMATED"));
     }
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));
@@ -2897,18 +2832,241 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
             json!({ "minecraft:max_stack_size": b.stack }),
         );
     }
+    let (declared, default) = match own {
+        Some(Value::Object(o)) => fork_states(template, o),
+        _ => (Map::new(), Map::new()),
+    };
     if let Some(s) = shapes {
-        doc.insert("shapes".into(), s.clone());
+        doc.insert("shapes".into(), fork_shapes(template, &default, s));
     }
-    if let Some(o) = own {
-        doc.insert("state_properties".into(), o.clone());
+    if !declared.is_empty() {
+        doc.insert("state_properties".into(), Value::Object(declared));
+    }
+    if !default.is_empty() {
+        doc.insert("default_state".into(), Value::Object(default));
     }
     Some(Value::Object(doc))
+}
+
+/// Vanilla 26.3's state properties of the templates blocks with properties of their own are
+/// declared on: each with its default value (`registerDefaultState`) and all its values
+/// (`StateDefinition`). The templates not listed have none (stone, glass, metal blocks, planks,
+/// carpet).
+const TEMPLATE_PROPERTIES: &[(&str, &[(&str, &str, &[&str])])] = &[
+    (
+        "minecraft:barrel",
+        &[
+            ("facing", "north", &DIRECTIONS),
+            ("open", "false", &BOOLEANS),
+        ],
+    ),
+    (
+        "minecraft:bell",
+        &[
+            (
+                "attachment",
+                "floor",
+                &["floor", "ceiling", "single_wall", "double_wall"],
+            ),
+            ("facing", "north", &HORIZONTAL),
+            ("powered", "false", &BOOLEANS),
+        ],
+    ),
+    (
+        "minecraft:grindstone",
+        &[
+            ("face", "wall", &["floor", "wall", "ceiling"]),
+            ("facing", "north", &HORIZONTAL),
+        ],
+    ),
+    (
+        "minecraft:heavy_core",
+        &[("waterlogged", "false", &BOOLEANS)],
+    ),
+    (
+        "minecraft:iron_chain",
+        &[
+            ("axis", "y", &["x", "y", "z"]),
+            ("waterlogged", "false", &BOOLEANS),
+        ],
+    ),
+    (
+        "minecraft:iron_door",
+        &[
+            ("facing", "north", &HORIZONTAL),
+            ("half", "lower", &["upper", "lower"]),
+            ("hinge", "left", &["left", "right"]),
+            ("open", "false", &BOOLEANS),
+            ("powered", "false", &BOOLEANS),
+        ],
+    ),
+    (
+        "minecraft:lever",
+        &[
+            ("face", "wall", &["floor", "wall", "ceiling"]),
+            ("facing", "north", &HORIZONTAL),
+            ("powered", "false", &BOOLEANS),
+        ],
+    ),
+    (
+        "minecraft:powered_rail",
+        &[
+            ("powered", "false", &BOOLEANS),
+            (
+                "shape",
+                "north_south",
+                &[
+                    "north_south",
+                    "east_west",
+                    "ascending_east",
+                    "ascending_west",
+                    "ascending_north",
+                    "ascending_south",
+                ],
+            ),
+            ("waterlogged", "false", &BOOLEANS),
+        ],
+    ),
+    (
+        "minecraft:quartz_pillar",
+        &[("axis", "y", &["x", "y", "z"])],
+    ),
+    (
+        "minecraft:repeater",
+        &[
+            ("delay", "1", &["1", "2", "3", "4"]),
+            ("facing", "north", &HORIZONTAL),
+            ("locked", "false", &BOOLEANS),
+            ("powered", "false", &BOOLEANS),
+        ],
+    ),
+    (
+        "minecraft:stripped_spruce_wood",
+        &[("axis", "y", &["x", "y", "z"])],
+    ),
+];
+
+const BOOLEANS: [&str; 2] = ["true", "false"];
+const HORIZONTAL: [&str; 4] = ["north", "south", "west", "east"];
+const DIRECTIONS: [&str; 6] = ["north", "east", "south", "west", "up", "down"];
+
+/// `template`'s own properties: name, vanilla default, values.
+fn template_properties(
+    template: &str,
+) -> &'static [(&'static str, &'static str, &'static [&'static str])] {
+    TEMPLATE_PROPERTIES
+        .iter()
+        .find(|(t, _)| *t == template)
+        .map_or(&[][..], |(_, p)| *p)
+}
+
+/// A shape table selected by one property (`{"property": p, "values": {..}}`) in the fork's form
+/// (`{"properties": [p], "values": {..}}`). Where `p` is the template's and Create never sets
+/// some of its values (a barrel template's `up` and `down` for a horizontal block), those
+/// states still exist: they take the shape of the block's default value of `p`, as `default`,
+/// since the loader wants every state covered.
+pub fn fork_shapes(template: &str, default_state: &Map<String, Value>, shapes: &Value) -> Value {
+    let Some(property) = shapes["property"].as_str() else {
+        return shapes.clone();
+    };
+    let values = &shapes["values"];
+    let mut out = json!({ "properties": [property], "values": values });
+    if let Some(&(_, vanilla, all)) = template_properties(template)
+        .iter()
+        .find(|(k, _, _)| *k == property)
+        && all.iter().any(|v| values.get(*v).is_none())
+    {
+        let default = default_state
+            .get(property)
+            .and_then(Value::as_str)
+            .unwrap_or(vanilla);
+        if let Some(shape) = values.get(default) {
+            out["default"] = shape.clone();
+        }
+    }
+    out
+}
+
+/// A block's own properties (`{name: [values, Create's default first]}`) in the fork's form
+/// (`docs/modding/src/how-to/content-mods.md`): the properties its template lacks, typed
+/// (`{"type": "boolean"}`, `{"type": "enum", "values": [..]}`), and its `default_state`: each
+/// declared property's default, and Create's default of a template property where it is not
+/// the template's. A template's own property is never declared again (the loader refuses it):
+/// the block takes the template's values for it.
+pub fn fork_states(
+    template: &str,
+    own: &Map<String, Value>,
+) -> (Map<String, Value>, Map<String, Value>) {
+    let on_template = template_properties(template);
+    let (mut declared, mut default) = (Map::new(), Map::new());
+    for (name, values) in own {
+        let values: Vec<&str> = values
+            .as_array()
+            .map(|v| v.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let Some(&first) = values.first() else {
+            continue;
+        };
+        if let Some((_, vanilla, _)) = on_template.iter().find(|(k, _, _)| k == name) {
+            if first != *vanilla {
+                default.insert(name.clone(), json!(first));
+            }
+            continue;
+        }
+        let mut sorted = values.clone();
+        sorted.sort_unstable();
+        let kind = if sorted == ["false", "true"] {
+            json!({ "type": "boolean" })
+        } else {
+            json!({ "type": "enum", "values": values })
+        };
+        declared.insert(name.clone(), kind);
+        default.insert(name.clone(), json!(first));
+    }
+    (declared, default)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shape_tables_cover_the_template_s_values_create_never_sets() {
+        let shapes = json!({ "property": "facing", "values": {
+            "north": [[0.0, 0.0, 0.0, 1.0, 1.0, 0.5]], "south": [[0.0, 0.0, 0.5, 1.0, 1.0, 1.0]],
+            "west": [[0.0, 0.0, 0.0, 0.5, 1.0, 1.0]], "east": [[0.5, 0.0, 0.0, 1.0, 1.0, 1.0]] } });
+        let default = json!({ "facing": "south" });
+        let out = fork_shapes("minecraft:barrel", default.as_object().unwrap(), &shapes);
+        assert_eq!(out["properties"], json!(["facing"]));
+        assert_eq!(out["default"], shapes["values"]["south"]);
+        // A template without the property: the table already covers every state.
+        let out = fork_shapes("minecraft:stone", &Map::new(), &shapes);
+        assert!(out.get("default").is_none());
+    }
+
+    #[test]
+    fn own_states_take_the_fork_s_form_without_the_template_s() {
+        let own = json!({
+            "axis": ["x", "y", "z"],
+            "powered": ["false", "true"],
+            "part": ["none", "start", "middle", "end"],
+            "top_shaft": ["true", "false"],
+        });
+        let (declared, default) = fork_states("minecraft:quartz_pillar", own.as_object().unwrap());
+        assert_eq!(
+            Value::Object(declared),
+            json!({
+                "powered": { "type": "boolean" },
+                "part": { "type": "enum", "values": ["none", "start", "middle", "end"] },
+                "top_shaft": { "type": "boolean" },
+            })
+        );
+        // `axis` is the pillar's, defaulting to x where vanilla's is y.
+        assert_eq!(
+            Value::Object(default),
+            json!({ "axis": "x", "powered": "false", "part": "none", "top_shaft": "true" })
+        );
+    }
 
     #[test]
     fn copper_shingles_and_tiles_take_the_cut_copper_of_their_age_and_shape() {
@@ -2949,10 +3107,10 @@ mod tests {
         assert_eq!(rotation("up", "down"), (180, 0));
     }
 
-    /// A declaration's state count (every combination of its own properties) and its default
-    /// (each property's first value).
+    /// A block's state count from its own properties as Create defines them (before
+    /// `fork_states` leaves out its template's) and its default (each property's first value).
     fn states_and_default(doc: &Value) -> (usize, Vec<(String, String)>) {
-        let props = doc["state_properties"].as_object().expect("own properties");
+        let props = doc[OWN].as_object().expect("own properties");
         let count = props
             .values()
             .map(|v| v.as_array().unwrap().len())
@@ -2964,6 +3122,9 @@ mod tests {
         (count, default)
     }
 
+    /// Where `declare` keeps the block's own properties as Create defines them.
+    const OWN: &str = "test:own";
+
     fn declare(name: &str, info: (f64, f64, u32)) -> Value {
         let b = CreateBlock {
             name: name.into(),
@@ -2974,7 +3135,11 @@ mod tests {
             java: JavaFacts::default(),
         };
         let d = decide(&b, &BTreeMap::new());
-        declaration(&b, &d).unwrap_or_else(|| panic!("{name}: {d:?}"))
+        let mut doc = declaration(&b, &d).unwrap_or_else(|| panic!("{name}: {d:?}"));
+        if let Decision::Declared { own: Some(own), .. } = &d {
+            doc[OWN] = own.clone();
+        }
+        doc
     }
 
     fn pairs(p: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -3072,7 +3237,7 @@ mod tests {
             assert_eq!(doc["properties"]["sounds"], "minecraft:copper_block");
             assert_eq!(doc["properties"]["requires_tool"], true);
             assert_eq!(doc["item"], true);
-            assert_eq!(doc["shapes"]["property"], "facing");
+            assert_eq!(doc["shapes"]["properties"][0], "facing");
             assert_eq!(
                 states_and_default(&doc),
                 (12, pairs(&[("facing", "down"), ("waterlogged", "false")]))
@@ -3142,9 +3307,9 @@ mod tests {
         let doc = declare("blue_nixie_tube", (3.0, 6.0, 1));
         assert_eq!(doc["item"], false);
         assert!(doc.get("components").is_none());
-        // Copycats: drawn by the glue (`dynamic_model`), Create's states and defaults.
+        // Copycats: drawn by their block entity, Create's states and defaults.
         let doc = declare("copycat_step", (3.0, 6.0, 64));
-        assert_eq!(doc["properties"]["dynamic_model"], true);
+        assert_eq!(doc["properties"]["render_shape"], "ENTITYBLOCK_ANIMATED");
         assert_eq!(
             states_and_default(&doc),
             (
@@ -3158,7 +3323,7 @@ mod tests {
         );
         assert_eq!(doc["shapes"]["values"]["top"][0][4], 1.0 - 1.0 / 256.0);
         let doc = declare("copycat_panel", (3.0, 6.0, 64));
-        assert_eq!(doc["properties"]["dynamic_model"], true);
+        assert_eq!(doc["properties"]["render_shape"], "ENTITYBLOCK_ANIMATED");
         assert_eq!(states_and_default(&doc).0, 12);
         assert_eq!(
             doc["shapes"]["values"]["north"][0],
@@ -3166,7 +3331,7 @@ mod tests {
         );
         let doc = declare("copycat_bars", (0.0, 0.0, 1));
         assert_eq!(doc["item"], false);
-        assert!(doc["properties"].get("dynamic_model").is_none());
+        assert!(doc["properties"].get("render_shape").is_none());
     }
 
     /// With Create's generated data beside the port: every valve handle, sliding door, toolbox,
@@ -3250,82 +3415,15 @@ mod tests {
         }
         assert_eq!(
             doc("turntable")["properties"]["render_shape"],
-            "entityblock_animated"
+            "ENTITYBLOCK_ANIMATED"
         );
-        // What stands on turntables and lands on seats is heard; carts run on controller rails.
-        assert_eq!(doc("turntable")["properties"]["entity_inside"], true);
         assert_eq!(states_and_default(&doc("turntable")).0, 1);
-        assert_eq!(doc("lime_seat")["properties"]["entity_inside"], true);
         assert_eq!(doc("lime_seat")["shapes"]["values"]["false"][0][4], 0.5);
-        assert_eq!(doc("controller_rail")["properties"]["rail"], true);
+        // Carts run on controller rails: a rail template.
         assert_eq!(doc("controller_rail")["template"], "minecraft:powered_rail");
-        assert!(doc("shaft")["properties"].get("entity_inside").is_none());
         assert_eq!(doc("water_wheel_structure")["item"], false);
         assert_eq!(doc("metal_girder_encased_shaft")["item"], false);
         assert_eq!(doc("haunted_bell")["template"], "minecraft:bell");
-    }
-
-    /// With Create's Java beside the port: the classes answering `hasAnalogOutputSignal` are the
-    /// ones `ANALOG_OUTPUT` names (and four not ported), and each of those blocks declared here
-    /// says `analog_output`.
-    #[test]
-    fn comparators_read_the_blocks_create_gives_an_analog_output() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        let java_root = root.join("src/main/java");
-        let generated = root.join("src/generated/resources");
-        if !java_root.is_dir() || !generated.is_dir() {
-            return;
-        }
-        let mut files = Vec::new();
-        crate::java::collect(&java_root, &mut files);
-        let mut classes: Vec<String> = files
-            .iter()
-            .filter(|f| {
-                std::fs::read_to_string(f)
-                    .is_ok_and(|t| t.contains("boolean hasAnalogOutputSignal("))
-            })
-            .map(|f| f.file_stem().unwrap().to_string_lossy().into_owned())
-            .collect();
-        classes.sort();
-        assert_eq!(
-            classes,
-            [
-                "BacktankBlock",
-                "BasinBlock",
-                "BlazeBurnerBlock",
-                "ControllerRailBlock",
-                "DepotBlock",
-                "EjectorBlock",
-                "FluidTankBlock",
-                "FrogportBlock",
-                "GaugeBlock",
-                "ItemDrainBlock",
-                "ItemVaultBlock",
-                "LitBlazeBurnerBlock",
-                "PackagerBlock",
-                "PortableStorageInterfaceBlock",
-                "PostboxBlock",
-                "RedstoneRequesterBlock",
-                "SequencedGearshiftBlock",
-                "SignalBlock",
-                "SpoutBlock",
-                "StationBlock",
-                "ToolboxBlock",
-            ]
-        );
-        let java = crate::java::read_all(&java_root);
-        let all = read_blocks(&generated, &java);
-        let mut declared = 0;
-        for b in &all {
-            let Some(doc) = declaration(b, &decide(b, &BTreeMap::new())) else {
-                continue;
-            };
-            let says = doc["properties"]["analog_output"] == true;
-            assert_eq!(says, analog_output(&b.name), "{}", b.name);
-            declared += usize::from(says);
-        }
-        // 25 blocks, 16 toolboxes and 16 postboxes.
-        assert_eq!(declared, 25 + 16 + 16);
     }
 
     #[test]

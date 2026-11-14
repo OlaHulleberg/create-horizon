@@ -8,7 +8,9 @@
   },
   "item": true,
   "shapes": {
-    "property": "x",
+    "properties": [
+      "x"
+    ],
     "values": {
       "true": [
         [
@@ -57,30 +59,23 @@
     }
   },
   "state_properties": {
-    "axis": [
-      "y",
-      "x",
-      "z"
-    ],
-    "bottom": [
-      "false",
-      "true"
-    ],
-    "top": [
-      "false",
-      "true"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ],
-    "x": [
-      "false",
-      "true"
-    ],
-    "z": [
-      "false",
-      "true"
-    ]
+    "bottom": {
+      "type": "boolean"
+    },
+    "top": {
+      "type": "boolean"
+    },
+    "x": {
+      "type": "boolean"
+    },
+    "z": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "bottom": "false",
+    "top": "false",
+    "x": "false",
+    "z": "false"
   }
 }

@@ -8,17 +8,27 @@
   },
   "item": true,
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "pointing": [
-      "up",
-      "left",
-      "down",
-      "right"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "pointing": {
+      "type": "enum",
+      "values": [
+        "up",
+        "left",
+        "down",
+        "right"
+      ]
+    }
+  },
+  "default_state": {
+    "facing": "north",
+    "pointing": "up"
   }
 }

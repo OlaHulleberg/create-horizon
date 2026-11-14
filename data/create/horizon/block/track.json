@@ -8,7 +8,9 @@
   },
   "item": true,
   "shapes": {
-    "property": "shape",
+    "properties": [
+      "shape"
+    ],
     "values": {
       "zo": [
         [
@@ -167,34 +169,40 @@
     }
   },
   "state_properties": {
-    "shape": [
-      "zo",
-      "none",
-      "xo",
-      "pd",
-      "nd",
-      "an",
-      "as",
-      "ae",
-      "aw",
-      "tn",
-      "ts",
-      "te",
-      "tw",
-      "cr_o",
-      "cr_d",
-      "cr_pdx",
-      "cr_pdz",
-      "cr_ndx",
-      "cr_ndz"
-    ],
-    "turn": [
-      "false",
-      "true"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "shape": {
+      "type": "enum",
+      "values": [
+        "zo",
+        "none",
+        "xo",
+        "pd",
+        "nd",
+        "an",
+        "as",
+        "ae",
+        "aw",
+        "tn",
+        "ts",
+        "te",
+        "tw",
+        "cr_o",
+        "cr_d",
+        "cr_pdx",
+        "cr_pdz",
+        "cr_ndx",
+        "cr_ndz"
+      ]
+    },
+    "turn": {
+      "type": "boolean"
+    },
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "shape": "zo",
+    "turn": "false",
+    "waterlogged": "false"
   }
 }

@@ -4,12 +4,13 @@
     "hardness": 2.5,
     "explosion_resistance": 2.5,
     "requires_tool": false,
-    "sounds": "minecraft:lectern",
-    "analog_output": true
+    "sounds": "minecraft:lectern"
   },
   "item": false,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "north": [
         [
@@ -118,19 +119,25 @@
     }
   },
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "has_book": [
-      "true",
-      "false"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "has_book": {
+      "type": "boolean"
+    },
+    "powered": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "facing": "north",
+    "has_book": "true",
+    "powered": "false"
   }
 }

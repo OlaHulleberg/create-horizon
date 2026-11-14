@@ -8,16 +8,24 @@
   },
   "item": false,
   "shapes": {
-    "property": "axis",
+    "properties": [
+      "axis"
+    ],
     "values": {
       "x": [],
       "z": []
     }
   },
   "state_properties": {
-    "axis": [
-      "x",
-      "z"
-    ]
+    "axis": {
+      "type": "enum",
+      "values": [
+        "x",
+        "z"
+      ]
+    }
+  },
+  "default_state": {
+    "axis": "x"
   }
 }

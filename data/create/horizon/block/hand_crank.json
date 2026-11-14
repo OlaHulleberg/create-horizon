@@ -5,11 +5,13 @@
     "explosion_resistance": 2.0,
     "requires_tool": false,
     "sounds": "minecraft:stripped_spruce_wood",
-    "render_shape": "entityblock_animated"
+    "render_shape": "ENTITYBLOCK_ANIMATED"
   },
   "item": true,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "down": [
         [
@@ -122,17 +124,19 @@
     }
   },
   "state_properties": {
-    "facing": [
-      "up",
-      "down",
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "up",
+        "down",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    }
+  },
+  "default_state": {
+    "facing": "up"
   }
 }

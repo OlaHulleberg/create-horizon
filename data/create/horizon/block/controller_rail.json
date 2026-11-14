@@ -4,45 +4,37 @@
     "hardness": 0.7,
     "explosion_resistance": 0.7,
     "requires_tool": false,
-    "sounds": "minecraft:iron_block",
-    "analog_output": true,
-    "rail": true
+    "sounds": "minecraft:iron_block"
   },
   "item": true,
   "state_properties": {
-    "backwards": [
-      "false",
-      "true"
-    ],
-    "power": [
-      "0",
-      "1",
-      "2",
-      "3",
-      "4",
-      "5",
-      "6",
-      "7",
-      "8",
-      "9",
-      "10",
-      "11",
-      "12",
-      "13",
-      "14",
-      "15"
-    ],
-    "shape": [
-      "north_south",
-      "east_west",
-      "ascending_east",
-      "ascending_west",
-      "ascending_north",
-      "ascending_south"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "backwards": {
+      "type": "boolean"
+    },
+    "power": {
+      "type": "enum",
+      "values": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15"
+      ]
+    }
+  },
+  "default_state": {
+    "backwards": "false",
+    "power": "0"
   }
 }

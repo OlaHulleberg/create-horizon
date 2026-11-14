@@ -5,11 +5,13 @@
     "explosion_resistance": 6.0,
     "requires_tool": true,
     "sounds": "minecraft:andesite",
-    "render_shape": "entityblock_animated"
+    "render_shape": "ENTITYBLOCK_ANIMATED"
   },
   "item": true,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "down": [
         [
@@ -74,23 +76,33 @@
     }
   },
   "state_properties": {
-    "facing": [
-      "up",
-      "down",
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "part": [
-      "start",
-      "middle",
-      "end",
-      "single"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "up",
+        "down",
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "part": {
+      "type": "enum",
+      "values": [
+        "start",
+        "middle",
+        "end",
+        "single"
+      ]
+    },
+    "powered": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "facing": "up",
+    "part": "start",
+    "powered": "false"
   }
 }

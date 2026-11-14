@@ -6,7 +6,9 @@
   },
   "item": true,
   "shapes": {
-    "property": "axis",
+    "properties": [
+      "axis"
+    ],
     "values": {
       "x": [
         [
@@ -159,17 +161,27 @@
     }
   },
   "state_properties": {
-    "axis": [
-      "x",
-      "z"
-    ],
-    "shape": [
-      "straight",
-      "window",
-      "closed",
-      "t_left",
-      "t_right",
-      "cross"
-    ]
+    "axis": {
+      "type": "enum",
+      "values": [
+        "x",
+        "z"
+      ]
+    },
+    "shape": {
+      "type": "enum",
+      "values": [
+        "straight",
+        "window",
+        "closed",
+        "t_left",
+        "t_right",
+        "cross"
+      ]
+    }
+  },
+  "default_state": {
+    "axis": "x",
+    "shape": "straight"
   }
 }

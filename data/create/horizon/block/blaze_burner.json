@@ -4,12 +4,13 @@
     "hardness": 3.0,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:gold_block",
-    "analog_output": true
+    "sounds": "minecraft:gold_block"
   },
   "item": true,
   "shapes": {
-    "property": "blaze",
+    "properties": [
+      "blaze"
+    ],
     "values": {
       "none": [
         [
@@ -64,18 +65,28 @@
     }
   },
   "state_properties": {
-    "blaze": [
-      "none",
-      "smouldering",
-      "fading",
-      "kindled",
-      "seething"
-    ],
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ]
+    "blaze": {
+      "type": "enum",
+      "values": [
+        "none",
+        "smouldering",
+        "fading",
+        "kindled",
+        "seething"
+      ]
+    },
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    }
+  },
+  "default_state": {
+    "blaze": "none",
+    "facing": "north"
   }
 }

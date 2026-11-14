@@ -4,18 +4,23 @@
     "hardness": 3.0,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:netherite_block",
-    "analog_output": true
+    "sounds": "minecraft:netherite_block"
   },
   "item": true,
   "state_properties": {
-    "powered": [
-      "false",
-      "true"
-    ],
-    "type": [
-      "entry_signal",
-      "cross_signal"
-    ]
+    "powered": {
+      "type": "boolean"
+    },
+    "type": {
+      "type": "enum",
+      "values": [
+        "entry_signal",
+        "cross_signal"
+      ]
+    }
+  },
+  "default_state": {
+    "powered": "false",
+    "type": "entry_signal"
   }
 }

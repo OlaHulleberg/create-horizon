@@ -8,7 +8,9 @@
   },
   "item": true,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "down": [
         [
@@ -60,25 +62,35 @@
           1.0
         ]
       ]
-    }
+    },
+    "default": [
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    ]
   },
   "state_properties": {
-    "facing": [
-      "down",
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "shape": [
-      "normal",
-      "window",
-      "encased",
-      "intersection"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "shape": {
+      "type": "enum",
+      "values": [
+        "normal",
+        "window",
+        "encased",
+        "intersection"
+      ]
+    },
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "facing": "down",
+    "shape": "normal",
+    "waterlogged": "false"
   }
 }

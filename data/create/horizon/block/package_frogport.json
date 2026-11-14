@@ -4,12 +4,13 @@
     "hardness": 3.0,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:netherite_block",
-    "analog_output": true
+    "sounds": "minecraft:netherite_block"
   },
   "item": true,
   "shapes": {
-    "property": "waterlogged",
+    "properties": [
+      "waterlogged"
+    ],
     "values": {
       "false": [
         [
@@ -48,11 +49,5 @@
         ]
       ]
     }
-  },
-  "state_properties": {
-    "waterlogged": [
-      "false",
-      "true"
-    ]
   }
 }

@@ -4,12 +4,13 @@
     "hardness": 1.5,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:netherite_block",
-    "analog_output": true
+    "sounds": "minecraft:netherite_block"
   },
   "item": true,
   "shapes": {
-    "property": "axis",
+    "properties": [
+      "axis"
+    ],
     "values": {
       "x": [
         [
@@ -34,13 +35,19 @@
     }
   },
   "state_properties": {
-    "axis": [
-      "x",
-      "z"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ]
+    "axis": {
+      "type": "enum",
+      "values": [
+        "x",
+        "z"
+      ]
+    },
+    "powered": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "axis": "x",
+    "powered": "false"
   }
 }

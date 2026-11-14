@@ -9,7 +9,9 @@
   },
   "item": false,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "north": [
         [
@@ -86,21 +88,27 @@
     }
   },
   "state_properties": {
-    "double_face": [
-      "floor",
-      "wall",
-      "wall_reversed",
-      "ceiling"
-    ],
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "double_face": {
+      "type": "enum",
+      "values": [
+        "floor",
+        "wall",
+        "wall_reversed",
+        "ceiling"
+      ]
+    },
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    }
+  },
+  "default_state": {
+    "double_face": "floor",
+    "facing": "north"
   }
 }

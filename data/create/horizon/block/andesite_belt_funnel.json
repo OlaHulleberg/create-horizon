@@ -8,7 +8,9 @@
   },
   "item": false,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "north": [
         [
@@ -85,25 +87,35 @@
     }
   },
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ],
-    "shape": [
-      "retracted",
-      "extended",
-      "pushing",
-      "pulling"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "south",
+        "west",
+        "east"
+      ]
+    },
+    "powered": {
+      "type": "boolean"
+    },
+    "shape": {
+      "type": "enum",
+      "values": [
+        "retracted",
+        "extended",
+        "pushing",
+        "pulling"
+      ]
+    },
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "facing": "north",
+    "powered": "false",
+    "shape": "retracted",
+    "waterlogged": "false"
   }
 }

@@ -4,20 +4,24 @@
     "hardness": 0.0,
     "explosion_resistance": 0.0,
     "sounds": "minecraft:stone",
-    "render_shape": "invisible"
+    "render_shape": "INVISIBLE"
   },
   "item": false,
   "shapes": {
-    "property": "waterlogged",
+    "properties": [
+      "waterlogged"
+    ],
     "values": {
       "false": [],
       "true": []
     }
   },
   "state_properties": {
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "waterlogged": "false"
   }
 }

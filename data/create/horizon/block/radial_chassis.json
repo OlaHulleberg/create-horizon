@@ -8,26 +8,23 @@
   },
   "item": true,
   "state_properties": {
-    "axis": [
-      "y",
-      "x",
-      "z"
-    ],
-    "sticky_east": [
-      "false",
-      "true"
-    ],
-    "sticky_north": [
-      "false",
-      "true"
-    ],
-    "sticky_south": [
-      "false",
-      "true"
-    ],
-    "sticky_west": [
-      "false",
-      "true"
-    ]
+    "sticky_east": {
+      "type": "boolean"
+    },
+    "sticky_north": {
+      "type": "boolean"
+    },
+    "sticky_south": {
+      "type": "boolean"
+    },
+    "sticky_west": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "sticky_east": "false",
+    "sticky_north": "false",
+    "sticky_south": "false",
+    "sticky_west": "false"
   }
 }

@@ -4,33 +4,27 @@
     "hardness": 1.5,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:andesite",
-    "rail": true
+    "sounds": "minecraft:andesite"
   },
   "item": true,
   "state_properties": {
-    "backwards": [
-      "false",
-      "true"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ],
-    "rail_type": [
-      "powered_rail",
-      "regular",
-      "detector_rail",
-      "activator_rail",
-      "controller_rail"
-    ],
-    "shape": [
-      "east_west",
-      "north_south"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "backwards": {
+      "type": "boolean"
+    },
+    "rail_type": {
+      "type": "enum",
+      "values": [
+        "powered_rail",
+        "regular",
+        "detector_rail",
+        "activator_rail",
+        "controller_rail"
+      ]
+    }
+  },
+  "default_state": {
+    "backwards": "false",
+    "rail_type": "powered_rail",
+    "shape": "east_west"
   }
 }

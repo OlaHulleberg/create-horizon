@@ -8,14 +8,12 @@
   },
   "item": true,
   "state_properties": {
-    "axis": [
-      "x",
-      "y",
-      "z"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ]
+    "powered": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "axis": "x",
+    "powered": "false"
   }
 }

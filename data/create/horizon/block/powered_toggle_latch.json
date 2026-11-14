@@ -6,19 +6,11 @@
   },
   "item": true,
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "powered": [
-      "false",
-      "true"
-    ],
-    "powering": [
-      "false",
-      "true"
-    ]
+    "powering": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "powering": "false"
   }
 }

@@ -5,11 +5,13 @@
     "explosion_resistance": 6.0,
     "requires_tool": true,
     "sounds": "minecraft:gold_block",
-    "dynamic_model": true
+    "render_shape": "ENTITYBLOCK_ANIMATED"
   },
   "item": true,
   "shapes": {
-    "property": "half",
+    "properties": [
+      "half"
+    ],
     "values": {
       "bottom": [
         [
@@ -34,19 +36,25 @@
     }
   },
   "state_properties": {
-    "facing": [
-      "south",
-      "north",
-      "west",
-      "east"
-    ],
-    "half": [
-      "bottom",
-      "top"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "facing": {
+      "type": "enum",
+      "values": [
+        "south",
+        "north",
+        "west",
+        "east"
+      ]
+    },
+    "half": {
+      "type": "enum",
+      "values": [
+        "bottom",
+        "top"
+      ]
+    }
+  },
+  "default_state": {
+    "facing": "south",
+    "half": "bottom"
   }
 }

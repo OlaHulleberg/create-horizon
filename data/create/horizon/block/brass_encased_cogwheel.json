@@ -6,18 +6,16 @@
   },
   "item": true,
   "state_properties": {
-    "axis": [
-      "x",
-      "y",
-      "z"
-    ],
-    "bottom_shaft": [
-      "false",
-      "true"
-    ],
-    "top_shaft": [
-      "false",
-      "true"
-    ]
+    "bottom_shaft": {
+      "type": "boolean"
+    },
+    "top_shaft": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "axis": "x",
+    "bottom_shaft": "false",
+    "top_shaft": "false"
   }
 }

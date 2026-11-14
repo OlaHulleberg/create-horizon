@@ -4,12 +4,13 @@
     "hardness": 2.0,
     "explosion_resistance": 2.0,
     "requires_tool": false,
-    "sounds": "minecraft:oak_planks",
-    "analog_output": true
+    "sounds": "minecraft:oak_planks"
   },
   "item": true,
   "shapes": {
-    "property": "facing",
+    "properties": [
+      "facing"
+    ],
     "values": {
       "north": [
         [
@@ -51,18 +52,24 @@
           0.9375
         ]
       ]
-    }
+    },
+    "default": [
+      [
+        0.0625,
+        0.0,
+        0.25,
+        0.9375,
+        0.5625,
+        0.75
+      ]
+    ]
   },
   "state_properties": {
-    "facing": [
-      "north",
-      "south",
-      "west",
-      "east"
-    ],
-    "waterlogged": [
-      "false",
-      "true"
-    ]
+    "waterlogged": {
+      "type": "boolean"
+    }
+  },
+  "default_state": {
+    "waterlogged": "false"
   }
 }
