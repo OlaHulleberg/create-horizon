@@ -254,12 +254,15 @@ fn facts(body: &str) -> JavaFacts {
         class,
         base,
         sound,
-        // `BuilderTransformers.encasedBase`, under the encased shafts and cogwheels.
+        // `BuilderTransformers.encasedBase` (under the encased shafts and cogwheels), `bearing`
+        // and `mechanicalPiston` set it in their own chains.
         no_occlusion: body.contains("noOcclusion()")
             || [
                 "BuilderTransformers.encasedShaft(",
                 "BuilderTransformers.encasedCogwheel(",
                 "BuilderTransformers.encasedLargeCogwheel(",
+                "BuilderTransformers.bearing(",
+                "BuilderTransformers.mechanicalPiston(",
             ]
             .iter()
             .any(|t| body.contains(t)),
