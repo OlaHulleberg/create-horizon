@@ -55,6 +55,19 @@ pub trait Subsystem: Sync {
     /// After a server level's tick.
     fn level_tick(&self, _lv: &mut ServerLevel<'_>) {}
 
+    /// An item on the belt segment at `segment` reaches its middle (`locked` false:
+    /// `BeltProcessingBehaviour.handleReceivedItem`) or is held there (`handleHeldItem`): what
+    /// a machine above it does. The first subsystem to answer acts; None when it has none there.
+    fn belt_process(
+        &self,
+        _lv: &mut ServerLevel<'_>,
+        _segment: [i32; 3],
+        _item: &mut create_engine::belt::Item,
+        _locked: bool,
+    ) -> Option<create_engine::belt::Process> {
+        None
+    }
+
     /// A player joined the server.
     fn player_joined(&self, _host: &mut dyn ServerHost, _player: PlayerRef) {}
 

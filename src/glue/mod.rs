@@ -4,6 +4,7 @@
 pub mod interaction;
 pub mod items;
 pub mod kinetics;
+pub mod logistics;
 pub mod net;
 pub mod packages;
 pub mod persist;
@@ -29,6 +30,10 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &schematics::Schematics,
     &interaction::Interaction,
     &items::Items,
+    &logistics::Logistics,
+    &logistics::Arms,
+    // After `Kinetics`, which declares the block entity type it adds to.
+    &logistics::Entities,
 ];
 
 thread_local! {
