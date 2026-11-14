@@ -758,7 +758,10 @@ impl Kinetics {
                 if driver[s] == NONE {
                     (root[s], driver[s]) = (r, id);
                 } else if r.signum() != root[s].signum() {
-                    conflict = conflict.or(Some(self.newer(id, driver[s])));
+                    // `propagateNewSource` destroys the block whose arrival (or new speed) met
+                    // the other way's: the network's newest part, which joined the two.
+                    let newest = self.queue.iter().copied().reduce(|a, b| self.newer(a, b));
+                    conflict = conflict.or(newest);
                 } else if r.abs() > root[s].abs() {
                     (root[s], driver[s]) = (r, id);
                 }
@@ -1062,6 +1065,18 @@ mod tests {
         let e = solve(&mut k);
         assert!(e.contains(&Event::Break { pos: [2, 0, 0] }), "{e:?}");
         assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        // Two running the other way apart, joined by a shaft placed between them: the shaft
+        // breaks and both motors go on.
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        k.set([3, 0, 0], 0, motor(Dir::West, 16.0));
+        solve(&mut k);
+        k.set([2, 0, 0], 0, Part::shaft(Axis::X));
+        let e = solve(&mut k);
+        assert!(e.contains(&Event::Break { pos: [2, 0, 0] }), "{e:?}");
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        assert_eq!(k.speed([3, 0, 0], 0), Some(-16.0));
     }
 
     #[test]
