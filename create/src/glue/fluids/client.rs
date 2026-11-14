@@ -169,10 +169,13 @@ impl BlockEntityPart for FluidEntity {
                 super::rims::draw(event);
                 draw_pipe_filter(host, event, &info);
             }
-            Block::FluidPipe
-            | Block::EncasedFluidPipe
-            | Block::GlassFluidPipe
-            | Block::MechanicalPump => super::rims::draw(event),
+            Block::GlassFluidPipe => {
+                super::rims::draw(event);
+                super::glass::draw(host, event, &info);
+            }
+            Block::FluidPipe | Block::EncasedFluidPipe | Block::MechanicalPump => {
+                super::rims::draw(event)
+            }
             _ => {}
         }
     }

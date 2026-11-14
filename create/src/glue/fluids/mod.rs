@@ -20,6 +20,7 @@ mod clicks;
 pub(crate) mod client;
 mod drawn;
 mod engine;
+mod glass;
 mod goggles;
 mod lava;
 mod machines;
@@ -115,6 +116,7 @@ impl Subsystem for Fluids {
         machines::tick_spouts(lv);
         machines::tick_drains(lv);
         rims::tick(lv);
+        glass::send(lv);
         drawn::send(lv);
         engine::tick(lv);
     }
@@ -137,6 +139,7 @@ impl Subsystem for Fluids {
 
     fn world_closed(&self) {
         lava::reset();
+        glass::reset();
         place::reset();
         rims::reset();
         drawn::reset();
@@ -154,6 +157,7 @@ impl Subsystem for Fluids {
             engine::ENGINE_SPEED,
             plumbing::FILTER,
             plumbing::WHISTLE,
+            glass::FLOW,
         ]
     }
 

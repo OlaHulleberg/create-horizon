@@ -231,6 +231,66 @@ pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> C
     out
 }
 
+/// The pipes `shown` picks (glass pipes, which draw the fluid in them) on the way from the pump
+/// out of its `side` to each end `reach` finds the same way (breadth first, the first way
+/// found), by the end's position.
+pub fn shown_on_the_way(
+    pump: [i32; 3],
+    side: Dir,
+    cell: impl Fn([i32; 3]) -> Cell,
+    shown: impl Fn([i32; 3]) -> bool,
+) -> Vec<([i32; 3], Vec<[i32; 3]>)> {
+    let first = step(pump, side);
+    let first_cell = cell(first);
+    let piped = |c: Cell| matches!(c, Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..));
+    if !piped(first_cell) || !connects(first_cell, side) {
+        return Vec::new();
+    }
+    let mut parent: std::collections::HashMap<[i32; 3], [i32; 3]> =
+        std::collections::HashMap::new();
+    let mut ends: Vec<([i32; 3], [i32; 3])> = Vec::new();
+    let mut frontier = std::collections::VecDeque::from([(1, first)]);
+    let mut visited = std::collections::HashSet::from([first]);
+    while let Some((distance, at)) = frontier.pop_front() {
+        let sides = openings(cell(at));
+        for d in Dir::ALL {
+            if sides & d.bit() == 0 {
+                continue;
+            }
+            let next = step(at, d);
+            if next == pump {
+                continue;
+            }
+            let next_cell = cell(next);
+            match next_cell {
+                Cell::Tank | Cell::Open => ends.push((next, at)),
+                Cell::Port(s) if s == d.opposite() => ends.push((next, at)),
+                c if piped(c) && openings(c) & d.opposite().bit() != 0 => {
+                    if distance + 1 >= PUMP_RANGE || !visited.insert(next) {
+                        continue;
+                    }
+                    parent.insert(next, at);
+                    frontier.push_back((distance + 1, next));
+                }
+                _ => {}
+            }
+        }
+    }
+    ends.into_iter()
+        .map(|(end, last)| {
+            let mut way = Vec::new();
+            let mut at = Some(last);
+            while let Some(p) = at {
+                if shown(p) {
+                    way.push(p);
+                }
+                at = parent.get(&p).copied();
+            }
+            (end, way)
+        })
+        .collect()
+}
+
 /// `PipeConnection.manageFlows`: how far a flow gets across half a pipe in a tick at
 /// `pressure` (`1/32 + clamp(pressure / 128, 0, 1) * 31/32`).
 pub fn flow_speed(pressure: f32) -> f32 {

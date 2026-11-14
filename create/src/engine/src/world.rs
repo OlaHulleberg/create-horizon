@@ -418,6 +418,10 @@ pub struct Pump {
     pub out: Option<(crate::tank::Fluid, u32)>,
     /// Ticks it has pumped since its pipes last changed (its flows' progress).
     pub pumped: u32,
+    /// The glass pipes behind it and in front of it on the way to each end, by the end
+    /// (`fluids::shown_on_the_way`): they draw what flows through them.
+    pub shown_pull: Vec<([i32; 3], Vec<[i32; 3]>)>,
+    pub shown_push: Vec<([i32; 3], Vec<[i32; 3]>)>,
 }
 
 /// An assembled windmill: its blocks (offset from the bearing, state) and its sails.
