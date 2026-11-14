@@ -24,8 +24,17 @@ pub(super) fn run(host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>)
         .id(&*host)
         .and_then(|d| level_index(&d))
         .unwrap_or(0);
-    let line = match with_world(|w| w.speed(dim, [x, y, z])).flatten() {
-        Some(speed) => format!("create speed at {x} {y} {z}: {speed} rpm"),
+    let found = with_world(|w| {
+        let speed = w.speed(dim, [x, y, z])?;
+        Some((speed, w.dims.get(dim)?.kinetics.network([x, y, z], 0)))
+    })
+    .flatten();
+    let line = match found {
+        Some((speed, Some((_, stress, capacity, over)))) => format!(
+            "create speed at {x} {y} {z}: {speed} rpm, stress {stress} / {capacity} su{}",
+            if over { ", overstressed" } else { "" }
+        ),
+        Some((speed, None)) => format!("create speed at {x} {y} {z}: {speed} rpm"),
         None => format!("create speed at {x} {y} {z}: not kinetic"),
     };
     let _ = host.commands().feedback(Text::literal(line));
