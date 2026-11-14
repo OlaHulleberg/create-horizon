@@ -1,7 +1,8 @@
 /target/
-/.horizon/
+/create/target/
+/create/.horizon/
+/create/Cargo.lock
 /tools/create-data/target/
 __pycache__/
 *.pyc
 saves/
-/Cargo.lock

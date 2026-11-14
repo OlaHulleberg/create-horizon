@@ -76,6 +76,12 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).
 - **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
 
+## Left out of the port, not for want of API
+
+- Fluids: the rest of Create's `use_plumbing` (copper casing on pipes, the smart pipe's filter slot,
+  growing a whistle) and clicking fluid tanks (`use_tank`).
+- Carriage seats wait on rideable mod entities (above); the seat helpers they need come back with them.
+
 ## Not to send
 
 - The earlier port's `feat/create-hooks` branch on OlaHulleberg/horizon added `native_*` hook points for the

@@ -1,7 +1,7 @@
 //! The one-time prepare step. A Create jar holds MIT data (`data/`, generated `assets/`) and All
 //! Rights Reserved assets (textures, hand-written models, sounds); neither ships with the port. This
 //! reads them from the player's own jar (or folders laid out like one) and writes the native mod
-//! the launcher builds: this repository's crate (`horizon-mod.toml`, `Cargo.toml`, `src/`) and
+//! the launcher builds: the mod's crate (`create/`: `horizon-mod.toml`, `Cargo.toml`, `src/`) and
 //! declarations (`data/`, `assets/`), Create's data converted from 1.21.1 to 26.3, and its assets
 //! with the item model definitions 26.3 needs. Reading a zip runs no Java. The folder holds
 //! Create's assets: it is for the player's own game, never for redistribution.
@@ -316,14 +316,12 @@ fn common_tag_files() -> impl Iterator<Item = (&'static str, String, Value)> {
     })
 }
 
-/// The repository's files that make up the mod's crate and package, besides `data/` and `assets/`.
-const CRATE_FILES: &[&str] = &[
-    "horizon-mod.toml",
-    "Cargo.toml",
-    "LICENSE",
-    "README.md",
-    "THIRD_PARTY_NOTICES.md",
-];
+/// The mod folder's (`create/`) files that make up its crate, besides `src/`, `data/` and
+/// `assets/`.
+const CRATE_FILES: &[&str] = &["horizon-mod.toml", "Cargo.toml"];
+
+/// The repository's notices that go into the package beside them.
+const NOTICES: &[&str] = &["LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"];
 
 pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, String> {
     let files = read_sources(sources)?;
@@ -340,21 +338,29 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
         fs::write(&p, bytes).map_err(|e| format!("{}: {e}", p.display()))
     };
+    let mod_dir = repo.join("create");
     let mut crate_files = BTreeMap::new();
-    walk(repo, &repo.join("src"), &mut crate_files)?;
-    for name in CRATE_FILES {
-        let p = repo.join(name);
-        crate_files.insert(
-            (*name).to_owned(),
-            fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?,
-        );
-    }
+    walk(&mod_dir, &mod_dir.join("src"), &mut crate_files)?;
+    let files_of = |dir: &Path, names: &[&str]| -> Result<Vec<(String, Vec<u8>)>, String> {
+        names
+            .iter()
+            .map(|name| {
+                let p = dir.join(name);
+                Ok((
+                    (*name).to_owned(),
+                    fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?,
+                ))
+            })
+            .collect()
+    };
+    crate_files.extend(files_of(&mod_dir, CRATE_FILES)?);
+    crate_files.extend(files_of(repo, NOTICES)?);
     for (rel, bytes) in &crate_files {
         put(rel, bytes)?;
     }
     let mut ours = BTreeMap::new();
-    walk(repo, &repo.join("data"), &mut ours)?;
-    walk(repo, &repo.join("assets"), &mut ours)?;
+    walk(&mod_dir, &mod_dir.join("data"), &mut ours)?;
+    walk(&mod_dir, &mod_dir.join("assets"), &mut ours)?;
     for (rel, bytes) in &ours {
         put(rel, bytes)?;
     }

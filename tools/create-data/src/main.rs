@@ -1,5 +1,5 @@
 //! `create-data compile`: reads Create's MIT data (`src/generated/`) and registration Java once,
-//! and writes the mod's committed outputs: its block and item declarations
+//! and writes the mod's committed outputs, under `create/`: its block, item and fluid declarations
 //! (`data/create/horizon/`), the partial models' block states (`assets/create/`) and the engine's
 //! typed block table (`src/engine/src/generated.rs`).
 //!
@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  create-data compile --create <Create checkout> --out <mod repo root>\n  \
+        "usage:\n  create-data compile --create <Create checkout> --out <this repository>\n  \
          create-data prepare --out <mod folder> <jar or folder>..."
     );
     std::process::exit(2)
@@ -83,7 +83,8 @@ fn pretty(v: &Value) -> Vec<u8> {
     s.into_bytes()
 }
 
-fn compile(create: &Path, out: &Path) {
+fn compile(create: &Path, repo: &Path) {
+    let out = &repo.join("create");
     let generated = create.join("src/generated/resources");
     let java_root = create.join("src/main/java");
     let block_java = java::read_all(&java_root);

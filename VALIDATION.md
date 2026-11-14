@@ -1,18 +1,32 @@
 # Validation
 
-Run on 2026-10-31 in the port sandbox (Linux, Rust 1.95.0 for this workspace, Horizon pinned at
-`9d979caa48a3bb58203319b9ea044db58c38e0d8`, horizon-mixins `d9c83d7`).
+Run on 2026-11-14 (Linux x86_64, Rust 1.99.1 as the SDK pins, the mod pinned to the fork build
+`42c5f703e3a0414297c1e1f00d62d4d4b4b2e580`, `cargo-horizon-mod` built from the fork at that commit).
 
 | Check | Result |
 |---|---|
-| `cargo fmt --all --check` | Pass |
-| `cargo clippy --workspace --all-targets --locked --offline -- -D warnings` | Pass |
-| `cargo test --workspace --locked --offline` | Engine and create-data unit tests pass |
-| `python3 tools/test_template.py` | The real bundle (named hook, glue module, engine crate) compiles on a two-crate fixture; its hook test runs the glue and the original body; AST audit, unchanged bytes/mtimes, wrong revision and renamed hook target rejected |
-| `python3 tools/test_stage.py --horizon /workspace/horizon` | The full pinned export stages deterministically; checkout unchanged; only the planned HEAD and module differ |
-| `python3 tools/horizon.py stage/check/test/build --horizon /workspace/horizon` | Pass; `test` also runs the engine's tests as a member of the staged Horizon workspace |
+| `cargo +1.99.1 fmt --check` (in `create/`) | Pass |
+| `cargo +1.99.1 clippy --all-targets -- -D warnings` (in `create/`) | Pass |
+| `cargo +1.99.1 test` (in `create/`) | 16 glue tests pass |
+| `cargo +1.99.1 test -p create-engine` | 533 engine tests pass |
+| `cargo horizon-mod check` (in `create/`) | Pass: the fork's package rules, the declarations against its content schema, `cargo check` against the pinned SDK. "Create uses 2266 items of the API … Made for 42c5f70." |
+| `cargo horizon-mod build` (in `create/`) | Pass: `create/target/horizon-mod/create.hmod` (sources and declarations, no Create assets) |
+| `cargo test`, `clippy -D warnings`, `fmt --check` in `tools/create-data` | Pass (21 tests) |
+| `cargo horizon-mod fits --build 0cad862` | Does not fit: the API changed between those builds |
 
-In game (headless, `/workspace/headless.sh`, renderer `Intel(R) Graphics (BMG G21)`, Vulkan): with the prepared
-content mod the game registers 25,349 Create states from id 35,723 and the mod logs its range; without it the mod
-logs that it stays idle. Create's decoration blocks place and render with Create's textures. Performance: see
-PORTING.md, "Budgets".
+## Not run
+
+- **In game.** Nothing of the port has been played on the mod API yet. The current Nightly
+  (514ecf9) publishes no SDK and no prebuilt game exists for the pinned build, so the launcher
+  cannot build it for a player today; it can once a Nightly at or after 42c5f70 ships with its SDK
+  (`cargo horizon-mod update` moves the pin), or on a developer base built from the fork at the
+  pin (`docs/modding/src/how-to/native-mods/07-local-developer-builds.md`). The in-game proofs and
+  benchmarks in PORTING.md and `benchmarks/` are the earlier mixin-based port's.
+- **`create-data compile` against Create's sources.** The declarations were converted to the fork's
+  content schema (typed `state_properties` without the template's own, `default_state`, shape
+  tables over `properties` covering every template value, upper-case `render_shape`, fluids'
+  `world`) by the same rules `tools/create-data` now applies, checked by its unit tests; they were
+  not regenerated from a Create checkout, since upstream has no 6.0.11 tag and the earlier port's
+  source commit is not recorded. The fork's loader checks a template's own properties only when
+  the game loads, so the vanilla template properties the generator assumes
+  (`TEMPLATE_PROPERTIES`) are verified first in game.

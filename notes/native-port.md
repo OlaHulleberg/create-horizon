@@ -30,7 +30,7 @@ each subsystem did.
 | `dimension_index(dimension)` | `world::level_index(dimension)` (mod dimensions get indices too) |
 | `game.world.block(x, y, z).0` | `lv.block(pos)` (engine id, 0 for any block not Create's) |
 | `game.native_set_block_property_with(pos, k, v, flags)` | `lv.set_property(pos, k, v, flags)` |
-| `game.native_set_block(pos, id)` | `lv.set_block(pos, id, flags)` |
+| `game.native_set_block(pos, id)` | `lv.set_state(pos, states::state(id)?, flags)` |
 | `has_neighbor_signal`, `best_neighbor_signal` | `lv.has_neighbor_signal(pos)`, `lv.best_neighbor_signal(pos)` |
 | `native_run_command("setblock .. destroy")` | `lv.destroy_block(pos, true)` |
 | `native_mark_chunk_unsaved(dim, chunk)` | `persist::mark_unsaved(dim, chunk)` |

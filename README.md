@@ -8,8 +8,10 @@ no game internals, no mixins, and no registry dependencies. No Java runs, at bui
 The mod pins one exact fork build in `create/horizon-mod.toml` (`[native] horizon`). The launcher compiles it
 against that build's prebuilt game; nothing of the game is rebuilt.
 
-**Status:** every legacy subsystem is ported to the API and the mod builds against its pinned SDK, with the engine's
-and the glue's unit tests passing. It has not yet been played on this API: see [VALIDATION.md](VALIDATION.md).
+**Status:** every legacy subsystem is ported to the API; the mod passes the fork's package check and builds against
+its pinned SDK, with the engine's and the glue's unit tests passing. It has not yet been played on this API, and the
+launcher can build it for players once a Nightly at or after the pinned build ships with its SDK: see
+[VALIDATION.md](VALIDATION.md).
 What the API cannot do yet, and so what the port leaves out, is listed in [HORIZON_API.md](HORIZON_API.md).
 
 ## Layout
@@ -42,8 +44,9 @@ from the player's own Create jar. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICE
 
 ## Build and play
 
-Requirements: the fork's launcher (`horizon-launcher`) and its `cargo horizon-mod` tool, Rust (the SDK pins 1.99.1),
-and your own copy of Create 6.0.11's jar for the textures, models and sounds.
+Requirements: the fork's launcher (`horizon-launcher`) and its `cargo horizon-mod` tool (`cargo install --locked --git
+https://github.com/arismoko/horizon --rev <the pin> cargo-horizon-mod`), Rust 1.99.1 with the `wasm32-unknown-unknown`
+target (the SDK's toolchain), and your own copy of Create 6.0.11's jar for the textures, models and sounds.
 
 ```sh
 cd create && cargo horizon-mod check                     # fetches the pinned SDK into create/.horizon/, checks
