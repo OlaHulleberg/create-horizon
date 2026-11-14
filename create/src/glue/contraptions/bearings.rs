@@ -21,6 +21,9 @@ type Turning = (Carried, Option<Turn>);
 /// A structure's blocks: offsets and states.
 type Blocks = Vec<([i32; 3], u32)>;
 
+/// A piston's speed and the game time when it stopped of itself.
+type Stopped = (f32, i64);
+
 thread_local! {
     /// The actors of bearings' turning structures (mechanical and windmill bearings), by
     /// dimension and bearing; only structures that have any. A windmill's with the angle it has
@@ -33,7 +36,7 @@ thread_local! {
     /// block updates of their stop are no speed change (`assembleNextTick` is only set by
     /// `onSpeedChanged`), so they don't start again from them: the speed and game time of the
     /// stop, for the checks of the next few ticks.
-    static PISTONS_STOPPED: RefCell<HashMap<(usize, [i32; 3]), (f32, i64)>> =
+    static PISTONS_STOPPED: RefCell<HashMap<(usize, [i32; 3]), Stopped>> =
         RefCell::new(HashMap::new());
 }
 

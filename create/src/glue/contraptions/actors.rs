@@ -1,8 +1,9 @@
 //! What moving contraptions carry besides their blocks, and Create's glue and stickers: super
 //! glue areas the structure search reads (set by the glue item, `superglue`, or
 //! `/create_debug glue`), the sticker's redstone, actors (drills, saws, harvesters, ploughs,
-//! rollers, interfaces) ticked only while their contraption moves, mounted storage (chests and
-//! barrels) that keeps its items and takes what the actors collect, and contraption controls
+//! rollers, interfaces) ticked only while their contraption moves, mounted storage (chests,
+//! barrels, item vaults and toolboxes) that keeps its items and takes what the actors collect
+//! (a toolbox takes nothing), and contraption controls
 //! (`/create_debug controls`). Create's rules are in `create_engine::glue` and
 //! `create_engine::actors`. Saved under `create_glue`.
 //! Track observers' filters (the trains' slot, read as the items port reads filters) are kept
@@ -1886,7 +1887,7 @@ impl BlockPart for MountedPart {
     /// (`create:contraption_controlled` only; an empty hand clears it), elsewhere it turns its
     /// kind off or on, with Create's status and click. A roller: on its filter slot the held
     /// block item becomes its pave material (`isValidMaterial`), an empty hand clears it, shared
-    /// with the rollers in line; its mode is set with `/create_debug roller` (the value box).
+    /// with the rollers in line; its mode is set on its value box (`interaction::values`).
     fn use_item_on(
         &self,
         host: &mut dyn ServerHost,

@@ -286,6 +286,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_moving_structure_meets_the_cells_its_leading_blocks_enter() {
+        // Two blocks in a row along x and one above the first; moving east the second and
+        // the one above lead, moving west the first and the one above.
+        let blocks = vec![([0, 0, 0], 1), ([1, 0, 0], 1), ([0, 1, 0], 1)];
+        let mut east = colliders(&blocks, Dir::East);
+        east.sort();
+        assert_eq!(east, vec![[0, 1, 0], [1, 0, 0]]);
+        let mut west = colliders(&blocks, Dir::West);
+        west.sort();
+        assert_eq!(west, vec![[0, 0, 0], [0, 1, 0]]);
+        // Anchor at x 10, 0.3 out east: going east it enters the cells a block further on.
+        let cells = entered_cells([10, 0, 0], Dir::East, 0.3, Dir::East, &[[1, 0, 0]]);
+        assert_eq!(cells, vec![([12, 0, 0], [1, 0, 0])]);
+        // Going back west from 0.3 it is entering the cells at its floor.
+        let cells = entered_cells([10, 0, 0], Dir::East, 0.3, Dir::West, &[[0, 0, 0]]);
+        assert_eq!(cells, vec![([10, 0, 0], [0, 0, 0])]);
+        assert_eq!(grid_offset(2.4, 4), 2.0);
+        assert_eq!(grid_offset(3.6, 3), 3.0);
+    }
+
+    #[test]
     fn a_retracted_piston_takes_its_poles_behind_it() {
         // A piston at x 0 facing east, three poles behind it (x -1..-3).
         let cell = |p: [i32; 3]| {

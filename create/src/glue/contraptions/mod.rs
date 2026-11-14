@@ -10,21 +10,33 @@
 //! the anchor's column, and drawn by the anchor's block entity (`draw`), which carries it to
 //! clients in its data.
 //!
+//! The movement mode on a bearing's, piston's or pulley's value box (`RotationMode`,
+//! `MovementMode`), a windmill's direction, a clock's hand arrangement and a roller's mode are
+//! kept per block (`scroll_options`, saved as `modes`). A stopped piston or pulley its mode keeps
+//! together waits for its speed to change (`waitingForSpeedChange`); pistons and gantries stop
+//! against the world as `ContraptionCollider.collideBlocks` has them. Chests, barrels, item
+//! vaults and toolboxes ride every contraption as mounted storage (saved with it), bearings,
+//! windmills and clocks included.
+//!
 //! What the API cannot do, left out (for HORIZON_API.md's gaps):
-//! - Moving structures have no collision and carry nothing standing on them: there is no
-//!   level collider an entity's motion reads (`notes/moving-structures-note.md`), and no mod
-//!   entity type to be one. Create's `ContraptionCollider` is not run.
+//! - Entities can't stand on, be pushed by or ride moving structures: there is no level
+//!   collider an entity's motion reads (`notes/moving-structures-note.md`), and no mod entity
+//!   type to be one.
 //! - A moving block cannot be clicked, and riders cannot sit on a moving structure's seats
-//!   (`Contraption.seats`): there is no moving entity to pick or ride.
-//! - Moving block entities other than chests and barrels are refused, as the legacy did:
-//!   their block entity data has no general way to ride along. A bearing's structure carries
-//!   no storage or controls, as the legacy's didn't; its glue stays in the world while it turns
-//!   and goes back turned with it.
+//!   (`Contraption.seats`): there is no moving entity to pick or ride. So contraption controls
+//!   on a moving structure are clicked with `/create_debug controls`.
 //! - Each moving block is lit with the world's light where the structure was last sent from
 //!   (the server reads it: `LevelRef::brightness` is the server's only), not where it is each
 //!   frame.
 //! - A clockwork bearing's top turns at its kinetic speed, not with the hour hand
 //!   (`BearingRenderer`): the top is the kinetic block entity's part.
+//!
+//! Left out, not for want of API:
+//! - Other moving block entities keep only their block: a depot's item, a deployer's held item
+//!   and a tank's fluid are not carried, and a deployer on a contraption does nothing
+//!   (`DeployerMovementBehaviour`). Block entities of other mods are refused.
+//! - A bearing's glue stays in the world while it turns and goes back turned with it; its
+//!   contraption controls are not carried.
 
 pub mod actors;
 mod bearings;

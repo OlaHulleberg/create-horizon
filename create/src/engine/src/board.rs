@@ -701,6 +701,21 @@ mod tests {
     }
 
     #[test]
+    fn movement_mode_slots_sit_off_the_facing_and_back_two_pixels() {
+        // A bearing facing up: on its sides, 15.5 px out, 2 px down; none on top or bottom.
+        assert_eq!(extender_slot(Dir::Up, None, Dir::Up), None);
+        assert_eq!(extender_slot(Dir::Up, None, Dir::Down), None);
+        let north = extender_slot(Dir::Up, None, Dir::North).unwrap();
+        let close = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9);
+        assert!(close(north, [0.5, 0.375, 0.5 / 16.0]));
+        // A piston facing east turning a z shaft: its box is on top and bottom only.
+        assert_eq!(extender_slot(Dir::East, Some(Axis::Z), Dir::North), None);
+        let top = extender_slot(Dir::East, Some(Axis::Z), Dir::Up).unwrap();
+        assert!(close(top, [0.375, 15.5 / 16.0, 0.5]));
+        assert!(close(centred_slot(Dir::Up), [0.5, 15.5 / 16.0, 0.5]));
+    }
+
+    #[test]
     fn value_boxes_sit_on_their_sides() {
         let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9);
         let px = |x: f64, y: f64, z: f64| [x / 16.0, y / 16.0, z / 16.0];
