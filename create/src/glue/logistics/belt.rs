@@ -84,8 +84,13 @@ pub fn use_belt_with(
             lv.set_property(pos, "part", "pulley", update_all());
             true
         }
-        Some("create:andesite_casing" | "create:brass_casing") => {
-            set_casing(lv, pos, true);
+        Some(c @ ("create:andesite_casing" | "create:brass_casing")) => {
+            let kind = if c == "create:brass_casing" {
+                "brass"
+            } else {
+                "andesite"
+            };
+            set_casing(lv, pos, Some(kind));
             // The casing's place sound (wood), at 0.8 of its pitch.
             let at = pos.map(|v| f64::from(v) + 0.5);
             lv.level.play_sound(
@@ -144,13 +149,79 @@ fn apply_color(lv: &mut ServerLevel<'_>, pos: [i32; 3], color: Option<&str>) -> 
     true
 }
 
-/// `BeltBlockEntity.setCasingType`: cases the segment at `pos` or takes its casing off. Belts
-/// draw their casing as their block model, so a brass casing shows the andesite one's texture
-/// (Create's `BeltModel` swaps it; the mod API cannot retexture a block's terrain model), and the
-/// casing's break particles are left out (the mod API has no state's numeric id).
-pub fn set_casing(lv: &mut ServerLevel<'_>, pos: [i32; 3], cased: bool) {
-    let flag = if cased { "true" } else { "false" };
+/// `BeltBlockEntity.setCasingType`: cases the segment at `pos` in `kind` (`andesite` or
+/// `brass`) or takes its casing off (None). The block entity keeps the kind for its clients, who
+/// draw the casing (`client`, as `BeltModel` would) and whether a block covers it
+/// (`updateCoverProperty`). The casing's break particles are left out (the mod API has no
+/// state's numeric id).
+pub fn set_casing(lv: &mut ServerLevel<'_>, pos: [i32; 3], kind: Option<&str>) {
+    let flag = if kind.is_some() { "true" } else { "false" };
+    if let Some(e) = lv.host.block_entity(lv.level, pos) {
+        let tag = mod_api::Tag::String(kind.unwrap_or("").into());
+        let _ = e.merge_data(
+            &mut *lv.host,
+            mod_api::Compound::from([(super::BELT_CASING.into(), tag)]),
+        );
+    }
     lv.set_property(pos, "casing", flag, update_all());
+    update_cover(lv, pos);
+}
+
+/// `BeltBlock.updateCoverProperty`: a cased horizontal segment at `pos` is covered while a block
+/// stands on it whose collision box (`isBlockCoveringBelt`) is at least half a block wide each
+/// way and starts at its bottom, but for funnels not facing up and tunnels.
+pub fn update_cover(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let Some(seg) = super::info_at(lv, pos).and_then(|(_, i)| i.belt) else {
+        return;
+    };
+    let cased = lv.block_state(pos).is_some_and(|s| {
+        s.property(&lv.host.block_states(), "casing").ok().flatten() == Some("true")
+    });
+    if !cased || seg.slope != belt::Slope::Horizontal {
+        return;
+    }
+    let above = [pos[0], pos[1] + 1, pos[2]];
+    let excluded = match super::info_at(lv, above) {
+        Some((b, i)) => {
+            matches!(
+                b,
+                create_engine::Block::AndesiteTunnel | create_engine::Block::BrassTunnel
+            ) || super::funnel::is_funnel(b) && i.facing != Some(Dir::Up)
+        }
+        None => false,
+    };
+    let cell = [
+        f64::from(above[0]),
+        f64::from(above[1]),
+        f64::from(above[2]),
+        f64::from(above[0]) + 1.0,
+        f64::from(above[1]) + 1.0,
+        f64::from(above[2]) + 1.0,
+    ];
+    let boxes = lv
+        .level
+        .collision_boxes(&*lv.host, cell)
+        .unwrap_or_default();
+    let covered = !excluded && !boxes.is_empty() && {
+        let lo = |k: usize| boxes.iter().map(|b| b[k]).fold(f64::MAX, f64::min);
+        let hi = |k: usize| boxes.iter().map(|b| b[k + 3]).fold(f64::MIN, f64::max);
+        hi(0) - lo(0) >= 0.5 && hi(2) - lo(2) >= 0.5 && lo(1) <= cell[1] + 1e-6
+    };
+    let Some(e) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let was = matches!(
+        e.data(&*lv.host)
+            .and_then(|d| d.get(&super::BELT_COVERED.into()).cloned()),
+        Some(mod_api::Tag::Byte(1))
+    );
+    if was != covered {
+        let tag = mod_api::Tag::Byte(i8::from(covered));
+        let _ = e.merge_data(
+            &mut *lv.host,
+            mod_api::Compound::from([(super::BELT_COVERED.into(), tag)]),
+        );
+    }
 }
 
 /// `BeltBlock.onWrenched` after `BeltSlicer.useWrench` passed it on: a casing comes off when a
@@ -175,7 +246,7 @@ pub fn wrench_belt(
         })
         .unwrap_or(false);
     if cased && clicked != Dir::Up {
-        set_casing(lv, pos, false);
+        set_casing(lv, pos, None);
         return true;
     }
     if seg.part == belt::Part::Pulley && clicked.axis() != Axis::Y {
@@ -573,6 +644,34 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
                 super::touch_shown(lv, c);
             }
         }
+    }
+}
+
+thread_local! {
+    /// Belt segments whose block above changed (`BeltBlock.updateShape` from above), by level:
+    /// their cover is looked at after the tick.
+    static COVER_CHECKS: std::cell::RefCell<Vec<(usize, [i32; 3])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The block above the belt segment at `pos` changed: its cover is looked at again.
+pub fn cover_check(dim: usize, pos: [i32; 3]) {
+    COVER_CHECKS.with_borrow_mut(|c| c.push((dim, pos)));
+}
+
+/// The cover checks of this level (`cover_check`).
+pub fn tick_covers(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let mine: Vec<[i32; 3]> = COVER_CHECKS.with_borrow_mut(|c| {
+        if c.is_empty() {
+            return Vec::new();
+        }
+        let mine = c.iter().filter(|e| e.0 == dim).map(|e| e.1).collect();
+        c.retain(|e| e.0 != dim);
+        mine
+    });
+    for pos in mine {
+        update_cover(lv, pos);
     }
 }
 

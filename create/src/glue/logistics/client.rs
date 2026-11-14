@@ -540,6 +540,15 @@ impl BlockEntityPart for LogisticsEntity {
                     }
                 });
                 draw_segment(draw, host, block, &info, pos, speeds, color.as_deref());
+                let cased = event
+                    .state
+                    .property(&mod_api::HostBlockStates::block_states(host), "casing")
+                    .ok()
+                    .flatten()
+                    == Some("true");
+                if cased && let Some(seg) = info.belt {
+                    draw_casing(draw, host, &seg, &event.entity.nbt);
+                }
                 draw_belt_items(draw, host, pos, partial_tick);
             }
             Block::Depot => draw_depot(draw, host, pos, partial_tick),
@@ -642,6 +651,60 @@ fn scrolled(
     // The belt sprites are 16 by 16, the scrolling ones 16 by 32.
     let shift = mod_api::TerrainUvShift::new(&source, &target, [1.0, 0.5], [0.0, offset]);
     let options = mod_api::TerrainModelOptions::default().with_uv_shift(shift);
+    terrain(draw, host, file, options)
+}
+
+/// A cased segment's casing, its block model drawn by its block entity (`BeltModel`): the brass
+/// casing's model, its texture swapped for the andesite casing's on an andesite one, and the
+/// cover over a horizontal one a block stands on.
+fn draw_casing(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    seg: &belt::Segment,
+    nbt: &Compound,
+) {
+    let andesite = matches!(
+        nbt.get(&super::BELT_CASING.into()),
+        Some(Tag::String(k)) if k.to_string_lossy() == "andesite"
+    );
+    let covered = matches!(nbt.get(&super::BELT_COVERED.into()), Some(Tag::Byte(1)));
+    let shift = mod_api::TerrainUvShift::new(
+        "create:block/belt/brass_belt_casing",
+        "create:block/belt/andesite_belt_casing",
+        [1.0, 1.0],
+        [0.0, 0.0],
+    );
+    let options = if andesite {
+        mod_api::TerrainModelOptions::default().with_uv_shift(shift)
+    } else {
+        mod_api::TerrainModelOptions::default()
+    };
+    let (file, x, y) = belt::casing_model(seg);
+    draw.push();
+    // A block state variant's turns: x first, then y, both clockwise.
+    draw.rotate_about([0.0, 1.0, 0.0], -(y as f32), [0.5; 3]);
+    draw.rotate_about([1.0, 0.0, 0.0], -(x as f32), [0.5; 3]);
+    terrain(draw, host, file, options);
+    draw.pop();
+    if covered && seg.slope == belt::Slope::Horizontal {
+        let along_x = seg.facing.axis() == Axis::X;
+        let cover = match (andesite, along_x) {
+            (true, true) => belt::COVER_MODELS[0],
+            (true, false) => belt::COVER_MODELS[1],
+            (false, true) => belt::COVER_MODELS[2],
+            (false, false) => belt::COVER_MODELS[3],
+        };
+        terrain(draw, host, cover, mod_api::TerrainModelOptions::default());
+    }
+}
+
+/// Draws the standalone model `file` (resolved again once stale): false when it is not there.
+fn terrain(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    file: &'static str,
+    options: mod_api::TerrainModelOptions<'_>,
+) -> bool {
     for fresh in [false, true] {
         let Some(model) = belt_model(host, file, fresh) else {
             return false;

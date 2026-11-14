@@ -96,7 +96,10 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
             continue;
         }
         if belt_below(lv, pos).is_some_and(|s| s.slope == Slope::Horizontal) && !cased(lv, pos) {
-            lv.set_property([pos[0], pos[1] - 1, pos[2]], "casing", "true", update_all());
+            // `BeltTunnelItem`: the tunnel's own kind of casing.
+            let brass = super::info_at(lv, pos).is_some_and(|(b, _)| b == Block::BrassTunnel);
+            let kind = if brass { "brass" } else { "andesite" };
+            super::belt::set_casing(lv, [pos[0], pos[1] - 1, pos[2]], Some(kind));
         }
     }
     let mut checks: Vec<([i32; 3], bool)> = fresh

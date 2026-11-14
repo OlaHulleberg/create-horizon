@@ -22,9 +22,10 @@
 //!   (`arms::select_point`, `arms::select_ejector_target`), but the outlines Create's client draws
 //!   around the chosen blocks are not, and left-clicking a point to drop it is out: the mod API's
 //!   `left_click_block` names no player.
-//! - Belts: a brass casing is drawn with the andesite casing's texture (Create's `BeltModel`
-//!   retextures the block model; the mod API cannot), and a sloped belt collides as a flat one (`BeltShapes` by facing, slope and part are not declared yet,
-//!   though content shapes can select by several properties).
+//! - Belts: a sloped belt collides as a flat one (`BeltShapes` by facing, slope and part are not
+//!   declared yet, though content shapes can select by several properties). A belt's casing is
+//!   drawn by its block entity (its block is never a terrain model, `ENTITYBLOCK_ANIMATED` in
+//!   every state), as `BeltModel` would draw it.
 //! - Players riding a belt are pushed by their own client (`push_player`), other entities by
 //!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`.
 //! - Diagonal chutes, a chute's window or casing drawn as Create joins them, and vaults' and
@@ -175,6 +176,7 @@ impl Subsystem for Logistics {
         tunnel::tick_tunnels(lv);
         tunnel::tick_brass(lv);
         depot::tick_depots(lv);
+        belt::tick_covers(lv);
         belt::tick_belts(lv);
         belt::transport_passengers(lv);
     }
@@ -307,6 +309,16 @@ impl Subsystem for Logistics {
                 .iter()
                 .map(|m| (*m).to_owned()),
         );
+        models.extend(
+            create_engine::belt::CASING_MODELS
+                .iter()
+                .map(|m| (*m).to_owned()),
+        );
+        models.extend(
+            create_engine::belt::COVER_MODELS
+                .iter()
+                .map(|m| (*m).to_owned()),
+        );
         models.push("create:block/belt_scroll_sprites".to_owned());
     }
 }
@@ -328,6 +340,11 @@ pub(crate) const FILTER: &str = "Filter";
 /// A block entity key holding a belt segment's dye (`BeltBlockEntity.color`: a `DyeColor` name,
 /// an empty string or none for an undyed belt), synced for its clients to draw.
 pub(crate) const BELT_COLOR: &str = "Dye";
+
+/// Block entity keys of a cased belt segment: its casing (`andesite` or `brass`), and 1 while a
+/// block covers it (`BeltBlockEntity.casing`, `covered`), synced for its clients to draw.
+pub(crate) const BELT_CASING: &str = "Casing";
+pub(crate) const BELT_COVERED: &str = "Covered";
 
 /// Shows filter `filter` in the slot of the block at `pos` (`FILTER`).
 pub(crate) fn show_filter(
@@ -373,7 +390,7 @@ impl Subsystem for Entities {
     }
 
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[SHOWN, FILTER, BELT_COLOR]
+        &[SHOWN, FILTER, BELT_COLOR, BELT_CASING, BELT_COVERED]
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
@@ -508,6 +525,26 @@ impl BlockPart for LogisticsBlock {
         };
         item_landed(&mut lv, event.block_pos, event.item_pos, event.stack);
         Flow::Continue
+    }
+
+    /// `BeltBlock.updateShape` from above: a cased belt looks at its cover again.
+    fn update_shape(
+        &self,
+        _level: &mut dyn mod_api::LevelTicksHost,
+        event: &mut mod_api::UpdateShapeEvent,
+    ) -> Option<mod_api::BlockState> {
+        if event.direction != mod_api::Direction::Up {
+            return None;
+        }
+        let belt = states::id(event.state)
+            .and_then(|id| with_world(|w| w.table.get(id).map(|(b, _)| b == Block::Belt)))
+            .flatten();
+        if belt == Some(true)
+            && let Some(dim) = super::world::level_index(event.dimension.key().id())
+        {
+            belt::cover_check(dim, [event.pos.x, event.pos.y, event.pos.z]);
+        }
+        None
     }
 
     /// `BeltBlock.entityInside`: what stands on a belt is carried at the end of the tick.

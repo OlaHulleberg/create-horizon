@@ -34,6 +34,7 @@
     "s31": "create:block/belt/red_diagonal_scroll",
     "s32": "create:block/belt/black_scroll",
     "s33": "create:block/belt/black_diagonal_scroll",
+    "s34": "create:block/belt/andesite_belt_casing",
     "particle": "create:block/belt_scroll"
   },
   "elements": [
@@ -816,6 +817,29 @@
             16
           ],
           "texture": "#s33"
+        }
+      }
+    },
+    {
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        16,
+        0
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": "#s34"
         }
       }
     }

@@ -104,8 +104,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   is played from the server).
 - **The player in `left_click_block`**: an arm's chosen point and an ejector's target can't be dropped
   by left-clicking them with the item.
-- **Retexturing a block's terrain model** (Create's `BeltModel`): a belt with a brass casing shows the
-  andesite casing's texture.
 - **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
   light inside the chute is dark.
 - **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).

@@ -488,6 +488,81 @@ pub fn partial(seg: &Segment, bottom: bool) -> Option<&'static str> {
     })
 }
 
+/// Every cased segment's model file (`BeltGenerator`).
+pub const CASING_MODELS: [&str; 12] = [
+    "create:block/belt_casing/diagonal_end",
+    "create:block/belt_casing/diagonal_middle",
+    "create:block/belt_casing/diagonal_pulley",
+    "create:block/belt_casing/diagonal_start",
+    "create:block/belt_casing/horizontal_end",
+    "create:block/belt_casing/horizontal_middle",
+    "create:block/belt_casing/horizontal_pulley",
+    "create:block/belt_casing/horizontal_start",
+    "create:block/belt_casing/sideways_end",
+    "create:block/belt_casing/sideways_middle",
+    "create:block/belt_casing/sideways_pulley",
+    "create:block/belt_casing/sideways_start",
+];
+
+/// The covers over a cased horizontal belt with a block on it (`BeltModel`): andesite or brass,
+/// along x or z.
+pub const COVER_MODELS: [&str; 4] = [
+    "create:block/belt_cover/andesite_belt_cover_x",
+    "create:block/belt_cover/andesite_belt_cover_z",
+    "create:block/belt_cover/brass_belt_cover_x",
+    "create:block/belt_cover/brass_belt_cover_z",
+];
+
+/// `BeltGenerator` for a cased segment: its model file and the variant's x and y turns (in
+/// degrees, as a block state variant turns its model).
+pub fn casing_model(seg: &Segment) -> (&'static str, i32, i32) {
+    let downward = seg.slope == Slope::Downward;
+    let diagonal = downward || seg.slope == Slope::Upward;
+    let vertical = seg.slope == Slope::Vertical;
+    let sideways = seg.slope == Slope::Sideways;
+    let negative = !seg.facing.positive();
+    let mut part = seg.part;
+    if (vertical && negative || downward || sideways && negative)
+        && !matches!(part, Part::Middle | Part::Pulley)
+    {
+        part = if part == Part::End {
+            Part::Start
+        } else {
+            Part::End
+        };
+    }
+    let slope = if diagonal {
+        "diagonal"
+    } else if vertical || sideways {
+        "sideways"
+    } else {
+        "horizontal"
+    };
+    let name = CASING_MODELS
+        .iter()
+        .find(|m| m.ends_with(&format!("/{slope}_{}", part.name())))
+        .copied()
+        .unwrap_or(CASING_MODELS[5]);
+    let x = if vertical {
+        90
+    } else if sideways && negative {
+        180
+    } else {
+        0
+    };
+    let y_rot = match seg.facing {
+        Dir::South => 0,
+        Dir::West => 90,
+        Dir::North => 180,
+        Dir::East => 270,
+        _ => 0,
+    };
+    let y = y_rot
+        + if seg.slope == Slope::Upward { 180 } else { 0 }
+        + if vertical { 90 } else { 0 };
+    (name, x, y % 360)
+}
+
 /// The model file of a belt partial (`getBeltPartial`), by its partial block's name.
 pub fn partial_model(partial: &str) -> Option<&'static str> {
     Some(match partial {

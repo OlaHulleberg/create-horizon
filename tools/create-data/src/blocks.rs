@@ -2907,8 +2907,9 @@ pub const PARTIALS: [(&str, &str, &str); 118] = [
 /// The unit-cube models of `part_fluid_*`: every face the fluid's still texture, water's
 /// tinted (tint index 0).
 /// The sprites Create's renderers draw in place of a model's own (`AllSpriteShifts`'s targets:
-/// belts' scrolling textures, undyed and in each dye's colour), in one model the native mod
-/// registers as a standalone model (`standalone_models`) so the block sprites hold them.
+/// belts' scrolling textures, undyed and in each dye's colour, and the andesite belt casing's),
+/// in one model the native mod registers as a standalone model (`standalone_models`) so the
+/// block sprites hold them.
 pub fn sprite_models() -> [(&'static str, Value); 1] {
     const DYES: [&str; 16] = [
         "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
@@ -2922,6 +2923,7 @@ pub fn sprite_models() -> [(&'static str, Value); 1] {
         sprites.push(format!("create:block/belt/{d}_scroll"));
         sprites.push(format!("create:block/belt/{d}_diagonal_scroll"));
     }
+    sprites.push("create:block/belt/andesite_belt_casing".to_owned());
     let textures: Map<String, Value> = sprites
         .iter()
         .enumerate()
