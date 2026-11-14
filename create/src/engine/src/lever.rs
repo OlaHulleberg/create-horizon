@@ -306,6 +306,8 @@ mod tests {
         let p = m.transform_point3(crate::math::Vec3::new(0.5, 1.0 / 16.0 + 0.25, 0.5));
         assert!((p - crate::math::Vec3::new(0.5, 1.0 / 16.0, 0.75)).length() < 1e-5);
         // At 0 on the floor facing south, nothing moves.
-        assert!(handle_pose(Face::Floor, Dir::South, 0).abs_diff_eq(crate::math::Mat4::IDENTITY, 1e-6));
+        assert!(
+            handle_pose(Face::Floor, Dir::South, 0).abs_diff_eq(crate::math::Mat4::IDENTITY, 1e-6)
+        );
     }
 }

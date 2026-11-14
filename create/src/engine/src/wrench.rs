@@ -104,18 +104,114 @@ pub fn rotated(
     let Some(mut f) = props.get("facing").and_then(|v| dir_of(v)) else {
         return out;
     };
+    // DirectionalAxisKineticBlock.AXIS_ALONG_FIRST_COORDINATE.
+    let along = props.get(ALONG_FIRST).map(|v| v == "true");
+    let cycle = |out: &mut BTreeMap<String, String>| {
+        if let Some(v) = out.get(ALONG_FIRST).map(|v| v == "true") {
+            out.insert(ALONG_FIRST.into(), (!v).to_string());
+        }
+    };
     if f.axis() == about {
-        // A block with AXIS_ALONG_FIRST_COORDINATE would cycle it here; none is ported yet.
+        if along.is_some() {
+            cycle(&mut out);
+        }
         return out;
     }
     loop {
         f = clockwise(f, about);
+        if about == Axis::Y {
+            cycle(&mut out);
+        }
         if f.axis() != about {
             break;
         }
     }
     out.insert("facing".into(), dir_name(f).into());
     out
+}
+
+const ALONG_FIRST: &str = "axis_along_first";
+
+/// The palette's stone types (`AllPaletteStoneTypes`), whose cut, polished, brick, layered and
+/// pillar variants are plain blocks.
+const STONE_TYPES: [&str; 14] = [
+    "granite",
+    "diorite",
+    "andesite",
+    "calcite",
+    "dripstone",
+    "deepslate",
+    "tuff",
+    "asurine",
+    "crimsite",
+    "limestone",
+    "ochrum",
+    "scorchia",
+    "scoria",
+    "veridium",
+];
+
+/// Whether Create's block `name` (without its namespace) is an `IWrenchable`: the wrench turns
+/// and picks up only those (others only when in `create:wrench_pickup`, sneaking). The rest are
+/// Create's plain building blocks and the few machines that are not: the schematic table and
+/// cannon, analog lever, bells, lectern controller, minecart anchor, seats and toolboxes.
+pub fn wrenchable(name: &str) -> bool {
+    const PLAIN: [&str; 26] = [
+        "schematicannon",
+        "schematic_table",
+        "crushing_wheel_controller",
+        "minecart_anchor",
+        "fake_track",
+        "analog_lever",
+        "lectern_controller",
+        "peculiar_bell",
+        "haunted_bell",
+        "copycat_base",
+        "zinc_ore",
+        "deepslate_zinc_ore",
+        "raw_zinc_block",
+        "zinc_block",
+        "andesite_alloy_block",
+        "industrial_iron_block",
+        "weathered_iron_block",
+        "brass_block",
+        "cardboard_block",
+        "bound_cardboard_block",
+        "experience_block",
+        "rose_quartz_block",
+        "rose_quartz_tiles",
+        "small_rose_quartz_tiles",
+        "tiled_glass",
+        "framed_glass",
+    ];
+    if PLAIN.contains(&name)
+        || name.ends_with("framed_glass")
+        || name.ends_with("_window")
+        || name.ends_with("_window_pane")
+        || name.ends_with("_glass_pane")
+        || name.ends_with("_bars")
+        || name.ends_with("_toolbox")
+        || name.ends_with("_seat")
+        || name.ends_with("_pillar")
+        || name.contains("copper_shingle")
+        || name.contains("copper_tile")
+    {
+        return false;
+    }
+    // The stone types (Create's own; vanilla's are vanilla's) and their cut, polished, brick and
+    // layered variants (`cut_granite_brick_stairs`, `layered_tuff`...).
+    if STONE_TYPES[7..].contains(&name) {
+        return false;
+    }
+    let Some(stem) = ["polished_cut_", "cut_", "small_", "layered_"]
+        .iter()
+        .find_map(|p| name.strip_prefix(p))
+    else {
+        return true;
+    };
+    !STONE_TYPES
+        .iter()
+        .any(|t| stem == *t || stem.strip_prefix(t).is_some_and(|r| r.starts_with('_')))
 }
 
 #[cfg(test)]
@@ -183,5 +279,67 @@ mod tests {
             rotated(&props(&[("facing", "up")]), false, Dir::Down)["facing"],
             "up"
         );
+        // A deployer facing up clicked on its top: its axis along the first coordinate cycles.
+        let deployer = props(&[("facing", "up"), ("axis_along_first", "false")]);
+        assert_eq!(
+            rotated(&deployer, false, Dir::Up)["axis_along_first"],
+            "true"
+        );
+        // Clicked on its north side, it turns about z without cycling.
+        let turned = rotated(&deployer, false, Dir::North);
+        assert_eq!(
+            (
+                turned["facing"].as_str(),
+                turned["axis_along_first"].as_str()
+            ),
+            ("east", "false")
+        );
+        // A deployer facing north clicked on top turns about y once, cycling once.
+        let flat = props(&[("facing", "north"), ("axis_along_first", "false")]);
+        let turned = rotated(&flat, false, Dir::Up);
+        assert_eq!(
+            (
+                turned["facing"].as_str(),
+                turned["axis_along_first"].as_str()
+            ),
+            ("east", "true")
+        );
+    }
+
+    #[test]
+    fn only_wrenchables_turn() {
+        for name in [
+            "shaft",
+            "chute",
+            "andesite_casing",
+            "andesite_door",
+            "metal_girder",
+            "placard",
+            "small_bogey",
+            "andesite_tunnel",
+            "andesite_ladder",
+            "andesite_scaffolding",
+            "copycat_panel",
+        ] {
+            assert!(wrenchable(name), "{name}");
+        }
+        for name in [
+            "cut_granite_brick_stairs",
+            "granite_pillar",
+            "layered_scoria",
+            "scoria",
+            "small_tuff_brick_wall",
+            "polished_cut_andesite_slab",
+            "oak_window_pane",
+            "andesite_bars",
+            "brown_toolbox",
+            "red_seat",
+            "schematic_table",
+            "exposed_copper_shingle_stairs",
+            "horizontal_framed_glass",
+            "framed_glass",
+        ] {
+            assert!(!wrenchable(name), "{name}");
+        }
     }
 }
