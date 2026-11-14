@@ -1,11 +1,12 @@
 # Porting the glue to the mod API
 
-The mod used to be a horizon-mixins bundle whose glue (`legacy/glue/`, ~43k lines) called the
-game's internals (`Game`, `game.world`, `game.native_*`). It is now a native mod: `src/lib.rs`
-implements `mod_api::Hooks`, the glue under `src/glue/` reaches the game only through `mod_api`,
-and the engine (`src/engine`, crate `create-engine`) is unchanged rules with no game types.
-`legacy/glue/` stays only as the reference for what each subsystem did; it is deleted once every
-subsystem is ported.
+The mod used to be a horizon-mixins bundle whose glue (~43k lines, `mixins/create/` before
+commit `137d74d`) called the game's internals (`Game`, `game.world`, `game.native_*`). It is now a
+native mod in `create/`: `create/src/lib.rs` implements `mod_api::Hooks`, the glue under
+`create/src/glue/` reaches the game only through `mod_api`, and the engine (`create/src/engine`,
+crate `create-engine`) is unchanged rules with no game types. Paths below are under `create/`.
+The legacy glue is in git history (`git show 137d74d:legacy/glue/<file>`) as the reference for what
+each subsystem did.
 
 ## Layout
 
@@ -60,5 +61,6 @@ Per-object helpers go on the handle or facade they act on, in the subsystem's ow
 - Where the mod API has no way to do what the legacy glue did, leave that behaviour out, say so
   in the subsystem's module doc, and add a line to `HORIZON_API.md` under "Gaps found porting".
   No stubs, shims or game internals to cover it.
-- Check with `cargo +1.99.1 check` (the SDK's toolchain), `cargo +1.99.1 test`, and
-  `cargo +1.99.1 clippy --all-targets -- -D warnings`.
+- Check in `create/` with `cargo +1.99.1 check` (the SDK's toolchain), `cargo +1.99.1 test`,
+  `cargo +1.99.1 clippy --all-targets -- -D warnings`, and `cargo horizon-mod check` (the fork's
+  package rules: no `.rs` or `.toml` outside `src/`, declarations in its content schema).

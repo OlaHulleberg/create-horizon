@@ -2852,7 +2852,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
 /// declared on: each with its default value (`registerDefaultState`) and all its values
 /// (`StateDefinition`). The templates not listed have none (stone, glass, metal blocks, planks,
 /// carpet).
-const TEMPLATE_PROPERTIES: &[(&str, &[(&str, &str, &[&str])])] = &[
+/// A template property: its name, vanilla default and values.
+type TemplateProperty = (&'static str, &'static str, &'static [&'static str]);
+
+const TEMPLATE_PROPERTIES: &[(&str, &[TemplateProperty])] = &[
     (
         "minecraft:barrel",
         &[

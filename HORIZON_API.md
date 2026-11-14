@@ -1,67 +1,82 @@
-# What the port needs from Horizon, and where it stands
+# What the port needs from the mod API
 
-Checked 2026-11-04 against the modding fork arismoko/horizon `main` (`da67617ff`). Re-check before acting on any
-line: the fork merges dozens of PRs a day.
+The mod targets the arismoko/horizon fork's mod API at the build `create/horizon-mod.toml` pins
+(`42c5f703e3`, the Mod SDK of 2026-11-14). Every subsystem of the earlier mixin-based port is on the API;
+this page lists what the API could not express when it was ported, so those behaviours are left out
+(each module's doc says the same where it applies). Re-check a line against a newer SDK before acting
+on it: `cargo horizon-mod sdk diff <old> <new>` lists what changed, and the fork moves fast.
 
-**Target: the fork's trait-mod API.** The fork is where the native mod API is built (its AGENTS.md, "the clean
-break"; trackers #26 design, #44 milestones, #27 hooks), and contributors who merge upstream (levzzz5154) work there
-too. The mod builds against one pinned fork commit with the fork's launcher (arismoko/horizon#44, answer of
-2026-11-03). Upstream's answer on direction (horizon-rust/horizon#4953) is still pending.
+Each line: what Create does, what the legacy glue called, and the API addition that would close it.
 
-The port today is a horizon-mixins bundle: a rules engine with no game types (`mixins/create/engine`, ~68k lines,
-moves over unchanged) and game glue (~43k lines in 33 modules, 50 hook injections) that calls `Game` internals. The
-fork forbids that: a mod depends only on `mod_api` and uses catalogued hooks, Parts, handles, capabilities under
-transactions, attachments, mod messages and draw contexts. The glue is rewritten against those.
+## Gaps found porting
 
-## What exists (port the glue to it)
+### World, saving and blocks
 
-| Area | Fork API |
-|---|---|
-| World and level life | `world_lifecycle`, `level_tick_post` (keep one global tick; a block entity's own tick runs with it out of the world), `tick` (`HostSide`), `client_level_unload`, `level_load` |
-| Saved state | attachments with codecs on `Holder::Chunk` / `BlockEntity` / `Level`; a write marks the chunk dirty, so no save hook is needed |
-| Blocks | `LevelRef::block_state` / `set_block` / `destroy_block` / `block_shape` / `block_face_sturdy` / `clip` / `level_event` / `play_sound` / `random`; `block_state_id` / `_string` / `_default` / `_property`; `LevelHost::state_with_property`, `fluid_state`, tags |
-| Block behaviour | `BlockPart`: `use_item_on`, `use_without_item`, `state_for_placement` (yaw, pitch, sneaking, face, hit), `neighbor_changed` (read-only), `tick_block`, `block_signal`, `is_signal_source`, `has_analog_output` + `analog_output`, `entity_inside`, `contents_changed`, `affect_neighbors_after_removal` |
-| Block entities | `r.block_entity_type(..).blocks(..)`, `BlockEntityPart::block_entity`, `block_entity_update_tag` + `block_entity_sync`, `screen` / `screen_draw` / `screen_click`, `BlockEntityRef::data` / `merge_data` / `replace_data` / `set_changed` |
-| Items, fluids | `ITEMS`, `FLUIDS`, `ITEM_FLUIDS`, `ENTITY_ITEMS` providers, `move_resources`, `host.transaction`, `ItemPlace`. Create needs its own providers: vaults outgrow `block_entity_container`'s 256 slots, tanks `block_entity_fluids`' 1,000,000 mB |
-| Items used | `ItemPart::use_on` / `use_item` / `hurt_enemy`, `right_click_item`, `left_click_block`, `entity_place`, `break_block`, `loot_drops`, `entity_interact`, `attack_entity`, `player_tick`, `living_breathe` |
-| Entities | `LevelRef::entities_in` / `spawn_item(_with_motion)` / `pop_resource`, `summon`, `EntityRef` push, velocity, riding, teleport, rotation, discard, air; `MinecartRef` fuel; `entity_mount`, `entity_join_level`, `vehicle_moved`; `LivingRef` equipment, `hurt_and_break`, attribute modifiers |
-| Recipes, commands, messages | `recipes_of_type` / `recipe_result` / `recipe_ingredient`, `server_data_loaded`; `register_commands` / `perform_command`; `net_send_to_player` / `_to_server`, `net_from_client` / `_from_server` |
-| Client | `block_entity_submit` + `BlockEntityDrawContext` (block, item, cube, quad, rotate, partial, keep), `block_entity_render_bounding_box`, `standalone_models`, `RenderHooks::world_drawn`; `hud`, `screen_render_post` + `DrawContext`; mod screens; `mouse_scrolling`, `movement_input`, `interaction_key_mapping_triggered`, `mod_key`; `crosshair_target`, `camera` |
+- **A moment before a chunk is saved** ((removed)). The glue writes each changed
+  column's data into its chunk attachment at the end of the tick that changed it (`glue/persist.rs`);
+  a pre-save hook would let it write only when the game saves.
+- **A world-open phase.** `world_lifecycle` reports only failures and closing; Create's world opens at the
+  first `level_load`.
+- **Block-state facts:** `isRedstoneConductor` and `isSolidRender` (cart assemblers, stock links, schematic
+  export approximate them by "full collision cube"); `requiresCorrectToolForDrops` / `isCorrectToolForDrops`
+  (deployers dig every block at its harvestable speed); the weathering-copper class and age; a block's class
+  (copycats guess stairs, bars and trapdoors from tags and ids).
+- **A state's numeric id**, for `level_event(2001, ..)` (block-break particles on a wrenched copycat).
+- **The neighbour-shape update of a state placed by code** (`updateShape` against its neighbours): mirrored
+  placements of the wand of symmetry skip it.
+- **Waterlogging in `state_for_placement`**: the event carries no fluid at the position, so rails and display
+  boards are not waterlogged when placed in water.
+- **`OnBlockPlacedByEvent` without a level**: decor's fix-ups after a dispenser places a block are skipped.
+- **`lightning_strike` names no level**, so lightning cannot clear Create's copper from the glue. Emitting
+  `neoforge:oxidizables` / `neoforge:waxables` data maps for Create's copper (`tools/create-data`) would let the
+  fork's own weathering, waxing and lightning handle it.
+- **Fluid interactions in content declarations**: honey and chocolate meeting lava (obsidian from a source,
+  limestone or scoria from flowing lava, `registerFluidInteractions`) have no declaration.
 
-## Missing: small additions the fork's rules allow
+### Containers, items and transactions
 
-Each needs a claim on its #44 / #27 row first, with the plan agreed in the thread, as levzzz5154 does.
+- **Rolling back mod-owned state with a transaction.** A handler cannot learn that its transaction aborted,
+  so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, and packagers and
+  frogports offer no `ITEMS` handlers to hoppers, funnels and chutes. A close/abort callback on `Transaction`
+  (or a journal for mod state) would close both.
+- **A notice for any container's contents changing.** `contents_changed` reaches only the changed block's own
+  parts, so a chute under a vanilla container and a frogport above an inventory re-check on a timer instead.
+- **Per-slot insert rules on `ModContainer`**: "insert only while empty" (depot, ejector, crafter, chute) and
+  the toolbox's one item kind per compartment.
+- **Enchantment maximum levels on the server** (the `max_enchanted` filter attribute).
+- **`ConfigFiles::remove`** (deleting the oldest schematic upload), and a mod reaching the game folder's
+  `schematics/` (uploads live in the mod's own data folder).
 
-1. **Catalogue helpers that already exist** in the game but not in `native-hooks.json`: `native_draw_model`
-   (`native_block_entity_draw.rs:544`), `native_text_width`, `native_sprite_size`, `native_playing`,
-   `native_mapping` (`native_hooks.rs`). One fragment; unblocks partial models and the train HUD.
-2. **Redstone on `LevelRef`**: `signal(pos, dir)`, `best_neighbor_signal(pos)`, `update_neighbors(pos, NeighbourUpdate)`;
-   removes the id-based `neighbor_signal`, `update_signal_neighbors`, `update_output_neighbors` (no shims).
-3. **State facts off the world**: can be replaced, destroy speed, sound type, has block entity, the states of a
-   block; `item_block` (row G9, host-lead-2: coordinate).
-4. **Breaking with a tool**: `LevelRef::destroy_block` with breaker and tool, or `block_drops(pos, tool)`; break progress.
-5. **Entity motion**: `EntityRef::reset_fall_distance`, `move_by` (`Entity.move`), `MinecartRef::set_push`.
-6. **Fluid flow** (`FluidState.getFlow`) on the level host, for water wheels.
-7. **Crafting-grid match** (`RecipeManager.getRecipeFor` over a `CraftingInput`) on `LevelRef`.
-8. **Part methods** (NeoForge `IBlockExtension` / vanilla `Block`): `minecart_pass` (`onMinecartPass`),
-   `set_placed_by` with the stack, items landing (`updateEntityMovementAfterFallOn`); with the F1/F2 rows (api-lead).
-9. **Client**: `draw_text` on the block-entity draw context, GUI text with alpha, clipboard text, UI sounds without a
-   position, block-entity view distance (`getViewDistance`), write access in screen hooks.
-10. **Fake players F5/F6** (use, place, attack, break): rows 83–84 of #44, unblocked and unclaimed. The deployer
-    depends on them.
+### Entities and moving structures
 
-## Large designs (contribute, don't work around)
+- **Moving colliders**: players cannot stand on, or be pushed by, bearings' and pistons' structures, trains or
+  minecart contraptions (`notes/moving-structures-note.md`).
+- **Mod entity types that are not template copies**, rideable by players: Create's seat entity is stood in by
+  a tagged display entity; carriage seats, riding a moving structure's seats and clicking its blocks are out.
+- **World-space drawing of any block state at a pose**: trains, minecart contraptions and couplings are
+  simulated, saved and driven, but not drawn. Moving structures anchored to a block entity are drawn by it,
+  lit with the anchor's light (no per-block light in a block entity's draw).
+- **`MinecartRef::set_carrying`** (a cart with a contraption counting as ridden) and **`EntityRef::move_by`**
+  (moving a coupled cart off its rail with collisions).
 
-- Instanced moving parts: #44 "Rendering" (not started), #27, horizon-rust/horizon#6302. Until then, per-frame
-  `block_entity_submit` drawing.
-- Moving block structures (contraptions, trains, carts; collisions, seats): horizon-rust/horizon#5313, #27.
-  Draft: `notes/moving-structures-note.md`.
-- Mod entity types (seats, carriages): #44 row E, horizon-rust/horizon#5212.
-- A block entity reaching its own storage during its own tick: #44 (design accepted, not started).
-- Copycat models in the chunk mesh: #44 D7, horizon-rust/horizon#6303.
+### Client
+
+- **Whether an item's model is 3D** (`BakedModel.isGui3d`): belts, depots, placards and link slots approximate
+  it by "the item places a block".
+- **Keeping only some of a block entity's drawing**: `keep()` keeps everything drawn for it, so a block with
+  one animated part is drawn every frame (the glue decides through `Subsystem::animated`). A way to hide
+  another part's model would let the clockwork bearing's hour hand replace its top.
+- **Text alpha in `BlockEntityDrawContext::text`** (display boards' 0.85 / 0.975), and more than one colour per
+  line in tooltips (goggles).
+- **A mutable `ClientHost` in screen hooks**: the clipboard screen closes and sends its pages from the next
+  client tick.
+- **Reading and setting the local player's movement on the client** (diving boots sinking), **consuming a key
+  in `input_key`** (driving a train), and **a client-side left-click-block hook** (the cardboard sword's bonk
+  is played from the server).
+- **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).
+- **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
 
 ## Not to send
 
-- `8a8c23021` on `feat/create-hooks` (hopper item handler): written after reading a NeoForge source patch, which
-  Horizon's rules forbid; the fork's `ITEMS` providers cover it.
-- Block-facts snapshot cache `e4f3833ae`: a cache, kept private.
+- The earlier port's `feat/create-hooks` branch on OlaHulleberg/horizon added `native_*` hook points for the
+  mixin bundle. The fork's API replaced that route; none of it is needed.

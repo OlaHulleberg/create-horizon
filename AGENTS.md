@@ -1,19 +1,24 @@
-# Working on a native Horizon mod
+# Working on the Create native mod
 
-Read README.md and compatibility.json before editing. Keep this repository
-separate from Horizon and horizon-mixins. Only export committed pinned Horizon
-sources into ignored target trees; never modify the original checkout or player
-resources. Do not commit binaries, exported sources or Minecraft assets.
+Read README.md and notes/native-port.md before editing. The mod is `create/`: a native mod on the
+arismoko/horizon fork's mod API, pinned to one fork build in `create/horizon-mod.toml`. Keep this
+repository separate from Horizon; never modify a Horizon checkout or player resources. Do not commit
+binaries, `.horizon/` (the fetched SDK) or Minecraft assets.
 
-Gameplay rules live in the create-engine crate (mixins/create/engine), plain Rust
-with no game types, unit-tested with cargo test. runtime.rs is the thin game glue
-injected as crate::game::create; hook helpers stay one call long. Generated files
-(engine/src/generated.rs, content/) come from tools/create-data compile: never edit
-them by hand. All AST changes go through horizon-mixins plan/apply; do not add
-string-based Rust source rewriting. Never commit Create's src/main/resources/assets
-or anything derived from it.
+Gameplay rules live in the create-engine crate (`create/src/engine`), plain Rust with no game types,
+unit-tested with cargo test. The glue (`create/src/glue`) only reads the world through `mod_api`,
+calls the engine and writes back; `create/src/lib.rs` is the one `impl Hooks`, handing each hook to
+every subsystem. Per-block, per-item and per-block-entity moments are Parts the subsystem attaches
+to its own blocks. Only `mod_api` and `create_engine`: no game internals, no `[[native.mixin]]`, no
+registry dependencies. Where the API cannot do something, leave it out, say so in the module's doc
+and in HORIZON_API.md; no stubs or shims.
 
-Validate with cargo fmt, clippy with warnings denied, cargo test and
-python3 tools/test_template.py. For bundle/compatibility changes also run
-python3 tools/test_stage.py and python3 tools/horizon.py check/test against the
-pinned source export. Keep validation claims and supported revisions honest.
+Generated files (`create/src/engine/src/generated.rs`, `create/data/`, `create/assets/`) come from
+`tools/create-data compile`: never edit them by hand. Never commit Create's
+`src/main/resources/assets` or anything derived from it; `create-data prepare` reads them from the
+player's jar.
+
+Validate in `create/` with the SDK's toolchain: `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy
+--all-targets -- -D warnings`, `cargo +1.99.1 test`, `cargo +1.99.1 test -p create-engine`, and
+`cargo horizon-mod check`; in `tools/create-data`, `cargo test`. Keep validation claims honest:
+say what was run, and what was not run in game.

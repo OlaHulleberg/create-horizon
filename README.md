@@ -1,73 +1,74 @@
 # Create for Horizon
 
-A port of [Create](https://github.com/Creators-of-Create/Create) 6.0.11 to
-[Horizon](https://github.com/horizon-rust/horizon) (Minecraft 26.3 in Rust) as a pure-Rust
-**horizon-mixins** native mod. No Java runs, at build time or play time. The plan, what is done, and
-the measured budgets are in [PORTING.md](PORTING.md).
+A port of [Create](https://github.com/Creators-of-Create/Create) 6.0.11 to Horizon (Minecraft 26.3 in Rust), as a
+native mod on the mod API of the [arismoko/horizon](https://github.com/arismoko/horizon) fork: hooks, Parts, block
+entities, attachments, capabilities under transactions, payloads and draw contexts. It depends only on `mod_api`:
+no game internals, no mixins, and no registry dependencies. No Java runs, at build time or play time.
 
-It builds against Horizon's `feat/create-hooks` branch on
-[OlaHulleberg/horizon](https://github.com/OlaHulleberg/horizon/tree/feat/create-hooks): Horizon 9d979ca plus the
-native hook points Create needs (API 41 to 66), pinned in `compatibility.json`. Create's own textures, models and
-sounds (`src/main/resources/assets`, All Rights Reserved) are not here: `tools/create-data prepare` reads them from a
-Create jar you have.
+The mod pins one exact fork build in `create/horizon-mod.toml` (`[native] horizon`). The launcher compiles it
+against that build's prebuilt game; nothing of the game is rebuilt.
+
+**Status:** every legacy subsystem is ported to the API and the mod builds against its pinned SDK, with the engine's
+and the glue's unit tests passing. It has not yet been played on this API: see [VALIDATION.md](VALIDATION.md).
+What the API cannot do yet, and so what the port leaves out, is listed in [HORIZON_API.md](HORIZON_API.md).
 
 ## Layout
 
 ```text
-compatibility.json                 Pinned Horizon / horizon-mixins revisions and source hashes
-mixins/create/
-  horizon-mixin.toml               Named hooks, the glue module and the engine crate
-  runtime.rs                       Game glue, injected as crate::game::create (thin: hooks -> engine)
-  *.rs                             One small typed helper per hook
-  engine/                          create-engine: Create's rules as plain Rust, unit-tested here,
-                                   staged as a member of Horizon's workspace
-    src/generated.rs               @generated block table (tools/create-data compile)
-content/                           @generated content-mod declarations (tools/create-data compile)
-tools/create-data/                 compile: Create's MIT data -> tables; prepare: Create jar -> content mod
-tools/horizon.py                   Export -> plan -> apply -> check/build/test against the pin
-tools/test_template.py             Compiles the real bundle on a tiny fixture and runs its hook test
-tools/test_stage.py                Real pinned source audit and repeatability test
-tools/perf_headless.sh             Horizon's perf_bench.py, invisibly (Xvfb, --offscreen, scratch homes)
-tools/audit/                       Rust AST comparison against the pristine export
+create/                        The native mod: what the launcher builds
+  horizon-mod.toml             Identity and the pinned fork build
+  Cargo.toml                   The mod's crate (only the pinned SDK and the engine)
+  src/lib.rs                   The one `impl Hooks`: each hook handed to every subsystem
+  src/glue/                    The game glue on the mod API, one module per subsystem
+  src/engine/                  create-engine: Create's rules as plain Rust with no game types
+    src/generated.rs           @generated block table (tools/create-data compile)
+  data/create/horizon/         @generated block, item and fluid declarations
+  assets/create/               @generated block states of the partial models
+tools/create-data/             compile: Create's MIT data -> tables; prepare: Create jar -> playable mod
+notes/                         Porting notes (start with notes/native-port.md)
+benchmarks/, PORTING.md        Measurements and the porting log of the earlier mixin-based port
 ```
+
+`create/src/glue/` holds the core (`states`, `world`, `server`, `persist`, `net`, `subsystem`) and the subsystems:
+kinetics, logistics, processing, fluids, equipment and gauges, redstone and display, contraptions, trains and carts,
+packages, stock and schematics, interaction and items, decor, blocks and copycats.
+[notes/native-port.md](notes/native-port.md) explains how they fit together.
 
 ## Licences
 
-Create's code and data (everything outside its `src/main/resources/assets/`) are MIT and are read,
-translated and compiled here; its assets are All Rights Reserved and never committed or shipped:
-`create-data prepare` reads them from the player's own Create jar. See [LICENSE](LICENSE) and
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Create's code and data (everything outside its `src/main/resources/assets/`) are MIT and are read, translated and
+compiled here; its assets are All Rights Reserved and never committed or shipped: `create-data prepare` reads them
+from the player's own Create jar. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Build and run
+## Build and play
 
-Requirements: Linux, Rust 1.95.0 (the template workspace) and the Rust of the Horizon pin, Python
-3.12+, a Horizon Git clone holding the pinned commit and horizon-mixins at its pinned revision
-(found beside this repository or beside `Create/`, or `HORIZON_MIXINS`).
+Requirements: the fork's launcher (`horizon-launcher`) and its `cargo horizon-mod` tool, Rust (the SDK pins 1.99.1),
+and your own copy of Create 6.0.11's jar for the textures, models and sounds.
 
 ```sh
-cargo run -p create-data -- compile --create .. --out .           # after a Create data change
-cargo run -p create-data -- prepare --out target/create-content /path/to/create-6.0.11.jar
-python3 tools/horizon.py build --horizon /path/to/horizon          # always pass --horizon
-target/horizon-cargo/fast/horizon-client --resources /path/to/prepared/26.3 \
-    --dev-mod $PWD/target/create-content
+cd create && cargo horizon-mod check                     # fetches the pinned SDK into create/.horizon/, checks
+cd tools/create-data && cargo run -- prepare --out ../../target/create-mod /path/to/create-6.0.11.jar
+horizon-launcher native-build target/create-mod --instance "My Instance" --trust-native-code
 ```
 
-In this repository's sandbox the jar stand-in is two folders:
-`prepare --out target/create-content ../src/generated/resources ../src/main/resources`.
+`prepare` assembles a complete mod folder: this repository's crate and declarations, Create's data converted from
+1.21.1 to 26.3, and Create's assets from your jar. That folder contains Create's assets: it is for your own game,
+never for redistribution.
+
+After a Create data change, regenerate the committed tables and declarations from a Create checkout:
+
+```sh
+cd tools/create-data && cargo run -- compile --create /path/to/Create --out ../..
+```
 
 ## Validation
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked --offline -- -D warnings
-cargo test --workspace --locked --offline
-python3 tools/test_template.py
-python3 tools/horizon.py stage|check|test|build --horizon /path/to/horizon
+cd create
+cargo +1.99.1 fmt --check
+cargo +1.99.1 clippy --all-targets -- -D warnings
+cargo +1.99.1 test                      # the glue's tests
+cargo +1.99.1 test -p create-engine     # the engine's tests
+cargo horizon-mod check                 # the fork's package rules, then cargo check for the pinned build
+cd ../tools/create-data && cargo test
 ```
-
-`horizon.py test` runs the glue's tests inside Horizon's game test binary and the engine's tests as
-a member of the staged Horizon workspace (Horizon's `Cargo.lock` is the allow list). See
-[VALIDATION.md](VALIDATION.md).
-
-Build and staging tools are adapted from the MIT-licensed Horizon native mod template and the
-Veinminer port.

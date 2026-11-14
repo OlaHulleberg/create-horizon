@@ -1,3 +1,9 @@
+> **Historical.** This is the log of the earlier port, a horizon-mixins bundle against upstream
+> Horizon's internals. The mod is now a native mod on the arismoko/horizon fork's mod API (`create/`,
+> see README.md, notes/native-port.md and HORIZON_API.md). The rules, their Java references and the
+> measurements below still describe the engine (`create/src/engine`); paths, hooks and API numbers
+> are the old route's.
+
 # Porting Create 6.0.11 to Horizon (Nightly 9d979ca, MC 26.3)
 
 Source of truth for behaviour: this repo's Java tree (`src/`, branch `main`, NeoForge 1.21.1); the port lives in `horizon/` on branch `port/horizon`.
