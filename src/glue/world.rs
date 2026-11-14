@@ -60,6 +60,13 @@ pub fn with_world<R>(f: impl FnOnce(&mut CreateWorld) -> R) -> Option<R> {
     WORLD.with_borrow_mut(|w| w.as_mut().map(f))
 }
 
+/// Reads the open world from a hook that may fire inside one of the glue's own writes (a block's
+/// signal, asked while a `with_world` caller changes the level): `None` then, as when no world
+/// is open.
+pub fn try_with_world<R>(f: impl FnOnce(&CreateWorld) -> R) -> Option<R> {
+    WORLD.with(|w| w.try_borrow().ok()?.as_ref().map(f))
+}
+
 /// The engine's index of level `dimension` (`minecraft:overworld`), giving a mod dimension the
 /// next one the first time it is asked.
 pub fn level_index(dimension: &str) -> Option<usize> {

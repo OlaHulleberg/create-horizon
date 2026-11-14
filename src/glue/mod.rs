@@ -4,6 +4,7 @@
 pub mod blocks;
 pub mod copycat;
 pub mod decor;
+pub mod display;
 pub mod equipment;
 pub mod fluids;
 pub mod gauges;
@@ -14,6 +15,7 @@ pub mod logistics;
 pub mod net;
 pub mod packages;
 pub mod persist;
+pub mod redstone;
 pub mod schematics;
 pub mod server;
 pub mod states;
@@ -50,6 +52,9 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &blocks::Blocks,
     &decor::Decor,
     &copycat::Copycats,
+    &redstone::Redstone,
+    &display::Display,
+    &redstone::Comparators,
 ];
 
 thread_local! {
