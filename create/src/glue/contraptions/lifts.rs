@@ -258,6 +258,23 @@ fn tick_clocks(lv: &mut ServerLevel<'_>) {
     }
 }
 
+/// The clock's hand arrangement picked on its value box (`operationMode`): a running clock's
+/// hands turn toward their new targets from the next tick.
+pub(super) fn clock_hands_set(lv: &mut ServerLevel<'_>, pos: [i32; 3], index: u8) {
+    let dim = lv.dim;
+    let hands = create_engine::clock::Hands::from_index(index);
+    let running = with_world(|w| {
+        let c = w.dims[dim].lifts.clocks.get_mut(&pos)?;
+        c.clock.hands = hands;
+        Some(())
+    })
+    .flatten();
+    if running.is_some() {
+        show_clock(lv, pos);
+        mark_unsaved(lv, pos);
+    }
+}
+
 /// `ClockworkBearingBlockEntity.assemble`: the hour hand and the minute hand leave the world.
 fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32) {
     let dim = lv.dim;
@@ -268,8 +285,12 @@ fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32
     if let Some((_, m)) = &hands.minute {
         take_blocks(lv, pos, m);
     }
+    let arrangement = create_engine::clock::Hands::from_index(super::option_at(dim, pos) as u8);
     let c = create_engine::lifts::RunningClock {
-        clock: create_engine::clock::Clock::default(),
+        clock: create_engine::clock::Clock {
+            hands: arrangement,
+            ..Default::default()
+        },
         facing,
         rpm,
         hour: hands.hour,
@@ -347,6 +368,8 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
         let rpm = speed(dim, pos);
         let running = with_world(|w| {
             let p = w.dims[dim].lifts.pulleys.get_mut(&pos)?;
+            // `onSpeedChanged`: one kept together by its mode moves again.
+            p.waiting = false;
             if rpm != 0.0 {
                 p.speed_changed(rpm);
             }
@@ -354,7 +377,7 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
         })
         .flatten();
         match running {
-            Some(grid) if rpm == 0.0 => stop_pulley(lv, pos, grid),
+            Some(grid) if rpm == 0.0 => try_stop_pulley(lv, pos, grid),
             Some(_) => show_pulley(lv, pos),
             None if rpm != 0.0 => assemble_pulley(lv, pos, rpm),
             None => {}
@@ -370,6 +393,10 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
         let Some(mut p) = with_world(|w| w.dims[dim].lifts.pulleys.remove(&pos)).flatten() else {
             continue;
         };
+        if p.waiting {
+            with_world(|w| w.dims[dim].lifts.pulleys.insert(pos, p));
+            continue;
+        }
         // Its actors first (`tickActors`); while one stalls, the pulley holds (`isStalled`).
         if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
             let at = pulley_origin(&p, p.offset);
@@ -404,7 +431,7 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
         with_world(|w| w.dims[dim].lifts.pulleys.insert(pos, p));
         match step {
             Step::Move(_) => {}
-            Step::Stop(grid) => stop_pulley(lv, pos, grid),
+            Step::Stop(grid) => try_stop_pulley(lv, pos, grid),
             Step::Grab(grid) => {
                 stop_pulley(lv, pos, grid);
                 with_world(|w| w.dims[dim].lifts.pulley_checks.push(pos));
@@ -469,6 +496,32 @@ fn assemble_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     mark_unsaved(lv, pos);
 }
 
+/// `LinearActuatorBlockEntity.tryDisassemble` for a pulley stopping at whole offset `grid`: by
+/// its movement mode it comes apart (`MOVE_PLACE`, or `MOVE_PLACE_RETURNED` at its starting
+/// offset) or holds there, together, until its speed changes (`waitingForSpeedChange`).
+fn try_stop_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], grid: i32) {
+    let dim = lv.dim;
+    let mode = super::option_at(dim, pos);
+    let keep = with_world(|w| {
+        let p = w.dims[dim].lifts.pulleys.get_mut(&pos)?;
+        let keep = mode == 2 || (mode == 1 && grid != p.initial);
+        if keep {
+            p.offset = grid as f32;
+            p.waiting = true;
+        }
+        Some(keep)
+    })
+    .flatten();
+    match keep {
+        Some(true) => {
+            show_pulley(lv, pos);
+            mark_unsaved(lv, pos);
+        }
+        Some(false) => stop_pulley(lv, pos, grid),
+        None => {}
+    }
+}
+
 /// `PulleyBlockEntity.disassemble` at whole offset `grid`: the magnet at the rope's end and
 /// rope above it (`shouldCreateRopes`), then the structure under them.
 fn stop_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], grid: i32) {
@@ -530,7 +583,11 @@ fn show_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             blocks: &blocks,
             dir: [0, -1, 0],
             offset: p.offset,
-            per_tick: create_engine::pulley::movement(p.rpm),
+            per_tick: if p.waiting {
+                0.0
+            } else {
+                create_engine::pulley::movement(p.rpm)
+            },
             clamp: Some((0.0, p.range as f32)),
             rope: true,
         },
@@ -1065,6 +1122,7 @@ pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compo
                             bits(p.offset),
                             p.range,
                             bits(p.rpm),
+                            i32::from(p.waiting),
                         ],
                     )
                 }
@@ -1174,6 +1232,7 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
                     );
                     x.offset = f(at(4)?);
                     x.rpm = f(at(6)?);
+                    x.waiting = at(7) == Some(1);
                     Held::Pulley(x)
                 }
                 2 => {

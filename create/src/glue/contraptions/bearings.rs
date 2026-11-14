@@ -241,6 +241,19 @@ fn facing_of(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block) -> Option<Dir> {
         .and_then(|(_, i)| i.facing)
 }
 
+/// Whether a stopped mechanical bearing at `angle` puts its structure back, by its movement
+/// mode (`RotationMode`): always (`ROTATE_PLACE`), near its initial angle
+/// (`ROTATE_PLACE_RETURNED`, `isNearInitialAngle`), or only when the bearing goes
+/// (`ROTATE_NEVER_PLACE`).
+fn may_place(dim: usize, pos: [i32; 3], angle: f32) -> bool {
+    let a = angle.rem_euclid(360.0);
+    match super::option_at(dim, pos) {
+        0 => true,
+        1 => !(22.5..=360.0 - 22.5).contains(&a),
+        _ => false,
+    }
+}
+
 fn speed(dim: usize, pos: [i32; 3]) -> f32 {
     with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0)
 }
@@ -260,7 +273,17 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
         return;
     };
     for (pos, w) in orphans {
-        put_back(lv, pos, &w);
+        // A mechanical bearing broken mid-turn leaves its structure where it had turned to
+        // (`remove` → `disassemble`: the entity keeps its angle); its first block is the one in
+        // front of it.
+        let front = w.blocks.first().and_then(|(o, _)| Dir::from_offset(*o));
+        match (w.bearing, front) {
+            (Some(turn), Some(facing)) => {
+                let quarter = contraption::quarter(turn.angle_at(lv.game_time()));
+                put_back_turned(lv, pos, facing, quarter, &w);
+            }
+            _ => put_back(lv, pos, &w),
+        }
     }
     for pos in queued {
         let state = lv.block(pos);
@@ -272,10 +295,11 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
             continue;
         };
         take_blocks(lv, pos, &blocks);
+        // `RotationDirection` on its value box: clockwise unless set otherwise.
         let w = create_engine::world::Windmill {
             blocks,
             sails,
-            clockwise: true,
+            clockwise: super::option_at(dim, pos) == 0,
             bearing: None,
         };
         with_world(|world| world.windmill_assembled(dim, pos, state, w));
@@ -424,7 +448,7 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
         let rpm = speed(dim, pos);
         let running = with_world(|w| w.dims[dim].windmills.get(&pos).map(|m| m.bearing)).flatten();
         match running {
-            Some(Some(turn)) if rpm == 0.0 => {
+            Some(Some(turn)) if rpm == 0.0 && may_place(dim, pos, turn.angle_at(now)) => {
                 if let Some((mut c, _)) = BEARING_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos)))
                 {
                     actors::cancel_actors(lv, &mut c);
@@ -743,6 +767,12 @@ fn piston_world(anchor: [i32; 3], local: [i32; 3], facing: Dir, offset: i32) -> 
 /// a tick and are put back at their end (`tryDisassemble`). Clients glide the structure.
 pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    let orphans =
+        with_world(|w| std::mem::take(&mut w.dims[dim].piston_orphans)).unwrap_or_default();
+    for (pos, m) in orphans {
+        put_back_piston(lv, pos, m, false);
+        draw::hide(lv, pos);
+    }
     let mut checks =
         with_world(|w| std::mem::take(&mut w.dims[dim].piston_checks)).unwrap_or_default();
     let moving: Vec<[i32; 3]> =
@@ -752,17 +782,32 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
     }
     checks.sort();
     checks.dedup();
-    for pos in checks {
+    for &pos in &checks {
         let rpm = speed(dim, pos);
-        let running = with_world(|w| w.dims[dim].pistons.contains_key(&pos)).unwrap_or(false);
+        // `onSpeedChanged`: a piston kept together by its mode moves again.
+        let running = with_world(|w| {
+            let m = w.dims[dim].pistons.get_mut(&pos)?;
+            m.waiting = false;
+            Some(())
+        })
+        .flatten()
+        .is_some();
         match (running, rpm != 0.0) {
             (false, true) => assemble_piston(lv, pos, rpm),
-            (true, false) => disassemble_piston(lv, pos),
+            (true, false) => try_disassemble_piston(lv, pos),
             (true, true) => show_piston(lv, pos),
             _ => {}
         }
     }
     for pos in moving {
+        // One whose speed changed this tick only answers it (`assembleNextTick` returns).
+        if checks.contains(&pos) {
+            continue;
+        }
+        let waiting = with_world(|w| w.dims[dim].pistons.get(&pos).map(|m| m.waiting)).flatten();
+        if waiting != Some(false) {
+            continue;
+        }
         let rpm = speed(dim, pos);
         let Some(facing) = super::create_info(lv.block(pos)).and_then(|(_, i)| i.facing) else {
             continue;
@@ -775,13 +820,41 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
             if !stalled {
                 m.offset += create_engine::piston::movement(rpm, facing, m.offset, m.range);
             }
-            Some(m.offset <= 0.0 || m.offset >= m.range as f32)
+            let end = m.offset <= 0.0 || m.offset >= m.range as f32;
+            if end {
+                m.offset = m.offset.clamp(0.0, m.range as f32);
+            }
+            Some(end)
         })
         .flatten();
         if end == Some(true) {
-            disassemble_piston(lv, pos);
+            try_disassemble_piston(lv, pos);
+        } else if lv.game_time() % 10 == 0 {
+            // Its offset is saved now and then while it moves (and whenever it stops).
+            super::super::persist::mark_pos_unsaved(dim, pos);
         }
     }
+}
+
+/// `LinearActuatorBlockEntity.tryDisassemble`: by its movement mode, a stopped piston puts its
+/// structure back (`MOVE_PLACE`, or `MOVE_PLACE_RETURNED` at its starting offset) or keeps it
+/// together, still, until its speed changes (`waitingForSpeedChange`).
+fn try_disassemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let mode = super::option_at(dim, pos);
+    let keep = with_world(|w| {
+        let m = w.dims[dim].pistons.get_mut(&pos)?;
+        let keep = mode == 2 || (mode == 1 && (m.offset + 0.5) as i32 != m.initial);
+        m.waiting = keep;
+        Some(keep)
+    })
+    .flatten();
+    match keep {
+        Some(true) => show_piston(lv, pos),
+        Some(false) => disassemble_piston(lv, pos),
+        None => {}
+    }
+    super::super::persist::mark_pos_unsaved(dim, pos);
 }
 
 /// A moving piston's actors at its offset now; clients hear when it stalls or moves on. Only
@@ -898,6 +971,7 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
         .collect();
     super::remove_cells(lv, &cells);
     lv.set_property(pos, "state", "moving", update_all());
+    super::super::persist::mark_pos_unsaved(dim, pos);
     with_world(|w| {
         w.dims[dim].pistons.insert(
             pos,
@@ -907,6 +981,9 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
                 offset: c.progress as f32,
                 range: c.range,
                 carried,
+                initial: c.progress,
+                facing: Some(facing),
+                waiting: false,
             },
         )
     });
@@ -917,10 +994,21 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
 /// piston is extended unless all the way in.
 fn disassemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
-    let Some(mut m) = with_world(|w| w.dims[dim].pistons.remove(&pos)).flatten() else {
+    let Some(m) = with_world(|w| w.dims[dim].pistons.remove(&pos)).flatten() else {
         return;
     };
-    let Some(facing) = super::create_info(lv.block(pos)).and_then(|(_, i)| i.facing) else {
+    put_back_piston(lv, pos, m, true);
+}
+
+/// The structure of piston `pos` back in the world at its nearest whole offset, and the piston
+/// (when `own`: still there) extended or retracted.
+fn put_back_piston(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    mut m: create_engine::world::Moving,
+    own: bool,
+) {
+    let Some(facing) = m.facing else {
         return;
     };
     let grid = m.offset.round() as i32;
@@ -931,12 +1019,15 @@ fn disassemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         .filter(|(p, _)| *p != pos)
         .collect();
     put_back_blocks(lv, &cells, |lv, p| lv.passable(p));
-    let state = if grid > 0 { "extended" } else { "retracted" };
-    lv.set_property(pos, "state", state, update_all());
+    if own {
+        let state = if grid > 0 { "extended" } else { "retracted" };
+        lv.set_property(pos, "state", state, update_all());
+    }
     let o = facing.offset();
     let origin = [0, 1, 2].map(|a| m.anchor[a] + o[a] * grid);
     actors::release(lv, pos, origin, &mut m.carried);
     draw::hide(lv, pos);
+    super::super::persist::mark_pos_unsaved(lv.dim, pos);
 }
 
 /// A moving piston to its clients: its blocks (offset from the anchor at offset 0) gliding
@@ -950,7 +1041,7 @@ fn show_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some(facing) = super::create_info(lv.block(pos)).and_then(|(_, i)| i.facing) else {
         return;
     };
-    let per_tick = if m.carried.stalled {
+    let per_tick = if m.carried.stalled || m.waiting {
         0.0
     } else {
         create_engine::piston::movement(speed(dim, pos), facing, m.offset, m.range)
@@ -978,7 +1069,8 @@ fn show_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 // ---------------------------------------------------------------------------------------------
 // Saved with the column
 
-/// Windmills and mechanical bearings (`windmills`) and chassis ranges (`chassis`).
+/// Windmills and mechanical bearings (`windmills`), chassis ranges (`chassis`) and the options
+/// picked on value boxes (`modes`).
 pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
     let dim = lv.dim;
     let windmills = windmills_from_nbt(lv, data);
@@ -991,26 +1083,73 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
             .collect(),
         _ => Vec::new(),
     };
+    let modes: Vec<([i32; 3], u8)> = match data.get(&"modes".into()) {
+        Some(Tag::IntArray(v)) => v
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| ([c[0], c[1], c[2]], c[3].clamp(0, 2) as u8))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let pistons = pistons_from_nbt(lv, data);
     with_world(|w| {
         w.load_windmills(dim, windmills.into_iter());
         w.dims[dim].chassis_range.extend(ranges);
+        w.dims[dim].scroll_options.extend(modes);
+        for (p, m) in pistons {
+            w.dims[dim].pistons.insert(p, m);
+            // Clients see it again, and its speed tells it to move on or stop.
+            w.dims[dim].piston_checks.push(p);
+        }
     });
 }
 
 pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     let dim = lv.dim;
-    let Some((windmills, ranges)) = with_world(|w| {
-        let mut ranges: Vec<([i32; 3], i32)> = w.dims[dim]
+    let in_chunk = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
+    let Some((windmills, ranges, modes, pistons)) = with_world(|w| {
+        let d = &w.dims[dim];
+        let mut ranges: Vec<([i32; 3], i32)> = d
             .chassis_range
             .iter()
-            .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]))
+            .filter(|(p, _)| in_chunk(p))
             .map(|(p, r)| (*p, *r))
             .collect();
         ranges.sort();
-        (w.column_windmills(dim, chunk[0], chunk[1]), ranges)
+        let mut modes: Vec<([i32; 3], i32)> = d
+            .scroll_options
+            .iter()
+            .filter(|(p, _)| in_chunk(p))
+            .map(|(p, m)| (*p, i32::from(*m)))
+            .collect();
+        modes.sort();
+        let mut pistons: Vec<([i32; 3], create_engine::world::Moving)> = d
+            .pistons
+            .iter()
+            .filter(|(p, _)| in_chunk(p))
+            .map(|(p, m)| (*p, m.clone()))
+            .collect();
+        pistons.sort_by_key(|(p, _)| *p);
+        (
+            w.column_windmills(dim, chunk[0], chunk[1]),
+            ranges,
+            modes,
+            pistons,
+        )
     }) else {
         return;
     };
+    if !pistons.is_empty() {
+        data.insert("pistons".into(), pistons_to_nbt(lv, &pistons));
+    }
+    if !modes.is_empty() {
+        let v = modes
+            .iter()
+            .flat_map(|(p, m)| [p[0], p[1], p[2], *m])
+            .collect();
+        data.insert("modes".into(), Tag::IntArray(v));
+    }
     if !ranges.is_empty() {
         let v = ranges
             .iter()
@@ -1064,6 +1203,119 @@ fn windmills_to_nbt(
             })
             .collect(),
     )
+}
+
+/// Blocks (offsets and states) as a save keeps them: `blocks` offsets, `states` texts.
+fn structure_to_nbt(lv: &ServerLevel<'_>, c: &mut Compound, blocks: &[([i32; 3], u32)]) {
+    c.insert(
+        "blocks".into(),
+        Tag::IntArray(blocks.iter().flat_map(|(o, _)| *o).collect()),
+    );
+    let states = blocks
+        .iter()
+        .map(|(_, s)| {
+            Tag::String(
+                state_text(&*lv.host, *s)
+                    .unwrap_or_default()
+                    .as_str()
+                    .into(),
+            )
+        })
+        .collect();
+    c.insert("states".into(), Tag::List(states));
+}
+
+fn structure_from_nbt(lv: &ServerLevel<'_>, c: &Compound) -> Option<Vec<([i32; 3], u32)>> {
+    let Some(Tag::IntArray(offsets)) = c.get(&"blocks".into()) else {
+        return None;
+    };
+    let Some(Tag::List(states)) = c.get(&"states".into()) else {
+        return None;
+    };
+    Some(
+        offsets
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(states)
+            .filter_map(|(o, s)| {
+                let Tag::String(s) = s else { return None };
+                Some((
+                    [o[0], o[1], o[2]],
+                    state_of_text(&*lv.host, &s.to_string_lossy())?,
+                ))
+            })
+            .collect(),
+    )
+}
+
+/// Moving and waiting pistons (`pistons`), as `LinearActuatorBlockEntity` and its contraption
+/// entity save them: anchor, offset, range, starting offset, waiting, facing, and the blocks.
+/// What they carried is found again from the blocks (their actors); mounted storage's items
+/// are not kept.
+fn pistons_to_nbt(lv: &ServerLevel<'_>, all: &[([i32; 3], create_engine::world::Moving)]) -> Tag {
+    Tag::List(
+        all.iter()
+            .filter_map(|(p, m)| {
+                let facing = Dir::ALL.iter().position(|d| Some(*d) == m.facing)?;
+                let mut c = Compound::new();
+                c.insert("pos".into(), Tag::IntArray(p.to_vec()));
+                structure_to_nbt(lv, &mut c, &m.blocks);
+                c.insert(
+                    "piston".into(),
+                    Tag::IntArray(vec![
+                        m.anchor[0],
+                        m.anchor[1],
+                        m.anchor[2],
+                        m.offset.to_bits() as i32,
+                        m.range,
+                        m.initial,
+                        i32::from(m.waiting),
+                        facing as i32,
+                    ]),
+                );
+                Some(Tag::Compound(c))
+            })
+            .collect(),
+    )
+}
+
+fn pistons_from_nbt(
+    lv: &ServerLevel<'_>,
+    data: &Compound,
+) -> Vec<([i32; 3], create_engine::world::Moving)> {
+    let Some(Tag::List(list)) = data.get(&"pistons".into()) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|c| {
+            let Tag::Compound(c) = c else { return None };
+            let Some(Tag::IntArray(p)) = c.get(&"pos".into()) else {
+                return None;
+            };
+            let Some(Tag::IntArray(v)) = c.get(&"piston".into()) else {
+                return None;
+            };
+            let [ax, ay, az, offset, range, initial, waiting, facing] = v[..] else {
+                return None;
+            };
+            let blocks = structure_from_nbt(lv, c)?;
+            let carried = actors::bearing_actors(&blocks);
+            Some((
+                [*p.first()?, *p.get(1)?, *p.get(2)?],
+                create_engine::world::Moving {
+                    anchor: [ax, ay, az],
+                    blocks,
+                    offset: f32::from_bits(offset as u32),
+                    range,
+                    carried,
+                    initial,
+                    facing: Dir::ALL.get(facing as usize).copied(),
+                    waiting: waiting == 1,
+                },
+            ))
+        })
+        .collect()
 }
 
 fn windmills_from_nbt(

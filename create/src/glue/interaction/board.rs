@@ -22,6 +22,8 @@ use std::collections::HashMap;
 struct OpenBoard {
     pos: [i32; 3],
     board: Board,
+    /// An icons board's option names.
+    names: &'static [&'static str],
     /// The pick under the cursor: the wheel moves it, as there is no free cursor while playing.
     pick: Settings,
     ticks: u32,
@@ -190,15 +192,15 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
     let (block, facing) =
         super::super::client_table(host, |t| t.get(state).map(|(b, i)| (b, i.facing))).flatten()?;
     let seen = seen(pos);
-    let b = match block {
-        B::CreativeMotor => board::MOTOR,
-        // `BrassTunnelBlockEntity.selectionMode` (`logistics.when_multiple_outputs_available`).
-        B::BrassTunnel => board::options(
-            "Distribution Method",
-            create_engine::tunnel::OPTIONS.len() as i32,
-        ),
-        B::PulseRepeater | B::PulseExtender | B::PulseTimer => board::DIODE,
-        _ => return None,
+    let (b, names) = match block {
+        B::CreativeMotor => (board::MOTOR, &[][..]),
+        B::PulseRepeater | B::PulseExtender | B::PulseTimer => (board::DIODE, &[][..]),
+        // `ScrollOptionBehaviour`s: a brass tunnel's `selectionMode`
+        // (`logistics.when_multiple_outputs_available`), the contraption blocks' modes.
+        _ => {
+            let (title, names) = values::option_names(block)?;
+            (board::options(title, names.len() as i32), names)
+        }
     };
     let setting = match (block, seen.filter(|_| known)) {
         (_, Some(v)) => v,
@@ -219,6 +221,7 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
     Some(OpenBoard {
         pos,
         board: b,
+        names,
         pick: board_pick(b, setting),
         ticks: 0,
         known,
@@ -353,9 +356,8 @@ fn opaque(rgb: u32) -> u32 {
 /// `ValueSettingsScreen.renderWindow`, with plain fills where Create draws its GUI sprites
 /// (`AllGuiTextures.VALUE_SETTINGS_*`). Whether a board is open.
 pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
-    use create_engine::tunnel::OPTIONS;
-    let Some((b, pick, ticks)) =
-        BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.pick, o.ticks)))
+    let Some((b, names, pick, ticks)) =
+        BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.names, o.pick, o.ticks)))
     else {
         return false;
     };
@@ -372,7 +374,11 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
     let tip = board::release_to_confirm(&key);
     let text = |s: Settings| {
         if b.icons {
-            OPTIONS[s.value.clamp(0, OPTIONS.len() as i32 - 1) as usize].to_owned()
+            names
+                .get(s.value.clamp(0, names.len() as i32 - 1) as usize)
+                .copied()
+                .unwrap_or_default()
+                .to_owned()
         } else if b == board::DIODE {
             board::diode_text(s)
         } else {

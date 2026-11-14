@@ -134,6 +134,58 @@ impl Subsystem for Contraptions {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Value boxes
+
+/// The option a contraption block's value box is on (`ScrollOptionBehaviour.get`): a bearing's,
+/// piston's or pulley's movement mode, a windmill's direction, a clock's hands, a roller's mode.
+pub fn scroll_option(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block) -> i32 {
+    let dim = lv.dim;
+    if block == Block::MechanicalRoller {
+        return with_world(|w| w.dims[dim].rollers.get(&pos).map(|r| r.1 as i32))
+            .flatten()
+            .unwrap_or(0);
+    }
+    option_at(dim, pos)
+}
+
+/// The option kept for the block at `pos` (0, the first, when none is).
+pub(super) fn option_at(dim: usize, pos: [i32; 3]) -> i32 {
+    with_world(|w| w.dims[dim].scroll_options.get(&pos).copied())
+        .flatten()
+        .map_or(0, i32::from)
+}
+
+/// A pick on a contraption block's value box (`ScrollOptionBehaviour.setValue` and its
+/// callback): a running windmill turns the other way (`onDirectionChanged`), a running clock's
+/// hands take their new targets, a roller shares its mode with the rollers in line
+/// (`onModeChanged`).
+pub fn set_scroll_option(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, value: i32) {
+    let dim = lv.dim;
+    if block == Block::MechanicalRoller {
+        actors::set_roller_mode(lv, pos, value);
+        return;
+    }
+    let value = value.clamp(0, 2) as u8;
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        if value == 0 {
+            d.scroll_options.remove(&pos);
+        } else {
+            d.scroll_options.insert(pos, value);
+        }
+    });
+    super::persist::mark_pos_unsaved(dim, pos);
+    match block {
+        Block::WindmillBearing => {
+            let state = lv.block(pos);
+            with_world(|w| w.windmill_direction(dim, pos, state, value == 0));
+        }
+        Block::ClockworkBearing => lifts::clock_hands_set(lv, pos, value),
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Block states as the engine numbers them
 
 /// The numbers of the states that are not Create's: the engine's structures hold a `u32` per

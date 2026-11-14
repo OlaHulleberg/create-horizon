@@ -1595,6 +1595,24 @@ fn share_roller(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     mark_pos_unsaved(dim, pos);
 }
 
+/// A roller's mode picked on its value box (`mode`, `onModeChanged`): shared with the rollers
+/// in line.
+pub(super) fn set_roller_mode(lv: &mut ServerLevel<'_>, pos: [i32; 3], mode: i32) {
+    let Some(m) = actors::RollingMode::ALL
+        .get(mode.clamp(0, 2) as usize)
+        .copied()
+    else {
+        return;
+    };
+    if roller_at(lv, pos).is_none() {
+        return;
+    }
+    let dim = lv.dim;
+    with_world(|w| w.dims[dim].rollers.entry(pos).or_default().1 = m);
+    share_roller(lv, pos);
+    mark_pos_unsaved(dim, pos);
+}
+
 /// After the contraptions moved: rollers placed take a neighbour's settings, contraption
 /// controls follow redstone, stationary interfaces read their power and those connected or
 /// letting go tick. Nothing runs while none of these has anything to do.

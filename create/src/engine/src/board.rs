@@ -483,7 +483,43 @@ pub fn motor_slot(facing: Dir, side: Dir) -> Option<[f64; 3]> {
 
 /// `BrassTunnelModeSlot` (a `CenteredSideValueBoxTransform`): 15.5 px out, on the top only.
 pub fn tunnel_mode_slot(side: Dir) -> Option<[f64; 3]> {
-    (side == Dir::Up).then(|| sided_offset([0.5, 0.5, 15.5 / 16.0], side))
+    (side == Dir::Up).then(|| centred_slot(side))
+}
+
+/// The option names of a contraption block's `ScrollOptionBehaviour`, in Create's lang order.
+pub const ROTATION_MODES: [&str; 3] = [
+    "Always Place when Stopped",
+    "Only Place near Initial Angle",
+    "Only Place when Anchor Destroyed",
+];
+pub const MOVEMENT_MODES: [&str; 3] = [
+    "Always Place when Stopped",
+    "Place only in Starting Position",
+    "Place only when Anchor Destroyed",
+];
+pub const ROTATION_DIRECTIONS: [&str; 2] = ["Clockwise", "Counter-Clockwise"];
+pub const CLOCK_HANDS: [&str; 3] = ["Hour hand first", "Minute hand first", "24-Hour hand first"];
+pub const ROLLER_MODES: [&str; 3] = [
+    "Clear Blocks and Pave",
+    "Straight Fill Below",
+    "Sloped Fill Below",
+];
+
+/// `CenteredSideValueBoxTransform`: 15.5 px out, in the middle of `side`.
+pub fn centred_slot(side: Dir) -> [f64; 3] {
+    sided_offset([0.5, 0.5, 15.5 / 16.0], side)
+}
+
+/// `DirectionalExtenderScrollOptionSlot` (bearings' and pistons' movement mode): centred on a
+/// side off the block's facing axis (and, for a piston, off its shaft's `shaft` axis), 2 px back
+/// from its facing; None on any other side.
+pub fn extender_slot(facing: Dir, shaft: Option<Axis>, side: Dir) -> Option<[f64; 3]> {
+    if side.axis() == facing.axis() || Some(side.axis()) == shaft {
+        return None;
+    }
+    let o = centred_slot(side);
+    let n = facing.offset();
+    Some([0, 1, 2].map(|i| o[i] - f64::from(n[i]) * 2.0 / 16.0))
 }
 
 /// `BrassDiodeScrollValueBehaviour.getValueSettings`: a delay in ticks as ticks (up to 60),

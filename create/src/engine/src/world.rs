@@ -267,6 +267,10 @@ pub struct Dimension {
     pub basin_changes: Vec<[i32; 3]>,
     /// Linear chassis ranges set with the wrench (`ChassisScrollValueBehaviour`; others 8).
     pub chassis_range: HashMap<[i32; 3], i32>,
+    /// The option picked on a contraption anchor's value box (`ScrollOptionBehaviour`): a
+    /// bearing's or piston's movement mode, a windmill's direction, a clock's hands; 0 (the
+    /// first option) when none is kept.
+    pub scroll_options: HashMap<[i32; 3], u8>,
     pub tunnels_new: Vec<[i32; 3]>,
     /// Mechanical mixers and their cycle, the running ones (the only ones that tick), and those
     /// to look at their basin again (`basinChecker`: placed, speed changed, basin changed).
@@ -287,6 +291,8 @@ pub struct Dimension {
     /// change), and the moving ones with what they carry (the only ones that tick).
     pub piston_checks: Vec<[i32; 3]>,
     pub pistons: HashMap<[i32; 3], Moving>,
+    /// Moving pistons whose block went (`remove` → `disassemble`): their structures go back.
+    pub piston_orphans: Vec<([i32; 3], Moving)>,
     /// Super glue areas (`SuperGlueEntity`), saved with the column holding each.
     pub glue: Vec<crate::glue::Glue>,
     /// Stickers whose neighbour changed: their power is read again after the level's tick.
@@ -404,6 +410,13 @@ pub struct Moving {
     pub range: i32,
     /// Its actors, glue and turned-off actor kinds (`Contraption`).
     pub carried: crate::actors::Carried,
+    /// `initialExtensionProgress`: the offset it started from.
+    pub initial: i32,
+    /// The piston's facing (its structure goes back along it when the piston is gone).
+    pub facing: Option<crate::kinetics::Dir>,
+    /// `waitingForSpeedChange`: stopped and kept together (its movement mode), until its speed
+    /// changes.
+    pub waiting: bool,
 }
 
 /// A mechanical pump: the ends behind and in front of it, found when its pipes changed, and the
@@ -1369,6 +1382,9 @@ impl CreateWorld {
             if d.chassis_range.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
+            if d.scroll_options.remove(&pos).is_some() {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if let Some(b) = d.brass.remove(&pos) {
                 d.brass_running.retain(|p| *p != pos);
                 // What it held drops (`BrassTunnelBlockEntity.destroy`).
@@ -1425,6 +1441,9 @@ impl CreateWorld {
                 d.running_fans.retain(|p| *p != pos);
             }
             d.nozzles.remove(&pos);
+            if let Some(m) = d.pistons.remove(&pos) {
+                d.piston_orphans.push((pos, m));
+            }
             if let Some(w) = d.windmills.remove(&pos) {
                 d.windmill_orphans.push((pos, w));
                 d.windmill_changes.push(pos);
@@ -1694,6 +1713,8 @@ impl CreateWorld {
             d.basin_fluids
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chassis_range
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.scroll_options
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass_running
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -2641,6 +2662,32 @@ impl CreateWorld {
         let speed = crate::contraption::windmill_speed(w.sails, w.clockwise);
         let d = &mut self.dims[dim];
         d.windmills.insert(pos, w);
+        d.windmill_changes.push(pos);
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        let old = d.settings.get(&pos).copied().unwrap_or_default();
+        self.set_settings(
+            dim,
+            pos,
+            state,
+            Settings {
+                windmill: speed,
+                ..old
+            },
+        );
+    }
+
+    /// A running windmill's direction was set (`onDirectionChanged` → `updateGeneratedRotation`):
+    /// it generates its speed the other way. Nothing for a windmill not running.
+    pub fn windmill_direction(&mut self, dim: usize, pos: [i32; 3], state: u32, clockwise: bool) {
+        let d = &mut self.dims[dim];
+        let Some(w) = d.windmills.get_mut(&pos).filter(|w| w.bearing.is_none()) else {
+            return;
+        };
+        if w.clockwise == clockwise {
+            return;
+        }
+        w.clockwise = clockwise;
+        let speed = crate::contraption::windmill_speed(w.sails, clockwise);
         d.windmill_changes.push(pos);
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         let old = d.settings.get(&pos).copied().unwrap_or_default();
