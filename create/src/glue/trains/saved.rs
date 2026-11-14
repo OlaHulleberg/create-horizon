@@ -123,6 +123,9 @@ pub fn trains_to_nbt(host: &dyn Host, all: &[TrainOnTrack]) -> Tag {
                                 .collect(),
                         ),
                     );
+                    if !s.source.is_empty() {
+                        c.insert("schedule_item".into(), Tag::ByteArray(s.source.clone()));
+                    }
                     c.insert(
                         "runtime".into(),
                         Tag::IntArray(vec![
@@ -273,6 +276,10 @@ pub fn trains_from_nbt(host: &dyn Host, data: &Compound) -> Vec<TrainOnTrack> {
                         })
                         .collect(),
                     cyclic: true,
+                    source: match c.get(&"schedule_item".into()) {
+                        Some(Tag::ByteArray(b)) => b.clone(),
+                        _ => Vec::new(),
+                    },
                 }),
                 _ => None,
             };

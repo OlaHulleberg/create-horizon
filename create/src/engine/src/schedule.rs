@@ -33,6 +33,9 @@ pub struct Entry {
 pub struct Schedule {
     pub entries: Vec<Entry>,
     pub cyclic: bool,
+    /// The schedule as its item held it (Create's NBT, as the glue wrote it), opaque to the
+    /// engine: what a conductor gives back (`returnSchedule`) and what the train is saved with.
+    pub source: Vec<u8>,
 }
 
 /// `ScheduleRuntime.State`.
@@ -229,6 +232,7 @@ mod tests {
                 },
             ],
             cyclic,
+            source: Vec::new(),
         }
     }
 

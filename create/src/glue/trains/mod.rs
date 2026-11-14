@@ -25,8 +25,9 @@
 //!   the API has collision exclusions (boxes where blocks don't stop a player), not moving
 //!   colliders. Needs `notes/moving-structures-note.md`'s level colliders.
 //! - **The `create_debug` commands** (`assemble`, `drive`, `schedule`, `station_name`,
-//!   `curve`, `train`; `hand_schedule` for the schedule item): the command subsystem's, which
-//!   can call `assembly::use_station` and the railway as the legacy did.
+//!   `curve`, `train`): the command subsystem's, which can call `assembly::use_station` and
+//!   the railway as the legacy did. The schedule item hands itself to a seated conductor
+//!   (`items::schedule`, through [`seat_of`] and [`conductor_seat`]).
 //! - **Taking the controls' keys from the game** is done with `movement_input` (the player
 //!   neither walks, jumps nor sneaks), as Create's `setDown(false)` does; `input_key` can't
 //!   consume a key, so a key bound to something else still does it.
@@ -45,6 +46,7 @@ mod visuals;
 pub use carts::Carts;
 pub use controls::TrainControls;
 pub use railway::Trains;
+pub use riding::{conductor_seat, seat_of};
 
 use super::states;
 use mod_api::{BlockState, Host, HostBlockStates, PlayerRef, ServerHost, Text};
