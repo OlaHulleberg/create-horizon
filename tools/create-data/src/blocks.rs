@@ -2713,7 +2713,10 @@ pub fn partial_files(model: &str, points: &str) -> (Value, Value) {
         "template": "minecraft:stone",
         "item": false,
         "properties": { "render_shape": "INVISIBLE" },
-        "state_properties": { "facing": ["north", "east", "south", "west", "up", "down"] }
+        "state_properties": {
+            "facing": { "type": "enum", "values": ["north", "east", "south", "west", "up", "down"] }
+        },
+        "default_state": { "facing": "north" }
     });
     let turn = |x: i32, y: i32| {
         let mut v = Map::new();
