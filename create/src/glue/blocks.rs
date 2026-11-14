@@ -39,7 +39,7 @@ impl Subsystem for Blocks {
         }
         let toolbox = r.block_entity_type_key(TOOLBOX_TYPE);
         if let Err(e) = r.block_entity_part(&toolbox, ToolboxMenu) {
-            eprintln!("[create] the toolbox screen's part was refused: {e:?}");
+            crate::create_log!("[create] the toolbox screen's part was refused: {e:?}");
         }
     }
 

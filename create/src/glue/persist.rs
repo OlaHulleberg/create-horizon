@@ -54,7 +54,7 @@ pub fn read(lv: &mut ServerLevel<'_>, chunk: [i32; 2]) -> Compound {
         Ok(Some(data)) => data,
         Ok(None) => Compound::new(),
         Err(e) => {
-            eprintln!("[create] column {chunk:?} of {}: {e:?}", lv.dimension);
+            crate::create_log!("[create] column {chunk:?} of {}: {e:?}", lv.dimension);
             Compound::new()
         }
     }
@@ -90,7 +90,7 @@ pub fn flush(lv: &mut ServerLevel<'_>, systems: &[&dyn Subsystem]) {
             COLUMN.set(&mut *lv.host, Holder::Chunk(chunk), data)
         };
         if let Err(e) = result {
-            eprintln!(
+            crate::create_log!(
                 "[create] writing column {chunk:?} of {}: {e:?}",
                 lv.dimension
             );

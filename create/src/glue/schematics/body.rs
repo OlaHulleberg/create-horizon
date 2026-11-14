@@ -100,14 +100,14 @@ pub fn read_structure(host: &dyn Host, rel: &str) -> Option<Nbt> {
     let raw = match gzip::decode(&bytes, MAX_BYTES) {
         Ok(raw) => raw,
         Err(e) => {
-            eprintln!("[create] Failed to read schematic {rel}: {e:?}");
+            crate::create_log!("[create] Failed to read schematic {rel}: {e:?}");
             return None;
         }
     };
     match read_named(&raw) {
         Some(t) => Some(to_engine(&t)),
         None => {
-            eprintln!("[create] Failed to read schematic {rel}: not NBT");
+            crate::create_log!("[create] Failed to read schematic {rel}: not NBT");
             None
         }
     }

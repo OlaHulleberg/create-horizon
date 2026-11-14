@@ -19,7 +19,7 @@ impl ServerLevel<'_> {
             ExplosionSettings::default(),
         );
         if let Err(e) = done {
-            eprintln!("[create] an explosion at {center:?} failed: {e:?}");
+            crate::create_log!("[create] an explosion at {center:?} failed: {e:?}");
         }
     }
 
@@ -30,7 +30,7 @@ impl ServerLevel<'_> {
     /// `cuckoo_surprise` damage type is not carried.
     pub fn cuckoo_surprise(&mut self, pos: [i32; 3]) {
         if !self.destroy_block(pos, false) {
-            eprintln!("[create] the cuckoo clock at {pos:?} could not be broken");
+            crate::create_log!("[create] the cuckoo clock at {pos:?} could not be broken");
             return;
         }
         let center = pos.map(|v| f64::from(v) + 0.5);
@@ -44,7 +44,7 @@ impl ServerLevel<'_> {
             ExplosionSettings::default(),
         );
         if let Err(e) = done {
-            eprintln!("[create] an explosion at {center:?} failed: {e:?}");
+            crate::create_log!("[create] an explosion at {center:?} failed: {e:?}");
         }
     }
 }

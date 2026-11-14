@@ -20,7 +20,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
         return;
     };
     if let Err(e) = r.block_entity_part(&kind, DisplayEntity) {
-        eprintln!("[create] the display block entity's part was refused: {e:?}");
+        crate::create_log!("[create] the display block entity's part was refused: {e:?}");
     }
 }
 

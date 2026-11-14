@@ -221,12 +221,12 @@ impl Subsystem for Entities {
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let Some(kind) = kinetics::kind() else {
-            eprintln!("[create] no kinetic block entity type: logistics has no renderer");
+            crate::create_log!("[create] no kinetic block entity type: logistics has no renderer");
             return;
         };
         r.block_entity_capability_before_game(&ITEMS, &kind, handlers::provide);
         if let Err(e) = r.block_entity_part(&kind, client::LogisticsEntity) {
-            eprintln!("[create] the logistics block entity part was refused: {e:?}");
+            crate::create_log!("[create] the logistics block entity part was refused: {e:?}");
         }
     }
 }

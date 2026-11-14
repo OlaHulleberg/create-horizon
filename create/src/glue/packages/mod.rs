@@ -181,7 +181,7 @@ impl Subsystem for Packages {
         if let Some(kind) = super::kinetics::kind()
             && let Err(e) = r.block_entity_part(&kind, ConveyorDraw)
         {
-            eprintln!("[create] the chain conveyor's drawing part was refused: {e:?}");
+            crate::create_log!("[create] the chain conveyor's drawing part was refused: {e:?}");
         }
     }
 

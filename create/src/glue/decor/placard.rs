@@ -22,7 +22,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
         .blocks(&["create:placard"])
         .build();
     if let Err(e) = r.block_entity_part(&kind, PlacardEntity) {
-        eprintln!("[create] the placard block entity's part was refused: {e:?}");
+        crate::create_log!("[create] the placard block entity's part was refused: {e:?}");
     }
 }
 

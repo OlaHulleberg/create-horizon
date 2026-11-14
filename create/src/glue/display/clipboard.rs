@@ -138,7 +138,7 @@ pub fn with_content(stack: &ItemStack, content: Option<&Content>) -> ItemStack {
         patch.insert(CUSTOM_DATA.into(), Tag::Compound(c));
     }
     if let Err(e) = stack.set_components(patch) {
-        eprintln!("[create] the clipboard's pages could not be written: {e:?}");
+        crate::create_log!("[create] the clipboard's pages could not be written: {e:?}");
     }
     stack
 }
@@ -185,7 +185,7 @@ fn use_clipboard(
     if let Some(slot) = player.selected_slot(&*host)
         && let Err(e) = player.set_inventory_slot(host, slot as u32, Some(edited))
     {
-        eprintln!("[create] the clipboard could not be marked as edited: {e:?}");
+        crate::create_log!("[create] the clipboard could not be marked as edited: {e:?}");
     }
     Some(InteractionResult::SuccessServer)
 }
@@ -248,7 +248,7 @@ pub(super) fn client_message(
     {
         let edited = with_content(&stack, edit.content.as_ref());
         if let Err(e) = player.set_inventory_slot(host, slot, Some(edited)) {
-            eprintln!("[create] the clipboard's pages could not be kept: {e:?}");
+            crate::create_log!("[create] the clipboard's pages could not be kept: {e:?}");
         }
     }
     true

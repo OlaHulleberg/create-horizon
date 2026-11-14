@@ -59,11 +59,13 @@ impl Subsystem for Drawing {
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let Some(kind) = super::super::kinetics::kind() else {
-            eprintln!("[create] contraptions: the kinetic block entity type is not registered yet");
+            crate::create_log!(
+                "[create] contraptions: the kinetic block entity type is not registered yet"
+            );
             return;
         };
         if let Err(e) = r.block_entity_part(&kind, StructurePart) {
-            eprintln!("[create] the contraption drawing part was refused: {e:?}");
+            crate::create_log!("[create] the contraption drawing part was refused: {e:?}");
         }
     }
 

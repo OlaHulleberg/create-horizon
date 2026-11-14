@@ -197,7 +197,9 @@ impl Subsystem for Schematics {
         }
         for kind in [cannon, table] {
             if let Err(e) = r.block_entity_part(&kind, SchematicEntity) {
-                eprintln!("[create] the schematic block entities' part was refused: {e:?}");
+                crate::create_log!(
+                    "[create] the schematic block entities' part was refused: {e:?}"
+                );
             }
         }
         r.block_part(states::key(Block::Schematicannon), CannonBlock);
@@ -1057,7 +1059,7 @@ fn save(
     let file = sch::export_name(file, false, |f| body::exists(host, f));
     let tag = structure.to_nbt();
     if let Err(e) = body::write_structure(host, &file, &tag) {
-        eprintln!("[create] An error occurred while saving schematic [{file}]: {e}");
+        crate::create_log!("[create] An error occurred while saving schematic [{file}]: {e}");
         return vec!["Failed to save schematic, check logs for details".into()];
     }
     let mut lines = vec![format!("Saved as {file}")];
@@ -1085,7 +1087,7 @@ fn save(
                     lines.push(format!("{file} written to the held schematic"));
                 }
                 Err(e) => {
-                    eprintln!("[create] Schematic instant-upload of {file}: {e}");
+                    crate::create_log!("[create] Schematic instant-upload of {file}: {e}");
                     lines.push("Schematic instant-upload failed, check logs for details".into());
                 }
             }
@@ -1126,7 +1128,9 @@ fn upload(lv: &mut ServerLevel<'_>, player: &str, pos: [i32; 3], file: &str) -> 
         return vec!["the table needs a blank schematic in and nothing out".into()];
     }
     let Some(target) = uploaded(player, file) else {
-        eprintln!("[create] Attempted Schematic Upload with non-supported Format: {player}/{file}");
+        crate::create_log!(
+            "[create] Attempted Schematic Upload with non-supported Format: {player}/{file}"
+        );
         return vec![format!("not a schematic file: {file}")];
     };
     let Some(size) = body::size(host, file) else {
@@ -1136,10 +1140,10 @@ fn upload(lv: &mut ServerLevel<'_>, player: &str, pos: [i32; 3], file: &str) -> 
         return vec![too_large(size)];
     }
     if let Err(e) = body::copy(host, file, &target) {
-        eprintln!("[create] Exception Thrown when starting Upload: {player}/{file}: {e}");
+        crate::create_log!("[create] Exception Thrown when starting Upload: {player}/{file}: {e}");
         return vec![format!("upload of {file} failed")];
     }
-    eprintln!("[create] New Schematic Uploaded: {player}/{file}");
+    crate::create_log!("[create] New Schematic Uploaded: {player}/{file}");
     let bounds = read(host, &target).size;
     let Some(mut stack) = packages::body::new_stack(host, SCHEMATIC, 1) else {
         return vec![format!("upload of {file} failed")];

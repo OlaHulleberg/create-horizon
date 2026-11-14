@@ -45,7 +45,7 @@ impl Subsystem for Kinetics {
         let kind = r.block_entity_type(TYPE).blocks(&names).build();
         let _ = KIND.set(kind);
         if let Err(e) = r.block_entity_part(&kind, KineticEntity) {
-            eprintln!("[create] the kinetic block entity's part was refused: {e:?}");
+            crate::create_log!("[create] the kinetic block entity's part was refused: {e:?}");
         }
     }
 

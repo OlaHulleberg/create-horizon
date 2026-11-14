@@ -1752,7 +1752,7 @@ fn level_load(lv: &mut ServerLevel<'_>) {
         Ok(Some(data)) => data,
         Ok(None) => return,
         Err(e) => {
-            eprintln!("[create] the logistics networks of {}: {e:?}", lv.dimension);
+            crate::create_log!("[create] the logistics networks of {}: {e:?}", lv.dimension);
             return;
         }
     };
@@ -1898,6 +1898,6 @@ fn level_save(lv: &mut ServerLevel<'_>) {
     let data = Compound::from([("LogisticsNetworks".into(), networks)]);
     match NETWORKS.set(&mut *lv.host, Holder::Level, data) {
         Ok(()) => DIRTY.set(false),
-        Err(e) => eprintln!("[create] saving the logistics networks: {e:?}"),
+        Err(e) => crate::create_log!("[create] saving the logistics networks: {e:?}"),
     }
 }

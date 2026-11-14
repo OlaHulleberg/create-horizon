@@ -161,7 +161,7 @@ impl Subsystem for Copycats {
             .build();
         let _ = KIND.set(kind);
         if let Err(e) = r.block_entity_part(&kind, parts::CopycatEntity) {
-            eprintln!("[create] the copycat block entity's part was refused: {e:?}");
+            crate::create_log!("[create] the copycat block entity's part was refused: {e:?}");
         }
     }
 

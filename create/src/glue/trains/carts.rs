@@ -1529,7 +1529,7 @@ fn save(lv: &mut ServerLevel<'_>) {
         ("Assemblers".into(), Tag::List(stations)),
     ]);
     if let Err(e) = SAVED.set(&mut *lv.host, Holder::Level, data) {
-        eprintln!("[create] saving the minecart contraptions: {e:?}");
+        crate::create_log!("[create] saving the minecart contraptions: {e:?}");
     }
 }
 
@@ -1541,7 +1541,7 @@ fn load(lv: &mut ServerLevel<'_>) {
         Ok(Some(data)) => data,
         Ok(None) => return,
         Err(e) => {
-            eprintln!("[create] reading the minecart contraptions: {e:?}");
+            crate::create_log!("[create] reading the minecart contraptions: {e:?}");
             return;
         }
     };

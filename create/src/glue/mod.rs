@@ -12,6 +12,8 @@ pub mod gauges;
 pub mod interaction;
 pub mod items;
 pub mod kinetics;
+#[macro_use]
+pub mod log;
 pub mod logistics;
 pub mod net;
 pub mod packages;

@@ -59,7 +59,7 @@ pub fn register(r: &mut dyn Registrar) {
     let _ = PARTIAL_KEYS.set(PARTIALS.map(|name| r.block_key(name)));
     let kind = r.block_entity_type_key(kinetics::TYPE);
     if let Err(e) = r.block_entity_part(&kind, MachineDraw) {
-        eprintln!("[create] the machines' drawing part was refused: {e:?}");
+        crate::create_log!("[create] the machines' drawing part was refused: {e:?}");
     }
 }
 

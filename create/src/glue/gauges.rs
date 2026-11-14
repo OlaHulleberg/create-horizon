@@ -52,7 +52,7 @@ impl Subsystem for Gauges {
             return;
         };
         if let Err(e) = r.block_entity_part(&kind, Animated) {
-            eprintln!("[create] the gauges' block entity part was refused: {e:?}");
+            crate::create_log!("[create] the gauges' block entity part was refused: {e:?}");
         }
     }
 

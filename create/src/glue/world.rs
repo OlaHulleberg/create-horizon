@@ -20,10 +20,10 @@ thread_local! {
 /// blocks are not in the game.
 pub fn open(host: &dyn Host) -> bool {
     let Some(table) = super::states::open(host) else {
-        eprintln!("[create] no Create block states: the mod stays idle");
+        crate::create_log!("[create] no Create block states: the mod stays idle");
         return false;
     };
-    eprintln!(
+    crate::create_log!(
         "[create] {} Create block states from id {}",
         table.len(),
         table.first()

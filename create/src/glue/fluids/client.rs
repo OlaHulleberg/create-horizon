@@ -24,7 +24,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
         return;
     };
     if let Err(e) = r.block_entity_part(&kind, FluidEntity) {
-        eprintln!("[create] the fluids' block entity part was refused: {e:?}");
+        crate::create_log!("[create] the fluids' block entity part was refused: {e:?}");
     }
 }
 

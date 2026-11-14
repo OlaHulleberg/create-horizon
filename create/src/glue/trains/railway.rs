@@ -42,7 +42,7 @@ impl Subsystem for Trains {
             return;
         };
         if let Err(e) = r.block_entity_part(&kind, tracks::TrackEntity) {
-            eprintln!("[create] the track block entity's part was refused: {e:?}");
+            crate::create_log!("[create] the track block entity's part was refused: {e:?}");
         }
     }
 

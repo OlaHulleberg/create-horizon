@@ -28,7 +28,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
         return;
     };
     if let Err(e) = r.block_entity_part(&kind, RedstoneEntity) {
-        eprintln!("[create] the redstone block entity's part was refused: {e:?}");
+        crate::create_log!("[create] the redstone block entity's part was refused: {e:?}");
     }
 }
 

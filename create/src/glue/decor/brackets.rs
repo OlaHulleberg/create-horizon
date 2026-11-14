@@ -34,7 +34,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
     if let Some(kind) = kinetics::kind()
         && let Err(e) = r.block_entity_part(&kind, BracketEntity)
     {
-        eprintln!("[create] the bracket drawing part was refused: {e:?}");
+        crate::create_log!("[create] the bracket drawing part was refused: {e:?}");
     }
 }
 
