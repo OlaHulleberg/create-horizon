@@ -146,7 +146,8 @@ impl BlockPart for Placement {
         let flag = |b: bool| if b { "true" } else { "false" };
         match block {
             // FunnelBlock.getStateForPlacement: extracting unless sneaking; facing away from the
-            // nearest way the player looks whose block behind is no funnel.
+            // nearest way the player looks (`getNearestLookingDirections`: into the clicked
+            // block first) whose block behind is no funnel.
             Block::AndesiteFunnel | Block::BrassFunnel => {
                 let funnel = |p: [i32; 3]| {
                     level
@@ -155,7 +156,7 @@ impl BlockPart for Placement {
                         .and_then(table)
                         .is_some_and(|(b, _)| super::funnel::is_funnel(b))
                 };
-                let facing = create_engine::place::ordered_by_nearest(c.yaw, c.pitch)
+                let facing = create_engine::place::nearest_looking_directions(ctx, c.replace_clicked)
                     .into_iter()
                     .map(Dir::opposite)
                     .find(|f| !funnel(beside(f.opposite())))

@@ -59,6 +59,20 @@ fn table(i: i64) -> f32 {
     ((i & 65535) as f64 / SCALE).sin() as f32
 }
 
+/// `BlockPlaceContext.getNearestLookingDirections`: `ordered_by_nearest`, but for a placement
+/// against a block (`replace_clicked` false) the clicked face's opposite comes first.
+pub fn nearest_looking_directions(ctx: Context, replace_clicked: bool) -> [Dir; 6] {
+    let mut d = ordered_by_nearest(ctx.yaw, ctx.pitch);
+    if replace_clicked {
+        return d;
+    }
+    let toward = ctx.clicked_face.opposite();
+    if let Some(i) = d.iter().position(|x| *x == toward) {
+        d[..=i].rotate_right(1);
+    }
+    d
+}
+
 /// `Entity.getDirection` (`Direction.fromYRot`): the horizontal direction the player faces.
 pub fn horizontal_direction(yaw: f32) -> Dir {
     match ((yaw / 90.0 + 0.5).floor() as i32) & 3 {
@@ -596,6 +610,30 @@ mod tests {
         };
         assert_eq!(crafter(east, Some(Dir::South)), (Dir::South, "left"));
         assert_eq!(facing(Block::Basin, c, |_| false), Some(Dir::Down));
+    }
+
+    #[test]
+    fn a_clicked_face_comes_first_when_looking() {
+        // Looking steeply down and east at a block's west face: east (into the clicked block)
+        // comes first, the rest keep their order.
+        let c = Context {
+            yaw: -90.0,
+            pitch: 60.0,
+            sneaking: false,
+            clicked_face: Dir::West,
+        };
+        assert_eq!(
+            nearest_looking_directions(c, false),
+            [
+                Dir::East,
+                Dir::Down,
+                Dir::South,
+                Dir::North,
+                Dir::West,
+                Dir::Up
+            ]
+        );
+        assert_eq!(nearest_looking_directions(c, true)[0], Dir::Down);
     }
 
     #[test]

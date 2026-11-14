@@ -237,6 +237,12 @@ pub fn insert_into_from(
     {
         return Some(left);
     }
+    if let Some(f) = funnel_at(lv, next) {
+        return Some(funnel_direct_input(lv, next, f, item));
+    }
+    if let Some((block, powered)) = super::chute::chute_at(lv, next) {
+        return Some(chute_direct_input(lv, next, block, powered, item));
+    }
     let dim = lv.dim;
     let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
     if is_depot {
@@ -302,6 +308,73 @@ pub fn insert_into_from(
         Some(0)
     })
     .flatten()
+}
+
+/// Whether something at `pos` takes items straight from a belt's end
+/// (`DirectBeltInputBehaviour`, `resolveEnding`'s `INSERT`): a depot, a belt, an item drain, a
+/// funnel or a chute. Only a floor funnel and a chute that may take items accept them; at the
+/// others the items wait.
+pub fn direct_input_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    let dim = lv.dim;
+    let kept = with_world(|w| {
+        let d = &w.dims[dim];
+        d.depots.contains_key(&pos) || d.belt_of.contains_key(&pos) || d.drains.contains_key(&pos)
+    });
+    kept == Some(true) || funnel_at(lv, pos).is_some() || super::chute::chute_at(lv, pos).is_some()
+}
+
+/// `FunnelBlockEntity`'s `DirectBeltInputBehaviour`: only an inserting floor funnel
+/// (`supportsDirectBeltInput`) takes what its filter passes while unpowered
+/// (`handleDirectBeltInput`), into the inventory under it. The count left.
+fn funnel_direct_input(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    f: super::funnel::FunnelState,
+    item: &belt::Item,
+) -> u8 {
+    if f.belt.is_some() || f.extracting || f.facing != Dir::Up || f.powered {
+        return item.count;
+    }
+    let Some(stack) = belt_stack(lv, item) else {
+        return item.count;
+    };
+    if !super::funnel::funnel_passes(lv, pos, &stack) {
+        return item.count;
+    }
+    let behind = create_engine::funnel::behind(pos, f.facing);
+    let left = items::insert_item(lv, behind, face(f.facing), stack);
+    left.map_or(0, |l| l.count().min(255) as u8)
+}
+
+/// `ChuteBlockEntity`'s `DirectBeltInputBehaviour`: while it may take items
+/// (`canDirectlyInsert`: no chute above leading down into it, not blown up without a chute
+/// feeding it) its handler takes the whole stack when empty (`ChuteItemHandler.insertItem`).
+/// The count left.
+fn chute_direct_input(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    block: create_engine::Block,
+    powered: bool,
+    item: &belt::Item,
+) -> u8 {
+    let above = [pos[0], pos[1] + 1, pos[2]];
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    if super::chute::chute_at(lv, above).is_some()
+        || (super::chute::chute_motion(lv, pos) > 0.0 && super::chute::chute_at(lv, below).is_none())
+    {
+        return item.count;
+    }
+    let Some(stack) = belt_stack(lv, item) else {
+        return item.count;
+    };
+    if !super::chute::chute_accepts(lv, pos, block, powered, &stack) {
+        return item.count;
+    }
+    if super::chute::chute_take(lv, pos, &stack) {
+        0
+    } else {
+        item.count
+    }
 }
 
 /// `BeltInventory.eject`: an item thrown off the end, forward and a little up.
@@ -548,12 +621,7 @@ fn block_face(d: Dir) -> BlockFace {
 impl belt::Surroundings for BeltSide<'_, '_> {
     fn ending(&mut self) -> belt::Ending {
         let next = self.past_end();
-        let dim = self.lv.dim;
-        let has = with_world(|w| {
-            let d = &w.dims[dim];
-            d.depots.contains_key(&next) || d.belt_of.contains_key(&next)
-        });
-        if has == Some(true) {
+        if direct_input_at(self.lv, next) {
             return belt::Ending::Insert;
         }
         // BlockHelper.hasBlockSolidSide toward the belt.
