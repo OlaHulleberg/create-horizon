@@ -1,0 +1,216 @@
+//! Metal girders and girder encased shafts (`GirderBlock`, `GirderEncasedShaftBlock`): what they
+//! read of the blocks beside them, their shape after a neighbour changed, their placement, and a
+//! shaft used on a girder.
+
+use super::super::server::ServerLevel;
+use super::super::states;
+use super::{add, block_of, face_of, flag, prop, with, with_props};
+use create_engine::Block;
+use create_engine::decor::{self, Side};
+use create_engine::kinetics::{Axis, Dir};
+use create_engine::parts::StateInfo;
+use mod_api::{BlockShapeKind, BlockState, SupportType};
+
+/// What a girder at `pos` reads of the block on side `d` (`GirderBlock.updateState`,
+/// `updateVerticalProperty`, `isConnected`).
+pub(super) fn side(lv: &ServerLevel<'_>, pos: [i32; 3], d: Dir) -> Side {
+    let p = add(pos, d);
+    let Some(state) = lv.block_state(p) else {
+        return Side::default();
+    };
+    let host = &*lv.host;
+    let text = super::state_text(host, state);
+    let (name, props) = states::split(&text);
+    let get = |k: &str| props.iter().find(|(a, _)| *a == k).map(|(_, v)| *v);
+    let empty = lv
+        .level
+        .block_shape(host, state, p, BlockShapeKind::Collision)
+        .is_none_or(|s| s.is_empty());
+    let bracket = with(lv.dim, |x| x.brackets.get(&p).copied()).is_some_and(|b| b.facing == d);
+    let placard_toward = name == "create:placard"
+        && get("facing")
+            .and_then(super::dir_named)
+            .map(|f| decor::connected_direction(get("face").unwrap_or(""), f))
+            == Some(d);
+    let holds = d.axis() == Axis::Y
+        && (get("up") == Some("true")
+            || name == "create:display_board"
+            || (name.ends_with("lantern")
+                && get("hanging").is_some_and(|h| (h == "true") == (d == Dir::Down)))
+            || (name.ends_with("chain") && get("axis") == Some("y"))
+            || (get("face") == Some("ceiling") && d == Dir::Down)
+            || (get("face") == Some("floor") && d == Dir::Up));
+    Side {
+        air: matches!(
+            name,
+            "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+        ),
+        girder: (name == "create:metal_girder")
+            .then(|| (get("x") == Some("true"), get("z") == Some("true"))),
+        encased: (name == "create:metal_girder_encased_shaft").then(|| {
+            if get("axis") == Some("x") {
+                Axis::X
+            } else {
+                Axis::Z
+            }
+        }),
+        toward: bracket || placard_toward,
+        holds,
+        full_face: lv
+            .level
+            .block_face_sturdy(host, p, face_of(d.opposite()), SupportType::Full)
+            == Some(true),
+        empty,
+        chute_down: (name == "create:chute" && get("facing") == Some("down"))
+            || name == "create:smart_chute",
+    }
+}
+
+/// A girdable track (`create:track`) above beside `pos` across `d`'s axis, running along it
+/// (`TrackShape.XO` / `ZO`).
+pub(super) fn track_beside(lv: &ServerLevel<'_>, pos: [i32; 3], d: Dir) -> bool {
+    let axis = d.axis();
+    if axis == Axis::Y {
+        return false;
+    }
+    let across = if axis == Axis::X { Axis::Z } else { Axis::X };
+    let want = if axis == Axis::X { "xo" } else { "zo" };
+    [true, false].into_iter().any(|positive| {
+        let p = add(
+            [pos[0], pos[1] + 1, pos[2]],
+            Dir::from_axis(across, positive),
+        );
+        lv.block_state(p).is_some_and(|s| {
+            s.block().id(&*lv.host) == "create:track"
+                && prop(&*lv.host, s, "shape").as_deref() == Some(want)
+        })
+    })
+}
+
+fn girder_of(info: &StateInfo, props: &dyn Fn(&str) -> bool) -> decor::Girder {
+    decor::Girder {
+        axis: info.axis.unwrap_or(Axis::Y),
+        x: props("x"),
+        z: props("z"),
+        top: props("top"),
+        bottom: props("bottom"),
+    }
+}
+
+fn axis_name(a: Axis) -> &'static str {
+    match a {
+        Axis::X => "x",
+        Axis::Y => "y",
+        Axis::Z => "z",
+    }
+}
+
+/// The girder at `pos` takes `g`'s properties.
+pub(super) fn set_girder(lv: &mut ServerLevel<'_>, pos: [i32; 3], g: decor::Girder) {
+    let Some(state) = lv.block_state(pos) else {
+        return;
+    };
+    let next = with_props(
+        &*lv.host,
+        state,
+        &[
+            ("axis", axis_name(g.axis)),
+            ("x", flag(g.x)),
+            ("z", flag(g.z)),
+            ("top", flag(g.top)),
+            ("bottom", flag(g.bottom)),
+        ],
+    );
+    if let Some(next) = next
+        && next != state
+    {
+        lv.put(pos, next);
+    }
+}
+
+/// `GirderBlock.getStateForPlacement`, after the girder is placed: its axis from the clicked
+/// face, then every side.
+pub(super) fn place(lv: &mut ServerLevel<'_>, pos: [i32; 3], clicked: Dir) {
+    let g = decor::placement(clicked, |d| side(lv, pos, d), |d| track_beside(lv, pos, d));
+    set_girder(lv, pos, g);
+}
+
+/// A girder or encased shaft shapes itself again after its neighbours changed: every side, as
+/// `updateShape` for each (the hook doesn't say which neighbour it was).
+pub(super) fn reshape(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let Some(state) = lv.block_state(pos) else {
+        return;
+    };
+    let Some((block, info)) = block_of(lv.block(pos)) else {
+        return;
+    };
+    let host = &*lv.host;
+    let text = super::state_text(host, state);
+    let (_, own) = states::split(&text);
+    let props = |k: &str| own.iter().any(|(a, v)| *a == k && *v == "true");
+    let support_empty = |d: Dir| {
+        let x = side(lv, pos, d);
+        x.air || x.empty
+    };
+    match block {
+        Block::MetalGirder => {
+            let mut g = girder_of(&info, &props);
+            for d in Dir::ALL {
+                g = decor::update_shape(
+                    g,
+                    d,
+                    |d| side(lv, pos, d),
+                    support_empty,
+                    |d| track_beside(lv, pos, d),
+                );
+            }
+            set_girder(lv, pos, g);
+        }
+        Block::MetalGirderEncasedShaft => {
+            let was = (props("top"), props("bottom"));
+            let mut tb = was;
+            for d in [Dir::Up, Dir::Down] {
+                tb = decor::encased_vertical(tb, d, &side(lv, pos, d), support_empty(d));
+            }
+            if tb != was
+                && let Some(next) =
+                    with_props(host, state, &[("top", flag(tb.0)), ("bottom", flag(tb.1))])
+            {
+                lv.put(pos, next);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The girders and encased shafts beside `pos` shape themselves again (a bracket came or went:
+/// `updateNeighbourShapes`).
+pub(super) fn around(dim: usize, pos: [i32; 3]) {
+    with(dim, |d| {
+        for side in Dir::ALL {
+            d.girder_checks.push(add(pos, side));
+        }
+    });
+}
+
+/// `GirderBlock.useItemOn` with a shaft: the girder becomes an encased shaft (its top, bottom
+/// and water kept), with the netherite block's hit sound.
+pub(super) fn encase(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState, clicked: Dir) {
+    let host = &*lv.host;
+    let get = |k: &str| prop(host, state, k).unwrap_or_else(|| "false".into());
+    let axis = decor::encased_axis(get("x") == "true", clicked);
+    let Some(next) = super::state_with(
+        host,
+        Block::MetalGirderEncasedShaft,
+        &[
+            ("axis", axis_name(axis)),
+            ("top", &get("top")),
+            ("bottom", &get("bottom")),
+            ("waterlogged", &get("waterlogged")),
+        ],
+    ) else {
+        return;
+    };
+    lv.put(pos, next);
+    lv.block_sound("minecraft:block.netherite_block.hit", pos, 0.5, 1.25);
+}

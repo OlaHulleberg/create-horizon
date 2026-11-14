@@ -287,8 +287,12 @@ impl BlockEntityPart for KineticEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let speeds = event.entity.nbt.get(&SPEEDS.into())?.clone();
-        Some(Compound::from([(SPEEDS.into(), speeds)]))
+        // The speeds, and a shaft's, cog's or pipe's bracket (`decor`).
+        let tag: Compound = [SPEEDS, super::decor::BRACKET]
+            .into_iter()
+            .filter_map(|k| Some((k.into(), event.entity.nbt.get(&k.into())?.clone())))
+            .collect();
+        (!tag.is_empty()).then_some(tag)
     }
 
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {

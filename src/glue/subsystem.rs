@@ -15,9 +15,10 @@ use super::server::ServerLevel;
 use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityInteractEvent,
     EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent, InteractionResult,
-    LeftClickBlockEvent, LevelSaveEvent, MouseScrollingEvent, PlayerRef, PlayerTickPostEvent,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
-    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ServerHost,
+    LeftClickBlockEvent, LevelSaveEvent, MouseScrollingEvent, PlayerContainerCloseEvent,
+    PlayerContainerOpenEvent, PlayerRef, PlayerTickPostEvent, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
+    RunModCommandEvent, ServerHost,
 };
 
 pub trait Subsystem: Sync {
@@ -171,4 +172,20 @@ pub trait Subsystem: Sync {
 
     /// `Hooks::render_gui_post`: draw on the HUD.
     fn render_gui_post(&self, _host: &dyn ClientHost, _event: &mut RenderGuiPostEvent<'_>) {}
+
+    /// `Hooks::player_container_open`: a player opened a menu.
+    fn player_container_open(
+        &self,
+        _host: &mut dyn ServerHost,
+        _event: &mut PlayerContainerOpenEvent<'_>,
+    ) {
+    }
+
+    /// `Hooks::player_container_close`: a player's menu closed.
+    fn player_container_close(
+        &self,
+        _host: &mut dyn ServerHost,
+        _event: &mut PlayerContainerCloseEvent<'_>,
+    ) {
+    }
 }
