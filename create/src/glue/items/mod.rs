@@ -20,6 +20,7 @@
 
 mod belt_connector;
 mod fertilizer;
+mod filter_screen;
 // The filter slots' helpers, for the subsystems whose blocks hold one.
 pub(crate) mod filters;
 mod nugget;
@@ -33,9 +34,11 @@ mod wrench;
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
 use mod_api::{
-    AttackEntityEvent, BreakBlockEvent, Compound, EntityPlaceEvent, Flow, Hand, Host, ItemKey,
-    ItemStack, LeftClickBlockEvent, PlayerRef, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RunModCommandEvent, ServerHost, Tag, Text,
+    AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityPlaceEvent, Flow, Hand, Host,
+    ItemKey, ItemStack, LeftClickBlockEvent, PlayerRef, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RunModCommandEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, Tag, Text,
 };
 use std::sync::OnceLock;
 
@@ -181,6 +184,13 @@ impl Subsystem for Items {
         r.item_part(k[Item::Worldshaper as usize], worldshaper::Shaper);
         r.item_part(k[Item::BeltConnector as usize], belt_connector::Connector);
         r.item_part(k[Item::TreeFertilizer as usize], fertilizer::Fertilizer);
+        for id in [
+            create_engine::filter::FILTER,
+            create_engine::filter::ATTRIBUTE_FILTER,
+        ] {
+            let key = r.item_key(id);
+            r.item_part(key, filters::FilterPart);
+        }
         for id in sandpaper::IDS {
             let key = r.item_key(id);
             r.item_part(key, sandpaper::SandPaper);
@@ -229,6 +239,73 @@ impl Subsystem for Items {
         event: &mut mod_api::LivingEntityUseItemFinishEvent<'_>,
     ) {
         sandpaper::finished(host, event);
+    }
+
+    /// What a filter's screen chose.
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != filter_screen::CHANNEL {
+            return false;
+        }
+        filters::client_message(host, player, data);
+        true
+    }
+
+    fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
+        filter_screen::server_message(host, channel, data)
+    }
+
+    fn client_tick(&self, host: &mut dyn ClientHost) {
+        filter_screen::tick(host);
+    }
+
+    fn client_reset(&self) {
+        filter_screen::reset();
+    }
+
+    fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
+        filter_screen::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> Flow {
+        filter_screen::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_released(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseButtonReleasedPreEvent<'_>,
+    ) -> Flow {
+        filter_screen::screen_mouse_released(host, event)
+    }
+
+    fn screen_mouse_scrolled(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseScrolledPreEvent<'_>,
+    ) -> Flow {
+        filter_screen::screen_mouse_scrolled(host, event)
+    }
+
+    fn screen_key_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenKeyPressedPreEvent<'_>,
+    ) -> Flow {
+        filter_screen::screen_key_pressed(host, event)
+    }
+
+    fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
+        filter_screen::screen_closing(host, event);
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
