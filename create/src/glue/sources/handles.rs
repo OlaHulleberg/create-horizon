@@ -20,8 +20,8 @@ use create_engine::kinetics::Dir;
 use create_engine::valve;
 use mod_api::{
     BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
-    BlockEntitySubmitEvent, BlockPart, CanSurviveEvent, ClientHost, Compound, LevelHost,
-    ModBlockEntity, Registrar, SoundPlay, SoundSource, Tag,
+    BlockEntitySubmitEvent, BlockPart, CanSurviveEvent, ClientHost, Compound, HostSide, LevelHost,
+    ModBlockEntity, OnChunkUnloadedEvent, Registrar, SoundPlay, SoundSource, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -309,6 +309,14 @@ impl BlockEntityPart for Handles {
                 c.chase = 0.0;
             }
         });
+    }
+
+    fn on_chunk_unloaded(&self, host: HostSide, event: &mut OnChunkUnloadedEvent<'_>) {
+        if let HostSide::Client(_) = host {
+            CRANKS.with_borrow_mut(|c| {
+                c.remove(&event.pos);
+            });
+        }
     }
 
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
