@@ -1,0 +1,1394 @@
+//! Create's schematics (`content/schematics`): the schematic and quill's save, the schematic
+//! table's upload, a schematic deployed, and the schematicannon printing it. Rules are the
+//! engine's (`create_engine::schematic`, `create_engine::schematicannon`); files, stacks and items
+//! go through `body`.
+//!
+//! Cannons are typed state here, ticked only when one needs it (`Cannon::next_wake`); a
+//! schematic is parsed and its palette resolved to block states once per load; NBT only at a
+//! chunk's save. The cannon and the table are block entity types of their own whose five slots
+//! are a hopper's menu (Create gives them no item handler, so no face reaches them); the
+//! cannon's barrel is drawn from where it aims, kept in its block entity's data (`Aim`).
+//!
+//! The engine numbers block states as `u32`s; the API's `BlockState` is a key and an ordinal, so
+//! the states a cannon meets are numbered here as it meets them (`intern`).
+//!
+//! Left out, for want of API:
+//! - Past `maxSchematics` uploads, the player's oldest is not deleted
+//!   (`tryDeleteOldestSchematic`): a mod's data files can be written but not removed.
+//! - `isRedstoneConductor` is read as a full collision cube (vanilla's default for it); the
+//!   blocks that override it (glass and the like) are not known to the API.
+//! - A schematic's export classes its blocks by their block entity and a full collision cube;
+//!   `isSolidRender` is not in the API.
+
+pub mod body;
+
+use super::packages::{self, block_of, debug_verb, feedback, ints, text};
+use super::persist;
+use super::server::ServerLevel;
+use super::states;
+use super::subsystem::Subsystem;
+use super::world::level_index;
+use create_engine::Block;
+use create_engine::schematic::{
+    self as sch, Class, Mirror, Need, PaletteState, Rotation, SchematicData, Structure,
+};
+use create_engine::schematicannon::{
+    self as cn, Blueprint, Cannon, CannonWorld, Configure, Entry, Loaded, Options, Printer,
+    Requirement, Spot,
+};
+use mod_api::{
+    BlockEntityOnLoadEvent, BlockEntityPart, BlockEntityRef, BlockEntitySubmitEvent,
+    BlockEntityTypeKey, BlockEntityUpdateTagEvent, BlockKey, BlockPart, BlockShapeKind, BlockState,
+    BlockUpdateFlags, ClientHost, Command, CommandArgumentValue, Compound, ContentsChangedEvent,
+    Direction, Flow, Host, HostBlockStates, HostSide, HostTransaction, ITEMS, ItemPart,
+    ItemResource, ItemStack, ModContainer, OnBlockPlacedByEvent, PlayerRef, RegisterCommandsEvent,
+    Registrar, RegistrationContext, RunModCommandEvent, Screen, ScreenEvent, ServerHost,
+    SoundSource, Tag,
+};
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::OnceLock;
+
+const KEY: &str = "create_schematics";
+const SCHEMATIC: &str = "create:schematic";
+const EMPTY_SCHEMATIC: &str = "create:empty_schematic";
+const QUILL: &str = "create:schematic_and_quill";
+const GUNPOWDER: &str = "minecraft:gunpowder";
+/// `SchematicannonInventory`: schematic in, schematic out, book in, book out, gunpowder.
+const CANNON_SLOTS: usize = 5;
+/// The key in a cannon's block entity data under which clients find where its barrel aims:
+/// `[has a target, x, y, z, resting yaw's bits]`.
+const AIM: &str = "Aim";
+
+/// `Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE`, as `placeSchematicBlock` sets a block.
+fn place_flags() -> BlockUpdateFlags {
+    BlockUpdateFlags::CLIENTS | BlockUpdateFlags::KNOWN_SHAPE
+}
+
+/// A level's cannons and when each wants its next tick.
+#[derive(Default)]
+struct Dim {
+    cannons: HashMap<[i32; 3], Cannon>,
+    wakes: BTreeSet<(u64, [i32; 3])>,
+    wake_of: HashMap<[i32; 3], u64>,
+    /// The aim last given to clients.
+    sent: HashMap<[i32; 3], Option<[i32; 3]>>,
+}
+
+impl Dim {
+    fn wake(&mut self, pos: [i32; 3], at: u64) {
+        if let Some(old) = self.wake_of.get(&pos).copied() {
+            if old <= at {
+                return;
+            }
+            self.wakes.remove(&(old, pos));
+        }
+        self.wakes.insert((at, pos));
+        self.wake_of.insert(pos, at);
+    }
+    fn unwake(&mut self, pos: [i32; 3]) {
+        if let Some(old) = self.wake_of.remove(&pos) {
+            self.wakes.remove(&(old, pos));
+        }
+    }
+}
+
+/// Something that happened to a cannon outside its tick, handled at its level's tick.
+enum Event {
+    /// A cannon placed (true) or removed (false) at a position.
+    Changed(usize, [i32; 3], bool),
+    /// Placed from an item by a player looking at this yaw (`setPlacedBy`).
+    Placed(usize, [i32; 3], f32),
+    /// Its slots (true) or neighbours changed.
+    Wake(usize, [i32; 3], bool),
+}
+
+impl Event {
+    fn dim(&self) -> usize {
+        match self {
+            Event::Changed(d, ..) | Event::Placed(d, ..) | Event::Wake(d, ..) => *d,
+        }
+    }
+}
+
+/// The states a cannon met, numbered from 1, both ways.
+#[derive(Default)]
+struct Interned {
+    states: Vec<BlockState>,
+    ids: HashMap<BlockState, u32>,
+}
+
+thread_local! {
+    static CANNONS: RefCell<Option<Vec<Dim>>> = const { RefCell::new(None) };
+    static EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
+    static INTERNED: RefCell<Interned> = RefCell::new(Interned::default());
+    /// A cannon's own slot writes while it ticks (or the table's upload) are not a change from
+    /// outside (`contents_changed` fires inside them).
+    static OWN_WRITE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The cannon's and the table's block entity types, and the barrel's two partial models.
+static KINDS: OnceLock<(BlockEntityTypeKey, BlockEntityTypeKey)> = OnceLock::new();
+static BARREL: OnceLock<(BlockKey, BlockKey)> = OnceLock::new();
+
+fn with<R>(dim: usize, f: impl FnOnce(&mut Dim) -> R) -> R {
+    CANNONS.with_borrow_mut(|c| {
+        let levels = c.get_or_insert_with(Vec::new);
+        if levels.len() <= dim {
+            levels.resize_with(dim + 1, Dim::default);
+        }
+        f(&mut levels[dim])
+    })
+}
+
+fn present() -> bool {
+    CANNONS.with_borrow(Option::is_some)
+}
+
+/// The engine's number for `state`.
+fn intern(state: BlockState) -> u32 {
+    INTERNED.with_borrow_mut(|t| {
+        if let Some(&id) = t.ids.get(&state) {
+            return id;
+        }
+        t.states.push(state);
+        let id = t.states.len() as u32;
+        t.ids.insert(state, id);
+        id
+    })
+}
+
+/// The state the engine's number `id` is.
+fn interned(id: u32) -> Option<BlockState> {
+    let i = id.checked_sub(1)? as usize;
+    INTERNED.with_borrow(|t| t.states.get(i).copied())
+}
+
+fn now(lv: &ServerLevel<'_>) -> u64 {
+    lv.game_time().max(0) as u64
+}
+
+pub struct Schematics;
+
+impl Subsystem for Schematics {
+    fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        let cannon = r
+            .block_entity_type("create:schematicannon")
+            .blocks(&["create:schematicannon"])
+            .build();
+        let table = r
+            .block_entity_type("create:schematic_table")
+            .blocks(&["create:schematic_table"])
+            .build();
+        let _ = KINDS.set((cannon, table));
+        // Their slots: Create gives them no item handler, so no face reaches them; their menus
+        // are a hopper's five slots (the table's screen shows its two).
+        for b in [Block::Schematicannon, Block::SchematicTable] {
+            r.block_container(
+                &states::key(b),
+                ModContainer {
+                    slots: CANNON_SLOTS,
+                    faces: std::array::from_fn(|_| Vec::new()),
+                    inputs: Vec::new(),
+                    outputs: Vec::new(),
+                    menu: Some("minecraft:hopper".into()),
+                },
+            );
+        }
+        for kind in [cannon, table] {
+            if let Err(e) = r.block_entity_part(&kind, SchematicEntity) {
+                eprintln!("[create] the schematic block entities' part was refused: {e:?}");
+            }
+        }
+        r.block_part(states::key(Block::Schematicannon), CannonBlock);
+        let key = r.item_key("create:schematicannon");
+        r.item_part(key, CannonItem);
+        let _ = BARREL.set((
+            r.block_key("create:part_schematicannon_connector"),
+            r.block_key("create:part_schematicannon_pipe"),
+        ));
+    }
+
+    fn world_closed(&self) {
+        CANNONS.with_borrow_mut(|c| *c = None);
+        EVENTS.with_borrow_mut(Vec::clear);
+        INTERNED.with_borrow_mut(|t| *t = Interned::default());
+    }
+
+    /// A cannon placed or gone.
+    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        let (was, is) = (
+            block_of(old) == Some(Block::Schematicannon),
+            block_of(new) == Some(Block::Schematicannon),
+        );
+        if was != is {
+            EVENTS.with_borrow_mut(|e| e.push(Event::Changed(dim, pos, is)));
+        }
+    }
+
+    /// A cannon looks round again (`neighbourCheckCooldown`).
+    fn neighbor_changed(&self, dim: usize, pos: [i32; 3], state: u32) {
+        if block_of(state) == Some(Block::Schematicannon) {
+            EVENTS.with_borrow_mut(|e| e.push(Event::Wake(dim, pos, false)));
+        }
+    }
+
+    fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        level_tick(lv);
+    }
+
+    fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
+        if let Some(Tag::Compound(own)) = data.get(&KEY.into()) {
+            chunk_load(lv, own);
+        }
+    }
+
+    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+        chunk_data_save(lv, chunk, data);
+    }
+
+    /// A column left a level: its cannons are forgotten (kept in its save).
+    fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
+        if !present() {
+            return;
+        }
+        let inside = |p: &[i32; 3]| [p[0] >> 4, p[2] >> 4] == chunk;
+        with(dim, |d| {
+            let gone: Vec<[i32; 3]> = d.cannons.keys().filter(|p| inside(p)).copied().collect();
+            for p in gone {
+                d.cannons.remove(&p);
+                d.unwake(p);
+                d.sent.remove(&p);
+            }
+        });
+    }
+
+    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+        for usage in [
+            // The schematic and quill's two corners and its prompt (`instant`: the creative
+            // convert button).
+            "create_debug schematic save <from:block_pos> <to:block_pos> <name:word> [instant:word]",
+            // The schematic table's upload of a file from `schematics/`.
+            "create_debug schematic upload <pos:block_pos> <name:word>",
+            // The held schematic deployed (`SchematicHandler` deploy and its tools).
+            "create_debug schematic deploy <name:word> <anchor:block_pos> [rotation:word] [mirror:word]",
+            // A cannon's state and its screen's options.
+            "create_debug schematicannon <pos:block_pos> [option:text]",
+        ] {
+            event.commands.push(Command::op(usage, 2));
+        }
+    }
+
+    fn run_mod_command(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut RunModCommandEvent<'_>,
+    ) -> Flow {
+        let Some(verb) = debug_verb(event, &["schematic", "schematicannon"]) else {
+            return Flow::Continue;
+        };
+        let player = packages::command_player(event.source);
+        let Some(dimension) = event.command.dimension.id(&*host) else {
+            return Flow::Cancel;
+        };
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return Flow::Cancel;
+        };
+        let cmd = event.command;
+        let pos = |name: &str| match cmd.argument(name) {
+            Some(CommandArgumentValue::BlockPos(p)) => Some(*p),
+            _ => None,
+        };
+        let word = |name: &str| match cmd.argument(name) {
+            Some(CommandArgumentValue::String(s)) => Some(s.clone()),
+            _ => None,
+        };
+        let name = player.and_then(|p| p.name(&*lv.host)).unwrap_or_default();
+        let lines = match (verb, cmd.literals.get(2).map(String::as_str)) {
+            ("schematicannon", _) => match pos("pos") {
+                Some(p) => {
+                    let option = word("option").unwrap_or_default();
+                    let words: Vec<&str> = option.split_whitespace().collect();
+                    vec![cannon_command(&mut lv, p, &words)]
+                }
+                None => vec!["usage: create_debug schematicannon <x y z> [option]".into()],
+            },
+            (_, Some("save")) => match (pos("from"), pos("to"), word("name")) {
+                (Some(a), Some(b), Some(file)) => save(
+                    &mut lv,
+                    player,
+                    &name,
+                    a,
+                    b,
+                    &file,
+                    word("instant").as_deref() == Some("instant"),
+                ),
+                _ => vec![
+                    "usage: create_debug schematic save <x y z> <x y z> <name> [instant]".into(),
+                ],
+            },
+            (_, Some("upload")) => match (pos("pos"), word("name")) {
+                (Some(p), Some(file)) => upload(&mut lv, &name, p, &nbt_file(&file)),
+                _ => vec!["usage: create_debug schematic upload <x y z> <name>".into()],
+            },
+            (_, Some("deploy")) => match (word("name"), pos("anchor")) {
+                (Some(file), Some(anchor)) => vec![deploy(
+                    &mut lv,
+                    player,
+                    &nbt_file(&file),
+                    anchor,
+                    word("rotation").as_deref(),
+                    word("mirror").as_deref(),
+                )],
+                _ => vec![
+                    "usage: create_debug schematic deploy <name> <x y z> [rotation] [mirror]"
+                        .into(),
+                ],
+            },
+            _ => vec!["usage: create_debug schematic save|upload|deploy ...".into()],
+        };
+        for l in lines {
+            feedback(lv.host, l);
+        }
+        Flow::Cancel
+    }
+}
+
+/// An inventory a cannon takes from (`attachedInventories`): any block's `ITEMS` through the
+/// face toward the cannon.
+type Items = mod_api::Capability<dyn mod_api::ResourceHandler<ItemResource>>;
+
+/// What a cannon reaches of the game while it ticks.
+struct World<'a, 'l> {
+    lv: &'a mut ServerLevel<'l>,
+    pos: [i32; 3],
+    found: Option<(Vec<Items>, bool)>,
+}
+
+/// `Iterate.directions`: down, up, north, south, west, east; each the face toward the cannon.
+const SIDES: [([i32; 3], Direction); 6] = [
+    ([0, -1, 0], Direction::Up),
+    ([0, 1, 0], Direction::Down),
+    ([0, 0, -1], Direction::South),
+    ([0, 0, 1], Direction::North),
+    ([-1, 0, 0], Direction::East),
+    ([1, 0, 0], Direction::West),
+];
+
+/// The cannon's or table's block entity.
+fn entity(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<BlockEntityRef> {
+    lv.host.block_entity(lv.level, pos)
+}
+
+/// The five slots of the block entity at `pos`.
+fn slots(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<Option<ItemStack>> {
+    let be = entity(lv, pos);
+    (0..CANNON_SLOTS as u32)
+        .map(|i| be.and_then(|be| be.item_slot(&*lv.host, i).ok().flatten()))
+        .collect()
+}
+
+/// Sets slots of the block entity at `pos`, in one transaction.
+fn set_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], writes: &[(u32, Option<ItemStack>)]) {
+    let Some(be) = entity(lv, pos) else {
+        return;
+    };
+    OWN_WRITE.set(true);
+    let _ = lv.host.transaction(|h, tx| {
+        for (slot, stack) in writes {
+            be.set_item_slot(h, tx, *slot, stack.clone())
+                .map_err(|_| ())?;
+        }
+        Ok::<(), ()>(())
+    });
+    OWN_WRITE.set(false);
+}
+
+fn item_is(host: &dyn Host, stack: &ItemStack, id: &str) -> bool {
+    packages::body::item_id(host, stack) == id
+}
+
+impl World<'_, '_> {
+    fn item(&self, slot: usize) -> Option<ItemStack> {
+        let be = entity(self.lv, self.pos)?;
+        be.item_slot(&*self.lv.host, slot as u32).ok().flatten()
+    }
+
+    fn set_slot(&mut self, slot: usize, stack: Option<ItemStack>) {
+        set_slots(self.lv, self.pos, &[(slot as u32, stack)]);
+    }
+
+    /// `findInventories`, once per tick.
+    fn found(&mut self) -> &(Vec<Items>, bool) {
+        if self.found.is_none() {
+            let mut invs = Vec::new();
+            let mut seen_vaults: Vec<[i32; 3]> = Vec::new();
+            let mut creative = false;
+            for (o, face) in SIDES {
+                let at = packages::add(self.pos, o);
+                if !CannonWorld::loaded(self, at) {
+                    continue;
+                }
+                let block = block_of(self.lv.block(at));
+                if block == Some(Block::CreativeCrate) {
+                    creative = true;
+                }
+                // A vault reached from two sides is one inventory.
+                if block == Some(Block::ItemVault) {
+                    let dim = self.lv.dim;
+                    let first = super::world::with_world(|w| w.dims[dim].vaults.inventory(at))
+                        .flatten()
+                        .and_then(|parts| parts.iter().min().copied())
+                        .unwrap_or(at);
+                    if seen_vaults.contains(&first) {
+                        continue;
+                    }
+                    seen_vaults.push(first);
+                }
+                if let Some(items) =
+                    self.lv
+                        .level
+                        .capability(&mut *self.lv.host, &ITEMS, at, Some(face))
+                {
+                    invs.push(items);
+                }
+            }
+            self.found = Some((invs, creative));
+        }
+        self.found.as_ref().expect("found was just set")
+    }
+
+    /// `ItemHelper.extract(inv, matching item, UPTO, max, simulate)`: how many it gave.
+    fn extract(&mut self, i: usize, item: &str, max: u32, simulate: bool) -> u32 {
+        self.found();
+        let Some((invs, _)) = self.found.as_ref() else {
+            return 0;
+        };
+        let Some(inv) = invs.get(i) else {
+            return 0;
+        };
+        let host = &mut *self.lv.host;
+        let mut matching = Vec::new();
+        for index in 0..inv.size(host) {
+            if let Some(r) = inv.resource(host, index)
+                && r.item().id(&*host) == item
+            {
+                matching.push((index, r, inv.amount(host, index)));
+            }
+        }
+        if simulate {
+            let have: u32 = matching.iter().map(|m| m.2).sum();
+            return have.min(max);
+        }
+        host.transaction(|h, tx| {
+            let mut got = 0;
+            for (index, r, _) in &matching {
+                if got >= max {
+                    break;
+                }
+                got += inv.extract(h, tx, *index, r, max - got);
+            }
+            Ok::<u32, ()>(got)
+        })
+        .unwrap_or(0)
+    }
+}
+
+impl CannonWorld for World<'_, '_> {
+    fn blueprint(&mut self) -> Blueprint {
+        match self.item(0) {
+            None => Blueprint::Empty,
+            Some(s) if item_is(&*self.lv.host, &s, SCHEMATIC) => {
+                let d = body::schematic_data(&s);
+                Blueprint::Item((!d.is_empty()).then_some(d))
+            }
+            Some(_) => Blueprint::Item(None),
+        }
+    }
+    fn output_empty(&mut self) -> bool {
+        self.item(1).is_none()
+    }
+    fn finish_blueprint(&mut self) {
+        let n = self.item(1).map_or(0, |s| s.count());
+        let out = packages::body::new_stack(&*self.lv.host, EMPTY_SCHEMATIC, n + 1);
+        set_slots(self.lv, self.pos, &[(0, None), (1, out)]);
+    }
+    fn expire_blueprint(&mut self) {
+        let out = packages::body::new_stack(&*self.lv.host, EMPTY_SCHEMATIC, 1);
+        set_slots(self.lv, self.pos, &[(0, None), (1, out)]);
+    }
+    fn own_gunpowder(&mut self) -> bool {
+        // Create's slot 4 takes only gunpowder (`isItemValid`); the hopper menu takes anything,
+        // so only gunpowder is burnt.
+        let Some(s) = self
+            .item(4)
+            .filter(|s| item_is(&*self.lv.host, s, GUNPOWDER))
+        else {
+            return false;
+        };
+        self.set_slot(4, s.shrink(1));
+        true
+    }
+    fn external_gunpowder(&mut self) -> bool {
+        let n = self.found().0.len();
+        (0..n).any(|i| self.extract(i, GUNPOWDER, 1, false) > 0)
+    }
+    fn creative_crate(&mut self) -> bool {
+        self.found().1
+    }
+    fn load(&mut self, data: &SchematicData) -> Loaded {
+        load(self.lv, data)
+    }
+    fn loaded(&mut self, pos: [i32; 3]) -> bool {
+        self.lv.level.in_world_bounds(&*self.lv.host, pos) == Some(true) && self.lv.is_loaded(pos)
+    }
+    fn spot(&mut self, pos: [i32; 3]) -> Spot {
+        let Some(state) = self.lv.block_state(pos) else {
+            return Spot {
+                state: 0,
+                unbreakable: false,
+                conductor: false,
+                has_block_entity: false,
+            };
+        };
+        let facts = self.lv.host.block_states();
+        Spot {
+            state: intern(state),
+            unbreakable: facts.destroy_speed(state) == Some(-1.0),
+            conductor: full_cube(self.lv, state, pos),
+            has_block_entity: facts.has_block_entity(state) == Some(true),
+        }
+    }
+    fn grab(&mut self, item: &str, count: u32, simulate: bool) -> bool {
+        let n = self.found().0.len();
+        let mut found = 0;
+        let mut success = false;
+        for i in 0..n {
+            found += self.extract(i, item, count, true);
+            if found >= count {
+                success = true;
+                break;
+            }
+        }
+        if !simulate && success {
+            // As Create, each inventory is asked for the whole count.
+            let mut found = 0;
+            for i in 0..n {
+                found += self.extract(i, item, count, false);
+                if found >= count {
+                    break;
+                }
+            }
+        }
+        success
+    }
+    fn place(&mut self, pos: [i32; 3], state: u32) {
+        if let Some(s) = interned(state) {
+            self.lv.set_state(pos, s, place_flags());
+        }
+    }
+    fn fired(&mut self, _now: u64) {
+        let at = self.pos.map(|v| f64::from(v) + 0.5);
+        let _ = self.lv.level.play_sound(
+            &mut *self.lv.host,
+            "minecraft:entity.generic.explode",
+            at,
+            SoundSource::Blocks,
+            0.1,
+            1.1,
+        );
+    }
+    fn dinged(&mut self) {
+        let at = self.pos.map(|v| f64::from(v) + 0.5);
+        let _ = self.lv.level.play_sound(
+            &mut *self.lv.host,
+            "minecraft:block.note_block.bell",
+            at,
+            SoundSource::Blocks,
+            1.0,
+            0.7,
+        );
+    }
+}
+
+/// Whether `state`'s collision shape at `pos` is a whole block (`isCollisionShapeFullBlock`).
+fn full_cube(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) -> bool {
+    lv.level
+        .block_shape(&*lv.host, state, pos, BlockShapeKind::Collision)
+        .is_some_and(|boxes| boxes.len() == 1 && boxes[0] == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+}
+
+/// Whether `state` is air (`isAir`: air, cave air, void air).
+fn is_air(host: &dyn Host, state: BlockState) -> bool {
+    matches!(
+        state.block().id(host).as_str(),
+        "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+    )
+}
+
+/// A block state by name and properties, as `NbtUtils.readBlockState` reads one: its default
+/// state with each property it has set where the value exists; air for an unknown block.
+fn resolve_state(
+    host: &dyn Host,
+    name: &str,
+    props: &BTreeMap<String, String>,
+) -> Option<BlockState> {
+    let default = host
+        .block_state_id(name)
+        .or_else(|| host.block_state_id(sch::AIR))?;
+    let facts = host.block_states();
+    let mut s = default;
+    for (k, v) in props {
+        if let Ok(next) = s.with(&facts, k, v) {
+            s = next;
+        }
+    }
+    Some(s)
+}
+
+/// A palette entry turned and resolved once per load: what it prints, places and costs.
+fn entry(lv: &ServerLevel<'_>, p: &PaletteState, rotation: Rotation, mirror: Mirror) -> Entry {
+    let host: &dyn Host = &*lv.host;
+    let (mut name, mut props) = (p.name.clone(), p.properties.clone());
+    if host.block_state_id(&name).is_none() {
+        name = sch::AIR.into();
+        props.clear();
+    }
+    sch::transform_state(&name, &mut props, mirror, rotation);
+    sch::printed_state(&mut name, &mut props);
+    let state = resolve_state(host, &name, &props);
+    let need = sch::need(&name, &props);
+    let requirement = match &need {
+        Need::Nothing => Requirement::Empty,
+        // A belt is printed with its connector (`launchBelt`), which isn't ported.
+        Need::Item { .. } if name == "create:belt" => Requirement::Invalid,
+        Need::Item { count, item } => {
+            match item
+                .map(str::to_owned)
+                .or_else(|| body::item_for_block(host, &name))
+            {
+                Some(i) => Requirement::Items(vec![(i, *count)]),
+                None => Requirement::Invalid,
+            }
+        }
+    };
+    let valid = requirement != Requirement::Invalid;
+    let ignore = sch::ignored(&name, &props, valid.then_some(&need));
+    let defer = sch::deferred(&name, &props);
+    let other = sch::other_half(&props);
+    let plain_air = name == sch::AIR;
+    let (mut placed_name, mut placed_props) = (name, props);
+    sch::placed_state(&mut placed_name, &mut placed_props);
+    let placed = resolve_state(host, &placed_name, &placed_props);
+    Entry {
+        state: state.map_or(0, intern),
+        placed: placed.map_or(0, intern),
+        air: state.is_none_or(|s| is_air(host, s)),
+        plain_air,
+        conductor: state.is_some_and(|s| full_cube(lv, s, [0; 3])),
+        requirement,
+        ignore,
+        defer,
+        other,
+    }
+}
+
+/// `owner/file` under `schematics/uploaded/`, when both are names a player may give.
+fn uploaded(owner: &str, file: &str) -> Option<String> {
+    let owner_ok = !owner.is_empty() && !owner.contains(['/', '\\']) && !owner.starts_with('.');
+    (owner_ok && sch::valid_file(file)).then(|| format!("uploaded/{owner}/{file}"))
+}
+
+/// A structure file read (an unreadable one is empty, as `loadSchematic`'s fresh template).
+fn read(host: &dyn Host, rel: &str) -> Structure {
+    body::read_structure(host, rel)
+        .and_then(|t| Structure::from_nbt(&t))
+        .unwrap_or_default()
+}
+
+/// `SchematicPrinter.loadSchematic` from the server's uploaded copy.
+fn load(lv: &ServerLevel<'_>, data: &SchematicData) -> Loaded {
+    let structure = match (&data.owner, &data.file) {
+        (Some(o), Some(f)) => uploaded(o, f)
+            .map(|r| read(&*lv.host, &r))
+            .unwrap_or_default(),
+        _ => Structure::default(),
+    };
+    let anchor = data.anchor.unwrap_or_default();
+    let printer = Printer::load(&structure, anchor, data.rotation, data.mirror);
+    let entries = structure
+        .palette
+        .iter()
+        .map(|p| entry(lv, p, data.rotation, data.mirror))
+        .collect();
+    Loaded {
+        printer,
+        entries,
+        air: entry(lv, &PaletteState::air(), Rotation::None, Mirror::None),
+    }
+}
+
+/// Where the cannon at `pos` aims, for its clients: into its block entity's data.
+fn send_aim(lv: &mut ServerLevel<'_>, c: &Cannon) {
+    let Some(be) = entity(lv, c.pos) else {
+        return;
+    };
+    let t = c.target();
+    let p = t.unwrap_or_default();
+    let aim = vec![
+        i32::from(t.is_some()),
+        p[0],
+        p[1],
+        p[2],
+        c.default_yaw.to_bits() as i32,
+    ];
+    let data = Compound::from([(AIM.into(), Tag::IntArray(aim))]);
+    OWN_WRITE.set(true);
+    let _ = be.merge_data(&mut *lv.host, data);
+    OWN_WRITE.set(false);
+}
+
+/// The level's tick: cannons placed, removed and woken, then those whose tick is due; clients
+/// are told where barrels point now. Nothing runs without a cannon.
+fn level_tick(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    if !present() && EVENTS.with_borrow(Vec::is_empty) {
+        return;
+    }
+    let now = now(lv);
+    let events: Vec<Event> = EVENTS.with_borrow_mut(|e| {
+        let (mine, rest): (Vec<Event>, Vec<Event>) = std::mem::take(e)
+            .into_iter()
+            .partition(|ev| ev.dim() == dim);
+        *e = rest;
+        mine
+    });
+    for ev in events {
+        match ev {
+            Event::Changed(_, pos, true) => {
+                let added = with(dim, |d| {
+                    if d.cannons.contains_key(&pos) {
+                        return false;
+                    }
+                    let mut c = Cannon::new(pos, Options::default());
+                    c.last = now;
+                    d.cannons.insert(pos, c);
+                    d.wake(pos, now);
+                    true
+                });
+                if added {
+                    persist::mark_pos_unsaved(dim, pos);
+                }
+            }
+            Event::Changed(_, pos, false) => with(dim, |d| {
+                d.unwake(pos);
+                d.sent.remove(&pos);
+                d.cannons.remove(&pos);
+            }),
+            Event::Placed(_, pos, yaw) => with(dim, |d| {
+                if let Some(c) = d.cannons.get_mut(&pos) {
+                    c.default_yaw = yaw;
+                    c.options = Options::placed();
+                    d.sent.remove(&pos);
+                    d.wake(pos, now);
+                }
+            }),
+            Event::Wake(_, pos, slots) => with(dim, |d| {
+                if let Some(c) = d.cannons.get_mut(&pos) {
+                    if slots {
+                        c.slots_changed(now);
+                    } else {
+                        c.settle(now);
+                    }
+                    d.wake(pos, now);
+                }
+            }),
+        }
+    }
+    let due: Vec<[i32; 3]> = with(dim, |d| {
+        let mut due = Vec::new();
+        while let Some(&(t, pos)) = d.wakes.first() {
+            if t > now {
+                break;
+            }
+            d.wakes.pop_first();
+            d.wake_of.remove(&pos);
+            due.push(pos);
+        }
+        due
+    });
+    for pos in due {
+        let Some(mut c) = with(dim, |d| d.cannons.remove(&pos)) else {
+            continue;
+        };
+        {
+            let mut w = World {
+                lv: &mut *lv,
+                pos,
+                found: None,
+            };
+            c.tick(now, &mut w);
+        }
+        let next = c.next_wake(now);
+        let target = c.target();
+        let changed = with(dim, |d| {
+            if let Some(t) = next {
+                d.wake(pos, t);
+            }
+            let changed = d.sent.get(&pos) != Some(&target);
+            if changed {
+                d.sent.insert(pos, target);
+            }
+            changed
+        });
+        // A cannon just placed or loaded is ticked here and, never sent, sent at rest.
+        if changed {
+            send_aim(lv, &c);
+        }
+        with(dim, |d| d.cannons.insert(pos, c));
+        persist::mark_pos_unsaved(dim, pos);
+    }
+}
+
+/// The cannon's and the table's block entities: the barrel drawn where it aims
+/// (`SchematicannonRenderer`), the table's screen, and their column's data once they load.
+struct SchematicEntity;
+
+#[mod_api::horizon_part]
+impl BlockPart for SchematicEntity {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for SchematicEntity {
+    fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
+        let HostSide::Server(host) = host else {
+            return;
+        };
+        let entity = event.entity;
+        let (Some(level), Some(pos)) = (entity.level(&*host), entity.position(&*host)) else {
+            return;
+        };
+        let Some(dimension) = level.dimension().id(&*host) else {
+            return;
+        };
+        super::ensure_column(host, &dimension, [pos[0] >> 4, pos[2] >> 4]);
+    }
+
+    fn block_entity_update_tag(
+        &self,
+        event: &mut BlockEntityUpdateTagEvent<'_>,
+    ) -> Option<Compound> {
+        let aim = event.entity.nbt.get(&AIM.into())?.clone();
+        Some(Compound::from([(AIM.into(), aim)]))
+    }
+
+    fn block_entity_submit(&self, _host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+        if event.block != "create:schematicannon" {
+            return;
+        }
+        let Some(&(connector, pipe)) = BARREL.get() else {
+            return;
+        };
+        let a = ints(event.entity.nbt.get(&AIM.into()));
+        let (target, default_yaw) = match a.as_slice() {
+            [has, x, y, z, yaw] => (
+                (*has != 0).then_some([*x, *y, *z]),
+                f32::from_bits(*yaw as u32),
+            ),
+            _ => (None, 0.0),
+        };
+        let (yaw, pitch) = cn::aim(event.pos, target, default_yaw);
+        let turn = (yaw + 90.0).rem_euclid(360.0);
+        let draw = &mut *event.draw;
+        let up = [("facing", "up")];
+        draw.push();
+        draw.rotate_about([0.0, 1.0, 0.0], turn, [0.5, 0.0, 0.5]);
+        draw.block(connector, &up);
+        draw.rotate_about([0.0, 0.0, 1.0], pitch, [0.5, 15.0 / 16.0, 0.5]);
+        draw.block(pipe, &up);
+        draw.pop();
+        draw.keep();
+    }
+
+    /// `SchematicTableMenu`: the input and output slots, as the hopper's first and last.
+    fn screen(&self, _host: &dyn Host, event: &mut ScreenEvent<'_>) -> Option<Screen> {
+        if event.block != "create:schematic_table" {
+            return None;
+        }
+        Some(Screen {
+            width: 176.0,
+            height: 133.0,
+            slots: vec![Some([44.0, 20.0]), Some([116.0, 20.0]), None, None, None],
+            inventory_y: 51.0,
+            inventory_x: 8.0,
+            ..Screen::default()
+        })
+    }
+}
+
+/// A cannon's slots changed (a player's click in its menu): it looks at them again.
+struct CannonBlock;
+
+#[mod_api::horizon_part]
+impl BlockPart for CannonBlock {
+    fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut ContentsChangedEvent) {
+        if OWN_WRITE.get() {
+            return;
+        }
+        let Some(dim) = event
+            .level
+            .dimension()
+            .id(&*host)
+            .and_then(|d| level_index(&d))
+        else {
+            return;
+        };
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        if CANNONS.with_borrow(|c| {
+            c.as_ref()
+                .and_then(|c| c.get(dim))
+                .is_none_or(|d| !d.cannons.contains_key(&pos))
+        }) {
+            return;
+        }
+        EVENTS.with_borrow_mut(|e| e.push(Event::Wake(dim, pos, true)));
+    }
+}
+
+/// The cannon placed from its item: it takes the placer's yaw and the item's options (none:
+/// `applyImplicitComponents`' default).
+struct CannonItem;
+
+#[mod_api::horizon_part]
+impl ItemPart for CannonItem {
+    fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
+        let Some(player) = event.placer else {
+            return;
+        };
+        let Some(dim) = player
+            .dimension(&*host)
+            .and_then(|d| level_index(&d.to_string()))
+        else {
+            return;
+        };
+        let yaw = player.entity().rotation(&*host).map_or(0.0, |r| r[0]);
+        let sneaking = player.is_secondary_use_active(&*host) == Some(true);
+        let yaw = cn::placed_yaw(yaw, sneaking);
+        EVENTS.with_borrow_mut(|e| e.push(Event::Placed(dim, event.pos, yaw)));
+    }
+}
+
+fn nbt_file(name: &str) -> String {
+    if name.ends_with(".nbt") {
+        name.to_owned()
+    } else {
+        format!("{name}.nbt")
+    }
+}
+
+/// `SchematicExport.saveSchematic` of the box between two corners: the blocks (`fillFromWorld`;
+/// their block entities' data and the entities in it are not read).
+fn export(lv: &ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
+    let min = [0, 1, 2].map(|i| a[i].min(b[i]));
+    let max = [0, 1, 2].map(|i| a[i].max(b[i]));
+    let size = [0, 1, 2].map(|i| max[i] - min[i] + 1);
+    let host: &dyn Host = &*lv.host;
+    let facts = host.block_states();
+    let mut cells = Vec::new();
+    for y in min[1]..=max[1] {
+        for x in min[0]..=max[0] {
+            for z in min[2]..=max[2] {
+                let pos = [x, y, z];
+                let Some(state) = lv.block_state(pos) else {
+                    continue;
+                };
+                let Some(text) = host.block_state_string(state) else {
+                    continue;
+                };
+                let (name, props) = states::split(&text);
+                let class = if facts.has_block_entity(state) == Some(true) {
+                    Class::WithEntity
+                } else if full_cube(lv, state, pos) {
+                    Class::Full
+                } else {
+                    Class::Special
+                };
+                cells.push((
+                    [x - min[0], y - min[1], z - min[2]],
+                    PaletteState {
+                        name: name.to_owned(),
+                        properties: props
+                            .into_iter()
+                            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                            .collect(),
+                    },
+                    class,
+                ));
+            }
+        }
+    }
+    Structure::capture(size, cells)
+}
+
+/// The stack in the player's selected slot, and that slot.
+fn held(lv: &ServerLevel<'_>, player: PlayerRef) -> Option<(u32, ItemStack)> {
+    let slot = player.selected_slot(&*lv.host)? as u32;
+    let stack = player
+        .inventory_slots(&*lv.host)?
+        .into_iter()
+        .find(|(s, _)| *s == slot)?
+        .1;
+    Some((slot, stack))
+}
+
+/// `SchematicAndQuillHandler.saveSchematic`: saved in `schematics/` under a free name; with
+/// `instant` (the convert button), `ServerSchematicLoader.handleInstantSchematic` too: saved
+/// again as the player's upload and the held schematic and quill turned into its schematic.
+fn save(
+    lv: &mut ServerLevel<'_>,
+    player: Option<PlayerRef>,
+    name: &str,
+    a: [i32; 3],
+    b: [i32; 3],
+    file: &str,
+    instant: bool,
+) -> Vec<String> {
+    let structure = export(lv, a, b);
+    let host: &dyn Host = &*lv.host;
+    let file = sch::export_name(file, false, |f| body::exists(host, f));
+    let tag = structure.to_nbt();
+    if let Err(e) = body::write_structure(host, &file, &tag) {
+        eprintln!("[create] An error occurred while saving schematic [{file}]: {e}");
+        return vec!["Failed to save schematic, check logs for details".into()];
+    }
+    let mut lines = vec![format!("Saved as {file}")];
+    if !instant {
+        return lines;
+    }
+    let holding = player
+        .and_then(|p| held(lv, p))
+        .filter(|(_, s)| item_is(&*lv.host, s, QUILL));
+    let size = body::size(&*lv.host, &file).unwrap_or(0);
+    match (uploaded(name, &file), holding) {
+        (Some(target), Some((slot, _))) if sch::size_allowed(size) => {
+            match body::write_structure(&*lv.host, &target, &tag) {
+                Ok(_) => {
+                    let Some(mut stack) = packages::body::new_stack(&*lv.host, SCHEMATIC, 1) else {
+                        return lines;
+                    };
+                    body::set_schematic_data(
+                        &mut stack,
+                        &SchematicData::written(&file, name, structure.size),
+                    );
+                    if let Some(p) = player {
+                        let _ = p.set_inventory_slot(&mut *lv.host, slot, Some(stack));
+                    }
+                    lines.push(format!("{file} written to the held schematic"));
+                }
+                Err(e) => {
+                    eprintln!("[create] Schematic instant-upload of {file}: {e}");
+                    lines.push("Schematic instant-upload failed, check logs for details".into());
+                }
+            }
+        }
+        _ if !sch::size_allowed(size) => lines.push(too_large(size)),
+        _ => {}
+    }
+    lines
+}
+
+fn too_large(size: u64) -> String {
+    format!(
+        "Your schematic exceeds limitations specified by the server. ({} KB). The maximum allowed schematic file size is: {} KB",
+        size / 1000,
+        sch::MAX_TOTAL_SCHEMATIC_SIZE_KB
+    )
+}
+
+/// The schematic table's upload (`SchematicTableScreen` → `ServerSchematicLoader`): the file
+/// from `schematics/` copied as the player's upload (one of the same name replaced), the input
+/// slot emptied (`startUpload`), and a written schematic in the output
+/// (`handleFinishedUpload`). The upload is local, so it finishes at once.
+fn upload(lv: &mut ServerLevel<'_>, player: &str, pos: [i32; 3], file: &str) -> Vec<String> {
+    if block_of(lv.block(pos)) != Some(Block::SchematicTable) {
+        return vec![format!(
+            "no schematic table at {} {} {}",
+            pos[0], pos[1], pos[2]
+        )];
+    }
+    let items = slots(lv, pos);
+    // `SchematicTableMenu.canWrite` and its input slot's `mayPlace`.
+    let host: &dyn Host = &*lv.host;
+    let writable = items[0].as_ref().is_some_and(|s| {
+        let id = packages::body::item_id(host, s);
+        matches!(id.as_str(), EMPTY_SCHEMATIC | QUILL | SCHEMATIC)
+    });
+    if !writable || items[1].is_some() {
+        return vec!["the table needs a blank schematic in and nothing out".into()];
+    }
+    let Some(target) = uploaded(player, file) else {
+        eprintln!("[create] Attempted Schematic Upload with non-supported Format: {player}/{file}");
+        return vec![format!("not a schematic file: {file}")];
+    };
+    let Some(size) = body::size(host, file) else {
+        return vec![format!("no schematic {file} in schematics/")];
+    };
+    if !sch::size_allowed(size) {
+        return vec![too_large(size)];
+    }
+    if let Err(e) = body::copy(host, file, &target) {
+        eprintln!("[create] Exception Thrown when starting Upload: {player}/{file}: {e}");
+        return vec![format!("upload of {file} failed")];
+    }
+    eprintln!("[create] New Schematic Uploaded: {player}/{file}");
+    let bounds = read(host, &target).size;
+    let Some(mut stack) = packages::body::new_stack(host, SCHEMATIC, 1) else {
+        return vec![format!("upload of {file} failed")];
+    };
+    body::set_schematic_data(&mut stack, &SchematicData::written(file, player, bounds));
+    set_slots(lv, pos, &[(0, None), (1, Some(stack))]);
+    vec![format!(
+        "uploaded {file}: {}x{}x{}",
+        bounds[0], bounds[1], bounds[2]
+    )]
+}
+
+/// The held schematic deployed (`DeployTool.handleRightClick`, then `SchematicSyncPacket`):
+/// deployed at `anchor`, turned and mirrored as given.
+fn deploy(
+    lv: &mut ServerLevel<'_>,
+    player: Option<PlayerRef>,
+    file: &str,
+    anchor: [i32; 3],
+    rotation: Option<&str>,
+    mirror: Option<&str>,
+) -> String {
+    let rotation = match rotation.map(Rotation::parse) {
+        None => Rotation::None,
+        Some(Some(r)) => r,
+        Some(None) => {
+            return "rotation: none, clockwise_90, clockwise_180 or counterclockwise_90".into();
+        }
+    };
+    let mirror = match mirror.map(Mirror::parse) {
+        None => Mirror::None,
+        Some(Some(m)) => m,
+        Some(None) => return "mirror: none, left_right or front_back".into(),
+    };
+    let Some(player) = player else {
+        return format!("hold the schematic of {file}");
+    };
+    let Some((slot, mut stack)) = held(lv, player) else {
+        return format!("hold the schematic of {file}");
+    };
+    let mut data = body::schematic_data(&stack);
+    if !item_is(&*lv.host, &stack, SCHEMATIC) || data.file.as_deref() != Some(file) {
+        return format!("hold the schematic of {file}");
+    }
+    data.deployed = Some(true);
+    data.anchor = Some(anchor);
+    data.rotation = rotation;
+    data.mirror = mirror;
+    body::set_schematic_data(&mut stack, &data);
+    let _ = player.set_inventory_slot(&mut *lv.host, slot, Some(stack));
+    format!(
+        "deployed {file} at {} {} {} {} {}",
+        anchor[0],
+        anchor[1],
+        anchor[2],
+        rotation.name(),
+        mirror.name()
+    )
+}
+
+/// A cannon's options (`ConfigureSchematicannonPacket`) and state.
+fn cannon_command(lv: &mut ServerLevel<'_>, pos: [i32; 3], option: &[&str]) -> String {
+    let now = now(lv);
+    let configure = if option.is_empty() {
+        None
+    } else {
+        match Configure::parse(option) {
+            Some(c) => Some(c),
+            None => {
+                return "options: play, pause, stop, mode <0-3>, skip_missing <bool>, replace_block_entities <bool>".into();
+            }
+        }
+    };
+    with(lv.dim, |d| {
+        let Some(c) = d.cannons.get_mut(&pos) else {
+            return format!("no schematicannon at {} {} {}", pos[0], pos[1], pos[2]);
+        };
+        if let Some(o) = configure {
+            c.configure(now, o);
+        }
+        let line = describe(c);
+        if configure.is_some() {
+            d.wake(pos, now);
+        }
+        line
+    })
+}
+
+fn describe(c: &Cannon) -> String {
+    format!(
+        "schematicannon {} {} {}: {} {} fuel={} placed={}/{} target={:?} mode={} skip_missing={} replace_block_entities={} missing={:?} flying={}",
+        c.pos[0],
+        c.pos[1],
+        c.pos[2],
+        c.state.name(),
+        c.status.name(),
+        c.fuel,
+        c.blocks_placed,
+        c.blocks_to_place,
+        c.target(),
+        c.options.replace_mode,
+        c.options.skip_missing,
+        c.options.replace_block_entities,
+        c.missing,
+        c.flying.len()
+    )
+}
+
+/// A column's cannons saved under `create_schematics` (`write`: state, status, fuel, options,
+/// progress, the barrel's rest and the blocks in flight; the printer itself starts over when
+/// loaded, as Create's server does).
+fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+    if !present() {
+        return;
+    }
+    let now = now(lv);
+    let host: &dyn Host = &*lv.host;
+    let state_text = |id: u32| {
+        interned(id)
+            .and_then(|s| host.block_state_string(s))
+            .unwrap_or_else(|| sch::AIR.to_owned())
+    };
+    let list: Vec<Tag> = with(lv.dim, |d| {
+        let mut cannons: Vec<&Cannon> = d
+            .cannons
+            .values()
+            .filter(|c| [c.pos[0] >> 4, c.pos[2] >> 4] == chunk)
+            .collect();
+        cannons.sort_by_key(|c| c.pos);
+        cannons
+            .into_iter()
+            .map(|c| {
+                let flying = c
+                    .flying
+                    .iter()
+                    .map(|f| {
+                        let left = f.land_at.saturating_sub(now + 1) as i32;
+                        Tag::compound([
+                            (
+                                "Target",
+                                Tag::IntArray(vec![
+                                    f.target[0],
+                                    f.target[1],
+                                    f.target[2],
+                                    left,
+                                    f.total as i32,
+                                ]),
+                            ),
+                            (
+                                "BlockState",
+                                Tag::String(state_text(f.state).as_str().into()),
+                            ),
+                        ])
+                    })
+                    .collect();
+                // Fuel, the options, progress and the barrel's resting yaw.
+                let nums = vec![
+                    c.fuel,
+                    i32::from(c.options.replace_mode),
+                    i32::from(c.options.skip_missing),
+                    i32::from(c.options.replace_block_entities),
+                    c.blocks_placed,
+                    c.blocks_to_place,
+                    c.default_yaw.to_bits() as i32,
+                ];
+                let mut e = vec![
+                    ("Pos", Tag::IntArray(c.pos.to_vec())),
+                    ("Nums", Tag::IntArray(nums)),
+                    ("State", Tag::String(c.state.name().into())),
+                    ("Status", Tag::String(c.status.name().into())),
+                    ("FlyingBlocks", Tag::List(flying)),
+                ];
+                if let Some(m) = &c.missing {
+                    e.push(("MissingItem", Tag::String(m.as_str().into())));
+                }
+                Tag::compound(e)
+            })
+            .collect()
+    });
+    if !list.is_empty() {
+        data.insert(KEY.into(), Tag::compound([("cannons", Tag::List(list))]));
+    }
+}
+
+/// A column joined a level: its cannons, ticked at once (`read`; the schematic in slot 0 loads
+/// again, the cannon paused and ready).
+fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
+    let Some(Tag::List(list)) = data.get(&"cannons".into()) else {
+        return;
+    };
+    let now = now(lv);
+    let host: &dyn Host = &*lv.host;
+    let cannons: Vec<Cannon> = list
+        .iter()
+        .filter_map(|t| {
+            let Tag::Compound(c) = t else { return None };
+            let p = ints(c.get(&"Pos".into()));
+            let pos = [*p.first()?, *p.get(1)?, *p.get(2)?];
+            let n = ints(c.get(&"Nums".into()));
+            let num = |i: usize| n.get(i).copied().unwrap_or(0);
+            let mut cannon = Cannon::new(
+                pos,
+                Options {
+                    replace_mode: num(1).clamp(0, 3) as u8,
+                    skip_missing: num(2) != 0,
+                    replace_block_entities: num(3) != 0,
+                },
+            );
+            let state = text(c.get(&"State".into()));
+            cannon.state = cn::State::ALL
+                .into_iter()
+                .find(|s| s.name() == state)
+                .unwrap_or_default();
+            cannon.status = cn::Status::parse(&text(c.get(&"Status".into()))).unwrap_or_default();
+            cannon.fuel = num(0);
+            cannon.blocks_placed = num(4);
+            cannon.blocks_to_place = num(5);
+            cannon.default_yaw = f32::from_bits(num(6) as u32);
+            let missing = text(c.get(&"MissingItem".into()));
+            cannon.missing = (!missing.is_empty()).then_some(missing);
+            if let Some(Tag::List(f)) = c.get(&"FlyingBlocks".into()) {
+                for t in f {
+                    let Tag::Compound(f) = t else { continue };
+                    let t = ints(f.get(&"Target".into()));
+                    let Some(state) = host.block_state_id(&text(f.get(&"BlockState".into())))
+                    else {
+                        continue;
+                    };
+                    if t.len() != 5 {
+                        continue;
+                    }
+                    cannon.flying.push(cn::Flying {
+                        target: [t[0], t[1], t[2]],
+                        state: intern(state),
+                        total: t[4].max(0) as u32,
+                        land_at: now + t[3].max(0) as u64 + 1,
+                    });
+                }
+            }
+            cannon.last = now;
+            Some(cannon)
+        })
+        .collect();
+    with(lv.dim, |d| {
+        for c in cannons {
+            let pos = c.pos;
+            d.cannons.insert(pos, c);
+            d.sent.remove(&pos);
+            d.wake(pos, now);
+        }
+    });
+}

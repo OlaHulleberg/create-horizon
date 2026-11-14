@@ -1,0 +1,1908 @@
+//! Create's package logistics: packagers, frogports, postboxes' packages and chain conveyors.
+//! The rules are `create_engine`'s `package`, `packager`, `port` and `chain_conveyor`; their
+//! state is typed, per level, on the server thread, saved with its column as
+//! `create_packages`; only packagers and frogports with something to do and conveyors
+//! carrying packages tick. A package's address, contents and order data are kept in its
+//! stack's `minecraft:custom_data` (`body`). Clients draw the conveyors' packages from the
+//! `create:chain` messages, round the wheel and gliding along each chain, every frame.
+//!
+//! The inventories a packager packs from and unpacks into, and a frogport's below it, are any
+//! block's `ITEMS` capability through the face toward it (`inv`).
+//!
+//! Left out, for want of API:
+//! - Other blocks' automation (hoppers, funnels, chutes) does not reach a packager's box or a
+//!   port's packages: their state lives here, not in storage a transaction journals, so an
+//!   `ITEMS` handler for them could not be rolled back (the legacy glue's
+//!   `automation_insert` / `automation_take` / `automation_room`).
+//! - A frogport is not told when the inventory below it changes (`contents_changed` is a Part
+//!   of the changed block only, with no hook for every container's `setChanged`): a frogport
+//!   with an inventory below looks at it on Create's own lazy tick, every 10 ticks, instead of
+//!   at once.
+//! - A dropped package is an item, not Create's package entity (`PackageEntity`), as in the
+//!   legacy glue.
+
+pub mod body;
+mod inv;
+
+use super::server::{ServerLevel, UPDATE_CLIENTS};
+use super::states;
+use super::subsystem::Subsystem;
+use super::world::{level_index, with_world};
+use super::{net, persist, stock};
+use create_engine::Block;
+use create_engine::chain_conveyor::{self as chain, Drawn, Parcel};
+use create_engine::kinetics::Dir;
+use create_engine::package;
+use create_engine::port::{Out, Packaging, Target};
+use inv::Inv;
+use mod_api::{
+    AnalogOutputEvent, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockEntitySubmitEvent,
+    BlockPart, ClientHost, Command, CommandArgumentValue, CommandSource, Compound, Direction, Flow,
+    Hand, HasAnalogOutputEvent, InteractionResult, ItemDisplayContext, ItemKey, ItemStack,
+    LevelHost, NeighbourUpdate, PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext,
+    RunModCommandEvent, ServerHost, SoundSource, Tag, Text, UseItemOnEvent,
+};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+
+pub type Pk = Packaging<ItemStack>;
+
+/// A block of ours placed or removed: level, position, was, is.
+type Change = (usize, [i32; 3], Option<Block>, Option<Block>);
+
+/// The key the column's data keeps this under.
+const KEY: &str = "create_packages";
+
+/// What the client draws of one conveyor: when it got them (on the animation clock, set at the
+/// first frame) and the packages.
+struct Shown {
+    since: Option<f64>,
+    drawn: Vec<(Drawn, Option<ItemStack>)>,
+}
+
+thread_local! {
+    /// Each level's package logistics, by level index, made when first needed.
+    static PACKAGES: RefCell<Option<Vec<Pk>>> = const { RefCell::new(None) };
+    /// Blocks of ours placed or removed, handled at the level's tick.
+    static CHANGES: RefCell<Vec<Change>> = const { RefCell::new(Vec::new()) };
+    /// Conveyors removed since the last send: clients clear what they drew there.
+    static GONE: RefCell<Vec<(usize, [i32; 3])>> = const { RefCell::new(Vec::new()) };
+    /// The largest stack of each item a port held, for what comparators read of it.
+    static MAXES: RefCell<HashMap<ItemKey, u32>> = RefCell::new(HashMap::new());
+    /// The client's conveyors' packages, by conveyor.
+    static SHOWN: RefCell<HashMap<[i32; 3], Shown>> = RefCell::new(HashMap::new());
+    /// Whether this client asked the server for what it draws (`sync`).
+    static SYNCED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `f` on level `dim`'s package logistics.
+pub fn with<R>(dim: usize, f: impl FnOnce(&mut Pk) -> R) -> R {
+    PACKAGES.with_borrow_mut(|p| {
+        let levels = p.get_or_insert_with(Vec::new);
+        if levels.len() <= dim {
+            levels.resize_with(dim + 1, Pk::default);
+        }
+        f(&mut levels[dim])
+    })
+}
+
+fn present() -> bool {
+    PACKAGES.with_borrow(Option::is_some)
+}
+
+fn ours(b: Block) -> bool {
+    matches!(
+        b,
+        Block::Packager | Block::Repackager | Block::PackageFrogport | Block::ChainConveyor
+    ) || create_engine::dye::is_postbox(b)
+}
+
+/// A packager or a re-packager.
+fn is_packager(b: Block) -> bool {
+    matches!(b, Block::Packager | Block::Repackager)
+}
+
+/// A frogport or a postbox.
+fn is_port(b: Block) -> bool {
+    b == Block::PackageFrogport || create_engine::dye::is_postbox(b)
+}
+
+pub fn block_of(state: u32) -> Option<Block> {
+    with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten()
+}
+
+pub fn add(p: [i32; 3], o: [i32; 3]) -> [i32; 3] {
+    [p[0] + o[0], p[1] + o[1], p[2] + o[2]]
+}
+
+fn center(p: [i32; 3]) -> [f64; 3] {
+    p.map(|v| f64::from(v) + 0.5)
+}
+
+pub fn direction(d: Dir) -> Direction {
+    Direction::ALL[d as usize]
+}
+
+fn now(lv: &ServerLevel<'_>) -> u64 {
+    lv.game_time().max(0) as u64
+}
+
+/// A package as the rules carry it: its stack and its address.
+pub fn parcel(stack: ItemStack) -> Parcel<ItemStack> {
+    Parcel {
+        address: body::address(&stack),
+        stack,
+    }
+}
+
+/// `Block.popResource` / `PackageEntity.fromItemStack`: the stack drops as an item at `at`.
+fn drop_stack(lv: &mut ServerLevel<'_>, at: [f64; 3], stack: ItemStack) {
+    let _ = lv
+        .level
+        .spawn_item(&mut *lv.host, at[0], at[1], at[2], stack, 10);
+}
+
+/// The kinetic network's chains of the conveyor at `pos`: the conveyors it joins turn with it.
+fn sync_far(dim: usize, pos: [i32; 3]) {
+    let to: Vec<[i32; 3]> = with(dim, |pk| {
+        pk.chains
+            .conveyors
+            .get(&pos)
+            .map(|c| c.connections.iter().map(|k| add(pos, *k)).collect())
+            .unwrap_or_default()
+    });
+    with_world(|w| w.dims[dim].kinetics.set_far(pos, to));
+}
+
+fn speed_of(dim: usize, pos: [i32; 3]) -> f32 {
+    with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0)
+}
+
+pub struct Packages;
+
+impl Subsystem for Packages {
+    fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        for &b in Block::ALL.iter().filter(|&&b| is_packager(b) || is_port(b)) {
+            r.block_part(states::key(b), PackageBlock);
+        }
+        if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, ConveyorDraw)
+        {
+            eprintln!("[create] the chain conveyor's drawing part was refused: {e:?}");
+        }
+    }
+
+    fn world_closed(&self) {
+        PACKAGES.with_borrow_mut(|p| *p = None);
+        CHANGES.with_borrow_mut(Vec::clear);
+        GONE.with_borrow_mut(Vec::clear);
+        MAXES.with_borrow_mut(HashMap::clear);
+    }
+
+    /// Ours placed or gone are handled at the level's tick.
+    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        let (o, n) = (
+            block_of(old).filter(|b| ours(*b)),
+            block_of(new).filter(|b| ours(*b)),
+        );
+        if o == n {
+            return;
+        }
+        CHANGES.with_borrow_mut(|c| c.push((dim, pos, o, n)));
+    }
+
+    /// A packager reads its power at the level's tick (`PackagerBlock.neighborChanged`); a
+    /// frogport looks at the inventory below.
+    fn neighbor_changed(&self, dim: usize, pos: [i32; 3], state: u32) {
+        match block_of(state) {
+            Some(Block::Packager | Block::Repackager) => with(dim, |pk| pk.redstone.push(pos)),
+            Some(Block::PackageFrogport) => with(dim, |pk| pk.wake(pos)),
+            _ => {}
+        }
+    }
+
+    /// A chain conveyor's packages move at its new speed, and the frogports on it register
+    /// again (a chain running the other way moves them).
+    fn speed_changed(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], speed: f32) {
+        if !present() {
+            return;
+        }
+        with(lv.dim, |pk| {
+            if pk.chains.conveyors.contains_key(&pos) {
+                pk.chains.set_speed(pos, speed);
+                pk.conveyor_changed(pos);
+            }
+        });
+    }
+
+    fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        level_tick(lv);
+    }
+
+    fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
+        if let Some(Tag::Compound(own)) = data.get(&KEY.into()) {
+            chunk_load(lv, own);
+        }
+    }
+
+    fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+        chunk_data_save(lv, chunk, data);
+    }
+
+    fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
+        chunk_unload(dim, chunk);
+    }
+
+    /// A client joining asks for what it draws (`sync`): every conveyor carrying packages in
+    /// its level. Not this subsystem's channel alone: the others answer it too.
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != create_engine::client::CHANNEL || data != b"sync" || !present() {
+            return false;
+        }
+        let Some(dim) = player
+            .dimension(&*host)
+            .and_then(|d| level_index(&d.to_string()))
+        else {
+            return false;
+        };
+        let conveyors: Vec<[i32; 3]> = with(dim, |pk| {
+            pk.chains
+                .conveyors
+                .iter()
+                .filter(|(_, c)| !c.is_empty())
+                .map(|(p, _)| *p)
+                .collect()
+        });
+        send_chains(host, &[player], dim, &conveyors);
+        false
+    }
+
+    fn server_message(&self, _host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
+        if channel != chain::CHANNEL {
+            return false;
+        }
+        if let Some((pos, drawn)) = chain::decode(data) {
+            SHOWN.with_borrow_mut(|s| {
+                if drawn.is_empty() {
+                    s.remove(&pos);
+                } else {
+                    let drawn = drawn.into_iter().map(|d| (d, None)).collect();
+                    s.insert(pos, Shown { since: None, drawn });
+                }
+            });
+        }
+        true
+    }
+
+    /// Once in each world, the client asks for what it draws.
+    fn client_tick(&self, host: &mut dyn ClientHost) {
+        if !SYNCED.get() && net::send_to_server(host, create_engine::client::CHANNEL, b"sync") {
+            SYNCED.set(true);
+        }
+    }
+
+    fn client_reset(&self) {
+        SHOWN.with_borrow_mut(HashMap::clear);
+        SYNCED.set(false);
+    }
+
+    /// Our debug commands, standing in for the clipboard and signs (`address`), the frogport
+    /// item's selection (`frogport`) and the chain item (`chain`, `unchain`).
+    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+        for usage in [
+            "create_debug address <pos:block_pos> <address:text>",
+            "create_debug frogport <pos:block_pos> <target:text>",
+            "create_debug chain <from:block_pos> <to:block_pos>",
+            "create_debug unchain <from:block_pos> <to:block_pos>",
+            "create_debug packages <pos:block_pos>",
+        ] {
+            event.commands.push(Command::op(usage, 2));
+        }
+    }
+
+    fn run_mod_command(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut RunModCommandEvent<'_>,
+    ) -> Flow {
+        let Some(verb) = debug_verb(
+            event,
+            &["address", "frogport", "chain", "unchain", "packages"],
+        ) else {
+            return Flow::Continue;
+        };
+        let here = event.command.position;
+        let Some(dimension) = event.command.dimension.id(&*host) else {
+            return Flow::Cancel;
+        };
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return Flow::Cancel;
+        };
+        let dim = lv.dim;
+        let pos = |name: &str| match event.command.argument(name) {
+            Some(CommandArgumentValue::BlockPos(p)) => Some(*p),
+            _ => None,
+        };
+        let text = |name: &str| match event.command.argument(name) {
+            Some(CommandArgumentValue::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let line = match (verb, pos("pos")) {
+            ("address", Some(p)) => set_address(dim, p, text("address").trim()),
+            ("frogport", Some(p)) => {
+                let target = text("target");
+                let words: Vec<&str> = target.split_whitespace().collect();
+                set_frogport(dim, p, &words, here)
+            }
+            ("packages", Some(p)) => describe(&lv, dim, p),
+            ("chain" | "unchain", _) => match (pos("from"), pos("to")) {
+                (Some(a), Some(b)) => chain_command(&mut lv, a, b, verb == "chain"),
+                _ => format!("usage: create_debug {verb} <x y z> <x y z>"),
+            },
+            _ => format!("usage: create_debug {verb} <x y z> ..."),
+        };
+        feedback(lv.host, line);
+        Flow::Cancel
+    }
+}
+
+/// The verb of a `create_debug` command when it is one of `verbs`.
+pub fn debug_verb(event: &RunModCommandEvent<'_>, verbs: &[&'static str]) -> Option<&'static str> {
+    let l = &event.command.literals;
+    if l.first().map(String::as_str) != Some("create_debug") {
+        return None;
+    }
+    let verb = l.get(1)?;
+    verbs.iter().copied().find(|v| v == verb)
+}
+
+/// A command's answer to whoever ran it.
+pub fn feedback(host: &mut dyn ServerHost, line: String) {
+    let _ = host.commands().feedback(Text::literal(line));
+}
+
+/// The player who ran a command, if a player did.
+pub fn command_player(source: &CommandSource) -> Option<PlayerRef> {
+    match source {
+        CommandSource::Player { player, .. } => Some(*player),
+        _ => None,
+    }
+}
+
+/// Coordinates from words (`~` from `here`).
+pub fn coords(words: &[&str], here: Option<[f64; 3]>) -> Option<[i32; 3]> {
+    let mut out = [0; 3];
+    for (i, v) in out.iter_mut().enumerate() {
+        let t = words.get(i)?;
+        *v = match t.strip_prefix('~') {
+            Some(off) => here?[i].floor() as i32 + off.parse::<i32>().unwrap_or(0),
+            None => t.parse().ok()?,
+        };
+    }
+    Some(out)
+}
+
+/// The level's tick: blocks placed and removed, packagers' power, the packagers, chains and
+/// frogports, then what clients draw. Nothing runs in a level with nothing to do.
+fn level_tick(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    if !present() && CHANGES.with_borrow(Vec::is_empty) {
+        return;
+    }
+    let changes: Vec<Change> = CHANGES.with_borrow_mut(|c| {
+        let mine = c.iter().filter(|x| x.0 == dim).copied().collect();
+        c.retain(|x| x.0 != dim);
+        mine
+    });
+    for (_, pos, was, is) in changes {
+        block_moved(lv, dim, pos, was, is);
+    }
+    // What comparators read of packagers and ports that changed (since the last tick too: a
+    // menu took or gave a package) is looked at after this tick.
+    let mut touched = with(dim, |pk| std::mem::take(&mut pk.changed));
+    let now = now(lv);
+    if with(dim, |pk| pk.is_idle()) && GONE.with_borrow(Vec::is_empty) {
+        analog_touched(lv, &touched);
+        mark_unsaved(dim, &[]);
+        return;
+    }
+    // PackagerBlock.neighborChanged: `powered` follows the signal; a new one activates it.
+    for pos in with(dim, |pk| std::mem::take(&mut pk.redstone)) {
+        let state = lv.block(pos);
+        let Some((Block::Packager | Block::Repackager, was)) =
+            with_world(|w| w.table.get(state).map(|(b, i)| (b, i.powered))).flatten()
+        else {
+            continue;
+        };
+        let now_powered = lv.has_neighbor_signal(pos);
+        if was == now_powered {
+            continue;
+        }
+        lv.set_property(
+            pos,
+            "powered",
+            if now_powered { "true" } else { "false" },
+            UPDATE_CLIENTS,
+        );
+        if !was {
+            activate(lv, dim, pos);
+        }
+    }
+    let mut out = Vec::new();
+    with(dim, |pk| pk.tick(&mut out));
+    for o in out {
+        match o {
+            Out::Recheck(pos) => {
+                // `lazyTick`: `redstonePowered` read back from the block, then a try to send.
+                let state = lv.block(pos);
+                let powered = with_world(|w| w.table.get(state).map(|(_, i)| i.powered))
+                    .flatten()
+                    .unwrap_or(false);
+                with(dim, |pk| pk.packager(pos).powered = powered);
+                if redstone_mode(lv, dim, pos) && with(dim, |pk| pk.packager(pos).can_send()) {
+                    attempt_send(lv, dim, pos);
+                }
+            }
+            Out::PackagerDone(_) => {}
+            Out::Drop(at, p) => drop_stack(lv, at, p.stack),
+        }
+    }
+    for pos in with(dim, |pk| pk.due(now)) {
+        frogport(lv, dim, pos, now);
+    }
+    // Clients redraw the conveyors whose packages changed.
+    let mut changed = with(dim, |pk| pk.chains.take_changed());
+    changed.extend(GONE.with_borrow_mut(|g| {
+        let mine: Vec<_> = g.iter().filter(|x| x.0 == dim).map(|x| x.1).collect();
+        g.retain(|x| x.0 != dim);
+        mine
+    }));
+    if !changed.is_empty() {
+        let players = lv.players();
+        send_chains(lv.host, &players, dim, &changed);
+    }
+    touched.extend(with(dim, |pk| std::mem::take(&mut pk.changed)));
+    analog_touched(lv, &touched);
+    mark_unsaved(dim, &changed);
+}
+
+/// The columns whose packagers, ports or conveyors changed (and those holding `also`) are
+/// written at the end of this tick.
+fn mark_unsaved(dim: usize, also: &[[i32; 3]]) {
+    let mut unsaved = with(dim, |pk| std::mem::take(&mut pk.unsaved));
+    unsaved.extend(also.iter().map(|p| (p[0] >> 4, p[2] >> 4)));
+    unsaved.sort_unstable();
+    unsaved.dedup();
+    for (cx, cz) in unsaved {
+        persist::mark_unsaved(dim, [cx, cz]);
+    }
+}
+
+/// Comparators beside packagers and ports whose output may have changed read them again
+/// (`updateNeighbourForOutputSignal`); the items their ports hold are noted for that reading.
+fn analog_touched(lv: &mut ServerLevel<'_>, touched: &[[i32; 3]]) {
+    if touched.is_empty() {
+        return;
+    }
+    let mut seen: Vec<[i32; 3]> = Vec::with_capacity(touched.len());
+    for &pos in touched {
+        if seen.contains(&pos) {
+            continue;
+        }
+        seen.push(pos);
+        note_maxes(lv, pos);
+        if let Some(state) = lv.block_state(pos) {
+            let _ =
+                lv.level
+                    .update_neighbors(&mut *lv.host, pos, state, NeighbourUpdate::OutputSignal);
+        }
+    }
+}
+
+/// Notes the largest stack of each item the port at `pos` holds.
+fn note_maxes(lv: &ServerLevel<'_>, pos: [i32; 3]) {
+    let items: Vec<ItemKey> = with(lv.dim, |pk| {
+        pk.ports
+            .get(&pos)
+            .map(|p| p.items.iter().flatten().map(|b| b.stack.item()).collect())
+            .unwrap_or_default()
+    });
+    MAXES.with_borrow_mut(|m| {
+        for item in items {
+            m.entry(item)
+                .or_insert_with(|| lv.host.max_stack_size(item).unwrap_or(64));
+        }
+    });
+}
+
+/// `getAnalogOutputSignal` of a packager (`PackagerBlock`: 15 while it holds a box or animates)
+/// or a frogport or postbox (`PackagePortBlockEntity.getComparatorOutput`: its 18 slots of
+/// packages, as `calcRedstoneFromInventory` counts them); None for anything else.
+fn analog(dim: usize, pos: [i32; 3]) -> Option<i32> {
+    PACKAGES.with(|p| {
+        let p = p.try_borrow().ok()?;
+        let pk = p.as_ref()?.get(dim)?;
+        if let Some(k) = pk.packagers.get(&pos) {
+            return Some(i32::from(k.comparator()));
+        }
+        let port = pk.ports.get(&pos)?;
+        Some(MAXES.with_borrow(|m| {
+            create_engine::comparator::inventory(
+                port.items.iter().map(|s| {
+                    s.as_ref().map(|p| {
+                        let max = m.get(&p.stack.item()).copied().unwrap_or(64);
+                        (p.stack.count(), max)
+                    })
+                }),
+                64,
+            )
+        }))
+    })
+}
+
+/// One of our blocks placed or removed.
+fn block_moved(
+    lv: &mut ServerLevel<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    was: Option<Block>,
+    is: Option<Block>,
+) {
+    let mut drops: Vec<([f64; 3], ItemStack)> = Vec::new();
+    match was {
+        // `PackagerBlockEntity.destroy`: its box and queued boxes drop.
+        Some(Block::Packager | Block::Repackager) => with(dim, |pk| {
+            if let Some(p) = pk.packagers.remove(&pos) {
+                for b in p.held.into_iter().chain(p.sliding) {
+                    drops.push((center(pos), b.stack));
+                }
+                for (b, n) in p.queue {
+                    for _ in 0..n.max(1) {
+                        drops.push((center(pos), b.stack.clone()));
+                    }
+                }
+            }
+            pk.active.retain(|x| *x != pos);
+        }),
+        // `ChainConveyorBlockEntity.destroy`: its packages drop, the conveyors it joined let go.
+        Some(Block::ChainConveyor) => {
+            let joined: Vec<[i32; 3]> = with(dim, |pk| {
+                let joined = pk
+                    .chains
+                    .conveyors
+                    .get(&pos)
+                    .map(|c| c.connections.iter().map(|k| add(pos, *k)).collect())
+                    .unwrap_or_default();
+                let mut ev = Vec::new();
+                pk.chains.remove(pos, &mut ev);
+                for e in ev {
+                    if let chain::Event::Drop(at, p) = e {
+                        drops.push((at, p.stack));
+                    }
+                }
+                joined
+            });
+            with_world(|w| w.dims[dim].kinetics.set_far(pos, Vec::new()));
+            for j in joined {
+                sync_far(dim, j);
+                with(dim, |pk| pk.conveyor_changed(j));
+            }
+            GONE.with_borrow_mut(|g| g.push((dim, pos)));
+        }
+        // `PackagePortBlockEntity.destroy`: its packages drop.
+        Some(_) => with(dim, |pk| {
+            for p in pk.remove_port(pos) {
+                drops.push((center(pos), p.stack));
+            }
+        }),
+        None => {}
+    }
+    match is {
+        Some(b @ (Block::Packager | Block::Repackager)) => {
+            with(dim, |pk| {
+                pk.packager(pos).repackager = b == Block::Repackager;
+                pk.touch(pos);
+            });
+            // `initialize`: `linked` follows a stock link on it.
+            stock::recheck_linked(lv, pos);
+        }
+        Some(Block::ChainConveyor) => {
+            let speed = speed_of(dim, pos);
+            with(dim, |pk| {
+                pk.chains.add(pos, Vec::new());
+                pk.chains.set_speed(pos, speed);
+                pk.touch(pos);
+            });
+        }
+        Some(Block::PackageFrogport) => with(dim, |pk| {
+            pk.port(pos, true);
+            pk.touch(pos);
+            pk.wake(pos);
+        }),
+        Some(_) => with(dim, |pk| {
+            pk.port(pos, false);
+            pk.touch(pos);
+        }),
+        None => {}
+    }
+    for (at, s) in drops {
+        drop_stack(lv, at, s);
+    }
+}
+
+/// The packager's facing and the inventory behind it (`oppositeOfBlockFacing`), reached through
+/// the face toward the packager.
+fn behind(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<([i32; 3], Direction)> {
+    let state = lv.block(pos);
+    let facing = with_world(|w| w.table.get(state).and_then(|(_, i)| i.facing)).flatten()?;
+    let o = facing.offset();
+    Some((
+        [pos[0] - o[0], pos[1] - o[1], pos[2] - o[2]],
+        direction(facing),
+    ))
+}
+
+/// The inventory behind the packager at `pos`, when there is one.
+fn behind_inv(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) -> Option<([i32; 3], Inv)> {
+    let (at, face) = behind(lv, pos)?;
+    Some((at, inv::at(lv, dim, at, face)?))
+}
+
+/// `activate`: a pulse packs the inventory behind into a package (`attemptToSend`), and the
+/// button cooldown starts.
+fn activate(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
+    with(dim, |pk| pk.packager(pos).pulse());
+    // `recheckIfLinksPresent`, then a linked packager waits for its network's orders.
+    stock::recheck_linked(lv, pos);
+    if !redstone_mode(lv, dim, pos) {
+        with(dim, |pk| pk.activate(pos));
+        return;
+    }
+    if with(dim, |pk| pk.packager(pos).can_send()) {
+        attempt_send(lv, dim, pos);
+    }
+    with(dim, |pk| {
+        pk.packager(pos).after_pulse();
+        pk.activate(pos);
+    });
+}
+
+/// A stack compared as Create compares stacks (`isSameItemSameComponents`).
+struct Same<'a>(&'a ItemStack);
+
+impl PartialEq for Same<'_> {
+    fn eq(&self, o: &Self) -> bool {
+        self.0.is_stackable_with(o.0)
+    }
+}
+
+/// `!canFitInsideContainerItems`: packages and shulker boxes.
+fn bulky(item: &str) -> bool {
+    package::is_package(item) || item.ends_with("shulker_box")
+}
+
+/// The packing view of an inventory's slots.
+fn slots_of<'a, K>(
+    lv: &ServerLevel<'_>,
+    view: &'a [Option<ItemStack>],
+    key: impl Fn(&'a ItemStack) -> K,
+) -> Vec<Option<package::Slot<K>>> {
+    view.iter()
+        .map(|s| {
+            s.as_ref().map(|s| {
+                let id = body::item_id(&*lv.host, s);
+                package::Slot {
+                    key: key(s),
+                    count: s.count(),
+                    max: body::stack_limit(&*lv.host, s),
+                    bulky: bulky(&id),
+                    package: package::is_package(&id),
+                }
+            })
+        })
+        .collect()
+}
+
+/// What a packing took: the package taken whole, or a new box of the contents.
+fn packed_stack(
+    lv: &mut ServerLevel<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    inv: &Inv,
+    view: &[Option<ItemStack>],
+    packed: &package::Packed,
+    boxed: Option<&mut Vec<ItemStack>>,
+) -> Option<ItemStack> {
+    let mut taken: HashMap<usize, Parcel<ItemStack>> = HashMap::new();
+    for &(slot, n) in &packed.taken {
+        if let Some(p) = inv::take(lv, dim, inv, slot, n) {
+            taken.insert(slot, p);
+        }
+    }
+    if let Some(p) = packed.package.and_then(|s| taken.remove(&s)) {
+        return Some(p.stack);
+    }
+    let contents: Vec<Option<ItemStack>> = packed
+        .contents
+        .iter()
+        .map(|c| {
+            let (from, n) = (*c)?;
+            body::with_count(view.get(from)?.as_ref()?, n)
+        })
+        .collect();
+    if let Some(boxed) = boxed {
+        boxed.extend(contents.iter().flatten().cloned());
+    }
+    new_box(lv, pos, &contents)
+}
+
+/// `PackagerBlockEntity.attemptToSend(null)`: the inventory behind packed into one box (a
+/// package there goes as it is), addressed with the packager's address, sliding out.
+fn attempt_send(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
+    if with(dim, |pk| pk.packager(pos).repackager) {
+        attempt_repackage(lv, dim, pos);
+        return;
+    }
+    let Some((at, inv)) = behind_inv(lv, dim, pos) else {
+        return;
+    };
+    // A packager behind a packager is no inventory to it (`instanceof PackagerItemHandler`).
+    if inv.is_packager() {
+        return;
+    }
+    let view = inv::view(lv, dim, &inv);
+    let packed = package::pack(&slots_of(lv, &view, Same));
+    let Some(packed) = packed else { return };
+    let Some(mut stack) = packed_stack(lv, dim, pos, &inv, &view, &packed, None) else {
+        return;
+    };
+    let address = with(dim, |pk| pk.packager(pos).address.clone());
+    let address = (!package::is_blank(&address)).then_some(address);
+    body::set_address(&mut stack, address.as_deref());
+    with(dim, |pk| {
+        pk.packager(pos).send(Parcel {
+            stack,
+            address: address.unwrap_or_default(),
+        });
+        pk.activate(pos);
+    });
+    let _ = at;
+}
+
+/// `unwrapBox`: whether the package's contents fit the inventory behind (`simulate`), else
+/// they go in (`DefaultUnpackingHandler.unpack`) and the tray slides in. An empty package
+/// always unwraps, without the tray.
+fn unwrap(
+    lv: &mut ServerLevel<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    stack: &ItemStack,
+    simulate: bool,
+) -> bool {
+    if !with(dim, |pk| pk.packager(pos).can_unwrap()) {
+        return false;
+    }
+    if with(dim, |pk| pk.packager(pos).repackager) {
+        return unwrap_whole(lv, dim, pos, stack, simulate);
+    }
+    let items: Vec<ItemStack> = body::contents(&*lv.host, stack)
+        .into_iter()
+        .flatten()
+        .collect();
+    if items.is_empty() {
+        return true;
+    }
+    let Some((_, inv)) = behind_inv(lv, dim, pos) else {
+        return false;
+    };
+    if simulate {
+        return match &inv {
+            Inv::Packager(_) => false,
+            Inv::Cap(items_cap) => inv::fits(lv, items_cap, &items),
+            // A port takes packages only.
+            Inv::Port(_) => items
+                .iter()
+                .all(|i| package::is_package(&body::item_id(&*lv.host, i))),
+        };
+    }
+    if inv.is_packager() {
+        return false;
+    }
+    for i in items {
+        if let Some(left) = inv::insert(lv, dim, &inv, parcel(i)) {
+            // `unpack` trusts its simulation: what still did not fit drops.
+            drop_stack(lv, center(pos), left.stack);
+        }
+    }
+    with(dim, |pk| {
+        pk.packager(pos).unwrapped();
+        pk.activate(pos);
+    });
+    true
+}
+
+/// `RepackagerBlockEntity.unwrapBox`: the package goes into the inventory behind as it is, when
+/// a slot takes it.
+fn unwrap_whole(
+    lv: &mut ServerLevel<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    stack: &ItemStack,
+    simulate: bool,
+) -> bool {
+    let Some((_, inv)) = behind_inv(lv, dim, pos) else {
+        return false;
+    };
+    let room = match &inv {
+        Inv::Packager(_) => return false,
+        Inv::Cap(items) => inv::has_empty(lv, items),
+        Inv::Port(p) => with(dim, |pk| {
+            pk.ports.get(p).is_some_and(|port| {
+                port.automation_takes(&body::address(stack)) && !port.backed_up()
+            })
+        }),
+    };
+    if !room || simulate {
+        return room;
+    }
+    if let Some(left) = inv::insert(lv, dim, &inv, parcel(stack.clone())) {
+        drop_stack(lv, center(pos), left.stack);
+    }
+    with(dim, |pk| {
+        pk.packager(pos).unwrapped();
+        pk.activate(pos);
+    });
+    true
+}
+
+/// `RepackagerBlockEntity.attemptToSend`: a package without order data in the inventory behind
+/// goes out as it is (with the sign's address); else, once every fragment of an order is there,
+/// they are taken and the order goes out repacked (`PackageRepackageHelper`), queued.
+fn attempt_repackage(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
+    if !with(dim, |pk| {
+        let k = pk.packager(pos);
+        k.can_send() && k.queue.is_empty()
+    }) {
+        return;
+    }
+    let Some((_, inv)) = behind_inv(lv, dim, pos) else {
+        return;
+    };
+    if inv.is_packager() {
+        return;
+    }
+    let view = inv::view(lv, dim, &inv);
+    let mut fragments: Vec<(usize, create_engine::stock::OrderData<ItemStack>)> = Vec::new();
+    let mut completed = None;
+    for (slot, s) in view.iter().enumerate() {
+        let Some(s) = s else { continue };
+        if !package::is_package(&body::item_id(&*lv.host, s)) {
+            continue;
+        }
+        let Some(order) = body::order(&*lv.host, s) else {
+            // Not fragmented: it goes out as it is.
+            let Some(mut p) = inv::take(lv, dim, &inv, slot, 1) else {
+                return;
+            };
+            let address = with(dim, |pk| pk.packager(pos).address.clone());
+            if !package::is_blank(&address) {
+                body::set_address(&mut p.stack, Some(&address));
+                p.address = address;
+            }
+            with(dim, |pk| {
+                pk.packager(pos).send(p);
+                pk.activate(pos);
+            });
+            return;
+        };
+        let id = order.order_id;
+        fragments.push((slot, order));
+        let mine: Vec<&create_engine::stock::OrderData<ItemStack>> = fragments
+            .iter()
+            .filter(|f| f.1.order_id == id)
+            .map(|f| &f.1)
+            .collect();
+        if create_engine::stock::is_order_complete(&mine) {
+            completed = Some(id);
+            break;
+        }
+    }
+    let Some(id) = completed else { return };
+    let mut frags = Vec::new();
+    for (slot, order) in fragments.into_iter().filter(|f| f.1.order_id == id) {
+        let Some(s) = view[slot].as_ref() else {
+            continue;
+        };
+        frags.push(create_engine::stock::Fragment {
+            order: stock::order_data_key(&order),
+            address: body::address(s),
+            contents: body::contents(&*lv.host, s)
+                .into_iter()
+                .flatten()
+                .map(|i| (stock::Key::of(&i), i.count()))
+                .collect(),
+        });
+    }
+    let host: &dyn mod_api::Host = &*lv.host;
+    let time = lv.game_time();
+    let boxes = create_engine::stock::repack(
+        &frags,
+        id,
+        |k| body::stack_limit(host, &k.0),
+        || stock::next_int(time),
+    );
+    // Every fragment of the order leaves the inventory.
+    for (slot, s) in view.iter().enumerate() {
+        let fragment = s.as_ref().is_some_and(|s| {
+            package::is_package(&body::item_id(&*lv.host, s))
+                && body::order(&*lv.host, s).is_some_and(|o| o.order_id == id)
+        });
+        if fragment {
+            inv::take(lv, dim, &inv, slot, 1);
+        }
+    }
+    for b in boxes {
+        let contents: Vec<Option<ItemStack>> = b
+            .contents
+            .iter()
+            .map(|(k, n)| body::with_count(&k.0, *n))
+            .collect();
+        let Some(mut stack) = new_box(lv, pos, &contents) else {
+            continue;
+        };
+        body::set_address(&mut stack, Some(&b.address));
+        body::set_order(&*lv.host, &mut stack, &stock::order_data_stack(&b.order));
+        with(dim, |pk| {
+            pk.packager(pos).queue.push_back((
+                Parcel {
+                    stack,
+                    address: b.address.clone(),
+                },
+                b.count,
+            ))
+        });
+    }
+    with(dim, |pk| pk.activate(pos));
+}
+
+/// `PackageItem.containing`: a box of a random style holding `contents`.
+fn new_box(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    contents: &[Option<ItemStack>],
+) -> Option<ItemStack> {
+    let mut seed = (lv.game_time() as u64)
+        ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (pos[2] as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ (pos[1] as u64) << 40;
+    let next = |n: u32| {
+        seed ^= seed >> 31;
+        seed = seed.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        seed ^= seed >> 29;
+        (seed % u64::from(n.max(1))) as u32
+    };
+    let mut b = body::new_stack(&*lv.host, package::random_box(next), 1)?;
+    body::set_contents(&*lv.host, &mut b, contents);
+    Some(b)
+}
+
+/// The packager's inventory as `getAvailableItems` sums it, and which inventory it is
+/// (`InventoryIdentifier`: a vault's first block), or None when nothing is behind it. A
+/// packager behind it is an inventory of nothing.
+pub fn available(
+    lv: &mut ServerLevel<'_>,
+    dim: usize,
+    pos: [i32; 3],
+) -> (create_engine::stock::Summary<stock::Key>, Option<[i32; 3]>) {
+    let mut s = create_engine::stock::Summary::default();
+    let Some((at, inv)) = behind_inv(lv, dim, pos) else {
+        return (s, None);
+    };
+    let vault = block_of(lv.block(at)) == Some(Block::ItemVault);
+    let id = vault
+        .then(|| with_world(|w| w.dims[dim].vaults.inventory(at)).flatten())
+        .flatten()
+        .and_then(|parts| parts.iter().min().copied())
+        .unwrap_or(at);
+    if inv.is_packager() {
+        return (s, Some(id));
+    }
+    for stack in inv::view(lv, dim, &inv).iter().flatten() {
+        s.add(&stock::Key::of(stack), stack.count() as i32);
+    }
+    (s, Some(id))
+}
+
+/// `isTooBusyFor`: a packager with that many boxes queued takes no order.
+pub fn too_busy(dim: usize, pos: [i32; 3], kind: create_engine::stock::RequestType) -> bool {
+    with(dim, |pk| {
+        pk.packagers.get(&pos).is_some_and(|k| k.too_busy(kind))
+    })
+}
+
+/// `performPackageRequests` for one packager: up to 100 boxes of its requests
+/// (`attemptToSend(requests)`), each sliding out or queued. The stacks put in boxes (not
+/// packages sent as they are), for `deductFromAccurateSummary`.
+pub fn perform_requests(
+    lv: &mut ServerLevel<'_>,
+    dim: usize,
+    pos: [i32; 3],
+    queue: &mut std::collections::VecDeque<create_engine::stock::Request<stock::Key>>,
+) -> Vec<ItemStack> {
+    let mut boxed = Vec::new();
+    for _ in 0..create_engine::stock::MAX_PACKAGES {
+        if queue.is_empty() {
+            break;
+        }
+        let Some((_, inv)) = behind_inv(lv, dim, pos) else {
+            break;
+        };
+        if inv.is_packager() {
+            break;
+        }
+        let view = inv::view(lv, dim, &inv);
+        let mut slots = slots_of(lv, &view, stock::Key::of);
+        let Some(r) = create_engine::stock::pack_requests(&mut slots, queue) else {
+            continue;
+        };
+        let Some(mut stack) = packed_stack(lv, dim, pos, &inv, &view, &r.packed, Some(&mut boxed))
+        else {
+            continue;
+        };
+        body::set_address(&mut stack, Some(&r.address));
+        body::set_order(&*lv.host, &mut stack, &stock::order_data_stack(&r.order));
+        with(dim, |pk| {
+            pk.packager(pos).send_or_queue(Parcel {
+                stack,
+                address: r.address.clone(),
+            });
+            pk.activate(pos);
+        });
+    }
+    boxed
+}
+
+/// `redstoneModeActive`: a packager with a stock link on it packs for its network only, not on
+/// a signal; a re-packager always on a signal.
+fn redstone_mode(lv: &ServerLevel<'_>, dim: usize, pos: [i32; 3]) -> bool {
+    with(dim, |pk| {
+        pk.packagers.get(&pos).is_some_and(|k| k.repackager)
+    }) || stock::link_of(lv, pos).is_none()
+}
+
+/// A frogport looks at its inventories (`lazyTick`): what it caught for its address goes down
+/// into the inventory below (`tryPushingToAdjacentInventories`), then a package not for it,
+/// its own or from below, is sent onto its chain (`tryPullingFromOwnAndAdjacentInventories`).
+/// It looks again in 10 ticks while something waits, and while an inventory is below it (that
+/// inventory's changes are not told: Create's lazy tick).
+fn frogport(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3], now: u64) {
+    let Some(animating) = with(dim, |pk| pk.ports.get(&pos).map(|p| p.is_animating())) else {
+        return;
+    };
+    if animating {
+        return;
+    }
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    let below_is_frog = with(dim, |pk| pk.ports.get(&below).is_some_and(|p| p.frog));
+    let inv = if below_is_frog {
+        None
+    } else {
+        inv::at(lv, dim, below, Direction::Up)
+    };
+    let mut failed = false;
+    if let Some(inv) = &inv {
+        for slot in 0..create_engine::port::SLOTS {
+            let p = with(dim, |pk| {
+                let port = pk.ports.get_mut(&pos)?;
+                let gives = port.items[slot]
+                    .as_ref()
+                    .is_some_and(|b| port.automation_gives(&b.address));
+                if gives { port.items[slot].take() } else { None }
+            });
+            let Some(p) = p else { continue };
+            if let Some(back) = inv::insert(lv, dim, inv, p) {
+                with(dim, |pk| {
+                    if let Some(port) = pk.ports.get_mut(&pos) {
+                        port.items[slot] = Some(back);
+                    }
+                });
+                failed = true;
+            } else {
+                with(dim, |pk| pk.touch(pos));
+            }
+        }
+    }
+    with(dim, |pk| {
+        if let Some(port) = pk.ports.get_mut(&pos) {
+            port.failed_export = failed;
+        }
+    });
+    let mut waiting = failed || inv.is_some();
+    if with(dim, |pk| pk.can_send(pos)) {
+        if !with(dim, |pk| pk.send_own(pos))
+            && let Some(inv) = &inv
+        {
+            let filter = with(dim, |pk| port_filter(pk, pos));
+            let view = inv::view(lv, dim, inv);
+            let packager = inv.is_packager();
+            let slot = view.iter().position(|s| {
+                s.as_ref().is_some_and(|s| {
+                    package::is_package(&body::item_id(&*lv.host, s))
+                        && (packager
+                            || filter
+                                .as_deref()
+                                .is_none_or(|f| !package::match_address(&body::address(s), f)))
+                })
+            });
+            if let Some(slot) = slot
+                && let Some(p) = inv::take(lv, dim, inv, slot, 1)
+            {
+                with(dim, |pk| pk.start(pos, p, true));
+            }
+        }
+    } else {
+        // Held back by its target: it waits only if it has something to send.
+        let own = with(dim, |pk| {
+            let port = pk.ports.get(&pos);
+            port.is_some_and(|p| p.target.is_some() && p.has_outgoing())
+        });
+        waiting |= own;
+    }
+    if waiting {
+        with(dim, |pk| pk.retry(pos, now));
+    }
+}
+
+/// The frogport's filter (`getFilterString`).
+fn port_filter(pk: &Pk, pos: [i32; 3]) -> Option<String> {
+    let port = pk.ports.get(&pos)?;
+    port.filter_string().map(str::to_owned)
+}
+
+/// A right click on a packager (`PackagerBlock.useItemOn`): a wrench, a frogport or a gauge in
+/// hand (or a stock link, unless one is on it) passes; with nothing held, a package in hand is
+/// unpacked into the inventory behind; a held box goes to the player.
+fn use_packager(
+    host: &mut dyn ServerHost,
+    event: &UseItemOnEvent<'_>,
+) -> Option<InteractionResult> {
+    let click = event.click;
+    let dimension = click.dimension.key().id();
+    let mut lv = ServerLevel::new(host, dimension)?;
+    let (dim, pos) = (lv.dim, click.pos);
+    let hand = click.stack.map(|s| body::item_id(&*lv.host, s));
+    let linked = stock::link_of(&lv, pos).is_some();
+    if hand.as_deref().is_some_and(|h| {
+        matches!(
+            h,
+            "create:wrench" | "create:package_frogport" | "create:factory_gauge"
+        ) || (h == "create:stock_link" && !linked)
+    }) {
+        return Some(InteractionResult::TryWithEmptyHand);
+    }
+    if click.hand != Hand::Main {
+        return Some(InteractionResult::Success);
+    }
+    let (animating, held) = with(dim, |pk| {
+        let p = pk.packager(pos);
+        (p.animation_ticks > 0, p.held.is_some())
+    });
+    if animating {
+        return Some(InteractionResult::Success);
+    }
+    let player = lv.host.player(click.player)?;
+    if !held {
+        let Some(stack) = click.stack.cloned() else {
+            return Some(InteractionResult::Success);
+        };
+        let id = body::item_id(&*lv.host, &stack);
+        if !package::is_package(&id) || !unwrap(&mut lv, dim, pos, &stack, true) {
+            return Some(InteractionResult::Success);
+        }
+        unwrap(&mut lv, dim, pos, &stack, false);
+        stock::stock_check(&mut lv, dim, pos);
+        if let Some(slot) = player.selected_slot(&*lv.host) {
+            let _ = player.set_inventory_slot(&mut *lv.host, slot as u32, stack.shrink(1));
+        }
+        let _ = lv.level.play_sound(
+            &mut *lv.host,
+            "create:depot_plop",
+            center(pos),
+            SoundSource::Blocks,
+            1.0,
+            1.0,
+        );
+        return Some(InteractionResult::Success);
+    }
+    let Some(b) = with(dim, |pk| inv::take_box(pk, pos)) else {
+        return Some(InteractionResult::Success);
+    };
+    // `placeItemBackInInventory`: into the inventory, else dropped.
+    let _ = player.give_stack(&mut *lv.host, b.stack);
+    with(dim, |pk| pk.wake([pos[0], pos[1] + 1, pos[2]]));
+    Some(InteractionResult::Success)
+}
+
+/// Packagers', frogports' and postboxes' own moments: a packager's click, and what comparators
+/// read of each.
+struct PackageBlock;
+
+#[mod_api::horizon_part]
+impl BlockPart for PackageBlock {
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let b = block_of(states::id(event.state)?)?;
+        if !is_packager(b) {
+            return None;
+        }
+        use_packager(host, event)
+    }
+
+    fn has_analog_output(&self, _level: &dyn LevelHost, event: &mut HasAnalogOutputEvent) {
+        event.output = true;
+    }
+
+    fn analog_output(&self, _level: &dyn LevelHost, event: &mut AnalogOutputEvent) {
+        let Some(dim) = level_index(event.dimension.key().id()) else {
+            return;
+        };
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        event.output = analog(dim, pos).unwrap_or(0);
+    }
+}
+
+/// A packager's address (its sign's) or a port's filter (`addressFilter`, `filterChanged`).
+fn set_address(dim: usize, pos: [i32; 3], text: &str) -> String {
+    with(dim, |pk| {
+        if let Some(p) = pk.packagers.get_mut(&pos) {
+            p.address = text.to_owned();
+            pk.touch(pos);
+            return format!("packager address \"{text}\"");
+        }
+        if let Some(p) = pk.ports.get_mut(&pos) {
+            p.filter = text.to_owned();
+            pk.register(pos);
+            pk.wake(pos);
+            pk.touch(pos);
+            return format!("port filter \"{text}\"");
+        }
+        "no packager or port there".to_owned()
+    })
+}
+
+/// A frogport's target: a chain conveyor, round its wheel at an angle or along one of its
+/// chains (`ChainConveyorFrogportTarget`, `setup`: flipped when the chain runs backwards).
+fn set_frogport(dim: usize, pos: [i32; 3], words: &[&str], here: [f64; 3]) -> String {
+    let usage = "usage: create_debug frogport <x y z> <conveyor x y z> <angle | distance dx dy dz>";
+    let Some(conveyor) = coords(words, Some(here)) else {
+        return usage.into();
+    };
+    let Some(chain_pos) = words.get(3).and_then(|w| w.parse::<f32>().ok()) else {
+        return usage.into();
+    };
+    let connection = if words.len() >= 7 {
+        coords(&words[4..], None)
+    } else {
+        None
+    };
+    with(dim, |pk| {
+        if !pk.ports.get(&pos).is_some_and(|p| p.frog) {
+            return "no frogport there".to_owned();
+        }
+        let Some(c) = pk.chains.conveyors.get(&conveyor) else {
+            return "no chain conveyor there".to_owned();
+        };
+        if connection.is_some_and(|k| !c.connections.contains(&k)) {
+            return "no such chain on that conveyor".to_owned();
+        }
+        let flipped = c.speed < 0.0;
+        if let Some(old) = pk.ports[&pos].target {
+            pk.chains.deregister_port(pos, old.conveyor);
+        }
+        if let Some(port) = pk.ports.get_mut(&pos) {
+            port.target = Some(Target {
+                conveyor,
+                chain_pos,
+                connection,
+                flipped,
+            });
+        }
+        pk.register(pos);
+        pk.wake(pos);
+        pk.touch(pos);
+        format!("frogport on {conveyor:?} at {chain_pos} {connection:?}")
+    })
+}
+
+/// `ChainConveyorConnectionHandler`'s connection (no chains taken: the command stands in for
+/// the chain item) or its removal.
+fn chain_command(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3], on: bool) -> String {
+    let dim = lv.dim;
+    let mut drops = Vec::new();
+    let ok = with(dim, |pk| {
+        let ok = if on {
+            pk.chains.connect(a, b)
+        } else {
+            let had = pk.chains.conveyors.get(&a).is_some_and(|c| {
+                c.connections
+                    .contains(&[b[0] - a[0], b[1] - a[1], b[2] - a[2]])
+            });
+            let mut ev = Vec::new();
+            pk.chains.disconnect(a, b, &mut ev);
+            for e in ev {
+                if let chain::Event::Drop(at, p) = e {
+                    drops.push((at, p.stack));
+                }
+            }
+            had
+        };
+        if ok {
+            pk.conveyor_changed(a);
+            pk.conveyor_changed(b);
+            pk.touch(a);
+            pk.touch(b);
+        }
+        ok
+    });
+    sync_far(dim, a);
+    sync_far(dim, b);
+    for (at, s) in drops {
+        drop_stack(lv, at, s);
+    }
+    match (ok, on) {
+        (true, true) => format!("chain {a:?} - {b:?}"),
+        (true, false) => format!("unchained {a:?} - {b:?}"),
+        (false, _) => "no such conveyors or chain".to_owned(),
+    }
+}
+
+/// A packager's, port's or conveyor's state, for tests.
+fn describe(lv: &ServerLevel<'_>, dim: usize, pos: [i32; 3]) -> String {
+    let id = |s: &ItemStack| body::item_id(&*lv.host, s);
+    with(dim, |pk| {
+        if let Some(p) = pk.packagers.get(&pos) {
+            let held = p.held.as_ref().or(p.sliding.as_ref());
+            let queued: u32 = p.queue.iter().map(|q| q.1.max(1)).sum();
+            return format!(
+                "{} address=\"{}\" powered={} animation={} inward={} held={} queued={queued}",
+                if p.repackager {
+                    "repackager"
+                } else {
+                    "packager"
+                },
+                p.address,
+                p.powered,
+                p.animation_ticks,
+                p.inward,
+                held.map_or("-".to_owned(), |b| format!(
+                    "{} to \"{}\"",
+                    id(&b.stack),
+                    b.address
+                )),
+            );
+        }
+        if let Some(p) = pk.ports.get(&pos) {
+            let items: Vec<String> = p
+                .items
+                .iter()
+                .flatten()
+                .map(|b| format!("{} to \"{}\"", id(&b.stack), b.address))
+                .collect();
+            return format!(
+                "{} filter=\"{}\" target={:?} animating={} items=[{}]",
+                if p.frog { "frogport" } else { "postbox" },
+                p.filter,
+                p.target.map(|t| (t.conveyor, t.chain_pos, t.connection)),
+                p.is_animating(),
+                items.join(", ")
+            );
+        }
+        if let Some(c) = pk.chains.conveyors.get(&pos) {
+            let travelling: usize = c.travelling.iter().map(|(_, l)| l.len()).sum();
+            let routes: Vec<String> = c
+                .routes()
+                .iter()
+                .map(|(f, d, k)| format!("{f}:{d}->{k:?}"))
+                .collect();
+            return format!(
+                "chain_conveyor speed={} connections={:?} looping={} travelling={} ports={} routes=[{}]",
+                c.speed,
+                c.connections,
+                c.looping.len(),
+                travelling,
+                c.loop_ports.len() + c.travel_ports.len(),
+                routes.join(", ")
+            );
+        }
+        "nothing of the package logistics there".to_owned()
+    })
+}
+
+/// The conveyors' packages to `players`, each conveyor in one message.
+fn send_chains(
+    host: &mut dyn ServerHost,
+    players: &[PlayerRef],
+    dim: usize,
+    conveyors: &[[i32; 3]],
+) {
+    if players.is_empty() {
+        return;
+    }
+    for &pos in conveyors {
+        let drawn = with(dim, |pk| pk.chains.drawn(pos, |s| s.item().id(&*host)));
+        let data = chain::encode(pos, &drawn);
+        net::send_to_players(host, players, chain::CHANNEL, &data);
+    }
+}
+
+/// `ChainConveyorRenderer.renderBox`: how far a package hangs up from its target, by the
+/// style's hook.
+fn lift(item: &str) -> f32 {
+    package::style(item).map_or(0.0, |s| {
+        17.0 / 16.0 - s.rigging / 16.0 + f32::from(s.height) / 32.0
+    })
+}
+
+/// Draws the chain conveyor's packages from the server's last message, every frame: round the
+/// wheel turning about the conveyor at its speed, along a chain gliding at the chain's.
+struct ConveyorDraw;
+
+#[mod_api::horizon_part]
+impl BlockPart for ConveyorDraw {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for ConveyorDraw {
+    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+        if event.block != "create:chain_conveyor" {
+            return;
+        }
+        let pos = event.pos;
+        let draw = &mut *event.draw;
+        let now = draw.animation_time();
+        SHOWN.with_borrow_mut(|shown| {
+            let Some(s) = shown.get_mut(&pos) else {
+                return;
+            };
+            let since = *s.since.get_or_insert(now);
+            // The server's speeds are per second; the clock counts ticks.
+            let seconds = ((now - since) / 20.0) as f32;
+            for (d, stack) in &mut s.drawn {
+                if stack.is_none() {
+                    *stack = body::new_stack(host, &d.item, 1);
+                }
+                let Some(stack) = stack.as_ref() else {
+                    continue;
+                };
+                let lift = lift(&d.item);
+                draw.push();
+                if d.looping {
+                    let angle = d.angle + d.degrees * seconds;
+                    draw.rotate_about([0.0, 1.0, 0.0], angle, [0.5, 0.0, 0.5]);
+                    draw.translate([0.5, 6.0 / 16.0 - 9.0 / 16.0 + lift, 0.5 + 0.875]);
+                    draw.rotate_about([0.0, 1.0, 0.0], d.yaw - d.angle, [0.0; 3]);
+                } else {
+                    let at =
+                        [0, 1, 2].map(|i| d.at[i] - pos[i] as f32 - 0.5 + d.velocity[i] * seconds);
+                    draw.translate(at);
+                    draw.translate([0.5, 0.5 + lift, 0.5]);
+                    draw.rotate_about([0.0, 1.0, 0.0], d.yaw, [0.0; 3]);
+                }
+                // The item model is drawn about its centre; the legacy part was posed from its
+                // corner.
+                draw.translate([0.5; 3]);
+                draw.item(stack, ItemDisplayContext::None, None, d.id as i32);
+                draw.pop();
+            }
+        });
+    }
+
+    fn block_entity_render_bounding_box(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut BlockEntityRenderBoundingBoxEvent<'_>,
+    ) {
+        if event.block != "create:chain_conveyor" {
+            return;
+        }
+        let pos = event.pos;
+        SHOWN.with_borrow(|shown| {
+            let Some(s) = shown.get(&pos) else {
+                return;
+            };
+            let b = &mut *event.bounds;
+            for (d, _) in &s.drawn {
+                // A package on a chain glides on until the next message: reach its whole way.
+                let reach = if d.looping { 2.0 } else { 34.0 };
+                for i in 0..3 {
+                    let at = d.at[i] - pos[i] as f32;
+                    let (lo, hi) = if d.looping {
+                        (-reach, 1.0 + reach)
+                    } else if d.velocity[i] >= 0.0 {
+                        (at - 1.0, at + 1.0 + d.velocity[i].abs().min(1.0) * reach)
+                    } else {
+                        (at - 1.0 - d.velocity[i].abs().min(1.0) * reach, at + 1.0)
+                    };
+                    b[i] = b[i].min(lo);
+                    b[i + 3] = b[i + 3].max(hi);
+                }
+            }
+        });
+    }
+}
+
+/// Packagers, ports and conveyors of a column saved (`write`) under `create_packages`.
+fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+    if !present() {
+        return;
+    }
+    let host: &dyn mod_api::Host = &*lv.host;
+    let inside = |p: &[i32; 3]| [p[0] >> 4, p[2] >> 4] == chunk;
+    let parcel_tag = |p: &Parcel<ItemStack>| {
+        Tag::compound([
+            ("Item", body::to_nbt(host, &p.stack)),
+            ("Address", Tag::String(p.address.as_str().into())),
+        ])
+    };
+    let pos_tag = |p: [i32; 3]| Tag::IntArray(p.to_vec());
+    let own = with(lv.dim, |pk| {
+        let mut packagers: Vec<Tag> = Vec::new();
+        let mut list: Vec<_> = pk.packagers.iter().filter(|(p, _)| inside(p)).collect();
+        list.sort_by_key(|(p, _)| **p);
+        for (p, k) in list {
+            let mut c = vec![
+                ("Pos", pos_tag(*p)),
+                ("SignAddress", Tag::String(k.address.as_str().into())),
+                (
+                    "State",
+                    Tag::IntArray(vec![
+                        i32::from(k.powered),
+                        k.animation_ticks as i32,
+                        i32::from(k.inward),
+                        k.button_cooldown as i32,
+                    ]),
+                ),
+            ];
+            if let Some(b) = &k.held {
+                c.push(("HeldBox", parcel_tag(b)));
+            }
+            if let Some(b) = &k.sliding {
+                c.push(("SlidingBox", parcel_tag(b)));
+            }
+            if k.repackager {
+                c.push(("Repackager", Tag::IntArray(vec![1])));
+            }
+            if !k.queue.is_empty() {
+                // `QueuedExitingPackages`: each box with its count.
+                let queue = k
+                    .queue
+                    .iter()
+                    .filter_map(|(b, n)| {
+                        let Tag::Compound(mut c) = parcel_tag(b) else {
+                            return None;
+                        };
+                        c.insert("Count".into(), Tag::IntArray(vec![*n as i32]));
+                        Some(Tag::Compound(c))
+                    })
+                    .collect();
+                c.push(("QueuedExitingPackages", Tag::List(queue)));
+            }
+            packagers.push(Tag::compound(c));
+        }
+        let mut ports: Vec<Tag> = Vec::new();
+        let mut list: Vec<_> = pk.ports.iter().filter(|(p, _)| inside(p)).collect();
+        list.sort_by_key(|(p, _)| **p);
+        for (p, port) in list {
+            let items: Vec<Tag> = port
+                .items
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| {
+                    let b = s.as_ref()?;
+                    let Tag::Compound(mut c) = parcel_tag(b) else {
+                        return None;
+                    };
+                    c.insert("Slot".into(), Tag::IntArray(vec![i as i32]));
+                    Some(Tag::Compound(c))
+                })
+                .collect();
+            let mut c = vec![
+                ("Pos", pos_tag(*p)),
+                (
+                    "Frog",
+                    Tag::IntArray(vec![i32::from(port.frog), i32::from(port.accepts)]),
+                ),
+                ("AddressFilter", Tag::String(port.filter.as_str().into())),
+                ("Inventory", Tag::List(items)),
+            ];
+            if let Some(t) = port.target {
+                let k = t.connection.unwrap_or([0; 3]);
+                c.push((
+                    "Target",
+                    Tag::IntArray(vec![
+                        t.conveyor[0],
+                        t.conveyor[1],
+                        t.conveyor[2],
+                        i32::from(t.connection.is_some()),
+                        k[0],
+                        k[1],
+                        k[2],
+                        i32::from(t.flipped),
+                    ]),
+                ));
+                c.push(("ChainPos", Tag::Double(f64::from(t.chain_pos).to_bits())));
+            }
+            if let Some(b) = &port.animated {
+                c.push(("AnimatedPackage", parcel_tag(b)));
+                c.push(("Deposit", Tag::IntArray(vec![i32::from(port.deposit)])));
+            }
+            ports.push(Tag::compound(c));
+        }
+        let mut conveyors: Vec<Tag> = Vec::new();
+        let mut list: Vec<_> = pk
+            .chains
+            .conveyors
+            .iter()
+            .filter(|(p, _)| inside(p))
+            .collect();
+        list.sort_by_key(|(p, _)| **p);
+        let package_tag = |b: &chain::Package<ItemStack>| {
+            let mut c = match parcel_tag(&b.parcel) {
+                Tag::Compound(c) => c,
+                _ => Compound::new(),
+            };
+            c.insert(
+                "Position".into(),
+                Tag::Double(f64::from(b.position).to_bits()),
+            );
+            Tag::Compound(c)
+        };
+        for (p, c) in list {
+            let travelling: Vec<Tag> = c
+                .travelling
+                .iter()
+                .map(|(k, l)| {
+                    Tag::compound([
+                        ("Target", Tag::IntArray(k.to_vec())),
+                        ("Packages", Tag::List(l.iter().map(package_tag).collect())),
+                    ])
+                })
+                .collect();
+            conveyors.push(Tag::compound([
+                ("Pos", pos_tag(*p)),
+                (
+                    "Connections",
+                    Tag::IntArray(c.connections.iter().flatten().copied().collect()),
+                ),
+                (
+                    "LoopingPackages",
+                    Tag::List(c.looping.iter().map(package_tag).collect()),
+                ),
+                ("TravellingPackages", Tag::List(travelling)),
+            ]));
+        }
+        (packagers, ports, conveyors)
+    });
+    let (packagers, ports, conveyors) = own;
+    if packagers.is_empty() && ports.is_empty() && conveyors.is_empty() {
+        data.remove(&KEY.into());
+        return;
+    }
+    data.insert(
+        KEY.into(),
+        Tag::compound([
+            ("packagers", Tag::List(packagers)),
+            ("ports", Tag::List(ports)),
+            ("conveyors", Tag::List(conveyors)),
+        ]),
+    );
+}
+
+pub fn ints(t: Option<&Tag>) -> Vec<i32> {
+    match t {
+        Some(Tag::IntArray(v)) => v.clone(),
+        _ => Vec::new(),
+    }
+}
+
+pub fn text(t: Option<&Tag>) -> String {
+    match t {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    }
+}
+
+fn float(t: Option<&Tag>) -> f32 {
+    match t {
+        Some(Tag::Double(bits)) => f64::from_bits(*bits) as f32,
+        _ => 0.0,
+    }
+}
+
+pub fn pos_of(c: &Compound) -> Option<[i32; 3]> {
+    let v = ints(c.get(&"Pos".into()));
+    (v.len() == 3).then(|| [v[0], v[1], v[2]])
+}
+
+/// The compounds of the list under `key`.
+pub fn list(data: &Compound, key: &str) -> Vec<Compound> {
+    match data.get(&key.into()) {
+        Some(Tag::List(l)) => l
+            .iter()
+            .filter_map(|t| match t {
+                Tag::Compound(c) => Some(c.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn parcel_from(host: &dyn mod_api::Host, t: Option<&Tag>) -> Option<Parcel<ItemStack>> {
+    let Some(Tag::Compound(c)) = t else {
+        return None;
+    };
+    Some(Parcel {
+        stack: body::from_nbt(host, c.get(&"Item".into())?)?,
+        address: text(c.get(&"Address".into())),
+    })
+}
+
+/// A column joined a level: its packagers, ports and conveyors back (`read`).
+fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
+    let dim = lv.dim;
+    let host: &dyn mod_api::Host = &*lv.host;
+    let mut conveyors = Vec::new();
+    let mut ports_loaded = Vec::new();
+    with(dim, |pk| {
+        for c in list(data, "packagers") {
+            let Some(pos) = pos_of(&c) else { continue };
+            let s = ints(c.get(&"State".into()));
+            let k = pk.packager(pos);
+            k.address = text(c.get(&"SignAddress".into()));
+            k.powered = s.first().is_some_and(|v| *v != 0);
+            k.animation_ticks = s.get(1).copied().unwrap_or(0).clamp(0, 20) as u32;
+            k.inward = s.get(2).is_none_or(|v| *v != 0);
+            k.button_cooldown = s.get(3).copied().unwrap_or(0).clamp(0, 40) as u32;
+            k.held = parcel_from(host, c.get(&"HeldBox".into()));
+            k.sliding = parcel_from(host, c.get(&"SlidingBox".into()));
+            k.repackager = !ints(c.get(&"Repackager".into())).is_empty();
+            if let Some(Tag::List(l)) = c.get(&"QueuedExitingPackages".into()) {
+                k.queue = l
+                    .iter()
+                    .filter_map(|t| {
+                        let Tag::Compound(e) = t else { return None };
+                        let n = ints(e.get(&"Count".into())).first().copied().unwrap_or(1);
+                        Some((parcel_from(host, Some(t))?, n.max(0) as u32))
+                    })
+                    .collect();
+            }
+            if k.active() {
+                pk.activate(pos);
+            }
+        }
+        for c in list(data, "conveyors") {
+            let Some(pos) = pos_of(&c) else { continue };
+            let connections: Vec<[i32; 3]> = ints(c.get(&"Connections".into()))
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|k| [k[0], k[1], k[2]])
+                .collect();
+            pk.chains.add(pos, connections);
+            let packages = |t: Option<&Tag>| -> Vec<(f32, Parcel<ItemStack>)> {
+                match t {
+                    Some(Tag::List(l)) => l
+                        .iter()
+                        .filter_map(|t| {
+                            let Tag::Compound(c) = t else { return None };
+                            Some((
+                                float(c.get(&"Position".into())),
+                                parcel_from(host, Some(t))?,
+                            ))
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                }
+            };
+            let looping = packages(c.get(&"LoopingPackages".into()));
+            let travelling = match c.get(&"TravellingPackages".into()) {
+                Some(Tag::List(l)) => l
+                    .iter()
+                    .filter_map(|t| {
+                        let Tag::Compound(e) = t else { return None };
+                        let k = ints(e.get(&"Target".into()));
+                        (k.len() == 3)
+                            .then(|| ([k[0], k[1], k[2]], packages(e.get(&"Packages".into()))))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            pk.chains.load_packages(pos, looping, travelling);
+            conveyors.push(pos);
+        }
+        for c in list(data, "ports") {
+            let Some(pos) = pos_of(&c) else { continue };
+            let f = ints(c.get(&"Frog".into()));
+            let frog = f.first().is_some_and(|v| *v != 0);
+            let port = pk.port(pos, frog);
+            port.accepts = f.get(1).is_none_or(|v| *v != 0);
+            port.filter = text(c.get(&"AddressFilter".into()));
+            if let Some(Tag::List(items)) = c.get(&"Inventory".into()) {
+                for t in items {
+                    let Tag::Compound(e) = t else { continue };
+                    let slot = ints(e.get(&"Slot".into())).first().copied().unwrap_or(-1);
+                    if let (Some(s), Some(b)) = (
+                        port.items.get_mut(slot.max(0) as usize),
+                        parcel_from(host, Some(t)),
+                    ) {
+                        *s = Some(b);
+                    }
+                }
+            }
+            let t = ints(c.get(&"Target".into()));
+            if t.len() == 8 {
+                port.target = Some(Target {
+                    conveyor: [t[0], t[1], t[2]],
+                    chain_pos: float(c.get(&"ChainPos".into())),
+                    connection: (t[3] != 0).then_some([t[4], t[5], t[6]]),
+                    flipped: t[7] != 0,
+                });
+            }
+            let deposit = ints(c.get(&"Deposit".into()))
+                .first()
+                .is_some_and(|v| *v != 0);
+            if let Some(b) = parcel_from(host, c.get(&"AnimatedPackage".into())) {
+                pk.start(pos, b, deposit);
+            }
+            pk.register(pos);
+            pk.wake(pos);
+            ports_loaded.push(pos);
+        }
+    });
+    for pos in ports_loaded {
+        note_maxes(lv, pos);
+    }
+    for pos in conveyors {
+        sync_far(dim, pos);
+        with(dim, |pk| pk.conveyor_changed(pos));
+    }
+}
+
+/// A column left a level: what was in it is forgotten (kept in its save).
+fn chunk_unload(dim: usize, chunk: [i32; 2]) {
+    if !present() {
+        return;
+    }
+    let inside = |p: &[i32; 3]| [p[0] >> 4, p[2] >> 4] == chunk;
+    let conveyors = with(dim, |pk| {
+        pk.packagers.retain(|p, _| !inside(p));
+        pk.active.retain(|p| !inside(p));
+        let ports: Vec<[i32; 3]> = pk.ports.keys().filter(|p| inside(p)).copied().collect();
+        for p in ports {
+            pk.remove_port(p);
+        }
+        let conveyors: Vec<[i32; 3]> = pk
+            .chains
+            .conveyors
+            .keys()
+            .filter(|p| inside(p))
+            .copied()
+            .collect();
+        for p in &conveyors {
+            pk.chains.unload(*p);
+        }
+        conveyors
+    });
+    for p in conveyors {
+        with_world(|w| w.dims[dim].kinetics.set_far(p, Vec::new()));
+    }
+}

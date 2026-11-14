@@ -46,6 +46,7 @@ pub mod gauge;
 pub mod generated;
 pub mod glue;
 pub mod graph;
+pub mod gzip;
 pub mod hose;
 pub mod kinetics;
 pub mod lamp;
