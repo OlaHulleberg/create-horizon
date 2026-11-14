@@ -160,13 +160,22 @@ fn sound_block(b: &CreateBlock) -> Option<&'static str> {
     })
 }
 
-/// Whether the base properties require the right tool for drops (copied from the vanilla block
-/// Create's `initialProperties` names).
+/// Whether the block needs the right tool for drops: set in its chain, or by the base
+/// properties Create's `initialProperties` names (copied from a vanilla block: its template's);
+/// a block with no base properties has Registrate's `Properties.of()`, which does not (a belt,
+/// a funnel on an iron template drop by hand as in Create).
 fn requires_tool(b: &CreateBlock) -> Option<bool> {
-    match b.java.base.as_deref()? {
-        "wooden" => Some(false),
-        "stone" | "softMetal" | "copperMetal" | "netheriteMetal" => Some(true),
-        _ => None,
+    if b.java.requires_tool {
+        return Some(true);
+    }
+    match b.java.base.as_deref() {
+        // Only a chain read from the registration Java (it named the block's class) with no
+        // `BuilderTransformers` helper is known to set no base properties.
+        None if b.java.class.is_some() && !b.java.transformed => Some(false),
+        None => None,
+        Some("wooden") => Some(false),
+        Some("stone" | "softMetal" | "copperMetal" | "netheriteMetal") => Some(true),
+        Some(_) => None,
     }
 }
 
