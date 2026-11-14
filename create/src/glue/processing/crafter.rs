@@ -3,7 +3,6 @@
 //! grid, the last crafts it and puts the result out.
 
 use super::stacks;
-use super::takes_from_side;
 use crate::glue::logistics::{insert_into_from, random_angle, upright};
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
@@ -457,7 +456,7 @@ fn crafter_insert(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let t = super::step(pos, dir, 1);
     // `isTargetingBelt`: a belt or depot there takes the results from the side
     // (`DirectBeltInputBehaviour.handleInsertion`); else `inserting.hasInventory()`.
-    let belt_input = takes_from_side(dim, t);
+    let belt_input = super::direct_input(lv, t, dir);
     let face = direction(dir.opposite());
     let has_inventory = !belt_input
         && lv

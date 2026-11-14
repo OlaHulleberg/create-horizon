@@ -589,12 +589,14 @@ impl arm::World for ArmWorld<'_, '_> {
                 if !free {
                     return count;
                 }
-                if !simulate {
-                    let mut stack = items::stack_of(&*lv.host, item, u32::from(count));
-                    crate::glue::processing::saw::saw_take(lv, pos, &mut stack);
-                    return stack.map_or(0, |s| s.count().min(255) as u8);
+                // One at a time (`ProcessingInventory`'s slot limit without bulk cutting).
+                let id = create_engine::arm::item_id(item);
+                let progress = items::stack_of(&*lv.host, item, 1)
+                    .and_then(|s| crate::glue::processing::sequenced_progress(&s));
+                if !simulate && !crate::glue::processing::saw::saw_put(lv, pos, id, progress) {
+                    return count;
                 }
-                0
+                count - 1
             }
             // PackagerItemHandler.insertItem: one package, unwrapped.
             Kind::Packager => {

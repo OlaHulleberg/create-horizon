@@ -2,7 +2,6 @@
 //! (`BlockBreakingKineticBlockEntity`), and the saw facing up cutting what lands on it
 //! (`SawBlockEntity`).
 
-use super::takes_from_side;
 use super::{recipes, stacks};
 use crate::glue::logistics::{insert_into_from, random_angle, upright};
 use crate::glue::server::ServerLevel;
@@ -11,18 +10,21 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::processing::{Recipe, Rng};
 use create_engine::saw::{self, Step};
 use create_engine::{Block, belt, drill, sequenced, tree};
-use mod_api::{HostBlockStates, ItemStack};
+use mod_api::{Compound, HostBlockStates, ItemStack, Tag};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 thread_local! {
     /// Each saw's `recipeIndex` while it holds nothing (an empty saw keeps no other state).
     static SAW_INDEX: RefCell<HashMap<(usize, [i32; 3]), usize>> = RefCell::new(HashMap::new());
+    /// Each cutting saw's `recipeDuration`, which its clients are told.
+    static SAW_DURATION: RefCell<HashMap<(usize, [i32; 3]), f32>> = RefCell::new(HashMap::new());
 }
 
 /// Forgets what was kept for the world.
 pub fn clear() {
     SAW_INDEX.with_borrow_mut(HashMap::clear);
+    SAW_DURATION.with_borrow_mut(HashMap::clear);
 }
 
 /// Turning drills and sideways saws (`BlockBreakingKineticBlockEntity.tick`): the block in front
@@ -200,25 +202,38 @@ fn fell(lv: &mut ServerLevel<'_>, saw: [i32; 3], at: [i32; 3], broken: tree::Cel
     }
 }
 
-/// `SawBlockEntity.insertItem` for an item landing on a saw facing up, while it holds nothing:
-/// it takes up to a stack; `stack` keeps what is left.
+/// `SawBlock.updateEntityAfterFallOn` and `SawBlockEntity.insertItem` for an item landing on a
+/// turning saw facing up, while it holds nothing: it takes one (`ProcessingInventory`'s slot
+/// limit without `bulkCutting`, which is off by default); `stack` keeps what is left.
 pub fn saw_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut Option<ItemStack>) {
-    let dim = lv.dim;
-    if lv.info(pos).and_then(|(_, i)| i.facing) != Some(Dir::Up) {
+    if lv.info(pos).and_then(|(_, i)| i.facing) != Some(Dir::Up) || lv.speed(pos) == 0.0 {
         return;
     }
     let Some(s) = stack.as_ref() else {
         return;
     };
     let item = stacks::id(&*lv.host, s);
-    let count = s.count().min(64) as u8;
     let progress = stacks::sequenced_progress(s);
+    if saw_put(lv, pos, &item, progress) {
+        *stack = stack.take().and_then(|s| s.shrink(1));
+    }
+}
+
+/// One `item` (a sequenced assembly's `progress` with it) into the saw at `pos` while it holds
+/// nothing (`ProcessingInventory.insertItem` into slot 0). Whether it took it.
+pub fn saw_put(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    item: &str,
+    progress: Option<create_engine::sequenced::Progress>,
+) -> bool {
+    let dim = lv.dim;
     let took = with_world(|w| {
         let s = w.dims[dim].saws.entry(pos).or_default();
         if !s.slots.is_empty() {
             return false;
         }
-        s.slots = vec![(item, count)];
+        s.slots = vec![(item.to_owned(), 1)];
         s.remaining = -1.0;
         s.applied = false;
         // `recipeIndex` stays with the saw between items.
@@ -228,29 +243,43 @@ pub fn saw_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut Option<Item
     })
     .unwrap_or(false);
     if took {
-        *stack = stack.take().and_then(|s| s.shrink(64));
+        show_saw(lv, pos);
     }
+    took
 }
 
 /// Saws holding items (`SawBlockEntity.tick`): their cutting recipe in turn, applied near the
 /// end, the results thrown off the way the saw turns (onto a belt or depot there, else as items).
 pub fn tick_saws(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    // `destroy`: a broken saw's items drop where it was.
+    let drops = with_world(|w| std::mem::take(&mut w.dims[dim].saw_drops)).unwrap_or_default();
+    for (pos, item, n) in drops {
+        let at = pos.map(|v| f64::from(v) + 0.5);
+        lv.spawn_moving(at, &item, u32::from(n), [0.0; 3]);
+    }
     let saws: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].saws.keys().copied().collect()).unwrap_or_default();
     if saws.is_empty() || !recipes::ready() {
         return;
     }
     for pos in saws {
-        let Some(along_first) = lv.info(pos).map(|(_, i)| i.along_first) else {
-            continue;
-        };
+        if tick_saw(lv, pos).is_some_and(|s| s != Step::Wait) {
+            show_saw(lv, pos);
+        }
+    }
+}
+
+/// One saw's `tick` (what it did; None when it is gone).
+fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
+    let dim = lv.dim;
+    {
+        let along_first = lv.info(pos).map(|(_, i)| i.along_first)?;
         let speed = lv.speed(pos);
-        let Some(mut saw) = with_world(|w| w.dims[dim].saws.get(&pos).cloned()).flatten() else {
-            continue;
-        };
+        let mut saw = with_world(|w| w.dims[dim].saws.get(&pos).cloned()).flatten()?;
         let item = saw.slots.first().map(|s| s.0.clone()).unwrap_or_default();
-        match saw.tick(speed) {
+        let step = saw.tick(speed);
+        match step {
             Step::Wait => {}
             Step::Start => {
                 recipes::with(|r| {
@@ -300,11 +329,16 @@ pub fn tick_saws(lv: &mut ServerLevel<'_>) {
             }
             Step::Out => {
                 let m = saw::movement(along_first, speed);
-                // A belt or depot it turns toward takes the results (`DirectBeltInputBehaviour`
-                // from that side); what it doesn't take waits in the saw.
+                // A belt, depot or machine it turns toward takes the results
+                // (`DirectBeltInputBehaviour` from that side); what it doesn't take, or all of
+                // them while it takes nothing from that side, waits in the saw.
                 let next = [pos[0] + m[0], pos[1], pos[2] + m[2]];
                 let facing = Dir::ALL.into_iter().find(|d| d.offset() == m);
-                if let (true, Some(facing)) = (takes_from_side(dim, next), facing) {
+                let facing = facing.filter(|_| crate::glue::logistics::direct_input_at(lv, next));
+                if let Some(facing) = facing {
+                    if !crate::glue::logistics::direct_input_accepts(lv, next, facing) {
+                        return Some(Step::Wait);
+                    }
                     let progress = saw.progress.clone();
                     let transitional = progress
                         .as_ref()
@@ -335,7 +369,7 @@ pub fn tick_saws(lv: &mut ServerLevel<'_>) {
                             w.dims[dim].saws.insert(pos, saw);
                         }
                     });
-                    continue;
+                    return Some(Step::Out);
                 }
                 let at = [
                     f64::from(pos[0]) + 0.5 + f64::from(m[0]) * 0.5,
@@ -362,6 +396,10 @@ pub fn tick_saws(lv: &mut ServerLevel<'_>) {
         if saw.slots.is_empty() {
             SAW_INDEX.with_borrow_mut(|m| m.insert((dim, pos), saw.index));
         }
+        if step == Step::Start {
+            // `recipeDuration`: what it starts with.
+            SAW_DURATION.with_borrow_mut(|m| m.insert((dim, pos), saw.remaining));
+        }
         with_world(|w| {
             if saw.slots.is_empty() {
                 w.dims[dim].saws.remove(&pos);
@@ -369,5 +407,46 @@ pub fn tick_saws(lv: &mut ServerLevel<'_>) {
                 w.dims[dim].saws.insert(pos, saw);
             }
         });
+        Some(step)
     }
+}
+
+/// The key of an upward saw's block entity data its clients draw its items from
+/// (`SawRenderer.renderItems`): `Items` (`id`, `count`), `R` its remaining time and `D` its
+/// duration when told, `A` whether it has cut them, `S` the game time it was told at.
+pub const SAW_KEY: &str = "SawItems";
+
+/// Tells the clients of the saw at `pos` what it holds and how far it is (`sendData`).
+fn show_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let saw = with_world(|w| w.dims[dim].saws.get(&pos).cloned()).flatten();
+    let value = saw.filter(|s| !s.slots.is_empty()).map(|s| {
+        let duration = if s.applied {
+            20.0
+        } else if s.remaining < 0.0 {
+            0.0
+        } else {
+            SAW_DURATION.with_borrow(|m| m.get(&(dim, pos)).copied().unwrap_or(0.0))
+        };
+        let items = s
+            .slots
+            .iter()
+            .map(|(id, n)| {
+                Tag::Compound(Compound::from([
+                    ("id".into(), Tag::String(id.as_str().into())),
+                    ("count".into(), Tag::Int(i32::from(*n))),
+                ]))
+            })
+            .collect();
+        Tag::Compound(Compound::from([
+            ("Items".into(), Tag::List(items)),
+            ("R".into(), Tag::Float(s.remaining.to_bits())),
+            ("D".into(), Tag::Float(duration.to_bits())),
+            ("A".into(), Tag::Byte(i8::from(s.applied))),
+            ("S".into(), Tag::Long(lv.game_time())),
+        ]))
+    });
+    // An empty saw's is an empty compound: a key taken away is not taken from its clients.
+    let value = value.unwrap_or_else(|| Tag::Compound(Compound::new()));
+    super::basin::set_shown(lv, pos, &[(SAW_KEY, Some(value))]);
 }

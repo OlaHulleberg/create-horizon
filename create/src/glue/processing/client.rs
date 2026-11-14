@@ -77,6 +77,10 @@ pub fn register(r: &mut dyn Registrar) {
 pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
     match block {
         Block::MechanicalPress | Block::Deployer | Block::BlazeBurner => true,
+        Block::MechanicalSaw => matches!(
+            entity.nbt.get(&super::saw::SAW_KEY.into()),
+            Some(Tag::Compound(c)) if c.contains_key(&"Items".into())
+        ),
         Block::MechanicalMixer => entity.nbt.contains_key(&basin_glue::MIXER_KEY.into()),
         Block::Basin => {
             entity.nbt.contains_key(&basin_glue::FLUIDS_KEY.into())
@@ -88,7 +92,12 @@ pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
 
 /// A basin's stacks its block entity's data holds (`ITEMS_KEY`), in slot order.
 fn basin_items(nbt: &Compound) -> Vec<(String, u32)> {
-    let Some(Tag::List(list)) = nbt.get(&basin_glue::ITEMS_KEY.into()) else {
+    basin_items_of(nbt.get(&basin_glue::ITEMS_KEY.into()))
+}
+
+/// The stacks (`id`, `count`) of a list of them.
+fn basin_items_of(tag: Option<&Tag>) -> Vec<(String, u32)> {
+    let Some(Tag::List(list)) = tag else {
         return Vec::new();
     };
     list.iter()
@@ -344,6 +353,7 @@ impl BlockEntityPart for MachineDraw {
             Block::MechanicalSaw => {
                 let speed = kinetics::speeds_of(&event.entity.nbt)[0];
                 draw_saw_blade(event.draw, &info, speed);
+                draw_saw_items(host, event.draw, &info, speed, &event.entity.nbt);
             }
             _ => {}
         }
@@ -588,6 +598,86 @@ fn draw_crafter(
         draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
         draw.pop();
     }
+}
+
+/// `SawRenderer.renderItems`: what an upward saw holds (`SAW_KEY`), lying on it and moving across
+/// it as it cuts, run on from the server's last word by the game time (`ProcessingInventory`'s
+/// `remainingTime`, which a client counts down too and holds above 5 until the server cuts);
+/// its results side by side.
+fn draw_saw_items(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    info: &StateInfo,
+    speed: f32,
+    nbt: &Compound,
+) {
+    if info.facing != Some(Dir::Up) {
+        return;
+    }
+    let Some(Tag::Compound(c)) = nbt.get(&super::saw::SAW_KEY.into()) else {
+        return;
+    };
+    let float = |k: &str| match c.get(&k.into()) {
+        Some(Tag::Float(v)) => f32::from_bits(*v),
+        _ => 0.0,
+    };
+    let applied = matches!(c.get(&"A".into()), Some(Tag::Byte(1)));
+    let told = match c.get(&"S".into()) {
+        Some(Tag::Long(t)) => *t,
+        _ => draw.game_time(),
+    };
+    let items = basin_items_of(c.get(&"Items".into()));
+    if items.is_empty() {
+        return;
+    }
+    let along_z = !info.along_first;
+    let duration = float("D");
+    let mut remaining = float("R");
+    if remaining >= 0.0 {
+        let elapsed = (draw.game_time() - told).max(0) as f32;
+        remaining -= (speed.abs() / 24.0).clamp(1.0, 128.0) * elapsed;
+        remaining = remaining.max(if applied { 0.0 } else { 4.0 });
+    }
+    let moving = duration != 0.0;
+    let mut offset = if moving { remaining / duration } else { 0.0 };
+    let processing_speed = (speed.abs() / 32.0).clamp(1.0, 128.0);
+    if moving {
+        offset = (offset + (-draw.partial() + 0.5) * processing_speed / duration).clamp(0.125, 1.0);
+        if !applied {
+            offset += 1.0;
+        }
+        offset /= 2.0;
+    }
+    if speed == 0.0 {
+        offset = 0.5;
+    }
+    if (speed < 0.0) ^ along_z {
+        offset = 1.0 - offset;
+    }
+    // The results are in slots 1 and on, the input in slot 0.
+    let outputs = if applied { items.len() } else { 0 };
+    draw.push();
+    if along_z {
+        draw.rotate_about([0.0, 1.0, 0.0], 90.0, [0.0; 3]);
+    }
+    draw.translate([if outputs <= 1 { 0.5 } else { 0.25 }, 0.0, offset]);
+    draw.translate([if along_z { -1.0 } else { 0.0 }, 0.0, 0.0]);
+    for (rendered, (id, _)) in items.iter().enumerate() {
+        let Some(stack) = stacks::stack(host, id, 1) else {
+            continue;
+        };
+        let block = host.item_block(stack.item()).is_some();
+        draw.push();
+        draw.translate([0.0, if block { 0.925 } else { 13.0 / 16.0 }, 0.0]);
+        if applied && outputs > 1 {
+            draw.translate([0.5 / (outputs - 1) as f32 * rendered as f32, 0.0, 0.0]);
+        }
+        draw.scale([0.5; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], 90.0, [0.0; 3]);
+        draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+        draw.pop();
+    }
+    draw.pop();
 }
 
 /// `SawRenderer.renderBlade`: the blade turned to the saw's facing, its texture running forward,

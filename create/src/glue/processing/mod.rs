@@ -97,6 +97,7 @@ impl Subsystem for Processing {
             basin::MIXER_KEY,
             basin::GOGGLES_KEY,
             crafter::CRAFTER_KEY,
+            saw::SAW_KEY,
         ]
     }
 
@@ -456,6 +457,79 @@ impl ServerLevel<'_> {
     pub fn seed_at(&self, pos: [i32; 3]) -> u64 {
         self.game_time() as u64 ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9) ^ (pos[2] as u64) << 20
     }
+}
+
+/// Whether a processing machine at `pos` takes items from belts (`DirectBeltInputBehaviour`):
+/// Some(None) from any side, Some(Some(d)) only for items moving toward `d` (a crushing wheel
+/// controller between wheels above each other: `supportsDirectBeltInput`).
+pub(crate) fn belt_input_side(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Option<Dir>> {
+    let (block, info) = lv.info(pos)?;
+    match block {
+        Block::MechanicalSaw | Block::Basin | Block::Millstone => Some(None),
+        Block::CrushingWheelController => Some(info.facing.filter(|&f| f != Dir::Down)),
+        _ => None,
+    }
+}
+
+/// `DirectBeltInputBehaviour.handleInsertion` of the processing machines at `next`, for `item`
+/// moving toward `side` (off a belt's end, out of a saw or crusher): an upward saw, a basin, a
+/// millstone or a crushing wheel controller, through their item handlers (the default
+/// insertion callback). What is left of it; None when no such machine is there.
+pub(crate) fn belt_input(
+    lv: &mut ServerLevel<'_>,
+    next: [i32; 3],
+    side: Dir,
+    item: &create_engine::belt::Item,
+) -> Option<u8> {
+    let (block, info) = lv.info(next)?;
+    let count = item.count;
+    let stack = || stacks::stack(&*lv.host, &item.item, u32::from(count));
+    let left = |s: &Option<mod_api::ItemStack>| s.as_ref().map_or(0, |s| s.count().min(255) as u8);
+    match block {
+        // The saw's inventory is offered on every side but its bottom; it takes one item
+        // while empty (`ProcessingInventory`, a slot limit of one without bulk cutting).
+        Block::MechanicalSaw => {
+            if info.facing != Some(Dir::Up) || side == Dir::Down {
+                return Some(count);
+            }
+            Some(if saw::saw_put(lv, next, &item.item, item.progress.clone()) {
+                count - 1
+            } else {
+                count
+            })
+        }
+        Block::Basin => {
+            let mut s = stack();
+            basin::basin_take(lv, next, &mut s);
+            Some(left(&s))
+        }
+        Block::Millstone => {
+            let mut s = stack();
+            millstone::millstone_take(lv, next, &mut s);
+            Some(left(&s))
+        }
+        // `supportsDirectBeltInput`: a controller between wheels side by side takes from any
+        // side, one between wheels above each other only from the side it faces.
+        Block::CrushingWheelController => {
+            if info.facing != Some(Dir::Down) && info.facing != Some(side) {
+                return Some(count);
+            }
+            Some(if crusher::crusher_put(lv, next, &item.item, count) {
+                0
+            } else {
+                count
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Whether something at `p` takes items handed to it moving toward `side`
+/// (`DirectBeltInputBehaviour` there, and its `canInsertFromSide(side)`): a belt, depot, funnel,
+/// chute, item drain or processing machine.
+pub(crate) fn direct_input(lv: &ServerLevel<'_>, p: [i32; 3], side: Dir) -> bool {
+    crate::glue::logistics::direct_input_at(lv, p)
+        && crate::glue::logistics::direct_input_accepts(lv, p, side)
 }
 
 /// Whether a depot or a belt is at `p` (`DirectBeltInputBehaviour` there).

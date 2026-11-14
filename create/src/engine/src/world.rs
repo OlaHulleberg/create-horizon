@@ -336,6 +336,8 @@ pub struct Dimension {
     pub cuckoos: HashMap<[i32; 3], (crate::cuckoo::Animation, u32)>,
     /// Saws holding items (the only ones that tick) and their processing.
     pub saws: HashMap<[i32; 3], crate::saw::Saw>,
+    /// What removed saws held (`SawBlockEntity.destroy` drops its inventory).
+    pub saw_drops: Vec<([i32; 3], String, u8)>,
     /// Spouts and their tank and cycle; those holding fluid tick.
     pub spouts: HashMap<[i32; 3], crate::spout::Spout>,
     /// Item drains, their held stack and tank; those holding items tick.
@@ -1384,7 +1386,10 @@ impl CreateWorld {
             if d.sequencers.remove(&pos).is_some() {
                 d.sequencing.retain(|p| *p != pos);
             }
-            d.saws.remove(&pos);
+            if let Some(s) = d.saws.remove(&pos) {
+                d.saw_drops
+                    .extend(s.slots.into_iter().map(|(item, n)| (pos, item, n)));
+            }
             d.spouts.remove(&pos);
             d.drains.remove(&pos);
             d.funnels.remove(&pos);
