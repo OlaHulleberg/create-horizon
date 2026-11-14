@@ -2477,7 +2477,11 @@ pub const PARTIALS: [(&str, &str, &str); 108] = [
     ),
     ("part_cogwheel_shaft", "create:block/cogwheel_shaft", "up"),
     // HandCrankVisual: the crank's base (`HAND_CRANK_BASE`), turned to its facing.
-    ("part_hand_crank_base", "create:block/hand_crank/block", "up"),
+    (
+        "part_hand_crank_base",
+        "create:block/hand_crank/block",
+        "up",
+    ),
     // SpeedControllerRenderer: the bracket over the controller under a large cog.
     (
         "part_speed_controller_bracket",
@@ -2709,38 +2713,142 @@ pub const PARTIALS: [(&str, &str, &str); 108] = [
     // and the casing of a pipe junction (`FLUID_PIPE_CASING`), drawn as they are.
     // SteamEngineRenderer's piston, linkage and shaft connector, posed by the glue from their
     // `up` state.
-    ("part_engine_piston", "create:block/steam_engine/piston", "up"),
-    ("part_engine_linkage", "create:block/steam_engine/linkage", "up"),
-    ("part_engine_connector", "create:block/steam_engine/shaft_connector", "up"),
+    (
+        "part_engine_piston",
+        "create:block/steam_engine/piston",
+        "up",
+    ),
+    (
+        "part_engine_linkage",
+        "create:block/steam_engine/linkage",
+        "up",
+    ),
+    (
+        "part_engine_connector",
+        "create:block/steam_engine/shaft_connector",
+        "up",
+    ),
     // SpoutRenderer's nozzle (`SPOUT_TOP`, `SPOUT_MIDDLE`, `SPOUT_BOTTOM`), squeezed by the glue.
     ("part_spout_top", "create:block/spout/top", "up"),
     ("part_spout_middle", "create:block/spout/middle", "up"),
     ("part_spout_bottom", "create:block/spout/bottom", "up"),
     ("part_pipe_casing", "create:block/fluid_pipe/casing", "up"),
-    ("part_pipe_connection_down", "create:block/fluid_pipe/connection/down", "up"),
-    ("part_pipe_connection_up", "create:block/fluid_pipe/connection/up", "up"),
-    ("part_pipe_connection_north", "create:block/fluid_pipe/connection/north", "up"),
-    ("part_pipe_connection_south", "create:block/fluid_pipe/connection/south", "up"),
-    ("part_pipe_connection_west", "create:block/fluid_pipe/connection/west", "up"),
-    ("part_pipe_connection_east", "create:block/fluid_pipe/connection/east", "up"),
-    ("part_pipe_rim_connector_down", "create:block/fluid_pipe/rim_connector/down", "up"),
-    ("part_pipe_rim_connector_up", "create:block/fluid_pipe/rim_connector/up", "up"),
-    ("part_pipe_rim_connector_north", "create:block/fluid_pipe/rim_connector/north", "up"),
-    ("part_pipe_rim_connector_south", "create:block/fluid_pipe/rim_connector/south", "up"),
-    ("part_pipe_rim_connector_west", "create:block/fluid_pipe/rim_connector/west", "up"),
-    ("part_pipe_rim_connector_east", "create:block/fluid_pipe/rim_connector/east", "up"),
-    ("part_pipe_rim_down", "create:block/fluid_pipe/rim/down", "up"),
+    (
+        "part_pipe_connection_down",
+        "create:block/fluid_pipe/connection/down",
+        "up",
+    ),
+    (
+        "part_pipe_connection_up",
+        "create:block/fluid_pipe/connection/up",
+        "up",
+    ),
+    (
+        "part_pipe_connection_north",
+        "create:block/fluid_pipe/connection/north",
+        "up",
+    ),
+    (
+        "part_pipe_connection_south",
+        "create:block/fluid_pipe/connection/south",
+        "up",
+    ),
+    (
+        "part_pipe_connection_west",
+        "create:block/fluid_pipe/connection/west",
+        "up",
+    ),
+    (
+        "part_pipe_connection_east",
+        "create:block/fluid_pipe/connection/east",
+        "up",
+    ),
+    (
+        "part_pipe_rim_connector_down",
+        "create:block/fluid_pipe/rim_connector/down",
+        "up",
+    ),
+    (
+        "part_pipe_rim_connector_up",
+        "create:block/fluid_pipe/rim_connector/up",
+        "up",
+    ),
+    (
+        "part_pipe_rim_connector_north",
+        "create:block/fluid_pipe/rim_connector/north",
+        "up",
+    ),
+    (
+        "part_pipe_rim_connector_south",
+        "create:block/fluid_pipe/rim_connector/south",
+        "up",
+    ),
+    (
+        "part_pipe_rim_connector_west",
+        "create:block/fluid_pipe/rim_connector/west",
+        "up",
+    ),
+    (
+        "part_pipe_rim_connector_east",
+        "create:block/fluid_pipe/rim_connector/east",
+        "up",
+    ),
+    (
+        "part_pipe_rim_down",
+        "create:block/fluid_pipe/rim/down",
+        "up",
+    ),
     ("part_pipe_rim_up", "create:block/fluid_pipe/rim/up", "up"),
-    ("part_pipe_rim_north", "create:block/fluid_pipe/rim/north", "up"),
-    ("part_pipe_rim_south", "create:block/fluid_pipe/rim/south", "up"),
-    ("part_pipe_rim_west", "create:block/fluid_pipe/rim/west", "up"),
-    ("part_pipe_rim_east", "create:block/fluid_pipe/rim/east", "up"),
-    ("part_pipe_drain_down", "create:block/fluid_pipe/drain/down", "up"),
-    ("part_pipe_drain_up", "create:block/fluid_pipe/drain/up", "up"),
-    ("part_pipe_drain_north", "create:block/fluid_pipe/drain/north", "up"),
-    ("part_pipe_drain_south", "create:block/fluid_pipe/drain/south", "up"),
-    ("part_pipe_drain_west", "create:block/fluid_pipe/drain/west", "up"),
-    ("part_pipe_drain_east", "create:block/fluid_pipe/drain/east", "up"),
+    (
+        "part_pipe_rim_north",
+        "create:block/fluid_pipe/rim/north",
+        "up",
+    ),
+    (
+        "part_pipe_rim_south",
+        "create:block/fluid_pipe/rim/south",
+        "up",
+    ),
+    (
+        "part_pipe_rim_west",
+        "create:block/fluid_pipe/rim/west",
+        "up",
+    ),
+    (
+        "part_pipe_rim_east",
+        "create:block/fluid_pipe/rim/east",
+        "up",
+    ),
+    (
+        "part_pipe_drain_down",
+        "create:block/fluid_pipe/drain/down",
+        "up",
+    ),
+    (
+        "part_pipe_drain_up",
+        "create:block/fluid_pipe/drain/up",
+        "up",
+    ),
+    (
+        "part_pipe_drain_north",
+        "create:block/fluid_pipe/drain/north",
+        "up",
+    ),
+    (
+        "part_pipe_drain_south",
+        "create:block/fluid_pipe/drain/south",
+        "up",
+    ),
+    (
+        "part_pipe_drain_west",
+        "create:block/fluid_pipe/drain/west",
+        "up",
+    ),
+    (
+        "part_pipe_drain_east",
+        "create:block/fluid_pipe/drain/east",
+        "up",
+    ),
 ];
 
 /// The unit-cube models of `part_fluid_*`: every face the fluid's still texture, water's
