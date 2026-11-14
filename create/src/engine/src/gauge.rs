@@ -134,6 +134,16 @@ pub fn mix_colors(a: u32, b: u32, w: f32) -> u32 {
         .wrapping_add(mix(ch(a, 0), ch(b, 0)))) as u32
 }
 
+/// `IRotate.getMinimumRequiredSpeedLevel`'s speed (`SpeedLevel.getSpeedValue`) for the blocks
+/// that ask more than any (`MechanicalMixerBlock`, `FlapDisplayBlock`: `MEDIUM`).
+pub fn minimum_speed(block: crate::Block) -> Option<f32> {
+    matches!(
+        block,
+        crate::Block::MechanicalMixer | crate::Block::DisplayBoard
+    )
+    .then_some(MEDIUM_SPEED)
+}
+
 /// `SpeedGaugeBlockEntity.getDialTarget`: 0 to .45 below medium speed, to .75 below fast, to
 /// 1.125 at the maximum.
 pub fn speed_dial(speed: f32) -> f32 {

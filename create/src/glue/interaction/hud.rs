@@ -157,6 +157,24 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
             "It appears that this contraption is _overstressed_. Add more sources or _slow_ \
              _down_ the components with a high _stress_ _impact_.",
         ));
+    } else if let Some(required) = create_engine::gauge::minimum_speed(block) {
+        // `notFastEnough`: turning (`getSpeed`), but slower than its speed level asks.
+        let turning = host.level(host.dimension()).map_or(0.0, |l| {
+            super::super::kinetics::shown_speeds(host, l, pos)[0]
+        });
+        if turning != 0.0 && turning.abs() < required {
+            if !lines.is_empty() {
+                lines.push(Vec::new());
+            }
+            lines.push(vec![("    Speed Requirement:".into(), 0xFFAA00)]);
+            let name = host
+                .translate(&format!("block.create.{}", block.name()))
+                .unwrap_or_else(|| block.name().to_owned());
+            lines.extend(cut_hint(
+                draw,
+                &format!("It appears that this _{name}_ is _not_ rotating with _enough_ _speed_."),
+            ));
+        }
     }
     if lines.is_empty() {
         HOVER.set(None);
