@@ -347,6 +347,8 @@ pub enum Event {
         sub: u8,
         speed: f32,
         overstressed: bool,
+        /// The speed its network turns it at, overstressed or not (`getTheoreticalSpeed`).
+        theoretical: f32,
     },
     /// Create destroys this block: a conflicting direction, a loop that disagrees, or too fast.
     Break { pos: [i32; 3] },
@@ -889,6 +891,7 @@ impl Kinetics {
                         sub: n.sub,
                         speed: shown,
                         overstressed,
+                        theoretical: turned,
                     });
                 }
             }
@@ -977,7 +980,8 @@ mod tests {
                 pos: [0, 0, 0],
                 sub: 0,
                 speed: 0.0,
-                overstressed: false
+                overstressed: false,
+                theoretical: 0.0
             }]
         );
         assert!(solve(&mut k).is_empty());

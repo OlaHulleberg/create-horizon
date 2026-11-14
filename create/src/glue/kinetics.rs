@@ -24,6 +24,10 @@ pub const TYPE: &str = "create:kinetic";
 
 /// The key in a block entity's data under which its parts' speeds are, `[slot 0, slot 1]`.
 const SPEEDS: &str = "Speeds";
+/// The keys of its first part's theoretical speed (`getTheoreticalSpeed`, what the goggles
+/// show) and of whether its network is overstressed (`isOverStressed`).
+const THEORY: &str = "Theory";
+const OVER: &str = "Over";
 
 static KIND: OnceLock<BlockEntityTypeKey> = OnceLock::new();
 
@@ -196,7 +200,7 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
         persist::mark_unsaved(dim, [cx, cz]);
     }
     for pos in removed {
-        set_speeds(lv, pos, None);
+        set_speeds(lv, pos, None, Some((0.0, false)));
     }
     for e in events {
         match e {
@@ -205,11 +209,16 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
                 lv.destroy_block(pos, true);
             }
             Event::Speed {
-                pos, sub, speed, ..
+                pos,
+                sub,
+                speed,
+                overstressed,
+                theoretical,
             } => {
                 let mut speeds = current_speeds(lv, pos);
                 speeds[usize::from(sub & 1)] = speed;
-                set_speeds(lv, pos, Some(speeds));
+                let first = (sub == 0).then_some((theoretical, overstressed));
+                set_speeds(lv, pos, Some(speeds), first);
                 for s in super::SUBSYSTEMS {
                     s.speed_changed(lv, pos, speed);
                 }
@@ -275,16 +284,43 @@ pub fn speeds_of(data: &Compound) -> [f32; 2] {
 
 /// Puts `speeds` (none: stopped, it left the network) in the block entity at `pos`, which
 /// sends them to the clients that see it.
-fn set_speeds(lv: &mut ServerLevel<'_>, pos: [i32; 3], speeds: Option<[f32; 2]>) {
+fn set_speeds(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    speeds: Option<[f32; 2]>,
+    first: Option<(f32, bool)>,
+) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
     let [a, b] = speeds.unwrap_or_default();
-    let data = Compound::from([(
+    let mut data = Compound::from([(
         SPEEDS.into(),
         Tag::List(vec![Tag::Float(a.to_bits()), Tag::Float(b.to_bits())]),
     )]);
+    if let Some((theory, over)) = first {
+        data.insert(THEORY.into(), Tag::Float(theory.to_bits()));
+        data.insert(OVER.into(), Tag::Byte(i8::from(over)));
+    }
     let _ = entity.merge_data(&mut *lv.host, data);
+}
+
+/// The theoretical speed of the first part of the block entity at `pos` of `level`, and whether
+/// its network is overstressed, as its clients last heard.
+pub fn shown_theory(
+    host: &dyn mod_api::Host,
+    level: mod_api::LevelRef,
+    pos: [i32; 3],
+) -> (f32, bool) {
+    let Some(d) = host.block_entity(level, pos).and_then(|e| e.data(host)) else {
+        return (0.0, false);
+    };
+    let theory = match d.get(&THEORY.into()) {
+        Some(Tag::Float(bits)) => f32::from_bits(*bits),
+        _ => speeds_of(&d)[0],
+    };
+    let over = matches!(d.get(&OVER.into()), Some(Tag::Byte(b)) if *b != 0);
+    (theory, over)
 }
 
 /// The speeds the block entity at `pos` of `level` shows (on a client, what its update tag
@@ -329,7 +365,8 @@ impl BlockEntityPart for KineticEntity {
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
         // The speeds, and what other subsystems keep in the same block entity for its clients.
-        let shown: Compound = std::iter::once(SPEEDS)
+        let shown: Compound = [SPEEDS, THEORY, OVER]
+            .into_iter()
             .chain(
                 super::SUBSYSTEMS
                     .iter()

@@ -3,7 +3,7 @@
 //! (`GoggleOverlayRenderer`).
 
 use super::super::items::{self, Item};
-use super::board::{block_at, holds_wrench, seen, speed_at};
+use super::board::{block_at, holds_wrench, seen};
 use create_engine::Block as B;
 use mod_api::{ClientHost, CrosshairTarget, DrawContext, EquipmentSlot};
 
@@ -38,10 +38,19 @@ pub(super) fn value_tip(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
     let (label, value) = match block {
         // The setting, from the speed the motor gives along its axis.
         B::CreativeMotor => {
-            let speed = speed_at(host, pos);
-            let setting = facing.map_or(speed, |f| {
-                create_engine::kinetics::convert_to_direction(speed, f)
+            // The setting the server told, else the speed the network turns it at
+            // (`getTheoreticalSpeed`, an overstressed network's too).
+            let speed = host.level(host.dimension()).map_or(0.0, |l| {
+                super::super::kinetics::shown_theory(host, l, pos).0
             });
+            let setting = seen(pos).map_or_else(
+                || {
+                    facing.map_or(speed, |f| {
+                        create_engine::kinetics::convert_to_direction(speed, f)
+                    })
+                },
+                |v| v as f32,
+            );
             ("Generated Speed in RPM", format!("{setting:.0}"))
         }
         // `ChassisScrollValueBehaviour` (with the wrench).
@@ -101,16 +110,13 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
     let Some(player) = host.local_player() else {
         return;
     };
-    // Hot: one compare on the head slot.
-    let head = host
-        .living(player.entity())
-        .and_then(|l| l.equipment(host, EquipmentSlot::Head));
-    if !items::is(head.as_ref(), Item::Goggles) {
-        return;
-    }
     let Some(pos) = aimed(host) else {
         return;
     };
+    let head = host
+        .living(player.entity())
+        .and_then(|l| l.equipment(host, EquipmentSlot::Head));
+    let goggles = items::is(head.as_ref(), Item::Goggles);
     let Some((block, impact, capacity)) = super::super::client_table(host, |t| {
         let (block, info) = t.get(block_at(host, pos))?;
         let [part, _] = create_engine::parts::parts(block, info, &Default::default());
@@ -119,28 +125,46 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
     .flatten() else {
         return;
     };
-    let speed = speed_at(host, pos);
+    // `getTheoreticalSpeed`: what the network turns it at, overstressed or not.
+    let (speed, overstressed) = host.level(host.dimension()).map_or((0.0, false), |l| {
+        super::super::kinetics::shown_theory(host, l, pos)
+    });
     // Create's tooltip: a header, then each stat indented by four spaces and its value by one
     // more; a line may change colour along the way.
     let mut lines: Vec<Vec<(String, u32)>> = Vec::new();
-    if impact != 0.0 {
-        lines.push(vec![("    Kinetic Stats:".into(), 0xFFFFFF)]);
-        lines.push(vec![("    Kinetic Stress Impact:".into(), 0xAAAAAA)]);
-        lines.push(vec![(
-            format!("     {}su at current speed", number(impact * speed.abs())),
-            0x55FFFF,
-        )]);
+    let at_speed = |su: f32| {
+        vec![
+            (format!("     {}su", number(su)), 0x55FFFF),
+            (" at current speed".to_owned(), 0x555555),
+        ]
+    };
+    if goggles {
+        if impact != 0.0 {
+            lines.push(vec![("    Kinetic Stats:".into(), 0xFFFFFF)]);
+            lines.push(vec![("    Kinetic Stress Impact:".into(), 0xAAAAAA)]);
+            lines.push(at_speed(impact * speed.abs()));
+        }
+        if capacity != 0.0 {
+            lines.push(vec![("    Generator Stats:".into(), 0xFFFFFF)]);
+            lines.push(vec![("    Kinetic Stress Capacity:".into(), 0xAAAAAA)]);
+            lines.push(at_speed(capacity * speed.abs()));
+        }
+        for s in super::super::SUBSYSTEMS {
+            s.goggle_tooltip(host, pos, block, &mut lines);
+        }
     }
-    if capacity != 0.0 {
-        lines.push(vec![("    Generator Stats:".into(), 0xFFFFFF)]);
-        lines.push(vec![("    Kinetic Stress Capacity:".into(), 0xAAAAAA)]);
-        lines.push(vec![(
-            format!("     {}su at current speed", number(capacity * speed.abs())),
-            0x55FFFF,
-        )]);
-    }
-    for s in super::super::SUBSYSTEMS {
-        s.goggle_tooltip(host, pos, block, &mut lines);
+    // `KineticBlockEntity.addToTooltip` (shown with or without goggles): an overstressed
+    // network's warning, after a blank line.
+    if overstressed {
+        if !lines.is_empty() {
+            lines.push(Vec::new());
+        }
+        lines.push(vec![("    Overstressed".into(), 0xFFAA00)]);
+        lines.extend(cut_hint(
+            draw,
+            "It appears that this contraption is _overstressed_. Add more sources or _slow_ \
+             _down_ the components with a high _stress_ _impact_.",
+        ));
     }
     if lines.is_empty() {
         return;
@@ -167,6 +191,47 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
             dx += draw.text_width(text);
         }
     }
+}
+
+/// `TooltipHelper.cutTextComponent` with `GRAY_AND_WHITE`, as goggle lines: words wrapped at
+/// 200 pixels, the parts between underscores white, the rest grey.
+fn cut_hint(draw: &dyn DrawContext, text: &str) -> Vec<Vec<(String, u32)>> {
+    const MAX_WIDTH_PER_LINE: f32 = 200.0;
+    let mut lines: Vec<String> = Vec::new();
+    let (mut line, mut width) = (String::new(), 0.0);
+    for word in text.split_inclusive(' ') {
+        let w = draw.text_width(&word.replace('_', ""));
+        if width + w > MAX_WIDTH_PER_LINE {
+            if width > 0.0 {
+                lines.push(std::mem::take(&mut line));
+                width = 0.0;
+            } else {
+                lines.push(word.to_owned());
+                continue;
+            }
+        }
+        line.push_str(word);
+        width += w;
+    }
+    if width > 0.0 {
+        lines.push(line);
+    }
+    let mut highlighted = false;
+    lines
+        .into_iter()
+        .map(|l| {
+            let mut out = vec![("    ".to_owned(), 0xAAAAAA)];
+            for part in l.split('_') {
+                out.push((
+                    part.to_owned(),
+                    if highlighted { 0xFFFFFF } else { 0xAAAAAA },
+                ));
+                highlighted = !highlighted;
+            }
+            highlighted = !highlighted;
+            out
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -175,8 +175,15 @@ pub fn draws_itself(block: Block, d: &Draw) -> bool {
 /// kept: a moving needle, wheel, valve pointer or hose.
 pub fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
     match block {
+        // A needle still moving, or one whose target the server just changed (its client tick
+        // sets it off after this drawing, which must not be kept).
         Block::Speedometer | Block::Stressometer => {
-            CLIENT.with_borrow(|c| c.needles.get(&pos).is_some_and(|n| n.moving))
+            let target = shown_of(&entity.nbt).map_or(0.0, |s| s.dial);
+            CLIENT.with_borrow(|c| {
+                c.needles
+                    .get(&pos)
+                    .map_or(target != 0.0, |n| n.moving || n.needle.target != target)
+            })
         }
         Block::Flywheel => CLIENT.with_borrow(|c| c.wheels.get(&pos).is_none_or(|w| w.moving)),
         _ => super::fluids::animated(block, pos, entity),
