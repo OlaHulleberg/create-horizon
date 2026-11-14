@@ -2654,6 +2654,36 @@ impl CreateWorld {
         );
     }
 
+    /// A windmill's direction was set (`onDirectionChanged`): a running one generates the other
+    /// way from the next solve on.
+    pub fn set_windmill_direction(&mut self, dim: usize, pos: [i32; 3], clockwise: bool) {
+        let d = &mut self.dims[dim];
+        let Some(w) = d.windmills.get_mut(&pos) else {
+            return;
+        };
+        if w.clockwise == clockwise || w.bearing.is_some() {
+            return;
+        }
+        w.clockwise = clockwise;
+        let speed = crate::contraption::windmill_speed(w.sails, clockwise);
+        d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        let (Some(&state), old) = (
+            d.states.get(&pos),
+            d.settings.get(&pos).copied().unwrap_or_default(),
+        ) else {
+            return;
+        };
+        self.set_settings(
+            dim,
+            pos,
+            state,
+            Settings {
+                windmill: speed,
+                ..old
+            },
+        );
+    }
+
     /// A windmill was taken apart (`disassemble`): its structure, to put back; it stops.
     pub fn windmill_disassembled(
         &mut self,

@@ -272,10 +272,16 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
             continue;
         };
         take_blocks(lv, pos, &blocks);
+        // `getAngleSpeedDirection`: its value box's direction, clockwise unless set.
+        let clockwise = lv
+            .host
+            .block_entity(lv.level, pos)
+            .and_then(|e| e.data(&*lv.host))
+            .is_none_or(|d| crate::glue::sources::handles::scroll_option(&d) == 0);
         let w = create_engine::world::Windmill {
             blocks,
             sails,
-            clockwise: true,
+            clockwise,
             bearing: None,
         };
         with_world(|world| world.windmill_assembled(dim, pos, state, w));

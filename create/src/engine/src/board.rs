@@ -493,6 +493,23 @@ pub fn hits_valve_box(slot: [f64; 3], local: [f64; 3]) -> bool {
     d2.sqrt() < 0.5 / 1.5
 }
 
+/// `IBearingBlockEntity.getMovementModeSlot` (a `DirectionalExtenderScrollOptionSlot`) on `side`
+/// of a bearing facing `facing`: centred 15.5 px out on a side across its axis, two pixels back
+/// from its facing.
+pub fn bearing_slot(facing: Dir, side: Dir) -> Option<[f64; 3]> {
+    if side.axis() == facing.axis() {
+        return None;
+    }
+    let o = sided_offset([0.5, 0.5, 15.5 / 16.0], side);
+    let n = facing.offset();
+    Some([0, 1, 2].map(|i| o[i] - f64::from(n[i]) * 2.0 / 16.0))
+}
+
+/// The windmill bearing's direction (`WindmillBearingBlockEntity.movementDirection`,
+/// `contraptions.windmill.rotation_direction`): its two `RotationDirection`s.
+pub const WINDMILL_DIRECTIONS: [&str; 2] = ["Clockwise", "Counter-Clockwise"];
+pub const WINDMILL: Board = options("Rotation Direction", 2);
+
 /// `BrassTunnelModeSlot` (a `CenteredSideValueBoxTransform`): 15.5 px out, on the top only.
 pub fn tunnel_mode_slot(side: Dir) -> Option<[f64; 3]> {
     (side == Dir::Up).then(|| sided_offset([0.5, 0.5, 15.5 / 16.0], side))
