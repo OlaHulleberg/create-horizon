@@ -29,6 +29,10 @@
 //! - Create's own damage types (`create:crush`): a native mod's are not registered, so the
 //!   crushing wheels deal vanilla's cramming.
 //!
+//! A blaze burner's blaze, rods, flame and goggles are its block entity's drawing
+//! (`burner_draw`), so a burner carried by a moving structure, drawn from its block model,
+//! shows only its cage.
+//!
 //! Not drawn yet: the items a saw facing up is cutting (`SawRenderer.renderItems`) and a grid's
 //! items moving between mechanical crafters (`MechanicalCrafterRenderer.renderItems` past
 //! `IDLE`).

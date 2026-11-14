@@ -71,6 +71,8 @@ pub const ITEMS_KEY: &str = "BasinItems";
 /// The key of a mixer's block entity data its clients run its head from: `T`, its running ticks
 /// when told, and `S`, the game time it was told at; none when it rests.
 pub const MIXER_KEY: &str = "Mixer";
+/// Ticks between a basin's `recipeBackupCheck`s (a lazy tick of 10, counted down from 20).
+const BACKUP_CHECK: i64 = 200;
 /// A blaze burner's blaze wears goggles (`BlazeBurnerBlockEntity.goggles`).
 pub const GOGGLES_KEY: &str = "Goggles";
 
@@ -342,6 +344,30 @@ pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let mut checks =
         with_world(|w| std::mem::take(&mut w.dims[dim].mixer_checks)).unwrap_or_default();
+    // `BasinBlockEntity.lazyTick`'s `recipeBackupCheck`: every 200 ticks a basin that holds
+    // something has its mixer or press look for a recipe again, so a burner lit (or a recipe
+    // reloaded) after the items went in still gets them going.
+    if lv.game_time() % BACKUP_CHECK == 0 {
+        let machines: Vec<[i32; 3]> = with_world(|w| {
+            let d = &w.dims[dim];
+            d.mixers
+                .iter()
+                .filter(|(_, m)| !m.running)
+                .map(|(p, _)| *p)
+                .chain(d.presses.keys().copied())
+                .collect()
+        })
+        .unwrap_or_default();
+        for pos in machines {
+            let basin_pos = [pos[0], pos[1] - 2, pos[2]];
+            let tanks = basin_tanks(dim, basin_pos);
+            let filled = basin_slots(lv, basin_pos).is_some_and(|s| s.iter().any(Option::is_some))
+                || tanks.input.iter().chain(&tanks.output).any(Option::is_some);
+            if filled {
+                checks.push(pos);
+            }
+        }
+    }
     let running = with_world(|w| w.dims[dim].mixing.clone()).unwrap_or_default();
     if checks.is_empty() && running.is_empty() {
         return;
