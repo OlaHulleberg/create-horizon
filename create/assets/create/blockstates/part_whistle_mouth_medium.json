@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/steam_whistle/medium_mouth",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/steam_whistle/medium_mouth",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/steam_whistle/medium_mouth"
+    },
+    "facing=west": {
+      "model": "create:block/steam_whistle/medium_mouth",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/steam_whistle/medium_mouth",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/steam_whistle/medium_mouth",
+      "x": 270
+    }
+  }
+}

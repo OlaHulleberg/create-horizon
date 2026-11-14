@@ -153,6 +153,7 @@ impl Subsystem for Fluids {
             drawn::DRAIN_ITEM,
             engine::ENGINE_SPEED,
             plumbing::FILTER,
+            plumbing::WHISTLE,
         ]
     }
 
@@ -272,6 +273,7 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
             .iter()
             .map(|(p, s)| (*p, TANK, fluid(s.fluid, create_engine::drain::CAPACITY)));
         let boilers = d.boilers.iter().map(|(p, b)| {
+            let width = d.tanks.multis.get(p).map_or(1, |m| i32::from(m.width));
             let b = &b.data;
             let v = vec![
                 b.active_heat,
@@ -279,6 +281,8 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
                 b.water_supply.to_bits() as i32,
                 b.attached_engines,
                 b.attached_whistles,
+                // The tank's width, for its sides' occlusion below.
+                width,
             ];
             (*p, BOILER, v)
         });
@@ -294,6 +298,19 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
         spouts.chain(drains).chain(boilers).chain(working).collect()
     })
     .unwrap_or_default();
+    // A boiler's sides its gauges are hidden on (`updateOcclusion`: something solid beside the
+    // middle of its bottom layer), in place of its width.
+    let now: Vec<_> = now
+        .into_iter()
+        .map(|(p, k, mut v)| {
+            if k == BOILER
+                && let Some(width) = v.pop()
+            {
+                v.push(boiler_occlusion(lv, p, width));
+            }
+            (p, k, v)
+        })
+        .collect();
     let changed: Vec<_> = SHOWN.with_borrow_mut(|shown| {
         // Gone (a boiler no more, a drain broken): shown as nothing.
         let mut changed: Vec<_> = shown
@@ -323,6 +340,34 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
         let data = Compound::from([(key.into(), Tag::IntArray(v))]);
         let _ = entity.merge_data(&mut *lv.host, data);
     }
+}
+
+/// `BoilerData.updateOcclusion` on the server: a bit per horizontal side (`get2DDataValue`:
+/// south, west, north, east) where a block with collision stands beside the middle of the
+/// boiler's bottom layer (its middle block, or two for an even width), hiding that side's gauge.
+fn boiler_occlusion(lv: &ServerLevel<'_>, c: [i32; 3], width: i32) -> i32 {
+    let middle: Vec<i32> = if width % 2 == 1 {
+        vec![width / 2]
+    } else {
+        vec![width / 2 - 1, width / 2]
+    };
+    let sides: [(i32, i32); 4] = [(0, 1), (-1, 0), (0, -1), (1, 0)];
+    let mut bits = 0;
+    for (i, (dx, dz)) in sides.into_iter().enumerate() {
+        let hidden = middle.iter().any(|m| {
+            let (x, z) = match (dx, dz) {
+                (1, _) => (width, *m),
+                (-1, _) => (-1, *m),
+                (_, 1) => (*m, width),
+                _ => (*m, -1),
+            };
+            crate::glue::logistics::has_collision(lv, [c[0] + x, c[1], c[2] + z])
+        });
+        if hidden {
+            bits |= 1 << i;
+        }
+    }
+    bits
 }
 
 /// Tanks saved with a column: `tank_multis` holds x, y, z, fluid, amount, width, height,

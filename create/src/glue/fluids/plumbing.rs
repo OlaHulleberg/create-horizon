@@ -695,16 +695,30 @@ fn tick_whistles(lv: &mut ServerLevel<'_>) {
                 }
             });
         }
-        with_world(|w| {
+        let was = with_world(|w| {
             let p = &mut w.dims[dim].plumbing;
-            p.whistles.insert(pos, wh);
+            let was = p.whistles.insert(pos, wh).is_some_and(|o| o.sounding);
             p.whistling.retain(|q| *q != pos);
             if wh.sounding {
                 p.whistling.push(pos);
             }
-        });
+            was
+        })
+        .unwrap_or(false);
+        if was != wh.sounding
+            && let Some(entity) = lv.host.block_entity(lv.level, pos)
+        {
+            // `WhistleBlockEntity.tick`'s `powered` on its clients, and since when.
+            let v = vec![i32::from(wh.sounding), lv.game_time() as i32];
+            let data = Compound::from([(WHISTLE.into(), Tag::IntArray(v))]);
+            let _ = entity.merge_data(&mut *lv.host, data);
+        }
     }
 }
+
+/// The key of whether a whistle blows, and the game time it started or stopped, in its block
+/// entity's data for its clients (`WhistleRenderer`'s mouth).
+pub const WHISTLE: &str = "Whistle";
 
 /// The key of a smart pipe's filter item in its block entity's data, for its clients.
 pub const FILTER: &str = "PipeFilter";

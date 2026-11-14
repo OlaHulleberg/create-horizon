@@ -52,8 +52,11 @@ pub const PARTIALS: &[&str] = &[
     "part_bogey_drive_wheel",
     "part_bogey_frame",
     "part_bogey_wheel",
+    "part_boiler_gauge",
+    "part_boiler_gauge_dial",
     "part_cogwheel_shaft",
     "part_cogwheel_shaftless",
+    "part_copper_backtank_cogs",
     "part_copper_door_fold_left",
     "part_copper_door_fold_right",
     "part_coupling_attachment",
@@ -98,6 +101,7 @@ pub const PARTIALS: &[&str] = &[
     "part_millstone_cog",
     "part_mixer_head",
     "part_mixer_pole",
+    "part_netherite_backtank_cogs",
     "part_pipe_casing",
     "part_pipe_connection_down",
     "part_pipe_connection_east",
@@ -144,6 +148,9 @@ pub const PARTIALS: &[&str] = &[
     "part_track_segment_right",
     "part_track_tie",
     "part_water_wheel",
+    "part_whistle_mouth_large",
+    "part_whistle_mouth_medium",
+    "part_whistle_mouth_small",
 ];
 
 /// The key of each of `PARTIALS`, requested in `register`.

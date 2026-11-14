@@ -2379,7 +2379,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 118] = [
+pub const PARTIALS: [(&str, &str, &str); 125] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     // AllPartialModels.FOLDING_DOORS: the folding doors' two leaves, drawn unturned (`north`)
     // and posed by the glue as SlidingDoorRenderer poses them.
@@ -2780,6 +2780,47 @@ pub const PARTIALS: [(&str, &str, &str); 118] = [
         "part_engine_connector",
         "create:block/steam_engine/shaft_connector",
         "up",
+    ),
+    // WhistleRenderer's mouth by size (`WHISTLE_MOUTH_*`), turned to the whistle's facing and
+    // lifted by the glue while it blows.
+    (
+        "part_whistle_mouth_small",
+        "create:block/steam_whistle/small_mouth",
+        "south",
+    ),
+    (
+        "part_whistle_mouth_medium",
+        "create:block/steam_whistle/medium_mouth",
+        "south",
+    ),
+    (
+        "part_whistle_mouth_large",
+        "create:block/steam_whistle/large_mouth",
+        "south",
+    ),
+    // FluidTankRenderer.renderAsBoiler's gauge and dial (`BOILER_GAUGE`, `BOILER_GAUGE_DIAL`),
+    // posed by the glue on each free side of a boiler.
+    (
+        "part_boiler_gauge",
+        "create:block/steam_engine/gauge",
+        "south",
+    ),
+    (
+        "part_boiler_gauge_dial",
+        "create:block/steam_engine/gauge_dial",
+        "south",
+    ),
+    // BacktankRenderer's cogs (`*_BACKTANK_COGS`), turned to the backtank's facing (as written,
+    // north) and spun by the glue.
+    (
+        "part_copper_backtank_cogs",
+        "create:block/copper_backtank/block_cogs",
+        "north",
+    ),
+    (
+        "part_netherite_backtank_cogs",
+        "create:block/netherite_backtank/block_cogs",
+        "north",
     ),
     // SpoutRenderer's nozzle (`SPOUT_TOP`, `SPOUT_MIDDLE`, `SPOUT_BOTTOM`), squeezed by the glue.
     ("part_spout_top", "create:block/spout/top", "up"),
