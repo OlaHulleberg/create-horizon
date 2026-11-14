@@ -724,6 +724,7 @@ fn send_deployers(lv: &mut ServerLevel<'_>, players: &[PlayerRef], list: &[[i32;
                     facing: f,
                     at,
                     per_tick: v,
+                    punch: d.mode == deployer::Mode::Punch,
                     held: d.held.map(|h| h.0),
                 }
             }
@@ -733,6 +734,7 @@ fn send_deployers(lv: &mut ServerLevel<'_>, players: &[PlayerRef], list: &[[i32;
                 at: f32::NAN,
                 per_tick: 0.0,
                 held: None,
+                punch: false,
             },
         });
     }

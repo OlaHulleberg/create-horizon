@@ -337,6 +337,27 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
             .facing
             .map(|f| vec![half(0, f.opposite(), speeds[0])])
             .unwrap_or_default(),
+        // SawVisual: facing sideways, the shaft half out of its back; up or down, a shaft on its
+        // rotation axis. Its blade is the glue's.
+        Block::MechanicalSaw => s
+            .facing
+            .map(|f| {
+                if f.axis() == Axis::Y {
+                    let a = crate::parts::directional_axis(f, s.along_first);
+                    vec![own(a, Model::Shaft(a))]
+                } else {
+                    vec![half(0, f.opposite(), speeds[0])]
+                }
+            })
+            .unwrap_or_default(),
+        // DeployerVisual: a shaft on its rotation axis (its pole and hand are the glue's).
+        Block::Deployer => s
+            .facing
+            .map(|f| {
+                let a = crate::parts::directional_axis(f, s.along_first);
+                vec![own(a, Model::Shaft(a))]
+            })
+            .unwrap_or_default(),
         // DrillRenderer: the shaft half behind, the head turning with it in front.
         Block::MechanicalDrill => s
             .facing

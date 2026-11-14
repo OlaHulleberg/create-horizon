@@ -2343,7 +2343,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 69] = [
+pub const PARTIALS: [(&str, &str, &str); 79] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -2427,6 +2427,59 @@ pub const PARTIALS: [(&str, &str, &str); 69] = [
         "part_drill_head",
         "create:block/mechanical_drill/head",
         "south",
+    ),
+    // SawRenderer's blade (turning, reversed or still), `partialFacing` as the shaft half.
+    (
+        "part_saw_blade_horizontal_active",
+        "create:block/mechanical_saw/blade_horizontal_active",
+        "south",
+    ),
+    (
+        "part_saw_blade_horizontal_inactive",
+        "create:block/mechanical_saw/blade_horizontal_inactive",
+        "south",
+    ),
+    (
+        "part_saw_blade_horizontal_reversed",
+        "create:block/mechanical_saw/blade_horizontal_reversed",
+        "south",
+    ),
+    (
+        "part_saw_blade_vertical_active",
+        "create:block/mechanical_saw/blade_vertical_active",
+        "south",
+    ),
+    (
+        "part_saw_blade_vertical_inactive",
+        "create:block/mechanical_saw/blade_vertical_inactive",
+        "south",
+    ),
+    (
+        "part_saw_blade_vertical_reversed",
+        "create:block/mechanical_saw/blade_vertical_reversed",
+        "south",
+    ),
+    // MechanicalCrafterRenderer's lid, arrow and belt (`renderAndTransform`), posed by the glue
+    // from their `up` state.
+    (
+        "part_crafter_lid",
+        "create:block/mechanical_crafter/lid",
+        "up",
+    ),
+    (
+        "part_crafter_arrow",
+        "create:block/mechanical_crafter/arrow",
+        "up",
+    ),
+    (
+        "part_crafter_belt",
+        "create:block/mechanical_crafter/belt_animated",
+        "up",
+    ),
+    (
+        "part_crafter_belt_frame",
+        "create:block/mechanical_crafter/belt",
+        "up",
     ),
     // DeployerRenderer: the pole and the hand (pointing empty, holding an item), turned by
     // `horizontalAngle` and 270/90° up and down, as the shaft half.
@@ -2791,6 +2844,12 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
         "crushing_wheel_controller" | "water_wheel_structure" | "fake_track"
     ) {
         props.insert("render_shape".into(), json!("INVISIBLE"));
+    }
+    // Declared full cubes whose Create shape is a 12 px casing (`CASING_12PX`): they hide no
+    // neighbour's face and let light through, so the floor under a saw shows and the parts
+    // their block entity draws inside them (a saw's blade) are lit.
+    if matches!(b.name.as_str(), "mechanical_saw" | "mechanical_drill") {
+        props.insert("occludes".into(), json!(false));
     }
     // AllBlocks.ROSE_QUARTZ_LAMP: `mapColor(TERRACOTTA_PINK)` (MapColor id 42); its light by
     // `powering` is per state, which a declaration can't give: none.

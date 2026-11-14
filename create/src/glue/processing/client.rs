@@ -14,6 +14,7 @@ use crate::glue::kinetics::{self, dir_name};
 use crate::glue::states;
 use create_engine::client::{self as parts, Model};
 use create_engine::kinetics::Dir;
+use create_engine::parts::StateInfo;
 use create_engine::tank::Fluid;
 use create_engine::{Block, deployer, press};
 use mod_api::{
@@ -307,7 +308,10 @@ impl BlockEntityPart for MachineDraw {
                     draw_press_head(event.draw, event.pos, f, speed);
                 }
             }
-            Block::Deployer => draw_deployer(event.draw, event.pos),
+            Block::Deployer => {
+                let rpm = kinetics::speeds_of(&event.entity.nbt)[0];
+                draw_deployer(host, event.draw, event.pos, rpm);
+            }
             Block::MechanicalMixer => {
                 let speeds = kinetics::speeds_of(&event.entity.nbt);
                 let offset = mixer_head_offset(&event.entity.nbt, &*event.draw);
@@ -318,6 +322,10 @@ impl BlockEntityPart for MachineDraw {
                 }
             }
             Block::Basin => draw_basin(host, event.draw, event.pos, &event.entity.nbt),
+            Block::MechanicalSaw => {
+                let speed = kinetics::speeds_of(&event.entity.nbt)[0];
+                draw_saw_blade(event.draw, &info, speed);
+            }
             _ => {}
         }
     }
@@ -353,8 +361,13 @@ fn draw_press_head(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3], facing:
 }
 
 /// The deployer's pole and hand (pointing, or holding) at the hand's offset along its facing,
-/// moving on at the speed the server gave.
-fn draw_deployer(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3]) {
+/// moving on at the speed the server gave, and what it holds (`DeployerRenderer.renderItem`).
+fn draw_deployer(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    pos: [i32; 3],
+    rpm: f32,
+) {
     let Some((s, at_tick)) = DEPLOYERS.with_borrow(|d| d.get(&pos).cloned()) else {
         return;
     };
@@ -370,6 +383,88 @@ fn draw_deployer(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3]) {
     draw.translate([o[0] * at, o[1] * at, o[2] * at]);
     draw_partial(draw, Partial::DeployerPole, dir_name(s.facing));
     draw_partial(draw, hand, dir_name(s.facing));
+    draw.pop();
+    let Some(stack) = s.held.as_deref().and_then(|id| stacks::stack(host, id, 1)) else {
+        return;
+    };
+    // `AngleHelper.horizontalAngle(facing) + 180`; up and down tip the item over x.
+    let horizontal = match s.facing {
+        Dir::South => 0.0,
+        Dir::West => -90.0,
+        Dir::North => 180.0,
+        Dir::East => -270.0,
+        Dir::Up | Dir::Down => 270.0,
+    };
+    let x_rot = match s.facing {
+        Dir::Up => 90.0,
+        Dir::Down => 270.0,
+        _ => 0.0,
+    };
+    // Facing up and still, it shows its item turning on top (`displayMode`).
+    let display = s.facing == Dir::Up && rpm == 0.0 && !s.punch;
+    let block = host.item_block(stack.item()).is_some();
+    draw.push();
+    draw.translate([o[0] * at + 0.5, o[1] * at + 0.5, o[2] * at + 0.5]);
+    draw.rotate_about([0.0, 1.0, 0.0], horizontal + 180.0, [0.0; 3]);
+    if !display {
+        draw.rotate_about([1.0, 0.0, 0.0], x_rot, [0.0; 3]);
+        draw.translate([0.0, 0.0, -11.0 / 16.0]);
+    }
+    if s.punch {
+        draw.translate([0.0, 1.0 / 8.0, -1.0 / 16.0]);
+    }
+    let context = if display {
+        let scale = if block { 1.25 } else { 1.0 };
+        draw.translate([0.0, if block { 9.0 / 16.0 } else { 11.0 / 16.0 }, 0.0]);
+        draw.scale([scale; 3]);
+        let turn = (draw.game_time() as f32 + draw.partial()) % 360.0;
+        draw.rotate_about([0.0, 1.0, 0.0], turn, [0.0; 3]);
+        ItemDisplayContext::Ground
+    } else {
+        let scale = if s.punch {
+            0.75
+        } else if block {
+            0.75 - 1.0 / 64.0
+        } else {
+            0.5
+        };
+        draw.scale([scale; 3]);
+        if s.punch {
+            ItemDisplayContext::ThirdPersonRightHand
+        } else {
+            ItemDisplayContext::Fixed
+        }
+    };
+    draw.item(&stack, context, None, 0);
+    draw.pop();
+}
+
+/// `SawRenderer.renderBlade`: the blade turned to the saw's facing, its texture running forward,
+/// backward or still with the speed's sign; facing up or down along x, turned a quarter.
+fn draw_saw_blade(draw: &mut dyn BlockEntityDrawContext, info: &StateInfo, speed: f32) {
+    let Some(facing) = info.facing else {
+        return;
+    };
+    let vertical = facing.axis() == create_engine::kinetics::Axis::Y;
+    let kind = if speed > 0.0 {
+        "active"
+    } else if speed < 0.0 {
+        "reversed"
+    } else {
+        "inactive"
+    };
+    let name = format!(
+        "part_saw_blade_{}_{kind}",
+        if vertical { "vertical" } else { "horizontal" }
+    );
+    let Some(part) = states::partial(&name) else {
+        return;
+    };
+    draw.push();
+    if vertical && info.along_first {
+        draw.rotate_about([0.0, 1.0, 0.0], 90.0, [0.5; 3]);
+    }
+    draw.block(part, &[("facing", dir_name(facing))]);
     draw.pop();
 }
 

@@ -406,6 +406,11 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         // MechanicalPistonBlock (DirectionalAxisKineticBlock.getRotationAxis): a shaft across
         // its facing, on the first or second other axis. GaugeBlock too, with no stress
         // (`CStress.setNoImpact`).
+        // SawBlock: facing sideways, it turns on its facing's axis with a shaft out of its back
+        // only (`getRotationAxis`, `hasShaftTowards`); facing up or down, as the piston.
+        Block::MechanicalSaw if s.facing.is_some_and(|f| f.axis() != Axis::Y) => s
+            .facing
+            .map_or([None, None], |f| one(Part::half(f.opposite()))),
         Block::MechanicalPiston
         | Block::StickyMechanicalPiston
         | Block::MechanicalSaw
