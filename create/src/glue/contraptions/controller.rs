@@ -30,6 +30,54 @@ use mod_api::{
 use std::cell::{Cell, RefCell};
 
 pub const ITEM: &str = "create:linked_controller";
+
+/// The linked controller's item, for drawing it on lecterns.
+static CONTROLLER_KEY: std::sync::OnceLock<mod_api::ItemKey> = std::sync::OnceLock::new();
+
+/// `LecternControllerRenderer`: the linked controller lying on the lectern's top, turned to its
+/// facing and tilted 22° (`renderInLectern`, its model as authored). Its buttons' presses
+/// (`renderDepression`, the powered model while used) are not drawn.
+struct LecternDraw;
+
+#[mod_api::horizon_part]
+impl BlockPart for LecternDraw {}
+
+#[mod_api::horizon_part]
+impl mod_api::BlockEntityPart for LecternDraw {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let Some(id) = super::super::states::id(event.state) else {
+            return;
+        };
+        let Some((Block::LecternController, info)) =
+            super::super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
+        else {
+            return;
+        };
+        let Some(key) = CONTROLLER_KEY.get() else {
+            return;
+        };
+        let facing = info.facing.unwrap_or(create_engine::kinetics::Dir::North);
+        let yaw = create_engine::decor::horizontal_angle(facing) - 90.0;
+        let draw = &mut *event.draw;
+        draw.push();
+        draw.translate([0.5, 1.45, 0.5]);
+        draw.rotate_about([0.0, 1.0, 0.0], yaw, [0.0; 3]);
+        draw.translate([0.28, 0.0, 0.0]);
+        draw.rotate_about([0.0, 0.0, 1.0], -22.0, [0.0; 3]);
+        draw.item(
+            &ItemStack::of(*key),
+            mod_api::ItemDisplayContext::None,
+            None,
+            0,
+        );
+        draw.pop();
+        draw.keep();
+    }
+}
 const KEY: &str = "create_controller";
 const CUSTOM_DATA: &str = "minecraft:custom_data";
 
@@ -66,6 +114,15 @@ impl Subsystem for Controller {
         let item = r.item_key(ITEM);
         r.item_part(item, ControllerItem);
         r.block_part(key(Block::LecternController), LecternPart);
+        let _ = CONTROLLER_KEY.set(item);
+        match super::super::kinetics::kind() {
+            Some(kind) => {
+                if let Err(e) = r.block_entity_part(&kind, LecternDraw) {
+                    crate::create_log!("[create] lectern controller drawing refused: {e:?}");
+                }
+            }
+            None => crate::create_log!("[create] controller: no kinetic block entity type yet"),
+        }
     }
 
     fn world_closed(&self) {

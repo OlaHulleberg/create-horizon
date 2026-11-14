@@ -46,8 +46,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 ### Containers, items and transactions
 
 - **Rolling back mod-owned state with a transaction.** A handler cannot learn that its transaction aborted,
-  so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, and packagers and
-  frogports offer no `ITEMS` handlers to hoppers, funnels and chutes. A close/abort callback on `Transaction`
+  so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, packagers and
+  frogports offer no `ITEMS` handlers to hoppers, funnels and chutes, and a portable storage interface
+  offers its contraption's storage to Create's chutes and funnels only, not to hoppers. A close/abort callback on `Transaction`
   (or a journal for mod state) would close both.
 - **A notice for any container's contents changing.** `contents_changed` reaches only the changed block's own
   parts, so a chute under a vanilla container and a frogport above an inventory re-check on a timer instead.
@@ -135,6 +136,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 - Logistics: a sloped belt collides as a flat one; Create's `BeltShapes` (by facing, slope and part) are
   not declared yet, though content shapes can select by several properties (as the steam engine's do).
+- Contraptions: a deployer on a moving contraption does nothing (`DeployerMovementBehaviour`), and moving
+  block entities other than mounted storage (chests, barrels, vaults, toolboxes) keep only their block (a
+  depot's item, a deployer's held item, a tank's fluid are not carried).
 - Fluids: the smart pipe's filter is set by a click anywhere on the pipe, not only on its filter slot;
   potion fluids (`PotionFluid`, potions in spouts, drains and tanks) and builder's tea.
 

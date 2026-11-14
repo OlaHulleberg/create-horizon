@@ -45,14 +45,6 @@ pub fn valve_angle(data: &Compound) -> i32 {
     }
 }
 
-/// A scroll option's index in a block entity's data (a windmill's direction): 0 unless set.
-pub fn scroll_option(data: &Compound) -> i32 {
-    match data.get(&SCROLL_VALUE.into()) {
-        Some(Tag::Int(v)) => *v,
-        _ => 0,
-    }
-}
-
 /// The data a valve handle's use at game time `start` with angle `value` gives its block entity.
 pub fn valve_use(start: i64, value: i32, back: bool) -> Compound {
     let used = Compound::from([

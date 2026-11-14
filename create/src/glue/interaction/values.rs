@@ -76,7 +76,26 @@ pub(crate) fn value_box_hit(
     let slot = match (block, info.axis, info.tunnel) {
         (B::CreativeMotor, ..) => info.facing.and_then(|f| board::motor_slot(f, side)),
         (B::RotationSpeedController, Some(axis), _) => board::controller_slot(axis, side),
-        (B::WindmillBearing, ..) => info.facing.and_then(|f| board::bearing_slot(f, side)),
+        // `IBearingBlockEntity.getMovementModeSlot`, the windmill's direction and the clock's
+        // hands on the same slot.
+        (B::MechanicalBearing | B::WindmillBearing | B::ClockworkBearing, ..) => info
+            .facing
+            .and_then(|f| board::extender_slot(f, None, side)),
+        // `MechanicalPistonBlockEntity.getMovementModeSlot`: off its shaft's axis too.
+        (B::MechanicalPiston | B::StickyMechanicalPiston, ..) => info.facing.and_then(|f| {
+            let shaft = create_engine::parts::directional_axis(f, info.along_first);
+            board::extender_slot(f, Some(shaft), side)
+        }),
+        // `PulleyBlockEntity.getMovementModeSlot`: on top.
+        (B::RopePulley, ..) => (side == Dir::Up).then(|| board::centred_slot(side)),
+        // `RollerBlockEntity.RollerValueBox(-3)`: the mode, beside its filter, from any side.
+        (B::MechanicalRoller, ..) => {
+            return info.facing.is_some_and(|f| {
+                let (slot, r) = create_engine::actors::roller_slot(f, false);
+                let d2: f64 = (0..3).map(|i| (local[i] - slot[i]).powi(2)).sum();
+                d2.sqrt() < r
+            });
+        }
         // `BrassDiodeScrollSlot`: not a sided box, any face reaches it.
         (B::PulseRepeater | B::PulseExtender | B::PulseTimer, ..) => {
             Some(create_engine::diode::SLOT)
@@ -103,6 +122,23 @@ pub(crate) fn value_box_hit(
         _ => None,
     };
     slot.is_some_and(|s| board::hits_box(s, local))
+}
+
+/// The title and option names of a block's `ScrollOptionBehaviour` (an icons board).
+pub(crate) fn option_names(block: B) -> Option<(&'static str, &'static [&'static str])> {
+    Some(match block {
+        B::BrassTunnel => ("Distribution Method", &create_engine::tunnel::OPTIONS[..]),
+        // `ArmBlockEntity.selectionMode`.
+        B::MechanicalArm => ("Distribution Method", &board::ARM_MODES[..]),
+        B::MechanicalBearing => ("Movement Mode", &board::ROTATION_MODES[..]),
+        B::MechanicalPiston | B::StickyMechanicalPiston | B::RopePulley => {
+            ("Movement Mode", &board::MOVEMENT_MODES[..])
+        }
+        B::WindmillBearing => ("Rotation Direction", &board::ROTATION_DIRECTIONS[..]),
+        B::ClockworkBearing => ("Clock Hand Arrangement", &board::CLOCK_HANDS[..]),
+        B::MechanicalRoller => ("Roller Mode", &board::ROLLER_MODES[..]),
+        _ => return None,
+    })
 }
 
 /// `ValueSettingsInputHandler.onBlockActivated` on the server: a click on an active value box is
@@ -287,6 +323,23 @@ pub(super) fn value_settings_from_client(
                     .flatten(),
             )
         }
+        // The contraption blocks' `ScrollOptionBehaviour`s (their movement mode, a windmill's
+        // direction, a clock's hands, a roller's mode).
+        B::MechanicalBearing
+        | B::WindmillBearing
+        | B::ClockworkBearing
+        | B::MechanicalPiston
+        | B::StickyMechanicalPiston
+        | B::RopePulley
+        | B::MechanicalRoller => {
+            use crate::glue::contraptions::{scroll_option, set_scroll_option};
+            let count = option_names(block).map_or(1, |(_, o)| o.len() as i32);
+            let now = scroll_option(&lv, pos, block);
+            if let Some(v) = pick.and_then(|s| board::option_value(s, now, count)) {
+                set_scroll_option(&mut lv, pos, block, v);
+            }
+            Some(Some(scroll_option(&lv, pos, block)))
+        }
         // `BrassDiodeScrollValueBehaviour`: `onShortInteract` toggles the diode (`toggle`: not
         // with a wrench; sneaking and no building were never a short click); `setValueSettings`
         // sets its delay.
@@ -304,24 +357,6 @@ pub(super) fn value_settings_from_client(
                 crate::glue::redstone::show_diode(&mut lv, pos);
             }
             max
-        }
-        // `WindmillBearingBlockEntity.movementDirection`: clockwise (0) or not, kept as its
-        // block entity's `ScrollValue`; a running windmill turns the other way at once.
-        B::WindmillBearing => {
-            let entity = lv.host.block_entity(lv.level, pos);
-            let now = entity
-                .and_then(|e| e.data(&*lv.host))
-                .map_or(0, |d| super::super::sources::handles::scroll_option(&d));
-            let picked = pick.and_then(|s| board::option_value(s, now, 2));
-            if let (Some(v), Some(entity)) = (picked, entity) {
-                let data = mod_api::Compound::from([(
-                    super::super::sources::handles::SCROLL_VALUE.into(),
-                    mod_api::Tag::Int(v),
-                )]);
-                let _ = entity.merge_data(&mut *lv.host, data);
-                with_world(|w| w.set_windmill_direction(dim, pos, v == 0));
-            }
-            Some(picked.or(Some(now)))
         }
         // `ValveHandleScrollValueBehaviour`: `onShortInteract` uses the handle as a click on it
         // would (`ValveHandleBlock.clicked`); `setValueSettings` sets its angle, never 0.

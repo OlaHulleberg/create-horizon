@@ -312,8 +312,9 @@ fn rise(
     let dim = lv.dim;
     let above = [pos[0], pos[1] + 1, pos[2]];
     let above_chute = chute_at(lv, above);
-    let container =
-        above_chute.is_none() && items::items_at(lv, above, Some(Direction::Down)).is_some();
+    let container = above_chute.is_none()
+        && (items::items_at(lv, above, Some(Direction::Down)).is_some()
+            || actors::is_item_interface(lv, above));
     let can = if !active {
         false
     } else if let Some((b, powered)) = above_chute {
@@ -416,7 +417,8 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
         let target = create_engine::chute::target(pos, facing);
         let target_chute = chute_at(lv, target);
         let container = chute_at(lv, below).is_none()
-            && items::items_at(lv, below, Some(Direction::Up)).is_some();
+            && (items::items_at(lv, below, Some(Direction::Up)).is_some()
+                || actors::is_item_interface(lv, below));
         let target_takes = |lv: &ServerLevel<'_>| {
             target_chute.is_some_and(|(b, powered)| {
                 chute_stack(lv, target).is_none() && chute_accepts(lv, target, b, powered, &stack)

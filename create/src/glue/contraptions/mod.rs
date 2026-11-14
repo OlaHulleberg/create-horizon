@@ -10,21 +10,33 @@
 //! the anchor's column, and drawn by the anchor's block entity (`draw`), which carries it to
 //! clients in its data.
 //!
+//! The movement mode on a bearing's, piston's or pulley's value box (`RotationMode`,
+//! `MovementMode`), a windmill's direction, a clock's hand arrangement and a roller's mode are
+//! kept per block (`scroll_options`, saved as `modes`). A stopped piston or pulley its mode keeps
+//! together waits for its speed to change (`waitingForSpeedChange`); pistons and gantries stop
+//! against the world as `ContraptionCollider.collideBlocks` has them. Chests, barrels, item
+//! vaults and toolboxes ride every contraption as mounted storage (saved with it), bearings,
+//! windmills and clocks included.
+//!
 //! What the API cannot do, left out (for HORIZON_API.md's gaps):
-//! - Moving structures have no collision and carry nothing standing on them: there is no
-//!   level collider an entity's motion reads (`notes/moving-structures-note.md`), and no mod
-//!   entity type to be one. Create's `ContraptionCollider` is not run.
+//! - Entities can't stand on, be pushed by or ride moving structures: there is no level
+//!   collider an entity's motion reads (`notes/moving-structures-note.md`), and no mod entity
+//!   type to be one.
 //! - A moving block cannot be clicked, and riders cannot sit on a moving structure's seats
-//!   (`Contraption.seats`): there is no moving entity to pick or ride.
-//! - Moving block entities other than chests and barrels are refused, as the legacy did:
-//!   their block entity data has no general way to ride along. A bearing's structure carries
-//!   no storage or controls, as the legacy's didn't; its glue stays in the world while it turns
-//!   and goes back turned with it.
+//!   (`Contraption.seats`): there is no moving entity to pick or ride. So contraption controls
+//!   on a moving structure are clicked with `/create_debug controls`.
 //! - Each moving block is lit with the world's light where the structure was last sent from
 //!   (the server reads it: `LevelRef::brightness` is the server's only), not where it is each
 //!   frame.
 //! - A clockwork bearing's top turns at its kinetic speed, not with the hour hand
 //!   (`BearingRenderer`): the top is the kinetic block entity's part.
+//!
+//! Left out, not for want of API:
+//! - Other moving block entities keep only their block: a depot's item, a deployer's held item
+//!   and a tank's fluid are not carried, and a deployer on a contraption does nothing
+//!   (`DeployerMovementBehaviour`). Block entities of other mods are refused.
+//! - A bearing's glue stays in the world while it turns and goes back turned with it; its
+//!   contraption controls are not carried.
 
 pub mod actors;
 mod bearings;
@@ -110,6 +122,32 @@ impl Subsystem for Contraptions {
         bearings::tick_pistons(lv);
         actors::tick_mounted(lv);
         lifts::tick_lifts(lv);
+        superglue::tick(lv);
+    }
+
+    fn server_message(
+        &self,
+        _host: &mut dyn mod_api::ClientHost,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != superglue::CHANNEL {
+            return false;
+        }
+        superglue::from_server(data);
+        true
+    }
+
+    fn client_reset(&self) {
+        superglue::client_reset();
+    }
+
+    fn render_level_stage(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        superglue::render(host, event);
     }
 
     /// A left click with super glue in hand takes the glue off the block hit.
@@ -130,6 +168,58 @@ impl Subsystem for Contraptions {
         event: &mut RunModCommandEvent<'_>,
     ) -> Flow {
         actors::run_command(host, event)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Value boxes
+
+/// The option a contraption block's value box is on (`ScrollOptionBehaviour.get`): a bearing's,
+/// piston's or pulley's movement mode, a windmill's direction, a clock's hands, a roller's mode.
+pub fn scroll_option(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block) -> i32 {
+    let dim = lv.dim;
+    if block == Block::MechanicalRoller {
+        return with_world(|w| w.dims[dim].rollers.get(&pos).map(|r| r.1 as i32))
+            .flatten()
+            .unwrap_or(0);
+    }
+    option_at(dim, pos)
+}
+
+/// The option kept for the block at `pos` (0, the first, when none is).
+pub(super) fn option_at(dim: usize, pos: [i32; 3]) -> i32 {
+    with_world(|w| w.dims[dim].scroll_options.get(&pos).copied())
+        .flatten()
+        .map_or(0, i32::from)
+}
+
+/// A pick on a contraption block's value box (`ScrollOptionBehaviour.setValue` and its
+/// callback): a running windmill turns the other way (`onDirectionChanged`), a running clock's
+/// hands take their new targets, a roller shares its mode with the rollers in line
+/// (`onModeChanged`).
+pub fn set_scroll_option(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, value: i32) {
+    let dim = lv.dim;
+    if block == Block::MechanicalRoller {
+        actors::set_roller_mode(lv, pos, value);
+        return;
+    }
+    let value = value.clamp(0, 2) as u8;
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        if value == 0 {
+            d.scroll_options.remove(&pos);
+        } else {
+            d.scroll_options.insert(pos, value);
+        }
+    });
+    super::persist::mark_pos_unsaved(dim, pos);
+    match block {
+        Block::WindmillBearing => {
+            let state = lv.block(pos);
+            with_world(|w| w.windmill_direction(dim, pos, state, value == 0));
+        }
+        Block::ClockworkBearing => lifts::clock_hands_set(lv, pos, value),
+        _ => {}
     }
 }
 
@@ -290,6 +380,15 @@ impl ServerLevel<'_> {
     fn is_free(&self, pos: [i32; 3]) -> bool {
         self.block_name(pos)
             .is_some_and(|n| n == "minecraft:air" || n == "minecraft:cave_air")
+    }
+
+    /// A cell a moving structure passes without colliding (`isCollidingWithWorld`): a block
+    /// that can be replaced, or one with no collision shape (and nothing unloaded).
+    fn moved_through(&self, pos: [i32; 3]) -> bool {
+        self.replaceable(pos)
+            || self
+                .shape(pos, mod_api::BlockShapeKind::Collision)
+                .is_empty()
     }
 
     /// A cell a moving structure passes (air, or a fluid; `canBeReplaced` with no collision).

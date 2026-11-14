@@ -69,6 +69,9 @@ pub struct Pulley {
     /// Its blocks with nothing of it below and above them.
     pub down: Vec<[i32; 3]>,
     pub up: Vec<[i32; 3]>,
+    /// `waitingForSpeedChange`: stopped and kept together by its movement mode until its speed
+    /// changes.
+    pub waiting: bool,
 }
 
 /// What a tick of a running pulley does.
@@ -94,6 +97,7 @@ impl Pulley {
             down: colliders(&blocks, false),
             up: colliders(&blocks, true),
             blocks,
+            waiting: false,
         }
     }
 

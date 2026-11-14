@@ -506,26 +506,45 @@ pub fn hits_valve_box(slot: [f64; 3], local: [f64; 3]) -> bool {
     d2.sqrt() < 0.5 / 1.5
 }
 
-/// `IBearingBlockEntity.getMovementModeSlot` (a `DirectionalExtenderScrollOptionSlot`) on `side`
-/// of a bearing facing `facing`: centred 15.5 px out on a side across its axis, two pixels back
-/// from its facing.
-pub fn bearing_slot(facing: Dir, side: Dir) -> Option<[f64; 3]> {
-    if side.axis() == facing.axis() {
-        return None;
-    }
-    let o = sided_offset([0.5, 0.5, 15.5 / 16.0], side);
-    let n = facing.offset();
-    Some([0, 1, 2].map(|i| o[i] - f64::from(n[i]) * 2.0 / 16.0))
-}
-
-/// The windmill bearing's direction (`WindmillBearingBlockEntity.movementDirection`,
-/// `contraptions.windmill.rotation_direction`): its two `RotationDirection`s.
-pub const WINDMILL_DIRECTIONS: [&str; 2] = ["Clockwise", "Counter-Clockwise"];
-pub const WINDMILL: Board = options("Rotation Direction", 2);
-
 /// `BrassTunnelModeSlot` (a `CenteredSideValueBoxTransform`): 15.5 px out, on the top only.
 pub fn tunnel_mode_slot(side: Dir) -> Option<[f64; 3]> {
-    (side == Dir::Up).then(|| sided_offset([0.5, 0.5, 15.5 / 16.0], side))
+    (side == Dir::Up).then(|| centred_slot(side))
+}
+
+/// The option names of a contraption block's `ScrollOptionBehaviour`, in Create's lang order.
+pub const ROTATION_MODES: [&str; 3] = [
+    "Always Place when Stopped",
+    "Only Place near Initial Angle",
+    "Only Place when Anchor Destroyed",
+];
+pub const MOVEMENT_MODES: [&str; 3] = [
+    "Always Place when Stopped",
+    "Place only in Starting Position",
+    "Place only when Anchor Destroyed",
+];
+pub const ROTATION_DIRECTIONS: [&str; 2] = ["Clockwise", "Counter-Clockwise"];
+pub const CLOCK_HANDS: [&str; 3] = ["Hour hand first", "Minute hand first", "24-Hour hand first"];
+pub const ROLLER_MODES: [&str; 3] = [
+    "Clear Blocks and Pave",
+    "Straight Fill Below",
+    "Sloped Fill Below",
+];
+
+/// `CenteredSideValueBoxTransform`: 15.5 px out, in the middle of `side`.
+pub fn centred_slot(side: Dir) -> [f64; 3] {
+    sided_offset([0.5, 0.5, 15.5 / 16.0], side)
+}
+
+/// `DirectionalExtenderScrollOptionSlot` (bearings' and pistons' movement mode): centred on a
+/// side off the block's facing axis (and, for a piston, off its shaft's `shaft` axis), 2 px back
+/// from its facing; None on any other side.
+pub fn extender_slot(facing: Dir, shaft: Option<Axis>, side: Dir) -> Option<[f64; 3]> {
+    if side.axis() == facing.axis() || Some(side.axis()) == shaft {
+        return None;
+    }
+    let o = centred_slot(side);
+    let n = facing.offset();
+    Some([0, 1, 2].map(|i| o[i] - f64::from(n[i]) * 2.0 / 16.0))
 }
 
 /// `ArmBlockEntity.SelectionModeValueBox` (a `CenteredSideValueBoxTransform` on the sides
@@ -750,6 +769,21 @@ mod tests {
         assert_eq!(shade(20.0), 0x5010_1010);
         assert!((MOTOR.pitch(0) - 1.15).abs() < 1e-6 && (MOTOR.pitch(256) - 1.5).abs() < 1e-6);
         assert_eq!(Layout::cursor([50.5, 5.0], 12), [43, -2, 15]);
+    }
+
+    #[test]
+    fn movement_mode_slots_sit_off_the_facing_and_back_two_pixels() {
+        // A bearing facing up: on its sides, 15.5 px out, 2 px down; none on top or bottom.
+        assert_eq!(extender_slot(Dir::Up, None, Dir::Up), None);
+        assert_eq!(extender_slot(Dir::Up, None, Dir::Down), None);
+        let north = extender_slot(Dir::Up, None, Dir::North).unwrap();
+        let close = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9);
+        assert!(close(north, [0.5, 0.375, 0.5 / 16.0]));
+        // A piston facing east turning a z shaft: its box is on top and bottom only.
+        assert_eq!(extender_slot(Dir::East, Some(Axis::Z), Dir::North), None);
+        let top = extender_slot(Dir::East, Some(Axis::Z), Dir::Up).unwrap();
+        assert!(close(top, [0.375, 15.5 / 16.0, 0.5]));
+        assert!(close(centred_slot(Dir::Up), [0.5, 15.5 / 16.0, 0.5]));
     }
 
     #[test]

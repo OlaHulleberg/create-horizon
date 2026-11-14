@@ -108,6 +108,44 @@ pub fn collect(
     })
 }
 
+/// `TranslatingContraption.createColliders`: the blocks of a structure (offsets) with no block
+/// of it next to them going `dir`, the ones that meet the world first.
+pub fn colliders(blocks: &[([i32; 3], u32)], dir: Dir) -> Vec<[i32; 3]> {
+    let set: HashSet<[i32; 3]> = blocks.iter().map(|(p, _)| *p).collect();
+    blocks
+        .iter()
+        .map(|(p, _)| *p)
+        .filter(|p| !set.contains(&add(*p, dir, 1)))
+        .collect()
+}
+
+/// `ContraptionCollider.collideBlocks` for a piston's structure (offsets from `anchor` at
+/// offset 0, along `facing`) moved to offset `to` going `dir`: the world cells its leading
+/// blocks enter (`BlockPos.containing(position)`, a block further on going a positive way),
+/// each with its block's offset.
+pub fn entered_cells(
+    anchor: [i32; 3],
+    facing: Dir,
+    to: f32,
+    dir: Dir,
+    colliders: &[[i32; 3]],
+) -> Vec<([i32; 3], [i32; 3])> {
+    let f = facing.offset();
+    let mut grid = [0, 1, 2].map(|i| (anchor[i] as f32 + f[i] as f32 * to).floor() as i32);
+    if dir.positive() {
+        grid = add(grid, dir, 1);
+    }
+    colliders
+        .iter()
+        .map(|l| ([grid[0] + l[0], grid[1] + l[1], grid[2] + l[2]], *l))
+        .collect()
+}
+
+/// `LinearActuatorBlockEntity.getGridOffset`.
+pub fn grid_offset(offset: f32, range: i32) -> f32 {
+    ((offset + 0.5) as i32).clamp(0, range) as f32
+}
+
 /// `Contraption.searchMovedStructure` from `start` with a forced direction: blocks stuck to each
 /// other (slime, honey) and the block ahead in `forced` move together; an unmovable block ahead
 /// refuses the move. Offsets from `start`, and states.
@@ -246,6 +284,27 @@ pub fn movement(speed: f32, facing: Dir, offset: f32, range: i32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_moving_structure_meets_the_cells_its_leading_blocks_enter() {
+        // Two blocks in a row along x and one above the first; moving east the second and
+        // the one above lead, moving west the first and the one above.
+        let blocks = vec![([0, 0, 0], 1), ([1, 0, 0], 1), ([0, 1, 0], 1)];
+        let mut east = colliders(&blocks, Dir::East);
+        east.sort();
+        assert_eq!(east, vec![[0, 1, 0], [1, 0, 0]]);
+        let mut west = colliders(&blocks, Dir::West);
+        west.sort();
+        assert_eq!(west, vec![[0, 0, 0], [0, 1, 0]]);
+        // Anchor at x 10, 0.3 out east: going east it enters the cells a block further on.
+        let cells = entered_cells([10, 0, 0], Dir::East, 0.3, Dir::East, &[[1, 0, 0]]);
+        assert_eq!(cells, vec![([12, 0, 0], [1, 0, 0])]);
+        // Going back west from 0.3 it is entering the cells at its floor.
+        let cells = entered_cells([10, 0, 0], Dir::East, 0.3, Dir::West, &[[0, 0, 0]]);
+        assert_eq!(cells, vec![([10, 0, 0], [0, 0, 0])]);
+        assert_eq!(grid_offset(2.4, 4), 2.0);
+        assert_eq!(grid_offset(3.6, 3), 3.0);
+    }
 
     #[test]
     fn a_retracted_piston_takes_its_poles_behind_it() {

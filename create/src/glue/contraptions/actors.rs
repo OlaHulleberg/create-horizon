@@ -1,8 +1,9 @@
 //! What moving contraptions carry besides their blocks, and Create's glue and stickers: super
 //! glue areas the structure search reads (set by the glue item, `superglue`, or
 //! `/create_debug glue`), the sticker's redstone, actors (drills, saws, harvesters, ploughs,
-//! rollers, interfaces) ticked only while their contraption moves, mounted storage (chests and
-//! barrels) that keeps its items and takes what the actors collect, and contraption controls
+//! rollers, interfaces) ticked only while their contraption moves, mounted storage (chests,
+//! barrels, item vaults and toolboxes) that keeps its items and takes what the actors collect
+//! (a toolbox takes nothing), and contraption controls
 //! (`/create_debug controls`). Create's rules are in `create_engine::glue` and
 //! `create_engine::actors`. Saved under `create_glue`.
 //! Track observers' filters (the trains' slot, read as the items port reads filters) are kept
@@ -84,10 +85,66 @@ fn storage_name(name: &str) -> bool {
     )
 }
 
+/// The block entity slots of Create's storage blocks that ride as mounted storage
+/// (`ItemVaultMountedStorage`: each vault block's 20 stacks; `ToolboxMountedStorage`: a
+/// toolbox's compartments and filters), read and written straight in their block entity.
+fn slot_storage(name: &str) -> Option<usize> {
+    if name == "create:item_vault" {
+        return Some(create_engine::vault::SLOTS);
+    }
+    let block = create_engine::Block::from_name(name.strip_prefix("create:")?)?;
+    create_engine::dye::is_toolbox(block).then_some(create_engine::toolbox::SLOTS)
+}
+
+/// Whether a carried storage block's slots take what actors collect and interfaces bring: a
+/// toolbox's don't (its compartments hold one kind each, `ToolboxInventory.isItemValid`).
+fn takes_any(stored: &Stored) -> bool {
+    stored.len() != create_engine::toolbox::SLOTS
+}
+
 /// Whether `pos` holds a storage block a contraption carries.
 pub(super) fn is_storage(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
-    lv.block_name(pos).is_some_and(|n| storage_name(&n))
+    lv.block_name(pos)
+        .is_some_and(|n| storage_name(&n) || slot_storage(&n).is_some())
         && lv.host.block_entity(lv.level, pos).is_some()
+}
+
+/// The slots of a vault or toolbox at `pos`, taken out of its block entity (left empty, so it
+/// spills nothing when its block goes).
+fn take_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], size: usize) -> Option<Stored> {
+    let e = lv.host.block_entity(lv.level, pos)?;
+    let stored: Stored = (0..size)
+        .map(|i| e.item_slot(&*lv.host, i as u32).ok().flatten())
+        .collect();
+    let _ = lv.host.transaction(|host, tx| {
+        for (i, s) in stored.iter().enumerate() {
+            if s.is_some() {
+                let _ = e.set_item_slot(host, tx, i as u32, None);
+            }
+        }
+        Ok::<(), ()>(())
+    });
+    Some(stored)
+}
+
+/// The carried slots back in the vault or toolbox now at `pos`; what has no slot drops.
+fn put_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], size: usize, stored: Stored) {
+    let Some(e) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let mut left = Vec::new();
+    let _ = lv.host.transaction(|host, tx| {
+        for (i, s) in stored.into_iter().enumerate() {
+            let Some(stack) = s else { continue };
+            if i >= size || e.set_item_slot(host, tx, i as u32, Some(stack.clone())) != Ok(true) {
+                left.push(stack);
+            }
+        }
+        Ok::<(), ()>(())
+    });
+    for stack in left {
+        lv.drop_stack(center(pos), [0.0; 3], stack, 10);
+    }
 }
 
 /// The `ITEMS` handler of the block at `pos`.
@@ -105,6 +162,9 @@ fn items_at(
 fn take_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Stored> {
     if !is_storage(lv, pos) {
         return None;
+    }
+    if let Some(size) = lv.block_name(pos).as_deref().and_then(slot_storage) {
+        return take_slots(lv, pos, size);
     }
     let items = items_at(lv, pos)?;
     let host = &mut *lv.host;
@@ -135,6 +195,10 @@ fn take_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Stored> {
 /// The carried items back in the storage block now at `pos` (`addBlocksToWorld`), each in its
 /// slot through the block's `ITEMS` handler; what does not go in drops there.
 fn put_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3], stored: Stored) {
+    if let Some(size) = lv.block_name(pos).as_deref().and_then(slot_storage) {
+        put_slots(lv, pos, size, stored);
+        return;
+    }
     let Some(items) = items_at(lv, pos) else {
         for stack in stored.into_iter().flatten() {
             lv.drop_stack(center(pos), [0.0; 3], stack, 10);
@@ -541,15 +605,7 @@ pub(super) fn carry(
     if !carried.controls.is_empty() || carried.actors.iter().any(|a| a.kind == Kind::Roller) {
         mark_pos_unsaved(dim, origin);
     }
-    let mut stored = Vec::new();
-    for (o, _) in blocks {
-        if let Some(s) = take_storage(lv, at(*o)) {
-            stored.push((*o, s));
-        }
-    }
-    if !stored.is_empty() {
-        STORAGE.with_borrow_mut(|m| m.insert((dim, key), stored));
-    }
+    carry_storage(lv, key, origin, blocks);
     let world: Vec<[i32; 3]> = blocks.iter().map(|(o, _)| at(*o)).collect();
     let taken = with_world(|w| {
         let areas = &mut w.dims[dim].glue;
@@ -568,6 +624,114 @@ pub(super) fn carry(
         }
     }
     carried
+}
+
+/// `MountedStorageManager` as a contraption assembles: the items of its storage blocks
+/// (`blocks`, offsets from `origin`) leave them and ride with contraption `key`.
+pub(super) fn carry_storage(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    origin: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+) {
+    let dim = lv.dim;
+    let mut stored = Vec::new();
+    for (o, _) in blocks {
+        if let Some(s) = take_storage(lv, add(origin, *o)) {
+            stored.push((*o, s));
+        }
+    }
+    if !stored.is_empty() {
+        STORAGE.with_borrow_mut(|m| m.insert((dim, key), stored));
+    }
+}
+
+/// The items contraption `key` carried back into its storage blocks, each now at `place(offset)`
+/// (dropped there when no storage block took its place).
+pub(super) fn release_storage(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    place: impl Fn([i32; 3]) -> [i32; 3],
+) {
+    let dim = lv.dim;
+    let stored = STORAGE
+        .with_borrow_mut(|m| m.remove(&(dim, key)))
+        .unwrap_or_default();
+    for (o, s) in stored {
+        let p = place(o);
+        // A fresh storage block where it went back: it takes the carried items.
+        if is_storage(lv, p) {
+            put_storage(lv, p, s);
+            continue;
+        }
+        for stack in s.into_iter().flatten() {
+            lv.drop_stack(center(p), [0.0; 3], stack, 10);
+        }
+    }
+}
+
+/// The items contraption `key` carries, as a save keeps them: each storage block's offset and
+/// its slots (`ItemStack.CODEC`, `Slot`). None when it carries none.
+pub(super) fn storage_to_nbt(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<Tag> {
+    let dim = lv.dim;
+    STORAGE.with_borrow(|m| {
+        let list = m.get(&(dim, key))?;
+        let blocks = list
+            .iter()
+            .map(|(o, slots)| {
+                let items = slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, s)| {
+                        let mut c = s.as_ref()?.to_nbt(&*lv.host)?;
+                        c.insert("Slot".into(), Tag::Int(i as i32));
+                        Some(Tag::Compound(c))
+                    })
+                    .collect();
+                let mut c = Compound::new();
+                c.insert("pos".into(), Tag::IntArray(o.to_vec()));
+                c.insert("size".into(), Tag::Int(slots.len() as i32));
+                c.insert("items".into(), Tag::List(items));
+                Tag::Compound(c)
+            })
+            .collect();
+        Some(Tag::List(blocks))
+    })
+}
+
+/// What [`storage_to_nbt`] saved, carried again by contraption `key`.
+pub(super) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<&Tag>) {
+    let Some(Tag::List(list)) = tag else {
+        return;
+    };
+    let mut stored: Mounted = Vec::new();
+    for b in list {
+        let Tag::Compound(b) = b else { continue };
+        let (Some(Tag::IntArray(p)), Some(Tag::List(items))) =
+            (b.get(&"pos".into()), b.get(&"items".into()))
+        else {
+            continue;
+        };
+        let [x, y, z] = p[..] else { continue };
+        let size = match b.get(&"size".into()) {
+            Some(Tag::Int(n)) => (*n).clamp(0, 256) as usize,
+            _ => STORAGE_SLOTS as usize,
+        };
+        let mut slots: Stored = vec![None; size];
+        for item in items {
+            let Tag::Compound(c) = item else { continue };
+            let Some(Tag::Int(i)) = c.get(&"Slot".into()) else {
+                continue;
+            };
+            if let Some(slot) = slots.get_mut(*i as usize) {
+                *slot = ItemStack::from_nbt(&*lv.host, c);
+            }
+        }
+        stored.push(([x, y, z], slots));
+    }
+    if !stored.is_empty() {
+        STORAGE.with_borrow_mut(|m| m.insert((lv.dim, key), stored));
+    }
 }
 
 /// What a contraption carried goes back with its blocks (`addBlocksToWorld`, `stop`): its
@@ -608,20 +772,7 @@ pub(super) fn release(
     if settled {
         mark_pos_unsaved(dim, origin);
     }
-    let stored = STORAGE
-        .with_borrow_mut(|m| m.remove(&(dim, key)))
-        .unwrap_or_default();
-    for (o, s) in stored {
-        let p = at(o);
-        // A fresh storage block where it went back: it takes the carried items.
-        if is_storage(lv, p) {
-            put_storage(lv, p, s);
-            continue;
-        }
-        for stack in s.into_iter().flatten() {
-            lv.drop_stack(center(p), [0.0; 3], stack, 10);
-        }
-    }
+    release_storage(lv, key, at);
     if carried.glue.is_empty() {
         return;
     }
@@ -947,7 +1098,7 @@ fn collect(lv: &mut ServerLevel<'_>, key: [i32; 3], actor: &Actor, stack: ItemSt
         // `ItemHandlerHelper.insertItem`: slot by slot, onto the same items or into an empty
         // slot. A stack can't hold none, so what is left is counted beside it.
         let mut left = stack.count();
-        for (_, s) in list.iter_mut() {
+        for (_, s) in list.iter_mut().filter(|(_, s)| takes_any(s)) {
             for slot in s.iter_mut() {
                 if left == 0 {
                     return None;
@@ -992,8 +1143,8 @@ fn collect(lv: &mut ServerLevel<'_>, key: [i32; 3], actor: &Actor, stack: ItemSt
 }
 
 /// The actors of a bearing's structure (its blocks' offsets from the bearing and states):
-/// breakers, harvesters, ploughs and rollers, each a breaker of its own. Its storage, glue and
-/// controls don't ride a bearing.
+/// breakers, harvesters, ploughs and rollers, each a breaker of its own. Its storage rides it
+/// apart (`carry_storage`); its glue and controls don't.
 pub(super) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
     let mut carried = Carried::default();
     for (o, state) in blocks {
@@ -1473,7 +1624,7 @@ pub fn psi_insert(
         let mut left = stack.count();
         // Same items first, then empty slots, storage block by storage block.
         for empty in [false, true] {
-            for (_, s) in list.iter_mut() {
+            for (_, s) in list.iter_mut().filter(|(_, s)| takes_any(s)) {
                 for slot in s.iter_mut() {
                     if left == 0 {
                         return None;
@@ -1592,6 +1743,24 @@ fn share_roller(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             with_world(|w| w.dims[dim].rollers.insert(p, v.clone()));
         }
     }
+    mark_pos_unsaved(dim, pos);
+}
+
+/// A roller's mode picked on its value box (`mode`, `onModeChanged`): shared with the rollers
+/// in line.
+pub(super) fn set_roller_mode(lv: &mut ServerLevel<'_>, pos: [i32; 3], mode: i32) {
+    let Some(m) = actors::RollingMode::ALL
+        .get(mode.clamp(0, 2) as usize)
+        .copied()
+    else {
+        return;
+    };
+    if roller_at(lv, pos).is_none() {
+        return;
+    }
+    let dim = lv.dim;
+    with_world(|w| w.dims[dim].rollers.entry(pos).or_default().1 = m);
+    share_roller(lv, pos);
     mark_pos_unsaved(dim, pos);
 }
 
@@ -1718,7 +1887,7 @@ impl BlockPart for MountedPart {
     /// (`create:contraption_controlled` only; an empty hand clears it), elsewhere it turns its
     /// kind off or on, with Create's status and click. A roller: on its filter slot the held
     /// block item becomes its pave material (`isValidMaterial`), an empty hand clears it, shared
-    /// with the rollers in line; its mode is set with `/create_debug roller` (the value box).
+    /// with the rollers in line; its mode is set on its value box (`interaction::values`).
     fn use_item_on(
         &self,
         host: &mut dyn ServerHost,
