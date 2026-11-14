@@ -842,9 +842,7 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
     let l = layout(o.attribute);
     let size = draw.size();
     let c = l.corner(size);
-    // `Screen.renderBackground` in a world: the blur, then the dark translucent menu background.
-    host.apply_screen_blur();
-    draw.draw_menu_background([0.0, 0.0, size[0], size[1]], true);
+    super::gadget_gui::dim(host, draw);
     // The player's inventory panel and its label.
     let p = l.inventory_panel(c);
     draw.sprite(

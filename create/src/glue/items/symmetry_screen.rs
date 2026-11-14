@@ -163,6 +163,7 @@ pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
 
 /// `renderWindow` and the widgets.
 fn draw(host: &dyn ClientHost, draw: &mut dyn mod_api::DrawContext, o: &Open, mouse: [f32; 2]) {
+    super::gadget_gui::dim(host, draw);
     let (x, y) = corner(draw.size(), SIZE, OFFSET_X);
     draw.sprite(
         CURIOSITIES,
