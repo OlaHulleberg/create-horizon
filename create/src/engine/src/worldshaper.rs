@@ -1,6 +1,8 @@
 //! Create's handheld worldshaper (`WorldshaperItem`, `ZapperItem`, `ZapperInteractionHandler`,
-//! `TerrainBrushes`: `CuboidBrush`, `SphereBrush`, `CylinderBrush`; `TerrainTools`,
-//! `PlacementOptions`, `PlacementPatterns`): the blocks a use reaches and what it does to each.
+//! `TerrainBrushes`: `CuboidBrush`, `SphereBrush`, `CylinderBrush`, `DynamicBrush`;
+//! `TerrainTools`, `PlacementOptions`, `PlacementPatterns`): the blocks a use reaches and what it
+//! does to each, and what its screen offers for each brush. The flatten tool is not ported: it
+//! changes nothing.
 //!
 //! Its settings ride the stack's `minecraft:custom_data` under Create's component names
 //! (`create:shaper_brush`, `create:shaper_brush_params`, `create:shaper_tool`,
@@ -45,27 +47,67 @@ pub const SPHERE_MAX: i32 = 10;
 pub const CYLINDER_MAX_RADIUS: i32 = 8;
 pub const CYLINDER_MAX_HEIGHT: i32 = 8;
 
+/// `DynamicBrush.MAX_RADIUS`: the surface and cluster brushes' range.
+pub const DYNAMIC_MAX: i32 = 10;
+
 impl Brush {
-    /// Whether the port has it (the surface and cluster brushes, `DynamicBrush`, are not).
-    pub fn ported(self) -> bool {
+    /// The brushes that are a fixed shape (`ShapedBrush`); the surface and cluster brushes
+    /// (`DynamicBrush`) follow the blocks they start on.
+    pub fn shaped(self) -> bool {
         matches!(self, Brush::Cuboid | Brush::Sphere | Brush::Cylinder)
     }
-    /// `getMin` / `getMax` of a parameter (`amtParams` of them: 3, 1, 2).
+    /// `getMin` / `getMax` of a parameter (the screen's inputs and the stored params).
     pub fn bounds(self, index: usize) -> (i32, i32) {
         match (self, index) {
             (Brush::Cuboid, _) => (1, CUBOID_MAX),
             (Brush::Sphere, _) => (0, SPHERE_MAX),
             (Brush::Cylinder, 0) => (0, CYLINDER_MAX_RADIUS),
             (Brush::Cylinder, _) => (1, CYLINDER_MAX_HEIGHT),
-            _ => (0, i32::MAX),
+            (Brush::Surface | Brush::Cluster, _) => (1, DYNAMIC_MAX),
         }
     }
+    /// `amtParams`: the inputs the screen shows.
     pub fn params(self) -> usize {
         match self {
             Brush::Cuboid => 3,
             Brush::Sphere => 1,
             Brush::Cylinder => 2,
-            Brush::Surface | Brush::Cluster => 3,
+            Brush::Surface | Brush::Cluster => 1,
+        }
+    }
+    /// `getParamLabel`: the lang key (under `create.`) of parameter `index`'s title.
+    pub fn param_label(self, index: usize) -> &'static str {
+        match (self, index) {
+            (Brush::Sphere, _) | (Brush::Cylinder, 0) => "generic.radius",
+            (Brush::Surface | Brush::Cluster, _) => "generic.range",
+            (_, 0) => "generic.width",
+            (_, 1) => "generic.height",
+            _ => "generic.length",
+        }
+    }
+    /// `getSupportedTools`, in the screen's order.
+    pub fn tools(self) -> &'static [Tool] {
+        match self {
+            Brush::Surface => &[Tool::Overlay, Tool::Replace, Tool::Clear],
+            Brush::Cluster => &[Tool::Replace, Tool::Clear],
+            _ => Tool::ALL,
+        }
+    }
+    /// `hasPlacementOptions`.
+    pub fn has_placement(self) -> bool {
+        self.shaped()
+    }
+    /// `hasConnectivityOptions`: follow diagonals and ignore material borders (the second and
+    /// third params, on when 0).
+    pub fn has_connectivity(self) -> bool {
+        !self.shaped()
+    }
+    /// `redirectTool`: the surface brush's overlay places on the surface it found.
+    pub fn redirect(self, tool: Tool) -> Tool {
+        if !self.shaped() && tool == Tool::Overlay {
+            Tool::Place
+        } else {
+            tool
         }
     }
 }
@@ -217,25 +259,130 @@ pub fn apply_pattern(
     });
 }
 
-/// The blocks a use reaches: the shape around the block hit, moved by the placement, thinned by
-/// the pattern (`WorldshaperItem.activate` up to `run`).
-pub fn positions(
+/// The blocks a use reaches: [`reached`], thinned by the pattern (`WorldshaperItem.activate` up
+/// to `run`).
+pub fn positions<G: Ground>(
     settings: &Settings,
     hit: [i32; 3],
     face: Dir,
+    ground: &mut G,
     next_bool: impl FnMut() -> bool,
+) -> Vec<[i32; 3]> {
+    let mut out = reached(settings, hit, face, ground);
+    apply_pattern(&mut out, settings.pattern, next_bool);
+    out
+}
+
+/// What the surface and cluster brushes read of the world (`DynamicBrush`).
+pub trait Ground {
+    /// A block's identity (`getBlock`), compared for material borders.
+    type Block: PartialEq;
+    fn block(&mut self, pos: [i32; 3]) -> Self::Block;
+    /// `canBeReplaced`.
+    fn replaceable(&mut self, pos: [i32; 3]) -> bool;
+    /// `getDestroySpeed == -1`.
+    fn unbreakable(&mut self, pos: [i32; 3]) -> bool;
+    /// `BlockHelper.hasBlockSolidSide`: the block at `pos` is not air and its collision shape
+    /// fills its `side` face.
+    fn solid_side(&mut self, pos: [i32; 3], side: Dir) -> bool;
+}
+
+/// `DynamicBrush.addToGlobalPositions`: from the block hit (replacing) or the space before its
+/// face (overlaying), a breadth-first walk over the blocks like it (any block when material
+/// borders are ignored) within `params[0]` of the start, along the faces' plane for the surface
+/// brush, diagonals included when `params[1]` is 0, in Create's order.
+pub fn dynamic<G: Ground>(
+    surface: bool,
+    params: [i32; 3],
+    target: [i32; 3],
+    face: Dir,
+    tool: Tool,
+    ground: &mut G,
+) -> Vec<[i32; 3]> {
+    let diagonals = params[1] == 0;
+    let fuzzy = params[2] == 0;
+    let replace = tool != Tool::Overlay;
+    let range = f64::from(params[0]);
+    let add = |a: [i32; 3], b: [i32; 3]| [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+    let axis = face.axis() as usize;
+    let mut offsets = Vec::new();
+    for x in -1..=1i32 {
+        for y in -1..=1i32 {
+            for z in -1..=1i32 {
+                let o = [x, y, z];
+                if (x.abs() + y.abs() + z.abs() < 2 || diagonals) && (o[axis] == 0 || !surface) {
+                    offsets.push(o);
+                }
+            }
+        }
+    }
+    let state = ground.block(target);
+    let f = face.offset();
+    let back = face.opposite().offset();
+    let start = if replace { target } else { add(target, f) };
+    let mut visited = std::collections::HashSet::new();
+    let mut frontier = std::collections::VecDeque::from([start]);
+    let mut out = Vec::new();
+    while let Some(p) = frontier.pop_front() {
+        if !visited.insert(p) {
+            continue;
+        }
+        // `BlockPos.closerThan`: the squared distance below the range's square.
+        let d: i64 = (0..3).map(|i| i64::from(p[i] - start[i]).pow(2)).sum();
+        if d as f64 >= range * range {
+            continue;
+        }
+        if replace {
+            if ground.unbreakable(p)
+                || (!fuzzy && ground.block(p) != state)
+                || ground.replaceable(p)
+                || (surface && ground.solid_side(add(p, f), face.opposite()))
+            {
+                continue;
+            }
+        } else {
+            let on = add(p, back);
+            if ground.replaceable(on)
+                || (!fuzzy && ground.block(on) != state)
+                || !ground.replaceable(p)
+            {
+                continue;
+            }
+        }
+        out.push(p);
+        frontier.extend(offsets.iter().map(|o| add(p, *o)));
+    }
+    out
+}
+
+/// The blocks a use reaches before its pattern: the brush's shape moved by the placement, or
+/// the dynamic brushes' walk (`getOffset` then `addToGlobalPositions`). What the worldshaper
+/// outlines while held (`WorldshaperRenderHandler`).
+pub fn reached<G: Ground>(
+    settings: &Settings,
+    hit: [i32; 3],
+    face: Dir,
+    ground: &mut G,
 ) -> Vec<[i32; 3]> {
     let Some(params) = settings.params else {
         return Vec::new();
     };
     let o = offset(settings.brush, params, face, settings.placement);
     let target = [hit[0] + o[0], hit[1] + o[1], hit[2] + o[2]];
-    let mut out: Vec<[i32; 3]> = shape(settings.brush, params)
-        .into_iter()
-        .map(|p| [target[0] + p[0], target[1] + p[1], target[2] + p[2]])
-        .collect();
-    apply_pattern(&mut out, settings.pattern, next_bool);
-    out
+    if settings.brush.shaped() {
+        return shape(settings.brush, params)
+            .into_iter()
+            .map(|p| [target[0] + p[0], target[1] + p[1], target[2] + p[2]])
+            .collect();
+    }
+    dynamic(
+        settings.brush == Brush::Surface,
+        params,
+        target,
+        face,
+        settings.tool,
+        ground,
+    )
 }
 
 /// What a tool writes at a position.
@@ -542,14 +689,14 @@ mod tests {
             placement: Placement::Attached,
             pattern: Pattern::Solid,
         };
-        let at = positions(&s, [800, 64, 800], Dir::Up, || false);
+        let at = positions(&s, [800, 64, 800], Dir::Up, &mut Flat, || false);
         assert_eq!(at, vec![[799, 65, 800], [800, 65, 800], [801, 65, 800]]);
         // Unconfigured: nothing.
         let none = Settings {
             params: None,
             ..s.clone()
         };
-        assert!(positions(&none, [0, 0, 0], Dir::Up, || false).is_empty());
+        assert!(positions(&none, [0, 0, 0], Dir::Up, &mut Flat, || false).is_empty());
         // Checkered keeps odd sums (negative ones too: Java's -1 % 2 is -1).
         let mut p = vec![[0, 0, 0], [1, 0, 0], [-1, 0, 0], [2, 0, 0]];
         apply_pattern(&mut p, Pattern::Checkered, || false);
@@ -633,5 +780,105 @@ mod tests {
         // Backwards, from the far side.
         let (pos, face, _) = clip([12.5, 0.5, 0.5], [0.5, 0.5, 0.5], solid).unwrap();
         assert_eq!((pos, face), ([9, 0, 0], Dir::East));
+    }
+
+    /// No world: the shaped brushes don't read one.
+    struct Flat;
+    impl Ground for Flat {
+        type Block = u8;
+        fn block(&mut self, _: [i32; 3]) -> u8 {
+            0
+        }
+        fn replaceable(&mut self, _: [i32; 3]) -> bool {
+            true
+        }
+        fn unbreakable(&mut self, _: [i32; 3]) -> bool {
+            false
+        }
+        fn solid_side(&mut self, _: [i32; 3], _: Dir) -> bool {
+            false
+        }
+    }
+
+    /// A floor of stone (1) at y 0 with a dirt (2) square at x 2..=3, air (0) above.
+    struct Floor;
+    impl Ground for Floor {
+        type Block = u8;
+        fn block(&mut self, p: [i32; 3]) -> u8 {
+            match p[1] {
+                0 if (2..=3).contains(&p[0]) => 2,
+                0 => 1,
+                _ => 0,
+            }
+        }
+        fn replaceable(&mut self, p: [i32; 3]) -> bool {
+            self.block(p) == 0
+        }
+        fn unbreakable(&mut self, _: [i32; 3]) -> bool {
+            false
+        }
+        fn solid_side(&mut self, p: [i32; 3], _: Dir) -> bool {
+            self.block(p) != 0
+        }
+    }
+
+    #[test]
+    fn dynamic_brushes_follow_the_surface_and_its_material() {
+        let s = |brush, params, tool| Settings {
+            brush,
+            params: Some(params),
+            tool,
+            placement: Placement::Merged,
+            pattern: Pattern::Solid,
+        };
+        // Range 2 from the stone at the origin, no diagonals (params 1 and 2 are 1): what
+        // orthogonal steps reach within a squared distance below 4, stone only.
+        let mut got = reached(
+            &s(Brush::Surface, [2, 1, 1], Tool::Replace),
+            [0, 0, 0],
+            Dir::Up,
+            &mut Floor,
+        );
+        got.sort();
+        assert_eq!(got.len(), 9);
+        assert!(
+            got.iter()
+                .all(|p| p[1] == 0 && p[0].abs() <= 1 && p[2].abs() <= 1)
+        );
+        // Ignoring material borders reaches the dirt too; the surface never leaves the floor.
+        let got = reached(
+            &s(Brush::Surface, [3, 1, 0], Tool::Replace),
+            [1, 0, 0],
+            Dir::Up,
+            &mut Floor,
+        );
+        assert!(got.contains(&[2, 0, 0]) && got.iter().all(|p| p[1] == 0));
+        // Overlaying starts above the face, on top of stone only.
+        let got = reached(
+            &s(Brush::Surface, [2, 1, 1], Tool::Overlay),
+            [1, 0, 0],
+            Dir::Up,
+            &mut Floor,
+        );
+        assert_eq!(got.first(), Some(&[1, 1, 0]));
+        assert!(!got.contains(&[2, 1, 0]));
+        // The cluster walks in all three dimensions: the air above and below isn't stone.
+        let got = reached(
+            &s(Brush::Cluster, [2, 1, 1], Tool::Replace),
+            [0, 0, 0],
+            Dir::Up,
+            &mut Floor,
+        );
+        assert_eq!(got.len(), 9);
+        // A wider range stops at the dirt unless material borders are ignored.
+        let got = reached(
+            &s(Brush::Surface, [4, 0, 1], Tool::Replace),
+            [0, 0, 0],
+            Dir::Up,
+            &mut Floor,
+        );
+        assert!(got.contains(&[1, 0, 2]) && !got.contains(&[2, 0, 0]));
+        assert_eq!(Brush::Surface.redirect(Tool::Overlay), Tool::Place);
+        assert_eq!(Brush::Cluster.tools(), &[Tool::Replace, Tool::Clear]);
     }
 }

@@ -1,33 +1,69 @@
 //! The handheld worldshaper: its use shapes the block it looks at within 128 blocks
 //! (`ZapperItem.use` → `WorldshaperItem.activate`), its left click picks the block it paints
-//! with (`ZapperInteractionHandler.trySelect`). Its screen is stood in for by
-//! `/create_debug worldshaper`, writing the held worldshaper's settings in its custom data under
-//! Create's component names.
+//! with (`ZapperInteractionHandler.trySelect`), its sneaking use opens its screen on the client
+//! (`worldshaper_screen`, `openHandgunGUI`), whose settings come back in
+//! `ConfigureWorldshaperPacket` and are kept in its custom data under Create's component names.
+//! While held, the client outlines the blocks a use would reach (`WorldshaperRenderHandler`).
+//!
+//! Left out: the outline's checkered face texture (`AllSpecialTextures.CHECKERED`): its faces
+//! are drawn in the outline's colour, faint, as world quads take no texture.
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
-use super::{
-    Item, action_bar, custom, held, is, set_custom, set_held, set_slot, slot_stack, sneaking,
-};
+use super::worldshaper_screen::{self as screen, Configure};
+use super::{Item, action_bar, custom, held, is, set_custom, set_held, sneaking};
 use create_engine::kinetics::Dir;
 use create_engine::worldshaper as ws;
 use mod_api::{
-    BlockFace, BlockState, ClipBlock, ClipFluid, CommandArgumentValue, CommandSource, Hand, Host,
-    HostBlockStates, HostSide, InteractionResult, ItemPart, ItemStack, PlayerRef,
-    RunModCommandEvent, ServerHost, SoundSource, Tag, UseItemEvent,
+    BlockFace, BlockState, ClientHost, ClipBlock, ClipFluid, Hand, Host, HostBlockStates, HostSide,
+    InteractionResult, ItemPart, ItemStack, LevelRef, PlayerRef, RenderLevelStage,
+    RenderLevelStageEvent, ServerHost, SoundSource, SupportType, Tag, UseItemEvent, UseOnEvent,
+    WorldDepth, WorldLine, WorldQuad,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 pub(super) struct Shaper;
 
 #[mod_api::horizon_part]
 impl ItemPart for Shaper {
+    /// `ZapperItem.useOn`: sneaking opens the screen; otherwise the use goes on to `use`.
+    fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
+        match host {
+            HostSide::Client(host) if client_sneaking(&*host) => {
+                screen::request(event.stack.clone(), event.hand);
+                Some(InteractionResult::Success)
+            }
+            HostSide::Server(host) if server_sneaking(&*host, event.player) => {
+                Some(InteractionResult::Success)
+            }
+            _ => None,
+        }
+    }
+
+    /// `ZapperItem.use`: sneaking opens the screen on the client; otherwise it shapes.
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
-        if let HostSide::Server(host) = host {
-            use_shaper(host, event);
+        match host {
+            HostSide::Server(host) => {
+                use_shaper(host, event);
+            }
+            HostSide::Client(host) => {
+                if client_sneaking(&*host) {
+                    screen::request(event.stack.clone(), event.hand);
+                }
+            }
         }
         Some(InteractionResult::Success)
     }
+}
+
+fn client_sneaking(host: &dyn ClientHost) -> bool {
+    host.local_player()
+        .and_then(|p| p.entity().is_shift_key_down(host))
+        == Some(true)
+}
+
+fn server_sneaking(host: &dyn ServerHost, uuid: u128) -> bool {
+    host.player(uuid).is_some_and(|p| sneaking(host, p))
 }
 
 fn text(t: Option<&Tag>) -> Option<String> {
@@ -38,7 +74,7 @@ fn text(t: Option<&Tag>) -> Option<String> {
 }
 
 /// The worldshaper's settings and the block it uses (`SHAPER_BLOCK_USED` as a state's text).
-fn shaper(stack: &ItemStack) -> (ws::Settings, Option<String>) {
+pub(super) fn shaper(stack: &ItemStack) -> (ws::Settings, Option<String>) {
     let c = custom(stack);
     let name = |k: &str| text(c.get(&k.into())).unwrap_or_default();
     let settings = ws::Settings {
@@ -212,14 +248,20 @@ fn use_shaper(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> Option<()>
         with_props(&*lv.host, paint, &props)
     };
     let mut seed = (lv.game_time() as u64) ^ 0x2545_f491_4f6c_dd1d;
-    let positions = ws::positions(&settings, hit, face, || {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        seed & 1 == 1
-    });
+    let positions = ws::positions(
+        &settings,
+        hit,
+        face,
+        &mut Ground::new(&*lv.host, lv.level),
+        || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed & 1 == 1
+        },
+    );
     let air = lv.host.block_state_id("minecraft:air");
-    let writes = ws::run(settings.tool, &positions, |p| {
+    let writes = ws::run(settings.brush.redirect(settings.tool), &positions, |p| {
         let here = lv.block_state(p);
         ws::Seen {
             replaceable: here
@@ -241,106 +283,226 @@ fn use_shaper(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> Option<()>
     Some(())
 }
 
-pub(super) fn register_commands(commands: &mut Vec<mod_api::Command>) {
-    // The worldshaper's screen and its left click: brush, size, tool, placement, pattern and
-    // block.
-    commands.push(mod_api::Command::op(
-        "create_debug worldshaper <args:text>",
-        2,
-    ));
-}
-
-/// `create_debug worldshaper <slot> <cuboid|sphere|cylinder> <size>... <tool> [placement]
-/// [pattern] [block=<state>]`: the screen's settings (`configureSettings`) and the block its
-/// left click picks.
-pub(super) fn command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) -> String {
-    const USAGE: &str = "usage: create_debug worldshaper <hand|offhand|slot> <cuboid|sphere|cylinder> \
-                         <size>... <fill|place|replace|clear|overlay> [merged|attached|inserted] \
-                         [solid|checkered|inverse_checkered|chance25|chance50|chance75] [block=<state>]";
-    let CommandSource::Player { player, .. } = event.source else {
-        return "worldshaper: only a player has a worldshaper".into();
+/// `ConfigureWorldshaperPacket.handle`: the settings into the worldshaper still in that hand
+/// (`configureSettings`), each parameter kept in its brush's range.
+pub(super) fn configure(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
+    let Some(Configure { hand, mut settings }) = Configure::decode(data) else {
+        return;
     };
-    let player = *player;
-    let rest = match event.command.argument("args") {
-        Some(CommandArgumentValue::String(s)) => s.clone(),
-        _ => return USAGE.into(),
-    };
-    let words: Vec<&str> = rest.split_whitespace().collect();
-    let (Some(slot), Some(brush)) = (
-        words.first(),
-        words.get(1).and_then(|b| ws::Brush::parse(b)),
-    ) else {
-        return USAGE.into();
-    };
-    if !brush.ported() {
-        return format!("worldshaper: the {} brush is not ported", brush.name());
-    }
-    let n = brush.params();
-    let mut params = [0i32; 3];
-    for (i, p) in params.iter_mut().enumerate().take(n) {
-        let Some(v) = words.get(2 + i).and_then(|v| v.parse::<i32>().ok()) else {
-            return USAGE.into();
-        };
-        let (lo, hi) = brush.bounds(i);
-        *p = v.clamp(lo, hi);
-    }
-    let mut s = ws::Settings {
-        brush,
-        params: Some(params),
-        ..ws::Settings::default()
-    };
-    let mut block = None;
-    for w in &words[(2 + n).min(words.len())..] {
-        if let Some(t) = ws::Tool::parse(w) {
-            s.tool = t;
-        } else if let Some(p) = ws::Placement::parse(w) {
-            s.placement = p;
-        } else if let Some(p) = ws::Pattern::parse(w) {
-            s.pattern = p;
-        } else if let Some(b) = w.strip_prefix("block=") {
-            block = Some(b.to_owned());
-        } else {
-            return USAGE.into();
-        }
-    }
-    if s.tool == ws::Tool::Flatten {
-        return "worldshaper: the flatten tool is not ported".into();
-    }
-    // The left click's pick (`trySelect`): a state that can be picked, its age set to 0 when
-    // used.
-    let state = match &block {
-        Some(b) => {
-            let Some(st) = host.block_state_id(b) else {
-                return format!("worldshaper: no block state {b}");
-            };
-            let Some(p) = picked(&*host, st) else {
-                return format!("worldshaper: {b} can't be picked");
-            };
-            host.block_state_string(p)
-        }
-        None => None,
-    };
-    let Some((slot_at, stack)) = slot_stack(&*host, player, slot) else {
-        return USAGE.into();
-    };
-    let Some(mut stack) = stack else {
-        return format!("worldshaper: nothing in {slot}");
+    let Some(mut stack) = held(&*host, player, hand) else {
+        return;
     };
     if !is(Some(&stack), Item::Worldshaper) {
-        return format!(
-            "worldshaper: {slot} holds {}, not a worldshaper",
-            stack.item().id(&*host)
-        );
+        return;
     }
-    set_shaper(&mut stack, &s, state.as_deref());
-    set_slot(host, player, slot_at, stack);
-    format!(
-        "worldshaper: {} {:?} {} {} {}{}",
-        s.brush.name(),
-        &params[..n],
-        s.tool.name(),
-        s.placement.name(),
-        s.pattern.name(),
-        state.map(|b| format!(" with {b}")).unwrap_or_default()
-    )
+    if let Some(p) = settings.params.as_mut() {
+        for (i, v) in p.iter_mut().enumerate() {
+            let (lo, hi) = settings.brush.bounds(i);
+            // The dynamic brushes' toggles are 0 or 1.
+            *v = if i > 0 && settings.brush.has_connectivity() {
+                (*v).clamp(0, 1)
+            } else {
+                (*v).clamp(lo, hi)
+            };
+        }
+    }
+    let (_, block) = shaper(&stack);
+    set_shaper(&mut stack, &settings, block.as_deref());
+    set_held(host, player, hand, Some(stack));
+}
+
+/// What the dynamic brushes read of a level, on either side.
+struct Ground<'a> {
+    host: &'a dyn Host,
+    level: Option<LevelRef>,
+}
+
+impl<'a> Ground<'a> {
+    fn new(host: &'a dyn Host, level: LevelRef) -> Ground<'a> {
+        Ground {
+            host,
+            level: Some(level),
+        }
+    }
+
+    fn state(&self, pos: [i32; 3]) -> Option<BlockState> {
+        self.level?.block_state(self.host, pos)
+    }
+}
+
+impl ws::Ground for Ground<'_> {
+    type Block = Option<mod_api::BlockKey>;
+
+    fn block(&mut self, pos: [i32; 3]) -> Self::Block {
+        self.state(pos).map(|s| s.block())
+    }
+
+    fn replaceable(&mut self, pos: [i32; 3]) -> bool {
+        self.state(pos)
+            .and_then(|s| self.host.block_states().replaceable(s))
+            .unwrap_or(false)
+    }
+
+    fn unbreakable(&mut self, pos: [i32; 3]) -> bool {
+        self.state(pos)
+            .and_then(|s| self.host.block_states().destroy_speed(s))
+            .is_some_and(|h| h < 0.0)
+    }
+
+    fn solid_side(&mut self, pos: [i32; 3], side: Dir) -> bool {
+        let Some(state) = self.state(pos) else {
+            return false;
+        };
+        if is_air(self.host, state) {
+            return false;
+        }
+        let face = match side {
+            Dir::Down => BlockFace::Down,
+            Dir::Up => BlockFace::Up,
+            Dir::North => BlockFace::North,
+            Dir::South => BlockFace::South,
+            Dir::West => BlockFace::West,
+            Dir::East => BlockFace::East,
+        };
+        self.level
+            .and_then(|l| l.block_face_sturdy(self.host, pos, face, SupportType::Full))
+            .unwrap_or(false)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Client: the outline
+
+thread_local! {
+    /// `WorldshaperRenderHandler.renderedPositions`, gathered each client tick.
+    static OUTLINED: std::cell::RefCell<Vec<[i32; 3]>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(super) fn reset() {
+    OUTLINED.with_borrow_mut(Vec::clear);
+}
+
+/// `WorldshaperRenderHandler.gatherSelectedBlocks`: the worldshaper in the main hand, else the
+/// off hand, outlines what its use would reach from the block looked at within 128 blocks.
+pub(super) fn tick(host: &dyn ClientHost) {
+    let found = outlined(host).unwrap_or_default();
+    OUTLINED.with_borrow_mut(|o| *o = found);
+}
+
+fn outlined(host: &dyn ClientHost) -> Option<Vec<[i32; 3]>> {
+    let player = host.local_player()?;
+    let living = host.living(player.entity())?;
+    let stack = [Hand::Main, Hand::Off]
+        .into_iter()
+        .filter_map(|h| living.hand_item(host, h))
+        .find(|s| is(Some(s), Item::Worldshaper))?;
+    let (settings, _) = shaper(&stack);
+    settings.params?;
+    let level = host.level(host.dimension())?;
+    let entity = player.entity();
+    let eye = entity.eye_position(host)?;
+    let look = entity.view_vector(host)?;
+    let to = [0, 1, 2].map(|i| eye[i] + look[i] * ws::RANGE);
+    let hit = level.clip(host, eye, to, ClipBlock::Outline, ClipFluid::None)?;
+    if hit.miss {
+        return None;
+    }
+    let face = dir_of(hit.face)?;
+    Some(ws::reached(
+        &settings,
+        hit.block,
+        face,
+        &mut Ground::new(host, level),
+    ))
+}
+
+/// `Outliner.showCluster(..).colored(0xbfbfbf).lineWidth(1 / 32f)`: the outer edges of the
+/// blocks' union, and its outer faces.
+pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
+    let _ = host;
+    if event.stage != RenderLevelStage::AfterTranslucentBlocks {
+        return;
+    }
+    OUTLINED.with_borrow(|cells| {
+        if cells.is_empty() {
+            return;
+        }
+        let (lines, quads) = cluster(cells);
+        let _ = event.draw.quads(&quads);
+        let _ = event.draw.lines(&lines);
+    });
+}
+
+const OUTLINE: u32 = 0xFFBF_BFBF;
+
+/// The faces between a member and a non-member, and the edges of those faces that don't run on
+/// into a flat continuation of the same face.
+fn cluster(cells: &[[i32; 3]]) -> (Vec<WorldLine>, Vec<WorldQuad>) {
+    let set: HashSet<[i32; 3]> = cells.iter().copied().collect();
+    let add = |a: [i32; 3], b: [i32; 3]| [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+    let exposed = |p: [i32; 3], d: Dir| set.contains(&p) && !set.contains(&add(p, d.offset()));
+    let mut lines = Vec::new();
+    let mut quads = Vec::new();
+    for &p in &set {
+        for d in Dir::ALL {
+            if !exposed(p, d) {
+                continue;
+            }
+            let n = d.offset();
+            let axis = d.axis() as usize;
+            let (u, v) = match axis {
+                0 => (1, 2),
+                1 => (0, 2),
+                _ => (0, 1),
+            };
+            // The face's plane, a hair outside the block.
+            let plane = f64::from(p[axis])
+                + if n[axis] > 0 { 1.0 } else { 0.0 }
+                + f64::from(n[axis]) * 0.002;
+            let corner = |a: i32, b: i32| {
+                let mut c = [0.0; 3];
+                c[axis] = plane;
+                c[u] = f64::from(p[u] + a);
+                c[v] = f64::from(p[v] + b);
+                c
+            };
+            quads.push(WorldQuad::new(
+                [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)],
+                0x30BF_BFBF,
+                WorldDepth::Tested,
+            ));
+            // Each edge: (step to the neighbour across it, its two ends).
+            for (step, a, b) in [
+                ((u, -1), corner(0, 0), corner(0, 1)),
+                ((u, 1), corner(1, 0), corner(1, 1)),
+                ((v, -1), corner(0, 0), corner(1, 0)),
+                ((v, 1), corner(0, 1), corner(1, 1)),
+            ] {
+                let mut o = [0; 3];
+                o[step.0] = step.1;
+                let beside = add(p, o);
+                // The same face going on flat: no edge there.
+                if exposed(beside, d) {
+                    continue;
+                }
+                lines.push(WorldLine::new(a, b, OUTLINE, 1.5, WorldDepth::Tested));
+            }
+        }
+    }
+    (lines, quads)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_cluster_outlines_its_outer_edges_once_per_face() {
+        // One block: 6 faces, 4 edges each.
+        let (lines, quads) = super::cluster(&[[0, 0, 0]]);
+        assert_eq!((lines.len(), quads.len()), (24, 6));
+        // Two side by side: 10 faces; the shared face's edges are gone from the four faces
+        // that run on, which keep 3 edges each.
+        let (lines, quads) = super::cluster(&[[0, 0, 0], [1, 0, 0]]);
+        assert_eq!(quads.len(), 10);
+        assert_eq!(lines.len(), 2 * 4 + 8 * 3);
+    }
 }

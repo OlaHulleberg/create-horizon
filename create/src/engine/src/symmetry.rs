@@ -49,6 +49,41 @@ impl Kind {
             .find(|k| k.name() == s)
             .unwrap_or(Kind::Empty)
     }
+    /// The screen's mirrors (`SymmetryMirror.getMirrors`), in order.
+    pub const SCREEN: [Kind; 3] = [Kind::Plane, Kind::CrossPlane, Kind::TriplePlane];
+    /// `getMirrors`' lang key (under `create.`) of a mirror the screen offers.
+    pub fn screen_key(self) -> &'static str {
+        match self {
+            Kind::CrossPlane => "symmetry.mirror.doublePlane",
+            Kind::TriplePlane => "symmetry.mirror.triplePlane",
+            _ => "symmetry.mirror.plane",
+        }
+    }
+    /// `getAlignToolTips`: the orientations' lang keys (under `create.`).
+    pub fn align_keys(self) -> &'static [&'static str] {
+        match self {
+            Kind::Plane => &["orientation.alongZ", "orientation.alongX"],
+            Kind::CrossPlane => &["orientation.orthogonal", "orientation.diagonal"],
+            Kind::TriplePlane => &["orientation.horizontal"],
+            Kind::Empty => &[],
+        }
+    }
+    /// The mirror's model (`getModel`: `AllPartialModels.SYMMETRY_*`) and its turn about y
+    /// at `orientation` (`applyModelTransform`), in degrees.
+    pub fn model(self, orientation: usize) -> Option<(&'static str, f32)> {
+        Some(match self {
+            Kind::Plane => (
+                "create:block/symmetry_effect/plane",
+                if orientation == 0 { 0.0 } else { 90.0 },
+            ),
+            Kind::CrossPlane => (
+                "create:block/symmetry_effect/crossplane",
+                if orientation == 0 { 0.0 } else { 45.0 },
+            ),
+            Kind::TriplePlane => ("create:block/symmetry_effect/tripleplane", 0.0),
+            Kind::Empty => return None,
+        })
+    }
     /// How many orientations it cycles through (`Align.values().length`).
     fn orientations(self) -> usize {
         match self {

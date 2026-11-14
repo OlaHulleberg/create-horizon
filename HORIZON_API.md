@@ -108,6 +108,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   andesite casing's texture.
 - **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
   light inside the chute is dark.
+- **The local player's inventory slots on its client** (`player_inventory_slots` answers on the server only;
+  `player_inventory` on a client lists stacks without their slots): the wand of symmetry's mirrors, drawn for
+  every wand in the hotbar (`SymmetryHandler.onRenderWorld`), are sent to the client by the server.
+- **A turned item in a screen** (`GuiGameElement.of(stack).rotate(..)`): the wand of symmetry's screen draws the
+  wand flat.
 - **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).
 - **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
 
