@@ -84,6 +84,8 @@ impl Settings {
         put_i32(&mut out, self.config.directional);
         put_i32(&mut out, self.config.mode);
         put_i32(&mut out, self.config.cycle);
+        put_i32(&mut out, self.config.format);
+        put_i32(&mut out, self.config.interval);
         out.push(self.target);
         put_i32(&mut out, self.rows);
         put_i32(&mut out, self.line);
@@ -110,6 +112,9 @@ impl Settings {
             mode: r.i32()?,
             cycle: r.i32()?,
             start_time: None,
+            format: r.i32()?,
+            interval: r.i32()?,
+            ..Config::default()
         };
         Some(Settings {
             pos,
@@ -165,14 +170,47 @@ pub(super) fn choice(source: Source) -> Option<(&'static str, &'static [&'static
             ],
             60.0,
         ),
+        Source::FillLevel => (
+            "Mode",
+            &[
+                "create.display_source.fill_level.percent",
+                "create.display_source.fill_level.progress_bar",
+            ],
+            120.0,
+        ),
+        Source::ItemThroughput => (
+            "Interval",
+            &[
+                "create.display_source.item_throughput.interval.second",
+                "create.display_source.item_throughput.interval.minute",
+                "create.display_source.item_throughput.interval.hour",
+            ],
+            80.0,
+        ),
+        // ValueListDisplaySource.addFullNumberConfig, on the first row.
+        Source::ListItems | Source::ListFluids => (
+            "Format",
+            &[
+                "create.display_source.value_list.shortened",
+                "create.display_source.value_list.full_number",
+            ],
+            75.0,
+        ),
         _ => return None,
     })
+}
+
+/// Whether the source's choice sits on the first row (`isFirstLine`), where a label would.
+fn choice_on_first_row(source: Source) -> bool {
+    !source.single_line()
 }
 
 fn choice_value<'a>(config: &'a mut Config, key: &str) -> &'a mut i32 {
     match key {
         "Directional" => &mut config.directional,
         "Mode" => &mut config.mode,
+        "Format" => &mut config.format,
+        "Interval" => &mut config.interval,
         _ => &mut config.cycle,
     }
 }
@@ -261,8 +299,8 @@ const LABEL_INPUT: [f32; 4] = [60.0, 47.0, 137.0, 18.0];
 const LINE_INPUT: [f32; 4] = [61.0, 105.0, 135.0, 16.0];
 const CONFIRM: [f32; 4] = [SIZE[0] - 33.0, SIZE[1] - 24.0, 18.0, 18.0];
 
-fn choice_input(width: f32) -> [f32; 4] {
-    [60.0, 68.0, width, 18.0]
+fn choice_input(width: f32, first_row: bool) -> [f32; 4] {
+    [60.0, if first_row { 47.0 } else { 68.0 }, width, 18.0]
 }
 
 fn at(rect: [f32; 4], left: f32, top: f32) -> [f32; 4] {
@@ -363,7 +401,7 @@ fn draw(
             }
             // The second row: the source's choice.
             if let Some((key, options, width)) = choice(source) {
-                let r = at(choice_input(width), x, y);
+                let r = at(choice_input(width, choice_on_first_row(source)), x, y);
                 draw.fill(r, 0xFF39_3939);
                 draw.fill(
                     [r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0],
@@ -395,6 +433,13 @@ fn draw(
             0xFFFF_FFFF,
             true,
         ),
+        // LecternDisplayTarget.getLineOptionText.
+        3 => {
+            let page = tr(host, "create.display_target.page")
+                .replace("%s", &(s.line + 1).to_string())
+                .replace("%1$s", &(s.line + 1).to_string());
+            draw.text(&page, [x + 65.0, y + 109.0], 0xFFFF_FFFF, true);
+        }
         _ => {
             let line = tr(host, "create.display_target.line")
                 .replace("%s", &(s.line + 1).to_string())
@@ -474,14 +519,17 @@ fn step(s: &mut Settings, mouse: [f32; 2], size: [f32; 2], up: bool) -> bool {
     }
     if let Some(source) = s.sources.get(s.source).copied()
         && let Some((key, options, width)) = choice(source)
-        && inside(at(choice_input(width), x, y), mouse)
+        && inside(
+            at(choice_input(width, choice_on_first_row(source)), x, y),
+            mouse,
+        )
     {
         let v = choice_value(&mut s.config, key);
         let max = options.len() as i32 - 1;
         *v = (if up { *v - 1 } else { *v + 1 }).clamp(0, max);
         return true;
     }
-    if s.target == 2 && s.rows > 1 && inside(at(LINE_INPUT, x, y), mouse) {
+    if s.target >= 2 && s.rows > 1 && inside(at(LINE_INPUT, x, y), mouse) {
         // `inverted()`: up is the line before.
         s.line = (if up { s.line - 1 } else { s.line + 1 }).clamp(0, s.rows - 1);
         return true;

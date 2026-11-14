@@ -13,8 +13,8 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::steam::Face;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost,
-    Identifier, ItemDisplayContext, ItemStack, ParticleKey, ParticleOptions, Registrar, SoundPlay,
-    Tag,
+    Compound, CubeFace, Identifier, ItemDisplayContext, ItemStack, ParticleKey, ParticleOptions,
+    Registrar, SoundPlay, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -32,6 +32,13 @@ pub(super) fn register(r: &mut dyn Registrar) {
     }
 }
 
+/// A clock's hands as `LerpedFloat.angular`s: this tick's and the last tick's angles.
+#[derive(Clone, Copy, Debug, Default)]
+struct Hands {
+    hour: (f32, f32),
+    minute: (f32, f32),
+}
+
 /// What a client was told and keeps for drawing.
 #[derive(Default)]
 struct Client {
@@ -39,10 +46,15 @@ struct Client {
     links: HashMap<[i32; 3], (Dir, create_engine::link::Key)>,
     /// Each lever's state, face and facing.
     levers: HashMap<[i32; 3], (u8, Face, Dir)>,
+    /// Each lever's `clientState` (`LerpedFloat`): this tick's value and the last.
+    lever_shown: HashMap<[i32; 3], (f32, f32)>,
     /// The animations playing: the clock, what, and its tick.
     cuckoos: Vec<([i32; 3], Animation, u32)>,
-    /// Each clock's hands' angles as last shown (they stay while it stops).
-    hands: HashMap<[i32; 3], (f32, f32)>,
+    /// Each clock's hands (`hourHand`, `minuteHand`): their angles this tick and the last
+    /// (they stay while it stops).
+    hands: HashMap<[i32; 3], Hands>,
+    /// The client's ticks (`AnimationTickHolder.getTicks`), for the clocks' ticking.
+    ticks: u64,
     /// The smoke's scatter.
     rng: Option<create_engine::processing::Rng>,
 }
@@ -113,7 +125,10 @@ fn client_block(host: &dyn ClientHost, pos: [i32; 3]) -> Option<(Block, Option<D
 /// `tick` on the client while an animation runs: its sounds at the clock (`playLocalSound`) and
 /// the surprise's smoke after 30; it ends past 100. Nothing runs without one.
 pub(super) fn tick(host: &mut dyn ClientHost) {
-    if CLIENT.with_borrow(|c| c.cuckoos.is_empty()) {
+    if CLIENT.with_borrow_mut(|c| {
+        c.ticks += 1;
+        c.cuckoos.is_empty()
+    }) {
         return;
     }
     let mut running = CLIENT.with_borrow_mut(|c| std::mem::take(&mut c.cuckoos));
@@ -157,6 +172,55 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
     });
 }
 
+/// `CuckooClockBlockEntity.tick` on the client, while the clock turns: the hands chase the
+/// time (`moveHands`), and with no animation playing it ticks (a hat note every 16 client
+/// ticks, every 3 where the day doesn't pass).
+fn tick_clock(host: &mut dyn ClientHost, pos: [i32; 3], turning: bool) {
+    if !turning {
+        return;
+    }
+    let Some(level) = host.local_player().and_then(|p| p.level(&*host)) else {
+        return;
+    };
+    let natural = level.dimension().id(&*host).as_deref() == Some("minecraft:overworld");
+    let Some(day_time) = level.day_time(&*host) else {
+        return;
+    };
+    let (hours, minutes) = cuckoo::time(day_time, natural);
+    let (hour, minute) = cuckoo::hand_angles(hours, minutes);
+    let (ticks, animating) = CLIENT.with_borrow_mut(|c| {
+        let h = c.hands.entry(pos).or_default();
+        // `chase(target, .2, EXP)` on the shortest way round, then `tickChaser`.
+        let chase = |v: &mut (f32, f32), target: f32| {
+            v.0 = v.1;
+            v.1 += create_engine::arm::shortest_angle_diff(v.1, target) * 0.2;
+        };
+        chase(&mut h.hour, hour);
+        chase(&mut h.minute, minute);
+        (c.ticks, c.cuckoos.iter().any(|a| a.0 == pos && a.2 <= 101))
+    });
+    if animating {
+        return;
+    }
+    let (high, low) = if natural { (32, 16) } else { (6, 3) };
+    let pitch = if ticks % high == 0 {
+        2.0
+    } else if ticks % low == 0 {
+        1.5
+    } else {
+        return;
+    };
+    let center = pos.map(|v| f64::from(v) + 0.5);
+    let play = SoundPlay::at(
+        "minecraft:block.note_block.hat",
+        mod_api::SoundSource::Blocks,
+        center,
+    )
+    .with_volume(1.0 / 16.0)
+    .with_pitch(pitch);
+    host.play_local_sound(&play, 0);
+}
+
 /// The redstone blocks' renderers, on the kinetic block entity type.
 struct RedstoneEntity;
 
@@ -165,6 +229,46 @@ impl BlockPart for RedstoneEntity {}
 
 #[mod_api::horizon_part]
 impl BlockEntityPart for RedstoneEntity {
+    fn block_entity_client_ticks(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntityClientTicksEvent<'_>,
+    ) {
+        if matches!(
+            event.block,
+            "create:cuckoo_clock" | "create:mysterious_cuckoo_clock" | "create:analog_lever"
+        ) {
+            event.ticks = true;
+        }
+    }
+
+    fn block_entity_client_tick(
+        &self,
+        host: &mut dyn ClientHost,
+        event: &mut mod_api::BlockEntityClientTickEvent<'_>,
+    ) {
+        let Some(id) = states::id(event.state) else {
+            return;
+        };
+        let block = client_table(&*host, |t| t.get(id).map(|(b, _)| b)).flatten();
+        match block {
+            Some(Block::CuckooClock | Block::MysteriousCuckooClock) => {
+                let turning = speed_of(&event.entity.nbt) != 0.0;
+                tick_clock(host, event.pos, turning);
+            }
+            // `clientState.chase(state, .2, EXP)`, `tickChaser`.
+            Some(Block::AnalogLever) => CLIENT.with_borrow_mut(|c| {
+                let Some(&(state, ..)) = c.levers.get(&event.pos) else {
+                    return;
+                };
+                let v = c.lever_shown.entry(event.pos).or_default();
+                v.0 = v.1;
+                v.1 += (f32::from(state) - v.1) * 0.2;
+            }),
+            _ => {}
+        }
+    }
+
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         let Some(id) = states::id(event.state) else {
             return;
@@ -178,12 +282,14 @@ impl BlockEntityPart for RedstoneEntity {
         match block {
             Block::RedstoneLink => draw_link(host, event.draw, pos),
             Block::AnalogLever => draw_lever(event.draw, pos),
+            Block::PulseRepeater | Block::PulseExtender | Block::PulseTimer => {
+                draw_diode_indicator(event.draw, block, &event.entity.nbt);
+            }
             Block::CuckooClock | Block::MysteriousCuckooClock => {
                 let Some(facing) = facing else {
                     return;
                 };
-                let turning = speed_of(&event.entity.nbt) != 0.0;
-                draw_clock_hands(host, event.draw, pos, facing, turning);
+                draw_clock_hands(event.draw, pos, facing);
                 let running = CLIENT.with_borrow(|c| {
                     c.cuckoos
                         .iter()
@@ -246,9 +352,55 @@ fn draw_link(host: &dyn ClientHost, draw: &mut dyn BlockEntityDrawContext, pos: 
     }
 }
 
-/// `AnalogLeverRenderer`'s handle, turned by the lever's state.
+/// `BrassDiodeRenderer`: the indicator (`AllPartialModels.FLEXPEATER_INDICATOR`, the model
+/// `diodes/indicator`) over the diode, from dark to bright red as its count nears its delay. The
+/// count goes on from what the server last put in the block entity (`ticks::DIODE_SHOWN`).
+fn draw_diode_indicator(draw: &mut dyn BlockEntityDrawContext, block: Block, nbt: &Compound) {
+    use create_engine::diode::{self, Kind};
+    let kind = match block {
+        Block::PulseExtender => Kind::Extender,
+        Block::PulseTimer => Kind::Timer,
+        _ => Kind::Repeater,
+    };
+    let progress = match nbt.get(&super::ticks::DIODE_SHOWN.into()) {
+        Some(Tag::LongArray(v)) if v.len() == 4 => diode::progress_after(
+            kind,
+            v[0] as i32,
+            v[1] as i32,
+            v[2] != 0,
+            draw.game_time() - v[3],
+        ),
+        _ => 0.0,
+    };
+    const SPRITE: &str = "create:block/diodes/pulse_repeater/idle";
+    let face = |uv: [f32; 4]| Some(CubeFace::new(SPRITE).with_uv(uv));
+    // (removed)
+    let lo = 0.0;
+    let hi = 0.0;
+    draw.cube(
+        [lo, 0.0, lo],
+        [hi, 0.0, hi],
+        [
+            None,
+            face([0.0, 0.0, 0.0, 0.0]),
+            face([0.0, 0.0, 0.0, 0.0]),
+            face([0.0, 0.0, 0.0, 0.0]),
+            face([0.0, 0.0, 0.0, 0.0]),
+            face([0.0, 0.0, 0.0, 0.0]),
+        ],
+        diode::indicator_color(progress),
+    );
+}
+
+/// `AnalogLeverRenderer`: the handle turned by the lever's (chased) state, and the indicator
+/// (`AllPartialModels.ANALOG_LEVER_INDICATOR`) from dark to bright red with it.
 fn draw_lever(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3]) {
-    let Some((state, face, facing)) = CLIENT.with_borrow(|c| c.levers.get(&pos).copied()) else {
+    let partial = draw.partial();
+    let Some((state, face, facing)) = CLIENT.with_borrow(|c| {
+        let (_, face, facing) = c.levers.get(&pos).copied()?;
+        let (last, now) = c.lever_shown.get(&pos).copied().unwrap_or_default();
+        Some((last + (now - last) * partial, face, facing))
+    }) else {
         return;
     };
     draw.push();
@@ -257,6 +409,25 @@ fn draw_lever(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3]) {
         &create_engine::lever::handle_pose(face, facing, state),
     );
     draw_part(draw, "part_analog_lever_handle");
+    draw.pop();
+    // The indicator: (removed)
+    const SPRITE: &str = "create:block/analog_lever";
+    let face_uv = |uv: [f32; 4]| Some(CubeFace::new(SPRITE).with_uv(uv));
+    draw.push();
+    pose::apply(draw, &create_engine::lever::handle_pose(face, facing, 0.0));
+    draw.cube(
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [
+            None,
+            None,
+            face_uv([0.0, 0.0, 0.0, 0.0]),
+            face_uv([0.0, 0.0, 0.0, 0.0]),
+            face_uv([0.0, 0.0, 0.0, 0.0]),
+            face_uv([0.0, 0.0, 0.0, 0.0]),
+        ],
+        create_engine::diode::indicator_color(state / 15.0),
+    );
     draw.pop();
 }
 
@@ -269,30 +440,14 @@ fn axis_vector(axis: Axis) -> [f32; 3] {
     }
 }
 
-/// The hours and minutes a turning clock shows in this client's level now (only the
-/// overworld's dimension type is `natural`).
-fn clock_time(host: &dyn ClientHost) -> Option<(i32, i32)> {
-    let level = host.local_player()?.level(host)?;
-    let natural = level.dimension().id(host).as_deref() == Some("minecraft:overworld");
-    Some(cuckoo::time(level.day_time(host)?, natural))
-}
-
-/// `CuckooClockRenderer`'s hands of the clock at `pos` facing `facing`: where the time puts them
-/// while it turns (`moveHands`), else where they were.
-fn draw_clock_hands(
-    host: &dyn ClientHost,
-    draw: &mut dyn BlockEntityDrawContext,
-    pos: [i32; 3],
-    facing: Dir,
-    turning: bool,
-) {
-    let now = if turning { clock_time(host) } else { None };
-    let (hour, minute) = CLIENT.with_borrow_mut(|c| {
-        let h = c.hands.entry(pos).or_insert((0.0, 0.0));
-        if let Some((hours, minutes)) = now {
-            *h = cuckoo::hand_angles(hours, minutes);
-        }
-        *h
+/// `CuckooClockRenderer`'s hands of the clock at `pos` facing `facing`, where its client tick
+/// left them (`getValue(partialTicks)`).
+fn draw_clock_hands(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3], facing: Dir) {
+    let partial = draw.partial();
+    let (hour, minute) = CLIENT.with_borrow(|c| {
+        let h = c.hands.get(&pos).copied().unwrap_or_default();
+        let lerp = |v: (f32, f32)| v.0 + (v.1 - v.0) * partial;
+        (lerp(h.hour), lerp(h.minute))
     });
     let hp = cuckoo::hand_pose(facing);
     for (name, angle) in [

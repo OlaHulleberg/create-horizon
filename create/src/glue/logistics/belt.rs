@@ -905,6 +905,9 @@ impl BeltSide<'_, '_> {
             return false;
         };
         let movement = self.movement();
+        // `transferred`: the stack as it entered, told to the tunnel's display links once it
+        // goes on.
+        let transferred = i32::from(item.count);
         let dim = self.lv.dim;
         // A brass tunnel that distributes (`hasDistributionBehaviour`: an open side across its
         // axis, or a brass tunnel beside it) takes the whole stack while it holds none, and
@@ -942,6 +945,7 @@ impl BeltSide<'_, '_> {
             return true;
         }
         if !create_engine::tunnel::splits(axis, shape, movement, item.count) {
+            super::super::display::items_through_tunnel(self.lv, t, transferred);
             return false;
         }
         for d in create_engine::tunnel::sides(axis, shape) {
@@ -968,6 +972,7 @@ impl BeltSide<'_, '_> {
                 break;
             }
         }
+        super::super::display::items_through_tunnel(self.lv, t, transferred);
         false
     }
 }

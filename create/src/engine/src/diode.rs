@@ -194,6 +194,67 @@ impl Diode {
     }
 }
 
+/// `BrassDiodeBlockEntity.getProgress` of a diode whose input stays `powered`, `ticks` block
+/// entity ticks after it held `state` toward `max` (each client's block entity counts on by
+/// itself between the server's updates, as Create's does: `tick` runs on both sides).
+pub fn progress_after(kind: Kind, state: i32, max: i32, powered: bool, ticks: i64) -> f32 {
+    let state = i64::from(state);
+    let max_l = i64::from(max);
+    let ticks = ticks.max(0);
+    let now = match kind {
+        // Counts up to `max + 2` and stays there while powered, then back to 0.
+        Kind::Repeater => {
+            if state <= 0 && !powered {
+                0
+            } else if state + ticks <= max_l + 2 {
+                state + ticks
+            } else if powered {
+                max_l + 2
+            } else {
+                0
+            }
+        }
+        // Held at `max` while powered; counts down to 0 after.
+        Kind::Extender => {
+            if powered {
+                if ticks == 0 { state } else { max_l }
+            } else {
+                (state - ticks).max(0)
+            }
+        }
+        // 0 while powered; around `0..max` while not.
+        Kind::Timer => {
+            if ticks == 0 {
+                state
+            } else if powered {
+                0
+            } else if state >= max_l - 1 {
+                (ticks - 1) % max_l.max(1)
+            } else {
+                (state + ticks) % max_l.max(1)
+            }
+        }
+    };
+    let d = Diode {
+        kind,
+        state: now.clamp(0, i64::from(i32::MAX)) as i32,
+        max,
+        powered,
+        powering: false,
+        running: false,
+    };
+    d.progress()
+}
+
+/// `BrassDiodeRenderer.getColor`: `Color.mixColors(0x2C0300, 0xCD0000, progress)`.
+pub fn indicator_color(progress: f32) -> u32 {
+    let mix = |a: u32, b: u32| {
+        let (a, b) = (a as f32, b as f32);
+        ((a + (b - a) * progress.clamp(0.0, 1.0)) as u32).min(255)
+    };
+    (mix(0x2C, 0xCD) << 16) | (mix(0x03, 0x00) << 8) | mix(0x00, 0x00)
+}
+
 /// `BrassDiodeBlockEntity.format`: ticks below 60, then seconds, then minutes.
 pub fn format(value: i32) -> String {
     if value < 60 {
@@ -298,6 +359,42 @@ mod tests {
         assert_eq!(format(40), "40t");
         assert_eq!(format(100), "5s");
         assert_eq!(format(72000), "60m");
+    }
+
+    #[test]
+    fn a_client_counts_on_as_the_server_does() {
+        for kind in [Kind::Repeater, Kind::Extender, Kind::Timer] {
+            for max in [2, 3, 5, 20] {
+                for powered in [false, true] {
+                    for start in 0..max + 2 {
+                        for powering in [false, true] {
+                            // A repeater is on from `max - 1` until `max + 1` only.
+                            if kind == Kind::Repeater
+                                && powering != (start >= max - 1 && start <= max)
+                            {
+                                continue;
+                            }
+                            let mut d = Diode::new(kind);
+                            d.max = max;
+                            d.state = start;
+                            d.powered = powered;
+                            d.powering = powering;
+                            for t in 0..3 * i64::from(max) + 5 {
+                                assert_eq!(
+                                    progress_after(kind, start, max, powered, t),
+                                    d.progress(),
+                                    "{kind:?} max {max} powered {powered} from {start} \
+                                     (powering {powering}) after {t}"
+                                );
+                                d.tick();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(indicator_color(0.0), 0x2C0300);
+        assert_eq!(indicator_color(1.0), 0xCD0000);
     }
 
     #[test]

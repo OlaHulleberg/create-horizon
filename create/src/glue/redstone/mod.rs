@@ -7,32 +7,41 @@
 //! ticks are taken from the repeater they are built on, and run in the level tick here
 //! (`ticks`), as do lamps, links, rails and cuckoo clocks; levers, observers and switches look
 //! after the solve (`detectors`); comparators last (`analog`, the `Comparators` subsystem).
-//! What clients draw (link frequencies, lever handles, cuckoo hands, doors and figures) is in
-//! `client`, sent on the legacy channels.
+//! What clients draw (link frequencies, lever handles and indicators, brass diodes' progress
+//! indicators, cuckoo hands, doors and figures) is in `client`, sent on the legacy channels or
+//! in the block entity's data (`ticks::DIODE_SHOWN`); clocks and levers ease on the client's
+//! block entity ticks, and clocks tick there.
 //!
 //! A smart observer's or threshold switch's filter is read, set by hand, saved and tested by the
 //! items port's filter helpers (`items::filters`), as the legacy glue's were; the filters of
-//! broken detectors (`detectors.dropped`) are dropped there too.
+//! broken detectors (`detectors.dropped`) are dropped there too. The threshold switch's screen
+//! is `switch_screen`; the clipboard's copying and pasting of these blocks' settings is
+//! `clipboard_values`.
 //!
 //! Left out, the API having no way to do it:
 //! - A redstone link slot's item is drawn as a block item (`isGui3d`) when the item places a
 //!   block: the API does not say whether an item model is 3D (`ItemRenderer` `isGui3d`).
+//! - `/tick freeze` holds Create's block entities, but the glue's level tick still runs: the API
+//!   does not say whether the server's ticks are frozen (`TickRateManager.runsNormally`).
 //!
-//! Not ported yet (the API could do it): the threshold switch's screen (its thresholds are set
-//! with `/create_debug threshold`) and the brass diodes' progress indicator
-//! (`BrassDiodeRenderer`).
+//! Not ported (the API could do it): a rope pulley as a threshold switch's target
+//! (`ThresholdSwitchObservable`), a belt as one (its item handler), and the switch screen's
+//! link to Ponder.
 
 mod analog;
 mod client;
+mod clipboard_values;
 mod detectors;
 mod parts;
 pub(crate) mod pose;
 mod saved;
+mod switch_screen;
 mod ticks;
 
 pub use analog::{Comparators, analog_touched};
-pub(crate) use detectors::{item_id, slot_stack};
+pub(crate) use detectors::{item_id, observed, slot_stack};
 pub(crate) use parts::with_properties;
+pub(crate) use ticks::show_diode;
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
@@ -42,7 +51,9 @@ use create_engine::kinetics::Dir;
 use create_engine::parts::StateInfo;
 use mod_api::{
     BlockState, ClientHost, Compound, Direction, Flow, HostBlockStates, PlayerRef,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent, ServerHost,
+    RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent, ScreenClosingEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost,
 };
 
 pub struct Redstone;
@@ -59,7 +70,13 @@ impl Subsystem for Detectors {
 }
 
 impl Subsystem for Redstone {
-    /// A cuckoo clock's hands and doors are drawn each frame (`client`).
+    /// A brass diode's count, for its indicator (`ticks::DIODE_SHOWN`).
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[ticks::DIODE_SHOWN]
+    }
+
+    /// A cuckoo clock's hands and doors, a brass diode's indicator and an analog lever's handle
+    /// are drawn each frame (`client`).
     fn animated(
         &self,
         block: create_engine::Block,
@@ -68,7 +85,12 @@ impl Subsystem for Redstone {
     ) -> bool {
         matches!(
             block,
-            create_engine::Block::CuckooClock | create_engine::Block::MysteriousCuckooClock
+            create_engine::Block::CuckooClock
+                | create_engine::Block::MysteriousCuckooClock
+                | create_engine::Block::PulseRepeater
+                | create_engine::Block::PulseExtender
+                | create_engine::Block::PulseTimer
+                | create_engine::Block::AnalogLever
         )
     }
 
@@ -139,14 +161,68 @@ impl Subsystem for Redstone {
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         client::server_message(host, channel, data)
+            || switch_screen::server_message(host, channel, data)
+    }
+
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        switch_screen::client_message(host, player, channel, data)
+            || clipboard_values::client_message(host, player, channel, data)
+    }
+
+    fn right_click_block(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::RightClickBlockEvent<'_>,
+    ) -> Flow {
+        clipboard_values::right_click_block(host, event)
+    }
+
+    fn interaction_key(
+        &self,
+        host: &mut dyn ClientHost,
+        event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
+    ) -> Flow {
+        clipboard_values::interaction_key(host, event)
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick(host);
+        switch_screen::tick(host);
     }
 
     fn client_reset(&self) {
         client::reset();
+        switch_screen::reset();
+    }
+
+    fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
+        switch_screen::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> Flow {
+        switch_screen::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_scrolled(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ScreenMouseScrolledPreEvent<'_>,
+    ) -> Flow {
+        switch_screen::screen_mouse_scrolled(host, event)
+    }
+
+    fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
+        switch_screen::screen_closing(host, event);
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
@@ -160,6 +236,13 @@ impl Subsystem for Redstone {
     ) -> Flow {
         detectors::run_command(host, event)
     }
+}
+
+/// The engine block at `pos` of this client's level, for Create's blocks.
+pub(crate) fn client_block_of(host: &dyn ClientHost, pos: [i32; 3]) -> Option<Block> {
+    let level = host.level(host.dimension())?;
+    let id = super::states::id(level.block_state(host, pos)?)?;
+    super::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten()
 }
 
 /// The block and state of engine id `state`, read so that a hook asked inside one of the glue's

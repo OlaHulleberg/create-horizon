@@ -122,6 +122,16 @@ impl Subsystem for Seats {
     }
 }
 
+/// `EntityNameDisplaySource`: the name of the first one riding the seat at `pos`
+/// (`getDisplayName`), if anyone does.
+pub(crate) fn rider_name(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<String> {
+    let dim = lv.dim;
+    let seat = SEATS.with_borrow(|s| s.get(&(dim, pos)).copied())?;
+    let stand = lv.host.entity(seat.id)?;
+    let rider = stand.passengers(&*lv.host)?.into_iter().next()?;
+    rider.name(&*lv.host)
+}
+
 fn is_seat(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     lv.create_block(pos).is_some_and(dye::is_seat)
 }

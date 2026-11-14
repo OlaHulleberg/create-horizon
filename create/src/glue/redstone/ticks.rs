@@ -228,6 +228,9 @@ pub(super) fn tick_diodes(lv: &mut ServerLevel<'_>) {
         return;
     }
     let mut next = Vec::new();
+    // The diodes whose clients count on from a new start (their input changed, or they were
+    // placed or looked at again).
+    let mut shown: Vec<[i32; 3]> = checks.iter().map(|c| c.0).collect();
     for (pos, _) in due {
         let Some((_, s)) = block_at(lv, pos).and_then(|(b, i)| diode_of(b, &i)) else {
             continue;
@@ -236,7 +239,9 @@ pub(super) fn tick_diodes(lv: &mut ServerLevel<'_>) {
         let (powered, again) = diode::block_tick(s.powered, input);
         // `setBlock(.., UPDATE_CLIENTS)`: its output does not follow `powered`, so no neighbour
         // reads it again.
-        lv.set_flags(pos, &[("powered", powered)], UPDATE_CLIENTS);
+        if lv.set_flags(pos, &[("powered", powered)], UPDATE_CLIENTS) {
+            shown.push(pos);
+        }
         if again {
             next.push((pos, now + diode::BLOCK_DELAY));
         }
@@ -275,6 +280,35 @@ pub(super) fn tick_diodes(lv: &mut ServerLevel<'_>) {
     if !next.is_empty() {
         with_world(|w| w.dims[dim].diode_ticks.extend(next));
     }
+    for pos in shown {
+        show_diode(lv, pos);
+    }
+}
+
+/// The block entity data a brass diode's clients count its indicator on from: its count, delay
+/// and input at a game time (`show_diode`).
+pub(crate) const DIODE_SHOWN: &str = "DiodeShown";
+
+/// Puts what the diode at `pos` holds now in its block entity for its clients
+/// (`BrassDiodeBlockEntity`'s `sendData`; between them each client's block entity counts on by
+/// itself, as Create's ticks on both sides).
+pub(crate) fn show_diode(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let Some(d) = with_world(|w| w.dims[dim].diodes.get(&pos).copied()).flatten() else {
+        return;
+    };
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let now = lv.game_time();
+    let shown = vec![
+        i64::from(d.state),
+        i64::from(d.max),
+        i64::from(d.powered),
+        now,
+    ];
+    let data = mod_api::Compound::from([(DIODE_SHOWN.into(), mod_api::Tag::LongArray(shown))]);
+    let _ = entity.merge_data(&mut *lv.host, data);
 }
 
 // ---------------------------------------------------------------------------------------------

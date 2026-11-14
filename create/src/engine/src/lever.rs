@@ -59,7 +59,7 @@ pub fn signal(state: u8, connected: Dir, side: Dir, direct: bool) -> i32 {
 /// `AnalogLeverRenderer.renderSafe`'s handle: turned to the lever's face and facing
 /// (`transform`: `rotateCentered` by `horizontalAngle(facing)` about y, then by 0, 90 or 180
 /// about x), then about x through (8, 1, 8) px by `state / 15 * 90` degrees.
-pub fn handle_pose(face: Face, facing: Dir, state: u8) -> crate::math::Mat4 {
+pub fn handle_pose(face: Face, facing: Dir, state: f32) -> crate::math::Mat4 {
     use crate::math::{Mat4, Vec3};
     let rx = match face {
         Face::Floor => 0.0f32,
@@ -70,7 +70,7 @@ pub fn handle_pose(face: Face, facing: Dir, state: u8) -> crate::math::Mat4 {
     let centre = Vec3::splat(0.5);
     let centred = |m: Mat4| Mat4::from_translation(centre) * m * Mat4::from_translation(-centre);
     let pivot = Vec3::new(0.5, 1.0 / 16.0, 0.5);
-    let angle = f32::from(state) / 15.0 * 90.0;
+    let angle = state / 15.0 * 90.0;
     centred(Mat4::from_rotation_y(ry.to_radians()))
         * centred(Mat4::from_rotation_x(rx.to_radians()))
         * Mat4::from_translation(pivot)
@@ -300,14 +300,14 @@ mod tests {
     fn the_handle_turns_about_its_pivot() {
         // On the floor facing south (no turn), at 15 the handle's tip (8, 1, 0 + ...) turns
         // a quarter about x through (8, 1, 8) px.
-        let m = handle_pose(Face::Floor, Dir::South, 15);
+        let m = handle_pose(Face::Floor, Dir::South, 15.0);
         let pivot = m.transform_point3(crate::math::Vec3::new(0.5, 1.0 / 16.0, 0.5));
         assert!((pivot - crate::math::Vec3::new(0.5, 1.0 / 16.0, 0.5)).length() < 1e-5);
         let p = m.transform_point3(crate::math::Vec3::new(0.5, 1.0 / 16.0 + 0.25, 0.5));
         assert!((p - crate::math::Vec3::new(0.5, 1.0 / 16.0, 0.75)).length() < 1e-5);
         // At 0 on the floor facing south, nothing moves.
         assert!(
-            handle_pose(Face::Floor, Dir::South, 0).abs_diff_eq(crate::math::Mat4::IDENTITY, 1e-6)
+            handle_pose(Face::Floor, Dir::South, 0.0).abs_diff_eq(crate::math::Mat4::IDENTITY, 1e-6)
         );
     }
 }

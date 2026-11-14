@@ -37,6 +37,31 @@ pub fn en_us(key: &str) -> Option<&'static str> {
         "create.display_source.stop_watch" => "Stopwatch",
         "create.display_source.combine_item_names" => "Combine Item Names",
         "create.display_source.nixie_tube" => "Copy Nixie Tubes",
+        "create.display_source.count_items" => "Amount of matching Items",
+        "create.display_source.list_items" => "List matching Items",
+        "create.display_source.fluid_amount" => "Amount of matching Fluids",
+        "create.display_source.list_fluids" => "List matching Fluids",
+        "create.display_source.fill_level" => "Container Fill Level",
+        "create.display_source.fill_level.display" => "Display Format",
+        "create.display_source.fill_level.percent" => "Percent",
+        "create.display_source.fill_level.progress_bar" => "Progress Bar",
+        "create.display_source.entity_name" => "Entity Name",
+        "create.display_source.accumulate_items" => "Accumulate Item Count",
+        "create.display_source.max_enchant_level" => "Max Enchanting Cost",
+        "create.display_source.item_throughput" => "Item Throughput",
+        "create.display_source.item_throughput.interval" => "Interval",
+        "create.display_source.item_throughput.interval.second" => "per Second",
+        "create.display_source.item_throughput.interval.minute" => "per Minute",
+        "create.display_source.item_throughput.interval.hour" => "per Hour",
+        "create.display_source.value_list.display" => "Value Display",
+        "create.display_source.value_list.shortened" => "Shortened",
+        "create.display_source.value_list.full_number" => "Full Number",
+        "create.display_source.value_list.thousand" => "k",
+        "create.display_source.value_list.million" => "m",
+        "create.generic.unit.millibuckets" => "mB",
+        "create.generic.unit.buckets" => "B",
+        "create.flap_display.cycles.shortened_numbers" => " ;K;M",
+        "create.flap_display.cycles.fluid_units" => "mB;B ",
         "create.display_link.success" => "Successfully bound to targeted position",
         "create.display_link.invalid" => "Link has no valid target, try placing it again",
         "create.display_link.too_far" => "Targeted position is too far from here",
@@ -85,10 +110,19 @@ pub enum Source {
     StopWatch,
     ItemNames,
     NixieTube,
+    CountItems,
+    ListItems,
+    CountFluids,
+    ListFluids,
+    FillLevel,
+    EntityName,
+    AccumulateItems,
+    ItemThroughput,
+    EnchantPower,
 }
 
 impl Source {
-    pub const ALL: [Source; 7] = [
+    pub const ALL: [Source; 16] = [
         Source::KineticSpeed,
         Source::KineticStress,
         Source::RedstonePower,
@@ -96,6 +130,15 @@ impl Source {
         Source::StopWatch,
         Source::ItemNames,
         Source::NixieTube,
+        Source::CountItems,
+        Source::ListItems,
+        Source::CountFluids,
+        Source::ListFluids,
+        Source::FillLevel,
+        Source::EntityName,
+        Source::AccumulateItems,
+        Source::ItemThroughput,
+        Source::EnchantPower,
     ];
 
     /// Its registry id's path (`create:<id>`).
@@ -108,6 +151,15 @@ impl Source {
             Source::StopWatch => "stopwatch",
             Source::ItemNames => "item_names",
             Source::NixieTube => "nixie_tube",
+            Source::CountItems => "count_items",
+            Source::ListItems => "list_items",
+            Source::CountFluids => "count_fluids",
+            Source::ListFluids => "list_fluids",
+            Source::FillLevel => "fill_level",
+            Source::EntityName => "entity_name",
+            Source::AccumulateItems => "accumulate_items",
+            Source::ItemThroughput => "item_throughput",
+            Source::EnchantPower => "enchant_power",
         }
     }
 
@@ -116,6 +168,7 @@ impl Source {
         let id = id.strip_prefix("create:").unwrap_or(id);
         Source::ALL.into_iter().find(|s| s.id() == id).or(match id {
             "redstone_power_display_source" => Some(Source::RedstonePower),
+            "enchant_power_display_source" => Some(Source::EnchantPower),
             "nixie_tube_source" => Some(Source::NixieTube),
             "belt_source_combine_item_names"
             | "depot_source_combine_item_names"
@@ -124,6 +177,18 @@ impl Source {
             "cuckoo_clock_source_stop_watch" => Some(Source::StopWatch),
             "speedometer_source_kinetic_speed" => Some(Source::KineticSpeed),
             "stressometer_source_kinetic_stress" => Some(Source::KineticStress),
+            "content_observer_source_count_items" => Some(Source::CountItems),
+            "content_observer_source_list_items" => Some(Source::ListItems),
+            "content_observer_source_count_fluids" => Some(Source::CountFluids),
+            "content_observer_source_list_fluids" => Some(Source::ListFluids),
+            "stockpile_switch_source_fill_level" => Some(Source::FillLevel),
+            _ if id.ends_with("_seat_source_entity_name") => Some(Source::EntityName),
+            "andesite_tunnel_source_accumulate_items" | "brass_tunnel_source_accumulate_items" => {
+                Some(Source::AccumulateItems)
+            }
+            "andesite_tunnel_source_item_throughput" | "brass_tunnel_source_item_throughput" => {
+                Some(Source::ItemThroughput)
+            }
             _ => None,
         })
     }
@@ -138,23 +203,42 @@ impl Source {
             Source::StopWatch => "create.display_source.stop_watch",
             Source::ItemNames => "create.display_source.combine_item_names",
             Source::NixieTube => "create.display_source.nixie_tube",
+            Source::CountItems => "create.display_source.count_items",
+            Source::ListItems => "create.display_source.list_items",
+            Source::CountFluids => "create.display_source.fluid_amount",
+            Source::ListFluids => "create.display_source.list_fluids",
+            Source::FillLevel => "create.display_source.fill_level",
+            Source::EntityName => "create.display_source.entity_name",
+            Source::AccumulateItems => "create.display_source.accumulate_items",
+            Source::ItemThroughput => "create.display_source.item_throughput",
+            Source::EnchantPower => "create.display_source.max_enchant_level",
         }
     }
 
-    /// `getPassiveRefreshTicks`: 100, the stopwatch 20 (every source here resets passively).
+    /// `getPassiveRefreshTicks`: 100, the stopwatch 20, the tunnels' counts 200 (every source
+    /// here resets passively).
     pub fn refresh_ticks(self) -> i64 {
         match self {
             Source::StopWatch => 20,
+            Source::AccumulateItems | Source::ItemThroughput => 200,
             _ => 100,
         }
     }
 
-    /// `SingleLineDisplaySource.allowsLabeling`.
+    /// `SingleLineDisplaySource.allowsLabeling` (a list, `ValueListDisplaySource`, has no
+    /// label).
     pub fn allows_labeling(self, target: Target) -> bool {
         match self {
             Source::NixieTube => target != Target::Nixie,
+            Source::ListItems | Source::ListFluids => false,
             _ => true,
         }
+    }
+
+    /// Whether it gives one line (`SingleLineDisplaySource`), not a list
+    /// (`ValueListDisplaySource`).
+    pub fn single_line(self) -> bool {
+        !matches!(self, Source::ListItems | Source::ListFluids)
     }
 }
 
@@ -167,6 +251,68 @@ pub struct Config {
     pub mode: i32,
     pub cycle: i32,
     pub start_time: Option<i64>,
+    /// A list's `Format`: 0 shortens its numbers.
+    pub format: i32,
+    /// A tunnel's `Collected` items (`AccumulatedItemCountDisplaySource`).
+    pub collected: i32,
+    /// `ItemThroughputDisplaySource`: its `Interval` (per second, minute, hour) and what it
+    /// keeps of the items it was told of.
+    pub interval: i32,
+    pub throughput: Throughput,
+}
+
+/// `ItemThroughputDisplaySource`'s source config: `LastReceived`, `LastReceivedAmount`,
+/// `PrevRates` (`POOL_SIZE` of them, -1 unset), `Index`, `Rate` and `Inactive`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Throughput {
+    pub last_received: Option<i64>,
+    pub last_amount: i32,
+    pub rates: Vec<f32>,
+    pub index: i32,
+    pub rate: Option<f32>,
+    pub inactive: bool,
+}
+
+/// `ItemThroughputDisplaySource.POOL_SIZE`.
+pub const POOL_SIZE: usize = 10;
+
+impl Throughput {
+    /// `itemReceived`: `amount` items at game time `now`; the rate is the mean of the last ten
+    /// arrivals' items per tick.
+    pub fn received(&mut self, amount: i32, now: i64) {
+        let Some(previous) = self.last_received else {
+            self.last_received = Some(now);
+            return;
+        };
+        if self.rates.len() != POOL_SIZE {
+            self.rates = vec![-1.0; POOL_SIZE];
+        }
+        let index = self.index.rem_euclid(POOL_SIZE as i32) as usize;
+        self.rates[index] = (f64::from(amount) / (now - previous) as f64) as f32;
+        let valid: Vec<f32> = self.rates.iter().copied().filter(|r| *r >= 0.0).collect();
+        self.rate = (!valid.is_empty()).then(|| valid.iter().sum::<f32>() / valid.len() as f32);
+        self.inactive = false;
+        self.last_amount = amount;
+        self.last_received = Some(now);
+        self.index = index as i32 + 1;
+    }
+
+    /// `provideLine`: the rate per interval (`20 * 60^interval` ticks); 0 once no items came
+    /// for twice the time one stack takes at that rate.
+    pub fn line(&mut self, interval: i32, now: i64) -> String {
+        if self.inactive {
+            return "0".to_owned();
+        }
+        let ticks = 20.0 * 60f64.powi(interval);
+        let rate = f64::from(self.rate.unwrap_or(0.0)) * ticks;
+        if rate > 0.0 {
+            let diff = (now - self.last_received.unwrap_or(0)) as i32;
+            if diff > 0 && f64::from(diff) > f64::from(self.last_amount) / rate * 2.0 {
+                self.inactive = true;
+            }
+        }
+        number(rate)
+    }
 }
 
 impl Config {
@@ -178,18 +324,22 @@ impl Config {
             "Directional" => self.directional = int(),
             "Mode" => self.mode = int(),
             "Cycle" => self.cycle = int(),
+            "Format" => self.format = int(),
+            "Interval" => self.interval = int(),
             _ => return false,
         }
         true
     }
 }
 
-/// The display targets the port has (`AllDisplayTargets`; lecterns not yet).
+/// The display targets (`AllDisplayTargets`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     Nixie,
     Sign { hanging: bool },
     Board,
+    /// A lectern's book (`LecternDisplayTarget`): a page a line.
+    Lectern,
 }
 
 /// `DisplayTargetStats`: rows and columns a target shows.
@@ -223,6 +373,18 @@ pub enum Reading {
     Names(Vec<String>),
     /// A nixie tube's full text (None: not a nixie tube).
     Nixie(Option<String>),
+    /// The matching items an observed inventory holds (None: no inventory).
+    Count(Option<i64>),
+    /// The matching fluid an observed tank holds, in mB (None: no tank).
+    Fluid(Option<i64>),
+    /// Amounts and names, unsorted (an observed inventory's items or tank's fluids).
+    Entries(Vec<(i64, String)>),
+    /// A threshold switch's fill level (None: not a switch).
+    Fill(Option<f32>),
+    /// A line of text (None: `EMPTY_LINE`): the name of who sits on a seat.
+    Text(Option<String>),
+    /// The game time (a tunnel's counts are kept in the link's config).
+    Now(i64),
 }
 
 /// One line a source gives: None is `EMPTY_LINE`; `numeric` is `flapDisplayContext` (a nixie
@@ -231,6 +393,9 @@ pub enum Reading {
 pub struct Line {
     pub text: Option<String>,
     pub numeric: bool,
+    /// A list's entries, largest first and as many as the target shows
+    /// (`ValueListDisplaySource.provideEntries`).
+    pub entries: Option<Vec<(i64, String)>>,
 }
 
 /// `TimeOfDayDisplaySource.EMPTY_TIME`.
@@ -254,6 +419,8 @@ fn percent_or_bar(
         return Some(match source {
             // RedstonePowerDisplaySource.formatNumeric.
             Source::RedstonePower => ((raw * 15.0) as i32).to_string(),
+            // PercentOrProgressBarDisplaySource.formatNumeric.
+            Source::FillLevel => format!("{}%", ((raw * 100.0) as i32).clamp(0, 100)),
             // KineticStressDisplaySource.formatNumeric: mode 1 is the percentage.
             _ if config.mode == 1 => format!("{}%", ((raw * 100.0) as i32).clamp(0, 100)),
             _ => {
@@ -359,9 +526,128 @@ pub fn provide_line(
             numeric = text.as_deref().is_some_and(|t| t.parse::<i32>().is_ok());
             text.clone()
         }
+        // ItemCountDisplaySource and EnchantPowerDisplaySource: `ZERO` without an inventory or
+        // an enchanting table.
+        (Source::CountItems | Source::EnchantPower, Reading::Count(n)) => {
+            Some(n.unwrap_or(0).to_string())
+        }
+        // FluidAmountDisplaySource: `FluidFormatter.asString(collected, false)`.
+        (Source::CountFluids, Reading::Fluid(n)) => n.map(|v| fluid_string(v, false, lang)),
+        // FillLevelDisplaySource.getProgress.
+        (Source::FillLevel, Reading::Fill(p)) => percent_or_bar(source, config, *p, target, stats, lang),
+        (Source::EntityName, Reading::Text(t)) => t.clone(),
+        (Source::AccumulateItems, _) => Some(config.collected.to_string()),
+        (Source::ItemThroughput, Reading::Now(now)) => {
+            let interval = config.interval;
+            Some(config.throughput.line(interval, *now))
+        }
+        // ValueListDisplaySource.provideEntries: the largest first, as many as the target has
+        // rows (a lectern's eight to a page).
+        (Source::ListItems | Source::ListFluids, Reading::Entries(e)) => {
+            let rows = stats.rows.max(0) as usize
+                * if target == Target::Lectern {
+                    ENTRIES_PER_PAGE
+                } else {
+                    1
+                };
+            let mut e = e.clone();
+            e.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            e.truncate(rows);
+            return Line {
+                text: None,
+                numeric: false,
+                entries: Some(e),
+            };
+        }
         _ => None,
     };
-    Line { text, numeric }
+    Line {
+        text,
+        numeric,
+        entries: None,
+    }
+}
+
+/// `EnchantmentHelper.getEnchantmentCost` of a diamond pickaxe (enchantability 10) for the
+/// third slot with `power` bookshelves (at most 15), from two random draws `a` in 0..8 and `b`
+/// in 0..=power.
+pub fn enchant_cost(power: i32, a: i32, b: i32) -> i32 {
+    let power = power.min(15);
+    let j = a + 1 + (power >> 1) + b;
+    j.max(power * 2)
+}
+
+/// `EnchantingTableBlock.BOOKSHELF_OFFSETS`: the ring two blocks out, at its height and one up.
+pub fn bookshelf_offsets() -> Vec<[i32; 3]> {
+    let mut out = Vec::new();
+    for x in -2..=2 {
+        for y in 0..=1 {
+            for z in -2..=2 {
+                if i32::abs(x) == 2 || i32::abs(z) == 2 {
+                    out.push([x, y, z]);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `ValueListDisplaySource.ENTRIES_PER_PAGE`.
+pub const ENTRIES_PER_PAGE: usize = 8;
+
+/// `FluidFormatter.asComponents`: tenths of buckets when shortened from a bucket up, else mB.
+pub fn fluid_components(amount: i64, shorten: bool, lang: &Lang) -> (String, String) {
+    if shorten && amount >= 1000 {
+        return (
+            format!("{:.1}", amount as f64 / 1000.0),
+            lang.get("create.generic.unit.buckets"),
+        );
+    }
+    (amount.to_string(), lang.get("create.generic.unit.millibuckets"))
+}
+
+/// `FluidFormatter.asString`.
+pub fn fluid_string(amount: i64, shorten: bool, lang: &Lang) -> String {
+    let (a, b) = fluid_components(amount, shorten, lang);
+    format!("{a} {b}")
+}
+
+/// `ValueListDisplaySource.shorten`: thousands and millions with their suffix.
+fn shorten(number: i64, lang: &Lang) -> (String, String) {
+    if number >= 1_000_000 {
+        return (
+            (number / 1_000_000).to_string(),
+            format!("{} ", lang.get("create.display_source.value_list.million")),
+        );
+    }
+    if number >= 1000 {
+        return (
+            (number / 1000).to_string(),
+            format!("{} ", lang.get("create.display_source.value_list.thousand")),
+        );
+    }
+    (number.to_string(), " ".to_owned())
+}
+
+/// `createComponentsFromEntry` of a list: the number (and its unit or suffix) and the name.
+pub fn entry_components(
+    source: Source,
+    config: &Config,
+    entry: &(i64, String),
+    lang: &Lang,
+) -> Vec<String> {
+    let shortened = config.format == 0;
+    let name = format!("{} ", entry.1);
+    if source == Source::ListFluids {
+        let (a, unit) = fluid_components(entry.0, shortened, lang);
+        return vec![a, unit, name];
+    }
+    // ItemListDisplaySource: the value first.
+    if shortened {
+        let (n, suffix) = shorten(entry.0, lang);
+        return vec![n, suffix, name];
+    }
+    vec![format!("{} ", entry.0), name]
 }
 
 /// `TimeOfDayDisplaySource.provideLine` for a turning clock: 12-hour (`c12`) with am/pm, or
@@ -428,6 +714,9 @@ pub fn stopwatch(diff: i64) -> String {
 
 /// `SingleLineDisplaySource.provideText`: the label before the line, `EMPTY` for no line.
 pub fn provide_text(source: Source, config: &Config, line: &Line, target: Target) -> Vec<String> {
+    if let Some(entries) = &line.entries {
+        return list_text(source, config, entries, target, &Lang::EN_US);
+    }
     let Some(text) = &line.text else {
         return vec![String::new()];
     };
@@ -437,8 +726,37 @@ pub fn provide_text(source: Source, config: &Config, line: &Line, target: Target
     vec![text.clone()]
 }
 
-/// `SingleLineDisplaySource.provideFlapDisplayText`: the label and the value as two sections.
+/// `ValueListDisplaySource.provideText`: each entry's parts in one line; a lectern's eight to a
+/// page.
+pub fn list_text(
+    source: Source,
+    config: &Config,
+    entries: &[(i64, String)],
+    target: Target,
+    lang: &Lang,
+) -> Vec<String> {
+    let lines: Vec<String> = entries
+        .iter()
+        .map(|e| entry_components(source, config, e, lang).concat())
+        .collect();
+    if target != Target::Lectern {
+        return lines;
+    }
+    lines
+        .chunks(ENTRIES_PER_PAGE)
+        .map(|page| page.join("\n"))
+        .collect()
+}
+
+/// `SingleLineDisplaySource.provideFlapDisplayText`: the label and the value as two sections; a
+/// list's entries' parts (`ValueListDisplaySource.provideFlapDisplayText`).
 pub fn provide_flap_text(source: Source, config: &Config, line: &Line) -> Vec<Vec<String>> {
+    if let Some(entries) = &line.entries {
+        return entries
+            .iter()
+            .map(|e| entry_components(source, config, e, &Lang::EN_US))
+            .collect();
+    }
     if source.allows_labeling(Target::Board) && !config.label.is_empty() {
         return vec![vec![
             format!("{} ", config.label),
@@ -465,14 +783,21 @@ pub enum Cycle {
     Numeric,
     Instant,
     Pixel,
+    /// A list's numbers (`"number"`: no lang entry, so one flap option, its key).
+    Number,
+    ShortenedNumbers,
+    FluidUnits,
 }
 
 impl Cycle {
-    pub const ALL: [Cycle; 4] = [
+    pub const ALL: [Cycle; 7] = [
         Cycle::Alphabet,
         Cycle::Numeric,
         Cycle::Instant,
         Cycle::Pixel,
+        Cycle::Number,
+        Cycle::ShortenedNumbers,
+        Cycle::FluidUnits,
     ];
 
     pub fn key(self) -> &'static str {
@@ -481,6 +806,9 @@ impl Cycle {
             Cycle::Numeric => "numeric",
             Cycle::Instant => "instant",
             Cycle::Pixel => "pixel",
+            Cycle::Number => "number",
+            Cycle::ShortenedNumbers => "shortened_numbers",
+            Cycle::FluidUnits => "fluid_units",
         }
     }
 
@@ -527,6 +855,11 @@ impl Section {
 
     pub fn wide(mut self) -> Section {
         self.wide = true;
+        self
+    }
+
+    pub fn right_aligned(mut self) -> Section {
+        self.right_aligned = true;
         self
     }
 
@@ -638,6 +971,51 @@ impl Board {
         Stats {
             rows: self.y_size * 2,
             columns: self.max_chars(),
+        }
+    }
+
+    /// `getLineIndexAt`: the line at height `y` of a controller at height `top` (within its
+    /// lines; Create's own clamp lets the board's bottom edge read one past the last).
+    pub fn line_index_at(&self, top: i32, y: f64) -> usize {
+        let n = (self.y_size * 2).max(1);
+        ((2.0 * (f64::from(top) - y + 1.0)).floor() as i32).clamp(0, n - 1) as usize
+    }
+
+    /// `applyTextManually`: a line's text set by hand (its default layout, the manual flag), or
+    /// cleared (None). Whether the line exists.
+    pub fn apply_text_manually(&mut self, line: usize, text: Option<&str>) -> bool {
+        let max = self.max_chars();
+        let lines = self.lines();
+        let Some(layout) = lines.get_mut(line) else {
+            return false;
+        };
+        if !layout.is_layout("Default") {
+            layout.load_default(max);
+        }
+        if let Some(s) = layout.sections.first_mut() {
+            s.set_text(text.unwrap_or(""));
+        }
+        if let Some(m) = self.manual.get_mut(line) {
+            *m = text.is_some();
+        }
+        true
+    }
+
+    /// `setColour`: white is no colour.
+    pub fn set_colour(&mut self, line: usize, colour: crate::dye::DyeColor) {
+        let id = crate::dye::DyeColor::ALL
+            .iter()
+            .position(|c| *c == colour)
+            .and_then(|i| u8::try_from(i).ok());
+        if let Some(c) = self.colour.get_mut(line) {
+            *c = id.filter(|_| colour != crate::dye::DyeColor::White);
+        }
+    }
+
+    /// `setGlowing`.
+    pub fn set_glowing(&mut self, line: usize) {
+        if let Some(g) = self.glowing.get_mut(line) {
+            *g = true;
         }
     }
 
@@ -782,10 +1160,21 @@ pub fn load_flap_layout(
         Source::RedstonePower => config.mode != 0,
         _ => false,
     };
+    let progress_bar = progress_bar || source == Source::FillLevel && config.mode != 0;
     let key = match source {
-        Source::KineticSpeed | Source::ItemNames => "Number",
-        Source::KineticStress | Source::RedstonePower if progress_bar => "Progress",
-        Source::KineticStress | Source::RedstonePower => "Number",
+        Source::KineticSpeed
+        | Source::ItemNames
+        | Source::CountItems
+        | Source::AccumulateItems
+        | Source::ItemThroughput
+        | Source::EnchantPower => "Number",
+        Source::KineticStress | Source::RedstonePower | Source::FillLevel if progress_bar => {
+            "Progress"
+        }
+        Source::KineticStress | Source::RedstonePower | Source::FillLevel => "Number",
+        Source::CountFluids | Source::EntityName | Source::ListItems | Source::ListFluids => {
+            "Default"
+        }
         Source::TimeOfDay | Source::StopWatch => "Instant",
         Source::NixieTube if numeric => "Number",
         Source::NixieTube => "Default",
@@ -794,9 +1183,14 @@ pub fn load_flap_layout(
         let width = size as f32 * MONOSPACE;
         match source {
             _ if progress_bar => Section::new(width, Cycle::Pixel, false, false).wide(),
-            Source::KineticSpeed | Source::KineticStress | Source::RedstonePower => {
-                Section::new(width, Cycle::Numeric, false, false)
-            }
+            Source::KineticSpeed
+            | Source::KineticStress
+            | Source::RedstonePower
+            | Source::FillLevel
+            | Source::CountItems
+            | Source::AccumulateItems
+            | Source::ItemThroughput
+            | Source::EnchantPower => Section::new(width, Cycle::Numeric, false, false),
             Source::NixieTube if numeric => Section::new(width, Cycle::Numeric, false, false),
             Source::TimeOfDay | Source::StopWatch => {
                 Section::new(width, Cycle::Instant, false, false)
@@ -829,9 +1223,62 @@ pub fn load_flap_layout(
     }
 }
 
-/// `DisplayBoardTarget.acceptFlapText` for a single-line source on a running board: from
-/// `line` down, while the lines aren't reserved by another link or set by hand (`reserved`).
+/// `ValueListDisplaySource.loadFlapDisplayLayout` (items: the value first) and
+/// `FluidListDisplaySource.loadFlapDisplayLayout`, for a list whose largest amount is
+/// `highest`.
+pub fn load_list_layout(
+    layout: &mut Layout,
+    source: Source,
+    config: &Config,
+    highest: i64,
+    max_chars: i32,
+) {
+    let shortened = config.format == 0;
+    if source == Source::ListFluids {
+        let length = fluid_string(highest, shortened, &Lang::EN_US).chars().count() as i32;
+        let key = format!("FluidList_{length}");
+        if layout.is_layout(&key) {
+            return;
+        }
+        let number = max_chars.min(3.max(length - 2));
+        let name = (max_chars - number - 2).max(0);
+        let sections = vec![
+            Section::new(MONOSPACE * number as f32, Cycle::Number, false, false).right_aligned(),
+            Section::new(MONOSPACE * 2.0, Cycle::FluidUnits, true, true),
+            Section::new(MONOSPACE * name as f32, Cycle::Alphabet, false, false),
+        ];
+        layout.configure(&key, sections);
+        return;
+    }
+    // `1 + (int) Math.log10(highest)`: no digits for 0 (log10 is -infinity there).
+    let digits = if highest > 0 {
+        1 + (highest as f64).log10() as i32
+    } else {
+        i32::MIN
+    };
+    let format = if shortened { 0 } else { 4.max(digits) };
+    let key = format!("ValueList_true_{format}");
+    if layout.is_layout(&key) {
+        return;
+    }
+    let number = max_chars.min(3.max(format));
+    let name = (max_chars - number - i32::from(shortened)).max(0);
+    let name = Section::new(MONOSPACE * name as f32, Cycle::Alphabet, false, false);
+    let value =
+        Section::new(MONOSPACE * number as f32, Cycle::Number, false, !shortened).right_aligned();
+    if shortened {
+        let suffix = Section::new(MONOSPACE, Cycle::ShortenedNumbers, false, true);
+        layout.configure(&key, vec![value, suffix, name]);
+        return;
+    }
+    layout.configure(&key, vec![value, name]);
+}
+
+/// `DisplayBoardTarget.acceptFlapText` on a running board: from `line` down, while the lines
+/// aren't reserved by another link or set by hand (`reserved`); a single-line source stops
+/// past its text, a list clears the lines past its entries (`applyTextManually(.., null)`).
 /// The controller's lines change; true when any section's text did.
+#[allow(clippy::too_many_arguments)]
 pub fn accept_flap_text(
     board: &mut Board,
     line: usize,
@@ -839,10 +1286,12 @@ pub fn accept_flap_text(
     source: Source,
     config: &Config,
     numeric: bool,
+    highest: i64,
     reserved: impl Fn(usize) -> bool,
 ) -> bool {
     let max = board.max_chars();
-    let manual = board.manual.clone();
+    let max_list = board.max_chars_with(1);
+    let mut manual = board.manual.clone();
     let lines = board.lines();
     let mut changed = false;
     let mut i = 0;
@@ -850,19 +1299,39 @@ pub fn accept_flap_text(
         if i > 0 && (reserved(i + line) || manual.get(i + line).copied().unwrap_or(false)) {
             break;
         }
-        // Single-line sources stop past their text.
         let Some(row) = text.get(i) else {
-            break;
+            if source.single_line() {
+                break;
+            }
+            let layout = &mut lines[i + line];
+            let before = layout.clone();
+            if !layout.is_layout("Default") {
+                layout.load_default(max);
+            }
+            if let Some(s) = layout.sections.first_mut() {
+                s.set_text("");
+            }
+            if let Some(m) = manual.get_mut(i + line) {
+                *m = false;
+            }
+            changed |= *layout != before;
+            i += 1;
+            continue;
         };
         let layout = &mut lines[i + line];
         let before = layout.clone();
-        load_flap_layout(layout, source, config, numeric, max);
+        if source.single_line() {
+            load_flap_layout(layout, source, config, numeric, max);
+        } else {
+            load_list_layout(layout, source, config, highest, max_list);
+        }
         for (section, t) in layout.sections.iter_mut().zip(row) {
             section.set_text(t);
         }
         changed |= *layout != before;
         i += 1;
     }
+    board.manual = manual;
     changed
 }
 
@@ -1168,6 +1637,7 @@ impl Link {
             return Line {
                 text: None,
                 numeric: false,
+                entries: None,
             };
         };
         let line = provide_line(source, &mut self.config, &reading, target, stats, lang);
@@ -2588,6 +3058,7 @@ mod tests {
             &Line {
                 text: Some("64 RPM".into()),
                 numeric: false,
+                entries: None,
             },
         );
         assert!(accept_flap_text(
@@ -2597,6 +3068,7 @@ mod tests {
             Source::KineticSpeed,
             &config,
             false,
+            0,
             |_| false
         ));
         let line = &b.lines()[1];
@@ -2621,6 +3093,7 @@ mod tests {
             Source::KineticSpeed,
             &config,
             false,
+            0,
             |_| false
         ));
         // Unlabelled progress: wide pixel flaps.
@@ -2638,6 +3111,111 @@ mod tests {
         assert_eq!(l.key, "17_Labeled_Instant");
         assert_eq!(l.sections.len(), 1);
         assert_eq!(l.sections[0].size, 13.0 * MONOSPACE);
+    }
+
+    #[test]
+    fn an_item_list_sorts_shortens_and_lays_out_its_entries() {
+        let stats = Stats {
+            rows: 2,
+            columns: 13,
+        };
+        let mut config = Config::default();
+        let reading = Reading::Entries(vec![
+            (5, "Redstone".into()),
+            (1024, "Cobblestone".into()),
+            (20, "Oak Planks".into()),
+        ]);
+        let line = provide_line(
+            Source::ListItems,
+            &mut config,
+            &reading,
+            Target::Board,
+            stats,
+            &Lang::EN_US,
+        );
+        // The largest first, as many as the target has rows.
+        let entries = line.entries.clone().unwrap();
+        assert_eq!(entries, vec![(1024, "Cobblestone".into()), (20, "Oak Planks".into())]);
+        let flap = provide_flap_text(Source::ListItems, &config, &line);
+        assert_eq!(flap[0], vec!["1", "k ", "Cobblestone "]);
+        // A sign reads them in one line each; a full number keeps its digits.
+        config.format = 1;
+        let text = provide_text(Source::ListItems, &config, &line, Target::Sign { hanging: false });
+        assert_eq!(text, vec!["1024 Cobblestone ", "20 Oak Planks "]);
+        // ValueList_true_0: three digits right-aligned, a suffix, then the name.
+        let mut b = Board::default();
+        b.set_status(true, 3, 1);
+        let config = Config::default();
+        assert!(accept_flap_text(
+            &mut b,
+            0,
+            &flap[..1],
+            Source::ListItems,
+            &config,
+            false,
+            1024,
+            |_| false
+        ));
+        let l = &b.lines()[0];
+        assert_eq!(l.key, "ValueList_true_0");
+        assert_eq!(l.sections.len(), 3);
+        assert!(l.sections[0].right_aligned);
+        assert_eq!(l.sections[0].cycle, Cycle::Number);
+        assert_eq!(l.sections[1].cycle, Cycle::ShortenedNumbers);
+        // The line past the list is cleared.
+        assert_eq!(b.lines()[1].sections[0].text.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn fluids_read_in_buckets_once_shortened() {
+        assert_eq!(fluid_string(1500, true, &Lang::EN_US), "1.5 B");
+        assert_eq!(fluid_string(1500, false, &Lang::EN_US), "1500 mB");
+        assert_eq!(fluid_string(999, true, &Lang::EN_US), "999 mB");
+    }
+
+    #[test]
+    fn a_tunnel_s_throughput_averages_its_arrivals_and_goes_quiet() {
+        let mut t = Throughput::default();
+        t.received(4, 0);
+        assert_eq!(t.rate, None, "the first only marks the time");
+        t.received(4, 20);
+        t.received(4, 40);
+        // 4 items every 20 ticks: 4 a second, 240 a minute.
+        assert_eq!(t.line(0, 40), "4");
+        assert_eq!(t.line(1, 40), "240");
+        // Long after the last stack: the rate once more, then 0.
+        assert_eq!(t.line(0, 400), "4");
+        assert_eq!(t.line(0, 400), "0");
+    }
+
+    #[test]
+    fn an_enchanting_table_s_cost_follows_its_bookshelves() {
+        assert_eq!(bookshelf_offsets().len(), 32);
+        assert_eq!(enchant_cost(15, 0, 0), 30);
+        assert_eq!(enchant_cost(20, 7, 15), 30);
+        assert_eq!(enchant_cost(0, 7, 0), 8);
+    }
+
+    #[test]
+    fn a_board_line_takes_its_colour_glow_and_text_by_hand() {
+        let mut b = Board::default();
+        b.set_status(true, 2, 2);
+        assert_eq!(b.line_index_at(10, 10.9), 0);
+        assert_eq!(b.line_index_at(10, 10.2), 1);
+        assert_eq!(b.line_index_at(10, 9.6), 2);
+        assert_eq!(b.line_index_at(10, 9.0), 3, "the bottom edge stays on the board");
+        b.set_colour(1, crate::dye::DyeColor::Red);
+        b.set_colour(2, crate::dye::DyeColor::White);
+        assert!(b.colour[1].is_some());
+        assert_eq!(b.colour[2], None);
+        b.set_glowing(3);
+        assert!(b.glowing[3]);
+        assert!(b.apply_text_manually(0, Some("Hello")));
+        assert!(b.manual[0]);
+        assert_eq!(b.lines()[0].sections[0].text.as_deref(), Some("Hello"));
+        assert!(b.apply_text_manually(0, None));
+        assert!(!b.manual[0]);
+        assert!(!b.apply_text_manually(9, None));
     }
 
     #[test]
@@ -2759,6 +3337,7 @@ mod tests {
             Source::ItemNames,
             &Config::default(),
             false,
+            0,
             |l| l == 1,
         );
         assert_eq!(bd.lines()[0].sections[0].text.as_deref(), Some("A"));
@@ -2772,6 +3351,7 @@ mod tests {
             Source::ItemNames,
             &Config::default(),
             false,
+            0,
             |_| false,
         );
         assert_eq!(bd.lines()[1].sections[0].text, None);
