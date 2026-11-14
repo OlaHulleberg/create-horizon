@@ -303,6 +303,18 @@ impl Subsystem for Logistics {
         host: mod_api::HostSide,
         event: &mut mod_api::RightClickBlockEvent<'_>,
     ) -> mod_api::Flow {
+        // `FunnelItem.funnelItemAlwaysPlacesWhenUsed`: a funnel is placed, never the clicked
+        // block used (a chest opened).
+        let id = match &host {
+            mod_api::HostSide::Client(h) => event.click.stack.map(|s| s.item().id(&**h)),
+            mod_api::HostSide::Server(h) => event.click.stack.map(|s| s.item().id(&**h)),
+        };
+        if matches!(
+            id.as_deref(),
+            Some("create:andesite_funnel" | "create:brass_funnel")
+        ) {
+            *event.use_block = mod_api::TriState::False;
+        }
         match host {
             mod_api::HostSide::Client(host) => client::predict_click(host, event),
             mod_api::HostSide::Server(_) => mod_api::Flow::Continue,

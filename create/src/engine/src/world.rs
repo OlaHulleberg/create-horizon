@@ -636,6 +636,11 @@ fn follows_power(block: Block) -> bool {
             | Block::TrackSignal
             | Block::SteamWhistle
             | Block::CartAssembler
+            // `AbstractFunnelBlock.neighborChanged` → `tick`: `powered` follows the signal.
+            | Block::AndesiteFunnel
+            | Block::BrassFunnel
+            | Block::AndesiteBeltFunnel
+            | Block::BrassBeltFunnel
     )
 }
 
