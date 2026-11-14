@@ -45,9 +45,13 @@ struct Part {
     wheel: bool,
 }
 
-/// What a carriage or bogey is: `(level, train, false, carriage)` or `(level, train, true,
-/// bogey)`.
-type Key = (usize, u32, bool, usize);
+/// What a display group shows: `(level, train, CAR, carriage)`, `(level, train, BOGEY,
+/// bogey)` or `(level, cart's UUID, CART, 0)`.
+type Key = (usize, u128, u8, usize);
+
+const CAR: u8 = 0;
+const BOGEY: u8 = 1;
+const CART: u8 = 2;
 
 thread_local! {
     static SHOWN: RefCell<HashMap<Key, Shown>> = RefCell::new(HashMap::new());
@@ -79,6 +83,8 @@ struct Now {
     /// The way it runs (its front).
     front: [f64; 3],
     loaded: bool,
+    /// A cart's contraption's blocks, when it has no displays yet.
+    blocks: Option<Vec<([i32; 3], u32)>>,
 }
 
 /// The heading's quarter `a` (degrees): `Ry(a)` turns +x onto the train's side (`heading`
@@ -144,13 +150,13 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
             e.discard(lv.host);
         }
     }
-    let empty = SHOWN.with_borrow(|s| !s.keys().any(|k| k.0 == dim));
+    let empty = SHOWN.with_borrow(|s| !s.keys().any(|k| k.0 == dim && k.2 != CART));
     let any =
         with_world(|w| w.dims[dim].railway.trains.iter().any(|t| t.train.bound)).unwrap_or(false);
     if empty && !any {
         return;
     }
-    let mut now: Vec<Now> = with_world(|w| {
+    let now: Vec<Now> = with_world(|w| {
         let r = &w.dims[dim].railway;
         let g = &r.net.graph;
         let mut out = Vec::new();
@@ -161,13 +167,14 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                 let f = Frame::new(pivot, front, t.heading);
                 let (yaw, pitch) = display_angles(f.yaw, f.pitch, t.heading);
                 out.push(Now {
-                    key: (dim, t.id, false, c),
+                    key: (dim, u128::from(t.id), CAR, c),
                     at: pivot,
                     yaw,
                     pitch,
                     turn: -a,
                     front,
                     loaded: false,
+                    blocks: None,
                 });
             }
             for b in 0..t.train.bogeys.len() {
@@ -175,7 +182,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                 let (yaw, pitch) = yaw_pitch(front, t.heading);
                 let (yaw, pitch) = display_angles(yaw, pitch, t.heading);
                 out.push(Now {
-                    key: (dim, t.id, true, b),
+                    key: (dim, u128::from(t.id), BOGEY, b),
                     at: anchor,
                     yaw,
                     pitch,
@@ -186,19 +193,62 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                         - a,
                     front,
                     loaded: false,
+                    blocks: None,
                 });
             }
         }
         out
     })
     .unwrap_or_default();
+    sync(lv, now, &[CAR, BOGEY]);
+}
+
+/// A cart's contraption as `carts` takes it.
+pub type CartPose<'a> = (u128, [f64; 3], f32, f32, f32, &'a [([i32; 3], u32)]);
+
+/// The cart contraptions of a level after its carts moved (`OrientedContraptionEntity`'s
+/// drawing): each cart's UUID, its contraption's pivot (its anchor block's centre), its turn
+/// (`Mounted::angle`), pitch and the turn of its initial orientation, drawn
+/// `Y(angle - base) · Z(pitch) · Y(base)` about the pivot, and the blocks.
+pub fn carts(lv: &mut ServerLevel<'_>, list: Vec<CartPose<'_>>) {
+    let dim = lv.dim;
+    if list.is_empty() && !SHOWN.with_borrow(|s| s.keys().any(|k| k.0 == dim && k.2 == CART)) {
+        return;
+    }
+    let now = list
+        .into_iter()
+        .map(|(uuid, at, angle, pitch, base, blocks)| {
+            let key = (dim, uuid, CART, 0);
+            let shown = SHOWN.with_borrow(|s| s.contains_key(&key));
+            // `Ry(angle - base) Rz(pitch) Ry(base)` is `Ry(angle - base - 90) Rx(pitch)
+            // Ry(base + 90)`.
+            let yaw = -(f64::from(angle) - f64::from(base) - 90.0);
+            Now {
+                key,
+                at,
+                yaw: ((yaw + 540.0).rem_euclid(360.0) - 180.0) as f32,
+                pitch,
+                turn: f64::from(base) + 90.0,
+                front: [0.0; 3],
+                loaded: false,
+                blocks: (!shown).then(|| blocks.to_vec()),
+            }
+        })
+        .collect();
+    sync(lv, now, &[CART]);
+}
+
+/// Display groups of kinds `kinds` as they are now: those that came into loaded chunks get
+/// their displays, those that moved move them, and those gone or out of reach lose them.
+fn sync(lv: &mut ServerLevel<'_>, mut now: Vec<Now>, kinds: &[u8]) {
+    let dim = lv.dim;
     for n in &mut now {
         n.loaded = lv.is_loaded(n.at.map(|v| v.floor() as i32));
     }
     // Gone, or out of loaded chunks: their displays go.
     let gone: Vec<Key> = SHOWN.with_borrow(|s| {
         s.keys()
-            .filter(|k| k.0 == dim)
+            .filter(|k| k.0 == dim && kinds.contains(&k.2))
             .filter(|k| !now.iter().any(|n| n.key == **k && n.loaded))
             .copied()
             .collect()
@@ -264,13 +314,14 @@ type Shape = (String, Vec<(String, String)>, [f64; 3], [f64; 3], bool);
 
 /// The displays of a carriage or bogey, made where it stands now.
 fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
-    let (_, train, bogey, i) = n.key;
+    let (_, id, kind, i) = n.key;
+    let train = id as u32;
     let dim = lv.dim;
     // Each display: its state, its point in the carriage's space, and its own turn about that
     // point (the partials' quarter) with the offset of its model's origin from the point.
     let mut parts: Vec<Shape> = Vec::new();
     let mut radius = 0.0;
-    if bogey {
+    if kind == BOGEY {
         let Some(size) = with_world(|w| {
             let t = w.dims[dim].railway.trains.iter().find(|t| t.id == train)?;
             t.train.bogeys.get(i).copied()
@@ -304,13 +355,20 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             parts.push((wheel.to_owned(), up.clone(), *w, [0.0; 3], true));
         }
     } else {
-        let blocks = with_world(|w| {
-            let t = w.dims[dim].railway.trains.iter().find(|t| t.id == train)?;
-            t.cars.get(i).cloned()
-        })
-        .flatten()
-        .unwrap_or_default();
+        let blocks = match &n.blocks {
+            Some(b) => b.clone(),
+            None => with_world(|w| {
+                let t = w.dims[dim].railway.trains.iter().find(|t| t.id == train)?;
+                t.cars.get(i).cloned()
+            })
+            .flatten()
+            .unwrap_or_default(),
+        };
         for (o, s) in blocks {
+            // A cart's anchor is its assembler, not drawn (Create puts its rail back there).
+            if kind == CART && o == [0, 0, 0] {
+                continue;
+            }
             let Some(state) = super::car_state(s) else {
                 continue;
             };
@@ -321,8 +379,9 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
                 continue;
             }
             // `Frame::to_world`: block `o` spans `o` to `o + 1`, the bogey's block a block
-            // over the pivot, its centre over it.
-            let centre = [f64::from(o[0]), f64::from(o[1]) + 1.5, f64::from(o[2])];
+            // over the pivot, its centre over it; a cart's anchor block is centred on its pivot.
+            let up = if kind == CART { 0.0 } else { 1.5 };
+            let centre = [f64::from(o[0]), f64::from(o[1]) + up, f64::from(o[2])];
             parts.push((name, props, centre, [-0.5; 3], false));
         }
     }
