@@ -2364,7 +2364,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 97] = [
+pub const PARTIALS: [(&str, &str, &str); 100] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -2659,6 +2659,10 @@ pub const PARTIALS: [(&str, &str, &str); 97] = [
     ("part_engine_piston", "create:block/steam_engine/piston", "up"),
     ("part_engine_linkage", "create:block/steam_engine/linkage", "up"),
     ("part_engine_connector", "create:block/steam_engine/shaft_connector", "up"),
+    // SpoutRenderer's nozzle (`SPOUT_TOP`, `SPOUT_MIDDLE`, `SPOUT_BOTTOM`), squeezed by the glue.
+    ("part_spout_top", "create:block/spout/top", "up"),
+    ("part_spout_middle", "create:block/spout/middle", "up"),
+    ("part_spout_bottom", "create:block/spout/bottom", "up"),
     ("part_pipe_casing", "create:block/fluid_pipe/casing", "up"),
     ("part_pipe_connection_down", "create:block/fluid_pipe/connection/down", "up"),
     ("part_pipe_connection_up", "create:block/fluid_pipe/connection/up", "up"),

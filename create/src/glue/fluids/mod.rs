@@ -23,6 +23,7 @@ mod pipes;
 mod place;
 mod plumbing;
 mod rims;
+mod spouted;
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
@@ -213,6 +214,9 @@ impl Subsystem for Tanks {
 /// heat, passive (0 or 1), water supply (`f32` bits), engines, whistles.
 pub const BOILER: &str = "Boiler";
 
+/// The key of the game time a spout's filling cycle started, while it runs, for its clients.
+pub const SPOUT_START: &str = "SpoutStart";
+
 thread_local! {
     /// What each spout's, drain's and boiler's block entity last showed its clients, by level
     /// and position.
@@ -224,6 +228,7 @@ thread_local! {
 /// states (`BOILER`) to their block entities' clients when they changed (`notifyUpdate`).
 fn send_shown(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    let time = lv.game_time();
     let now: Vec<([i32; 3], &'static str, Vec<i32>)> = with_world(|w| {
         let d = &w.dims[dim];
         let fluid = |f: Option<(Fluid, u32)>, capacity: u32| match f {
@@ -249,7 +254,16 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
             ];
             (*p, BOILER, v)
         });
-        spouts.chain(drains).chain(boilers).collect()
+        // A spout working shows when its cycle started (`processingTicks`).
+        let working = d
+            .spouts
+            .iter()
+            .filter(|(_, s)| s.processing >= 0)
+            .map(|(p, s)| {
+                let start = time - i64::from(create_engine::spout::FILLING_TIME - s.processing);
+                (*p, SPOUT_START, vec![start as i32])
+            });
+        spouts.chain(drains).chain(boilers).chain(working).collect()
     })
     .unwrap_or_default();
     let changed: Vec<_> = SHOWN.with_borrow_mut(|shown| {

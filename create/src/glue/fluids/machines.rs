@@ -12,9 +12,17 @@ use create_engine::tank::Fluid;
 use create_engine::{belt, sequenced};
 use mod_api::{Compound, HostTransaction, Identifier, ItemStack, ServerHost, Tag};
 
+/// `count` of `item`; a filled water bottle (`spout::WATER_BOTTLE`) holds water
+/// (`PotionContents` of `Potions.WATER`).
 pub(super) fn stack_of(host: &dyn ServerHost, item: &str, count: u32) -> Option<ItemStack> {
     let key = host.item_key(&Identifier::parse(item).ok()?)?;
-    ItemStack::new(key, count)
+    let mut stack = ItemStack::new(key, count)?;
+    if item == spout::WATER_BOTTLE {
+        let contents = Compound::from([("potion".into(), Tag::String("minecraft:water".into()))]);
+        let patch = Compound::from([("minecraft:potion_contents".into(), Tag::Compound(contents))]);
+        let _ = stack.set_components(patch);
+    }
+    Some(stack)
 }
 
 /// A sequenced assembly's filling step for `item` at `progress`: the assembly, the step's
@@ -209,8 +217,10 @@ fn fill_held(
                     .map(|i| (i as u32, entity.item_slot(&*host, i as u32).ok().flatten()))
                     .collect();
                 let stacked = slots.iter().find(|(_, s)| {
-                    s.as_ref()
-                        .is_some_and(|s| s.is_stackable_with(&filled) && s.count() < 64)
+                    s.as_ref().is_some_and(|s| {
+                        let max = host.max_stack_size(s.item()).unwrap_or(64);
+                        s.is_stackable_with(&filled) && s.count() < max
+                    })
                 });
                 if let Some((i, Some(s))) = stacked {
                     let mut s = s.clone();
