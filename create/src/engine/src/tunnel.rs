@@ -140,16 +140,20 @@ pub enum Mode {
     RoundRobin,
     ForcedRoundRobin,
     PreferNearest,
+    Randomize,
+    Synchronize,
 }
 
 impl Mode {
-    /// The modes in Create's order (`RANDOMIZE` and `SYNCHRONIZE` are not ported).
-    pub const ALL: [Mode; 5] = [
+    /// The modes in Create's order.
+    pub const ALL: [Mode; 7] = [
         Mode::Split,
         Mode::ForcedSplit,
         Mode::RoundRobin,
         Mode::ForcedRoundRobin,
         Mode::PreferNearest,
+        Mode::Randomize,
+        Mode::Synchronize,
     ];
 
     pub fn index(self) -> usize {
@@ -164,6 +168,8 @@ impl Mode {
             Mode::RoundRobin => "Round Robin",
             Mode::ForcedRoundRobin => "Forced Round Robin",
             Mode::PreferNearest => "Prefer Nearest",
+            Mode::Randomize => "Randomize",
+            Mode::Synchronize => "Synchronize Inputs",
         }
     }
 
@@ -173,8 +179,7 @@ impl Mode {
         Mode::ALL[i as usize]
     }
 
-    /// The mode at `SelectionMode` ordinal `i`; None for `RANDOMIZE`, `SYNCHRONIZE` (not ported)
-    /// or past the end.
+    /// The mode at `SelectionMode` ordinal `i`; None past the end.
     pub fn from_option(i: i32) -> Option<Mode> {
         Mode::ALL.get(usize::try_from(i).ok()?).copied()
     }
@@ -216,6 +221,8 @@ pub struct Brass {
     pub mode: Mode,
     /// The sequenced assembly progress of the stack it distributes (not saved).
     pub stack_progress: Option<crate::sequenced::Progress>,
+    /// `syncedOutputActive`: a synchronizing group of tunnels all hold a stack and hand it out.
+    pub synced: bool,
 }
 
 impl Default for Brass {
@@ -228,31 +235,42 @@ impl Default for Brass {
             previous_output: 0,
             mode: Mode::Split,
             stack_progress: None,
+            synced: false,
         }
     }
+}
+
+/// `BrassTunnelFilterSlot`: where a brass tunnel (axis `axis`, shape `shape`) shows the filter
+/// slot of side `side`, in the block; None on a side without one (`isValidFaceForFilter`: its
+/// open sides).
+pub fn filter_slot(axis: Axis, shape: Shape, side: Dir) -> Option<[f64; 3]> {
+    sides(axis, shape)
+        .contains(&side)
+        .then(|| crate::board::sided_offset([0.5, 13.0 / 16.0, 15.5 / 16.0], side))
 }
 
 /// `brassTunnelTimer`: ticks between distributions.
 pub const BRASS_TIMER: i32 = 10;
 
 /// `BrassTunnelBlockEntity.distribute`: hands `count` items out to `targets` outputs from
-/// `previous_output`, as the mode says; `insert(target, count, simulate)` is
-/// `insertIntoTunnel` (None: that output takes nothing of it, else what it leaves). The items
-/// left over.
+/// `previous_output` (a randomizing tunnel from `random`, any number), as the mode says;
+/// `insert(target, count, simulate)` is `insertIntoTunnel` (None: that output takes nothing of
+/// it, else what it leaves). The items left over.
 pub fn distribute(
     count: u8,
     targets: usize,
     previous_output: usize,
     mode: Mode,
+    random: usize,
     mut insert: impl FnMut(usize, u8, bool) -> Option<u8>,
 ) -> u8 {
     if targets == 0 {
         return count;
     }
-    let start = if mode == Mode::PreferNearest {
-        0
-    } else {
-        previous_output % targets
+    let start = match mode {
+        Mode::PreferNearest | Mode::Synchronize => 0,
+        Mode::Randomize => random % targets,
+        _ => previous_output % targets,
     };
     let force = matches!(mode, Mode::ForcedRoundRobin | Mode::ForcedSplit);
     let split = matches!(mode, Mode::ForcedSplit | Mode::Split);
@@ -352,10 +370,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn randomizing_and_synchronizing_tunnels_start_where_create_s_do() {
+        // A randomizing tunnel hands the whole stack to the first output from its random start
+        // that takes it; a synchronizing one starts at the nearest.
+        let mut got = Vec::new();
+        let left = distribute(5, 3, 1, Mode::Randomize, 7, |t, n, sim| {
+            if !sim {
+                got.push((t, n));
+            }
+            Some(0)
+        });
+        assert_eq!((left, got), (0, vec![(1, 5)]));
+        let mut got = Vec::new();
+        distribute(5, 3, 2, Mode::Synchronize, 7, |t, n, sim| {
+            if !sim {
+                got.push((t, n));
+            }
+            Some(0)
+        });
+        assert_eq!(got, vec![(0, 5)]);
+    }
+
+    #[test]
     fn a_brass_tunnel_splits_a_stack_evenly() {
         // Three outputs taking anything: 10 items as 4, 3, 3.
         let mut got = [0u8; 3];
-        let left = distribute(10, 3, 0, Mode::Split, |t, n, sim| {
+        let left = distribute(10, 3, 0, Mode::Split, 0, |t, n, sim| {
             if !sim {
                 got[t] += n;
             }
@@ -364,7 +404,7 @@ mod tests {
         assert_eq!((left, got), (0, [4, 3, 3]));
         // One output refusing: the other two share it.
         let mut got = [0u8; 3];
-        let left = distribute(9, 3, 0, Mode::Split, |t, n, sim| {
+        let left = distribute(9, 3, 0, Mode::Split, 0, |t, n, sim| {
             if t == 1 {
                 return None;
             }
@@ -375,7 +415,7 @@ mod tests {
         });
         assert_eq!((left, got), (0, [5, 0, 4]));
         // Outputs taking at most 2: what is left stays in the tunnel.
-        let left = distribute(9, 3, 0, Mode::Split, |_, n, _| Some(n.saturating_sub(2)));
+        let left = distribute(9, 3, 0, Mode::Split, 0, |_, n, _| Some(n.saturating_sub(2)));
         assert_eq!(left, 3);
     }
 
@@ -409,7 +449,11 @@ mod tests {
         assert!(!distributes(Axis::X, Shape::TLeft, |d| d == Dir::South));
         assert!(!distributes(Axis::X, Shape::Window, |_| false));
         assert_eq!(Mode::from_option(4), Some(Mode::PreferNearest));
-        assert_eq!((Mode::from_option(5), Mode::from_option(-1)), (None, None));
+        assert_eq!(
+            (Mode::from_option(6), Mode::from_option(7), Mode::from_option(-1)),
+            (Some(Mode::Synchronize), None, None)
+        );
+        assert_eq!(OPTIONS[Mode::Randomize.index()], Mode::Randomize.label());
         assert_eq!(OPTIONS[Mode::RoundRobin.index()], Mode::RoundRobin.label());
         // Junctions split stacks moving along them.
         assert!(splits(Axis::X, Shape::Cross, Dir::East, 2));

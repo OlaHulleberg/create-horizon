@@ -31,23 +31,43 @@ pub fn belt_segment(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<([i32; 3], i3
     Some((c, index, seg))
 }
 
-/// `BeltBlock.useItemOn` for a player who may build and is not sneaking: an empty main hand
-/// takes the segment's items (`use_belt`), a shaft makes a middle segment a pulley (used up
-/// outside creative), a casing cases the segment (`setCasingType`, nothing used up). True when
-/// the click was the belt's. Dyes, packages and the belt connector's and wrench's slicing are
-/// not in the port.
+/// `BeltBlock.useItemOn` for a player who may build and is not sneaking, clicked on `hit` (the
+/// face and the point): a wrench or a belt connector slices the belt (`slicer`), a dye or water
+/// colours or washes it, an empty main hand takes the segment's items (`use_belt`), a shaft makes
+/// a middle segment a pulley (used up outside creative), a casing cases the segment
+/// (`setCasingType`, nothing used up). True when the click was the belt's. Packages are not in
+/// the port.
 pub fn use_belt_with(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     player: u128,
     hand: mod_api::Hand,
     held: Option<&str>,
+    hit: (Dir, [f64; 3]),
 ) -> bool {
     let Some(p) = lv.host.player(player) else {
         return false;
     };
     if crate::glue::items::sneaking(&*lv.host, p) || p.may_build(&*lv.host) != Some(true) {
         return false;
+    }
+    // `BeltSlicer`: from the clicked point, measured from the block's centre.
+    let local = [0, 1, 2].map(|i| hit.1[i] - f64::from(pos[i]) - 0.5);
+    match held {
+        Some("create:wrench") => {
+            return super::slicer::use_wrench(lv, pos, p, hit.0, local).is_some();
+        }
+        Some("create:belt_connector") => {
+            return super::slicer::use_connector(lv, pos, p, local).is_some();
+        }
+        _ => {}
+    }
+    // A dye colours the whole belt, water washes it (`applyColor`); neither is used up.
+    if let Some(h) = held {
+        let dye = create_engine::dye::DyeColor::of_item(h);
+        if dye.is_some() || crate::glue::fluids::empties_water(h) {
+            return apply_color(lv, pos, dye.map(|d| d.name()));
+        }
     }
     match held {
         None => hand == mod_api::Hand::Main && use_belt(lv, pos, player),
@@ -64,8 +84,13 @@ pub fn use_belt_with(
             lv.set_property(pos, "part", "pulley", update_all());
             true
         }
-        Some("create:andesite_casing" | "create:brass_casing") => {
-            set_casing(lv, pos, true);
+        Some(c @ ("create:andesite_casing" | "create:brass_casing")) => {
+            let kind = if c == "create:brass_casing" {
+                "brass"
+            } else {
+                "andesite"
+            };
+            set_casing(lv, pos, Some(kind));
             // The casing's place sound (wood), at 0.8 of its pitch.
             let at = pos.map(|v| f64::from(v) + 0.5);
             lv.level.play_sound(
@@ -82,19 +107,126 @@ pub fn use_belt_with(
     }
 }
 
-/// `BeltBlockEntity.setCasingType`: cases the segment at `pos` or takes its casing off. Belts
-/// draw their casing as their block model, so a brass casing shows the andesite one's texture
-/// (Create's `BeltModel` swaps it; the mod API cannot retexture a block's terrain model), and the
-/// casing's break particles are left out (the mod API has no state's numeric id).
-pub fn set_casing(lv: &mut ServerLevel<'_>, pos: [i32; 3], cased: bool) {
-    let flag = if cased { "true" } else { "false" };
+/// The dye of the belt segment at `pos` (`BeltBlockEntity.color`), None when undyed.
+pub fn belt_color(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<String> {
+    let e = lv.host.block_entity(lv.level, pos)?;
+    match e.data(&*lv.host)?.get(&super::BELT_COLOR.into()) {
+        Some(mod_api::Tag::String(c)) => {
+            Some(c.to_string_lossy().to_string()).filter(|c| !c.is_empty())
+        }
+        _ => None,
+    }
+}
+
+/// Dyes the belt segment at `pos` `color` (None: undyed), for its clients to draw.
+fn set_segment_color(lv: &mut ServerLevel<'_>, pos: [i32; 3], color: Option<&str>) {
+    if let Some(e) = lv.host.block_entity(lv.level, pos) {
+        let tag = mod_api::Tag::String(color.unwrap_or("").into());
+        let _ = e.merge_data(
+            &mut *lv.host,
+            mod_api::Compound::from([(super::BELT_COLOR.into(), tag)]),
+        );
+    }
+}
+
+/// `BeltBlockEntity.applyColor`: every segment of the belt at `pos` takes dye `color` (None:
+/// washed clean). False when it already has it (the click passes on).
+fn apply_color(lv: &mut ServerLevel<'_>, pos: [i32; 3], color: Option<&str>) -> bool {
+    if belt_color(lv, pos).as_deref() == color {
+        return false;
+    }
+    let dim = lv.dim;
+    let Some(chain) = with_world(|w| {
+        let d = &w.dims[dim];
+        Some(d.belts.get(d.belt_of.get(&pos)?)?.chain.clone())
+    })
+    .flatten() else {
+        return false;
+    };
+    for p in chain {
+        set_segment_color(lv, p, color);
+    }
+    true
+}
+
+/// `BeltBlockEntity.setCasingType`: cases the segment at `pos` in `kind` (`andesite` or
+/// `brass`) or takes its casing off (None). The block entity keeps the kind for its clients, who
+/// draw the casing (`client`, as `BeltModel` would) and whether a block covers it
+/// (`updateCoverProperty`). The casing's break particles are left out (the mod API has no
+/// state's numeric id).
+pub fn set_casing(lv: &mut ServerLevel<'_>, pos: [i32; 3], kind: Option<&str>) {
+    let flag = if kind.is_some() { "true" } else { "false" };
+    if let Some(e) = lv.host.block_entity(lv.level, pos) {
+        let tag = mod_api::Tag::String(kind.unwrap_or("").into());
+        let _ = e.merge_data(
+            &mut *lv.host,
+            mod_api::Compound::from([(super::BELT_CASING.into(), tag)]),
+        );
+    }
     lv.set_property(pos, "casing", flag, update_all());
+    update_cover(lv, pos);
+}
+
+/// `BeltBlock.updateCoverProperty`: a cased horizontal segment at `pos` is covered while a block
+/// stands on it whose collision box (`isBlockCoveringBelt`) is at least half a block wide each
+/// way and starts at its bottom, but for funnels not facing up and tunnels.
+pub fn update_cover(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let Some(seg) = super::info_at(lv, pos).and_then(|(_, i)| i.belt) else {
+        return;
+    };
+    let cased = lv.block_state(pos).is_some_and(|s| {
+        s.property(&lv.host.block_states(), "casing").ok().flatten() == Some("true")
+    });
+    if !cased || seg.slope != belt::Slope::Horizontal {
+        return;
+    }
+    let above = [pos[0], pos[1] + 1, pos[2]];
+    let excluded = match super::info_at(lv, above) {
+        Some((b, i)) => {
+            matches!(
+                b,
+                create_engine::Block::AndesiteTunnel | create_engine::Block::BrassTunnel
+            ) || super::funnel::is_funnel(b) && i.facing != Some(Dir::Up)
+        }
+        None => false,
+    };
+    let cell = [
+        f64::from(above[0]),
+        f64::from(above[1]),
+        f64::from(above[2]),
+        f64::from(above[0]) + 1.0,
+        f64::from(above[1]) + 1.0,
+        f64::from(above[2]) + 1.0,
+    ];
+    let boxes = lv
+        .level
+        .collision_boxes(&*lv.host, cell)
+        .unwrap_or_default();
+    let covered = !excluded && !boxes.is_empty() && {
+        let lo = |k: usize| boxes.iter().map(|b| b[k]).fold(f64::MAX, f64::min);
+        let hi = |k: usize| boxes.iter().map(|b| b[k + 3]).fold(f64::MIN, f64::max);
+        hi(0) - lo(0) >= 0.5 && hi(2) - lo(2) >= 0.5 && lo(1) <= cell[1] + 1e-6
+    };
+    let Some(e) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let was = matches!(
+        e.data(&*lv.host)
+            .and_then(|d| d.get(&super::BELT_COVERED.into()).cloned()),
+        Some(mod_api::Tag::Byte(1))
+    );
+    if was != covered {
+        let tag = mod_api::Tag::Byte(i8::from(covered));
+        let _ = e.merge_data(
+            &mut *lv.host,
+            mod_api::Compound::from([(super::BELT_COVERED.into(), tag)]),
+        );
+    }
 }
 
 /// `BeltBlock.onWrenched` after `BeltSlicer.useWrench` passed it on: a casing comes off when a
 /// side or the bottom is clicked; a pulley clicked on a side becomes a middle segment again, its
-/// shaft back to the player outside creative. True when the wrench did something; the slicing
-/// (shortening a belt from its end, splitting it) is not in the port, so other clicks do nothing.
+/// shaft back to the player outside creative. True when the wrench did something.
 pub fn wrench_belt(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
@@ -114,7 +246,7 @@ pub fn wrench_belt(
         })
         .unwrap_or(false);
     if cased && clicked != Dir::Up {
-        set_casing(lv, pos, false);
+        set_casing(lv, pos, None);
         return true;
     }
     if seg.part == belt::Part::Pulley && clicked.axis() != Axis::Y {
@@ -237,6 +369,12 @@ pub fn insert_into_from(
     {
         return Some(left);
     }
+    if let Some(f) = funnel_at(lv, next) {
+        return Some(funnel_direct_input(lv, next, f, item));
+    }
+    if let Some((block, powered)) = super::chute::chute_at(lv, next) {
+        return Some(chute_direct_input(lv, next, block, powered, item));
+    }
     let dim = lv.dim;
     let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
     if is_depot {
@@ -304,8 +442,98 @@ pub fn insert_into_from(
     .flatten()
 }
 
+/// Whether something at `pos` takes items straight from a belt's end
+/// (`DirectBeltInputBehaviour`, `resolveEnding`'s `INSERT`): a depot, a belt, an item drain, a
+/// funnel or a chute. Only a floor funnel and a chute that may take items accept them; at the
+/// others the items wait.
+pub fn direct_input_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    let dim = lv.dim;
+    let kept = with_world(|w| {
+        let d = &w.dims[dim];
+        d.depots.contains_key(&pos) || d.belt_of.contains_key(&pos) || d.drains.contains_key(&pos)
+    });
+    kept == Some(true) || funnel_at(lv, pos).is_some() || super::chute::chute_at(lv, pos).is_some()
+}
+
+/// `DirectBeltInputBehaviour.canInsertFromSide` of what takes items at `pos`, for an item moving
+/// toward `side`: a belt turning, not against it; a floor funnel inserting; a chute that may take
+/// items (`canDirectlyInsert`); a depot or drain always.
+pub fn direct_input_accepts(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> bool {
+    if let Some(f) = funnel_at(lv, pos) {
+        return f.belt.is_none() && !f.extracting && f.facing == Dir::Up;
+    }
+    if super::chute::chute_at(lv, pos).is_some() {
+        let above = [pos[0], pos[1] + 1, pos[2]];
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        return super::chute::chute_at(lv, above).is_none()
+            && !(super::chute::chute_motion(lv, pos) > 0.0
+                && super::chute::chute_at(lv, below).is_none());
+    }
+    if let Some((c, _, seg)) = belt_segment(lv, pos) {
+        let dim = lv.dim;
+        let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+        return rpm != 0.0 && belt::movement_facing(rpm, seg.facing) != side.opposite();
+    }
+    true
+}
+
+/// `FunnelBlockEntity`'s `DirectBeltInputBehaviour`: only an inserting floor funnel
+/// (`supportsDirectBeltInput`) takes what its filter passes while unpowered
+/// (`handleDirectBeltInput`), into the inventory under it. The count left.
+fn funnel_direct_input(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    f: super::funnel::FunnelState,
+    item: &belt::Item,
+) -> u8 {
+    if f.belt.is_some() || f.extracting || f.facing != Dir::Up || f.powered {
+        return item.count;
+    }
+    let Some(stack) = belt_stack(lv, item) else {
+        return item.count;
+    };
+    if !super::funnel::funnel_passes(lv, pos, &stack) {
+        return item.count;
+    }
+    let behind = create_engine::funnel::behind(pos, f.facing);
+    let left = items::insert_item(lv, behind, face(f.facing), stack);
+    left.map_or(0, |l| l.count().min(255) as u8)
+}
+
+/// `ChuteBlockEntity`'s `DirectBeltInputBehaviour`: while it may take items
+/// (`canDirectlyInsert`: no chute above leading down into it, not blown up without a chute
+/// feeding it) its handler takes the whole stack when empty (`ChuteItemHandler.insertItem`).
+/// The count left.
+fn chute_direct_input(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    block: create_engine::Block,
+    powered: bool,
+    item: &belt::Item,
+) -> u8 {
+    let above = [pos[0], pos[1] + 1, pos[2]];
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    if super::chute::chute_at(lv, above).is_some()
+        || (super::chute::chute_motion(lv, pos) > 0.0
+            && super::chute::chute_at(lv, below).is_none())
+    {
+        return item.count;
+    }
+    let Some(stack) = belt_stack(lv, item) else {
+        return item.count;
+    };
+    if !super::chute::chute_accepts(lv, pos, block, powered, &stack) {
+        return item.count;
+    }
+    if super::chute::chute_take(lv, pos, &stack) {
+        0
+    } else {
+        item.count
+    }
+}
+
 /// `BeltInventory.eject`: an item thrown off the end, forward and a little up.
-fn eject_from_belt(
+pub(super) fn eject_item(
     lv: &mut ServerLevel<'_>,
     controller: [i32; 3],
     seg: &belt::Segment,
@@ -360,7 +588,7 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
         }
     }
     for (c, seg, length, item) in drops {
-        eject_from_belt(lv, c, &seg, length, 0.0, &item);
+        eject_item(lv, c, &seg, length, 0.0, &item);
     }
     let busy = with_world(|w| w.busy_belts(dim)).unwrap_or_default();
     for c in busy {
@@ -400,7 +628,12 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
             }
         });
         for item in &ticked.ejected {
-            eject_from_belt(lv, c, &seg, length, rpm, item);
+            eject_item(lv, c, &seg, length, rpm, item);
+        }
+        if !ticked.ejected.is_empty() {
+            let last = if speed > 0.0 { length - 1 } else { 0 };
+            let last = belt::position_for_offset(c, &seg, length, last);
+            super::flaps::tunnel(lv, last, belt::movement_facing(rpm, seg.facing), false);
         }
     }
     let changed = with_world(|w| {
@@ -438,6 +671,34 @@ pub fn tick_belts(lv: &mut ServerLevel<'_>) {
                 super::touch_shown(lv, c);
             }
         }
+    }
+}
+
+thread_local! {
+    /// Belt segments whose block above changed (`BeltBlock.updateShape` from above), by level:
+    /// their cover is looked at after the tick.
+    static COVER_CHECKS: std::cell::RefCell<Vec<(usize, [i32; 3])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The block above the belt segment at `pos` changed: its cover is looked at again.
+pub fn cover_check(dim: usize, pos: [i32; 3]) {
+    COVER_CHECKS.with_borrow_mut(|c| c.push((dim, pos)));
+}
+
+/// The cover checks of this level (`cover_check`).
+pub fn tick_covers(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let mine: Vec<[i32; 3]> = COVER_CHECKS.with_borrow_mut(|c| {
+        if c.is_empty() {
+            return Vec::new();
+        }
+        let mine = c.iter().filter(|e| e.0 == dim).map(|e| e.1).collect();
+        c.retain(|e| e.0 != dim);
+        mine
+    });
+    for pos in mine {
+        update_cover(lv, pos);
     }
 }
 
@@ -548,12 +809,7 @@ fn block_face(d: Dir) -> BlockFace {
 impl belt::Surroundings for BeltSide<'_, '_> {
     fn ending(&mut self) -> belt::Ending {
         let next = self.past_end();
-        let dim = self.lv.dim;
-        let has = with_world(|w| {
-            let d = &w.dims[dim];
-            d.depots.contains_key(&next) || d.belt_of.contains_key(&next)
-        });
-        if has == Some(true) {
+        if direct_input_at(self.lv, next) {
             return belt::Ending::Insert;
         }
         // BlockHelper.hasBlockSolidSide toward the belt.
@@ -570,7 +826,12 @@ impl belt::Surroundings for BeltSide<'_, '_> {
 
     fn insert(&mut self, item: &belt::Item) -> Option<u8> {
         let (next, side) = (self.past_end(), self.movement());
-        insert_into(self.lv, next, side, item)
+        let left = insert_into(self.lv, next, side, item);
+        if left.is_some_and(|l| l != item.count) {
+            let last = self.at(if self.positive { self.length - 1 } else { 0 });
+            super::flaps::tunnel(self.lv, last, side, false);
+        }
+        left
     }
 
     fn funnel(&mut self, segment: i32) -> Option<(create_engine::funnel::OnBelt, Dir)> {
@@ -595,13 +856,49 @@ impl belt::Surroundings for BeltSide<'_, '_> {
             return Some(item.count);
         }
         let left = items::insert_item(self.lv, behind, face(f.facing), stack);
-        Some(left.map_or(0, |l| l.count().min(255) as u8))
+        let left = left.map_or(0, |l| l.count().min(255) as u8);
+        if left != item.count {
+            super::flaps::funnel(self.lv, pos, true);
+        }
+        Some(left)
     }
 
+    /// `flapTunnelsAndCheckIfStuck`: the tunnel over segment `segment` may take some of `item`;
+    /// unless it must wait, the tunnels it leaves and enters flap.
     fn tunnel(&mut self, segment: i32, item: &mut belt::Item) -> bool {
         if self.segment.slope != belt::Slope::Horizontal {
             return false;
         }
+        let before = item.count;
+        let stuck = self.tunnel_takes(segment, item);
+        if !stuck || item.count == 0 && before > 0 {
+            let movement = self.movement();
+            let step = if self.positive { 1 } else { -1 };
+            super::flaps::tunnel(self.lv, self.at(segment - step), movement, false);
+            super::flaps::tunnel(self.lv, self.at(segment), movement.opposite(), true);
+        }
+        stuck
+    }
+
+    /// The machines over segment `segment` (presses, deployers, spouts) are the processing
+    /// subsystems': the first that answers acts.
+    fn process(
+        &mut self,
+        segment: i32,
+        item: &mut belt::Item,
+        locked: bool,
+    ) -> Option<belt::Process> {
+        let at = self.at(segment);
+        super::super::SUBSYSTEMS
+            .iter()
+            .find_map(|s| s.belt_process(self.lv, at, item, locked))
+    }
+}
+
+impl BeltSide<'_, '_> {
+    /// The tunnel over segment `segment` of a horizontal belt takes some of `item` (`tunnel`):
+    /// true when it must wait.
+    fn tunnel_takes(&mut self, segment: i32, item: &mut belt::Item) -> bool {
         let at = self.at(segment);
         let t = [at[0], at[1] + 1, at[2]];
         let Some((axis, shape)) = tunnel_state(self.lv, t) else {
@@ -613,6 +910,10 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         // axis, or a brass tunnel beside it) takes the whole stack while it holds none, and
         // holds back the next.
         if with_world(|w| w.dims[dim].brass.contains_key(&t)) == Some(true) {
+            // `stuckAtTunnel`: its filter on the side the item comes in by must pass it.
+            if !super::tunnel::flap_filter_passes(self.lv, t, movement.opposite(), &item.item) {
+                return true;
+            }
             if !shape.junction() && !super::tunnel::brass_connected(self.lv, t) {
                 return false;
             }
@@ -659,7 +960,7 @@ impl belt::Surroundings for BeltSide<'_, '_> {
             };
             match insert_into(self.lv, out, d, &one) {
                 None => continue,
-                Some(0) => {}
+                Some(0) => super::flaps::tunnel(self.lv, at, d, false),
                 Some(_) => return true,
             }
             item.count -= 1;
@@ -668,20 +969,6 @@ impl belt::Surroundings for BeltSide<'_, '_> {
             }
         }
         false
-    }
-
-    /// The machines over segment `segment` (presses, deployers, spouts) are the processing
-    /// subsystems': the first that answers acts.
-    fn process(
-        &mut self,
-        segment: i32,
-        item: &mut belt::Item,
-        locked: bool,
-    ) -> Option<belt::Process> {
-        let at = self.at(segment);
-        super::super::SUBSYSTEMS
-            .iter()
-            .find_map(|s| s.belt_process(self.lv, at, item, locked))
     }
 }
 

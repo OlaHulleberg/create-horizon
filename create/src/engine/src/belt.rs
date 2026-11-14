@@ -24,6 +24,31 @@ pub enum Part {
     Pulley,
 }
 
+impl Slope {
+    /// Its state value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Slope::Horizontal => "horizontal",
+            Slope::Upward => "upward",
+            Slope::Downward => "downward",
+            Slope::Vertical => "vertical",
+            Slope::Sideways => "sideways",
+        }
+    }
+}
+
+impl Part {
+    /// Its state value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Part::Start => "start",
+            Part::Middle => "middle",
+            Part::End => "end",
+            Part::Pulley => "pulley",
+        }
+    }
+}
+
 /// One belt block's state: `horizontal_facing`, `slope`, `part`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Segment {
@@ -98,6 +123,66 @@ impl Segment {
             _ => {}
         }
         Some(p)
+    }
+
+    /// `BeltHelper.getBeltVector`: from one segment to the next toward the end.
+    pub fn vector(&self) -> [i32; 3] {
+        if self.slope == Slope::Vertical {
+            return [0, if self.facing.positive() { 1 } else { -1 }, 0];
+        }
+        let n = self.facing.offset();
+        let up = match self.slope {
+            Slope::Upward => 1,
+            Slope::Downward => -1,
+            _ => 0,
+        };
+        [n[0], up, n[2]]
+    }
+
+    /// `BeltSlicer.hoveringEnd`: a click at `hit` (from the block's centre) on a start or end
+    /// segment is on its outer half.
+    pub fn hovering_end(&self, hit: [f64; 3]) -> bool {
+        if !matches!(self.part, Part::Start | Part::End) {
+            return false;
+        }
+        let v = self.vector();
+        let dot: f64 = (0..3).map(|i| hit[i] * f64::from(v[i])).sum();
+        (dot > 0.0) == (self.part == Part::End)
+    }
+
+    /// `BeltSlicer.beltStatesCompatible`: a belt `other` may join this one end to end.
+    pub fn compatible(&self, other: &Segment) -> bool {
+        match self.slope {
+            Slope::Upward | Slope::Downward => {
+                let flipped = if self.slope == Slope::Upward {
+                    Slope::Downward
+                } else {
+                    Slope::Upward
+                };
+                if other.slope == flipped {
+                    return self.facing == other.facing.opposite();
+                }
+                other.slope == self.slope && self.facing == other.facing
+            }
+            _ => other.slope == self.slope && other.facing.axis() == self.facing.axis(),
+        }
+    }
+
+    /// `BeltSlicer.flipBelt`: the same segment seen from the other end.
+    pub fn flipped(&self) -> Segment {
+        Segment {
+            facing: self.facing.opposite(),
+            slope: match self.slope {
+                Slope::Upward => Slope::Downward,
+                Slope::Downward => Slope::Upward,
+                s => s,
+            },
+            part: match self.part {
+                Part::End => Part::Start,
+                Part::Start => Part::End,
+                p => p,
+            },
+        }
     }
 
     /// `BeltBlock.getRotationAxis`.
@@ -401,6 +486,155 @@ pub fn partial(seg: &Segment, bottom: bool) -> Option<&'static str> {
         (false, false, _, true) => "create:part_belt_end",
         (false, false, ..) => "create:part_belt_middle",
     })
+}
+
+/// Every cased segment's model file (`BeltGenerator`).
+pub const CASING_MODELS: [&str; 12] = [
+    "create:block/belt_casing/diagonal_end",
+    "create:block/belt_casing/diagonal_middle",
+    "create:block/belt_casing/diagonal_pulley",
+    "create:block/belt_casing/diagonal_start",
+    "create:block/belt_casing/horizontal_end",
+    "create:block/belt_casing/horizontal_middle",
+    "create:block/belt_casing/horizontal_pulley",
+    "create:block/belt_casing/horizontal_start",
+    "create:block/belt_casing/sideways_end",
+    "create:block/belt_casing/sideways_middle",
+    "create:block/belt_casing/sideways_pulley",
+    "create:block/belt_casing/sideways_start",
+];
+
+/// The covers over a cased horizontal belt with a block on it (`BeltModel`): andesite or brass,
+/// along x or z.
+pub const COVER_MODELS: [&str; 4] = [
+    "create:block/belt_cover/andesite_belt_cover_x",
+    "create:block/belt_cover/andesite_belt_cover_z",
+    "create:block/belt_cover/brass_belt_cover_x",
+    "create:block/belt_cover/brass_belt_cover_z",
+];
+
+/// `BeltGenerator` for a cased segment: its model file and the variant's x and y turns (in
+/// degrees, as a block state variant turns its model).
+pub fn casing_model(seg: &Segment) -> (&'static str, i32, i32) {
+    let downward = seg.slope == Slope::Downward;
+    let diagonal = downward || seg.slope == Slope::Upward;
+    let vertical = seg.slope == Slope::Vertical;
+    let sideways = seg.slope == Slope::Sideways;
+    let negative = !seg.facing.positive();
+    let mut part = seg.part;
+    if (vertical && negative || downward || sideways && negative)
+        && !matches!(part, Part::Middle | Part::Pulley)
+    {
+        part = if part == Part::End {
+            Part::Start
+        } else {
+            Part::End
+        };
+    }
+    let slope = if diagonal {
+        "diagonal"
+    } else if vertical || sideways {
+        "sideways"
+    } else {
+        "horizontal"
+    };
+    let name = CASING_MODELS
+        .iter()
+        .find(|m| m.ends_with(&format!("/{slope}_{}", part.name())))
+        .copied()
+        .unwrap_or(CASING_MODELS[5]);
+    let x = if vertical {
+        90
+    } else if sideways && negative {
+        180
+    } else {
+        0
+    };
+    let y_rot = match seg.facing {
+        Dir::South => 0,
+        Dir::West => 90,
+        Dir::North => 180,
+        Dir::East => 270,
+        _ => 0,
+    };
+    let y = y_rot
+        + if seg.slope == Slope::Upward { 180 } else { 0 }
+        + if vertical { 90 } else { 0 };
+    (name, x, y % 360)
+}
+
+/// The model file of a belt partial (`getBeltPartial`), by its partial block's name.
+pub fn partial_model(partial: &str) -> Option<&'static str> {
+    Some(match partial {
+        "create:part_belt_diagonal_start" => "create:block/belt/diagonal_start",
+        "create:part_belt_diagonal_end" => "create:block/belt/diagonal_end",
+        "create:part_belt_diagonal_middle" => "create:block/belt/diagonal_middle",
+        "create:part_belt_start_bottom" => "create:block/belt/start_bottom",
+        "create:part_belt_end_bottom" => "create:block/belt/end_bottom",
+        "create:part_belt_middle_bottom" => "create:block/belt/middle_bottom",
+        "create:part_belt_start" => "create:block/belt/start",
+        "create:part_belt_end" => "create:block/belt/end",
+        "create:part_belt_middle" => "create:block/belt/middle",
+        _ => return None,
+    })
+}
+
+/// Every belt partial's model file.
+pub const PARTIAL_MODELS: [&str; 9] = [
+    "create:block/belt/diagonal_start",
+    "create:block/belt/diagonal_end",
+    "create:block/belt/diagonal_middle",
+    "create:block/belt/start_bottom",
+    "create:block/belt/end_bottom",
+    "create:block/belt/middle_bottom",
+    "create:block/belt/start",
+    "create:block/belt/end",
+    "create:block/belt/middle",
+];
+
+/// `BeltRenderer.getSpriteShiftEntry`: the sprite a segment's partial is textured with and the
+/// scrolling one drawn in its place, for an undyed belt or one dyed `color` (a `DyeColor` name).
+pub fn sprite_shift(seg: &Segment, color: Option<&str>, bottom: bool) -> (String, String) {
+    let diagonal = matches!(seg.slope, Slope::Upward | Slope::Downward);
+    let source = if diagonal {
+        "create:block/belt_diagonal"
+    } else if bottom {
+        "create:block/belt_offset"
+    } else {
+        "create:block/belt"
+    };
+    let target = match (color, diagonal) {
+        (Some(c), true) => format!("create:block/belt/{c}_diagonal_scroll"),
+        (Some(c), false) => format!("create:block/belt/{c}_scroll"),
+        (None, true) => "create:block/belt_diagonal_scroll".to_owned(),
+        (None, false) => "create:block/belt_scroll".to_owned(),
+    };
+    (source.to_owned(), target)
+}
+
+/// `BeltRenderer`'s UV scroll of a segment's partial turning at `speed` (its rpm) at render
+/// time `tick` (client ticks and the partial tick), in units of the scrolling sprite's height
+/// (twice the belt sprite's): None when it is drawn with its own sprite (still and undyed).
+pub fn scroll(seg: &Segment, speed: f32, dyed: bool, tick: f64, bottom: bool) -> Option<f32> {
+    if speed == 0.0 && !dyed {
+        return None;
+    }
+    let downward = seg.slope == Slope::Downward;
+    let diagonal = downward || seg.slope == Slope::Upward;
+    let sideways = seg.slope == Slope::Sideways;
+    let along_x = seg.facing.axis() == Axis::X;
+    let step = if seg.facing.positive() { 1.0 } else { -1.0 };
+    let time = tick * step;
+    let mut speed = f64::from(speed);
+    if diagonal && (downward ^ along_x)
+        || !sideways && !diagonal && along_x
+        || sideways && !seg.facing.positive()
+    {
+        speed = -speed;
+    }
+    let mult = if diagonal { 3.0 / 8.0 } else { 0.5 };
+    let s = speed * time / (31.5 * 16.0) + if bottom { 0.5 } else { 0.0 };
+    Some(((s - s.floor()) * mult) as f32)
 }
 
 /// `BeltRenderer`'s turn of a segment's partials, in block units.

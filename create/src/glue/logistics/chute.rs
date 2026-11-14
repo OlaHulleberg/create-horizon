@@ -11,7 +11,7 @@ use crate::glue::contraptions::actors;
 use crate::glue::items::filters;
 use create_engine::Block;
 use create_engine::kinetics::Dir;
-use mod_api::{BlockClick, Direction, ItemStack};
+use mod_api::{BlockClick, Direction, HostBlockStates, ItemStack, Tag};
 
 /// The chute or smart chute at `pos`, with whether it is powered.
 pub fn chute_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Block, bool)> {
@@ -68,6 +68,189 @@ pub fn chute_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) ->
     let dim = lv.dim;
     with_world(|w| w.dims[dim].chutes.insert(pos, 1.0));
     true
+}
+
+/// The way the chute at `pos` leads (`getChuteFacing`): down, or a diagonal chute's facing; None
+/// when no chute is there.
+pub fn chute_facing(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Dir> {
+    let (b, i) = info_at(lv, pos)?;
+    match b {
+        Block::Chute => Some(i.facing.unwrap_or(Dir::Down)),
+        Block::SmartChute => Some(Dir::Down),
+        _ => None,
+    }
+}
+
+/// A player's click on a chute (`AbstractChuteBlock.useItemOn`, `ChuteBlock.useItemOn`,
+/// `ChuteItem.place`): an empty hand takes what it holds; an industrial iron block encases a
+/// chute (not used up); a chute item on a chute's side places a diagonal chute leading into it,
+/// a block up (or turns the down-facing chute there toward it). True when the click was the
+/// chute's.
+pub fn use_chute(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &BlockClick<'_>) -> bool {
+    let Some(p) = lv.host.player(click.player) else {
+        return false;
+    };
+    let held = click.stack.map(|s| items::id_of(&*lv.host, s));
+    let Some((block, _)) = info_at(lv, pos) else {
+        return false;
+    };
+    let shape = || {
+        lv.block_state(pos).and_then(|s| {
+            s.property(&lv.host.block_states(), "shape")
+                .ok()
+                .flatten()
+                .and_then(create_engine::chute::Shape::read)
+        })
+    };
+    match held.as_deref() {
+        None => {
+            if click.hand != mod_api::Hand::Main {
+                return false;
+            }
+            let Some(stack) = chute_stack(lv, pos) else {
+                return false;
+            };
+            set_chute_stack(lv, pos, None);
+            let dim = lv.dim;
+            with_world(|w| w.dims[dim].chutes.remove(&pos));
+            items::give(&mut *lv.host, click.player, stack);
+            true
+        }
+        Some("create:industrial_iron_block") if block == Block::Chute => {
+            use create_engine::chute::Shape;
+            if matches!(shape(), Some(Shape::Intersection | Shape::Encased) | None) {
+                return false;
+            }
+            lv.set_property(pos, "shape", "encased", super::super::server::update_all());
+            let at = pos.map(|v| f64::from(v) + 0.5);
+            lv.level.play_sound(
+                &mut *lv.host,
+                "minecraft:block.netherite_block.hit",
+                at,
+                mod_api::SoundSource::Blocks,
+                0.5,
+                1.05,
+            );
+            true
+        }
+        Some("create:chute") => {
+            let sneaking = p.is_secondary_use_active(&*lv.host).unwrap_or(false);
+            let Some(face) = Dir::from_offset(click.hit.face) else {
+                return false;
+            };
+            if sneaking || face.axis() == create_engine::kinetics::Axis::Y {
+                return false;
+            }
+            let o = face.offset();
+            let correct = [pos[0] + o[0], pos[1] + 1, pos[2] + o[2]];
+            place_diagonal(lv, correct, face, p, click)
+        }
+        _ => false,
+    }
+}
+
+/// `ChuteItem.place` at `at`, facing `face`: a new chute where the block can be replaced, else a
+/// down-facing chute there turned toward `face`.
+fn place_diagonal(
+    lv: &mut ServerLevel<'_>,
+    at: [i32; 3],
+    face: Dir,
+    player: mod_api::PlayerRef,
+    click: &BlockClick<'_>,
+) -> bool {
+    use create_engine::chute::{Shape, update_state};
+    let existing = info_at(lv, at);
+    let free = lv
+        .block_state(at)
+        .is_none_or(|s| lv.host.block_states().replaceable(s) != Some(false));
+    let shape = match existing {
+        Some((Block::Chute, i)) if i.facing.unwrap_or(Dir::Down) == Dir::Down => lv
+            .block_state(at)
+            .and_then(|s| {
+                s.property(&lv.host.block_states(), "shape")
+                    .ok()
+                    .flatten()
+                    .and_then(Shape::read)
+            })
+            .unwrap_or(Shape::Normal),
+        _ if free => Shape::Normal,
+        _ => return true,
+    };
+    let above = [at[0], at[1] + 1, at[2]];
+    let funnel_down = super::funnel::funnel_at(lv, above)
+        .is_some_and(|f| f.belt.is_none() && f.facing == Dir::Down);
+    let (f, s) = update_state(at, face, shape, |p| chute_facing(lv, p), funnel_down);
+    let state = {
+        let facts = lv.host.block_states();
+        mod_api::BlockState::of(
+            &facts,
+            super::super::states::key(Block::Chute),
+            &[
+                mod_api::StateConstraint::new("facing", super::super::kinetics::dir_name(f)),
+                mod_api::StateConstraint::new("shape", s.name()),
+            ],
+        )
+    };
+    let Ok(state) = state else {
+        return false;
+    };
+    lv.set_state(at, state, super::super::server::update_all());
+    if free {
+        lv.place_sound(at);
+        if !crate::glue::items::creative(&*lv.host, player) {
+            crate::glue::items::shrink_held(&mut *lv.host, player, click.hand, 1);
+        }
+    }
+    true
+}
+
+/// Chutes whose shape is due a look (`AbstractChuteBlock.tick` and `updateShape` from above,
+/// `updateChuteState`): a diagonal chute with nothing to lead into turns down; intersections
+/// come and go with the diagonal chutes leading in.
+pub fn tick_chute_shapes(lv: &mut ServerLevel<'_>) {
+    use create_engine::chute::{Shape, update_state};
+    let dim = lv.dim;
+    let mut checks =
+        with_world(|w| std::mem::take(&mut w.dims[dim].chute_shapes)).unwrap_or_default();
+    if checks.is_empty() {
+        return;
+    }
+    checks.sort();
+    checks.dedup();
+    for pos in checks {
+        let Some((Block::Chute, info)) = info_at(lv, pos) else {
+            continue;
+        };
+        let Some(state) = lv.block_state(pos) else {
+            continue;
+        };
+        let shape = {
+            let facts = lv.host.block_states();
+            state
+                .property(&facts, "shape")
+                .ok()
+                .flatten()
+                .and_then(Shape::read)
+                .unwrap_or(Shape::Normal)
+        };
+        let facing = info.facing.unwrap_or(Dir::Down);
+        let above = [pos[0], pos[1] + 1, pos[2]];
+        let funnel_down = super::funnel::funnel_at(lv, above)
+            .is_some_and(|f| f.belt.is_none() && f.facing == Dir::Down);
+        let (f2, s2) = update_state(pos, facing, shape, |p| chute_facing(lv, p), funnel_down);
+        if (f2, s2) == (facing, shape) {
+            continue;
+        }
+        let next = {
+            let facts = lv.host.block_states();
+            state
+                .with(&facts, "facing", super::super::kinetics::dir_name(f2))
+                .and_then(|s| s.with(&facts, "shape", s2.name()))
+        };
+        if let Ok(next) = next {
+            lv.set_state(pos, next, super::super::server::update_all());
+        }
+    }
 }
 
 /// Whether nothing at `pos` stops what falls: no collision shape there
@@ -187,6 +370,14 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
     let moving: Vec<([i32; 3], f32)> =
         with_world(|w| w.dims[dim].chutes.iter().map(|(p, v)| (*p, *v)).collect())
             .unwrap_or_default();
+    // The chutes whose stack moved, and those next to them it may have moved into: their
+    // windows show it again (`show_chute_item`).
+    let mut shown: Vec<[i32; 3]> = Vec::new();
+    for (pos, _) in &moving {
+        shown.push(*pos);
+        shown.push([pos[0], pos[1] - 1, pos[2]]);
+        shown.push([pos[0], pos[1] + 1, pos[2]]);
+    }
     for (pos, position) in moving {
         let Some(stack) = chute_stack(lv, pos) else {
             with_world(|w| {
@@ -217,37 +408,61 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
             });
             continue;
         }
+        // `handleDownwardOutput`: the inventory below first; then the chute it leads into (a
+        // diagonal chute's beside that); a diagonal chute never drops what it holds.
+        let facing = chute_facing(lv, pos).unwrap_or(Dir::Down);
+        let diagonal = facing != Dir::Down;
         let below = [pos[0], pos[1] - 1, pos[2]];
-        let below_chute = chute_at(lv, below);
-        let container =
-            below_chute.is_none() && items::items_at(lv, below, Some(Direction::Up)).is_some();
+        let target = create_engine::chute::target(pos, facing);
+        let target_chute = chute_at(lv, target);
+        let container = chute_at(lv, below).is_none()
+            && items::items_at(lv, below, Some(Direction::Up)).is_some();
+        let target_takes = |lv: &ServerLevel<'_>| {
+            target_chute.is_some_and(|(b, powered)| {
+                chute_stack(lv, target).is_none() && chute_accepts(lv, target, b, powered, &stack)
+            })
+        };
         let can = if !active {
             false
-        } else if let Some((b, powered)) = below_chute {
-            chute_stack(lv, below).is_none() && chute_accepts(lv, below, b, powered, &stack)
         } else if container {
             true
+        } else if target_chute.is_some() {
+            target_takes(lv)
+        } else if diagonal {
+            false
         } else {
-            falls_through(lv, below)
+            let funnel_down = super::funnel::funnel_at(lv, below)
+                .is_some_and(|f| f.belt.is_none() && f.facing == Dir::Down);
+            !funnel_down && falls_through(lv, below)
+        };
+        // Into the chute it leads into: at the top, or past the middle from a diagonal one.
+        let into_target = |lv: &mut ServerLevel<'_>, stack: ItemStack| {
+            set_chute_stack(lv, target, Some(stack));
+            set_chute_stack(lv, pos, None);
+            let at = if diagonal { 0.51 } else { 1.0 };
+            with_world(|w| w.dims[dim].chutes.insert(target, at));
         };
         let next = match step(position, motion, can) {
             Fall::At(p) => Some(p),
-            Fall::Out if below_chute.is_some() => {
-                set_chute_stack(lv, below, Some(stack));
-                set_chute_stack(lv, pos, None);
-                with_world(|w| w.dims[dim].chutes.insert(below, 1.0));
-                None
-            }
             Fall::Out if container => {
                 let count = stack.count();
-                let left = items::insert_item(lv, below, Direction::Up, stack);
+                let left = items::insert_item(lv, below, Direction::Up, stack.clone());
                 if left.as_ref().is_some_and(|l| l.count() == count) {
-                    Some(0.5)
+                    if diagonal && target_takes(lv) {
+                        into_target(lv, stack);
+                        None
+                    } else {
+                        Some(0.5)
+                    }
                 } else {
                     let done = left.is_none();
                     set_chute_stack(lv, pos, left);
                     (!done).then_some(0.5)
                 }
+            }
+            Fall::Out if target_chute.is_some() => {
+                into_target(lv, stack);
+                None
             }
             Fall::Out => {
                 // An item 12/16 below the centre, falling at a quarter block a tick.
@@ -272,6 +487,63 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
         });
     }
     tick_chute_pulls(lv);
+    shown.sort();
+    shown.dedup();
+    for pos in shown {
+        show_chute_item(lv, pos);
+    }
+}
+
+/// Block entity keys of a windowed chute's stack, for its clients to draw it moving
+/// (`ChuteRenderer`): the item (an empty string: none), where it is (1 the top, 0 the bottom)
+/// and how far it moves a tick.
+pub const CHUTE_ITEM: &str = "ChuteItem";
+pub const CHUTE_POSITION: &str = "ChutePosition";
+pub const CHUTE_MOTION: &str = "ChuteMotion";
+
+/// Tells the clients of the vertical windowed chute at `pos` what it holds and where
+/// (`CHUTE_ITEM`), when that changed.
+fn show_chute_item(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    if chute_facing(lv, pos) != Some(Dir::Down) {
+        return;
+    }
+    let window = lv.block_state(pos).is_some_and(|s| {
+        s.property(&lv.host.block_states(), "shape").ok().flatten() == Some("window")
+    });
+    if !window {
+        return;
+    }
+    let dim = lv.dim;
+    let stack = chute_stack(lv, pos);
+    let id = stack
+        .as_ref()
+        .map(|s| items::id_of(&*lv.host, s))
+        .unwrap_or_default();
+    let moving = with_world(|w| w.dims[dim].chutes.get(&pos).copied()).flatten();
+    let position = moving.unwrap_or(0.5);
+    let motion = if moving.is_some() && stack.is_some() {
+        chute_motion(lv, pos)
+    } else {
+        0.0
+    };
+    let Some(e) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let data = e.data(&*lv.host).unwrap_or_default();
+    let same = matches!(data.get(&CHUTE_ITEM.into()), Some(Tag::String(s)) if s.to_string_lossy() == id)
+        && matches!(data.get(&CHUTE_POSITION.into()), Some(Tag::Float(b)) if f32::from_bits(*b) == position)
+        && matches!(data.get(&CHUTE_MOTION.into()), Some(Tag::Float(b)) if f32::from_bits(*b) == motion);
+    if same {
+        return;
+    }
+    let _ = e.merge_data(
+        &mut *lv.host,
+        mod_api::Compound::from([
+            (CHUTE_ITEM.into(), Tag::String(id.as_str().into())),
+            (CHUTE_POSITION.into(), Tag::Float(position.to_bits())),
+            (CHUTE_MOTION.into(), Tag::Float(motion.to_bits())),
+        ]),
+    );
 }
 
 /// `ChuteBlockEntity.handleInputFromAbove` for the empty chutes due to look: up to 16 of the

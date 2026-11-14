@@ -5,8 +5,11 @@
 //! entities' slots (depots, ejectors, vaults, chutes: `block_container`), which they give and
 //! take through `ITEMS` (`handlers`), and they reach every other inventory through `ITEMS` in
 //! transactions (`items`). Clients get their contents on Create's channels (`create:depot`,
-//! `create:belt`, `create:arm`, `create:ejector`) and draw them from the kinetic block
-//! entity's renderer (`client`): again each frame while they move, else when they change.
+//! `create:belt`, `create:arm`, `create:ejector`), or as synced block entity keys (belts' dye
+//! and casing, funnels' and tunnels' flaps, filters, a windowed chute's stack), and draw them
+//! from the kinetic block entity's renderer (`client`): again each frame while they move, else
+//! when they change. Belts' segments scroll their texture and wear their casing through standalone
+//! models drawn with the terrain's sprites (`standalone_models`, `terrain_model` with a UV shift).
 //!
 //! Left out, for want of an API or because another subsystem owns it:
 //! - `BakedModel.isGui3d` (how a stack lies on a belt or depot) is not in the mod API: an item
@@ -22,17 +25,19 @@
 //!   (`arms::select_point`, `arms::select_ejector_target`), but the outlines Create's client draws
 //!   around the chosen blocks are not, and left-clicking a point to drop it is out: the mod API's
 //!   `left_click_block` names no player.
-//! - Belts: a dye, the belt connector's lengthening and the wrench's shortening and splitting
-//!   (`BeltSlicer`) are not in the port; a brass casing is drawn with the andesite casing's
-//!   texture (Create's `BeltModel` retextures the block model; the mod API cannot), and a sloped
-//!   belt collides as a flat one (`BeltShapes` by facing, slope and part are not declared yet,
-//!   though content shapes can select by several properties).
+//! - Belts: a sloped belt collides as a flat one (`BeltShapes` by facing, slope and part are not
+//!   declared yet, though content shapes can select by several properties). A belt's casing is
+//!   drawn by its block entity (its block is never a terrain model, `ENTITYBLOCK_ANIMATED` in
+//!   every state), as `BeltModel` would draw it.
 //! - Players riding a belt are pushed by their own client (`push_player`), other entities by
 //!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`.
-//! - Diagonal chutes, a chute's window or casing drawn as Create joins them, and vaults' and
-//!   casings' connected textures are not in the port.
+//! - Item vaults' connected textures (`ItemVaultCTBehaviour`) are not drawn: a vault is a terrain
+//!   model per block, and drawing one by its block entity would need a UV shift per face of one
+//!   model (`TerrainModelOptions` takes one sprite's).
+//! - A filter slot's amount board (`FilteringBehaviour`'s "up to" / "exactly" count) is not in
+//!   the port: brass funnels and smart chutes move up to a stack of what their filter passes.
 //! - A brass tunnel's mode value box and the comparators beside a vault's other blocks are the
-//!   interaction and redstone subsystems'; a brass tunnel's side filters are not in the port.
+//!   interaction and redstone subsystems'.
 //!
 //! The kinetic block entity type is declared by `Kinetics`; `Entities`, after it, adds the
 //! handlers and the renderer to it. Belts' segments and pulleys are posed partials that
@@ -43,10 +48,12 @@ mod belt;
 mod chute;
 mod client;
 mod depot;
+mod flaps;
 mod funnel;
 mod handlers;
 mod items;
 mod placement;
+mod slicer;
 mod tunnel;
 
 pub use arms::Arms;
@@ -55,6 +62,7 @@ pub use arms::Arms;
 // stack placed on one needs.
 pub(crate) use belt::insert_into_from;
 pub(crate) use items::{random_angle, upright};
+pub(crate) use tunnel::set_brass_mode;
 
 use super::items::filters;
 use super::kinetics;
@@ -128,12 +136,14 @@ impl Subsystem for Logistics {
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         let (vaults, filters) = vaults_from_nbt(&*lv.host, data);
+        let side_filters = tunnel_filters_from_nbt(&*lv.host, data);
         let belts = belts_from_nbt(data);
         let brass = brass_from_nbt(data);
         let dim = lv.dim;
         with_world(|w| {
             w.dims[dim].vaults.load(vaults.into_iter());
             w.dims[dim].chute_filters.extend(filters);
+            w.dims[dim].tunnel_filters.extend(side_filters);
             w.load_belt_items(dim, belts.into_iter());
             w.load_brass(dim, brass.into_iter());
         });
@@ -142,6 +152,18 @@ impl Subsystem for Logistics {
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
         let dim = lv.dim;
         let (cx, cz) = (chunk[0], chunk[1]);
+        let side_filters = with_world(|w| {
+            let mut v: Vec<(([i32; 3], Dir), create_engine::filter::Filter)> = w.dims[dim]
+                .tunnel_filters
+                .iter()
+                .filter(|((p, _), _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+                .map(|(k, f)| (*k, f.clone()))
+                .collect();
+            v.sort_by_key(|e| (e.0.0, e.0.1 as u8));
+            v
+        })
+        .unwrap_or_default();
+        tunnel_filters_to_nbt(&*lv.host, data, &side_filters);
         let Some((vaults, filters, belts, brass)) = with_world(|w| {
             let mut filters: Vec<([i32; 3], create_engine::filter::Filter)> = w.dims[dim]
                 .chute_filters
@@ -170,14 +192,17 @@ impl Subsystem for Logistics {
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         chute::tick_vaults(lv);
+        chute::tick_chute_shapes(lv);
         chute::tick_chutes(lv);
         funnel::tick_funnel_shapes(lv);
         funnel::tick_funnels(lv);
         tunnel::tick_tunnels(lv);
         tunnel::tick_brass(lv);
         depot::tick_depots(lv);
+        belt::tick_covers(lv);
         belt::tick_belts(lv);
         belt::transport_passengers(lv);
+        flaps::send(lv);
     }
 
     /// `onWrenched` of Create's logistics blocks (sneaking, they are picked up as any block):
@@ -278,14 +303,61 @@ impl Subsystem for Logistics {
         client::logistics_message(host, channel, data)
     }
 
+    /// The client's prediction of a click a belt takes (`client::predict_click`).
+    fn right_click_block(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::RightClickBlockEvent<'_>,
+    ) -> mod_api::Flow {
+        // `FunnelItem.funnelItemAlwaysPlacesWhenUsed`: a funnel is placed, never the clicked
+        // block used (a chest opened).
+        let id = match &host {
+            mod_api::HostSide::Client(h) => event.click.stack.map(|s| s.item().id(&**h)),
+            mod_api::HostSide::Server(h) => event.click.stack.map(|s| s.item().id(&**h)),
+        };
+        if matches!(
+            id.as_deref(),
+            Some("create:andesite_funnel" | "create:brass_funnel")
+        ) {
+            *event.use_block = mod_api::TriState::False;
+        }
+        match host {
+            mod_api::HostSide::Client(host) => client::predict_click(host, event),
+            mod_api::HostSide::Server(_) => mod_api::Flow::Continue,
+        }
+    }
+
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick_client_depots(host);
         client::tick_client_belts(host);
+        client::tick_client_flaps();
         belt::carry_local_player(host);
     }
 
     fn client_reset(&self) {
         client::reset_logistics();
+    }
+
+    /// The belt partials, drawn with their texture scrolling, and the model naming the
+    /// scrolling sprites (so the block sprites hold them).
+    fn standalone_models(&self, models: &mut Vec<String>) {
+        models.extend(
+            create_engine::belt::PARTIAL_MODELS
+                .iter()
+                .map(|m| (*m).to_owned()),
+        );
+        models.extend(
+            create_engine::belt::CASING_MODELS
+                .iter()
+                .map(|m| (*m).to_owned()),
+        );
+        models.extend(
+            create_engine::belt::COVER_MODELS
+                .iter()
+                .map(|m| (*m).to_owned()),
+        );
+        models.push("create:block/belt_scroll_sprites".to_owned());
+        models.extend(client::FLAP_MODELS.iter().map(|m| (*m).to_owned()));
     }
 }
 
@@ -302,6 +374,15 @@ const SHOWN: &str = "Shown";
 /// A block entity key holding the item a brass funnel's or smart chute's filter slot shows
 /// (an empty string: none), synced for its clients to draw.
 pub(crate) const FILTER: &str = "Filter";
+
+/// A block entity key holding a belt segment's dye (`BeltBlockEntity.color`: a `DyeColor` name,
+/// an empty string or none for an undyed belt), synced for its clients to draw.
+pub(crate) const BELT_COLOR: &str = "Dye";
+
+/// Block entity keys of a cased belt segment: its casing (`andesite` or `brass`), and 1 while a
+/// block covers it (`BeltBlockEntity.casing`, `covered`), synced for its clients to draw.
+pub(crate) const BELT_CASING: &str = "Casing";
+pub(crate) const BELT_COVERED: &str = "Covered";
 
 /// Shows filter `filter` in the slot of the block at `pos` (`FILTER`).
 pub(crate) fn show_filter(
@@ -341,13 +422,24 @@ impl Subsystem for Entities {
         &self,
         block: create_engine::Block,
         pos: [i32; 3],
-        _entity: &mod_api::ModBlockEntity,
+        entity: &mod_api::ModBlockEntity,
     ) -> bool {
-        client::animated(block, pos)
+        client::animated(block, pos, entity)
     }
 
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[SHOWN, FILTER]
+        &[
+            SHOWN,
+            FILTER,
+            BELT_COLOR,
+            BELT_CASING,
+            BELT_COVERED,
+            flaps::KEY,
+            tunnel::SIDE_FILTERS,
+            chute::CHUTE_ITEM,
+            chute::CHUTE_POSITION,
+            chute::CHUTE_MOTION,
+        ]
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
@@ -425,11 +517,22 @@ fn use_block(
             depot::use_depot(&mut lv, pos, face, click.player, main)
         }
         Block::MechanicalArm => arms::use_arm(&mut lv, pos, click.player),
-        Block::SmartChute => chute::use_smart_chute(&mut lv, pos, click),
+        Block::SmartChute => {
+            chute::use_smart_chute(&mut lv, pos, click) || chute::use_chute(&mut lv, pos, click)
+        }
+        Block::Chute => chute::use_chute(&mut lv, pos, click),
         Block::BrassFunnel | Block::BrassBeltFunnel => {
             funnel::use_funnel_filter(&mut lv, pos, click)
         }
-        Block::Belt => belt::use_belt_with(&mut lv, pos, click.player, click.hand, held.as_deref()),
+        Block::BrassTunnel => tunnel::use_tunnel_filter(&mut lv, pos, click),
+        Block::Belt => belt::use_belt_with(
+            &mut lv,
+            pos,
+            click.player,
+            click.hand,
+            held.as_deref(),
+            (Dir::ALL[face as usize], click.hit.point),
+        ),
         _ => false,
     };
     used.then_some(InteractionResult::Success)
@@ -475,6 +578,31 @@ impl BlockPart for LogisticsBlock {
         };
         item_landed(&mut lv, event.block_pos, event.item_pos, event.stack);
         Flow::Continue
+    }
+
+    /// `updateShape` from above: a cased belt looks at its cover again (`BeltBlock`), a chute
+    /// at its shape (`AbstractChuteBlock`).
+    fn update_shape(
+        &self,
+        _level: &mut dyn mod_api::LevelTicksHost,
+        event: &mut mod_api::UpdateShapeEvent,
+    ) -> Option<mod_api::BlockState> {
+        if event.direction != mod_api::Direction::Up {
+            return None;
+        }
+        let block = states::id(event.state)
+            .and_then(|id| with_world(|w| w.table.get(id).map(|(b, _)| b)))
+            .flatten();
+        let dim = super::world::level_index(event.dimension.key().id())?;
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        match block {
+            Some(Block::Belt) => belt::cover_check(dim, pos),
+            Some(Block::Chute) => {
+                with_world(|w| w.dims[dim].chute_shapes.push(pos));
+            }
+            _ => {}
+        }
+        None
     }
 
     /// `BeltBlock.entityInside`: what stands on a belt is carried at the end of the tick.
@@ -590,7 +718,11 @@ fn item_landed(
                 return;
             }
             let behind = create_engine::funnel::behind(spot, f.facing);
+            let count = s.count();
             *stack = items::insert_item(lv, behind, items::face(f.facing), s);
+            if stack.as_ref().is_none_or(|l| l.count() != count) {
+                flaps::funnel(lv, spot, true);
+            }
         }
         Block::Depot => {
             // DirectBeltInputBehaviour from above: only into an empty depot (an ejector's while
@@ -669,6 +801,57 @@ fn vaults_to_nbt(
         c.insert("items".into(), Tag::List(items));
         own.insert("chute_filters".into(), Tag::Compound(c));
     }
+}
+
+/// Brass tunnels' side filters saved with a column: `tunnel_filters` holds x, y, z and the side
+/// of each, and its filter.
+fn tunnel_filters_to_nbt(
+    host: &dyn mod_api::Host,
+    own: &mut Compound,
+    filters: &[(([i32; 3], Dir), create_engine::filter::Filter)],
+) {
+    if filters.is_empty() {
+        return;
+    }
+    let mut c = Compound::new();
+    let pos = filters
+        .iter()
+        .flat_map(|((p, d), _)| [p[0], p[1], p[2], *d as i32])
+        .collect();
+    let items = filters
+        .iter()
+        .map(|(_, f)| filters::filter_to_nbt(host, f).unwrap_or_else(|| Tag::String("".into())))
+        .collect();
+    c.insert("pos".into(), Tag::IntArray(pos));
+    c.insert("items".into(), Tag::List(items));
+    own.insert("tunnel_filters".into(), Tag::Compound(c));
+}
+
+/// What `tunnel_filters_to_nbt` wrote.
+fn tunnel_filters_from_nbt(
+    host: &dyn mod_api::Host,
+    data: &Compound,
+) -> Vec<(([i32; 3], Dir), create_engine::filter::Filter)> {
+    let Some(Tag::Compound(c)) = data.get(&"tunnel_filters".into()) else {
+        return Vec::new();
+    };
+    let (Some(Tag::IntArray(pos)), Some(Tag::List(items))) =
+        (c.get(&"pos".into()), c.get(&"items".into()))
+    else {
+        return Vec::new();
+    };
+    pos.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(items)
+        .filter_map(|(p, i)| {
+            let side = *Dir::ALL.get(usize::try_from(p[3]).ok()?)?;
+            Some((
+                ([p[0], p[1], p[2]], side),
+                filters::filter_from_nbt(host, i)?,
+            ))
+        })
+        .collect()
 }
 
 /// What `vaults_to_nbt` wrote.
@@ -886,7 +1069,7 @@ fn brass_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::tunnel::Bras
                 create_engine::tunnel::Brass {
                     stack: (!item.is_empty() && n > 0).then_some((item, n)),
                     entered_from: Dir::ALL.get(v[4].clamp(0, 6) as usize).copied(),
-                    mode: create_engine::tunnel::Mode::ALL[v[3].clamp(0, 4) as usize],
+                    mode: create_engine::tunnel::Mode::ALL[v[3].clamp(0, 6) as usize],
                     ..Default::default()
                 },
             )

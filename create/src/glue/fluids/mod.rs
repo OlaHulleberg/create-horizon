@@ -44,6 +44,12 @@ use std::collections::HashMap;
 pub use client::animated;
 pub(crate) use machines::insert_into_drain;
 
+/// Whether emptying `item` gives water (`GenericItemEmptying.emptyItem(..).getFluid()`): a
+/// water bucket, a water bottle.
+pub(crate) fn empties_water(item: &str) -> bool {
+    clicks::emptying(item).is_some_and(|e| e.fluid == Fluid::Water)
+}
+
 /// The key of a tank's contents in its block entity's data: fluid (255: none), amount, width,
 /// height, window; empty for a tank block that is no controller.
 pub const TANK: &str = "Tank";

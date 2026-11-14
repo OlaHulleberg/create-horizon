@@ -172,15 +172,13 @@ pub(super) fn scroll_from_client(host: &mut dyn ServerHost, player: PlayerRef, d
             with_world(|w| w.set_chassis_range(dim, &group, range));
             range
         }
-        Some(B::BrassTunnel) => with_world(|w| {
-            let b = w.dims[dim].brass.get_mut(&pos)?;
-            b.mode = b.mode.scrolled(steps);
-            let i = b.mode.index() as i32;
-            w.mark_unsaved(dim, pos);
-            Some(i)
-        })
-        .flatten()
-        .unwrap_or(0),
+        Some(B::BrassTunnel) => {
+            let mode = with_world(|w| w.dims[dim].brass.get(&pos).map(|b| b.mode.scrolled(steps)))
+                .flatten()
+                .unwrap_or_default();
+            crate::glue::logistics::set_brass_mode(&lv, pos, mode);
+            mode.index() as i32
+        }
         _ => return,
     };
     net::send_to_player(lv.host, player, VALUE, &encode(&[x, y, z, value]));
@@ -232,20 +230,22 @@ pub(super) fn value_settings_from_client(
             }
             w.motor_setting(dim, pos).map(|rpm| rpm as i32)
         }),
-        // `ScrollOptionBehaviour` over Create's seven `SelectionMode`s: `RANDOMIZE` and
-        // `SYNCHRONIZE` are not ported and leave the mode as it is (as do connected tunnels,
-        // which would take it too).
-        B::BrassTunnel => with_world(|w| {
-            let b = w.dims[dim].brass.get_mut(&pos)?;
-            let now = b.mode.index() as i32;
-            let picked =
-                pick.and_then(|s| board::option_value(s, now, tunnel::OPTIONS.len() as i32));
+        // `ScrollOptionBehaviour` over Create's seven `SelectionMode`s; tunnels connected with
+        // it take the mode too.
+        B::BrassTunnel => {
+            let now = with_world(|w| w.dims[dim].brass.get(&pos).map(|b| b.mode.index() as i32))
+                .flatten();
+            let picked = pick.and_then(|s| {
+                board::option_value(s, now.unwrap_or(0), tunnel::OPTIONS.len() as i32)
+            });
             if let Some(mode) = picked.and_then(Mode::from_option) {
-                b.mode = mode;
-                w.mark_unsaved(dim, pos);
+                crate::glue::logistics::set_brass_mode(&lv, pos, mode);
             }
-            w.dims[dim].brass.get(&pos).map(|b| b.mode.index() as i32)
-        }),
+            Some(
+                with_world(|w| w.dims[dim].brass.get(&pos).map(|b| b.mode.index() as i32))
+                    .flatten(),
+            )
+        }
         // `BrassDiodeScrollValueBehaviour`: `onShortInteract` toggles the diode (`toggle`: not
         // with a wrench; sneaking and no building were never a short click); `setValueSettings`
         // sets its delay.

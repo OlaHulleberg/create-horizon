@@ -129,6 +129,10 @@ pub trait Subsystem: Sync {
     /// Each tick of a client's level.
     fn client_tick(&self, _host: &mut dyn ClientHost) {}
 
+    /// The model files (no block state names them) this subsystem's renderers draw through
+    /// `RenderAssets::model`, baked on every resource load (`standalone_models`).
+    fn standalone_models(&self, _models: &mut Vec<String>) {}
+
     /// The client left its world: drop what it kept.
     fn client_reset(&self) {}
 

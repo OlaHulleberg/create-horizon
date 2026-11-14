@@ -145,6 +145,9 @@ fn compile(create: &Path, repo: &Path) {
         let file = model.trim_start_matches("create:block/");
         write(&models_dir.join(format!("{file}.json")), &pretty(json));
     }
+    for (name, model) in blocks::sprite_models() {
+        write(&models_dir.join(format!("{name}.json")), &pretty(&model));
+    }
 
     // Items that are not blocks: plain ingredients now, the rest with their subsystem.
     let block_names: std::collections::BTreeSet<&str> =

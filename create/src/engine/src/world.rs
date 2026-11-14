@@ -149,6 +149,9 @@ pub struct Dimension {
     pub belt_drops: Vec<([i32; 3], crate::belt::Segment, i32, crate::belt::Item)>,
     /// Items saved with a belt, kept until its chain is whole again after loading.
     belt_saved: HashMap<[i32; 3], crate::belt::Inventory>,
+    /// Belt segments the belt slicer takes away (`UPDATE_MOVE_BY_PISTON`): their removal
+    /// breaks no neighbour and drops nothing.
+    belt_quiet: std::collections::HashSet<[i32; 3]>,
     /// Latches whose inputs may have changed, looked at after the tick
     /// (`checkTickOnNeighbor`), and their scheduled ticks (position, game time due).
     pub latch_checks: Vec<[i32; 3]>,
@@ -309,6 +312,11 @@ pub struct Dimension {
     pub chute_pulls: crate::chute::Pulls,
     /// Smart chutes' filters, saved with their column.
     pub chute_filters: HashMap<[i32; 3], crate::filter::Filter>,
+    /// Chutes whose shape or facing is looked at again after the tick
+    /// (`AbstractChuteBlock.updateDiagonalNeighbour` and `onRemove` schedule them a tick).
+    pub chute_shapes: Vec<[i32; 3]>,
+    /// Brass tunnels' side filters (`SidedFilteringBehaviour`), by tunnel and side.
+    pub tunnel_filters: HashMap<([i32; 3], crate::kinetics::Dir), crate::filter::Filter>,
     /// Filter items whose block was broken (`FilteringBehaviour.destroy`): the glue drops them.
     pub dropped_filters: Vec<([i32; 3], crate::filter::Filter)>,
     /// Item vault blocks and the vaults they form.
@@ -631,6 +639,11 @@ fn follows_power(block: Block) -> bool {
             | Block::TrackSignal
             | Block::SteamWhistle
             | Block::CartAssembler
+            // `AbstractFunnelBlock.neighborChanged` → `tick`: `powered` follows the signal.
+            | Block::AndesiteFunnel
+            | Block::BrassFunnel
+            | Block::AndesiteBeltFunnel
+            | Block::BrassBeltFunnel
     )
 }
 
@@ -1090,6 +1103,29 @@ impl CreateWorld {
                     .push((pos, was.unwrap_or(false)));
             }
         }
+        // `AbstractChuteBlock.onPlace` / `onRemove`: the chute a chute leads into, and the
+        // diagonal chutes over a chute that went, look at their shape again.
+        let chute = |s: u32| {
+            self.table
+                .get(s)
+                .filter(|(b, _)| matches!(b, Block::Chute | Block::SmartChute))
+                .map(|(_, i)| i.facing.unwrap_or(crate::kinetics::Dir::Down))
+        };
+        if let Some(f) = chute(new).or(chute(old))
+            && chute(old).is_none() != chute(new).is_none()
+        {
+            let d = &mut self.dims[dim];
+            d.chute_shapes.push(crate::chute::target(pos, f));
+            for side in [
+                crate::kinetics::Dir::South,
+                crate::kinetics::Dir::West,
+                crate::kinetics::Dir::North,
+                crate::kinetics::Dir::East,
+            ] {
+                let o = side.offset();
+                d.chute_shapes.push([pos[0] + o[0], pos[1] + 1, pos[2] + o[2]]);
+            }
+        }
         // A still hose turning forwards waits for the block below its end (`lazyTick`).
         if !self.dims[dim].plumbing.hose_waits.is_empty()
             && let Some(hose) = self.dims[dim].plumbing.hose_waits.remove(&pos)
@@ -1371,6 +1407,18 @@ impl CreateWorld {
             }
             if d.chassis_range.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
+            // Its side filters go (a filter item drops, `FilteringBehaviour.destroy`).
+            for side in crate::kinetics::Dir::ALL {
+                if d.tunnel_filters.is_empty() {
+                    break;
+                }
+                if let Some(f) = d.tunnel_filters.remove(&(pos, side)) {
+                    d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+                    if f.is_filter_item() {
+                        d.dropped_filters.push((pos, f));
+                    }
+                }
             }
             if let Some(b) = d.brass.remove(&pos) {
                 d.brass_running.retain(|p| *p != pos);
@@ -2522,6 +2570,9 @@ impl CreateWorld {
     /// next to it break in turn (a pulley leaves its shaft).
     fn belt_removed(&mut self, dim: usize, pos: [i32; 3], seg: crate::belt::Segment) {
         let d = &mut self.dims[dim];
+        if d.belt_quiet.remove(&pos) {
+            return;
+        }
         if let Some(c) = d.belt_of.remove(&pos)
             && let Some(belt) = d.belts.remove(&c)
         {
@@ -2617,6 +2668,43 @@ impl CreateWorld {
                 self.place(dim, p, state);
             }
         }
+    }
+
+    /// `BeltSlicer`'s first step (`detachKinetics`, `beltLength = 0` on every segment): the belt
+    /// with segment `pos` is taken apart, its chain and items handed back; its segments form
+    /// belts again after the tick, from their states then (`settle_belts`).
+    pub fn take_belt(&mut self, dim: usize, pos: [i32; 3]) -> Option<([i32; 3], Belt)> {
+        let d = &mut self.dims[dim];
+        let c = *d.belt_of.get(&pos)?;
+        let b = d.belts.remove(&c)?;
+        for p in &b.chain {
+            d.belt_of.remove(p);
+            d.belt_dirty.push(*p);
+        }
+        d.belt_changes.push(c);
+        Some((c, b))
+    }
+
+    /// The belt segment at `pos` leaves without breaking its neighbours or dropping anything
+    /// (the slicer's `UPDATE_MOVE_BY_PISTON`).
+    pub fn remove_belt_quietly(&mut self, dim: usize, pos: [i32; 3]) {
+        self.dims[dim].belt_quiet.insert(pos);
+    }
+
+    /// The belt whose controller will be `controller` takes `items` once its chain forms; its
+    /// segments `chain` look for their chain after the tick.
+    pub fn reform_belt(
+        &mut self,
+        dim: usize,
+        controller: [i32; 3],
+        chain: &[[i32; 3]],
+        items: crate::belt::Inventory,
+    ) {
+        let d = &mut self.dims[dim];
+        if !items.is_empty() {
+            d.belt_saved.insert(controller, items);
+        }
+        d.belt_dirty.extend_from_slice(chain);
     }
 
     /// Items saved with belts in a column (`chunk_data_save`), for when their chains form.

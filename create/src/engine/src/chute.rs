@@ -3,7 +3,10 @@
 //! takes from the inventory above it (`handleInputFromAbove`). Encased fans at the ends of a
 //! column of chutes blow its stacks up or speed them down (`getItemMotion`); rising, an empty
 //! chute takes from the inventory below it. The smart chute (`SmartChuteBlockEntity`) adds a
-//! filter and stops while powered. Diagonal chutes are not in the port.
+//! filter and stops while powered. A diagonal chute (facing sideways) leads down into the chute
+//! below and beside it, away from its facing.
+
+use crate::kinetics::Dir;
 
 /// `getItemMotion` with no fan: `-gravity / 20` chutes a tick.
 pub const MOTION: f32 = -4.0 / 20.0;
@@ -176,6 +179,106 @@ pub fn passes(filter: Option<&str>, item: &str) -> bool {
     filter.is_none_or(|f| f == item)
 }
 
+/// `ChuteBlock.SHAPE`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    Intersection,
+    Window,
+    Normal,
+    Encased,
+}
+
+impl Shape {
+    /// Its state value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Shape::Intersection => "intersection",
+            Shape::Window => "window",
+            Shape::Normal => "normal",
+            Shape::Encased => "encased",
+        }
+    }
+
+    /// The shape a state value names.
+    pub fn read(s: &str) -> Option<Shape> {
+        Some(match s {
+            "intersection" => Shape::Intersection,
+            "window" => Shape::Window,
+            "normal" => Shape::Normal,
+            "encased" => Shape::Encased,
+            _ => return None,
+        })
+    }
+}
+
+/// Where a chute at `pos` facing `facing` hands its stack on (`getTargetChute`): the block below,
+/// a diagonal one's (facing sideways) beside that, away from its facing.
+pub fn target(pos: [i32; 3], facing: Dir) -> [i32; 3] {
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    if facing.axis() == crate::kinetics::Axis::Y {
+        return below;
+    }
+    let o = facing.opposite().offset();
+    [below[0] + o[0], below[1], below[2] + o[2]]
+}
+
+/// `ChuteBlock.updateChuteState` for a chute facing `facing` with shape `shape`: a diagonal one
+/// with no chute at its target turns down again; a vertical one is an intersection while
+/// diagonal chutes above it lead into it (`facing_at(p)`: the facing of the chute at `p`, None
+/// when there is none, a smart chute's down), else as it was; a diagonal one too, but for one
+/// chute leading on in its own line while no chute or down-facing funnel (`funnel_down_above`)
+/// is over it.
+pub fn update_state(
+    pos: [i32; 3],
+    facing: Dir,
+    shape: Shape,
+    facing_at: impl Fn([i32; 3]) -> Option<Dir>,
+    funnel_down_above: bool,
+) -> (Dir, Shape) {
+    let vertical = facing == Dir::Down;
+    if !vertical && facing_at(target(pos, facing)).is_none() {
+        return (Dir::Down, Shape::Normal);
+    }
+    let above = [pos[0], pos[1] + 1, pos[2]];
+    let connected = |d: Dir| {
+        let o = d.offset();
+        facing_at([above[0] + o[0], above[1], above[2] + o[2]]) == Some(d)
+    };
+    let horizontal = [Dir::South, Dir::West, Dir::North, Dir::East];
+    let count = horizontal.iter().filter(|d| connected(**d)).count();
+    if vertical {
+        let shape = if count == 0 {
+            if shape == Shape::Intersection {
+                Shape::Normal
+            } else {
+                shape
+            }
+        } else {
+            Shape::Intersection
+        };
+        return (facing, shape);
+    }
+    if count == 0
+        || connected(Dir::North) && connected(Dir::South)
+        || connected(Dir::East) && connected(Dir::West)
+    {
+        return (facing, Shape::Intersection);
+    }
+    if count == 1
+        && connected(facing)
+        && facing_at(above) != Some(Dir::Down)
+        && !funnel_down_above
+    {
+        let s = if shape == Shape::Encased {
+            Shape::Encased
+        } else {
+            Shape::Normal
+        };
+        return (facing, s);
+    }
+    (facing, Shape::Intersection)
+}
+
 /// `SmartChuteFilterSlotPositioning`: the filter slot on a horizontal side, 11 px up, half a
 /// pixel in from the face.
 pub fn filter_slot(side: crate::kinetics::Dir) -> Option<[f64; 3]> {
@@ -243,6 +346,41 @@ pub fn extract<K: PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagonal_chutes_lead_down_beside_and_join_as_create_s_do() {
+        // A chute at the origin; a diagonal one facing east sits up and east of it.
+        let chutes = |list: Vec<([i32; 3], Dir)>| move |p: [i32; 3]| {
+            list.iter().find(|(q, _)| *q == p).map(|(_, f)| *f)
+        };
+        assert_eq!(target([1, 1, 0], Dir::East), [0, 0, 0]);
+        let world = chutes(vec![([0, 0, 0], Dir::Down), ([1, 1, 0], Dir::East)]);
+        // The diagonal one, with nothing leading into it: an intersection (its start).
+        assert_eq!(
+            update_state([1, 1, 0], Dir::East, Shape::Normal, &world, false),
+            (Dir::East, Shape::Intersection)
+        );
+        // The vertical one it leads into: an intersection.
+        assert_eq!(
+            update_state([0, 0, 0], Dir::Down, Shape::Window, &world, false),
+            (Dir::Down, Shape::Intersection)
+        );
+        // With nothing below to lead into, a diagonal chute faces down again.
+        assert_eq!(
+            update_state([5, 5, 5], Dir::East, Shape::Normal, &world, false),
+            (Dir::Down, Shape::Normal)
+        );
+        // A diagonal chute fed by one more in its line is a plain run.
+        let world = chutes(vec![
+            ([0, 0, 0], Dir::Down),
+            ([1, 1, 0], Dir::East),
+            ([2, 2, 0], Dir::East),
+        ]);
+        assert_eq!(
+            update_state([1, 1, 0], Dir::East, Shape::Normal, &world, false),
+            (Dir::East, Shape::Normal)
+        );
+    }
 
     #[test]
     fn a_fan_blowing_up_a_column_carries_its_stacks_up() {

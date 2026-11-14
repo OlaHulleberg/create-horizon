@@ -5,6 +5,7 @@
 //! by the kinetic block entity's renderer every frame, between the last tick and the next.
 
 use super::super::states;
+use super::BELT_COLOR;
 use super::items::{is_block_item, stack_of};
 use create_engine::Block;
 use create_engine::arm;
@@ -58,7 +59,25 @@ struct Client {
     speeds: HashMap<[i32; 3], f32>,
     /// Whether an item draws as a block, by id, looked up once.
     block_items: HashMap<String, bool>,
+    /// Client ticks so far (`AnimationTickHolder.ticks`): belts scroll their texture by them.
+    ticks: u64,
+    /// The belt partials' models, resolved when first drawn (and again once stale).
+    models: HashMap<&'static str, mod_api::ModelRef>,
+    /// Belt segments drawn dyed, by position: what a click with water predicts.
+    dyed: std::collections::HashSet<[i32; 3]>,
+    /// Flaps swinging back to rest, by block and side (`flaps::FUNNEL` for a funnel's): where
+    /// they were a tick ago and are now (`LerpedFloat` chasing 0 at 0.05, exponentially).
+    flaps: HashMap<([i32; 3], u8), (f32, f32)>,
+    /// The count of flaps each funnel and tunnel drawn has had (`flaps::KEY`).
+    flapped: HashMap<[i32; 3], i32>,
 }
+
+/// The flaps' models (`AllPartialModels.FUNNEL_FLAP`, `BELT_FUNNEL_FLAP`, `BELT_TUNNEL_FLAP`).
+pub const FLAP_MODELS: [&str; 3] = [
+    "create:block/funnel/flap",
+    "create:block/belt_funnel/flap",
+    "create:block/belt_tunnel/flap",
+];
 
 thread_local! {
     static CLIENT: RefCell<Client> = RefCell::new(Client::default());
@@ -72,6 +91,9 @@ pub fn reset_logistics() {
         c.belts.clear();
         c.speeds.clear();
         c.block_items.clear();
+        c.dyed.clear();
+        c.flaps.clear();
+        c.flapped.clear();
     });
 }
 
@@ -109,17 +131,104 @@ fn table_info(
 /// ejector or arm (they move their own parts), a depot whose held stack slides, a belt's
 /// controller carrying items. The server touches the block entity (`SHOWN`) when what a kept
 /// drawing shows changes, so it is drawn once more from the contents it sent first.
-pub fn animated(block: Block, pos: [i32; 3]) -> bool {
+pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
     match block {
         Block::MechanicalArm | Block::WeightedEjector => true,
+        // A windowed chute's stack moves (`chute::CHUTE_MOTION`).
+        Block::Chute => matches!(
+            entity.nbt.get(&super::chute::CHUTE_MOTION.into()),
+            Some(Tag::Float(b)) if f32::from_bits(*b) != 0.0
+        ),
+        Block::AndesiteFunnel
+        | Block::BrassFunnel
+        | Block::AndesiteBeltFunnel
+        | Block::BrassBeltFunnel
+        | Block::AndesiteTunnel
+        | Block::BrassTunnel => flapping(pos),
         Block::Depot => CLIENT.with_borrow(|c| c.sliding.contains(&pos)),
+        // A turning belt scrolls its texture every frame.
         Block::Belt => CLIENT.with_borrow(|c| {
-            c.belts
-                .get(&pos)
-                .is_some_and(|b| !b.contents.items.is_empty())
+            speeds_of(&entity.nbt)[0] != 0.0
+                || c.belts
+                    .get(&pos)
+                    .is_some_and(|b| !b.contents.items.is_empty())
         }),
         _ => false,
     }
+}
+
+/// The client's prediction of a click a logistics block takes as the server will: water on a
+/// dyed belt washes it (`BeltBlock.useItemOn`), so the bucket is not emptied on the client's
+/// word; a click on a filter slot (`ValueSettingsInputHandler` cancels it on both sides), so the
+/// other hand is not used after it.
+pub fn predict_click(
+    host: &mut dyn ClientHost,
+    event: &mut mod_api::RightClickBlockEvent<'_>,
+) -> mod_api::Flow {
+    let click = event.click;
+    let Some(player) = host.player(click.player) else {
+        return mod_api::Flow::Continue;
+    };
+    if crate::glue::items::sneaking(&*host, player) {
+        return mod_api::Flow::Continue;
+    }
+    let Some(state) = host
+        .level(host.dimension())
+        .and_then(|l| l.block_state(&*host, click.pos))
+    else {
+        return mod_api::Flow::Continue;
+    };
+    let Some((block, info)) = table_info(&*host, state) else {
+        return mod_api::Flow::Continue;
+    };
+    if filter_slot_hit(block, &info, click) {
+        let wrench_or_arm = click.stack.is_some_and(|s| {
+            matches!(
+                s.item().id(&*host).as_str(),
+                "create:wrench" | "create:mechanical_arm" | "create:clipboard"
+            )
+        });
+        if !wrench_or_arm {
+            *event.cancellation_result = mod_api::InteractionResult::Success;
+            return mod_api::Flow::Cancel;
+        }
+    }
+    if block != Block::Belt {
+        return mod_api::Flow::Continue;
+    }
+    let id = click.stack.map(|s| s.item().id(&*host));
+    let water = id.as_deref() == Some("minecraft:water_bucket");
+    let dyed = CLIENT.with_borrow(|c| c.dyed.contains(&click.pos));
+    if water && dyed {
+        *event.cancellation_result = mod_api::InteractionResult::Success;
+        return mod_api::Flow::Cancel;
+    }
+    mod_api::Flow::Continue
+}
+
+/// Whether `click` lands on a filter slot of the logistics block `block` (a brass funnel's, a
+/// smart chute's, a brass tunnel's side's).
+fn filter_slot_hit(
+    block: Block,
+    info: &create_engine::parts::StateInfo,
+    click: &mod_api::BlockClick<'_>,
+) -> bool {
+    let Some(side) = Dir::from_offset(click.hit.face) else {
+        return false;
+    };
+    let slot = match block {
+        Block::BrassFunnel | Block::BrassBeltFunnel => info
+            .facing
+            .and_then(|f| create_engine::funnel::filter_slot(f, info.belt_funnel, side)),
+        Block::SmartChute => create_engine::chute::filter_slot(side),
+        Block::BrassTunnel => match (info.axis, info.tunnel) {
+            (Some(a), Some(s)) => create_engine::tunnel::filter_slot(a, s, side),
+            _ => None,
+        },
+        _ => None,
+    };
+    let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(click.pos[i]));
+    slot.is_some_and(|s| create_engine::board::hits_box(s, local))
 }
 
 /// Depots' and belts' contents from the server.
@@ -134,6 +243,198 @@ pub fn logistics_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8])
             true
         }
         _ => false,
+    }
+}
+
+/// Flaps swing back toward rest (`tickChaser`); those at rest are forgotten.
+pub fn tick_client_flaps() {
+    CLIENT.with_borrow_mut(|c| {
+        c.flaps.retain(|_, (prev, now)| {
+            *prev = *now;
+            if (*now).abs() <= 1.0e-5 {
+                *now = 0.0;
+                return *prev != 0.0;
+            }
+            *now -= *now * 0.05;
+            true
+        });
+    });
+}
+
+/// The flaps the server noted on the block entity at `pos` since it was last drawn start to
+/// swing (`flap`: out 1, in -1); those of a block first seen are past.
+fn new_flaps(pos: [i32; 3], data: &Compound) {
+    let Some((serial, flaps)) = super::flaps::read(data) else {
+        return;
+    };
+    CLIENT.with_borrow_mut(|c| {
+        let seen = c.flapped.insert(pos, serial);
+        if seen.is_none_or(|s| s == serial) {
+            return;
+        }
+        for (side, inward) in flaps {
+            let e = c.flaps.entry((pos, side)).or_insert((0.0, 0.0));
+            e.1 = if inward { -1.0 } else { 1.0 };
+        }
+    });
+}
+
+/// `ChuteRenderer`: a windowed chute's stack at half size, turning as it falls, between where
+/// the server last put it and a tick on (`chute::CHUTE_ITEM`).
+fn draw_chute_item(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, nbt: &Compound) {
+    let Some(Tag::String(id)) = nbt.get(&super::chute::CHUTE_ITEM.into()) else {
+        return;
+    };
+    let id = id.to_string_lossy();
+    if id.is_empty() {
+        return;
+    }
+    let float = |k: &str| match nbt.get(&k.into()) {
+        Some(Tag::Float(b)) => f32::from_bits(*b),
+        _ => 0.0,
+    };
+    let at = float(super::chute::CHUTE_POSITION);
+    let motion = float(super::chute::CHUTE_MOTION);
+    let position = (at + motion * draw.partial()).clamp(0.0, 1.0);
+    let Some(stack) = stack_of(host, &id, 1) else {
+        return;
+    };
+    // The light inside the chute is dark; the light outside isn't readable on a client.
+    if draw.light() == 0 {
+        draw.set_light(0xF0F0);
+    }
+    draw.push();
+    draw.translate([0.5, position, 0.5]);
+    draw.scale([0.5; 3]);
+    draw.rotate_about([1.0, 0.0, 0.0], position * 180.0, [0.0; 3]);
+    draw.rotate_about(UP, position * 180.0, [0.0; 3]);
+    draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+    draw.pop();
+}
+
+/// Whether a flap of the funnel or tunnel at `pos` swings.
+fn flapping(pos: [i32; 3]) -> bool {
+    CLIENT.with_borrow(|c| c.flaps.keys().any(|(p, _)| *p == pos))
+}
+
+/// `FlapStuffs.renderFlaps`: four flaps of model `file` on side `side` of the block, swung by
+/// the flap's value, `z` further out, hinged at `pivot` (in pixels).
+#[allow(clippy::too_many_arguments)]
+fn draw_flaps(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    file: &'static str,
+    pos: [i32; 3],
+    key: u8,
+    side: Dir,
+    z: f32,
+    pivot: [f32; 3],
+) {
+    let t = draw.partial();
+    let f = CLIENT.with_borrow(|c| {
+        c.flaps
+            .get(&(pos, key))
+            .map_or(0.0, |(prev, now)| prev + (now - prev) * t)
+    });
+    // AngleHelper.horizontalAngle of the side's opposite.
+    let o = side.opposite();
+    let y_rot = match o {
+        Dir::South => 0.0,
+        Dir::West => 90.0,
+        Dir::North => 180.0,
+        Dir::East => 270.0,
+        _ => 0.0,
+    };
+    let angle: f32 = if o.axis() == Axis::X { -y_rot } else { y_rot };
+    let pivot = pivot.map(|v| v / 16.0);
+    draw.push();
+    draw.rotate_about([0.0, 1.0, 0.0], angle, [0.5; 3]);
+    draw.translate([0.075 / 16.0, 0.0, z]);
+    for segment in 0..4 {
+        draw.push();
+        draw.rotate_about([1.0, 0.0, 0.0], super::flaps::flap_angle(f, segment), pivot);
+        terrain(draw, host, file, mod_api::TerrainModelOptions::default());
+        draw.pop();
+        draw.translate([-3.05 / 16.0, 0.0, 0.0]);
+    }
+    draw.pop();
+}
+
+/// The flaps of the funnel or tunnel `block` at `pos` (`FunnelRenderer`, `BeltTunnelRenderer`).
+fn draw_block_flaps(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    block: Block,
+    info: &create_engine::parts::StateInfo,
+    pos: [i32; 3],
+) {
+    use super::flaps::FUNNEL;
+    match block {
+        Block::AndesiteFunnel | Block::BrassFunnel => {
+            if let Some(f) = info.facing.filter(|f| f.axis() != Axis::Y) {
+                let file = FLAP_MODELS[0];
+                draw_flaps(
+                    draw,
+                    host,
+                    file,
+                    pos,
+                    FUNNEL,
+                    f,
+                    1.0 / 16.0,
+                    [0.0, 10.0, 9.5],
+                );
+            }
+        }
+        Block::AndesiteBeltFunnel | Block::BrassBeltFunnel => {
+            use create_engine::funnel::BeltShape;
+            if let Some(f) = info.facing {
+                // `getFlapOffset`, negated.
+                let z = match info.belt_funnel.unwrap_or_default() {
+                    BeltShape::Extended => -8.0 / 16.0,
+                    BeltShape::Pulling | BeltShape::Pushing => 2.0 / 16.0,
+                    BeltShape::Retracted => 0.0,
+                };
+                let file = FLAP_MODELS[1];
+                draw_flaps(draw, host, file, pos, FUNNEL, f, z, [0.0, 10.0, 9.5]);
+            }
+        }
+        Block::AndesiteTunnel | Block::BrassTunnel => {
+            let (Some(axis), Some(shape)) = (info.axis, info.tunnel) else {
+                return;
+            };
+            let level = host.level(host.dimension());
+            for side in create_engine::tunnel::sides(axis, shape) {
+                // A flap might be hidden: by a tunnel next to it, or an extended belt funnel
+                // facing it.
+                let o = side.offset();
+                let next = [pos[0] + o[0], pos[1], pos[2] + o[2]];
+                let hidden = level
+                    .and_then(|l| l.block_state(host, next))
+                    .and_then(|s| table_info(host, s))
+                    .is_some_and(|(b, i)| match b {
+                        Block::AndesiteTunnel | Block::BrassTunnel => true,
+                        Block::AndesiteBeltFunnel | Block::BrassBeltFunnel => {
+                            i.belt_funnel == Some(create_engine::funnel::BeltShape::Extended)
+                                && i.facing == Some(side.opposite())
+                        }
+                        _ => false,
+                    });
+                if !hidden {
+                    let file = FLAP_MODELS[2];
+                    draw_flaps(
+                        draw,
+                        host,
+                        file,
+                        pos,
+                        side as u8,
+                        side,
+                        0.0,
+                        [0.0, 10.0, 1.0],
+                    );
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -287,6 +588,7 @@ impl belt::Surroundings for ClientSide<'_> {
 
 /// Each client tick: belts with items move them on (`BeltInventory.tick` on the client).
 pub fn tick_client_belts(host: &mut dyn ClientHost) {
+    CLIENT.with_borrow_mut(|c| c.ticks += 1);
     let busy: Vec<[i32; 3]> = CLIENT.with_borrow(|c| {
         c.belts
             .iter()
@@ -464,9 +766,14 @@ impl BlockEntityPart for LogisticsEntity {
         let Some((block, info)) = table_info(host, event.state) else {
             return;
         };
+        new_flaps(event.pos, &event.entity.nbt);
+        if block == Block::Chute {
+            draw_chute_item(&mut *event.draw, host, &event.entity.nbt);
+        }
+        draw_block_flaps(&mut *event.draw, host, block, &info, event.pos);
         if matches!(
             block,
-            Block::BrassFunnel | Block::BrassBeltFunnel | Block::SmartChute
+            Block::BrassFunnel | Block::BrassBeltFunnel | Block::SmartChute | Block::BrassTunnel
         ) {
             draw_filter(&mut *event.draw, host, block, &info, &event.entity.nbt);
             return;
@@ -484,7 +791,28 @@ impl BlockEntityPart for LogisticsEntity {
         let partial_tick = draw.partial();
         match block {
             Block::Belt => {
-                draw_segment(draw, block, &info, pos, speeds);
+                let color = match event.entity.nbt.get(&BELT_COLOR.into()) {
+                    Some(Tag::String(c)) => Some(c.to_string_lossy().to_string()),
+                    _ => None,
+                }
+                .filter(|c| !c.is_empty());
+                CLIENT.with_borrow_mut(|c| {
+                    if color.is_some() {
+                        c.dyed.insert(pos);
+                    } else {
+                        c.dyed.remove(&pos);
+                    }
+                });
+                draw_segment(draw, host, block, &info, pos, speeds, color.as_deref());
+                let cased = event
+                    .state
+                    .property(&mod_api::HostBlockStates::block_states(host), "casing")
+                    .ok()
+                    .flatten()
+                    == Some("true");
+                if cased && let Some(seg) = info.belt {
+                    draw_casing(draw, host, &seg, &event.entity.nbt);
+                }
                 draw_belt_items(draw, host, pos, partial_tick);
             }
             Block::Depot => draw_depot(draw, host, pos, partial_tick),
@@ -525,15 +853,19 @@ impl BlockEntityPart for LogisticsEntity {
     }
 }
 
-/// `BeltRenderer`: the segment's halves (still: Create scrolls their texture instead), and the
-/// pulley turning on the belt's axis, posed partials `kinetics` leaves to logistics.
+/// `BeltRenderer`: the segment's halves, their texture scrolling as the belt turns (and drawn
+/// in its dye's colour), and the pulley turning on the belt's axis, posed partials `kinetics`
+/// leaves to logistics.
 fn draw_segment(
     draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
     block: Block,
     info: &create_engine::parts::StateInfo,
     pos: [i32; 3],
     speeds: [f32; 2],
+    color: Option<&str>,
 ) {
+    let tick = CLIENT.with_borrow(|c| c.ticks) as f64 + f64::from(draw.partial());
     for d in parts::draws(block, info, pos, speeds) {
         match d.model {
             Model::Belt(seg, bottom) => {
@@ -542,7 +874,9 @@ fn draw_segment(
                 };
                 draw.push();
                 pose(draw, belt::segment_pose(&seg));
-                partial(draw, name);
+                if !scrolled(draw, host, &seg, name, speeds[0], color, tick, bottom) {
+                    partial(draw, name);
+                }
                 draw.pop();
             }
             Model::BeltPulley(seg) => {
@@ -556,6 +890,107 @@ fn draw_segment(
             _ => {}
         }
     }
+}
+
+/// The belt partial `name` drawn with its sprite shifted (`shiftUVScrolling`): true when it was
+/// drawn so, false when it is drawn as it is (still and undyed, or its model is not there).
+#[allow(clippy::too_many_arguments)]
+fn scrolled(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    seg: &belt::Segment,
+    name: &str,
+    speed: f32,
+    color: Option<&str>,
+    tick: f64,
+    bottom: bool,
+) -> bool {
+    let Some(offset) = belt::scroll(seg, speed, color.is_some(), tick, bottom) else {
+        return false;
+    };
+    let Some(file) = belt::partial_model(name) else {
+        return false;
+    };
+    let (source, target) = belt::sprite_shift(seg, color, bottom);
+    // The belt sprites are 16 by 16, the scrolling ones 16 by 32.
+    let shift = mod_api::TerrainUvShift::new(&source, &target, [1.0, 0.5], [0.0, offset]);
+    let options = mod_api::TerrainModelOptions::default().with_uv_shift(shift);
+    terrain(draw, host, file, options)
+}
+
+/// A cased segment's casing, its block model drawn by its block entity (`BeltModel`): the brass
+/// casing's model, its texture swapped for the andesite casing's on an andesite one, and the
+/// cover over a horizontal one a block stands on.
+fn draw_casing(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    seg: &belt::Segment,
+    nbt: &Compound,
+) {
+    let andesite = matches!(
+        nbt.get(&super::BELT_CASING.into()),
+        Some(Tag::String(k)) if k.to_string_lossy() == "andesite"
+    );
+    let covered = matches!(nbt.get(&super::BELT_COVERED.into()), Some(Tag::Byte(1)));
+    let shift = mod_api::TerrainUvShift::new(
+        "create:block/belt/brass_belt_casing",
+        "create:block/belt/andesite_belt_casing",
+        [1.0, 1.0],
+        [0.0, 0.0],
+    );
+    let options = if andesite {
+        mod_api::TerrainModelOptions::default().with_uv_shift(shift)
+    } else {
+        mod_api::TerrainModelOptions::default()
+    };
+    let (file, x, y) = belt::casing_model(seg);
+    draw.push();
+    // A block state variant's turns: x first, then y, both clockwise.
+    draw.rotate_about([0.0, 1.0, 0.0], -(y as f32), [0.5; 3]);
+    draw.rotate_about([1.0, 0.0, 0.0], -(x as f32), [0.5; 3]);
+    terrain(draw, host, file, options);
+    draw.pop();
+    if covered && seg.slope == belt::Slope::Horizontal {
+        let along_x = seg.facing.axis() == Axis::X;
+        let cover = match (andesite, along_x) {
+            (true, true) => belt::COVER_MODELS[0],
+            (true, false) => belt::COVER_MODELS[1],
+            (false, true) => belt::COVER_MODELS[2],
+            (false, false) => belt::COVER_MODELS[3],
+        };
+        terrain(draw, host, cover, mod_api::TerrainModelOptions::default());
+    }
+}
+
+/// Draws the standalone model `file` (resolved again once stale): false when it is not there.
+fn terrain(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    file: &'static str,
+    options: mod_api::TerrainModelOptions<'_>,
+) -> bool {
+    for fresh in [false, true] {
+        let Some(model) = belt_model(host, file, fresh) else {
+            return false;
+        };
+        match draw.terrain_model(model, options) {
+            Ok(()) => return true,
+            Err(mod_api::TerrainModelError::Model(_)) if !fresh => continue,
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+/// The standalone model `file` (`standalone_models`), resolved once, or again when `fresh`.
+fn belt_model(host: &dyn ClientHost, file: &'static str, fresh: bool) -> Option<mod_api::ModelRef> {
+    if !fresh && let Some(m) = CLIENT.with_borrow(|c| c.models.get(file).copied()) {
+        return Some(m);
+    }
+    let id = mod_api::Identifier::parse(file).ok()?;
+    let m = host.render_assets().model(&id).ok()?;
+    CLIENT.with_borrow_mut(|c| c.models.insert(file, m));
+    Some(m)
 }
 
 /// Draws a belt's items as `BeltRenderer.renderItem` does: each at its point on the belt
@@ -768,6 +1203,25 @@ fn draw_filter(
     info: &create_engine::parts::StateInfo,
     nbt: &Compound,
 ) {
+    // A brass tunnel's side filters (`tunnel::SIDE_FILTERS`), one per side.
+    if block == Block::BrassTunnel {
+        let (Some(axis), Some(shape)) = (info.axis, info.tunnel) else {
+            return;
+        };
+        let Some(Tag::List(ids)) = nbt.get(&super::tunnel::SIDE_FILTERS.into()) else {
+            return;
+        };
+        for side in [Dir::South, Dir::West, Dir::North, Dir::East] {
+            let Some(Tag::String(id)) = ids.get(side as usize) else {
+                continue;
+            };
+            let id = id.to_string_lossy();
+            if let Some(slot) = create_engine::tunnel::filter_slot(axis, shape, side) {
+                draw_filter_stack(draw, host, &id, side, slot, 0.0);
+            }
+        }
+        return;
+    }
     let Some(Tag::String(id)) = nbt.get(&super::FILTER.into()) else {
         return;
     };
@@ -775,11 +1229,6 @@ fn draw_filter(
     if id.is_empty() {
         return;
     }
-    let Some(stack) = stack_of(host, &id, 1) else {
-        return;
-    };
-    let solid = block_item(host, &id);
-    let scale = 0.5 * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
     // A slot on the face of a block that occludes (a smart chute here) would take the dark light
     // inside it; the light outside isn't readable on a client, so it is drawn fully lit.
     if draw.light() == 0 {
@@ -808,6 +1257,34 @@ fn draw_filter(
         let Some(slot) = slot else {
             continue;
         };
+        draw_filter_stack(draw, host, &id, side, slot, tilt);
+    }
+}
+
+/// One filter slot's item `id`, at `slot` on side `side` of the block, tilted back `tilt`
+/// degrees (`FilteringRenderer`).
+fn draw_filter_stack(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    id: &str,
+    side: Dir,
+    slot: [f64; 3],
+    tilt: f32,
+) {
+    if id.is_empty() {
+        return;
+    }
+    let Some(stack) = stack_of(host, id, 1) else {
+        return;
+    };
+    let solid = block_item(host, id);
+    let scale = 0.5 * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
+    // A slot on the face of a block that occludes (a smart chute here) would take the dark light
+    // inside it; the light outside isn't readable on a client, so it is drawn fully lit.
+    if draw.light() == 0 {
+        draw.set_light(0xF0F0);
+    }
+    {
         // `Sided.rotate`: the side's horizontal angle plus 180°, then 90° up for the top.
         let y_rot = match side {
             Dir::South | Dir::Up | Dir::Down => 0.0,

@@ -102,7 +102,7 @@ fn state_of(host: &dyn mod_api::Host, block: Block, props: &[(&str, &str)]) -> O
 impl ServerLevel<'_> {
     /// `SoundType.getPlaceSound()` of the state at `pos`, at `(volume + 1) / 2` and `pitch * 0.8`
     /// (`EncasableBlock.playEncaseSound`, `PlacementOffset.placeInWorld`).
-    fn place_sound(&mut self, pos: [i32; 3]) {
+    pub(crate) fn place_sound(&mut self, pos: [i32; 3]) {
         let Some(state) = self.block_state(pos) else {
             return;
         };

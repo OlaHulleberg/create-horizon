@@ -111,8 +111,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   is played from the server).
 - **The player in `left_click_block`**: an arm's chosen point and an ejector's target can't be dropped
   by left-clicking them with the item.
-- **Retexturing a block's terrain model** (Create's `BeltModel`): a belt with a brass casing shows the
-  andesite casing's texture.
 - **A terrain model that reads its neighbours** (Create's `CTModel` and `CTSpriteShifter`, connected textures):
   casings side by side (gearboxes, encased shafts and cogs, the casings themselves) keep each its own frame,
   where Create's `EncasedCTBehaviour` and `EncasedCogCTBehaviour` join them into one. A model hook given the
@@ -120,6 +118,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **The level's redstone in `state_for_placement`** (`LevelHost` has no `has_neighbor_signal`): a clutch,
   gearshift or adjustable chain gearshift placed beside power is placed unpowered and takes `powered` in the
   same tick's level tick (`GearshiftBlock.getStateForPlacement` reads it at once).
+- **More than one UV shift in a `terrain_model` draw** (`TerrainModelOptions::uv_shift` takes one
+  sprite's): item vaults' connected textures (`ItemVaultCTBehaviour` picks each face's tile of the
+  front, side, top and bottom sheets by the vault's size) would be drawn by the vault's block entity
+  with one shift per sprite; they are not drawn.
 - **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
   light inside the chute is dark.
 - **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).

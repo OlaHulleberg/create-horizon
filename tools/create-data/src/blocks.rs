@@ -2906,6 +2906,45 @@ pub const PARTIALS: [(&str, &str, &str); 118] = [
 
 /// The unit-cube models of `part_fluid_*`: every face the fluid's still texture, water's
 /// tinted (tint index 0).
+/// The sprites Create's renderers draw in place of a model's own (`AllSpriteShifts`'s targets:
+/// belts' scrolling textures, undyed and in each dye's colour, and the andesite belt casing's),
+/// in one model the native mod registers as a standalone model (`standalone_models`) so the
+/// block sprites hold them.
+pub fn sprite_models() -> [(&'static str, Value); 1] {
+    const DYES: [&str; 16] = [
+        "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+        "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black",
+    ];
+    let mut sprites = vec![
+        "create:block/belt_scroll".to_owned(),
+        "create:block/belt_diagonal_scroll".to_owned(),
+    ];
+    for d in DYES {
+        sprites.push(format!("create:block/belt/{d}_scroll"));
+        sprites.push(format!("create:block/belt/{d}_diagonal_scroll"));
+    }
+    sprites.push("create:block/belt/andesite_belt_casing".to_owned());
+    let textures: Map<String, Value> = sprites
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (format!("s{i}"), json!(s)))
+        .chain([("particle".to_owned(), json!(sprites[0]))])
+        .collect();
+    let elements: Vec<Value> = (0..sprites.len())
+        .map(|i| {
+            json!({
+                "from": [0, 0, 0],
+                "to": [16, 16, 0],
+                "faces": { "north": { "uv": [0, 0, 16, 16], "texture": format!("#s{i}") } }
+            })
+        })
+        .collect();
+    [(
+        "belt_scroll_sprites",
+        json!({ "textures": textures, "elements": elements }),
+    )]
+}
+
 pub fn fluid_models() -> [(&'static str, Value); 5] {
     let cube = |texture: &str, tint: bool| {
         let face = |_: &str| {
@@ -3142,6 +3181,11 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     // blade drawn inside it is lit. (The crafter's and mixer's `noOcclusion` is the general rule
     // below.)
     if matches!(b.name.as_str(), "mechanical_saw" | "mechanical_drill") {
+        props.insert("occludes".into(), json!(false));
+    }
+    // AllBlocks.CHUTE, SMART_CHUTE: `noOcclusion` with shapes of their own; light reaches the
+    // stack drawn inside (`ChuteRenderer`) and the filter on a smart chute's side.
+    if matches!(b.name.as_str(), "chute" | "smart_chute") && b.java.no_occlusion {
         props.insert("occludes".into(), json!(false));
     }
     // AllBlocks.ROSE_QUARTZ_LAMP: `mapColor(TERRACOTTA_PINK)` (MapColor id 42); its light by

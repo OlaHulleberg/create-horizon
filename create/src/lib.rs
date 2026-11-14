@@ -20,7 +20,7 @@ use mod_api::{
     RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
     ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
     ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
-    ServerHost, TagsUpdatedEvent, WorldLifecycleEvent, WorldPhase,
+    ServerHost, StandaloneModelsEvent, TagsUpdatedEvent, WorldLifecycleEvent, WorldPhase,
 };
 
 #[derive(Default)]
@@ -36,6 +36,12 @@ impl Hooks for Create {
         glue::net::register(r, SUBSYSTEMS);
         for s in SUBSYSTEMS {
             s.register(r, cx);
+        }
+    }
+
+    fn standalone_models(&self, _cx: &RegistrationContext, event: &mut StandaloneModelsEvent<'_>) {
+        for s in SUBSYSTEMS {
+            s.standalone_models(event.models);
         }
     }
 
