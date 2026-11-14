@@ -1234,8 +1234,9 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
         }
         _ => return None,
     };
-    // KineticBlock.getRenderShape: shafts and cogs are all moving parts; casings, gearboxes and
-    // motors keep their model and show their shafts as parts.
+    // KineticBlock.getRenderShape: shafts and cogs are all moving parts (valve handles are hand
+    // cranks: `HandCrankBlock.getRenderShape`); casings, gearboxes and motors keep their model and
+    // show their shafts as parts.
     let animated = matches!(
         b.name.as_str(),
         "shaft"
@@ -1249,7 +1250,7 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             | "flywheel"
             | "turntable"
             | "large_water_wheel"
-    );
+    ) || b.name.ends_with("valve_handle");
     Some(Decision::Declared {
         template,
         sounds,
@@ -2343,7 +2344,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 69] = [
+pub const PARTIALS: [(&str, &str, &str); 73] = [
     ("part_shaft_half", "create:block/shaft_half", "south"),
     (
         "part_hand_crank_handle",
@@ -2408,6 +2409,22 @@ pub const PARTIALS: [(&str, &str, &str); 69] = [
     (
         "part_cogwheel_shaftless",
         "create:block/cogwheel_shaftless",
+        "up",
+    ),
+    // BracketedKineticBlockEntityVisual.LargeCogVisual and EncasedCogVisual: the large cog without
+    // its shaft, and the shaft drawn apart at the shaft's angle (`getShaftAngleOffset`).
+    (
+        "part_large_cogwheel_shaftless",
+        "create:block/large_cogwheel_shaftless",
+        "up",
+    ),
+    ("part_cogwheel_shaft", "create:block/cogwheel_shaft", "up"),
+    // HandCrankVisual: the crank's base (`HAND_CRANK_BASE`), turned to its facing.
+    ("part_hand_crank_base", "create:block/hand_crank/block", "up"),
+    // SpeedControllerRenderer: the bracket over the controller under a large cog.
+    (
+        "part_speed_controller_bracket",
+        "create:block/rotation_speed_controller/bracket",
         "up",
     ),
     (
@@ -2818,6 +2835,12 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     // with no model of their own in the chunk mesh.
     if matches!(b.name.as_str(), "copycat_panel" | "copycat_step") {
         props.insert("render_shape".into(), json!("ENTITYBLOCK_ANIMATED"));
+    }
+    // `noOcclusion()` on a block with its template's full cube: the faces beside it are drawn
+    // and light reaches inside, where its block entity draws its parts (a gearbox's shafts, an
+    // encased cog).
+    if b.java.no_occlusion && shapes.is_none() {
+        props.insert("occludes".into(), json!(false));
     }
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));

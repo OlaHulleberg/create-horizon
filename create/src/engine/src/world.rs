@@ -2337,6 +2337,41 @@ impl CreateWorld {
         step
     }
 
+    /// The instructions of the sequenced gearshift at `pos`.
+    pub fn sequencer_instructions(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+    ) -> Option<Vec<crate::sequencer::Instruction>> {
+        Some(self.dims[dim].sequencers.get(&pos)?.instructions.clone())
+    }
+
+    /// `ConfigureSequencedGearshiftPacket.applySettings`: the running sequence stops
+    /// (`run(-1)`, its block's `state` back to 0 unless powered) and the new instructions are
+    /// its own. With `stop` false (its block entity loading them) nothing else changes.
+    pub fn set_sequencer_instructions(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        instructions: Vec<crate::sequencer::Instruction>,
+        stop: bool,
+    ) -> bool {
+        let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
+            return false;
+        };
+        let step = if stop { s.run(-1) } else { None };
+        s.instructions = if instructions.is_empty() {
+            crate::sequencer::default_instructions()
+        } else {
+            instructions
+        };
+        if let Some(step) = step {
+            self.dims[dim].sequencer_steps.push((pos, step));
+        }
+        self.sequencer_stepped(dim, pos);
+        true
+    }
+
     /// One tick of the sequenced gearshifts whose instruction runs (`tick`), and the steps they
     /// took as their speed changed: what their blocks' `state` becomes. Nothing without one.
     pub fn tick_sequencers(&mut self, dim: usize) -> Vec<([i32; 3], crate::sequencer::Step)> {
@@ -2909,6 +2944,11 @@ impl CreateWorld {
     pub fn block_at(&self, dim: usize, pos: [i32; 3]) -> Option<Block> {
         let state = *self.dims.get(dim)?.states.get(&pos)?;
         self.table.get(state).map(|(b, _)| b)
+    }
+
+    /// The Create state at `pos` as this world last saw it, for blocks it keeps.
+    pub fn state_at(&self, dim: usize, pos: [i32; 3]) -> Option<u32> {
+        self.dims.get(dim)?.states.get(&pos).copied()
     }
 
     pub fn load_links(
@@ -3541,6 +3581,50 @@ impl CreateWorld {
             .iter()
             .flatten()
             .any(|p| p.shafts & face.bit() != 0)
+    }
+
+    /// The cog at `pos` (`ICogWheel.isSmallCog` / `isLargeCog`): whether it is large, and its
+    /// axis; None for a block without one.
+    pub fn cog_at(&self, dim: usize, pos: [i32; 3]) -> Option<(bool, crate::kinetics::Axis)> {
+        let d = &self.dims[dim];
+        let (block, info) = d.states.get(&pos).and_then(|&s| self.table.get(s))?;
+        let settings = d.settings.get(&pos).copied().unwrap_or_default();
+        parts(block, info, &settings)
+            .iter()
+            .flatten()
+            .find_map(|p| match p.cog {
+                crate::kinetics::Cog::Small => Some((false, p.axis)),
+                crate::kinetics::Cog::Large => Some((true, p.axis)),
+                crate::kinetics::Cog::None => None,
+            })
+    }
+
+    /// `CogWheelBlock.isValidCogwheelPosition`: no large cog (nor, for a large one, a small cog)
+    /// beside `pos` off `axis`, unless that neighbour's own axis points at it.
+    pub fn valid_cog_position(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        large: bool,
+        axis: crate::kinetics::Axis,
+    ) -> bool {
+        crate::kinetics::Dir::ALL
+            .into_iter()
+            .filter(|d| d.axis() != axis)
+            .all(|d| {
+                let o = d.offset();
+                let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+                let along = self.dims[dim]
+                    .states
+                    .get(&at)
+                    .and_then(|&s| self.table.get(s))
+                    .is_some_and(|(_, i)| i.axis == Some(d.axis()));
+                along
+                    || match self.cog_at(dim, at) {
+                        Some((other_large, _)) => !other_large && !large,
+                        None => true,
+                    }
+            })
     }
 
     pub fn speed(&self, dim: usize, pos: [i32; 3]) -> Option<f32> {

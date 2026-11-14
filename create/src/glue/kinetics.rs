@@ -24,6 +24,18 @@ pub const TYPE: &str = "create:kinetic";
 
 /// The key in a block entity's data under which its parts' speeds are, `[slot 0, slot 1]`.
 const SPEEDS: &str = "Speeds";
+/// The keys of its first part's theoretical speed (`getTheoreticalSpeed`, what the goggles
+/// show) and of whether its network is overstressed (`isOverStressed`).
+const THEORY: &str = "Theory";
+const OVER: &str = "Over";
+/// Whether a speed controller shows its bracket (`SpeedControllerBlockEntity.hasBracket`).
+const BRACKET: &str = "Bracket";
+
+thread_local! {
+    /// Speed controllers to look at again: one, or the large cog over one, came or went.
+    static BRACKETS: std::cell::RefCell<Vec<(usize, [i32; 3])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
 
 static KIND: OnceLock<BlockEntityTypeKey> = OnceLock::new();
 
@@ -47,6 +59,71 @@ impl Subsystem for Kinetics {
         if let Err(e) = r.block_entity_part(&kind, KineticEntity) {
             crate::create_log!("[create] the kinetic block entity's part was refused: {e:?}");
         }
+        super::transmission::register(r);
+        super::sequencer::register(r);
+    }
+
+    fn client_message(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        player: mod_api::PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        super::sequencer::client_message(host, player, channel, data)
+    }
+
+    fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
+        super::sequencer::server_message(host, channel, data)
+    }
+
+    fn client_tick(&self, host: &mut dyn ClientHost) {
+        super::sequencer::client_tick(host);
+    }
+
+    fn client_reset(&self) {
+        super::sequencer::client_reset();
+    }
+
+    fn screen_render_post(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenRenderPostEvent<'_>,
+    ) {
+        super::sequencer::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> mod_api::Flow {
+        super::sequencer::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_scrolled(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenMouseScrolledPreEvent<'_>,
+    ) -> mod_api::Flow {
+        super::sequencer::screen_mouse_scrolled(host, event)
+    }
+
+    fn screen_closing(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenClosingEvent<'_>) {
+        super::sequencer::screen_closing(host, event);
+    }
+
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        _player: mod_api::PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        clicked: Dir,
+        _point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        super::transmission::wrench_used(lv, pos, block, clicked, sneaking)
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -72,7 +149,21 @@ impl Subsystem for Kinetics {
     }
 
     fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
-        with_world(|w| w.block_changed(dim, pos, old, new));
+        let watched = with_world(|w| {
+            w.block_changed(dim, pos, old, new);
+            [old, new].iter().any(|&s| {
+                matches!(
+                    w.table.get(s).map(|(b, _)| b),
+                    Some(Block::LargeCogwheel | Block::RotationSpeedController)
+                )
+            })
+        });
+        if watched == Some(true) {
+            BRACKETS.with_borrow_mut(|b| {
+                b.push((dim, pos));
+                b.push((dim, [pos[0], pos[1] - 1, pos[2]]));
+            });
+        }
     }
 
     fn neighbor_changed(&self, dim: usize, pos: [i32; 3], state: u32) {
@@ -164,6 +255,42 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
         lv.set_property(pos, "part", drive.part.name(), super::server::update_all());
     }
     tick_sequencers(lv);
+    tick_brackets(lv);
+}
+
+/// `SpeedControllerBlockEntity.updateBracket`: a controller under a large cog on a horizontal
+/// axis (`isCogwheelPresent`) shows its bracket; its block entity's data tells its clients.
+fn tick_brackets(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let due: Vec<[i32; 3]> = BRACKETS.with_borrow_mut(|b| {
+        let (now, later): (Vec<_>, Vec<_>) = b.drain(..).partition(|(d, _)| *d == dim);
+        *b = later;
+        now.into_iter().map(|(_, p)| p).collect()
+    });
+    for pos in due {
+        let Some(bracket) = with_world(|w| {
+            (w.block_at(dim, pos) == Some(Block::RotationSpeedController)).then(|| {
+                w.state_at(dim, [pos[0], pos[1] + 1, pos[2]])
+                    .and_then(|s| w.table.get(s))
+                    .is_some_and(|(b, i)| {
+                        b == Block::LargeCogwheel && i.axis.is_some_and(|a| a != Axis::Y)
+                    })
+            })
+        })
+        .flatten() else {
+            continue;
+        };
+        let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+            continue;
+        };
+        let shown = entity
+            .data(&*lv.host)
+            .is_some_and(|d| matches!(d.get(&BRACKET.into()), Some(Tag::Byte(1))));
+        if shown != bracket {
+            let data = Compound::from([(BRACKET.into(), Tag::Byte(i8::from(bracket)))]);
+            let _ = entity.merge_data(&mut *lv.host, data);
+        }
+    }
 }
 
 /// A level's solve: the network solved, the blocks Create breaks broken, and every changed
@@ -182,7 +309,7 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
         persist::mark_unsaved(dim, [cx, cz]);
     }
     for pos in removed {
-        set_speeds(lv, pos, None);
+        set_speeds(lv, pos, None, Some((0.0, false)));
     }
     for e in events {
         match e {
@@ -191,11 +318,16 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
                 lv.destroy_block(pos, true);
             }
             Event::Speed {
-                pos, sub, speed, ..
+                pos,
+                sub,
+                speed,
+                overstressed,
+                theoretical,
             } => {
                 let mut speeds = current_speeds(lv, pos);
                 speeds[usize::from(sub & 1)] = speed;
-                set_speeds(lv, pos, Some(speeds));
+                let first = (sub == 0).then_some((theoretical, overstressed));
+                set_speeds(lv, pos, Some(speeds), first);
                 for s in super::SUBSYSTEMS {
                     s.speed_changed(lv, pos, speed);
                 }
@@ -261,16 +393,43 @@ pub fn speeds_of(data: &Compound) -> [f32; 2] {
 
 /// Puts `speeds` (none: stopped, it left the network) in the block entity at `pos`, which
 /// sends them to the clients that see it.
-fn set_speeds(lv: &mut ServerLevel<'_>, pos: [i32; 3], speeds: Option<[f32; 2]>) {
+fn set_speeds(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    speeds: Option<[f32; 2]>,
+    first: Option<(f32, bool)>,
+) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
     let [a, b] = speeds.unwrap_or_default();
-    let data = Compound::from([(
+    let mut data = Compound::from([(
         SPEEDS.into(),
         Tag::List(vec![Tag::Float(a.to_bits()), Tag::Float(b.to_bits())]),
     )]);
+    if let Some((theory, over)) = first {
+        data.insert(THEORY.into(), Tag::Float(theory.to_bits()));
+        data.insert(OVER.into(), Tag::Byte(i8::from(over)));
+    }
     let _ = entity.merge_data(&mut *lv.host, data);
+}
+
+/// The theoretical speed of the first part of the block entity at `pos` of `level`, and whether
+/// its network is overstressed, as its clients last heard.
+pub fn shown_theory(
+    host: &dyn mod_api::Host,
+    level: mod_api::LevelRef,
+    pos: [i32; 3],
+) -> (f32, bool) {
+    let Some(d) = host.block_entity(level, pos).and_then(|e| e.data(host)) else {
+        return (0.0, false);
+    };
+    let theory = match d.get(&THEORY.into()) {
+        Some(Tag::Float(bits)) => f32::from_bits(*bits),
+        _ => speeds_of(&d)[0],
+    };
+    let over = matches!(d.get(&OVER.into()), Some(Tag::Byte(b)) if *b != 0);
+    (theory, over)
 }
 
 /// The speeds the block entity at `pos` of `level` shows (on a client, what its update tag
@@ -308,6 +467,9 @@ impl BlockEntityPart for KineticEntity {
         };
         super::ensure_column(host, &dimension, [pos[0] >> 4, pos[2] >> 4]);
         with_world(|w| w.block_loaded(dim, pos, state));
+        if with_world(|w| w.block_at(dim, pos)).flatten() == Some(Block::SequencedGearshift) {
+            super::sequencer::loaded(&*host, dim, pos, entity);
+        }
     }
 
     fn block_entity_update_tag(
@@ -315,7 +477,8 @@ impl BlockEntityPart for KineticEntity {
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
         // The speeds, and what other subsystems keep in the same block entity for its clients.
-        let shown: Compound = std::iter::once(SPEEDS)
+        let shown: Compound = [SPEEDS, THEORY, OVER, BRACKET]
+            .into_iter()
             .chain(
                 super::SUBSYSTEMS
                     .iter()
@@ -346,6 +509,20 @@ impl BlockEntityPart for KineticEntity {
             if !systems.iter().any(|s| s.draws_itself(block, &d)) {
                 draw_turning(event.draw, block, &own, &d);
             }
+        }
+        // SpeedControllerRenderer: the bracket a block up, turned across the controller's axis.
+        if block == Block::RotationSpeedController
+            && matches!(event.entity.nbt.get(&BRACKET.into()), Some(Tag::Byte(1)))
+            && let Some(part) = states::partial("part_speed_controller_bracket")
+        {
+            let draw = &mut *event.draw;
+            draw.push();
+            draw.translate([0.0, 1.0, 0.0]);
+            if info.axis != Some(Axis::X) {
+                draw.rotate_about([0.0, 1.0, 0.0], 90.0, [0.5; 3]);
+            }
+            draw.block(part, &[("facing", "up")]);
+            draw.pop();
         }
         if !systems
             .iter()
@@ -398,6 +575,16 @@ fn model_block(
         Model::Shaft(a) => Some((states::key(Block::Shaft), Some(("axis", axis_name(a))))),
         Model::ShaftHalf(d) => part("part_shaft_half", dir_name(d)),
         Model::CrankHandle(d) => part("part_hand_crank_handle", dir_name(d)),
+        Model::CrankBase(d) => part("part_hand_crank_base", dir_name(d)),
+        Model::Cog { large, axis } => part(
+            if large {
+                "part_large_cogwheel_shaftless"
+            } else {
+                "part_cogwheel_shaftless"
+            },
+            dir_name(Dir::from_axis(axis, true)),
+        ),
+        Model::CogShaft(a) => part("part_cogwheel_shaft", dir_name(Dir::from_axis(a, true))),
         Model::WaterWheel(d) => part("part_water_wheel", dir_name(d)),
         Model::MillstoneCog => part("part_millstone_cog", "up"),
         Model::BearingTop(d) => part("part_bearing_top_wooden", dir_name(d)),

@@ -1,0 +1,30 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/rotation_speed_controller/bracket",
+      "x": 90
+    },
+    "facing=east": {
+      "model": "create:block/rotation_speed_controller/bracket",
+      "x": 90,
+      "y": 90
+    },
+    "facing=south": {
+      "model": "create:block/rotation_speed_controller/bracket",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create:block/rotation_speed_controller/bracket",
+      "x": 90,
+      "y": 270
+    },
+    "facing=up": {
+      "model": "create:block/rotation_speed_controller/bracket"
+    },
+    "facing=down": {
+      "model": "create:block/rotation_speed_controller/bracket",
+      "x": 180
+    }
+  }
+}

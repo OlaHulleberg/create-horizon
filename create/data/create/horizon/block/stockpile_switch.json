@@ -5,7 +5,8 @@
     "explosion_resistance": 6.0,
     "requires_tool": true,
     "sounds": "minecraft:andesite",
-    "light": 0
+    "light": 0,
+    "occludes": false
   },
   "item": true,
   "state_properties": {

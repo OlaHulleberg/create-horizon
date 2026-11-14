@@ -5,7 +5,8 @@
     "explosion_resistance": 2.0,
     "requires_tool": false,
     "sounds": "minecraft:stripped_spruce_wood",
-    "render_shape": "INVISIBLE"
+    "render_shape": "INVISIBLE",
+    "occludes": false
   },
   "item": false,
   "state_properties": {

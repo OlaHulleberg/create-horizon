@@ -2,7 +2,8 @@
   "template": "minecraft:quartz_pillar",
   "properties": {
     "hardness": 1.5,
-    "explosion_resistance": 6.0
+    "explosion_resistance": 6.0,
+    "occludes": false
   },
   "item": true
 }

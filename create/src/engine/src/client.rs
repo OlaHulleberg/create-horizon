@@ -16,6 +16,14 @@ pub enum Model {
     ShaftHalf(Dir),
     /// The hand crank's handle (`AllPartialModels.HAND_CRANK_HANDLE`), turned to a face.
     CrankHandle(Dir),
+    /// The hand crank's base and shaft stub (`AllPartialModels.HAND_CRANK_BASE`), turned to its
+    /// facing.
+    CrankBase(Dir),
+    /// A cog without its shaft (`SHAFTLESS_COGWHEEL`, `SHAFTLESS_LARGE_COGWHEEL`) on an axis:
+    /// encased cogs' and the large cog's.
+    Cog { large: bool, axis: Axis },
+    /// The large cog's shaft (`COGWHEEL_SHAFT`), drawn apart at a shaft's angle.
+    CogShaft(Axis),
     /// The water wheel (`AllPartialModels.WATER_WHEEL`), its axle along a face.
     WaterWheel(Dir),
     /// The millstone's turning stone (`AllPartialModels.MILLSTONE_COG`).
@@ -107,7 +115,10 @@ pub fn rotation_offset(block: Block, axis: Axis, pos: [i32; 3]) -> f32 {
         .sum();
     if sum % 2 == 0 {
         22.5
-    } else if matches!(block, Block::LargeCogwheel) {
+    } else if matches!(
+        block,
+        Block::LargeCogwheel | Block::AndesiteEncasedLargeCogwheel | Block::BrassEncasedLargeCogwheel
+    ) {
         11.25
     } else {
         0.0
@@ -131,9 +142,57 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
         phase: rotation_offset(block, face.axis(), pos),
     };
     match block {
-        Block::Shaft | Block::PoweredShaft | Block::Cogwheel | Block::LargeCogwheel => {
+        Block::Shaft | Block::PoweredShaft | Block::Cogwheel => {
             s.axis.map(|a| vec![own(a, Model::Own)]).unwrap_or_default()
         }
+        // BracketedKineticBlockEntityVisual.LargeCogVisual: the shaftless cog at its own offset,
+        // its shaft apart at a shaft's (`getShaftAngleOffset`), so it lines up with shafts.
+        Block::LargeCogwheel => s
+            .axis
+            .map(|a| {
+                vec![
+                    own(a, Model::Cog { large: true, axis: a }),
+                    Draw {
+                        slot: 1,
+                        model: Model::CogShaft(a),
+                        axis: a,
+                        rpm: speeds[0],
+                        phase: rotation_offset(Block::Shaft, a, pos),
+                    },
+                ]
+            })
+            .unwrap_or_default(),
+        // EncasedCogVisual: the shaftless cog, and a shaft half on each end that has a shaft
+        // (a large one's at a shaft's angle).
+        Block::AndesiteEncasedCogwheel
+        | Block::BrassEncasedCogwheel
+        | Block::AndesiteEncasedLargeCogwheel
+        | Block::BrassEncasedLargeCogwheel => s
+            .axis
+            .map(|a| {
+                let large = matches!(
+                    block,
+                    Block::AndesiteEncasedLargeCogwheel | Block::BrassEncasedLargeCogwheel
+                );
+                let mut v = vec![own(a, Model::Cog { large, axis: a })];
+                for (slot, positive, on) in [(1, true, s.top_shaft), (2, false, s.bottom_shaft)] {
+                    if on {
+                        let face = Dir::from_axis(a, positive);
+                        let mut h = half(slot, face, speeds[0]);
+                        if large {
+                            h.phase = rotation_offset(Block::Shaft, a, pos);
+                        }
+                        v.push(h);
+                    }
+                }
+                v
+            })
+            .unwrap_or_default(),
+        // ValveHandleVisual: the block's own model, turning on its facing's axis (no shaft).
+        b if crate::dye::is_valve_handle(b) => s
+            .facing
+            .map(|f| vec![own(f.axis(), Model::Own)])
+            .unwrap_or_default(),
         // KineticBlockEntityRenderer: the gantry shaft's own model turning on its facing's axis.
         Block::GantryShaft => s
             .facing
@@ -457,13 +516,19 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
             .facing
             .map(|f| vec![own(f.axis(), Model::WaterWheel(f))])
             .unwrap_or_default(),
-        // HandCrankVisual: its shaft half into the block it hangs from, and the handle facing
-        // away from it, both turning with the crank.
+        // HandCrankVisual: its base and shaft stub into the block it hangs from, and the handle
+        // facing away from it, both turning with the crank.
         Block::HandCrank => s
             .facing
             .map(|f| {
                 vec![
-                    half(0, f.opposite(), speeds[0]),
+                    Draw {
+                        slot: 0,
+                        model: Model::CrankBase(f),
+                        axis: f.axis(),
+                        rpm: speeds[0],
+                        phase: rotation_offset(block, f.axis(), pos),
+                    },
                     Draw {
                         slot: 1,
                         model: Model::CrankHandle(f.opposite()),
@@ -605,14 +670,14 @@ mod tests {
     }
 
     #[test]
-    fn a_hand_crank_shows_its_half_shaft_and_handle() {
+    fn a_hand_crank_shows_its_base_and_handle() {
         let s = StateInfo {
             facing: Some(Dir::West),
             ..StateInfo::default()
         };
         let d = draws(Block::HandCrank, &s, [0, 0, 0], [-32.0, 0.0]);
         assert_eq!(d.len(), 2);
-        assert_eq!(d[0].model, Model::ShaftHalf(Dir::East));
+        assert_eq!(d[0].model, Model::CrankBase(Dir::West));
         assert_eq!(d[1].model, Model::CrankHandle(Dir::East));
         assert!(d.iter().all(|x| x.axis == Axis::X && x.rpm == -32.0));
     }

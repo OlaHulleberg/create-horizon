@@ -155,17 +155,38 @@ impl BlockPart for Placement {
             state = set(state, "facing", super::super::kinetics::dir_name(f));
             changed = true;
         }
-        // Create's axis blocks: chain drives, the speed controller, the sequenced gearshift.
+        // Create's axis blocks: shafts, cogs, casings, gearboxes, chain drives, the speed
+        // controller, the sequenced gearshift.
         let axis = with_world(|w| {
-            let above = w.large_cog_axis(dim, [pos[0], pos[1] + 1, pos[2]]);
+            let below = [pos[0], pos[1] - 1, pos[2]];
+            let near = create_engine::place::Nearby {
+                large_cog_above: w.large_cog_axis(dim, [pos[0], pos[1] + 1, pos[2]]),
+                small_cog_clicked: w
+                    .cog_at(dim, beside(clicked_face.opposite()))
+                    .filter(|(large, _)| !large)
+                    .map(|(_, a)| a),
+                controller_below: w
+                    .state_at(dim, below)
+                    .and_then(|s| w.table.get(s))
+                    .filter(|(b, _)| *b == Block::RotationSpeedController)
+                    .and_then(|(_, i)| i.axis),
+            };
             create_engine::place::axis(
                 block,
                 ctx,
                 |side| w.has_shaft_towards(dim, beside(side), side.opposite()),
-                above,
+                near,
             )
         })
         .flatten();
+        // CogWheelBlock.canSurvive (`isValidCogwheelPosition`): no large cog beside it in its
+        // plane, nor a small one beside a large one.
+        if let (Block::Cogwheel | Block::LargeCogwheel, Some((a, _))) = (block, axis) {
+            let large = block == Block::LargeCogwheel;
+            if with_world(|w| w.valid_cog_position(dim, pos, large, a)) == Some(false) {
+                return Some(None);
+            }
+        }
         if let Some((a, vertical)) = axis
             && (info.axis != Some(a) || info.vertical != vertical)
         {

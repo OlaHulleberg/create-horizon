@@ -250,7 +250,15 @@ fn facts(body: &str) -> JavaFacts {
         class,
         base,
         sound,
-        no_occlusion: body.contains("noOcclusion()"),
+        // `BuilderTransformers.encasedBase`, under the encased shafts and cogwheels.
+        no_occlusion: body.contains("noOcclusion()")
+            || [
+                "BuilderTransformers.encasedShaft(",
+                "BuilderTransformers.encasedCogwheel(",
+                "BuilderTransformers.encasedLargeCogwheel(",
+            ]
+            .iter()
+            .any(|t| body.contains(t)),
         food: body.contains(".food("),
         impact: number_after(body, "CStress.setImpact(")
             .or_else(|| body.contains("CStress.setNoImpact()").then_some(0.0))
