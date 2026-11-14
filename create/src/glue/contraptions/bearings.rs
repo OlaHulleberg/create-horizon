@@ -712,7 +712,12 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
             powered,
             speed: speed(dim, sp),
         });
-        match g.step(shaft) {
+        // `ContraptionCollider.collideBlocks`: run into the world, it comes apart.
+        let step = match g.step(shaft) {
+            Step::Move(v) if gantry_collides(lv, &g, v) => Step::Stop,
+            step => step,
+        };
+        match step {
             Step::Move(v) => {
                 if v != g.per_tick {
                     g.per_tick = v;
@@ -741,6 +746,23 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
         keep.extend(std::mem::take(&mut d.gantries));
         d.gantries = keep;
     });
+}
+
+/// Whether gantry `g`, moving `v` a tick along its shaft, meets the world where it is
+/// (`isCollidingWithWorld`, as a piston's structure does).
+fn gantry_collides(lv: &ServerLevel<'_>, g: &create_engine::gantry::Moving, v: f32) -> bool {
+    use create_engine::piston::{colliders, entered_cells};
+    let dir = if v > 0.0 {
+        g.shaft_facing
+    } else {
+        g.shaft_facing.opposite()
+    };
+    let leading = colliders(&g.blocks, dir);
+    entered_cells(g.start, g.shaft_facing, g.offset, dir, &leading)
+        .into_iter()
+        .any(|(cell, local)| {
+            !lv.moved_through(cell) && !actors::breaker_clears(lv, g.start, &g.carried, local, cell)
+        })
 }
 
 /// A moving gantry to its clients, through the shaft its carriage started on: gliding along the
