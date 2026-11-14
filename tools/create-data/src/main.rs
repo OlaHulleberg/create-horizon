@@ -135,6 +135,9 @@ fn compile(create: &Path, repo: &Path) {
     for (name, model) in blocks::fluid_models() {
         write(&models_dir.join(format!("{name}.json")), &pretty(&model));
     }
+    for (name, model) in blocks::sprite_models() {
+        write(&models_dir.join(format!("{name}.json")), &pretty(&model));
+    }
 
     // Items that are not blocks: plain ingredients now, the rest with their subsystem.
     let block_names: std::collections::BTreeSet<&str> =

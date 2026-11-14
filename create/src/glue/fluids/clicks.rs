@@ -98,7 +98,7 @@ impl BlockPart for Clicks {
 
 /// What emptying `item` gives (`GenericItemEmptying.emptyItem`): a `create:emptying` recipe's,
 /// else a filled bucket's.
-fn emptying(item: &str) -> Option<Emptying> {
+pub(crate) fn emptying(item: &str) -> Option<Emptying> {
     let recipes = recipes::with(|r| r.emptying.clone()).unwrap_or_default();
     create_engine::drain::contents(item, &recipes)
 }

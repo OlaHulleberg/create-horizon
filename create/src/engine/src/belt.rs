@@ -403,6 +403,80 @@ pub fn partial(seg: &Segment, bottom: bool) -> Option<&'static str> {
     })
 }
 
+/// The model file of a belt partial (`getBeltPartial`), by its partial block's name.
+pub fn partial_model(partial: &str) -> Option<&'static str> {
+    Some(match partial {
+        "create:part_belt_diagonal_start" => "create:block/belt/diagonal_start",
+        "create:part_belt_diagonal_end" => "create:block/belt/diagonal_end",
+        "create:part_belt_diagonal_middle" => "create:block/belt/diagonal_middle",
+        "create:part_belt_start_bottom" => "create:block/belt/start_bottom",
+        "create:part_belt_end_bottom" => "create:block/belt/end_bottom",
+        "create:part_belt_middle_bottom" => "create:block/belt/middle_bottom",
+        "create:part_belt_start" => "create:block/belt/start",
+        "create:part_belt_end" => "create:block/belt/end",
+        "create:part_belt_middle" => "create:block/belt/middle",
+        _ => return None,
+    })
+}
+
+/// Every belt partial's model file.
+pub const PARTIAL_MODELS: [&str; 9] = [
+    "create:block/belt/diagonal_start",
+    "create:block/belt/diagonal_end",
+    "create:block/belt/diagonal_middle",
+    "create:block/belt/start_bottom",
+    "create:block/belt/end_bottom",
+    "create:block/belt/middle_bottom",
+    "create:block/belt/start",
+    "create:block/belt/end",
+    "create:block/belt/middle",
+];
+
+/// `BeltRenderer.getSpriteShiftEntry`: the sprite a segment's partial is textured with and the
+/// scrolling one drawn in its place, for an undyed belt or one dyed `color` (a `DyeColor` name).
+pub fn sprite_shift(seg: &Segment, color: Option<&str>, bottom: bool) -> (String, String) {
+    let diagonal = matches!(seg.slope, Slope::Upward | Slope::Downward);
+    let source = if diagonal {
+        "create:block/belt_diagonal"
+    } else if bottom {
+        "create:block/belt_offset"
+    } else {
+        "create:block/belt"
+    };
+    let target = match (color, diagonal) {
+        (Some(c), true) => format!("create:block/belt/{c}_diagonal_scroll"),
+        (Some(c), false) => format!("create:block/belt/{c}_scroll"),
+        (None, true) => "create:block/belt_diagonal_scroll".to_owned(),
+        (None, false) => "create:block/belt_scroll".to_owned(),
+    };
+    (source.to_owned(), target)
+}
+
+/// `BeltRenderer`'s UV scroll of a segment's partial turning at `speed` (its rpm) at render
+/// time `tick` (client ticks and the partial tick), in units of the scrolling sprite's height
+/// (twice the belt sprite's): None when it is drawn with its own sprite (still and undyed).
+pub fn scroll(seg: &Segment, speed: f32, dyed: bool, tick: f64, bottom: bool) -> Option<f32> {
+    if speed == 0.0 && !dyed {
+        return None;
+    }
+    let downward = seg.slope == Slope::Downward;
+    let diagonal = downward || seg.slope == Slope::Upward;
+    let sideways = seg.slope == Slope::Sideways;
+    let along_x = seg.facing.axis() == Axis::X;
+    let step = if seg.facing.positive() { 1.0 } else { -1.0 };
+    let time = tick * step;
+    let mut speed = f64::from(speed);
+    if diagonal && (downward ^ along_x)
+        || !sideways && !diagonal && along_x
+        || sideways && !seg.facing.positive()
+    {
+        speed = -speed;
+    }
+    let mult = if diagonal { 3.0 / 8.0 } else { 0.5 };
+    let s = speed * time / (31.5 * 16.0) + if bottom { 0.5 } else { 0.0 };
+    Some(((s - s.floor()) * mult) as f32)
+}
+
 /// `BeltRenderer`'s turn of a segment's partials, in block units.
 pub fn segment_pose(seg: &Segment) -> crate::math::Mat4 {
     use crate::math::{Mat4, Vec3};

@@ -5,6 +5,7 @@
 //! by the kinetic block entity's renderer every frame, between the last tick and the next.
 
 use super::super::states;
+use super::BELT_COLOR;
 use super::items::{is_block_item, stack_of};
 use create_engine::Block;
 use create_engine::arm;
@@ -58,6 +59,10 @@ struct Client {
     speeds: HashMap<[i32; 3], f32>,
     /// Whether an item draws as a block, by id, looked up once.
     block_items: HashMap<String, bool>,
+    /// Client ticks so far (`AnimationTickHolder.ticks`): belts scroll their texture by them.
+    ticks: u64,
+    /// The belt partials' models, resolved when first drawn (and again once stale).
+    models: HashMap<&'static str, mod_api::ModelRef>,
 }
 
 thread_local! {
@@ -109,14 +114,16 @@ fn table_info(
 /// ejector or arm (they move their own parts), a depot whose held stack slides, a belt's
 /// controller carrying items. The server touches the block entity (`SHOWN`) when what a kept
 /// drawing shows changes, so it is drawn once more from the contents it sent first.
-pub fn animated(block: Block, pos: [i32; 3]) -> bool {
+pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
     match block {
         Block::MechanicalArm | Block::WeightedEjector => true,
         Block::Depot => CLIENT.with_borrow(|c| c.sliding.contains(&pos)),
+        // A turning belt scrolls its texture every frame.
         Block::Belt => CLIENT.with_borrow(|c| {
-            c.belts
-                .get(&pos)
-                .is_some_and(|b| !b.contents.items.is_empty())
+            speeds_of(&entity.nbt)[0] != 0.0
+                || c.belts
+                    .get(&pos)
+                    .is_some_and(|b| !b.contents.items.is_empty())
         }),
         _ => false,
     }
@@ -287,6 +294,7 @@ impl belt::Surroundings for ClientSide<'_> {
 
 /// Each client tick: belts with items move them on (`BeltInventory.tick` on the client).
 pub fn tick_client_belts(host: &mut dyn ClientHost) {
+    CLIENT.with_borrow_mut(|c| c.ticks += 1);
     let busy: Vec<[i32; 3]> = CLIENT.with_borrow(|c| {
         c.belts
             .iter()
@@ -484,7 +492,12 @@ impl BlockEntityPart for LogisticsEntity {
         let partial_tick = draw.partial();
         match block {
             Block::Belt => {
-                draw_segment(draw, block, &info, pos, speeds);
+                let color = match event.entity.nbt.get(&BELT_COLOR.into()) {
+                    Some(Tag::String(c)) => Some(c.to_string_lossy().to_string()),
+                    _ => None,
+                }
+                .filter(|c| !c.is_empty());
+                draw_segment(draw, host, block, &info, pos, speeds, color.as_deref());
                 draw_belt_items(draw, host, pos, partial_tick);
             }
             Block::Depot => draw_depot(draw, host, pos, partial_tick),
@@ -525,15 +538,19 @@ impl BlockEntityPart for LogisticsEntity {
     }
 }
 
-/// `BeltRenderer`: the segment's halves (still: Create scrolls their texture instead), and the
-/// pulley turning on the belt's axis, posed partials `kinetics` leaves to logistics.
+/// `BeltRenderer`: the segment's halves, their texture scrolling as the belt turns (and drawn
+/// in its dye's colour), and the pulley turning on the belt's axis, posed partials `kinetics`
+/// leaves to logistics.
 fn draw_segment(
     draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
     block: Block,
     info: &create_engine::parts::StateInfo,
     pos: [i32; 3],
     speeds: [f32; 2],
+    color: Option<&str>,
 ) {
+    let tick = CLIENT.with_borrow(|c| c.ticks) as f64 + f64::from(draw.partial());
     for d in parts::draws(block, info, pos, speeds) {
         match d.model {
             Model::Belt(seg, bottom) => {
@@ -542,7 +559,9 @@ fn draw_segment(
                 };
                 draw.push();
                 pose(draw, belt::segment_pose(&seg));
-                partial(draw, name);
+                if !scrolled(draw, host, &seg, name, speeds[0], color, tick, bottom) {
+                    partial(draw, name);
+                }
                 draw.pop();
             }
             Model::BeltPulley(seg) => {
@@ -556,6 +575,53 @@ fn draw_segment(
             _ => {}
         }
     }
+}
+
+/// The belt partial `name` drawn with its sprite shifted (`shiftUVScrolling`): true when it was
+/// drawn so, false when it is drawn as it is (still and undyed, or its model is not there).
+#[allow(clippy::too_many_arguments)]
+fn scrolled(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    seg: &belt::Segment,
+    name: &str,
+    speed: f32,
+    color: Option<&str>,
+    tick: f64,
+    bottom: bool,
+) -> bool {
+    let Some(offset) = belt::scroll(seg, speed, color.is_some(), tick, bottom) else {
+        return false;
+    };
+    let Some(file) = belt::partial_model(name) else {
+        return false;
+    };
+    let (source, target) = belt::sprite_shift(seg, color, bottom);
+    // The belt sprites are 16 by 16, the scrolling ones 16 by 32.
+    let shift = mod_api::TerrainUvShift::new(&source, &target, [1.0, 0.5], [0.0, offset]);
+    let options = mod_api::TerrainModelOptions::default().with_uv_shift(shift);
+    for fresh in [false, true] {
+        let Some(model) = belt_model(host, file, fresh) else {
+            return false;
+        };
+        match draw.terrain_model(model, options) {
+            Ok(()) => return true,
+            Err(mod_api::TerrainModelError::Model(_)) if !fresh => continue,
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+/// The standalone model `file` (`standalone_models`), resolved once, or again when `fresh`.
+fn belt_model(host: &dyn ClientHost, file: &'static str, fresh: bool) -> Option<mod_api::ModelRef> {
+    if !fresh && let Some(m) = CLIENT.with_borrow(|c| c.models.get(file).copied()) {
+        return Some(m);
+    }
+    let id = mod_api::Identifier::parse(file).ok()?;
+    let m = host.render_assets().model(&id).ok()?;
+    CLIENT.with_borrow_mut(|c| c.models.insert(file, m));
+    Some(m)
 }
 
 /// Draws a belt's items as `BeltRenderer.renderItem` does: each at its point on the belt

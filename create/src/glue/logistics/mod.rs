@@ -287,6 +287,13 @@ impl Subsystem for Logistics {
     fn client_reset(&self) {
         client::reset_logistics();
     }
+
+    /// The belt partials, drawn with their texture scrolling, and the model naming the
+    /// scrolling sprites (so the block sprites hold them).
+    fn standalone_models(&self, models: &mut Vec<String>) {
+        models.extend(create_engine::belt::PARTIAL_MODELS.iter().map(|m| (*m).to_owned()));
+        models.push("create:block/belt_scroll_sprites".to_owned());
+    }
 }
 
 /// What logistics adds to the kinetic block entity type: its `ITEMS` handlers and its
@@ -302,6 +309,10 @@ const SHOWN: &str = "Shown";
 /// A block entity key holding the item a brass funnel's or smart chute's filter slot shows
 /// (an empty string: none), synced for its clients to draw.
 pub(crate) const FILTER: &str = "Filter";
+
+/// A block entity key holding a belt segment's dye (`BeltBlockEntity.color`: a `DyeColor` name,
+/// an empty string or none for an undyed belt), synced for its clients to draw.
+pub(crate) const BELT_COLOR: &str = "Dye";
 
 /// Shows filter `filter` in the slot of the block at `pos` (`FILTER`).
 pub(crate) fn show_filter(
@@ -341,13 +352,13 @@ impl Subsystem for Entities {
         &self,
         block: create_engine::Block,
         pos: [i32; 3],
-        _entity: &mod_api::ModBlockEntity,
+        entity: &mod_api::ModBlockEntity,
     ) -> bool {
-        client::animated(block, pos)
+        client::animated(block, pos, entity)
     }
 
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[SHOWN, FILTER]
+        &[SHOWN, FILTER, BELT_COLOR]
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {

@@ -49,6 +49,13 @@ pub fn use_belt_with(
     if crate::glue::items::sneaking(&*lv.host, p) || p.may_build(&*lv.host) != Some(true) {
         return false;
     }
+    // A dye colours the whole belt, water washes it (`applyColor`); neither is used up.
+    if let Some(h) = held {
+        let dye = create_engine::dye::DyeColor::of_item(h);
+        if dye.is_some() || crate::glue::fluids::empties_water(h) {
+            return apply_color(lv, pos, dye.map(|d| d.name()));
+        }
+    }
     match held {
         None => hand == mod_api::Hand::Main && use_belt(lv, pos, player),
         Some("create:shaft") => {
@@ -80,6 +87,48 @@ pub fn use_belt_with(
         }
         _ => false,
     }
+}
+
+/// The dye of the belt segment at `pos` (`BeltBlockEntity.color`), None when undyed.
+pub fn belt_color(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<String> {
+    let e = lv.host.block_entity(lv.level, pos)?;
+    match e.data(&*lv.host)?.get(&super::BELT_COLOR.into()) {
+        Some(mod_api::Tag::String(c)) => {
+            Some(c.to_string_lossy().to_string()).filter(|c| !c.is_empty())
+        }
+        _ => None,
+    }
+}
+
+/// Dyes the belt segment at `pos` `color` (None: undyed), for its clients to draw.
+fn set_segment_color(lv: &mut ServerLevel<'_>, pos: [i32; 3], color: Option<&str>) {
+    if let Some(e) = lv.host.block_entity(lv.level, pos) {
+        let tag = mod_api::Tag::String(color.unwrap_or("").into());
+        let _ = e.merge_data(
+            &mut *lv.host,
+            mod_api::Compound::from([(super::BELT_COLOR.into(), tag)]),
+        );
+    }
+}
+
+/// `BeltBlockEntity.applyColor`: every segment of the belt at `pos` takes dye `color` (None:
+/// washed clean). False when it already has it (the click passes on).
+fn apply_color(lv: &mut ServerLevel<'_>, pos: [i32; 3], color: Option<&str>) -> bool {
+    if belt_color(lv, pos).as_deref() == color {
+        return false;
+    }
+    let dim = lv.dim;
+    let Some(chain) = with_world(|w| {
+        let d = &w.dims[dim];
+        Some(d.belts.get(d.belt_of.get(&pos)?)?.chain.clone())
+    })
+    .flatten() else {
+        return false;
+    };
+    for p in chain {
+        set_segment_color(lv, p, color);
+    }
+    true
 }
 
 /// `BeltBlockEntity.setCasingType`: cases the segment at `pos` or takes its casing off. Belts
