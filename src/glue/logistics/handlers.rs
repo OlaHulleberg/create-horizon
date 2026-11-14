@@ -5,7 +5,7 @@
 
 use super::super::states;
 use super::super::world::{level_index, with_world};
-use super::filter;
+use crate::glue::items::filters;
 use create_engine::Block;
 use create_engine::ejector;
 use mod_api::{
@@ -335,7 +335,7 @@ fn accepts(host: &dyn mod_api::Host, at: At, stack: &ItemStack) -> bool {
         Some((Block::SmartChute, info)) => {
             !info.powered
                 && with_world(|w| {
-                    filter::passes(host, w.dims[at.dim].chute_filters.get(&at.pos), stack)
+                    filters::passes(host, w.dims[at.dim].chute_filters.get(&at.pos), stack)
                 })
                 .unwrap_or(false)
         }

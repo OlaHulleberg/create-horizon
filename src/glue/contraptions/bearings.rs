@@ -59,10 +59,6 @@ pub(super) fn bearing_speed_changed(dim: usize, pos: [i32; 3]) {
 /// `ChassisBlockEntity.collectChassisGroup`: the chassis joined to `pos`, of its kind and axis
 /// (a radial chassis' group: the radial chassis on its axis either side). For the value box's
 /// range (`ChassisScrollValueBehaviour`, `World::set_chassis_range`).
-#[allow(
-    dead_code,
-    reason = "for the value box glue: a chassis' range scrolls for its group"
-)]
 pub fn chassis_group(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<[i32; 3]> {
     let kind = |p: [i32; 3]| {
         let (name, props) = lv.name_props(p)?;

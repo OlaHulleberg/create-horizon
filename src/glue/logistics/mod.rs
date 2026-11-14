@@ -11,8 +11,6 @@
 //! Left out, for want of an API or because another subsystem owns it:
 //! - `BakedModel.isGui3d` (how a stack lies on a belt or depot) is not in the mod API: an item
 //!   with a block stands in for it (`items::is_block_item`).
-//! - Item attributes in smart chute filters (`ItemAttribute.appliesTo`) read processing
-//!   recipes; none applies here.
 //! - The machines above a belt or depot (presses, deployers, spouts: `Subsystem::belt_process`),
 //!   and items landing on basins, saws and item drains are the processing and fluids
 //!   subsystems'. A sequenced assembly's progress on a stack (processing's `stacks`) goes with
@@ -33,7 +31,6 @@ mod belt;
 mod chute;
 mod client;
 mod depot;
-mod filter;
 mod funnel;
 mod handlers;
 mod items;
@@ -47,6 +44,7 @@ pub use arms::Arms;
 pub(crate) use belt::insert_into_from;
 pub(crate) use items::{random_angle, upright};
 
+use super::items::filters;
 use super::kinetics;
 use super::server::ServerLevel;
 use super::states;
@@ -514,7 +512,7 @@ fn vaults_to_nbt(
         let pos = filters.iter().flat_map(|(p, _)| *p).collect();
         let items = filters
             .iter()
-            .map(|(_, f)| filter::filter_to_nbt(host, f))
+            .map(|(_, f)| filters::filter_to_nbt(host, f).unwrap_or_else(|| Tag::String("".into())))
             .collect();
         c.insert("pos".into(), Tag::IntArray(pos));
         c.insert("items".into(), Tag::List(items));
@@ -560,7 +558,7 @@ fn vaults_from_nbt(
                 .0
                 .iter()
                 .zip(items)
-                .filter_map(|(p, i)| Some(([p[0], p[1], p[2]], filter::filter_from_nbt(host, i)?)))
+                .filter_map(|(p, i)| Some(([p[0], p[1], p[2]], filters::filter_from_nbt(host, i)?)))
                 .collect(),
             _ => Vec::new(),
         },

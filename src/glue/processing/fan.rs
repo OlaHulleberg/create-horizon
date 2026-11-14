@@ -11,7 +11,7 @@ use crate::glue::world::with_world;
 use create_engine::fan::{self, Catalyst, Current, Heat, Kind, Way};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::{Block, belt, depot, nozzle, processing};
-use mod_api::{BlockShapeKind, EntityRef, ExplosionInteraction, ExplosionSettings, ItemStack};
+use mod_api::{BlockShapeKind, EntityRef, ItemStack};
 use std::collections::HashMap;
 
 /// Encased fans that turn (`EncasedFanBlockEntity.tick`): the current looked at again when due
@@ -213,15 +213,7 @@ fn tick_nozzle(lv: &mut ServerLevel<'_>, pos: [i32; 3], fan: (f32, Dir)) {
         n.entities.retain(|t| alive.contains(t));
         if nozzle::overloaded(n.pushing, n.entities.len()) {
             // `level.explode(.., 2, ExplosionInteraction.NONE)`, then what it held vanishes.
-            let _ = lv.level.explode(
-                &mut *lv.host,
-                None,
-                nozzle::center(pos),
-                2.0,
-                false,
-                ExplosionInteraction::None,
-                ExplosionSettings::default(),
-            );
+            lv.explode_sparing_blocks(nozzle::center(pos), 2.0);
             let gone = std::mem::take(&mut n.entities);
             for d in &items {
                 if gone.contains(&Target::Item(d.id())) {

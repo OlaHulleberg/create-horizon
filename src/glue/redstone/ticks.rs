@@ -435,7 +435,8 @@ pub(super) fn tick_cuckoos(lv: &mut ServerLevel<'_>) {
     let players = lv.players();
     for (pos, kind, boom) in events {
         if boom {
-            cuckoo_surprise(lv, pos);
+            // The surprise: `contraptions`' blast (legacy `blast_body`).
+            lv.cuckoo_surprise(pos);
             continue;
         }
         let mut m = Vec::with_capacity(13);
@@ -444,29 +445,6 @@ pub(super) fn tick_cuckoos(lv: &mut ServerLevel<'_>) {
         }
         m.push(kind.index());
         net::send_to_players(&mut *lv.host, &players, CUCKOO_CHANNEL, &m);
-    }
-}
-
-/// The mysterious cuckoo clock's surprise at its progress 50: `level.destroyBlock(pos, false)`
-/// (the break effects, no drops), then `level.explode(.., 3, false, ExplosionInteraction.BLOCK)`
-/// at its centre (blocks broken as the `block_explosion_drop_decay` rule says). The damage is
-/// vanilla's explosion: Create's `cuckoo_surprise` damage type is not carried.
-fn cuckoo_surprise(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    if !lv.destroy_block(pos, false) {
-        eprintln!("[create] the cuckoo clock at {pos:?} could not be broken");
-        return;
-    }
-    let center = pos.map(|v| f64::from(v) + 0.5);
-    if let Err(e) = lv.level.explode(
-        &mut *lv.host,
-        None,
-        center,
-        3.0,
-        false,
-        mod_api::ExplosionInteraction::Block,
-        mod_api::ExplosionSettings::default(),
-    ) {
-        eprintln!("[create] an explosion at {center:?} failed: {e:?}");
     }
 }
 

@@ -10,14 +10,13 @@
 //! What clients draw (link frequencies, lever handles, cuckoo hands, doors and figures) is in
 //! `client`, sent on the legacy channels.
 //!
+//! A smart observer's or threshold switch's filter is read, set by hand, saved and tested by the
+//! items port's filter helpers (`items::filters`), as the legacy glue's were; the filters of
+//! broken detectors (`detectors.dropped`) are dropped there too.
+//!
 //! Left out, the API having no way to do it:
 //! - A redstone link slot's item is drawn as a block item (`isGui3d`) when the item places a
 //!   block: the API does not say whether an item model is 3D (`ItemRenderer` `isGui3d`).
-//! - A smart observer's or threshold switch's filter read from a configured filter item (a list
-//!   or attribute filter): that is the items port's filter reading. Here a filter set by a click
-//!   is the held item itself; a saved filter stack is kept (and saved again) as it was, tested
-//!   as its item. Filters of broken detectors (`detectors.dropped`) are dropped by the items
-//!   port, as the legacy items glue did.
 //! - The threshold switch's screen: its thresholds are set with `/create_debug threshold`, as
 //!   the legacy glue did.
 

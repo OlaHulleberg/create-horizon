@@ -156,7 +156,7 @@ pub(super) fn scroll_from_client(host: &mut dyn ServerHost, player: PlayerRef, d
         }
         // `ChassisScrollValueBehaviour`: the whole group of chassis takes the range, 1 to 16.
         Some(B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis) => {
-            let group = chassis_group(&lv, pos);
+            let group = crate::glue::contraptions::chassis_group(&lv, pos);
             let now = with_world(|w| w.dims[dim].chassis_range.get(&pos).copied())
                 .flatten()
                 .unwrap_or(create_engine::contraption::CHASSIS_RANGE);
@@ -176,45 +176,6 @@ pub(super) fn scroll_from_client(host: &mut dyn ServerHost, player: PlayerRef, d
         _ => return,
     };
     net::send_to_player(lv.host, player, VALUE, &encode(&[x, y, z, value]));
-}
-
-/// `ChassisBlockEntity.collectChassisGroup`: the chassis joined to `pos`, of its kind and axis
-/// (a radial chassis' group is the radial chassis on its axis either side).
-fn chassis_group(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<[i32; 3]> {
-    let kind = |p: [i32; 3]| {
-        let state = lv.block(p);
-        with_world(|w| {
-            let (b, info) = w.table.get(state)?;
-            matches!(
-                b,
-                B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis
-            )
-            .then_some((b, info.axis))
-        })
-        .flatten()
-    };
-    let Some(own) = kind(pos) else {
-        return Vec::new();
-    };
-    let radial = own.0 == B::RadialChassis;
-    let axis = own.1.unwrap_or(create_engine::kinetics::Axis::Y);
-    let mut group = vec![pos];
-    let mut i = 0;
-    while i < group.len() && group.len() < 256 {
-        let p = group[i];
-        i += 1;
-        for d in Dir::ALL {
-            if radial && d.axis() != axis {
-                continue;
-            }
-            let o = d.offset();
-            let n = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
-            if !group.contains(&n) && kind(n) == Some(own) {
-                group.push(n);
-            }
-        }
-    }
-    group
 }
 
 /// `ValueSettingsPacket.applySettings` (`BlockEntityConfigurationPacket.handle`: no spectator or

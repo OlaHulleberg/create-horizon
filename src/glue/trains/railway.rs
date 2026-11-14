@@ -1,7 +1,9 @@
 //! The railway's tick and the trains' save: trains move over the graph (`Train.tick`,
 //! `Navigation.tick`, `ScheduleRuntime.tick`), signals follow them (`SignalBoundary.tickState`),
 //! track observers light (`TrackObserverBlockEntity.tick`), and clients hear of each train as
-//! it starts, stops, arrives, runs a curve or passes onto another edge.
+//! it starts, stops, arrives, runs a curve or passes onto another edge. A track observer's
+//! cargo filter is set on its filter slot (`Observer`); it is saved with the contraptions'
+//! `create_glue`, as in the legacy glue.
 
 use super::super::net;
 use super::super::server::{ServerLevel, update_all};
@@ -11,7 +13,10 @@ use super::super::{kinetics, persist, states};
 use super::{assembly, saved, tracks};
 use create_engine::Block;
 use create_engine::trains::{CURVE_UPDATE_TICKS, Event, Run};
-use mod_api::{ClientHost, Compound, Host, PlayerRef, Registrar, RegistrationContext, ServerHost};
+use mod_api::{
+    BlockClick, BlockPart, ClientHost, Compound, Host, InteractionResult, PlayerRef, Registrar,
+    RegistrationContext, ServerHost, UseItemOnEvent, UseWithoutItemEvent,
+};
 use std::cell::RefCell;
 
 /// Create's channel for a train's motion (`create_engine::trains::Motion`).
@@ -32,6 +37,7 @@ impl Subsystem for Trains {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         tracks::register(r);
         r.block_part(states::key(Block::TrackStation), assembly::Station);
+        r.block_part(states::key(Block::TrackObserver), Observer);
         let Some(kind) = kinetics::kind() else {
             return;
         };
@@ -324,4 +330,72 @@ mod tests {
             ]
         );
     }
+}
+
+/// A track observer's part: the click on its filter slot.
+struct Observer;
+
+#[mod_api::horizon_part]
+impl BlockPart for Observer {
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        use_observer(host, event.click)
+    }
+
+    fn use_without_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseWithoutItemEvent<'_>,
+    ) -> Option<InteractionResult> {
+        use_observer(host, event.click)
+    }
+}
+
+/// A click on a track observer (legacy `use_observer`): on its filter slot
+/// (`TrackObserverBlockEntity.createFilter`: on top, 15.5 px up; `FilteringBehaviour
+/// .onShortInteract` through `ValueSettingsInputHandler`) the held stack becomes its cargo filter
+/// (a filter item taken from the hand, the one it held given back), an empty hand clears it
+/// (`onFilterChanged` → `setFilterAndNotify`). Trains carry no cargo in this port: a filtered
+/// observer sees none.
+fn use_observer(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<InteractionResult> {
+    use crate::glue::items::filters;
+    if click.hit.face != [0, 1, 0] {
+        return None;
+    }
+    let player = host.player(click.player)?;
+    if !crate::glue::interaction::values::may_use_value_box(&*host, player) {
+        return None;
+    }
+    let pos = click.pos;
+    let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]));
+    if !create_engine::board::hits_box([0.5, 15.5 / 16.0, 0.5], local) {
+        return None;
+    }
+    // `canShortInteract`: a wrench or a mechanical arm is used on the block instead.
+    let held = click.stack.map(|s| s.item().id(&*host));
+    if held
+        .as_deref()
+        .is_some_and(|h| matches!(h, "create:wrench" | "create:mechanical_arm"))
+    {
+        return None;
+    }
+    let dimension = click.dimension.key().id().to_owned();
+    let mut lv = ServerLevel::new(host, &dimension)?;
+    let filter = filters::take_filter(lv.host, player, click.hand);
+    let dim = lv.dim;
+    let old = with_world(|w| {
+        let d = &mut w.dims[dim];
+        d.railway.set_observer_filtered(pos, filter.is_some());
+        match filter {
+            Some(f) => d.observer_filters.insert(pos, f),
+            None => d.observer_filters.remove(&pos),
+        }
+    })
+    .flatten();
+    persist::mark_pos_unsaved(dim, pos);
+    filters::return_filter(&mut lv, player, pos, old);
+    Some(InteractionResult::Success)
 }

@@ -245,7 +245,7 @@ fn extract_in_front(
     if !near.is_empty() {
         return Some(Some(false));
     }
-    let Some(stack) = items::take_from(lv, behind, side, |_, _| true, max) else {
+    let Some(stack) = items::take_from(lv, behind, side, |_| true, max) else {
         return Some(None);
     };
     items::drop_stack(lv, at, v, stack, 0);
@@ -281,13 +281,7 @@ fn push_onto_belt(
         return Some(Some(false));
     }
     // The belts carry items without components: only those leave.
-    let Some(stack) = items::take_from(
-        lv,
-        behind,
-        side,
-        |_, r| !items::has_components(r.as_stack()),
-        max,
-    ) else {
+    let Some(stack) = items::take_from(lv, behind, side, |s| !items::has_components(s), max) else {
         return Some(None);
     };
     let count = stack.count().min(64) as u8;

@@ -181,33 +181,6 @@ fn sit_down(lv: &mut ServerLevel<'_>, pos: [i32; 3], rider: EntityRef) -> bool {
     true
 }
 
-/// `Contraption.moveSeat`: the seat block at `pos` moves into a contraption (a train's
-/// carriage); its seat's first rider is taken off and returned, and the seat goes.
-#[allow(
-    dead_code,
-    reason = "for the trains glue: a carriage takes and puts back its seats' riders"
-)]
-pub fn take_rider(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<EntityRef> {
-    let seat = SEATS.with_borrow_mut(|s| s.remove(&(lv.dim, pos)))?;
-    let e = lv.host.entity(seat.id)?;
-    let rider = e.passengers(&*lv.host).unwrap_or_default().first().copied();
-    e.discard(&mut *lv.host);
-    rider
-}
-
-/// `Contraption.addPassengersToWorld`: a contraption's rider sits on the seat block at `pos`
-/// put back in the world, if it is a seat and free (`isSeatOccupied`, `sitDown`).
-#[allow(
-    dead_code,
-    reason = "for the trains glue: a carriage takes and puts back its seats' riders"
-)]
-pub fn seat_rider(lv: &mut ServerLevel<'_>, pos: [i32; 3], rider: EntityRef) -> bool {
-    if !is_seat(lv, pos) || SEATS.with_borrow(|s| s.contains_key(&(lv.dim, pos))) {
-        return false;
-    }
-    sit_down(lv, pos, rider)
-}
-
 /// The stand-ins that came back: one in a seat block no other stand-in holds is that seat's
 /// again (Create's `SeatEntity` is the block's by where it stands).
 fn take_back(lv: &mut ServerLevel<'_>) {

@@ -4,12 +4,13 @@
 
 use super::super::server::{ServerLevel, UPDATE_CLIENTS};
 use super::super::world::with_world;
-use super::filter;
 use super::items;
 use super::{info_at, mark_touched};
+use crate::glue::contraptions::actors;
+use crate::glue::items::filters;
 use create_engine::Block;
 use create_engine::kinetics::Dir;
-use mod_api::{BlockClick, Direction, Hand, ItemStack, SoundSource};
+use mod_api::{BlockClick, Direction, ItemStack};
 
 /// The chute or smart chute at `pos`, with whether it is powered.
 pub fn chute_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Block, bool)> {
@@ -33,7 +34,7 @@ pub fn chute_accepts(
         Block::SmartChute => {
             !powered
                 && with_world(|w| {
-                    filter::passes(&*lv.host, w.dims[dim].chute_filters.get(&pos), stack)
+                    filters::passes(&*lv.host, w.dims[dim].chute_filters.get(&pos), stack)
                 })
                 .unwrap_or(false)
         }
@@ -190,17 +191,22 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
         if chute_at(lv, above).is_some() {
             continue;
         }
-        let Some(from) = items::items_at(lv, above, Some(Direction::Down)) else {
+        // A portable storage interface hands down its contraption's storage while connected;
+        // it wakes the chute when it connects.
+        let psi = actors::is_item_interface(lv, above);
+        let from = items::items_at(lv, above, Some(Direction::Down));
+        if from.is_none() && !psi {
             continue;
-        };
+        }
         // Create's own containers say when they change; others are looked at again later.
-        let tells = matches!(
-            info_at(lv, above),
-            Some((
-                Block::Depot | Block::WeightedEjector | Block::ItemVault | Block::Chute,
-                _
-            )) | Some((Block::SmartChute, _))
-        );
+        let tells = psi
+            || matches!(
+                info_at(lv, above),
+                Some((
+                    Block::Depot | Block::WeightedEjector | Block::ItemVault | Block::Chute,
+                    _
+                )) | Some((Block::SmartChute, _))
+            );
         let smart = block == Block::SmartChute;
         let filter = smart
             .then(|| with_world(|w| w.dims[dim].chute_filters.get(&pos).cloned()).flatten())
@@ -210,12 +216,26 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
         } else {
             create_engine::chute::CHUTE_AMOUNT
         };
-        let taken = items::extract_matching(
-            lv,
-            &from,
-            |host, r| filter::passes(&*host, filter.as_ref(), r.as_stack()),
-            amount,
-        );
+        let taken = match from {
+            _ if psi => {
+                let host = &*lv.host;
+                actors::psi_extract(
+                    lv,
+                    above,
+                    |s| filters::passes(host, filter.as_ref(), s),
+                    amount,
+                )
+                .ok()
+                .flatten()
+            }
+            Some(from) => items::extract_matching(
+                lv,
+                &from,
+                |host, r| filters::passes(&*host, filter.as_ref(), r.as_stack()),
+                amount,
+            ),
+            None => None,
+        };
         match taken {
             Some(stack) => {
                 set_chute_stack(lv, pos, Some(stack));
@@ -269,60 +289,13 @@ pub fn use_smart_chute(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &BlockCli
     {
         return false;
     }
-    let creative = p.is_creative(&*lv.host).unwrap_or(false);
-    // `FilteringBehaviour.onShortInteract`'s hand: what the slot is set to (None: emptied), a
-    // filter item taken from the hand outside creative.
-    let filter = click.stack.map(|s| filter::filter_of(&*lv.host, s));
-    if let (Some(f), Some(held)) = (&filter, click.stack)
-        && f.is_filter_item()
-        && !creative
-    {
-        let rest = held.clone().shrink(1);
-        set_hand(lv, p, click.hand, rest);
-    }
+    // `FilteringBehaviour.onShortInteract`: the hand's stack becomes the filter (a filter item
+    // taken from it outside creative); the one it held goes back, with the frame sound.
+    let filter = filters::take_filter(lv.host, p, click.hand);
     let dim = lv.dim;
     let old = with_world(|w| w.set_chute_filter(dim, pos, filter)).flatten();
-    // The filter the slot held before, given back when it was a filter item (in creative only
-    // when the inventory has none like it), and the frame sound.
-    if let Some(old) = old.filter(create_engine::filter::Filter::is_filter_item)
-        && let Some(stack) = filter::filter_stack(&*lv.host, &old)
-    {
-        let has = p
-            .inventory(&*lv.host)
-            .unwrap_or_default()
-            .iter()
-            .any(|s| s.same_item(&stack) && s.same_components(&stack));
-        if !creative || !has {
-            items::give(&mut *lv.host, click.player, stack);
-        }
-    }
-    let center = pos.map(|v| f64::from(v) + 0.5);
-    lv.level.play_sound(
-        &mut *lv.host,
-        "minecraft:entity.item_frame.add_item",
-        center,
-        SoundSource::Blocks,
-        0.25,
-        0.1,
-    );
+    filters::return_filter(lv, p, pos, old);
     true
-}
-
-/// Sets the stack in `player`'s `hand`.
-pub fn set_hand(
-    lv: &mut ServerLevel<'_>,
-    player: mod_api::PlayerRef,
-    hand: Hand,
-    stack: Option<ItemStack>,
-) {
-    let slot = match hand {
-        Hand::Main => player.selected_slot(&*lv.host).map(|s| s as u32),
-        // `Inventory.SLOT_OFFHAND`.
-        Hand::Off => Some(40),
-    };
-    if let Some(slot) = slot {
-        let _ = player.set_inventory_slot(&mut *lv.host, slot, stack);
-    }
 }
 
 /// Item vaults whose blocks changed form or split (`updateConnectivity`), and their blocks

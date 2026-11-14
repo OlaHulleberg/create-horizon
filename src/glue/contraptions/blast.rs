@@ -8,7 +8,6 @@ use mod_api::{ExplosionInteraction, ExplosionSettings};
 impl ServerLevel<'_> {
     /// `Level.explode(null, x, y, z, power, ExplosionInteraction.NONE)`: entities hurt and
     /// pushed, no block broken, no fire; the explosion's sound and particles.
-    #[allow(dead_code, reason = "for the processing glue: a nozzle's blast")]
     pub fn explode_sparing_blocks(&mut self, center: [f64; 3], power: f32) {
         let done = self.level.explode(
             &mut *self.host,
@@ -29,10 +28,6 @@ impl ServerLevel<'_> {
     /// ExplosionInteraction.BLOCK)` at its centre (blocks broken as the
     /// `block_explosion_drop_decay` rule says). The damage is vanilla's explosion: Create's
     /// `cuckoo_surprise` damage type is not carried.
-    #[allow(
-        dead_code,
-        reason = "for the redstone glue: the mysterious cuckoo clock"
-    )]
     pub fn cuckoo_surprise(&mut self, pos: [i32; 3]) {
         if !self.destroy_block(pos, false) {
             eprintln!("[create] the cuckoo clock at {pos:?} could not be broken");

@@ -5,10 +5,10 @@
 //! barrels) that keeps its items and takes what the actors collect, and contraption controls
 //! (`/create_debug controls`). Create's rules are in `create_engine::glue` and
 //! `create_engine::actors`. Saved under `create_glue`.
-//!
-//! Left out: a track observer's filter is kept under `create_glue` (`observers`) by the trains'
-//! glue, which reads filter items; it is not written here.
+//! Track observers' filters (the trains' slot, read as the items port reads filters) are kept
+//! there too (`observers`), as in the legacy glue.
 
+use super::super::items::filters;
 use super::super::persist::{mark_pos_unsaved, mark_unsaved};
 use super::super::server::{ServerLevel, UPDATE_CLIENTS, update_all};
 use super::super::states::{self, key};
@@ -203,12 +203,17 @@ fn debug_glue(lv: &mut ServerLevel<'_>, from: [i32; 3], to: [i32; 3]) -> String 
     }
 }
 
-/// The glue areas, contraption controls and rollers of a column, saved with it under
-/// `create_glue`.
-pub(super) fn glue_chunk_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
+/// The glue areas, contraption controls, rollers and track observers' filters of a column,
+/// saved with it under `create_glue`.
+pub(super) fn glue_chunk_save(
+    host: &dyn mod_api::Host,
+    dim: usize,
+    chunk: [i32; 2],
+    data: &mut Compound,
+) {
     let here = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
     let text = |s: &Option<String>| Tag::String(s.as_deref().unwrap_or("").into());
-    let Some((areas, controls, rollers)) = with_world(|w| {
+    let Some((areas, controls, rollers, observers)) = with_world(|w| {
         let d = &w.dims[dim];
         let areas: Vec<i32> = d
             .glue
@@ -230,11 +235,18 @@ pub(super) fn glue_chunk_save(dim: usize, chunk: [i32; 2], data: &mut Compound) 
             .map(|(p, v)| (*p, v.clone()))
             .collect();
         rollers.sort_by_key(|e| e.0);
-        (areas, controls, rollers)
+        let mut observers: Vec<_> = d
+            .observer_filters
+            .iter()
+            .filter(|(p, _)| here(p))
+            .map(|(p, f)| (*p, f.clone()))
+            .collect();
+        observers.sort_by_key(|e| e.0);
+        (areas, controls, rollers, observers)
     }) else {
         return;
     };
-    if areas.is_empty() && controls.is_empty() && rollers.is_empty() {
+    if areas.is_empty() && controls.is_empty() && rollers.is_empty() && observers.is_empty() {
         return;
     }
     // Others' entries (a track observer's) stay beside these.
@@ -282,11 +294,24 @@ pub(super) fn glue_chunk_save(dim: usize, chunk: [i32; 2], data: &mut Compound) 
         c.insert("filters".into(), Tag::List(items));
         own.insert("rollers".into(), Tag::Compound(c));
     }
+    // Track observers' filters: the filter stacks.
+    if !observers.is_empty() {
+        let mut c = Compound::new();
+        let pos = observers.iter().flat_map(|(p, _)| *p).collect();
+        let items = observers
+            .iter()
+            .map(|(_, f)| filters::filter_to_nbt(host, f).unwrap_or_else(|| Tag::String("".into())))
+            .collect();
+        c.insert("pos".into(), Tag::IntArray(pos));
+        c.insert("items".into(), Tag::List(items));
+        own.insert("observers".into(), Tag::Compound(c));
+    }
     data.insert("create_glue".into(), Tag::Compound(own));
 }
 
-/// A column's glue, contraption controls and rollers back as it loads.
-pub(super) fn glue_chunk_load(dim: usize, data: &Compound) {
+/// A column's glue, contraption controls, rollers and track observers' filters back as it
+/// loads.
+pub(super) fn glue_chunk_load(host: &dyn mod_api::Host, dim: usize, data: &Compound) {
     let Some(Tag::Compound(saved)) = data.get(&"create_glue".into()) else {
         return;
     };
@@ -351,10 +376,28 @@ pub(super) fn glue_chunk_load(dim: usize, data: &Compound) {
             .collect(),
         _ => Vec::new(),
     };
+    let observers: Vec<([i32; 3], create_engine::filter::Filter)> =
+        match saved.get(&"observers".into()) {
+            Some(Tag::Compound(c)) => match (c.get(&"pos".into()), c.get(&"items".into())) {
+                (Some(Tag::IntArray(pos)), Some(Tag::List(items))) => pos
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .zip(items)
+                    .filter_map(|(p, i)| Some((*p, filters::filter_from_nbt(host, i)?)))
+                    .collect(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
     with_world(|w| {
         let d = &mut w.dims[dim];
         d.controls.extend(controls);
         d.rollers.extend(rollers);
+        for (p, f) in observers {
+            d.railway.set_observer_filtered(p, true);
+            d.observer_filters.insert(p, f);
+        }
         for g in areas {
             if !d.glue.contains(&g) {
                 d.glue.push(g);
@@ -1309,20 +1352,12 @@ fn psi_connected(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<[i32; 3]> {
 }
 
 /// Whether an item interface stands at `pos` (connected or not).
-#[allow(
-    dead_code,
-    reason = "for the logistics glue: chutes and funnels reach a moving contraption's storage through a stationary interface"
-)]
 pub fn is_item_interface(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     lv.create_block(pos) == Some(Block::PortableStorageInterface)
 }
 
 /// How much of `stack` `psi_insert` would put in (simulated); None when no connected item
 /// interface is at `pos`.
-#[allow(
-    dead_code,
-    reason = "for the logistics glue: chutes and funnels reach a moving contraption's storage through a stationary interface"
-)]
 pub fn psi_room(lv: &ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) -> Option<u32> {
     let key = psi_connected(lv, pos)?;
     let limit = slot_limit(lv, stack);
@@ -1362,10 +1397,6 @@ fn psi_transferred(dim: usize, pos: [i32; 3]) {
 /// and funnels put items in): into the storage of the contraption the interface at `pos` is
 /// connected to, onto the same items first. Err(stack) when no connected item interface is
 /// there; Ok(what did not fit).
-#[allow(
-    dead_code,
-    reason = "for the logistics glue: chutes and funnels reach a moving contraption's storage through a stationary interface"
-)]
 pub fn psi_insert(
     lv: &ServerLevel<'_>,
     pos: [i32; 3],
@@ -1422,10 +1453,6 @@ pub fn psi_insert(
 /// `InterfaceItemHandler.extractItem` through `ItemHelper.extract` (up to `amount` of the first
 /// item `test` passes, gathered from the slots in order) from the storage of the contraption the
 /// interface at `pos` is connected to. Err(()) when no connected item interface is there.
-#[allow(
-    dead_code,
-    reason = "for the logistics glue: chutes and funnels reach a moving contraption's storage through a stationary interface"
-)]
 pub fn psi_extract(
     lv: &ServerLevel<'_>,
     pos: [i32; 3],

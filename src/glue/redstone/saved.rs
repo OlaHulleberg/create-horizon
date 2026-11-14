@@ -2,12 +2,12 @@
 //! (`links`) and brass diodes (`diodes`) beside the kinetic settings, and analog levers, smart
 //! observers and threshold switches under `create_redstone`.
 
+use crate::glue::items::filters;
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::filter::Filter;
 use create_engine::observe::{Observer, Switch};
-use mod_api::{Compound, ItemStack, Tag};
-use std::rc::Rc;
+use mod_api::{Compound, Tag};
 
 /// Reads what `save` wrote, before the column's blocks are found.
 pub(super) fn load(lv: &mut ServerLevel<'_>, data: &Compound) {
@@ -116,36 +116,16 @@ fn diodes_from_nbt(data: &Compound) -> Vec<([i32; 3], (i32, i32))> {
         .collect()
 }
 
-/// A detector's filter as saved: the stack it came from when the glue kept one, else its plain
-/// item's id, or "" for none.
+/// A detector's filter as saved: its stack (`filters::filter_to_nbt`), or "" for none (legacy
+/// `filter_to_nbt` of the items glue).
 fn filter_to_nbt(lv: &ServerLevel<'_>, f: Option<&Filter>) -> Tag {
-    let Some(f) = f else {
-        return Tag::String("".into());
-    };
-    if let Some(c) = f.source::<ItemStack>().and_then(|s| s.to_nbt(&*lv.host)) {
-        return Tag::Compound(c);
-    }
-    match &f.kind {
-        create_engine::filter::Kind::Item { item, .. } => Tag::String((&**item).into()),
-        _ => Tag::String("".into()),
-    }
+    f.and_then(|f| filters::filter_to_nbt(&*lv.host, f))
+        .unwrap_or_else(|| Tag::String("".into()))
 }
 
-/// What `filter_to_nbt` wrote. A saved stack is kept as the filter's source (given back as it
-/// was) and tested as its item: a filter item's settings are the items port's reading.
+/// What `filter_to_nbt` wrote, read as a filter item is (`filters::filter_from_nbt`).
 fn filter_from_nbt(lv: &ServerLevel<'_>, tag: &Tag) -> Option<Filter> {
-    match tag {
-        Tag::String(s) => {
-            let item = s.to_string_lossy();
-            (!item.is_empty()).then(|| Filter::item(&item))
-        }
-        Tag::Compound(c) => {
-            let stack = ItemStack::from_nbt(&*lv.host, c)?;
-            let id = stack.item().id(&*lv.host);
-            Some(Filter::item(&id).with_source(Rc::new(stack)))
-        }
-        _ => None,
-    }
+    filters::filter_from_nbt(&*lv.host, tag)
 }
 
 /// Analog levers, smart observers and threshold switches saved with a column

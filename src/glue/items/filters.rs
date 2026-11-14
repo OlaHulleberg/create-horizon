@@ -5,11 +5,13 @@
 //! screens. A filter's settings are kept in the stack's custom data under Create's component
 //! names, its list as `ItemContainerContents` (`Slot` and the stack's own NBT).
 //!
-//! Left out: the attributes that read a recipe book (`washable`, `hauntable`, `crushable`,
-//! `smeltable`, `smokable`, `blastable`), which are the processing port's (its recipes), and
-//! `max_enchanted`, which needs each enchantment's maximum level (the host answers it on the
-//! client only, `ItemsClientHost::enchantments`): those test false.
+//! The attributes that read a recipe book (`washable`, `hauntable`, `crushable`, `smeltable`,
+//! `smokable`, `blastable`) ask processing's recipes.
+//!
+//! Left out: `max_enchanted`, which needs each enchantment's maximum level (the host answers it
+//! on the client only, `ItemsClientHost::enchantments`): it tests false.
 
+use super::super::processing::recipes::{self, Recipes};
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::{creative, custom, give_back, held, set_custom, set_held, set_slot, slot_stack};
@@ -289,10 +291,26 @@ impl Probe for Looked<'_> {
                 });
                 generation == *g
             }
-            // The recipe attributes and `max_enchanted`: see the module's doc.
+            // The attributes that read a recipe book: processing's recipes (none read yet, or
+            // off the server thread: false).
+            Attribute::Washable => recipe(&self.id, |r| &r.splashing),
+            Attribute::Hauntable => recipe(&self.id, |r| &r.haunting),
+            Attribute::Crushable => {
+                recipe(&self.id, |r| &r.crushing) || recipe(&self.id, |r| &r.milling)
+            }
+            Attribute::Smeltable => recipe(&self.id, |r| &r.smelting),
+            Attribute::Smokable => recipe(&self.id, |r| &r.smoking),
+            Attribute::Blastable => recipe(&self.id, |r| &r.blasting),
+            // `max_enchanted`: see the module's doc.
             _ => false,
         }
     }
+}
+
+/// Whether a recipe of the book `pick` takes `item` alone (`RecipeManager.getRecipeFor` with
+/// the item's single-slot input, as the legacy glue read Create's recipe store).
+fn recipe(item: &str, pick: fn(&Recipes) -> &create_engine::processing::Book) -> bool {
+    recipes::with(|r| pick(r).find_single(item).is_some()) == Some(true)
 }
 
 /// `FilteringBehaviour.test(stack)`: anything with no filter.

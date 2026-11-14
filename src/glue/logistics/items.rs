@@ -2,6 +2,7 @@
 //! game holds `ItemStack`s in block entity slots and in other mods' and vanilla's containers,
 //! reached through the `ITEMS` capability in transactions.
 
+use super::super::contraptions::actors;
 use super::super::server::ServerLevel;
 use create_engine::kinetics::Dir;
 use mod_api::{
@@ -170,13 +171,19 @@ fn insert_stacked(
 
 /// Puts `stack` into the container at `pos` through its side `side`
 /// (`ItemHandlerHelper.insertItemStacked`, as Create's chutes and funnels insert). What did not
-/// fit; all of it when nothing there takes items.
+/// fit; all of it when nothing there takes items. A portable storage interface puts it into its
+/// contraption's storage while connected (`InterfaceItemHandler`, contraptions' `psi_insert`:
+/// that storage is no journaled container).
 pub fn insert_item(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     side: Direction,
     stack: ItemStack,
 ) -> Option<ItemStack> {
+    let stack = match actors::psi_insert(lv, pos, stack) {
+        Ok(left) => return left,
+        Err(stack) => stack,
+    };
     let Some(to) = items_at(lv, pos, Some(side)) else {
         return Some(stack);
     };
@@ -200,6 +207,9 @@ pub fn insert_room(
     side: Direction,
     stack: &ItemStack,
 ) -> Option<u32> {
+    if let Some(room) = actors::psi_room(lv, pos, stack) {
+        return Some(room);
+    }
     let to = items_at(lv, pos, Some(side))?;
     let resource = ItemResource::of(stack);
     let limit = u32::from(stack_limit(&*lv.host, &id_of(&*lv.host, stack)));
@@ -249,17 +259,21 @@ pub fn extract_matching(
     resource.to_stack(taken)
 }
 
-/// Up to `max` of the first item the container at `pos` gives through `side`; None when there
-/// is no container or nothing to take.
+/// Up to `max` of the first item `test` passes the container at `pos` gives through `side`;
+/// None when there is no container or nothing to take. A connected portable storage interface
+/// gives from its contraption's storage (contraptions' `psi_extract`).
 pub fn take_from(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     side: Direction,
-    test: impl Fn(&mut dyn ServerHost, &ItemResource) -> bool,
+    test: impl Fn(&ItemStack) -> bool,
     max: u32,
 ) -> Option<ItemStack> {
+    if let Ok(taken) = actors::psi_extract(lv, pos, &test, max) {
+        return taken;
+    }
     let from = items_at(lv, pos, Some(side))?;
-    extract_matching(lv, &from, test, max)
+    extract_matching(lv, &from, |_, r| test(r.as_stack()), max)
 }
 
 /// An item entity of `stack` at `at`, moving `motion` blocks a tick, picked up after

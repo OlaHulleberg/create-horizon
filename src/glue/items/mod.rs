@@ -20,9 +20,7 @@
 
 mod belt_connector;
 mod fertilizer;
-// The filter slots' helpers are for the subsystems whose blocks hold one (logistics, redstone,
-// contraptions): unused until those are merged with this one.
-#[allow(dead_code)]
+// The filter slots' helpers, for the subsystems whose blocks hold one.
 pub(crate) mod filters;
 mod nugget;
 mod sword;

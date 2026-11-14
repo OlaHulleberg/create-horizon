@@ -3,6 +3,7 @@
 //! handles to clients, and the debug commands standing in for the switch's screen.
 
 use super::block_at;
+use crate::glue::items::filters;
 use crate::glue::net;
 use crate::glue::persist;
 use crate::glue::server::{ServerLevel, UPDATE_CLIENTS, update_all};
@@ -82,8 +83,8 @@ pub(super) fn use_lever(lv: &mut ServerLevel<'_>, pos: [i32; 3], back: bool, wre
 }
 
 /// A click on a smart observer or threshold switch: on its filter slot
-/// (`FilteredDetectorFilterSlot`, `FilteringBehaviour.onShortInteract`) the held item becomes
-/// its filter, an empty hand clears it; elsewhere a switch opens its screen (none here: the
+/// (`FilteredDetectorFilterSlot`, `FilteringBehaviour.onShortInteract`) the held stack becomes
+/// its filter (`filters::take_filter`), an empty hand clears it; elsewhere a switch opens its screen (none here: the
 /// thresholds are set with `/create_debug threshold`), which takes the click all the same.
 /// True when it was taken.
 pub(super) fn use_detector(
@@ -113,14 +114,24 @@ pub(super) fn use_detector(
             _ => false,
         };
     if on_slot {
-        // The held item is the filter; a configured filter item is the items port's reading.
-        let filter = held.map(Filter::item);
+        let Some(player) = lv.host.player(click.player) else {
+            return true;
+        };
+        // `FilteringBehaviour.onShortInteract`: the hand's stack becomes the filter (a filter
+        // item taken from it), the one it held goes back, with the frame sound.
+        let filter = filters::take_filter(lv.host, player, click.hand);
         let dim = lv.dim;
-        let set = with_world(|w| w.dims[dim].detectors.set_filter(pos, filter));
-        if matches!(set, Some(Ok(_))) {
-            persist::mark_pos_unsaved(dim, pos);
-        }
-        lv.play_block_sound("minecraft:entity.item_frame.add_item", pos, 0.25, 0.1);
+        let old = with_world(|w| w.dims[dim].detectors.set_filter(pos, filter));
+        let old = match old {
+            Some(Ok(old)) => {
+                persist::mark_pos_unsaved(dim, pos);
+                old
+            }
+            // No detector there: the filter taken goes back.
+            Some(Err(back)) => back,
+            None => None,
+        };
+        filters::return_filter(lv, player, pos, old);
         return true;
     }
     // ThresholdSwitchBlock.useItemOn: SUCCESS (the screen, on the client).
@@ -312,7 +323,11 @@ fn look(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) {
     match block {
         Block::ContentObserver => {
             let (seen, watch) = seen_at(lv, target, filter.is_some());
-            let found = observe::observe(filter.as_ref(), &seen);
+            let passes = filters::Detector {
+                host: &*lv.host,
+                filter: filter.as_ref(),
+            };
+            let found = observe::observe(&passes, &seen);
             let effect = with_world(|w| {
                 let d = &mut w.dims[dim].detectors;
                 d.watch(pos, watch, now);
@@ -327,7 +342,11 @@ fn look(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) {
         }
         Block::StockpileSwitch => {
             let (seen, watch) = seen_at(lv, target, false);
-            let reading = observe::fill_level(filter.as_ref(), &seen);
+            let passes = filters::Detector {
+                host: &*lv.host,
+                filter: filter.as_ref(),
+            };
+            let reading = observe::fill_level(&passes, &seen);
             // A belt is no inventory: the switch looks at it as at any other block.
             let watch = if watch == Watch::Belt {
                 Watch::Notified

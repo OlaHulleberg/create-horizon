@@ -38,8 +38,6 @@
 //! - **Taking the controls' keys from the game** is done with `movement_input` (the player
 //!   neither walks, jumps nor sneaks), as Create's `setDown(false)` does; `input_key` can't
 //!   consume a key, so a key bound to something else still does it.
-//! - **A track observer's cargo filter slot** (`use_observer`, `create_items::take_filter`): the
-//!   filter items are the item subsystem's; an observer here is never filtered.
 
 pub mod assembly;
 mod carts;
