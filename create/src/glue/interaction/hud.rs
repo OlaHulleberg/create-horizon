@@ -24,7 +24,7 @@ pub(super) fn value_tip(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
         .level(host.dimension())
         .and_then(|l| l.game_time(host))
         .unwrap_or(0);
-    let Some((pos, title)) = board::hovered_box(host) else {
+    let Some((pos, tip)) = board::hovered_box(host) else {
         TIP.set(None);
         return;
     };
@@ -42,13 +42,11 @@ pub(super) fn value_tip(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
     }
     let alpha = ((shown as f32 + 1.0) / 5.0).min(1.0);
     let a = ((alpha * 255.0) as u32).max(5) << 24;
-    let hint = host
-        .translate("create.gui.value_settings.hold_to_edit")
-        .unwrap_or_else(|| "Click and hold to edit".into());
-    let lines = [(title.to_owned(), 0xFB_DC7D), (hint, 0xFF_FFFF)];
+    // The title in Create's yellow, the rest white.
     let [width, height] = draw.size();
-    let mut y = height - 75.0 - lines.len() as f32 * 12.0;
-    for (text, rgb) in &lines {
+    let mut y = height - 75.0 - tip.len() as f32 * 12.0;
+    for (i, text) in tip.iter().enumerate() {
+        let rgb = if i == 0 { 0xFB_DC7D } else { 0xFF_FFFF };
         let w = draw.text_width(text);
         draw.text(text, [(width / 2.0 - w / 2.0).floor(), y], a | rgb, true);
         y += 12.0;

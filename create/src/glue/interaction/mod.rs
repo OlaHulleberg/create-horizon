@@ -78,6 +78,10 @@ impl Subsystem for Interaction {
         board::tick(host);
     }
 
+    fn camera_pose(&self, _host: &dyn ClientHost, event: &mut mod_api::CameraPoseEvent<'_>) {
+        board::camera_pose(event);
+    }
+
     fn mouse_scrolling(&self, host: &mut dyn ClientHost, event: &mut MouseScrollingEvent) -> Flow {
         board::wheel(host, event.accumulated[1])
     }

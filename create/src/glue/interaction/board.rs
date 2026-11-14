@@ -28,10 +28,21 @@ struct OpenBoard {
     pick: Settings,
     ticks: u32,
     /// Whether the server told the block's setting (the pick starts on it), and whether the
-    /// wheel moved the pick: a board that knows neither sends nothing.
+    /// wheel or the mouse moved the pick: a board that knows neither sends nothing.
     known: bool,
     moved: bool,
+    /// The view when the board opened: it stays there while the board is open, as Create's
+    /// screen takes the mouse (`camera_pose`), and the mouse moves `cursor` instead.
+    frozen: Option<[f32; 2]>,
+    /// The board's cursor (`ValueSettingsScreen`'s mouse), in GUI pixels: placed on the pick
+    /// when drawn first (None), moved by the mouse's turn, picking the nearest row and column.
+    cursor: Option<[f32; 2]>,
+    cursor_moved: bool,
 }
+
+/// GUI pixels the board's cursor moves for a degree the mouse would turn the view (vanilla's
+/// turn at the default sensitivity, `0.15°` a pixel, at a GUI scale of three).
+const CURSOR_PER_DEGREE: f32 = 2.2;
 
 /// The use press held on a value box (`ValueSettingsClient.interactHeldPos`,
 /// `interactHeldTicks`), and whether the server told its setting yet.
@@ -108,18 +119,55 @@ pub(super) fn values_from_server(data: &[u8]) {
     });
 }
 
-/// The value box under the crosshair, when the player may use it: its block and its board's
-/// title.
-pub(super) fn hovered_box(host: &dyn ClientHost) -> Option<([i32; 3], &'static str)> {
+/// The value box under the crosshair, when the player may use it: its block and its hover tip
+/// (its board's title and "Click and hold to edit"; a logistics filter slot's own lines).
+pub(super) fn hovered_box(host: &dyn ClientHost) -> Option<([i32; 3], Vec<String>)> {
     let Some(CrosshairTarget::Block { pos, hit, .. }) = host.crosshair_target() else {
         return None;
     };
     let pos = [pos.x, pos.y, pos.z];
     let player = host.local_player()?;
-    if !may_use_value_box(host, player) || !hits_value_box(host, pos, hit.face, hit.point) {
+    if !may_use_value_box(host, player) {
         return None;
     }
-    Some((pos, board_of(host, pos, false)?.board.title))
+    // `FilteringRenderer.tick`'s tip, with or without its amount board.
+    use crate::glue::logistics::amount;
+    if amount::client_filter_slot_hit(host, pos, hit.face, hit.point) {
+        return Some((pos, amount::client_tip(host, pos)));
+    }
+    if !hits_value_box(host, pos, hit.face, hit.point) {
+        return None;
+    }
+    let hint = host
+        .translate("create.gui.value_settings.hold_to_edit")
+        .unwrap_or_else(|| board::HOLD_TO_EDIT.into());
+    Some((
+        pos,
+        vec![board_of(host, pos, false)?.board.title.to_owned(), hint],
+    ))
+}
+
+/// The amount board's top value when the hit lands on a filter slot that shows one (a brass
+/// funnel's or smart chute's, `acceptsValueSettings`) and the main hand holds no wrench or arm
+/// (their use is the block's).
+fn filter_board_hit(
+    host: &dyn ClientHost,
+    pos: [i32; 3],
+    face: [i32; 3],
+    point: [f64; 3],
+) -> Option<i32> {
+    use crate::glue::logistics::amount;
+    let player = host.local_player()?;
+    let bypass = items::held(host, player, Hand::Main).is_some_and(|s| {
+        matches!(
+            s.item().id(host).as_str(),
+            "create:wrench" | "create:mechanical_arm"
+        )
+    });
+    if bypass || !amount::client_filter_slot_hit(host, pos, face, point) {
+        return None;
+    }
+    amount::client_shown(host, pos)
 }
 
 /// The value box under the crosshair, for its outline: the block, the side it is on and its
@@ -180,7 +228,8 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
         return Flow::Continue;
     };
     if may_use_value_box(&*host, player)
-        && hits_value_box(&*host, click.pos, click.hit.face, click.hit.point)
+        && (hits_value_box(&*host, click.pos, click.hit.face, click.hit.point)
+            || filter_board_hit(&*host, click.pos, click.hit.face, click.hit.point).is_some())
     {
         let idle = HOLD.with_borrow(Option::is_none) && BOARD.with_borrow(Option::is_none);
         if idle {
@@ -215,6 +264,8 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
 fn board_pick(b: Board, v: i32) -> Settings {
     if b.icons || b == board::EJECTOR {
         Settings { row: 0, value: v }
+    } else if b.title == board::FILTER_TITLE {
+        board::filter_settings(v)
     } else if b == board::DIODE {
         board::diode_settings(v)
     } else {
@@ -236,6 +287,11 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
         B::PulseRepeater | B::PulseExtender | B::PulseTimer => (board::DIODE, &[][..]),
         b if create_engine::dye::is_valve_handle(b) => (board::VALVE_HANDLE, &[][..]),
         B::WeightedEjector => (board::EJECTOR, &[][..]),
+        // `FilteringBehaviour.createBoard`, up to the filter's stack size.
+        B::BrassFunnel | B::BrassBeltFunnel | B::SmartChute => {
+            let max = crate::glue::logistics::amount::client_shown(host, pos)?;
+            (board::filter(max), &[][..])
+        }
         // `ScrollOptionBehaviour`s: a brass tunnel's `selectionMode`
         // (`logistics.when_multiple_outputs_available`), an arm's, the contraption blocks' modes.
         _ => {
@@ -268,6 +324,10 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
         }),
         // Round robin and any stack size, until the server says.
         (B::MechanicalArm | B::WeightedEjector, None) => 0,
+        // Up to a stack until the server says.
+        (B::BrassFunnel | B::BrassBeltFunnel | B::SmartChute, None) => {
+            board::FilterAmount::default().word(b.max)
+        }
         (_, None) => seen.unwrap_or_else(|| {
             create_engine::world::diode_kind(block).map_or(0, |k| k.default_delay())
         }),
@@ -280,7 +340,47 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
         ticks: 0,
         known,
         moved: false,
+        frozen: None,
+        cursor: None,
+        cursor_moved: false,
     })
+}
+
+/// While a board is open the camera keeps the view it opened on (`camera_pose`).
+pub(super) fn camera_pose(event: &mut mod_api::CameraPoseEvent<'_>) {
+    if let Some([yaw, pitch]) = BOARD.with_borrow(|b| b.as_ref().and_then(|o| o.frozen)) {
+        event.yaw = yaw;
+        event.pitch = pitch;
+    }
+}
+
+/// The mouse on an open board (`ValueSettingsScreen`'s cursor): the player's turn since the
+/// last tick moves the board's cursor, and the view goes back to where it was.
+fn track_mouse(host: &mut dyn ClientHost) {
+    let Some(player) = host.local_player() else {
+        return;
+    };
+    let Some([yaw, pitch]) = player.entity().rotation(&*host) else {
+        return;
+    };
+    let frozen = BOARD.with_borrow_mut(|b| {
+        let open = b.as_mut()?;
+        let [fy, fp] = *open.frozen.get_or_insert([yaw, pitch]);
+        let (dx, dy) = (yaw - fy, pitch - fp);
+        if (dx != 0.0 || dy != 0.0)
+            && let Some(c) = open.cursor.as_mut()
+        {
+            c[0] += dx * CURSOR_PER_DEGREE;
+            c[1] += dy * CURSOR_PER_DEGREE;
+            open.cursor_moved = true;
+        }
+        Some([fy, fp])
+    });
+    if let Some([fy, fp]) = frozen
+        && (fy != yaw || fp != pitch)
+    {
+        let _ = host.set_local_rotation(fy, fp);
+    }
 }
 
 /// The block under the crosshair when the hit lands on its active value box.
@@ -289,7 +389,9 @@ fn aimed_value_box(host: &dyn ClientHost) -> Option<[i32; 3]> {
         return None;
     };
     let pos = [pos.x, pos.y, pos.z];
-    hits_value_box(host, pos, hit.face, hit.point).then_some(pos)
+    let hit = hits_value_box(host, pos, hit.face, hit.point)
+        || filter_board_hit(host, pos, hit.face, hit.point).is_some();
+    hit.then_some(pos)
 }
 
 /// Whether the vanilla mapping `name` is held.
@@ -311,6 +413,9 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
         return;
     }
     let down = mapping_down(&*host, "key.use");
+    if down && BOARD.with_borrow(Option::is_some) {
+        track_mouse(host);
+    }
     let released = BOARD.with_borrow_mut(|b| {
         let open = b.as_mut()?;
         open.ticks += 1;
@@ -374,6 +479,8 @@ pub(super) fn wheel(host: &mut dyn ClientHost, steps: i32) -> Flow {
                 {
                     open.pick.value = column;
                     open.moved = true;
+                    // `setCursor(getCoordinateOfValue(..))`: the cursor follows.
+                    open.cursor = None;
                 }
             });
         }
@@ -410,8 +517,8 @@ fn opaque(rgb: u32) -> u32 {
 /// `ValueSettingsScreen.renderWindow`, with plain fills where Create draws its GUI sprites
 /// (`AllGuiTextures.VALUE_SETTINGS_*`). Whether a board is open.
 pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
-    let Some((b, names, pick, ticks)) =
-        BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.names, o.pick, o.ticks)))
+    let Some((b, names, ticks)) =
+        BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.names, o.ticks)))
     else {
         return false;
     };
@@ -419,6 +526,36 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
     let tw = |draw: &dyn DrawContext, s: &str| draw.text_width(s) as i32;
     let label = b.rows.iter().map(|r| tw(draw, r)).max().unwrap_or(0);
     let l = Layout::new(b, label, [width as i32, height as i32]);
+    // The cursor starts on the pick; once the mouse moves it, the pick is the nearest row and
+    // column to it (`getClosestCoordinate`, milestones only with shift held).
+    let shift = mapping_down(host, "key.sneak");
+    let pick = BOARD.with_borrow_mut(|o| {
+        let open = o.as_mut()?;
+        match open.cursor {
+            None => open.cursor = Some(l.coordinate(open.pick.row, open.pick.value)),
+            Some(c) if open.cursor_moved => {
+                let closest = l.closest([c[0] as i32, c[1] as i32], shift);
+                // Kept within the board, so moving back comes back at once.
+                let last = b.rows.len() as i32 - 1;
+                let [x0, y0] = l.coordinate(0, 0);
+                let [x1, y1] = l.coordinate(last.max(0), b.max);
+                open.cursor = Some([
+                    c[0].clamp(x0 - 4.0, x1 + 4.0),
+                    c[1].clamp(y0 - 6.0, y1 + 6.0),
+                ]);
+                if closest != open.pick {
+                    open.pick = closest;
+                    open.moved = true;
+                }
+                open.cursor_moved = false;
+            }
+            Some(_) => {}
+        }
+        Some(open.pick)
+    });
+    let Some(pick) = pick else {
+        return false;
+    };
     let key = host
         .mapping("key.use")
         .ok()
@@ -435,6 +572,8 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
                 .to_owned()
         } else if b == board::EJECTOR {
             board::ejector_text(s)
+        } else if b.title == board::FILTER_TITLE {
+            board::filter_text(s, b.max)
         } else if b == board::DIODE {
             board::diode_text(s)
         } else if b == board::VALVE_HANDLE {

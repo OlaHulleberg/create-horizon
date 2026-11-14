@@ -184,7 +184,11 @@ pub fn deployer_on_belt(
         return Process::Pass;
     }
     let tool = d.held.as_ref().map(|h| h.0.clone()).unwrap_or_default();
-    let (sequenced, recipe) = recipe_for(&item.item, item.progress.as_ref(), &tool);
+    let (sequenced, recipe) = recipe_for(
+        create_engine::arm::item_id(&item.item),
+        item.progress.as_ref(),
+        &tool,
+    );
     match deployer::on_depot(&d, rpm, locked, recipe.is_some()) {
         Depot::Pass => Process::Pass,
         Depot::Hold => Process::Hold,

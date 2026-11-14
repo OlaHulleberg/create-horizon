@@ -13,7 +13,7 @@
 
 use super::server::ServerLevel;
 use mod_api::{
-    AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityInteractEvent,
+    AttackEntityEvent, BreakBlockEvent, CameraPoseEvent, ClientHost, Compound, EntityInteractEvent,
     EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
     InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
     LeftClickBlockEvent, LevelSaveEvent, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent,
@@ -251,6 +251,9 @@ pub trait Subsystem: Sync {
 
     /// `Hooks::input_key`, on the client.
     fn input_key(&self, _host: &mut dyn ClientHost, _event: &mut InputKeyEvent<'_>) {}
+
+    /// `Hooks::camera_pose`, on the client: the camera's turn this frame.
+    fn camera_pose(&self, _host: &dyn ClientHost, _event: &mut CameraPoseEvent<'_>) {}
 
     /// `Hooks::mouse_scrolling`, on the client: `Flow::Cancel` when the scroll was taken.
     fn mouse_scrolling(

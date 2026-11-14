@@ -8,7 +8,7 @@
 //! depots, ejectors and stations, belts, chutes, funnels, basins, millstones, crafters,
 //! deployers, blaze burners, crushing wheels, packagers, saws facing up, campfires,
 //! composters, jukeboxes (the arm dances while one plays) and respawn anchors. Stacks keep their
-//! components through an arm or ejector (`items::key_of`), which belts still cannot carry.
+//! components through an arm or ejector (`items::key_of`), onto belts too.
 //! The weighted ejector's target outline and arc are drawn as `EjectorTargetHandler` draws them.
 //!
 //! Left out: the rainbow tint of a dancing arm (a partial block is drawn untinted), goggles on
@@ -454,7 +454,7 @@ impl arm::World for ArmWorld<'_, '_> {
                 let record = peek(lv, pos, up)?;
                 let out = (items::key_of(&*lv.host, &record), 1);
                 if !simulate {
-                    items::take_from(lv, pos, up, |_| true, 1)?;
+                    items::take_from(lv, pos, up, |_| true, 1, false)?;
                 }
                 Some(out)
             }
@@ -465,7 +465,7 @@ impl arm::World for ArmWorld<'_, '_> {
                 let n = (s.count().min(255) as u8).min(amount);
                 let out = (items::key_of(&*lv.host, &s), n);
                 if !simulate {
-                    items::take_from(lv, pos, side, |_| true, u32::from(n))?;
+                    items::take_from(lv, pos, side, |_| true, u32::from(n), false)?;
                 }
                 Some(out)
             }
@@ -491,8 +491,7 @@ impl arm::World for ArmWorld<'_, '_> {
         match p.kind {
             Kind::Depot => depot_insert(lv, pos, item, count, simulate),
             // ItemHandlerBeltSegment.insertItem: onto the segment from above while nothing just
-            // put there is in the way. The belts carry items without components only.
-            Kind::Belt if item.contains('#') => count,
+            // put there is in the way.
             Kind::Belt => put_on_from_above(lv, pos, item, count, None, simulate).unwrap_or(count),
             // ChuteItemHandler: while it is empty and takes the item, a stack from the top.
             Kind::Chute => {
@@ -1073,7 +1072,7 @@ impl ejector::World for EjectorWorld<'_, '_> {
         let taken: Vec<(String, u8)> = slots
             .iter()
             .flatten()
-            .map(|s| (items::id_of(&*self.lv.host, s), s.count().min(255) as u8))
+            .map(|s| (items::key_of(&*self.lv.host, s), s.count().min(255) as u8))
             .collect();
         if !taken.is_empty() {
             let clear = (0..create_engine::depot::SLOTS as u32).map(|i| (i, None));

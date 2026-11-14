@@ -692,16 +692,17 @@ fn fan_on_belt(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) {
     let max = |i: &str| stacks::limit(host, i);
     let dirty = recipes::with(|r| {
         inv.apply_within(index + 0.5, 0.51, |it| {
-            let fire_resistant = stacks::key(host, &it.item).is_some_and(|k| {
+            // A stack with components (named by them) is processed as its item.
+            let id = create_engine::arm::item_id(&it.item);
+            let fire_resistant = stacks::key(host, id).is_some_and(|k| {
                 host.item_default_component(k, "minecraft:damage_resistant")
                     .is_some()
             });
-            let can = fan::can_process(kind, &it.item, fire_resistant, r.fan());
+            let can = fan::can_process(kind, id, fire_resistant, r.fan());
             if !fan::advance(&mut it.fan, kind, u32::from(it.count), can) {
                 return belt::Process::Pass;
             }
-            let Some(results) = fan::process(kind, &it.item, it.count, r.fan(), max, &mut rng)
-            else {
+            let Some(results) = fan::process(kind, id, it.count, r.fan(), max, &mut rng) else {
                 return belt::Process::Pass;
             };
             let outputs = results

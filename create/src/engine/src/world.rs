@@ -318,6 +318,10 @@ pub struct Dimension {
     pub chute_pulls: crate::chute::Pulls,
     /// Smart chutes' filters, saved with their column.
     pub chute_filters: HashMap<[i32; 3], crate::filter::Filter>,
+    /// The amount boards of brass funnels' and smart chutes' filter slots that were set (the
+    /// others take up to a stack), saved with their column and kept by the same blocks as
+    /// `chute_filters`.
+    pub filter_amounts: HashMap<[i32; 3], crate::board::FilterAmount>,
     /// Chutes whose shape or facing is looked at again after the tick
     /// (`AbstractChuteBlock.updateDiagonalNeighbour` and `onRemove` schedule them a tick).
     pub chute_shapes: Vec<[i32; 3]>,
@@ -1238,6 +1242,9 @@ impl CreateWorld {
         if family(kind(old)).is_some() && family(kind(new)) != family(kind(old)) {
             let d = &mut self.dims[dim];
             d.chute_pulls.forget(pos);
+            if d.filter_amounts.remove(&pos).is_some() {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if let Some(f) = d.chute_filters.remove(&pos) {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
                 if f.is_filter_item() {
@@ -1677,6 +1684,8 @@ impl CreateWorld {
             d.ejecting.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chute_pulls.column_unloaded(cx, cz);
             d.chute_filters
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.filter_amounts
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             let out = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) != (cx, cz);
             d.psis.retain(|p, _| out(p));

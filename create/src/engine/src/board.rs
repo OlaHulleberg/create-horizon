@@ -639,9 +639,134 @@ pub fn valve_text(s: Settings) -> String {
     format!("{}\u{b0}", number(s.value.abs().max(1)))
 }
 
+/// `logistics.filter.extracted_amount`: a filter slot's board's title.
+pub const FILTER_TITLE: &str = "Extracted Amount";
+
+/// `FilteringBehaviour.createBoard`: "Up to" and "Exactly" rows of 0 to `max` (the filter's
+/// stack size, `getMaxStackSize`), a milestone every 16.
+pub const fn filter(max: i32) -> Board {
+    Board {
+        title: FILTER_TITLE,
+        max,
+        milestone: 16,
+        rows: &["Up to", "Exactly"],
+        icons: false,
+    }
+}
+
+/// `FilteringBehaviour`'s `count` and `upTo`: how much a brass funnel or smart chute takes at
+/// once (`FilterAmount`, `UpTo`). Without a setting (`count` 0, as read from an empty save) it
+/// is up to the filter's stack size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FilterAmount {
+    /// 0: the filter's stack size.
+    pub count: u8,
+    pub up_to: bool,
+}
+
+/// `FilteringBehaviour`'s `count = 64, upTo = true`: up to a stack.
+impl Default for FilterAmount {
+    fn default() -> FilterAmount {
+        FilterAmount {
+            count: 0,
+            up_to: true,
+        }
+    }
+}
+
+impl FilterAmount {
+    /// `FilteringBehaviour.read`: `count` 0 is up to a stack.
+    pub fn new(count: u8, up_to: bool) -> FilterAmount {
+        FilterAmount {
+            count,
+            up_to: up_to || count == 0,
+        }
+    }
+
+    /// The count, `max` (the filter's stack size) for none.
+    pub fn count(self, max: i32) -> i32 {
+        if self.count == 0 {
+            max
+        } else {
+            i32::from(self.count)
+        }
+    }
+
+    /// `getValueSettings`.
+    pub fn settings(self, max: i32) -> Settings {
+        Settings {
+            row: if self.up_to { 0 } else { 1 },
+            value: self.count(max),
+        }
+    }
+
+    /// `setValueSettings`: `count` within 1 and `max`, "Up to" on the first row.
+    pub fn from_settings(s: Settings, max: i32) -> FilterAmount {
+        FilterAmount {
+            count: s.value.clamp(1, max.clamp(1, 255)) as u8,
+            up_to: s.row == 0,
+        }
+    }
+
+    /// `setFilter`: an exact count fits the new filter's stack size (`max`).
+    pub fn fitted(self, max: i32) -> FilterAmount {
+        if self.up_to || self.count == 0 {
+            return self;
+        }
+        FilterAmount {
+            count: (i32::from(self.count).min(max.max(1))) as u8,
+            ..self
+        }
+    }
+
+    /// The value a `create:value` message carries for it: the row in the second byte.
+    pub fn word(self, max: i32) -> i32 {
+        let s = self.settings(max);
+        s.row << 8 | s.value
+    }
+}
+
+/// The settings a `create:value` word for a filter slot carries (`FilterAmount::word`).
+pub fn filter_settings(word: i32) -> Settings {
+    Settings {
+        row: (word >> 8) & 1,
+        value: word & 0xFF,
+    }
+}
+
+/// `FilteringBehaviour.formatValue`: "Any" for up to a whole stack, else `≤n` or `=n`.
+pub fn filter_text(s: Settings, max: i32) -> String {
+    if s.row == 0 && s.value == max {
+        return "Any".to_owned();
+    }
+    let sign = if s.row == 0 { '\u{2264}' } else { '=' };
+    format!("{sign}{}", s.value.max(1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_amounts_round_trip_through_the_board() {
+        let any = FilterAmount::default();
+        assert_eq!(any.settings(64), Settings { row: 0, value: 64 });
+        assert_eq!(filter_text(any.settings(64), 64), "Any");
+        assert_eq!(filter_text(any.settings(16), 16), "Any");
+        let exact = FilterAmount::from_settings(Settings { row: 1, value: 0 }, 64);
+        assert_eq!(exact, FilterAmount::new(1, false));
+        assert_eq!(filter_text(exact.settings(64), 64), "=1");
+        let up = FilterAmount::from_settings(Settings { row: 0, value: 20 }, 64);
+        assert_eq!(filter_text(up.settings(64), 64), "\u{2264}20");
+        assert_eq!(filter_settings(up.word(64)), up.settings(64));
+        assert_eq!(filter_settings(exact.word(64)), exact.settings(64));
+        // An exact count fits a smaller stack; up to stays.
+        assert_eq!(FilterAmount::new(40, false).fitted(16).count, 16);
+        assert_eq!(FilterAmount::new(40, true).fitted(16).count, 40);
+        assert!(FilterAmount::new(0, false).up_to);
+        let b = filter(64);
+        assert_eq!((b.milestone_count(), b.scale()), (5, 2));
+    }
 
     fn motor(label: i32) -> Layout {
         Layout {

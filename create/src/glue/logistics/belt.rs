@@ -33,10 +33,10 @@ pub fn belt_segment(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<([i32; 3], i3
 
 /// `BeltBlock.useItemOn` for a player who may build and is not sneaking, clicked on `hit` (the
 /// face and the point): a wrench or a belt connector slices the belt (`slicer`), a dye or water
-/// colours or washes it, an empty main hand takes the segment's items (`use_belt`), a shaft makes
-/// a middle segment a pulley (used up outside creative), a casing cases the segment
-/// (`setCasingType`, nothing used up). True when the click was the belt's. Packages are not in
-/// the port.
+/// (a bucket or a bottle, `held` naming a potion with its contents) colours or washes it, an
+/// empty main hand takes the segment's items (`use_belt`), a shaft makes a middle segment a
+/// pulley (used up outside creative), a casing cases the segment (`setCasingType`, nothing used
+/// up). True when the click was the belt's.
 pub fn use_belt_with(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
@@ -284,6 +284,22 @@ pub fn use_belt(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> bool {
         }
     }
     true
+}
+
+/// How a belt names `stack` (`belt_stack` turns it back): a sequenced assembly's transitional
+/// item by its id with its progress apart (legacy `belt_stack`), any other by `items::key_of`,
+/// its components kept (a package, a potion, a named or damaged item).
+pub fn belt_name(
+    host: &dyn mod_api::Host,
+    stack: &ItemStack,
+) -> (String, Option<create_engine::sequenced::Progress>) {
+    let progress = (!stack.is_damaged())
+        .then(|| crate::glue::processing::sequenced_progress(stack))
+        .flatten();
+    match progress {
+        Some(p) => (items::id_of(host, stack), Some(p)),
+        None => (items::key_of(host, stack), None),
+    }
 }
 
 /// A belt item as a stack, its sequenced assembly progress with it (legacy `belt_stack`).

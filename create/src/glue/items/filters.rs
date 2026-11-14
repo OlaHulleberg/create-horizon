@@ -324,11 +324,19 @@ pub(crate) fn passes(host: &dyn Host, filter: Option<&Filter>, stack: &ItemStack
     filter.is_none_or(|f| f.test(&Looked::new(host, stack)))
 }
 
-/// The same for an item without components (on a belt, a block's item).
+/// The same for an item as a belt names it (`logistics::items::key_of`: a plain id, or one
+/// with its components).
 pub(crate) fn passes_item(host: &dyn Host, filter: Option<&Filter>, item: &str) -> bool {
     let Some(f) = filter else {
         return true;
     };
+    // A stack with components is tested as itself.
+    if item.contains(['#', '|']) {
+        return match crate::glue::logistics::items::stack_of(host, item, 1) {
+            Some(stack) => passes(host, filter, &stack),
+            None => f.test(item),
+        };
+    }
     // A plain item filter needs no stack.
     if matches!(f.kind, filter::Kind::Item { .. }) {
         return f.test(item);

@@ -359,6 +359,16 @@ pub(super) fn value_settings_from_client(
             }
             Some(Some(scroll_option(&lv, pos, block)))
         }
+        // `FilteringBehaviour`: a short click sets the filter, a pick its amount.
+        B::BrassFunnel | B::BrassBeltFunnel | B::SmartChute => {
+            Some(crate::glue::logistics::amount::value_settings(
+                &mut lv,
+                pos,
+                player,
+                pick,
+                short.is_some(),
+            ))
+        }
         // `BrassDiodeScrollValueBehaviour`: `onShortInteract` toggles the diode (`toggle`: not
         // with a wrench; sneaking and no building were never a short click); `setValueSettings`
         // sets its delay.

@@ -34,8 +34,9 @@
 //! - Item vaults' connected textures (`ItemVaultCTBehaviour`) are not drawn: a vault is a terrain
 //!   model per block, and drawing one by its block entity would need a UV shift per face of one
 //!   model (`TerrainModelOptions` takes one sprite's).
-//! - A filter slot's amount board (`FilteringBehaviour`'s "up to" / "exactly" count) is not in
-//!   the port: brass funnels and smart chutes move up to a stack of what their filter passes.
+//! - A filter slot's amount board (`amount`) is opened by a held use as Create's; a smart chute's
+//!   client takes its stacks to fall when it decides whether to hold (the server decides by the
+//!   fans' real pull), and a portable storage interface gives up to the amount, never exactly.
 //! - A brass tunnel's mode value box and the comparators beside a vault's other blocks are the
 //!   interaction and redstone subsystems'.
 //!
@@ -43,6 +44,7 @@
 //! handlers and the renderer to it. Belts' segments and pulleys are posed partials that
 //! `kinetics::draw_part` leaves to this renderer.
 
+pub(crate) mod amount;
 pub mod arms;
 mod belt;
 mod chute;
@@ -139,9 +141,26 @@ impl Subsystem for Logistics {
         let side_filters = tunnel_filters_from_nbt(&*lv.host, data);
         let belts = belts_from_nbt(data);
         let brass = brass_from_nbt(data);
+        let amounts: Vec<([i32; 3], create_engine::board::FilterAmount)> =
+            match data.get(&FILTER_AMOUNTS.into()) {
+                Some(Tag::IntArray(v)) => v
+                    .as_chunks::<5>()
+                    .0
+                    .iter()
+                    .map(|a| {
+                        let amount = create_engine::board::FilterAmount::new(
+                            a[3].clamp(0, 255) as u8,
+                            a[4] != 0,
+                        );
+                        ([a[0], a[1], a[2]], amount)
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
         let dim = lv.dim;
         with_world(|w| {
             w.dims[dim].vaults.load(vaults.into_iter());
+            w.dims[dim].filter_amounts.extend(amounts);
             w.dims[dim].chute_filters.extend(filters);
             w.dims[dim].tunnel_filters.extend(side_filters);
             w.load_belt_items(dim, belts.into_iter());
@@ -182,6 +201,21 @@ impl Subsystem for Logistics {
             return;
         };
         vaults_to_nbt(&*lv.host, data, &vaults, &filters);
+        // `FilterAmount` and `UpTo` of the filter slots set: x, y, z, count, up to.
+        let mut amounts: Vec<[i32; 5]> = with_world(|w| {
+            w.dims[dim]
+                .filter_amounts
+                .iter()
+                .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == (cx, cz))
+                .map(|(p, a)| [p[0], p[1], p[2], i32::from(a.count), i32::from(a.up_to)])
+                .collect()
+        })
+        .unwrap_or_default();
+        if !amounts.is_empty() {
+            amounts.sort();
+            let flat = amounts.into_iter().flatten().collect();
+            data.insert(FILTER_AMOUNTS.into(), Tag::IntArray(flat));
+        }
         if !belts.is_empty() {
             data.insert("belts".into(), belts_to_nbt(&belts));
         }
@@ -384,6 +418,9 @@ pub(crate) const BELT_COLOR: &str = "Dye";
 pub(crate) const BELT_CASING: &str = "Casing";
 pub(crate) const BELT_COVERED: &str = "Covered";
 
+/// The key of the filter slots' amounts in a column's saved data.
+const FILTER_AMOUNTS: &str = "filter_amounts";
+
 /// Shows filter `filter` in the slot of the block at `pos` (`FILTER`).
 pub(crate) fn show_filter(
     lv: &mut ServerLevel<'_>,
@@ -525,14 +562,21 @@ fn use_block(
             funnel::use_funnel_filter(&mut lv, pos, click)
         }
         Block::BrassTunnel => tunnel::use_tunnel_filter(&mut lv, pos, click),
-        Block::Belt => belt::use_belt_with(
-            &mut lv,
-            pos,
-            click.player,
-            click.hand,
-            held.as_deref(),
-            (Dir::ALL[face as usize], click.hit.point),
-        ),
+        Block::Belt => {
+            // A potion named with its contents: a water bottle washes the belt as water does.
+            let potion = click
+                .stack
+                .map(|s| items::key_of(&*lv.host, s))
+                .filter(|k| create_engine::tank::split_potion_item(k).is_some());
+            belt::use_belt_with(
+                &mut lv,
+                pos,
+                click.player,
+                click.hand,
+                potion.or(held).as_deref(),
+                (Dir::ALL[face as usize], click.hit.point),
+            )
+        }
         _ => false,
     };
     used.then_some(InteractionResult::Success)
@@ -695,14 +739,6 @@ fn item_landed(
         (_, Some(b @ (Block::AndesiteFunnel | Block::BrassFunnel))) => (pos, b),
         _ => return,
     };
-    // A depot and a chute hold the whole stack, components and all; a belt carries items
-    // without them, but for a sequenced assembly's transitional item (its progress with it).
-    let progress = (block == Block::Belt && !s.is_damaged())
-        .then(|| crate::glue::processing::sequenced_progress(&s))
-        .flatten();
-    if block == Block::Belt && items::has_components(&s) && progress.is_none() {
-        return;
-    }
     match block {
         Block::Chute | Block::SmartChute => {
             if chute::chute_take(lv, spot, &s) {
@@ -748,7 +784,9 @@ fn item_landed(
             with_world(|w| w.depot_put(dim, spot, Some(held)));
         }
         _ => {
-            let id = items::id_of(&*lv.host, &s);
+            // A belt carries the stack by its name, components and all (a sequenced
+            // assembly's progress apart).
+            let (id, progress) = belt::belt_name(&*lv.host, &s);
             let count = s.count().min(u32::from(items::stack_limit(&*lv.host, &id))) as u8;
             if let Some(left) = belt::put_on_from_above(lv, spot, &id, count, progress, false)
                 && left < count

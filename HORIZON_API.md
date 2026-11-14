@@ -178,8 +178,7 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   block entities other than mounted storage (chests, barrels, vaults, toolboxes) keep only their block (a
   depot's item, a deployer's held item, a tank's fluid are not carried).
 - Fluids: creative fluid tanks stay one block each (Create's join into tanks up to 3 wide); potion fluids
-  keep registered potions only (custom effects are lost), and belts carry only the potions a spout fills on
-  them (the logistics glue keeps no components on belts); the boiler's gauge is drawn at its level without
+  keep registered potions only (custom effects are lost); the boiler's gauge is drawn at its level without
   its swing, and its steam sounds are not played; glass pipes show a steady stream, not its growth, and open
   pipe ends have no flow particles.
 
