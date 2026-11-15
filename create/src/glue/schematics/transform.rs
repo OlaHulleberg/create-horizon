@@ -150,7 +150,7 @@ fn floor(v: Vec3) -> [i32; 3] {
 
 /// `SchematicTransformation`.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct Transformation {
+pub(super) struct Placing {
     chasing: Vec3,
     prev_chasing: Vec3,
     target: [i32; 3],
@@ -161,9 +161,9 @@ pub(super) struct Transformation {
     z_origin: f64,
 }
 
-impl Default for Transformation {
+impl Default for Placing {
     fn default() -> Self {
-        Transformation {
+        Placing {
             chasing: [0.0; 3],
             prev_chasing: [0.0; 3],
             target: [0; 3],
@@ -176,7 +176,7 @@ impl Default for Transformation {
     }
 }
 
-impl Transformation {
+impl Placing {
     /// `init(anchor, settings, bounds)`: settled at the anchor, turned and mirrored as the item
     /// says, for a schematic of `size`.
     pub(super) fn init(
@@ -488,7 +488,7 @@ mod tests {
 
     /// The world box `SchematicHandler` would outline once settled: the corners of the
     /// schematic's own box carried by the transformation.
-    fn drawn(t: &Transformation, size: [i32; 3]) -> ([i32; 3], [i32; 3]) {
+    fn drawn(t: &Placing, size: [i32; 3]) -> ([i32; 3], [i32; 3]) {
         let mut min = [i32::MAX; 3];
         let mut max = [i32::MIN; 3];
         for c in 0..8 {
@@ -517,7 +517,7 @@ mod tests {
         )
     }
 
-    fn settle(t: &mut Transformation) {
+    fn settle(t: &mut Placing) {
         for _ in 0..200 {
             t.tick();
         }
@@ -532,7 +532,7 @@ mod tests {
         for size in EVEN {
             for r in Rotation::ALL {
                 for m in Mirror::ALL {
-                    let mut t = Transformation::default();
+                    let mut t = Placing::default();
                     t.init([10, 64, -20], r, m, size);
                     settle(&mut t);
                     assert_eq!(t.anchor(), [10, 64, -20], "{size:?} {r:?} {m:?}");
@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn turning_and_flipping_keep_the_drawn_box_on_the_printed_one() {
         for size in EVEN {
-            let mut t = Transformation::default();
+            let mut t = Placing::default();
             t.init([0, 64, 0], Rotation::None, Mirror::None, size);
             for step in 0..12 {
                 match step % 3 {
@@ -574,7 +574,7 @@ mod tests {
     /// and `getAnchor` adds the target before flooring), as the same sums give in Java.
     #[test]
     fn an_even_by_odd_half_turn_creeps_as_in_create() {
-        let mut t = Transformation::default();
+        let mut t = Placing::default();
         t.init(
             [10, 64, -20],
             Rotation::Clockwise180,
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn a_flip_both_ways_is_a_half_turn() {
-        let mut t = Transformation::default();
+        let mut t = Placing::default();
         t.init([0, 0, 0], Rotation::None, Mirror::None, [3, 1, 3]);
         t.flip_x();
         t.flip_z();
@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn the_chase_eases_in() {
-        let mut t = Transformation::default();
+        let mut t = Placing::default();
         t.init([0, 0, 0], Rotation::None, Mirror::None, [3, 1, 3]);
         t.flip_z();
         t.tick();
@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn a_world_point_comes_back_to_its_place_in_the_schematic() {
-        let mut t = Transformation::default();
+        let mut t = Placing::default();
         t.init([5, 70, 5], Rotation::Clockwise90, Mirror::None, [3, 4, 5]);
         let local = [1.25, 2.0, 3.5];
         let back = t.to_local(t.apply(local, 1.0), 1.0);

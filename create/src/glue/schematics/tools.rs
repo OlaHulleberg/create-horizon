@@ -17,7 +17,7 @@
 use super::super::net;
 use super::body;
 use super::quill::CHANNEL;
-use super::transform::{Transformation, trace_until};
+use super::transform::{Placing, trace_until};
 use create_engine::kinetics::Dir;
 use create_engine::schematic::{Mirror, Rotation, SchematicData};
 use mod_api::{
@@ -154,7 +154,7 @@ struct Handler {
     active: bool,
     deployed: bool,
     size: Option<[i32; 3]>,
-    transformation: Transformation,
+    transformation: Placing,
     tool: Tool,
     aim: Aim,
     screen: Selection,
@@ -171,7 +171,7 @@ impl Handler {
             active: false,
             deployed: false,
             size: None,
-            transformation: Transformation::default(),
+            transformation: Placing::default(),
             tool: Tool::Deploy,
             aim: Aim::default(),
             screen: Selection::new(vec![Tool::Deploy]),
@@ -203,7 +203,7 @@ impl Handler {
 
     /// `loadSettings` and `init`.
     fn init(&mut self, data: &SchematicData, creative: bool) {
-        self.transformation = Transformation::default();
+        self.transformation = Placing::default();
         self.deployed = data.deployed.unwrap_or(false);
         let anchor = data.anchor.unwrap_or([0; 3]);
         if let Some(size) = data.bounds {
