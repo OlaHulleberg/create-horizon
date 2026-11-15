@@ -8,6 +8,7 @@ use super::super::net;
 use super::super::states;
 use super::crank;
 use super::values::{self, SCROLL, VALUE_SETTINGS, may_use_value_box, value_box_hit};
+use crate::glue::stock::gauge_client as gauge;
 use create_engine::Block as B;
 use create_engine::board::{self, Board, Hold, Layout, Settings, Step};
 use create_engine::kinetics::Dir;
@@ -31,6 +32,8 @@ struct OpenBoard {
     /// wheel moved the pick: a board that knows neither sends nothing.
     known: bool,
     moved: bool,
+    /// A factory gauge's panel (`FactoryPanelBehaviour`, one of four in its block).
+    slot: Option<u8>,
 }
 
 /// The use press held on a value box (`ValueSettingsClient.interactHeldPos`,
@@ -39,6 +42,8 @@ struct Held {
     pos: [i32; 3],
     hold: Hold,
     known: bool,
+    /// A factory gauge's panel.
+    slot: Option<u8>,
 }
 
 thread_local! {
@@ -179,6 +184,26 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
     let Some(player) = host.player(click.player) else {
         return Flow::Continue;
     };
+    // A factory gauge's panel: one with an item holds for its board (the server takes the
+    // click of one without, `onShortInteract`).
+    if block == B::FactoryGauge
+        && may_use_value_box(&*host, player)
+        && let Some((slot, set)) = gauge::hit(&*host, click.pos, click.hit.point)
+    {
+        let idle = HOLD.with_borrow(Option::is_none) && BOARD.with_borrow(Option::is_none);
+        if set && idle && click.hand == Hand::Main {
+            HOLD.with_borrow_mut(|h| {
+                *h = Some(Held {
+                    pos: click.pos,
+                    hold: Hold::default(),
+                    known: true,
+                    slot: Some(slot),
+                })
+            });
+        }
+        *event.cancellation_result = InteractionResult::Success;
+        return Flow::Cancel;
+    }
     if may_use_value_box(&*host, player)
         && hits_value_box(&*host, click.pos, click.hit.face, click.hit.point)
     {
@@ -189,6 +214,7 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
                     pos: click.pos,
                     hold: Hold::default(),
                     known: false,
+                    slot: None,
                 })
             });
             net::send_to_server(host, VALUE_SETTINGS, &values::encode(&click.pos));
@@ -280,6 +306,7 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
         ticks: 0,
         known,
         moved: false,
+        slot: None,
     })
 }
 
@@ -321,6 +348,10 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
         if !open.known && !open.moved {
             return;
         }
+        if let Some(slot) = open.slot {
+            gauge::send_amount(host, open.pos, slot, open.pick.row, open.pick.value);
+            return;
+        }
         let [x, y, z] = open.pos;
         let data = values::encode(&[x, y, z, open.pick.row, open.pick.value]);
         net::send_to_server(host, VALUE_SETTINGS, &data);
@@ -330,8 +361,19 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
         return;
     }
     let player = host.local_player();
+    let gauge_slot = HOLD.with_borrow(|h| h.as_ref().and_then(|h| h.slot));
     let aimed = match player {
-        Some(p) if may_use_value_box(&*host, p) => aimed_value_box(&*host),
+        Some(p) if may_use_value_box(&*host, p) => match gauge_slot {
+            // The same panel still under the crosshair.
+            Some(slot) => match host.crosshair_target() {
+                Some(CrosshairTarget::Block { pos, hit, .. }) => {
+                    let pos = [pos.x, pos.y, pos.z];
+                    (gauge::hit(&*host, pos, hit.point).map(|h| h.0) == Some(slot)).then_some(pos)
+                }
+                _ => None,
+            },
+            None => aimed_value_box(&*host),
+        },
         _ => None,
     };
     // `cancelInteraction` when the player may no longer interact or looks off the box.
@@ -343,7 +385,21 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
         Some((_, _, Step::Wait)) => {}
         Some((pos, known, Step::Open)) => {
             HOLD.with_borrow_mut(|h| *h = None);
-            if let Some(open) = board_of(&*host, pos, known) {
+            if let Some(slot) = gauge_slot {
+                // `FactoryPanelBehaviour.createBoard`, on its `getValueSettings`.
+                let (row, value) = gauge::board_pick(&*host, pos, slot);
+                let open = OpenBoard {
+                    pos,
+                    board: board::FACTORY,
+                    names: &[],
+                    pick: Settings { row, value },
+                    ticks: 0,
+                    known: true,
+                    moved: false,
+                    slot: Some(slot),
+                };
+                BOARD.with_borrow_mut(|b| *b = Some(open));
+            } else if let Some(open) = board_of(&*host, pos, known) {
                 BOARD.with_borrow_mut(|b| *b = Some(open));
             }
         }
@@ -352,6 +408,10 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
         Some((pos, _, Step::Short)) => {
             HOLD.with_borrow_mut(|h| *h = None);
             let wrench = player.is_some_and(|p| holds_wrench(&*host, p));
+            if let Some(slot) = gauge_slot {
+                gauge::short_click(host, pos, slot, wrench);
+                return;
+            }
             let data = values::encode(&[pos[0], pos[1], pos[2], i32::from(wrench)]);
             net::send_to_server(host, VALUE_SETTINGS, &data);
         }
@@ -435,6 +495,8 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
                 .to_owned()
         } else if b == board::EJECTOR {
             board::ejector_text(s)
+        } else if b == board::FACTORY {
+            board::factory_text(s)
         } else if b == board::DIODE {
             board::diode_text(s)
         } else if b == board::VALVE_HANDLE {

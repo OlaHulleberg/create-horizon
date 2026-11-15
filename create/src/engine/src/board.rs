@@ -584,6 +584,29 @@ pub fn ejector_slot(facing: Dir, side: Dir, charged: bool) -> Option<[f64; 3]> {
 /// The ejector's board (`create.weighted_ejector.stack_size`, `between(0, 64)`).
 pub const EJECTOR: Board = scroll_value("Ejected Stack Size", 64);
 
+/// `FactoryPanelBehaviour.createBoard`: the target amount, up to 100 items (row 0) or stacks
+/// (row 1), a milestone every 10.
+pub const FACTORY: Board = Board {
+    title: "Target Amount in Storage",
+    max: 100,
+    milestone: 10,
+    rows: &["Items", "Stacks"],
+    icons: false,
+};
+
+/// `FactoryPanelBehaviour.formatValue`: ` Inactive ` at 0, stacks marked `\u{25a4}`.
+pub fn factory_text(s: Settings) -> String {
+    if s.value == 0 {
+        " Inactive ".to_owned()
+    } else {
+        format!(
+            "{}{}",
+            s.value.max(0),
+            if s.row == 0 { "" } else { "\u{25a4}" }
+        )
+    }
+}
+
 /// The ejector's stack size as its value box shows it: `*` for any.
 pub fn ejector_text(s: Settings) -> String {
     if s.value == 0 {
