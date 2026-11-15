@@ -25,8 +25,10 @@
 //!   damped. Needs `EntityRef::move_by` (HORIZON_API.md's entity motion row).
 //! - A redstone conductor beside an assembler turning an accelerated cart
 //!   (`BlockState.isRedstoneConductor`): no API reads it, so none is seen. Needs a state fact.
-//! - Actors (drills, harvesters) on a cart, and a chest minecart's own inventory added to the
-//!   contraption's (`addExtraInventories`, which only actors fill).
+//!
+//! Left out, not for want of API (HORIZON_API.md): actors (drills, harvesters) on a cart, and a
+//! chest minecart's own inventory added to the contraption's (`addExtraInventories`, which only
+//! actors fill).
 
 use super::super::net;
 use super::super::persist::mark_unsaved;
