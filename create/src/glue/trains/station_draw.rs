@@ -159,7 +159,7 @@ pub fn refresh_marks(lv: &mut ServerLevel<'_>) {
         let signals = r.signals.keys().map(|p| {
             let m = r
                 .net
-                .signal_marker(&r.tracks, *p)
+                .signal_marker(*p)
                 .map(|(t, d, dual)| (t, d, u8::from(dual)));
             (*p, m)
         });

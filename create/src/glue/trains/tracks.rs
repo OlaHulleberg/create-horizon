@@ -6,6 +6,13 @@
 //! under its straight runs (`TrackPaver`); a curve taken up drops its tracks and girders
 //! (`BezierConnection.spawnItems`). Any other block in the off hand paves too: slabs, full
 //! blocks and walls (under the rails only), each placed where the block is free.
+//!
+//! The signal item picks its track first (`TrackTargetingBlockItem.useOn`): a click on straight
+//! track keeps the track and the way the player looked on the stack, and the signal placed next,
+//! within 16 blocks, keeps them in its block entity (`TargetTrack`, `TargetDirection`), which
+//! the railway reads as it is placed and loaded. Create's highlight of the picked track
+//! (`TrackTargetingClient`) is not drawn, and a pick on diagonal, sloped or curved track is
+//! refused as invalid (the port binds signals to straight track along x or z only).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
@@ -13,6 +20,7 @@ use super::super::world::{level_index, with_world};
 use super::saved;
 use crate::glue::items;
 use create_engine::Block;
+use create_engine::network::Target;
 use create_engine::track::{self, End, Failure, Request, TrackShape};
 use create_engine::track_curves::Saved;
 use create_engine::track_render::{Mat4, Piece, girder_parts, segment_parts};
@@ -39,17 +47,23 @@ thread_local! {
     /// Track and signal block entities that came into a level, by level: their data is set
     /// from the railway at the level's next tick.
     static LOADED: RefCell<Vec<(usize, [i32; 3])>> = const { RefCell::new(Vec::new()) };
+    /// The pick a player's signal click is placing with (`useOn` sets the block entity data
+    /// before `BlockItem.useOn` places it), by player: its level and the pick.
+    static PLACING: RefCell<HashMap<u128, (usize, Target)>> = RefCell::new(HashMap::new());
 }
 
 /// The world closed.
 pub fn forget() {
     TRACK_FROM.with_borrow_mut(HashMap::clear);
     LOADED.with_borrow_mut(Vec::clear);
+    PLACING.with_borrow_mut(HashMap::clear);
 }
 
 pub fn register(r: &mut dyn Registrar) {
     let item = r.item_key("create:track");
     r.item_part(item, TrackItem);
+    let signal = r.item_key("create:track_signal");
+    r.item_part(signal, SignalItem);
 }
 
 /// The track shape of `state`, if it is Create's track.
@@ -728,6 +742,13 @@ pub fn sync(lv: &mut ServerLevel<'_>) {
         match with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten() {
             Some(Block::Track) => set_curves(lv, pos),
             Some(Block::TrackSignal) => {
+                // Its pick, if it was placed with one (else it binds to the track beside it).
+                let target = lv
+                    .host
+                    .block_entity(lv.level, pos)
+                    .and_then(|e| e.data(&*lv.host))
+                    .and_then(|d| data_target(pos, &d));
+                with_world(|w| w.dims[dim].railway.set_signal_target(pos, target));
                 let state = with_world(|w| w.dims[dim].railway.lights.get(&pos).copied()).flatten();
                 set_light(lv, pos, state.unwrap_or_default());
             }
@@ -751,6 +772,244 @@ fn set_curves(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     }
     let data = Compound::from([(CURVES.into(), saved::curves_to_nbt(&curves))]);
     let _ = entity.merge_data(&mut *lv.host, data);
+}
+
+/// The keys in the signal stack's custom data holding its pick
+/// (`TRACK_TARGETING_ITEM_SELECTED_POS`, `TRACK_TARGETING_ITEM_SELECTED_DIRECTION`).
+const PICK_POS: &str = "create:track_targeting_item_selected_pos";
+const PICK_DIRECTION: &str = "create:track_targeting_item_selected_direction";
+/// The keys in a signal's block entity data (`TrackTargetingBehaviour.write`): its track, from
+/// the signal, and whether it was picked `POSITIVE`.
+pub const TARGET_TRACK: &str = "TargetTrack";
+pub const TARGET_DIRECTION: &str = "TargetDirection";
+
+/// The pick a signal stack holds.
+fn stack_pick(stack: &mod_api::ItemStack) -> Option<Target> {
+    let c = items::custom(stack);
+    let Some(Tag::IntArray(p)) = c.get(&PICK_POS.into()) else {
+        return None;
+    };
+    let &[x, y, z] = &p[..] else {
+        return None;
+    };
+    let front = matches!(c.get(&PICK_DIRECTION.into()), Some(Tag::Byte(b)) if *b != 0);
+    Some(Target {
+        track: [x, y, z],
+        front,
+    })
+}
+
+/// Sets (or clears) the pick on the signal stack in `player`'s `hand`.
+fn set_stack_pick(
+    lv: &mut ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    hand: mod_api::Hand,
+    pick: Option<Target>,
+) {
+    let Some(mut stack) = items::held(&*lv.host, player, hand) else {
+        return;
+    };
+    if stack.item().id(&*lv.host) != "create:track_signal" {
+        return;
+    }
+    items::set_custom(
+        &mut stack,
+        &[
+            (PICK_POS, pick.map(|t| Tag::IntArray(t.track.to_vec()))),
+            (PICK_DIRECTION, pick.map(|t| Tag::Byte(i8::from(t.front)))),
+        ],
+    );
+    items::set_held(lv.host, player, hand, Some(stack));
+}
+
+/// The pick kept in a signal's block entity data, if it has one.
+pub fn data_target(pos: [i32; 3], data: &Compound) -> Option<Target> {
+    let Some(Tag::IntArray(t)) = data.get(&TARGET_TRACK.into()) else {
+        return None;
+    };
+    let &[x, y, z] = &t[..] else {
+        return None;
+    };
+    let front = matches!(data.get(&TARGET_DIRECTION.into()), Some(Tag::Byte(b)) if *b != 0);
+    Some(Target {
+        track: [pos[0] + x, pos[1] + y, pos[2] + z],
+        front,
+    })
+}
+
+/// A `create.track_target.*` line on the action bar, coloured as Create's.
+fn say_target(
+    lv: &mut ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    key: &str,
+    color: Option<&str>,
+) {
+    let mut line = Text::translate(format!("create.track_target.{key}"), Vec::new());
+    if let Some(c) = color {
+        let mut style = mod_api::text::TextStyle::default();
+        style.color = Some(c.to_owned());
+        line = line.with_style(style);
+    }
+    super::action_bar(lv.host, player, line);
+}
+
+fn click_sound(lv: &mut ServerLevel<'_>, pos: [i32; 3], id: &str, volume: f32, pitch: f32) {
+    let at = [
+        f64::from(pos[0]) + 0.5,
+        f64::from(pos[1]) + 0.5,
+        f64::from(pos[2]) + 0.5,
+    ];
+    lv.level.play_sound(
+        &mut *lv.host,
+        id,
+        at,
+        mod_api::SoundSource::Blocks,
+        volume,
+        pitch,
+    );
+}
+
+/// `TrackTargetingBlockItem.useOn` with a signal, on the server: sneaking with a pick clears
+/// it; a click on track picks it and the way the player looks along it (refused on a junction,
+/// where another point stands, or off the graph); with no pick nothing is placed; else the
+/// signal goes where the click places it if the pick is within 16 blocks, keeping it (None: the
+/// block item places it).
+fn use_signal(
+    lv: &mut ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    event: &UseOnEvent<'_>,
+) -> Option<InteractionResult> {
+    let pos = event.pos;
+    let picked = stack_pick(event.stack);
+    if picked.is_some() && player.entity().is_shift_key_down(&*lv.host) == Some(true) {
+        say_target(lv, player, "clear", None);
+        set_stack_pick(lv, player, event.hand, None);
+        click_sound(lv, pos, "create:controller_click", 1.0, 0.5);
+        return Some(InteractionResult::SuccessServer);
+    }
+    let here = lv.block_state(pos)?;
+    if let Some(shape) = shape_of(&*lv.host, here) {
+        let deny = |lv: &mut ServerLevel<'_>, key: &str| {
+            say_target(lv, player, key, Some("red"));
+            click_sound(lv, pos, "create:deny", 0.5, 1.0);
+            Some(InteractionResult::Fail)
+        };
+        if shape.is_junction() {
+            return deny(lv, "no_junctions");
+        }
+        let look = player.entity().view_vector(&*lv.host)?;
+        let Some(target) = Target::pick(pos, shape, look) else {
+            return deny(lv, "invalid");
+        };
+        let dim = lv.dim;
+        let overlap = with_world(|w| w.dims[dim].railway.net.signal_overlap(pos)).flatten();
+        match overlap {
+            None => return deny(lv, "invalid"),
+            Some(true) => return deny(lv, "occupied"),
+            Some(false) => {}
+        }
+        set_stack_pick(lv, player, event.hand, Some(target));
+        say_target(lv, player, "set", None);
+        click_sound(lv, pos, "create:controller_click", 1.0, 1.0);
+        return Some(InteractionResult::SuccessServer);
+    }
+    let Some(target) = picked else {
+        say_target(lv, player, "missing", Some("red"));
+        return Some(InteractionResult::Fail);
+    };
+    let replaceable = lv.host.block_states().replaceable(here) == Some(true);
+    let placed = if replaceable {
+        pos
+    } else {
+        std::array::from_fn(|i| pos[i] + event.face[i])
+    };
+    let far: i64 = (0..3)
+        .map(|i| i64::from(target.track[i] - placed[i]).pow(2))
+        .sum();
+    if far >= 16 * 16 {
+        say_target(lv, player, "too_far", Some("red"));
+        return Some(InteractionResult::Fail);
+    }
+    let dim = lv.dim;
+    PLACING.with_borrow_mut(|m| m.insert(player.uuid(), (dim, target)));
+    None
+}
+
+/// The signal item (`TrackTargetingBlockItem`).
+struct SignalItem;
+
+#[mod_api::horizon_part]
+impl ItemPart for SignalItem {
+    fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
+        let host = match host {
+            HostSide::Server(host) => host,
+            // The client's `useOn`: a clear or a pick is the server's; with no pick nothing is
+            // placed.
+            HostSide::Client(host) => {
+                let picked = stack_pick(event.stack).is_some();
+                let sneaking = host
+                    .local_player()
+                    .and_then(|p| p.is_secondary_use_active(&*host))
+                    == Some(true);
+                let on_track = host
+                    .level(host.dimension())
+                    .and_then(|l| l.block_state(&*host, event.pos))
+                    .is_some_and(|s| s.block() == states::key(Block::Track));
+                if (picked && sneaking) || on_track {
+                    return Some(InteractionResult::Success);
+                }
+                return (!picked).then_some(InteractionResult::Fail);
+            }
+        };
+        PLACING.with_borrow_mut(|m| m.remove(&event.player));
+        let player = host.player(event.player)?;
+        let dimension = player.level(&*host)?.dimension().id(&*host)?;
+        let mut lv = ServerLevel::new(host, &dimension)?;
+        use_signal(&mut lv, player, event)
+    }
+
+    /// The rest of `useOn` once the block is placed: the pick into its block entity
+    /// (`BLOCK_ENTITY_DATA`: `TargetTrack` from the signal, `TargetDirection`), off the stack, and
+    /// `track_target.success`.
+    fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
+        let Some(player) = event.placer else {
+            return;
+        };
+        let Some((dim, target)) = PLACING.with_borrow_mut(|m| m.remove(&player.uuid())) else {
+            return;
+        };
+        if event.state.block() != states::key(Block::TrackSignal) {
+            return;
+        }
+        let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+            return;
+        };
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return;
+        };
+        if lv.dim != dim {
+            return;
+        }
+        let pos = event.pos;
+        let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+            return;
+        };
+        let rel: Vec<i32> = (0..3).map(|i| target.track[i] - pos[i]).collect();
+        let data = Compound::from([
+            (TARGET_TRACK.into(), Tag::IntArray(rel)),
+            (TARGET_DIRECTION.into(), Tag::Byte(i8::from(target.front))),
+        ]);
+        if entity.merge_data(&mut *lv.host, data).is_err() {
+            return;
+        }
+        with_world(|w| w.dims[dim].railway.set_signal_target(pos, Some(target)));
+        for hand in [mod_api::Hand::Main, mod_api::Hand::Off] {
+            if items::held(&*lv.host, player, hand).is_some_and(|s| stack_pick(&s).is_some()) {
+                set_stack_pick(&mut lv, player, hand, None);
+            }
+        }
+        say_target(&mut lv, player, "success", Some("green"));
+    }
 }
 
 /// Whether a signal's data shows an invalid signal's blink.
@@ -911,6 +1170,21 @@ impl BlockEntityPart for TrackEntity {
         _host: &dyn ClientHost,
         event: &mut BlockEntityRenderBoundingBoxEvent<'_>,
     ) {
+        if event.state.block() == states::key(Block::TrackSignal) {
+            // Its marker, on its track up to 16 blocks away.
+            if let Some(Tag::Compound(c)) =
+                crate::glue::kinetics::synced(&event.entity.nbt, super::station_draw::MARK)
+                && let Some(Tag::IntArray(t)) = c.get(&"t".into())
+                && let &[x, y, z] = &t[..]
+            {
+                for (k, d) in [x, y, z].into_iter().enumerate() {
+                    let d = d as f32;
+                    event.bounds[k] = event.bounds[k].min(d - 1.0);
+                    event.bounds[k + 3] = event.bounds[k + 3].max(d + 2.0);
+                }
+            }
+            return;
+        }
         if event.state.block() != states::key(Block::Track) {
             return;
         }

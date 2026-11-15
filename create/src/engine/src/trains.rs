@@ -2024,6 +2024,9 @@ pub struct Railway {
     pub tracks: HashMap<[i32; 3], TrackShape>,
     pub stations: HashMap<[i32; 3], String>,
     pub signals: HashMap<[i32; 3], SignalBlock>,
+    /// The track and way each signal picked with its item (`TrackTargetingBehaviour`), as its
+    /// block entity keeps them; a signal with none binds to the track beside it.
+    pub signal_targets: HashMap<[i32; 3], crate::network::Target>,
     /// Names saved with a column, waiting for their station block.
     pub saved_names: HashMap<[i32; 3], String>,
     /// Stations in assembly mode (`StationBlock.ASSEMBLING`), each with its assembly
@@ -2091,6 +2094,18 @@ impl Railway {
                 self.signals_dirty = true;
             }
             _ => self.dirty = true,
+        }
+    }
+
+    /// The track and way the signal at `pos` picked (`TargetTrack`, `TargetDirection`), read from
+    /// its block entity when it is placed or loaded; the graph is built again when it changes.
+    pub fn set_signal_target(&mut self, pos: [i32; 3], target: Option<crate::network::Target>) {
+        let old = match target {
+            Some(t) => self.signal_targets.insert(pos, t),
+            None => self.signal_targets.remove(&pos),
+        };
+        if old != target {
+            self.dirty = true;
         }
     }
 
@@ -2166,6 +2181,7 @@ impl Railway {
     /// A track, station or signal at `pos` is gone.
     pub fn remove(&mut self, pos: [i32; 3]) {
         let signal = self.signals.remove(&pos).is_some();
+        self.signal_targets.remove(&pos);
         if signal && self.lights.remove(&pos).is_some() {
             self.lights_changed.push((pos, None));
         }
@@ -2316,7 +2332,13 @@ impl Railway {
         stations.sort_unstable();
         let signals: Vec<([i32; 3], SignalType)> =
             self.signals.iter().map(|(p, s)| (*p, s.kind)).collect();
-        self.net = Network::build(&self.tracks, curves, &stations, &signals);
+        self.net = Network::build_targeted(
+            &self.tracks,
+            curves,
+            &stations,
+            &signals,
+            &self.signal_targets,
+        );
         let mut observers: Vec<[i32; 3]> = self.observers.keys().copied().collect();
         observers.sort_unstable();
         self.net.bind_observers(&self.tracks, &observers);
