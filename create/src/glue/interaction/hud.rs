@@ -4,6 +4,7 @@
 
 use super::super::items::{self, Item};
 use super::board::{self, block_at};
+use create_engine::kinetics::Dir;
 use mod_api::{ClientHost, CrosshairTarget, DrawContext, EquipmentSlot};
 
 /// The block under the crosshair, when it is Create's.
@@ -309,13 +310,8 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
     draw.fill([x - 4.0, y - 3.0, 1.0, h + 6.0], background);
     draw.fill([x + w + 3.0, y - 3.0, 1.0, h + 6.0], background);
     // The sides' borders fade from the top colour to the bottom one.
-    let rows = (h + 4.0) as u32;
-    for row in 0..rows {
-        let c = mix_argb(top, bottom, row as f32 / rows.max(1) as f32);
-        let at = y - 2.0 + row as f32;
-        draw.fill([x - 3.0, at, 1.0, 1.0], c);
-        draw.fill([x + w + 2.0, at, 1.0, 1.0], c);
-    }
+    draw.fill_gradient([x - 3.0, y - 2.0, 1.0, h + 4.0], top, bottom);
+    draw.fill_gradient([x + w + 2.0, y - 2.0, 1.0, h + 4.0], top, bottom);
     draw.fill([x - 3.0, y - 3.0, w + 6.0, 1.0], top);
     draw.fill([x - 3.0, y + h + 2.0, w + 6.0, 1.0], bottom);
     // The goggles over the box's corner (z 450 over the tooltip's 400).
@@ -476,15 +472,6 @@ std::thread_local! {
     static HOVER: std::cell::Cell<Option<([i32; 3], i64)>> = const { std::cell::Cell::new(None) };
 }
 
-/// Each channel of `a` moved `t` of the way to `b`'s (`fillGradient`'s vertical blend).
-fn mix_argb(a: u32, b: u32, t: f32) -> u32 {
-    let ch = |s: u32| {
-        let (x, y) = (((a >> s) & 0xFF) as f32, ((b >> s) & 0xFF) as f32);
-        ((x + (y - x) * t).round() as u32 & 0xFF) << s
-    };
-    ch(24) | ch(16) | ch(8) | ch(0)
-}
-
 /// `TooltipHelper.cutTextComponent` with `GRAY_AND_WHITE`, as goggle lines: words wrapped at
 /// 200 pixels, the parts between underscores white, the rest grey.
 fn cut_hint(draw: &dyn DrawContext, text: &str) -> Vec<Vec<(String, u32)>> {
@@ -526,9 +513,10 @@ fn cut_hint(draw: &dyn DrawContext, text: &str) -> Vec<Vec<(String, u32)>> {
         .collect()
 }
 
-/// `ValueBox.render` of the highlighted box (`passive(false)`): Create's white
-/// `VALUE_BOX_HOVER` frame round the box, half a block across on the face it is on, a hair out
-/// from it. Its value's number is the block entity's to draw (`value_text`).
+/// `ValueBox.render` of the highlighted box (`passive(false)`): Create's `VALUE_BOX_HOVER_4PX`
+/// frame round the box (the icon atlas through the glue's world pipeline, else white lines),
+/// and an option box's icon (`IconValueBox.renderContents`) on the face looked at. A number's
+/// box is the block entity's to draw (`value_text`).
 pub(super) fn value_box_outline(
     host: &dyn ClientHost,
     event: &mut mod_api::RenderLevelStageEvent<'_>,
@@ -542,41 +530,169 @@ pub(super) fn value_box_outline(
         let _ = event.draw.lines(&panel);
         return;
     }
-    let Some((pos, side, slot)) = super::board::hovered_slot(host) else {
-        return;
-    };
-    let n = side.offset();
-    let axis = (0..3).find(|i| n[*i] != 0).unwrap_or(1);
-    let (u, v) = match axis {
-        0 => (1, 2),
-        1 => (0, 2),
-        _ => (0, 1),
-    };
-    let centre: [f64; 3] = [0, 1, 2].map(|i| f64::from(pos[i]) + slot[i] + f64::from(n[i]) * 0.002);
-    let corner = |a: f64, b: f64| {
-        let mut c = centre;
-        c[u] += a * 0.25;
-        c[v] += b * 0.25;
-        c
-    };
-    let square = [
-        corner(-1.0, -1.0),
-        corner(1.0, -1.0),
-        corner(1.0, 1.0),
-        corner(-1.0, 1.0),
-    ];
-    let lines: Vec<WorldLine> = (0..4)
-        .map(|i| {
-            WorldLine::new(
-                square[i],
-                square[(i + 1) % 4],
-                0xFFFF_FFFF,
-                2.0,
-                WorldDepth::Tested,
+    let icons = crate::glue::pipelines::resolve(host, crate::glue::pipelines::Textured::Icons);
+    let mut quads = Vec::new();
+    if let Some((pos, side, slot)) = super::board::hovered_slot(host) {
+        let frame = BoxFrame::of(host, pos, side, slot);
+        match (icons, frame) {
+            (Some(_), Some(f)) => {
+                // `scale(-2.01, -2.01, 2.01)`, `translate(-8 / 16, -8 / 16, -0.5 / 16)`.
+                let at =
+                    |x: f64, y: f64| f.world([-2.01 * (x - 0.5), -2.01 * (y - 0.5), -2.01 / 32.0]);
+                quads.push(icon_quad(at, VALUE_BOX_HOVER_4PX));
+            }
+            _ => {
+                let n = side.offset();
+                let axis = (0..3).find(|i| n[*i] != 0).unwrap_or(1);
+                let (u, v) = match axis {
+                    0 => (1, 2),
+                    1 => (0, 2),
+                    _ => (0, 1),
+                };
+                let centre: [f64; 3] =
+                    [0, 1, 2].map(|i| f64::from(pos[i]) + slot[i] + f64::from(n[i]) * 0.002);
+                let corner = |a: f64, b: f64| {
+                    let mut c = centre;
+                    c[u] += a * 0.25;
+                    c[v] += b * 0.25;
+                    c
+                };
+                let square = [
+                    corner(-1.0, -1.0),
+                    corner(1.0, -1.0),
+                    corner(1.0, 1.0),
+                    corner(-1.0, 1.0),
+                ];
+                let lines: Vec<WorldLine> = (0..4)
+                    .map(|i| {
+                        WorldLine::new(
+                            square[i],
+                            square[(i + 1) % 4],
+                            0xFFFF_FFFF,
+                            2.0,
+                            WorldDepth::Tested,
+                        )
+                    })
+                    .collect();
+                let _ = event.draw.lines(&lines);
+            }
+        }
+    }
+    // The option's icon on the box of the face looked at (`ScrollValueRenderer` draws the box
+    // of the face looked at, hovered or not).
+    if let Some(icons) = icons
+        && let Some(mod_api::CrosshairTarget::Block { pos, hit, .. }) = host.crosshair_target()
+        && let Some(side) = Dir::from_offset(hit.face)
+    {
+        let pos = [pos.x, pos.y, pos.z];
+        let block = super::super::client_table(host, |t| {
+            t.get(super::board::block_at(host, pos)).map(|(b, _)| b)
+        })
+        .flatten();
+        let cells = block.map_or(&[][..], super::values::option_icons);
+        let cell = super::board::seen(pos).and_then(|v| cells.get(usize::try_from(v).ok()?));
+        let slot = super::super::client_table(host, |t| {
+            super::values::value_box_slot(
+                t,
+                |p| super::board::block_at(host, p),
+                crate::glue::logistics::client::ejector_charged,
+                pos,
+                side,
             )
         })
-        .collect();
-    let _ = event.draw.lines(&lines);
+        .flatten();
+        if let (Some(cell), Some(slot)) = (cell, slot)
+            && let Some(f) = BoxFrame::of(host, pos, side, slot)
+        {
+            // `fontScale` (-1/64), then `scale(32)`, `translate(-0.5, -0.5, 5 / 32)`.
+            let s = -1.0 / 64.0 * 32.0;
+            let at = |x: f64, y: f64| f.world([s * (x - 0.5), s * (y - 0.5), s * 5.0 / 32.0]);
+            quads.push(icon_quad(at, *cell));
+        }
+        if !quads.is_empty() {
+            let _ = event.draw.pipeline_quads(icons, &quads);
+        }
+    } else if let Some(icons) = icons
+        && !quads.is_empty()
+    {
+        let _ = event.draw.pipeline_quads(icons, &quads);
+    }
+}
+
+/// `AllIcons.VALUE_BOX_HOVER_4PX`'s cell in the icon atlas.
+const VALUE_BOX_HOVER_4PX: [f32; 2] = [48.0, 128.0];
+
+/// `AllIcons.render`: the icon at `cell` on the unit square `at` maps, white, full bright.
+fn icon_quad(at: impl Fn(f64, f64) -> [f64; 3], cell: [f32; 2]) -> mod_api::PipelineQuad {
+    let (u0, v0) = (cell[0] / 256.0, cell[1] / 256.0);
+    let (u1, v1) = ((cell[0] + 16.0) / 256.0, (cell[1] + 16.0) / 256.0);
+    mod_api::PipelineQuad::new(
+        [at(0.0, 0.0), at(0.0, 1.0), at(1.0, 1.0), at(1.0, 0.0)],
+        [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
+        0xFFFF_FFFF,
+    )
+}
+
+/// A value box's frame (`ValueBoxTransform.Sided.transform`): the box's centre, turned
+/// `yaw` about y and `pitch` about x, at the transform's scale (0.5).
+struct BoxFrame {
+    centre: [f64; 3],
+    yaw: f64,
+    pitch: f64,
+}
+
+impl BoxFrame {
+    fn of(host: &dyn ClientHost, pos: [i32; 3], side: Dir, slot: [f64; 3]) -> Option<BoxFrame> {
+        let (block, facing) = super::super::client_table(host, |t| {
+            t.get(super::board::block_at(host, pos))
+                .map(|(b, i)| (b, i.facing))
+        })
+        .flatten()?;
+        let horizontal = |d: Dir| -> f64 {
+            match d {
+                Dir::South => 0.0,
+                Dir::East => 90.0,
+                Dir::North => 180.0,
+                Dir::West => 270.0,
+                Dir::Up | Dir::Down => 0.0,
+            }
+        };
+        let diode = matches!(
+            block,
+            create_engine::Block::PulseRepeater
+                | create_engine::Block::PulseExtender
+                | create_engine::Block::PulseTimer
+        );
+        let (yaw, pitch) = if diode {
+            (horizontal(facing.unwrap_or(Dir::North)), 90.0)
+        } else {
+            let pitch = match side {
+                Dir::Up => 90.0,
+                Dir::Down => 270.0,
+                _ => 0.0,
+            };
+            (horizontal(side), pitch)
+        };
+        Some(BoxFrame {
+            centre: [0, 1, 2].map(|i| f64::from(pos[i]) + slot[i]),
+            yaw: yaw + 180.0,
+            pitch,
+        })
+    }
+
+    /// A point of the box's own space (before the transform's scale) in the world.
+    fn world(&self, local: [f64; 3]) -> [f64; 3] {
+        let [x, y, z] = local.map(|v| v * 0.5);
+        let (sp, cp) = self.pitch.to_radians().sin_cos();
+        let (y1, z1) = (y * cp - z * sp, y * sp + z * cp);
+        let (sy, cy) = self.yaw.to_radians().sin_cos();
+        let (x2, z2) = (x * cy + z1 * sy, -x * sy + z1 * cy);
+        [
+            self.centre[0] + x2,
+            self.centre[1] + y1,
+            self.centre[2] + z2,
+        ]
+    }
 }
 
 #[cfg(test)]

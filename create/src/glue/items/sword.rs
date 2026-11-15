@@ -3,8 +3,9 @@
 //! and the attacker, as hard as the attacker's `ATTACK_KNOCKBACK` + 2, the sword's Knockback
 //! level and a sprint make it, less the target's knockback resistance. Left out: stopping the
 //! attacker's sprint (no API sets it; `HORIZON_API.md`). Its click on a block
-//! (`cardboardSwordsMakeNoiseOnClick`, a sound only the clicking client plays) is heard here
-//! from the server, so the players near it hear it too: `left_click_block` is the server's.
+//! (`cardboardSwordsMakeNoiseOnClick`: the clicking client plays it, the server plays it to the
+//! others) is played here from the server to every player near it, the clicker included: the
+//! API has no sound at a position that leaves one player out (HORIZON_API.md).
 
 use super::{Item, held, is};
 use mod_api::{

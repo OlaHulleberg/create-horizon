@@ -3,6 +3,7 @@
 //! flaps turning toward their text with their sounds, and the text drawn in the world through
 //! each block entity's draw context, every frame.
 
+use crate::glue::pipelines::{Pose, Textured};
 use crate::glue::redstone::pose;
 use crate::glue::{client_table, kinetics, states};
 use create_engine::Block;
@@ -354,6 +355,7 @@ fn draw_nixie(
     if draw_nixie_signal(host, draw, state, facing, pos) {
         return;
     }
+    signal_gone(pos);
     let Some((left, right)) = DISPLAYS.with_borrow(|d| d.nixies.get(&pos).cloned()) else {
         return;
     };
@@ -384,11 +386,10 @@ fn signal_behind(
     Some(crate::glue::trains::signal_state_of(&data))
 }
 
-/// `NixieTubeRenderer.renderAsSignal`: on a train signal, the tube shows the signal's panel and
-/// its lights (`AllPartialModels.SIGNAL_PANEL`, then the red tube while it is red or blinking
-/// invalid, and the yellow or white one while it is yellow or green), full bright. Create also
-/// draws each lit tube's glow (`SIGNAL_*_GLOW` and `SIGNAL_WHITE_CUBE`, additive within 128
-/// blocks); that is left out (see the module's doc). Whether it drew as a signal.
+/// `NixieTubeRenderer.renderAsSignal`: on a train signal, the tube shows the signal's panel
+/// (`AllPartialModels.SIGNAL_PANEL`); its lights (the red tube while it is red or blinking
+/// invalid, the yellow or white one while it is yellow or green) and their glows are drawn
+/// additively by [`render_signal_glows`] from the pose noted here. Whether it drew as a signal.
 fn draw_nixie_signal(
     host: &dyn ClientHost,
     draw: &mut dyn BlockEntityDrawContext,
@@ -435,39 +436,24 @@ fn draw_nixie_signal(
     if let Some(panel) = states::partial("part_signal_panel") {
         draw.block(panel, &[("facing", "up")]);
     }
-    draw.translate([0.5, 7.5 / 16.0, 0.5]);
-    // `AnimationTickHolder.getRenderTime`.
-    let time = draw.game_time() as f64 + f64::from(draw.partial());
-    let light = draw.light();
-    draw.set_light(0xF0_00F0);
-    for first in [true, false] {
-        use create_engine::trains::SignalState;
-        let yellow = signal == SignalState::Yellow;
-        let lit = if first {
-            signal.red_light_at(time)
-        } else {
-            yellow || signal == SignalState::Green
-        };
-        if !lit {
-            continue;
-        }
-        let flip = first == invert;
-        let name = if first {
-            "part_signal_red_tube"
-        } else if yellow {
-            "part_signal_yellow_tube"
-        } else {
-            "part_signal_white_tube"
-        };
-        draw.push();
-        draw.translate([if flip { 4.0 / 16.0 } else { -4.0 / 16.0 }, 0.0, 0.0]);
-        draw.scale([1.0 + 1.0 / 16.0; 3]);
-        if let Some(tube) = states::partial(name) {
-            draw.block(tube, &[("facing", "up")]);
-        }
-        draw.pop();
+    let mut pose = Pose::at(pos.map(f64::from))
+        .rotate([0.0, 1.0, 0.0], f64::from(y_rot), [0.5; 3])
+        .rotate([0.0, 0.0, 1.0], f64::from(x_rot), [0.5; 3]);
+    if getfacing == Dir::Down {
+        pose = pose.rotate([0.0, 0.0, 1.0], 180.0, [0.5; 3]);
     }
-    draw.set_light(light);
+    let pose = pose.translate([0.5, 7.5 / 16.0, 0.5]);
+    SIGNALS.with_borrow_mut(|s| {
+        s.insert(
+            pos,
+            SignalLights {
+                pose,
+                invert,
+                horizontal: getfacing.axis() != create_engine::kinetics::Axis::Y,
+                signal,
+            },
+        )
+    });
     draw.pop();
     true
 }
@@ -486,6 +472,142 @@ fn flicker() -> f32 {
         r.set(x);
         (x >> 40) as f32 / (1u64 << 24) as f32
     })
+}
+
+/// A nixie signal's lights as its block entity last drew it.
+struct SignalLights {
+    /// The pose at the middle between the two tubes.
+    pose: Pose,
+    invert: bool,
+    /// `NixieTubeBlock.getFacing` is horizontal.
+    horizontal: bool,
+    signal: create_engine::trains::SignalState,
+}
+
+thread_local! {
+    static SIGNALS: RefCell<HashMap<[i32; 3], SignalLights>> = RefCell::new(HashMap::new());
+}
+
+/// The nixie tube at `pos` no longer shows a signal.
+fn signal_gone(pos: [i32; 3]) {
+    SIGNALS.with_borrow_mut(|s| s.remove(&pos));
+}
+
+/// `GLOW_VIEW_DISTANCE`: the glows show within 96 blocks of the eye.
+const GLOW_VIEW_DISTANCE: f64 = 96.0;
+
+/// `renderAsSignal`'s lights, each frame (the red one blinks): for each lit light, within 96
+/// blocks the white cube (`SIGNAL_WHITE_CUBE`, translucent) and the glow (`SIGNAL_*_GLOW`,
+/// additive) stretched along it, and the tube (`SIGNAL_*`, additive, scaled by 17/16), full
+/// bright and without diffuse shading.
+pub(super) fn render_signal_glows(
+    host: &dyn ClientHost,
+    event: &mut mod_api::RenderLevelStageEvent<'_>,
+) {
+    if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
+        return;
+    }
+    let time = event.view.game_time as f64 + f64::from(event.view.partial_tick);
+    let eye = event.view.camera;
+    let Some(level) = host.level(host.dimension()) else {
+        return;
+    };
+    let (mut cubes, mut glows, mut glows2) = (Vec::new(), Vec::new(), Vec::new());
+    SIGNALS.with_borrow_mut(|s| {
+        s.retain(|pos, l| {
+            let block = level
+                .block_state(host, *pos)
+                .and_then(states::id)
+                .and_then(|id| client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten());
+            if !block.is_some_and(|b| create_engine::dye::NIXIE_TUBES.contains(&b)) {
+                return false;
+            }
+            let d2: f64 = (0..3)
+                .map(|i| (f64::from(pos[i]) + 0.5 - eye[i]).powi(2))
+                .sum();
+            let near = d2 < GLOW_VIEW_DISTANCE * GLOW_VIEW_DISTANCE;
+            let white = 0xFFFF_FFFFu32;
+            for first in [true, false] {
+                use create_engine::trains::SignalState;
+                let yellow = l.signal == SignalState::Yellow;
+                let lit = if first {
+                    l.signal.red_light_at(time)
+                } else {
+                    yellow || l.signal == SignalState::Green
+                };
+                if !lit {
+                    continue;
+                }
+                let flip = first == l.invert;
+                let at = l
+                    .pose
+                    .translate([if flip { 4.0 / 16.0 } else { -4.0 / 16.0 }, 0.0, 0.0]);
+                if near {
+                    let vert = first ^ l.horizontal;
+                    let (long, long_glow) = if yellow { (1.0, 2.0) } else { (4.0, 5.125) };
+                    let cube = at.scale(if vert {
+                        [long, 1.0, 1.0]
+                    } else {
+                        [1.0, long, 1.0]
+                    });
+                    cube.cuboid(
+                        [-0.5; 3],
+                        [0.5; 3],
+                        [[0.0, 0.0, 0.0, 0.0]; 6],
+                        white,
+                        &mut cubes,
+                    );
+                    let glow = at.scale(if vert {
+                        [long_glow, 2.0, 2.0]
+                    } else {
+                        [2.0, long_glow, 2.0]
+                    });
+                    // (removed)
+                    let uv = if first || yellow {
+                        [0.0, 0.0, 0.0, 0.0]
+                    } else {
+                        [0.0, 0.0, 0.0, 0.0]
+                    };
+                    let out = if !first && yellow {
+                        &mut glows2
+                    } else {
+                        &mut glows
+                    };
+                    glow.cuboid([-0.5; 3], [0.5; 3], [uv; 6], white, out);
+                }
+                let tube = at.scale([1.0 + 1.0 / 16.0; 3]);
+                let (side, end) = if first || yellow {
+                    ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0])
+                } else {
+                    ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0])
+                };
+                let out = if !first && yellow {
+                    &mut glows2
+                } else {
+                    &mut glows
+                };
+                tube.cuboid(
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [side, side, side, side, end, end],
+                    white,
+                    out,
+                );
+            }
+            true
+        });
+    });
+    for (t, quads) in [
+        (Textured::SignalCube, cubes),
+        (Textured::SignalGlow, glows),
+        (Textured::SignalGlow2, glows2),
+    ] {
+        if !quads.is_empty()
+            && let Some(p) = crate::glue::pipelines::resolve(host, t)
+        {
+            let _ = event.draw.pipeline_quads(p, &quads);
+        }
+    }
 }
 
 /// `NixieTubeRenderer`: the tube's two characters, `left` and `right`, in its colour, each

@@ -23,8 +23,9 @@ use std::collections::HashMap;
 struct OpenBoard {
     pos: [i32; 3],
     board: Board,
-    /// An icons board's option names.
+    /// An icons board's option names, and their icons' cells in `create:gui/icons`.
     names: &'static [&'static str],
+    icons: &'static [[f32; 2]],
     /// The pick under the cursor: the wheel moves it, as there is no free cursor while playing.
     pick: Settings,
     ticks: u32,
@@ -384,6 +385,7 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
         pos,
         board: b,
         names,
+        icons: values::option_icons(block),
         pick: board_pick(b, setting),
         ticks: 0,
         known,
@@ -519,6 +521,7 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
                     pos,
                     board: board::FACTORY,
                     names: &[],
+                    icons: &[],
                     pick: Settings { row, value },
                     ticks: 0,
                     known: true,
@@ -599,42 +602,44 @@ fn opaque(rgb: u32) -> u32 {
     0xFF00_0000 | rgb
 }
 
-/// `AllGuiTextures`' sheet for the board (`VALUE_SETTINGS_*`, `BRASS_FRAME_*`).
-const SHEET: &str = "create:gui/value_settings";
+/// `AllGuiTextures.VALUE_SETTINGS_*` and `BRASS_FRAME_*`.
+const TEX: &str = "create:gui/value_settings";
 
-/// `UIRenderHelper.drawStretched`: the region `src` stretched over `dst`.
-fn stretched(draw: &mut dyn DrawContext, src: [f32; 4], dst: [i32; 4]) {
-    let d = dst.map(|v| v as f32);
-    draw.sprite(SHEET, src, d, None);
+/// `UIRenderHelper.drawStretched`: texture part `src` stretched over `rect`.
+fn stretched(draw: &mut dyn DrawContext, src: [f32; 4], rect: [f32; 4]) {
+    draw.sprite(TEX, src, rect, None);
 }
 
-/// `UIRenderHelper.drawCropped` and `AllGuiTextures.render`: as much of the region `src` as
-/// `dst` holds, from its corner.
-fn cropped(draw: &mut dyn DrawContext, src: [f32; 2], dst: [i32; 4]) {
-    let d = dst.map(|v| v as f32);
-    draw.sprite(SHEET, [src[0], src[1], d[2], d[3]], d, None);
+/// `UIRenderHelper.drawCropped` (and `AllGuiTextures.render`): the top left `w`x`h` of the
+/// texture part at `src` drawn at `at`.
+fn cropped(draw: &mut dyn DrawContext, src: [f32; 2], at: [f32; 2], w: f32, h: f32) {
+    draw.sprite(TEX, [src[0], src[1], w, h], [at[0], at[1], w, h], None);
 }
 
 /// `ValueSettingsScreen.renderBrassFrame`.
-fn brass_frame(draw: &mut dyn DrawContext, x: i32, y: i32, w: i32, h: i32) {
-    cropped(draw, [65.0, 9.0], [x, y, 4, 4]);
-    cropped(draw, [70.0, 9.0], [x + w - 4, y, 4, 4]);
-    cropped(draw, [65.0, 19.0], [x, y + h - 4, 4, 4]);
-    cropped(draw, [70.0, 19.0], [x + w - 4, y + h - 4, 4, 4]);
-    if h > 8 {
-        stretched(draw, [65.0, 14.0, 3.0, 4.0], [x, y + 4, 3, h - 8]);
-        stretched(draw, [71.0, 14.0, 3.0, 4.0], [x + w - 3, y + 4, 3, h - 8]);
+fn brass_frame(draw: &mut dyn DrawContext, x: f32, y: f32, w: f32, h: f32) {
+    cropped(draw, [65.0, 9.0], [x, y], 4.0, 4.0);
+    cropped(draw, [70.0, 9.0], [x + w - 4.0, y], 4.0, 4.0);
+    cropped(draw, [65.0, 19.0], [x, y + h - 4.0], 4.0, 4.0);
+    cropped(draw, [70.0, 19.0], [x + w - 4.0, y + h - 4.0], 4.0, 4.0);
+    if h > 8.0 {
+        stretched(draw, [65.0, 14.0, 3.0, 4.0], [x, y + 4.0, 3.0, h - 8.0]);
+        stretched(
+            draw,
+            [71.0, 14.0, 3.0, 4.0],
+            [x + w - 3.0, y + 4.0, 3.0, h - 8.0],
+        );
     }
-    if w > 8 {
-        cropped(draw, [0.0, 24.0], [x + 4, y, w - 8, 3]);
-        cropped(draw, [0.0, 27.0], [x + 4, y + h - 3, w - 8, 3]);
+    if w > 8.0 {
+        cropped(draw, [0.0, 24.0], [x + 4.0, y], w - 8.0, 3.0);
+        cropped(draw, [0.0, 27.0], [x + 4.0, y + h - 3.0], w - 8.0, 3.0);
     }
 }
 
-/// `ValueSettingsScreen.renderWindow`, drawn with Create's sprites. Whether a board is open.
+/// `ValueSettingsScreen.renderWindow`. Whether a board is open.
 pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
-    let Some((b, names, ticks)) =
-        BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.names, o.ticks)))
+    let Some((b, names, icons, ticks)) =
+        BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.names, o.icons, o.ticks)))
     else {
         return false;
     };
@@ -711,11 +716,19 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
     let open = ticks as f32;
     draw.fill([0.0, 0.0, width, height], board::shade(open));
     let fr = l.frame(fattest, open);
-    // `VALUE_SETTINGS_OUTER_BG`, with a pixel more above and below but at the corners.
-    let outer = [80.0, 9.0, 1.0, 1.0];
-    stretched(draw, outer, [fr.x, fr.y, fr.width, fr.height]);
-    stretched(draw, outer, [fr.x + 1, fr.y - 1, fr.width - 2, 1]);
-    stretched(draw, outer, [fr.x + 1, fr.y + fr.height, fr.width - 2, 1]);
+    // The background, and its top edge a pixel narrower each side. (Create's bottom edge passes
+    // its width and height in the wrong places and draws nothing.)
+    const OUTER_BG: [f32; 4] = [80.0, 9.0, 1.0, 1.0];
+    stretched(
+        draw,
+        OUTER_BG,
+        [f(fr.x), f(fr.y), f(fr.width), f(fr.height)],
+    );
+    stretched(
+        draw,
+        OUTER_BG,
+        [f(fr.x + 1), f(fr.y - 1), f(fr.width - 2), 1.0],
+    );
     if fr.text {
         let at = [centred(draw, b.title, fr.text_x), f(fr.title_y)];
         draw.text(b.title, at, opaque(0xDD_DDDD), false);
@@ -723,61 +736,86 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
         draw.text(&tip, at, opaque(0xDD_DDDD), false);
     }
     let rows = b.rows.len() as i32;
-    let bar_width = b.bar_width();
     brass_frame(
         draw,
-        l.left + l.label + 14,
-        l.top - 3,
-        bar_width + 8,
-        rows * 11 + 5,
+        f(l.left + l.label + 14),
+        f(l.top - 3),
+        f(b.bar_width() + 8),
+        f(rows * 11 + 5),
     );
     stretched(
         draw,
         [75.0, 9.0, 1.0, 1.0],
-        [l.left + l.label + 17, l.top, bar_width + 2, rows * 11 - 1],
+        [
+            f(l.left + l.label + 17),
+            f(l.top),
+            f(b.bar_width() + 2),
+            f(rows * 11 - 1),
+        ],
     );
     for (i, row) in b.rows.iter().enumerate() {
         let y = l.top + i as i32 * 11;
         if !b.icons {
-            cropped(draw, [0.0, 31.0], [l.left - 4, y, l.label + 8, 11]);
-            // `VALUE_SETTINGS_BAR` (249 wide) repeated along the bar.
+            cropped(
+                draw,
+                [0.0, 31.0],
+                [f(l.left - 4), f(y)],
+                f(l.label + 8),
+                11.0,
+            );
             let mut w = 0;
-            while w < bar_width {
-                cropped(
-                    draw,
-                    [7.0, 0.0],
-                    [l.bar_x() + w, y + 1, 248.min(bar_width - w), 8],
-                );
+            while w < b.bar_width() {
+                let part = 248.min(b.bar_width() - w);
+                cropped(draw, [7.0, 0.0], [f(l.bar_x() + w), f(y + 1)], f(part), 8.0);
                 w += 248;
             }
             draw.text(row, [f(l.left), f(y + 1)], opaque(0x44_2000), false);
         }
         for x in l.milestones() {
             if b.icons {
-                cropped(draw, [75.0, 14.0], [x, y + 1, 13, 8]);
+                cropped(draw, [75.0, 14.0], [f(x), f(y + 1)], 13.0, 8.0);
             } else {
-                cropped(draw, [0.0, 0.0], [x, y + 1, 7, 8]);
+                cropped(draw, [0.0, 0.0], [f(x), f(y + 1)], 7.0, 8.0);
             }
         }
     }
     if !b.icons {
-        brass_frame(draw, l.left - 7, l.top - 3, l.label + 14, rows * 11 + 5);
+        brass_frame(
+            draw,
+            f(l.left - 7),
+            f(l.top - 3),
+            f(l.label + 14),
+            f(rows * 11 + 5),
+        );
     }
-    let label = text(pick);
-    let width = if b.icons { 16 } else { tw(draw, &label) };
-    let [x, y, w] = Layout::cursor(l.coordinate(pick.row, pick.value), width);
-    if !b.icons {
-        // `VALUE_SETTINGS_CURSOR_LEFT`, `_CURSOR`, `_CURSOR_RIGHT`.
-        cropped(draw, [0.0, 9.0], [x - 3, y, 3, 14]);
-        cropped(draw, [4.0, 9.0], [x, y, w, 14]);
-        cropped(draw, [61.0, 9.0], [x + w, y, 3, 14]);
-        draw.text(&label, [f(x + 2), f(y + 3)], opaque(0x44_2000), false);
+    if ticks < 1 {
         return true;
     }
-    cropped(draw, [0.0, 44.0], [x - 2, y - 3, 22, 20]);
-    if fr.text {
-        let at = [centred(draw, &label, fr.text_x), f(fr.option_y)];
-        draw.text(&label, at, opaque(0xFB_DC7D), false);
+    let label = text(pick);
+    let icon = b
+        .icons
+        .then(|| icons.get(pick.value.max(0) as usize).copied())
+        .flatten();
+    let width = if icon.is_some() { 16 } else { tw(draw, &label) };
+    let [x, y, w] = Layout::cursor(l.coordinate(pick.row, pick.value), width);
+    if let Some(icon) = icon {
+        cropped(draw, [0.0, 44.0], [f(x - 2), f(y - 3)], 22.0, 20.0);
+        // The icon in the cursor's brown (`setShaderColor(0.265625, 0.125, 0, 1)`).
+        draw.sprite(
+            "create:gui/icons",
+            [icon[0], icon[1], 16.0, 16.0],
+            [f(x + 1), f(y - 1), 16.0, 16.0],
+            Some(0xFF44_2000),
+        );
+        if fr.text {
+            let at = [centred(draw, &label, fr.text_x), f(fr.option_y)];
+            draw.text(&label, at, opaque(0xFB_DC7D), false);
+        }
+        return true;
     }
+    cropped(draw, [0.0, 9.0], [f(x - 3), f(y)], 3.0, 14.0);
+    cropped(draw, [4.0, 9.0], [f(x), f(y)], f(w), 14.0);
+    cropped(draw, [61.0, 9.0], [f(x + w), f(y)], 3.0, 14.0);
+    draw.text(&label, [f(x + 2), f(y + 3)], opaque(0x44_2000), false);
     true
 }

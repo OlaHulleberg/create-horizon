@@ -2,9 +2,8 @@
 //! stands at it or it is in assembly mode (`flag_on`, `flag_off`, `flag_assemble`, turned to the
 //! track and swung up as `transformFlag` does), the station marker on its track
 //! (`TrackTargetingBehaviour.render` of `track_overlay/station`), and in assembly mode the
-//! assembly track's `track_overlay/assembling` where a bogey may go and where one is (Create
-//! colours them blue and green; with no colour over a block model in the API both are drawn
-//! in the model's own colours).
+//! assembly track's `track_overlay/assembling` where a bogey may go and where one is, blue and
+//! green (a copy of the model with every face tinted, made by `create-data prepare`).
 //!
 //! The server keeps what clients need in the station's block entity data (`KEY`), refreshed
 //! every ten ticks and when its train comes or goes. The station keeps no facing along its track
@@ -28,7 +27,9 @@ pub const FLAG_ON: &str = "create:block/track_station/flag_on";
 pub const FLAG_OFF: &str = "create:block/track_station/flag_off";
 pub const FLAG_ASSEMBLE: &str = "create:block/track_station/flag_assemble";
 pub const OVERLAY: &str = "create:block/track_overlay/station";
-pub const ASSEMBLING: &str = "create:block/track_overlay/assembling";
+/// The assembly overlay with every face tinted (made by `create-data prepare`), coloured as
+/// Create's `SuperByteBuffer.color` colours it.
+pub const ASSEMBLING: &str = "create:block/track_overlay/assembling_tinted";
 pub const SIGNAL: &str = "create:block/track_overlay/signal";
 pub const SIGNAL_DUAL: &str = "create:block/track_overlay/signal_dual";
 pub const OBSERVER: &str = "create:block/track_overlay/observer";
@@ -478,12 +479,13 @@ pub fn draw(
         } else {
             None
         };
-        // Create colours it (`SuperByteBuffer.color`); the model has no tint index, so it is
-        // drawn in its own colours (`HORIZON_API.md`: a colour over a block model).
-        if colour.is_some()
+        // `SuperByteBuffer.color`, through the tinted copy's tint index.
+        if let Some(colour) = colour
             && let Some(m) = model(host, ASSEMBLING)
         {
-            let _ = draw.terrain_model(m, mod_api::TerrainModelOptions::default());
+            let mut options = mod_api::TerrainModelOptions::default();
+            options.tint = colour;
+            let _ = draw.terrain_model(m, options);
         }
     }
     draw.pop();

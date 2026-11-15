@@ -287,6 +287,9 @@ pub trait Subsystem: Sync {
         Flow::Continue
     }
 
+    /// `Hooks::player_tick_pre`, on either side.
+    fn player_tick_pre(&self, _host: HostSide, _event: &mut mod_api::PlayerTickPreEvent) {}
+
     /// `Hooks::player_tick_post`, on either side.
     fn player_tick(&self, _host: HostSide, _event: &mut PlayerTickPostEvent) {}
 
@@ -355,6 +358,11 @@ pub trait Subsystem: Sync {
     ) -> Flow {
         Flow::Continue
     }
+
+    /// After a key or mouse button was handled (`input_key`, `mouse_button_post`), with a
+    /// client that may be changed: what the read-only screen hooks left (a screen to close, edits
+    /// to send) goes now, in the same input as Create's, not at the next client tick.
+    fn input_handled(&self, _host: &mut dyn ClientHost) {}
 
     /// `Hooks::interaction_key_mapping_triggered`, on the client: `Flow::Cancel` when the
     /// click was taken.

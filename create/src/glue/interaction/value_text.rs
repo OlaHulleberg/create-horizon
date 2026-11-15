@@ -7,8 +7,8 @@
 //! block entity again with a count of the looks (`values::LOOKS`), as a kept block entity is drawn
 //! anew only when its data changes, and once more when the client looks away.
 //!
-//! Left out: the icon boxes (`IconValueBox`: bearings', pistons', arms', tunnels' modes: the
-//! icons are GUI sprites, which a block entity's draw has no atlas for), the ejector's number
+//! The icon boxes (`IconValueBox`: bearings', pistons', arms', tunnels' modes) are drawn as world
+//! quads with the icon atlas (`hud::value_box_outline`). Left out: the ejector's number
 //! (its block entity is the logistics one, drawn by another part; the same call would serve it) and the filter slots' items and counts (`FilteringRenderer`).
 
 use super::super::net;
@@ -71,7 +71,14 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
     if let Some(old) = before.filter(|b| Some(*b) != target && DRAWN.get() == Some(*b)) {
         net::send_to_server(host, VALUE_SETTINGS, &values::encode(&old));
     }
-    let Some(pos) = target.filter(|p| shown_block(host, *p).is_some()) else {
+    // An option box's icon is drawn from its setting too (`hud::value_box_outline`).
+    let icons = |p: [i32; 3]| {
+        let id = block_at(host, p);
+        super::super::client_table(host, |t| t.get(id).map(|(b, _)| b))
+            .flatten()
+            .is_some_and(|b| !super::values::option_icons(b).is_empty())
+    };
+    let Some(pos) = target.filter(|p| shown_block(host, *p).is_some() || icons(*p)) else {
         return;
     };
     let due = match ASKED.get() {

@@ -16,8 +16,7 @@
 //! stands on it (`block_step_on`, acted on at the level's tick) or a player
 //! does (their client asks, `create:ejector_trigger`), throwing them along its arc.
 //!
-//! Left out: dropping a chosen point or ejector target with a left click (see HORIZON_API.md),
-//! and the elytra a launched player deploys.
+//! Left out: the elytra a launched player deploys.
 
 use super::super::net;
 use super::super::server::ServerLevel;
@@ -2126,6 +2125,42 @@ pub fn select_ejector_target(
     }
     *event.cancellation_result = mod_api::InteractionResult::Success;
     mod_api::Flow::Cancel
+}
+
+/// `leftClickingBlocksDeselectsThem`: with the arm item in the main hand, a left click on a
+/// chosen point drops it (`ArmInteractionPointHandler`); sneaking with an ejector, one on the
+/// chosen target drops it (`EjectorTargetHandler`). The click is then taken: nothing is dug.
+pub fn left_click(host: &mut dyn ServerHost, pos: [i32; 3]) -> mod_api::Flow {
+    let Some(player) = host.players().acting_player() else {
+        return mod_api::Flow::Continue;
+    };
+    let held = crate::glue::items::held(&*host, player, mod_api::Hand::Main);
+    let uuid = player.uuid();
+    if is_arm_item(&*host, held.as_ref()) {
+        let removed = SELECTION.with_borrow_mut(|s| {
+            let list = s.get_mut(&uuid)?;
+            let i = list.iter().position(|(p, _)| p.pos == pos)?;
+            list.remove(i);
+            Some(())
+        });
+        if removed.is_some() {
+            send_selection(host, player);
+            return mod_api::Flow::Cancel;
+        }
+        return mod_api::Flow::Continue;
+    }
+    let ejector = held
+        .as_ref()
+        .is_some_and(|s| items::id_of(&*host, s) == "create:weighted_ejector");
+    if ejector
+        && crate::glue::items::sneaking(&*host, player)
+        && EJECTOR_TARGET.with_borrow(|t| t.get(&uuid) == Some(&pos))
+    {
+        EJECTOR_TARGET.with_borrow_mut(|t| t.remove(&uuid));
+        net::send_to_player(host, player, EJECTOR_TARGET_CHANNEL, &[]);
+        return mod_api::Flow::Cancel;
+    }
+    mod_api::Flow::Continue
 }
 
 /// `EjectorTargetHandler.getValidTargetDirection`: the way an ejector at `pos` faces to throw

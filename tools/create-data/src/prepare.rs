@@ -250,12 +250,38 @@ fn custom_rendered(name: &str) -> Option<Value> {
         "handheld_worldshaper" => &["item", "core", "core_glow", "accelerator"],
         // `ExtendoGripItemRenderer`: its arms, hand and cog posed by the mod's special model
         // renderer (`create:extendo_grip`, `glue/equipment.rs`).
+        // The glue's `create:extendo_grip_pose` node picks one by where it is drawn and the
+        // time (`item_model_update`): at rest away from a first-person hand, else as the swing
+        // left it; the cog turned to a 1/10 of its 45° repeat; the hand pointing, punching or
+        // holding.
         "extendo_grip" => {
-            return Some(json!({
-                "type": "minecraft:special",
-                "base": "create:item/extendo_grip",
-                "model": { "type": "create:extendo_grip" },
-            }));
+            let special = |animation: f64, cog: f64, hand: &str| {
+                json!({
+                    "type": "minecraft:special",
+                    "base": "create:item/extendo_grip",
+                    "model": {
+                        "type": "create:extendo_grip",
+                        "animation": animation,
+                        "cog": cog,
+                        "hand": hand,
+                    },
+                })
+            };
+            let mut models = Map::new();
+            for c in 0..GRIP_COG_STEPS {
+                let cog = c as f64 * 45.0 / GRIP_COG_STEPS as f64;
+                models.insert(format!("rest_{c}"), special(0.25, cog, "pointing"));
+                for a in 0..GRIP_SWING_STEPS {
+                    let animation = a as f64 / (GRIP_SWING_STEPS - 1) as f64;
+                    for hand in ["punching", "holding"] {
+                        models.insert(
+                            format!("hand_{a}_{c}_{hand}"),
+                            special(animation, cog, hand),
+                        );
+                    }
+                }
+            }
+            return Some(json!({ "type": "create:extendo_grip_pose", "models": models }));
         }
         "cardboard_sword" => {
             return Some(json!({
@@ -511,7 +537,8 @@ fn tinted_model(path: &str) -> Option<String> {
     let rest = path.strip_prefix("assets/create/models/block/")?;
     let coloured = rest.starts_with("factory_gauge/connections/")
         || rest == "mechanical_arm/lower_body.json"
-        || rest == "mechanical_arm/upper_body.json";
+        || rest == "mechanical_arm/upper_body.json"
+        || rest == "track_overlay/assembling.json";
     let stem = rest.strip_suffix(".json").filter(|_| coloured)?;
     Some(format!("assets/create/models/block/{stem}_tinted.json"))
 }
@@ -649,6 +676,68 @@ fn left_out(path: &str, bytes: &[u8]) -> Option<Value> {
     Some(json!({ "neoforge:conditions": [{ "type": "(removed)" }] }))
 }
 
+/// Vanilla's `template_chain` with `minecraft:block/iron_chain`, its texture scrolled `k` pixels
+/// down: the plane's top part shows the texture from `k` on, the bottom part its first `k` rows.
+fn scrolled_chain(k: u32) -> Value {
+    let k = f64::from(k);
+    let rotation = json!({ "origin": [8, 8, 8], "axis": "y", "angle": 45 });
+    let mut elements = Vec::new();
+    // (from, to, the face names, each face's u range)
+    let planes = [
+        (
+            [6.5, 8.0],
+            [9.5, 8.0],
+            ["north", "south"],
+            [[3.0, 0.0], [0.0, 3.0]],
+        ),
+        (
+            [8.0, 6.5],
+            [8.0, 9.5],
+            ["west", "east"],
+            [[6.0, 3.0], [3.0, 6.0]],
+        ),
+    ];
+    for (from, to, faces, us) in planes {
+        // (y from, y to, v from, v to), v running down from the face's top: the top part shows
+        // rows `k` to 16, the bottom part the wrapped rows 0 to `k`.
+        for (y0, y1, v0, v1) in [(k, 16.0, k, 16.0), (0.0, k, 0.0, k)] {
+            let mut f = Map::new();
+            for (name, u) in faces.iter().zip(us) {
+                f.insert(
+                    (*name).into(),
+                    json!({ "uv": [u[0], v0, u[1], v1], "texture": "#all" }),
+                );
+            }
+            elements.push(json!({
+                "from": [from[0], y0, from[1]],
+                "to": [to[0], y1, to[1]],
+                "rotation": rotation,
+                "shade_direction_override": "up",
+                "faces": f,
+            }));
+        }
+    }
+    json!({
+        "parent": "minecraft:block/block",
+        "textures": { "particle": "minecraft:block/iron_chain", "all": "minecraft:block/iron_chain" },
+        "elements": elements,
+    })
+}
+
+/// Steam jet frames a row of its grid sprite (the glue's `JET_GRID`).
+const JET_GRID: usize = 5;
+
+/// The extendo grip's cog angles within its 45° repeat, and its swing's steps (the glue's
+/// `GRIP_COG_STEPS`, `GRIP_SWING_STEPS`).
+const GRIP_COG_STEPS: usize = 10;
+const GRIP_SWING_STEPS: usize = 8;
+
+/// The fragment stage of the glue's textured world pipelines.
+const TEXTURED_SHADER: &str = "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
+    return pipeline_texture(input.uv) * input.color;
+}
+";
+
 pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, String> {
     let layered = layered(sources)?;
     let files = read_sources(sources)?;
@@ -783,6 +872,18 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             }
             // The coupling's entity models (`CouplingRenderer`) are drawn as part blocks: their
             // texture on the block atlas, the models beside the block models pointing at it.
+            // Create's special textures (`AllSpecialTextures`: the outliner's checkered and glue
+            // faces) on the block atlas too, where a world pipeline samples them.
+            if let Some(rest) = path.strip_prefix("assets/create/textures/special/") {
+                put(
+                    &format!("assets/create/textures/block/special/{rest}"),
+                    bytes,
+                )?;
+            }
+            // The icon atlas (`AllIcons`), for the value boxes' frames and icons in the world.
+            if path == "assets/create/textures/gui/icons.png" {
+                put("assets/create/textures/block/special/gui_icons.png", bytes)?;
+            }
             if path == "assets/create/textures/entity/coupling.png" {
                 put("assets/create/textures/block/entity/coupling.png", bytes)?;
             }
@@ -867,6 +968,61 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             &serde_json::to_vec_pretty(&doc).unwrap(),
         )?;
     }
+    // The chain conveyor's chain scrolled a pixel at a time (`ChainConveyorRenderer.renderChain`'s
+    // `minV`): vanilla's chain model with its texture shifted down `k` pixels, each plane split
+    // where the texture wraps. Made here as it names vanilla's chain sprite by id.
+    for k in 1..16 {
+        put(
+            &format!("assets/create/models/block/chain_conveyor/chain_{k}.json"),
+            &serde_json::to_vec_pretty(&scrolled_chain(k)).unwrap(),
+        )?;
+    }
+    // The steam jet's frames (`particles/steam_jet.json`) on the block atlas, in a square grid
+    // (`JET_GRID` a row, left to right then down) as an atlas sprite is square: the glue draws
+    // the jet's quads itself (`SteamJetParticle.render`) through a world pipeline, which samples
+    // one block atlas sprite.
+    let frames: Vec<&Vec<u8>> = (0..)
+        .map_while(|i| {
+            files.get(&format!(
+                "assets/create/textures/particle/steam_jet_{i}.png"
+            ))
+        })
+        .collect();
+    if !frames.is_empty() {
+        let images = frames
+            .iter()
+            .map(|b| crate::ct::decode(b))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (w, h) = (images[0].w as usize, images[0].h as usize);
+        let side = JET_GRID * w;
+        let mut px = vec![0u8; side * JET_GRID * h * 4];
+        for (i, im) in images.iter().enumerate().take(JET_GRID * JET_GRID) {
+            if (im.w as usize, im.h as usize) != (w, h) {
+                return Err("steam jet frames of different sizes".into());
+            }
+            let (cx, cy) = (i % JET_GRID, i / JET_GRID);
+            for y in 0..h {
+                let src = &im.px[y * w * 4..(y + 1) * w * 4];
+                let at = ((cy * h + y) * side + cx * w) * 4;
+                px[at..at + src.len()].copy_from_slice(src);
+            }
+        }
+        let grid = crate::ct::Image {
+            w: side as u32,
+            h: (JET_GRID * h) as u32,
+            px,
+        };
+        put(
+            "assets/create/textures/block/special/steam_jet.png",
+            &crate::ct::encode(&grid),
+        )?;
+    }
+    // The glue's world pipelines' fragment shader (`create:textured`): the sampled sprite tinted
+    // by the quad's colour, as a `position_tex_color` render type draws it. The port's own code.
+    put(
+        "assets/create/shaders/pipeline/textured.wgsl",
+        TEXTURED_SHADER.as_bytes(),
+    )?;
     // The jar layer (`[[jar]]` in horizon-mod.toml) also holds the data left out above (recipes for
     // other mods, the worldgen 26.3 cannot place, recipe advancements...): the mod's own file at
     // the same path keeps each out, as it was when the mod carried copies of what it kept.

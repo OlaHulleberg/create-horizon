@@ -2,7 +2,8 @@
 //! is attached to), its settings (a label, and the speed's direction, the stress's or power's
 //! display, the time's format) and the line written. The server opens it with what the link
 //! holds; the client sends the settings back when it closes (`DisplayLinkConfigurationPacket`),
-//! from its next tick (the screen hooks are given a read-only client).
+//! right after the key or click (`Subsystem::input_handled`: the screen hooks are given a
+//! read-only client).
 
 use crate::glue::net;
 use create_engine::display::{Config, Source};

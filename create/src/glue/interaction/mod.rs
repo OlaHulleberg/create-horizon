@@ -9,12 +9,10 @@
 //! within reach, not in adventure or spectator), and the setting comes back on `create:value`,
 //! which the client's value box and board show.
 //!
-//! Left out (no API for it):
-//! - The goggles' tooltip is drawn as a plain box of fills and text: Create draws vanilla's
-//!   tooltip background (`RemovedGuiUtils.drawHoveringText`); `DrawContext::gui_tooltip` takes
-//!   one colour per line where Create's lines change colour along the way.
-//! - An icon board's cursor shows the option's name below, not its icon (`AllIcons` tinted:
-//!   `DrawContext::sprite` takes a tint, but the port keeps no option's icon).
+//! The goggles' tooltip is drawn as `RemovedGuiUtils.drawHoveringText` draws it (its gradient
+//! box in the overlay's colours, faded in, each line's parts in their own colours), and the
+//! board with `ValueSettingsScreen`'s sprites (`create:gui/value_settings`, its icons from
+//! `create:gui/icons`).
 
 mod board;
 mod commands;

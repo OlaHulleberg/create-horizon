@@ -9,16 +9,21 @@
 //! client pick hook: `HORIZON_API.md`, Client).
 //! A whole netherite diving set makes its wearer immune to fire (`NetheriteDivingHandler`), and a
 //! diving helmet sees further under water, the netherite one in lava (`getFogDensity`). The
-//! extendo grip is drawn by a special item model (`GripModel`) at Create's resting pose: its cog
-//! does not turn and its arms don't reach out in a first-person hand (the renderer is asked once
-//! per stack, without the display context or the time).
+//! extendo grip is drawn by a special item model (`GripModel`) posed as Create's: an item model
+//! node of the glue's (`create:extendo_grip_pose`) picks, by where it is drawn and the game time,
+//! one of the poses `create-data prepare` lists (the cog turned to a tenth of its 45° repeat,
+//! the swing in eight steps, the hand pointing, punching or holding); the swing is started by
+//! a click in the world, as the client sees no swing progress.
 //! Free when unused: a player's tick reads their armour and hands and looks each item up once
 //! (the gear each item is, cached by key), and only backtanks with something to do tick.
 //!
-//! Left out, for want of the API: the diving boots' sinking (`DivingBootsItem
-//! .accelerateDescentUnderwater`), which moves the local player on its client from its movement
-//! input: a client can neither read the local player's input (`xxa`, `zza`) nor set its motion
-//! (`set_velocity` is the server's). The helmet keeps the wearer's air full on the server only: a client
+//! The diving boots sink the local player on its client (`DivingBootsItem
+//! .accelerateDescentUnderwater`, from its movement input and pushes to its velocity); their
+//! hold on swimming (`HeavyBootsOnPlayerMixin`: `isUnderWater` false, so no sprint-swimming)
+//! is left out, and the ground (`onGround || verticalCollision`, which a client can't read for
+//! its own player) is a block shape just under or over the player's box.
+//!
+//! Left out, for want of the API: the helmet keeps the wearer's air full on the server only: a client
 //! cannot set its own player's air (`set_air_supply` is the server's), and the server's value
 //! never changes, so the client's bubbles still run down (no damage is taken). Using a backtank's
 //! air rewrites the worn stack (`set_equipment`), which plays its equip sound each second: Create
@@ -85,6 +90,58 @@ thread_local! {
 }
 
 pub struct Equipment;
+
+thread_local! {
+    /// The local player's last movement input: forward, strafe, jump, sneak.
+    static INPUT: std::cell::Cell<(f32, f32, bool, bool)> =
+        const { std::cell::Cell::new((0.0, 0.0, false, false)) };
+}
+
+/// `DivingBootsItem.accelerateDescentUnderwater` for the local player, on its client (which
+/// moves it): in water, not swimming or flying, it sinks 0.05 a tick faster, jumps 0.5 off the
+/// ground, and walks 1.3 times as fast while slower than 0.145.
+fn diving_boots(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
+    if host.local_player() != Some(player) {
+        return;
+    }
+    let h: &dyn mod_api::Host = &*host;
+    let boots = h
+        .living(player.entity())
+        .and_then(|l| l.equipment(h, EquipmentSlot::Feet))
+        .is_some_and(|s| matches!(gear_of(h, &s), Gear::Boots(_)));
+    if !boots {
+        return;
+    }
+    let e = player.entity();
+    let in_water = e
+        .fluid_heights(h)
+        .is_some_and(|f| f.iter().any(|(id, _)| id == "minecraft:water"));
+    if !in_water || e.pose(h) == Some("swimming") || player.abilities(h).is_some_and(|a| a.flying) {
+        return;
+    }
+    let Some(v) = e.velocity(h) else {
+        return;
+    };
+    // `onGround() || verticalCollision`: the client has no ground flag to read for its own
+    // player, so a block shape just under or over its box counts.
+    let on_ground = e.bounding_box(h).is_some_and(|[lo, hi]| {
+        let level = h.level(h.dimension());
+        let touches = |y0: f64, y1: f64| {
+            level.is_some_and(|l| {
+                l.has_collisions(h, [lo[0], y0, lo[2], hi[0], y1, hi[2]]) == Some(true)
+            })
+        };
+        touches(lo[1] - 1.0e-3, lo[1]) || touches(hi[1], hi[1] + 1.0e-3)
+    });
+    let (forward, strafe, jump, sneak) = INPUT.get();
+    let mut push = [0.0f32; 3];
+    push[1] = if jump && on_ground { 0.5 } else { -0.05 };
+    if v[0].hypot(v[2]) < 0.145 && (forward > 0.0 || strafe != 0.0) && !sneak {
+        push[0] = (v[0] * 0.3) as f32;
+        push[2] = (v[2] * 0.3) as f32;
+    }
+    host.push_player(push);
+}
 
 impl Subsystem for Equipment {
     /// `BacktankBlock.useItemOn`: a player not sneaking, with no block in the main hand and
@@ -284,6 +341,28 @@ impl Subsystem for Equipment {
                 );
             }
         }
+    }
+
+    /// `ExtendoGripRenderHandler.tick`.
+    fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
+        grip_tick(host);
+    }
+
+    /// The start of the local player's tick on its client (`EntityTickEvent.Pre`): the diving
+    /// boots' sinking.
+    fn player_tick_pre(&self, host: HostSide, event: &mut mod_api::PlayerTickPreEvent) {
+        if let HostSide::Client(host) = host {
+            diving_boots(host, event.player);
+        }
+    }
+
+    /// The local player's movement input, for the diving boots (`zza`, `xxa`, `jumping`).
+    fn movement_input(
+        &self,
+        _host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::MovementInputEvent,
+    ) {
+        INPUT.set((event.forward, event.strafe, event.jump, event.sneak));
     }
 
     /// The end of a player's server tick (`EntityTickEvent`, `LivingBreatheEvent`): the extendo
@@ -1035,17 +1114,120 @@ impl Pose {
     }
 }
 
+/// The item model node type that picks the grip's pose (`create-data prepare` writes its
+/// models: `rest_<cog>` and `hand_<swing>_<cog>_<hand>`).
+pub(crate) const GRIP_POSE: &str = "create:extendo_grip_pose";
+/// The cog's angles within its 45° repeat, and the swing's steps, as `create-data` makes them.
+const GRIP_COG_STEPS: i64 = 10;
+const GRIP_SWING_STEPS: f32 = 8.0;
+
+thread_local! {
+    /// `ExtendoGripRenderHandler.mainHandAnimation` and `pose`: the swing the local player's
+    /// first-person grip shows, and whether its hand holds (a block in the main hand, the grip
+    /// in the off hand) or punches.
+    static GRIP_SWING: std::cell::Cell<(f32, bool)> = const { std::cell::Cell::new((0.0, false)) };
+}
+
+/// `onRenderPlayerHand`: a swing starting (a click in the world, no screen open) sets the
+/// grip's animation to 0.95 when it has fallen below it.
+pub(crate) fn grip_swing(
+    host: &mut dyn mod_api::ClientHost,
+    event: &mod_api::MouseButtonPostEvent,
+) {
+    if !event.pressed
+        || event.button > 1
+        || host.screen_title().is_some()
+        || host.mod_screen().is_some()
+    {
+        return;
+    }
+    let (a, hold) = GRIP_SWING.get();
+    GRIP_SWING.set((a.max(0.95), hold));
+}
+
+/// `ExtendoGripRenderHandler.tick`: the animation falls off, and the hand pose follows the
+/// hands (a block item stands in for `isGui3d`).
+pub(crate) fn grip_tick(host: &dyn mod_api::ClientHost) {
+    let (a, _) = GRIP_SWING.get();
+    let a = a * a.clamp(0.8, 0.99);
+    let hold = host.local_player().is_some_and(|p| {
+        let off = super::items::held(host, p, Hand::Off);
+        let main = super::items::held(host, p, Hand::Main);
+        off.is_some_and(|s| matches!(gear_of(host, &s), Gear::ExtendoGrip))
+            && main
+                .is_some_and(|s| super::logistics::items::is_block_item(host, &s.item().id(host)))
+    });
+    GRIP_SWING.set((a, hold));
+}
+
+/// `item_model_update` for the grip's node: in a first-person hand, the swing's pose and the
+/// cog turned on by it; elsewhere at rest (`animation` 0.25); the cog at `renderTime * -2`.
+pub(crate) fn grip_pose(
+    _host: &dyn mod_api::ClientHost,
+    event: &mut mod_api::ItemModelUpdateEvent<'_>,
+) {
+    if event.kind != GRIP_POSE {
+        return;
+    }
+    let time = event.level.map_or(0, |l| l.game_time);
+    let hand = matches!(
+        event.display,
+        mod_api::ItemDisplayContext::FirstPersonLeftHand
+            | mod_api::ItemDisplayContext::FirstPersonRightHand
+    );
+    let (swing, hold) = GRIP_SWING.get();
+    let step = (swing * (GRIP_SWING_STEPS - 1.0)).round() as i64;
+    let shown = step as f32 / (GRIP_SWING_STEPS - 1.0);
+    let mut angle = time as f32 * -2.0;
+    if hand {
+        angle += 360.0 * shown.powi(3);
+    }
+    let cog = ((angle.rem_euclid(45.0) / 45.0 * GRIP_COG_STEPS as f32) as i64) % GRIP_COG_STEPS;
+    event.models.push(if hand {
+        let pose = if hold { "holding" } else { "punching" };
+        format!("hand_{step}_{cog}_{pose}")
+    } else {
+        format!("rest_{cog}")
+    });
+}
+
+/// A number in a special model's config (its JSON converted to NBT).
+fn config_number(config: &Tag, key: &str) -> Option<f32> {
+    let Tag::Compound(c) = config else {
+        return None;
+    };
+    Some(match c.get(&key.into())? {
+        Tag::Double(v) => f64::from_bits(*v) as f32,
+        Tag::Float(v) => f32::from_bits(*v),
+        Tag::Int(v) => *v as f32,
+        Tag::Long(v) => *v as f32,
+        Tag::Short(v) => f32::from(*v),
+        Tag::Byte(v) => f32::from(*v),
+        _ => return None,
+    })
+}
+
 impl mod_api::SpecialModelRenderer for GripModel {
+    /// `ExtendoGripItemRenderer.render` for the pose its node names: `animation` (before it is
+    /// cubed), the cog's turn `cog` and the hand.
     fn extract(
         &self,
         _host: &dyn mod_api::ClientHost,
         _stack: &ItemStack,
-        _config: &Tag,
+        config: &Tag,
     ) -> Result<Vec<mod_api::SpecialModelPart>, String> {
         const ROT: [f32; 3] = [0.0, 0.5, 0.5];
         const BACK: [f32; 3] = [0.0, -0.5, -0.5];
         let item = |m: &str| format!("create:item/extendo_grip/{m}");
-        let animation: f32 = 0.25f32.powi(3);
+        let animation: f32 = config_number(config, "animation").unwrap_or(0.25).powi(3);
+        let cog = config_number(config, "cog").unwrap_or(0.0);
+        let hand = match config {
+            Tag::Compound(c) => match c.get(&"hand".into()) {
+                Some(Tag::String(s)) => s.to_string_lossy(),
+                _ => "pointing".to_owned(),
+            },
+            _ => "pointing".to_owned(),
+        };
         let extension = 24.0 + (156.0 - 24.0) * animation;
         let half = extension / 2.0;
         let opposite = 180.0 - extension;
@@ -1077,9 +1259,13 @@ impl mod_api::SpecialModelRenderer for GripModel {
         ms = ms.rotate(0, 180.0 - half).rotate(1, 180.0);
         ms = ms.translate([0.0, 0.0, -4.0 / 16.0]);
         ms = ms.scale([1.0, 1.0, 1.0 / (1.0 + animation)]);
-        parts.push(ms.part("create:block/deployer/hand_pointing"));
-        // The cog, still.
-        parts.push(Pose::IDENTITY.part(&item("cog")));
+        parts.push(ms.part(&format!("create:block/deployer/hand_{hand}")));
+        // The cog, turned about its middle (`COG_ROTATION_OFFSET`).
+        let cog_pose = Pose::IDENTITY
+            .translate([0.0, 1.0 / 16.0, 0.0])
+            .rotate(2, cog)
+            .translate([0.0, -1.0 / 16.0, 0.0]);
+        parts.push(cog_pose.part(&item("cog")));
         Ok(parts)
     }
 }

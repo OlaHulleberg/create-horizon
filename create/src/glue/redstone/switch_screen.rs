@@ -5,8 +5,8 @@
 //! the server with what the switch holds; while it is open the client asks again every ten
 //! ticks for what the switch reads (Create's screen reads its client block entity each frame).
 //! It sends its settings back 20 ticks after the last change, on inverting and when it closes
-//! (`ConfigureThresholdSwitchPacket`), from its next tick (the screen hooks are given a
-//! read-only client). Create's link from the block's item to the Ponder tag is left out with
+//! (`ConfigureThresholdSwitchPacket`), right after the key or click (`Subsystem::input_handled`:
+//! the screen hooks are given a read-only client). Create's link from the block's item to the Ponder tag is left out with
 //! Ponder.
 
 use super::block_at;
@@ -519,11 +519,19 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
             send.push(ask);
         }
     });
+    for m in send {
+        net::send_to_server(host, CHANNEL, &m);
+    }
+    flush(host);
+}
+
+/// What the hooks left: closing and sending, and the settings once the screen is gone.
+pub(super) fn flush(host: &mut dyn ClientHost) {
     let later = LATER.with_borrow_mut(std::mem::take);
     if later.close {
         host.mod_screen_close(MOD);
     }
-    for m in send.into_iter().chain(later.send) {
+    for m in later.send {
         net::send_to_server(host, CHANNEL, &m);
     }
     if host.mod_screen() != Some(MOD)

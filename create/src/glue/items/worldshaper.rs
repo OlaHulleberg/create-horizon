@@ -5,19 +5,19 @@
 //! `ConfigureWorldshaperPacket` and are kept in its custom data under Create's component names.
 //! While held, the client outlines the blocks a use would reach (`WorldshaperRenderHandler`).
 //!
-//! The outline's faces show Create's checkered face texture (`AllSpecialTextures.CHECKERED`:
-//! white, its two squares at alphas 0x00 and 0x00, once over each block face) as quads of those
-//! alphas in the outline's colour, as world quads take no texture.
+//! Its faces are covered with `AllSpecialTextures.CHECKERED` through the glue's textured world
+//! pipeline (`pipelines`).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::worldshaper_screen::{self as screen, Configure};
 use super::{Item, action_bar, custom, held, is, set_custom, set_held, sneaking};
+use crate::glue::pipelines::Textured;
 use create_engine::kinetics::Dir;
 use create_engine::worldshaper as ws;
 use mod_api::{
     BlockFace, BlockState, ClientHost, ClipBlock, ClipFluid, Hand, Host, HostBlockStates, HostSide,
-    InteractionResult, ItemPart, ItemStack, LevelRef, PlayerRef, RenderLevelStage,
+    InteractionResult, ItemPart, ItemStack, LevelRef, PipelineQuad, PlayerRef, RenderLevelStage,
     RenderLevelStageEvent, ServerHost, SoundSource, SupportType, Tag, UseItemEvent, UseOnEvent,
     WorldDepth, WorldLine, WorldQuad,
 };
@@ -516,7 +516,6 @@ fn outlined(host: &dyn ClientHost) -> Option<Vec<[i32; 3]>> {
 /// `Outliner.showCluster(..).colored(0xbfbfbf).lineWidth(1 / 32f)`: the outer edges of the
 /// blocks' union, and its outer faces.
 pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-    let _ = host;
     if event.stage != RenderLevelStage::AfterTranslucentBlocks {
         return;
     }
@@ -524,8 +523,21 @@ pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelS
         if cells.is_empty() {
             return;
         }
-        let (lines, quads) = cluster(cells);
-        let _ = event.draw.quads(&quads);
+        let (lines, quads, uvs) = cluster(cells);
+        // `withFaceTexture(AllSpecialTextures.CHECKERED)`: each face the checkerboard, in the
+        // outline's colour; without the pipeline, its squares as quads of their alphas.
+        let checkered = crate::glue::pipelines::resolve(host, Textured::Checkered);
+        let drawn = checkered.is_some_and(|p| {
+            let faces: Vec<PipelineQuad> = quads
+                .iter()
+                .zip(&uvs)
+                .map(|(q, uv)| PipelineQuad::new(q.corners, *uv, OUTLINE))
+                .collect();
+            event.draw.pipeline_quads(p, &faces).is_ok()
+        });
+        if !drawn {
+            let _ = event.draw.quads(&quads);
+        }
         let _ = event.draw.lines(&lines);
     });
 }
@@ -544,13 +556,15 @@ const FIRST_CORNER: [[i32; 3]; 6] = [
 ];
 
 /// The faces between a member and a non-member, and the edges of those faces that don't run on
-/// into a flat continuation of the same face.
-fn cluster(cells: &[[i32; 3]]) -> (Vec<WorldLine>, Vec<WorldQuad>) {
+/// into a flat continuation of the same face; each face as its checkerboard's four squares, with
+/// their texture coordinates (`(0, 0)` at the face's first corner).
+fn cluster(cells: &[[i32; 3]]) -> (Vec<WorldLine>, Vec<WorldQuad>, Vec<[[f32; 2]; 4]>) {
     let set: HashSet<[i32; 3]> = cells.iter().copied().collect();
     let add = |a: [i32; 3], b: [i32; 3]| [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
     let exposed = |p: [i32; 3], d: Dir| set.contains(&p) && !set.contains(&add(p, d.offset()));
     let mut lines = Vec::new();
     let mut quads = Vec::new();
+    let mut uvs = Vec::new();
     for &p in &set {
         for d in Dir::ALL {
             if !exposed(p, d) {
@@ -563,7 +577,7 @@ fn cluster(cells: &[[i32; 3]]) -> (Vec<WorldLine>, Vec<WorldQuad>) {
                 1 => (0, 2),
                 _ => (0, 1),
             };
-            // The face's plane, a hair outside the block.
+            // The face's plane, 1/128 outside the block (`bufferBlockFace`).
             let plane = f64::from(p[axis])
                 + if n[axis] > 0 { 1.0 } else { 0.0 }
                 + f64::from(n[axis]) / 128.0;
@@ -591,16 +605,19 @@ fn cluster(cells: &[[i32; 3]]) -> (Vec<WorldLine>, Vec<WorldQuad>) {
                     c
                 };
                 let (x0, y0) = (lo(a), lo(b));
+                let ends = [
+                    (x0, y0),
+                    (x0 + 0.5, y0),
+                    (x0 + 0.5, y0 + 0.5),
+                    (x0, y0 + 0.5),
+                ];
                 quads.push(WorldQuad::new(
-                    [
-                        at(x0, y0),
-                        at(x0 + 0.5, y0),
-                        at(x0 + 0.5, y0 + 0.5),
-                        at(x0, y0 + 0.5),
-                    ],
+                    ends.map(|(x, y)| at(x, y)),
                     alpha << 24 | (OUTLINE & 0xFF_FFFF),
                     WorldDepth::Tested,
                 ));
+                let uv = |x: f64, k: i32| (x - f64::from(k)).abs() as f32;
+                uvs.push(ends.map(|(x, y)| [uv(x, fu), uv(y, fv)]));
             }
             // Each edge: (step to the neighbour across it, its two ends).
             for (step, a, b) in [
@@ -620,7 +637,7 @@ fn cluster(cells: &[[i32; 3]]) -> (Vec<WorldLine>, Vec<WorldQuad>) {
             }
         }
     }
-    (lines, quads)
+    (lines, quads, uvs)
 }
 
 #[cfg(test)]
@@ -628,11 +645,11 @@ mod tests {
     #[test]
     fn a_cluster_outlines_its_outer_edges_once_per_face() {
         // One block: 6 faces, 4 edges each.
-        let (lines, quads) = super::cluster(&[[0, 0, 0]]);
-        assert_eq!((lines.len(), quads.len()), (24, 6 * 4));
+        let (lines, quads, uvs) = super::cluster(&[[0, 0, 0]]);
+        assert_eq!((lines.len(), quads.len(), uvs.len()), (24, 6 * 4, 6 * 4));
         // Two side by side: 10 faces; the shared face's edges are gone from the four faces
         // that run on, which keep 3 edges each.
-        let (lines, quads) = super::cluster(&[[0, 0, 0], [1, 0, 0]]);
+        let (lines, quads, _) = super::cluster(&[[0, 0, 0], [1, 0, 0]]);
         assert_eq!(quads.len(), 10 * 4);
         assert_eq!(lines.len(), 2 * 4 + 8 * 3);
     }

@@ -39,15 +39,6 @@ impl Hooks for Create {
         }
     }
 
-    /// The schematic outline's checkerboard (`glue::schematics`).
-    fn register_render_pipelines(
-        &self,
-        _cx: &RegistrationContext,
-        event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
-    ) {
-        glue::schematics::render_pipelines(event.pipelines);
-    }
-
     fn standalone_models(&self, _cx: &RegistrationContext, event: &mut StandaloneModelsEvent<'_>) {
         for s in SUBSYSTEMS {
             s.standalone_models(event.models);
@@ -219,6 +210,33 @@ impl Hooks for Create {
         }
     }
 
+    /// The glue's textured world pipelines (`glue::pipelines`) and the schematic outline's
+    /// checkerboard (`glue::schematics`).
+    fn register_render_pipelines(
+        &self,
+        _context: &RegistrationContext,
+        event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
+    ) {
+        glue::pipelines::register(event);
+        glue::schematics::render_pipelines(event.pipelines);
+    }
+
+    fn register_item_models(
+        &self,
+        _context: &RegistrationContext,
+        event: &mut mod_api::RegisterItemModelsEvent<'_>,
+    ) {
+        event.models.push(glue::equipment::GRIP_POSE.into());
+    }
+
+    fn item_model_update(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ItemModelUpdateEvent<'_>,
+    ) {
+        glue::equipment::grip_pose(host, event);
+    }
+
     fn register_special_model_renderer(
         &self,
         _context: &RegistrationContext,
@@ -307,6 +325,12 @@ impl Hooks for Create {
         until_cancel(|s| s.key_mapping_pre(host, event))
     }
 
+    fn player_tick_pre(&self, mut host: HostSide, event: &mut mod_api::PlayerTickPreEvent) {
+        for s in SUBSYSTEMS {
+            s.player_tick_pre(reborrow(&mut host), event);
+        }
+    }
+
     fn player_tick_post(&self, mut host: HostSide, event: &mut PlayerTickPostEvent) {
         for s in SUBSYSTEMS {
             s.player_tick(reborrow(&mut host), event);
@@ -369,6 +393,20 @@ impl Hooks for Create {
     fn input_key(&self, host: &mut dyn ClientHost, event: &mut InputKeyEvent<'_>) {
         for s in SUBSYSTEMS {
             s.input_key(host, event);
+        }
+        for s in SUBSYSTEMS {
+            s.input_handled(host);
+        }
+    }
+
+    fn mouse_button_post(
+        &self,
+        host: &mut dyn ClientHost,
+        event: &mut mod_api::MouseButtonPostEvent,
+    ) {
+        glue::equipment::grip_swing(host, event);
+        for s in SUBSYSTEMS {
+            s.input_handled(host);
         }
     }
 

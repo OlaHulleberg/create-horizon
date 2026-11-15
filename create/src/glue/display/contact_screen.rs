@@ -3,7 +3,8 @@
 //! click on the contact (anything but the wrench) opens it from the server with what the
 //! contact holds (Create's client reads its own block entity); Enter or the confirm button sends
 //! the names and setting back (`ElevatorContactEditPacket`, from within 20 blocks) and closes it,
-//! from the next client tick (the screen hooks get a read-only client). Escape closes it without
+//! right after the key or click (`Subsystem::input_handled`: the screen hooks get a read-only
+//! client). Escape closes it without
 //! sending.
 
 use crate::glue::net;

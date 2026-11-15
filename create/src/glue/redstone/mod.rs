@@ -347,6 +347,10 @@ impl Subsystem for Redstone {
         switch_screen::reset();
     }
 
+    fn input_handled(&self, host: &mut dyn ClientHost) {
+        switch_screen::flush(host);
+    }
+
     fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
         switch_screen::screen_render_post(host, event);
     }
