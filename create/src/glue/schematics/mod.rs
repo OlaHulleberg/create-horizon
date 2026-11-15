@@ -2157,7 +2157,6 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
         pos: [0; 3],
         found: None,
     };
-    let mut placed = 0;
     while printer.advance(|i| entries[i as usize].defer) {
         let target = printer.target();
         if printer.stage == cn::Stage::Entities {
@@ -2194,12 +2193,7 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
             Some(to) => w.place_belt(target, state, to, &casings),
             None => w.place(target, state),
         }
-        placed += 1;
     }
-    crate::create_log!(
-        "[create] printed {placed} blocks of {:?} instantly",
-        data.file
-    );
 }
 
 /// A cannon's options (`ConfigureSchematicannonPacket`) and state.
