@@ -638,6 +638,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     let mut touched = with(dim, |pk| std::mem::take(&mut pk.changed));
     let now = now(lv);
     if with(dim, |pk| pk.is_idle()) && GONE.with_borrow(Vec::is_empty) {
+        frog_draw::sync(lv);
         box_draw::sync(lv);
         analog_touched(lv, &touched);
         mark_unsaved(dim, &[]);
@@ -1605,6 +1606,9 @@ pub(crate) fn use_port(
     }
     let dimension = click.dimension.key().id().to_owned();
     let mut lv = ServerLevel::new(host, &dimension)?;
+    if frog_draw::put_on_goggles(&mut lv, click) {
+        return Some(InteractionResult::Success);
+    }
     if port_clipboard(&mut lv, player, click.pos) {
         return Some(InteractionResult::Success);
     }
@@ -2439,7 +2443,11 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                 ("Pos", pos_tag(*p)),
                 (
                     "Frog",
-                    Tag::IntArray(vec![i32::from(port.frog), i32::from(port.accepts)]),
+                    Tag::IntArray(vec![
+                        i32::from(port.frog),
+                        i32::from(port.accepts),
+                        i32::from(port.goggles),
+                    ]),
                 ),
                 ("AddressFilter", Tag::String(port.filter.as_str().into())),
                 ("Inventory", Tag::List(items)),
@@ -2656,6 +2664,7 @@ fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
             let frog = f.first().is_some_and(|v| *v != 0);
             let port = pk.port(pos, frog);
             port.accepts = f.get(1).is_none_or(|v| *v != 0);
+            port.goggles = f.get(2).is_some_and(|v| *v != 0);
             port.filter = text(c.get(&"AddressFilter".into()));
             if let Some(Tag::List(items)) = c.get(&"Inventory".into()) {
                 for t in items {

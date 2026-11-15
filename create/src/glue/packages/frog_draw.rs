@@ -5,8 +5,7 @@
 //! tick an animation started, whether it deposits, and its package.
 //!
 //! Left out: the anticipation before a package arrives (`anticipate`), the head opening while
-//! its screen is open (`manualOpenAnimationProgress`), goggles on a frogport, and the address
-//! shown over it on hover.
+//! its screen is open (`manualOpenAnimationProgress`) and the address shown over it on hover.
 
 use super::super::server::ServerLevel;
 use super::{body, chain, with};
@@ -20,10 +19,11 @@ use std::collections::HashMap;
 /// The key of a frogport's state in its block entity's data.
 pub const FROG: &str = "Frog";
 
-const MODELS: [&str; 3] = [
+const MODELS: [&str; 4] = [
     "create:block/package_frogport/body",
     "create:block/package_frogport/head",
     "create:block/package_frogport/tongue",
+    "create:block/package_frogport/head_goggles",
 ];
 
 pub(super) fn models() -> impl Iterator<Item = String> {
@@ -38,6 +38,7 @@ struct Shown {
     animating: bool,
     deposit: bool,
     item: String,
+    goggles: bool,
 }
 
 thread_local! {
@@ -81,6 +82,7 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
                             .as_ref()
                             .map(|b| b.stack.item().id(host))
                             .unwrap_or_default(),
+                        goggles: p.goggles,
                     },
                 )
             })
@@ -100,6 +102,7 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
             ("Animating", Tag::Byte(i8::from(s.animating))),
             ("Deposit", Tag::Byte(i8::from(s.deposit))),
             ("Item", Tag::String(s.item.as_str().into())),
+            ("Goggles", Tag::Byte(i8::from(s.goggles))),
         ];
         if let Some(t) = s.target {
             c.push((
@@ -121,6 +124,40 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
             SENT.with_borrow_mut(|m| m.insert((dim, pos), s));
         }
     }
+}
+
+/// `FrogportBlockEntity.use`: goggles in the main hand go on a frogport without them (the
+/// stack is kept), with the gold armour's sound.
+pub(super) fn put_on_goggles(lv: &mut ServerLevel<'_>, click: &mod_api::BlockClick<'_>) -> bool {
+    let host: &dyn mod_api::Host = &*lv.host;
+    if click.hand != mod_api::Hand::Main
+        || click
+            .stack
+            .is_none_or(|s| s.item().id(host) != "create:goggles")
+    {
+        return false;
+    }
+    let pos = click.pos;
+    let done = with(lv.dim, |pk| match pk.ports.get_mut(&pos) {
+        Some(p) if p.frog && !p.goggles => {
+            p.goggles = true;
+            pk.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            true
+        }
+        _ => false,
+    });
+    if done {
+        let at = pos.map(|v| f64::from(v) + 0.5);
+        let _ = lv.level.play_sound(
+            &mut *lv.host,
+            "minecraft:item.armor.equip_gold",
+            at,
+            mod_api::SoundSource::Blocks,
+            0.5,
+            1.0,
+        );
+    }
+    done
 }
 
 fn model(draw: &mut dyn BlockEntityDrawContext, host: &dyn ClientHost, file: &'static str) {
@@ -245,7 +282,12 @@ impl BlockEntityPart for FrogDraw {
         model(draw, host, MODELS[0]);
         draw.push();
         draw.rotate_about([1.0, 0.0, 0.0], head_pitch, [0.5, 10.0 / 16.0, 11.0 / 16.0]);
-        model(draw, host, MODELS[1]);
+        // `FROGPORT_HEAD_GOGGLES` on one wearing goggles.
+        model(
+            draw,
+            host,
+            MODELS[if flag(&frog, "Goggles") { 3 } else { 1 }],
+        );
         draw.pop();
         if tongue_length > 0.0 {
             draw.push();
