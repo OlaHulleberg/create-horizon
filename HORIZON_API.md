@@ -132,6 +132,14 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   so crushing wheels hurt with vanilla's `cramming`, which also goes through armour, saws and drills (standing
   or moving, with moving rollers) and a train running a mob over (`run_over`) with `generic`, and fans with
   `lava` (blasting) and `in_fire` (smoking).
+- **A portal's destination** (`Portal.getPortalDestination`: vanilla's `PortalForcer` finding the matching
+  nether portal in the other dimension, or building one): Create links a track run into a nether portal to a
+  track out of the portal it leads to (`AllPortalTracks.fromPortal`, `PortalTrackProvider`) and trains cross
+  between dimensions on it (`Carriage`'s portal entry, `TRAIN_PORTAL`). No API finds or makes the exit portal
+  (no POI search, no portal forcer), so the port has no portal tracks and `train_portal` is never given.
+  `LevelRef::portal_destination(self, &mut dyn ServerHost, portal: [i32; 3], axis) -> Option<(LevelRef,
+  [i32; 3])>` (the exit portal block, made if missing as an entity's travel would) would close the API half;
+  the port's railway would then need its graph to span levels.
 - **Moving colliders**: players cannot stand on, or be pushed by, bearings' and pistons' structures, trains or
   minecart contraptions (`notes/moving-structures-note.md`). A train still hurts and throws a grounded entity its
   blocks meet (`handleDamageFromTrain`, the glue's own overlap test, `glue/trains/actors.rs`), but the entity
