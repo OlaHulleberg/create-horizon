@@ -344,6 +344,7 @@ impl Subsystem for Fluids {
         &[
             TANK,
             TANK_FLUIDS,
+            SPOUT_START,
             HOSE,
             BOILER,
             rims::RIMS,
