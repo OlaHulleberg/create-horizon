@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/contraption_controls/indicator_4",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/contraption_controls/indicator_4",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/contraption_controls/indicator_4"
+    },
+    "facing=west": {
+      "model": "create:block/contraption_controls/indicator_4",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/contraption_controls/indicator_4",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/contraption_controls/indicator_4",
+      "x": 270
+    }
+  }
+}

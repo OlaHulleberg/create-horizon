@@ -1,0 +1,30 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/copper_backtank/block_shaft_input",
+      "x": 90
+    },
+    "facing=east": {
+      "model": "create:block/copper_backtank/block_shaft_input",
+      "x": 90,
+      "y": 90
+    },
+    "facing=south": {
+      "model": "create:block/copper_backtank/block_shaft_input",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create:block/copper_backtank/block_shaft_input",
+      "x": 90,
+      "y": 270
+    },
+    "facing=up": {
+      "model": "create:block/copper_backtank/block_shaft_input"
+    },
+    "facing=down": {
+      "model": "create:block/copper_backtank/block_shaft_input",
+      "x": 180
+    }
+  }
+}

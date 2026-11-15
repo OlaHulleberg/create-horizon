@@ -78,6 +78,20 @@ impl BlockData {
     }
 }
 
+/// Whether the deployer at block `local` of contraption `key` punches (`Mode.PUNCH`).
+pub(super) fn deployer_punches(dim: usize, key: [i32; 3], local: [i32; 3]) -> bool {
+    HELD.with_borrow(|m| {
+        m.get(&(dim, key)).is_some_and(|held| {
+            held.iter().any(|(o, d)| {
+                *o == local
+                    && d.deployer
+                        .as_ref()
+                        .is_some_and(|d| d.mode == create_engine::deployer::Mode::Punch)
+            })
+        })
+    })
+}
+
 /// The world closed: what moving contraptions carried goes with it.
 pub(super) fn forget() {
     STORAGE.with_borrow_mut(HashMap::clear);
@@ -1082,6 +1096,7 @@ pub(super) fn release(
         if lv.create_block(p) == Some(Block::ContraptionControls) {
             c.disabled = actors::stays_disabled(&carried.disabled, &c.filter);
             with_world(|w| w.dims[dim].controls.insert(p, c));
+            super::actor_draw::sync_controls(lv, p);
             settled = true;
         }
     }
@@ -2436,6 +2451,7 @@ pub(super) fn tick_mounted(lv: &mut ServerLevel<'_>) {
         });
         if changed == Some(true) {
             mark_pos_unsaved(dim, pos);
+            super::actor_draw::sync_controls(lv, pos);
         }
     }
     for pos in psis {
@@ -2458,22 +2474,30 @@ pub(super) fn tick_mounted(lv: &mut ServerLevel<'_>) {
     if !running {
         return;
     }
-    with_world(|w| {
+    let ticked = with_world(|w| {
         let d = &mut w.dims[dim];
         let mut list = std::mem::take(&mut d.psi_running);
+        let mut ticked = Vec::new();
         list.retain(|p| {
             let Some(s) = d.psis.get_mut(p) else {
                 return false;
             };
             let was = s.is_connected();
             s.tick();
+            ticked.push((*p, *s));
             if was != s.is_connected() {
                 d.analog_checks.push(*p);
             }
             !s.idle()
         });
         d.psi_running = list;
-    });
+        ticked
+    })
+    .unwrap_or_default();
+    // Their clients run the timers on, and hear when theirs would be wrong.
+    for (p, s) in ticked {
+        super::actor_draw::sync_interface(lv, p, &s);
+    }
 }
 
 /// A roller's item placed it (`setPlacedBy` → `searchForSharedValues`, at the level's tick).
@@ -2595,6 +2619,7 @@ fn use_mounted(
     })?;
     controls_status(lv, c.player, pos, filter.as_deref(), on);
     mark_pos_unsaved(dim, pos);
+    super::actor_draw::sync_controls(lv, pos);
     Some(InteractionResult::Success)
 }
 

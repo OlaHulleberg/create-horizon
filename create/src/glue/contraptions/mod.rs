@@ -43,11 +43,19 @@
 //! - The state the engine keeps per block for other Create blocks (a creative motor's speed, a
 //!   blaze burner's fuel, a basin's fluids, a link's frequency) is not carried.
 //! - What block entities hold is not drawn on a moving structure (a depot's item, a tank's
-//!   fluid, a deployer's pole and hand); actors' heads are drawn at rest.
+//!   fluid, a deployer's held item).
+//!
+//! Actors' moving parts are drawn as Create's actor visuals draw them (`actor_draw`): drill heads
+//! turn, harvester blades and roller wheels roll, saw blades run, deployers stroke and punch,
+//! interfaces reach out when they dock, from the structure's motion and what the server tells of
+//! its stall, its actors turned off and its interfaces. A carried mechanical bearing's top stays
+//! at rest on the structure, as Create's does when nothing is stabilized on it
+//! (`StabilizedBearingMovementBehaviour`).
 //! - A bearing's glue stays in the world while it turns and goes back turned with it; its
 //!   contraption controls are not carried.
 //! - An elevator contact's door control has no value box: doors open on every side.
 
+pub mod actor_draw;
 pub mod actors;
 mod bearings;
 mod blast;

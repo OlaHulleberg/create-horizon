@@ -11,6 +11,7 @@ use super::super::server::ServerLevel;
 use super::super::states;
 use super::super::subsystem::Subsystem;
 use super::super::world::{level_index, with_world};
+use super::actor_draw::{self, Frame, Motion};
 use super::state_text;
 use create_engine::contraption::Turn;
 use create_engine::elevator::{ColumnKey, Elevator};
@@ -45,16 +46,23 @@ pub struct Drawing;
 
 impl Subsystem for Drawing {
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[KEY]
+        &[
+            KEY,
+            actor_draw::ACTORS,
+            actor_draw::PSI,
+            actor_draw::CONTROLS_OFF,
+        ]
     }
 
     fn animated(
         &self,
-        _block: create_engine::Block,
+        block: create_engine::Block,
         _pos: [i32; 3],
         entity: &mod_api::ModBlockEntity,
     ) -> bool {
         moving(&entity.nbt)
+            || (holds_structure(&entity.nbt) && actor_draw::view(&entity.nbt).is_some())
+            || actor_draw::animated(block, entity)
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
@@ -67,10 +75,14 @@ impl Subsystem for Drawing {
         if let Err(e) = r.block_entity_part(&kind, StructurePart) {
             crate::create_log!("[create] the contraption drawing part was refused: {e:?}");
         }
+        if let Err(e) = r.block_entity_part(&kind, actor_draw::PlacedActors) {
+            crate::create_log!("[create] the actors' drawing part was refused: {e:?}");
+        }
     }
 
     fn world_closed(&self) {
         LOADED.with_borrow_mut(Vec::clear);
+        actor_draw::forget();
     }
 
     /// Anchors that came back with a structure in their data that is not running (a piston or
@@ -248,6 +260,7 @@ fn write(lv: &mut ServerLevel<'_>, anchor: [i32; 3], c: Option<Compound>) {
 /// The anchor at `anchor` draws nothing (its structure stopped or came apart).
 pub(super) fn hide(lv: &mut ServerLevel<'_>, anchor: [i32; 3]) {
     write(lv, anchor, None);
+    actor_draw::hide_actors(lv, anchor);
 }
 
 /// A bearing's structure (offsets from the bearing) turning about its axis through the
@@ -480,6 +493,17 @@ enum Shape {
     },
 }
 
+/// The axis `v` (a unit axis vector) lies along.
+fn axis_enum(v: [f32; 3]) -> Axis {
+    if v[0] != 0.0 {
+        Axis::X
+    } else if v[2] != 0.0 {
+        Axis::Z
+    } else {
+        Axis::Y
+    }
+}
+
 fn axis_vector(i: i32) -> [f32; 3] {
     match i {
         0 => [1.0, 0.0, 0.0],
@@ -574,6 +598,7 @@ thread_local! {
 
 fn client_reset() {
     SHOWN.with_borrow_mut(HashMap::clear);
+    actor_draw::client_reset();
 }
 
 /// Each client tick: elevators run on as the server runs them.
@@ -597,7 +622,12 @@ fn client_tick(_host: &mut dyn ClientHost) {
     });
 }
 
-fn draw_blocks(draw: &mut dyn BlockEntityDrawContext, blocks: &[Drawn]) {
+/// Draws a structure's blocks; `actors`: its actors' moving parts this frame (none: at rest).
+fn draw_blocks(
+    draw: &mut dyn BlockEntityDrawContext,
+    blocks: &[Drawn],
+    actors: Option<&Frame<'_>>,
+) {
     let own = draw.light();
     for b in blocks {
         let props: Vec<(&str, &str)> = b
@@ -610,7 +640,25 @@ fn draw_blocks(draw: &mut dyn BlockEntityDrawContext, blocks: &[Drawn]) {
         draw.translate(b.at);
         draw.block(b.block, &props);
         if let Some((block, info)) = b.create {
-            draw_parts(draw, block, &info, &props);
+            let actor = actors.filter(|_| actor_draw::draws(block));
+            draw_parts(draw, block, &info, &props, actor.is_some());
+            match actor {
+                Some(frame) => {
+                    let local = b.at.map(|v| v.round() as i32);
+                    actor_draw::draw_moving(draw, frame, block, &info, local);
+                }
+                // No word of its actors yet (or a clock's hands): at rest.
+                None if actor_draw::draws(block)
+                    && block != create_engine::Block::MechanicalDrill =>
+                {
+                    let rest = actor_draw::Doing {
+                        lit: true,
+                        ..actor_draw::Doing::default()
+                    };
+                    actor_draw::actor_parts(&mut actor_draw::Drawing(draw), block, &info, &rest);
+                }
+                None => {}
+            }
         }
         // `BlazeBurnerMovementBehaviour.renderInContraption`: a carried burner's blaze.
         if b.block == states::key(create_engine::Block::BlazeBurner) {
@@ -663,19 +711,21 @@ fn whole_model(block: create_engine::Block) -> bool {
 
 /// A moving block's kinetic parts at rest (`ContraptionKineticRenderer`: what its block
 /// entity's visual draws in the world, its shafts, cogs, drill head or fan blades), over its
-/// block model; none for a block whose model is already all of it.
+/// block model; none for a block whose model is already all of it. An actor drawn moving
+/// (`actor`) draws its own drill head.
 fn draw_parts(
     draw: &mut dyn BlockEntityDrawContext,
     block: create_engine::Block,
     info: &create_engine::parts::StateInfo,
     props: &[(&str, &str)],
+    actor: bool,
 ) {
     use create_engine::client::{Model, draws};
     if whole_model(block) {
         return;
     }
     for d in draws(block, info, [0; 3], [0.0; 2]) {
-        if d.model == Model::Own {
+        if d.model == Model::Own || (actor && matches!(d.model, Model::DrillHead(_))) {
             continue;
         }
         let Some((model, prop)) = super::super::kinetics::part_model(block, d.model) else {
@@ -718,6 +768,7 @@ fn submit(
 ) {
     let Some(Tag::Compound(c)) = data.get(&KEY.into()).filter(|_| holds_structure(data)) else {
         SHOWN.with_borrow_mut(|s| s.remove(&pos));
+        actor_draw::client_forget(pos);
         return;
     };
     let rev = int(c, "Rev").unwrap_or(0);
@@ -741,6 +792,7 @@ fn submit(
     let now = draw.game_time() as f64 + f64::from(draw.partial());
     let anim = draw.animation_time();
     let speed = own_speed(data);
+    let view = actor_draw::view(data);
     SHOWN.with_borrow_mut(|s| {
         let Some(shown) = s.get_mut(&pos) else {
             return;
@@ -767,11 +819,32 @@ fn submit(
                 };
                 let rate = rpm * 0.3;
                 let here = angle + rate * (now - since) as f32;
-                let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
-                draw.spin(*axis, [0.5; 3], rate, phase as f32);
-                draw_blocks(draw, blocks);
-                draw.still();
-                draw.keep();
+                match &view {
+                    // Its actors move each frame: all of it is drawn each frame, turned.
+                    Some(view) => {
+                        let frame = Frame {
+                            anchor: pos,
+                            view,
+                            motion: Motion::Turn {
+                                axis: axis_enum(*axis),
+                                angle: here % 360.0,
+                                rate,
+                            },
+                            now,
+                        };
+                        draw.push();
+                        draw.rotate_about(*axis, here % 360.0, [0.5; 3]);
+                        draw_blocks(draw, blocks, Some(&frame));
+                        draw.pop();
+                    }
+                    None => {
+                        let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
+                        draw.spin(*axis, [0.5; 3], rate, phase as f32);
+                        draw_blocks(draw, blocks, None);
+                        draw.still();
+                        draw.keep();
+                    }
+                }
             }
             Shape::Clock {
                 hour,
@@ -787,7 +860,7 @@ fn submit(
                     let here = angle + rate * (now - since) as f32;
                     let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
                     draw.spin(*axis, [0.5; 3], rate, phase as f32);
-                    draw_blocks(draw, blocks);
+                    draw_blocks(draw, blocks, None);
                     draw.still();
                 }
                 draw.keep();
@@ -802,15 +875,27 @@ fn submit(
                 clamp,
                 rope,
             } => {
-                let mut at = offset + per_tick * (now - since) as f32;
+                let free = offset + per_tick * (now - since) as f32;
+                let mut at = free;
                 if let Some((lo, hi)) = clamp {
                     at = at.clamp(*lo, *hi);
                 }
                 let shift = [0, 1, 2].map(|i| origin[i] + dir[i] * at);
                 shown.drawn_at = Some([0, 1, 2].map(|i| f64::from(pos[i]) + f64::from(shift[i])));
+                // Held at an end of its range, it doesn't move.
+                let step = if at == free { *per_tick } else { 0.0 };
+                let frame = view.as_ref().map(|view| Frame {
+                    anchor: pos,
+                    view,
+                    motion: Motion::Glide {
+                        shift,
+                        velocity: dir.map(|d| d * step),
+                    },
+                    now,
+                });
                 draw.push();
                 draw.translate(shift);
-                draw_blocks(draw, blocks);
+                draw_blocks(draw, blocks, frame.as_ref());
                 draw.pop();
                 // Rope: whole blocks between the pulley and its magnet.
                 if *rope {
@@ -826,9 +911,18 @@ fn submit(
                     (y - f64::from(pos[1])) as f32,
                     (e.anchor[2] - pos[2]) as f32,
                 ];
+                let frame = view.as_ref().map(|view| Frame {
+                    anchor: pos,
+                    view,
+                    motion: Motion::Glide {
+                        shift: origin,
+                        velocity: [0.0, (e.y - prev_y) as f32, 0.0],
+                    },
+                    now,
+                });
                 draw.push();
                 draw.translate(origin);
-                draw_blocks(draw, blocks);
+                draw_blocks(draw, blocks, frame.as_ref());
                 draw.pop();
             }
         }

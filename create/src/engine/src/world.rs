@@ -562,6 +562,7 @@ fn has_state(block: Block) -> bool {
             | Block::ContraptionControls
             | Block::LecternController
             | Block::MechanicalRoller
+            | Block::MechanicalHarvester
             | Block::ControllerRail
             | Block::CartAssembler
             | Block::Nozzle

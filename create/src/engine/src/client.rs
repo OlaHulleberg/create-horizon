@@ -59,6 +59,13 @@ pub enum Model {
     /// The hose pulley's coil (`AllPartialModels.HOSE_COIL`), turned to the positive end of its
     /// shaft's axis (`partialFacing`, as the shaft half).
     HoseCoil(Dir),
+    /// The rope pulley's coil (`AllPartialModels.ROPE_COIL`), as the hose pulley's.
+    RopeCoil(Dir),
+    /// The elevator pulley's coil (`AllPartialModels.ELEVATOR_COIL`), turned to its facing.
+    ElevatorCoil(Dir),
+    /// A backtank's shaft input (`COPPER_BACKTANK_SHAFT`, `NETHERITE_BACKTANK_SHAFT`), turning
+    /// about up as written.
+    BacktankShaft { netherite: bool },
 }
 
 /// `FlywheelBlockEntity.visualSpeed` on a client: the wheel's drawn speed, which starts at 0 and
@@ -252,8 +259,13 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 ]
             })
             .unwrap_or_default(),
-        // BacktankRenderer: its shaft's half out of the top.
-        Block::CopperBacktank | Block::NetheriteBacktank => vec![half(0, Dir::Up, speeds[0])],
+        // BacktankRenderer: its shaft input out of the top, turning about up.
+        Block::CopperBacktank | Block::NetheriteBacktank => vec![own(
+            Axis::Y,
+            Model::BacktankShaft {
+                netherite: block == Block::NetheriteBacktank,
+            },
+        )],
         Block::CreativeMotor => s
             .facing
             .map(|f| vec![half(0, f, speeds[0])])
@@ -326,10 +338,22 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 ]
             })
             .unwrap_or_default(),
-        // AbstractPulleyRenderer, ElevatorPulleyRenderer: a shaft through the pulley.
+        // AbstractPulleyRenderer, ElevatorPulleyRenderer: a shaft through the pulley and the
+        // coil, still (Create scrolls its texture as the rope runs).
         Block::RopePulley => s
             .axis
-            .map(|a| vec![own(a, Model::Shaft(a))])
+            .map(|a| {
+                vec![
+                    own(a, Model::Shaft(a)),
+                    Draw {
+                        slot: 1,
+                        model: Model::RopeCoil(Dir::from_axis(a, true)),
+                        axis: Axis::Y,
+                        rpm: 0.0,
+                        phase: 0.0,
+                    },
+                ]
+            })
             .unwrap_or_default(),
         Block::ElevatorPulley => s
             .facing
@@ -339,7 +363,16 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 } else {
                     Axis::X
                 };
-                vec![own(a, Model::Shaft(a))]
+                vec![
+                    own(a, Model::Shaft(a)),
+                    Draw {
+                        slot: 1,
+                        model: Model::ElevatorCoil(f),
+                        axis: Axis::Y,
+                        rpm: 0.0,
+                        phase: 0.0,
+                    },
+                ]
             })
             .unwrap_or_default(),
         // BearingRenderer: the shaft half out of its back and its top, both turning with it.

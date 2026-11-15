@@ -2,7 +2,11 @@
 //! a carriage carries is a vanilla block display the server keeps where the block is, turned
 //! with the carriage, and each bogey's frame and wheels (Create's partials, as the hidden
 //! `create:part_bogey_*` blocks) displays posed with the bogey. Clients draw them with the
-//! game's own block models and light, gliding between ticks (`teleport_duration`).
+//! game's own block models and light, gliding between ticks (`teleport_duration`). An actor a
+//! carriage or cart carries has its moving parts as displays of their partials too
+//! (`contraptions::actor_draw`, Create's `ActorVisual`s): drill heads, harvester blades and roller
+//! wheels turn as the carriage moves their way, saw blades run, deployers stroke as they pass
+//! block centres.
 //!
 //! A carriage has its displays while the chunk under it is loaded (`Carriage.manageEntities`
 //! spawns its entity the same way); they go when it leaves, when the train goes, and with the
@@ -11,6 +15,9 @@
 
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
+use crate::glue::contraptions::actor_draw::{self, Doing, Poses};
+use create_engine::Block;
+use create_engine::parts::StateInfo;
 use create_engine::train_controls::Frame;
 use create_engine::trains::{BogeySize, yaw_pitch};
 use mod_api::{Compound, Tag, Transformation};
@@ -32,6 +39,8 @@ struct Shown {
     /// roll on.
     wheel: f64,
     radius: f64,
+    /// Each actor's head, blade or wheel turn (degrees), by its block's centre in the carriage.
+    rolls: Vec<([f64; 3], f32)>,
 }
 
 /// A display's place: its point in the carriage's (or bogey's) space, from which the display
@@ -43,6 +52,9 @@ struct Part {
     translation: [f32; 3],
     left: [f32; 4],
     wheel: bool,
+    /// An actor's moving part (`ActorVisual`): the actor's block, its state's facts, its centre in
+    /// the carriage's space (unturned) and which of its parts this is.
+    actor: Option<(Block, StateInfo, [f64; 3], usize)>,
 }
 
 /// What a display group shows: `(level, train, CAR, carriage)`, `(level, train, BOGEY,
@@ -323,8 +335,29 @@ fn sync(lv: &mut ServerLevel<'_>, mut now: Vec<Now>, kinds: &[u8]) {
         if !moved {
             continue;
         }
-        let (displays, wheel) = SHOWN.with_borrow_mut(|s| {
+        let (displays, wheel, rolls) = SHOWN.with_borrow_mut(|s| {
             let v = s.get_mut(&n.key).expect("known");
+            // Each actor's head, blade or wheel turns on by the way it moved
+            // (`HarvesterActorVisual.tick`, `DrillActorVisual.tick`).
+            if let Some((was, _, _)) = v.last {
+                let world: [f64; 3] = std::array::from_fn(|i| n.at[i] - was[i]);
+                let relative = to_carriage(n, world);
+                let mut rolls = std::mem::take(&mut v.rolls);
+                for (_, part) in &v.displays {
+                    let Some((block, info, centre, 0)) = part.actor else {
+                        continue;
+                    };
+                    let Some(facing) = info.facing else {
+                        continue;
+                    };
+                    let rate = actor_draw::roll_rate(block, facing, relative, false, false);
+                    match rolls.iter_mut().find(|r| r.0 == centre) {
+                        Some(r) => r.1 = (r.1 + rate) % 360.0,
+                        None => rolls.push((centre, rate % 360.0)),
+                    }
+                }
+                v.rolls = rolls;
+            }
             // `CarriageBogey.updateAngles`: the wheels turn by the distance rolled, forward
             // along the bogey's way, over their circumference.
             if let Some((was, _, _)) = v.last
@@ -334,14 +367,62 @@ fn sync(lv: &mut ServerLevel<'_>, mut now: Vec<Now>, kinds: &[u8]) {
                 let along = d[0] * n.front[0] + d[1] * n.front[1] + d[2] * n.front[2];
                 v.wheel = (v.wheel + (along / v.radius).to_degrees()).rem_euclid(360.0);
             }
+            let motion = v.last.map_or([0.0; 3], |(was, _, _)| {
+                std::array::from_fn(|i| n.at[i] - was[i])
+            });
             v.last = Some(pose);
-            (v.displays.clone(), v.wheel)
+            (v.displays.clone(), v.wheel, (v.rolls.clone(), motion))
         });
+        let (rolls, motion) = rolls;
+        let relative = to_carriage(n, motion);
         for (id, part) in displays {
             let Some(e) = lv.host.entity(id) else {
                 continue;
             };
             e.teleport_to(lv.host, place(n, part), Some([n.yaw, n.pitch]));
+            if let Some((block, info, centre, i)) = part.actor
+                && let Some(d) = lv.host.display(e)
+                && let Some(facing) = info.facing
+            {
+                // Where it acts (`getActiveAreaOffset`), and the way it faces, in the world.
+                let o = facing.offset().map(f64::from);
+                let reach = create_engine::actors::Kind::of(block).map_or(0.0, |k| k.reach());
+                let local: [f64; 3] = std::array::from_fn(|k| centre[k] + o[k] * reach);
+                let point = place(
+                    n,
+                    Part {
+                        at: turn_y(local, n.turn),
+                        ..part
+                    },
+                );
+                let way = from_carriage(n, o);
+                let horizontal = way[1].abs() < way[0].abs().max(way[2].abs());
+                let doing = Doing {
+                    roll: rolls.iter().find(|r| r.0 == centre).map_or(0.0, |r| r.1),
+                    stroke: actor_draw::deployer_stroke(point),
+                    running: actor_draw::saw_runs(facing, relative, horizontal, false, false),
+                    lit: true,
+                    ..Doing::default()
+                };
+                if let Some((name, facing, pose)) =
+                    actor_poses(block, &info, &doing).into_iter().nth(i)
+                {
+                    let (translation, left) = actor_transform(pose, n.turn);
+                    let mut t = Transformation::IDENTITY;
+                    t.translation = translation;
+                    t.left_rotation = left;
+                    d.set_start_interpolation(lv.host, 0);
+                    d.set_interpolation_duration(lv.host, 1);
+                    d.set_transformation(lv.host, t);
+                    if block == Block::MechanicalSaw
+                        && let Some(state) = lv
+                            .host
+                            .block_state_id(&format!("create:{name}[facing={facing}]"))
+                    {
+                        d.set_block_state(lv.host, state);
+                    }
+                }
+            }
             if part.wheel
                 && let Some(d) = lv.host.display(e)
             {
@@ -369,6 +450,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
     // Each display: its state, its point in the carriage's space, and its own turn about that
     // point (the partials' quarter) with the offset of its model's origin from the point.
     let mut parts: Vec<Shape> = Vec::new();
+    let mut actors: Vec<(Block, StateInfo, [f64; 3], usize)> = Vec::new();
     let mut radius = 0.0;
     if kind == BOGEY {
         let Some(size) = with_world(|w| {
@@ -381,6 +463,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
                 last: None,
                 wheel: 0.0,
                 radius: 0.0,
+                rolls: Vec::new(),
             };
         };
         radius = size.wheel_radius();
@@ -432,6 +515,18 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             let up = if kind == CART { 0.0 } else { 1.5 };
             let centre = [f64::from(o[0]), f64::from(o[1]) + up, f64::from(o[2])];
             parts.push((name, props, centre, [-0.5; 3], false));
+            // An actor's moving parts, at rest until it moves.
+            if let Some((block, info)) =
+                crate::glue::contraptions::create_info(s).filter(|(b, _)| actor_draw::draws(*b))
+            {
+                let doing = Doing {
+                    lit: true,
+                    ..Doing::default()
+                };
+                for (i, _) in actor_poses(block, &info, &doing).into_iter().enumerate() {
+                    actors.push((block, info, centre, i));
+                }
+            }
         }
     }
     let mut displays = Vec::new();
@@ -444,6 +539,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             translation: turn_y(origin, n.turn).map(|v| v as f32),
             left: quat_y(n.turn),
             wheel,
+            actor: None,
         };
         let nbt = display_nbt(&name, &props, part.translation, part.left, n.yaw, n.pitch);
         let pos = place(n, part);
@@ -454,12 +550,75 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             displays.push((id, part));
         }
     }
+    for (block, info, centre, i) in actors {
+        let doing = Doing {
+            lit: true,
+            ..Doing::default()
+        };
+        let Some((name, facing, pose)) = actor_poses(block, &info, &doing).into_iter().nth(i)
+        else {
+            continue;
+        };
+        let (translation, left) = actor_transform(pose, n.turn);
+        let part = Part {
+            at: turn_y(centre, n.turn),
+            translation,
+            left,
+            wheel: false,
+            actor: Some((block, info, centre, i)),
+        };
+        let props = vec![("facing".to_owned(), facing.to_owned())];
+        let name = format!("create:{name}");
+        let nbt = display_nbt(&name, &props, part.translation, part.left, n.yaw, n.pitch);
+        if let Some(id) =
+            lv.host
+                .summon(lv.dimension, "minecraft:block_display", place(n, part), nbt)
+        {
+            displays.push((id, part));
+        }
+    }
     Shown {
         displays,
         last: Some((n.at, n.yaw, n.pitch)),
         wheel: 0.0,
         radius,
+        rolls: Vec::new(),
     }
+}
+
+/// The poses of actor `block`'s moving parts doing `doing` (`actor_draw::actor_parts`).
+fn actor_poses(
+    block: Block,
+    info: &StateInfo,
+    doing: &Doing,
+) -> Vec<(String, &'static str, actor_draw::Pose)> {
+    let mut poses = Poses::default();
+    actor_draw::actor_parts(&mut poses, block, info, doing);
+    poses.out
+}
+
+/// A display's translation and left rotation for a part posed `pose` in its block (from its
+/// corner), the block centred on the display and turned `turn` about up as the carriage's.
+fn actor_transform(pose: actor_draw::Pose, turn: f64) -> ([f32; 3], [f32; 4]) {
+    let q = actor_draw::quat_mul(actor_draw::quat([0.0, 1.0, 0.0], turn), pose.q);
+    let t = turn_y(std::array::from_fn(|i| pose.t[i] - 0.5), turn);
+    (t.map(|v| v as f32), q.map(|v| v as f32))
+}
+
+/// `v` in the world turned into the carriage's own space (`place`'s turn, back).
+fn to_carriage(n: &Now, v: [f64; 3]) -> [f64; 3] {
+    turn_y(
+        turn_x(turn_y(v, f64::from(n.yaw)), -f64::from(n.pitch)),
+        -n.turn,
+    )
+}
+
+/// `v` in the carriage's own space turned into the world, as `place` turns a point.
+fn from_carriage(n: &Now, v: [f64; 3]) -> [f64; 3] {
+    turn_y(
+        turn_x(turn_y(v, n.turn), f64::from(n.pitch)),
+        -f64::from(n.yaw),
+    )
 }
 
 /// A block display's compound (`/summon minecraft:block_display`'s): the state, its model

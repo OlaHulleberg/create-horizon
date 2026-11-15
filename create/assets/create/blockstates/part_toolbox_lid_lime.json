@@ -1,0 +1,30 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/toolbox/lid/lime",
+      "x": 90
+    },
+    "facing=east": {
+      "model": "create:block/toolbox/lid/lime",
+      "x": 90,
+      "y": 90
+    },
+    "facing=south": {
+      "model": "create:block/toolbox/lid/lime",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create:block/toolbox/lid/lime",
+      "x": 90,
+      "y": 270
+    },
+    "facing=up": {
+      "model": "create:block/toolbox/lid/lime"
+    },
+    "facing=down": {
+      "model": "create:block/toolbox/lid/lime",
+      "x": 180
+    }
+  }
+}
