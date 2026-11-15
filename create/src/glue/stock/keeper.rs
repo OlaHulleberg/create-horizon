@@ -1968,8 +1968,13 @@ pub(super) fn screen_mouse_released(
     if !ours(host) || event.button != 0 {
         return Flow::Continue;
     }
+    let mouse = event.screen.mouse;
     OPEN.with_borrow_mut(|o| {
-        if let Some(o) = o.as_mut() {
+        if let Some(o) = o.as_mut()
+            && o.dragging
+        {
+            // The bar follows the cursor to where it was let go.
+            drag(host, o, mouse);
             o.dragging = false;
         }
     });
