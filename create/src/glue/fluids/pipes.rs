@@ -4,17 +4,24 @@
 use super::super::processing;
 use super::super::server::{ServerLevel, UPDATE_CLIENTS};
 use super::super::world::with_world;
-use super::{all, flag, has_fluid, info_at, plumbing, replaceable, state_with, world_fluid};
+use super::{all, flag, info_at, plumbing, replaceable, state_with};
 use crate::glue::kinetics::dir_name;
 use create_engine::Block;
 use create_engine::fluids::{self, Cell};
 use create_engine::kinetics::Dir;
-use create_engine::tank::{BUCKET, Fluid};
-use mod_api::{BlockState, HostBlockStates};
+use create_engine::open_end::OpenEnd;
+use create_engine::tank::{Codes, Fluid};
+use mod_api::{BlockState, Compound, HostBlockStates, Tag};
 
 /// What a block is to the pipes (`FluidPropagator`): a pipe and its open sides, a pump and its
 /// facing, a tank, open space a pipe may end in, or neither.
 pub(super) fn pipe_cell(lv: &ServerLevel<'_>, p: [i32; 3]) -> Cell {
+    pipe_cell_toward(lv, p, None)
+}
+
+/// [`pipe_cell`] of the block at `p` entered by way `toward` from a pipe: open space is an open
+/// end only as `FluidPropagator.isOpenEnd` says, by its face toward the pipe.
+pub(super) fn pipe_cell_toward(lv: &ServerLevel<'_>, p: [i32; 3], toward: Option<Dir>) -> Cell {
     if !lv.is_loaded(p) {
         return Cell::Solid;
     }
@@ -26,11 +33,54 @@ pub(super) fn pipe_cell(lv: &ServerLevel<'_>, p: [i32; 3]) -> Cell {
             b => plumbing::plumbing_cell(lv, b, &info, p).unwrap_or(Cell::Solid),
         };
     }
-    if replaceable(lv, p) || has_fluid(lv, p) {
+    if open_end(lv, p, toward) {
         Cell::Open
     } else {
         Cell::Solid
     }
+}
+
+/// `FluidPropagator.isOpenEnd` of a block that is no pipe, pump or Create fluid handler, entered
+/// by way `toward`: a beehive or cauldron (`canProvideFluidWithoutCapability`); not a block with
+/// a sturdy face toward the pipe (but what fans blow through) or another fluid handler; and
+/// only what can be replaced (and broken) or waterlogged.
+fn open_end(lv: &ServerLevel<'_>, p: [i32; 3], toward: Option<Dir>) -> bool {
+    let Some(state) = lv.block_state(p) else {
+        return false;
+    };
+    let name = state.block().id(&*lv.host);
+    if super::property(lv, p, "honey_level").is_some()
+        || matches!(
+            name.as_str(),
+            "minecraft:cauldron" | "minecraft:lava_cauldron" | "minecraft:water_cauldron"
+        )
+    {
+        return true;
+    }
+    if let Some(d) = toward {
+        use mod_api::BlockFace;
+        let face = match d.opposite() {
+            Dir::Down => BlockFace::Down,
+            Dir::Up => BlockFace::Up,
+            Dir::North => BlockFace::North,
+            Dir::South => BlockFace::South,
+            Dir::West => BlockFace::West,
+            Dir::East => BlockFace::East,
+        };
+        let sturdy = lv
+            .level
+            .block_face_sturdy(&*lv.host, p, face, mod_api::SupportType::Full)
+            == Some(true);
+        if sturdy && lv.host.block_in_tag(state.block(), "create:fan_transparent") != Some(true) {
+            return false;
+        }
+    }
+    let unbreakable = lv
+        .host
+        .block_states()
+        .destroy_speed(state)
+        .is_some_and(|s| s == -1.0);
+    (replaceable(lv, p) && !unbreakable) || super::property(lv, p, "waterlogged").is_some()
 }
 
 /// A pipe state's open sides (`Dir::bit`).
@@ -95,6 +145,23 @@ pub(super) fn tick_pipes(lv: &mut ServerLevel<'_>) {
     }
     // A pump that stopped loses its flows (`wipePressure`).
     super::flows::keep_only(dim, &pumps);
+    collide(lv);
+}
+
+/// `FluidReactions.handlePipeFlowCollision`: a pipe where flows of two fluids come in breaks
+/// (`BlockHelper.destroyBlock`, its drops and particles) and becomes cobblestone (water and
+/// lava), limestone or scoria (lava and honey or chocolate), or stays broken.
+fn collide(lv: &mut ServerLevel<'_>) {
+    let now = lv.game_time();
+    for (pos, a, b) in super::flows::collisions(lv.dim, now) {
+        crate::create_log!("DEBUG pipe collision at {pos:?}: {a:?} meets {b:?}");
+        lv.destroy_block(pos, true);
+        if let Some(state) =
+            create_engine::open_end::flow_collision(a, b).and_then(|n| state_with(lv, n, &[]))
+        {
+            lv.set_state(pos, state, all());
+        }
+    }
 }
 
 fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
@@ -107,10 +174,11 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
         return;
     };
     if changed || !pump.found {
-        let pull = fluids::reach(pos, facing.opposite(), speed, |p| pipe_cell(lv, p));
-        let push = fluids::reach(pos, facing, speed, |p| pipe_cell(lv, p));
-        let ways_pull = fluids::ways(pos, facing.opposite(), |p| pipe_cell(lv, p));
-        let ways_push = fluids::ways(pos, facing, |p| pipe_cell(lv, p));
+        let cell = |p, d| pipe_cell_toward(lv, p, Some(d));
+        let pull = fluids::reach_toward(pos, facing.opposite(), speed, cell);
+        let push = fluids::reach_toward(pos, facing, speed, cell);
+        let ways_pull = fluids::ways_toward(pos, facing.opposite(), cell);
+        let ways_push = fluids::ways_toward(pos, facing, cell);
         // Pipes changed elsewhere leave this pump's network as it was.
         let same = pump.found
             && pull == pump.pull
@@ -170,17 +238,9 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
             })
             .flatten()
         } else {
-            if pump.buffer.is_none() {
-                // `OpenEndedPipe.removeFluidFromSpace`: a source block gives a bucket's worth.
-                let fluid = world_fluid(lv, from.pos).filter(|(_, source)| *source);
-                if let Some((fluid, _)) = fluid {
-                    pump.buffer = Some((fluid, BUCKET));
-                    if let Some(left) = state_with(lv, fluid.id(), &[("level", "14")]) {
-                        lv.set_state(from.pos, left, all());
-                    }
-                }
-            }
-            pump.buffer.map(|(f, n)| (f, n.min(amount)))
+            // An open end: its own tank, else the source in front (`OpenEndFluidHandler.drain`,
+            // simulated).
+            with_open_end(lv, &from, |end, front| end.drain(front, amount, None, false))
         };
         // Smart pipes on the way let only their filter's fluid through.
         let offer = offer.filter(|(f, _)| from.passes(*f));
@@ -221,7 +281,7 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
                 let Some(to) = push.iter().filter(reaches).nth(k) else {
                     return 0;
                 };
-                fill_end(lv, to, fluid, give, &mut pump)
+                fill_end(lv, to, fluid, give)
             });
             if moved > 0 {
                 if special.is_some() {
@@ -239,8 +299,10 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
                     });
                 } else if from.tank {
                     with_world(|w| w.drain_tank(dim, from.pos, moved));
-                } else if let Some((f, left)) = pump.buffer {
-                    pump.buffer = (left > moved).then_some((f, left - moved));
+                } else {
+                    with_open_end(lv, &from, |end, front| {
+                        end.drain(front, moved, Some(fluid), true)
+                    });
                 }
                 with_world(|w| w.mark_unsaved(dim, pos));
             }
@@ -260,13 +322,7 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
 /// Up to `n` mB of `fluid` into end `to` of `pump`'s pipes in front: a hose pulley's or creative
 /// tank's sink, a basin's inputs, a boiler's supply, a spout's tank, a tank's, or an open end's
 /// space (a source placed per bucket, `provideFluidToSpace`). How much it took.
-fn fill_end(
-    lv: &mut ServerLevel<'_>,
-    to: &fluids::End,
-    fluid: Fluid,
-    n: u32,
-    pump: &mut create_engine::world::Pump,
-) -> u32 {
+fn fill_end(lv: &mut ServerLevel<'_>, to: &fluids::End, fluid: Fluid, n: u32) -> u32 {
     let dim = lv.dim;
     if to.tank {
         if let Some(took) = plumbing::sink(lv, to.pos, fluid, n) {
@@ -301,43 +357,108 @@ fn fill_end(
         })
         .unwrap_or(0);
     }
-    // `OpenEndFluidHandler.fill`, `provideFluidToSpace`: only into space that can be replaced,
-    // not into a source, and into another fluid only to turn it (`handlePipeSpillCollision`).
-    if !replaceable(lv, to.pos) {
-        return 0;
-    }
-    if let Some((there, source)) = world_fluid(lv, to.pos) {
-        if there != fluid {
-            if let Some(turned) = create_engine::open_end::spill(fluid, there, source)
-                .and_then(|b| state_with(lv, b, &[]))
-            {
-                lv.set_state(to.pos, turned, all());
+    // An open end: `OpenEndFluidHandler.fill`.
+    with_open_end(lv, to, |end, front| end.fill(front, fluid, n, true))
+}
+
+/// `f` on the open end `end` of a pump's pipes (its own tank, kept by the pipe or pump it
+/// belongs to and the side it is open to) and the space in front of it; the tank is kept, and
+/// its column saved, when it changed.
+fn with_open_end<R>(
+    lv: &mut ServerLevel<'_>,
+    end: &fluids::End,
+    f: impl FnOnce(&mut OpenEnd, &mut super::open_end::Front<'_, '_>) -> R,
+) -> R {
+    let dim = lv.dim;
+    let owner = super::offset(end.pos, end.face.opposite());
+    let key = (owner, end.face);
+    let before = with_world(|w| w.dims[dim].open_ends.get(&key).copied())
+        .flatten()
+        .unwrap_or_default();
+    let mut open = before;
+    let out = f(
+        &mut open,
+        &mut super::open_end::Front {
+            lv,
+            pos: end.pos,
+            down: end.face == Dir::Down,
+        },
+    );
+    if open != before {
+        crate::create_log!("DEBUG open_end {owner:?} {:?}: {before:?} -> {open:?}", end.face);
+        with_world(|w| {
+            if open == OpenEnd::default() {
+                w.dims[dim].open_ends.remove(&key);
+            } else {
+                w.dims[dim].open_ends.insert(key, open);
             }
-            return 0;
-        }
-        if source {
-            return 0;
-        }
+            w.mark_unsaved(dim, owner);
+        });
     }
-    let down = to.face == Dir::Down;
-    // A fluid with no block (milk, tea, potions) is taken a drop at a time, for its effect.
-    if let Some(took) = create_engine::open_end::takes_without_block(fluid, n) {
-        super::open_end::apply(lv, to.pos, down, fluid);
-        return took;
+    out
+}
+
+/// The key of the open ends' tanks in a column's data: for each, the pipe's position, the side
+/// (`Dir::ALL` index), its fluid (`tank::Codes`, a potion's key beside it), amount and whether
+/// it was pulled from (`OpenEndedPipe`'s `Pulling`).
+const OPEN_ENDS: &str = "open_ends";
+
+pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
+    let here = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
+    let Some(mut ends) = with_world(|w| {
+        w.dims[dim]
+            .open_ends
+            .iter()
+            .filter(|((p, _), _)| here(p))
+            .map(|(k, e)| (*k, *e))
+            .collect::<Vec<_>>()
+    }) else {
+        return;
+    };
+    if ends.is_empty() {
+        return;
     }
-    let have = pump.out.filter(|o| o.0 == fluid).map_or(0, |o| o.1);
-    let total = have + n;
-    super::open_end::apply(lv, to.pos, down, fluid);
-    // A bucket's worth becomes a source.
-    if total < BUCKET {
-        pump.out = Some((fluid, total));
-        return n;
-    }
-    if let Some(src) = state_with(lv, fluid.id(), &[("level", "0")]) {
-        lv.set_state(to.pos, src, all());
-    }
-    pump.out = (total > BUCKET).then_some((fluid, total - BUCKET));
-    n
+    ends.sort_by_key(|((p, d), _)| (*p, Dir::ALL.iter().position(|x| x == d)));
+    let mut codes = Codes::default();
+    let v: Vec<i32> = ends
+        .iter()
+        .flat_map(|((p, d), e)| {
+            let side = Dir::ALL.iter().position(|x| x == d).unwrap_or(0) as i32;
+            [
+                p[0],
+                p[1],
+                p[2],
+                side,
+                codes.code(e.tank.map(|t| t.0)),
+                e.tank.map_or(0, |t| t.1 as i32),
+                i32::from(e.pulling),
+            ]
+        })
+        .collect();
+    data.insert(OPEN_ENDS.into(), Tag::IntArray(v));
+    super::put_fluid_keys(data, OPEN_ENDS, codes);
+}
+
+pub(super) fn chunk_load(dim: usize, data: &Compound) {
+    let Some(Tag::IntArray(v)) = data.get(&OPEN_ENDS.into()) else {
+        return;
+    };
+    let keys = super::fluid_keys(data, OPEN_ENDS);
+    let ends: Vec<_> = v
+        .as_chunks::<7>()
+        .0
+        .iter()
+        .filter_map(|c| {
+            let side = *Dir::ALL.get(c[3].clamp(0, 5) as usize)?;
+            let tank = Codes::fluid(&keys, c[4]).map(|f| (f, c[5].max(0) as u32));
+            let end = OpenEnd {
+                tank: tank.filter(|t| t.1 > 0),
+                pulling: c[6] != 0,
+            };
+            Some((([c[0], c[1], c[2]], side), end))
+        })
+        .collect();
+    with_world(|w| w.dims[dim].open_ends.extend(ends));
 }
 
 /// Boilers and steam engines (`BoilerData.tick`, `SteamEngineBlockEntity.tick`): tanks whose

@@ -2274,6 +2274,28 @@ fn with_carried_tanks<R>(
     })
 }
 
+/// A portable fluid interface at `pos` as a smart observer's or threshold switch's fluid handler
+/// (`PortableFluidInterfaceBlockEntity.capability`): the tanks of the contraption it is connected
+/// to (`MountedStorageManager.getFluids`), else one tank of no capacity (`createEmptyHandler`);
+/// None for any other block.
+pub fn pfi_tanks(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Vec<create_engine::observe::TankSlot>> {
+    use create_engine::observe::TankSlot;
+    if lv.create_block(pos) != Some(Block::PortableFluidInterface) {
+        return None;
+    }
+    let empty = || vec![TankSlot::of(None, 0)];
+    let Some(key) = interface_connected(lv, pos, Block::PortableFluidInterface) else {
+        return Some(empty());
+    };
+    let tanks = with_carried_tanks(lv.dim, key, |tanks| {
+        tanks
+            .iter()
+            .map(|m| TankSlot::of(m.tank.fluid.map(|f| (f, m.tank.amount)), m.capacity()))
+            .collect::<Vec<_>>()
+    });
+    Some(tanks.unwrap_or_else(empty))
+}
+
 /// A portable fluid interface at `pos` as a pump's end (`InterfaceFluidHandler.drain`, simulated):
 /// what the tanks of the contraption it is connected to give, up to `amount` of the first fluid
 /// in them; Some(None) when it is connected to nothing, None for any other block.

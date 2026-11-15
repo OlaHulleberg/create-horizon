@@ -241,3 +241,181 @@ fn dowse_fire(lv: &mut ServerLevel<'_>, p: [i32; 3]) {
         lv.set_state(p, out, all());
     }
 }
+
+thread_local! {
+    /// Water ticks to run a tick after an open end waterlogged or drained a block
+    /// (`scheduleTick(pos, Fluids.WATER, 1)`): level, position, game time due.
+    static WATER_TICKS: std::cell::RefCell<Vec<(usize, [i32; 3], i64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static RNG: std::cell::RefCell<create_engine::processing::Rng> =
+        std::cell::RefCell::new(create_engine::processing::Rng::new(0x0E9D));
+}
+
+pub(super) fn reset() {
+    WATER_TICKS.with_borrow_mut(Vec::clear);
+}
+
+/// The water ticks of level `lv` that are due run.
+pub(super) fn tick(lv: &mut ServerLevel<'_>) {
+    let (dim, now) = (lv.dim, lv.game_time());
+    let due: Vec<[i32; 3]> = WATER_TICKS.with_borrow_mut(|t| {
+        let mut due = Vec::new();
+        t.retain(|&(d, p, at)| {
+            let now_due = d == dim && at <= now;
+            if now_due {
+                due.push(p);
+            }
+            !now_due
+        });
+        due
+    });
+    for p in due {
+        if lv.is_loaded(p) {
+            lv.level.fluid_tick(&mut *lv.host, p);
+        }
+    }
+}
+
+/// The space in front of an open end at `pos`, the pipe pointing `down` or not.
+pub(super) struct Front<'l, 'a> {
+    pub(super) lv: &'l mut ServerLevel<'a>,
+    pub(super) pos: [i32; 3],
+    pub(super) down: bool,
+}
+
+impl Front<'_, '_> {
+    fn set(&mut self, state: Option<mod_api::BlockState>) {
+        if let Some(state) = state {
+            self.lv.set_state(self.pos, state, all());
+        }
+    }
+
+    fn with(&self, key: &str, value: &str) -> Option<mod_api::BlockState> {
+        let meta = self.lv.host.block_states();
+        self.lv
+            .block_state(self.pos)
+            .and_then(|s| s.with(&meta, key, value).ok())
+    }
+
+    /// `FlowingFluid.getNewLiquid` would make the spot `fluid`'s source again: a fluid that may
+    /// form sources (water, with `water_source_conversion`; lava with `lava_source_conversion`)
+    /// beside two of its sources, over a block that blocks motion or one of its sources.
+    fn refills(&self, fluid: Fluid) -> bool {
+        let lv = &*self.lv;
+        let rule = match fluid {
+            Fluid::Water => "minecraft:water_source_conversion",
+            Fluid::Lava => "minecraft:lava_source_conversion",
+            _ => return false,
+        };
+        let converts = matches!(
+            lv.level.game_rule(&*lv.host, rule),
+            Ok(Some(mod_api::GameRuleValue::Bool(true)))
+        );
+        if !converts {
+            return false;
+        }
+        let [x, y, z] = self.pos;
+        let source_at = |p: [i32; 3]| super::world_fluid(lv, p) == Some((fluid, true));
+        let sources = [[x + 1, y, z], [x - 1, y, z], [x, y, z + 1], [x, y, z - 1]]
+            .into_iter()
+            .filter(|p| source_at(*p))
+            .count();
+        if sources < 2 {
+            return false;
+        }
+        let below = [x, y - 1, z];
+        source_at(below) || crate::glue::logistics::has_collision(lv, below)
+    }
+}
+
+impl create_engine::open_end::Space for Front<'_, '_> {
+    fn drain_block(&mut self, simulate: bool) -> Option<(Fluid, u32)> {
+        let name = self.lv.block_name(self.pos)?;
+        let honey = property(self.lv, self.pos, "honey_level").and_then(|v| v.parse::<u8>().ok());
+        let (got, left) = if honey.is_some_and(|h| h >= 5) {
+            ((Fluid::Honey, 250), self.with("honey_level", "0"))
+        } else if name == "minecraft:lava_cauldron" {
+            ((Fluid::Lava, 1000), state_with(self.lv, "minecraft:cauldron", &[]))
+        } else if name == "minecraft:water_cauldron"
+            && property(self.lv, self.pos, "level").as_deref() == Some("3")
+        {
+            ((Fluid::Water, 1000), state_with(self.lv, "minecraft:cauldron", &[]))
+        } else {
+            return None;
+        };
+        if !simulate {
+            self.set(left);
+        }
+        Some(got)
+    }
+
+    fn waterloggable(&self) -> bool {
+        property(self.lv, self.pos, "waterlogged").is_some()
+    }
+
+    fn replaceable(&self) -> bool {
+        super::replaceable(self.lv, self.pos)
+    }
+
+    fn fluid(&self) -> Option<(Option<Fluid>, bool)> {
+        let f = self.lv.level.fluid_state(&*self.lv.host, self.pos)?;
+        if f.is_empty() {
+            return None;
+        }
+        Some((super::world_fluid(self.lv, self.pos).map(|w| w.0), f.is_source()))
+    }
+
+    fn evaporates(&self) -> bool {
+        self.lv
+            .level
+            .dimension_type(&*self.lv.host)
+            .is_some_and(|t| t.water_evaporates)
+    }
+
+    fn spill(&mut self, pipe: Fluid, world: Option<Fluid>, source: bool) {
+        let turned = world.and_then(|w| open_end::spill(pipe, w, source));
+        let state = turned.and_then(|b| state_with(self.lv, b, &[]));
+        self.set(state);
+    }
+
+    fn set_waterlogged(&mut self, on: bool) {
+        let state = self.with("waterlogged", if on { "true" } else { "false" });
+        self.set(state);
+        let at = (self.lv.dim, self.pos, self.lv.game_time() + 1);
+        WATER_TICKS.with_borrow_mut(|t| t.push(at));
+    }
+
+    fn place_source(&mut self, fluid: Fluid) {
+        let state = state_with(self.lv, fluid.id(), &[("level", "0")]);
+        self.set(state);
+    }
+
+    fn take_source(&mut self) {
+        let Some((fluid, _)) = super::world_fluid(self.lv, self.pos) else {
+            return;
+        };
+        if self.refills(fluid) {
+            return;
+        }
+        let state = state_with(self.lv, fluid.id(), &[("level", "14")]);
+        self.set(state);
+    }
+
+    fn fizz(&mut self) {
+        // At the block's corner, as Create plays it.
+        let pitch = RNG.with_borrow_mut(|r| 2.6 + (r.next_float() - r.next_float()) * 0.8);
+        let at = self.pos.map(f64::from);
+        self.lv.level.play_sound(
+            &mut *self.lv.host,
+            "minecraft:block.fire.extinguish",
+            at,
+            SoundSource::Blocks,
+            0.5,
+            pitch,
+        );
+    }
+
+    fn effect(&mut self, fluid: Fluid) {
+        apply(self.lv, self.pos, self.down, fluid);
+    }
+}

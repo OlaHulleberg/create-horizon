@@ -236,6 +236,61 @@ fn shown_at(dim: usize, pos: [i32; 3]) -> (Vec<i32>, Codes) {
     })
 }
 
+/// The flows complete and coming in by each side of the pipe at `pos` at game time `now`
+/// (`PipeConnection.getProvidedFluid`: inbound and complete), one a side (the first pump's, as
+/// `shown_at` shows them).
+pub(super) fn provided(dim: usize, pos: [i32; 3], now: i64) -> Vec<(Dir, Fluid)> {
+    RUNNING.with_borrow(|r| {
+        let mut runs: Vec<_> = r.iter().filter(|((d, _), _)| *d == dim).collect();
+        runs.sort_by_key(|((_, p), _)| *p);
+        let mut sides = 0u8;
+        let mut out = Vec::new();
+        for (_, run) in runs {
+            for f in run.flows.iter().filter(|f| f.pos == pos) {
+                if sides & f.side.bit() != 0 {
+                    continue;
+                }
+                sides |= f.side.bit();
+                if f.inbound && complete(run, f, now) {
+                    out.push((f.side, run.fluid));
+                }
+            }
+        }
+        out
+    })
+}
+
+/// Whether flow `f` of `run` has filled its half of the pipe and not yet gone at `now`.
+fn complete(run: &Running, f: &FlowAt, now: i64) -> bool {
+    if ends_at(run, f).is_some_and(|e| now >= e) {
+        return false;
+    }
+    f.progress((now - run.start) as f32) >= 1.0
+}
+
+/// The pipes of level `dim` where flows of two fluids come in complete by two sides at `now`
+/// (`FluidTransportBehaviour.tick`'s `collidingFlow`): each pipe with the first fluid and the
+/// one that met it.
+pub(super) fn collisions(dim: usize, now: i64) -> Vec<([i32; 3], Fluid, Fluid)> {
+    let mut at: Vec<[i32; 3]> = RUNNING.with_borrow(|r| {
+        r.iter()
+            .filter(|((d, _), _)| *d == dim)
+            .flat_map(|(_, run)| run.flows.iter().filter(|f| f.inbound).map(|f| f.pos))
+            .collect()
+    });
+    at.sort_unstable();
+    at.dedup();
+    at.into_iter()
+        .filter_map(|pos| {
+            let mut sides = provided(dim, pos, now);
+            sides.sort_by_key(|(d, _)| Dir::ALL.iter().position(|x| x == d));
+            let first = sides.first()?.1;
+            let other = sides.iter().find(|(_, f)| *f != first)?.1;
+            Some((pos, first, other))
+        })
+        .collect()
+}
+
 /// A flow as a client reads it from its pipe's block entity.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Shown {

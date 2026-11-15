@@ -117,6 +117,38 @@ pub struct Slot {
     pub max_stack: u32,
 }
 
+/// One tank of a fluid handler as a detector sees it: its fluid (none: empty, or a fluid the port
+/// does not know, which only an empty filter passes), amount and capacity, and whether a
+/// simulated drain of what it holds gives any (`IFluidHandler.drain`; a boiler's gives none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TankSlot {
+    pub fluid: Option<Fluid>,
+    pub amount: u32,
+    pub capacity: u32,
+    pub drains: bool,
+}
+
+impl TankSlot {
+    /// A tank of `capacity` holding `amount` of `fluid` that drains.
+    pub fn of(fluid: Option<(Fluid, u32)>, capacity: u32) -> TankSlot {
+        TankSlot {
+            fluid: fluid.map(|f| f.0),
+            amount: fluid.map_or(0, |f| f.1),
+            capacity,
+            drains: true,
+        }
+    }
+
+    /// `filtering.test(getFluidInTank(i))` of what it holds (`FilteringBehaviour.test`: an empty
+    /// filter passes anything, a fluid the port does not know passes no filter).
+    fn passes(&self, filter: &impl Passes) -> bool {
+        match self.fluid {
+            Some(f) => filter.fluid(f),
+            None => !filter.filtered(),
+        }
+    }
+}
+
 /// What a detector finds at its target.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Seen {
@@ -127,8 +159,15 @@ pub struct Seen {
     pub transported: Option<Vec<String>>,
     /// An item handler's slots and their limit (`getSlotLimit`), if it has one.
     pub inventory: Option<(Vec<Slot>, u32)>,
-    /// A fluid handler's tank: its fluid, amount and capacity.
-    pub tank: Option<(Option<Fluid>, u32, u32)>,
+    /// A fluid handler's tanks (`IFluidHandler.getTanks`), if it has one.
+    pub tanks: Option<Vec<TankSlot>>,
+    /// The fluids flowing into a pipe from its sides, each flow complete (`FluidTransportBehaviour
+    /// .getFlow`: inbound and complete); Some for a pipe even without any: such a target is
+    /// looked at no further.
+    pub flows: Option<Vec<Fluid>>,
+    /// The items of the packages going round a chain conveyor (`getLoopingPackages`); Some for a
+    /// chain conveyor even without any: it is looked at no further.
+    pub looping: Option<Vec<String>>,
     /// A `ThresholdSwitchObservable` (a rope pulley): its (min, current, max), read before
     /// any handler.
     pub custom: Option<(i32, i32, i32)>,
@@ -148,6 +187,20 @@ pub fn observe(filter: impl Passes, seen: &Seen) -> Option<u8> {
             .any(|i| filter.item(i))
             .then_some(DEFAULT_DELAY);
     }
+    // `FluidTransportBehaviour`: a complete inbound flow the filter passes.
+    if let Some(flows) = &seen.flows {
+        return flows
+            .iter()
+            .any(|f| filter.fluid(*f))
+            .then_some(DEFAULT_DELAY);
+    }
+    // `ChainConveyorBlockEntity.getLoopingPackages`.
+    if let Some(items) = &seen.looping {
+        return items
+            .iter()
+            .any(|i| filter.item(i))
+            .then_some(DEFAULT_DELAY);
+    }
     if let Some((slots, _)) = &seen.inventory
         && slots
             .iter()
@@ -155,9 +208,12 @@ pub fn observe(filter: impl Passes, seen: &Seen) -> Option<u8> {
     {
         return Some(DEFAULT_DELAY);
     }
-    if let Some((Some(fluid), amount, _)) = seen.tank
-        && amount > 0
-        && filter.fluid(fluid)
+    // `TankManipulationBehaviour.extractAny`, simulated: a tank holding what the filter
+    // passes that gives some of it.
+    if let Some(tanks) = &seen.tanks
+        && tanks
+            .iter()
+            .any(|t| t.amount > 0 && t.drains && t.passes(&filter))
     {
         return Some(DEFAULT_DELAY);
     }
@@ -170,7 +226,7 @@ pub fn fill_level(filter: impl Passes, seen: &Seen) -> Option<(i32, i32, i32)> {
     if let Some(custom) = seen.custom {
         return Some(custom);
     }
-    if seen.inventory.is_none() && seen.tank.is_none() {
+    if seen.inventory.is_none() && seen.tanks.is_none() {
         return None;
     }
     let (mut level, mut max) = (0i64, 0i64);
@@ -190,15 +246,14 @@ pub fn fill_level(filter: impl Passes, seen: &Seen) -> Option<(i32, i32, i32)> {
             }
         }
     }
-    if let Some((fluid, amount, capacity)) = seen.tank
-        && capacity > 0
-    {
-        max += i64::from(capacity);
+    for t in seen.tanks.iter().flatten() {
+        if t.capacity == 0 {
+            continue;
+        }
+        max += i64::from(t.capacity);
         // `filtering.test(FluidStack.EMPTY)` passes only without a filter, and adds nothing.
-        if let Some(f) = fluid
-            && filter.fluid(f)
-        {
-            level += i64::from(amount);
+        if t.amount > 0 && t.passes(&filter) {
+            level += i64::from(t.amount);
         }
     }
     let clamp = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
@@ -365,6 +420,9 @@ pub enum Watch {
     Belt,
     /// A container with no notification: looked at every lazy interval.
     Lazy,
+    /// A target whose changes are not told (a pipe's flows, a chain conveyor's packages, a
+    /// basin's, spout's or hose pulley's tanks): looked at each tick, as Create's observer does.
+    Tick,
 }
 
 /// The smart observers and threshold switches of one dimension.
@@ -379,6 +437,8 @@ pub struct Detectors {
     pub checks: Vec<[i32; 3]>,
     /// Observers watching a belt: looked at each tick its belt has items.
     pub belt_watch: HashSet<[i32; 3]>,
+    /// Detectors looking at their target each tick (`Watch::Tick`).
+    pub tick_watch: HashSet<[i32; 3]>,
     /// Detectors looking at a container with no notification, by the game time they look again.
     pub lazy: BTreeSet<(i64, [i32; 3])>,
     lazy_at: HashMap<[i32; 3], i64>,
@@ -432,6 +492,7 @@ impl Detectors {
             }
         }
         self.belt_watch.remove(&pos);
+        self.tick_watch.remove(&pos);
         if let Some(t) = self.lazy_at.remove(&pos) {
             self.lazy.remove(&(t, pos));
         }
@@ -483,6 +544,11 @@ impl Detectors {
         } else {
             self.belt_watch.remove(&pos);
         }
+        if watch == Watch::Tick {
+            self.tick_watch.insert(pos);
+        } else {
+            self.tick_watch.remove(&pos);
+        }
         if let Some(t) = self.lazy_at.remove(&pos) {
             self.lazy.remove(&(t, pos));
         }
@@ -501,6 +567,7 @@ impl Detectors {
     /// round; each once.
     pub fn take_checks(&mut self, now: i64) -> Vec<[i32; 3]> {
         let mut out = std::mem::take(&mut self.checks);
+        out.extend(self.tick_watch.iter().copied());
         while let Some(&(t, pos)) = self.lazy.first() {
             if t > now {
                 break;
@@ -759,7 +826,7 @@ mod tests {
         assert_eq!(observe(iron, &chest), Some(DEFAULT_DELAY));
         assert_eq!(observe(Some("minecraft:dirt"), &chest), None);
         let tank = Seen {
-            tank: Some((Some(Fluid::Water), 500, 8000)),
+            tanks: Some(vec![TankSlot::of(Some((Fluid::Water, 500)), 8000)]),
             ..Seen::default()
         };
         assert_eq!(observe(None::<&str>, &tank), Some(DEFAULT_DELAY));
@@ -770,6 +837,50 @@ mod tests {
         assert_eq!(observe(Some("minecraft:lava_bucket"), &tank), None);
         assert_eq!(observe(iron, &tank), None);
         assert_eq!(observe(None::<&str>, &Seen::default()), None);
+        // A basin's second output and a boiler (which gives nothing).
+        let basin = Seen {
+            tanks: Some(vec![
+                TankSlot::of(None, 1000),
+                TankSlot::of(Some((Fluid::Lava, 10)), 1000),
+            ]),
+            ..Seen::default()
+        };
+        assert_eq!(observe(Some("minecraft:lava_bucket"), &basin), Some(DEFAULT_DELAY));
+        let boiler = Seen {
+            tanks: Some(vec![TankSlot {
+                drains: false,
+                ..TankSlot::of(Some((Fluid::Water, 10)), 10000)
+            }]),
+            ..Seen::default()
+        };
+        assert_eq!(observe(None::<&str>, &boiler), None);
+        // A pipe: its flows only; a chain conveyor: its packages only.
+        let pipe = Seen {
+            flows: Some(vec![Fluid::Water]),
+            tanks: Some(vec![TankSlot::of(Some((Fluid::Lava, 10)), 1000)]),
+            ..Seen::default()
+        };
+        assert_eq!(observe(Some("minecraft:water_bucket"), &pipe), Some(DEFAULT_DELAY));
+        assert_eq!(observe(Some("minecraft:lava_bucket"), &pipe), None);
+        let chain = Seen {
+            looping: Some(vec!["create:cardboard_package_10x12".into()]),
+            ..Seen::default()
+        };
+        assert_eq!(observe(None::<&str>, &chain), Some(DEFAULT_DELAY));
+        assert_eq!(observe(iron, &chain), None);
+        // A fluid the port does not know passes only an empty filter.
+        let other = Seen {
+            tanks: Some(vec![TankSlot {
+                fluid: None,
+                amount: 5,
+                capacity: 10,
+                drains: true,
+            }]),
+            ..Seen::default()
+        };
+        assert_eq!(observe(None::<&str>, &other), Some(DEFAULT_DELAY));
+        assert_eq!(observe(Some("minecraft:water_bucket"), &other), None);
+        assert_eq!(fill_level(None::<&str>, &other), Some((0, 5, 10)));
     }
 
     #[test]
@@ -892,7 +1003,7 @@ mod tests {
         assert!(s.powered);
         // A full tank: level 5; a tank of lava read through a water filter: 0.
         let tank = Seen {
-            tank: Some((Some(Fluid::Lava), 8000, 8000)),
+            tanks: Some(vec![TankSlot::of(Some((Fluid::Lava, 8000)), 8000)]),
             ..Seen::default()
         };
         let mut t = Switch::default();
@@ -904,6 +1015,21 @@ mod tests {
             fill_level(Some("minecraft:water_bucket"), &tank),
             Some((0, 0, 8000))
         );
+        // Every tank of a basin counts: two inputs and two outputs of 1000.
+        let basin = Seen {
+            tanks: Some(vec![
+                TankSlot::of(Some((Fluid::Water, 500)), 1000),
+                TankSlot::of(None, 1000),
+                TankSlot::of(Some((Fluid::Water, 250)), 1000),
+                TankSlot::of(Some((Fluid::Lava, 1000)), 1000),
+            ]),
+            ..Seen::default()
+        };
+        assert_eq!(
+            fill_level(Some("minecraft:water_bucket"), &basin),
+            Some((0, 750, 4000))
+        );
+        assert_eq!(fill_level(None::<&str>, &basin), Some((0, 1750, 4000)));
         // The tank gone: level 0, off, a tick scheduled; then nothing more.
         assert_eq!(
             t.update_level(None),
