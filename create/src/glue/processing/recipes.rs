@@ -162,7 +162,27 @@ pub fn recipe_fluid(json: &Value) -> Option<(tank::Fluid, u32)> {
     let id = json["fluid"]
         .as_str()
         .or_else(|| json["tag"].as_str())
-        .or_else(|| json["id"].as_str())?;
+        .or_else(|| json["id"].as_str())
+        .or_else(|| json["fluids"].as_str())?;
+    // A potion fluid named by its components (`neoforge:components`: the potion and its
+    // bottle, `DataComponentFluidIngredient`), as the spout's glowstone, redstone and
+    // gunpowder recipes take.
+    if id == "create:potion" {
+        let c = &json["components"];
+        let potion = c["minecraft:potion_contents"]["potion"].as_str()?;
+        let bottle = match c["create:potion_fluid_bottle_type"]
+            .as_str()
+            .unwrap_or("regular")
+        {
+            "splash" => tank::Bottle::Splash,
+            "lingering" => tank::Bottle::Lingering,
+            _ => tank::Bottle::Regular,
+        };
+        return Some((
+            tank::Fluid::Potion(tank::Potion::of(potion, bottle)?),
+            amount,
+        ));
+    }
     Some((tank::Fluid::of_id(id)?, amount))
 }
 
