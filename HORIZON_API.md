@@ -211,10 +211,7 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   `PortableStorageInterfaceRenderer`) have no partial blocks yet, so they are drawn neither placed nor moving;
   actor heads on a moving structure are drawn at rest; an elevator contact's door control
   (`DoorControlBehaviour`) has no value box: elevators open their doors on every side.
-- Fluids: potion fluids keep registered potions only (custom effects and colours are lost: the engine's
-  `tank::Fluid` is a fixed set of ids saved and sent as one byte, which would need a world-saved table of
-  potion contents), and belts carry only the potions a spout fills on them (the logistics glue keeps no
-  components on belts); glass pipes show a steady stream, not its growth from the side it comes in
+- Fluids: glass pipes show a steady stream, not its growth from the side it comes in
   (`PipeConnection.Flow.progress`), and pipes don't drip on their rims while fluid passes; open pipe ends
   pour only fluids with a block (Create's `FluidStackParticle` draws milk, tea and potions too).
 

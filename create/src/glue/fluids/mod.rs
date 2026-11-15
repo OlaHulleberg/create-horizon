@@ -7,9 +7,15 @@
 //! state, a hose pulley's hose, a pipe's rims, a drain's stack, an engine's shaft speed and a
 //! spout's cycle; a valve's pointer follows the valve's own state and speed on the client.
 //!
-//! Potions and builder's tea are fluids too (`tank::Fluid::Potion`, `Tea`): drains and tanks take
-//! potions as their potion fluid (a regular water bottle as water), spouts fill bottles with it;
-//! the engine names a potion item with its contents (`tank::potion_item`).
+//! Potions and builder's tea are fluids too (`tank::Fluid::Potion`, `Tea`): drains, tanks and
+//! basins take potions as their potion fluid (a regular water bottle as water), spouts fill
+//! bottles with it; the engine names a potion item with its contents (`tank::potion_item`). A
+//! potion fluid carries its whole `potion_contents` (custom effects, colour and name:
+//! `create_engine::potion::Contents`) and its bottle, so potions of other contents never mix; the
+//! int arrays fluids are saved and sent in number a potion by its place in a list of keys kept
+//! beside them (`tank::Codes`, `fluid_keys`). An open end letting out a fluid without a block
+//! takes a millibucket at a time and gives the living in front a potion's effects, haste for tea
+//! or a cure for milk (`pipes::open_effect`, `OpenPipeEffectHandler`).
 //!
 //! Creative fluid tanks join into tanks as fluid tanks do (`creative_tanks` in the engine's
 //! world), each block giving the tank's fluid (`plumbing.creative`). Steam engines hiss and puff

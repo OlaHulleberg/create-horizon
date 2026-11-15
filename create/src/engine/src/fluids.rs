@@ -115,6 +115,8 @@ pub struct End {
     pub only: Option<Fluid>,
     /// Pipes between the pump and it.
     pub distance: i32,
+    /// The way from the last pipe (or the pump) to it (`OpenEndedPipe`'s face).
+    pub face: Dir,
 }
 
 impl End {
@@ -164,21 +166,24 @@ fn step(p: [i32; 3], d: Dir) -> [i32; 3] {
 /// (they have pipe behaviours); only the flow stops there (`End::passes`).
 pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> Cell) -> Vec<End> {
     let mut ends: Vec<(End, i32)> = Vec::new();
-    let end = |pos: [i32; 3], tank: bool, pass: Pass| End {
+    let end = |pos: [i32; 3], tank: bool, pass: Pass, face: Dir| End {
         pos,
         tank,
         pressure: 0.0,
         blocked: pass.blocked,
         only: pass.only,
         distance: 0,
+        face,
     };
     let first = step(pump, side);
     let first_cell = cell(first);
     match first_cell {
-        Cell::Tank => ends.push((end(first, true, Pass::default()), 0)),
-        Cell::Port(s) if s == side.opposite() => ends.push((end(first, true, Pass::default()), 0)),
+        Cell::Tank => ends.push((end(first, true, Pass::default(), side), 0)),
+        Cell::Port(s) if s == side.opposite() => {
+            ends.push((end(first, true, Pass::default(), side), 0))
+        }
         // A pump right against water or air is an open end itself (`isOpenEnd` from the pump).
-        Cell::Open => ends.push((end(first, false, Pass::default()), 0)),
+        Cell::Open => ends.push((end(first, false, Pass::default(), side), 0)),
         Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..) if connects(first_cell, side) => {
             let start = Pass::default().through(first_cell);
             let mut frontier = std::collections::VecDeque::from([(1, first, start)]);
@@ -198,11 +203,11 @@ pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> C
                     }
                     let next_cell = cell(next);
                     match next_cell {
-                        Cell::Tank => ends.push((end(next, true, pass), distance)),
+                        Cell::Tank => ends.push((end(next, true, pass, d), distance)),
                         Cell::Port(s) if s == d.opposite() => {
-                            ends.push((end(next, true, pass), distance))
+                            ends.push((end(next, true, pass, d), distance))
                         }
-                        Cell::Open => ends.push((end(next, false, pass), distance)),
+                        Cell::Open => ends.push((end(next, false, pass, d), distance)),
                         Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..)
                             if openings(next_cell) & d.opposite().bit() != 0 =>
                         {
@@ -818,6 +823,8 @@ mod tests {
             blocked: false,
             only: None,
             distance: 0,
+            // The tests' ends lie along x from the pump.
+            face: if pos[0] < 0 { Dir::West } else { Dir::East },
         }
     }
 
@@ -1066,6 +1073,7 @@ mod tests {
             blocked: false,
             only: None,
             distance,
+            face: Dir::Up,
         };
         let end = |distance: i32| at(distance, 16.0);
         // A tank right behind, one 5 pipes in front: (0 + 2 + 10) halves at 6.56 ticks.

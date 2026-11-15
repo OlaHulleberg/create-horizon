@@ -83,86 +83,102 @@ pub const EFFECTS: [(&str, u32); 40] = [
 ];
 
 /// The registered potions (`minecraft:potion`, vanilla's order): id, name suffix
-/// (`Potion.name`) and effects (effect, amplifier).
-pub const POTIONS: [(&str, &str, &[(&str, i32)]); 46] = [
+/// (`Potion.name`) and effects (effect, amplifier, duration in ticks).
+pub const POTIONS: [(&str, &str, &[(&str, i32, i32)]); 46] = [
     ("water", "water", &[]),
     ("mundane", "mundane", &[]),
     ("thick", "thick", &[]),
     ("awkward", "awkward", &[]),
-    ("night_vision", "night_vision", &[("night_vision", 0)]),
-    ("long_night_vision", "night_vision", &[("night_vision", 0)]),
-    ("invisibility", "invisibility", &[("invisibility", 0)]),
-    ("long_invisibility", "invisibility", &[("invisibility", 0)]),
-    ("leaping", "leaping", &[("jump_boost", 0)]),
-    ("long_leaping", "leaping", &[("jump_boost", 0)]),
-    ("strong_leaping", "leaping", &[("jump_boost", 1)]),
+    ("night_vision", "night_vision", &[("night_vision", 0, 3600)]),
+    (
+        "long_night_vision",
+        "night_vision",
+        &[("night_vision", 0, 9600)],
+    ),
+    ("invisibility", "invisibility", &[("invisibility", 0, 3600)]),
+    (
+        "long_invisibility",
+        "invisibility",
+        &[("invisibility", 0, 9600)],
+    ),
+    ("leaping", "leaping", &[("jump_boost", 0, 3600)]),
+    ("long_leaping", "leaping", &[("jump_boost", 0, 9600)]),
+    ("strong_leaping", "leaping", &[("jump_boost", 1, 1800)]),
     (
         "fire_resistance",
         "fire_resistance",
-        &[("fire_resistance", 0)],
+        &[("fire_resistance", 0, 3600)],
     ),
     (
         "long_fire_resistance",
         "fire_resistance",
-        &[("fire_resistance", 0)],
+        &[("fire_resistance", 0, 9600)],
     ),
-    ("swiftness", "swiftness", &[("speed", 0)]),
-    ("long_swiftness", "swiftness", &[("speed", 0)]),
-    ("strong_swiftness", "swiftness", &[("speed", 1)]),
-    ("slowness", "slowness", &[("slowness", 0)]),
-    ("long_slowness", "slowness", &[("slowness", 0)]),
-    ("strong_slowness", "slowness", &[("slowness", 3)]),
+    ("swiftness", "swiftness", &[("speed", 0, 3600)]),
+    ("long_swiftness", "swiftness", &[("speed", 0, 9600)]),
+    ("strong_swiftness", "swiftness", &[("speed", 1, 1800)]),
+    ("slowness", "slowness", &[("slowness", 0, 1800)]),
+    ("long_slowness", "slowness", &[("slowness", 0, 4800)]),
+    ("strong_slowness", "slowness", &[("slowness", 3, 400)]),
     (
         "turtle_master",
         "turtle_master",
-        &[("slowness", 3), ("resistance", 2)],
+        &[("slowness", 3, 400), ("resistance", 2, 400)],
     ),
     (
         "long_turtle_master",
         "turtle_master",
-        &[("slowness", 3), ("resistance", 2)],
+        &[("slowness", 3, 800), ("resistance", 2, 800)],
     ),
     (
         "strong_turtle_master",
         "turtle_master",
-        &[("slowness", 5), ("resistance", 3)],
+        &[("slowness", 5, 400), ("resistance", 3, 400)],
     ),
     (
         "water_breathing",
         "water_breathing",
-        &[("water_breathing", 0)],
+        &[("water_breathing", 0, 3600)],
     ),
     (
         "long_water_breathing",
         "water_breathing",
-        &[("water_breathing", 0)],
+        &[("water_breathing", 0, 9600)],
     ),
-    ("healing", "healing", &[("instant_health", 0)]),
-    ("strong_healing", "healing", &[("instant_health", 1)]),
-    ("harming", "harming", &[("instant_damage", 0)]),
-    ("strong_harming", "harming", &[("instant_damage", 1)]),
-    ("poison", "poison", &[("poison", 0)]),
-    ("long_poison", "poison", &[("poison", 0)]),
-    ("strong_poison", "poison", &[("poison", 1)]),
-    ("regeneration", "regeneration", &[("regeneration", 0)]),
-    ("long_regeneration", "regeneration", &[("regeneration", 0)]),
+    ("healing", "healing", &[("instant_health", 0, 1)]),
+    ("strong_healing", "healing", &[("instant_health", 1, 1)]),
+    ("harming", "harming", &[("instant_damage", 0, 1)]),
+    ("strong_harming", "harming", &[("instant_damage", 1, 1)]),
+    ("poison", "poison", &[("poison", 0, 900)]),
+    ("long_poison", "poison", &[("poison", 0, 1800)]),
+    ("strong_poison", "poison", &[("poison", 1, 432)]),
+    ("regeneration", "regeneration", &[("regeneration", 0, 900)]),
+    (
+        "long_regeneration",
+        "regeneration",
+        &[("regeneration", 0, 1800)],
+    ),
     (
         "strong_regeneration",
         "regeneration",
-        &[("regeneration", 1)],
+        &[("regeneration", 1, 450)],
     ),
-    ("strength", "strength", &[("strength", 0)]),
-    ("long_strength", "strength", &[("strength", 0)]),
-    ("strong_strength", "strength", &[("strength", 1)]),
-    ("weakness", "weakness", &[("weakness", 0)]),
-    ("long_weakness", "weakness", &[("weakness", 0)]),
-    ("luck", "luck", &[("luck", 0)]),
-    ("slow_falling", "slow_falling", &[("slow_falling", 0)]),
-    ("long_slow_falling", "slow_falling", &[("slow_falling", 0)]),
-    ("wind_charged", "wind_charged", &[("wind_charged", 0)]),
-    ("weaving", "weaving", &[("weaving", 0)]),
-    ("oozing", "oozing", &[("oozing", 0)]),
-    ("infested", "infested", &[("infested", 0)]),
+    ("strength", "strength", &[("strength", 0, 3600)]),
+    ("long_strength", "strength", &[("strength", 0, 9600)]),
+    ("strong_strength", "strength", &[("strength", 1, 1800)]),
+    ("weakness", "weakness", &[("weakness", 0, 1800)]),
+    ("long_weakness", "weakness", &[("weakness", 0, 4800)]),
+    ("luck", "luck", &[("luck", 0, 6000)]),
+    ("slow_falling", "slow_falling", &[("slow_falling", 0, 1800)]),
+    (
+        "long_slow_falling",
+        "slow_falling",
+        &[("slow_falling", 0, 4800)],
+    ),
+    ("wind_charged", "wind_charged", &[("wind_charged", 0, 3600)]),
+    ("weaving", "weaving", &[("weaving", 0, 3600)]),
+    ("oozing", "oozing", &[("oozing", 0, 3600)]),
+    ("infested", "infested", &[("infested", 0, 3600)]),
 ];
 
 /// The name suffixes the game's English names (`item.minecraft.potion.effect.*`).
@@ -277,7 +293,7 @@ impl Contents {
             .iter()
             .filter(|e| e.visible)
             .map(|e| (e.id.as_str(), e.amplifier));
-        mix(potion.iter().copied().chain(custom)).unwrap_or(BASE_COLOR)
+        mix(potion.iter().map(|e| (e.0, e.1)).chain(custom)).unwrap_or(BASE_COLOR)
     }
 
     /// The suffix its name is made with (`PotionContents.getName`): the custom name, else its

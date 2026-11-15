@@ -287,8 +287,13 @@ fn fill_end(
     let have = pump.out.filter(|o| o.0 == fluid).map_or(0, |o| o.1);
     let total = have + n;
     if !fluid.placeable() {
-        // Milk has no block.
-        return 0;
+        // Milk, tea and potions have no block: the open end takes a millibucket at a time and
+        // lets it act on what is in front (`OpenEndFluidHandler.fill`, `OpenPipeEffectHandler`).
+        if !replaceable(lv, to.pos) {
+            return 0;
+        }
+        open_effect(lv, to, fluid);
+        return n.min(1);
     }
     if total < BUCKET {
         pump.out = Some((fluid, total));
@@ -452,4 +457,125 @@ fn pour(lv: &mut ServerLevel<'_>, open: [i32; 3], fluid: Fluid, inbound: bool) {
     let _ = lv
         .level
         .send_particles(&mut *lv.host, &options, Some(state), at, m, 1.0, 0);
+}
+
+/// Vanilla's undead (`#minecraft:undead`, which the mod API cannot read for entities): healing
+/// hurts them and harming heals them.
+const UNDEAD: [&str; 17] = [
+    "minecraft:skeleton",
+    "minecraft:stray",
+    "minecraft:wither_skeleton",
+    "minecraft:skeleton_horse",
+    "minecraft:bogged",
+    "minecraft:parched",
+    "minecraft:zombie_horse",
+    "minecraft:camel_husk",
+    "minecraft:zombie",
+    "minecraft:zombie_villager",
+    "minecraft:zombified_piglin",
+    "minecraft:zoglin",
+    "minecraft:drowned",
+    "minecraft:husk",
+    "minecraft:zombie_nautilus",
+    "minecraft:wither",
+    "minecraft:phantom",
+];
+
+/// A potion's effects (`PotionContents.forEachEffect`): its potion's, then its custom ones as
+/// saved (`MobEffectInstance`'s codec: id, amplifier, duration, ambient, show_particles,
+/// show_icon).
+fn potion_effects(
+    c: &create_engine::potion::Contents,
+) -> Vec<(String, i32, i32, bool, bool, bool)> {
+    use mod_api::Tag;
+    let mut out: Vec<_> = c
+        .potion
+        .as_deref()
+        .and_then(create_engine::potion::registered)
+        .map_or(&[][..], |i| create_engine::potion::POTIONS[i].2)
+        .iter()
+        .map(|(e, amp, d)| (format!("minecraft:{e}"), *amp, *d, false, true, true))
+        .collect();
+    let Ok((Tag::List(custom), _)) = Tag::from_network_bytes(&c.custom_effects, None) else {
+        return out;
+    };
+    let int = |t: Option<&Tag>, or: i32| match t {
+        Some(Tag::Byte(v)) => i32::from(*v),
+        Some(Tag::Short(v)) => i32::from(*v),
+        Some(Tag::Int(v)) => *v,
+        _ => or,
+    };
+    for e in custom {
+        let Tag::Compound(e) = e else { continue };
+        let Some(Tag::String(id)) = e.get(&"id".into()) else {
+            continue;
+        };
+        let visible = int(e.get(&"show_particles".into()), 1) != 0;
+        out.push((
+            id.to_string_lossy(),
+            int(e.get(&"amplifier".into()), 0),
+            int(e.get(&"duration".into()), 0),
+            int(e.get(&"ambient".into()), 0) != 0,
+            visible,
+            int(e.get(&"show_icon".into()), i32::from(visible)) != 0,
+        ));
+    }
+    out
+}
+
+/// What an open end letting out a fluid without a block does to the living in front
+/// (`OpenEndedPipe`'s `aoe`: its space and the one below, two below from a pipe facing down):
+/// a potion gives each its effects, instant ones at half strength (`PotionEffectHandler`);
+/// builder's tea gives haste every 5 ticks (`TeaEffectHandler`); milk cures every 5 ticks
+/// (`MilkEffectHandler`).
+fn open_effect(lv: &mut ServerLevel<'_>, to: &fluids::End, fluid: Fluid) {
+    let p = to.pos.map(f64::from);
+    let below = if to.face == Dir::Down { 2.0 } else { 1.0 };
+    let (lo, hi) = (
+        [p[0], p[1] - below, p[2]],
+        [p[0] + 1.0, p[1] + 1.0, p[2] + 1.0],
+    );
+    let every_fifth = lv.game_time() % 5 == 0;
+    let effects = match fluid {
+        Fluid::Potion(potion) => potion_effects(potion.contents),
+        Fluid::Tea if every_fifth => vec![("minecraft:haste".into(), 0, 21, false, false, false)],
+        Fluid::Milk if every_fifth => Vec::new(),
+        _ => return,
+    };
+    let found = lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default();
+    for e in found {
+        let Some(living) = lv.host.living(e) else {
+            continue;
+        };
+        if fluid == Fluid::Milk {
+            living.remove_all_effects(&mut *lv.host);
+            continue;
+        }
+        for (id, amp, duration, ambient, visible, icon) in &effects {
+            let short = id.strip_prefix("minecraft:").unwrap_or(id);
+            if matches!(short, "instant_health" | "instant_damage") {
+                // `HealOrHarmMobEffect.applyInstantenousEffect` at 0.5.
+                let undead = e
+                    .kind(&*lv.host)
+                    .is_some_and(|k| UNDEAD.contains(&k.as_str()));
+                if (short == "instant_health") != undead {
+                    living.heal(&mut *lv.host, (4 << amp.clamp(&0, &30)) as f32 * 0.5);
+                } else {
+                    let _ = e.hurt(
+                        &mut *lv.host,
+                        "minecraft:magic",
+                        (6 << amp.clamp(&0, &30)) as f32 * 0.5,
+                        None,
+                        None,
+                    );
+                }
+                continue;
+            }
+            if let Some(key) = lv.host.effect_key(id) {
+                let effect =
+                    mod_api::ActiveEffect::new(key, *duration, *amp, *ambient, *visible, *icon);
+                living.add_effect(&mut *lv.host, &effect);
+            }
+        }
+    }
 }
