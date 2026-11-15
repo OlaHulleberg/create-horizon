@@ -681,7 +681,11 @@ impl Shown {
             h: e.launcher.h,
             v: e.launcher.v,
             early: e.early.map(|x| x.time),
-            flying: e.flying.iter().map(|f| (f.time, crate::arm::item_id(&f.item).to_owned())).collect(),
+            flying: e
+                .flying
+                .iter()
+                .map(|f| (f.time, crate::arm::shown_name(&f.item).to_owned()))
+                .collect(),
         }
     }
 
@@ -692,33 +696,35 @@ impl Shown {
     }
 }
 
-/// Ejectors as messages (each well under the 30,000-byte limit).
+/// Ejectors as messages of at most 30,000 bytes.
 pub fn encode(all: &[Shown]) -> Vec<Vec<u8>> {
-    all.chunks(32)
-        .map(|chunk| {
-            let mut out = Vec::new();
-            for s in chunk {
-                for c in s.pos {
-                    out.extend_from_slice(&c.to_le_bytes());
-                }
-                out.push(u8::from(s.gone) | s.state.index() << 1);
-                for v in [s.lid, s.wind_up, s.early.unwrap_or(f32::NAN)] {
-                    out.extend_from_slice(&v.to_le_bytes());
-                }
-                out.extend_from_slice(&(s.h as i16).to_le_bytes());
-                out.extend_from_slice(&(s.v as i16).to_le_bytes());
-                let n = s.flying.len().min(16);
-                out.push(n as u8);
-                for (t, item) in &s.flying[..n] {
-                    out.extend_from_slice(&(*t as i16).to_le_bytes());
-                    let len = item.len().min(255);
-                    out.push(len as u8);
-                    out.extend_from_slice(&item.as_bytes()[..len]);
-                }
-            }
-            out
-        })
-        .collect()
+    let mut messages: Vec<Vec<u8>> = Vec::new();
+    for s in all {
+        let mut one = Vec::new();
+        for c in s.pos {
+            one.extend_from_slice(&c.to_le_bytes());
+        }
+        one.push(u8::from(s.gone) | s.state.index() << 1);
+        for v in [s.lid, s.wind_up, s.early.unwrap_or(f32::NAN)] {
+            one.extend_from_slice(&v.to_le_bytes());
+        }
+        one.extend_from_slice(&(s.h as i16).to_le_bytes());
+        one.extend_from_slice(&(s.v as i16).to_le_bytes());
+        let n = s.flying.len().min(16);
+        one.push(n as u8);
+        for (t, item) in &s.flying[..n] {
+            one.extend_from_slice(&(*t as i16).to_le_bytes());
+            let item = crate::arm::shown_name(item);
+            one.extend_from_slice(&(item.len() as u16).to_le_bytes());
+            one.extend_from_slice(item.as_bytes());
+        }
+        // A stack's name runs to a kilobyte (`arm::shown_name`): whole ejectors to a message.
+        match messages.last_mut() {
+            Some(m) if m.len() + one.len() <= 30_000 => m.extend_from_slice(&one),
+            _ => messages.push(one),
+        }
+    }
+    messages
 }
 
 /// A message's ejectors; a malformed tail is dropped.
@@ -748,7 +754,7 @@ pub fn decode(mut d: &[u8]) -> Vec<Shown> {
         let mut flying = Vec::with_capacity(usize::from(n));
         for _ in 0..n {
             let t = i16_of(d)?;
-            let len = usize::from(take(d, 1)?[0]);
+            let len = usize::from(u16::from_le_bytes(take(d, 2)?.try_into().ok()?));
             flying.push((t, String::from_utf8_lossy(take(d, len)?).into_owned()));
         }
         Some(Shown {

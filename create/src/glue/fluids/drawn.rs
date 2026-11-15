@@ -7,7 +7,7 @@ use super::super::world::with_world;
 use super::TANK;
 use super::client::fluid_box;
 use create_engine::kinetics::Dir;
-use create_engine::tank::Fluid;
+use create_engine::tank::Codes;
 use mod_api::{
     BlockEntitySubmitEvent, ClientHost, Compound, ItemDisplayContext, ModBlockEntity, Tag,
 };
@@ -106,7 +106,7 @@ pub(super) fn animated(entity: &ModBlockEntity) -> bool {
 pub(super) fn draw(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
     if let Some(Tag::IntArray(v)) = event.entity.nbt.get(&TANK.into()).cloned()
         && let &[fluid, amount, capacity] = v.as_slice()
-        && let Some(fluid) = Fluid::from_index(fluid.clamp(0, 255) as u8)
+        && let Some(fluid) = Codes::fluid(&super::fluid_keys(&event.entity.nbt, TANK), fluid)
         && amount > 0
         && capacity > 0
     {

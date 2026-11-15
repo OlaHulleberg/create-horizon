@@ -70,6 +70,7 @@ pub mod plumbing;
 pub mod port;
 pub mod postbox;
 pub mod potato;
+pub mod potion;
 pub mod press;
 pub mod processing;
 pub mod psi;

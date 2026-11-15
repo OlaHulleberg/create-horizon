@@ -95,19 +95,22 @@ pub fn save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
         data.insert("burners".into(), Tag::IntArray(v));
     }
     if !basins.is_empty() {
-        // x, y, z, then fluid (255: none) and amount for each of the four tanks.
+        // x, y, z, then fluid (255: none; a potion by its key beside) and amount for each of
+        // the four tanks.
+        let mut codes = tank::Codes::default();
         let v = basins
             .into_iter()
             .flat_map(|(p, t)| {
                 let mut out = p.to_vec();
                 for f in t.input.iter().chain(&t.output) {
-                    out.push(f.map_or(255, |f| i32::from(f.0.index())));
+                    out.push(codes.code(f.map(|f| f.0)));
                     out.push(f.map_or(0, |f| f.1 as i32));
                 }
                 out
             })
             .collect();
         data.insert("basins".into(), Tag::IntArray(v));
+        crate::glue::fluids::put_fluid_keys(data, "basins", codes);
     }
     if !inputs.is_empty() {
         data.insert("crafter_inputs".into(), Tag::IntArray(inputs));
@@ -294,12 +297,13 @@ fn basins_from_nbt(data: &Compound) -> Vec<([i32; 3], basin::Tanks)> {
     let Some(Tag::IntArray(v)) = data.get(&"basins".into()) else {
         return Vec::new();
     };
+    let keys = crate::glue::fluids::fluid_keys(data, "basins");
     v.as_chunks::<11>()
         .0
         .iter()
         .map(|c| {
             let tank = |i: usize| {
-                tank::Fluid::from_index(c[3 + 2 * i].clamp(0, 255) as u8)
+                tank::Codes::fluid(&keys, c[3 + 2 * i])
                     .map(|f| (f, c[4 + 2 * i].clamp(0, 1000) as u32))
             };
             (

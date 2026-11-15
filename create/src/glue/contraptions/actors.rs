@@ -955,7 +955,9 @@ pub(crate) fn storage_to_nbt(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<Tag>
                 );
             }
             if let Some(t) = d.tank {
-                let fluid = t.tank.fluid.map_or(255, |f| i32::from(f.index()));
+                let mut codes = create_engine::tank::Codes::default();
+                let fluid = codes.code(t.tank.fluid);
+                crate::glue::fluids::put_fluid_keys(&mut held, "tank", codes);
                 held.insert(
                     "tank".into(),
                     Tag::IntArray(vec![
@@ -1033,7 +1035,10 @@ pub(crate) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<
                 height: hh.clamp(1, 32) as u8,
                 window: win != 0,
                 tank: create_engine::tank::Tank {
-                    fluid: create_engine::tank::Fluid::from_index(f.clamp(0, 255) as u8),
+                    fluid: create_engine::tank::Codes::fluid(
+                        &crate::glue::fluids::fluid_keys(h, "tank"),
+                        f,
+                    ),
                     amount: n.max(0) as u32,
                 },
             });

@@ -65,6 +65,8 @@ pub fn basin_tanks(dim: usize, pos: [i32; 3]) -> basin::Tanks {
 /// The key of a basin's block entity data its clients read its tanks from: fluid index (-1 for
 /// none) and amount of the inputs, then the outputs.
 pub const FLUIDS_KEY: &str = "BasinFluids";
+/// The keys of the potions `FLUIDS_KEY` numbers (`fluids::fluid_keys`).
+pub const FLUIDS_KEYS_KEY: &str = "BasinFluids_fluids";
 /// The key of a basin's block entity data its clients read its stacks from (`id`, `count`), in
 /// slot order: a client's block entity has no slots.
 pub const ITEMS_KEY: &str = "BasinItems";
@@ -134,15 +136,26 @@ pub fn show_basins(lv: &mut ServerLevel<'_>) {
             continue;
         }
         let t = basin_tanks(dim, pos);
+        let mut codes = create_engine::tank::Codes::default();
         let fluids = (t != basin::Tanks::default()).then(|| {
             Tag::IntArray(
                 t.input
                     .iter()
                     .chain(t.output.iter())
                     .flat_map(|s| match s {
-                        Some((f, n)) => [i32::from(f.index()), *n as i32],
+                        Some((f, n)) => [codes.code(Some(*f)), *n as i32],
                         None => [-1, 0],
                     })
+                    .collect(),
+            )
+        });
+        // The potions' keys (`fluids::fluid_keys`), none taken away.
+        let keys = (!codes.keys.is_empty()).then(|| {
+            Tag::List(
+                codes
+                    .keys
+                    .iter()
+                    .map(|k| Tag::String(k.as_str().into()))
                     .collect(),
             )
         });
@@ -164,7 +177,15 @@ pub fn show_basins(lv: &mut ServerLevel<'_>) {
             .collect();
         // Empty ones are taken away (their clients see them absent: `kinetics::synced`).
         let items = (!items.is_empty()).then_some(Tag::List(items));
-        set_shown(lv, pos, &[(FLUIDS_KEY, fluids), (ITEMS_KEY, items)]);
+        set_shown(
+            lv,
+            pos,
+            &[
+                (FLUIDS_KEY, fluids),
+                (FLUIDS_KEYS_KEY, keys),
+                (ITEMS_KEY, items),
+            ],
+        );
     }
 }
 
@@ -259,17 +280,18 @@ pub fn basin_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut Option<It
 }
 
 /// `BasinBlock.useItemOn`: an empty hand takes every stack out (inputs and outputs, into the
-/// inventory); a fluid's bucket empties into an input tank when all of it fits
-/// (`FluidHelper.tryEmptyItemIntoBE`); an empty bucket takes a bucket's worth from the first tank
-/// holding one, the outputs first (`tryFillItemFromBE` on `CombinedTankWrapper(output, input)`).
-/// A creative player keeps their bucket and gets none. True when the click was the basin's.
+/// inventory); an item holding a fluid (a bucket, a potion with its whole contents, an emptying
+/// recipe's) empties into an input tank when all of it fits (`FluidHelper.tryEmptyItemIntoBE`);
+/// an item that can be filled (an empty bucket, a glass bottle) takes what it needs from the
+/// first tank holding enough, the outputs first (`tryFillItemFromBE` on
+/// `CombinedTankWrapper(output, input)`). A creative player keeps the item and gets none back.
+/// True when the click was the basin's.
 pub fn use_basin(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     player: PlayerRef,
     stack: Option<&ItemStack>,
 ) -> bool {
-    use create_engine::tank::{BUCKET, Fluid};
     let dim = lv.dim;
     let Some(stack) = stack else {
         let Some(slots) = lv.slots(pos, basin::SLOTS) else {
@@ -298,48 +320,62 @@ pub fn use_basin(
         return true;
     };
     let creative = lv.creative(player);
-    let held = stacks::id(&*lv.host, stack);
+    // A potion by its whole contents (`PotionFluidHandler.getFluidFromPotionItem`).
+    let held = crate::glue::logistics::items::potion_name(&*lv.host, stack)
+        .unwrap_or_else(|| stacks::id(&*lv.host, stack));
     let mut tanks = basin_tanks(dim, pos);
-    if let Some(fluid) = Fluid::of_bucket(&held) {
+    let emptying = crate::glue::fluids::clicks::emptying(&held);
+    // `tryEmptyItemIntoBE`: all of it into an input tank, or nothing.
+    if let Some(e) = &emptying {
         let mut inputs = tanks.input;
-        if basin::fill(&mut inputs, fluid, BUCKET) != BUCKET {
-            return false;
+        if basin::fill(&mut inputs, e.fluid, e.amount) == e.amount {
+            tanks.input = inputs;
+            with_world(|w| w.set_basin_fluids(dim, pos, tanks));
+            if !creative {
+                lv.take_held(player, 1);
+                if let Some(left) = e
+                    .leftover
+                    .as_deref()
+                    .and_then(|l| crate::glue::logistics::items::stack_of(&*lv.host, l, 1))
+                {
+                    lv.give(player, left);
+                }
+            }
+            return true;
         }
-        tanks.input = inputs;
+    }
+    // `tryFillItemFromBE` on `CombinedTankWrapper(output, input)`: the first tank holding what
+    // filling the item takes.
+    for i in 0..4 {
+        let slot = if i < 2 {
+            &mut tanks.output[i]
+        } else {
+            &mut tanks.input[i - 2]
+        };
+        let Some((fluid, have)) = *slot else {
+            continue;
+        };
+        let Some((need, out)) = crate::glue::fluids::clicks::filling(&held, fluid) else {
+            continue;
+        };
+        if need > have {
+            continue;
+        }
+        *slot = (have > need).then_some((fluid, have - need));
         with_world(|w| w.set_basin_fluids(dim, pos, tanks));
         if !creative {
             lv.take_held(player, 1);
-            if let Some(b) = stacks::stack(&*lv.host, "minecraft:bucket", 1) {
-                lv.give(player, b);
+            if let Some(out) = crate::glue::logistics::items::stack_of(&*lv.host, &out, 1) {
+                lv.give(player, out);
             }
         }
         return true;
     }
-    if held != "minecraft:bucket" {
-        return false;
-    }
-    // A bucket takes only a fluid that has one (not tea or a potion).
-    let full = |t: &[Option<(Fluid, u32)>; 2]| {
-        t.iter()
-            .position(|s| s.is_some_and(|(f, n)| n >= BUCKET && f.bucket().is_some()))
-    };
-    let take = |t: &mut [Option<(Fluid, u32)>; 2]| {
-        let i = full(t)?;
-        let (f, n) = t[i]?;
-        t[i] = (n > BUCKET).then_some((f, n - BUCKET));
-        Some(f)
-    };
-    let Some(fluid) = take(&mut tanks.output).or_else(|| take(&mut tanks.input)) else {
-        return false;
-    };
-    with_world(|w| w.set_basin_fluids(dim, pos, tanks));
-    if !creative {
-        lv.take_held(player, 1);
-        if let Some(b) = fluid.bucket().and_then(|b| stacks::stack(&*lv.host, b, 1)) {
-            lv.give(player, b);
-        }
-    }
-    true
+    // An item that could be emptied or filled is used up all the same.
+    emptying.is_some()
+        || held == "minecraft:bucket"
+        || held == "minecraft:glass_bottle"
+        || recipes::with(|r| create_engine::spout::fillable(&held, &r.filling)).unwrap_or(false)
 }
 
 /// Mechanical mixers: those asked to look at their basin (`updateBasin`: turning, not running,

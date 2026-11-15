@@ -129,6 +129,8 @@ pub(crate) fn spec(host: &dyn Host, stack: &ItemStack) -> Spec {
             _ => None,
         },
         address: address(stack),
+        fluid: crate::glue::logistics::items::potion_name(host, stack)
+            .and_then(|n| create_engine::tank::potion_fluid(&n)),
     }
 }
 

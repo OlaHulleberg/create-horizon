@@ -19,31 +19,11 @@ pub(super) fn stack_of(host: &dyn ServerHost, item: &str, count: u32) -> Option<
     crate::glue::logistics::items::stack_of(host, item, count)
 }
 
-/// The item a stack is to spouts, drains and tanks: its id, and a potion's contents with it
-/// (`tank::potion_item`) when they are a registered potion without custom effects. None for a
-/// stack with other components, which they don't take apart from potions.
+/// The item a stack is to spouts, drains and tanks: its id, and a potion with its whole
+/// contents (`tank::potion_item`; its other components, a name or enchantments, aside, as
+/// `PotionFluidHandler.getFluidFromPotionItem` reads only the contents).
 pub(super) fn item_name(host: &dyn mod_api::Host, stack: &ItemStack) -> String {
-    let id = stack.item().id(host);
-    if create_engine::tank::Bottle::of_item(&id).is_none() {
-        return id;
-    }
-    let potion = stack.components().and_then(|c| {
-        match c.as_nbt().get(&"minecraft:potion_contents".into()) {
-            Some(Tag::Compound(p)) if p.get(&"custom_effects".into()).is_none() => {
-                match p.get(&"potion".into()) {
-                    Some(Tag::String(s)) => Some(s.to_string_lossy()),
-                    _ => None,
-                }
-            }
-            // `PotionContents`' codec writes a lone potion as its id.
-            Some(Tag::String(s)) => Some(s.to_string_lossy()),
-            _ => None,
-        }
-    });
-    match potion {
-        Some(p) => create_engine::tank::potion_item(&id, &p),
-        None => id,
-    }
+    crate::glue::logistics::items::potion_name(host, stack).unwrap_or_else(|| stack.item().id(host))
 }
 
 /// A sequenced assembly's filling step for `item` at `progress`: the assembly, the step's
@@ -430,8 +410,10 @@ const KEY: &str = "create_machines";
 
 pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
     let here = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
+    let codes = std::cell::RefCell::new(create_engine::tank::Codes::default());
     let tank = |p: &[i32; 3], f: Option<(Fluid, u32)>| {
-        let (fluid, n) = f.map_or((255, 0), |(f, n)| (i32::from(f.index()), n as i32));
+        let n = f.map_or(0, |(_, n)| n as i32);
+        let fluid = codes.borrow_mut().code(f.map(|f| f.0));
         [p[0], p[1], p[2], fluid, n]
     };
     let Some((spouts, drains, items)) = with_world(|w| {
@@ -464,11 +446,12 @@ pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) 
     if spouts.is_empty() && drains.is_empty() {
         return;
     }
-    let own = Compound::from([
+    let mut own = Compound::from([
         ("spouts".into(), Tag::IntArray(spouts)),
         ("drains".into(), Tag::IntArray(drains)),
         ("drain_items".into(), Tag::List(items)),
     ]);
+    super::put_fluid_keys(&mut own, KEY, codes.into_inner());
     data.insert(KEY.into(), Tag::Compound(own));
 }
 
@@ -481,8 +464,9 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
         Some(Tag::IntArray(v)) => v.clone(),
         _ => Vec::new(),
     };
+    let keys = super::fluid_keys(own, KEY);
     let fluid =
-        |c: &[i32]| Fluid::from_index(c[3].clamp(0, 255) as u8).map(|f| (f, c[4].max(0) as u32));
+        |c: &[i32]| create_engine::tank::Codes::fluid(&keys, c[3]).map(|f| (f, c[4].max(0) as u32));
     let (spouts, drains) = (ints("spouts"), ints("drains"));
     let items = match own.get(&"drain_items".into()) {
         Some(Tag::List(l)) => l.clone(),

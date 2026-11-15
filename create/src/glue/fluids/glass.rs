@@ -14,6 +14,9 @@ use std::collections::HashMap;
 /// The key of the fluid a glass pipe shows (its index; none: empty) in its block entity's data.
 pub const FLOW: &str = "Flow";
 
+/// The key of the potion's key beside it (`super::fluid_keys`).
+pub const FLOW_FLUIDS: &str = "Flow_fluids";
+
 /// Ticks a glass pipe keeps showing a flow after it last carried it.
 const LINGER: i64 = 4;
 
@@ -74,8 +77,15 @@ pub(super) fn send(lv: &mut ServerLevel<'_>) {
         let Some(entity) = lv.host.block_entity(lv.level, pos) else {
             continue;
         };
-        let v = fluid.map_or_else(Vec::new, |f| vec![i32::from(f.index())]);
-        let data = Compound::from([(FLOW.into(), Tag::IntArray(v))]);
+        let mut codes = create_engine::tank::Codes::default();
+        let v = fluid.map_or_else(Vec::new, |f| vec![codes.code(Some(f))]);
+        let mut data = Compound::from([(FLOW.into(), Tag::IntArray(v))]);
+        let keys = codes
+            .keys
+            .iter()
+            .map(|k| Tag::String(k.as_str().into()))
+            .collect();
+        data.insert(FLOW_FLUIDS.into(), Tag::List(keys));
         let _ = entity.merge_data(&mut *lv.host, data);
     }
 }
@@ -89,9 +99,10 @@ pub(super) fn draw(
     let Some(Tag::IntArray(v)) = event.entity.nbt.get(&FLOW.into()) else {
         return;
     };
+    let keys = super::fluid_keys(&event.entity.nbt, FLOW);
     let Some(fluid) = v
         .first()
-        .and_then(|i| Fluid::from_index((*i).clamp(0, 255) as u8))
+        .and_then(|i| create_engine::tank::Codes::fluid(&keys, *i))
     else {
         return;
     };

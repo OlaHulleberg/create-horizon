@@ -5,6 +5,7 @@
 use super::super::contraptions::actors;
 use super::super::server::ServerLevel;
 use create_engine::kinetics::Dir;
+use create_engine::potion::Contents;
 use mod_api::{
     BlockEntityRef, Capability, Direction, EntityRef, Host, HostTransaction, ITEMS, Identifier,
     ItemResource, ItemStack, ResourceHandler, ServerHost,
@@ -24,17 +25,18 @@ pub fn id_of(host: &dyn Host, stack: &ItemStack) -> String {
 }
 
 /// `stack` as the engine's belts, arms and ejectors name it (`create_engine::arm::item_id`):
-/// its item id; a potion whose only component is a registered potion named with it
-/// (`tank::potion_item`, as spouts and drains name it); any other stack with components (a
-/// package's address and contents, a name) followed by `#` and the hex of its item NBT, so that
-/// moving it keeps them.
+/// its item id; a potion with its whole contents (`tank::potion_item`, as spouts and drains
+/// name it); and any other stack with components (a package's address and contents, a name, an
+/// enchantment, a potion's other components) followed by `#` and the hex of its item NBT, so
+/// that moving it keeps them all.
 pub fn key_of(host: &dyn Host, stack: &ItemStack) -> String {
     let id = id_of(host, stack);
     if !has_components(stack) {
         return id;
     }
-    if let Some(potion) = plain_potion(&id, stack) {
-        return create_engine::tank::potion_item(&id, &potion);
+    let potion = potion_name(host, stack);
+    if potion.is_some() && only_potion_contents(stack) {
+        return potion.unwrap_or(id);
     }
     let Some(mut nbt) = with_count(stack, 1).and_then(|s| s.to_nbt(host)) else {
         return id;
@@ -43,7 +45,7 @@ pub fn key_of(host: &dyn Host, stack: &ItemStack) -> String {
     let Ok(bytes) = mod_api::Tag::Compound(nbt).to_network_bytes() else {
         return id;
     };
-    let mut key = id;
+    let mut key = potion.unwrap_or(id);
     key.push('#');
     for b in bytes {
         key.push_str(&format!("{b:02x}"));
@@ -66,22 +68,114 @@ pub fn stack_of(host: &dyn Host, id: &str, count: u32) -> Option<ItemStack> {
         let stack = ItemStack::from_nbt(host, &nbt)?;
         return with_count(&stack, count);
     }
-    let (id, potion) = match create_engine::tank::split_potion_item(id) {
-        Some((id, potion)) => (id, Some(potion)),
+    let (id, contents) = match create_engine::tank::split_potion_item(id) {
+        Some((id, c)) => (id, Some(Contents::decode(c)?)),
         None => (id, None),
     };
     let key = host.item_key(&Identifier::parse(id).ok()?)?;
     let mut stack = ItemStack::new(key, count)?;
-    if let Some(potion) = potion {
-        let contents =
-            mod_api::Compound::from([("potion".into(), mod_api::Tag::String(potion.into()))]);
-        let patch = mod_api::Compound::from([(
-            "minecraft:potion_contents".into(),
-            mod_api::Tag::Compound(contents),
-        )]);
+    // `PotionFluidHandler.fillBottle`: the bottle holds the fluid's contents (none: empty).
+    if let Some(tag) = contents.as_ref().and_then(contents_tag) {
+        let patch = mod_api::Compound::from([(POTION_CONTENTS.into(), tag)]);
         let _ = stack.set_components(patch);
     }
     Some(stack)
+}
+
+/// The item component a potion's contents are in.
+pub const POTION_CONTENTS: &str = "minecraft:potion_contents";
+
+/// A potion bottle as spouts, drains and tanks name it (`tank::potion_item`): its item and its
+/// whole `potion_contents` (`PotionFluidHandler.getFluidFromPotionItem` reads nothing else);
+/// None for any other item.
+pub fn potion_name(host: &dyn Host, stack: &ItemStack) -> Option<String> {
+    let id = id_of(host, stack);
+    create_engine::tank::Bottle::of_item(&id)?;
+    let contents = stack
+        .components()
+        .and_then(|c| c.as_nbt().get(&POTION_CONTENTS.into()).map(contents_of_tag))
+        .unwrap_or_default();
+    Some(create_engine::tank::potion_item(&id, &contents.encode()))
+}
+
+/// Whether a stack's only component is its `potion_contents` (undamaged).
+fn only_potion_contents(stack: &ItemStack) -> bool {
+    !stack.is_damaged()
+        && stack.components().is_some_and(|c| {
+            let nbt = c.as_nbt();
+            nbt.len() == 1 && nbt.get(&POTION_CONTENTS.into()).is_some()
+        })
+}
+
+/// `PotionContents` as its codec reads `tag`: a lone potion's id, or a compound of `potion`,
+/// `custom_color`, `custom_name` and `custom_effects` (kept whole; their ids, amplifiers and
+/// `show_particles` read for the colour).
+pub fn contents_of_tag(tag: &mod_api::Tag) -> Contents {
+    use mod_api::Tag;
+    let text = |t: Option<&Tag>| match t {
+        Some(Tag::String(s)) => Some(s.to_string_lossy()),
+        _ => None,
+    };
+    let int = |t: Option<&Tag>| match t {
+        Some(Tag::Byte(v)) => Some(i32::from(*v)),
+        Some(Tag::Short(v)) => Some(i32::from(*v)),
+        Some(Tag::Int(v)) => Some(*v),
+        Some(Tag::Long(v)) => Some(*v as i32),
+        _ => None,
+    };
+    let c = match tag {
+        Tag::String(s) => return Contents::of(&s.to_string_lossy()),
+        Tag::Compound(c) => c,
+        _ => return Contents::default(),
+    };
+    let mut out = Contents {
+        potion: text(c.get(&"potion".into())),
+        custom_color: int(c.get(&"custom_color".into())),
+        custom_name: text(c.get(&"custom_name".into())),
+        ..Contents::default()
+    };
+    if let Some(list @ Tag::List(effects)) = c.get(&"custom_effects".into())
+        && !effects.is_empty()
+    {
+        out.custom_effects = list.to_network_bytes().unwrap_or_default();
+        out.effects = effects
+            .iter()
+            .filter_map(|e| {
+                let Tag::Compound(e) = e else { return None };
+                Some(create_engine::potion::Effect {
+                    id: text(e.get(&"id".into()))?,
+                    amplifier: int(e.get(&"amplifier".into())).unwrap_or(0),
+                    visible: int(e.get(&"show_particles".into())).unwrap_or(1) != 0,
+                })
+            })
+            .collect();
+    }
+    out
+}
+
+/// The `potion_contents` tag of `c`; None for `PotionContents.EMPTY` (the component left out,
+/// `PotionFluid.addPotionToFluidStack`).
+pub fn contents_tag(c: &Contents) -> Option<mod_api::Tag> {
+    use mod_api::Tag;
+    if c.is_empty() {
+        return None;
+    }
+    let mut out = mod_api::Compound::new();
+    if let Some(p) = &c.potion {
+        out.insert("potion".into(), Tag::String(p.as_str().into()));
+    }
+    if let Some(color) = c.custom_color {
+        out.insert("custom_color".into(), Tag::Int(color));
+    }
+    if !c.custom_effects.is_empty()
+        && let Ok((effects, _)) = Tag::from_network_bytes(&c.custom_effects, None)
+    {
+        out.insert("custom_effects".into(), effects);
+    }
+    if let Some(n) = &c.custom_name {
+        out.insert("custom_name".into(), Tag::String(n.as_str().into()));
+    }
+    Some(Tag::Compound(out))
 }
 
 /// The item id of a stack's name (`key_of`), or of a potion named with its contents
@@ -128,27 +222,6 @@ pub fn is_block_item(host: &dyn Host, id: &str) -> bool {
         .ok()
         .and_then(|i| host.item_key(&i))
         .is_some_and(|k| host.item_block(k).is_some())
-}
-
-/// The potion of a potion item `id` whose only component is a registered potion's contents
-/// (no custom effects or colour, undamaged); None for any other stack.
-fn plain_potion(id: &str, stack: &ItemStack) -> Option<String> {
-    create_engine::tank::Bottle::of_item(id)?;
-    if stack.is_damaged() {
-        return None;
-    }
-    let nbt = stack.components()?.as_nbt();
-    if nbt.len() != 1 {
-        return None;
-    }
-    match nbt.get(&"minecraft:potion_contents".into())? {
-        mod_api::Tag::String(s) => Some(s.to_string_lossy()),
-        mod_api::Tag::Compound(c) if c.len() == 1 => match c.get(&"potion".into())? {
-            mod_api::Tag::String(s) => Some(s.to_string_lossy()),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 /// Whether a stack carries components (or damage), which the engine's belts and arms do not keep.

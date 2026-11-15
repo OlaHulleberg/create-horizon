@@ -4,6 +4,7 @@
 //! buckets in and out for creative players (Create 6 leaves survival to spouts and drains), drawn
 //! as a box of the fluid at its level over the whole tank.
 
+use crate::potion::Contents;
 use std::collections::{HashMap, HashSet};
 
 /// The fluids a tank can hold: vanilla's, Create's honey and chocolate, milk, Create's virtual
@@ -19,17 +20,17 @@ pub enum Fluid {
     Milk,
     /// Builder's tea (`create:tea`): no bucket, no block.
     Tea,
-    /// A potion (`PotionFluid`): which of `POTIONS`, and the bottle it came from. A regular
+    /// A potion (`PotionFluid`): its whole contents and the bottle it came from. A regular
     /// water bottle is plain water (`PotionFluidHandler.getFluidFromPotion`).
     Potion(Potion),
 }
 
-/// A potion fluid's contents (`PotionContents` of a registered potion; custom effects are not
-/// kept) and its bottle (`POTION_FLUID_BOTTLE_TYPE`).
+/// A potion fluid's components (`PotionFluid.of`): its `PotionContents` (custom effects, colour
+/// and name included) and its bottle (`POTION_FLUID_BOTTLE_TYPE`). Potions of different
+/// contents or bottles are different fluids.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Potion {
-    /// Its index in [`POTIONS`].
-    pub potion: u8,
+    pub contents: &'static Contents,
     pub bottle: Bottle,
 }
 
@@ -60,144 +61,79 @@ impl Bottle {
             Bottle::Lingering => "minecraft:lingering_potion",
         }
     }
-    /// The word its bottles are named with (`item.minecraft.splash_potion...`).
-    fn kind(self) -> &'static str {
-        match self {
-            Bottle::Regular => "Potion",
-            Bottle::Splash => "Splash Potion",
-            Bottle::Lingering => "Lingering Potion",
-        }
-    }
 }
 
-/// The registered potions (`minecraft:potion` registry, vanilla's order) and their colours
-/// (`PotionContents.getColor`: the effects' colours weighed by amplifier; none's water blue).
-pub const POTIONS: [(&str, u32); 46] = [
-    ("minecraft:water", 0x385DC6),
-    ("minecraft:mundane", 0x385DC6),
-    ("minecraft:thick", 0x385DC6),
-    ("minecraft:awkward", 0x385DC6),
-    ("minecraft:night_vision", 0xC2FF66),
-    ("minecraft:long_night_vision", 0xC2FF66),
-    ("minecraft:invisibility", 0xF6F6F6),
-    ("minecraft:long_invisibility", 0xF6F6F6),
-    ("minecraft:leaping", 0xFDFF84),
-    ("minecraft:long_leaping", 0xFDFF84),
-    ("minecraft:strong_leaping", 0xFDFF84),
-    ("minecraft:fire_resistance", 0xFF9900),
-    ("minecraft:long_fire_resistance", 0xFF9900),
-    ("minecraft:swiftness", 0x33EBFF),
-    ("minecraft:long_swiftness", 0x33EBFF),
-    ("minecraft:strong_swiftness", 0x33EBFF),
-    ("minecraft:slowness", 0x8BAFE0),
-    ("minecraft:long_slowness", 0x8BAFE0),
-    ("minecraft:strong_slowness", 0x8BAFE0),
-    // Slowness IV and resistance III: (0x8BAFE0 * 4 + 0x9146F0 * 3) / 7; the strong one's
-    // slowness VI and resistance IV weigh 6 and 4.
-    ("minecraft:turtle_master", 0x8D82E6),
-    ("minecraft:long_turtle_master", 0x8D82E6),
-    ("minecraft:strong_turtle_master", 0x8D84E6),
-    ("minecraft:water_breathing", 0x98DAC0),
-    ("minecraft:long_water_breathing", 0x98DAC0),
-    ("minecraft:healing", 0xF82423),
-    ("minecraft:strong_healing", 0xF82423),
-    ("minecraft:harming", 0xA9656A),
-    ("minecraft:strong_harming", 0xA9656A),
-    ("minecraft:poison", 0x87A363),
-    ("minecraft:long_poison", 0x87A363),
-    ("minecraft:strong_poison", 0x87A363),
-    ("minecraft:regeneration", 0xCD5CAB),
-    ("minecraft:long_regeneration", 0xCD5CAB),
-    ("minecraft:strong_regeneration", 0xCD5CAB),
-    ("minecraft:strength", 0xFFC700),
-    ("minecraft:long_strength", 0xFFC700),
-    ("minecraft:strong_strength", 0xFFC700),
-    ("minecraft:weakness", 0x484D48),
-    ("minecraft:long_weakness", 0x484D48),
-    ("minecraft:luck", 0x59C106),
-    ("minecraft:slow_falling", 0xF3CFB9),
-    ("minecraft:long_slow_falling", 0xF3CFB9),
-    ("minecraft:wind_charged", 0xBDC9FF),
-    ("minecraft:weaving", 0x78695A),
-    ("minecraft:oozing", 0x99FFA3),
-    ("minecraft:infested", 0x8C9B8C),
-];
+/// The registered potions' ids in the order the fluids' old saved indices count them.
+fn legacy_potion(i: usize) -> Option<&'static str> {
+    crate::potion::POTIONS.get(i).map(|p| p.0)
+}
 
-/// The first index of the potions in [`Fluid::index`]: 3 bottles each from it.
+/// The first index of the potions in old saves ([`Fluid::from_legacy_index`]): 3 bottles each.
 const FIRST_POTION: u8 = 6;
 
 impl Potion {
-    /// The potion with registry id `id` in `bottle`.
+    /// The registered potion `id` alone in `bottle`.
     pub fn of(id: &str, bottle: Bottle) -> Option<Potion> {
-        let potion = POTIONS.iter().position(|(p, _)| *p == id)? as u8;
-        Some(Potion { potion, bottle })
+        (!id.is_empty()).then(|| Potion::new(Contents::of(id), bottle))
     }
-    /// Its potion's registry id.
-    pub fn id(self) -> &'static str {
-        POTIONS[usize::from(self.potion)].0
+    /// A potion fluid of `contents` in `bottle`.
+    pub fn new(contents: Contents, bottle: Bottle) -> Potion {
+        Potion {
+            contents: crate::potion::intern(contents),
+            bottle,
+        }
     }
-    /// `PotionContents.getColor`, 0xRRGGBB.
+    /// The potion of a potion item named as [`potion_item`] does (a bare bottle holding none),
+    /// its own data after `#` aside.
+    pub fn of_item(item: &str) -> Option<Potion> {
+        let item = crate::arm::item_id(item);
+        let (item, contents) = item.split_once('|').unwrap_or((item, ""));
+        let bottle = Bottle::of_item(item)?;
+        Some(Potion::new(Contents::decode(contents)?, bottle))
+    }
+    /// Its registered potion's id.
+    pub fn id(self) -> Option<&'static str> {
+        self.contents.potion.as_deref()
+    }
+    /// `PotionFluidType.getTintColor` (`PotionContents.getColor`), 0xRRGGBB.
     pub fn color(self) -> u32 {
-        POTIONS[usize::from(self.potion)].1
+        self.contents.color()
     }
     /// The filled bottle (`PotionFluidHandler.fillBottle`), named as [`potion_item`] does.
     pub fn item(self) -> String {
-        potion_item(self.bottle.item(), self.id())
+        potion_item(self.bottle.item(), &self.contents.encode())
     }
-    /// Its English name, as its bottle's (`item.minecraft.potion.effect.*`).
+    /// Its English name, as its bottle's (`PotionFluidType.getDescriptionId`).
     pub fn name(self) -> String {
-        let base = self.id().trim_start_matches("minecraft:");
-        let base = base
-            .strip_prefix("long_")
-            .or_else(|| base.strip_prefix("strong_"))
-            .unwrap_or(base);
-        let title = |w: &str| {
-            let mut c = w.chars();
-            c.next()
-                .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
-                .unwrap_or_default()
-        };
-        match base {
-            "water" => match self.bottle {
-                Bottle::Regular => "Water Bottle".into(),
-                b => format!("{} Water Bottle", b.kind().trim_end_matches(" Potion")),
-            },
-            "mundane" | "thick" | "awkward" => format!("{} {}", title(base), self.bottle.kind()),
-            b => {
-                let of = match b {
-                    "turtle_master" => "the Turtle Master".to_owned(),
-                    "wind_charged" => "Wind Charging".to_owned(),
-                    "infested" => "Infestation".to_owned(),
-                    b => b.split('_').map(title).collect::<Vec<_>>().join(" "),
-                };
-                format!("{} of {of}", self.bottle.kind())
-            }
-        }
+        let bottle = self.bottle.item().trim_start_matches("minecraft:");
+        crate::potion::english_name(bottle, self.contents.name_suffix())
     }
 }
 
-/// How the engine names a potion item with its contents: the item, a bar, the potion
-/// (`minecraft:potion|minecraft:swiftness`); the glue gives the stack its `potion_contents`.
-pub fn potion_item(item: &str, potion: &str) -> String {
-    format!("{item}|{potion}")
+/// How the engine names a potion item with its contents: the item, a bar, the contents
+/// (`Contents::encode`: `minecraft:potion|minecraft:swiftness` for a lone potion); the glue
+/// gives the stack its `potion_contents`.
+pub fn potion_item(item: &str, contents: &str) -> String {
+    format!("{item}|{contents}")
 }
 
-/// A potion item named as [`potion_item`] does: the item and its potion.
+/// A potion item named as [`potion_item`] does: the item and its encoded contents.
 pub fn split_potion_item(item: &str) -> Option<(&str, &str)> {
-    let (item, potion) = item.split_once('|')?;
+    let (item, potion) = crate::arm::item_id(item).split_once('|')?;
     Bottle::of_item(item)?;
     Some((item, potion))
 }
 
 /// `PotionFluidHandler.getFluidFromPotionItem` for a potion item named as [`potion_item`]
-/// does: a regular water bottle is water, any other its potion fluid. None for anything else.
+/// does (a bare bottle holds no contents; a stack's own data after `#` aside): a regular water
+/// bottle without custom effects is water, any other its potion fluid, all its contents kept.
+/// None for anything else.
 pub fn potion_fluid(item: &str) -> Option<Fluid> {
-    let (item, potion) = split_potion_item(item)?;
-    let bottle = Bottle::of_item(item)?;
-    if potion == "minecraft:water" && bottle == Bottle::Regular {
+    let p = Potion::of_item(item)?;
+    if p.bottle == Bottle::Regular && p.contents.is_water() {
         return Some(Fluid::Water);
     }
-    Potion::of(potion, bottle).map(Fluid::Potion)
+    Some(Fluid::Potion(p))
 }
 
 impl Fluid {
@@ -211,31 +147,30 @@ impl Fluid {
         Fluid::Tea,
     ];
 
-    /// Its number in saved data and on the wire (255 is no fluid).
-    pub fn index(self) -> u8 {
+    /// How it is saved and sent whole: its id, a potion as its filled bottle
+    /// (`minecraft:splash_potion|<contents>`, [`potion_item`]).
+    pub fn key(self) -> String {
         match self {
-            Fluid::Water => 0,
-            Fluid::Lava => 1,
-            Fluid::Honey => 2,
-            Fluid::Chocolate => 3,
-            Fluid::Milk => 4,
-            Fluid::Tea => 5,
-            Fluid::Potion(p) => FIRST_POTION + p.potion * 3 + p.bottle as u8,
+            Fluid::Potion(p) => p.item(),
+            f => f.id().to_owned(),
         }
     }
-    pub fn from_index(i: u8) -> Option<Fluid> {
+    /// A fluid saved by [`Fluid::key`].
+    pub fn of_key(key: &str) -> Option<Fluid> {
+        Fluid::ALL.into_iter().find(|f| f.id() == key).or_else(|| {
+            key.contains('|')
+                .then(|| Potion::of_item(key).map(Fluid::Potion))?
+        })
+    }
+    /// A fluid by the number old saves gave it (255 none): the fixed fluids, then the
+    /// registered potions three bottles each.
+    pub fn from_legacy_index(i: u8) -> Option<Fluid> {
         if let Some(f) = Fluid::ALL.get(usize::from(i)) {
             return Some(*f);
         }
         let n = i.checked_sub(FIRST_POTION)?;
-        let potion = n / 3;
-        if usize::from(potion) >= POTIONS.len() {
-            return None;
-        }
-        Some(Fluid::Potion(Potion {
-            potion,
-            bottle: Bottle::ALL[usize::from(n % 3)],
-        }))
+        let id = legacy_potion(usize::from(n / 3))?;
+        Potion::of(&format!("minecraft:{id}"), Bottle::ALL[usize::from(n % 3)]).map(Fluid::Potion)
     }
     /// Its registry id.
     pub fn id(self) -> &'static str {
@@ -297,6 +232,46 @@ impl Fluid {
     }
 }
 
+/// Fluids in the glue's saved and sent int arrays: none is 255, a fixed fluid its index (as old
+/// saves had it), any other (a potion) 1000 and its place in a list of keys ([`Fluid::key`])
+/// saved and sent beside the array.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Codes {
+    pub keys: Vec<String>,
+}
+
+/// The first code of a fluid named in a [`Codes`] list.
+const FIRST_KEYED: i32 = 1000;
+
+impl Codes {
+    /// The number `f` is written as, its key added to the list when it needs one.
+    pub fn code(&mut self, f: Option<Fluid>) -> i32 {
+        let Some(f) = f else {
+            return 255;
+        };
+        if let Some(i) = Fluid::ALL.iter().position(|a| *a == f) {
+            return i as i32;
+        }
+        let key = f.key();
+        let i = match self.keys.iter().position(|k| *k == key) {
+            Some(i) => i,
+            None => {
+                self.keys.push(key);
+                self.keys.len() - 1
+            }
+        };
+        FIRST_KEYED + i as i32
+    }
+    /// The fluid a number written with `keys` stands for (old saves' numbers too).
+    pub fn fluid(keys: &[String], code: i32) -> Option<Fluid> {
+        if code >= FIRST_KEYED {
+            return keys
+                .get((code - FIRST_KEYED) as usize)
+                .and_then(|k| Fluid::of_key(k));
+        }
+        Fluid::from_legacy_index(u8::try_from(code).ok()?)
+    }
+}
 /// `FluidType.BUCKET_VOLUME`.
 pub const BUCKET: u32 = 1000;
 /// `getCapacityMultiplier`: 8 buckets a block (`fluidTankCapacity`).
@@ -881,53 +856,6 @@ pub fn fluid_box(m: &Multi) -> Option<([f32; 3], [f32; 3])> {
     Some(([hull, y0, hull], [width - hull, y0 + clamped, width - hull]))
 }
 
-/// Tanks as clients draw them: position, width (0: no controller there), height, windows, fluid
-/// (255: none), amount; 20 bytes each.
-pub const CHANNEL: &str = "create:tank";
-const RECORD: usize = 20;
-
-pub fn encode(all: &[([i32; 3], Option<Multi>)]) -> Vec<Vec<u8>> {
-    all.chunks(30_000 / RECORD)
-        .map(|chunk| {
-            let mut out = Vec::with_capacity(chunk.len() * RECORD);
-            for (p, m) in chunk {
-                for v in p {
-                    out.extend_from_slice(&v.to_le_bytes());
-                }
-                let m = m.unwrap_or(Multi {
-                    width: 0,
-                    ..Multi::default()
-                });
-                out.extend_from_slice(&[m.width, m.height, u8::from(m.window)]);
-                out.push(m.tank.fluid.map_or(255, Fluid::index));
-                out.extend_from_slice(&m.tank.amount.to_le_bytes());
-            }
-            out
-        })
-        .collect()
-}
-
-pub fn decode(data: &[u8]) -> Vec<([i32; 3], Option<Multi>)> {
-    let i = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
-    data.chunks_exact(RECORD)
-        .map(|r| {
-            let m = Multi {
-                width: r[12],
-                height: r[13],
-                window: r[14] != 0,
-                tank: Tank {
-                    fluid: Fluid::from_index(r[15]),
-                    amount: u32::from_le_bytes(r[16..20].try_into().unwrap()),
-                },
-            };
-            (
-                [i(&r[0..4]), i(&r[4..8]), i(&r[8..12])],
-                (m.width > 0).then_some(m),
-            )
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -957,16 +885,58 @@ mod tests {
     }
 
     #[test]
-    fn every_fluid_keeps_its_index() {
-        for i in 0..=255u8 {
-            if let Some(f) = Fluid::from_index(i) {
-                assert_eq!(f.index(), i);
-            }
+    fn every_fluid_keeps_its_code() {
+        let mut codes = Codes::default();
+        for f in Fluid::ALL {
+            let c = codes.code(Some(f));
+            assert_eq!(Codes::fluid(&codes.keys, c), Some(f));
         }
-        assert_eq!(Fluid::from_index(5), Some(Fluid::Tea));
+        assert_eq!(codes.code(None), 255);
+        assert_eq!(Codes::fluid(&[], 255), None);
+        // Old saves' potion numbers still read as their registered potion.
         let swift = Fluid::Potion(Potion::of("minecraft:swiftness", Bottle::Regular).unwrap());
-        assert_eq!(Fluid::from_index(swift.index()), Some(swift));
-        assert!(Fluid::from_index(6 + 46 * 3).is_none());
+        assert_eq!(Codes::fluid(&[], 6 + 13 * 3), Some(swift));
+        // A potion with custom contents comes back whole through its key.
+        let custom = Fluid::Potion(Potion::new(
+            Contents {
+                potion: Some("minecraft:awkward".into()),
+                custom_color: Some(0x00FF_00FF),
+                custom_effects: vec![10, 20],
+                ..Contents::default()
+            },
+            Bottle::Splash,
+        ));
+        let c = codes.code(Some(custom));
+        assert_eq!(codes.code(Some(swift)), c + 1);
+        assert_eq!(codes.code(Some(custom)), c);
+        assert_eq!(Codes::fluid(&codes.keys, c), Some(custom));
+        assert_ne!(custom, swift);
+        assert_eq!(Fluid::of_key(&custom.key()), Some(custom));
+    }
+
+    #[test]
+    fn potions_of_other_contents_do_not_mix() {
+        let plain = Fluid::Potion(Potion::of("minecraft:poison", Bottle::Regular).unwrap());
+        let named = Fluid::Potion(Potion::new(
+            Contents {
+                custom_name: Some("poison".into()),
+                ..Contents::of("minecraft:poison")
+            },
+            Bottle::Regular,
+        ));
+        let lingering = Fluid::Potion(Potion::of("minecraft:poison", Bottle::Lingering).unwrap());
+        let mut t = Tank::default();
+        assert_eq!(t.fill_amount(plain, 500, 1000), 500);
+        assert_eq!(t.fill_amount(named, 250, 1000), 0);
+        assert_eq!(t.fill_amount(lingering, 250, 1000), 0);
+        assert_eq!(
+            t.fill_amount(
+                Fluid::Potion(Potion::of("minecraft:poison", Bottle::Regular).unwrap()),
+                250,
+                1000
+            ),
+            250
+        );
     }
 
     #[test]
@@ -987,6 +957,23 @@ mod tests {
         assert_eq!(potion_fluid("minecraft:glass_bottle"), None);
         assert_eq!(Fluid::Tea.bucket(), None);
         assert!(!Fluid::Potion(p).placeable());
+        // A bare bottle holds an uncraftable potion; a stack's own data is set aside.
+        let Some(Fluid::Potion(e)) = potion_fluid("minecraft:potion") else {
+            panic!("a bare potion is a potion fluid");
+        };
+        assert!(e.contents.is_empty());
+        assert_eq!(e.name(), "Uncraftable Potion");
+        assert_eq!(
+            potion_fluid("minecraft:potion|minecraft:healing#0a0b"),
+            potion_fluid("minecraft:potion|minecraft:healing")
+        );
+        // Water with custom effects stays a potion fluid.
+        let odd = Contents {
+            custom_effects: vec![1],
+            ..Contents::of("minecraft:water")
+        };
+        let item = potion_item("minecraft:potion", &odd.encode());
+        assert!(matches!(potion_fluid(&item), Some(Fluid::Potion(p)) if *p.contents == odd));
     }
 
     fn water(amount: u32) -> Tank {
@@ -1064,8 +1051,6 @@ mod tests {
             ..big
         };
         assert_eq!(fluid_box(&boiler), None, "no windows, no fluid drawn");
-        let all = vec![([1, 2, 3], Some(big)), ([-4, 5, 6], None)];
-        assert_eq!(decode(&encode(&all)[0]), all);
     }
 
     #[test]

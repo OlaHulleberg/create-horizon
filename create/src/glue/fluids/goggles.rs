@@ -6,7 +6,7 @@
 use super::super::states;
 use super::{BOILER, TANK, tank_in};
 use create_engine::Block;
-use create_engine::tank::{Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
+use create_engine::tank::{MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
 use mod_api::{ClientHost, Compound, Tag};
 
 /// The block entity data of the block at `pos` this client has.
@@ -135,7 +135,7 @@ pub(super) fn tooltip(
                 return;
             };
             let tank = Tank {
-                fluid: Fluid::from_index(fluid.clamp(0, 255) as u8),
+                fluid: create_engine::tank::Codes::fluid(&super::fluid_keys(&data, TANK), fluid),
                 amount: amount.max(0) as u32,
             };
             lines.extend(create_engine::tank::tooltip(tank, capacity.max(0) as u32));

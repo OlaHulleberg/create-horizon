@@ -16,6 +16,20 @@ pub fn item_id(key: &str) -> &str {
     key.split_once('#').map_or(key, |(id, _)| id)
 }
 
+/// The longest stack name sent whole to clients with an arm's or ejector's state; a longer
+/// one (a package with its contents) is sent as its item id.
+pub const SHOWN_NAME_MAX: usize = 1024;
+
+/// A stack's name as clients are sent it: whole (its components drawn: a potion's colour, an
+/// enchantment's glint), or its item id when too long.
+pub fn shown_name(key: &str) -> &str {
+    if key.len() <= SHOWN_NAME_MAX {
+        key
+    } else {
+        item_id(key)
+    }
+}
+
 /// `mechanicalArmRange`: points must lie closer than this to the arm.
 pub const RANGE: i32 = 5;
 /// `SmartBlockEntity`'s lazy tick rate: a lazy tick every 11 ticks (the counter runs 10 to 0).
@@ -1019,7 +1033,7 @@ impl Shown {
             from: arm.from,
             to: arm.target_angles(pos),
             from_base: arm.from_base,
-            held: arm.held.as_ref().map(|h| item_id(&h.0).to_owned()),
+            held: arm.held.as_ref().map(|h| shown_name(&h.0).to_owned()),
             points: arm
                 .inputs
                 .iter()
@@ -1105,10 +1119,9 @@ pub fn encode(all: &[Shown]) -> Vec<Vec<u8>> {
                 out.extend_from_slice(&s.from_base.to_le_bytes());
                 put_angles(&mut out, s.from);
                 put_angles(&mut out, s.to);
-                let held = s.held.as_deref().unwrap_or("");
-                let n = held.len().min(255);
-                out.push(n as u8);
-                out.extend_from_slice(&held.as_bytes()[..n]);
+                let held = s.held.as_deref().map_or("", shown_name);
+                out.extend_from_slice(&(held.len() as u16).to_le_bytes());
+                out.extend_from_slice(held.as_bytes());
                 encode_points(&mut out, &s.points);
             }
             out
@@ -1151,7 +1164,7 @@ pub fn decode(mut d: &[u8]) -> Vec<Shown> {
         let from_base = f32_of(d)?;
         let from = angles(d)?;
         let to = angles(d)?;
-        let n = usize::from(take(d, 1)?[0]);
+        let n = usize::from(u16::from_le_bytes(take(d, 2)?.try_into().ok()?));
         let held = String::from_utf8_lossy(take(d, n)?).into_owned();
         let points = decode_points(d)?;
         Some(Shown {
