@@ -482,7 +482,11 @@ pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
             continue;
         }
         // `canContinueProcessing`: not while results wait at the spout.
-        if speed == 0.0 || m.running || !super::spoutput::can_continue(lv, basin_pos) {
+        // `updateBasin`: `isSpeedRequirementFulfilled` (medium speed) first.
+        if speed.abs() < basin::MIXER_MIN_SPEED
+            || m.running
+            || !super::spoutput::can_continue(lv, basin_pos)
+        {
             continue;
         }
         let Some(slots) = basin_slots(lv, basin_pos) else {

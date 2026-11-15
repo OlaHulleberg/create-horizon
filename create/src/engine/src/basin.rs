@@ -246,6 +246,9 @@ impl Mixer {
 
     /// One server tick at `speed` (rpm, signed); `time` the recipe's processing duration.
     pub fn tick(&mut self, speed: f32, time: i32) -> MixStep {
+        // `isSpeedRequirementFulfilled` (`MechanicalMixerBlock`'s medium speed): too slow, the
+        // head goes back up as when still.
+        let fulfilled = speed.abs() >= MIXER_MIN_SPEED;
         if self.running_ticks >= 40 {
             self.running = false;
             self.running_ticks = 0;
@@ -256,7 +259,7 @@ impl Mixer {
         }
         let speed = speed.abs();
         let mut step = MixStep::None;
-        if speed == 0.0 {
+        if speed == 0.0 || !fulfilled {
             if self.running_ticks < 20 {
                 self.running_ticks = 40 - self.running_ticks;
             } else if self.running_ticks == 20 {
@@ -283,6 +286,10 @@ impl Mixer {
         step
     }
 }
+
+/// `MechanicalMixerBlock.getMinimumRequiredSpeedLevel`: `MEDIUM`, Create's `mediumSpeed`
+/// (30 rpm by default).
+pub const MIXER_MIN_SPEED: f32 = 30.0;
 
 /// The mixer's `runningTicks` a client works out `elapsed` ticks after it was told `told`, as
 /// the client's own `tick` runs it on: down to the bottom (20), where it waits for the server,
