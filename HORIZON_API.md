@@ -196,9 +196,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   none; one that holds them prints them. Listing them in `entities_in` (or a lookup of its own) would close it.
 - **Calling a block's `setPlacedBy` from code**: the schematicannon writes a door's, tall plant's and bed's
   other half itself as those blocks' `setPlacedBy` does (`glue/schematics`), where Create calls the block's own.
-- **A key's release from the control socket**: `screen_key_released_pre` is fired for the window's keys only,
-  so the toolbox menu closes on the tool belt key's release through the Alt modifier the window reports
-  (a rebinding to another key closes it on that key's release from the window).
 - **The local player's inventory slots on its client** (`player_inventory_slots` answers on the server only;
   `player_inventory` on a client lists stacks without their slots): the wand of symmetry's mirrors, drawn for
   every wand in the hotbar (`SymmetryHandler.onRenderWorld`), are sent to the client by the server.
