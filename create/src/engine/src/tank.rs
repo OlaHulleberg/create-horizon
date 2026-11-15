@@ -511,12 +511,9 @@ impl Tanks {
             }
             return;
         }
-        // The controller of a loaded tank holding `p`: at most 2 west and north, 31 down, with
-        // a tank block under `p` all the way down (its column loads from the bottom).
+        // The controller of a loaded tank holding `p`: at most 2 west and north, 31 down. A
+        // column's blocks load in no particular order, so the blocks between may come later.
         for dy in 0..MAX_HEIGHT {
-            if dy > 0 && !self.parts.contains_key(&add(p, 0, -dy, 0)) {
-                break;
-            }
             for dx in 0..MAX_WIDTH {
                 for dz in 0..MAX_WIDTH {
                     let c = add(p, -dx, -dy, -dz);
@@ -1222,6 +1219,13 @@ mod tests {
         assert_eq!(size(&t, [1, 3, 1]), ([1, 3, 1], 1, 1), "above it");
         t.load([5, 1, 5], None);
         assert_eq!(size(&t, [5, 1, 5]), ([5, 1, 5], 1, 1));
+        // A column's blocks come in any order: an upper block before the one under it.
+        let mut t = Tanks::default();
+        t.load([0, 0, 0], Some(Multi { height: 2, ..saved }));
+        t.load([1, 1, 0], None);
+        t.load([1, 0, 0], None);
+        assert_eq!(t.multis.len(), 1);
+        assert_eq!(size(&t, [1, 1, 0]), ([0, 0, 0], 2, 2));
     }
 }
 
