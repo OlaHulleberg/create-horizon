@@ -181,6 +181,8 @@ pub struct Breath {
     pub consume: Option<usize>,
     /// Breathe (`setCanBreathe`) and refill the air supply to its maximum.
     pub refill: bool,
+    /// Diving in lava in a netherite helmet with air in a tank (`DIVING_SUIT_LAVA`).
+    pub lava_diving: bool,
 }
 
 /// `DivingHelmetItem.breatheUnderwater` for a helmet (`Some(fire_resistant)`, the netherite one)
@@ -206,11 +208,15 @@ pub fn breathe(
         return Breath::default();
     };
     if in_lava && !tanks.iter().any(|t| t.fire_resistant) {
-        return Breath::default();
+        return Breath {
+            lava_diving: true,
+            ..Breath::default()
+        };
     }
     Breath {
         consume: (game_time % 20 == 0).then_some(first.slot),
         refill: !in_lava,
+        lava_diving: in_lava,
     }
 }
 
@@ -455,14 +461,18 @@ mod tests {
         );
         assert_eq!(
             breathe(Some(true), true, false, &[copper], 0),
-            Breath::default()
+            Breath {
+                lava_diving: true,
+                ..Breath::default()
+            }
         );
         let b = breathe(Some(true), true, true, &[netherite], 0);
         assert_eq!(
             b,
             Breath {
                 consume: Some(2),
-                refill: false
+                refill: false,
+                lava_diving: true
             }
         );
         assert_eq!(

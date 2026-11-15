@@ -131,6 +131,15 @@ impl Links {
         self.update(pos, &key)
     }
 
+    /// Whether a receiver is in the network of `key` (`getNetworkOf` with a `LinkBehaviour`
+    /// that `isListening`).
+    pub fn listened(&self, key: &Key) -> bool {
+        self.nets.get(key).is_some_and(|n| {
+            n.iter()
+                .any(|p| self.links.get(p).is_some_and(|l| l.receiver))
+        })
+    }
+
     /// Moves a transmitter with no block (`updatePosition`: its network is not looked at).
     pub fn move_virtual(&mut self, id: u64, pos: [i32; 3]) {
         if let Some(v) = self.virtuals.get_mut(&id) {

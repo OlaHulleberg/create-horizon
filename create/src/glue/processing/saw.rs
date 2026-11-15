@@ -322,7 +322,7 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
                 let mut rng = Rng::new(lv.seed_at(pos));
                 let filter = super::filtering::filter_at(dim, pos);
                 let host = &*lv.host;
-                recipes::with(|r| {
+                let applied = recipes::with(|r| {
                     if let Some((a, _)) = sequenced::step_for(
                         &r.sequenced,
                         &item,
@@ -330,7 +330,7 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
                         "create:cutting",
                     ) {
                         saw.apply_assembly(a, &mut rng);
-                        return;
+                        return true;
                     }
                     let list: Vec<&Recipe> = r
                         .cutting
@@ -348,7 +348,11 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
                         &mut rng,
                         left.as_deref(),
                     );
+                    !list.is_empty()
                 });
+                if applied == Some(true) {
+                    crate::glue::advancements::award_placer(lv, pos, "saw_processing");
+                }
             }
             Step::Out => {
                 let m = saw::movement(along_first, speed);

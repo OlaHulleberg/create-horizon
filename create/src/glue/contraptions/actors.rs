@@ -2471,6 +2471,7 @@ pub fn psi_room(lv: &ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) -> Optio
 
 /// `onContentTransferred`: the connection holds `getTransferTimeout` ticks more.
 fn psi_transferred(dim: usize, pos: [i32; 3]) {
+    crate::glue::advancements::award_later(dim, pos, "portable_storage_interface");
     with_world(|w| {
         let d = &mut w.dims[dim];
         if let Some(s) = d.psis.get_mut(&pos) {

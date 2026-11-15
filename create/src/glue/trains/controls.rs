@@ -57,6 +57,16 @@ thread_local! {
     static CONTROLLING: RefCell<Vec<Controlling>> = const { RefCell::new(Vec::new()) };
 }
 
+/// The players holding train `train`'s controls in level `dim` (`getControllingPlayer`).
+pub(crate) fn drivers(dim: usize, train: u32) -> Vec<u128> {
+    CONTROLLING.with_borrow(|c| {
+        c.iter()
+            .filter(|c| c.dim == dim && c.at.train == train)
+            .map(|c| c.player)
+            .collect()
+    })
+}
+
 impl Subsystem for TrainControls {
     fn world_closed(&self) {
         CLICKS.with_borrow_mut(Vec::clear);

@@ -471,6 +471,10 @@ impl ArmWorld<'_, '_> {
 }
 
 impl arm::World for ArmWorld<'_, '_> {
+    fn deposited(&mut self, arm: [i32; 3], musical: bool) {
+        crate::glue::advancements::arm_deposited(self.lv, arm, musical);
+    }
+
     /// `isValid`: still a block of its type (`canCreatePoint`).
     fn valid(&mut self, p: &Point) -> bool {
         let Some(now) = arm_point(self.lv, p.pos) else {

@@ -340,6 +340,7 @@ impl Subsystem for Logistics {
                     _ => return true,
                 };
                 set(lv, "shape", next);
+                crate::glue::advancements::funnel_kiss(lv, player, pos);
             }
             // ChuteBlock.onWrenched: an encased chute loses its casing; a vertical one swaps
             // its window; an intersection passes.
@@ -694,7 +695,9 @@ impl BlockPart for LogisticsBlock {
         let Some(mut lv) = level_of(host, event.dimension) else {
             return Flow::Continue;
         };
+        let thrower = crate::glue::advancements::package_thrower(event.entity, event.stack);
         item_landed(&mut lv, event.block_pos, event.item_pos, event.stack);
+        crate::glue::advancements::package_landed(&mut lv, thrower, event.block_pos, event.stack);
         Flow::Continue
     }
 

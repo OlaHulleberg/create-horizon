@@ -344,6 +344,11 @@ pub trait World {
     fn extract(&mut self, p: &Point, slot: usize, amount: u8, simulate: bool) -> Option<Stack>;
     /// `insert(stack, simulate)`: the count of the stack left over.
     fn insert(&mut self, p: &Point, item: &str, count: u8, simulate: bool) -> u8;
+    /// `depositItem` done by the arm at `arm` (`MECHANICAL_ARM`), `musical` when it put its
+    /// whole stack into a jukebox (`MUSICAL_ARM`).
+    fn deposited(&mut self, arm: [i32; 3], musical: bool) {
+        let _ = (arm, musical);
+    }
     /// `keepAlive` while the arm reaches for an input (a belt holds its first item there).
     fn keep_alive(&mut self, p: &Point) {
         let _ = p;
@@ -629,13 +634,16 @@ impl Arm {
 
     /// `depositItem`.
     fn deposit(&mut self, pos: [i32; 3], world: &mut impl World) -> bool {
+        let mut musical = false;
         if let Some(p) = self.target().copied()
             && world.valid(&p)
             && let Some((item, count)) = self.held.take()
         {
             let left = world.insert(&p, &item, count, false);
             self.held = (left > 0).then_some((item, left));
+            musical = p.kind == Kind::Jukebox && left == 0;
         }
+        world.deposited(pos, musical);
         let phase = if self.held.is_none() {
             Phase::SearchInputs
         } else {

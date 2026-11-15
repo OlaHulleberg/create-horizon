@@ -448,6 +448,7 @@ fn request_inputs(
     for g in all {
         perform(lv, dim, g);
     }
+    crate::glue::advancements::award_placer(lv, pp.0, "factory_gauge");
     // The output promised to the panel's network (`getQueuedPromises`: a network with links).
     let Some(item) = panel.filter.clone() else {
         return;

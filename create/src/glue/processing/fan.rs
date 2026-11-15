@@ -46,6 +46,9 @@ pub fn tick_fans(lv: &mut ServerLevel<'_>) {
                 Some(facing) if speed != 0.0 => fan_current(lv, pos, facing, speed),
                 _ => Default::default(),
             };
+            if current.max > 0.0 {
+                crate::glue::advancements::award_placer(lv, pos, "encased_fan");
+            }
             with_world(|w| {
                 if let Some(f) = w.dims[dim].fans.get_mut(&pos) {
                     f.rebuild = false;
@@ -84,8 +87,9 @@ pub fn tick_fans(lv: &mut ServerLevel<'_>) {
             let Some(kind) = kind else {
                 continue;
             };
-            fan_on_depot(lv, at, kind);
-            fan_on_belt(lv, at, kind);
+            if fan_on_depot(lv, at, kind) | fan_on_belt(lv, at, kind) {
+                crate::glue::advancements::award_placer(lv, pos, "fan_processing");
+            }
         }
     }
     with_world(|w| w.dims[dim].item_fan = kept);
@@ -363,6 +367,9 @@ fn fan_on_items(
             })
             .flatten();
             kept.insert(id, p);
+            if done.is_some() {
+                crate::glue::advancements::award_placer(lv, pos, "fan_processing");
+            }
             if let Some(mut out) = done {
                 if out.is_empty() {
                     next = None;
@@ -654,17 +661,17 @@ fn catalyst_at(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Kind> {
 /// `DepotBehaviour.applyToAllItems` with `FanProcessing.applyProcessing`: the held stack's
 /// progress, and when done, its results: the first held (centred), the rest in the outputs,
 /// what finds no room dropped; none, and the stack is gone.
-fn fan_on_depot(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) {
+fn fan_on_depot(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) -> bool {
     let dim = lv.dim;
     let Some(Some(mut held)) = with_world(|w| w.dims[dim].depots.get(&at).copied()).flatten()
     else {
-        return;
+        return false;
     };
     let Some(slots) = lv.slots(at, depot::SLOTS) else {
-        return;
+        return false;
     };
     let Some(stack) = slots[0].clone() else {
-        return;
+        return false;
     };
     let host = &*lv.host;
     let item = stacks::id(host, &stack);
@@ -675,7 +682,7 @@ fn fan_on_depot(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) {
     let done = fan::advance(&mut held.fan, kind, u32::from(count), can);
     if !done {
         with_world(|w| w.dims[dim].depots.insert(at, Some(held)));
-        return;
+        return false;
     }
     let mut rng = processing::Rng::new(lv.seed_at(at));
     let max = |i: &str| stacks::limit(host, i);
@@ -683,7 +690,7 @@ fn fan_on_depot(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) {
         recipes::with(|r| fan::process(kind, &item, count, r.fan(), max, &mut rng)).flatten();
     let Some(results) = results else {
         with_world(|w| w.dims[dim].depots.insert(at, Some(held)));
-        return;
+        return false;
     };
     let mut first = None;
     let mut outputs: Vec<processing::Slot> = slots[depot::OUTPUTS]
@@ -726,11 +733,12 @@ fn fan_on_depot(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) {
         w.dims[dim].depots.insert(at, next);
         w.depot_changed(dim, at);
     });
+    true
 }
 
 /// `BeltBlockEntity.applyToAllItems` with `FanProcessing.applyProcessing`: the items over the
 /// segment at `at` (within .51 of its middle).
-fn fan_on_belt(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) {
+fn fan_on_belt(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) -> bool {
     let dim = lv.dim;
     let Some((c, index)) = with_world(|w| {
         let d = &w.dims[dim];
@@ -744,7 +752,7 @@ fn fan_on_belt(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) {
         any.then_some((c, index))
     })
     .flatten() else {
-        return;
+        return false;
     };
     let Some(mut inv) = with_world(|w| {
         w.dims[dim]
@@ -753,7 +761,7 @@ fn fan_on_belt(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) {
             .map(|b| std::mem::take(&mut b.items))
     })
     .flatten() else {
-        return;
+        return false;
     };
     let mut rng = processing::Rng::new(lv.seed_at(at));
     let mut made = 0;
@@ -806,4 +814,5 @@ fn fan_on_belt(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) {
             w.mark_unsaved(dim, c);
         }
     });
+    dirty
 }

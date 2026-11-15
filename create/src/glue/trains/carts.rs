@@ -1158,6 +1158,7 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             .unwrap_or_default()
     });
     let carried = crate::glue::contraptions::actors::bearing_actors(&blocks);
+    crate::glue::advancements::assembled(lv, pos, &blocks);
     let m = Mounted::new(blocks, mode, initial);
     // A furnace cart's push is zeroed (`PushX`, `PushZ` saved as 0 and loaded back).
     if nc.kind == "minecraft:furnace_minecart"
@@ -1622,6 +1623,9 @@ fn interact_entity(
     let components = Compound::from([("minecraft:custom_data".into(), Tag::Compound(custom))]);
     if out.set_components(components).is_err() {
         return None;
+    }
+    if on.m.blocks.len() > 200 {
+        crate::glue::advancements::award(lv.host, player, "cart_pickup");
     }
     // `Inventory.placeItemBackInInventory`: into the inventory, the rest dropped at the player.
     if player.give_stack(lv.host, out.clone()).is_err() {

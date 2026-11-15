@@ -117,6 +117,7 @@ fn send_steam(lv: &mut ServerLevel<'_>) {
 /// Engines placed since the last tick show the speed of the shaft in front of them.
 pub(super) fn tick(lv: &mut ServerLevel<'_>) {
     send_steam(lv);
+    super::super::advancements::steam_engines(lv);
     let dim = lv.dim;
     let placed: Vec<[i32; 3]> = PLACED.with_borrow_mut(|p| {
         let (mine, rest): (Vec<_>, Vec<_>) = p.drain(..).partition(|(d, _)| *d == dim);

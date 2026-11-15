@@ -74,6 +74,7 @@ fn fix_controllers(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                     lv.set_state(cpos, state, update_all());
                 }
                 let crushing = if valid {
+                    crate::glue::advancements::crushing(lv, pos, side);
                     crusher::crushing_speed(speed)
                 } else {
                     0.0

@@ -706,6 +706,7 @@ fn breathe(host: &mut dyn ServerHost, player: PlayerRef, fire_resistant: bool) {
         &tanks,
         now,
     );
+    super::advancements::diving(host, player, breath.refill, breath.lava_diving);
     if let Some(slot) = breath.consume {
         consume_air(host, player, slot, 1);
     }

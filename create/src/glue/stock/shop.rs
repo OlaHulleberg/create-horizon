@@ -1095,6 +1095,7 @@ pub(super) fn placed(
         );
     });
     show(lv, pos);
+    crate::glue::advancements::award(lv.host, player, "table_cloth_shop");
 }
 
 /// `TableClothBlock.getDrops`: a shop's cloth drops programmed again

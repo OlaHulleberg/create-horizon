@@ -73,6 +73,7 @@ pub(crate) use cargo::key as cargo_key;
 
 pub use carts::{Carts, assembler_mode, set_assembler_mode};
 pub use controls::TrainControls;
+pub(crate) use controls::drivers;
 pub use railway::Trains;
 pub(crate) use structure::turned_state;
 pub(crate) use tracks::signal_state_of;

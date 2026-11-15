@@ -3125,12 +3125,22 @@ impl CreateWorld {
         pos: [i32; 3],
         keys: &[crate::link::Key],
         pressed: bool,
-    ) {
+    ) -> bool {
         let d = &mut self.dims[dim];
+        // A newly pressed frequency heard by a receiver (`LINKED_CONTROLLER`).
+        let heard = pressed
+            && keys.iter().any(|k| {
+                !d.controllers
+                    .held
+                    .iter()
+                    .any(|h| h.player == player && h.key == *k)
+                    && d.links.listened(k)
+            });
         let changed = d
             .controllers
             .receive(&mut d.links, player, pos, keys, pressed);
         d.link_changes.extend(changed);
+        heard
     }
 
     /// `LinkedControllerServerHandler.tick` of a level; whether any frequency is still held.

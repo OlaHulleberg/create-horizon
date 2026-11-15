@@ -74,11 +74,17 @@ impl<P: Clone> Packager<P> {
     /// `attemptToSend(requests)`'s end: a box made for an order slides out now, or waits in the
     /// queue while one is held or animating.
     pub fn send_or_queue(&mut self, box_: P) {
-        if self.held.is_some() || self.sliding.is_some() || self.animation_ticks != 0 {
+        if !self.sends_now() {
             self.queue.push_back((box_, 1));
         } else {
             self.send(box_);
         }
+    }
+
+    /// Whether a box sent now goes out at once, not into the queue (nothing held, not
+    /// animating).
+    pub fn sends_now(&self) -> bool {
+        self.held.is_none() && self.sliding.is_none() && self.animation_ticks == 0
     }
 
     /// `isTooBusyFor`.

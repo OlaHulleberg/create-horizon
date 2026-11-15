@@ -76,6 +76,11 @@ pub trait Level {
     /// `playEffect`: the fill (drawn) or empty (poured) sound of `fluid` at `p`; `fizz` for
     /// water poured where it boils away (`FIRE_EXTINGUISH`).
     fn effect(&mut self, p: [i32; 3], fluid: Fluid, fill: bool, fizz: bool);
+    /// The hose at `hose` drew from or poured into the world (`HOSE_PULLEY`), from a bottomless
+    /// body of lava (`HOSE_PULLEY_LAVA`).
+    fn hose_worked(&mut self, hose: [i32; 3], lava: bool) {
+        let _ = (hose, lava);
+    }
 }
 
 fn below(p: [i32; 3], n: i32) -> [i32; 3] {
@@ -428,6 +433,7 @@ impl Drainer {
             self.revalidate_at = now + VALIDATION_TIMER;
         }
         if self.infinite {
+            level.hose_worked(hose, self.fluid == Some(Fluid::Lava));
             if !simulate && let Some(f) = self.fluid {
                 level.effect(root, f, true, false);
             }
@@ -467,6 +473,7 @@ impl Drainer {
             if let Some(f) = fluid {
                 level.effect(top.pos, f, true, false);
             }
+            level.hose_worked(hose, false);
             level.empty(top.pos);
             self.queue.pop();
             if self.queue.is_empty() {
@@ -623,9 +630,11 @@ impl Filler {
 
     /// `tryDeposit`: whether a bucket's worth of `fluid` went into the world at `root` (a
     /// source placed unless `simulate`). `ultra_warm`: water boils away (the nether).
+    #[allow(clippy::too_many_arguments)]
     pub fn try_deposit(
         &mut self,
         level: &mut impl Level,
+        hose: [i32; 3],
         fluid: Fluid,
         root: [i32; 3],
         simulate: bool,
@@ -714,6 +723,9 @@ impl Filler {
                         .push(Entry::new(next, entry.distance + 1, root, false));
                 }
             }
+        }
+        if !simulate && success {
+            level.hose_worked(hose, false);
         }
         success
     }
@@ -938,7 +950,7 @@ impl Hose {
             let root = self.root(pos);
             if self
                 .filler
-                .try_deposit(level, fluid, root, false, ultra_warm, now)
+                .try_deposit(level, pos, fluid, root, false, ultra_warm, now)
             {
                 self.drainer.counterpart_acted();
                 remaining = remaining.saturating_sub(BUCKET);

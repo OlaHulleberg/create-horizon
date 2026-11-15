@@ -326,6 +326,12 @@ fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32
         all.extend(m.iter().copied());
     }
     actors::carry_storage(lv, pos, pos, &all);
+    crate::glue::advancements::clock_assembled(
+        lv,
+        pos,
+        &hands.hour,
+        hands.minute.as_ref().map(|m| &m.1[..]),
+    );
     take_blocks(lv, pos, &hands.hour);
     if let Some((_, m)) = &hands.minute {
         take_blocks(lv, pos, m);
@@ -469,6 +475,7 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
                 continue;
             }
         }
+        let before = p.offset;
         let step = {
             let lv: &ServerLevel<'_> = lv;
             p.step(
@@ -489,6 +496,9 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
                 },
             )
         };
+        if before < 200.0 && p.offset >= 200.0 {
+            crate::glue::advancements::award_placer(lv, pos, "pulley_maxed");
+        }
         with_world(|w| w.dims[dim].lifts.pulleys.insert(pos, p));
         match step {
             // Its offset is saved now and then while it moves, as a piston's is.
@@ -559,6 +569,7 @@ fn assemble_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     if !carried.actors.is_empty() || !carried.controls.is_empty() || !carried.glue.is_empty() {
         PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
     }
+    crate::glue::advancements::assembled(lv, pos, &p.blocks);
     take_blocks(lv, anchor, &p.blocks);
     with_world(|w| w.dims[dim].lifts.pulleys.insert(pos, p));
     show_pulley(lv, pos);
@@ -1052,6 +1063,7 @@ fn assemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if !carried.actors.is_empty() || !carried.controls.is_empty() || !carried.glue.is_empty() {
         PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
     }
+    crate::glue::advancements::assembled(lv, pos, &blocks);
     take_blocks(lv, anchor, &blocks);
     let (min_y, height) = lv.build_range();
     let range = pulley::extension_range(pos[1], min_y);

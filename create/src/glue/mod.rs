@@ -107,6 +107,7 @@ pub static SUBSYSTEMS: &[&dyn Subsystem] = &[
     &copycat::Copycats,
     &items::Items,
     &redstone::Comparators,
+    &advancements::Owners,
 ];
 
 thread_local! {

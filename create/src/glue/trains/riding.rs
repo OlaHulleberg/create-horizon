@@ -201,6 +201,7 @@ pub fn sit_entity(host: &mut dyn ServerHost, dim: usize, rider: EntityRef, at: T
         return false;
     }
     let uuid = rider.uuid(host).unwrap_or(0);
+    crate::glue::advancements::seated(host, uuid);
     SEATED.with_borrow_mut(|s| {
         s.push(Seated {
             dim,
@@ -226,6 +227,7 @@ pub fn dismounted(host: &mut dyn ServerHost, vehicle: u32) {
     };
     if let (Some(f), Some(stand)) = (frame(s.dim, s.at), host.entity(vehicle)) {
         stand.teleport_to(host, f.dismount(s.at.local), None);
+        crate::glue::advancements::let_off(host, s.rider, f.dismount(s.at.local));
     }
 }
 

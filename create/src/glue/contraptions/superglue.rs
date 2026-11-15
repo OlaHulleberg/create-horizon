@@ -284,6 +284,7 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         living.hurt_and_break(lv.host, EquipmentSlot::MainHand, 1);
     }
     FIRST.with_borrow_mut(|f| f.remove(&id));
+    crate::glue::advancements::award(lv.host, player, "super_glue");
     action_bar(lv.host, player, "create.super_glue.success");
     slime_sound(&mut lv, pos, 0.95);
     send_glue(&mut lv, player);

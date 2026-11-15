@@ -311,6 +311,8 @@ pub(super) struct Front<'l, 'a> {
     pub(super) lv: &'l mut ServerLevel<'a>,
     pub(super) pos: [i32; 3],
     pub(super) down: bool,
+    /// The pipe (or pump) the open end belongs to.
+    pub(super) pipe: [i32; 3],
 }
 
 impl Front<'_, '_> {
@@ -381,6 +383,9 @@ impl create_engine::open_end::Space for Front<'_, '_> {
         };
         if !simulate {
             self.set(left);
+            if got.0 == Fluid::Honey {
+                crate::glue::advancements::award_placer(self.lv, self.pipe, "honey_drain");
+            }
         }
         Some(got)
     }
@@ -427,6 +432,12 @@ impl create_engine::open_end::Space for Front<'_, '_> {
     fn place_source(&mut self, fluid: Fluid) {
         let state = state_with(self.lv, fluid.id(), &[("level", "0")]);
         self.set(state);
+    }
+
+    fn took(&mut self, fluid: Fluid) {
+        if fluid == Fluid::Water {
+            crate::glue::advancements::award_placer(self.lv, self.pipe, "water_supply");
+        }
     }
 
     fn take_source(&mut self) {

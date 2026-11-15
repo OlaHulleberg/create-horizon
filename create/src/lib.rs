@@ -498,6 +498,19 @@ impl Hooks for Create {
         }
     }
 
+    fn item_toss(&self, host: &mut dyn ServerHost, event: &mut mod_api::ItemTossEvent) -> Flow {
+        glue::advancements::item_tossed(host, event);
+        Flow::Continue
+    }
+
+    fn player_item_smithed(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerItemSmithedEvent<'_>,
+    ) {
+        glue::advancements::item_smithed(host, event);
+    }
+
     fn item_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {
         glue::items::item_tooltip(host, event);
     }

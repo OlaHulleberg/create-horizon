@@ -75,6 +75,7 @@ pub fn tick_millstones(lv: &mut ServerLevel<'_>) {
             }
         }
         lv.set_slots(pos, &changes);
+        crate::glue::advancements::award_placer(lv, pos, "millstone");
     }
 }
 

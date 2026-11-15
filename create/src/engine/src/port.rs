@@ -248,6 +248,8 @@ pub enum Out<P> {
     PackagerDone([i32; 3]),
     /// A package falls where it is.
     Drop([f64; 3], Parcel<P>),
+    /// A frogport caught a package off its chain (`startAnimation(box, false)`).
+    Caught([i32; 3]),
 }
 
 impl<P: Clone> Packaging<P> {
@@ -476,7 +478,10 @@ impl<P: Clone> Packaging<P> {
         );
         for e in events {
             match e {
-                ChainEvent::Catch(at, parcel) => self.start(at, parcel, false),
+                ChainEvent::Catch(at, parcel) => {
+                    self.start(at, parcel, false);
+                    out.push(Out::Caught(at));
+                }
                 ChainEvent::Anticipate(at) => {
                     if let Some(p) = self.ports.get_mut(&at) {
                         p.send_anticipate();
@@ -622,7 +627,7 @@ mod tests {
         for _ in 0..400 {
             pk.tick(&mut out);
         }
-        assert!(out.is_empty(), "{out:?}");
+        assert!(out.iter().all(|o| matches!(o, Out::Caught(_))), "{out:?}");
         let mine = &pk.ports[&[4, 0, 2]];
         assert_eq!(mine.items.iter().flatten().count(), 1, "caught at the mine");
         assert!(pk.ports[&[0, 0, 2]].items.iter().all(Option::is_none));

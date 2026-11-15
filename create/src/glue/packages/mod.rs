@@ -783,6 +783,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             }
             Out::PackagerDone(_) => {}
             Out::Drop(at, p) => drop_stack(lv, at, p.stack),
+            Out::Caught(pos) => crate::glue::advancements::award_placer(lv, pos, "frogport"),
         }
     }
     for pos in with(dim, |pk| pk.due(now)) {
@@ -1120,6 +1121,7 @@ fn attempt_send(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
         });
         pk.activate(pos);
     });
+    crate::glue::advancements::award_placer(lv, pos, "packager");
     let _ = at;
 }
 
@@ -1487,6 +1489,9 @@ pub fn perform_requests(
         };
         body::set_address(&mut stack, Some(&r.address));
         body::set_order(&*lv.host, &mut stack, &stock::order_data_stack(&r.order));
+        if with(dim, |pk| pk.packager(pos).sends_now()) {
+            crate::glue::advancements::award_placer(lv, pos, "packager");
+        }
         with(dim, |pk| {
             pk.packager(pos).send_or_queue(Parcel {
                 stack,

@@ -864,6 +864,7 @@ fn launch_local_player(host: &mut dyn ClientHost, s: &ejector::Shown) {
     };
     let m = ejector::Launcher::new(s.h, s.v).entity_motion(facing);
     host.push_player([m[0] as f32, m[1] as f32, m[2] as f32]);
+    super::super::advancements::ejector_launched(host, s.pos, s.h, s.v);
 }
 
 fn depots_from_server(data: &[u8]) {

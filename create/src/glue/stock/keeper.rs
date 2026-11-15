@@ -494,6 +494,7 @@ fn order(
         1.0,
         1.0,
     );
+    crate::glue::advancements::award(lv.host, player, "stock_ticker");
     let Some(net) = network_at(dim, pos) else {
         return;
     };

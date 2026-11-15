@@ -260,6 +260,7 @@ fn deployer_used(
     recipe: &deployer::Recipe,
     pos: [i32; 3],
 ) {
+    crate::glue::advancements::deployer_applied(lv, pos, recipe.results.first().map(|o| &*o.item));
     let held = held_of(lv, d);
     let host = &*lv.host;
     let max_damage = held
@@ -392,6 +393,9 @@ pub fn tick_deployers(lv: &mut ServerLevel<'_>) {
             keep_overflow(lv, pos, stack.into_iter().collect());
             continue;
         }
+        if mode == Mode::Punch && super::fist::start(lv, pos, facing) {
+            continue;
+        }
         let below = super::step(pos, facing, 2);
         if facing == Dir::Down && takes_from_side(dim, below) && mode == Mode::Use {
             continue;
@@ -449,6 +453,7 @@ pub fn tick_deployers(lv: &mut ServerLevel<'_>) {
         })
         .unwrap_or(false);
         if activated {
+            super::fist::trigger(lv, pos);
             deployer_activate(lv, pos);
         }
     }
@@ -535,6 +540,7 @@ fn deployer_activate(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     let before = d.clone();
     let other = activate(lv, pos, facing, &mut d, deployer::breaker_id(pos));
+    crate::glue::advancements::award_placer(lv, pos, "deployer");
     if d != before {
         with_world(|w| w.set_deployer(dim, pos, d));
     }

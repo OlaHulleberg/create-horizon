@@ -1133,6 +1133,14 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     let stats = stats_of(lv, target_pos, target);
     let reading = read_source(lv, pos, source);
+    // `StationSummaryDisplaySource.provideFlapDisplayText`: departures shown on a board.
+    if let Reading::Summary(a) = &reading
+        && !a.is_empty()
+        && target == Target::Board
+        && stats.rows > 0
+    {
+        crate::glue::advancements::award_placer(lv, pos, "display_board_0");
+    }
     let Some((line, config, started)) = with_world(|w| {
         let l = w.dims[dim].displays.links.get_mut(&pos)?;
         let had = l.config.start_time;
@@ -1147,6 +1155,7 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     }
     // `sendPulseNextSync` after the transfer.
     bulb::pulse(lv, pos);
+    crate::glue::advancements::award_placer(lv, pos, "display_link");
     match target {
         Target::Nixie => {
             let text = display::provide_text(source, &config, &line, target);

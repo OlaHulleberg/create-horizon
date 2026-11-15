@@ -51,6 +51,7 @@ mod deployer;
 mod fan;
 pub(crate) use fan::flow_limit_from;
 mod filtering;
+mod fist;
 pub(crate) use filtering::filter_at as machine_filter;
 mod millstone;
 mod persist;
@@ -186,6 +187,7 @@ impl Subsystem for Processing {
         spoutput::clear();
         crafter::clear();
         toolbelt::clear();
+        fist::clear();
     }
 
     fn tags_updated(&self, host: &mut dyn ServerHost) {

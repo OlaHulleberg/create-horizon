@@ -847,6 +847,7 @@ fn redstone_state(d: &create_engine::world::Dimension, pos: [i32; 3], now: i64) 
 /// observer beside it looking at it, whose filter passes the item, is on for 4 ticks
 /// (`activate(4)`).
 pub(crate) fn funnel_transfer(lv: &mut ServerLevel<'_>, funnel: [i32; 3], item: &ItemStack) {
+    crate::glue::advancements::award_placer(lv, funnel, "funnel");
     let dim = lv.dim;
     let now = lv.game_time();
     for d in Dir::ALL {

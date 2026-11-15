@@ -557,6 +557,7 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
         return false;
     };
     clear_failure(dim, pos);
+    crate::glue::advancements::train_assembled(lv, pos, &cars);
     // A train assembled here: its comparators read `trainPresent` again.
     crate::glue::redstone::analog_touched(dim, pos);
     super::super::persist::mark_pos_unsaved(dim, pos);

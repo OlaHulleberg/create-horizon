@@ -717,7 +717,9 @@ fn from_client(host: &mut dyn ServerHost, player: PlayerRef, packet: ToServer) {
             if let Some(keys) = keys
                 && !(press && spectator)
             {
-                with_world(|w| w.controller_input(dim, uuid, at, &keys, press));
+                if with_world(|w| w.controller_input(dim, uuid, at, &keys, press)) == Some(true) {
+                    crate::glue::advancements::award(host, player, "linked_controller");
+                }
                 BUSY.set(true);
             }
         }
@@ -790,7 +792,9 @@ fn player_tick(host: &mut dyn ServerHost, me: PlayerRef) {
                     .position(&*host)
                     .unwrap_or_default()
                     .map(|v| v.floor() as i32);
-                with_world(|w| w.controller_input(dim, uuid, at, &keys, press));
+                if with_world(|w| w.controller_input(dim, uuid, at, &keys, press)) == Some(true) {
+                    crate::glue::advancements::award(host, me, "linked_controller");
+                }
                 BUSY.set(true);
             }
             // `LinkedControllerBindPacket.handleItem`: the link's frequency on the button.

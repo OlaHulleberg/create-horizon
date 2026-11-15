@@ -51,6 +51,7 @@ pub fn set_chute_stack(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: Option<It
     items::set_slot(lv, pos, 0, stack);
     // Arms using the chute look again.
     mark_touched(lv.dim, pos);
+    crate::glue::advancements::award_placer(lv, pos, "chute");
 }
 
 /// `ChuteBlockEntity` taking an item that landed on it (`canAcceptItem`: only while empty; a
@@ -67,6 +68,7 @@ pub fn chute_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) ->
     }
     let dim = lv.dim;
     with_world(|w| w.dims[dim].chutes.insert(pos, 1.0));
+    crate::glue::advancements::award_placer(lv, pos, "chute");
     true
 }
 
