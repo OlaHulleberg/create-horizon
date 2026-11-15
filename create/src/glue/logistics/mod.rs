@@ -358,6 +358,7 @@ impl Subsystem for Logistics {
         );
         models.push("create:block/belt_scroll_sprites".to_owned());
         models.extend(client::FLAP_MODELS.iter().map(|m| (*m).to_owned()));
+        models.extend(client::ARM_TINTED.iter().map(|m| (*m).to_owned()));
     }
 }
 

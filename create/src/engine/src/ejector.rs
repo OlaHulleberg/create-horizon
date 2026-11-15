@@ -129,6 +129,15 @@ impl Launcher {
         [r[0] + start[0], r[1] + start[1], r[2] + start[2]]
     }
 
+    /// `applyMotion`: the motion an entity on the plate is thrown with (`facing` the ejector's).
+    pub fn entity_motion(&self, facing: Dir) -> [f64; 3] {
+        let v = rotate_y(
+            [0.0, self.y_motion, self.x_motion],
+            f64::from(horizontal_angle(facing)),
+        );
+        [v[0] * 0.91, v[1] * 0.98, v[2] * 0.91]
+    }
+
     /// `getGlobalVelocity(t, d, launcher)`.
     pub fn global_velocity(&self, t: f64, d: Dir) -> [f64; 3] {
         rotate_y(

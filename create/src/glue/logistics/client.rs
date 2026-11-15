@@ -727,7 +727,7 @@ fn draw_block_flaps(
 }
 
 /// Arms and ejectors from the server.
-pub fn arms_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
+pub fn arms_message(host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
     match channel {
         arm::CHANNEL => {
             for s in arm::decode(data) {
@@ -751,6 +751,7 @@ pub fn arms_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> b
         }
         ejector::CHANNEL => {
             for s in ejector::decode(data) {
+                launch_local_player(host, &s);
                 CLIENT.with_borrow_mut(|c| {
                     if s.gone {
                         c.ejectors.remove(&s.pos);
@@ -764,6 +765,79 @@ pub fn arms_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> b
         }
         _ => false,
     }
+}
+
+/// `activateDeferred` on the client: the local player standing on an ejector that launches is
+/// thrown by its own client (`isPlayerEntity != level.isClientSide`), as Create does.
+/// `EjectorBlock.updateEntityAfterFallOn` for the local player: standing on a charged ejector
+/// with a target ahead, its client asks the server to fire it (`EjectorTriggerPacket`).
+pub fn trigger_from_local_player(host: &mut dyn ClientHost) {
+    let Some(player) = host.local_player() else {
+        return;
+    };
+    let Some(feet) = player.entity().position(&*host) else {
+        return;
+    };
+    let below = [
+        feet[0].floor() as i32,
+        (feet[1] - 0.2).floor() as i32,
+        feet[2].floor() as i32,
+    ];
+    let ready = CLIENT.with_borrow(|c| {
+        c.ejectors
+            .get(&below)
+            .is_some_and(|e| e.shown.state == ejector::State::Charged && e.shown.h != 0)
+    });
+    if !ready {
+        return;
+    }
+    let mut m = Vec::new();
+    for v in below {
+        m.extend(v.to_le_bytes());
+    }
+    super::super::net::send_to_server(host, EJECTOR_TRIGGER, &m);
+}
+
+/// Client to server: the local player stands on a charged ejector.
+pub const EJECTOR_TRIGGER: &str = "create:ejector_trigger";
+
+fn launch_local_player(host: &mut dyn ClientHost, s: &ejector::Shown) {
+    if s.gone || s.state != ejector::State::Launching {
+        return;
+    }
+    let was = CLIENT.with_borrow(|c| c.ejectors.get(&s.pos).map(|e| e.shown.state));
+    if was != Some(ejector::State::Charged) {
+        return;
+    }
+    let Some(player) = host.local_player() else {
+        return;
+    };
+    let Some(feet) = player.entity().position(&*host) else {
+        return;
+    };
+    let p = s.pos.map(f64::from);
+    let inset = 1.0 / 16.0;
+    let on = feet[0] > p[0] + inset
+        && feet[0] < p[0] + 1.0 - inset
+        && feet[2] > p[2] + inset
+        && feet[2] < p[2] + 1.0 - inset
+        && feet[1] >= p[1]
+        && feet[1] <= p[1] + 1.0;
+    if !on {
+        return;
+    }
+    let Some(facing) = host
+        .level(host.dimension())
+        .and_then(|l| l.block_state(&*host, s.pos))
+        .and_then(states::id)
+        .and_then(|id| {
+            super::super::client_table(&*host, |t| t.get(id).and_then(|(_, i)| i.facing)).flatten()
+        })
+    else {
+        return;
+    };
+    let m = ejector::Launcher::new(s.h, s.v).entity_motion(facing);
+    host.push_player([m[0] as f32, m[1] as f32, m[2] as f32]);
 }
 
 fn depots_from_server(data: &[u8]) {
@@ -1355,7 +1429,18 @@ fn draw_depot(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, pos: [i32;
 
 /// Draws an arm as `ArmRenderer` poses it at its progress: every part turned about the
 /// block's vertical axis by the base's yaw, its joints, and the item in its claw.
-fn draw_arm(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, pos: [i32; 3], t: f32) {
+/// A dancing arm's body, tinted (`create-data prepare` makes them from the player's jar).
+pub(super) const ARM_TINTED: [&str; 2] = [
+    "create:block/mechanical_arm/lower_body_tinted",
+    "create:block/mechanical_arm/upper_body_tinted",
+];
+
+/// Whether this client sees goggles on the arm at `pos`.
+pub(super) fn arm_goggles(pos: [i32; 3]) -> bool {
+    CLIENT.with_borrow(|c| c.arms.get(&pos).is_some_and(|a| a.shown.goggles))
+}
+
+fn draw_arm(draw: &mut dyn BlockEntityDrawContext, host: &dyn ClientHost, pos: [i32; 3], t: f32) {
     let Some((s, progress)) = CLIENT.with_borrow(|c| {
         c.arms.get(&pos).map(|a| {
             let shown = arm::Shown {
@@ -1369,10 +1454,10 @@ fn draw_arm(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, pos: [i32; 3
         return;
     };
     let mut now = arm::at_progress(s.from, s.from_base, s.to, progress);
-    // `rave`: a dancing arm that turns sways to the music (Create also tints it with a rainbow,
-    // which a partial block drawn here cannot take).
+    // `rave`: a dancing arm that turns sways to the music, its body in a rainbow.
     let speed = CLIENT.with_borrow(|c| c.speeds.get(&pos).copied().unwrap_or(0.0));
-    if s.phase == arm::Phase::Dancing && speed != 0.0 {
+    let rave = s.phase == arm::Phase::Dancing && speed != 0.0;
+    if rave {
         let seed = (pos[0].wrapping_mul(31) ^ pos[1].wrapping_mul(17) ^ pos[2]).rem_euclid(64);
         let r = draw.game_time() as f32 + t + seed as f32;
         let lerp = |p: f32, a: f32, b: f32| a + (b - a) * p;
@@ -1390,18 +1475,43 @@ fn draw_arm(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, pos: [i32; 3
     let sign = if s.ceiling { -1.0 } else { 1.0 };
     draw.push();
     draw.rotate_about(UP, sign * now.base, [0.5, 0.0, 0.5]);
+    let claw = if s.goggles {
+        "part_arm_claw_base_goggles"
+    } else {
+        "part_arm_claw_base"
+    };
     let parts = [
         ("part_arm_base", p.base),
         ("part_arm_lower_body", p.lower),
         ("part_arm_upper_body", p.upper),
-        ("part_arm_claw_base", p.claw),
+        (claw, p.claw),
         ("part_arm_upper_claw_grip", p.upper_grip),
         ("part_arm_lower_claw_grip", p.lower_grip),
     ];
+    // `Color.rainbowColor(AnimationTickHolder.getTicks() * 100)` on the body while dancing.
+    let rainbow =
+        rave.then(|| arm::rainbow_color((draw.animation_time() as i32).wrapping_mul(100)));
     for (name, m) in parts {
         draw.push();
         pose(draw, m);
-        partial(draw, name);
+        // Hung from the ceiling, the goggles turn upright (`rotateZDegrees(180)`).
+        if name == claw && s.ceiling && s.goggles {
+            draw.rotate_about([0.0, 0.0, 1.0], 180.0, [0.5; 3]);
+        }
+        let tinted = match (rainbow, name) {
+            (Some(c), "part_arm_lower_body") => Some((ARM_TINTED[0], c)),
+            (Some(c), "part_arm_upper_body") => Some((ARM_TINTED[1], c)),
+            _ => None,
+        };
+        match tinted {
+            Some((file, c)) => {
+                let options = mod_api::TerrainModelOptions::default().with_tint(c);
+                if !terrain(draw, host, file, options) {
+                    partial(draw, name);
+                }
+            }
+            None => partial(draw, name),
+        }
         draw.pop();
     }
     if let Some(id) = &s.held {
