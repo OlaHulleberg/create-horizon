@@ -8,9 +8,11 @@
 //! than a block behind it is picked, where Create picks entities only past a missed block.
 //! A whole netherite diving set makes its wearer immune to fire (`NetheriteDivingHandler`), and a
 //! diving helmet sees further under water, the netherite one in lava (`getFogDensity`). The
-//! extendo grip is drawn by a special item model (`GripModel`) at Create's resting pose: its cog
-//! does not turn and its arms don't reach out in a first-person hand (the renderer is asked once
-//! per stack, without the display context or the time).
+//! extendo grip is drawn by a special item model (`GripModel`) posed as Create's: an item model
+//! node of the glue's (`create:extendo_grip_pose`) picks, by where it is drawn and the game time,
+//! one of the poses `create-data prepare` lists (the cog turned to a tenth of its 45° repeat,
+//! the swing in eight steps, the hand pointing, punching or holding); the swing is started by
+//! a click in the world, as the client sees no swing progress.
 //! Free when unused: a player's tick reads their armour and hands and looks each item up once
 //! (the gear each item is, cached by key), and only backtanks with something to do tick.
 //!
@@ -338,6 +340,11 @@ impl Subsystem for Equipment {
                 );
             }
         }
+    }
+
+    /// `ExtendoGripRenderHandler.tick`.
+    fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
+        grip_tick(host);
     }
 
     /// The start of the local player's tick on its client (`EntityTickEvent.Pre`): the diving
@@ -1098,17 +1105,120 @@ impl Pose {
     }
 }
 
+/// The item model node type that picks the grip's pose (`create-data prepare` writes its
+/// models: `rest_<cog>` and `hand_<swing>_<cog>_<hand>`).
+pub(crate) const GRIP_POSE: &str = "create:extendo_grip_pose";
+/// The cog's angles within its 45° repeat, and the swing's steps, as `create-data` makes them.
+const GRIP_COG_STEPS: i64 = 10;
+const GRIP_SWING_STEPS: f32 = 8.0;
+
+thread_local! {
+    /// `ExtendoGripRenderHandler.mainHandAnimation` and `pose`: the swing the local player's
+    /// first-person grip shows, and whether its hand holds (a block in the main hand, the grip
+    /// in the off hand) or punches.
+    static GRIP_SWING: std::cell::Cell<(f32, bool)> = const { std::cell::Cell::new((0.0, false)) };
+}
+
+/// `onRenderPlayerHand`: a swing starting (a click in the world, no screen open) sets the
+/// grip's animation to 0.95 when it has fallen below it.
+pub(crate) fn grip_swing(
+    host: &mut dyn mod_api::ClientHost,
+    event: &mod_api::MouseButtonPostEvent,
+) {
+    if !event.pressed
+        || event.button > 1
+        || host.screen_title().is_some()
+        || host.mod_screen().is_some()
+    {
+        return;
+    }
+    let (a, hold) = GRIP_SWING.get();
+    GRIP_SWING.set((a.max(0.95), hold));
+}
+
+/// `ExtendoGripRenderHandler.tick`: the animation falls off, and the hand pose follows the
+/// hands (a block item stands in for `isGui3d`).
+pub(crate) fn grip_tick(host: &dyn mod_api::ClientHost) {
+    let (a, _) = GRIP_SWING.get();
+    let a = a * a.clamp(0.8, 0.99);
+    let hold = host.local_player().is_some_and(|p| {
+        let off = super::items::held(host, p, Hand::Off);
+        let main = super::items::held(host, p, Hand::Main);
+        off.is_some_and(|s| matches!(gear_of(host, &s), Gear::ExtendoGrip))
+            && main
+                .is_some_and(|s| super::logistics::items::is_block_item(host, &s.item().id(host)))
+    });
+    GRIP_SWING.set((a, hold));
+}
+
+/// `item_model_update` for the grip's node: in a first-person hand, the swing's pose and the
+/// cog turned on by it; elsewhere at rest (`animation` 0.25); the cog at `renderTime * -2`.
+pub(crate) fn grip_pose(
+    _host: &dyn mod_api::ClientHost,
+    event: &mut mod_api::ItemModelUpdateEvent<'_>,
+) {
+    if event.kind != GRIP_POSE {
+        return;
+    }
+    let time = event.level.map_or(0, |l| l.game_time);
+    let hand = matches!(
+        event.display,
+        mod_api::ItemDisplayContext::FirstPersonLeftHand
+            | mod_api::ItemDisplayContext::FirstPersonRightHand
+    );
+    let (swing, hold) = GRIP_SWING.get();
+    let step = (swing * (GRIP_SWING_STEPS - 1.0)).round() as i64;
+    let shown = step as f32 / (GRIP_SWING_STEPS - 1.0);
+    let mut angle = time as f32 * -2.0;
+    if hand {
+        angle += 360.0 * shown.powi(3);
+    }
+    let cog = ((angle.rem_euclid(45.0) / 45.0 * GRIP_COG_STEPS as f32) as i64) % GRIP_COG_STEPS;
+    event.models.push(if hand {
+        let pose = if hold { "holding" } else { "punching" };
+        format!("hand_{step}_{cog}_{pose}")
+    } else {
+        format!("rest_{cog}")
+    });
+}
+
+/// A number in a special model's config (its JSON converted to NBT).
+fn config_number(config: &Tag, key: &str) -> Option<f32> {
+    let Tag::Compound(c) = config else {
+        return None;
+    };
+    Some(match c.get(&key.into())? {
+        Tag::Double(v) => f64::from_bits(*v) as f32,
+        Tag::Float(v) => f32::from_bits(*v),
+        Tag::Int(v) => *v as f32,
+        Tag::Long(v) => *v as f32,
+        Tag::Short(v) => f32::from(*v),
+        Tag::Byte(v) => f32::from(*v),
+        _ => return None,
+    })
+}
+
 impl mod_api::SpecialModelRenderer for GripModel {
+    /// `ExtendoGripItemRenderer.render` for the pose its node names: `animation` (before it is
+    /// cubed), the cog's turn `cog` and the hand.
     fn extract(
         &self,
         _host: &dyn mod_api::ClientHost,
         _stack: &ItemStack,
-        _config: &Tag,
+        config: &Tag,
     ) -> Result<Vec<mod_api::SpecialModelPart>, String> {
         const ROT: [f32; 3] = [0.0, 0.5, 0.5];
         const BACK: [f32; 3] = [0.0, -0.5, -0.5];
         let item = |m: &str| format!("create:item/extendo_grip/{m}");
-        let animation: f32 = 0.25f32.powi(3);
+        let animation: f32 = config_number(config, "animation").unwrap_or(0.25).powi(3);
+        let cog = config_number(config, "cog").unwrap_or(0.0);
+        let hand = match config {
+            Tag::Compound(c) => match c.get(&"hand".into()) {
+                Some(Tag::String(s)) => s.to_string_lossy(),
+                _ => "pointing".to_owned(),
+            },
+            _ => "pointing".to_owned(),
+        };
         let extension = 24.0 + (156.0 - 24.0) * animation;
         let half = extension / 2.0;
         let opposite = 180.0 - extension;
@@ -1140,9 +1250,13 @@ impl mod_api::SpecialModelRenderer for GripModel {
         ms = ms.rotate(0, 180.0 - half).rotate(1, 180.0);
         ms = ms.translate([0.0, 0.0, -4.0 / 16.0]);
         ms = ms.scale([1.0, 1.0, 1.0 / (1.0 + animation)]);
-        parts.push(ms.part("create:block/deployer/hand_pointing"));
-        // The cog, still.
-        parts.push(Pose::IDENTITY.part(&item("cog")));
+        parts.push(ms.part(&format!("create:block/deployer/hand_{hand}")));
+        // The cog, turned about its middle (`COG_ROTATION_OFFSET`).
+        let cog_pose = Pose::IDENTITY
+            .translate([0.0, 1.0 / 16.0, 0.0])
+            .rotate(2, cog)
+            .translate([0.0, -1.0 / 16.0, 0.0]);
+        parts.push(cog_pose.part(&item("cog")));
         Ok(parts)
     }
 }

@@ -207,6 +207,22 @@ impl Hooks for Create {
         glue::pipelines::register(event);
     }
 
+    fn register_item_models(
+        &self,
+        _context: &RegistrationContext,
+        event: &mut mod_api::RegisterItemModelsEvent<'_>,
+    ) {
+        event.models.push(glue::equipment::GRIP_POSE.into());
+    }
+
+    fn item_model_update(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ItemModelUpdateEvent<'_>,
+    ) {
+        glue::equipment::grip_pose(host, event);
+    }
+
     fn register_special_model_renderer(
         &self,
         _context: &RegistrationContext,
@@ -364,8 +380,9 @@ impl Hooks for Create {
     fn mouse_button_post(
         &self,
         host: &mut dyn ClientHost,
-        _event: &mut mod_api::MouseButtonPostEvent,
+        event: &mut mod_api::MouseButtonPostEvent,
     ) {
+        glue::equipment::grip_swing(host, event);
         for s in SUBSYSTEMS {
             s.input_handled(host);
         }
