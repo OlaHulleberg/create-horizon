@@ -3578,12 +3578,14 @@ pub const TABLE_CLOTHS: [&str; 19] = [
     "copper",
 ];
 
+/// A hidden block made here: `(block, blockstate, [(model file under models/block, model)])`.
+pub type HiddenBlock = (String, Value, Vec<(String, Value)>);
+
 /// `TableClothModel`'s corners (`AllPartialModels.TABLE_CLOTH_*`, drawn in the cloth's own
 /// sprite) as one hidden block per cloth, `part_table_cloth_<kind>`: the corner a side's
 /// quads carry by facing (south: south west, west: north west, north: north east, east: south
 /// east; up and down unused). Each corner model is Create's, by id, with the cloth's texture.
-/// Returns `(block, blockstate, [(model file under models/block, model)])`.
-pub fn cloth_partials() -> Vec<(String, Value, Vec<(String, Value)>)> {
+pub fn cloth_partials() -> Vec<HiddenBlock> {
     let corners = [
         ("south", "south_west"),
         ("west", "north_west"),
