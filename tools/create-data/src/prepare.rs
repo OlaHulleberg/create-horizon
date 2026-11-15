@@ -509,7 +509,8 @@ fn tinted_model(path: &str) -> Option<String> {
     let rest = path.strip_prefix("assets/create/models/block/")?;
     let coloured = rest.starts_with("factory_gauge/connections/")
         || rest == "mechanical_arm/lower_body.json"
-        || rest == "mechanical_arm/upper_body.json";
+        || rest == "mechanical_arm/upper_body.json"
+        || rest == "track_overlay/assembling.json";
     let stem = rest.strip_suffix(".json").filter(|_| coloured)?;
     Some(format!("assets/create/models/block/{stem}_tinted.json"))
 }
