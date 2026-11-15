@@ -31,6 +31,9 @@ const TURN: i32 = 0;
 const GLIDE: i32 = 1;
 const CLOCK: i32 = 2;
 const ELEVATOR: i32 = 3;
+/// A structure that is gone: clients merge the data they are sent into their copy, so a key
+/// taken away would stay with them; this one says the anchor draws nothing.
+const GONE: i32 = -1;
 
 /// How far from the camera anchors draw their structures, in blocks: the legacy parts were
 /// drawn at any distance.
@@ -128,7 +131,15 @@ fn anchors(dim: usize, pos: [i32; 3]) -> bool {
 /// entity's geometry is not kept between frames).
 pub fn moving(data: &Compound) -> bool {
     match data.get(&KEY.into()) {
-        Some(Tag::Compound(c)) => !matches!(int(c, "Kind"), Some(TURN | CLOCK)),
+        Some(Tag::Compound(c)) => matches!(int(c, "Kind"), Some(GLIDE | ELEVATOR)),
+        _ => false,
+    }
+}
+
+/// Whether `data` holds a structure (not none, nor one that is gone).
+fn holds_structure(data: &Compound) -> bool {
+    match data.get(&KEY.into()) {
+        Some(Tag::Compound(c)) => int(c, "Kind") != Some(GONE),
         _ => false,
     }
 }
@@ -228,9 +239,17 @@ fn write(lv: &mut ServerLevel<'_>, anchor: [i32; 3], c: Option<Compound>) {
             data.insert(KEY.into(), Tag::Compound(c));
         }
         None => {
-            if data.remove(&KEY.into()).is_none() {
+            if !holds_structure(&data) {
                 return;
             }
+            let gone = Compound::from([
+                ("Kind".into(), Tag::Int(GONE)),
+                (
+                    "Rev".into(),
+                    Tag::Int(REVISION.fetch_add(1, Ordering::Relaxed)),
+                ),
+            ]);
+            data.insert(KEY.into(), Tag::Compound(gone));
         }
     }
     let _ = entity.replace_data(&mut *lv.host, data);
@@ -396,6 +415,8 @@ struct Drawn {
     light: Option<u32>,
     block: BlockKey,
     props: Vec<(String, String)>,
+    /// The Create block and facts of its state.
+    create: Option<(create_engine::Block, create_engine::parts::StateInfo)>,
 }
 
 fn drawn_blocks(host: &dyn Host, c: &Compound, suffix: &str) -> Vec<Drawn> {
@@ -415,10 +436,14 @@ fn drawn_blocks(host: &dyn Host, c: &Compound, suffix: &str) -> Vec<Drawn> {
             let text = t.to_string_lossy();
             let state = host.block_state_id(&text)?;
             let (_, props) = states::split(&text);
+            let create = states::id(state).and_then(|id| {
+                super::super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
+            });
             Some(Drawn {
                 at: o.map(|v| v as f32),
                 light: lights.get(i).map(|l| *l as u32),
                 block: state.block(),
+                create,
                 props: props
                     .into_iter()
                     .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -545,6 +570,8 @@ fn parse(host: &dyn Host, c: &Compound) -> Option<Shape> {
 struct Shown {
     rev: i32,
     shape: Shape,
+    /// Where offset 0 of a gliding structure was last drawn, in the world (for clicks).
+    drawn_at: Option<[f64; 3]>,
     /// A windmill's turn as the client runs it: its angle at a time and the speed since, so a
     /// speed change turns on from where it is (`turn_contraption`).
     base: Option<(f32, f64, f32)>,
@@ -592,9 +619,73 @@ fn draw_blocks(draw: &mut dyn BlockEntityDrawContext, blocks: &[Drawn]) {
         draw.push();
         draw.translate(b.at);
         draw.block(b.block, &props);
+        if let Some((block, info)) = b.create {
+            draw_parts(draw, block, &info, &props);
+        }
         draw.pop();
     }
     draw.set_light(own);
+}
+
+/// Blocks whose model is the whole block, drawn by its block entity in the world
+/// (`RenderShape.ENTITYBLOCK_ANIMATED`): shafts, cogs, cranks and valve handles, the gantry
+/// shaft, crushing wheels, flywheels, large water wheels, turntables, belts and copycats.
+fn whole_model(block: create_engine::Block) -> bool {
+    use create_engine::Block as B;
+    create_engine::dye::is_valve_handle(block)
+        || matches!(
+            block,
+            B::Shaft
+                | B::PoweredShaft
+                | B::Cogwheel
+                | B::LargeCogwheel
+                | B::GantryShaft
+                | B::CrushingWheel
+                | B::Flywheel
+                | B::LargeWaterWheel
+                | B::HandCrank
+                | B::Turntable
+                | B::Belt
+                | B::CopycatPanel
+                | B::CopycatStep
+        )
+}
+
+/// A moving block's kinetic parts at rest (`ContraptionKineticRenderer`: what its block
+/// entity's visual draws in the world, its shafts, cogs, drill head or fan blades), over its
+/// block model; none for a block whose model is already all of it.
+fn draw_parts(
+    draw: &mut dyn BlockEntityDrawContext,
+    block: create_engine::Block,
+    info: &create_engine::parts::StateInfo,
+    props: &[(&str, &str)],
+) {
+    use create_engine::client::{Model, draws};
+    if whole_model(block) {
+        return;
+    }
+    for d in draws(block, info, [0; 3], [0.0; 2]) {
+        if d.model == Model::Own {
+            continue;
+        }
+        let Some((model, prop)) = super::super::kinetics::part_model(block, d.model) else {
+            continue;
+        };
+        draw.push();
+        let axis = match d.axis {
+            Axis::X => [1.0, 0.0, 0.0],
+            Axis::Y => [0.0, 1.0, 0.0],
+            Axis::Z => [0.0, 0.0, 1.0],
+        };
+        if d.phase != 0.0 {
+            draw.rotate_about(axis, d.phase, [0.5; 3]);
+        }
+        match prop {
+            Some(p) => draw.block(model, &[p]),
+            None => draw.block(model, props),
+        };
+        draw.pop();
+    }
 }
 
 /// The speed the kinetic data gives the anchor's own part (slot 0).
@@ -615,7 +706,7 @@ fn submit(
     data: &Compound,
     draw: &mut dyn BlockEntityDrawContext,
 ) {
-    let Some(Tag::Compound(c)) = data.get(&KEY.into()) else {
+    let Some(Tag::Compound(c)) = data.get(&KEY.into()).filter(|_| holds_structure(data)) else {
         SHOWN.with_borrow_mut(|s| s.remove(&pos));
         return;
     };
@@ -631,6 +722,7 @@ fn submit(
                 Shown {
                     rev,
                     shape,
+                    drawn_at: None,
                     base: None,
                 },
             )
@@ -643,6 +735,7 @@ fn submit(
         let Some(shown) = s.get_mut(&pos) else {
             return;
         };
+        let shown = &mut *shown;
         match &shown.shape {
             Shape::Turn {
                 blocks,
@@ -703,8 +796,10 @@ fn submit(
                 if let Some((lo, hi)) = clamp {
                     at = at.clamp(*lo, *hi);
                 }
+                let shift = [0, 1, 2].map(|i| origin[i] + dir[i] * at);
+                shown.drawn_at = Some([0, 1, 2].map(|i| f64::from(pos[i]) + f64::from(shift[i])));
                 draw.push();
-                draw.translate([0, 1, 2].map(|i| origin[i] + dir[i] * at));
+                draw.translate(shift);
                 draw_blocks(draw, blocks);
                 draw.pop();
                 // Rope: whole blocks between the pulley and its magnet.
@@ -728,6 +823,126 @@ fn submit(
             }
         }
     });
+}
+
+/// The channel a client's click on contraption controls riding a gliding structure goes to
+/// the server on: the structure's anchor and the block's offset in it, six ints.
+pub const CONTROLS_CHANNEL: &str = "create:contraption_controls";
+
+/// Reads a click sent on [`CONTROLS_CHANNEL`].
+pub fn decode_click(data: &[u8]) -> Option<([i32; 3], [i32; 3])> {
+    let v: Vec<i32> = data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| i32::from_le_bytes(*b))
+        .collect();
+    let [a, b, c, x, y, z] = v[..] else {
+        return None;
+    };
+    Some(([a, b, c], [x, y, z]))
+}
+
+/// Where a ray from `eye` to `target` enters the unit box at `min`, as a fraction of the ray.
+fn ray_box(eye: [f64; 3], target: [f64; 3], min: [f64; 3]) -> Option<f64> {
+    let (mut lo, mut hi) = (0.0f64, 1.0f64);
+    for i in 0..3 {
+        let d = target[i] - eye[i];
+        let (a, b) = (min[i], min[i] + 1.0);
+        if d.abs() < 1e-9 {
+            if eye[i] < a || eye[i] > b {
+                return None;
+            }
+            continue;
+        }
+        let (t0, t1) = ((a - eye[i]) / d, (b - eye[i]) / d);
+        lo = lo.max(t0.min(t1));
+        hi = hi.min(t0.max(t1));
+        if lo > hi {
+            return None;
+        }
+    }
+    Some(lo)
+}
+
+/// `ContraptionHandlerClient.rightClickingOnContraptionsGetsHandledLocally` for contraption
+/// controls: a use click whose ray (as far as the player reaches, or the block the crosshair is
+/// on) meets a contraption controls block of a gliding structure this client draws goes to the
+/// server as a click on it, and nothing else happens. Turning structures carry no controls.
+pub fn use_key(
+    host: &mut dyn ClientHost,
+    event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
+) -> mod_api::Flow {
+    use mod_api::{CrosshairTarget, Flow, Hand, InteractionKey};
+    if event.key != InteractionKey::Use
+        || event.hand != Hand::Main
+        || event.cancelled
+        || SHOWN.with_borrow(HashMap::is_empty)
+    {
+        return Flow::Continue;
+    }
+    let (Some(player), Some(camera)) = (host.local_player(), host.camera()) else {
+        return Flow::Continue;
+    };
+    if player.is_spectator(&*host) == Some(true) {
+        return Flow::Continue;
+    }
+    let Some(controls) = host
+        .block_state_id("create:contraption_controls")
+        .map(|s| s.block())
+    else {
+        return Flow::Continue;
+    };
+    let eye = camera.position;
+    let (yaw, pitch) = (camera.yaw.to_radians(), camera.pitch.to_radians());
+    let look = [
+        f64::from(-yaw.sin() * pitch.cos()),
+        f64::from(-pitch.sin()),
+        f64::from(yaw.cos() * pitch.cos()),
+    ];
+    let mut reach: f64 = if player.is_creative(&*host) == Some(true) {
+        5.0
+    } else {
+        4.5
+    };
+    match host.crosshair_target() {
+        Some(CrosshairTarget::Block { hit, .. }) => {
+            let d: f64 = (0..3).map(|i| (hit.point[i] - eye[i]).powi(2)).sum();
+            reach = d.sqrt().min(reach);
+        }
+        Some(CrosshairTarget::Entity { .. }) => return Flow::Continue,
+        _ => {}
+    }
+    let target: [f64; 3] = std::array::from_fn(|i| eye[i] + look[i] * reach);
+    let hit = SHOWN.with_borrow(|s| {
+        let mut best: Option<(f64, [i32; 3], [i32; 3])> = None;
+        for (anchor, shown) in s {
+            let (Shape::Glide { blocks, .. }, Some(at)) = (&shown.shape, shown.drawn_at) else {
+                continue;
+            };
+            for b in blocks.iter().filter(|b| b.block == controls) {
+                let min = [0, 1, 2].map(|i| at[i] + f64::from(b.at[i]));
+                if let Some(t) = ray_box(eye, target, min)
+                    && best.is_none_or(|x| t < x.0)
+                {
+                    best = Some((t, *anchor, b.at.map(|v| v.round() as i32)));
+                }
+            }
+        }
+        best
+    });
+    let Some((_, anchor, local)) = hit else {
+        return Flow::Continue;
+    };
+    let data: Vec<u8> = anchor
+        .iter()
+        .chain(&local)
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    super::super::net::send_to_server(host, CONTROLS_CHANNEL, &data);
+    event.cancelled = true;
+    event.swing_hand = true;
+    Flow::Cancel
 }
 
 thread_local! {
@@ -768,7 +983,7 @@ impl BlockEntityPart for StructurePart {
         let Some(data) = entity.data(&*host) else {
             return;
         };
-        if !data.contains_key(&KEY.into()) {
+        if !holds_structure(&data) {
             return;
         }
         let (Some(level), Some(pos)) = (entity.level(&*host), entity.position(&*host)) else {

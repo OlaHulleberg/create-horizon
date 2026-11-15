@@ -121,7 +121,7 @@ pub fn save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
 }
 
 /// `DeployerBlockEntity.write`: `State`, `Timer`, `Reach`, the held stack and `Mode`, per deployer.
-fn deployers_to_nbt(list: &[([i32; 3], deployer::Deployer)]) -> Tag {
+pub(crate) fn deployers_to_nbt(list: &[([i32; 3], deployer::Deployer)]) -> Tag {
     Tag::List(
         list.iter()
             .map(|(p, d)| {
@@ -149,7 +149,7 @@ fn deployers_to_nbt(list: &[([i32; 3], deployer::Deployer)]) -> Tag {
     )
 }
 
-fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::Deployer)> {
+pub(crate) fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::Deployer)> {
     let Some(Tag::List(list)) = data.get(&"deployers".into()) else {
         return Vec::new();
     };

@@ -135,7 +135,8 @@ pub struct Lifts {
     pub contact_ticks: Vec<([i32; 3], i64)>,
     pub contact_lit: HashSet<[i32; 3]>,
     /// Contacts lit by an elevator that stopped at them: they stay lit until their next
-    /// activation (Create re-checks a contact only when the block it faces changes).
+    /// activation (Create re-checks a contact only when the block it faces changes); redstone
+    /// contacts a moving contact powers, until it leaves them.
     pub contact_held: HashSet<[i32; 3]>,
     /// Structures whose block broke, to put back; blocks clients must see again.
     pub orphans: Vec<([i32; 3], Held)>,

@@ -444,14 +444,36 @@ fn deployer_activate(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if facing == Dir::Down && takes_from_side(dim, reached) {
         return;
     }
-    let Some(d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten() else {
+    let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten() else {
         return;
     };
+    let before = d.clone();
+    let other = activate(lv, pos, facing, &mut d, deployer::breaker_id(pos));
+    if d != before {
+        with_world(|w| w.set_deployer(dim, pos, d));
+    }
+    for s in other {
+        lv.spawn_stack(centre(pos), s, [0.0; 3]);
+    }
+}
+
+/// `DeployerHandler.activate` for the deployer `d` at `pos` facing `facing` (one standing in the
+/// world, or riding a contraption there now): punching, `punch`; else its fake player clicks
+/// the block two ahead with what it holds (`activateInner` in `Mode.USE`), and the hand keeps
+/// what is left of the stack. `breaker` names its cracks. What else the fake ended with
+/// (Create's `overflowItems`).
+pub fn activate(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    d: &mut Deployer,
+    breaker: i32,
+) -> Vec<ItemStack> {
     if d.mode == deployer::Mode::Punch {
-        punch(lv, pos, facing, d);
-        return;
+        return punch(lv, pos, facing, d, breaker);
     }
     // `safeOnUse` and the item's use, clicked at the middle of the face toward the deployer.
+    let reached = deployer::clicked(pos, facing);
     let o = facing.offset();
     let hit = BlockHit::new(
         std::array::from_fn(|i| f64::from(reached[i]) + 0.5 - f64::from(o[i]) * 0.5),
@@ -463,22 +485,20 @@ fn deployer_activate(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         pos: reached,
         hit,
     };
-    act(lv, pos, facing, d, action);
+    act(lv, pos, facing, d, action)
 }
 
 /// The fake player at the deployer `pos` facing `facing` does `action` with what `d` holds;
-/// the deployer keeps what is left in the hand, and what else the fake ended with drops at the
-/// deployer (Create's `overflowItems`, popped out).
+/// the deployer keeps what is left in the hand, and what else the fake ended with is returned.
 fn act(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     facing: Dir,
-    mut d: Deployer,
+    d: &mut Deployer,
     action: PlayerAction,
-) {
-    let dim = lv.dim;
+) -> Vec<ItemStack> {
     let Some(fake) = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME) else {
-        return;
+        return Vec::new();
     };
     let stack = d
         .held
@@ -503,7 +523,7 @@ fn act(
     };
     let setup = PlayerActionSetup::new(stack, eye, yaw, pitch, false);
     let Ok(result) = fake.perform_action_scoped(&mut *lv.host, action, setup) else {
-        return;
+        return Vec::new();
     };
     let held = result.held.as_ref().map(|s| {
         (
@@ -518,18 +538,20 @@ fn act(
     };
     d.held = held;
     d.held_damage = worn;
-    with_world(|w| w.set_deployer(dim, pos, d));
-    for s in result.other {
-        lv.spawn_stack(centre(pos), s, [0.0; 3]);
-    }
+    result.other
 }
 
 /// `activateInner` in `Mode.PUNCH`: an entity in the block it reaches takes the hit (one at
 /// random, any but a contraption); else, with a held stack, the block there breaks in strokes
 /// (`Deployer::punch`), the fake player's cracks on it, a fire in front of it goes out; a
 /// broken block is broken by the fake player with the held tool (its drops, the tool's wear).
-fn punch(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, mut d: Deployer) {
-    let dim = lv.dim;
+fn punch(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    d: &mut Deployer,
+    breaker: i32,
+) -> Vec<ItemStack> {
     let at = deployer::clicked(pos, facing);
     let lo = at.map(f64::from);
     let hi = at.map(|v| f64::from(v) + 1.0);
@@ -551,35 +573,31 @@ fn punch(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, mut d: Deployer) 
             .with_random(&mut *lv.host, |r| r.next_int_bound(n).unwrap_or(0))
             .unwrap_or(0) as usize;
         let target = targets[pick.min(targets.len() - 1)];
-        act(lv, pos, facing, d, PlayerAction::Attack { target });
-        return;
+        return act(lv, pos, facing, d, PlayerAction::Attack { target });
     }
-    let breaker = deployer::breaker_id(pos);
     // `getShape(..).isEmpty()`: nothing to punch, and the breaking is forgotten.
     if lv.shape(at, mod_api::BlockShapeKind::Outline).is_empty() {
-        if d.breaking.take().is_some() {
-            with_world(|w| w.set_deployer(dim, pos, d));
-        }
-        return;
+        d.breaking = None;
+        return Vec::new();
     }
     // `BlockHelper.extinguishFire`: fire on the face toward the deployer goes out.
     let front = super::step(at, deployer::clicked_face(facing), 1);
     if lv.block_name(front).as_deref() == Some("minecraft:fire") {
         let _ = lv.level.level_event(&mut *lv.host, 1009, front, 0);
         let _ = lv.level.remove_block(&mut *lv.host, front, false);
-        return;
+        return Vec::new();
     }
     let Some(held) = d.held.clone() else {
-        return;
+        return Vec::new();
     };
     let Some(state) = lv.block_state(at) else {
-        return;
+        return Vec::new();
     };
     let hardness = mod_api::HostBlockStates::block_states(&*lv.host)
         .destroy_speed(state)
         .unwrap_or(0.0);
     let Some(tool) = stacks::stack(&*lv.host, &held.0, 1) else {
-        return;
+        return Vec::new();
     };
     let per_hit = deployer::destroy_progress(deployer::Dig {
         hardness,
@@ -603,12 +621,10 @@ fn punch(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, mut d: Deployer) 
             1.0,
         );
     }
-    let punched = d.punch(at, per_hit);
-    with_world(|w| w.set_deployer(dim, pos, d.clone()));
-    match punched {
+    match d.punch(at, per_hit) {
         deployer::Punch::Broken => {
             let _ = lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
-            act(lv, pos, facing, d, PlayerAction::BreakBlock { pos: at });
+            return act(lv, pos, facing, d, PlayerAction::BreakBlock { pos: at });
         }
         deployer::Punch::Crack(Some(stage)) => {
             let _ = lv
@@ -617,6 +633,7 @@ fn punch(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, mut d: Deployer) 
         }
         deployer::Punch::Crack(None) | deployer::Punch::Stop => {}
     }
+    Vec::new()
 }
 
 /// `DeployerBlockEntity.tick`: cracks on a block that is gone since are cleared.

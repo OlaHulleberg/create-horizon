@@ -619,6 +619,15 @@ fn model_block(
     }
 }
 
+/// The model of part `model` of `block` and the property it is drawn with (None: `block`'s
+/// own properties); None for parts drawn by their own systems.
+pub fn part_model(
+    block: Block,
+    model: Model,
+) -> Option<(BlockKey, Option<(&'static str, &'static str)>)> {
+    model_block(block, model)
+}
+
 /// Draws one turning part of `block` (whose state has the properties `own`): its model at
 /// rest, turning at its speed about its axis through the block's centre (`rpm * 0.3` degrees a
 /// tick), from its starting angle.

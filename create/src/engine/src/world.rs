@@ -418,6 +418,18 @@ pub struct Dimension {
     pub rail_checks: Vec<[i32; 3]>,
 }
 
+impl Dimension {
+    /// A deployer about to be put back at `pos` by a contraption: placed, it takes `d`.
+    pub fn deployer_saved_insert(&mut self, pos: [i32; 3], d: crate::deployer::Deployer) {
+        self.deployer_saved.insert(pos, d);
+    }
+
+    /// What waited at `pos` for a deployer that was not placed there.
+    pub fn deployer_saved_remove(&mut self, pos: [i32; 3]) -> Option<crate::deployer::Deployer> {
+        self.deployer_saved.remove(&pos)
+    }
+}
+
 pub use crate::trains::TrainOnTrack;
 
 /// A piston's moving structure (`ControlledContraptionEntity` of a `PistonContraption`): its

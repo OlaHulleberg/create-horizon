@@ -40,6 +40,9 @@ type Saved = (
 );
 
 thread_local! {
+    /// Elevators that moved since they were put together (`firstMovement` is over).
+    static ELEVATOR_MOVED: RefCell<std::collections::HashSet<(usize, [i32; 3])>> =
+        RefCell::new(std::collections::HashSet::new());
     /// What running rope pulleys and elevators carry besides their blocks (`Contraption.actors`,
     /// storage, glue, controls), by dimension and pulley; only those whose structure has any.
     static PULLEY_CARRIED: RefCell<HashMap<(usize, [i32; 3]), Carried>> =
@@ -53,6 +56,7 @@ thread_local! {
 }
 
 pub(super) fn forget() {
+    ELEVATOR_MOVED.with_borrow_mut(std::collections::HashSet::clear);
     PULLEY_CARRIED.with_borrow_mut(HashMap::clear);
     CLOCK_SHOWN.with_borrow_mut(HashMap::clear);
     VISITED.with_borrow_mut(HashMap::clear);
@@ -86,7 +90,13 @@ fn speed(dim: usize, pos: [i32; 3]) -> f32 {
 
 /// Blocks a structure took go back: each where it was, or dropped where something else took
 /// its place (`Contraption.addBlocksToWorld`).
-fn lift_put_back(lv: &mut ServerLevel<'_>, blocks: &[([i32; 3], u32)]) {
+fn lift_put_back(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    origin: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+) {
+    actors::expect_back(lv, key, |o| add(origin, o));
     super::put_back_blocks(lv, blocks, |lv, p| lv.passable(p));
 }
 
@@ -134,7 +144,7 @@ pub(super) fn tick_lifts(lv: &mut ServerLevel<'_>) {
             // A clock's hands go back turned to 0, where they started.
             Held::Clock(_) => Some(pos),
         };
-        lift_put_back(lv, &held.put_back(pos));
+        lift_put_back(lv, pos, origin.unwrap_or(pos), &held.put_back(pos));
         // What rode with it (its storage too, kept apart from its actors) goes back.
         if let Some(origin) = origin {
             let mut carried = PULLEY_CARRIED
@@ -333,7 +343,7 @@ fn disassemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     CLOCK_SHOWN.with_borrow_mut(|s| s.remove(&(dim, pos)));
     let held = Held::Clock(c);
-    lift_put_back(lv, &held.put_back(pos));
+    lift_put_back(lv, pos, pos, &held.put_back(pos));
     actors::release_storage(lv, pos, |o| add(pos, o));
     draw::hide(lv, pos);
     mark_unsaved(lv, pos);
@@ -571,7 +581,7 @@ fn stop_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], grid: i32) {
     p.offset = grid as f32;
     let origin = p.placed_at(create_engine::pulley::grid_offset(p.offset, p.range));
     let held = Held::Pulley(p);
-    lift_put_back(lv, &held.put_back(pos));
+    lift_put_back(lv, pos, origin, &held.put_back(pos));
     // What rode with it goes back with its blocks (`disassemble`).
     let mut carried = PULLEY_CARRIED
         .with_borrow_mut(|c| c.remove(&(dim, pos)))
@@ -706,6 +716,7 @@ fn tick_elevators(lv: &mut ServerLevel<'_>) {
                 broadcast_floor(lv, column, at);
             }
         }
+        elevator_doors(lv, pos);
         // `triggerContact`: an elevator contact there that isn't lit lights on its next tick.
         if let Some(c) = reached
             && let Some((Block::ElevatorContact, info)) = create_info(lv.block(c))
@@ -781,6 +792,147 @@ fn broadcast_floor(
             .unwrap_or_default();
         l.floor_reached(column, &name);
     });
+}
+
+/// `SlidingDoorMovementBehaviour.tickOpen` for an elevator's sliding doors: they open while
+/// it has arrived at a floor (`ec.arrived`; the floor's `DoorControl` is Create's default,
+/// all sides) and close as it leaves, the door in the world each faces out toward opening and
+/// closing with it. Not before the elevator first moved (`firstMovement`).
+fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let Some(e) = with_world(|w| w.dims[dim].lifts.elevators.get(&pos).cloned()).flatten() else {
+        return;
+    };
+    let moved = ELEVATOR_MOVED.with_borrow_mut(|m| {
+        if !e.arrived {
+            m.insert((dim, pos));
+        }
+        m.contains(&(dim, pos))
+    });
+    let open = e.arrived && moved;
+    type Door = (usize, [i32; 3], Vec<(String, String)>, String);
+    let doors: Vec<Door> = e
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, s))| {
+            create_info(*s).is_some_and(|(b, _)| create_engine::dye::is_sliding_door(b))
+        })
+        .filter_map(|(i, (o, s))| {
+            let (name, props) = super::name_props(&*lv.host, *s)?;
+            Some((i, *o, props, name))
+        })
+        .collect();
+    if doors.is_empty() {
+        return;
+    }
+    let lo = e.blocks.iter().fold([i32::MAX; 3], |m, (o, _)| {
+        [m[0].min(o[0]), m[1].min(o[1]), m[2].min(o[2])]
+    });
+    let hi = e.blocks.iter().fold([i32::MIN; 3], |m, (o, _)| {
+        [m[0].max(o[0] + 1), m[1].max(o[1] + 1), m[2].max(o[2] + 1)]
+    });
+    let center = [0, 1, 2].map(|i| f64::from(lo[i] + hi[i]) / 2.0);
+    let mut changed = Vec::new();
+    let mut sound = None;
+    for (i, o, props, name) in &doors {
+        let prop = |k: &str| {
+            props
+                .iter()
+                .find(|(pk, _)| pk == k)
+                .map(|(_, v)| v.as_str())
+        };
+        if prop("open") == Some(if open { "true" } else { "false" }) {
+            continue;
+        }
+        let set: Vec<(&str, &str)> = props
+            .iter()
+            .map(|(k, v)| {
+                if k == "open" {
+                    (k.as_str(), if open { "true" } else { "false" })
+                } else {
+                    (k.as_str(), v.as_str())
+                }
+            })
+            .collect();
+        if let Some(id) = state_with(&*lv.host, name, &set) {
+            changed.push((*i, id));
+        }
+        if prop("half") != Some("lower") {
+            continue;
+        }
+        // `getDoorFacing`: along its facing's axis, away from the structure's middle.
+        let Some(facing) = prop("facing").and_then(super::dir_of) else {
+            continue;
+        };
+        let axis = facing.axis();
+        let k = match axis {
+            Axis::X => 0,
+            Axis::Y => 1,
+            Axis::Z => 2,
+        };
+        let f = facing.offset();
+        let along = f64::from(o[k]) + 0.5 - f64::from(f[k]) * 0.45 - center[k];
+        let out = if along < 0.0 {
+            Dir::ALL
+                .into_iter()
+                .find(|d| d.axis() == axis && !d.positive())
+        } else {
+            Dir::ALL
+                .into_iter()
+                .find(|d| d.axis() == axis && d.positive())
+        };
+        let Some(out) = out else {
+            continue;
+        };
+        let here = [
+            e.anchor[0] + o[0],
+            (e.y + f64::from(o[1])).round() as i32,
+            e.anchor[2] + o[2],
+        ];
+        let world_door = add(here, out.offset());
+        if let Some((n, p)) = lv.name_props(world_door)
+            && n.ends_with("_door")
+            && p.iter()
+                .find(|(k, _)| k == "facing")
+                .and_then(|(_, v)| super::dir_of(v))
+                .is_some_and(|d| d.axis() == axis)
+        {
+            lv.set_property(
+                world_door,
+                "open",
+                if open { "true" } else { "false" },
+                update_all(),
+            );
+        }
+        if open {
+            sound = Some(here);
+        }
+    }
+    if changed.is_empty() {
+        return;
+    }
+    with_world(|w| {
+        if let Some(e) = w.dims[dim].lifts.elevators.get_mut(&pos) {
+            for (i, id) in &changed {
+                if let Some(b) = e.blocks.get_mut(*i) {
+                    b.1 = *id;
+                }
+            }
+        }
+    });
+    if let Some(at) = sound {
+        lv.level.play_sound(
+            &mut *lv.host,
+            "minecraft:block.iron_door.open",
+            super::center(at),
+            mod_api::SoundSource::Blocks,
+            0.125,
+            1.0,
+        );
+    }
+    show_elevator(lv, pos);
+    mark_unsaved(lv, pos);
 }
 
 /// `ElevatorPulleyBlockEntity.assemble`: the structure under the free blocks below the pulley,
@@ -905,8 +1057,9 @@ fn disassemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         return;
     };
     let origin = e.placed_at();
+    ELEVATOR_MOVED.with_borrow_mut(|m| m.remove(&(dim, pos)));
     let held = Held::Elevator(e);
-    lift_put_back(lv, &held.put_back(pos));
+    lift_put_back(lv, pos, origin, &held.put_back(pos));
     if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
         actors::release(lv, pos, origin, &mut carried);
     }
@@ -957,8 +1110,10 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let valid = contact_faces_back(&|p| lv.block_state(p), pos, facing);
+        // A contact a moving one powers stays powered until that one leaves it.
+        let held = with_world(|w| w.dims[dim].lifts.contact_held.contains(&pos)) == Some(true);
         match block {
-            Block::RedstoneContact if info.powered != valid => {
+            Block::RedstoneContact if info.powered != valid && !(info.powered && held) => {
                 lv.set_flags(pos, &[("powered", valid)], update_all());
             }
             Block::ElevatorContact => {
@@ -971,8 +1126,6 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
                 }
                 // `updateShape` (the block it faces changed): a contact an elevator lit keeps
                 // its light through other neighbour changes.
-                let held =
-                    with_world(|w| w.dims[dim].lifts.contact_held.contains(&pos)) == Some(true);
                 if info.powering != valid && !(info.powering && held) {
                     with_world(|w| w.dims[dim].lifts.schedule(pos, now));
                 }
@@ -981,9 +1134,21 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
         }
     }
     for (pos, _) in due {
-        let Some((Block::ElevatorContact, info)) = create_info(lv.block(pos)) else {
-            continue;
+        let (block, info) = match create_info(lv.block(pos)) {
+            Some((b @ (Block::ElevatorContact | Block::RedstoneContact), i)) => (b, i),
+            _ => continue,
         };
+        // `RedstoneContactBlock.tick`: a contact a moving one left powers while one faces it.
+        if block == Block::RedstoneContact {
+            with_world(|w| w.dims[dim].lifts.contact_held.remove(&pos));
+            let valid = info
+                .facing
+                .is_some_and(|f| contact_faces_back(&|p| lv.block_state(p), pos, f));
+            if info.powered != valid {
+                lv.set_flags(pos, &[("powered", valid)], update_all());
+            }
+            continue;
+        }
         let lit = with_world(|w| w.dims[dim].lifts.contact_lit.remove(&pos)) == Some(true);
         let should = lit
             || info

@@ -23,20 +23,30 @@
 //!   collider an entity's motion reads (`notes/moving-structures-note.md`), and no mod entity
 //!   type to be one.
 //! - A moving block cannot be clicked, and riders cannot sit on a moving structure's seats
-//!   (`Contraption.seats`): there is no moving entity to pick or ride. So contraption controls
-//!   on a moving structure are clicked with `/create_debug controls`.
+//!   (`Contraption.seats`): there is no moving entity to pick or ride. Contraption controls on a
+//!   gliding structure (piston, gantry) are clicked through the client's own raycast of what it
+//!   draws (`draw::use_key`); elsewhere with `/create_debug controls`.
 //! - Each moving block is lit with the world's light where the structure was last sent from
 //!   (the server reads it: `LevelRef::brightness` is the server's only), not where it is each
 //!   frame.
 //! - A clockwork bearing's top turns at its kinetic speed, not with the hour hand
 //!   (`BearingRenderer`): the top is the kinetic block entity's part.
 //!
+//! Block entities ride with what they hold (`actors::carry_storage`, Create's
+//! `StructureBlockInfo.nbt`): Create's item slots (a depot's stack), a deployer's hand and mode,
+//! a tank's fluid (tanks keep their shape), and other block entities' saved data (a furnace's
+//! items). Deployers work while moving (`DeployerMovementBehaviour`), redstone contacts power the
+//! contacts they pass (`ContactMovementBehaviour`), elevators open their sliding doors at floors
+//! (`SlidingDoorMovementBehaviour`), and portable fluid interfaces reach a contraption's tanks.
+//!
 //! Left out, not for want of API:
-//! - Other moving block entities keep only their block: a depot's item, a deployer's held item
-//!   and a tank's fluid are not carried, and a deployer on a contraption does nothing
-//!   (`DeployerMovementBehaviour`). Block entities of other mods are refused.
+//! - The state the engine keeps per block for other Create blocks (a creative motor's speed, a
+//!   blaze burner's fuel, a basin's fluids, a link's frequency) is not carried.
+//! - What block entities hold is not drawn on a moving structure (a depot's item, a tank's
+//!   fluid, a deployer's pole and hand); actors' heads are drawn at rest.
 //! - A bearing's glue stays in the world while it turns and goes back turned with it; its
 //!   contraption controls are not carried.
+//! - An elevator contact's door control has no value box: doors open on every side.
 
 pub mod actors;
 mod bearings;
@@ -126,6 +136,39 @@ impl Subsystem for Contraptions {
         actors::tick_mounted(lv);
         lifts::tick_lifts(lv);
         superglue::tick(lv);
+    }
+
+    /// A click on contraption controls riding a moving structure (`CONTROLS_CHANNEL`).
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != draw::CONTROLS_CHANNEL {
+            return false;
+        }
+        let Some((anchor, local)) = draw::decode_click(data) else {
+            return true;
+        };
+        let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+            return true;
+        };
+        if let Some(mut lv) = ServerLevel::new(host, &dimension) {
+            actors::click_moving_controls(&mut lv, player, anchor, local);
+        }
+        true
+    }
+
+    /// The use key on contraption controls riding a moving structure (`ContraptionHandlerClient`
+    /// raycasts the structures the client draws).
+    fn interaction_key(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
+    ) -> Flow {
+        draw::use_key(host, event)
     }
 
     fn server_message(
@@ -539,9 +582,8 @@ fn chassis_range(dim: usize, p: [i32; 3]) -> i32 {
 }
 
 /// What a structure search finds at `p` (`contraption_found`): None for air and fluids. Blocks
-/// Create can't move (unbreakable ones) and blocks whose block entity would be lost (moving
-/// block entities isn't ported: refused rather than emptied; Create's own state-keeping blocks
-/// and chests and barrels ride) are unmovable.
+/// Create can't move (unbreakable ones) are unmovable; block entities ride with what they hold
+/// (`actors::carry_storage`).
 pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
     let id = lv.state_num(p)?;
     let (name, props) = name_props(&*lv.host, id)?;
@@ -553,11 +595,6 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
     let sail_facing = sail
         .then(|| prop(&props, "facing").and_then(dir_of))
         .flatten();
-    let foreign_entity = lv
-        .host
-        .block_entity(lv.level, p)
-        .is_some_and(|e| e.kind(&*lv.host) != super::kinetics::kind())
-        && !actors::is_storage(lv, p);
     let unmovable = matches!(
         name.as_str(),
         "minecraft:bedrock"
@@ -568,7 +605,7 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
             | "minecraft:repeating_command_block"
             | "minecraft:structure_block"
             | "minecraft:jigsaw"
-    ) || foreign_entity;
+    );
     let sticker = (name == "create:sticker" && flag(&props, "extended"))
         .then(|| prop(&props, "facing").and_then(dir_of))
         .flatten();
@@ -597,9 +634,40 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
         sticker,
         movable: !unmovable,
         chassis,
-        attached: attached_sides(&name, &props),
+        attached: attached_sides(&name, &props) | joined_sides(lv.dim, p, &name),
         unsupportive: unsupportive_faces(&name, &props),
     })
+}
+
+/// `BlockMovementChecksImpl.isBlockAttachedTowardsFallback` for fluid tanks and item vaults
+/// (`ConnectivityHandler.isConnected`): the sides where the block beside is part of the same
+/// tank or vault, a `Dir::bit` each.
+fn joined_sides(dim: usize, p: [i32; 3], name: &str) -> u8 {
+    let tank = name == "create:fluid_tank";
+    if !tank && name != "create:item_vault" {
+        return 0;
+    }
+    with_world(|w| {
+        let d = &w.dims[dim];
+        let of = |q: [i32; 3]| {
+            if tank {
+                d.tanks.parts.get(&q).copied()
+            } else {
+                d.vaults.controller_of(q)
+            }
+        };
+        let Some(own) = of(p) else {
+            return 0;
+        };
+        Dir::ALL.into_iter().fold(0, |acc, dir| {
+            if of(add(p, dir.offset())) == Some(own) {
+                acc | dir.bit()
+            } else {
+                acc
+            }
+        })
+    })
+    .unwrap_or(0)
 }
 
 fn bits(dirs: &[Dir]) -> u8 {

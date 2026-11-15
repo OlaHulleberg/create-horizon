@@ -2,7 +2,9 @@
 //! `MovementContext`, `AbstractContraptionEntity.tickActors`): drills and saws breaking what
 //! they pass (`BlockBreakingMovementBehaviour`, `DrillMovementBehaviour`,
 //! `SawMovementBehaviour`), harvesters (`HarvesterMovementBehaviour`), ploughs
-//! (`PloughMovementBehaviour`), rollers (`RollerMovementBehaviour`) and portable storage
+//! (`PloughMovementBehaviour`), rollers (`RollerMovementBehaviour`), deployers
+//! (`DeployerMovementBehaviour`, the glue's fake player), redstone contacts
+//! (`ContactMovementBehaviour`) and portable storage
 //! interfaces (`PortableStorageInterfaceMovement`, with `crate::psi`); a contraption's storage
 //! taking what they collect (`MovementBehaviour.collectOrDropItem`,
 //! `ItemHandlerHelper.insertItem`); and contraption controls turning kinds of actor off
@@ -20,6 +22,12 @@ pub enum Kind {
     Harvester,
     Plough,
     Roller,
+    /// A deployer (`DeployerMovementBehaviour`): its fake player uses what it holds on, or
+    /// punches, each block two ahead of it.
+    Deployer,
+    /// A redstone contact (`ContactMovementBehaviour`): it powers a stationary contact facing
+    /// it as it passes.
+    Contact,
     /// A portable storage interface (`fluid`: the fluid one).
     Interface {
         fluid: bool,
@@ -35,6 +43,8 @@ impl Kind {
             crate::Block::MechanicalHarvester => Kind::Harvester,
             crate::Block::MechanicalPlough => Kind::Plough,
             crate::Block::MechanicalRoller => Kind::Roller,
+            crate::Block::Deployer => Kind::Deployer,
+            crate::Block::RedstoneContact => Kind::Contact,
             crate::Block::PortableStorageInterface => Kind::Interface { fluid: false },
             crate::Block::PortableFluidInterface => Kind::Interface { fluid: true },
             _ => return None,
@@ -46,6 +56,8 @@ impl Kind {
         match self {
             Kind::Drill | Kind::Saw => 0.65,
             Kind::Harvester | Kind::Plough | Kind::Roller => 0.45,
+            Kind::Deployer => 2.0,
+            Kind::Contact => 0.65,
             Kind::Interface { .. } => crate::psi::REACH,
         }
     }
@@ -58,6 +70,8 @@ impl Kind {
             Kind::Harvester => "create:mechanical_harvester",
             Kind::Plough => "create:mechanical_plough",
             Kind::Roller => "create:mechanical_roller",
+            Kind::Deployer => "create:deployer",
+            Kind::Contact => "create:redstone_contact",
             Kind::Interface { fluid: false } => "create:portable_storage_interface",
             Kind::Interface { fluid: true } => "create:portable_fluid_interface",
         }
@@ -172,6 +186,9 @@ pub struct Actor {
     pub reference: Option<[i32; 3]>,
     /// An interface's `WorkingPos`.
     pub interface: crate::psi::Moving,
+    /// A deployer's `Timer`: the ticks it has waited, stalled on a block it breaks, since its
+    /// last punch.
+    pub timer: i32,
 }
 
 impl Actor {
@@ -195,6 +212,7 @@ impl Actor {
             mode: RollingMode::TunnelPave,
             reference: None,
             interface: crate::psi::Moving::default(),
+            timer: 0,
         }
     }
 }
@@ -215,6 +233,18 @@ pub enum Effect {
     Pave([i32; 3]),
     /// The plough's hoe used on the top of the block (`useOn`).
     Till([i32; 3]),
+    /// A deployer's `visitNewPosition` at a block (`activate`, then `stall` while its fake
+    /// player breaks a block).
+    Deploy([i32; 3]),
+    /// A stalled deployer's `tick`, 20 ticks after its last punch: it punches the block it
+    /// breaks again.
+    Redeploy,
+    /// A moving contact reaches a block (`visitNewPosition`): a redstone contact there facing it
+    /// is powered.
+    Contact([i32; 3]),
+    /// A stationary contact a moving one powered is left (`deactivateLastVisitedContact`): it
+    /// looks at what it faces again a tick later.
+    ContactLeft([i32; 3]),
 }
 
 /// What an actor reads of the world.
@@ -597,7 +627,24 @@ impl Actor {
         if self.kind.breaks() {
             self.tick_breaking(facing_now, lower, probe, effects);
         }
+        if self.kind == Kind::Deployer {
+            self.tick_deployer(effects);
+        }
         self.stall
+    }
+
+    /// `DeployerMovementBehaviour.tick`: stalled on a block its fake player breaks, it punches
+    /// it again every 21st tick (its caller sets `stall` from what the punch left).
+    fn tick_deployer(&mut self, effects: &mut Vec<Effect>) {
+        if !self.stall {
+            return;
+        }
+        if self.timer < 20 {
+            self.timer += 1;
+            return;
+        }
+        self.timer = 0;
+        effects.push(Effect::Redeploy);
     }
 
     /// `visitNewPosition`.
@@ -610,6 +657,22 @@ impl Actor {
     ) {
         if self.kind == Kind::Harvester {
             effects.push(Effect::Harvest(pos));
+            return;
+        }
+        if self.kind == Kind::Deployer {
+            effects.push(Effect::Deploy(pos));
+            return;
+        }
+        if self.kind == Kind::Contact {
+            // Not where it started moving from.
+            if self.first_movement {
+                return;
+            }
+            if let Some(last) = self.reference.take() {
+                effects.push(Effect::ContactLeft(last));
+            }
+            effects.push(Effect::Contact(pos));
+            self.reference = Some(pos);
             return;
         }
         if self.kind == Kind::Roller {
@@ -728,8 +791,15 @@ impl Actor {
         if let Some(b) = self.breaking.take() {
             effects.push(Effect::Crack(b.pos, -1));
         }
+        // A contact's `stopMoving`.
+        if self.kind == Kind::Contact
+            && let Some(last) = self.reference.take()
+        {
+            effects.push(Effect::ContactLeft(last));
+        }
         // An interface's `reset`.
         self.interface.working = None;
+        self.timer = 0;
         self.stall = false;
     }
 }
@@ -1730,5 +1800,46 @@ mod tests {
         let v = [0.3, -0.2, 0.7];
         let w = unturn(turn_all(v, &turns), &turns);
         assert!((0..3).all(|i| (w[i] - v[i]).abs() < 1e-12));
+    }
+
+    #[test]
+    fn a_stalled_deployer_punches_again_every_21st_tick() {
+        let world = World(HashMap::new());
+        let mut a = Actor::new([0; 3], Kind::Deployer, Dir::East, -1);
+        let mut effects = Vec::new();
+        a.tick([0.5, 0.5, 0.5], Dir::East, 0.0, &world, &mut effects);
+        // Its first move visits where it is.
+        a.tick([0.6, 0.5, 0.5], Dir::East, 0.0, &world, &mut effects);
+        assert_eq!(effects, vec![Effect::Deploy([0, 0, 0])]);
+        // Its fake player breaks a block: the glue stalls it.
+        a.stall = true;
+        let mut punches = Vec::new();
+        for tick in 1..=42 {
+            let mut e = Vec::new();
+            a.tick([0.6, 0.5, 0.5], Dir::East, 0.0, &world, &mut e);
+            if e.contains(&Effect::Redeploy) {
+                punches.push(tick);
+            }
+        }
+        assert_eq!(punches, vec![21, 42]);
+    }
+
+    #[test]
+    fn a_moving_contact_powers_what_it_passes_and_lets_go_after() {
+        let world = World(HashMap::new());
+        let mut a = Actor::new([0; 3], Kind::Contact, Dir::South, -1);
+        let mut e = Vec::new();
+        // Not where it started from.
+        a.tick([0.5, 0.5, 1.15], Dir::South, 0.0, &world, &mut e);
+        a.tick([0.6, 0.5, 1.15], Dir::South, 0.0, &world, &mut e);
+        assert!(e.is_empty());
+        a.tick([1.5, 0.5, 1.15], Dir::South, 0.0, &world, &mut e);
+        assert_eq!(e, vec![Effect::Contact([1, 0, 1])]);
+        e.clear();
+        a.tick([2.5, 0.5, 1.15], Dir::South, 0.0, &world, &mut e);
+        assert_eq!(e, vec![Effect::ContactLeft([1, 0, 1]), Effect::Contact([2, 0, 1])]);
+        e.clear();
+        a.cancel(&mut e);
+        assert_eq!(e, vec![Effect::ContactLeft([2, 0, 1])]);
     }
 }

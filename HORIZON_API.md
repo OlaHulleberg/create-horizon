@@ -72,7 +72,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   minecart contraptions (`notes/moving-structures-note.md`).
 - **Mod entity types that are not template copies**, rideable by players: Create's seat entity and carriage seats
   are stood in by tagged item display entities; riding a moving structure's seats on bearings and pistons and
-  clicking its blocks are out.
+  clicking its blocks are out (contraption controls on a gliding structure are the exception: the client
+  raycasts the structures it draws, as `ContraptionHandlerClient` does, and sends the click).
+- **A block entity type for a block by its name**: the game gives `create:mechanical_piston_head` a
+  `minecraft:skull` block entity (its path ends in `_head`), and one is left behind on the block that takes the
+  head's place when a piston retracts. A declaration field naming a block's entity type (or none) would close it.
 - **Reading the client level's light** (`LevelRef::brightness` answers on the logical server only): a
   moving structure's blocks are lit with the light the server read where they were last sent from,
   not where they are each frame (`ContraptionRenderer`'s per-block world light).
@@ -183,22 +187,25 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 - Display and redstone: the station summary display source (Create's `GlobalTrainDisplayData`, every train's
   arrival predictions, is not in the trains port), the factory gauge status source (gauges are not connected
-  to display links), and an elevator contact's door setting opening doors (doors on moving structures are not
-  ported); the clipboard copies no value box `interaction::values` does not serve (a funnel's filter count, a
+  to display links); the clipboard copies no value box `interaction::values` does not serve (a funnel's filter count, a
   chassis' range, tunnels' side filters, deployers' filters), nor from a placed clipboard.
-
 - Logistics: a sloped belt collides as a flat one; Create's `BeltShapes` (by facing, slope and part) are
   not declared yet, though content shapes can select by several properties (as the steam engine's do).
-- Contraptions: a deployer on a moving contraption does nothing (`DeployerMovementBehaviour`), and moving
-  block entities other than mounted storage (chests, barrels, vaults, toolboxes) keep only their block (a
-  depot's item, a deployer's held item, a tank's fluid are not carried).
+- Contraptions: moving block entities carry their item slots, a deployer's state and a tank's fluid, and other
+  mods' and vanilla block entities their saved data, but the state the engine keeps per block for other Create
+  blocks (a creative motor's speed, a blaze burner's fuel, a basin's fluids, a redstone link's frequency, a
+  nixie tube's text, a smart chute's filter) is not carried; what block entities hold is not drawn on a moving
+  structure (a depot's item, a tank's fluid, a deployer's held item and its pole's stroke); the harvester's blade,
+  the roller's wheel and frame and the portable interfaces' moving parts (`HarvesterRenderer`, `RollerRenderer`,
+  `PortableStorageInterfaceRenderer`) have no partial blocks yet, so they are drawn neither placed nor moving;
+  actor heads on a moving structure are drawn at rest; an elevator contact's door control
+  (`DoorControlBehaviour`) has no value box: elevators open their doors on every side.
 - Fluids: potion fluids keep registered potions only (custom effects and colours are lost: the engine's
   `tank::Fluid` is a fixed set of ids saved and sent as one byte, which would need a world-saved table of
   potion contents), and belts carry only the potions a spout fills on them (the logistics glue keeps no
   components on belts); glass pipes show a steady stream, not its growth from the side it comes in
   (`PipeConnection.Flow.progress`), and pipes don't drip on their rims while fluid passes; open pipe ends
-  pour only fluids with a block (Create's `FluidStackParticle` draws milk, tea and potions too); a portable
-  fluid interface docks but has nothing to hand over, as moving structures carry no tank's fluid.
+  pour only fluids with a block (Create's `FluidStackParticle` draws milk, tea and potions too).
 
 ## Not to send
 

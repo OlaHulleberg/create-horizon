@@ -362,7 +362,7 @@ impl Tank {
     }
 
     /// `applyFluidTankSize`: what is over `capacity` is lost.
-    fn truncate(&mut self, capacity: u32) {
+    pub fn truncate(&mut self, capacity: u32) {
         if self.amount > capacity {
             self.drain_amount(self.amount - capacity);
         }
@@ -472,6 +472,10 @@ pub struct Tanks {
     /// amount is not kept), taken by a new tank that has none and given to every block of a
     /// split one.
     pub creative: bool,
+    /// Tank blocks a moving contraption is about to put back, with what their block entity
+    /// held (a controller's tank; None for another block of it): placed, they take it, as a
+    /// block entity loaded with its data does, and form nothing.
+    pub arriving: HashMap<[i32; 3], Option<Multi>>,
 }
 
 fn add(p: [i32; 3], x: i32, y: i32, z: i32) -> [i32; 3] {
@@ -563,6 +567,11 @@ impl Tanks {
         if self.parts.contains_key(&p) {
             return;
         }
+        if let Some(saved) = self.arriving.remove(&p) {
+            self.load(p, saved);
+            self.touched.push(p);
+            return;
+        }
         self.parts.insert(p, p);
         self.multis.insert(p, Multi::default());
         self.touched.push(p);
@@ -586,6 +595,17 @@ impl Tanks {
             self.split_at(c, m, false);
         }
         self.settle();
+    }
+
+    /// A moving contraption takes the tank block at `p` with it (`Contraption.addBlock` keeps
+    /// its block entity's data): it leaves its tank without splitting it. A controller's tank
+    /// goes with it; None for another block.
+    pub fn take(&mut self, p: [i32; 3]) -> Option<Multi> {
+        let c = self.parts.remove(&p)?;
+        if c != p {
+            return None;
+        }
+        self.multis.remove(&p)
     }
 
     /// A column unloaded: its blocks and controllers go; blocks elsewhere of a tank whose
@@ -911,6 +931,30 @@ pub fn decode(data: &[u8]) -> Vec<([i32; 3], Option<Multi>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_carried_tank_comes_back_whole_with_its_fluid() {
+        let mut t = Tanks::default();
+        t.place([0, 0, 0]);
+        t.place([0, 1, 0]);
+        let (c, m) = t.get([0, 1, 0]).map(|(c, m)| (c, *m)).unwrap();
+        assert_eq!((c, m.height), ([0, 0, 0], 2));
+        t.get_mut(c).unwrap().1.tank.fill_amount(Fluid::Water, 5000, 16000);
+        // Taken by a contraption: no split, nothing shared out.
+        let taken = t.take([0, 0, 0]);
+        assert_eq!(t.take([0, 1, 0]), None);
+        t.remove([0, 0, 0]);
+        t.remove([0, 1, 0]);
+        assert!(t.parts.is_empty() && t.multis.is_empty());
+        // Put back two blocks east: placed, they take what they held.
+        t.arriving.insert([2, 0, 0], taken);
+        t.arriving.insert([2, 1, 0], None);
+        t.place([2, 1, 0]);
+        t.place([2, 0, 0]);
+        let (c, m) = t.get([2, 1, 0]).map(|(c, m)| (c, *m)).unwrap();
+        assert_eq!(c, [2, 0, 0]);
+        assert_eq!((m.height, m.tank.amount), (2, 5000));
+    }
 
     #[test]
     fn every_fluid_keeps_its_index() {
