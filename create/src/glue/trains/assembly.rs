@@ -8,7 +8,7 @@ use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::super::world::with_world;
 use super::railway::{railway_ready, send_train_clear, send_trains};
-use super::structure::{found, turned_state};
+use super::structure::{found_carrying, turned_state};
 use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::schedule::Runtime;
@@ -289,24 +289,35 @@ pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
     };
     // A train taken apart here: its comparators read `trainPresent` again.
     crate::glue::redstone::analog_touched(dim, pos);
-    for (car, (pivot, front)) in t.cars.iter().zip(poses) {
+    for (c, (car, (pivot, front))) in t.cars.iter().zip(poses).enumerate() {
         let (yaw, _) = create_engine::trains::yaw_pitch(front, t.heading);
         let quarter = ((yaw / 90.0).round() as i32 * 90).rem_euclid(360);
-        for (o, s) in car {
-            // The block's centre from the pivot (the middle of the track under the
-            // carriage's leading bogey), turned about it; its height from the track.
+        let place = |o: [i32; 3]| {
             let r = create_engine::contraption::rotate([o[0], 0, o[2]], quarter, Axis::Y);
-            let p = [
+            [
                 (pivot[0] + f64::from(r[0])).floor() as i32,
                 (pivot[1] + f64::from(o[1]) + 1.0).round() as i32,
                 (pivot[2] + f64::from(r[2])).floor() as i32,
-            ];
+            ]
+        };
+        for (o, s) in car {
+            // The block's centre from the pivot (the middle of the track under the
+            // carriage's leading bogey), turned about it; its height from the track.
+            let p = place(*o);
             let Some(state) = super::car_state(*s) else {
                 continue;
             };
             let state = turned_state(&*lv.host, state, quarter, Axis::Y);
-            lv.set_state(p, state, update_all());
+            // Without shape updates (`Contraption.addBlocksToWorld` places them as they were
+            // carried): a door's half put back before its other half stays.
+            lv.set_state(
+                p,
+                state,
+                update_all() | mod_api::BlockUpdateFlags::KNOWN_SHAPE,
+            );
         }
+        // The carriage's storage blocks take their items back.
+        super::cargo::release(lv, t.id, c, place);
     }
     super::super::persist::mark_unsaved(dim, [t.column.0, t.column.1]);
     super::super::persist::mark_pos_unsaved(dim, pos);
@@ -443,7 +454,9 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
     let controls = states::key(Block::Controls);
     let laid = layout(&locations, |i| {
         let b = bogeys[i].1;
-        let Ok(blocks) = create_engine::piston::gather(b, Dir::Down, &run, |p| found(lv, p)) else {
+        let Ok(blocks) =
+            create_engine::piston::gather(b, Dir::Down, &run, |p| found_carrying(lv, p))
+        else {
             refused = true;
             return Structure::default();
         };
@@ -523,6 +536,7 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
             name,
             icon: 0,
             players: 0,
+            probes: Default::default(),
         };
         t.column = t.column_on(&r.net);
         r.trains.push(t);
@@ -550,6 +564,10 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
             }
         }
     }
+    // `MountedStorageManager`: the storage blocks' items ride with their carriage.
+    for (c, (shape, car)) in laid.carriages.iter().zip(&cars).enumerate() {
+        super::cargo::carry(lv, id, c, bogeys[shape.first].1, car);
+    }
     let Some(air) = super::default_state(&*lv.host, "minecraft:air") else {
         return true;
     };
@@ -557,7 +575,13 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
         let b = bogeys[c.first].1;
         for (o, _) in car {
             let p = [b[0] + o[0], b[1] + o[1], b[2] + o[2]];
-            lv.set_state(p, air, update_all());
+            // `removeBlocksFromWorld`: no drops and no shape updates, so the other half of a
+            // door taken along doesn't break and drop.
+            let flags = update_all()
+                | mod_api::BlockUpdateFlags::KNOWN_SHAPE
+                | mod_api::BlockUpdateFlags::SUPPRESS_DROPS
+                | mod_api::BlockUpdateFlags::MOVE_BY_PISTON;
+            lv.set_state(p, air, flags);
             super::super::persist::mark_pos_unsaved(dim, p);
         }
     }

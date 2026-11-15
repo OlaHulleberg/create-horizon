@@ -45,6 +45,19 @@ impl Hooks for Create {
         }
     }
 
+    /// `AllBlocks.CONTROLLER_RAIL.color(..)`: the controller rail's middle in the redstone
+    /// colour of its `power` (`RedStoneWireBlock.getColorForPower`).
+    fn register_block_tint_sources(
+        &self,
+        _cx: &RegistrationContext,
+        event: &mut mod_api::RegisterBlockTintSourcesEvent<'_>,
+    ) {
+        event.sources.register(
+            vec![mod_api::TintLayer::Vanilla(mod_api::VanillaTint::Redstone)],
+            vec!["create:controller_rail".to_owned()],
+        );
+    }
+
     fn world_lifecycle(&self, _host: &mut dyn ServerHost, event: &mut WorldLifecycleEvent<'_>) {
         match event.phase {
             WorldPhase::WorldCloseFinal

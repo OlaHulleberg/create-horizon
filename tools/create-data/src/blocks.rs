@@ -3439,6 +3439,38 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
         );
         doc.insert("collision_context_shapes".into(), json!({ "item": item }));
     }
+    if b.name == "cart_assembler" {
+        // CartAssemblerBlock.getShape (AllShapes.CART_ASSEMBLER: the top and the clamps across
+        // the rail) to players, who also collide with CART_ASSEMBLER_PLAYER_COLLISION; dropped
+        // items and mobs with a full block (`getCollisionShape`); minecarts keep the rail's.
+        let by_rail = |ns: &[crate::shapes::Px], ew: &[crate::shapes::Px]| {
+            let s = crate::shapes::by_property_values(
+                "shape",
+                &[("north_south", ns), ("east_west", ew)],
+            );
+            fork_shapes(template, &default, &s)
+        };
+        let outline = by_rail(
+            &[[0., 12., 0., 16., 16., 16.], [-2., 0., 1., 18., 14., 15.]],
+            &[[0., 12., 0., 16., 16., 16.], [1., 0., -2., 15., 14., 18.]],
+        );
+        let player = by_rail(
+            &[[0., 0., 1., 16., 16., 15.]],
+            &[[1., 0., 0., 15., 16., 16.]],
+        );
+        let full = by_rail(
+            &[[0., 0., 0., 16., 16., 16.]],
+            &[[0., 0., 0., 16., 16., 16.]],
+        );
+        doc.insert(
+            "outline_context_shapes".into(),
+            json!({ "player": outline }),
+        );
+        doc.insert(
+            "collision_context_shapes".into(),
+            json!({ "player": player, "item": full, "living": full }),
+        );
+    }
     if !declared.is_empty() {
         doc.insert("state_properties".into(), Value::Object(declared));
     }

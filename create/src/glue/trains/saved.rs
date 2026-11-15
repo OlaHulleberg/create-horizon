@@ -1,7 +1,9 @@
 //! What trains, station names and curves keep with their columns, in the legacy layouts
 //! (`trains`, `station_names`, `track_curves` of the column's compound).
 
-use create_engine::schedule::{Condition, Entry, Instruction, Runtime, Schedule, State, TimeUnit};
+use create_engine::schedule::{
+    Condition, Entry, Instruction, Op, Runtime, Schedule, Stack, State, TimeUnit,
+};
 use create_engine::track_curves::Saved;
 use create_engine::trains::{
     BogeySize, CarriageShape, Nav, Placed, SavedMotion, SavedStation, Train, TrainOnTrack,
@@ -22,6 +24,7 @@ pub fn trains_to_nbt(
     host: &dyn Host,
     all: &[TrainOnTrack],
     riders: &dyn Fn(u32) -> Vec<(u16, [i32; 3], u128)>,
+    cargo: &dyn Fn(&TrainOnTrack) -> Option<Tag>,
 ) -> Tag {
     let f = |v: f64| (v as f32).to_bits() as i32;
     Tag::List(
@@ -99,6 +102,10 @@ pub fn trains_to_nbt(
                 if !seated.is_empty() {
                     c.insert("riders".into(), Tag::IntArray(seated));
                 }
+                // What its carriages' storage blocks hold (`cargo`).
+                if let Some(cargo) = cargo(t) {
+                    c.insert("cargo".into(), cargo);
+                }
                 c.insert(
                     "cars".into(),
                     Tag::List(
@@ -150,6 +157,26 @@ pub fn trains_to_nbt(
     )
 }
 
+/// A ghost slot's stack as Create saves it (`ItemStack.saveOptional`: an empty compound for
+/// none), from the bytes the engine keeps (the stack's network NBT).
+fn stack_tag(s: &Stack) -> Tag {
+    if s.is_empty() {
+        return Tag::Compound(Compound::new());
+    }
+    match Tag::from_network_bytes(s, None) {
+        Ok((t @ Tag::Compound(_), _)) => t,
+        _ => Tag::Compound(Compound::new()),
+    }
+}
+
+/// The bytes the engine keeps for a saved stack (empty for an empty compound).
+fn stack_of_tag(t: Option<&Tag>) -> Stack {
+    match t {
+        Some(t @ Tag::Compound(c)) if !c.is_empty() => t.to_network_bytes().unwrap_or_default(),
+        _ => Stack::new(),
+    }
+}
+
 /// A schedule as Create writes it (`Schedule.write`): `Entries`, each with its `Instruction`
 /// and `Conditions` (groups of `{Id, Data}`), `Cyclic` and `Progress`; each part's `Data` keyed
 /// as Create keys it.
@@ -167,12 +194,15 @@ pub fn schedule_to_nbt(s: &Schedule) -> Compound {
     for e in &s.entries {
         let mut data = Compound::new();
         match &e.instruction {
-            Instruction::Destination(t) | Instruction::Rename(t) => {
+            Instruction::Destination(t)
+            | Instruction::Rename(t)
+            | Instruction::FetchPackages(t) => {
                 data.insert("Text".into(), Tag::String(t.as_str().into()));
             }
             Instruction::Throttle(v) => {
                 data.insert("Value".into(), Tag::Int(*v));
             }
+            Instruction::DeliverPackages => {}
         }
         let mut entry = Compound::new();
         entry.insert("Instruction".into(), part(e.instruction.id(), data));
@@ -187,10 +217,10 @@ pub fn schedule_to_nbt(s: &Schedule) -> Compound {
                             let mut int = |k: &str, v: i32| {
                                 d.insert(k.into(), Tag::Int(v));
                             };
-                            match *c {
+                            match c {
                                 Condition::Delay { value, unit }
                                 | Condition::Idle { value, unit } => {
-                                    int("Value", value);
+                                    int("Value", *value);
                                     int("TimeUnit", unit.ordinal());
                                 }
                                 Condition::TimeOfDay {
@@ -198,15 +228,52 @@ pub fn schedule_to_nbt(s: &Schedule) -> Compound {
                                     minute,
                                     rotation,
                                 } => {
-                                    int("Hour", hour);
-                                    int("Minute", minute);
-                                    int("Rotation", rotation);
+                                    int("Hour", *hour);
+                                    int("Minute", *minute);
+                                    int("Rotation", *rotation);
                                 }
                                 Condition::PlayerCount { count, exact } => {
-                                    int("Count", count);
-                                    int("Exact", i32::from(exact));
+                                    int("Count", *count);
+                                    int("Exact", i32::from(*exact));
                                 }
-                                Condition::Powered => {}
+                                // `CargoThresholdCondition`: the operator, the threshold as
+                                // text, the measure; the item (`Item`) or bucket (`Bucket`).
+                                Condition::ItemThreshold {
+                                    op,
+                                    threshold,
+                                    stacks,
+                                    item,
+                                } => {
+                                    int("Operator", op.ordinal());
+                                    int("Measure", i32::from(*stacks));
+                                    d.insert(
+                                        "Threshold".into(),
+                                        Tag::String(threshold.to_string().as_str().into()),
+                                    );
+                                    d.insert("Item".into(), stack_tag(item));
+                                }
+                                Condition::FluidThreshold {
+                                    op,
+                                    threshold,
+                                    item,
+                                } => {
+                                    int("Operator", op.ordinal());
+                                    int("Measure", 0);
+                                    d.insert(
+                                        "Threshold".into(),
+                                        Tag::String(threshold.to_string().as_str().into()),
+                                    );
+                                    d.insert("Bucket".into(), stack_tag(item));
+                                }
+                                // `RedstoneLinkCondition`: `Inverted`, `Frequency` (both stacks).
+                                Condition::RedstoneLink { freq, inverted } => {
+                                    int("Inverted", i32::from(*inverted));
+                                    d.insert(
+                                        "Frequency".into(),
+                                        Tag::List(freq.iter().map(stack_tag).collect()),
+                                    );
+                                }
+                                Condition::Unloaded | Condition::Powered => {}
                             }
                             part(c.id(), d)
                         })
@@ -255,6 +322,8 @@ pub fn schedule_from_nbt(c: &Compound) -> Schedule {
             };
             let instruction = match id.as_str() {
                 "destination" => Instruction::Destination(text(&d, "Text")),
+                "package_delivery" => Instruction::DeliverPackages,
+                "package_retrieval" => Instruction::FetchPackages(text(&d, "Text")),
                 "rename" => Instruction::Rename(text(&d, "Text")),
                 "throttle" => Instruction::Throttle(int(&d, "Value").clamp(5, 100)),
                 _ => continue,
@@ -286,6 +355,30 @@ pub fn schedule_from_nbt(c: &Compound) -> Schedule {
                                     count: int(&d, "Count"),
                                     exact: int(&d, "Exact") != 0,
                                 },
+                                "item_threshold" => Condition::ItemThreshold {
+                                    op: Op::from_ordinal(int(&d, "Operator") % 3),
+                                    threshold: text(&d, "Threshold").trim().parse().unwrap_or(0),
+                                    stacks: int(&d, "Measure") == 1,
+                                    item: stack_of_tag(d.get(&"Item".into())),
+                                },
+                                "fluid_threshold" => Condition::FluidThreshold {
+                                    op: Op::from_ordinal(int(&d, "Operator") % 3),
+                                    threshold: text(&d, "Threshold").trim().parse().unwrap_or(0),
+                                    item: stack_of_tag(d.get(&"Bucket".into())),
+                                },
+                                "redstone_link" => {
+                                    let mut freq = [Stack::new(), Stack::new()];
+                                    if let Some(Tag::List(l)) = d.get(&"Frequency".into()) {
+                                        for (f, t) in freq.iter_mut().zip(l) {
+                                            *f = stack_of_tag(Some(t));
+                                        }
+                                    }
+                                    Condition::RedstoneLink {
+                                        freq,
+                                        inverted: int(&d, "Inverted") == 1,
+                                    }
+                                }
+                                "unloaded" => Condition::Unloaded,
                                 "powered" => Condition::Powered,
                                 _ => return None,
                             })
@@ -333,6 +426,21 @@ pub fn riders_from_nbt(data: &Compound) -> Vec<Vec<(u16, [i32; 3], u128)>> {
                     })
                     .collect()
             })
+        })
+        .collect()
+}
+
+/// The cargo saved with each train of the column, in the order of `trains_from_nbt`.
+pub fn cargo_from_nbt(data: &Compound) -> Vec<Option<Tag>> {
+    let Some(Tag::List(list)) = data.get(&"trains".into()) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|t| match t {
+            Tag::Compound(c) if c.contains_key(&"carriages".into()) => {
+                Some(c.get(&"cargo".into()).cloned())
+            }
+            _ => None,
         })
         .collect()
 }
@@ -493,6 +601,7 @@ pub fn trains_from_nbt(host: &dyn Host, data: &Compound) -> Vec<TrainOnTrack> {
                     _ => 0,
                 },
                 players: 0,
+                probes: Default::default(),
             })
         })
         .collect()

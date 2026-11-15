@@ -601,7 +601,7 @@ impl BlockEntityPart for TrackEntity {
     ) -> Option<Compound> {
         let nbt = &event.entity.nbt;
         let mut out = Compound::new();
-        for key in [CURVES, LIGHT] {
+        for key in [CURVES, LIGHT, super::station_draw::KEY] {
             if let Some(v) = nbt.get(&key.into()) {
                 out.insert(key.into(), v.clone());
             }
@@ -630,9 +630,13 @@ impl BlockEntityPart for TrackEntity {
         }
     }
 
-    fn block_entity_submit(&self, _host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
-        // Hot: every kept block's draw; two compares for any other block.
+    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+        // Hot: every kept block's draw; three compares for any other block.
         let block = event.state.block();
+        if block == states::key(Block::TrackStation) {
+            super::station_draw::draw(host, event.draw, event.pos, &event.entity.nbt);
+            return;
+        }
         if block != states::key(Block::Track) && block != states::key(Block::TrackSignal) {
             return;
         }

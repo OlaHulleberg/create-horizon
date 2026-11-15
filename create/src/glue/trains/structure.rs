@@ -26,7 +26,13 @@ fn axis_named(name: Option<&str>) -> Axis {
 /// unbreakable blocks and for a block whose block entity is not Create's own (moving a block
 /// entity's contents isn't ported: refused rather than emptied); its stickiness, glue (the
 /// glue the world keeps), an extended sticker and a chassis.
-pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
+/// For a train's carriages: chests, barrels, vaults, toolboxes (`cargo`) and sliding doors move
+/// too.
+pub fn found_carrying(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
+    found_with(lv, p, true)
+}
+
+fn found_with(lv: &ServerLevel<'_>, p: [i32; 3], storage: bool) -> Option<Found> {
     let state = lv.block_state(p)?;
     let (name, props) = super::state_parts(&*lv.host, state)?;
     let prop = |k: &str| props.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
@@ -43,10 +49,14 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
     let sail =
         name == "create:sail_frame" || (name.starts_with("create:") && name.ends_with("_sail"));
     let sail_facing = sail.then(|| prop("facing").and_then(dir_named)).flatten();
+    // A storage block's items ride with it (`MountedStorageManager`, `cargo`).
     let foreign_entity = lv
         .host
         .block_entity(lv.level, p)
-        .is_some_and(|e| e.kind(&*lv.host) != kinetics::kind());
+        .is_some_and(|e| e.kind(&*lv.host) != kinetics::kind())
+        && !(storage && crate::glue::contraptions::actors::is_storage(lv, p))
+        // A sliding door's block entity holds only its animation (`SlidingDoorBlockEntity`).
+        && !(storage && super::doors::is_sliding_door(&name));
     let unmovable = matches!(
         name.as_str(),
         "minecraft:bedrock"

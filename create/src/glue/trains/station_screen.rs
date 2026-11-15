@@ -58,6 +58,8 @@ pub struct View {
     /// The last failure: its lang key, arguments and carriage (-1 none).
     pub failure: Option<(String, Vec<String>, i32)>,
     pub train: Option<TrainView>,
+    /// `DoorControlBehaviour.mode` (`doors::MODES`).
+    pub doors: u8,
 }
 
 impl View {
@@ -98,6 +100,7 @@ impl View {
                 put_f32(&mut out, t.distance);
             }
         }
+        out.push(self.doors);
         out
     }
 
@@ -142,6 +145,7 @@ impl View {
                 })
             }
         };
+        let doors = r.u8()?;
         Some(View {
             pos,
             name,
@@ -150,6 +154,7 @@ impl View {
             bogeys,
             failure,
             train,
+            doors,
         })
     }
 }
@@ -176,6 +181,8 @@ pub enum Edit {
     Closed { pos: [i32; 3] },
     /// `StationEditPacket.dropSchedule`: the present train's schedule comes back.
     DropSchedule { pos: [i32; 3] },
+    /// `StationEditPacket`'s door control (`doors::MODES`).
+    Doors { pos: [i32; 3], mode: u8 },
 }
 
 impl Edit {
@@ -216,6 +223,11 @@ impl Edit {
                 out.push(4);
                 put_pos(&mut out, *pos);
             }
+            Edit::Doors { pos, mode } => {
+                out.push(5);
+                put_pos(&mut out, *pos);
+                out.push(*mode);
+            }
         }
         out
     }
@@ -237,6 +249,10 @@ impl Edit {
             },
             3 => Edit::Closed { pos: r.pos()? },
             4 => Edit::DropSchedule { pos: r.pos()? },
+            5 => Edit::Doors {
+                pos: r.pos()?,
+                mode: r.u8()?,
+            },
             _ => return None,
         })
     }
@@ -309,6 +325,7 @@ fn view(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<View> {
         bogeys,
         failure: assembly::failure(dim, pos),
         train,
+        doors: super::doors::mode(lv, pos),
     })
 }
 
@@ -375,7 +392,8 @@ pub fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8])
         | Edit::Assemble { pos }
         | Edit::Train { pos, .. }
         | Edit::Closed { pos }
-        | Edit::DropSchedule { pos } => *pos,
+        | Edit::DropSchedule { pos }
+        | Edit::Doors { pos, .. } => *pos,
     };
     if let Edit::Closed { .. } = edit {
         let uuid = player.uuid();
@@ -436,6 +454,7 @@ pub fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8])
                 super::conductor::give_back_schedule(lv.host, player, dim, train);
             }
         }
+        Edit::Doors { mode, .. } => super::doors::set_mode(&mut lv, pos, mode),
         Edit::Closed { .. } => {}
     }
     // The screen hears at once.
@@ -892,8 +911,29 @@ fn draw_station(
     {
         draw.item(door, [x + 14.0, y + 103.0], 16.0);
     }
-    let doors = tr(host, "create.contraption.door_control.all.short", &[]);
+    let mode = super::doors::MODES[usize::from(view.doors).min(5)];
+    let doors = tr(
+        host,
+        &format!("create.contraption.door_control.{mode}.short"),
+        &[],
+    );
     draw.text(&doors, [x + 39.0, y + 108.0], 0xFFFF_FFFF, true);
+    // `SelectionScrollInput`'s tooltip: its title and options, the chosen one marked.
+    if inside([x + 35.0, y + 102.0, 53.0, 16.0], mouse) {
+        tips.push(tr(host, "create.contraption.door_control", &[]));
+        for (i, m) in super::doors::MODES.iter().enumerate() {
+            let mark = if i == usize::from(view.doors) {
+                "-> "
+            } else {
+                "> "
+            };
+            tips.push(format!(
+                "{mark}{}",
+                tr(host, &format!("create.contraption.door_control.{m}"), &[])
+            ));
+        }
+        tips.push(tr(host, "create.gui.scrollInput.scrollToSelect", &[]));
+    }
     let Some(t) = &view.train else {
         let header = tr(host, "create.station.idle", &[]);
         let w = draw.text_width(&header);
@@ -1184,6 +1224,49 @@ pub fn screen_mouse_pressed(
     Flow::Cancel
 }
 
+/// The door control's `SelectionScrollInput`: a notch picks the next or last mode, sent at
+/// once (`StationEditPacket.configure` with the door control).
+pub fn screen_mouse_scrolled(
+    host: &dyn ClientHost,
+    event: &mut mod_api::ScreenMouseScrolledPreEvent<'_>,
+) -> Flow {
+    if !ours(host) || event.scroll[1] == 0.0 {
+        return Flow::Continue;
+    }
+    let mouse = event.screen.mouse;
+    let edit = OPEN.with_borrow_mut(|o| {
+        let o = o.as_mut()?;
+        if o.view.assembling {
+            return None;
+        }
+        let (x, y) = corner(o.size, false);
+        if !inside([x + 35.0, y + 102.0, 53.0, 16.0], mouse) {
+            return None;
+        }
+        let n = super::doors::MODES.len() as i32;
+        let step = if event.scroll[1] > 0.0 { -1 } else { 1 };
+        let next = (i32::from(o.view.doors) + step).clamp(0, n - 1) as u8;
+        if next == o.view.doors {
+            return Some(None);
+        }
+        o.view.doors = next;
+        Some(Some(Edit::Doors {
+            pos: o.view.pos,
+            mode: next,
+        }))
+    });
+    match edit {
+        None => Flow::Continue,
+        Some(e) => {
+            if let Some(e) = e {
+                click_sound(host);
+                LATER.with_borrow_mut(|l| l.0.push(e));
+            }
+            Flow::Cancel
+        }
+    }
+}
+
 pub fn screen_key_pressed(host: &dyn ClientHost, event: &mut ScreenKeyPressedPreEvent<'_>) -> Flow {
     if !ours(host) {
         return Flow::Continue;
@@ -1298,6 +1381,7 @@ mod tests {
                 vec!["21".into()],
                 -1,
             )),
+            doors: 3,
             train: Some(TrainView {
                 id: 7,
                 name: "Express".into(),

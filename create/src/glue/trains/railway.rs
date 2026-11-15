@@ -58,6 +58,8 @@ impl Subsystem for Trains {
         super::conductor::forget();
         super::relocate::forget();
         super::station_screen::forget();
+        super::station_draw::forget();
+        super::carriage_draw::forget();
         visuals::forget();
         riding::forget();
     }
@@ -77,6 +79,7 @@ impl Subsystem for Trains {
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, chunk: [i32; 2], data: &Compound) {
         let mut trains = saved::trains_from_nbt(&*lv.host, data);
         let riders = saved::riders_from_nbt(data);
+        let cargo = saved::cargo_from_nbt(data);
         // Each is the column's it was saved with, until it moves: a train taken apart where it
         // stood saves that column again, and unloads with it.
         for t in &mut trains {
@@ -88,16 +91,21 @@ impl Subsystem for Trains {
             return;
         }
         let dim = lv.dim;
-        with_world(|w| {
+        let ids = with_world(|w| {
             let ids = w.load_trains(dim, trains);
-            for (id, r) in ids.into_iter().zip(riders) {
-                riding::riders_loaded(dim, id, r);
+            for (id, r) in ids.iter().zip(riders) {
+                riding::riders_loaded(dim, *id, r);
             }
             w.dims[dim].railway.load_stations(names);
             for c in curves {
                 w.dims[dim].track_curves.add(c);
             }
-        });
+            ids
+        })
+        .unwrap_or_default();
+        for (id, c) in ids.into_iter().zip(cargo) {
+            super::cargo::from_nbt(lv, id, c.as_ref());
+        }
     }
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
@@ -114,7 +122,9 @@ impl Subsystem for Trains {
         if !trains.is_empty() {
             data.insert(
                 "trains".into(),
-                saved::trains_to_nbt(&*lv.host, &trains, &|id| riding::riders_of(dim, id)),
+                saved::trains_to_nbt(&*lv.host, &trains, &|id| riding::riders_of(dim, id), &|t| {
+                    super::cargo::to_nbt(lv, t.id, t.cars.len())
+                }),
             );
         }
         if !names.is_empty() {
@@ -129,6 +139,17 @@ impl Subsystem for Trains {
         // The controls drive before the trains move; their HUD hears of the move after.
         super::controls::before_trains(lv);
         tick_trains(lv);
+        super::cargo::tick_interfaces(lv);
+        super::carriage_draw::tick(lv);
+        if lv.game_time() % 4 == 0 {
+            super::doors::tick(lv);
+        }
+        if lv.game_time() % 100 == 0 {
+            super::cargo::prune(lv);
+        }
+        if lv.game_time() % 10 == 0 {
+            super::station_draw::refresh(lv);
+        }
         visuals::tick(lv);
         riding::tick(lv);
         super::controls::after_trains(lv);
@@ -170,6 +191,7 @@ impl Subsystem for Trains {
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         match channel {
             TRAIN_CHANNEL => super::client::trains_from_server(&*host, data),
+            super::carriage_draw::CHANNEL => super::carriage_draw::server_message(data),
             STATES_CHANNEL => super::client::states_from_server(&*host, data),
             super::station_screen::CHANNEL => super::station_screen::server_message(host, data),
             super::schedule_screen::CHANNEL => super::schedule_screen::server_message(host, data),
@@ -183,7 +205,42 @@ impl Subsystem for Trains {
         super::schedule_screen::tick_client(host);
     }
 
+    /// A station's flag, marker and assembly track, for its clients.
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[super::station_draw::KEY]
+    }
+
+    fn standalone_models(&self, models: &mut Vec<String>) {
+        models.extend(super::station_draw::MODELS.iter().map(|m| (*m).to_owned()));
+        models.extend(super::carriage_draw::MODELS.iter().map(|m| (*m).to_owned()));
+    }
+
+    fn models_baked(&self, host: &mut dyn ClientHost) {
+        super::carriage_draw::models_baked(&*host);
+    }
+
+    fn render_level_stage(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        super::carriage_draw::render_level_stage(host, event);
+    }
+
+    /// A station's flag moving is drawn every frame.
+    fn animated(
+        &self,
+        block: create_engine::Block,
+        pos: [i32; 3],
+        entity: &mod_api::ModBlockEntity,
+    ) -> bool {
+        block == create_engine::Block::TrackStation
+            && super::station_draw::animating(pos, &entity.nbt)
+    }
+
     fn client_reset(&self) {
+        super::station_draw::client_reset();
+        super::carriage_draw::reset();
         super::client::reset();
         super::station_screen::reset();
         super::schedule_screen::reset();
@@ -210,6 +267,9 @@ impl Subsystem for Trains {
         host: &dyn ClientHost,
         event: &mut ScreenMouseScrolledPreEvent<'_>,
     ) -> Flow {
+        if super::station_screen::screen_mouse_scrolled(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
         super::schedule_screen::screen_mouse_scrolled(host, event)
     }
 
@@ -380,12 +440,18 @@ fn tick_trains(lv: &mut ServerLevel<'_>) {
         .filter(|p| lv.has_neighbor_signal(*p))
         .collect();
     let seated = riding::passengers(dim);
+    let probes = probe_schedules(lv);
     with_world(|w| {
         let r = &mut w.dims[dim].railway;
         r.day_time = day_time;
         r.powered = powered;
         for t in &mut r.trains {
             t.players = seated.get(&t.id).copied().unwrap_or(0);
+        }
+        for (id, p) in probes {
+            if let Some(t) = r.trains.iter_mut().find(|t| t.id == id) {
+                t.probes = p;
+            }
         }
     });
     let mut events = EVENTS.take();
@@ -455,6 +521,121 @@ fn tick_trains(lv: &mut ServerLevel<'_>) {
         send_trains(lv, &due, false);
     }
     tracks::lights_changed(lv, &lights);
+}
+
+/// What the schedules' conditions about to be looked at read of the world (`Probes`): the
+/// items or fluid the train carries matching a threshold's item, whether a link network is
+/// powered (`hasAnyLoadedPower`), whether the station's chunk is unloaded; and the stations a
+/// package instruction may go to (none: no postbox is linked to a station here).
+fn probe_schedules(lv: &mut ServerLevel<'_>) -> Vec<(u32, create_engine::schedule::Probes)> {
+    use create_engine::schedule::{Condition, Probes};
+    let dim = lv.dim;
+    // Each train's wanted measures: its id, carriages, station, the conditions and whether it
+    // carries packages wanted.
+    type Wanted = (
+        u32,
+        usize,
+        Option<[i32; 3]>,
+        Vec<((usize, usize), Condition)>,
+        bool,
+    );
+    let wanted: Vec<Wanted> = with_world(|w| {
+        w.dims[dim]
+            .railway
+            .trains
+            .iter()
+            .filter_map(|t| {
+                let s = t.schedule.as_ref()?;
+                let at = t.runtime.probes_wanted(s);
+                let packages = t.runtime.packages_wanted(s);
+                if at.is_empty() && !packages {
+                    return None;
+                }
+                let entry = s.entries.get(t.runtime.current)?;
+                let conditions = at
+                    .into_iter()
+                    .filter_map(|(g, r)| Some(((g, r), entry.conditions.get(g)?.get(r)?.clone())))
+                    .collect();
+                Some((t.id, t.cars.len(), t.train.at_station, conditions, packages))
+            })
+            .collect()
+    })
+    .unwrap_or_default();
+    let mut out = Vec::new();
+    for (id, cars, station, conditions, packages) in wanted {
+        let mut p = Probes::default();
+        let needs_items = packages
+            || conditions
+                .iter()
+                .any(|(_, c)| matches!(c, Condition::ItemThreshold { .. }));
+        let stacks = if needs_items {
+            super::cargo::stacks(dim, id, cars)
+        } else {
+            Vec::new()
+        };
+        for (at, c) in conditions {
+            let v = match &c {
+                Condition::ItemThreshold {
+                    stacks: full, item, ..
+                } => {
+                    let filter = (!item.is_empty())
+                        .then(|| crate::glue::items::filter_screen::stack_of(&*lv.host, item))
+                        .flatten();
+                    stacks
+                        .iter()
+                        .filter(|s| filter.as_ref().is_none_or(|f| matches_item(lv, f, s)))
+                        .map(|s| {
+                            if *full {
+                                let max = lv.host.max_stack_size(s.item()).unwrap_or(64);
+                                i32::from(s.count() == max)
+                            } else {
+                                s.count() as i32
+                            }
+                        })
+                        .sum()
+                }
+                // Carriages carry no fluid here (tanks keep only their block when moved).
+                Condition::FluidThreshold { .. } => 0,
+                Condition::RedstoneLink { freq, .. } => {
+                    let name = |b: &Vec<u8>| {
+                        if b.is_empty() {
+                            return String::new();
+                        }
+                        crate::glue::items::filter_screen::stack_of(&*lv.host, b)
+                            .map(|s| s.item().id(&*lv.host))
+                            .unwrap_or_default()
+                    };
+                    let key = (name(&freq[0]), name(&freq[1]));
+                    with_world(|w| w.dims[dim].links.any_power(&key)).map_or(0, i32::from)
+                }
+                Condition::Unloaded => station.map_or(0, |s| {
+                    i32::from(!lv.level.entity_ticking(&*lv.host, s).unwrap_or(true))
+                }),
+                _ => 0,
+            };
+            p.measures.push((at, v));
+        }
+        if packages {
+            // No postbox here is linked to a station (`GlobalPackagePort`), so no station is
+            // found for either instruction; whether packages are aboard still decides what a
+            // delivery does.
+            let any = stacks.iter().any(|s| {
+                let id = s.item().id(&*lv.host);
+                id.starts_with("create:cardboard_package") || id.starts_with("create:rare_")
+            });
+            p.packages = Some((Vec::new(), any));
+        }
+        out.push((id, p));
+    }
+    out
+}
+
+/// `FilterItemStack.test` for a threshold's item: a filter tests as filters do, any other
+/// item matches itself.
+fn matches_item(lv: &ServerLevel<'_>, filter: &mod_api::ItemStack, s: &mod_api::ItemStack) -> bool {
+    let h: &dyn mod_api::Host = &*lv.host;
+    let f = crate::glue::items::filters::filter_of(h, filter);
+    crate::glue::items::filters::passes(h, Some(&f), s)
 }
 
 /// A track observer's `powered`, None for any other block.

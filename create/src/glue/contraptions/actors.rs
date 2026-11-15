@@ -132,7 +132,7 @@ fn takes_any(stored: &Stored) -> bool {
 }
 
 /// Whether `pos` holds a storage block a contraption carries.
-pub(super) fn is_storage(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+pub(crate) fn is_storage(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     lv.block_name(pos)
         .is_some_and(|n| storage_name(&n) || slot_storage(&n).is_some())
         && lv.host.block_entity(lv.level, pos).is_some()
@@ -655,9 +655,34 @@ pub(super) fn carry(
     carried
 }
 
+/// The items of the storage block at `pos` as a cart's contraption carries them (the cart
+/// keeps them), taken out of it; None for a block that is no storage.
+pub(crate) fn take_storage_at(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<Option<ItemStack>>> {
+    take_storage(lv, pos)
+}
+
+/// A cart's carried items back in the storage block now at `pos`, dropped there when no storage
+/// block took its place.
+pub(crate) fn put_storage_at(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    stored: Vec<Option<ItemStack>>,
+) {
+    if is_storage(lv, pos) {
+        put_storage(lv, pos, stored);
+        return;
+    }
+    for stack in stored.into_iter().flatten() {
+        lv.drop_stack(center(pos), [0.0; 3], stack, 10);
+    }
+}
+
 /// `MountedStorageManager` as a contraption assembles: the items of its storage blocks
 /// (`blocks`, offsets from `origin`) leave them and ride with contraption `key`.
-pub(super) fn carry_storage(
+pub(crate) fn carry_storage(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     origin: [i32; 3],
@@ -847,7 +872,7 @@ fn release_held(lv: &mut ServerLevel<'_>, key: [i32; 3], place: impl Fn([i32; 3]
 
 /// The items contraption `key` carried back into its storage blocks, each now at `place(offset)`
 /// (dropped there when no storage block took its place).
-pub(super) fn release_storage(
+pub(crate) fn release_storage(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     place: impl Fn([i32; 3]) -> [i32; 3],
@@ -870,9 +895,27 @@ pub(super) fn release_storage(
     }
 }
 
+/// Every stack contraption `key` carries (`MountedStorageManager.getAllItems`), copied.
+pub(crate) fn storage_stacks(dim: usize, key: [i32; 3]) -> Vec<ItemStack> {
+    STORAGE.with_borrow(|m| {
+        m.get(&(dim, key))
+            .map(|list| {
+                list.iter()
+                    .flat_map(|(_, s)| s.iter().flatten().cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
+/// What contraptions no longer kept (`keep(key)` false) carried is forgotten.
+pub(crate) fn retain_storage(dim: usize, keep: impl Fn([i32; 3]) -> bool) {
+    STORAGE.with_borrow_mut(|m| m.retain(|(d, k), _| *d != dim || keep(*k)));
+}
+
 /// The items contraption `key` carries, as a save keeps them: each storage block's offset and
 /// its slots (`ItemStack.CODEC`, `Slot`). None when it carries none.
-pub(super) fn storage_to_nbt(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<Tag> {
+pub(crate) fn storage_to_nbt(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<Tag> {
     let dim = lv.dim;
     let slots_nbt = |o: &[i32; 3], slots: &[Option<ItemStack>]| {
         let items = slots
@@ -932,7 +975,7 @@ pub(super) fn storage_to_nbt(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<Tag>
 }
 
 /// What [`storage_to_nbt`] saved, carried again by contraption `key`.
-pub(super) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<&Tag>) {
+pub(crate) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<&Tag>) {
     let Some(Tag::List(list)) = tag else {
         return;
     };
@@ -2221,6 +2264,7 @@ pub fn psi_insert(
     });
     if left.as_ref().map_or(0, ItemStack::count) != before {
         psi_transferred(dim, pos);
+        crate::glue::trains::cargo_moved(dim, key);
     }
     Ok(left)
 }
@@ -2273,6 +2317,7 @@ pub fn psi_extract(
     });
     if taken.is_some() {
         psi_transferred(dim, pos);
+        crate::glue::trains::cargo_moved(dim, key);
     }
     Ok(taken)
 }

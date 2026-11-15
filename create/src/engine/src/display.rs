@@ -570,6 +570,11 @@ pub fn train_status(
             .replace("%1$s", &players.to_string())
             .replace("%2$s", &count.to_string()),
         Condition::Powered => status("powered"),
+        Condition::RedstoneLink { .. } => status("redstone_link"),
+        Condition::Unloaded => status("unloaded"),
+        // `CargoThresholdCondition.getWaitingStatus`: empty without a display snapshot of the
+        // cargo, which the runtime does not keep for display links.
+        Condition::FluidThreshold { .. } | Condition::ItemThreshold { .. } => String::new(),
         // TimeOfDayCondition.getWaitingStatus.
         Condition::TimeOfDay {
             hour,

@@ -12,7 +12,7 @@
 use crate::bezier::Vec3;
 use crate::graph::{Graph, Point};
 use crate::network::{Key, Mark, Network, SignalType, key_position, side_of};
-use crate::schedule::{Inputs, Order, Runtime, Schedule, station_matches};
+use crate::schedule::{Inputs, Order, Probes, Runtime, Schedule, station_matches};
 use crate::track::TrackShape;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
@@ -1492,6 +1492,8 @@ pub struct TrainOnTrack {
     pub icon: u8,
     /// Players seated on it (`countPlayerPassengers`), as the glue last counted them.
     pub players: i32,
+    /// What the glue measured for its schedule before this tick (taken by the tick).
+    pub probes: Probes,
 }
 
 impl TrainOnTrack {
@@ -2558,12 +2560,15 @@ impl Railway {
                     .at_station
                     .is_some_and(|p| self.powered.contains(&p)),
             };
-            let order = t.runtime.tick(&schedule, t.train.nav.is_some(), inputs);
+            let probes = std::mem::take(&mut t.probes);
+            let order = t
+                .runtime
+                .tick(&schedule, t.train.nav.is_some(), inputs, &probes);
             if let Order::Throttle(p) = order {
                 // `ChangeThrottleInstruction`: `train.throttle`.
                 t.train.throttle = f64::from(p.clamp(5, 100)) / 100.0;
             }
-            if let Order::Navigate(filter) = order {
+            if let Order::Navigate(filter) = &order {
                 let targets = self.matching(&filter);
                 let here = self.trains[i].train.at_station;
                 if here.is_some_and(|h| {
@@ -2571,6 +2576,22 @@ impl Railway {
                         .get(&h)
                         .is_some_and(|n| station_matches(&filter, n))
                 }) {
+                    self.trains[i].runtime.already_there(&schedule);
+                    self.trains[i].idle = 0;
+                } else if self.navigate(i, &targets) {
+                    self.trains[i].runtime.started();
+                } else {
+                    self.trains[i].runtime.no_path();
+                }
+            }
+            if let Order::NavigateTo(stations) = &order {
+                let here = self.trains[i].train.at_station;
+                let targets: Vec<usize> = stations
+                    .iter()
+                    .filter(|p| !self.assembling.contains_key(*p))
+                    .filter_map(|p| self.station_index(*p))
+                    .collect();
+                if here.is_some_and(|h| stations.contains(&h)) {
                     self.trains[i].runtime.already_there(&schedule);
                     self.trains[i].idle = 0;
                 } else if self.navigate(i, &targets) {
@@ -2795,6 +2816,7 @@ mod tests {
             name: String::new(),
             icon: 0,
             players: 0,
+            probes: Default::default(),
         });
         r.trains.len() - 1
     }
@@ -3146,6 +3168,7 @@ mod tests {
             name: String::new(),
             icon: 0,
             players: 0,
+            probes: Default::default(),
         });
         r.trains.len() - 1
     }

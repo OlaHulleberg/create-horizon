@@ -95,6 +95,44 @@ pub fn placement(facing: Dir) -> (Shape, bool) {
     (shape, positive)
 }
 
+/// `ControllerRailBlock.rotate` by `quarters` clockwise quarter turns (1, 2 or 3): the powered
+/// rail's shape turned, and `backwards` flipped on a half turn or when the turned rail points
+/// along z exactly when the turn is counter-clockwise.
+pub fn rotated(rail: Rail, quarters: u8) -> Rail {
+    let cw = |s: Shape| match s {
+        Shape::NorthSouth => Shape::EastWest,
+        Shape::EastWest => Shape::NorthSouth,
+        Shape::AscendingEast => Shape::AscendingSouth,
+        Shape::AscendingSouth => Shape::AscendingWest,
+        Shape::AscendingWest => Shape::AscendingNorth,
+        Shape::AscendingNorth => Shape::AscendingEast,
+    };
+    let shape = (0..quarters).fold(rail.shape, |s, _| cw(s));
+    let along_z = matches!(shape.pointing(), Dir::North | Dir::South);
+    let flip = quarters == 2 || along_z == (quarters == 3);
+    Rail {
+        shape,
+        backwards: rail.backwards ^ flip,
+        ..rail
+    }
+}
+
+/// `ControllerRailBlock.onWrenched`: the first of a quarter turn clockwise, a half turn and a
+/// quarter turn back the rail is stable with (`isStableWith`), else the same rail turned
+/// around (`backwards` flipped) when that is stable; None when nothing is.
+pub fn wrenched(rail: Rail, stable: impl Fn(Shape) -> bool) -> Option<Rail> {
+    for quarters in [1, 2, 3] {
+        let turned = rotated(rail, quarters);
+        if stable(turned.shape) {
+            return Some(turned);
+        }
+    }
+    stable(rail.shape).then_some(Rail {
+        backwards: !rail.backwards,
+        ..rail
+    })
+}
+
 /// What the power rule reads of the world.
 pub trait Probe {
     /// `getBestNeighborSignal`.
@@ -173,7 +211,8 @@ pub fn power(probe: &impl Probe, pos: [i32; 3]) -> u8 {
 /// `onMinecartPass` on the server: a cart moving the rail's way (or still) is set to
 /// `power / 15` of its top speed with the rail (`getMaxSpeedWithRail`) along it when that is
 /// above 0; otherwise it is pulled to the rail's centre at a sixteenth of the distance a tick,
-/// stopping vertical motion (`decelerateCart`). The new motion, and a furnace cart's push.
+/// stopping vertical motion (`decelerateCart`, which takes a furnace cart's push away). The
+/// new motion, and a furnace cart's push.
 pub fn cart_motion(
     rail: Rail,
     pos: [i32; 3],
@@ -197,7 +236,7 @@ pub fn cart_motion(
             0.0,
             (centre[2] - cart[2]) / 16.0,
         ],
-        push,
+        [0.0; 2],
     )
 }
 
@@ -269,6 +308,28 @@ mod tests {
     }
 
     #[test]
+    fn the_wrench_turns_a_rail_a_quarter_keeping_the_way_it_drives() {
+        let rail = |shape, backwards| Rail {
+            shape,
+            backwards,
+            power: 0,
+        };
+        let flat = |s: Shape| !s.ascending();
+        // East-west driving west turns to north-south driving north, then back east-west
+        // driving east (`rotate(CLOCKWISE_90)` twice is a half turn).
+        let a = wrenched(rail(Shape::EastWest, false), flat).unwrap();
+        assert_eq!(a, rail(Shape::NorthSouth, false));
+        assert_eq!(a.acceleration(), Dir::North);
+        let b = wrenched(a, flat).unwrap();
+        assert_eq!(b, rail(Shape::EastWest, true));
+        assert_eq!(b.acceleration(), Dir::East);
+        // A slope with no turned form standing: turned around in place.
+        let slope = rail(Shape::AscendingEast, false);
+        let c = wrenched(slope, |s| s == Shape::AscendingEast).unwrap();
+        assert_eq!(c, rail(Shape::AscendingEast, true));
+    }
+
+    #[test]
     fn a_cart_is_set_to_its_share_of_top_speed_or_brought_to_rest() {
         let rail = Rail {
             shape: Shape::EastWest,
@@ -283,8 +344,9 @@ mod tests {
         let (m, _) = cart_motion(half, [0, 64, 0], [0.5, 64.0, 0.5], [0.1, 0.0, 0.0], 0.4);
         assert!((m[0] - 0.4 / 3.0).abs() < 1e-12);
         // Against it, or unpowered: pulled to the centre.
-        let (m, _) = cart_motion(rail, [0, 64, 0], [0.9, 64.0, 0.5], [-0.2, 0.0, 0.0], 0.4);
+        let (m, push) = cart_motion(rail, [0, 64, 0], [0.9, 64.0, 0.5], [-0.2, 0.0, 0.0], 0.4);
         assert_eq!(m, [-0.4 / 16.0, 0.0, 0.0]);
+        assert_eq!(push, [0.0, 0.0]);
         let off = Rail { power: 0, ..rail };
         let (m, _) = cart_motion(off, [0, 64, 0], [0.5, 64.0, 0.1], [0.0; 3], 0.4);
         assert_eq!(m, [0.0, 0.0, 0.4 / 16.0]);

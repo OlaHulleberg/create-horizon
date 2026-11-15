@@ -20,23 +20,29 @@
 //!   the seat.
 //! - [`TrainControls`] (`controls`, `client`): clicks on carriages, driving by the controls'
 //!   keys and the train HUD.
-//! - [`Carts`] (`carts`): cart assemblers acting on the carts that pass them, contraptions
-//!   riding carts, their items, couplings, and their save with the world.
+//! - [`Carts`] (`carts`, `coupling_draw`): cart assemblers acting on the carts that pass them,
+//!   contraptions riding carts, their items, couplings (drawn by clients as Create's
+//!   `CouplingRenderer` draws them), controller rails turned by the wrench, and their save with
+//!   the world.
+//! - `carriage_draw`: the couplings between carriages, drawn by clients
+//!   (`CarriageCouplingRenderer`).
+//! - `station_draw`: a station's flag, its marker on the track and its assembly track
+//!   (`StationRenderer`).
+//! - `doors`: carriages' sliding doors opening at stations by their door control.
+//! - `cargo`: what carriages' storage blocks hold, and portable storage interfaces on slow
+//!   carriages connecting to the stationary ones at a station.
 //!
-//! Left out for now, not for want of API: the station's flag and the highlight of its assembly
-//! track (`StationRenderer`), the line of where a relocated train's wheels would go
-//! (`TrainRelocator`'s preview), and train doors'
-//! control (`DoorControl`: the station screen shows its default, all doors open). The schedule
-//! editor is a mod screen without Create's menu (`ScheduleMenu`, the player's inventory and
-//! ghost slots), so the conditions set with items (`ItemThresholdCondition`,
-//! `FluidThresholdCondition`, `CargoThresholdCondition`, `RedstoneLinkCondition`) are not
-//! offered, nor `StationUnloadedCondition` (a train unloads with its column here) and the
-//! package instructions.
+//! Every schedule instruction and condition is offered and run; carriages carry no fluid (a
+//! tank keeps only its block when moved), so a fluid threshold reads none, and no postbox is
+//! linked to a station (`GlobalPackagePort`), so the package instructions find no station: a
+//! delivery with packages aboard waits and looks again, one without and a retrieval go on to the
+//! next entry.
+//!
+//! Left out for now, not for want of API: the line of where a relocated train's wheels would go
+//! (`TrainRelocator`'s preview).
 //!
 //! What the mod API cannot do, and is left out (each with the legacy call it replaced):
 //!
-//! - **Drawing couplings' connectors** (`CouplingRenderer`): the cable between two carts bends
-//!   along a curve no block model draws.
 //! - **Standing on and colliding with carriages** (`entity_collisions`, `ContraptionCollider`):
 //!   the API has collision exclusions (boxes where blocks don't stop a player), not moving
 //!   colliders. Needs `notes/moving-structures-note.md`'s level colliders.
@@ -45,22 +51,27 @@
 //!   consume a key, so a key bound to something else still does it.
 
 pub mod assembly;
+mod cargo;
+mod carriage_draw;
 mod carts;
 mod client;
 mod conductor;
 mod controls;
+mod coupling_draw;
+mod doors;
 pub(crate) mod gui;
 mod railway;
 mod relocate;
 mod riding;
 mod saved;
 mod schedule_screen;
+mod station_draw;
 mod station_screen;
 mod structure;
 mod tracks;
 mod visuals;
 
-pub use carts::Carts;
+pub use carts::{Carts, assembler_mode, set_assembler_mode};
 pub use controls::TrainControls;
 pub use railway::Trains;
 
@@ -120,6 +131,14 @@ struct Palette {
 
 thread_local! {
     static PALETTE: RefCell<Palette> = RefCell::new(Palette::default());
+}
+
+/// Items moved in or out of contraption storage `key` through an interface: when it is a
+/// carriage's, its train's cargo is not idle (`IdleCargoCondition`).
+pub fn cargo_moved(dim: usize, key: [i32; 3]) {
+    if let Some(train) = cargo::train_of(key) {
+        cargo::moved(dim, train);
+    }
 }
 
 /// The engine's number for `state` on this side.

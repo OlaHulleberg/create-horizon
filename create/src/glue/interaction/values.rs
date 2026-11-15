@@ -136,6 +136,16 @@ pub(crate) fn value_box_slot(
         }
         // `ArmBlockEntity.selectionMode`.
         (B::MechanicalArm, ..) => board::arm_mode_slot(info.ceiling, side),
+        // `CartAssemblerValueBoxTransform`: on the sides across the rail, 7 px up, 17.5 out.
+        (B::CartAssembler, ..) => {
+            let across = if info.rail == Some(create_engine::rail::Shape::NorthSouth) {
+                create_engine::kinetics::Axis::X
+            } else {
+                create_engine::kinetics::Axis::Z
+            };
+            (side.axis() == across)
+                .then(|| board::sided_offset([0.5, 7.0 / 16.0, 17.5 / 16.0], side))
+        }
         // `EjectorBlockEntity.maxStackSize`: its top only while the plate is not charged.
         (B::WeightedEjector, ..) => info
             .facing
@@ -170,6 +180,10 @@ pub(crate) fn option_names(block: B) -> Option<(&'static str, &'static [&'static
         B::WindmillBearing => ("Rotation Direction", &board::ROTATION_DIRECTIONS[..]),
         B::ClockworkBearing => ("Clock Hand Arrangement", &board::CLOCK_HANDS[..]),
         B::MechanicalRoller => ("Roller Mode", &board::ROLLER_MODES[..]),
+        B::CartAssembler => (
+            "Cart Movement Mode",
+            &create_engine::mounted::MODE_OPTIONS[..],
+        ),
         _ => return None,
     })
 }
@@ -441,6 +455,15 @@ pub(crate) fn settings_at(
                 pick,
                 short.is_some(),
             ))
+        }
+        // `CartAssemblerBlockEntity.movementMode`.
+        B::CartAssembler => {
+            let count = create_engine::mounted::MODE_OPTIONS.len() as i32;
+            let now = crate::glue::trains::assembler_mode(dim, pos);
+            if let Some(v) = pick.and_then(|s| board::option_value(s, now, count)) {
+                crate::glue::trains::set_assembler_mode(dim, pos, v);
+            }
+            Some(Some(crate::glue::trains::assembler_mode(dim, pos)))
         }
         // `BrassDiodeScrollValueBehaviour`: `onShortInteract` toggles the diode (`toggle`: not
         // with a wrench; sneaking and no building were never a short click); `setValueSettings`

@@ -1,11 +1,15 @@
 //! Create's train schedules (`Schedule`, `ScheduleEntry`, `ScheduleRuntime`, the instructions
-//! `DestinationInstruction`, `ChangeTitleInstruction`, `ChangeThrottleInstruction` and the wait
-//! conditions `ScheduledDelay`, `TimeOfDayCondition`, `PlayerPassengerCondition`,
-//! `IdleCargoCondition`, `StationPoweredCondition`): a list of entries, each an instruction; a
-//! station instruction sends the train to a station whose name matches a filter, then it waits
-//! there until one of its condition groups is met (every condition of the group, in order); a
-//! title or throttle instruction takes effect at once. At the end the schedule starts over, or
-//! stops when it is not cyclic.
+//! `DestinationInstruction`, `DeliverPackagesInstruction`, `FetchPackagesInstruction`,
+//! `ChangeTitleInstruction`, `ChangeThrottleInstruction` and the wait conditions
+//! `ScheduledDelay`, `TimeOfDayCondition`, `FluidThresholdCondition`, `ItemThresholdCondition`,
+//! `RedstoneLinkCondition`, `PlayerPassengerCondition`, `IdleCargoCondition`,
+//! `StationUnloadedCondition`, `StationPoweredCondition`): a list of entries, each an
+//! instruction; a station instruction sends the train to a station whose name matches a filter
+//! (a package instruction to the stations the glue found for it), then it waits there until one
+//! of its condition groups is met (every condition of the group, in order); a title or throttle
+//! instruction takes effect at once. At the end the schedule starts over, or stops when it is
+//! not cyclic. What a condition reads of the world beyond the train (its cargo, a link's
+//! network, whether the station is loaded) the glue measures before the tick ([`Probes`]).
 
 /// `TimedWaitCondition.TimeUnit`: ticks a unit.
 pub const TICKS: i32 = 1;
@@ -14,6 +18,9 @@ pub const MINUTES: i32 = 20 * 60;
 
 /// `ScheduleRuntime.INTERVAL`: how long a train waits after an instruction could not start.
 pub const INTERVAL: i32 = 40;
+
+/// `CargoThresholdCondition`'s `LazyTickedScheduleCondition` rate.
+pub const LAZY: i32 = 20;
 
 /// `TimedWaitCondition.TimeUnit`, by its ordinal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -65,11 +72,20 @@ impl TimeUnit {
     }
 }
 
-/// What an entry does (`Schedule.INSTRUCTION_TYPES` that the port runs).
+/// An item stack a condition holds (a ghost slot's), opaque to the engine: the glue's bytes
+/// for it (its network NBT); empty for none.
+pub type Stack = Vec<u8>;
+
+/// What an entry does (`Schedule.INSTRUCTION_TYPES`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Instruction {
     /// `DestinationInstruction`: the station name filter (`*` any text).
     Destination(String),
+    /// `DeliverPackagesInstruction`: to a station whose postboxes take the packages aboard.
+    DeliverPackages,
+    /// `FetchPackagesInstruction`: to a station whose postboxes hold packages for addresses
+    /// matching the filter (`*` any text; empty: any).
+    FetchPackages(String),
     /// `ChangeTitleInstruction`: the schedule's title shown on displays.
     Rename(String),
     /// `ChangeThrottleInstruction`: the top speed in percent, 5 to 100.
@@ -84,11 +100,19 @@ impl Default for Instruction {
 
 impl Instruction {
     /// The types in the editor's order, as their ids.
-    pub const IDS: [&'static str; 3] = ["destination", "rename", "throttle"];
+    pub const IDS: [&'static str; 5] = [
+        "destination",
+        "package_delivery",
+        "package_retrieval",
+        "rename",
+        "throttle",
+    ];
 
     pub fn id(&self) -> &'static str {
         match self {
             Instruction::Destination(_) => "destination",
+            Instruction::DeliverPackages => "package_delivery",
+            Instruction::FetchPackages(_) => "package_retrieval",
             Instruction::Rename(_) => "rename",
             Instruction::Throttle(_) => "throttle",
         }
@@ -98,46 +122,194 @@ impl Instruction {
     pub fn of(id: &str) -> Option<Instruction> {
         Some(match id {
             "destination" => Instruction::Destination(String::new()),
+            "package_delivery" => Instruction::DeliverPackages,
+            "package_retrieval" => Instruction::FetchPackages(String::new()),
             "rename" => Instruction::Rename(String::new()),
             "throttle" => Instruction::Throttle(100),
             _ => return None,
         })
     }
 
-    /// `supportsConditions`: only a station has conditions to wait on.
+    /// `supportsConditions`: a station (by name or for packages) has conditions to wait on.
     pub fn supports_conditions(&self) -> bool {
-        matches!(self, Instruction::Destination(_))
+        matches!(
+            self,
+            Instruction::Destination(_)
+                | Instruction::DeliverPackages
+                | Instruction::FetchPackages(_)
+        )
+    }
+
+    /// Whether it goes to the stations the glue finds for packages.
+    pub fn packages(&self) -> bool {
+        matches!(
+            self,
+            Instruction::DeliverPackages | Instruction::FetchPackages(_)
+        )
     }
 }
 
-/// A wait condition (`Schedule.CONDITION_TYPES` that the port runs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `CargoThresholdCondition.Ops`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Op {
+    #[default]
+    Greater,
+    Less,
+    Equal,
+}
+
+impl Op {
+    pub const ALL: [Op; 3] = [Op::Greater, Op::Less, Op::Equal];
+
+    pub fn test(self, current: i32, target: i32) -> bool {
+        match self {
+            Op::Greater => current > target,
+            Op::Less => current < target,
+            Op::Equal => current == target,
+        }
+    }
+
+    /// `formatted`.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Op::Greater => ">",
+            Op::Less => "<",
+            Op::Equal => "=",
+        }
+    }
+
+    /// Its lang key's last part (`schedule.condition.threshold.greater`).
+    pub fn key(self) -> &'static str {
+        match self {
+            Op::Greater => "greater",
+            Op::Less => "less",
+            Op::Equal => "equal",
+        }
+    }
+
+    pub fn ordinal(self) -> i32 {
+        Op::ALL.iter().position(|o| *o == self).unwrap_or(0) as i32
+    }
+
+    pub fn from_ordinal(i: i32) -> Op {
+        Op::ALL.get(i.max(0) as usize).copied().unwrap_or_default()
+    }
+}
+
+/// A wait condition (`Schedule.CONDITION_TYPES`).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Condition {
     /// `ScheduledDelay`: this long at the station.
     Delay { value: i32, unit: TimeUnit },
     /// `TimeOfDayCondition`: at this hour and minute, every `rotation` (an index of
     /// `getRotation`: 0 every day ... 9 every quarter hour).
     TimeOfDay { hour: i32, minute: i32, rotation: i32 },
+    /// `FluidThresholdCondition`: the train holds more, less or exactly this many buckets of
+    /// the fluid of `item` (a bucket or a filter; none: any).
+    FluidThreshold { op: Op, threshold: i32, item: Stack },
+    /// `ItemThresholdCondition`: the train holds more, less or exactly this many items (or
+    /// full stacks) matching `item` (none: any).
+    ItemThreshold {
+        op: Op,
+        threshold: i32,
+        stacks: bool,
+        item: Stack,
+    },
+    /// `RedstoneLinkCondition`: the network of these two frequency items is powered (or not,
+    /// `inverted`).
+    RedstoneLink { freq: [Stack; 2], inverted: bool },
     /// `PlayerPassengerCondition`: this many players seated, or more unless `exact`.
     PlayerCount { count: i32, exact: bool },
     /// `IdleCargoCondition`: no cargo moved in or out for longer than this.
     Idle { value: i32, unit: TimeUnit },
+    /// `StationUnloadedCondition`: the station's block is not in a ticking chunk.
+    Unloaded,
     /// `StationPoweredCondition`: the station block has a redstone signal.
     Powered,
 }
 
 impl Condition {
     /// The types in the editor's order, as their ids.
-    pub const IDS: [&'static str; 5] = ["delay", "time_of_day", "player_count", "idle", "powered"];
+    pub const IDS: [&'static str; 9] = [
+        "delay",
+        "time_of_day",
+        "fluid_threshold",
+        "item_threshold",
+        "redstone_link",
+        "player_count",
+        "idle",
+        "unloaded",
+        "powered",
+    ];
 
     pub fn id(&self) -> &'static str {
         match self {
             Condition::Delay { .. } => "delay",
             Condition::TimeOfDay { .. } => "time_of_day",
+            Condition::FluidThreshold { .. } => "fluid_threshold",
+            Condition::ItemThreshold { .. } => "item_threshold",
+            Condition::RedstoneLink { .. } => "redstone_link",
             Condition::PlayerCount { .. } => "player_count",
             Condition::Idle { .. } => "idle",
+            Condition::Unloaded => "unloaded",
             Condition::Powered => "powered",
         }
+    }
+
+    /// `slotsTargeted`: the ghost item slots its editor offers.
+    pub fn slots(&self) -> usize {
+        match self {
+            Condition::FluidThreshold { .. } | Condition::ItemThreshold { .. } => 1,
+            Condition::RedstoneLink { .. } => 2,
+            _ => 0,
+        }
+    }
+
+    /// Ghost slot `i`'s stack (`getItem`).
+    pub fn item(&self, i: usize) -> Option<&Stack> {
+        match self {
+            Condition::FluidThreshold { item, .. } | Condition::ItemThreshold { item, .. } => {
+                (i == 0).then_some(item)
+            }
+            Condition::RedstoneLink { freq, .. } => freq.get(i),
+            _ => None,
+        }
+    }
+
+    /// `setItem`.
+    pub fn set_item(&mut self, i: usize, stack: Stack) {
+        match self {
+            Condition::FluidThreshold { item, .. } | Condition::ItemThreshold { item, .. } => {
+                if i == 0 {
+                    *item = stack;
+                }
+            }
+            Condition::RedstoneLink { freq, .. } => {
+                if let Some(f) = freq.get_mut(i) {
+                    *f = stack;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether it reads the world through [`Probes`].
+    pub fn probed(&self) -> bool {
+        matches!(
+            self,
+            Condition::FluidThreshold { .. }
+                | Condition::ItemThreshold { .. }
+                | Condition::RedstoneLink { .. }
+                | Condition::Unloaded
+        )
+    }
+
+    /// `LazyTickedScheduleCondition`'s rate: the cargo thresholds look every 20 ticks.
+    pub fn lazy(&self) -> bool {
+        matches!(
+            self,
+            Condition::FluidThreshold { .. } | Condition::ItemThreshold { .. }
+        )
     }
 
     /// A new condition of type `id` with Create's defaults.
@@ -152,6 +324,21 @@ impl Condition {
                 minute: 0,
                 rotation: 5,
             },
+            "fluid_threshold" => Condition::FluidThreshold {
+                op: Op::Greater,
+                threshold: 10,
+                item: Stack::new(),
+            },
+            "item_threshold" => Condition::ItemThreshold {
+                op: Op::Greater,
+                threshold: 10,
+                stacks: false,
+                item: Stack::new(),
+            },
+            "redstone_link" => Condition::RedstoneLink {
+                freq: [Stack::new(), Stack::new()],
+                inverted: false,
+            },
             "player_count" => Condition::PlayerCount {
                 count: 1,
                 exact: false,
@@ -160,6 +347,7 @@ impl Condition {
                 value: 5,
                 unit: TimeUnit::Seconds,
             },
+            "unloaded" => Condition::Unloaded,
             "powered" => Condition::Powered,
             _ => return None,
         })
@@ -205,12 +393,23 @@ impl Entry {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Schedule {
     pub entries: Vec<Entry>,
     pub cyclic: bool,
     /// `savedProgress`: the entry a train given this schedule starts at.
     pub saved_progress: usize,
+}
+
+/// `new Schedule()`: empty and cyclic.
+impl Default for Schedule {
+    fn default() -> Self {
+        Schedule {
+            entries: Vec::new(),
+            cyclic: true,
+            saved_progress: 0,
+        }
+    }
 }
 
 /// `ScheduleRuntime.State`.
@@ -230,8 +429,29 @@ pub enum Order {
     /// (`instruction.start` → `findPathTo`); answer with [`Runtime::started`],
     /// [`Runtime::already_there`] or [`Runtime::no_path`].
     Navigate(String),
+    /// A package instruction: go to the nearest of these stations, answered the same way.
+    NavigateTo(Vec<[i32; 3]>),
     /// `ChangeThrottleInstruction`: the train's throttle is now this many percent.
     Throttle(i32),
+}
+
+/// What the glue measured for one train before the tick, for its current entry: each probed
+/// condition's measure by (group, row) (items or full stacks, fluid in millibuckets, 1 for a
+/// powered link network or an unloaded station, else 0), and for a package instruction the
+/// stations it may go to and whether the train carries any package.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Probes {
+    pub measures: Vec<((usize, usize), i32)>,
+    pub packages: Option<(Vec<[i32; 3]>, bool)>,
+}
+
+impl Probes {
+    fn measure(&self, at: (usize, usize)) -> i32 {
+        self.measures
+            .iter()
+            .find(|(k, _)| *k == at)
+            .map_or(0, |(_, v)| *v)
+    }
 }
 
 /// What the conditions read of the world each tick.
@@ -282,7 +502,13 @@ impl Runtime {
     }
 
     /// `tick`: `navigating` while the train has a destination.
-    pub fn tick(&mut self, schedule: &Schedule, navigating: bool, inputs: Inputs) -> Order {
+    pub fn tick(
+        &mut self,
+        schedule: &Schedule,
+        navigating: bool,
+        inputs: Inputs,
+        probes: &Probes,
+    ) -> Order {
         if self.paused {
             return Order::Nothing;
         }
@@ -301,21 +527,81 @@ impl Runtime {
         match self.state {
             State::InTransit => Order::Nothing,
             State::PostTransit => {
-                self.tick_conditions(schedule, inputs);
+                self.tick_conditions(schedule, inputs, probes);
                 Order::Nothing
             }
-            State::PreTransit => self.start_current(schedule),
+            State::PreTransit => self.start_current(schedule, probes),
         }
+    }
+
+    /// The conditions the glue must measure before this tick: (group, row) of each group's
+    /// current condition that reads the world, when it will be looked at (a cargo threshold
+    /// every 20 ticks, `LazyTickedScheduleCondition`).
+    pub fn probes_wanted(&self, schedule: &Schedule) -> Vec<(usize, usize)> {
+        if self.paused || self.state != State::PostTransit || self.cooldown > 0 {
+            return Vec::new();
+        }
+        let Some(entry) = schedule.entries.get(self.current) else {
+            return Vec::new();
+        };
+        entry
+            .conditions
+            .iter()
+            .enumerate()
+            .filter_map(|(g, group)| {
+                let (done, time) = self.progress.get(g).copied().unwrap_or((0, 0));
+                let c = group.get(done)?;
+                (c.probed() && (!c.lazy() || time % LAZY == 0)).then_some((g, done))
+            })
+            .collect()
+    }
+
+    /// Whether the glue must find stations for a package instruction before this tick.
+    pub fn packages_wanted(&self, schedule: &Schedule) -> bool {
+        !self.paused
+            && self.state == State::PreTransit
+            && self.cooldown <= 0
+            && schedule
+                .entries
+                .get(self.current)
+                .is_some_and(|e| e.instruction.packages())
     }
 
     /// `startCurrentInstruction`: a station is looked for; a title or throttle takes effect
     /// and the next entry follows.
-    fn start_current(&mut self, schedule: &Schedule) -> Order {
+    fn start_current(&mut self, schedule: &Schedule, probes: &Probes) -> Order {
         if self.end_reached(schedule) {
             return Order::Nothing;
         }
         match &schedule.entries[self.current].instruction {
             Instruction::Destination(filter) => Order::Navigate(filter.clone()),
+            // `DeliverPackagesInstruction.start`: no station takes the packages aboard: wait
+            // and look again, or with none aboard, on to the next entry.
+            Instruction::DeliverPackages => match &probes.packages {
+                Some((stations, _)) if !stations.is_empty() => {
+                    Order::NavigateTo(stations.clone())
+                }
+                Some((_, true)) | None => {
+                    self.no_path();
+                    Order::Nothing
+                }
+                Some((_, false)) => {
+                    self.current += 1;
+                    Order::Nothing
+                }
+            },
+            // `FetchPackagesInstruction.start`: no station has packages for it: on to the
+            // next entry after a wait.
+            Instruction::FetchPackages(_) => match &probes.packages {
+                Some((stations, _)) if !stations.is_empty() => {
+                    Order::NavigateTo(stations.clone())
+                }
+                _ => {
+                    self.no_path();
+                    self.current += 1;
+                    Order::Nothing
+                }
+            },
             Instruction::Rename(title) => {
                 self.title.clone_from(title);
                 self.current += 1;
@@ -380,7 +666,7 @@ impl Runtime {
 
     /// `tickConditions`: the first group whose conditions are all met moves on to the next
     /// entry; each group advances its current condition by one tick.
-    fn tick_conditions(&mut self, schedule: &Schedule, inputs: Inputs) {
+    fn tick_conditions(&mut self, schedule: &Schedule, inputs: Inputs, probes: &Probes) {
         let entry = &schedule.entries[self.current];
         if !entry.instruction.supports_conditions() {
             self.state = State::PreTransit;
@@ -390,15 +676,21 @@ impl Runtime {
         if self.progress.len() != entry.conditions.len() {
             self.progress = vec![(0, 0); entry.conditions.len()];
         }
-        for (group, (done, time)) in entry.conditions.iter().zip(self.progress.iter_mut()) {
+        for (g, (group, (done, time))) in entry
+            .conditions
+            .iter()
+            .zip(self.progress.iter_mut())
+            .enumerate()
+        {
             if *done >= group.len() {
                 self.state = State::PreTransit;
                 self.current += 1;
                 return;
             }
-            let met = match group[*done] {
+            let measure = probes.measure((g, *done));
+            let met = match &group[*done] {
                 Condition::Delay { value, unit } => {
-                    if *time >= Condition::ticks(value, unit) {
+                    if *time >= Condition::ticks(*value, *unit) {
                         true
                     } else {
                         *time += 1;
@@ -407,29 +699,46 @@ impl Runtime {
                 }
                 Condition::Idle { value, unit } => {
                     *time = inputs.idle_cargo;
-                    inputs.idle_cargo > Condition::ticks(value, unit)
+                    inputs.idle_cargo > Condition::ticks(*value, *unit)
                 }
                 Condition::TimeOfDay {
                     hour,
                     minute,
                     rotation,
                 } => {
-                    let r = rotation_ticks(rotation);
+                    let r = rotation_ticks(*rotation);
                     let day = inputs.day_time.rem_euclid(r);
                     let target = ((i64::from((hour + 18) % 24)) * 1000
-                        + (f64::from(minute) / 60.0 * 1000.0).ceil() as i64)
+                        + (f64::from(*minute) / 60.0 * 1000.0).ceil() as i64)
                         % r;
                     let diff = day - target;
                     (0..=40).contains(&diff)
                 }
                 Condition::PlayerCount { count, exact } => {
-                    if exact {
-                        inputs.players == count
+                    if *exact {
+                        inputs.players == *count
                     } else {
-                        inputs.players >= count
+                        inputs.players >= *count
                     }
                 }
                 Condition::Powered => inputs.powered,
+                // `LazyTickedScheduleCondition`: looked at every 20 ticks.
+                c @ (Condition::ItemThreshold { op, threshold, .. }
+                | Condition::FluidThreshold { op, threshold, .. }) => {
+                    let unit = if matches!(c, Condition::FluidThreshold { .. }) {
+                        1000
+                    } else {
+                        1
+                    };
+                    let looked = *time % LAZY == 0;
+                    let met = looked && op.test(measure, threshold * unit);
+                    if !met {
+                        *time = if looked { 1 } else { *time + 1 };
+                    }
+                    met
+                }
+                Condition::RedstoneLink { inverted, .. } => (measure != 0) != *inverted,
+                Condition::Unloaded => measure != 0,
             };
             if met {
                 *done += 1;
@@ -463,6 +772,10 @@ pub fn station_matches(filter: &str, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn none() -> Probes {
+        Probes::default()
+    }
 
     fn idle(n: i32) -> Inputs {
         Inputs {
@@ -504,28 +817,28 @@ mod tests {
     fn a_shuttle_goes_waits_and_starts_over() {
         let s = shuttle(true);
         let mut r = Runtime::new();
-        assert_eq!(r.tick(&s, false, idle(0)), Order::Navigate("Depot".into()));
+        assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Navigate("Depot".into()));
         // No path: it looks again 40 ticks later.
         r.no_path();
         let asks = (0..41)
-            .filter(|_| r.tick(&s, false, idle(0)) != Order::Nothing)
+            .filter(|_| r.tick(&s, false, idle(0), &none()) != Order::Nothing)
             .count();
         assert_eq!(asks, 1);
         r.started();
         for _ in 0..30 {
-            assert_eq!(r.tick(&s, true, idle(0)), Order::Nothing);
+            assert_eq!(r.tick(&s, true, idle(0), &none()), Order::Nothing);
         }
         assert_eq!(r.ticks_in_transit, 30);
         r.arrived(&s);
         // 5 s: 100 ticks counting, the 101st sees it done, the next moves on.
         let mut ticks = 0;
         while r.current == 0 {
-            r.tick(&s, false, idle(0));
+            r.tick(&s, false, idle(0), &none());
             ticks += 1;
         }
         assert_eq!(ticks, 102);
         assert_eq!(
-            r.tick(&s, false, idle(0)),
+            r.tick(&s, false, idle(0), &none()),
             Order::Navigate("Mine, Platform *".into())
         );
         r.started();
@@ -533,15 +846,15 @@ mod tests {
         // Cargo idle for more than 3 s ends the wait before the minute.
         let mut ticks = 0;
         while r.current == 1 {
-            r.tick(&s, false, idle(ticks));
+            r.tick(&s, false, idle(ticks), &none());
             ticks += 1;
         }
         assert!(ticks < 70, "{ticks}");
         // Cyclic: back to the first entry.
-        assert_eq!(r.tick(&s, false, idle(0)), Order::Nothing);
+        assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Nothing);
         assert_eq!(r.current, 0);
         assert!(!r.paused);
-        assert_eq!(r.tick(&s, false, idle(0)), Order::Navigate("Depot".into()));
+        assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Navigate("Depot".into()));
     }
 
     #[test]
@@ -551,7 +864,7 @@ mod tests {
             current: 2,
             ..Runtime::new()
         };
-        assert_eq!(r.tick(&s, false, idle(0)), Order::Nothing);
+        assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Nothing);
         assert!(r.paused && r.completed);
     }
 
@@ -573,22 +886,22 @@ mod tests {
             saved_progress: 0,
         };
         let mut r = Runtime::new();
-        assert_eq!(r.tick(&s, false, idle(0)), Order::Nothing);
+        assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Nothing);
         assert_eq!(r.title, "Express");
-        assert_eq!(r.tick(&s, false, idle(0)), Order::Throttle(50));
-        assert_eq!(r.tick(&s, false, idle(0)), Order::Navigate("Depot".into()));
+        assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Throttle(50));
+        assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Navigate("Depot".into()));
         r.already_there(&s);
         // Unpowered it waits; powered it is done.
         for _ in 0..10 {
-            r.tick(&s, false, idle(0));
+            r.tick(&s, false, idle(0), &none());
         }
         assert_eq!(r.current, 2);
         let on = Inputs {
             powered: true,
             ..Inputs::default()
         };
-        r.tick(&s, false, on);
-        r.tick(&s, false, on);
+        r.tick(&s, false, on, &none());
+        r.tick(&s, false, on, &none());
         assert_eq!(r.current, 3);
     }
 
@@ -619,20 +932,142 @@ mod tests {
             ..Inputs::default()
         };
         let mut r = Runtime::new();
-        r.tick(&s, false, at(0, 0));
+        r.tick(&s, false, at(0, 0), &none());
         r.already_there(&s);
-        r.tick(&s, false, at(1999, 3));
-        r.tick(&s, false, at(1999, 3));
+        r.tick(&s, false, at(1999, 3), &none());
+        r.tick(&s, false, at(1999, 3), &none());
         assert_eq!(r.current, 0);
-        r.tick(&s, false, at(24_000 + 2010, 0));
-        r.tick(&s, false, at(24_000 + 2011, 0));
+        r.tick(&s, false, at(24_000 + 2010, 0), &none());
+        r.tick(&s, false, at(24_000 + 2011, 0), &none());
         assert_eq!(r.current, 1);
         let mut r = Runtime::new();
-        r.tick(&s, false, at(0, 0));
+        r.tick(&s, false, at(0, 0), &none());
         r.already_there(&s);
-        r.tick(&s, false, at(0, 2));
-        r.tick(&s, false, at(0, 2));
+        r.tick(&s, false, at(0, 2), &none());
+        r.tick(&s, false, at(0, 2), &none());
         assert_eq!(r.current, 1);
+    }
+
+    #[test]
+    fn cargo_thresholds_look_every_20_ticks() {
+        let s = Schedule {
+            entries: vec![Entry::station(
+                "A",
+                vec![
+                    vec![Condition::ItemThreshold {
+                        op: Op::Greater,
+                        threshold: 10,
+                        stacks: false,
+                        item: Stack::new(),
+                    }],
+                    vec![Condition::FluidThreshold {
+                        op: Op::Less,
+                        threshold: 2,
+                        item: Stack::new(),
+                    }],
+                ],
+            )],
+            cyclic: true,
+            saved_progress: 0,
+        };
+        let mut r = Runtime::new();
+        r.tick(&s, false, idle(0), &none());
+        r.already_there(&s);
+        // Looked at once at arrival: 5 items, 3000 mB: neither met.
+        let at = |items, fluid| Probes {
+            measures: vec![((0, 0), items), ((1, 0), fluid)],
+            packages: None,
+        };
+        assert_eq!(r.probes_wanted(&s), vec![(0, 0), (1, 0)]);
+        r.tick(&s, false, idle(0), &at(5, 3000));
+        assert_eq!(r.current, 0);
+        // Not looked at again for 19 ticks, whatever the cargo.
+        for _ in 0..19 {
+            assert!(r.probes_wanted(&s).is_empty());
+            r.tick(&s, false, idle(0), &at(11, 0));
+        }
+        assert_eq!(r.current, 0);
+        assert_eq!(r.probes_wanted(&s), vec![(0, 0), (1, 0)]);
+        r.tick(&s, false, idle(0), &at(11, 3000));
+        r.tick(&s, false, idle(0), &none());
+        assert_eq!(r.current, 1);
+    }
+
+    #[test]
+    fn links_and_unloaded_stations_are_read_each_tick() {
+        let s = Schedule {
+            entries: vec![Entry::station(
+                "A",
+                vec![vec![
+                    Condition::RedstoneLink {
+                        freq: [Stack::new(), Stack::new()],
+                        inverted: true,
+                    },
+                    Condition::Unloaded,
+                ]],
+            )],
+            cyclic: true,
+            saved_progress: 0,
+        };
+        let mut r = Runtime::new();
+        r.tick(&s, false, idle(0), &none());
+        r.already_there(&s);
+        let m = |v| Probes {
+            measures: vec![((0, 0), v), ((0, 1), v)],
+            packages: None,
+        };
+        // A powered network does not meet an inverted link.
+        r.tick(&s, false, idle(0), &m(1));
+        assert_eq!(r.progress[0].0, 0);
+        r.tick(&s, false, idle(0), &m(0));
+        assert_eq!(r.progress[0].0, 1);
+        assert_eq!(r.probes_wanted(&s), vec![(0, 1)]);
+        r.tick(&s, false, idle(0), &m(0));
+        assert_eq!(r.progress[0].0, 1);
+        r.tick(&s, false, idle(0), &m(1));
+        r.tick(&s, false, idle(0), &none());
+        assert_eq!(r.current, 1);
+    }
+
+    #[test]
+    fn package_instructions_go_where_the_glue_found() {
+        let s = Schedule {
+            entries: vec![
+                Entry {
+                    instruction: Instruction::DeliverPackages,
+                    conditions: vec![vec![Condition::Powered]],
+                },
+                Entry {
+                    instruction: Instruction::FetchPackages("Home*".into()),
+                    conditions: vec![vec![Condition::Powered]],
+                },
+            ],
+            cyclic: true,
+            saved_progress: 0,
+        };
+        let found = |stations: Vec<[i32; 3]>, any| Probes {
+            measures: Vec::new(),
+            packages: Some((stations, any)),
+        };
+        let mut r = Runtime::new();
+        assert!(r.packages_wanted(&s));
+        // Packages aboard but no postbox for them: it waits and looks again.
+        assert_eq!(
+            r.tick(&s, false, idle(0), &found(vec![], true)),
+            Order::Nothing
+        );
+        assert_eq!((r.current, r.cooldown), (0, INTERVAL));
+        r.cooldown = 0;
+        assert_eq!(
+            r.tick(&s, false, idle(0), &found(vec![[1, 2, 3]], true)),
+            Order::NavigateTo(vec![[1, 2, 3]])
+        );
+        // Nothing aboard: on to fetching; nothing to fetch: on again after a wait.
+        let mut r = Runtime::new();
+        r.tick(&s, false, idle(0), &found(vec![], false));
+        assert_eq!(r.current, 1);
+        r.tick(&s, false, idle(0), &found(vec![], false));
+        assert_eq!((r.current, r.cooldown), (2, INTERVAL));
     }
 
     #[test]

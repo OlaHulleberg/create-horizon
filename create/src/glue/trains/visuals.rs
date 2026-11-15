@@ -239,6 +239,19 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
     sync(lv, now, &[CAR, BOGEY]);
 }
 
+/// Carriage `car` of train `train` changed a block (a door opened): its displays are made
+/// again from its blocks next tick.
+pub fn refresh_car(lv: &mut ServerLevel<'_>, train: u32, car: usize) {
+    let key = (lv.dim, u128::from(train), CAR, car);
+    if let Some(shown) = SHOWN.with_borrow_mut(|s| s.remove(&key)) {
+        for (id, _) in shown.displays {
+            if let Some(e) = lv.host.entity(id) {
+                e.discard(lv.host);
+            }
+        }
+    }
+}
+
 /// A cart's contraption as `carts` takes it.
 pub type CartPose<'a> = (u128, [f64; 3], f32, f32, f32, &'a [([i32; 3], u32)]);
 

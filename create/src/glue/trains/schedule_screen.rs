@@ -2,17 +2,24 @@
 //! screen, where entries (a station to travel to, a title, a top speed) and the conditions to
 //! wait on at a station are added, edited, moved and removed; closing it writes the schedule
 //! back onto the item in the hand it was opened from, under Create's component name in its
-//! custom data. The schedule's screen is the mod's own: Create's opens a menu with the player's
-//! inventory for item and fluid conditions, which the port doesn't run.
+//! custom data. While a part is edited, the player's inventory is shown under the editor and
+//! the part's ghost slots (an item threshold's item, a fluid threshold's bucket, a redstone
+//! link's two frequencies) take ghost copies of its stacks (`ScheduleMenu`).
+//!
+//! Left out (no API for it): an item-opened mod menu has no screen layout (`player_open_mod_menu`
+//! without a block gives the client no `Screen`), so the screen is the mod's own and the
+//! inventory shown is a copy the server sent when it opened: clicking a slot carries a ghost
+//! copy of its stack, never the stack itself (as the filters' screens do).
 
-use super::gui::{Reader, click_sound, icon_button, inside, millis, put_i32, put_str, tooltip, tr};
+use super::gui::{Reader, click_sound, icon_button, inside, millis, put_i32, tooltip, tr};
+use crate::glue::items::filter_screen::{click_inventory, stack_bytes, stack_of};
 use crate::glue::net;
-use create_engine::schedule::{Condition, Entry, Instruction, Schedule, TimeUnit};
+use create_engine::schedule::{Condition, Entry, Instruction, Op, Schedule, Stack, TimeUnit};
 use mod_api::{
-    ClientHost, Compound, DrawContext, Flow, HostSide, InteractionResult, ItemPart, ItemStack,
-    PlayerRef, Registrar, ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
-    ServerHost, Tag, UseItemEvent,
+    ClientHost, Compound, DrawContext, Flow, Host, HostSide, InteractionResult, ItemPart,
+    ItemStack, PlayerRef, Registrar, ScreenCharTypedPreEvent, ScreenClosingEvent,
+    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent,
+    ScreenRenderPostEvent, ServerHost, Tag, UseItemEvent,
 };
 use std::cell::RefCell;
 
@@ -68,109 +75,35 @@ pub fn with_schedule(stack: &ItemStack, schedule: &Schedule) -> ItemStack {
 // ---------------------------------------------------------------------------------------------
 // The wire
 
+fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
+    put_i32(out, b.len() as i32);
+    out.extend_from_slice(b);
+}
+
+fn read_bytes(r: &mut Reader<'_>) -> Option<Vec<u8>> {
+    let n = usize::try_from(r.i32()?).ok()?;
+    if r.0.len() < n {
+        return None;
+    }
+    let (b, rest) = r.0.split_at(n);
+    r.0 = rest;
+    Some(b.to_vec())
+}
+
+/// A schedule on the wire: its NBT as Create saves it (`Schedule.write`), ghost stacks and all.
 fn put_schedule(out: &mut Vec<u8>, s: &Schedule) {
-    out.push(u8::from(s.cyclic));
-    put_i32(out, s.saved_progress as i32);
-    put_i32(out, s.entries.len() as i32);
-    for e in &s.entries {
-        match &e.instruction {
-            Instruction::Destination(t) => {
-                out.push(0);
-                put_str(out, t);
-            }
-            Instruction::Rename(t) => {
-                out.push(1);
-                put_str(out, t);
-            }
-            Instruction::Throttle(v) => {
-                out.push(2);
-                put_i32(out, *v);
-            }
-        }
-        put_i32(out, e.conditions.len() as i32);
-        for g in &e.conditions {
-            put_i32(out, g.len() as i32);
-            for c in g {
-                put_condition(out, c);
-            }
-        }
-    }
-}
-
-fn put_condition(out: &mut Vec<u8>, c: &Condition) {
-    let (kind, a, b, d) = match *c {
-        Condition::Delay { value, unit } => (0, value, unit.ordinal(), 0),
-        Condition::TimeOfDay {
-            hour,
-            minute,
-            rotation,
-        } => (1, hour, minute, rotation),
-        Condition::PlayerCount { count, exact } => (2, count, i32::from(exact), 0),
-        Condition::Idle { value, unit } => (3, value, unit.ordinal(), 0),
-        Condition::Powered => (4, 0, 0, 0),
-    };
-    out.push(kind);
-    for v in [a, b, d] {
-        put_i32(out, v);
-    }
-}
-
-fn read_condition(r: &mut Reader<'_>) -> Option<Condition> {
-    let kind = r.u8()?;
-    let (a, b, d) = (r.i32()?, r.i32()?, r.i32()?);
-    Some(match kind {
-        0 => Condition::Delay {
-            value: a,
-            unit: TimeUnit::from_ordinal(b),
-        },
-        1 => Condition::TimeOfDay {
-            hour: a,
-            minute: b,
-            rotation: d,
-        },
-        2 => Condition::PlayerCount {
-            count: a,
-            exact: b != 0,
-        },
-        3 => Condition::Idle {
-            value: a,
-            unit: TimeUnit::from_ordinal(b),
-        },
-        _ => Condition::Powered,
-    })
+    let b = Tag::Compound(super::saved::schedule_to_nbt(s))
+        .to_network_bytes()
+        .unwrap_or_default();
+    put_bytes(out, &b);
 }
 
 fn read_schedule(r: &mut Reader<'_>) -> Option<Schedule> {
-    let cyclic = r.bool()?;
-    let saved_progress = r.i32()?.max(0) as usize;
-    let n = r.i32()?.clamp(0, 1000);
-    let mut entries = Vec::new();
-    for _ in 0..n {
-        let instruction = match r.u8()? {
-            0 => Instruction::Destination(r.str()?),
-            1 => Instruction::Rename(r.str()?),
-            _ => Instruction::Throttle(r.i32()?.clamp(5, 100)),
-        };
-        let groups = r.i32()?.clamp(0, 100);
-        let mut conditions = Vec::new();
-        for _ in 0..groups {
-            let k = r.i32()?.clamp(0, 100);
-            conditions.push(
-                (0..k)
-                    .map(|_| read_condition(r))
-                    .collect::<Option<Vec<_>>>()?,
-            );
-        }
-        entries.push(Entry {
-            instruction,
-            conditions,
-        });
+    let b = read_bytes(r)?;
+    match Tag::from_network_bytes(&b, None).ok()?.0 {
+        Tag::Compound(c) => Some(super::saved::schedule_from_nbt(&c)),
+        _ => None,
     }
-    Some(Schedule {
-        entries,
-        cyclic,
-        saved_progress,
-    })
 }
 
 /// The hotbar slot of the schedule and the schedule.
@@ -184,6 +117,33 @@ fn decode(data: &[u8]) -> Option<(u8, Schedule)> {
     let mut r = Reader(data);
     let slot = r.u8()?;
     Some((slot, read_schedule(&mut r)?))
+}
+
+/// The screen opened: the schedule, and the player's inventory (slot 0..35, the stack's
+/// network NBT) for the ghost slots.
+fn encode_open(slot: u8, s: &Schedule, inventory: &[(u8, Vec<u8>)]) -> Vec<u8> {
+    let mut out = encode(slot, s);
+    out.push(inventory.len() as u8);
+    for (i, b) in inventory {
+        out.push(*i);
+        put_bytes(&mut out, b);
+    }
+    out
+}
+
+type Opened = (u8, Schedule, Vec<(u8, Vec<u8>)>);
+
+fn decode_open(data: &[u8]) -> Option<Opened> {
+    let mut r = Reader(data);
+    let slot = r.u8()?;
+    let s = read_schedule(&mut r)?;
+    let n = r.u8()?;
+    let mut inventory = Vec::new();
+    for _ in 0..n {
+        let i = r.u8()?;
+        inventory.push((i, read_bytes(&mut r)?));
+    }
+    Some((slot, s, inventory))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -207,7 +167,20 @@ impl ItemPart for ScheduleItem {
         }
         let slot = player.selected_slot(&*host).unwrap_or(0) as u8;
         let schedule = schedule_of(event.stack).unwrap_or_default();
-        net::send_to_player(host, player, CHANNEL, &encode(slot, &schedule));
+        let h: &dyn Host = &*host;
+        let inventory: Vec<(u8, Vec<u8>)> = player
+            .inventory_slots(h)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(i, _)| *i < 36)
+            .filter_map(|(i, s)| Some((i as u8, stack_bytes(h, &s)?)))
+            .collect();
+        net::send_to_player(
+            host,
+            player,
+            CHANNEL,
+            &encode_open(slot, &schedule, &inventory),
+        );
         Some(InteractionResult::SuccessServer)
     }
 
@@ -301,6 +274,8 @@ struct Editing {
     allow_delete: bool,
     /// The text box has the focus.
     typing: bool,
+    /// The ghost slots (`ScheduleMenu.ghostInventory`), given to the part when it closes.
+    ghosts: [Option<ItemStack>; 2],
 }
 
 struct Open {
@@ -309,6 +284,18 @@ struct Open {
     scroll: f32,
     editing: Option<Editing>,
     size: [f32; 2],
+    /// The player's inventory as the server sent it, and the slot whose ghost is carried.
+    inventory: Vec<(u8, ItemStack)>,
+    cursor: Option<u8>,
+}
+
+impl Open {
+    fn stack(&self, slot: u8) -> Option<&ItemStack> {
+        self.inventory
+            .iter()
+            .find(|(i, _)| *i == slot)
+            .map(|(_, s)| s)
+    }
 }
 
 thread_local! {
@@ -322,9 +309,14 @@ pub fn reset() {
 }
 
 pub fn server_message(host: &mut dyn ClientHost, data: &[u8]) {
-    let Some((slot, schedule)) = decode(data) else {
+    let Some((slot, schedule, inventory)) = decode_open(data) else {
         return;
     };
+    let h: &dyn Host = &*host;
+    let inventory = inventory
+        .iter()
+        .filter_map(|(i, b)| Some((*i, stack_of(h, b)?)))
+        .collect();
     OPEN.with_borrow_mut(|o| {
         *o = Some(Open {
             schedule,
@@ -332,6 +324,8 @@ pub fn server_message(host: &mut dyn ClientHost, data: &[u8]) {
             scroll: 0.0,
             editing: None,
             size: [0.0, 0.0],
+            inventory,
+            cursor: None,
         })
     });
     if !host.mod_screen_open(MOD) {
@@ -422,6 +416,20 @@ fn item(host: &dyn ClientHost, id: &str) -> Option<mod_api::ItemKey> {
         .and_then(|i| host.item_key(&i))
 }
 
+/// A stack of the item `id`.
+fn stack_named(host: &dyn ClientHost, id: &str) -> Option<ItemStack> {
+    item(host, id).map(ItemStack::of)
+}
+
+/// A ghost slot's stack from the bytes a condition keeps.
+fn ghost(host: &dyn ClientHost, s: &Stack) -> Option<ItemStack> {
+    if s.is_empty() {
+        None
+    } else {
+        stack_of(host, s)
+    }
+}
+
 fn two(v: i32) -> String {
     format!("{v:02}")
 }
@@ -446,14 +454,56 @@ fn digital(host: &dyn ClientHost, hour: i32, minute: i32) -> String {
 }
 
 /// `getSummary`: the item drawn in a field and its text.
-fn summary(host: &dyn ClientHost, f: &Field) -> (Option<&'static str>, String) {
+fn summary(host: &dyn ClientHost, f: &Field) -> (Option<ItemStack>, String) {
+    let named = |id: &str| stack_named(host, id);
     match f {
         Field::Instruction(Instruction::Destination(t)) => {
-            (Some("create:track_station"), t.clone())
+            (named("create:track_station"), t.clone())
         }
-        Field::Instruction(Instruction::Rename(t)) => (Some("minecraft:name_tag"), t.clone()),
-        Field::Instruction(Instruction::Throttle(v)) => (Some("create:controls"), format!("{v}%")),
+        Field::Instruction(Instruction::DeliverPackages) => (
+            named("create:white_postbox"),
+            tr(host, "create.schedule.instruction.package_delivery", &[]),
+        ),
+        Field::Instruction(Instruction::FetchPackages(_)) => (
+            named("create:cardboard_package_12x12"),
+            tr(host, "create.schedule.instruction.package_retrieval", &[]),
+        ),
+        Field::Instruction(Instruction::Rename(t)) => (named("minecraft:name_tag"), t.clone()),
+        Field::Instruction(Instruction::Throttle(v)) => (named("create:controls"), format!("{v}%")),
         Field::Condition(c) => match *c {
+            // `CargoThresholdCondition.getSummary`: the item, the operator and the threshold
+            // with its unit.
+            Condition::ItemThreshold {
+                op,
+                threshold,
+                stacks,
+                ref item,
+            } => (
+                ghost(host, item),
+                format!(
+                    "{} {threshold}{}",
+                    op.symbol(),
+                    if stacks { "\u{25A4}" } else { "" }
+                ),
+            ),
+            Condition::FluidThreshold {
+                op,
+                threshold,
+                ref item,
+            } => (ghost(host, item), format!("{} {threshold}b", op.symbol())),
+            Condition::RedstoneLink { inverted, .. } => (
+                named("create:redstone_link"),
+                tr(
+                    host,
+                    if inverted {
+                        "create.schedule.condition.redstone_link_off"
+                    } else {
+                        "create.schedule.condition.redstone_link_on"
+                    },
+                    &[],
+                ),
+            ),
+            Condition::Unloaded => (None, tr(host, "create.schedule.condition.unloaded", &[])),
             Condition::Delay { value, unit } => (
                 None,
                 tr(
@@ -471,10 +521,10 @@ fn summary(host: &dyn ClientHost, f: &Field) -> (Option<&'static str>, String) {
                 ),
             ),
             Condition::TimeOfDay { hour, minute, .. } => {
-                (Some("minecraft:clock"), digital(host, hour, minute))
+                (named("minecraft:clock"), digital(host, hour, minute))
             }
             Condition::PlayerCount { count, .. } => (
-                Some("create:yellow_seat"),
+                named("create:yellow_seat"),
                 tr(
                     host,
                     if count == 1 {
@@ -491,7 +541,7 @@ fn summary(host: &dyn ClientHost, f: &Field) -> (Option<&'static str>, String) {
 }
 
 /// `getFieldSize`.
-fn field_size(draw: &dyn DrawContext, min: f32, s: &(Option<&str>, String)) -> f32 {
+fn field_size(draw: &dyn DrawContext, min: f32, s: &(Option<ItemStack>, String)) -> f32 {
     (draw.text_width(&s.1) + if s.0.is_some() { 20.0 } else { 0.0 } + 16.0).max(min)
 }
 
@@ -499,7 +549,7 @@ fn field_size(draw: &dyn DrawContext, min: f32, s: &(Option<&str>, String)) -> f
 fn render_input(
     host: &dyn ClientHost,
     draw: &mut dyn DrawContext,
-    s: &(Option<&str>, String),
+    s: &(Option<ItemStack>, String),
     at: [f32; 2],
     clean: bool,
     min: f32,
@@ -512,12 +562,11 @@ fn render_input(
         sprite(draw, SHEET, CONDITION_LEFT, [at[0] - 3.0, at[1]]);
     }
     sprite(draw, SHEET, CONDITION_RIGHT, [at[0] + size - 2.0, at[1]]);
-    if let Some(id) = s.0 {
+    if let Some(stack) = &s.0 {
         sprite(draw, SHEET, CONDITION_ITEM, [at[0] + 3.0, at[1]]);
-        if let Some(k) = item(host, id) {
-            draw.item(k, [at[0] + 4.0, at[1]], 16.0);
-        }
+        draw.item_stack(stack, [at[0] + 4.0, at[1]], 16.0);
     }
+    let _ = host;
     let x = if s.0.is_some() { 28.0 } else { 8.0 };
     let mut text = s.1.clone();
     while draw.text_width(&text) > 120.0 {
@@ -539,7 +588,7 @@ fn card_height(e: &Entry) -> f32 {
 
 fn column_width(host: &dyn ClientHost, draw: &dyn DrawContext, g: &[Condition]) -> f32 {
     g.iter()
-        .map(|c| field_size(draw, 32.0, &summary(host, &Field::Condition(*c))))
+        .map(|c| field_size(draw, 32.0, &summary(host, &Field::Condition(c.clone()))))
         .fold(0.0, f32::max)
 }
 
@@ -785,7 +834,7 @@ fn draw_entry(
     for g in &e.conditions {
         let w = column_width(host, &*draw, g);
         for (r, c) in g.iter().enumerate() {
-            let sum = summary(host, &Field::Condition(*c));
+            let sum = summary(host, &Field::Condition(c.clone()));
             render_input(
                 host,
                 draw,
@@ -899,7 +948,7 @@ fn action(
             let w = g
                 .iter()
                 .map(|c| {
-                    let s = summary(host, &Field::Condition(*c));
+                    let s = summary(host, &Field::Condition(c.clone()));
                     let tw = host
                         .text_width(&mod_api::Text::literal(s.1.as_str()))
                         .unwrap_or(0) as f32;
@@ -914,13 +963,9 @@ fn action(
             if row >= 0 && (row as usize) < g.len() {
                 let row = row as usize;
                 let can_remove = g.len() > 1 || e.conditions.len() > 1;
-                let c = g[row];
+                let c = &g[row];
                 let mut lines = vec![tr(host, "create.schedule.condition_type", &[])];
-                lines.push(tr(
-                    host,
-                    &format!("create.schedule.condition.{}", c.id()),
-                    &[],
-                ));
+                lines.extend(title_lines(host, c));
                 lines.push(String::new());
                 lines.push(lmb);
                 if can_remove {
@@ -964,6 +1009,139 @@ fn action(
     Some(vec![tr(host, "create.gui.schedule.add_entry", &[])])
 }
 
+/// `getTitleAs`: a condition's lines in its tooltip.
+fn title_lines(host: &dyn ClientHost, c: &Condition) -> Vec<String> {
+    let name = |s: &Stack| {
+        ghost(host, s).map_or_else(
+            || tr(host, "create.schedule.condition.threshold.anything", &[]),
+            |st| {
+                let id = st.item().id(host);
+                if matches!(
+                    id.as_str(),
+                    "create:filter" | "create:attribute_filter" | "create:package_filter"
+                ) {
+                    tr(
+                        host,
+                        "create.schedule.condition.threshold.matching_content",
+                        &[],
+                    )
+                } else {
+                    host.hover_name(&st)
+                }
+            },
+        )
+    };
+    let holds = |op: Op| {
+        tr(
+            host,
+            "create.schedule.condition.threshold.train_holds",
+            &[tr(
+                host,
+                &format!("create.schedule.condition.threshold.{}", op.key()),
+                &[],
+            )],
+        )
+    };
+    match c {
+        Condition::ItemThreshold {
+            op,
+            threshold,
+            stacks,
+            item,
+        } => vec![
+            holds(*op),
+            tr(
+                host,
+                "create.schedule.condition.threshold.x_units_of_item",
+                &[
+                    threshold.to_string(),
+                    tr(
+                        host,
+                        if *stacks {
+                            "create.schedule.condition.threshold.stacks"
+                        } else {
+                            "create.schedule.condition.threshold.items"
+                        },
+                        &[],
+                    ),
+                    name(item),
+                ],
+            ),
+        ],
+        Condition::FluidThreshold {
+            op,
+            threshold,
+            item,
+        } => vec![
+            holds(*op),
+            tr(
+                host,
+                "create.schedule.condition.threshold.x_units_of_item",
+                &[
+                    threshold.to_string(),
+                    tr(host, "create.schedule.condition.threshold.buckets", &[]),
+                    name(item),
+                ],
+            ),
+        ],
+        Condition::RedstoneLink { freq, inverted } => {
+            let freq_name = |s: &Stack| {
+                ghost(host, s).map_or_else(
+                    || tr(host, "block.minecraft.air", &[]),
+                    |st| host.hover_name(&st),
+                )
+            };
+            vec![
+                tr(
+                    host,
+                    if *inverted {
+                        "create.schedule.condition.redstone_link.frequency_unpowered"
+                    } else {
+                        "create.schedule.condition.redstone_link.frequency_powered"
+                    },
+                    &[],
+                ),
+                format!(" #1 {}", freq_name(&freq[0])),
+                format!(" #2 {}", freq_name(&freq[1])),
+            ]
+        }
+        _ => vec![tr(
+            host,
+            &format!("create.schedule.condition.{}", c.id()),
+            &[],
+        )],
+    }
+}
+
+/// `getSecondLineTooltip`: what an empty ghost slot says.
+fn slot_tip(host: &dyn ClientHost, c: &Condition, slot: usize) -> Vec<String> {
+    match c {
+        Condition::RedstoneLink { .. } => vec![tr(
+            host,
+            if slot == 0 {
+                "create.logistics.firstFrequency"
+            } else {
+                "create.logistics.secondFrequency"
+            },
+            &[],
+        )],
+        _ => (1..=3)
+            .map(|n| {
+                let suffix = if n == 1 {
+                    String::new()
+                } else {
+                    format!("_{n}")
+                };
+                tr(
+                    host,
+                    &format!("create.schedule.condition.threshold.place_item{suffix}"),
+                    &[],
+                )
+            })
+            .collect(),
+    }
+}
+
 /// A change a click asks for.
 enum Change {
     Edit(Target),
@@ -973,7 +1151,7 @@ enum Change {
     RemoveCondition(usize, usize, usize),
 }
 
-fn apply(o: &mut Open, change: Change) {
+fn apply(host: &dyn ClientHost, o: &mut Open, change: Change) {
     let s = &mut o.schedule;
     match change {
         Change::Remove(i) => {
@@ -1004,18 +1182,25 @@ fn apply(o: &mut Open, change: Change) {
                 Target::Condition { entry, col, row } => {
                     let groups = &s.entries[entry].conditions;
                     let can_remove = groups[col].len() > 1 || groups.len() > 1;
-                    (Field::Condition(groups[col][row]), can_remove)
+                    (Field::Condition(groups[col][row].clone()), can_remove)
                 }
                 Target::AppendCondition { .. } | Target::NewGroup { .. } => (
                     Field::Condition(Condition::of("delay").unwrap_or(Condition::Powered)),
                     true,
                 ),
             };
+            // `startEditing`: the ghost slots take the part's stacks.
+            let ghosts = match &field {
+                Field::Condition(c) => [0, 1].map(|i| c.item(i).and_then(|b| ghost(host, b))),
+                Field::Instruction(_) => [None, None],
+            };
+            o.cursor = None;
             o.editing = Some(Editing {
                 field,
                 target,
                 allow_delete,
                 typing: false,
+                ghosts,
             });
         }
     }
@@ -1027,11 +1212,22 @@ fn apply(o: &mut Open, change: Change) {
     };
 }
 
-/// `onEditorClose`: confirmed, the part goes where it was edited; deleted, it goes away.
-fn close_editor(o: &mut Open, confirmed: bool) {
-    let Some(ed) = o.editing.take() else {
+/// `onEditorClose`: confirmed, the part goes where it was edited; deleted, it goes away. The
+/// ghost slots' stacks go to the part first (`stopEditing`).
+fn close_editor(host: &dyn ClientHost, o: &mut Open, confirmed: bool) {
+    let Some(mut ed) = o.editing.take() else {
         return;
     };
+    o.cursor = None;
+    if let Field::Condition(c) = &mut ed.field {
+        for i in 0..c.slots() {
+            let b = ed.ghosts[i]
+                .as_ref()
+                .and_then(|s| stack_bytes(host, s))
+                .unwrap_or_default();
+            c.set_item(i, b);
+        }
+    }
     let s = &mut o.schedule;
     match (ed.target, ed.field) {
         (Target::NewEntry, Field::Instruction(i)) if confirmed => {
@@ -1080,6 +1276,8 @@ enum Input {
     },
     /// One of the options (lang keys).
     Select(&'static [&'static str]),
+    /// A number typed in (`addIntegerTextInput`).
+    Digits,
 }
 
 const UNITS: [&str; 3] = [
@@ -1103,13 +1301,45 @@ const PLAYER_COUNT: [&str; 2] = [
     "create.schedule.condition.player_count.exactly",
     "create.schedule.condition.player_count.or_above",
 ];
+const OPERATORS: [&str; 3] = [
+    "create.schedule.condition.threshold.greater",
+    "create.schedule.condition.threshold.less",
+    "create.schedule.condition.threshold.equal",
+];
+const ITEM_MEASURES: [&str; 2] = [
+    "create.schedule.condition.threshold.items",
+    "create.schedule.condition.threshold.stacks",
+];
+const FLUID_MEASURES: [&str; 1] = ["create.schedule.condition.threshold.buckets"];
+const LINK_STATES: [&str; 2] = [
+    "create.schedule.condition.redstone_link.powered",
+    "create.schedule.condition.redstone_link.unpowered",
+];
 
 /// `initConfigurationWidgets` of each part: `(x, width, input)`.
 fn inputs(f: &Field) -> Vec<(f32, f32, Input)> {
     match f {
-        Field::Instruction(Instruction::Destination(_) | Instruction::Rename(_)) => {
+        Field::Instruction(
+            Instruction::Destination(_) | Instruction::Rename(_) | Instruction::FetchPackages(_),
+        ) => {
             vec![(0.0, 121.0, Input::Text)]
         }
+        Field::Instruction(Instruction::DeliverPackages) => Vec::new(),
+        // `CargoThresholdCondition.initConfigurationWidgets` and the measure of each.
+        Field::Condition(Condition::ItemThreshold { .. }) => vec![
+            (0.0, 24.0, Input::Select(&OPERATORS)),
+            (29.0, 41.0, Input::Digits),
+            (71.0, 50.0, Input::Select(&ITEM_MEASURES)),
+        ],
+        Field::Condition(Condition::FluidThreshold { .. }) => vec![
+            (0.0, 24.0, Input::Select(&OPERATORS)),
+            (29.0, 41.0, Input::Digits),
+            (71.0, 50.0, Input::Select(&FLUID_MEASURES)),
+        ],
+        Field::Condition(Condition::RedstoneLink { .. }) => {
+            vec![(20.0, 101.0, Input::Select(&LINK_STATES))]
+        }
+        Field::Condition(Condition::Unloaded) => Vec::new(),
         Field::Instruction(Instruction::Throttle(_)) => vec![(
             0.0,
             50.0,
@@ -1183,6 +1413,21 @@ fn value(f: &Field, k: usize) -> i32 {
         (Field::Condition(Condition::TimeOfDay { rotation, .. }), 2) => *rotation,
         (Field::Condition(Condition::PlayerCount { count, .. }), 0) => *count,
         (Field::Condition(Condition::PlayerCount { exact, .. }), 1) => i32::from(!*exact),
+        (
+            Field::Condition(
+                Condition::ItemThreshold { op, .. } | Condition::FluidThreshold { op, .. },
+            ),
+            0,
+        ) => op.ordinal(),
+        (
+            Field::Condition(
+                Condition::ItemThreshold { threshold, .. }
+                | Condition::FluidThreshold { threshold, .. },
+            ),
+            1,
+        ) => *threshold,
+        (Field::Condition(Condition::ItemThreshold { stacks, .. }), 2) => i32::from(*stacks),
+        (Field::Condition(Condition::RedstoneLink { inverted, .. }), 0) => i32::from(*inverted),
         _ => 0,
     }
 }
@@ -1201,18 +1446,46 @@ fn set_value(f: &mut Field, k: usize, v: i32) {
         (Field::Condition(Condition::TimeOfDay { rotation, .. }), 2) => *rotation = v,
         (Field::Condition(Condition::PlayerCount { count, .. }), 0) => *count = v,
         (Field::Condition(Condition::PlayerCount { exact, .. }), 1) => *exact = v == 0,
+        (
+            Field::Condition(
+                Condition::ItemThreshold { op, .. } | Condition::FluidThreshold { op, .. },
+            ),
+            0,
+        ) => *op = Op::from_ordinal(v),
+        (
+            Field::Condition(
+                Condition::ItemThreshold { threshold, .. }
+                | Condition::FluidThreshold { threshold, .. },
+            ),
+            1,
+        ) => *threshold = v,
+        (Field::Condition(Condition::ItemThreshold { stacks, .. }), 2) => *stacks = v == 1,
+        (Field::Condition(Condition::RedstoneLink { inverted, .. }), 0) => *inverted = v == 1,
         _ => {}
+    }
+}
+
+/// The number a `Digits` input of `f` holds, if any (`Threshold`).
+fn digits_mut(f: &mut Field) -> Option<&mut i32> {
+    match f {
+        Field::Condition(
+            Condition::ItemThreshold { threshold, .. }
+            | Condition::FluidThreshold { threshold, .. },
+        ) => Some(threshold),
+        _ => None,
     }
 }
 
 fn text_mut(f: &mut Field) -> Option<&mut String> {
     match f {
-        Field::Instruction(Instruction::Destination(t) | Instruction::Rename(t)) => Some(t),
+        Field::Instruction(
+            Instruction::Destination(t) | Instruction::Rename(t) | Instruction::FetchPackages(t),
+        ) => Some(t),
         _ => None,
     }
 }
 
-/// The editor's type options (`Schedule.INSTRUCTION_TYPES` / `CONDITION_TYPES` the port runs).
+/// The editor's type options (`Schedule.INSTRUCTION_TYPES` / `CONDITION_TYPES`).
 fn types(f: &Field) -> (&'static str, Vec<&'static str>) {
     match f {
         Field::Instruction(_) => ("instruction", Instruction::IDS.to_vec()),
@@ -1251,6 +1524,149 @@ fn at(r: [f32; 4], left: f32, top: f32) -> [f32; 4] {
     [left + r[0], top + r[1], r[2], r[3]]
 }
 
+/// `SCHEDULE_EDITOR_ADDITIONAL_SLOT` in `schedule_2.png`.
+const ADDITIONAL_SLOT: [f32; 4] = [55.0, 47.0, 32.0, 18.0];
+/// `PLAYER_INVENTORY`, drawn at (38, 122) under the editor.
+const INVENTORY_PANEL: [f32; 4] = [0.0, 0.0, 176.0, 108.0];
+
+/// Ghost slot `i`'s item corner (`ScheduleMenu.addSlots`: 54 + 20i, 88).
+fn ghost_slot(left: f32, top: f32, i: usize) -> [f32; 2] {
+    [left + 54.0 + 20.0 * i as f32, top + 88.0]
+}
+
+/// An inventory slot's item corner (`addPlayerSlots(46, 140)`).
+fn inventory_slot(left: f32, top: f32, slot: u8) -> [f32; 2] {
+    let s = f32::from(slot);
+    if slot < 9 {
+        [left + 46.0 + s * 18.0, top + 198.0]
+    } else {
+        let i = s - 9.0;
+        [
+            left + 46.0 + (i % 9.0) * 18.0,
+            top + 140.0 + (i / 9.0).floor() * 18.0,
+        ]
+    }
+}
+
+fn over_slot(at: [f32; 2], p: [f32; 2]) -> bool {
+    p[0] >= at[0] - 1.0 && p[0] < at[0] + 17.0 && p[1] >= at[1] - 1.0 && p[1] < at[1] + 17.0
+}
+
+/// The ghost slots the part offers (`targetSlotsActive`).
+fn slots_of(f: &Field) -> usize {
+    match f {
+        Field::Condition(c) => c.slots(),
+        Field::Instruction(_) => 0,
+    }
+}
+
+/// The inventory under the editor, the ghost slots and what is carried (`ScheduleMenu`'s
+/// slots, drawn while editing); the hovered slot's name or the empty ghost slot's tip.
+fn draw_slots(
+    host: &dyn ClientHost,
+    draw: &mut dyn DrawContext,
+    o: &Open,
+    ed: &Editing,
+    mouse: [f32; 2],
+    tips: &mut Vec<String>,
+) {
+    let (left, top) = corner(o.size);
+    sprite(
+        draw,
+        "create:gui/player_inventory",
+        INVENTORY_PANEL,
+        [left + 38.0, top + 122.0],
+    );
+    draw.text(
+        &tr(host, "container.inventory", &[]),
+        [left + 46.0, top + 128.0],
+        0xFF50_5050,
+        false,
+    );
+    for slot in 0..36u8 {
+        let p = inventory_slot(left, top, slot);
+        if let Some(s) = o.stack(slot) {
+            // With its count and bar, as a slot draws it.
+            draw.gui_draw_item_with(s, p, None);
+        }
+        if over_slot(p, mouse) {
+            draw.fill([p[0], p[1], 16.0, 16.0], 0x80FF_FFFF);
+            if o.cursor.is_none()
+                && let Some(s) = o.stack(slot)
+            {
+                tips.push(host.hover_name(s));
+            }
+        }
+    }
+    let n = slots_of(&ed.field);
+    for i in 0..n {
+        let p = ghost_slot(left, top, i);
+        if let Some(s) = &ed.ghosts[i] {
+            draw.item_stack(s, p, 16.0);
+        }
+        if over_slot(p, mouse) {
+            draw.fill([p[0], p[1], 16.0, 16.0], 0x80FF_FFFF);
+            match (&ed.ghosts[i], &ed.field) {
+                (Some(s), _) if o.cursor.is_none() => tips.push(host.hover_name(s)),
+                (None, Field::Condition(c)) => tips.extend(slot_tip(host, c, i)),
+                _ => {}
+            }
+        }
+    }
+    // The ghost on the cursor (`renderFloatingItem`).
+    if let Some(s) = o.cursor.and_then(|slot| o.stack(slot)) {
+        draw.item_stack(s, [mouse[0] - 8.0, mouse[1] - 8.0], 16.0);
+    }
+}
+
+/// A click on the inventory or a ghost slot while editing (`GhostItemMenu.clicked`,
+/// `quickMoveStack`); true when one took it.
+fn click_slots(o: &mut Open, mouse: [f32; 2], shift: bool) -> bool {
+    let (left, top) = corner(o.size);
+    let selected = o.slot;
+    for slot in 0..36u8 {
+        if !over_slot(inventory_slot(left, top, slot), mouse) {
+            continue;
+        }
+        let stack = o.stack(slot).cloned();
+        if shift {
+            // `quickMoveStack`: a copy into the first empty ghost slot.
+            if let (Some(s), Some(ed)) = (stack, o.editing.as_mut())
+                && slot != selected
+            {
+                let n = slots_of(&ed.field);
+                if let Some(g) = ed.ghosts[..n].iter_mut().find(|g| g.is_none()) {
+                    *g = Some(one_of(&s));
+                }
+            }
+        } else {
+            o.cursor = click_inventory(o.cursor, slot, stack.is_some(), selected);
+        }
+        return true;
+    }
+    let carried = o.cursor.and_then(|slot| o.stack(slot)).map(one_of);
+    let Some(ed) = o.editing.as_mut() else {
+        return false;
+    };
+    for i in 0..slots_of(&ed.field) {
+        if over_slot(ghost_slot(left, top, i), mouse) {
+            ed.ghosts[i] = if shift { None } else { carried };
+            return true;
+        }
+    }
+    if !inside([left, top, W, H], mouse) {
+        o.cursor = None;
+    }
+    false
+}
+
+/// A one-item copy (`GhostItemMenu`: `insert.setCount(1)`).
+fn one_of(s: &ItemStack) -> ItemStack {
+    let mut s = s.clone();
+    let _ = s.set_count(1);
+    s
+}
+
 /// The editor over the schedule (`renderBg` while editing, its widgets).
 fn draw_editor(
     host: &dyn ClientHost,
@@ -1286,19 +1702,40 @@ fn draw_editor(
     if inside(at(TYPE_INPUT, left, top), mouse) {
         tips.push(tr(host, &format!("create.schedule.{kind}_type"), &[]));
     }
-    // Its icon.
-    let (icon, _) = summary(host, &ed.field);
-    let icon = icon.or(match ed.field {
-        Field::Condition(Condition::Delay { .. } | Condition::Idle { .. }) => {
-            Some("minecraft:repeater")
+    // Its ghost slots, or its icon (`getSummary`, else `getSecondLineIcon`).
+    let n = slots_of(&ed.field);
+    for i in 0..n {
+        sprite(
+            draw,
+            SHEET_2,
+            ADDITIONAL_SLOT,
+            [left + 53.0 + 20.0 * i as f32, top + 87.0],
+        );
+    }
+    if n == 0 {
+        let (icon, _) = summary(host, &ed.field);
+        let icon = icon.or(match ed.field {
+            Field::Condition(Condition::Delay { .. } | Condition::Idle { .. }) => {
+                stack_named(host, "minecraft:repeater")
+            }
+            _ => None,
+        });
+        match icon {
+            Some(s) => {
+                draw.item_stack(&s, [left + 54.0, top + 88.0], 16.0);
+            }
+            None => sprite(draw, SHEET_2, INACTIVE_SLOT, [left + 53.0, top + 87.0]),
         }
-        _ => None,
-    });
-    match icon.and_then(|i| item(host, i)) {
-        Some(k) => {
-            draw.item(k, [left + 54.0, top + 88.0], 16.0);
+        // `getSecondLineTooltip` of a package retrieval: its address filter.
+        if matches!(ed.field, Field::Instruction(Instruction::FetchPackages(_)))
+            && over_slot([left + 54.0, top + 88.0], mouse)
+        {
+            let base = "create.schedule.instruction.address_filter_edit_box";
+            tips.push(tr(host, base, &[]));
+            for k in 1..=3 {
+                tips.push(tr(host, &format!("{base}_{k}"), &[]));
+            }
         }
-        None => sprite(draw, SHEET_2, INACTIVE_SLOT, [left + 53.0, top + 87.0]),
     }
     // The line's boxes (`ModularGuiLine.renderWidgetBG`, a speech bubble first) and values.
     for (k, (x, w, input)) in inputs(&ed.field).into_iter().enumerate() {
@@ -1339,9 +1776,11 @@ fn draw_editor(
         match input {
             Input::Text => {
                 let mut t = match &ed.field {
-                    Field::Instruction(Instruction::Destination(t) | Instruction::Rename(t)) => {
-                        t.clone()
-                    }
+                    Field::Instruction(
+                        Instruction::Destination(t)
+                        | Instruction::Rename(t)
+                        | Instruction::FetchPackages(t),
+                    ) => t.clone(),
                     _ => String::new(),
                 };
                 if ed.typing && (millis() / 300).is_multiple_of(2) {
@@ -1355,6 +1794,9 @@ fn draw_editor(
                     let base = match ed.field {
                         Field::Instruction(Instruction::Rename(_)) => {
                             "create.schedule.instruction.name_edit_box"
+                        }
+                        Field::Instruction(Instruction::FetchPackages(_)) => {
+                            "create.schedule.instruction.address_filter_edit_box"
                         }
                         _ => "create.schedule.instruction.filter_edit_box",
                     };
@@ -1394,20 +1836,50 @@ fn draw_editor(
                     tips.push(tr(host, key, &[]));
                 }
             }
+            Input::Digits => {
+                let mut t = value(&ed.field, k).to_string();
+                if ed.typing && (millis() / 300).is_multiple_of(2) {
+                    t.push('_');
+                }
+                draw.text(&t, label_at, 0xFFFF_FFFF, true);
+            }
             Input::Select(options) => {
                 let v = value(&ed.field, k).clamp(0, options.len() as i32 - 1) as usize;
-                draw.text(&tr(host, options[v], &[]), label_at, 0xFFFF_FFFF, true);
+                // The operator shows its sign (`format`: " >").
+                let label = if std::ptr::eq(options, &OPERATORS[..]) {
+                    format!(" {}", Op::from_ordinal(v as i32).symbol())
+                } else {
+                    tr(host, options[v], &[])
+                };
+                draw.text(&label, label_at, 0xFFFF_FFFF, true);
                 if inside(r, mouse) {
                     let key = match ed.field {
                         Field::Condition(Condition::TimeOfDay { .. }) => {
-                            "create.schedule.condition.time_of_day.rotation"
+                            Some("create.schedule.condition.time_of_day.rotation")
                         }
                         Field::Condition(Condition::PlayerCount { .. }) => {
-                            "create.schedule.condition.player_count.condition"
+                            Some("create.schedule.condition.player_count.condition")
                         }
-                        _ => "create.generic.timeUnit",
+                        Field::Condition(
+                            Condition::ItemThreshold { .. } | Condition::FluidThreshold { .. },
+                        ) if k == 0 => Some("create.schedule.condition.threshold.train_holds"),
+                        Field::Condition(Condition::ItemThreshold { .. }) => {
+                            Some("create.schedule.condition.threshold.item_measure")
+                        }
+                        Field::Condition(Condition::FluidThreshold { .. }) => None,
+                        Field::Condition(Condition::RedstoneLink { .. }) => {
+                            Some("create.schedule.condition.redstone_link.frequency_state")
+                        }
+                        _ => Some("create.generic.timeUnit"),
                     };
-                    tips.push(tr(host, key, &[]));
+                    if let Some(key) = key {
+                        tips.push(tr(host, key, &[String::new()]).trim_end().to_owned());
+                    }
+                    // `forOptions`: each option, the chosen one marked.
+                    for (i, opt) in options.iter().enumerate() {
+                        let mark = if i == v { "-> " } else { "> " };
+                        tips.push(format!("{mark}{}", tr(host, opt, &[])));
+                    }
                 }
             }
         }
@@ -1418,6 +1890,7 @@ fn draw_editor(
         let d = at(EDITOR_DELETE, left, top);
         icon_button(draw, [d[0], d[1]], I_TRASH, true, inside(d, mouse));
     }
+    draw_slots(host, draw, o, ed, mouse, tips);
 }
 
 /// A step of the editor's input under `mouse`; true when one took it.
@@ -1445,7 +1918,7 @@ fn step_editor(o: &mut Open, mouse: [f32; 2], up: bool) -> bool {
             continue;
         }
         match input {
-            Input::Text => return false,
+            Input::Text | Input::Digits => return false,
             Input::Number { min, max, step } => {
                 let v = value(&ed.field, k);
                 let v = if up { v + step } else { v - step };
@@ -1512,23 +1985,29 @@ pub fn screen_mouse_pressed(
             return;
         };
         let (left, top) = corner(o.size);
-        if let Some(ed) = o.editing.as_mut() {
+        if o.editing.is_some() {
+            if button <= 1 && click_slots(o, mouse, host.modifiers().shift()) {
+                return;
+            }
+            let Some(ed) = o.editing.as_mut() else {
+                return;
+            };
             if button != 0 {
                 return;
             }
             if inside(at(EDITOR_CONFIRM, left, top), mouse) {
                 click_sound(host);
-                close_editor(o, true);
+                close_editor(host, o, true);
                 return;
             }
             if ed.allow_delete && inside(at(EDITOR_DELETE, left, top), mouse) {
                 click_sound(host);
-                close_editor(o, false);
+                close_editor(host, o, false);
                 return;
             }
             let text_at = inputs(&ed.field)
                 .into_iter()
-                .find(|(_, _, i)| matches!(i, Input::Text))
+                .find(|(_, _, i)| matches!(i, Input::Text | Input::Digits))
                 .map(|(x, w, _)| at(input_rect(x, w), left, top));
             ed.typing = text_at.is_some_and(|r| inside(r, mouse));
             if !ed.typing && step_editor(o, mouse, false) {
@@ -1564,7 +2043,7 @@ pub fn screen_mouse_pressed(
         action(host, o, mouse, Some((button, &mut changes)));
         for c in changes {
             click_sound(host);
-            apply(o, c);
+            apply(host, o, c);
         }
     });
     if close && let Some(open) = OPEN.with_borrow_mut(Option::take) {
@@ -1587,12 +2066,13 @@ pub fn screen_key_pressed(host: &dyn ClientHost, event: &mut ScreenKeyPressedPre
     match event.key {
         "key.keyboard.backspace" if typing => {
             OPEN.with_borrow_mut(|o| {
-                if let Some(t) = o
-                    .as_mut()
-                    .and_then(|o| o.editing.as_mut())
-                    .and_then(|e| text_mut(&mut e.field))
-                {
+                let Some(e) = o.as_mut().and_then(|o| o.editing.as_mut()) else {
+                    return;
+                };
+                if let Some(t) = text_mut(&mut e.field) {
                     t.pop();
+                } else if let Some(n) = digits_mut(&mut e.field) {
+                    *n /= 10;
                 }
             });
             Flow::Cancel
@@ -1601,7 +2081,7 @@ pub fn screen_key_pressed(host: &dyn ClientHost, event: &mut ScreenKeyPressedPre
             // `hitEnter`: the editor closes, confirmed.
             OPEN.with_borrow_mut(|o| {
                 if let Some(o) = o.as_mut() {
-                    close_editor(o, true);
+                    close_editor(host, o, true);
                 }
             });
             Flow::Cancel
@@ -1618,13 +2098,26 @@ pub fn screen_char_typed(host: &dyn ClientHost, event: &mut ScreenCharTypedPreEv
     }
     let c = event.c;
     OPEN.with_borrow_mut(|o| {
-        if let Some(e) = o.as_mut().and_then(|o| o.editing.as_mut())
-            && e.typing
-            && super::gui::allowed(c)
-            && let Some(t) = text_mut(&mut e.field)
-            && t.chars().count() < 256
+        let Some(e) = o.as_mut().and_then(|o| o.editing.as_mut()) else {
+            return;
+        };
+        if !e.typing {
+            return;
+        }
+        // A package retrieval's filter takes three `*` at most (`modifyEditBox`).
+        let fetch = matches!(e.field, Field::Instruction(Instruction::FetchPackages(_)));
+        if let Some(t) = text_mut(&mut e.field) {
+            if super::gui::allowed(c)
+                && t.chars().count() < 256
+                && !(fetch && c == '*' && t.matches('*').count() >= 3)
+            {
+                t.push(c);
+            }
+        } else if let Some(n) = digits_mut(&mut e.field)
+            && let Some(d) = c.to_digit(10)
+            && *n < 100_000_000
         {
-            t.push(c);
+            *n = *n * 10 + d as i32;
         }
     });
     Flow::Cancel

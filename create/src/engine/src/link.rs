@@ -193,6 +193,22 @@ impl Links {
         changed
     }
 
+    /// `hasAnyLoadedPower`: some transmitter of the network transmits, wherever it is.
+    pub fn any_power(&self, key: &Key) -> bool {
+        let placed = self.nets.get(key).is_some_and(|net| {
+            net.iter().any(|p| {
+                self.links
+                    .get(p)
+                    .is_some_and(|l| !l.receiver && l.transmit > 0)
+            })
+        });
+        placed
+            || self
+                .virtuals
+                .values()
+                .any(|(_, k, strength)| k == key && *strength > 0)
+    }
+
     /// A receiver's signal (`getReceivedSignal`), 0 for anything else.
     pub fn received(&self, pos: [i32; 3]) -> i32 {
         self.links

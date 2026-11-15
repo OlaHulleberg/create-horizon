@@ -87,8 +87,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   contraptions are drawn as vanilla block displays the server moves every tick.
 - **`EntityRef::move_by` for any entity** (`Entity.move`): belts carry mobs by setting their motion
   each tick, and players by a push from their own client (`push_player`), where Create moves them.
-- **`MinecartRef::set_carrying`** (a cart with a contraption counting as ridden) and **`EntityRef::move_by`**
-  (moving a coupled cart off its rail with collisions).
+- **`MinecartRef::set_carrying`** (a cart with a contraption counting as ridden: the glue gives back the
+  drag an empty cart's rails take, but not the three-quarter step a ridden cart moves) and
+  **`EntityRef::move_by`** (moving a coupled cart off its rail with collisions). `MinecartRef::is_on_rails`
+  answered false for a cart running on a rail when read in a level tick, so the glue looks at the rail itself.
 - **A mod's own projectile entity type with its own class** (Create's `create:potato_projectile`,
   with its damage type `create:potato_cannon`): the potato cannon's shots are vanilla snowballs
   carrying the ammunition, flown and hit by the glue, hurting as `minecraft:thrown` (a declared copy of
@@ -122,7 +124,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   `BlockEntityDrawContext::block` draws a model in its own tints, and `terrain_model`'s tint reaches only
   quads with a tint index. The smoke and cloud that go with the flash are played. The display link's bulb
   flash (`LinkBulbRenderer`: its glow model drawn additively in a fading grey) is left out for the same
-  want (and of an additive render type).
+  want (and of an additive render type). A station's assembly track (`StationRenderer`: blue where a
+  bogey may go, green where one is) is drawn in the overlay model's own colours for the same reason.
+- **A train station's signal and observer overlays' facing** is not an API gap but not kept: the port keeps
+  no `TrackTargetingBehaviour.targetDirection`, so signals' and observers' track markers are not drawn
+  (stations draw theirs, turned by their last assembly direction).
 - **Collision shapes in `can_survive`** (`LevelHost` has none): a hand crank or valve handle is refused
   only against air or a fluid as it is placed, where Create asks for any collision shape behind it (the
   neighbour check after placement reads them through `LevelRef::collision_boxes`).
