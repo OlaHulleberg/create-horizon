@@ -598,6 +598,7 @@ fn stop_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], grid: i32) {
         }
     }
     p.offset = grid as f32;
+    draw::set_pulley_rest(lv, pos, grid);
     let origin = p.placed_at(create_engine::pulley::grid_offset(p.offset, p.range));
     let held = Held::Pulley(p);
     lift_put_back(lv, pos, origin, &held.put_back(pos));
@@ -617,11 +618,8 @@ fn show_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some(p) = with_world(|w| w.dims[dim].lifts.pulleys.get(&pos).cloned()).flatten() else {
         return;
     };
-    // The magnet, a block over the anchor, glides with it.
-    let mut blocks = p.blocks.clone();
-    if let Some(m) = state_with(&*lv.host, "create:pulley_magnet", &[]) {
-        blocks.push(([0, 1, 0], m));
-    }
+    // The magnet and rope are drawn with it (`draw_hanging`).
+    let blocks = p.blocks.clone();
     let origin = [
         p.anchor[0] - pos[0],
         p.anchor[1] + p.initial - pos[1],
@@ -1116,6 +1114,7 @@ fn disassemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         actors::release(lv, pos, origin, &mut carried);
     }
     draw::hide(lv, pos);
+    draw::set_pulley_rest(lv, pos, -1);
     mark_unsaved(lv, pos);
 }
 
