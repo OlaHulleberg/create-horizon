@@ -385,6 +385,10 @@ pub fn insert_into_from(
     {
         return Some(left);
     }
+    // So do upward saws, basins, millstones and crushing wheels (processing's).
+    if let Some(left) = super::super::processing::belt_input(lv, next, side, item) {
+        return Some(left);
+    }
     if let Some(f) = funnel_at(lv, next) {
         return Some(funnel_direct_input(lv, next, f, item));
     }
@@ -468,7 +472,10 @@ pub fn direct_input_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         let d = &w.dims[dim];
         d.depots.contains_key(&pos) || d.belt_of.contains_key(&pos) || d.drains.contains_key(&pos)
     });
-    kept == Some(true) || funnel_at(lv, pos).is_some() || super::chute::chute_at(lv, pos).is_some()
+    kept == Some(true)
+        || funnel_at(lv, pos).is_some()
+        || super::chute::chute_at(lv, pos).is_some()
+        || super::super::processing::belt_input_side(lv, pos).is_some()
 }
 
 /// `DirectBeltInputBehaviour.canInsertFromSide` of what takes items at `pos`, for an item moving
@@ -489,6 +496,9 @@ pub fn direct_input_accepts(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> b
         let dim = lv.dim;
         let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
         return rpm != 0.0 && belt::movement_facing(rpm, seg.facing) != side.opposite();
+    }
+    if let Some(only) = super::super::processing::belt_input_side(lv, pos) {
+        return only.is_none_or(|d| d == side);
     }
     true
 }

@@ -272,6 +272,8 @@ pub struct Dimension {
     /// that tick).
     pub brass: HashMap<[i32; 3], crate::tunnel::Brass>,
     pub brass_running: Vec<[i32; 3]>,
+    /// The loaded basins, whose spout output looks for somewhere to go (`lazyTick`).
+    pub basins: HashSet<[i32; 3]>,
     /// Basins' fluid tanks (`BasinBlockEntity`'s inputs and outputs).
     pub basin_fluids: HashMap<[i32; 3], crate::basin::Tanks>,
     /// Basins whose tanks changed: their clients are told (taken by the glue).
@@ -345,6 +347,8 @@ pub struct Dimension {
     pub cuckoos: HashMap<[i32; 3], (crate::cuckoo::Animation, u32)>,
     /// Saws holding items (the only ones that tick) and their processing.
     pub saws: HashMap<[i32; 3], crate::saw::Saw>,
+    /// What removed saws held (`SawBlockEntity.destroy` drops its inventory).
+    pub saw_drops: Vec<([i32; 3], String, u8)>,
     /// Spouts and their tank and cycle; those holding fluid tick.
     pub spouts: HashMap<[i32; 3], crate::spout::Spout>,
     /// Item drains, their held stack and tank; those holding items tick.
@@ -751,6 +755,9 @@ impl CreateWorld {
         }
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
+        }
+        if block == Block::Basin {
+            d.basins.insert(pos);
         }
         if matches!(block, Block::CopperBacktank | Block::NetheriteBacktank)
             && !d.backtanks.contains_key(&pos)
@@ -1300,9 +1307,13 @@ impl CreateWorld {
         }
         // The blocks whose filter slot `chute_filters` holds, by the blocks it stays with: a
         // brass funnel's filter goes with it onto a belt and off it again.
+        // The basin's, the saw's and the deployer's filters are kept there too.
         let family = |b: Option<Block>| match b {
             Some(Block::Chute | Block::SmartChute) => Some(0),
             Some(Block::BrassFunnel | Block::BrassBeltFunnel) => Some(1),
+            Some(Block::Basin) => Some(2),
+            Some(Block::MechanicalSaw) => Some(3),
+            Some(Block::Deployer) => Some(4),
             _ => None,
         };
         if family(kind(old)).is_some() && family(kind(new)) != family(kind(old)) {
@@ -1383,6 +1394,9 @@ impl CreateWorld {
             if self.table.get(new).map(|(b, _)| b) == Some(Block::Millstone) {
                 self.dims[dim].millstones.entry(pos).or_default();
             }
+            if self.table.get(new).map(|(b, _)| b) == Some(Block::Basin) {
+                self.dims[dim].basins.insert(pos);
+            }
             if self.table.get(new).map(|(b, _)| b) == Some(Block::WaterWheel)
                 && self.table.get(old).map(|(b, _)| b) != Some(Block::WaterWheel)
             {
@@ -1430,6 +1444,7 @@ impl CreateWorld {
             d.valve_cooldowns.remove(&pos);
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
+            d.basins.remove(&pos);
             d.presses.remove(&pos);
             d.backtanks.remove(&pos);
             self.diode_removed(dim, pos);
@@ -1457,7 +1472,10 @@ impl CreateWorld {
             if d.sequencers.remove(&pos).is_some() {
                 d.sequencing.retain(|p| *p != pos);
             }
-            d.saws.remove(&pos);
+            if let Some(s) = d.saws.remove(&pos) {
+                d.saw_drops
+                    .extend(s.slots.into_iter().map(|(item, n)| (pos, item, n)));
+            }
             d.spouts.remove(&pos);
             d.drains.remove(&pos);
             d.funnels.remove(&pos);
@@ -1722,6 +1740,7 @@ impl CreateWorld {
             d.wheels.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.millstones
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.basins.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.backtanks
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.backtank_saved

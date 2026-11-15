@@ -1,7 +1,6 @@
 //! Crushing wheels (`CrushingWheelBlock`) and the controller between two of them
 //! (`CrushingWheelControllerBlockEntity`): the item it draws in, crushes and lets out.
 
-use super::takes_from_side;
 use super::{recipes, stacks};
 use crate::glue::kinetics::dir_name;
 use crate::glue::logistics::{insert_into_from, random_angle, upright};
@@ -155,7 +154,11 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                     facing.offset()
                 };
                 let next = [pos[0] + side[0], pos[1] - 1, pos[2] + side[2]];
-                if facing != Dir::Up && takes_from_side(dim, next) {
+                if facing != Dir::Up && crate::glue::logistics::direct_input_at(lv, next) {
+                    // `canInsertFromSide`: what it takes nothing from this side waits.
+                    if !crate::glue::logistics::direct_input_accepts(lv, next, facing) {
+                        return;
+                    }
                     let mut left = Vec::new();
                     for (item, count) in std::mem::take(&mut c.slots) {
                         let up = upright(&*lv.host, &item);
@@ -184,6 +187,26 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             w.mark_unsaved(dim, pos);
         }
     });
+}
+
+/// The controller's inventory taking `count` of `item` from a belt, a saw or another crusher
+/// (`ProcessingInventory.insertItem` through its handler): only while it holds nothing and
+/// draws in no entity. Whether it took them.
+pub fn crusher_put(lv: &mut ServerLevel<'_>, pos: [i32; 3], item: &str, count: u8) -> bool {
+    let dim = lv.dim;
+    let time =
+        recipes::with(|r| crusher::recipe(&r.crushing, &r.milling, item).map(|x| x.time)).flatten();
+    with_world(|w| {
+        let (c, _) = w.dims[dim].crushers.get_mut(&pos)?;
+        if c.occupied() {
+            return None;
+        }
+        crusher::intake(c, item, count, time);
+        w.mark_unsaved(dim, pos);
+        Some(())
+    })
+    .flatten()
+    .is_some()
 }
 
 /// `CrushingWheelControllerBlockEntity.CRUSHER_DAMAGE` (`crushingDamage`, 4 by default).

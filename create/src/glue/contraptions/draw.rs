@@ -622,6 +622,26 @@ fn draw_blocks(draw: &mut dyn BlockEntityDrawContext, blocks: &[Drawn]) {
         if let Some((block, info)) = b.create {
             draw_parts(draw, block, &info, &props);
         }
+        // `BlazeBurnerMovementBehaviour.renderInContraption`: a carried burner's blaze.
+        if b.block == states::key(create_engine::Block::BlazeBurner) {
+            let prop = |k: &str| props.iter().find(|(n, _)| *n == k).map(|(_, v)| *v);
+            let heat = match prop("blaze") {
+                Some("smouldering") => create_engine::fan::Heat::Smouldering,
+                Some("fading") => create_engine::fan::Heat::Fading,
+                Some("kindled") => create_engine::fan::Heat::Kindled,
+                Some("seething") => create_engine::fan::Heat::Seething,
+                _ => create_engine::fan::Heat::None,
+            };
+            let facing = prop("facing")
+                .and_then(|f| {
+                    create_engine::kinetics::Dir::ALL
+                        .into_iter()
+                        .find(|d| crate::glue::kinetics::dir_name(*d) == f)
+                })
+                .unwrap_or(create_engine::kinetics::Dir::South);
+            let hash = (b.at[0] as i32 * 31 + b.at[1] as i32) * 31 + b.at[2] as i32;
+            crate::glue::processing::burner_draw::draw_moving(draw, heat, facing, hash);
+        }
         draw.pop();
     }
     draw.set_light(own);

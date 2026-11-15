@@ -35,6 +35,8 @@ thread_local! {
     static PRESSES: RefCell<HashMap<[i32; 3], (press::Press, bool)>> = RefCell::new(HashMap::new());
     /// Each deployer's stroke as last sent, and the client tick it came at.
     static DEPLOYERS: RefCell<HashMap<[i32; 3], (deployer::Shown, u64)>> = RefCell::new(HashMap::new());
+    /// Each basin's ingredient swirl: angle, speed, and the client tick they are at.
+    static SPINS: RefCell<HashMap<[i32; 3], (f32, f32, u64)>> = RefCell::new(HashMap::new());
     /// This client's ticks, for the strokes' glide between messages.
     static TICKS: Cell<u64> = const { Cell::new(0) };
 }
@@ -77,10 +79,23 @@ pub fn register(r: &mut dyn Registrar) {
 pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
     match block {
         Block::MechanicalPress | Block::Deployer | Block::BlazeBurner => true,
-        Block::MechanicalMixer => entity.nbt.contains_key(&basin_glue::MIXER_KEY.into()),
+        // A crafter's grid moves while it exports or crafts.
+        Block::MechanicalCrafter => matches!(
+            entity.nbt.get(&super::crafter::CRAFTER_KEY.into()),
+            Some(Tag::Compound(c)) if matches!(c.get(&"P".into()), Some(Tag::Int(3 | 5)))
+        ),
+        Block::MechanicalSaw => matches!(
+            entity.nbt.get(&super::saw::SAW_KEY.into()),
+            Some(Tag::Compound(c)) if c.contains_key(&"Items".into())
+        ),
+        Block::MechanicalMixer => matches!(
+            entity.nbt.get(&basin_glue::MIXER_KEY.into()),
+            Some(Tag::Compound(c)) if c.contains_key(&"T".into())
+        ),
         Block::Basin => {
-            entity.nbt.contains_key(&basin_glue::FLUIDS_KEY.into())
-                && !basin_items(&entity.nbt).is_empty()
+            // Items bob on fluid or swirl under a mixer.
+            !basin_items(&entity.nbt).is_empty()
+                || !super::spoutput::visualized(&entity.nbt).is_empty()
         }
         _ => false,
     }
@@ -88,7 +103,12 @@ pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
 
 /// A basin's stacks its block entity's data holds (`ITEMS_KEY`), in slot order.
 fn basin_items(nbt: &Compound) -> Vec<(String, u32)> {
-    let Some(Tag::List(list)) = nbt.get(&basin_glue::ITEMS_KEY.into()) else {
+    basin_items_of(nbt.get(&basin_glue::ITEMS_KEY.into()))
+}
+
+/// The stacks (`id`, `count`) of a list of them.
+fn basin_items_of(tag: Option<&Tag>) -> Vec<(String, u32)> {
+    let Some(Tag::List(list)) = tag else {
         return Vec::new();
     };
     list.iter()
@@ -120,6 +140,43 @@ fn basin_fluids(nbt: &Compound) -> Vec<(Fluid, u32)> {
             (c[1] > 0).then_some((fluid, c[1] as u32))
         })
         .collect()
+}
+
+/// `BasinBlockEntity.ingredientRotation`: the items in a basin swirl while its mixer works the
+/// bottom (`setAreFluidsMoving`: running, at most 20 running ticks), their speed chasing 20°
+/// (or 0) a tick by a tenth of the gap each tick; this frame's angle.
+fn ingredient_rotation(
+    host: &dyn ClientHost,
+    draw: &dyn BlockEntityDrawContext,
+    pos: [i32; 3],
+) -> f32 {
+    let mixer = [pos[0], pos[1] + 2, pos[2]];
+    let moving = host
+        .local_player()
+        .and_then(|p| p.level(host))
+        .and_then(|l| host.block_entity(l, mixer))
+        .and_then(|e| e.data(host))
+        .is_some_and(|d| match d.get(&basin_glue::MIXER_KEY.into()) {
+            Some(Tag::Compound(c)) => match (c.get(&"T".into()), c.get(&"S".into())) {
+                (Some(Tag::Int(t)), Some(Tag::Long(at))) => {
+                    create_engine::basin::shown_ticks(*t, draw.game_time() - at) <= 20
+                }
+                _ => false,
+            },
+            _ => false,
+        });
+    let target = if moving { 20.0 } else { 0.0 };
+    let now = TICKS.get();
+    SPINS.with_borrow_mut(|s| {
+        let e = s.entry(pos).or_insert((0.0, 0.0, now));
+        let steps = now.saturating_sub(e.2).min(200);
+        for _ in 0..steps {
+            e.1 += (target - e.1) * 0.1;
+            e.0 = (e.0 + e.1) % 360.0;
+        }
+        e.2 = now;
+        e.0 + e.1 * draw.partial()
+    })
 }
 
 /// `BasinRenderer`: the fluids side by side across the basin, as high as they fill it, and the
@@ -171,6 +228,11 @@ fn draw_basin(
     let time = draw.game_time() as f32 + draw.partial();
     draw.push();
     draw.translate([0.5, 0.2, 0.5]);
+    draw.rotate_about(
+        [0.0, 1.0, 0.0],
+        ingredient_rotation(host, draw, pos),
+        [0.0; 3],
+    );
     for (id, n) in items {
         let Some(stack) = stacks::stack(host, &id, 1) else {
             count -= 1;
@@ -201,6 +263,52 @@ fn draw_basin(
     draw.pop();
 }
 
+/// `BasinRenderer`'s `visualizedOutputItems`: the items leaving a basin's spout, falling out of
+/// it over their moment (only the first third of it unless another basin is there).
+fn draw_spout_items(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    pos: [i32; 3],
+    facing: Dir,
+    nbt: &Compound,
+) {
+    if facing == Dir::Down || facing == Dir::Up {
+        return;
+    }
+    let seen = super::spoutput::visualized(nbt);
+    if seen.is_empty() {
+        return;
+    }
+    let o = facing.offset().map(|v| v as f32);
+    let out = [0.5 + o[0] * 0.55, 0.0, 0.5 + o[2] * 0.55];
+    let next = [pos[0] + o[0] as i32, pos[1], pos[2] + o[2] as i32];
+    let out_to_basin = host
+        .level(host.dimension())
+        .and_then(|l| l.block_state(host, next))
+        .and_then(states::id)
+        .and_then(|id| crate::glue::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten())
+        == Some(Block::Basin);
+    let time = draw.game_time() as f32 + draw.partial();
+    let span = super::spoutput::OUTPUT_ANIMATION_TIME as f32;
+    for (id, at) in seen {
+        let progress = (time - at as f32) / span;
+        if !(0.0..=1.0).contains(&progress) || (!out_to_basin && progress > 0.35) {
+            continue;
+        }
+        let Some(stack) = stacks::stack(host, &id, 1) else {
+            continue;
+        };
+        draw.push();
+        draw.translate(out);
+        draw.translate([0.0, (-(progress * progress * 2.0)).max(-0.55), 0.0]);
+        draw.translate([o[0] * progress * 0.5, 0.0, o[2] * progress * 0.5]);
+        draw.rotate_about([0.0, 1.0, 0.0], horizontal_angle(facing), [0.0; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], progress * 180.0, [0.0; 3]);
+        draw.item(&stack, ItemDisplayContext::Ground, None, 0);
+        draw.pop();
+    }
+}
+
 /// The server's word on presses or deployers. True for those channels.
 pub fn server_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
     if channel == press::CHANNEL {
@@ -228,6 +336,7 @@ pub fn reset() {
     super::burner_draw::reset();
     PRESSES.with_borrow_mut(HashMap::clear);
     DEPLOYERS.with_borrow_mut(HashMap::clear);
+    SPINS.with_borrow_mut(HashMap::clear);
 }
 
 fn presses_from_server(data: &[u8]) {
@@ -327,16 +436,17 @@ impl BlockEntityPart for MachineDraw {
                     }
                 }
             }
-            Block::Basin => draw_basin(host, event.draw, event.pos, &event.entity.nbt),
+            Block::Basin => {
+                draw_basin(host, event.draw, event.pos, &event.entity.nbt);
+                let facing = info.facing.unwrap_or(Dir::Down);
+                draw_spout_items(host, event.draw, event.pos, facing, &event.entity.nbt);
+            }
             Block::BlazeBurner => super::burner_draw::draw(
                 event.draw,
                 event.pos,
                 info.heat.unwrap_or(create_engine::fan::Heat::None),
                 info.facing.unwrap_or(Dir::South),
-                event
-                    .entity
-                    .nbt
-                    .contains_key(&basin_glue::GOGGLES_KEY.into()),
+                event.entity.nbt.get(&basin_glue::GOGGLES_KEY.into()) == Some(&Tag::Byte(1)),
             ),
             Block::MechanicalCrafter => {
                 draw_crafter(host, event.draw, event.pos, &event.entity.nbt);
@@ -344,8 +454,19 @@ impl BlockEntityPart for MachineDraw {
             Block::MechanicalSaw => {
                 let speed = kinetics::speeds_of(&event.entity.nbt)[0];
                 draw_saw_blade(event.draw, &info, speed);
+                draw_saw_items(host, event.draw, &info, speed, &event.entity.nbt);
             }
             _ => {}
+        }
+        if matches!(block, Block::Basin | Block::MechanicalSaw | Block::Deployer) {
+            draw_machine_filter(
+                host,
+                event.draw,
+                block,
+                &info,
+                event.state,
+                &event.entity.nbt,
+            );
         }
     }
 }
@@ -401,7 +522,13 @@ fn draw_deployer(
     draw.push();
     draw.translate([o[0] * at, o[1] * at, o[2] * at]);
     draw_partial(draw, Partial::DeployerPole, dir_name(s.facing));
-    draw_partial(draw, hand, dir_name(s.facing));
+    // `getHandPose`: a fist in punch mode.
+    match states::partial("part_deployer_hand_punching").filter(|_| s.punch) {
+        Some(fist) => {
+            draw.block(fist, &[("facing", dir_name(s.facing))]);
+        }
+        None => draw_partial(draw, hand, dir_name(s.facing)),
+    }
     draw.pop();
     let Some(stack) = s.held.as_deref().and_then(|id| stacks::stack(host, id, 1)) else {
         return;
@@ -575,9 +702,11 @@ fn draw_crafter(
     } else {
         posed(draw, "part_crafter_arrow");
     }
-    if phase == IDLE
-        && let Some(stack) = item.as_deref().and_then(|i| stacks::stack(host, i, 1))
-    {
+    if phase != IDLE {
+        draw_crafter_grid(host, draw, facing, pointing, phase, nbt);
+        return;
+    }
+    if let Some(stack) = item.as_deref().and_then(|i| stacks::stack(host, i, 1)) {
         let f = facing.offset().map(|v| v as f32 * 0.58 + 0.5);
         draw.push();
         draw.translate(f);
@@ -588,6 +717,301 @@ fn draw_crafter(
         draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
         draw.pop();
     }
+}
+
+/// The cells of a crafter's grid its block entity data holds under `key` of `CRAFTER_KEY`.
+fn crafter_cells(c: &Compound, key: &str) -> Vec<((i32, i32), String)> {
+    let Some(Tag::List(list)) = c.get(&key.into()) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|t| {
+            let Tag::Compound(e) = t else { return None };
+            let (Some(Tag::Int(x)), Some(Tag::Int(y)), Some(Tag::String(id))) =
+                (e.get(&"x".into()), e.get(&"y".into()), e.get(&"id".into()))
+            else {
+                return None;
+            };
+            Some(((*x, *y), id.to_string().ok()?))
+        })
+        .collect()
+}
+
+/// `MechanicalCrafterRenderer.renderSafe`/`renderItems` past `IDLE`: the grid's items on the
+/// crafter's face, sliding on to the crafter it points at while exporting, and while crafting
+/// gathering, shrinking away and the result spinning up in their place. Its `countDown` runs on
+/// from the server's word at the phase's start (`S`, `D`) at the crafter's speed.
+fn draw_crafter_grid(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    facing: Dir,
+    pointing: &str,
+    phase: i32,
+    nbt: &Compound,
+) {
+    const EXPORTING: i32 = 3;
+    const CRAFTING: i32 = 5;
+    const INSERTING: i32 = 6;
+    let Some(Tag::Compound(c)) = nbt.get(&super::crafter::CRAFTER_KEY.into()) else {
+        return;
+    };
+    let began = match c.get(&"S".into()) {
+        Some(Tag::Long(t)) => *t,
+        _ => draw.game_time(),
+    };
+    let start = match c.get(&"D".into()) {
+        Some(Tag::Int(d)) => *d,
+        _ => 0,
+    };
+    let speed = create_engine::crafter::count_down_speed(kinetics::speeds_of(nbt)[0]) as f32;
+    let count_down = (start as f32 - speed * (draw.game_time() - began).max(0) as f32).max(0.0);
+    let partial = draw.partial();
+    let pointing_v = create_engine::crafter::Pointing::read(pointing)
+        .unwrap_or(create_engine::crafter::Pointing::Up);
+    let o = facing.offset().map(|v| v as f32);
+    let mut vec = [0.5 + o[0] * 0.58, 0.5 + o[1] * 0.58, 0.5 + o[2] * 0.58];
+    if phase == EXPORTING {
+        let t = create_engine::crafter::target(facing, pointing_v).offset();
+        let progress = ((1000.0 - count_down + speed * partial) / 1000.0).clamp(0.0, 1.0);
+        for i in 0..3 {
+            vec[i] += t[i] as f32 * progress * 0.75;
+        }
+    }
+    draw.push();
+    draw.translate(vec);
+    draw.scale([0.5; 3]);
+    draw.rotate_about([0.0, 1.0, 0.0], horizontal_angle(facing), [0.0; 3]);
+    let mut items = crafter_cells(c, "G");
+    let mut distance = 0.5f32;
+    draw.push();
+    if phase == CRAFTING {
+        items = crafter_cells(c, "B");
+        let progress = ((2000.0 - count_down + speed * partial) / 1000.0).clamp(0.0, 1.0);
+        let early = (progress * 2.0).clamp(0.0, 1.0);
+        let late = (progress * 2.0 - 1.0).clamp(0.0, 1.0);
+        draw.scale([1.0 - late; 3]);
+        // `calcStats`: the grid's extent.
+        let min_x = items.iter().map(|((x, _), _)| *x).min().unwrap_or(0) as f32;
+        let max_x = items.iter().map(|((x, _), _)| *x).max().unwrap_or(0) as f32;
+        let min_y = items.iter().map(|((_, y), _)| *y).min().unwrap_or(0) as f32;
+        let max_y = items.iter().map(|((_, y), _)| *y).max().unwrap_or(0) as f32;
+        let (width, height) = (max_x - min_x + 1.0, max_y - min_y + 1.0);
+        let cx = (-min_x + (-width + 1.0) / 2.0) * early;
+        let cy = (-min_y + (-height + 1.0) / 2.0) * early;
+        draw.translate([cx * 0.5, cy * 0.5, 0.0]);
+        distance += (-4.0 * (progress - 0.5) * (progress - 0.5) + 1.0) * 0.25;
+    }
+    let only_first = phase == INSERTING || (phase == CRAFTING && count_down < 1000.0);
+    let offset = if phase == EXPORTING {
+        match pointing_v {
+            create_engine::crafter::Pointing::Up => -1,
+            create_engine::crafter::Pointing::Left => 2,
+            create_engine::crafter::Pointing::Right => -2,
+            create_engine::crafter::Pointing::Down => 1,
+        }
+    } else {
+        0
+    };
+    for ((x, y), id) in &items {
+        if only_first && (*x != 0 || *y != 0) {
+            continue;
+        }
+        let Some(stack) = stacks::stack(host, id, 1) else {
+            continue;
+        };
+        draw.push();
+        draw.translate([*x as f32 * distance, *y as f32 * distance, 0.0]);
+        draw.rotate_about([0.0, 1.0, 0.0], 180.0, [0.0; 3]);
+        draw.translate([0.0, 0.0, (x + y * 3 + offset * 9) as f32 / 1024.0]);
+        draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+        draw.pop();
+    }
+    draw.pop();
+    if phase == CRAFTING {
+        let progress = ((1000.0 - count_down + speed * partial) / 1000.0).clamp(0.0, 1.0);
+        let early = (progress * 2.0).clamp(0.0, 1.0);
+        let late = (progress * 2.0 - 1.0).clamp(0.0, 1.0);
+        draw.rotate_about([0.0, 0.0, 1.0], early * 2.0 * 360.0, [0.0; 3]);
+        draw.scale([early * 1.125; 3]);
+        draw.scale([1.0 + (1.0 - late) * 0.125; 3]);
+        for ((x, y), id) in crafter_cells(c, "G") {
+            if x != 0 || y != 0 {
+                continue;
+            }
+            let Some(stack) = stacks::stack(host, &id, 1) else {
+                continue;
+            };
+            draw.push();
+            draw.rotate_about([0.0, 1.0, 0.0], 180.0, [0.0; 3]);
+            draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+            draw.pop();
+        }
+    }
+    draw.pop();
+}
+
+/// Whether `click` on the processing block `block` lands on its filter slot and is the slot's
+/// (not a wrench's, an arm's or a clipboard's), which the client then takes as used.
+pub fn filter_slot_click(
+    host: &dyn ClientHost,
+    block: Block,
+    click: &mod_api::BlockClick<'_>,
+) -> bool {
+    if !matches!(block, Block::Basin | Block::MechanicalSaw | Block::Deployer) {
+        return false;
+    }
+    let Some(player) = host.player(click.player) else {
+        return false;
+    };
+    if !crate::glue::interaction::values::may_use_value_box(host, player) {
+        return false;
+    }
+    if click.stack.is_some_and(|s| {
+        matches!(
+            stacks::id(host, s).as_str(),
+            "create:wrench" | "create:mechanical_arm" | "create:clipboard"
+        )
+    }) {
+        return false;
+    }
+    let Some(state) = host
+        .level(host.dimension())
+        .and_then(|l| l.block_state(host, click.pos))
+    else {
+        return false;
+    };
+    let Some((_, info)) = states::id(state).and_then(|id| {
+        crate::glue::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
+    }) else {
+        return false;
+    };
+    let flipped = host
+        .block_state_string(state)
+        .is_some_and(|s| s.contains("flipped=true"));
+    let Some(face) = Dir::from_offset(click.hit.face) else {
+        return false;
+    };
+    super::filtering::hit(block, &info, flipped, click.pos, face, click.hit.point)
+}
+
+/// `FilteringRenderer` for the basin, upward saw and deployer: the filter (`logistics::FILTER`)
+/// in each slot, at half the value box's half scale for a flat item and its half scale for a
+/// block.
+fn draw_machine_filter(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    block: Block,
+    info: &StateInfo,
+    state: mod_api::BlockState,
+    nbt: &Compound,
+) {
+    let Some(Tag::String(id)) = nbt.get(&crate::glue::logistics::FILTER.into()) else {
+        return;
+    };
+    let id = id.to_string_lossy();
+    if id.is_empty() {
+        return;
+    }
+    let Some(stack) = stacks::stack(host, &id, 1) else {
+        return;
+    };
+    let flipped = host
+        .block_state_string(state)
+        .is_some_and(|s| s.contains("flipped=true"));
+    let solid = host.item_block(stack.item()).is_some();
+    let scale = 0.5 * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
+    for (_, slot, y_rot, x_rot) in super::filtering::drawn(block, info, flipped) {
+        draw.push();
+        draw.translate(slot.map(|v| v as f32));
+        draw.rotate_about([0.0, 1.0, 0.0], y_rot, [0.0; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], x_rot, [0.0; 3]);
+        draw.scale([scale; 3]);
+        if !solid {
+            draw.translate([0.0, 0.0, -0.15]);
+        }
+        draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+        draw.pop();
+    }
+}
+
+/// `SawRenderer.renderItems`: what an upward saw holds (`SAW_KEY`), lying on it and moving across
+/// it as it cuts, run on from the server's last word by the game time (`ProcessingInventory`'s
+/// `remainingTime`, which a client counts down too and holds above 5 until the server cuts);
+/// its results side by side.
+fn draw_saw_items(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    info: &StateInfo,
+    speed: f32,
+    nbt: &Compound,
+) {
+    if info.facing != Some(Dir::Up) {
+        return;
+    }
+    let Some(Tag::Compound(c)) = nbt.get(&super::saw::SAW_KEY.into()) else {
+        return;
+    };
+    let float = |k: &str| match c.get(&k.into()) {
+        Some(Tag::Float(v)) => f32::from_bits(*v),
+        _ => 0.0,
+    };
+    let applied = matches!(c.get(&"A".into()), Some(Tag::Byte(1)));
+    let told = match c.get(&"S".into()) {
+        Some(Tag::Long(t)) => *t,
+        _ => draw.game_time(),
+    };
+    let items = basin_items_of(c.get(&"Items".into()));
+    if items.is_empty() {
+        return;
+    }
+    let along_z = !info.along_first;
+    let duration = float("D");
+    let mut remaining = float("R");
+    if remaining >= 0.0 {
+        let elapsed = (draw.game_time() - told).max(0) as f32;
+        remaining -= (speed.abs() / 24.0).clamp(1.0, 128.0) * elapsed;
+        remaining = remaining.max(if applied { 0.0 } else { 4.0 });
+    }
+    let moving = duration != 0.0;
+    let mut offset = if moving { remaining / duration } else { 0.0 };
+    let processing_speed = (speed.abs() / 32.0).clamp(1.0, 128.0);
+    if moving {
+        offset = (offset + (-draw.partial() + 0.5) * processing_speed / duration).clamp(0.125, 1.0);
+        if !applied {
+            offset += 1.0;
+        }
+        offset /= 2.0;
+    }
+    if speed == 0.0 {
+        offset = 0.5;
+    }
+    if (speed < 0.0) ^ along_z {
+        offset = 1.0 - offset;
+    }
+    // The results are in slots 1 and on, the input in slot 0.
+    let outputs = if applied { items.len() } else { 0 };
+    draw.push();
+    if along_z {
+        draw.rotate_about([0.0, 1.0, 0.0], 90.0, [0.0; 3]);
+    }
+    draw.translate([if outputs <= 1 { 0.5 } else { 0.25 }, 0.0, offset]);
+    draw.translate([if along_z { -1.0 } else { 0.0 }, 0.0, 0.0]);
+    for (rendered, (id, _)) in items.iter().enumerate() {
+        let Some(stack) = stacks::stack(host, id, 1) else {
+            continue;
+        };
+        let block = host.item_block(stack.item()).is_some();
+        draw.push();
+        draw.translate([0.0, if block { 0.925 } else { 13.0 / 16.0 }, 0.0]);
+        if applied && outputs > 1 {
+            draw.translate([0.5 / (outputs - 1) as f32 * rendered as f32, 0.0, 0.0]);
+        }
+        draw.scale([0.5; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], 90.0, [0.0; 3]);
+        draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
+        draw.pop();
+    }
+    draw.pop();
 }
 
 /// `SawRenderer.renderBlade`: the blade turned to the saw's facing, its texture running forward,

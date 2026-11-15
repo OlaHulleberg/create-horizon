@@ -3,7 +3,6 @@
 //! grid, the last crafts it and puts the result out.
 
 use super::stacks;
-use super::takes_from_side;
 use crate::glue::logistics::{insert_into_from, random_angle, upright};
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
@@ -457,7 +456,7 @@ fn crafter_insert(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let t = super::step(pos, dir, 1);
     // `isTargetingBelt`: a belt or depot there takes the results from the side
     // (`DirectBeltInputBehaviour.handleInsertion`); else `inserting.hasInventory()`.
-    let belt_input = takes_from_side(dim, t);
+    let belt_input = super::direct_input(lv, t, dir);
     let face = direction(dir.opposite());
     let has_inventory = !belt_input
         && lv
@@ -522,14 +521,32 @@ fn insert_item(lv: &mut ServerLevel<'_>, t: [i32; 3], face: Direction, item: &st
         .unwrap_or(0)
 }
 
+/// A crafter's grid: each cell's place and item.
+type Grid = Vec<((i32, i32), String)>;
+/// A phase as told: the phase, the game time it began at and its `countDown` then.
+type Told = (Phase, i64, i32);
+
 /// The key of a crafter's block entity data its clients draw it from: `P`, its phase; `C`,
 /// whether it is covered; `I`, the item in its slot.
 pub const CRAFTER_KEY: &str = "Crafter";
 
 thread_local! {
+    /// The grid each crafting crafter held before it crafted (`groupedItemsBeforeCraft`).
+    static BEFORE_CRAFT: std::cell::RefCell<std::collections::HashMap<(usize, [i32; 3]), Grid>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Each crafter's phase as its clients were told, with the game time and `countDown` it
+    /// began at, from which they run its countdown on.
+    static TOLD: std::cell::RefCell<std::collections::HashMap<(usize, [i32; 3]), Told>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
     /// Crafters a player clicked, by dimension: their slot or cover may have changed.
     static SHOW: std::cell::RefCell<Vec<(usize, [i32; 3])>> =
         const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Forgets what was kept for the world.
+pub fn clear() {
+    BEFORE_CRAFT.with_borrow_mut(std::collections::HashMap::clear);
+    TOLD.with_borrow_mut(std::collections::HashMap::clear);
 }
 
 /// Mechanical crafters (`run_crafters`), then those looked at or at work tell their clients
@@ -567,10 +584,44 @@ pub fn tick_crafters(lv: &mut ServerLevel<'_>) {
         if crafter_at(lv, pos).is_none() {
             continue;
         }
-        let phase = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.phase))
+        let crafter = with_world(|w| w.dims[dim].crafters.get(&pos).cloned())
             .flatten()
             .unwrap_or_default();
+        let phase = crafter.phase;
+        let now = lv.game_time();
+        let (_, began, count_down) = TOLD.with_borrow_mut(|t| {
+            let e = t
+                .entry((dim, pos))
+                .or_insert((phase, now, crafter.count_down));
+            if e.0 != phase {
+                *e = (phase, now, crafter.count_down);
+            }
+            *e
+        });
+        if phase != Phase::Crafting {
+            BEFORE_CRAFT.with_borrow_mut(|b| b.remove(&(dim, pos)));
+        }
+        let grid_tag = |grid: &[((i32, i32), String)]| {
+            mod_api::Tag::List(
+                grid.iter()
+                    .map(|((x, y), item)| {
+                        mod_api::Tag::Compound(mod_api::Compound::from([
+                            ("x".into(), mod_api::Tag::Int(*x)),
+                            ("y".into(), mod_api::Tag::Int(*y)),
+                            ("id".into(), mod_api::Tag::String(item.as_str().into())),
+                        ]))
+                    })
+                    .collect(),
+            )
+        };
+        let before = BEFORE_CRAFT
+            .with_borrow(|b| b.get(&(dim, pos)).cloned())
+            .unwrap_or_default();
         let mut c = mod_api::Compound::from([
+            ("G".into(), grid_tag(&crafter.grid)),
+            ("B".into(), grid_tag(&before)),
+            ("S".into(), mod_api::Tag::Long(began)),
+            ("D".into(), mod_api::Tag::Int(count_down)),
             ("P".into(), mod_api::Tag::Int(phase as i32)),
             (
                 "C".into(),
@@ -719,8 +770,11 @@ fn run_crafters(lv: &mut ServerLevel<'_>) {
                             .map(|r| stacks::id(host, &r))
                     })
                     .collect();
-                match crafter_recipe(lv, &c.grid) {
+                let found = crafter_recipe(lv, &c.grid);
+                match found {
                     Some((item, n)) => {
+                        // `groupedItemsBeforeCraft`, which its clients draw shrinking away.
+                        BEFORE_CRAFT.with_borrow_mut(|b| b.insert((dim, pos), c.grid.clone()));
                         with_world(|w| {
                             if let Some(x) = w.dims[dim].crafters.get_mut(&pos) {
                                 x.grid =

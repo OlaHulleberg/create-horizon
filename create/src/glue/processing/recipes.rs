@@ -94,6 +94,8 @@ pub fn publish(host: &dyn Host) {
     splashing.extend(runtime_data::splashing(&items));
     let mut mixing = read_basin(host, "create:mixing");
     mixing.extend(read_shapeless_mixing(host));
+    let potions = read_potion_mixing(host);
+    mixing.extend(potions);
     let next = Recipes {
         milling,
         pressing,
@@ -160,7 +162,27 @@ pub fn recipe_fluid(json: &Value) -> Option<(tank::Fluid, u32)> {
     let id = json["fluid"]
         .as_str()
         .or_else(|| json["tag"].as_str())
-        .or_else(|| json["id"].as_str())?;
+        .or_else(|| json["id"].as_str())
+        .or_else(|| json["fluids"].as_str())?;
+    // A potion fluid named by its components (`neoforge:components`: the potion and its
+    // bottle, `DataComponentFluidIngredient`), as the spout's glowstone, redstone and
+    // gunpowder recipes take.
+    if id == "create:potion" {
+        let c = &json["components"];
+        let potion = c["minecraft:potion_contents"]["potion"].as_str()?;
+        let bottle = match c["create:potion_fluid_bottle_type"]
+            .as_str()
+            .unwrap_or("regular")
+        {
+            "splash" => tank::Bottle::Splash,
+            "lingering" => tank::Bottle::Lingering,
+            _ => tank::Bottle::Regular,
+        };
+        return Some((
+            tank::Fluid::Potion(tank::Potion::of(potion, bottle)?),
+            amount,
+        ));
+    }
     Some((tank::Fluid::of_id(id)?, amount))
 }
 
@@ -270,6 +292,57 @@ fn read_shapeless_mixing(host: &dyn Host) -> Vec<basin::Recipe> {
             fluids: Vec::new(),
             fluid_results: Vec::new(),
         });
+    }
+    found
+}
+
+/// `PotionMixingRecipes` (`allowBrewingInMixer`, on by default): each brewing recipe from one
+/// potion bottle to another (`minecraft:brewing`, which the game reads from data, its potion,
+/// splash and lingering ones listed apiece) as a heated mixing recipe, its reagent with
+/// 1000 mB of the potion fluid it starts from making 1000 mB of the one it ends at (a regular
+/// water bottle's is water).
+fn read_potion_mixing(host: &dyn Host) -> Vec<basin::Recipe> {
+    use create_engine::tank::{potion_fluid, potion_item};
+    let mut found = Vec::new();
+    for r in host.recipes_of_type("minecraft:brewing").iter() {
+        let json = &*r.json;
+        let (Some(from_item), Some(to_item)) = (
+            json["input"]["item"].as_str(),
+            json["output"]["id"].as_str(),
+        ) else {
+            continue;
+        };
+        let Some(to_potion) =
+            json["output"]["components"]["minecraft:potion_contents"]["potion"].as_str()
+        else {
+            continue;
+        };
+        let Some(to) = potion_fluid(&potion_item(to_item, to_potion)) else {
+            continue;
+        };
+        // A brewing reagent names its items as `item` (an id, a `#tag` or a list).
+        let Some(reagent) = ingredient(host, &json["reagent"]["item"]) else {
+            continue;
+        };
+        let potions: Vec<&str> = match &json["input"]["potion_contents"]["potions"] {
+            Value::String(s) => vec![s.as_str()],
+            Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
+        };
+        for from_potion in potions {
+            let Some(from) = potion_fluid(&potion_item(from_item, from_potion)) else {
+                continue;
+            };
+            found.push(basin::Recipe {
+                id: r.id.clone(),
+                ingredients: vec![reagent.clone()],
+                results: Vec::new(),
+                time: 0,
+                heat: basin::HeatReq::Heated,
+                fluids: vec![(from, 1000)],
+                fluid_results: vec![(to, 1000)],
+            });
+        }
     }
     found
 }

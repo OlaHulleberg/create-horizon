@@ -447,15 +447,9 @@ pub(crate) fn settings_at(
             Some(Some(scroll_option(lv, pos, block)))
         }
         // `FilteringBehaviour`: a short click sets the filter, a pick its amount.
-        B::BrassFunnel | B::BrassBeltFunnel | B::SmartChute => {
-            Some(crate::glue::logistics::amount::value_settings(
-                lv,
-                pos,
-                player,
-                pick,
-                short.is_some(),
-            ))
-        }
+        B::BrassFunnel | B::BrassBeltFunnel | B::SmartChute => Some(
+            crate::glue::logistics::amount::value_settings(lv, pos, player, pick, short.is_some()),
+        ),
         // `CartAssemblerBlockEntity.movementMode`.
         B::CartAssembler => {
             let count = create_engine::mounted::MODE_OPTIONS.len() as i32;

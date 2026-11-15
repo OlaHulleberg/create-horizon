@@ -15,8 +15,12 @@
 //! progress. The machines over a belt answer `Subsystem::belt_process`; a crafter's group takes
 //! items through its `ITEMS` handler (`crafter::provide_items`, the legacy
 //! `crafter_handler_insert`), whoever puts them in.
-//! The saw, the crushing wheels and the crafter hand their results to a belt or depot beside
-//! them through logistics' `insert_into_from`, as in the legacy glue.
+//! The saw, the crushing wheels and the crafter hand their results to whatever takes items from
+//! that side (`DirectBeltInputBehaviour`: a belt, depot, funnel, chute, drain or machine) through
+//! logistics' `insert_into_from`, which in turn hands belts' items to upward saws, basins,
+//! millstones and crushing wheels (`belt_input`). A basin turns its spout toward such a taker
+//! diagonally below it (`spoutput`). The basin's, the upward saw's and the deployer's filter
+//! slots are `filtering`'s.
 //!
 //! Left out, the API having no way yet:
 //! - A toolbox's one item kind per compartment: `ModContainer` has no per-slot insert check
@@ -28,29 +32,33 @@
 //!   `canProcess`): `ModContainer` has no per-slot insert check.
 //! - Create's own damage types (`create:crush`): a native mod's are not registered, so the
 //!   crushing wheels deal vanilla's cramming.
+//! - The deployer's punch at full strength (`DeployerFakePlayer.getCurrentItemAttackStrengthDelay`
+//!   of 1/64): the game's fake player attacks with its own, uncharged, attack strength, so a
+//!   punch deals about a fifth of its damage.
 //!
-//! A blaze burner's blaze, rods, flame and goggles are its block entity's drawing
-//! (`burner_draw`), so a burner carried by a moving structure, drawn from its block model,
-//! shows only its cage.
+//! Left out otherwise: a deployer's `overflowItems` (what its filter turns away, a crafting
+//! remainder) drop at the deployer instead of waiting in it for a funnel to take.
 //!
-//! Not drawn yet: the items a saw facing up is cutting (`SawRenderer.renderItems`) and a grid's
-//! items moving between mechanical crafters (`MechanicalCrafterRenderer.renderItems` past
-//! `IDLE`).
+//! A blaze burner carried by a moving structure is drawn by the structure's anchor
+//! (`burner_draw::draw_moving`): its blaze faces its front rather than the nearest player.
 
 mod application;
 pub(crate) mod basin;
-mod burner_draw;
+pub(crate) mod burner_draw;
 mod client;
 mod containers;
 mod crafter;
 mod crusher;
 mod deployer;
 mod fan;
+mod filtering;
+pub(crate) use filtering::filter_at as machine_filter;
 mod millstone;
 mod persist;
 mod press;
 pub mod recipes;
 pub(crate) mod saw;
+mod spoutput;
 mod stacks;
 
 pub use containers::TOOLBOX_TYPE;
@@ -101,6 +109,8 @@ impl Subsystem for Processing {
             basin::MIXER_KEY,
             basin::GOGGLES_KEY,
             crafter::CRAFTER_KEY,
+            saw::SAW_KEY,
+            spoutput::VISUALIZED_KEY,
         ]
     }
 
@@ -121,6 +131,8 @@ impl Subsystem for Processing {
         recipes::clear();
         saw::clear();
         basin::clear();
+        spoutput::clear();
+        crafter::clear();
     }
 
     fn tags_updated(&self, host: &mut dyn ServerHost) {
@@ -145,6 +157,7 @@ impl Subsystem for Processing {
         crusher::tick_crushers(lv);
         basin::tick_burners(lv);
         basin::tick_mixers(lv);
+        spoutput::tick(lv);
         basin::show_basins(lv);
     }
 
@@ -164,6 +177,24 @@ impl Subsystem for Processing {
             ));
         }
         press::press_on_belt(lv, segment, item, locked)
+    }
+
+    /// `BasinBlock.onWrenched`: the basin's spout side is chosen or shut, not turned.
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        _player: PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        clicked: Dir,
+        _point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        if block != Block::Basin || sneaking {
+            return false;
+        }
+        spoutput::wrenched(lv, pos, clicked);
+        true
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
@@ -213,6 +244,12 @@ impl Subsystem for Processing {
                     .and_then(|id| {
                         super::client_table(&*host, |t| t.get(id).map(|(b, _)| b)).flatten()
                     });
+                if let Some(block) = block
+                    && client::filter_slot_click(&*host, block, click)
+                {
+                    *event.cancellation_result = mod_api::InteractionResult::Success;
+                    return mod_api::Flow::Cancel;
+                }
                 if let Some(block) = block
                     && passes_item_use(&*host, block, click.stack)
                 {
@@ -341,6 +378,13 @@ fn use_block(host: &mut dyn ServerHost, event: &mut RightClickBlockEvent<'_>) ->
         return mod_api::Flow::Continue;
     };
     let main = click.hand == mod_api::Hand::Main;
+    // A filter slot takes the click first (`ValueSettingsInputHandler`).
+    if matches!(block, Block::Basin | Block::MechanicalSaw | Block::Deployer)
+        && filtering::click(&mut lv, pos, click)
+    {
+        *event.cancellation_result = mod_api::InteractionResult::Success;
+        return mod_api::Flow::Cancel;
+    }
     // The wrench (`WrenchItem.useOn`, not sneaking): a deployer's front half changes its mode
     // (`onWrenched`), a crafter's edge joins or parts its input (`EdgeInteractionHandler`).
     let wrench = click
@@ -460,6 +504,81 @@ impl ServerLevel<'_> {
     pub fn seed_at(&self, pos: [i32; 3]) -> u64 {
         self.game_time() as u64 ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9) ^ (pos[2] as u64) << 20
     }
+}
+
+/// Whether a processing machine at `pos` takes items from belts (`DirectBeltInputBehaviour`):
+/// Some(None) from any side, Some(Some(d)) only for items moving toward `d` (a crushing wheel
+/// controller between wheels above each other: `supportsDirectBeltInput`).
+pub(crate) fn belt_input_side(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Option<Dir>> {
+    let (block, info) = lv.info(pos)?;
+    match block {
+        Block::MechanicalSaw | Block::Basin | Block::Millstone => Some(None),
+        Block::CrushingWheelController => Some(info.facing.filter(|&f| f != Dir::Down)),
+        _ => None,
+    }
+}
+
+/// `DirectBeltInputBehaviour.handleInsertion` of the processing machines at `next`, for `item`
+/// moving toward `side` (off a belt's end, out of a saw or crusher): an upward saw, a basin, a
+/// millstone or a crushing wheel controller, through their item handlers (the default
+/// insertion callback). What is left of it; None when no such machine is there.
+pub(crate) fn belt_input(
+    lv: &mut ServerLevel<'_>,
+    next: [i32; 3],
+    side: Dir,
+    item: &create_engine::belt::Item,
+) -> Option<u8> {
+    let (block, info) = lv.info(next)?;
+    let count = item.count;
+    let stack = || stacks::stack(&*lv.host, &item.item, u32::from(count));
+    let left = |s: &Option<mod_api::ItemStack>| s.as_ref().map_or(0, |s| s.count().min(255) as u8);
+    match block {
+        // The saw's inventory is offered on every side but its bottom; it takes one item
+        // while empty (`ProcessingInventory`, a slot limit of one without bulk cutting).
+        Block::MechanicalSaw => {
+            if info.facing != Some(Dir::Up) || side == Dir::Down {
+                return Some(count);
+            }
+            Some(
+                if saw::saw_put(lv, next, &item.item, item.progress.clone()) {
+                    count - 1
+                } else {
+                    count
+                },
+            )
+        }
+        Block::Basin => {
+            let mut s = stack();
+            basin::basin_take(lv, next, &mut s);
+            Some(left(&s))
+        }
+        Block::Millstone => {
+            let mut s = stack();
+            millstone::millstone_take(lv, next, &mut s);
+            Some(left(&s))
+        }
+        // `supportsDirectBeltInput`: a controller between wheels side by side takes from any
+        // side, one between wheels above each other only from the side it faces.
+        Block::CrushingWheelController => {
+            if info.facing != Some(Dir::Down) && info.facing != Some(side) {
+                return Some(count);
+            }
+            Some(if crusher::crusher_put(lv, next, &item.item, count) {
+                0
+            } else {
+                count
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Whether something at `p` takes items handed to it moving toward `side`
+/// (`DirectBeltInputBehaviour` there, and its `canInsertFromSide(side)`): a belt, depot, funnel,
+/// chute, item drain or processing machine.
+pub(crate) fn direct_input(lv: &ServerLevel<'_>, p: [i32; 3], side: Dir) -> bool {
+    crate::glue::logistics::direct_input_at(lv, p)
+        && crate::glue::logistics::direct_input_accepts(lv, p, side)
 }
 
 /// Whether a depot or a belt is at `p` (`DirectBeltInputBehaviour` there).

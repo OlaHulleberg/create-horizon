@@ -65,6 +65,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 ### Entities and moving structures
 
+- **A fake player's attack strength** (`DeployerFakePlayer.getCurrentItemAttackStrengthDelay`, 1/64, so
+  every blow lands charged): `PlayerRef::perform_action_scoped` with `PlayerAction::Attack` hits with the
+  fake's own uncharged ticker, so a deployer's punch deals about a fifth of Create's damage (0.21 of a
+  fist's 1). A `PlayerActionSetup` field for the attack strength (or a full charge) would close it.
+
 - **A native mod's damage types**: Create's `data/create/damage_type/*.json` (`crush`, `mechanical_saw`,
   `fan_fire`...) shipped with the mod are not registered (`EntityRef::hurt` with `create:crush` is refused), so
   crushing wheels hurt with vanilla's `cramming`, which also goes through armour.

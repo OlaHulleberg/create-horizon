@@ -936,11 +936,12 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             )),
             own(&[("waterlogged", bools)]),
         ),
-        // SawBlock (DirectionalAxisKineticBlock): facing, its shaft's axis, `flipped`; a full
-        // block here, so items land on top of it.
+        // SawBlock (DirectionalAxisKineticBlock): facing, its shaft's axis, `flipped`;
+        // AllShapes.CASING_12PX to its facing, so items land on its top at 12 px, under the
+        // blade, and its filter slot is in reach.
         "mechanical_saw" => (
             "minecraft:iron_block",
-            None,
+            Some(by_facing(&[[0., 0., 0., 16., 12., 16.]])),
             own(&[
                 ("axis_along_first", bools),
                 ("facing", facing),
@@ -2393,7 +2394,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 140] = [
+pub const PARTIALS: [(&str, &str, &str); 141] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -2630,7 +2631,8 @@ pub const PARTIALS: [(&str, &str, &str); 140] = [
         "create:block/mechanical_crafter/belt",
         "up",
     ),
-    // DeployerRenderer: the pole and the hand (pointing empty, holding an item), turned by
+    // DeployerRenderer: the pole and the hand (pointing empty, holding an item, punching in
+    // punch mode), turned by
     // `horizontalAngle` and 270/90° up and down, as the shaft half.
     ("part_deployer_pole", "create:block/deployer/pole", "south"),
     (
@@ -2641,6 +2643,11 @@ pub const PARTIALS: [(&str, &str, &str); 140] = [
     (
         "part_deployer_hand_holding",
         "create:block/deployer/hand_holding",
+        "south",
+    ),
+    (
+        "part_deployer_hand_punching",
+        "create:block/deployer/hand_punching",
         "south",
     ),
     // GaugeRenderer: a head and a dial per shown face, `rotateBufferTowards` (0° for east);
