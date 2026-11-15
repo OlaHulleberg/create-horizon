@@ -41,6 +41,9 @@ struct Shown {
     radius: f64,
     /// Each actor's head, blade or wheel turn (degrees), by its block's centre in the carriage.
     rolls: Vec<([f64; 3], f32)>,
+    /// Each train controls' levers (`LeverAngles`: hand, speed, steering), by its block's
+    /// centre in the carriage.
+    levers: Vec<([f64; 3], [f32; 3])>,
 }
 
 /// A display's place: its point in the carriage's (or bogey's) space, from which the display
@@ -331,7 +334,20 @@ fn sync(lv: &mut ServerLevel<'_>, mut now: Vec<Now>, kinds: &[u8]) {
             continue;
         }
         let pose = (n.at, n.yaw, n.pitch);
-        let moved = SHOWN.with_borrow(|s| s.get(&n.key).is_some_and(|v| v.last != Some(pose)));
+        let levers = lever_targets(n);
+        let moved = SHOWN.with_borrow(|s| {
+            s.get(&n.key).is_some_and(|v| {
+                v.last != Some(pose)
+                    || levers.iter().any(|(c, t)| {
+                        let now = v
+                            .levers
+                            .iter()
+                            .find(|l| l.0 == *c)
+                            .map_or([0.0; 3], |l| l.1);
+                        (0..3).any(|i| (now[i] - t[i]).abs() > 1e-3)
+                    })
+            })
+        });
         if !moved {
             continue;
         }
@@ -370,10 +386,35 @@ fn sync(lv: &mut ServerLevel<'_>, mut now: Vec<Now>, kinds: &[u8]) {
             let motion = v.last.map_or([0.0; 3], |(was, _, _)| {
                 std::array::from_fn(|i| n.at[i] - was[i])
             });
+            // `renderInContraption`: each lever chases its target by a fifth a tick
+            // (`Chaser.EXP` at 0.2); the speed lever's target is how far it moved this tick.
+            let moved_by = motion.iter().map(|m| m * m).sum::<f64>().sqrt().min(0.5) as f32;
+            for (centre, target) in &levers {
+                let target = [target[0], target[1] * moved_by, target[2]];
+                let entry = match v.levers.iter_mut().position(|l| l.0 == *centre) {
+                    Some(i) => &mut v.levers[i].1,
+                    None => {
+                        v.levers.push((*centre, [0.0; 3]));
+                        &mut v.levers.last_mut().expect("pushed").1
+                    }
+                };
+                for i in 0..3 {
+                    // A hand let go drops the levers at once (`chase(0, 0, ..)`).
+                    if target[0] == 0.0 && i > 0 {
+                        entry[i] = 0.0;
+                    } else {
+                        entry[i] += (target[i] - entry[i]) * 0.2;
+                    }
+                }
+            }
             v.last = Some(pose);
-            (v.displays.clone(), v.wheel, (v.rolls.clone(), motion))
+            (
+                v.displays.clone(),
+                v.wheel,
+                (v.rolls.clone(), motion, v.levers.clone()),
+            )
         });
-        let (rolls, motion) = rolls;
+        let (rolls, motion, lever_now) = rolls;
         let relative = to_carriage(n, motion);
         for (id, part) in displays {
             let Some(e) = lv.host.entity(id) else {
@@ -402,6 +443,10 @@ fn sync(lv: &mut ServerLevel<'_>, mut now: Vec<Now>, kinds: &[u8]) {
                     stroke: actor_draw::deployer_stroke(point),
                     running: actor_draw::saw_runs(facing, relative, horizontal, false, false),
                     lit: true,
+                    levers: lever_now
+                        .iter()
+                        .find(|l| l.0 == centre)
+                        .map_or([0.0; 3], |l| l.1),
                     ..Doing::default()
                 };
                 if let Some((name, facing, pose)) =
@@ -464,6 +509,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
                 wheel: 0.0,
                 radius: 0.0,
                 rolls: Vec::new(),
+                levers: Vec::new(),
             };
         };
         radius = size.wheel_radius();
@@ -516,8 +562,10 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             let centre = [f64::from(o[0]), f64::from(o[1]) + up, f64::from(o[2])];
             parts.push((name, props, centre, [-0.5; 3], false));
             // An actor's moving parts, at rest until it moves.
-            if let Some((block, info)) =
-                crate::glue::contraptions::create_info(s).filter(|(b, _)| actor_draw::draws(*b))
+            // Train controls draw their cover and levers on a train only.
+            let train_controls = |b: Block| b == Block::Controls && kind == CAR;
+            if let Some((block, info)) = crate::glue::contraptions::create_info(s)
+                .filter(|(b, _)| actor_draw::draws(*b) || train_controls(*b))
             {
                 let doing = Doing {
                     lit: true,
@@ -583,7 +631,63 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
         wheel: 0.0,
         radius,
         rolls: Vec::new(),
+        levers: Vec::new(),
     }
+}
+
+/// The train controls of carriage `n` and their levers' targets: the hand on them (1 while a
+/// player holds them), the speed lever's way (`movingBackwards ^ inverted`: -1 or 1, times how
+/// far the carriage moves), the steering (right 1, left -1), by the controls' centre.
+fn lever_targets(n: &Now) -> Vec<([f64; 3], [f32; 3])> {
+    let (dim, id, kind, car) = n.key;
+    if kind != CAR {
+        return Vec::new();
+    }
+    let train = id as u32;
+    let found = SHOWN.with_borrow(|s| {
+        s.get(&n.key).map(|v| {
+            v.displays
+                .iter()
+                .filter_map(|(_, p)| match p.actor {
+                    Some((Block::Controls, _, centre, 0)) => Some(centre),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+    });
+    let Some(found) = found.filter(|f| !f.is_empty()) else {
+        return Vec::new();
+    };
+    let backwards = with_world(|w| {
+        w.dims[dim]
+            .railway
+            .trains
+            .iter()
+            .find(|t| t.id == train)
+            .map(|t| t.train.speed < 0.0)
+    })
+    .flatten()
+    .unwrap_or(false);
+    found
+        .into_iter()
+        .map(|centre| {
+            let local = [
+                centre[0].round() as i32,
+                (centre[1] - 1.5).round() as i32,
+                centre[2].round() as i32,
+            ];
+            let target = match super::controls::held_at(dim, train, car, local) {
+                Some((keys, inverted)) => {
+                    let has = |k: u8| keys & (1 << k) != 0;
+                    let steer = f32::from(u8::from(has(create_engine::train_controls::RIGHT)))
+                        - f32::from(u8::from(has(create_engine::train_controls::LEFT)));
+                    [1.0, if backwards ^ inverted { -1.0 } else { 1.0 }, steer]
+                }
+                None => [0.0; 3],
+            };
+            (centre, target)
+        })
+        .collect()
 }
 
 /// The poses of actor `block`'s moving parts doing `doing` (`actor_draw::actor_parts`).

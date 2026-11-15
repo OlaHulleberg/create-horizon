@@ -750,6 +750,29 @@ pub fn before_trains(lv: &mut ServerLevel<'_>) {
     }
 }
 
+/// The controls at block `local` of carriage `car` of train `train` in level `dim` while a
+/// player holds them: the keys held (a bit per control) and whether they face the train's back.
+pub fn held_at(dim: usize, train: u32, car: usize, local: [i32; 3]) -> Option<(u8, bool)> {
+    let (player, inverted) = CONTROLLING.with_borrow(|c| {
+        c.iter()
+            .find(|c| {
+                c.dim == dim
+                    && c.at.train == train
+                    && usize::from(c.at.car) == car
+                    && c.at.local == local
+            })
+            .map(|c| (c.player, c.inverted))
+    })?;
+    let keys = INPUTS.with_borrow(|all| {
+        all.iter()
+            .filter(|(d, _)| *d == dim)
+            .flat_map(|(_, i)| i.players.iter())
+            .find(|(p, _)| *p == player)
+            .map_or(0, |(_, c)| c.held())
+    });
+    Some((keys, inverted))
+}
+
 /// `ControlsMovementBehaviour.stopMoving`: train `train` was taken apart; its controls are let
 /// go.
 pub fn disassembled(lv: &mut ServerLevel<'_>, train: u32) {

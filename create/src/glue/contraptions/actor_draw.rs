@@ -274,6 +274,9 @@ pub struct Doing {
     pub lit: bool,
     /// Contraption controls turned off.
     pub off: bool,
+    /// Train controls' levers (`ControlsMovementBehaviour.LeverAngles`): the hand on them, the
+    /// speed lever and the steering lever.
+    pub levers: [f32; 3],
 }
 
 /// Draws actor `block`'s moving parts (state facts `info`) doing `d`, under its block's pose.
@@ -295,6 +298,7 @@ pub fn actor_parts(draw: &mut dyn Parts, block: Block, info: &StateInfo, d: &Doi
             d.reach,
         ),
         Block::ContraptionControls => draw_controls(draw, facing, d.off),
+        Block::Controls => draw_train_controls(draw, facing, d.levers),
         _ => {}
     }
 }
@@ -310,6 +314,41 @@ fn draw_controls(draw: &mut dyn Parts, facing: Dir, off: bool) {
         "part_contraption_controls_indicator_0"
     };
     draw.part(indicator, back);
+}
+
+/// `ControlsRenderer.render` (trains only): the cover turned to the controls' facing and the
+/// two levers, the first by the speed (`× 70 - 25`), the second by the steering (`× 15`),
+/// both within 45° and raised as a hand takes them (`equipAnimation`).
+fn draw_train_controls(draw: &mut dyn Parts, facing: Dir, [equip, speed, steer]: [f32; 3]) {
+    let h = 180.0 + horizontal_angle(facing);
+    draw.push();
+    draw.rotate_about(UP, h, CENTRE);
+    draw.part("part_train_controls_cover", "up");
+    draw.pop();
+    let y = -0.15 + (0.05 - -0.15) * equip * equip;
+    for first in [true, false] {
+        let v = if first {
+            speed * 70.0 - 25.0
+        } else {
+            steer * 15.0
+        }
+        .clamp(-45.0, 45.0);
+        draw.push();
+        draw.translate(CENTRE);
+        draw.rotate_about(UP, h, [0.0; 3]);
+        draw.translate([0.0, 4.0 / 16.0, 4.0 / 16.0]);
+        draw.rotate_about(EAST, v - 45.0, [0.0; 3]);
+        draw.translate([0.0, y, 0.0]);
+        draw.rotate_about(EAST, 45.0, [0.0; 3]);
+        draw.translate(CENTRE.map(|c| -c));
+        draw.translate([
+            if first { 0.0 } else { 6.0 / 16.0 },
+            -6.0 / 16.0,
+            -3.0 / 16.0,
+        ]);
+        draw.part("part_train_controls_lever", "up");
+        draw.pop();
+    }
 }
 
 /// `MovementContext.getAnimationSpeed` on a client.
