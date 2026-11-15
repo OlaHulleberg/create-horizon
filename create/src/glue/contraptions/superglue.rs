@@ -12,12 +12,12 @@
 //! block looked at, their faces covered with `AllSpecialTextures.GLUE` (the glue's textured
 //! world pipeline, `pipelines`).
 
-use crate::glue::pipelines::Textured;
 use super::super::items::{action_bar, creative, held, sneaking};
 use super::super::persist::mark_unsaved;
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::{center, found};
+use crate::glue::pipelines::Textured;
 use create_engine::glue;
 use mod_api::{
     EquipmentSlot, Hand, HostSide, InteractionResult, ItemPart, LeftClickBlockEvent, PlayerRef,
@@ -204,16 +204,44 @@ fn box_faces(
         hi[i] += inflate;
     }
     let colour = (((colour >> 24) / 2) << 24) | (colour & 0xFF_FFFF);
-    let (sx, sy, sz) = ((hi[0] - lo[0]) as f32, (hi[1] - lo[1]) as f32, (hi[2] - lo[2]) as f32);
+    let (sx, sy, sz) = (
+        (hi[0] - lo[0]) as f32,
+        (hi[1] - lo[1]) as f32,
+        (hi[2] - lo[2]) as f32,
+    );
     let [x0, y0, z0] = lo;
     let [x1, y1, z1] = hi;
     for (corners, u, v) in [
-        ([[x0, y0, z1], [x0, y0, z0], [x1, y0, z0], [x1, y0, z1]], sx, sz),
-        ([[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]], sx, sz),
-        ([[x1, y1, z0], [x1, y0, z0], [x0, y0, z0], [x0, y1, z0]], sx, sy),
-        ([[x0, y1, z1], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1]], sx, sy),
-        ([[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]], sz, sy),
-        ([[x1, y1, z1], [x1, y0, z1], [x1, y0, z0], [x1, y1, z0]], sz, sy),
+        (
+            [[x0, y0, z1], [x0, y0, z0], [x1, y0, z0], [x1, y0, z1]],
+            sx,
+            sz,
+        ),
+        (
+            [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
+            sx,
+            sz,
+        ),
+        (
+            [[x1, y1, z0], [x1, y0, z0], [x0, y0, z0], [x0, y1, z0]],
+            sx,
+            sy,
+        ),
+        (
+            [[x0, y1, z1], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1]],
+            sx,
+            sy,
+        ),
+        (
+            [[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],
+            sz,
+            sy,
+        ),
+        (
+            [[x1, y1, z1], [x1, y0, z1], [x1, y0, z0], [x1, y1, z0]],
+            sz,
+            sy,
+        ),
     ] {
         faces.push(mod_api::PipelineQuad::new(
             corners,

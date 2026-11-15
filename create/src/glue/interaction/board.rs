@@ -624,7 +624,11 @@ fn brass_frame(draw: &mut dyn DrawContext, x: f32, y: f32, w: f32, h: f32) {
     cropped(draw, [70.0, 19.0], [x + w - 4.0, y + h - 4.0], 4.0, 4.0);
     if h > 8.0 {
         stretched(draw, [65.0, 14.0, 3.0, 4.0], [x, y + 4.0, 3.0, h - 8.0]);
-        stretched(draw, [71.0, 14.0, 3.0, 4.0], [x + w - 3.0, y + 4.0, 3.0, h - 8.0]);
+        stretched(
+            draw,
+            [71.0, 14.0, 3.0, 4.0],
+            [x + w - 3.0, y + 4.0, 3.0, h - 8.0],
+        );
     }
     if w > 8.0 {
         cropped(draw, [0.0, 24.0], [x + 4.0, y], w - 8.0, 3.0);
@@ -634,10 +638,9 @@ fn brass_frame(draw: &mut dyn DrawContext, x: f32, y: f32, w: f32, h: f32) {
 
 /// `ValueSettingsScreen.renderWindow`. Whether a board is open.
 pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
-    let Some((b, names, icons, ticks)) = BOARD.with_borrow(|b| {
-        b.as_ref()
-            .map(|o| (o.board, o.names, o.icons, o.ticks))
-    }) else {
+    let Some((b, names, icons, ticks)) =
+        BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.names, o.icons, o.ticks)))
+    else {
         return false;
     };
     let [width, height] = draw.size();
@@ -753,7 +756,13 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
     for (i, row) in b.rows.iter().enumerate() {
         let y = l.top + i as i32 * 11;
         if !b.icons {
-            cropped(draw, [0.0, 31.0], [f(l.left - 4), f(y)], f(l.label + 8), 11.0);
+            cropped(
+                draw,
+                [0.0, 31.0],
+                [f(l.left - 4), f(y)],
+                f(l.label + 8),
+                11.0,
+            );
             let mut w = 0;
             while w < b.bar_width() {
                 let part = 248.min(b.bar_width() - w);

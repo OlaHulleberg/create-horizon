@@ -344,7 +344,11 @@ pub fn tick_client(host: &mut dyn ClientHost) {
             for c in &mut o.columns {
                 c[0] = c[1];
                 let d = c[2] - c[1];
-                c[1] = if d.abs() < 1.0 / 128.0 { c[2] } else { c[1] + d * 0.5 };
+                c[1] = if d.abs() < 1.0 / 128.0 {
+                    c[2]
+                } else {
+                    c[1] + d * 0.5
+                };
             }
         }
     });

@@ -710,7 +710,10 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             // Create's special textures (`AllSpecialTextures`: the outliner's checkered and glue
             // faces) on the block atlas too, where a world pipeline samples them.
             if let Some(rest) = path.strip_prefix("assets/create/textures/special/") {
-                put(&format!("assets/create/textures/block/special/{rest}"), bytes)?;
+                put(
+                    &format!("assets/create/textures/block/special/{rest}"),
+                    bytes,
+                )?;
             }
             if path == "assets/create/textures/entity/coupling.png" {
                 put("assets/create/textures/block/entity/coupling.png", bytes)?;

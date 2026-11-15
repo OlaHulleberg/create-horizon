@@ -113,10 +113,7 @@ fn diving_boots(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
     let in_water = e
         .fluid_heights(h)
         .is_some_and(|f| f.iter().any(|(id, _)| id == "minecraft:water"));
-    if !in_water
-        || e.pose(h) == Some("swimming")
-        || player.abilities(h).is_some_and(|a| a.flying)
-    {
+    if !in_water || e.pose(h) == Some("swimming") || player.abilities(h).is_some_and(|a| a.flying) {
         return;
     }
     let Some(v) = e.velocity(h) else {

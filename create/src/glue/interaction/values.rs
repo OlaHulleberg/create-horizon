@@ -204,15 +204,19 @@ pub(crate) fn option_icons(block: B) -> &'static [[f32; 2]] {
         [c as f32 * 16.0, r as f32 * 16.0]
     }
     match block {
-        B::BrassTunnel => const { &[
-            at(4, 3),
-            at(5, 3),
-            at(6, 3),
-            at(7, 3),
-            at(8, 3),
-            at(9, 3),
-            at(10, 3),
-        ] },
+        B::BrassTunnel => {
+            const {
+                &[
+                    at(4, 3),
+                    at(5, 3),
+                    at(6, 3),
+                    at(7, 3),
+                    at(8, 3),
+                    at(9, 3),
+                    at(10, 3),
+                ]
+            }
+        }
         B::MechanicalArm => const { &[at(4, 4), at(5, 4), at(6, 4)] },
         B::MechanicalBearing => const { &[at(6, 1), at(7, 1), at(8, 1)] },
         B::MechanicalPiston | B::StickyMechanicalPiston | B::RopePulley => {
