@@ -35,6 +35,8 @@ thread_local! {
     static PRESSES: RefCell<HashMap<[i32; 3], (press::Press, bool)>> = RefCell::new(HashMap::new());
     /// Each deployer's stroke as last sent, and the client tick it came at.
     static DEPLOYERS: RefCell<HashMap<[i32; 3], (deployer::Shown, u64)>> = RefCell::new(HashMap::new());
+    /// Each basin's ingredient swirl: angle, speed, and the client tick they are at.
+    static SPINS: RefCell<HashMap<[i32; 3], (f32, f32, u64)>> = RefCell::new(HashMap::new());
     /// This client's ticks, for the strokes' glide between messages.
     static TICKS: Cell<u64> = const { Cell::new(0) };
 }
@@ -91,7 +93,8 @@ pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
             Some(Tag::Compound(c)) if c.contains_key(&"T".into())
         ),
         Block::Basin => {
-            (!basin_fluids(&entity.nbt).is_empty() && !basin_items(&entity.nbt).is_empty())
+            // Items bob on fluid or swirl under a mixer.
+            !basin_items(&entity.nbt).is_empty()
                 || !super::spoutput::visualized(&entity.nbt).is_empty()
         }
         _ => false,
@@ -137,6 +140,43 @@ fn basin_fluids(nbt: &Compound) -> Vec<(Fluid, u32)> {
             (c[1] > 0).then_some((fluid, c[1] as u32))
         })
         .collect()
+}
+
+/// `BasinBlockEntity.ingredientRotation`: the items in a basin swirl while its mixer works the
+/// bottom (`setAreFluidsMoving`: running, at most 20 running ticks), their speed chasing 20°
+/// (or 0) a tick by a tenth of the gap each tick; this frame's angle.
+fn ingredient_rotation(
+    host: &dyn ClientHost,
+    draw: &dyn BlockEntityDrawContext,
+    pos: [i32; 3],
+) -> f32 {
+    let mixer = [pos[0], pos[1] + 2, pos[2]];
+    let moving = host
+        .local_player()
+        .and_then(|p| p.level(host))
+        .and_then(|l| host.block_entity(l, mixer))
+        .and_then(|e| e.data(host))
+        .is_some_and(|d| match d.get(&basin_glue::MIXER_KEY.into()) {
+            Some(Tag::Compound(c)) => match (c.get(&"T".into()), c.get(&"S".into())) {
+                (Some(Tag::Int(t)), Some(Tag::Long(at))) => {
+                    create_engine::basin::shown_ticks(*t, draw.game_time() - at) <= 20
+                }
+                _ => false,
+            },
+            _ => false,
+        });
+    let target = if moving { 20.0 } else { 0.0 };
+    let now = TICKS.get();
+    SPINS.with_borrow_mut(|s| {
+        let e = s.entry(pos).or_insert((0.0, 0.0, now));
+        let steps = now.saturating_sub(e.2).min(200);
+        for _ in 0..steps {
+            e.1 += (target - e.1) * 0.1;
+            e.0 = (e.0 + e.1) % 360.0;
+        }
+        e.2 = now;
+        e.0 + e.1 * draw.partial()
+    })
 }
 
 /// `BasinRenderer`: the fluids side by side across the basin, as high as they fill it, and the
@@ -188,6 +228,11 @@ fn draw_basin(
     let time = draw.game_time() as f32 + draw.partial();
     draw.push();
     draw.translate([0.5, 0.2, 0.5]);
+    draw.rotate_about(
+        [0.0, 1.0, 0.0],
+        ingredient_rotation(host, draw, pos),
+        [0.0; 3],
+    );
     for (id, n) in items {
         let Some(stack) = stacks::stack(host, &id, 1) else {
             count -= 1;
@@ -291,6 +336,7 @@ pub fn reset() {
     super::burner_draw::reset();
     PRESSES.with_borrow_mut(HashMap::clear);
     DEPLOYERS.with_borrow_mut(HashMap::clear);
+    SPINS.with_borrow_mut(HashMap::clear);
 }
 
 fn presses_from_server(data: &[u8]) {
