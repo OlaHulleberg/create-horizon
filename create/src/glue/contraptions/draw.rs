@@ -31,6 +31,9 @@ const TURN: i32 = 0;
 const GLIDE: i32 = 1;
 const CLOCK: i32 = 2;
 const ELEVATOR: i32 = 3;
+/// A structure that is gone: clients merge the data they are sent into their copy, so a key
+/// taken away would stay with them; this one says the anchor draws nothing.
+const GONE: i32 = -1;
 
 /// How far from the camera anchors draw their structures, in blocks: the legacy parts were
 /// drawn at any distance.
@@ -128,7 +131,15 @@ fn anchors(dim: usize, pos: [i32; 3]) -> bool {
 /// entity's geometry is not kept between frames).
 pub fn moving(data: &Compound) -> bool {
     match data.get(&KEY.into()) {
-        Some(Tag::Compound(c)) => !matches!(int(c, "Kind"), Some(TURN | CLOCK)),
+        Some(Tag::Compound(c)) => matches!(int(c, "Kind"), Some(GLIDE | ELEVATOR)),
+        _ => false,
+    }
+}
+
+/// Whether `data` holds a structure (not none, nor one that is gone).
+fn holds_structure(data: &Compound) -> bool {
+    match data.get(&KEY.into()) {
+        Some(Tag::Compound(c)) => int(c, "Kind") != Some(GONE),
         _ => false,
     }
 }
@@ -228,9 +239,17 @@ fn write(lv: &mut ServerLevel<'_>, anchor: [i32; 3], c: Option<Compound>) {
             data.insert(KEY.into(), Tag::Compound(c));
         }
         None => {
-            if data.remove(&KEY.into()).is_none() {
+            if !holds_structure(&data) {
                 return;
             }
+            let gone = Compound::from([
+                ("Kind".into(), Tag::Int(GONE)),
+                (
+                    "Rev".into(),
+                    Tag::Int(REVISION.fetch_add(1, Ordering::Relaxed)),
+                ),
+            ]);
+            data.insert(KEY.into(), Tag::Compound(gone));
         }
     }
     let _ = entity.replace_data(&mut *lv.host, data);
@@ -396,6 +415,8 @@ struct Drawn {
     light: Option<u32>,
     block: BlockKey,
     props: Vec<(String, String)>,
+    /// The Create block and facts of its state.
+    create: Option<(create_engine::Block, create_engine::parts::StateInfo)>,
 }
 
 fn drawn_blocks(host: &dyn Host, c: &Compound, suffix: &str) -> Vec<Drawn> {
@@ -415,10 +436,14 @@ fn drawn_blocks(host: &dyn Host, c: &Compound, suffix: &str) -> Vec<Drawn> {
             let text = t.to_string_lossy();
             let state = host.block_state_id(&text)?;
             let (_, props) = states::split(&text);
+            let create = states::id(state).and_then(|id| {
+                super::super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
+            });
             Some(Drawn {
                 at: o.map(|v| v as f32),
                 light: lights.get(i).map(|l| *l as u32),
                 block: state.block(),
+                create,
                 props: props
                     .into_iter()
                     .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -594,9 +619,73 @@ fn draw_blocks(draw: &mut dyn BlockEntityDrawContext, blocks: &[Drawn]) {
         draw.push();
         draw.translate(b.at);
         draw.block(b.block, &props);
+        if let Some((block, info)) = b.create {
+            draw_parts(draw, block, &info, &props);
+        }
         draw.pop();
     }
     draw.set_light(own);
+}
+
+/// Blocks whose model is the whole block, drawn by its block entity in the world
+/// (`RenderShape.ENTITYBLOCK_ANIMATED`): shafts, cogs, cranks and valve handles, the gantry
+/// shaft, crushing wheels, flywheels, large water wheels, turntables, belts and copycats.
+fn whole_model(block: create_engine::Block) -> bool {
+    use create_engine::Block as B;
+    create_engine::dye::is_valve_handle(block)
+        || matches!(
+            block,
+            B::Shaft
+                | B::PoweredShaft
+                | B::Cogwheel
+                | B::LargeCogwheel
+                | B::GantryShaft
+                | B::CrushingWheel
+                | B::Flywheel
+                | B::LargeWaterWheel
+                | B::HandCrank
+                | B::Turntable
+                | B::Belt
+                | B::CopycatPanel
+                | B::CopycatStep
+        )
+}
+
+/// A moving block's kinetic parts at rest (`ContraptionKineticRenderer`: what its block
+/// entity's visual draws in the world, its shafts, cogs, drill head or fan blades), over its
+/// block model; none for a block whose model is already all of it.
+fn draw_parts(
+    draw: &mut dyn BlockEntityDrawContext,
+    block: create_engine::Block,
+    info: &create_engine::parts::StateInfo,
+    props: &[(&str, &str)],
+) {
+    use create_engine::client::{Model, draws};
+    if whole_model(block) {
+        return;
+    }
+    for d in draws(block, info, [0; 3], [0.0; 2]) {
+        if d.model == Model::Own {
+            continue;
+        }
+        let Some((model, prop)) = super::super::kinetics::part_model(block, d.model) else {
+            continue;
+        };
+        draw.push();
+        let axis = match d.axis {
+            Axis::X => [1.0, 0.0, 0.0],
+            Axis::Y => [0.0, 1.0, 0.0],
+            Axis::Z => [0.0, 0.0, 1.0],
+        };
+        if d.phase != 0.0 {
+            draw.rotate_about(axis, d.phase, [0.5; 3]);
+        }
+        match prop {
+            Some(p) => draw.block(model, &[p]),
+            None => draw.block(model, props),
+        };
+        draw.pop();
+    }
 }
 
 /// The speed the kinetic data gives the anchor's own part (slot 0).
@@ -617,7 +706,7 @@ fn submit(
     data: &Compound,
     draw: &mut dyn BlockEntityDrawContext,
 ) {
-    let Some(Tag::Compound(c)) = data.get(&KEY.into()) else {
+    let Some(Tag::Compound(c)) = data.get(&KEY.into()).filter(|_| holds_structure(data)) else {
         SHOWN.with_borrow_mut(|s| s.remove(&pos));
         return;
     };
@@ -894,7 +983,7 @@ impl BlockEntityPart for StructurePart {
         let Some(data) = entity.data(&*host) else {
             return;
         };
-        if !data.contains_key(&KEY.into()) {
+        if !holds_structure(&data) {
             return;
         }
         let (Some(level), Some(pos)) = (entity.level(&*host), entity.position(&*host)) else {
