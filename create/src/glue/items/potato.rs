@@ -8,15 +8,15 @@
 //! keeps its flight by entity id: Create's gravity and drag each tick (set over the snowball's
 //! own), sticking to what a sticky type hits, and its hits (`projectile_impact`, taken from the
 //! snowball): damage, knockback, the type's entity and block actions, the item recovered or
-//! its leftover dropped, `POTATO_HIT` and the item's crumbs.
+//! its leftover dropped, `POTATO_HIT` and the item's crumbs. A golden apple cures a weakened
+//! zombie villager (`CureZombieVillager`, through its saved `ConversionTime` as `mobInteract`'s
+//! `startConverting` sets it).
 //!
 //! Left out, for want of API:
 //! - Create's own entity type (`create:potato_projectile`) and damage type
 //!   (`create:potato_cannon`): the shot is a snowball and hurts as `minecraft:thrown` from it and
 //!   the shooter. A save keeps the snowballs, not the glue's flights: one flying when the world
 //!   is saved comes back as a plain snowball showing its item.
-//! - `CureZombieVillager`'s cure (the zombie villager's `mobInteract` with a golden apple from a
-//!   fake player): a golden apple gives its food effects to anything it hits.
 //! - The cannon's recoil in the hand (`PotatoCannonRenderHandler`: a special item model is
 //!   asked once per stack, `HORIZON_API.md`) and the `potato_cannon_collide` advancement (shots of two types meeting), not wired. A monster killed or another player hit gives `potato_cannon`.
 //!
@@ -772,8 +772,38 @@ fn entity_hit(lv: &mut ServerLevel<'_>, shot: &Shot, target: EntityRef) -> bool 
             }
             true
         }
-        // `CureZombieVillager`: a golden apple's own effects (`Foods.GOLDEN_APPLE`).
+        // `CureZombieVillager`: a weakened zombie villager is given the golden apple by Create's
+        // converter (`mobInteract`: `startConverting(converter, nextInt(2401) + 3600)`, which its
+        // saved data's `ConversionTime` runs: weakness off, strength on, the cure's sound);
+        // anything else gets a golden apple's own effects (`Foods.GOLDEN_APPLE`).
         Some("cure_zombie_villager") => {
+            let weak = lv.host.effect_key("minecraft:weakness").is_some_and(|k| {
+                lv.host
+                    .living(target)
+                    .is_some_and(|l| l.effect(&*lv.host, k).is_some())
+            });
+            let zombie = target.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref()
+                == Some("minecraft:zombie_villager");
+            if zombie && weak {
+                use mod_api::RandomSource;
+                let time = lv
+                    .level
+                    .with_random(&mut *lv.host, |r| r.next_int_bound(2401).unwrap_or(1200))
+                    .unwrap_or(1200)
+                    + 3600;
+                // `ZOMBIE_CONVERTER_NAME`'s UUID, be12d3dc-27d3-4992-8c97-66be53fd49c5.
+                let converter =
+                    [0xbe12d3dc_u32, 0x27d34992, 0x8c9766be, 0x53fd49c5].map(|v| v as i32);
+                let data = mod_api::Compound::from([
+                    ("ConversionTime".into(), mod_api::Tag::Int(time)),
+                    (
+                        "ConversionPlayer".into(),
+                        mod_api::Tag::IntArray(converter.to_vec()),
+                    ),
+                ]);
+                target.merge_nbt(&mut *lv.host, data);
+                return true;
+            }
             give(lv, target, "minecraft:regeneration", 100, 1);
             give(lv, target, "minecraft:absorption", 2400, 0);
             true
