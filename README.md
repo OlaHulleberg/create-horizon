@@ -53,9 +53,9 @@ Every subsystem of Create is ported to the mod API. Highlights:
 - **Schematics.** Schematic tools, the schematic table and schematicannon.
 - **Advancements.** Create's advancement tree, awarded where Create awards them.
 
-Some things need API that the game doesn't have yet, so they are left out for now. Examples: shapeless
-crafting recipes in a basin, Create's own enchantments at enchanting tables, and hoppers reaching into belts
-and tanks. The full list, with what would fix each one: **[HORIZON_API.md](HORIZON_API.md)**.
+Some things need API that the game doesn't have yet, so they are left out for now. Examples: standing on or
+bumping into moving contraptions and trains, Create's own enchantments at enchanting tables, and hoppers
+reaching into belts and tanks. The full list, with what would fix each one: **[HORIZON_API.md](HORIZON_API.md)**.
 
 ## Install
 
