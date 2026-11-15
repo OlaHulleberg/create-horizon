@@ -36,6 +36,17 @@ pub fn carry(
     actors::carry_storage(lv, key(train, car), origin, blocks);
 }
 
+/// A carriage about to be taken apart: what its other block entities and the engine kept for
+/// its blocks waits for them, each going back at `place(offset)` (`addBlocksToWorld`).
+pub fn expect(
+    lv: &mut ServerLevel<'_>,
+    train: u32,
+    car: usize,
+    place: impl Fn([i32; 3]) -> [i32; 3],
+) {
+    actors::expect_back(lv, key(train, car), place);
+}
+
 /// A carriage taken apart: its items go back into its storage blocks, each now at
 /// `place(offset)`.
 pub fn release(

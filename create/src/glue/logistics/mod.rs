@@ -47,6 +47,7 @@
 pub(crate) mod amount;
 pub mod arms;
 mod belt;
+mod carried;
 mod chute;
 pub(crate) mod client;
 mod depot;
@@ -112,6 +113,27 @@ const PARTS: [Block; 12] = [
 ];
 
 impl Subsystem for Logistics {
+    fn carry_out(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        out: &mut Compound,
+    ) {
+        carried::carry_out(lv, pos, block, out);
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        data: &Compound,
+        _turn: create_engine::contraption::Transform,
+    ) {
+        carried::carry_in(lv, pos, block, data);
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         for (block, slots) in CONTAINERS {
             let all: Vec<usize> = (0..slots).collect();
@@ -847,7 +869,7 @@ fn vaults_to_nbt(
 
 /// Brass tunnels' side filters saved with a column: `tunnel_filters` holds x, y, z and the side
 /// of each, and its filter.
-fn tunnel_filters_to_nbt(
+pub(super) fn tunnel_filters_to_nbt(
     host: &dyn mod_api::Host,
     own: &mut Compound,
     filters: &[(([i32; 3], Dir), create_engine::filter::Filter)],
@@ -870,7 +892,7 @@ fn tunnel_filters_to_nbt(
 }
 
 /// What `tunnel_filters_to_nbt` wrote.
-fn tunnel_filters_from_nbt(
+pub(super) fn tunnel_filters_from_nbt(
     host: &dyn mod_api::Host,
     data: &Compound,
 ) -> Vec<(([i32; 3], Dir), create_engine::filter::Filter)> {
@@ -1065,7 +1087,7 @@ fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::belt::Invent
 }
 
 /// Brass tunnels' stacks: x, y, z, mode, side it came in by (6: none), count, then the item ids.
-fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::Brass)]) -> Tag {
+pub(super) fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::Brass)]) -> Tag {
     let mut nums = Vec::new();
     let mut items = Vec::new();
     for (p, b) in brass {
@@ -1087,7 +1109,7 @@ fn brass_to_nbt(brass: &[([i32; 3], create_engine::tunnel::Brass)]) -> Tag {
 }
 
 /// What `brass_to_nbt` wrote.
-fn brass_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::tunnel::Brass)> {
+pub(super) fn brass_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::tunnel::Brass)> {
     let Some(Tag::Compound(c)) = data.get(&"brass".into()) else {
         return Vec::new();
     };

@@ -253,9 +253,9 @@ fn crushers_from_nbt(data: &Compound) -> Vec<([i32; 3], crusher::Crusher)> {
 }
 
 /// A saved burner's fuel type when it is creative: its heat follows.
-const CREATIVE_BURNER: i32 = 3;
+pub(super) const CREATIVE_BURNER: i32 = 3;
 
-fn heat_of(i: i32) -> create_engine::fan::Heat {
+pub(super) fn heat_of(i: i32) -> create_engine::fan::Heat {
     use create_engine::fan::Heat;
     match i {
         2 => Heat::Fading,

@@ -39,7 +39,56 @@ use std::collections::HashMap;
 /// Mechanical arms and weighted ejectors.
 pub struct Arms;
 
+/// What a moving structure carries for an ejector (`Subsystem::carry_out`).
+const CARRIED_EJECTOR: &str = "EjectorLauncher";
+
 impl Subsystem for Arms {
+    /// A weighted ejector's target and stack size (`EjectorBlockEntity.write`: `HorizontalDistance`,
+    /// `VerticalDistance`, `MaxStackSize`) ride with it; the stacks in flight drop as it goes.
+    fn carry_out(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        out: &mut Compound,
+    ) {
+        if block != create_engine::Block::WeightedEjector {
+            return;
+        }
+        let dim = lv.dim;
+        let e = with_world(|w| w.dims[dim].ejectors.get(&pos).cloned()).flatten();
+        if let Some(e) = e {
+            out.insert(
+                CARRIED_EJECTOR.into(),
+                Tag::IntArray(vec![e.launcher.h, e.launcher.v, i32::from(e.max_stack)]),
+            );
+        }
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        data: &Compound,
+        _turn: create_engine::contraption::Transform,
+    ) {
+        let Some(Tag::IntArray(v)) = data.get(&CARRIED_EJECTOR.into()) else {
+            return;
+        };
+        let (&[h, vertical, max], create_engine::Block::WeightedEjector) = (&v[..], block) else {
+            return;
+        };
+        let mut e = ejector::Ejector {
+            launcher: ejector::Launcher::new(h, vertical),
+            ..Default::default()
+        };
+        e.launcher.clamp(ejector::MAX_DISTANCE);
+        e.max_stack = max.clamp(0, 64) as u8;
+        let dim = lv.dim;
+        with_world(|w| w.dims[dim].ejector_saved.insert(pos, e));
+    }
+
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         arms_from_nbt(lv.dim, data);
     }

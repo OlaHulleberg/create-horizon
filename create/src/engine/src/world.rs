@@ -2253,6 +2253,14 @@ impl CreateWorld {
     }
 
     /// Settings saved with a column, before its blocks are scanned.
+    /// A creative motor's or speed controller's speed setting, taken from it as a moving
+    /// structure carries it away (`ScrollValueBehaviour.write`); none for another block.
+    pub fn take_motor_setting(&mut self, dim: usize, pos: [i32; 3]) -> Option<i32> {
+        let rpm = self.motor_setting(dim, pos)?;
+        self.dims[dim].settings.remove(&pos);
+        Some(rpm as i32)
+    }
+
     pub fn load_settings(&mut self, dim: usize, saved: impl Iterator<Item = ([i32; 3], i32)>) {
         for (pos, rpm) in saved {
             self.dims[dim].settings.insert(

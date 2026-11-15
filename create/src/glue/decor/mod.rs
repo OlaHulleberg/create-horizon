@@ -31,6 +31,7 @@
 //!   item model's `gui3d`, so an item that places a block stands for it.
 
 mod brackets;
+mod carried;
 mod clicks;
 mod copper;
 mod crates;
@@ -270,6 +271,21 @@ pub struct Decor;
 impl Subsystem for Decor {
     fn synced_keys(&self) -> &'static [&'static str] {
         &[BRACKET]
+    }
+
+    fn carry_out(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], b: Block, out: &mut Compound) {
+        carried::carry_out(lv, pos, b, out);
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        b: Block,
+        data: &Compound,
+        turn: create_engine::contraption::Transform,
+    ) {
+        carried::carry_in(lv, pos, b, data, turn);
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {

@@ -29,6 +29,7 @@
 //! link to Ponder.
 
 mod analog;
+mod carried;
 mod client;
 pub(crate) mod clipboard_values;
 mod detectors;
@@ -115,6 +116,27 @@ impl Subsystem for Redstone {
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
         analog::column_unloaded(dim, chunk);
+    }
+
+    fn carry_out(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        out: &mut Compound,
+    ) {
+        carried::carry_out(lv, pos, block, out);
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        data: &Compound,
+        _turn: create_engine::contraption::Transform,
+    ) {
+        carried::carry_in(lv, pos, block, data);
     }
 
     fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {

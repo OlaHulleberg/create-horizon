@@ -1,0 +1,138 @@
+//! What the displays keep for a block that rides a moving structure (`Subsystem::carry_out`,
+//! Create's block entity NBT): a nixie tube's custom text (`NixieTubeBlockEntity.write`:
+//! `CustomText`, `CustomTextIndex`), and a display link's target, line, source and its
+//! configuration (`DisplayLinkBlockEntity.write`), the target's offset turned with the
+//! structure (`DisplayLinkBlockEntity.transform`). Each waits where it goes back as a saved
+//! one does (`displays_from_nbt`), and is kept as it is placed there.
+
+use crate::glue::server::ServerLevel;
+use crate::glue::world::with_world;
+use create_engine::Block;
+use create_engine::contraption::Transform;
+use create_engine::display::{Config, Link, Source, is_nixie};
+use mod_api::{Compound, Tag};
+
+const NIXIE: &str = "NixieText";
+const NIXIE_INDEX: &str = "NixieIndex";
+const LINK: &str = "DisplayLink";
+const LINK_TEXTS: &str = "DisplayLinkTexts";
+
+pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: &mut Compound) {
+    let dim = lv.dim;
+    with_world(|w| {
+        let d = &mut w.dims[dim].displays;
+        if is_nixie(block) {
+            if let Some(n) = d.nixies.remove(&pos) {
+                // Its clients forget it where it was (`nixie_removed`).
+                d.forgotten.push(pos);
+                if let Some(text) = n.custom {
+                    out.insert(NIXIE.into(), Tag::String(text.as_str().into()));
+                    out.insert(NIXIE_INDEX.into(), Tag::Int(n.index));
+                }
+            }
+        } else if block == Block::DisplayLink
+            && let Some(l) = d.links.remove(&pos)
+        {
+            let c = &l.config;
+            let start = c.start_time.unwrap_or(0);
+            let mut nums = l.target_offset.to_vec();
+            nums.extend([
+                l.target_line,
+                c.directional,
+                c.mode,
+                c.cycle,
+                i32::from(c.start_time.is_some()),
+                (start >> 32) as i32,
+                start as i32,
+                c.format,
+                c.collected,
+                c.interval,
+            ]);
+            out.insert(LINK.into(), Tag::IntArray(nums));
+            out.insert(
+                LINK_TEXTS.into(),
+                Tag::List(vec![
+                    Tag::String(l.source.map_or("", Source::id).into()),
+                    Tag::String(c.label.as_str().into()),
+                ]),
+            );
+        }
+    });
+}
+
+pub(super) fn carry_in(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    block: Block,
+    data: &Compound,
+    turn: Transform,
+) {
+    let dim = lv.dim;
+    if is_nixie(block) {
+        let Some(Tag::String(text)) = data.get(&NIXIE.into()) else {
+            return;
+        };
+        let index = match data.get(&NIXIE_INDEX.into()) {
+            Some(Tag::Int(i)) => *i,
+            _ => 0,
+        };
+        with_world(|w| {
+            let d = &mut w.dims[dim].displays;
+            let n = d.nixies.entry(pos).or_default();
+            n.custom = Some(text.to_string_lossy());
+            n.index = index;
+            d.shown.push(pos);
+        });
+        return;
+    }
+    if block != Block::DisplayLink {
+        return;
+    }
+    let (Some(Tag::IntArray(v)), Some(Tag::List(texts))) =
+        (data.get(&LINK.into()), data.get(&LINK_TEXTS.into()))
+    else {
+        return;
+    };
+    let [
+        ox,
+        oy,
+        oz,
+        line,
+        directional,
+        mode,
+        cycle,
+        has_start,
+        hi,
+        lo,
+        format,
+        collected,
+        interval,
+    ] = v[..]
+    else {
+        return;
+    };
+    let text = |i: usize| match texts.get(i) {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    let start = (i64::from(hi) << 32) | i64::from(lo as u32);
+    let link = Link {
+        target_offset: turn.vec([ox, oy, oz]),
+        target_line: line,
+        source: Source::from_id(&text(0)),
+        config: Config {
+            label: text(1),
+            directional,
+            mode,
+            cycle,
+            start_time: (has_start != 0).then_some(start),
+            format,
+            collected,
+            interval,
+            ..Config::default()
+        },
+        due: None,
+        last: None,
+    };
+    with_world(|w| w.dims[dim].displays.links.insert(pos, link));
+}

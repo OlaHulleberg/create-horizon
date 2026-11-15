@@ -74,6 +74,7 @@ mod visuals;
 pub use carts::{Carts, assembler_mode, set_assembler_mode};
 pub use controls::TrainControls;
 pub use railway::Trains;
+pub(crate) use structure::turned_state;
 
 use super::states;
 use mod_api::{BlockState, Host, HostBlockStates, PlayerRef, ServerHost, Text};

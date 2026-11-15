@@ -79,6 +79,10 @@ pub(crate) use lifts::contact_floor;
 
 pub struct Contraptions;
 
+/// What a moving structure carries for a contraption block on it (`Subsystem::carry_out`).
+const CARRIED_OPTION: &str = "ScrollOption";
+const CARRIED_RANGE: &str = "ChassisRange";
+
 impl Subsystem for Contraptions {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         bearings::register(r);
@@ -110,6 +114,49 @@ impl Subsystem for Contraptions {
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
         actors::glue_chunk_unload(dim, chunk);
+    }
+
+    /// The option on a contraption block's value box (`ScrollOptionBehaviour`: a bearing's or
+    /// piston's movement mode, a windmill's direction, a clock's hands) and a chassis' range
+    /// (`ChassisScrollValueBehaviour`) ride with it.
+    fn carry_out(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], _b: Block, out: &mut Compound) {
+        let dim = lv.dim;
+        let (option, range) = with_world(|w| {
+            let d = &mut w.dims[dim];
+            (d.scroll_options.remove(&pos), d.chassis_range.remove(&pos))
+        })
+        .unwrap_or_default();
+        if let Some(o) = option {
+            out.insert(CARRIED_OPTION.into(), mod_api::Tag::Int(i32::from(o)));
+        }
+        if let Some(r) = range {
+            out.insert(CARRIED_RANGE.into(), mod_api::Tag::Int(r));
+        }
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        _b: Block,
+        data: &Compound,
+        _turn: create_engine::contraption::Transform,
+    ) {
+        let dim = lv.dim;
+        let int = |k: &str| match data.get(&k.into()) {
+            Some(mod_api::Tag::Int(v)) => Some(*v),
+            _ => None,
+        };
+        let (option, range) = (int(CARRIED_OPTION), int(CARRIED_RANGE));
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            if let Some(o) = option {
+                d.scroll_options.insert(pos, o.clamp(0, 255) as u8);
+            }
+            if let Some(r) = range {
+                d.chassis_range.insert(pos, r);
+            }
+        });
     }
 
     /// `MechanicalBearingBlockEntity.onSpeedChanged` (`assembleNextTick`) and
