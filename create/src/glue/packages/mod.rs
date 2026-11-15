@@ -99,6 +99,19 @@ fn present() -> bool {
     PACKAGES.with_borrow(Option::is_some)
 }
 
+/// The packages going round the chain conveyor at `pos` (`getLoopingPackages`), none for any
+/// other block.
+pub(crate) fn looping_packages(dim: usize, pos: [i32; 3]) -> Vec<ItemStack> {
+    if !present() {
+        return Vec::new();
+    }
+    with(dim, |pk| {
+        pk.chains.conveyors.get(&pos).map_or_else(Vec::new, |c| {
+            c.looping.iter().map(|p| p.parcel.stack.clone()).collect()
+        })
+    })
+}
+
 fn ours(b: Block) -> bool {
     matches!(
         b,

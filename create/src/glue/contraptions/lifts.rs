@@ -1,7 +1,14 @@
 //! Clockwork bearings, rope pulleys and elevators (`lifts.rs` in the engine): their structures
 //! leave the world while they run and come back where they stop; clients draw each from its
 //! block's data (`draw`), told when it starts, stops or changes speed. Redstone and elevator
-//! contacts: their signals, placement and lights. Saved under `create_lifts`.
+//! contacts: their signals, placement and lights; an elevator contact's floor names (made up as
+//! Create's `initNames` does, edited on its screen), door setting and the floor its column's
+//! elevator last passed or reached (`broadcastFloorData`). Saved under `create_lifts` and
+//! `create_contacts`.
+//!
+//! Left out of the port, not for want of API: the door setting is kept and edited but opens no
+//! door (doors on moving structures, `SlidingDoorMovementBehaviour`, are not ported), and the
+//! elevator's contraption controls choose no floor (`ElevatorControlsHandler`).
 
 use super::super::persist;
 use super::super::server::{ServerLevel, UPDATE_CLIENTS, update_all};
@@ -40,11 +47,15 @@ thread_local! {
     /// The degrees a tick each running clock's hands were last shown turning at.
     static CLOCK_SHOWN: RefCell<HashMap<(usize, [i32; 3]), HandSpeeds>> =
         RefCell::new(HashMap::new());
+    /// The height in its column each running elevator's contact last passed
+    /// (`ContactMovementBehaviour.visitNewPosition`).
+    static VISITED: RefCell<HashMap<(usize, [i32; 3]), i32>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn forget() {
     PULLEY_CARRIED.with_borrow_mut(HashMap::clear);
     CLOCK_SHOWN.with_borrow_mut(HashMap::clear);
+    VISITED.with_borrow_mut(HashMap::clear);
 }
 
 pub(super) fn register(r: &mut dyn Registrar) {
@@ -105,7 +116,9 @@ pub(super) fn tick_lifts(lv: &mut ServerLevel<'_>) {
             && l.travelling.is_empty()
             && l.contact_checks.is_empty()
             && l.contact_ticks.is_empty()
-            && l.changes.is_empty())
+            && l.changes.is_empty()
+            && l.names_due.is_empty()
+            && l.contacts_changed.is_empty())
     });
     if busy != Some(true) {
         return;
@@ -136,6 +149,7 @@ pub(super) fn tick_lifts(lv: &mut ServerLevel<'_>) {
     tick_pulleys(lv);
     tick_elevators(lv);
     tick_contacts(lv);
+    contact_names(lv);
     let changes = with_world(|w| {
         let mut v = std::mem::take(&mut w.dims[dim].lifts.changes);
         v.sort();
@@ -664,16 +678,34 @@ fn tick_elevators(lv: &mut ServerLevel<'_>) {
             let t = e.tick(pos[1], rpm, target);
             let column = e.column;
             let settled = e.settled(target);
+            // The block its contact reaches into (`getActiveAreaOffset`: .65 out of the
+            // contact), by the centre of the contact's block.
+            let visiting = (e.y + f64::from(e.contact_y) + 0.5).floor() as i32;
             if settled {
                 l.travelling.remove(&pos);
             }
-            Some((t.reached.map(|y| [column.x, y, column.z]), settled))
+            Some((
+                t.reached.map(|y| [column.x, y, column.z]),
+                settled,
+                column,
+                visiting,
+            ))
         })
         .flatten();
-        let Some((reached, settled)) = done else {
+        let Some((reached, settled, column, visiting)) = done else {
             with_world(|w| w.dims[dim].lifts.travelling.remove(&pos));
             continue;
         };
+        // `visitNewPosition`: an elevator contact facing back at it as it passes tells the
+        // column's floor (`broadcastFloorData`).
+        let moved = VISITED.with_borrow_mut(|v| v.insert((dim, pos), visiting) != Some(visiting));
+        if moved {
+            let at = [column.x, visiting, column.z];
+            if matches!(create_info(lv.block(at)), Some((Block::ElevatorContact, i)) if i.facing == Some(column.side))
+            {
+                broadcast_floor(lv, column, at);
+            }
+        }
         // `triggerContact`: an elevator contact there that isn't lit lights on its next tick.
         if let Some(c) = reached
             && let Some((Block::ElevatorContact, info)) = create_info(lv.block(c))
@@ -690,6 +722,65 @@ fn tick_elevators(lv: &mut ServerLevel<'_>) {
             mark_unsaved(lv, pos);
         }
     }
+}
+
+/// `ElevatorContactBlockEntity.tick`'s `deferNameGenerator` (`ElevatorColumn.initNames`), and
+/// the contacts whose names or floor changed: saved, sent to those looking at their screen,
+/// and the display links reading them told (`notifyGatherers`).
+fn contact_names(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let due = with_world(|w| std::mem::take(&mut w.dims[dim].lifts.names_due)).unwrap_or_default();
+    for key in due {
+        with_world(|w| w.dims[dim].lifts.init_column_names(key));
+    }
+    let changed =
+        with_world(|w| std::mem::take(&mut w.dims[dim].lifts.contacts_changed)).unwrap_or_default();
+    for pos in changed {
+        mark_unsaved(lv, pos);
+        crate::glue::display::notify_gatherers(lv, pos);
+    }
+}
+
+/// `CurrentFloorDisplaySource`: the floor the elevator contact at `pos` was last told
+/// (`lastReportedCurrentFloor`); None for any other block.
+pub(crate) fn contact_floor(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<String> {
+    let Some((Block::ElevatorContact, _)) = create_info(lv.block(pos)) else {
+        return None;
+    };
+    let dim = lv.dim;
+    Some(
+        with_world(|w| {
+            w.dims[dim]
+                .lifts
+                .contacts
+                .get(&pos)
+                .map(|c| c.floor.clone())
+        })
+        .flatten()
+        .unwrap_or_default(),
+    )
+}
+
+/// `ElevatorContraption.broadcastFloorData`: the elevator contact at `contact` (facing its
+/// column) tells its column's contacts its short name as the floor reached.
+fn broadcast_floor(
+    lv: &ServerLevel<'_>,
+    column: create_engine::elevator::ColumnKey,
+    contact: [i32; 3],
+) {
+    let Some((Block::ElevatorContact, _)) = create_info(lv.block(contact)) else {
+        return;
+    };
+    let dim = lv.dim;
+    with_world(|w| {
+        let l = &mut w.dims[dim].lifts;
+        let name = l
+            .contacts
+            .get(&contact)
+            .map(|c| c.short.clone())
+            .unwrap_or_default();
+        l.floor_reached(column, &name);
+    });
 }
 
 /// `ElevatorPulleyBlockEntity.assemble`: the structure under the free blocks below the pulley,
@@ -783,6 +874,18 @@ fn assemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             l.schedule(here, now);
         }
     });
+    let visiting = with_world(|w| {
+        w.dims[dim]
+            .lifts
+            .elevators
+            .get(&pos)
+            .map(|e| (e.y + f64::from(e.contact_y) + 0.5).floor() as i32)
+    })
+    .flatten();
+    if let Some(v) = visiting {
+        VISITED.with_borrow_mut(|m| m.insert((dim, pos), v));
+    }
+    broadcast_floor(lv, column, here);
     show_elevator(lv, pos);
     mark_unsaved(lv, pos);
 }
@@ -1008,6 +1111,31 @@ impl BlockPart for ContactPart {
             dir_name(facing)
         );
         Some(level.block_state_id(&text))
+    }
+
+    /// `ElevatorContactBlock.useItemOn`: anything but the wrench opens its screen (Create opens
+    /// it on the client; here the server sends what the contact holds).
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let (Block::ElevatorContact, _) = states::id(event.state).and_then(create_info)? else {
+            return None;
+        };
+        let c = clicker(&*host, event.click);
+        if c.held.as_deref() == Some("create:wrench") {
+            return None;
+        }
+        if c.after_empty_main {
+            return Some(InteractionResult::Success);
+        }
+        let player = c.player?;
+        let pos = event.click.pos;
+        in_click_level(host, event.click, |lv| {
+            crate::glue::display::contact_screen::open(lv, player, pos);
+        });
+        Some(InteractionResult::Success)
     }
 
     /// A contact's signal toward the reader on `face` (`getSignal`).
@@ -1289,5 +1417,78 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
             held.push((pos, h));
         }
         l.load(held.into_iter());
+    });
+}
+
+/// Elevator contacts' names, door setting and floor shown (`ElevatorContactBlockEntity.write`:
+/// `ShortName`, `LongName`, `LastReportedCurrentFloor`, and the door behaviour's `DoorControl`),
+/// saved with their column under `create_contacts`.
+pub(super) fn contacts_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+    let dim = lv.dim;
+    let list: Vec<Tag> = with_world(|w| {
+        w.dims[dim]
+            .lifts
+            .contacts
+            .iter()
+            .filter(|(p, _)| [p[0] >> 4, p[2] >> 4] == chunk)
+            .map(|(p, c)| {
+                let mut t = Compound::new();
+                t.insert("Pos".into(), Tag::IntArray(p.to_vec()));
+                t.insert("ShortName".into(), Tag::String(c.short.as_str().into()));
+                t.insert("LongName".into(), Tag::String(c.long.as_str().into()));
+                t.insert(
+                    "LastReportedCurrentFloor".into(),
+                    Tag::String(c.floor.as_str().into()),
+                );
+                let door = create_engine::lifts::DOOR_CONTROLS
+                    .get(usize::from(c.door))
+                    .copied()
+                    .unwrap_or("all");
+                t.insert(
+                    "DoorControl".into(),
+                    Tag::String(door.to_uppercase().as_str().into()),
+                );
+                Tag::Compound(t)
+            })
+            .collect()
+    })
+    .unwrap_or_default();
+    if !list.is_empty() {
+        data.insert("create_contacts".into(), Tag::List(list));
+    }
+}
+
+/// What `contacts_save` wrote.
+pub(super) fn contacts_load(lv: &mut ServerLevel<'_>, data: &Compound) {
+    let Some(Tag::List(list)) = data.get(&"create_contacts".into()) else {
+        return;
+    };
+    let text = |c: &Compound, k: &str| match c.get(&k.into()) {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    let dim = lv.dim;
+    with_world(|w| {
+        let l = &mut w.dims[dim].lifts;
+        for t in list {
+            let Tag::Compound(c) = t else { continue };
+            let Some(Tag::IntArray(p)) = c.get(&"Pos".into()) else {
+                continue;
+            };
+            let [x, y, z] = p[..] else { continue };
+            let door = text(c, "DoorControl").to_lowercase();
+            l.contacts.insert(
+                [x, y, z],
+                create_engine::lifts::ContactNames {
+                    short: text(c, "ShortName"),
+                    long: text(c, "LongName"),
+                    door: create_engine::lifts::DOOR_CONTROLS
+                        .iter()
+                        .position(|d| *d == door)
+                        .unwrap_or(0) as u8,
+                    floor: text(c, "LastReportedCurrentFloor"),
+                },
+            );
+        }
     });
 }

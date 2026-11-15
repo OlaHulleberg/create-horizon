@@ -24,21 +24,29 @@ pub(super) fn value_tip(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
         .level(host.dimension())
         .and_then(|l| l.game_time(host))
         .unwrap_or(0);
-    // A factory gauge's panel shows its own label, stock and tips (`FactoryPanelBehaviour`);
-    // another value box its title in Create's yellow and the rest white.
-    let hovered = match crate::glue::stock::gauge_client::hover_lines(host) {
-        Some(lines) => match host.crosshair_target() {
-            Some(CrosshairTarget::Block { pos, .. }) => Some(([pos.x, pos.y, pos.z], lines)),
-            _ => None,
-        },
-        None => board::hovered_box(host).map(|(pos, tip)| {
-            let lines = tip
-                .into_iter()
-                .enumerate()
-                .map(|(i, t)| (t, if i == 0 { 0xFB_DC7D } else { 0xFF_FFFF }))
-                .collect::<Vec<(String, u32)>>();
-            (pos, lines)
-        }),
+    // A clipboard in hand tells its actions instead (`ClipboardValueSettingsHandler.clientTick`
+    // shows its tip after the box's); a factory gauge's panel shows its own label, stock and tips
+    // (`FactoryPanelBehaviour`); another value box its title in Create's yellow, the rest white.
+    let tinted = |pos: [i32; 3], tip: Vec<String>| {
+        let lines = tip
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| (t, if i == 0 { 0xFB_DC7D } else { 0xFF_FFFF }))
+            .collect::<Vec<(String, u32)>>();
+        (pos, lines)
+    };
+    let hovered = if let Some((pos, tip)) =
+        super::super::redstone::clipboard_values::hover_tip(host)
+    {
+        Some(tinted(pos, tip))
+    } else {
+        match crate::glue::stock::gauge_client::hover_lines(host) {
+            Some(lines) => match host.crosshair_target() {
+                Some(CrosshairTarget::Block { pos, .. }) => Some(([pos.x, pos.y, pos.z], lines)),
+                _ => None,
+            },
+            None => board::hovered_box(host).map(|(pos, tip)| tinted(pos, tip)),
+        }
     };
     let Some((pos, lines)) = hovered else {
         TIP.set(None);

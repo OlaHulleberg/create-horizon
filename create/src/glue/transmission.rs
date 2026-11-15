@@ -121,7 +121,7 @@ impl ServerLevel<'_> {
     }
 
     /// Whether `pos` can be replaced (`BlockState.canBeReplaced`).
-    fn free(&self, pos: [i32; 3]) -> bool {
+    pub(crate) fn free(&self, pos: [i32; 3]) -> bool {
         let facts = self.host.block_states();
         self.block_state(pos)
             .is_some_and(|s| facts.replaceable(s) == Some(true))

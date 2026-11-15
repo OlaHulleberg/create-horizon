@@ -44,6 +44,8 @@ pub(super) enum Kind {
     Unsupported,
     Item,
     Fluid,
+    /// A `ThresholdSwitchObservable`: a rope pulley.
+    Custom,
 }
 
 /// What the switch holds and reads, as its screen shows it.
@@ -118,6 +120,7 @@ impl Shown {
         let kind = match r.u8()? {
             1 => Kind::Item,
             2 => Kind::Fluid,
+            3 => Kind::Custom,
             _ => Kind::Unsupported,
         };
         let (level, min, max) = (r.i32()?, r.i32()?, r.i32()?);
@@ -163,12 +166,15 @@ fn shown(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Shown> {
         return None;
     }
     let target = observe::target_pos(pos, info.target?, info.facing?);
-    // `getTypeOfCurrentTarget`: an item handler first, then a fluid handler.
-    let (seen, _) = super::detectors::seen_at(lv, target, false);
+    // `getTypeOfCurrentTarget`: an item handler first, then a fluid handler, then a
+    // `ThresholdSwitchObservable`.
+    let (seen, _) = super::detectors::switch_seen(lv, target);
     let kind = if seen.inventory.is_some() {
         Kind::Item
     } else if seen.tank.is_some() {
         Kind::Fluid
+    } else if seen.custom.is_some() {
+        Kind::Custom
     } else {
         Kind::Unsupported
     };
@@ -597,6 +603,11 @@ pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
 
 /// `format`: a number and its unit.
 fn format(host: &dyn ClientHost, kind: Kind, value: i32, stacks: bool) -> String {
+    // `ThresholdSwitchObservable.format`: a pulley's height.
+    if kind == Kind::Custom {
+        return tr(host, "create.gui.threshold_switch.pulley_y_level")
+            .replace("%1$s", &value.to_string());
+    }
     let unit = match kind {
         Kind::Item if stacks => "create.schedule.condition.threshold.stacks",
         Kind::Item => "create.schedule.condition.threshold.items",

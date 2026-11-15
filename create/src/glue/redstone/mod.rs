@@ -30,7 +30,7 @@
 
 mod analog;
 mod client;
-mod clipboard_values;
+pub(crate) mod clipboard_values;
 mod detectors;
 mod parts;
 pub(crate) mod pose;

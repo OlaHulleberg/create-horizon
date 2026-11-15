@@ -56,6 +56,67 @@ impl Held {
     }
 }
 
+/// `DoorControl`: which side's doors a contraption opens at a floor or station.
+pub const DOOR_CONTROLS: [&str; 6] = ["all", "north", "east", "south", "west", "none"];
+
+/// `ElevatorContactBlockEntity`: its floor's names (`shortName`, `longName`), its doors'
+/// setting (`DoorControlBehaviour.mode`, an index of [`DOOR_CONTROLS`]) and the floor it was
+/// last told the elevator is at (`lastReportedCurrentFloor`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContactNames {
+    pub short: String,
+    pub long: String,
+    pub door: u8,
+    pub floor: String,
+}
+
+/// `ElevatorColumn.initNames` over a column's contacts (bottom up, each its short name): blank
+/// and numbered floors are numbered on from the floor below, from the next numbered floor up
+/// less one, or from 0; a numbered floor not above the one below it loses its name; a floor
+/// named otherwise keeps it. The new short names, by index.
+pub fn init_names(names: &[String]) -> Vec<(usize, String)> {
+    let number = |s: &str| s.parse::<i32>().ok();
+    let mut names: Vec<String> = names.to_vec();
+    let mut out = Vec::new();
+    let mut prev: Option<i32> = None;
+    for i in 0..names.len() {
+        let mut current = None;
+        if !names[i].trim().is_empty() {
+            match number(&names[i]) {
+                Some(v) => current = Some(v),
+                None => continue,
+            }
+        }
+        if let Some(p) = prev {
+            current = Some(p + 1);
+        }
+        let mut next = None;
+        for peek in i + 1..names.len() {
+            let Some(v) = number(&names[peek]) else {
+                continue;
+            };
+            if current.is_some_and(|c| c >= v) {
+                names[peek].clear();
+                out.push((peek, String::new()));
+                break;
+            }
+            next = Some(v);
+            break;
+        }
+        let level = current.unwrap_or_else(|| next.map_or(0, |n| n - 1));
+        names[i] = level.to_string();
+        out.push((i, names[i].clone()));
+        prev = Some(level);
+    }
+    // The last name given each index wins.
+    let mut last: Vec<(usize, String)> = Vec::new();
+    for (i, n) in out {
+        last.retain(|(j, _)| *j != i);
+        last.push((i, n));
+    }
+    last
+}
+
 #[derive(Default)]
 pub struct Lifts {
     pub clocks: HashMap<[i32; 3], RunningClock>,
@@ -80,6 +141,12 @@ pub struct Lifts {
     pub orphans: Vec<([i32; 3], Held)>,
     pub changes: Vec<[i32; 3]>,
     saved: HashMap<[i32; 3], Held>,
+    /// Elevator contacts' names and settings; the columns whose names are to be made up
+    /// (`deferNameGenerator`); contacts whose floor changed or whose names changed (for display
+    /// links and saving).
+    pub contacts: HashMap<[i32; 3], ContactNames>,
+    pub names_due: Vec<ColumnKey>,
+    pub contacts_changed: Vec<[i32; 3]>,
 }
 
 impl Lifts {
@@ -117,11 +184,17 @@ impl Lifts {
             }
             Block::ElevatorContact => {
                 if let Some(f) = info.facing {
-                    // `ElevatorContactBlockEntity.initialize`.
-                    self.columns
-                        .entry(crate::elevator::column_of(pos, f))
-                        .or_default()
-                        .add(pos[1]);
+                    // `ElevatorContactBlockEntity.initialize`: a blank name is made up next
+                    // tick.
+                    let key = crate::elevator::column_of(pos, f);
+                    self.columns.entry(key).or_default().add(pos[1]);
+                    let blank = self
+                        .contacts
+                        .get(&pos)
+                        .is_none_or(|c| c.short.trim().is_empty());
+                    if blank && !self.names_due.contains(&key) {
+                        self.names_due.push(key);
+                    }
                 }
                 self.contact_checks.push(pos);
             }
@@ -166,6 +239,10 @@ impl Lifts {
                 if let Some(f) = info.facing {
                     self.leave_column(pos, f);
                 }
+                // Its block entity goes with it.
+                if self.contacts.remove(&pos).is_some() {
+                    self.contacts_changed.push(pos);
+                }
                 None
             }
             _ => None,
@@ -184,6 +261,48 @@ impl Lifts {
                 self.columns.remove(&key);
             }
         }
+    }
+
+    /// `ElevatorColumn.initNames` for a column (`deferNameGenerator`): its contacts' short names
+    /// made up; the contacts whose names changed.
+    pub fn init_column_names(&mut self, key: ColumnKey) -> Vec<[i32; 3]> {
+        let Some(c) = self.columns.get(&key) else {
+            return Vec::new();
+        };
+        let at: Vec<[i32; 3]> = c.contacts.iter().map(|y| [key.x, *y, key.z]).collect();
+        let names: Vec<String> = at
+            .iter()
+            .map(|p| self.contacts.get(p).map(|c| c.short.clone()).unwrap_or_default())
+            .collect();
+        let mut changed = Vec::new();
+        for (i, name) in init_names(&names) {
+            let c = self.contacts.entry(at[i]).or_default();
+            if c.short != name {
+                c.short = name;
+                changed.push(at[i]);
+            }
+        }
+        self.contacts_changed.extend_from_slice(&changed);
+        changed
+    }
+
+    /// `ElevatorColumn.floorReached`: every contact of the column shows the floor `name`
+    /// (`updateDisplayedFloor`); those whose floor changed.
+    pub fn floor_reached(&mut self, key: ColumnKey, name: &str) -> Vec<[i32; 3]> {
+        let Some(c) = self.columns.get(&key) else {
+            return Vec::new();
+        };
+        let mut changed = Vec::new();
+        for y in &c.contacts {
+            let p = [key.x, *y, key.z];
+            let n = self.contacts.entry(p).or_default();
+            if n.floor != name {
+                n.floor = name.to_owned();
+                changed.push(p);
+            }
+        }
+        self.contacts_changed.extend_from_slice(&changed);
+        changed
     }
 
     /// `ElevatorColumn.setActive`.
@@ -286,6 +405,8 @@ impl Lifts {
         self.contact_ticks.retain(|t| away(&t.0));
         self.contact_lit.retain(away);
         self.contact_held.retain(away);
+        self.contacts.retain(|p, _| away(p));
+        self.contacts_changed.retain(away);
         // A column's contacts all lie in one column of blocks: they come back with it.
         self.columns.retain(|k, c| {
             if (k.x >> 4, k.z >> 4) == (cx, cz) {
@@ -298,6 +419,27 @@ impl Lifts {
 
 #[cfg(test)]
 mod tests {
+    use super::init_names;
+
+    fn names(n: &[&str]) -> Vec<String> {
+        let mut v: Vec<String> = n.iter().map(|s| s.to_string()).collect();
+        for (i, s) in init_names(&v) {
+            v[i] = s;
+        }
+        v
+    }
+
+    #[test]
+    fn floors_are_numbered_as_create_numbers_them() {
+        assert_eq!(names(&["", "", ""]), ["0", "1", "2"]);
+        // From the next numbered floor down.
+        assert_eq!(names(&["", "5"]), ["4", "5"]);
+        // Named floors keep their names and break nothing; numbers follow on.
+        assert_eq!(names(&["", "Lobby", ""]), ["0", "Lobby", "1"]);
+        // A number at or below the one under it is renumbered.
+        assert_eq!(names(&["3", "2", ""]), ["3", "4", "5"]);
+    }
+
     use super::*;
     use crate::kinetics::Dir;
 
