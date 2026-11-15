@@ -620,6 +620,10 @@ impl Subsystem for Stock {
         channel: &str,
         data: &[u8],
     ) -> bool {
+        if channel == keeper::NEARBY_CHANNEL {
+            keeper::nearby_from_server(data);
+            return true;
+        }
         keeper::server_message(host, channel, data)
             || categories::server_message(host, channel, data)
             || package_filter::server_message(host, channel, data)
@@ -647,6 +651,7 @@ impl Subsystem for Stock {
 
     fn client_reset(&self) {
         keeper::reset();
+        keeper::forget_nearby();
         categories::reset();
         package_filter::reset();
         requester::reset();
@@ -883,6 +888,7 @@ impl Subsystem for Stock {
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         shop::level_tick(lv);
+        keeper::advertise_clipboards(lv);
         if lv.dimension == "minecraft:overworld" {
             if !LOADED.get() {
                 LOADED.set(true);
@@ -2540,9 +2546,27 @@ pub(crate) fn gauge_status(lv: &ServerLevel<'_>, link: [i32; 3]) -> Vec<(i64, St
                 } else {
                     "\u{25aa}"
                 };
+                // The mark in `getIngredientStatusColor`, the name as it is.
+                let colour = create_engine::factory::ingredient_color(create_engine::factory::Status {
+                    count: g.count,
+                    missing_address: create_engine::factory::missing_address(
+                        !g.inputs.is_empty(),
+                        g.restocker,
+                        g.count,
+                        &g.recipe_address,
+                    ),
+                    redstone_powered: g.redstone_powered,
+                    waiting: g.waiting,
+                    satisfied: g.satisfied,
+                    promised_satisfied: g.promised_satisfied,
+                });
                 Some((
                     i64::from(g.last_level),
-                    format!("{mark} {}", super::display::item_name(&id)),
+                    format!(
+                        "{}{}",
+                        create_engine::display::coloured(&format!("{mark} "), colour),
+                        super::display::item_name(&id)
+                    ),
                 ))
             })
         })
