@@ -1,10 +1,12 @@
 # What the port needs from the mod API
 
-The mod targets the arismoko/horizon fork's mod API at the build `create/horizon-mod.toml` pins
-(`42c5f703e3`, the Mod SDK of 2026-11-14). Every subsystem of the earlier mixin-based port is on the API;
-this page lists what the API could not express when it was ported, so those behaviours are left out
-(each module's doc says the same where it applies). Re-check a line against a newer SDK before acting
-on it: `cargo horizon-mod sdk diff <old> <new>` lists what changed, and the fork moves fast.
+The mod runs on Sunrise ([sunrise-org/sunrise](https://github.com/sunrise-org/sunrise), the successor of the
+arismoko/horizon fork, whose mod API it carries unchanged) and targets its mod API at the build
+`create/horizon-mod.toml` pins (`b77574eb1b`). The gaps below were found porting at the fork's `42c5f703e3`;
+every subsystem of the earlier mixin-based port is on the API, and this page lists what the API could not
+express, so those behaviours are left out (each module's doc says the same where it applies). Some are closed
+or narrowed by the newer API and not taken up yet: re-check a line against the pinned SDK before acting on it
+(`cargo horizon-mod sdk diff <old> <new>` lists what changed).
 
 Each line: what Create does, what the legacy glue called, and the API addition that would close it.
 
@@ -62,6 +64,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   limestone or scoria from flowing lava, `registerFluidInteractions`) have no declaration; the glue finds them
   when the lava or the honey next ticks (`fluid_tick`) and turns the lava in the level's next tick, where
   Create's happen at once on the neighbour's change.
+
+- **Crafting recipes in `recipes_of_type`**: at the pinned build `recipes_of_type("minecraft:crafting")`
+  lists no recipe (nor any `minecraft:crafting_*` serializer id, the key the earlier build used), though
+  smelting, stonecutting, smithing and the mod's own types list and the game crafts. So shapeless crafting
+  recipes don't mix in a basin (`MechanicalMixerBlockEntity.matchStaticFilters`) and the factory gauge finds
+  no crafting recipe for its output; the glue reads them as the API documents (`recipes::crafting_of`), so
+  they come back once the game lists them.
 
 ### Containers, items and transactions
 

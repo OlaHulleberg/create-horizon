@@ -728,9 +728,9 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, mouse: [f32; 2], open
         });
         if let Some(state) = state {
             let top = torch_y + row - 4.0;
-            draw.draw_scene(
+            let _ = draw.draw_scene(
                 [torch_x - 4.0, top, torch_x + 20.0, top + 24.0],
-                &[SceneBlock::new([0, 0, 0], state, None)],
+                &mod_api::Scene::new(vec![SceneBlock::new([0, 0, 0], state, None)]),
                 SceneView::new([0.5, 0.35, 0.5], 45.0, 22.5, 20.0),
             );
         }

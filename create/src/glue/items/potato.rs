@@ -656,7 +656,7 @@ fn chorus(lv: &mut ServerLevel<'_>, target: EntityRef, diameter: f64) -> bool {
     let (Some(living), Some(at)) = (lv.host.living(target), target.position(&*lv.host)) else {
         return false;
     };
-    let fox = target.kind(&*lv.host).as_deref() == Some("minecraft:fox");
+    let fox = target.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref() == Some("minecraft:fox");
     let sound = if fox {
         "minecraft:entity.fox.teleport"
     } else {

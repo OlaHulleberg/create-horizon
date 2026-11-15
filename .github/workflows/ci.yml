@@ -20,7 +20,7 @@ jobs:
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
           rustup default 1.99.1
       - name: Install cargo horizon-mod at the pinned build
-        run: cargo install --locked --git https://github.com/arismoko/horizon --rev "${{ steps.pin.outputs.horizon }}" cargo-horizon-mod
+        run: cargo install --locked --git https://github.com/sunrise-org/sunrise --rev "${{ steps.pin.outputs.horizon }}" cargo-horizon-mod
       - name: Package rules, SDK fetch and cargo check
         working-directory: create
         run: cargo horizon-mod check

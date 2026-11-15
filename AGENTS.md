@@ -1,8 +1,8 @@
 # Working on the Create native mod
 
 Read README.md and notes/native-port.md before editing. The mod is `create/`: a native mod on the
-arismoko/horizon fork's mod API, pinned to one fork build in `create/horizon-mod.toml`. Keep this
-repository separate from Horizon; never modify a Horizon checkout or player resources. Do not commit
+mod API of Sunrise (sunrise-org/sunrise, the arismoko/horizon fork's successor), pinned to one
+Sunrise build in `create/horizon-mod.toml`. Keep this repository separate from Horizon; never modify a Horizon checkout or player resources. Do not commit
 binaries, `.horizon/` (the fetched SDK) or Minecraft assets.
 
 Gameplay rules live in the create-engine crate (`create/src/engine`), plain Rust with no game types,

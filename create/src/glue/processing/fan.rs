@@ -136,7 +136,9 @@ fn others_in(lv: &mut ServerLevel<'_>, lo: [f64; 3], hi: [f64; 3]) -> Vec<Pushed
         if lv.host.item_entity(entity).is_some() {
             continue;
         }
-        let flying = if entity.kind(&*lv.host).as_deref() == Some("minecraft:player") {
+        let flying = if entity.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref()
+            == Some("minecraft:player")
+        {
             entity
                 .uuid(&mut *lv.host)
                 .and_then(|u| lv.host.player(u))
@@ -478,7 +480,7 @@ fn affect_entity(lv: &mut ServerLevel<'_>, entity: EntityRef, kind: Kind) {
         // `SplashingType`: drowning hurts endermen, snow golems and blazes; a burning entity is
         // put out with the extinguish sound (0.7, 1.6 ± 0.4: `Entity.extinguishFire`'s).
         Kind::Splashing => {
-            let kind = entity.kind(&*host);
+            let kind = entity.kind(&*host).map(|k| k.id(&*host));
             if matches!(
                 kind.as_deref(),
                 Some("minecraft:enderman" | "minecraft:snow_golem" | "minecraft:blaze")

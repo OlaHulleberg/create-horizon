@@ -1371,9 +1371,9 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
             .ok()
             .map(|id| mod_api::SceneBlockEntity::new(id, fields));
         let (ex, ey) = (x - 35.0, y + l.h - 43.0);
-        draw.draw_scene(
+        let _ = draw.draw_scene(
             [ex - 50.0, ey - 70.0, ex + 50.0, ey + 30.0],
-            &[mod_api::SceneBlock::new([0, 0, 0], state, entity)],
+            &mod_api::Scene::new(vec![mod_api::SceneBlock::new([0, 0, 0], state, entity)]),
             mod_api::SceneView::new([0.5, 0.5, 0.5], -45.0, 22.5, 48.0),
         );
     }

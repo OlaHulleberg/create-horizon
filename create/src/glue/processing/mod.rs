@@ -150,6 +150,7 @@ impl Subsystem for Processing {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let _ = deployer::ITEM_PARTICLE.set(r.particle_key("minecraft:item"));
         containers::register(r);
+        recipes::register(r);
         // The crafter's group inventory, ahead of the game's plain slot (it is the kinetic type's,
         // declared by `Kinetics`).
         let kind = r.block_entity_type_key(super::kinetics::TYPE);
