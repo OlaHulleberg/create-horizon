@@ -135,13 +135,16 @@ pub fn tick(host: &dyn ClientHost) {
     }
 }
 
-/// `renderShared` for the burner at `pos` of `heat` facing `facing`.
+/// `renderShared` for the burner at `pos` of `heat` facing `facing`; beside a stock ticker it is
+/// its keeper (`stockKeeper`): lit at least as a fading blaze (`getHeatLevelForRender`) and
+/// wearing the logistics hat.
 pub fn draw(
     draw: &mut dyn BlockEntityDrawContext,
     pos: [i32; 3],
     heat: Heat,
     facing: Dir,
     goggles: bool,
+    keeper: bool,
 ) {
     if heat == Heat::None {
         return;
@@ -164,7 +167,12 @@ pub fn draw(
     let hash = (pos[0].wrapping_mul(31).wrapping_add(pos[1]))
         .wrapping_mul(31)
         .wrapping_add(pos[2]);
-    shared(draw, heat, angle, animation, true, goggles, hash);
+    let heat = if keeper { heat.max(Heat::Fading) } else { heat };
+    let wear = Wear {
+        goggles,
+        hat: keeper,
+    };
+    shared(draw, heat, angle, animation, true, wear, hash);
 }
 
 /// `renderInContraption`: a burner carried by a moving structure, its blaze at least fading,
@@ -175,7 +183,18 @@ pub fn draw_moving(draw: &mut dyn BlockEntityDrawContext, heat: Heat, facing: Di
         return;
     }
     let heat = heat.max(Heat::Fading);
-    shared(draw, heat, front_angle(facing), 0.0, false, false, hash);
+    let wear = Wear {
+        goggles: false,
+        hat: false,
+    };
+    shared(draw, heat, front_angle(facing), 0.0, false, wear, hash);
+}
+
+/// What the blaze wears: goggles (`drawGoggles`) and the logistics hat (`drawHat`).
+#[derive(Clone, Copy)]
+struct Wear {
+    goggles: bool,
+    hat: bool,
 }
 
 /// `renderShared`: the head at `angle`, sunk by `animation`, its rods, and (when it may and
@@ -186,9 +205,10 @@ fn shared(
     angle: f32,
     animation: f32,
     can_draw_flame: bool,
-    goggles: bool,
+    wear: Wear,
     hash: i32,
 ) {
+    let Wear { goggles, hat } = wear;
     let above = animation > 0.125;
     let time = draw.animation_time() as f32;
     let tick = time + (hash % 13) as f32 * 16.0;
@@ -228,6 +248,22 @@ fn shared(
         draw.push();
         draw.translate([0.0, head_y + 0.5, 0.0]);
         draw.rotate_about([0.0, 1.0, 0.0], angle, [0.5; 3]);
+        draw.block(part, &[("facing", "up")]);
+        draw.pop();
+    }
+    // `drawHat`: the logistics hat on the head, smaller on the inert one.
+    if hat && let Some(part) = states::partial("part_logistics_hat") {
+        draw.push();
+        if model == "part_blaze_inert" {
+            draw.translate([0.0, head_y + 0.5, 0.0]);
+            draw.translate([0.5, 0.5, 0.5]);
+            draw.scale([0.75, 0.75, 0.75]);
+            draw.translate([-0.5, -0.5, -0.5]);
+        } else {
+            draw.translate([0.0, head_y + 0.75, 0.0]);
+        }
+        draw.rotate_about([0.0, 1.0, 0.0], angle + 180.0, [0.5; 3]);
+        draw.translate([0.5, 0.0, 0.5]);
         draw.block(part, &[("facing", "up")]);
         draw.pop();
     }

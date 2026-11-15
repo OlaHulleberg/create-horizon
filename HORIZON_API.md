@@ -21,6 +21,12 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   sources (`ScoreboardDisplaySource`, `DeathCounterDisplaySource`) are left out (`glue/display`).
 - **A world-open phase.** `world_lifecycle` reports only failures and closing; Create's world opens at the
   first `level_load`.
+- **`isSolid` (legacy solidity) of a declared shape**: a declared block keeps its template's `isSolid`
+  (`BlockBehaviour.calculateSolid` is not run on the declared shapes), so a sign, banner or torch on a wall
+  (`WallSignBlock.canSurvive`) drops off a block on the heavy core's template, however full its shape.
+  Packagers and the redstone requester moved to a solid template (they need no waterlogging); frogports
+  and postboxes, waterlogged on the heavy core, still drop a sign put on them. Computing `isSolid` from the
+  declared collision shape (or a `solid` declaration field) would close it.
 - **Block-state facts:** `isRedstoneConductor` and `isSolidRender` (cart assemblers, stock links, schematic
   export approximate them by "full collision cube"); `requiresCorrectToolForDrops` / `isCorrectToolForDrops`
   (deployers dig every block at its harvestable speed); the weathering-copper class and age; a block's class
@@ -198,6 +204,12 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A clip rectangle in `DrawContext`** (`GuiGraphics.enableScissor`): the schedule's cards scrolled past its
   panel are covered by the panel's frame drawn again, and a card's condition groups that don't fit across it are
   left out until scrolled to, where Create cuts them at the card's edge.
+  The stock keeper's list and the stock ticker's category cards are drawn a whole row or card at a time: one
+  scrolled partly out of the window is left out where Create shows the part inside it.
+- **A live entity drawn in a screen** (`InventoryScreen.renderEntityInInventoryFollowsMouse`): the stock keeper's
+  screen draws a blaze keeper (its burner as a scene block, `DrawContext::draw_scene`), but not a seated mob
+  keeper beside the window. A `DrawContext` call drawing an `EntityRef` at a size, looking at a point, would
+  close it.
 - **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
 
 ## Left out of the port, not for want of API

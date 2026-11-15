@@ -6,7 +6,7 @@
 //! (`FilterScreenPacket`, the menus' `saveData`). A filter's settings are kept in the stack's
 //! custom data under Create's component names, its list as `ItemContainerContents` (`Slot` and
 //! the stack's own NBT). `/create_debug filter` sets a filter in a slot or hand for tests, and
-//! is the package filter's address until its screen is ported.
+//! sets a package filter's address too (its screen is the stock glue's, `stock::package_filter`).
 //!
 //! The attributes that read a recipe book (`washable`, `hauntable`, `crushable`, `smeltable`,
 //! `smokable`, `blastable`) ask processing's recipes.
@@ -794,6 +794,21 @@ fn attr_line(kind: &str, value: Option<String>) -> filter_screen::AttrLine {
         arg,
         arg_key,
     }
+}
+
+/// The item tags `stack`'s item is in (`ItemStack.getTags`), among those the server's data
+/// defines: what the stock keeper's `#` search looks through.
+pub(crate) fn item_tags(host: &dyn Host, stack: &ItemStack) -> Vec<String> {
+    let tags = ITEM_TAGS.lock().map(|t| t.clone()).unwrap_or_default();
+    tags.into_iter()
+        .filter(|tag| {
+            Identifier::parse(tag)
+                .ok()
+                .and_then(|id| host.tags().key(&id))
+                .and_then(|k| host.tags().is_in_tag(stack.item(), k))
+                .unwrap_or(false)
+        })
+        .collect()
 }
 
 /// Every item tag the server's data defines, in resource order (`tags/item`), as the last data

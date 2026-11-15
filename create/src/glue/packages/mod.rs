@@ -1587,8 +1587,67 @@ pub(crate) fn use_port(
     }
     let dimension = click.dimension.key().id().to_owned();
     let mut lv = ServerLevel::new(host, &dimension)?;
+    if port_clipboard(&mut lv, player, click.pos) {
+        return Some(InteractionResult::Success);
+    }
     port_screen::open(&mut lv, player, click.pos, false);
     Some(InteractionResult::Success)
+}
+
+/// `PackagePortBlockEntity.use` with a clipboard in the main hand: the port's address is written
+/// on it, and the screen does not open. False without a clipboard.
+pub(crate) fn port_clipboard(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) -> bool {
+    let held = super::items::held(&*lv.host, player, Hand::Main);
+    let Some(clip) = held.filter(|s| s.item().id(&*lv.host) == "create:clipboard") else {
+        return false;
+    };
+    let filter = with(lv.dim, |pk| pk.ports.get(&pos).map(|p| p.filter.clone()));
+    if let Some((clip, address)) = filter.and_then(|f| address_to_clipboard(&clip, &f)) {
+        super::items::set_held(lv.host, player, Hand::Main, Some(clip));
+        let line = Text::translate(
+            "create.clipboard.address_added",
+            vec![Text::literal(address)],
+        );
+        let _ = player.action_bar(lv.host, line);
+    }
+    true
+}
+
+/// `PackagePortBlockEntity.addAddressToClipboard`: `#address` added to the first page with room
+/// (twelve entries), or a new one, unless the clipboard has it already; it is then written on.
+fn address_to_clipboard(clip: &ItemStack, address: &str) -> Option<(ItemStack, String)> {
+    use super::display::clipboard;
+    if address.trim().is_empty() {
+        return None;
+    }
+    let mut content = clipboard::content(clip);
+    let entry = format!("#{address}");
+    let spaced = format!("# {address}");
+    if content
+        .pages
+        .iter()
+        .flatten()
+        .any(|e| e.text == entry || e.text == spaced)
+    {
+        return None;
+    }
+    let page = match content.pages.iter().position(|p| p.len() <= 11) {
+        Some(i) => i,
+        None => {
+            content.pages.push(Vec::new());
+            content.pages.len() - 1
+        }
+    };
+    content.pages[page].push(create_engine::clipboard::Entry {
+        checked: false,
+        text: entry,
+        icon: None,
+    });
+    content.kind = create_engine::clipboard::Kind::Written;
+    Some((
+        clipboard::with_content(clip, Some(&content)),
+        address.to_owned(),
+    ))
 }
 
 /// Packagers', frogports' and postboxes' own moments: a packager's click, and what comparators

@@ -26,7 +26,7 @@
 mod belt_connector;
 mod fertilizer;
 pub(crate) mod filter_screen;
-mod gadget_gui;
+pub(crate) mod gadget_gui;
 // The filter slots' helpers, for the subsystems whose blocks hold one.
 pub(crate) mod filters;
 mod nugget;

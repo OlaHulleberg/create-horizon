@@ -303,6 +303,7 @@ pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
         let Some(o) = o.as_mut() else {
             return;
         };
+        super::super::items::gadget_gui::dim(host, draw);
         o.size = size;
         let (x, y) = corner(size);
         draw.sprite(
