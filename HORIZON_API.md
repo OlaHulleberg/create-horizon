@@ -196,7 +196,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   every wand in the hotbar (`SymmetryHandler.onRenderWorld`), are sent to the client by the server.
 - **A turned item in a screen** (`GuiGameElement.of(stack).rotate(..)`): the wand of symmetry's screen draws the
   wand flat.
-- **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).
 - **Marking an entity immune to fire** (`Entity.fireImmune`, Create's `CreateFireImmune`): a player in a whole
   netherite diving set takes no fire damage (`living_incoming_damage`) and stops burning each tick, and their
   own view shows no flames, but lava still sets them alight for a tick, so others see flames on them.

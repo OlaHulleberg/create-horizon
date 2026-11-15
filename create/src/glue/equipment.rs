@@ -1,6 +1,11 @@
 //! Create's equipment (`create_engine::equipment` holds the rules): backtanks filled by their
 //! shaft, their air kept on the item (and shown as its bar, and on a potato cannon's while it
-//! uses it: `backtank_bar`), the diving helmet's breathing, the extendo grip's reach and wear.
+//! uses it: `backtank_bar`), the diving helmet's breathing, the extendo grip's reach (blocks and,
+//! as Create's client pick and `ExtendoGripInteractionPacket` give, entities as far), its +2
+//! knockback and its wear on any damage its holder deals, paid with backtank air when there is
+//! some. The grip's entity reach is the game's entity interaction range lent the distance
+//! Create picks to (the block reach, half a block less out of creative), so an entity nearer
+//! than a block behind it is picked, where Create picks entities only past a missed block.
 //! A whole netherite diving set makes its wearer immune to fire (`NetheriteDivingHandler`), and a
 //! diving helmet sees further under water, the netherite one in lava (`getFogDensity`). The
 //! extendo grip is drawn by a special item model (`GripModel`) at Create's resting pose: its cog
@@ -12,9 +17,7 @@
 //! Left out, for want of the API: the diving boots' sinking (`DivingBootsItem
 //! .accelerateDescentUnderwater`), which moves the local player on its client from its movement
 //! input: a client can neither read the local player's input (`xxa`, `zza`) nor set its motion
-//! (`set_velocity` is the server's). The extendo grip wears on a landed hit only when the grip is
-//! the stack that hit (`hurt_enemy` is a part of the hitting item), not when it is in the off hand
-//! behind another weapon. The helmet keeps the wearer's air full on the server only: a client
+//! (`set_velocity` is the server's). The helmet keeps the wearer's air full on the server only: a client
 //! cannot set its own player's air (`set_air_supply` is the server's), and the server's value
 //! never changes, so the client's bubbles still run down (no damage is taken). Using a backtank's
 //! air rewrites the worn stack (`set_equipment`), which plays its equip sound each second: Create
@@ -33,7 +36,7 @@ use create_engine::equipment::{
 };
 use mod_api::{
     AttributeModifier, AttributeOperation, BlockDropsEvent, BreakBlockEvent, Compound,
-    EntityPlaceEvent, EquipmentSlot, Flow, GameMode, Hand, HostSide, HurtEnemyEvent, Identifier,
+    EntityPlaceEvent, EquipmentSlot, Flow, GameMode, Hand, HostSide, Identifier,
     ItemKey, ItemPart, ItemStack, LevelHost, LivingRef, ModifierLifetime, OnBlockPlacedByEvent,
     PlayerRef, PlayerTickPostEvent, Registrar, RegistrationContext, ServerHost, SoundSource, Tag,
 };
@@ -46,6 +49,12 @@ const CARRIED_AIR: &str = "BacktankAir";
 const KEY: &str = "create_equipment";
 
 const BLOCK_RANGE: &str = "minecraft:block_interaction_range";
+const ENTITY_RANGE: &str = "minecraft:entity_interaction_range";
+/// The port's entity reach for a held grip (`dontMissEntitiesWhenYouHaveHighReachDistance`).
+const ENTITY_REACH: &str = "create:extendo_entity_range";
+
+/// The extendo grip's item key, requested at registration.
+static GRIP_ITEM: std::sync::OnceLock<ItemKey> = std::sync::OnceLock::new();
 
 /// The armour slots in the legacy order the engine's `Tank::slot` counts (head first).
 const ARMOR: [EquipmentSlot; 4] = [
@@ -63,6 +72,9 @@ thread_local! {
     static GEAR: RefCell<HashMap<ItemKey, Gear>> = RefCell::new(HashMap::new());
     /// Players given an extendo grip's reach (`EXTENDO_MARKER`): empty while nobody holds one.
     static REACH: RefCell<Vec<u128>> = const { RefCell::new(Vec::new()) };
+    /// The players (by entity id) whose damage an entity took this tick
+    /// (`bufferLivingAttackEvent`): a grip they hold wears.
+    static HITTERS: RefCell<Vec<(i32, u8)>> = const { RefCell::new(Vec::new()) };
     /// Players wearing a whole netherite diving set, by entity id: fire can't hurt them
     /// (`NetheriteDivingHandler.setFireImmune`).
     static FIRE_IMMUNE: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
@@ -142,13 +154,13 @@ impl Subsystem for Equipment {
             r.item_part(key, PlacedBacktank);
         }
         let _ = BACKTANK_ITEMS.set(keys);
-        let grip = r.item_key("create:extendo_grip");
-        r.item_part(grip, GripHit);
+        let _ = GRIP_ITEM.set(r.item_key("create:extendo_grip"));
     }
 
     fn world_closed(&self) {
         GEAR.with_borrow_mut(HashMap::clear);
         REACH.with_borrow_mut(Vec::clear);
+        HITTERS.with_borrow_mut(Vec::clear);
         FIRE_IMMUNE.with_borrow_mut(Vec::clear);
         BREAKING.with_borrow_mut(HashMap::clear);
     }
@@ -234,6 +246,15 @@ impl Subsystem for Equipment {
 
     /// Before the solve: backtanks with something to do fill (`BacktankBlockEntity.tick`).
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        // A hitter not found by its player tick within two ticks was no player (a mob's hit).
+        if lv.dim == 0 {
+            HITTERS.with_borrow_mut(|h| {
+                h.retain_mut(|(_, age)| {
+                    *age += 1;
+                    *age <= 2
+                })
+            });
+        }
         let dim = lv.dim;
         for (pos, speed) in with_world(|w| w.filling_backtanks(dim)).unwrap_or_default() {
             let filled = with_world(|w| {
@@ -272,6 +293,15 @@ impl Subsystem for Equipment {
         };
         let player = event.player;
         extendo_reach(host, player);
+        let id = player.entity().id() as i32;
+        let hits = HITTERS.with_borrow_mut(|h| {
+            let n = h.len();
+            h.retain(|(e, _)| *e != id);
+            n - h.len()
+        });
+        for _ in 0..hits {
+            wear_extendo(host, player);
+        }
         let Some(living) = host.living(player.entity()) else {
             return;
         };
@@ -298,6 +328,10 @@ impl Subsystem for Equipment {
                 | "minecraft:fireball"
                 | "minecraft:unattributed_fireball"
         );
+        // `bufferLivingAttackEvent`: damage a player caused wears the grip they hold.
+        if event.source.causing != 0 {
+            HITTERS.with_borrow_mut(|h| h.push((event.source.causing, 0)));
+        }
         let Ok(id) = u32::try_from(event.entity) else {
             return Flow::Continue;
         };
@@ -305,6 +339,27 @@ impl Subsystem for Equipment {
             return Flow::Cancel;
         }
         Flow::Continue
+    }
+
+    /// `attacksByExtendoGripHaveMoreKnockback`: a hit by a player (its direct entity) holding a
+    /// grip in either hand pushes 2 harder.
+    fn living_knockback(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::LivingKnockbackEvent<'_>,
+    ) {
+        let Some(grip) = GRIP_ITEM.get() else {
+            return;
+        };
+        if event.attacker == 0 || event.source.direct != event.attacker {
+            return;
+        }
+        let holds = [event.attacker_main, event.attacker_off]
+            .iter()
+            .any(|s| s.is_some_and(|s| s.item() == *grip));
+        if holds {
+            event.strength += 2.0;
+        }
     }
 
     fn special_model_renderers(&self, renderers: &mut dyn mod_api::SpecialModelRenderers) {
@@ -449,18 +504,6 @@ impl ItemPart for PlacedBacktank {
                 w.dims[dim].analog_checks.push(pos);
             }
         });
-    }
-}
-
-/// A player's hit landed holding the grip: it wears.
-struct GripHit;
-
-#[mod_api::horizon_part]
-impl ItemPart for GripHit {
-    fn hurt_enemy(&self, host: &mut dyn ServerHost, _event: &mut HurtEnemyEvent<'_>) {
-        if let Some(player) = host.players().acting_player() {
-            wear_extendo(host, player);
-        }
     }
 }
 
@@ -768,6 +811,35 @@ fn extendo_reach(host: &mut dyn ServerHost, player: PlayerRef) {
             living.add_attribute_modifier(host, BLOCK_RANGE, m, ModifierLifetime::Transient);
         } else {
             living.remove_attribute_modifier(host, BLOCK_RANGE, &id);
+        }
+    }
+    // `dontMissEntitiesWhenYouHaveHighReachDistance`: the client picks entities as far as the
+    // block reach (half a block less out of creative), and the server takes the hit
+    // (`ExtendoGripInteractionPacket`); the port lends the entity reach the same distance
+    // (from 3, or creative's 5).
+    let creative = player.is_creative(&*host) == Some(true);
+    let entity = match (single, dual) {
+        (_, true) => DOUBLE_RANGE.1,
+        (true, _) => SINGLE_RANGE.1,
+        _ => 0.0,
+    };
+    let entity = if entity > 0.0 && !creative {
+        entity + 1.0
+    } else {
+        entity
+    };
+    if let Ok(id) = Identifier::parse(ENTITY_REACH) {
+        let now = living
+            .attribute_modifiers(&*host, ENTITY_RANGE)
+            .and_then(|m| m.iter().find(|m| m.id == id).map(|m| m.amount));
+        if entity == 0.0 && now.is_some() {
+            living.remove_attribute_modifier(host, ENTITY_RANGE, &id);
+        } else if entity > 0.0 && now != Some(entity) {
+            if now.is_some() {
+                living.remove_attribute_modifier(host, ENTITY_RANGE, &id);
+            }
+            let m = AttributeModifier::new(id, entity, AttributeOperation::AddValue);
+            living.add_attribute_modifier(host, ENTITY_RANGE, m, ModifierLifetime::Transient);
         }
     }
     REACH.with_borrow_mut(|r| {

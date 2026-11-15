@@ -293,6 +293,17 @@ impl Hooks for Create {
         until_cancel(|s| s.living_incoming_damage(level, event))
     }
 
+    fn living_knockback(
+        &self,
+        level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::LivingKnockbackEvent<'_>,
+    ) -> Flow {
+        for s in SUBSYSTEMS {
+            s.living_knockback(level, event);
+        }
+        Flow::Continue
+    }
+
     fn render_fog(&self, host: &dyn ClientHost, event: &mut mod_api::RenderFogEvent<'_>) {
         for s in SUBSYSTEMS {
             s.render_fog(host, event);
