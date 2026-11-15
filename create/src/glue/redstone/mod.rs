@@ -12,6 +12,11 @@
 //! in the block entity's data (`ticks::DIODE_SHOWN`); clocks and levers ease on the client's
 //! block entity ticks, and clocks tick there.
 //!
+//! A link's frequency is its item's id, with its colour when dyed (`frequency_key`: Create's
+//! `Frequency` compares the item and `DYED_COLOR`). Links join factory gauges' panels as
+//! display links do (`stock::gauge`): a receiving link pauses them, a transmitting one sends 15
+//! while one is satisfied.
+//!
 //! A smart observer's or threshold switch's filter is read, set by hand, saved and tested by the
 //! items port's filter helpers (`items::filters`), as the legacy glue's were; the filters of
 //! broken detectors (`detectors.dropped`) are dropped there too. The threshold switch's screen
@@ -56,6 +61,103 @@ use mod_api::{
     ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
     ServerHost,
 };
+
+/// `FactoryPanelSupportBehaviour.notifyLink` of a redstone link (`updateTransmittedSignal`): a
+/// transmitter at `pos` sends again in the level's tick, with its panels' power.
+pub(crate) fn notify_link(dim: usize, pos: [i32; 3]) {
+    with_world(|w| w.dims[dim].link_checks.push(pos));
+}
+
+/// The facing of the redstone link at `pos`, if one is there.
+pub(crate) fn link_facing(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Dir> {
+    block_at(lv, pos)
+        .and_then(|(b, i)| ticks::link_of(b, &i))
+        .map(|l| l.0)
+}
+
+/// `FactoryPanelSupportBehaviour.shouldPanelBePowered` of the link at `pos`: a receiving redstone
+/// link (`isListening`) that receives a signal; None for no redstone link (a display link's is
+/// never powered).
+pub(crate) fn link_receiving(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<bool> {
+    let (_, receiver, _) = block_at(lv, pos).and_then(|(b, i)| ticks::link_of(b, &i))?;
+    let dim = lv.dim;
+    Some(receiver && with_world(|w| w.dims[dim].links.received(pos)).unwrap_or(0) > 0)
+}
+
+/// `LinkHandler.onBlockActivated` on the client: a click with an item on a redstone link's
+/// frequency slot is the link's (the server tunes it), so the item is not used as well: armour
+/// is not put on, food not eaten (the click is taken, as Create cancels it on both sides).
+fn link_use_predicted(host: &dyn ClientHost, event: &mod_api::RightClickBlockEvent<'_>) -> bool {
+    let click = event.click;
+    let Some(stack) = click.stack else {
+        return false;
+    };
+    let id = stack.item().id(host);
+    if matches!(id.as_str(), "create:wrench" | "create:linked_controller") {
+        return false;
+    }
+    let sneaking = host
+        .local_player()
+        .is_some_and(|p| p.entity().is_shift_key_down(host) == Some(true));
+    if sneaking {
+        return false;
+    }
+    let Some(level) = host.level(host.dimension()) else {
+        return false;
+    };
+    let Some(id) = level
+        .block_state(host, click.pos)
+        .and_then(super::states::id)
+    else {
+        return false;
+    };
+    let Some(facing) = super::client_table(host, |t| {
+        t.get(id)
+            .filter(|(b, _)| *b == Block::RedstoneLink)
+            .and_then(|(_, i)| i.facing)
+    })
+    .flatten() else {
+        return false;
+    };
+    let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(click.pos[i]));
+    create_engine::link::hit_slot(facing, local).is_some()
+}
+
+/// The component a dyed item's colour is in (`DataComponents.DYED_COLOR`).
+const DYED_COLOR: &str = "minecraft:dyed_color";
+
+/// `RedstoneLinkNetworkHandler.Frequency.of(stack)` as a link's network key: the item, and
+/// its colour when dyed (`DYED_COLOR`; Create's `equals` compares nothing else), as
+/// `logistics::items::key_of` names a stack with components ("" for none).
+pub(crate) fn frequency_key(
+    host: &dyn mod_api::Host,
+    stack: Option<&mod_api::ItemStack>,
+) -> String {
+    let Some(stack) = stack else {
+        return String::new();
+    };
+    let id = stack.item().id(host);
+    let dyed = stack
+        .components()
+        .and_then(|c| c.as_nbt().get(&DYED_COLOR.into()).cloned());
+    let Some(colour) = dyed else {
+        return id;
+    };
+    let mut plain = mod_api::ItemStack::of(stack.item());
+    let patch = Compound::from([(DYED_COLOR.into(), colour)]);
+    if plain.set_components(patch).is_err() {
+        return id;
+    }
+    super::logistics::items::key_of(host, &plain)
+}
+
+/// The stack a frequency key names, to draw or copy (`Frequency.getStack`).
+pub(crate) fn frequency_stack(host: &dyn mod_api::Host, key: &str) -> Option<mod_api::ItemStack> {
+    if key.is_empty() {
+        return None;
+    }
+    super::logistics::items::stack_of(host, key, 1)
+}
 
 pub struct Redstone;
 
@@ -220,6 +322,12 @@ impl Subsystem for Redstone {
         host: mod_api::HostSide,
         event: &mut mod_api::RightClickBlockEvent<'_>,
     ) -> Flow {
+        if let mod_api::HostSide::Client(h) = &host
+            && link_use_predicted(&**h, event)
+        {
+            *event.cancellation_result = mod_api::InteractionResult::Success;
+            return Flow::Cancel;
+        }
         clipboard_values::right_click_block(host, event)
     }
 

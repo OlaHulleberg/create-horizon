@@ -18,9 +18,14 @@
 //! `LinkedGauges` in the display port, which reads them (`FactoryGaugeDisplaySource`); a panel
 //! whose satisfaction or amount changes tells its links (`notifyRedstoneOutputs`).
 //!
-//! Left out: redstone links feeding a panel (`RedstoneLinkBlockEntity`'s
-//! `FactoryPanelSupportBehaviour`), relocating a panel, and the block's per-panel shape (the
-//! declared shape is Create's `FACTORY_PANEL_FALLBACK`, the whole face).
+//! Redstone links join the same way (`RedstoneLinkBlockEntity`'s `FactoryPanelSupportBehaviour`):
+//! a receiving link that receives a signal pauses the panels it is joined to
+//! (`checkForRedstoneInput`, `redstonePowered`), a transmitting one sends 15 while one of its
+//! panels is satisfied (`shouldBePoweredTristate`). Which panels a link feeds is read from the
+//! panels' `targetedByLinks` (each link's `LinkedGauges` in Create).
+//!
+//! Left out: relocating a panel, and the block's per-panel shape (the declared shape is
+//! Create's `FACTORY_PANEL_FALLBACK`, the whole face).
 
 use super::super::items;
 use super::super::server::ServerLevel;
@@ -90,14 +95,15 @@ pub(super) fn remove_panel(n: &mut Net, pp: PanelPos) -> bool {
     // `disconnectAllLinks`.
     for l in &p.links {
         crate::glue::display::panel_disconnected(n.dim, l.from.0, pp);
+        crate::glue::redstone::notify_link(n.dim, l.from.0);
     }
     n.redraw.push(pp.0);
     n.unsaved.push(chunk_of(pp.0));
     true
 }
 
-/// `FactoryPanelSupportBehaviour.destroy`: the display link at `link` is gone from the panels it
-/// was joined to.
+/// `FactoryPanelSupportBehaviour.destroy`: the display or redstone link at `link` is gone from
+/// the panels it was joined to.
 pub(super) fn link_gone(n: &mut Net, link: [i32; 3]) {
     for (pp, g) in n.gauges.iter_mut() {
         let before = g.links.len();
@@ -105,15 +111,87 @@ pub(super) fn link_gone(n: &mut Net, link: [i32; 3]) {
         if g.links.len() != before {
             n.redraw.push(pp.0);
             n.unsaved.push(chunk_of(pp.0));
+            n.redstone_checks.push(*pp);
         }
     }
 }
 
-/// `notifyRedstoneOutputs`: the display links joined to the panel refresh (`notifyLink`).
+/// `notifyRedstoneOutputs`: the links joined to the panel that are no outputs refresh
+/// (`notifyLink`): a display link gathers again, a transmitting redstone link sends again
+/// (`updateTransmittedSignal`).
 fn notify_links(dim: usize, links: &[Input]) {
     for l in links {
         crate::glue::display::notify_link(dim, l.from.0);
+        crate::glue::redstone::notify_link(dim, l.from.0);
     }
+}
+
+/// `FactoryPanelBehaviour.checkForRedstoneInput` for the panel `pp`: powered (paused) while a
+/// receiving redstone link joined to it receives a signal (`shouldPanelBePowered`); a link not
+/// loaded leaves it as it is. Changed, the panel redraws and looks again at once (`timer = 1`).
+pub(super) fn check_redstone_input(lv: &ServerLevel<'_>, pp: PanelPos) {
+    let dim = lv.dim;
+    let Some(links) = with(dim, |n| n.gauges.get(&pp).map(|g| g.links.clone())) else {
+        return;
+    };
+    let mut power = false;
+    for l in &links {
+        let at = l.from.0;
+        if !lv.is_loaded(at) {
+            return;
+        }
+        power |= crate::glue::redstone::link_receiving(lv, at) == Some(true);
+    }
+    let now = super::now(lv);
+    with(dim, |n| {
+        let Some(g) = n.gauges.get_mut(&pp) else {
+            return;
+        };
+        if g.redstone_powered == power {
+            return;
+        }
+        g.redstone_powered = power;
+        n.timers.insert(pp, now);
+        schedule(n, pp, now);
+        n.redraw.push(pp.0);
+        n.unsaved.push(chunk_of(pp.0));
+    });
+}
+
+/// `FactoryPanelSupportBehaviour.notifyPanels`: the panels the link at `link` is joined to
+/// look at their redstone input again.
+pub(super) fn link_panels_changed(lv: &ServerLevel<'_>, link: [i32; 3]) {
+    let panels: Vec<PanelPos> = with(lv.dim, |n| {
+        n.gauges
+            .iter()
+            .filter(|(_, g)| g.links.iter().any(|l| l.from.0 == link))
+            .map(|(pp, _)| *pp)
+            .collect()
+    });
+    for pp in panels {
+        check_redstone_input(lv, pp);
+    }
+}
+
+/// `FactoryPanelSupportBehaviour.shouldBePoweredTristate` for the link at `link`: whether a
+/// panel joined to it is satisfied and asks for an amount (15 into what it sends); None while
+/// one of them is not loaded.
+pub(super) fn link_panels_power(lv: &ServerLevel<'_>, link: [i32; 3]) -> Option<bool> {
+    let panels: Vec<(PanelPos, bool)> = with(lv.dim, |n| {
+        n.gauges
+            .iter()
+            .filter(|(_, g)| g.links.iter().any(|l| l.from.0 == link))
+            .map(|(pp, g)| (*pp, g.satisfied && g.count != 0))
+            .collect()
+    });
+    let mut any = false;
+    for (pp, on) in panels {
+        if !lv.is_loaded(pp.0) {
+            return None;
+        }
+        any |= on;
+    }
+    Some(any)
 }
 
 /// The panels of the gauge at `pos`.
@@ -841,6 +919,7 @@ pub(super) fn connect_link(
     pp: PanelPos,
     link: [i32; 3],
     link_facing: Dir,
+    redstone: bool,
 ) -> Result<(), &'static str> {
     let dim = lv.dim;
     if !with(dim, |n| n.gauges.contains_key(&pp)) {
@@ -885,7 +964,15 @@ pub(super) fn connect_link(
         n.redraw.push(pp.0);
         n.unsaved.push(chunk_of(pp.0));
     });
-    crate::glue::display::panel_connected(dim, link, pp);
+    if redstone {
+        // `FactoryPanelSupportBehaviour.connect`: `changed`, so a link that is no output sends
+        // again (`notifyLink`); a receiving one powers the panel at its next look
+        // (`checkForRedstoneInput`).
+        crate::glue::redstone::notify_link(dim, link);
+        check_redstone_input(lv, pp);
+    } else {
+        crate::glue::display::panel_connected(dim, link, pp);
+    }
     Ok(())
 }
 
@@ -927,6 +1014,8 @@ pub(super) fn configure(lv: &mut ServerLevel<'_>, player: PlayerRef, pp: PanelPo
             };
             for l in std::mem::take(&mut g.links) {
                 crate::glue::display::panel_disconnected(dim, l.from.0, pp);
+                // `disconnect`: a transmitting redstone link sends without it.
+                crate::glue::redstone::notify_link(dim, l.from.0);
             }
             n.redraw.push(pp.0);
             n.unsaved.push(chunk_of(pp.0));

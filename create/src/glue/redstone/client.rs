@@ -13,8 +13,8 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::steam::Face;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost,
-    Compound, CubeFace, Identifier, ItemDisplayContext, ItemStack, ParticleKey, ParticleOptions,
-    Registrar, SoundPlay, Tag,
+    Compound, CubeFace, ItemDisplayContext, ParticleKey, ParticleOptions, Registrar, SoundPlay,
+    Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -389,23 +389,16 @@ fn draw_link(host: &dyn ClientHost, draw: &mut dyn BlockEntityDrawContext, pos: 
         if item.is_empty() {
             continue;
         }
-        let Some(item_key) = Identifier::parse(item)
-            .ok()
-            .and_then(|id| host.item_key(&id))
-        else {
+        // `Frequency.getStack`: a dyed item in its colour.
+        let Some(stack) = super::frequency_stack(host, item) else {
             continue;
         };
         // `isGui3d`: an item that places a block is drawn whole.
-        let block_item = host.item_block(item_key).is_some();
+        let block_item = host.item_block(stack.item()).is_some();
         let pose = create_engine::link::slot_pose(facing, first, block_item);
         draw.push();
         pose::apply(draw, &pose);
-        draw.item(
-            &ItemStack::of(item_key),
-            ItemDisplayContext::Fixed,
-            None,
-            i as i32,
-        );
+        draw.item(&stack, ItemDisplayContext::Fixed, None, i as i32);
         draw.pop();
     }
 }

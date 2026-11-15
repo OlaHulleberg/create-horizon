@@ -452,7 +452,9 @@ fn use_link(
         return false;
     };
     let dim = lv.dim;
-    with_world(|w| w.link_frequency(dim, pos, first, held.unwrap_or_default()));
+    // `Frequency.of`: the item, and its colour when dyed.
+    let key = super::frequency_key(&*lv.host, click.stack.filter(|_| held.is_some()));
+    with_world(|w| w.link_frequency(dim, pos, first, &key));
     // `LinkHandler.onBlockActivated`: an item frame's add sound.
     lv.play_block_sound("minecraft:entity.item_frame.add_item", pos, 0.25, 0.1);
     true

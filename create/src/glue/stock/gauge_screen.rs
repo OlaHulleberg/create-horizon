@@ -204,10 +204,16 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
             if !near(link) {
                 return;
             }
-            let Some(link_facing) = crate::glue::display::display_link_facing(&lv, link) else {
-                return;
+            // A display link or a redstone link (`FactoryPanelSupportBehaviour` there).
+            let (link_facing, redstone) = match crate::glue::display::display_link_facing(&lv, link)
+            {
+                Some(f) => (f, false),
+                None => match crate::glue::redstone::link_facing(&lv, link) {
+                    Some(f) => (f, true),
+                    None => return,
+                },
             };
-            match gauge::connect_link(&mut lv, pp, link, link_facing) {
+            match gauge::connect_link(&mut lv, pp, link, link_facing, redstone) {
                 Err(key) => {
                     say(lv.host, player, &format!("create.{key}"), Vec::new(), "red");
                     let at = player.entity().position(&*lv.host).unwrap_or([0.0; 3]);
@@ -221,7 +227,14 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
                     );
                 }
                 Ok(()) => {
-                    let name = Text::translate("block.create.display_link", Vec::new());
+                    let name = Text::translate(
+                        if redstone {
+                            "block.create.redstone_link"
+                        } else {
+                            "block.create.display_link"
+                        },
+                        Vec::new(),
+                    );
                     say(
                         lv.host,
                         player,

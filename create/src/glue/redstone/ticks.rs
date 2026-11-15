@@ -517,6 +517,11 @@ pub(super) fn tick_links(lv: &mut ServerLevel<'_>) {
     if !shown.is_empty() {
         let players = lv.players();
         send_links(lv, &players, &shown);
+        // A link's drawing is kept until its block entity changes: touched, its clients draw
+        // the new frequency.
+        for &pos in &shown {
+            crate::glue::logistics::touch_shown(lv, pos);
+        }
     }
     let mut done: HashSet<[i32; 3]> = HashSet::new();
     for pos in checks {
@@ -540,7 +545,12 @@ pub(super) fn tick_links(lv: &mut ServerLevel<'_>) {
         if receiver {
             continue;
         }
-        let power = link_power(lv, pos, facing);
+        // The panels it is joined to: 15 while one is satisfied (`shouldBePoweredTristate`);
+        // nothing changes while one of them is not loaded.
+        let Some(panels) = crate::glue::stock::link_panels_power(lv, pos) else {
+            continue;
+        };
+        let power = link_power(lv, pos, facing).max(if panels { 15 } else { 0 });
         if powered != (power > 0) {
             lv.set_property(
                 pos,
@@ -575,6 +585,8 @@ pub(super) fn tick_links(lv: &mut ServerLevel<'_>) {
             );
         }
         lv.update_signal_neighbors(pos);
+        // `updateSelfAndAttached`: `panelSupport.notifyPanels`.
+        crate::glue::stock::link_panels_changed(lv, pos);
     }
 }
 
@@ -622,4 +634,7 @@ pub(crate) fn toggle_link(lv: &mut ServerLevel<'_>, pos: [i32; 3], receiver: boo
     }
     // The receiver's `tick` sets `powered` from its network at once.
     with_world(|w| w.dims[dim].link_changes.push(pos));
+    // Its panels see it listen or not (`isOutput`), and a transmitter sends with them.
+    crate::glue::stock::link_panels_changed(lv, pos);
+    with_world(|w| w.dims[dim].link_checks.push(pos));
 }
