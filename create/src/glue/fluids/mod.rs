@@ -42,6 +42,7 @@ mod goggles;
 mod lava;
 mod machines;
 mod open_end;
+pub(crate) use open_end::drink_potion;
 mod pipes;
 mod place;
 mod plumbing;

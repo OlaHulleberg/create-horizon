@@ -8,9 +8,9 @@
 //! the game's own path (`ServerPlayerGameMode.useItemOn`: the block's use, then the item's
 //! `useOn`, which places a block item, tills with a hoe...), then the item's use in the air
 //! (`item.use`: a bucket fills or empties, a bottle fills, a snowball is thrown); its punch the
-//! game's attack and block break. Sand paper polishes what lies under it. Left out: feeding food
-//! and drinks to a player in front of it (`finishUsingItem` on another player), and the slower
-//! digging of a block whose drops need another tool
+//! game's attack and block break. Sand paper polishes what lies under it. A player in front
+//! whose interaction passed is fed what it holds, if it is a food they can eat or a deployable
+//! drink (`finishUsingItem` on them, `finish_using`). Left out: the slower digging of a block whose drops need another tool
 //! (`requiresCorrectToolForDrops`), the API having no query for it, so every block digs at its
 //! harvestable speed.
 
@@ -31,6 +31,10 @@ use mod_api::{
 /// `DeployerFakePlayer`'s fallback profile: `9e2faded-cafe-4ec2-c314-dad129ae971d`, "Deployer".
 const FAKE_UUID: u128 = 0x9e2f_aded_cafe_4ec2_c314_dad1_29ae_971d;
 const FAKE_NAME: &str = "Deployer";
+
+/// `minecraft:item`, for the crumbs of what a deployer feeds.
+pub(crate) static ITEM_PARTICLE: std::sync::OnceLock<mod_api::ParticleKey> =
+    std::sync::OnceLock::new();
 
 /// The deployer two above `depot`, facing down, and its speed; None for anything else.
 pub fn deployer_above(lv: &ServerLevel<'_>, depot: [i32; 3]) -> Option<(Deployer, f32)> {
@@ -256,10 +260,7 @@ fn deployer_used(
     recipe: &deployer::Recipe,
     pos: [i32; 3],
 ) {
-    let held = d
-        .held
-        .as_ref()
-        .and_then(|h| held_stack(lv, h, d.held_damage));
+    let held = held_of(lv, d);
     let host = &*lv.host;
     let max_damage = held
         .as_ref()
@@ -291,13 +292,30 @@ fn centre(pos: [i32; 3]) -> [f64; 3] {
     pos.map(|v| f64::from(v) + 0.5)
 }
 
-/// The deployer's held stack as an item stack, with its wear.
-fn held_stack(lv: &ServerLevel<'_>, held: &(String, u8), damage: u32) -> Option<ItemStack> {
+/// The deployer's held stack as an item stack, with its components and its wear.
+fn held_of(lv: &ServerLevel<'_>, d: &Deployer) -> Option<ItemStack> {
+    let held = d.held.as_ref()?;
     let mut s = stacks::stack(&*lv.host, &held.0, u32::from(held.1))?;
-    if damage > 0 {
-        s.set_damage(damage);
+    if !d.held_components.is_empty()
+        && let Ok((mod_api::Tag::Compound(c), _)) =
+            mod_api::Tag::from_network_bytes(&d.held_components, None)
+    {
+        let _ = s.set_components(c);
+    }
+    if d.held_damage > 0 {
+        s.set_damage(d.held_damage);
     }
     Some(s)
+}
+
+/// The deployer's hand takes `stack` (its id, count, wear and the rest of its components).
+pub(crate) fn set_held_stack(host: &dyn mod_api::Host, d: &mut Deployer, stack: Option<&ItemStack>) {
+    d.held = stack.map(|s| (stacks::id(host, s), s.count().min(64) as u8));
+    d.held_damage = stack.map_or(0, ItemStack::damage);
+    d.held_components = stack
+        .and_then(|s| s.components())
+        .and_then(|c| mod_api::Tag::Compound(c.as_nbt().clone()).to_network_bytes().ok())
+        .unwrap_or_default();
 }
 
 /// Deployers mid-stroke (`DeployerBlockEntity.tick`): the stroke runs; one back at rest has the
@@ -348,9 +366,8 @@ pub fn tick_deployers(lv: &mut ServerLevel<'_>) {
             && let Some(held) = d.held.clone()
             && !crate::glue::items::filters::passes_item(&*lv.host, Some(&f), &held.0)
         {
-            let stack = held_stack(lv, &held, d.held_damage);
-            d.held = None;
-            d.held_damage = 0;
+            let stack = held_of(lv, &d);
+            set_held_stack(&*lv.host, &mut d, None);
             with_world(|w| w.set_deployer(dim, pos, d));
             if let Some(s) = stack {
                 lv.spawn_stack(centre(pos), s, [0.0; 3]);
@@ -554,6 +571,18 @@ pub fn activate(
         for s in other {
             lv.spawn_stack(centre(pos), s, [0.0; 3]);
         }
+        // `entity instanceof Player`: food it can eat, or a deployable drink, is finished on it.
+        let player = lv
+            .level
+            .online_players(&*lv.host)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|p| p.entity() == target);
+        if let Some(player) = player
+            && feed(lv, pos, facing, d, player)
+        {
+            return Vec::new();
+        }
     }
     let action = PlayerAction::UseOn {
         hand: Hand::Main,
@@ -582,6 +611,212 @@ pub fn activate(
         other.extend(more);
     }
     other
+}
+
+/// A component of `stack`: its own (the patch), else its item's default.
+fn component(host: &dyn mod_api::Host, stack: &ItemStack, name: &str) -> Option<mod_api::Tag> {
+    stack
+        .components()
+        .and_then(|c| c.as_nbt().get(&name.into()).cloned())
+        .or_else(|| host.item_default_component(stack.item(), name))
+}
+
+fn tag_number(t: Option<&mod_api::Tag>) -> Option<f64> {
+    use mod_api::Tag;
+    match t? {
+        Tag::Byte(v) => Some(f64::from(*v)),
+        Tag::Short(v) => Some(f64::from(*v)),
+        Tag::Int(v) => Some(f64::from(*v)),
+        Tag::Long(v) => Some(*v as f64),
+        Tag::Float(v) => Some(f64::from(f32::from_bits(*v))),
+        Tag::Double(v) => Some(f64::from_bits(*v)),
+        _ => None,
+    }
+}
+
+/// `activateInner` in `Mode.USE` on a player whose interaction passed: a held food the player
+/// can eat (`canEat(canAlwaysEat)`), or a deployable drink (`create:deployable_drink`: milk,
+/// potions), is finished on them (`stack.finishUsingItem(level, playerEntity)`), the hand keeping
+/// what is left, and its crumbs fly at the hand (`spawnedItemEffects`). True when it was.
+fn feed(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    d: &mut Deployer,
+    target: PlayerRef,
+) -> bool {
+    let Some(stack) = held_of(lv, d) else {
+        return false;
+    };
+    let host = &*lv.host;
+    let food = match component(host, &stack, "minecraft:food") {
+        Some(mod_api::Tag::Compound(c)) => Some((
+            tag_number(c.get(&"nutrition".into())).unwrap_or(0.0) as i32,
+            tag_number(c.get(&"saturation".into())).unwrap_or(0.0) as f32,
+            tag_number(c.get(&"can_always_eat".into())).is_some_and(|v| v != 0.0),
+        )),
+        _ => None,
+    };
+    let eats = food.is_some_and(|(_, _, always)| target.can_eat(host, always) == Some(true));
+    let drink = stacks::item_tagged(host, &stacks::id(host, &stack), "create:deployable_drink");
+    if !eats && !drink {
+        return false;
+    }
+    let left = finish_using(lv, &stack, target, food.filter(|_| eats));
+    set_held_stack(&*lv.host, d, left.as_ref());
+    // `SandPaperItem.spawnParticles` at the hand (`getMovementVector().scale(reach + 1)`): 20
+    // crumbs of the stack as it was, each thrown up to 1/8 along each axis.
+    if let Some(key) = ITEM_PARTICLE.get() {
+        let o = facing.offset();
+        let reach = f64::from(d.reach) + 1.0;
+        let at = std::array::from_fn(|i| f64::from(pos[i]) + 0.5 + f64::from(o[i]) * reach);
+        let options = mod_api::ParticleOptions::item_stack(*key, stack);
+        lv.level.send_particles(
+            &mut *lv.host,
+            &options,
+            None,
+            at,
+            [0.0; 3],
+            0.125 / 3f64.sqrt(),
+            20,
+        );
+    }
+    true
+}
+
+/// `ItemStack.finishUsingItem(level, target)` for a consumable `stack` (`Consumable.onConsume`):
+/// its sound, the food's listener (`FoodProperties.onConsume`: the eating sound, the food, a
+/// burp), a potion's (`PotionContents.onConsume`) and a suspicious stew's effects, its consume
+/// effects (milk's clearing), then one is used up unless the target has infinite materials, and
+/// its `use_remainder` takes the emptied hand or goes to the target. What the hand keeps.
+fn finish_using(
+    lv: &mut ServerLevel<'_>,
+    stack: &ItemStack,
+    target: PlayerRef,
+    food: Option<(i32, f32, bool)>,
+) -> Option<ItemStack> {
+    use mod_api::{RandomSource, SoundSource, Tag};
+    let host = &*lv.host;
+    let Some(Tag::Compound(consumable)) = component(host, stack, "minecraft:consumable") else {
+        return Some(stack.clone());
+    };
+    let Some(living) = lv.host.living(target.entity()) else {
+        return Some(stack.clone());
+    };
+    let at = target.entity().position(host).unwrap_or([0.0; 3]);
+    let drinks = matches!(
+        consumable.get(&"animation".into()),
+        Some(Tag::String(a)) if a.to_string_lossy() == "drink"
+    );
+    let sound = match consumable.get(&"sound".into()) {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        Some(Tag::Compound(c)) => match c.get(&"sound_id".into()) {
+            Some(Tag::String(s)) => s.to_string_lossy(),
+            _ => String::new(),
+        },
+        _ => "minecraft:entity.generic.eat".into(),
+    };
+    let effects = match consumable.get(&"on_consume_effects".into()) {
+        Some(Tag::List(l)) => l.len(),
+        _ => 0,
+    };
+    // `Consumable.emit`: the consume sound at the target, from its own source.
+    let (volume, pitch) = lv
+        .level
+        .with_random(&mut *lv.host, |r| {
+            let eat_volume = if r.next_boolean() { 0.5 } else { 1.0 };
+            let eat_pitch = r.triangle_float(1.0, 0.2);
+            let drink_pitch = 0.9 + r.next_float() * 0.1;
+            if drinks {
+                (0.5, drink_pitch)
+            } else {
+                (eat_volume, eat_pitch)
+            }
+        })
+        .unwrap_or((1.0, 1.0));
+    if !sound.is_empty() {
+        lv.level
+            .play_sound(&mut *lv.host, &sound, at, SoundSource::Players, volume, pitch);
+    }
+    // `FoodProperties.onConsume`.
+    if let Some((nutrition, saturation, _)) = food {
+        let pitch = lv
+            .level
+            .with_random(&mut *lv.host, |r| r.triangle_float(1.0, 0.4))
+            .unwrap_or(1.0);
+        if !sound.is_empty() {
+            lv.level
+                .play_sound(&mut *lv.host, &sound, at, SoundSource::Neutral, 1.0, pitch);
+        }
+        // `FoodData.eat(nutrition, saturation)`, given as its modifier
+        // (`saturation = nutrition * modifier * 2`).
+        let modifier = if nutrition == 0 {
+            0.0
+        } else {
+            saturation / (nutrition as f32 * 2.0)
+        };
+        target.feed(&mut *lv.host, nutrition, modifier);
+        let pitch = lv
+            .level
+            .with_random(&mut *lv.host, |r| 0.9 + r.next_float() * 0.1)
+            .unwrap_or(1.0);
+        lv.level.play_sound(
+            &mut *lv.host,
+            "minecraft:entity.player.burp",
+            at,
+            SoundSource::Players,
+            0.5,
+            pitch,
+        );
+    }
+    // `PotionContents.onConsume`.
+    if let Some(t) = component(&*lv.host, stack, crate::glue::logistics::items::POTION_CONTENTS) {
+        let contents = crate::glue::logistics::items::contents_of_tag(&t);
+        crate::glue::fluids::drink_potion(lv, target.entity(), &contents);
+    }
+    // `SuspiciousStewEffects.onConsume`: each entry at amplifier 0.
+    if let Some(Tag::List(stew)) =
+        component(&*lv.host, stack, "minecraft:suspicious_stew_effects")
+    {
+        for e in stew {
+            let Tag::Compound(e) = e else { continue };
+            let Some(Tag::String(id)) = e.get(&"id".into()) else {
+                continue;
+            };
+            let ticks = tag_number(e.get(&"duration".into())).unwrap_or(160.0) as i32;
+            if let Some(key) = lv.host.effect_key(&id.to_string_lossy()) {
+                let effect = mod_api::ActiveEffect::new(key, ticks, 0, false, true, true);
+                living.add_effect(&mut *lv.host, &effect);
+            }
+        }
+    }
+    for i in 0..effects {
+        let _ = living.apply_consume_effect(&mut *lv.host, stack, i);
+    }
+    // `stack.consume(1, entity)` and `UseRemainder.convertIntoRemainder`.
+    if target.has_infinite_materials(&*lv.host) == Some(true) {
+        return Some(stack.clone());
+    }
+    let left = stack.clone().shrink(1);
+    let remainder = match component(&*lv.host, stack, "minecraft:use_remainder") {
+        Some(Tag::Compound(c)) => match c.get(&"id".into()) {
+            Some(Tag::String(id)) => stacks::stack(
+                &*lv.host,
+                &id.to_string_lossy(),
+                tag_number(c.get(&"count".into())).unwrap_or(1.0) as u32,
+            ),
+            _ => None,
+        },
+        _ => None,
+    };
+    match (left, remainder) {
+        (None, r) => r,
+        (Some(left), Some(r)) => {
+            let _ = target.give_stack(&mut *lv.host, r);
+            Some(left)
+        }
+        (left, None) => left,
+    }
 }
 
 /// The entities in the block `at`, but a contraption (`AbstractContraptionEntity`).
@@ -632,10 +867,7 @@ fn act_with(
     let Some(fake) = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME) else {
         return (None, Vec::new());
     };
-    let stack = d
-        .held
-        .as_ref()
-        .and_then(|h| held_stack(lv, h, d.held_damage));
+    let stack = held_of(lv, d);
     // Create's fake player stands at the ray's origin with no eye height and is not in the
     // world; the game's has a standing body there (1.62 to its eyes), which would be in the
     // way of the block it places. It stands in the deployer instead: its eyes in the middle,
@@ -663,19 +895,7 @@ fn act_with(
     let Ok(result) = fake.perform_action_scoped(&mut *lv.host, action, setup) else {
         return (None, Vec::new());
     };
-    let held = result.held.as_ref().map(|s| {
-        (
-            stacks::id(&*lv.host, s),
-            s.count().min(64) as u8,
-            s.damage(),
-        )
-    });
-    let (held, worn) = match held {
-        Some((i, n, w)) => (Some((i, n)), w),
-        None => (None, 0),
-    };
-    d.held = held;
-    d.held_damage = worn;
+    set_held_stack(&*lv.host, d, result.held.as_ref());
     (Some(result.outcome), result.other)
 }
 
@@ -807,8 +1027,7 @@ pub fn wrench_deployer(lv: &mut ServerLevel<'_>, pos: [i32; 3], point: [f64; 3])
 }
 
 /// `DeployerBlock.useItemOn`: a click on its front half swaps the player's hand with the
-/// deployer's (plain stacks only: the deployer keeps an item's id, count and wear). True when
-/// the click was the deployer's.
+/// deployer's. True when the click was the deployer's.
 pub fn use_deployer(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
@@ -833,22 +1052,14 @@ pub fn use_deployer(
         return true;
     }
     let hand = lv.held(player);
-    // Its hand keeps an item's id, count and wear, nothing else.
-    if hand.as_ref().is_some_and(|s| s.components().is_some()) {
-        return true;
-    }
     let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten() else {
         return true;
     };
     if d.held.is_none() && hand.is_none() {
         return true;
     }
-    let back = d
-        .held
-        .take()
-        .and_then(|h| held_stack(lv, &h, d.held_damage));
-    d.held_damage = hand.as_ref().map_or(0, ItemStack::damage);
-    d.held = hand.map(|s| (stacks::id(&*lv.host, &s), s.count().min(64) as u8));
+    let back = held_of(lv, &d);
+    set_held_stack(&*lv.host, &mut d, hand.as_ref());
     lv.set_held(player, back);
     with_world(|w| {
         w.set_deployer(dim, pos, d);

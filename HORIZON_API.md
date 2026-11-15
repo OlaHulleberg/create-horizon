@@ -260,9 +260,8 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   conveyor; a nixie tube on a train signal shows its text, not the signal's lights (`NixieTubeRenderer`); a
   redstone contact on an elevator column is not turned into an elevator contact by the wrench; dyed items
   (`DYED_COLOR`) make one link frequency with their undyed item.
-- Processing: a deployer does not feed food or drinks to a player in front of it (`finishUsingItem` on another
-  player), and its overflow (`overflowItems`) drops at it rather than staying for funnels and hoppers; crafting
-  remainders of saw, crushing and millstone inputs are not given back.
+- Processing: a deployer's overflow (`overflowItems`) drops at it rather than staying for funnels and hoppers;
+  crafting remainders of saw, crushing and millstone inputs are not given back.
 - Decor: table cloths hold no items and run no shops (`TableClothBlockEntity`); copycats have no placement
   helpers and do not take their material's sound, friction or light; girders have no placement helper; an item
   hatch's filter compares item ids, not a filter item's list or attributes.

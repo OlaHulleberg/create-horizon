@@ -606,6 +606,10 @@ impl arm::World for ArmWorld<'_, '_> {
             Kind::Deployer => {
                 let mut d = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten()?;
                 let (item, count) = d.held.clone()?;
+                // An arm carries an item by its id: a stack with components stays in the hand.
+                if !d.held_components.is_empty() {
+                    return None;
+                }
                 // `DeployerItemHandler.extractItem`: what its filter names stays in its hand.
                 let f = crate::glue::processing::machine_filter(dim, pos);
                 if f.is_some()

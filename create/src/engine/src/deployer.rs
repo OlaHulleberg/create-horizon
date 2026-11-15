@@ -73,6 +73,9 @@ pub struct Deployer {
     pub locked: bool,
     /// The held tool's damage (`DAMAGE`).
     pub held_damage: u32,
+    /// The rest of the held stack's component patch (the glue's encoding; empty for a plain
+    /// stack): a potion's contents, a name, enchantments. It goes with the stack.
+    pub held_components: Vec<u8>,
 }
 
 /// `getTimerSpeed`: twice the speed, held between 8 and 512 (0 when still).
@@ -283,6 +286,9 @@ impl Deployer {
             return None;
         }
         use_held(&mut self.held, recipe);
+        if self.held.is_none() {
+            self.held_components.clear();
+        }
         let rest = remainder?.to_owned();
         if self.held.is_none() {
             self.held = Some((rest, 1));
@@ -301,6 +307,7 @@ impl Deployer {
         if self.held_damage >= max_damage {
             self.held = None;
             self.held_damage = 0;
+            self.held_components.clear();
             return true;
         }
         false

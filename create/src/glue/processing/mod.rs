@@ -67,6 +67,7 @@ pub use containers::TOOLBOX_TYPE;
 // the world does.
 pub(crate) use crafter::crafter_handler_insert;
 pub(crate) use deployer::activate as activate_deployer;
+pub(crate) use deployer::set_held_stack as set_deployer_held;
 pub(crate) use persist::{deployers_from_nbt, deployers_to_nbt};
 pub use press::transitional_of;
 // What the other subsystems call (the legacy glue's siblings did): fluids (the spout on a belt
@@ -148,6 +149,7 @@ impl Subsystem for Processing {
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        let _ = deployer::ITEM_PARTICLE.set(r.particle_key("minecraft:item"));
         containers::register(r);
         // The crafter's group inventory, ahead of the game's plain slot (it is the kinetic type's,
         // declared by `Kinetics`).

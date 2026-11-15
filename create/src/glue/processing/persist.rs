@@ -146,6 +146,12 @@ pub(crate) fn deployers_to_nbt(list: &[([i32; 3], deployer::Deployer)]) -> Tag {
                     ]),
                 );
                 b.insert("HeldItem".into(), Tag::String(item.as_str().into()));
+                if !d.held_components.is_empty() {
+                    b.insert(
+                        "HeldComponents".into(),
+                        Tag::ByteArray(d.held_components.clone()),
+                    );
+                }
                 Tag::Compound(b)
             })
             .collect(),
@@ -179,6 +185,10 @@ pub(crate) fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::De
                     breaking: None,
                     locked: v.get(8).is_some_and(|l| *l != 0),
                     held_damage: v.get(9).map_or(0, |d| (*d).max(0) as u32),
+                    held_components: match b.get(&"HeldComponents".into()) {
+                        Some(Tag::ByteArray(c)) => c.clone(),
+                        _ => Vec::new(),
+                    },
                 },
             ))
         })
@@ -371,6 +381,7 @@ mod tests {
             timer: 120,
             locked: true,
             held_damage: 7,
+            held_components: vec![10, 0],
             ..Default::default()
         };
         let mut data = Compound::new();
@@ -385,6 +396,7 @@ mod tests {
         assert_eq!(back[0].1.timer, 120);
         assert!(back[0].1.locked);
         assert_eq!(back[0].1.held_damage, 7);
+        assert_eq!(back[0].1.held_components, d.held_components);
 
         // Two crafters: one alone with no offsets, one controller with two.
         data.insert(

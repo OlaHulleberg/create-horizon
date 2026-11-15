@@ -1992,8 +1992,7 @@ fn deploy(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, at: Option<[i32; 3
     if d.held.is_none()
         && let Some(s) = take_one(lv, key)
     {
-        d.held = Some((item_id(lv, &s), 1));
-        d.held_damage = s.damage();
+        crate::glue::processing::set_deployer_held(&*lv.host, &mut d, Some(&s));
     }
     let facing = actors::posed_facing(a.facing, &a.turns);
     let mut stall = false;
