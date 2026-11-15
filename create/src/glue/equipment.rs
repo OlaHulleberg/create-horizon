@@ -18,7 +18,10 @@
 //! cannot set its own player's air (`set_air_supply` is the server's), and the server's value
 //! never changes, so the client's bubbles still run down (no damage is taken). Using a backtank's
 //! air rewrites the worn stack (`set_equipment`), which plays its equip sound each second: Create
-//! changes the stack in place, which the API has no way to do.
+//! changes the stack in place, which the API has no way to do. The Capacity enchantment is read
+//! from a stack's components, but the game's item enchantment table does not hold a native
+//! mod's enchantments, so it is not offered by enchanting tables nor shown in tooltips.
+//! A placed backtank is put on by a click with the chest free (`BacktankBlock.useItemOn`).
 
 use super::server::ServerLevel;
 use super::states;

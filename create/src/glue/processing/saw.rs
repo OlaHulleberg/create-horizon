@@ -1,6 +1,8 @@
 //! The block breakers and the saw: the mechanical drill and saw breaking the block in front
-//! (`BlockBreakingKineticBlockEntity`), and the saw facing up cutting what lands on it
-//! (`SawBlockEntity`).
+//! (`BlockBreakingKineticBlockEntity`), the saw facing up cutting what lands on it
+//! (`SawBlockEntity`), and both hurting what walks into them (`entityInside`), with vanilla's
+//! `generic` damage for Create's `mechanical_saw` and `mechanical_drill` (`HORIZON_API.md`: a
+//! native mod's damage types).
 
 use super::{recipes, stacks};
 use crate::glue::logistics::{insert_into_from, random_angle, upright};

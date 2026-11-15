@@ -13,7 +13,9 @@
 //! `entity_inside` runs inside the entity's move, where its position, ground and motion can't
 //! be read: the entity is noted there and seated or turned at the end of the level's tick.
 //! Create's `setNoActionTime(20)` and `setOnGround(false)` for mobs on a turntable, and a
-//! leashed mob sitting in the player's place (`getLeashed`), have no writer.
+//! leashed mob sitting in the player's place (`getLeashed`), have no writer. A seat bounces what
+//! won't sit on it (`bounce_restitution`); the halved fall damage (`SeatBlock.fallOn`) has no
+//! hook (`HORIZON_API.md`).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states::key;
