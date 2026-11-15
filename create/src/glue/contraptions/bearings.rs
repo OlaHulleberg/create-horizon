@@ -419,6 +419,7 @@ pub(super) fn tick_bearing_actors(lv: &mut ServerLevel<'_>) {
         let was = carried.stalled;
         let stalled = actors::tick_turning_actors(lv, pos, &mut carried, pos, facing.axis(), deg);
         carried.stalled = stalled;
+        super::actor_draw::show_actors(lv, pos, pos, &carried);
         if stalled != was {
             let rpm = if stalled { 0.0 } else { rpm };
             if own.is_some() {
@@ -702,6 +703,8 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                 [0, 1, 2].map(|a| f64::from(g.start[a]) + f64::from(o[a]) * f64::from(g.offset));
             let stalled = actors::tick_actors(lv, g.start, &mut g.carried, at);
             g.carried.stalled = stalled;
+            let shaft = add(g.start, g.carriage_facing.opposite().offset());
+            super::actor_draw::show_actors(lv, shaft, g.start, &g.carried);
             if stalled {
                 if g.per_tick != 0.0 {
                     g.per_tick = 0.0;
@@ -966,6 +969,7 @@ fn tick_piston_actors(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> b
     let stalled = actors::tick_actors(lv, pos, &mut carried, at);
     let changed = stalled != carried.stalled;
     carried.stalled = stalled;
+    super::actor_draw::show_actors(lv, pos, pos, &carried);
     let back = with_world(|w| match w.dims[dim].pistons.get_mut(&pos) {
         Some(m) => {
             m.carried = carried;

@@ -2400,7 +2400,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 141] = [
+pub const PARTIALS: [(&str, &str, &str); 150] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -3048,6 +3048,55 @@ pub const PARTIALS: [(&str, &str, &str); 141] = [
     (
         "part_symmetry_tripleplane",
         "create:block/symmetry_effect/tripleplane",
+        "up",
+    ),
+    // HarvesterRenderer's blade, RollerRenderer's wheel and frame, and
+    // PortableStorageInterfaceRenderer's middle (lit while connected) and top, for both
+    // interfaces: drawn from their `up` state (the model as written) and posed by the glue
+    // (`contraptions::actor_draw`), placed and on moving structures.
+    (
+        "part_harvester_blade",
+        "create:block/mechanical_harvester/blade",
+        "up",
+    ),
+    (
+        "part_roller_wheel",
+        "create:block/mechanical_roller/wheel",
+        "up",
+    ),
+    (
+        "part_roller_frame",
+        "create:block/mechanical_roller/frame",
+        "up",
+    ),
+    (
+        "part_psi_middle",
+        "create:block/portable_storage_interface/block_middle",
+        "up",
+    ),
+    (
+        "part_psi_middle_powered",
+        "create:block/portable_storage_interface/block_middle_powered",
+        "up",
+    ),
+    (
+        "part_psi_top",
+        "create:block/portable_storage_interface/block_top",
+        "up",
+    ),
+    (
+        "part_pfi_middle",
+        "create:block/portable_fluid_interface/block_middle",
+        "up",
+    ),
+    (
+        "part_pfi_middle_powered",
+        "create:block/portable_fluid_interface/block_middle_powered",
+        "up",
+    ),
+    (
+        "part_pfi_top",
+        "create:block/portable_fluid_interface/block_top",
         "up",
     ),
 ];

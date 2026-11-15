@@ -435,6 +435,7 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
             let at = pulley_origin(&p, p.offset);
             let stalled = actors::tick_actors(lv, pos, &mut carried, at);
             carried.stalled = stalled;
+            super::actor_draw::show_actors(lv, pos, pos, &carried);
             PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
             if stalled {
                 with_world(|w| w.dims[dim].lifts.pulleys.insert(pos, p));
@@ -675,6 +676,7 @@ fn tick_elevators(lv: &mut ServerLevel<'_>) {
             .flatten();
             let stalled = at.is_some_and(|at| actors::tick_actors(lv, pos, &mut carried, at));
             carried.stalled = stalled;
+            super::actor_draw::show_actors(lv, pos, pos, &carried);
             PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
             if stalled {
                 continue;

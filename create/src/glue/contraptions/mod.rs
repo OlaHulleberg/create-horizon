@@ -48,6 +48,7 @@
 //!   contraption controls are not carried.
 //! - An elevator contact's door control has no value box: doors open on every side.
 
+mod actor_draw;
 pub mod actors;
 mod bearings;
 mod blast;
