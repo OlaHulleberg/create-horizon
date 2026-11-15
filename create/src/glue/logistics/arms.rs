@@ -1217,6 +1217,13 @@ fn land(
         }
         return Some(count - n);
     }
+    // Funnels, chutes, item drains and processing machines: their own
+    // `handleInsertion(stack, UP, simulate)`.
+    let belt = with_world(|w| w.dims[dim].belt_of.contains_key(&target)) == Some(true);
+    if !belt && super::belt::direct_input_at(lv, target) {
+        let one = create_engine::belt::Item::new(item, count, random_angle(lv, target), false);
+        return super::belt::handle_insertion(lv, target, Dir::Up, &one, false, simulate);
+    }
     put_on_from_above(lv, target, item, count, None, simulate)
 }
 

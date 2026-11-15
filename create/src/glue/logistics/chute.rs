@@ -253,20 +253,16 @@ pub fn tick_chute_shapes(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// Whether nothing at `pos` stops what falls: no collision shape there
-/// (`Block.canSupportRigidBlock`'s answer for a chute's output).
-fn falls_through(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
-    let cell = [
-        f64::from(pos[0]) + 1e-4,
-        f64::from(pos[1]) + 1e-4,
-        f64::from(pos[2]) + 1e-4,
-        f64::from(pos[0]) + 1.0 - 1e-4,
-        f64::from(pos[1]) + 1.0 - 1e-4,
-        f64::from(pos[2]) + 1.0 - 1e-4,
-    ];
-    lv.level
-        .collision_boxes(&*lv.host, cell)
-        .is_none_or(|b| b.is_empty())
+/// Whether the block at `pos` lets a chute's stack out toward it: below, unless it can hold
+/// a rigid block up on its top (`Block.canSupportRigidBlock`); above, unless its bottom is a
+/// full solid side (`BlockHelper.hasBlockSolidSide(.., DOWN)`).
+fn falls_through(lv: &ServerLevel<'_>, pos: [i32; 3], up: bool) -> bool {
+    let (face, support) = if up {
+        (mod_api::BlockFace::Down, mod_api::SupportType::Full)
+    } else {
+        (mod_api::BlockFace::Up, mod_api::SupportType::Rigid)
+    };
+    lv.level.block_face_sturdy(&*lv.host, pos, face, support) != Some(true)
 }
 
 /// The speed of an encased fan at `pos` blowing `way` (`fan.getSpeed()`), if one is there.
@@ -283,16 +279,52 @@ fn fan_blowing(lv: &ServerLevel<'_>, pos: [i32; 3], way: Dir) -> Option<f32> {
 /// lowest chute blowing up) and `pull` (`calculatePull`: a fan over the highest one blowing
 /// down), in chutes a tick.
 pub fn chute_motion(lv: &ServerLevel<'_>, pos: [i32; 3]) -> f32 {
-    let end = |step: i32| {
-        let mut p = [pos[0], pos[1] + step, pos[2]];
-        while chute_at(lv, p).is_some() {
-            p[1] += step;
-        }
-        p
+    create_engine::chute::item_motion(chute_push(lv, pos, 0), chute_pull(lv, pos, 0))
+}
+
+/// `getInputChutes`: the chutes leading into the one at `pos`, the one above facing down and
+/// the diagonal ones above beside it facing toward it.
+fn input_chutes(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<[i32; 3]> {
+    [Dir::Down, Dir::North, Dir::South, Dir::West, Dir::East]
+        .into_iter()
+        .filter_map(|f| {
+            let o = if f == Dir::Down { [0; 3] } else { f.offset() };
+            let p = [pos[0] + o[0], pos[1] + 1, pos[2] + o[2]];
+            (chute_facing(lv, p) == Some(f)).then_some(p)
+        })
+        .collect()
+}
+
+/// `calculatePull`: a fan over the chute at `pos` blowing down, else what the chutes leading
+/// into it pull, added up (`depth`: how far up it looked).
+fn chute_pull(lv: &ServerLevel<'_>, pos: [i32; 3], depth: u32) -> f32 {
+    if let Some(speed) = fan_blowing(lv, [pos[0], pos[1] + 1, pos[2]], Dir::Down) {
+        return speed;
+    }
+    if depth > 256 {
+        return 0.0;
+    }
+    input_chutes(lv, pos)
+        .into_iter()
+        .map(|p| chute_pull(lv, p, depth + 1))
+        .sum()
+}
+
+/// `calculatePush`: a fan under the chute at `pos` blowing up, else the push of the chute it
+/// leads into (diagonals too), shared among that chute's inputs.
+fn chute_push(lv: &ServerLevel<'_>, pos: [i32; 3], depth: u32) -> f32 {
+    if let Some(speed) = fan_blowing(lv, [pos[0], pos[1] - 1, pos[2]], Dir::Up) {
+        return speed;
+    }
+    let Some(facing) = chute_facing(lv, pos) else {
+        return 0.0;
     };
-    let push = fan_blowing(lv, end(-1), Dir::Up).unwrap_or(0.0);
-    let pull = fan_blowing(lv, end(1), Dir::Down).unwrap_or(0.0);
-    create_engine::chute::item_motion(push, pull)
+    let target = create_engine::chute::target(pos, facing);
+    if depth > 256 || chute_at(lv, target).is_none() {
+        return 0.0;
+    }
+    let branches = input_chutes(lv, target).len().max(1) as f32;
+    chute_push(lv, target, depth + 1) / branches
 }
 
 /// A stack the fans carry up the chute at `pos` (`tick` with a positive motion,
@@ -325,7 +357,7 @@ fn rise(
         true
     } else {
         let funnel_up = super::funnel::funnel_at(lv, above).is_some_and(|f| f.facing == Dir::Up);
-        !funnel_up && falls_through(lv, above)
+        !funnel_up && falls_through(lv, above, true)
     };
     match step(position, motion, can) {
         Fall::At(p) => Some(p),
@@ -439,7 +471,7 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
         } else {
             let funnel_down = super::funnel::funnel_at(lv, below)
                 .is_some_and(|f| f.belt.is_none() && f.facing == Dir::Down);
-            !funnel_down && falls_through(lv, below)
+            !funnel_down && falls_through(lv, below, false)
         };
         // Into the chute it leads into: at the top, or past the middle from a diagonal one.
         let into_target = |lv: &mut ServerLevel<'_>, stack: ItemStack| {
