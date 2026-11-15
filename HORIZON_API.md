@@ -205,6 +205,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   arrival predictions, is not in the trains port), the factory gauge status source (gauges are not connected
   to display links); the clipboard copies no value box `interaction::values` does not serve (a funnel's filter count, a
   chassis' range, tunnels' side filters, deployers' filters), nor from a placed clipboard.
+- Kinetics: Create breaks a block whose speed starts, stops or turns round too often (`flickerTally`,
+  `RotationPropagator.MAX_FLICKER_SCORE`: a clutch on a fast redstone clock); the port does not count it. The
+  limit a sequenced gearshift's or valve handle's turn sets on a bearing, piston, pulley or gantry
+  (`sequencedAngleLimit`, `sequencedOffsetLimit`) is not saved: one reloaded mid-turn starts the turn's limit again.
 - Logistics: a sloped belt collides as a flat one; Create's `BeltShapes` (by facing, slope and part) are
   not declared yet, though content shapes can select by several properties (as the steam engine's do).
 - Contraptions: moving block entities carry their item slots, a deployer's state and a tank's fluid, and other
