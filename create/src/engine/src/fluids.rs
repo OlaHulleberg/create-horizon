@@ -177,6 +177,8 @@ pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> C
     match first_cell {
         Cell::Tank => ends.push((end(first, true, Pass::default()), 0)),
         Cell::Port(s) if s == side.opposite() => ends.push((end(first, true, Pass::default()), 0)),
+        // A pump right against water or air is an open end itself (`isOpenEnd` from the pump).
+        Cell::Open => ends.push((end(first, false, Pass::default()), 0)),
         Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..) if connects(first_cell, side) => {
             let start = Pass::default().through(first_cell);
             let mut frontier = std::collections::VecDeque::from([(1, first, start)]);
@@ -900,6 +902,16 @@ mod tests {
             }]
         );
         assert_eq!(transfer_speed(16.0), 8);
+        // A pump right against water (no pipe) draws from it as an open end.
+        let bare = |p: [i32; 3]| match p {
+            [0, 0, 0] => Cell::Pump(Dir::East),
+            [-1, 0, 0] => Cell::Open,
+            _ => Cell::Solid,
+        };
+        assert_eq!(
+            reach([0, 0, 0], Dir::West, 16.0, bare),
+            vec![end([-1, 0, 0], false, 16.0)]
+        );
         // Two ends at the same distance share the pressure.
         let fork = |p: [i32; 3]| match p {
             [1, 0, 0] => Cell::Pipe(Dir::West.bit() | Dir::North.bit() | Dir::South.bit()),
