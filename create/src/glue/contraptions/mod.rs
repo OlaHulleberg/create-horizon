@@ -112,7 +112,7 @@ use std::sync::RwLock;
 pub use super::kinetics::dir_name;
 // The chassis group a value box scrolls the range of (legacy `contraptions::chassis_group`).
 pub use bearings::chassis_group;
-pub(crate) use lifts::contact_floor;
+pub(crate) use lifts::{contact_floor, contact_wrenched};
 
 pub struct Contraptions;
 

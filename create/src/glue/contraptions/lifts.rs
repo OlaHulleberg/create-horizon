@@ -10,6 +10,10 @@
 //! contact's door control lets open (`SlidingDoorMovementBehaviour`, `DoorControlBehaviour`),
 //! and follow a door control changed while it stands there.
 //!
+//! A redstone contact placed or wrenched to face an elevator column is that column's elevator
+//! contact, and an elevator contact wrenched away from it (or up or down) a redstone contact
+//! again (`RedstoneContactItem.getPlacementState`, `onWrenched`).
+//!
 //! Left out of the port, not for want of API: the elevator's contraption controls choose no
 //! floor (`ElevatorControlsHandler`).
 
@@ -1297,6 +1301,50 @@ impl BlockPart for LiftPart {
     }
 }
 
+/// `ElevatorColumn.get(level, new ColumnCoords(x, z, facing)) != null` for a contact at `pos`
+/// facing `facing` (never up or down): a column exists there, with an elevator or another
+/// contact than the one at height `own` (whose block entity keeps the column it joined).
+fn facing_column(dim: usize, pos: [i32; 3], facing: Dir, own: Option<i32>) -> bool {
+    if facing.axis() == Axis::Y {
+        return false;
+    }
+    let key = create_engine::elevator::column_of(pos, facing);
+    with_world(|w| {
+        w.dims[dim]
+            .lifts
+            .columns
+            .get(&key)
+            .is_some_and(|c| c.active || c.contacts.iter().any(|y| Some(*y) != own))
+    }) == Some(true)
+}
+
+/// `RedstoneContactBlock.onWrenched` / `ElevatorContactBlock.onWrenched` after the wrench
+/// turned the contact at `pos`: a redstone contact now facing an elevator column becomes its
+/// elevator contact, an elevator contact facing up, down or no column a redstone contact
+/// (`setBlockAndUpdate` with `copyProperties`: its facing and power).
+pub(crate) fn contact_wrenched(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let Some((block, info)) = create_info(lv.block(pos)) else {
+        return;
+    };
+    let Some(facing) = info.facing else {
+        return;
+    };
+    let column = facing_column(lv.dim, pos, facing, Some(pos[1]));
+    let to = match block {
+        Block::RedstoneContact if column => "create:elevator_contact",
+        Block::ElevatorContact if !column => "create:redstone_contact",
+        _ => return,
+    };
+    let powered = if info.powered { "true" } else { "false" };
+    if let Some(s) = state_with(
+        &*lv.host,
+        to,
+        &[("facing", dir_name(facing)), ("powered", powered)],
+    ) {
+        lv.set_num(pos, s, update_all());
+    }
+}
+
 struct ContactPart;
 
 #[mod_api::horizon_part]
@@ -1323,10 +1371,15 @@ impl BlockPart for ContactPart {
         let (facing, powered) = create_engine::place::redstone_contact(ctx, |d| {
             contact_faces_back(&|p| level.block_state(p), pos, d)
         });
-        let text = format!(
-            "create:redstone_contact[facing={},powered={powered}]",
-            dir_name(facing)
-        );
+        // `RedstoneContactItem.getPlacementState`: facing an elevator column, it is that
+        // column's elevator contact (`copyProperties`).
+        let dim = super::super::world::level_index(event.dimension.key().id());
+        let name = if dim.is_some_and(|dim| facing_column(dim, pos, facing, None)) {
+            "create:elevator_contact"
+        } else {
+            "create:redstone_contact"
+        };
+        let text = format!("{name}[facing={},powered={powered}]", dir_name(facing));
         Some(level.block_state_id(&text))
     }
 
