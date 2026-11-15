@@ -230,6 +230,7 @@ impl Subsystem for Logistics {
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        placement::tick_vault_layers(lv);
         chute::tick_vaults(lv);
         chute::tick_chute_shapes(lv);
         chute::tick_chutes(lv);
