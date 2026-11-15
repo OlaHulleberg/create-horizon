@@ -15,8 +15,12 @@
 //! progress. The machines over a belt answer `Subsystem::belt_process`; a crafter's group takes
 //! items through its `ITEMS` handler (`crafter::provide_items`, the legacy
 //! `crafter_handler_insert`), whoever puts them in.
-//! The saw, the crushing wheels and the crafter hand their results to a belt or depot beside
-//! them through logistics' `insert_into_from`, as in the legacy glue.
+//! The saw, the crushing wheels and the crafter hand their results to whatever takes items from
+//! that side (`DirectBeltInputBehaviour`: a belt, depot, funnel, chute, drain or machine) through
+//! logistics' `insert_into_from`, which in turn hands belts' items to upward saws, basins,
+//! millstones and crushing wheels (`belt_input`). A basin turns its spout toward such a taker
+//! diagonally below it (`spoutput`). The basin's, the upward saw's and the deployer's filter
+//! slots are `filtering`'s.
 //!
 //! Left out, the API having no way yet:
 //! - A toolbox's one item kind per compartment: `ModContainer` has no per-slot insert check
@@ -28,14 +32,15 @@
 //!   `canProcess`): `ModContainer` has no per-slot insert check.
 //! - Create's own damage types (`create:crush`): a native mod's are not registered, so the
 //!   crushing wheels deal vanilla's cramming.
+//! - The deployer's punch at full strength (`DeployerFakePlayer.getCurrentItemAttackStrengthDelay`
+//!   of 1/64): the game's fake player attacks with its own, uncharged, attack strength, so a
+//!   punch deals about a fifth of its damage.
 //!
-//! A blaze burner's blaze, rods, flame and goggles are its block entity's drawing
-//! (`burner_draw`), so a burner carried by a moving structure, drawn from its block model,
-//! shows only its cage.
+//! Left out otherwise: a deployer's `overflowItems` (what its filter turns away, a crafting
+//! remainder) drop at the deployer instead of waiting in it for a funnel to take.
 //!
-//! Not drawn yet: the items a saw facing up is cutting (`SawRenderer.renderItems`) and a grid's
-//! items moving between mechanical crafters (`MechanicalCrafterRenderer.renderItems` past
-//! `IDLE`).
+//! A blaze burner carried by a moving structure is drawn by the structure's anchor
+//! (`burner_draw::draw_moving`): its blaze faces its front rather than the nearest player.
 
 mod application;
 pub(crate) mod basin;
@@ -236,7 +241,7 @@ impl Subsystem for Processing {
                         super::client_table(&*host, |t| t.get(id).map(|(b, _)| b)).flatten()
                     });
                 if let Some(block) = block
-                    && client::filter_slot_click(&*host, block, &click)
+                    && client::filter_slot_click(&*host, block, click)
                 {
                     *event.cancellation_result = mod_api::InteractionResult::Success;
                     return mod_api::Flow::Cancel;
@@ -371,7 +376,7 @@ fn use_block(host: &mut dyn ServerHost, event: &mut RightClickBlockEvent<'_>) ->
     let main = click.hand == mod_api::Hand::Main;
     // A filter slot takes the click first (`ValueSettingsInputHandler`).
     if matches!(block, Block::Basin | Block::MechanicalSaw | Block::Deployer)
-        && filtering::click(&mut lv, pos, &click)
+        && filtering::click(&mut lv, pos, click)
     {
         *event.cancellation_result = mod_api::InteractionResult::Success;
         return mod_api::Flow::Cancel;

@@ -209,7 +209,7 @@ pub fn route(lv: &mut ServerLevel<'_>, pos: [i32; 3], before: &[Slot], after: &m
                 Some((_, m)) => *m = m.saturating_add(n - had),
                 None => added.push((id.clone(), n - had)),
             }
-            after[i] = (had > 0).then(|| (id, had));
+            after[i] = (had > 0).then_some((id, had));
         }
     }
     if added.is_empty() {

@@ -468,9 +468,6 @@ impl BlockEntityPart for MachineDraw {
                 &event.entity.nbt,
             );
         }
-        match block {
-            _ => {}
-        }
     }
 }
 

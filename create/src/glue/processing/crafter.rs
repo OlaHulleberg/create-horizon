@@ -521,17 +521,22 @@ fn insert_item(lv: &mut ServerLevel<'_>, t: [i32; 3], face: Direction, item: &st
         .unwrap_or(0)
 }
 
+/// A crafter's grid: each cell's place and item.
+type Grid = Vec<((i32, i32), String)>;
+/// A phase as told: the phase, the game time it began at and its `countDown` then.
+type Told = (Phase, i64, i32);
+
 /// The key of a crafter's block entity data its clients draw it from: `P`, its phase; `C`,
 /// whether it is covered; `I`, the item in its slot.
 pub const CRAFTER_KEY: &str = "Crafter";
 
 thread_local! {
     /// The grid each crafting crafter held before it crafted (`groupedItemsBeforeCraft`).
-    static BEFORE_CRAFT: std::cell::RefCell<std::collections::HashMap<(usize, [i32; 3]), Vec<((i32, i32), String)>>> =
+    static BEFORE_CRAFT: std::cell::RefCell<std::collections::HashMap<(usize, [i32; 3]), Grid>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
     /// Each crafter's phase as its clients were told, with the game time and `countDown` it
     /// began at, from which they run its countdown on.
-    static TOLD: std::cell::RefCell<std::collections::HashMap<(usize, [i32; 3]), (Phase, i64, i32)>> =
+    static TOLD: std::cell::RefCell<std::collections::HashMap<(usize, [i32; 3]), Told>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
     /// Crafters a player clicked, by dimension: their slot or cover may have changed.
     static SHOW: std::cell::RefCell<Vec<(usize, [i32; 3])>> =
