@@ -184,13 +184,16 @@ fn tick_cart_actors(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) {
             lent.push((CART_INVENTORY, before.clone()));
         }
         crate::glue::contraptions::actors::lend_storage(dim, key, lent);
-        let stalled = crate::glue::contraptions::actors::tick_posed_actors(
-            lv,
-            key,
-            &mut on.carried,
-            pivot,
-            &turns,
-        );
+        // `damageEntities` leaves the cart carrying the structure alone.
+        let stalled = crate::glue::contraptions::actors::on_vehicle(&[nc.entity.id()], || {
+            crate::glue::contraptions::actors::tick_posed_actors(
+                lv,
+                key,
+                &mut on.carried,
+                pivot,
+                &turns,
+            )
+        });
         on.carried.stalled = stalled;
         let mut back = crate::glue::contraptions::actors::lent_back(dim, key);
         let after = back

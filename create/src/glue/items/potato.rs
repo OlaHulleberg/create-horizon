@@ -7,7 +7,9 @@
 //! (`ThrownItemRenderer`, as Create's `PotatoProjectileRenderer` draws its stack); the glue
 //! keeps its flight by entity id: Create's gravity and drag each tick (set over the snowball's
 //! own), sticking to what a sticky type hits, and its hits (`projectile_impact`, taken from the
-//! snowball): damage, knockback, the type's entity and block actions, the item recovered or
+//! snowball, and the glue's own look along each move for entities, with the 0.3 margin
+//! Create's `AbstractHurtingProjectile` meets them with from its first tick, where the
+//! snowball's grows from nothing): damage, knockback, the type's entity and block actions, the item recovered or
 //! its leftover dropped, `POTATO_HIT` and the item's crumbs. A golden apple cures a weakened
 //! zombie villager (`CureZombieVillager`, through its saved `ConversionTime` as `mobInteract`'s
 //! `startConverting` sets it).
@@ -78,6 +80,8 @@ struct Shot {
     stuck: Option<(EntityRef, [f64; 3], f64)>,
     /// `tickCount`.
     age: i32,
+    /// `Projectile.leftOwner`: it has left its shooter's reach, who it may hit from then on.
+    left_owner: bool,
 }
 
 thread_local! {
@@ -432,6 +436,7 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
                     motion: first,
                     stuck: None,
                     age: 0,
+                    left_owner: false,
                 },
             )
         });
@@ -535,10 +540,114 @@ fn fly(lv: &mut ServerLevel<'_>) {
         } else {
             shot.stuck = None;
             shot.motion = potato::fly(shot.motion, shot.kind);
+            // Create's projectile meets the entities on its move with a margin of 0.3 from its
+            // first tick; the snowball's own grows from nothing (`computeMargin`), so the glue
+            // looks first and hits as Create's would.
+            if let Some((target, at)) = ahead(lv, e, &mut shot) {
+                let kind = target
+                    .kind(&*lv.host)
+                    .map(|k| k.id(&*lv.host).to_string())
+                    .unwrap_or_default();
+                let dimension = shot.dimension.clone();
+                let event = ProjectileImpactEvent {
+                    dimension: &dimension,
+                    projectile: id,
+                    kind: SHOT,
+                    owner: shot.owner.map_or(0, |o| o.id()),
+                    entity: Some(target.id()),
+                    entity_kind: &kind,
+                    block: [0; 3],
+                    face: [0; 3],
+                    at,
+                    cancelled: false,
+                };
+                let Some(kept) = impact(lv.host, &event, shot) else {
+                    continue;
+                };
+                shot = kept;
+                if shot.stuck.is_some() {
+                    SHOTS.with_borrow_mut(|s| s.insert(id, shot));
+                    continue;
+                }
+            }
             e.set_velocity(lv.host, snowball_velocity(shot.motion));
         }
         SHOTS.with_borrow_mut(|s| s.insert(id, shot));
     }
+}
+
+/// `AbstractHurtingProjectile.tick`'s entity hit (`ProjectileUtil.getHitResultOnMoveVector`,
+/// margin 0.3) for the shot `e` about to move by its motion, blocks first stopping the line;
+/// `Projectile.checkLeftOwner` before it. What it hits (`canHitEntity`: alive and pickable, not
+/// its shooter until it left them) and where.
+fn ahead(lv: &ServerLevel<'_>, e: EntityRef, shot: &mut Shot) -> Option<(EntityRef, [f64; 3])> {
+    let host: &dyn Host = &*lv.host;
+    let from = e.position(host)?;
+    let m = shot.motion;
+    let mut to = [0, 1, 2].map(|i| from[i] + m[i]);
+    if let Some(hit) = lv.level.clip(
+        host,
+        from,
+        to,
+        mod_api::ClipBlock::Collider,
+        mod_api::ClipFluid::None,
+    ) && !hit.miss
+    {
+        to = hit.location;
+    }
+    // `getBoundingBox().expandTowards(motion).inflate(1.0)`: the shot's box is 0.25 a side.
+    let mut lo = [from[0] - 0.125, from[1], from[2] - 0.125];
+    let mut hi = [from[0] + 0.125, from[1] + 0.25, from[2] + 0.125];
+    for i in 0..3 {
+        if m[i] < 0.0 {
+            lo[i] += m[i];
+        } else {
+            hi[i] += m[i];
+        }
+        lo[i] -= 1.0;
+        hi[i] += 1.0;
+    }
+    let found: Vec<EntityRef> = lv
+        .level
+        .entities_in(host, lo, hi)?
+        .into_iter()
+        .filter(|o| *o != e && pickable(host, *o))
+        .collect();
+    let owner_root = shot.owner.map(|o| o.root_vehicle(host).unwrap_or(o));
+    let same_root =
+        |o: EntityRef| owner_root.is_some_and(|r| o.root_vehicle(host).unwrap_or(o) == r);
+    if !shot.left_owner {
+        shot.left_owner = !found.iter().any(|o| same_root(*o));
+    }
+    let boxes: Vec<(u32, [[f64; 3]; 2])> = found
+        .iter()
+        .filter(|o| shot.left_owner || !same_root(**o))
+        .filter_map(|o| Some((o.id(), o.bounding_box(host)?)))
+        .collect();
+    let (id, at) = potato::entity_hit(from, to, &boxes, potato::HIT_MARGIN)?;
+    Some((found.into_iter().find(|o| o.id() == id)?, at))
+}
+
+/// `Entity.canBeHitByProjectile`: alive and `isPickable` (living things but spectators, carts,
+/// boats, frames, paintings, end crystals and Create's other shots).
+fn pickable(host: &dyn Host, e: EntityRef) -> bool {
+    if SHOTS.with_borrow(|s| s.contains_key(&e.id())) {
+        return true;
+    }
+    if host.living(e).is_some() {
+        return alive(host, e) && e.spectator(host) != Some(true);
+    }
+    let Some(kind) = e.kind(host).map(|k| k.id(host).to_string()) else {
+        return false;
+    };
+    let id = kind.trim_start_matches("minecraft:");
+    id.ends_with("minecart")
+        || id.ends_with("boat")
+        || id.ends_with("raft")
+        || matches!(
+            id,
+            "item_frame" | "glow_item_frame" | "painting" | "end_crystal"
+        )
 }
 
 /// `pop`: the item's crumbs and `POTATO_HIT` where it hit.

@@ -164,6 +164,58 @@ pub fn motion(look: [f64; 3], correction: [f64; 3], t: &Type) -> [f64; 3] {
     n.map(|c| c * 2.0 * f64::from(t.velocity))
 }
 
+/// `ProjectileUtil.getEntityHitResult` as Create's projectile (an `AbstractHurtingProjectile`
+/// on 1.21.1) calls it: from `from` to `to`, the nearest of `boxes` (each id with its box's
+/// corners) grown by the margin (`0.3`, from the first tick) that the line meets, or that holds
+/// `from`; where the line enters it.
+pub const HIT_MARGIN: f64 = 0.3;
+
+pub fn entity_hit(
+    from: [f64; 3],
+    to: [f64; 3],
+    boxes: &[(u32, [[f64; 3]; 2])],
+    margin: f64,
+) -> Option<(u32, [f64; 3])> {
+    let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    let mut best: Option<(f64, u32, [f64; 3])> = None;
+    for &(id, [lo, hi]) in boxes {
+        let lo = lo.map(|v| v - margin);
+        let hi = hi.map(|v| v + margin);
+        let inside = (0..3).all(|i| from[i] >= lo[i] && from[i] <= hi[i]);
+        let t = if inside {
+            Some(0.0)
+        } else {
+            // The slab test: where the segment enters the box, if it does within it.
+            let (mut t0, mut t1) = (0.0f64, 1.0f64);
+            let mut meets = true;
+            for i in 0..3 {
+                if d[i].abs() < 1e-12 {
+                    if from[i] < lo[i] || from[i] > hi[i] {
+                        meets = false;
+                        break;
+                    }
+                    continue;
+                }
+                let (a, b) = ((lo[i] - from[i]) / d[i], (hi[i] - from[i]) / d[i]);
+                let (a, b) = if a < b { (a, b) } else { (b, a) };
+                t0 = t0.max(a);
+                t1 = t1.min(b);
+                if t0 > t1 {
+                    meets = false;
+                    break;
+                }
+            }
+            meets.then_some(t0)
+        };
+        if let Some(t) = t
+            && best.is_none_or(|(bt, ..)| t < bt)
+        {
+            best = Some((t, id, [0, 1, 2].map(|i| from[i] + d[i] * t)));
+        }
+    }
+    best.map(|(_, id, at)| (id, at))
+}
+
 /// `VecHelper.lookAt`: `vec` in the frame whose forward is `fwd`.
 fn look_at(vec: [f64; 3], fwd: [f64; 3]) -> [f64; 3] {
     let fwd = norm(fwd);
@@ -290,6 +342,23 @@ mod tests {
         all.dedup();
         assert_eq!(all.len(), n);
         assert_eq!(TYPES.len(), 25);
+    }
+
+    #[test]
+    fn a_shot_hits_what_passes_within_the_margin() {
+        // A chicken's box (0.4 wide) half a block beside the line: missed without the margin,
+        // hit with Create's 0.3.
+        let chicken = (7, [[0.3, 0.0, 4.8], [0.7, 0.7, 5.2]]);
+        let (from, to) = ([0.05, 0.3, 3.0], [0.05, 0.3, 5.5]);
+        assert_eq!(entity_hit(from, to, &[chicken], 0.0), None);
+        let (id, at) = entity_hit(from, to, &[chicken], HIT_MARGIN).unwrap();
+        assert_eq!(id, 7);
+        assert!((at[2] - 4.5).abs() < 1e-9);
+        // The nearer of two; one holding the start is hit at once.
+        let near = (8, [[-0.2, 0.0, 3.9], [0.2, 0.7, 4.1]]);
+        assert_eq!(entity_hit(from, to, &[chicken, near], HIT_MARGIN).unwrap().0, 8);
+        let around = (9, [[-0.5, 0.0, 2.5], [0.5, 1.0, 3.5]]);
+        assert_eq!(entity_hit(from, to, &[around], 0.0), Some((9, from)));
     }
 
     #[test]

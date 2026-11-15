@@ -81,6 +81,10 @@ impl Subsystem for TrainControls {
         channel: &str,
         data: &[u8],
     ) -> bool {
+        if channel == super::horn::CHANNEL {
+            super::horn::from_client(host, player, data);
+            return true;
+        }
         if channel != tc::CHANNEL {
             return false;
         }
@@ -89,6 +93,10 @@ impl Subsystem for TrainControls {
     }
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
+        if channel == super::horn::CHANNEL {
+            super::horn::from_server(data);
+            return true;
+        }
         if channel != tc::CHANNEL {
             return false;
         }
@@ -98,6 +106,7 @@ impl Subsystem for TrainControls {
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client_tick(host);
+        super::horn::client_tick(host);
     }
 
     fn client_reset(&self) {
@@ -105,6 +114,7 @@ impl Subsystem for TrainControls {
         DRIVING.set(false);
         HUD.with_borrow_mut(|h| *h = Hud::default());
         PROMPT.with_borrow_mut(|p| *p = None);
+        super::horn::reset();
     }
 
     fn interaction_key(
@@ -318,6 +328,9 @@ fn client_tick(host: &mut dyn ClientHost) {
     });
     if let (Some(steps), Some(target)) = (throttle, DRIVER.with_borrow(|d| d.controls)) {
         packets.push(ToServer::Throttle { target, steps });
+    }
+    if let Some(target) = DRIVER.with_borrow(|d| d.controls) {
+        super::horn::driving_tick(host, target.train);
     }
     send_server(host, packets);
     DRIVING.set(DRIVER.with_borrow(|d| d.controls.is_some()));

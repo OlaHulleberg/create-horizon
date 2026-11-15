@@ -161,6 +161,7 @@ fn changed(lv: &mut ServerLevel<'_>, pos: [i32; 3], old: u32, new: u32) {
         && !only_water(lv, old, new)
         && let Some(b) = with(dim, |d| d.brackets.remove(&pos))
     {
+        super::brackets::removed_effect(lv, pos, b);
         with(dim, |d| d.shown.push(pos));
         girders::around(dim, pos);
         persist::mark_pos_unsaved(dim, pos);

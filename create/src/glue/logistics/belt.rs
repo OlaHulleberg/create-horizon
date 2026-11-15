@@ -152,11 +152,28 @@ fn apply_color(lv: &mut ServerLevel<'_>, pos: [i32; 3], color: Option<&str>) -> 
 /// `BeltBlockEntity.setCasingType`: cases the segment at `pos` in `kind` (`andesite` or
 /// `brass`) or takes its casing off (None). The block entity keeps the kind for its clients, who
 /// draw the casing (`client`, as `BeltModel` would) and whether a block covers it
-/// (`updateCoverProperty`). The casing's break particles are left out (the mod API has no
-/// state's numeric id).
+/// (`updateCoverProperty`). A casing it had breaks with its particles and sound
+/// (`levelEvent(PARTICLES_DESTROY_BLOCK)` of the casing block).
 pub fn set_casing(lv: &mut ServerLevel<'_>, pos: [i32; 3], kind: Option<&str>) {
     let flag = if kind.is_some() { "true" } else { "false" };
     if let Some(e) = lv.host.block_entity(lv.level, pos) {
+        let had = e
+            .data(&*lv.host)
+            .and_then(|d| match d.get(&super::BELT_CASING.into()) {
+                Some(mod_api::Tag::String(k)) => {
+                    Some(k.to_string_lossy()).filter(|k| !k.is_empty())
+                }
+                _ => None,
+            });
+        if let Some(had) = had
+            && let Some(state) = lv.host.block_state_id(if had == "brass" {
+                "create:brass_casing"
+            } else {
+                "create:andesite_casing"
+            })
+        {
+            lv.destroy_effect(pos, state);
+        }
         let tag = mod_api::Tag::String(kind.unwrap_or("").into());
         let _ = e.merge_data(
             &mut *lv.host,

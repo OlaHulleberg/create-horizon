@@ -1445,6 +1445,17 @@ const FALLING: [&str; 11] = [
 ];
 
 impl actors::Probe for Reader<'_, '_> {
+    /// `isRedstoneConductor`, read as a full collision cube (vanilla's default for it; the
+    /// blocks that override it are not known to the API, `HORIZON_API.md`).
+    fn conductor(&self, pos: [i32; 3]) -> bool {
+        let Some(state) = self.lv.block_state(pos) else {
+            return false;
+        };
+        self.lv
+            .level
+            .block_shape(&*self.lv.host, state, pos, BlockShapeKind::Collision)
+            .is_some_and(|b| b.len() == 1 && b[0] == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+    }
     fn material(&self, filter: Option<&str>) -> u32 {
         STORAGE.with_borrow(|m| {
             let Some(list) = m.get(&(self.lv.dim, self.key)) else {
@@ -1742,7 +1753,7 @@ pub(crate) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
 
 /// A turning contraption's actors stop (`stopMoving`): what they were breaking is left as it
 /// was, its cracks gone.
-pub(super) fn cancel_actors(lv: &mut ServerLevel<'_>, key: [i32; 3], carried: &mut Carried) {
+pub(crate) fn cancel_actors(lv: &mut ServerLevel<'_>, key: [i32; 3], carried: &mut Carried) {
     stop_actors(lv, &mut carried.actors);
     cancel_deployers(lv, key, carried);
 }
@@ -1967,8 +1978,157 @@ fn apply(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, e: Effect) -> Optio
         Effect::Contact(p) => contact_reached(lv, p, actors::posed_facing(a.facing, &a.turns)),
         Effect::ContactLeft(p) => contact_left(lv, p),
         Effect::Redeploy => return Some(deploy(lv, key, a, None)),
+        Effect::Entities { pos, damage, boost } => hit_entities(lv, a, pos, damage, boost),
     }
     None
+}
+
+/// The channel a thrown player's client is told its push on (`throwEntity` runs on the client
+/// for players).
+pub const THROW_CHANNEL: &str = "create:actor_throw";
+
+thread_local! {
+    /// Entities a moving structure's actors leave alone while they tick: the cart carrying it
+    /// (`damageEntities`' minecart test), set by the one ticking them.
+    static EXEMPT: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    /// The actors ticking ride a cart or a train (`MountedContraption`, `CarriageContraption`).
+    static ON_VEHICLE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `f` for the actors of a structure on a cart or a train, with `ids` left alone by them
+/// (`isPassengerOfSameVehicle`, the carrying cart).
+pub fn on_vehicle<R>(ids: &[u32], f: impl FnOnce() -> R) -> R {
+    EXEMPT.with_borrow_mut(|e| e.extend_from_slice(ids));
+    let was = ON_VEHICLE.replace(true);
+    let r = f();
+    ON_VEHICLE.set(was);
+    EXEMPT.with_borrow_mut(|e| e.truncate(e.len().saturating_sub(ids.len())));
+    r
+}
+
+/// The display and marker entities the port draws moving structures and seats with
+/// (`AbstractContraptionEntity`, which `damageEntities` passes).
+fn drawing_entity(kind: &str) -> bool {
+    matches!(
+        kind,
+        "minecraft:block_display"
+            | "minecraft:item_display"
+            | "minecraft:text_display"
+            | "minecraft:interaction"
+            | "minecraft:marker"
+    )
+}
+
+/// `BlockBreakingMovementBehaviour.damageEntities` at block `pos`: every entity in it but items
+/// and the structure's own (its drawing, what rides it, its cart) is hurt by `damage` (Create's
+/// drill, saw and roller damage types are stood in for by `generic`, `HORIZON_API.md`) and
+/// thrown by `boost`; a player's own client throws it (`push_player`). A plough throwing an
+/// anvil hard enough gives `ANVIL_PLOUGH` to the players within 32 blocks.
+fn hit_entities(
+    lv: &mut ServerLevel<'_>,
+    a: &Actor,
+    pos: [i32; 3],
+    damage: Option<f32>,
+    boost: [f64; 3],
+) {
+    let lo = pos.map(f64::from);
+    let hi = pos.map(|v| f64::from(v) + 1.0);
+    let Some(found) = lv.level.entities_in(&*lv.host, lo, hi) else {
+        return;
+    };
+    let exempt = EXEMPT.with_borrow(Clone::clone);
+    for e in found {
+        let host: &dyn mod_api::Host = &*lv.host;
+        if lv.host.item_entity(e).is_some() || exempt.contains(&e.id()) {
+            continue;
+        }
+        let kind = e
+            .kind(host)
+            .map(|k| k.id(host).to_string())
+            .unwrap_or_default();
+        if drawing_entity(&kind) {
+            continue;
+        }
+        // A rider of the structure's seats sits on one of its stand-ins.
+        let root = e.root_vehicle(host).unwrap_or(e);
+        if root != e
+            && root
+                .kind(host)
+                .is_some_and(|k| drawing_entity(&k.id(host).to_string()))
+        {
+            continue;
+        }
+        if let Some(d) = damage {
+            let _ = e.hurt(&mut *lv.host, "minecraft:generic", d, None, None);
+        }
+        if kind == "minecraft:player" {
+            if let Some(p) = e.uuid(&mut *lv.host).and_then(|u| lv.host.player(u)) {
+                let words: Vec<u8> = boost.iter().flat_map(|v| v.to_le_bytes()).collect();
+                crate::glue::net::send_to_player(&mut *lv.host, p, THROW_CHANNEL, &words);
+            }
+            continue;
+        }
+        let before = e.velocity(&*lv.host).unwrap_or_default();
+        e.push(&mut *lv.host, boost);
+        // `PloughMovementBehaviour.throwEntity`: an anvil falling at 0.25 or more.
+        if a.kind == Kind::Plough && kind == "minecraft:falling_block" {
+            let v = [0, 1, 2].map(|i| before[i] + boost[i]);
+            let speed = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            let anvil = e
+                .nbt(&mut *lv.host)
+                .and_then(|n| match n.get(&"BlockState".into()) {
+                    // The state as text (`minecraft:anvil[facing=north]`), or a compound.
+                    Some(Tag::String(text)) => Some(text.to_string_lossy()),
+                    Some(Tag::Compound(b)) => match b.get(&"Name".into()) {
+                        Some(Tag::String(name)) => Some(name.to_string_lossy()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .is_some_and(|n| {
+                    // `instanceof AnvilBlock`: the anvil and its chipped and damaged kinds.
+                    let name = n.split('[').next().unwrap_or_default();
+                    matches!(
+                        name,
+                        "minecraft:anvil" | "minecraft:chipped_anvil" | "minecraft:damaged_anvil"
+                    )
+                });
+            if anvil && speed >= 0.25 {
+                plough_anvil_award(lv, e);
+            }
+        }
+    }
+}
+
+/// `AllAdvancements.ANVIL_PLOUGH` for the players in `AABB(entity.blockPosition()).inflate(32)`.
+fn plough_anvil_award(lv: &mut ServerLevel<'_>, anvil: mod_api::EntityRef) {
+    let Some(b) = anvil.block_position(&*lv.host) else {
+        return;
+    };
+    let lo = b.map(|v| f64::from(v) - 32.0);
+    let hi = b.map(|v| f64::from(v) + 33.0);
+    for p in lv.players() {
+        let Some(at) = p.entity().position(&*lv.host) else {
+            continue;
+        };
+        if (0..3).all(|i| at[i] >= lo[i] && at[i] <= hi[i]) {
+            crate::glue::advancements::award(&mut *lv.host, p, "anvil_plough");
+        }
+    }
+}
+
+/// A thrown player's client: the push the structure gave it (`throwEntity` on the client).
+pub fn thrown(host: &mut dyn mod_api::ClientHost, data: &[u8]) {
+    if data.len() != 24 {
+        return;
+    }
+    let v: Vec<f64> = data
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
+        .collect();
+    host.push_player([v[0] as f32, v[1] as f32, v[2] as f32]);
 }
 
 /// `DeployerMovementBehaviour.shouldActivate` (`DeployerHandler.shouldActivate` with no
@@ -2061,9 +2221,26 @@ fn deploy(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, at: Option<[i32; 3
         // The deployer two back from the block it reaches, as `context.position - facing × 2`.
         let o = facing.offset();
         let origin = [0, 1, 2].map(|i| pos[i] - 2 * o[i]);
+        let before = d.held.clone();
         other =
             crate::glue::processing::activate_deployer(lv, origin, facing, &mut d, a.breaker_id);
         stall = d.breaking.is_some();
+        // `checkForTrackPlacementAdvancement`: on a cart or a train, a rail or track it placed
+        // (`placedTracks`) gives its placer `SELF_DEPLOYING`.
+        if ON_VEHICLE.get()
+            && let Some((item, n)) = &before
+            && d.held.as_ref().is_none_or(|(i, m)| i != item || m < n)
+            && placed_track(lv, item)
+        {
+            let owner = HELD.with_borrow(|m| {
+                let held = m.get(&(dim, key))?;
+                let data = held.iter().find(|(o, _)| *o == a.local)?;
+                crate::glue::advancements::carried_owner(data.1.engine.as_ref()?)
+            });
+            if let Some(p) = owner.and_then(|u| lv.host.player(u)) {
+                crate::glue::advancements::award(&mut *lv.host, p, "self_deploying");
+            }
+        }
         // `tryHarvestBlock`: the broken block's drops go into the fake player's inventory
         // (the game's break drops them where the block was).
         if d.mode == Mode::Punch && !stall {
@@ -2089,6 +2266,15 @@ fn deploy(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, at: Option<[i32; 3
         collect(lv, key, a, s);
     }
     stall
+}
+
+/// Whether `item` places a rail or a track (`IBaseRailBlockExtension`, `ITrackBlock`).
+fn placed_track(lv: &ServerLevel<'_>, item: &str) -> bool {
+    let Some(block) = item_key_of(lv, item).and_then(|k| lv.host.item_block(k)) else {
+        return false;
+    };
+    lv.host.block_in_tag(block, "minecraft:rails") == Some(true)
+        || lv.host.block_in_tag(block, "create:tracks") == Some(true)
 }
 
 /// The plough's hoe on the block a ray down from the block's centre hits (it, if it has a

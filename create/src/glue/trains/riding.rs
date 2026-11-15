@@ -106,6 +106,7 @@ fn seat_pending(lv: &mut ServerLevel<'_>) {
 }
 
 /// The players seated on each train of level `dim` (`countPlayerPassengers`).
+/// The players seated on each train of level `dim` (`countPlayerPassengers`).
 pub fn passengers(dim: usize) -> std::collections::HashMap<u32, i32> {
     let mut out = std::collections::HashMap::new();
     SEATED.with_borrow(|s| {

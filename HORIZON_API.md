@@ -47,11 +47,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   (deployers dig every block at its harvestable speed: `can_harvest_block` and `player_harvest_check` hear the
   game's own dig and break, but a deployer counts its progress itself, before any break); the weathering-copper class and age; a block's class
   (copycats guess stairs, bars and trapdoors from tags and ids).
-- **A state's numeric id**, for `level_event(2001, ..)`: a wrenched copycat and an encased shaft's or cog's
-  casing taken off show the state's block particles (`LevelRef::send_particles`) and its break sound
-  (`BlockStates::sound`), rebuilt in `ServerLevel::destroy_effect`, not the client's own
-  `addDestroyBlockEffect` burst; a belt's casing, an encased pipe's, a bracket and the belt slicer's cut show
-  none yet. `BlockStates::state_id` (or a 2001 call taking a `BlockState`) would make them exact.
+- **A state's numeric id**, for `level_event(2001, ..)`: a wrenched copycat, an encased shaft's or cog's
+  casing, a belt's casing, an encased pipe's and chute's casing, a bracket taken off and the belt slicer's cut
+  show the state's block particles (`LevelRef::send_particles`) and its break sound (`BlockStates::sound`),
+  rebuilt in `ServerLevel::destroy_effect`, not the client's own `addDestroyBlockEffect` burst.
+  `BlockStates::state_id` (or a 2001 call taking a `BlockState`) would make them exact.
 - **The neighbour-shape update of a state placed by code** (`updateShape` against its neighbours): mirrored
   placements of the wand of symmetry skip it.
 - **`OnBlockPlacedByEvent` without a level**: decor's fix-ups after a placement with no placer are skipped.
@@ -129,10 +129,21 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A native mod's damage types**: Create's `data/create/damage_type/*.json` (`crush`, `mechanical_saw`,
   `fan_fire`...) shipped with the mod are not registered (`EntityRef::hurt` with `create:crush` is refused; with
   the files shipped, `/damage` parses `create:crush` but the health code's damage table answers "invulnerable"),
-  so crushing wheels hurt with vanilla's `cramming`, which also goes through armour, saws and drills with
-  `generic`, and fans with `lava` (blasting) and `in_fire` (smoking).
+  so crushing wheels hurt with vanilla's `cramming`, which also goes through armour, saws and drills (standing
+  or moving, with moving rollers) and a train running a mob over (`run_over`) with `generic`, and fans with
+  `lava` (blasting) and `in_fire` (smoking).
+- **A portal's destination** (`Portal.getPortalDestination`: vanilla's `PortalForcer` finding the matching
+  nether portal in the other dimension, or building one): Create links a track run into a nether portal to a
+  track out of the portal it leads to (`AllPortalTracks.fromPortal`, `PortalTrackProvider`) and trains cross
+  between dimensions on it (`Carriage`'s portal entry, `TRAIN_PORTAL`). No API finds or makes the exit portal
+  (no POI search, no portal forcer), so the port has no portal tracks and `train_portal` is never given.
+  `LevelRef::portal_destination(self, &mut dyn ServerHost, portal: [i32; 3], axis) -> Option<(LevelRef,
+  [i32; 3])>` (the exit portal block, made if missing as an entity's travel would) would close the API half;
+  the port's railway would then need its graph to span levels.
 - **Moving colliders**: players cannot stand on, or be pushed by, bearings' and pistons' structures, trains or
-  minecart contraptions (`notes/moving-structures-note.md`).
+  minecart contraptions (`notes/moving-structures-note.md`). A train still hurts and throws a grounded entity its
+  blocks meet (`handleDamageFromTrain`, the glue's own overlap test, `glue/trains/actors.rs`), but the entity
+  is not stopped by the carriage. `LevelRef::set_moving_colliders` (the audit's E6 proposal) would close it.
 - **Mod entity types that are not template copies**, rideable by players: Create's seat entity and carriage seats
   are stood in by tagged item display entities; riding a moving structure's seats on bearings and pistons and
   clicking its blocks are out (contraption controls on a gliding structure are the exception: the client
@@ -272,8 +283,8 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Moving a playing sound** (a tickable `SoundInstance`'s `getX/Y/Z`, read each tick): turning machinery's
   ambient hum and cog clicks (`SoundScapes`, `ContinuousSound`) follow the mean of their blocks in Create; a
   `SoundRef` can change its volume (`fade`) but not its position, so they play at the listener with the volume
-  their distance gives them, from no side (`glue/sources/ambience.rs`). A `SoundRef::move_to(position)` would
-  close it.
+  their distance gives them, from no side (`glue/sources/ambience.rs`); a train's horn plays where the train was
+  when it started (`glue/trains/horn.rs`). A `SoundRef::move_to(position)` would close it.
 - **Light at a position on the client**: the steam jets (`SteamJetParticle`) are drawn as Create's four
   turned quads through the glue's world pipeline, but a pipeline is unlit and the client has no light read
   (`LevelRef::brightness` is the server's), so a jet is full bright where Create's takes the light at its

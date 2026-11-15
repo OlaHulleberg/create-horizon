@@ -28,7 +28,15 @@
 //!   (`CarriageCouplingRenderer`).
 //! - `station_draw`: a station's flag, its marker on the track and its assembly track
 //!   (`StationRenderer`).
+//! - `actors`: the drills, saws, harvesters, ploughs, rollers, deployers and contacts a
+//!   carriage carries, working where it is each tick and stalling their train.
+//! - `horn`: the driver's horn through the train's first steam whistle (`TrainHUD`, `HonkPacket`).
 //! - `doors`: carriages' sliding doors opening at stations by their door control.
+//!
+//! Trains meeting on the track crash and derail (`Train.collideWithOtherTrains`, `crash`), standing
+//! where they met until the wrench puts them back; a train hurts the grounded mobs it meets
+//! (`handleDamageFromTrain`). Portal tracks are left out (`HORIZON_API.md`: a portal's
+//! destination).
 //! - `cargo`: what carriages' storage blocks hold, and portable storage interfaces on slow
 //!   carriages connecting to the stationary ones at a station.
 //!
@@ -47,6 +55,7 @@
 //!   neither walks, jumps nor sneaks), as Create's `setDown(false)` does; `input_key` can't
 //!   consume a key, so a key bound to something else still does it.
 
+pub mod actors;
 pub mod assembly;
 mod cargo;
 mod carriage_draw;
@@ -58,6 +67,7 @@ mod controls;
 mod coupling_draw;
 mod doors;
 pub(crate) mod gui;
+mod horn;
 mod railway;
 mod relocate;
 mod riding;

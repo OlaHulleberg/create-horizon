@@ -331,6 +331,7 @@ pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
     super::super::persist::mark_unsaved(dim, [t.column.0, t.column.1]);
     super::super::persist::mark_pos_unsaved(dim, pos);
     super::controls::disassembled(lv, t.id);
+    super::actors::disassembled(lv, t.id);
     super::riding::train_gone(lv, t.id);
     send_train_clear(lv, t.id);
     true

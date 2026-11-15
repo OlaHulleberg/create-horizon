@@ -61,6 +61,7 @@ impl Subsystem for Trains {
         super::station_draw::forget();
         super::carriage_draw::forget();
         visuals::forget();
+        super::actors::forget();
         riding::forget();
     }
 
@@ -144,6 +145,7 @@ impl Subsystem for Trains {
         // The controls drive before the trains move; their HUD hears of the move after.
         super::controls::before_trains(lv);
         tick_trains(lv);
+        super::actors::tick(lv);
         super::cargo::tick_interfaces(lv);
         super::carriage_draw::tick(lv);
         if lv.game_time() % 4 == 0 {
@@ -482,6 +484,7 @@ fn tick_trains(lv: &mut ServerLevel<'_>) {
     });
     let mut events = EVENTS.take();
     let mut observed = Vec::new();
+    let mut crashes = Vec::new();
     let (due, fresh, lights) = with_world(|w| {
         let d = &mut w.dims[dim];
         d.railway.ensure(&d.track_curves);
@@ -499,6 +502,7 @@ fn tick_trains(lv: &mut ServerLevel<'_>) {
         for p in after.iter().filter(|p| !before.contains(p)) {
             d.analog_checks.push(*p);
         }
+        crashes = std::mem::take(&mut d.railway.crashes);
         let lights = std::mem::take(&mut d.railway.lights_changed);
         d.analog_checks
             .extend(lights.iter().filter(|l| l.1.is_some()).map(|l| l.0));
@@ -547,6 +551,47 @@ fn tick_trains(lv: &mut ServerLevel<'_>) {
         send_trains(lv, &due, false);
     }
     tracks::lights_changed(lv, &lights);
+    for c in crashes {
+        crashed(lv, &c);
+    }
+}
+
+/// `Train.collideWithOtherTrains` and `crash` after two trains met: a blast that breaks nothing
+/// where they met when they came together faster than 0.2 blocks a tick (`explode`, `NONE`,
+/// `min(3 × speed, 5)`); each train's seated players but its drivers get `TRAIN_CRASH`, a
+/// driver driving backwards `TRAIN_CRASH_BACKWARDS`. Their clients see them stop.
+fn crashed(lv: &mut ServerLevel<'_>, c: &create_engine::trains::Crash) {
+    if c.combined_speed > 0.2 {
+        let radius = (3.0 * c.combined_speed).min(5.0) as f32;
+        let _ = lv.level.explode(
+            &mut *lv.host,
+            None,
+            c.at,
+            radius,
+            false,
+            mod_api::ExplosionInteraction::None,
+            mod_api::ExplosionSettings::default(),
+        );
+    }
+    for (k, &train) in c.trains.iter().enumerate() {
+        let drivers = super::controls::drivers(lv.dim, train);
+        for (_, _, rider) in riding::riders_of(lv.dim, train) {
+            if drivers.contains(&rider) {
+                continue;
+            }
+            if let Some(p) = lv.host.player(rider) {
+                crate::glue::advancements::award(&mut *lv.host, p, "train_crash");
+            }
+        }
+        if c.backwards[k] {
+            for d in drivers {
+                if let Some(p) = lv.host.player(d) {
+                    crate::glue::advancements::award(&mut *lv.host, p, "train_crash_backwards");
+                }
+            }
+        }
+    }
+    send_trains(lv, &c.trains, false);
 }
 
 /// What the schedules' conditions about to be looked at read of the world (`Probes`): the
