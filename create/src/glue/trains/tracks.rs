@@ -460,7 +460,7 @@ pub fn sync(lv: &mut ServerLevel<'_>) {
             Some(Block::Track) => set_curves(lv, pos),
             Some(Block::TrackSignal) => {
                 let red = with_world(|w| w.dims[dim].railway.lights.get(&pos).copied()).flatten();
-                set_light(lv, pos, red.unwrap_or(false));
+                set_light(lv, pos, red.unwrap_or(0));
             }
             _ => {}
         }
@@ -484,17 +484,22 @@ fn set_curves(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let _ = entity.merge_data(&mut *lv.host, data);
 }
 
+/// Whether a signal's data shows an invalid signal's blink.
+pub fn blinking(nbt: &Compound) -> bool {
+    matches!(nbt.get(&LIGHT.into()), Some(Tag::Byte(l)) if *l as u8 == create_engine::trains::LIGHT_BLINK)
+}
+
 /// A signal's light into its block entity's data.
-fn set_light(lv: &mut ServerLevel<'_>, pos: [i32; 3], red: bool) {
+fn set_light(lv: &mut ServerLevel<'_>, pos: [i32; 3], light: u8) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
-    let data = Compound::from([(LIGHT.into(), Tag::Byte(i8::from(red)))]);
+    let data = Compound::from([(LIGHT.into(), Tag::Byte(light as i8))]);
     let _ = entity.merge_data(&mut *lv.host, data);
 }
 
 /// Signal lights that changed in the railway's tick (None: the signal is gone).
-pub fn lights_changed(lv: &mut ServerLevel<'_>, lights: &[([i32; 3], Option<bool>)]) {
+pub fn lights_changed(lv: &mut ServerLevel<'_>, lights: &[([i32; 3], Option<u8>)]) {
     for &(pos, red) in lights {
         if let Some(red) = red {
             set_light(lv, pos, red);
@@ -641,15 +646,27 @@ impl BlockEntityPart for TrackEntity {
             return;
         }
         let nbt = &event.entity.nbt;
-        if let Some(Tag::Byte(red)) = nbt.get(&LIGHT.into()) {
-            // `SignalRenderer`: Create's `indicator_on` partial while red, `indicator_off` else.
-            let name = if *red != 0 {
+        if let Some(Tag::Byte(light)) = nbt.get(&LIGHT.into()) {
+            // `SignalRenderer`: Create's `indicator_on` partial, full bright, while red (and an
+            // invalid signal's blink, the first 3 ticks of every 40); `indicator_off` else.
+            let light = *light as u8;
+            let blink = light == create_engine::trains::LIGHT_BLINK;
+            let on = light == create_engine::trains::LIGHT_RED
+                || (blink && event.draw.animation_time().rem_euclid(40.0) < 3.0);
+            let name = if on {
                 "part_signal_indicator_on"
             } else {
                 "part_signal_indicator_off"
             };
             if let Some(b) = states::partial(name) {
+                let lit = event.draw.light();
+                if on {
+                    event.draw.set_light(0x00F0_00F0);
+                }
                 event.draw.block(b, &[("facing", "up")]);
+                event.draw.set_light(lit);
+            }
+            if !blink {
                 event.draw.keep();
             }
             return;

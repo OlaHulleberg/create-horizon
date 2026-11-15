@@ -227,15 +227,17 @@ impl Subsystem for Trains {
         super::carriage_draw::render_level_stage(host, event);
     }
 
-    /// A station's flag moving is drawn every frame.
+    /// A station's flag moving and an invalid signal's blink (`SignalRenderer`) are drawn every
+    /// frame.
     fn animated(
         &self,
         block: create_engine::Block,
         pos: [i32; 3],
         entity: &mod_api::ModBlockEntity,
     ) -> bool {
-        block == create_engine::Block::TrackStation
-            && super::station_draw::animating(pos, &entity.nbt)
+        (block == create_engine::Block::TrackStation
+            && super::station_draw::animating(pos, &entity.nbt))
+            || (block == create_engine::Block::TrackSignal && super::tracks::blinking(&entity.nbt))
     }
 
     fn client_reset(&self) {
