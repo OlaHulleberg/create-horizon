@@ -80,6 +80,12 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
     for pos in ladders {
         super::ladders::check(lv, pos);
     }
+    let mut cloths = with(dim, |d| std::mem::take(&mut d.cloth_checks));
+    cloths.sort_unstable();
+    cloths.dedup();
+    for pos in cloths {
+        super::cloth::check(lv, pos);
+    }
     let mut shown = with(dim, |d| std::mem::take(&mut d.shown));
     shown.sort_unstable();
     shown.dedup();

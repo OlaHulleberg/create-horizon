@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/metal_girder/segment_top",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/metal_girder/segment_top",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/metal_girder/segment_top"
+    },
+    "facing=west": {
+      "model": "create:block/metal_girder/segment_top",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/metal_girder/segment_top",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/metal_girder/segment_top",
+      "x": 270
+    }
+  }
+}

@@ -29,9 +29,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **`isSolid` (legacy solidity) of a declared shape**: a declared block keeps its template's `isSolid`
   (`BlockBehaviour.calculateSolid` is not run on the declared shapes), so a sign, banner or torch on a wall
   (`WallSignBlock.canSurvive`) drops off a block on the heavy core's template, however full its shape.
-  Packagers and the redstone requester moved to a solid template (they need no waterlogging); frogports
-  and postboxes, waterlogged on the heavy core, still drop a sign put on them. Computing `isSolid` from the
-  declared collision shape (or a `solid` declaration field) would close it.
+  Packagers and the redstone requester moved to a solid template (they need no waterlogging), frogports
+  and postboxes to waxed copper grate's (solid and waterloggable, letting light through), so signs stay on
+  all of them as in Create; a block needing waterlogging, a solid face and the template of another class
+  has no such choice. Computing `isSolid` from the declared collision shape (or a `solid` declaration
+  field) would close it.
 - **Block-state facts:** `isRedstoneConductor` and `isSolidRender` (cart assemblers, stock links, schematic
   export approximate them by "full collision cube"); `requiresCorrectToolForDrops` / `isCorrectToolForDrops`
   (deployers dig every block at its harvestable speed); the weathering-copper class and age; a block's class
@@ -170,8 +172,8 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   network's turning parts flash red, and a recovered one's green (`KineticEffectHandler.overStressedEffect`);
   `BlockEntityDrawContext::block` draws a model in its own tints, and `terrain_model`'s tint reaches only
   quads with a tint index. The smoke and cloud that go with the flash are played. The display link's bulb
-  flash (`LinkBulbRenderer`: its glow model drawn additively in a fading grey) is left out for the same
-  want (and of an additive render type). A station's assembly track (`StationRenderer`: blue where a
+  flash (`LinkBulbRenderer`) draws its tube full bright in the translucent layer, but not the glow model
+  drawn additively in a fading grey over it, for the same want (and of an additive render type). A station's assembly track (`StationRenderer`: blue where a
   bogey may go, green where one is) is drawn in the overlay model's own colours for the same reason.
 - **A train station's signal and observer overlays' facing** is not an API gap but not kept: the port keeps
   no `TrackTargetingBehaviour.targetDirection`, so signals' and observers' track markers are not drawn
@@ -268,6 +270,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - Decor: table cloths hold no items and run no shops (`TableClothBlockEntity`); copycats have no placement
   helpers and do not take their material's sound, friction or light; girders have no placement helper; an item
   hatch's filter compares item ids, not a filter item's list or attributes.
+- Equipment: a haunted bell's soul pulse showing where mobs may spawn (`HauntedBellPulser`, `SoulPulseEffect`)
+  and the soul particles and sounds after it rings.
+- Trains: a track's paving with an off-hand block other than metal girders (`TrackPaver`: slabs, full
+  blocks and walls under a placement; girder curves pave and pay as Create's).
 
 ## Not to send
 

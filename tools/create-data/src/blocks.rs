@@ -1644,11 +1644,14 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
         ));
     }
     // FrogportBlock (`SharedProperties::softMetal`, netherite's sounds): no properties of its
-    // own, so heavy core's waterlogging carries AllShapes.PACKAGE_PORT. Its packages, filter and
-    // chain are the native mod's.
+    // own, so a waterloggable template carries AllShapes.PACKAGE_PORT. Waxed copper grate's: a
+    // full block's legacy solidity (`isSolid`, which a declared block keeps from its template),
+    // as Create's shape gives (its bounds average over 0.73 of a block), so a wall sign, banner
+    // or torch stays on it; no occlusion, so light passes. Its packages, filter and chain are
+    // the native mod's.
     if n == "package_frogport" {
         return Some(declared(
-            "minecraft:heavy_core",
+            "minecraft:waxed_copper_grate",
             "minecraft:netherite_block",
             true,
             Some(by_property(
@@ -1656,7 +1659,8 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
                 bools,
                 &[[0., 0., 0., 16., 4., 16.], [2., 2., 2., 14., 14., 14.]],
             )),
-            own(&[("waterlogged", bools)]),
+            // `waterlogged` is the template's own.
+            own(&[]),
             true,
         ));
     }
@@ -1678,18 +1682,15 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
         ));
     }
     // PostboxBlock (`SharedProperties::wooden`): facing, `open` (its menu is open), waterlogged;
-    // AllShapes.POSTBOX (the same box turned any way).
+    // AllShapes.POSTBOX (the same box turned any way), solid as the frogport (its bounds
+    // average 0.875 of a block), on the same template.
     if dyed(n, "postbox").is_some() {
         return Some(declared(
-            "minecraft:heavy_core",
+            "minecraft:waxed_copper_grate",
             "minecraft:stripped_spruce_wood",
             false,
             Some(by_horizontal(&[[2., 0., 0., 14., 14., 16.]])),
-            own(&[
-                ("facing", horizontal),
-                ("open", bools),
-                ("waterlogged", bools),
-            ]),
+            own(&[("facing", horizontal), ("open", bools)]),
             true,
         ));
     }
@@ -2123,11 +2124,7 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
                 [2., 4., 0., 14., 11., 5.8],
                 [2., 6., 0., 14., 9., 7.8],
             ])),
-            own(&[
-                ("facing", horizontal),
-                ("open", bools),
-                ("waterlogged", bools),
-            ]),
+            own(&[("facing", horizontal), ("open", bools)]),
             true,
         ));
     }
@@ -2445,7 +2442,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 177] = [
+pub const PARTIALS: [(&str, &str, &str); 201] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -3272,6 +3269,112 @@ pub const PARTIALS: [(&str, &str, &str); 177] = [
         "create:block/contraption_controls/indicator_4",
         "south",
     ),
+    // DeskBellRenderer's plunger and bell (`DESK_BELL_PLUNGER`, `DESK_BELL_BELL`), as written
+    // for a bell facing up.
+    (
+        "part_desk_bell_plunger",
+        "create:block/desk_bell/plunger",
+        "up",
+    ),
+    ("part_desk_bell_bell", "create:block/desk_bell/bell", "up"),
+    // PostboxRenderer's flag (`POSTBOX_FLAG`), as written for a postbox facing south.
+    (
+        "part_postbox_flag",
+        "create:block/package_postbox/flag",
+        "up",
+    ),
+    // PackagerRenderer's trays and hatches (`PACKAGER_TRAY_*`, `PACKAGER_HATCH_*`).
+    ("part_packager_tray", "create:block/packager/tray", "up"),
+    ("part_repackager_tray", "create:block/repackager/tray", "up"),
+    (
+        "part_packager_hatch_open",
+        "create:block/packager/hatch_open",
+        "up",
+    ),
+    (
+        "part_packager_hatch_closed",
+        "create:block/packager/hatch_closed",
+        "up",
+    ),
+    // PulleyRenderer's rope and magnet halves (`ROPE_HALF`, `ROPE_HALF_MAGNET`) and
+    // ElevatorPulleyRenderer's magnet and belt (`ELEVATOR_MAGNET`, `ELEVATOR_BELT*`).
+    ("part_rope_half", "create:block/rope_pulley/rope_half", "up"),
+    (
+        "part_rope_half_magnet",
+        "create:block/rope_pulley/rope_half_magnet",
+        "up",
+    ),
+    (
+        "part_elevator_magnet",
+        "create:block/elevator_pulley/pulley_magnet",
+        "up",
+    ),
+    (
+        "part_elevator_belt",
+        "create:block/elevator_pulley/rope",
+        "up",
+    ),
+    (
+        "part_elevator_belt_half",
+        "create:block/elevator_pulley/rope_half",
+        "up",
+    ),
+    // LinkBulbRenderer's tube (`DISPLAY_LINK_TUBE`), as written for a link facing up.
+    (
+        "part_display_link_tube",
+        "create:block/display_link/tube",
+        "up",
+    ),
+    // ControlsRenderer's cover and levers (`TRAIN_CONTROLS_*`), as written facing north.
+    (
+        "part_train_controls_cover",
+        "create:block/controls/train/cover",
+        "up",
+    ),
+    (
+        "part_train_controls_lever",
+        "create:block/controls/train/lever",
+        "up",
+    ),
+    // BellRenderer's bodies (`PECULIAR_BELL`, `HAUNTED_BELL`), as written for a bell facing
+    // south on the floor.
+    ("part_peculiar_bell", "create:block/peculiar_bell", "up"),
+    ("part_haunted_bell", "create:block/haunted_bell", "up"),
+    // StandardBogeyRenderer's shafts (`AllBlocks.SHAFT`, as written along y), drawn on
+    // displays, which take no shaft's `axis`.
+    ("part_shaft", "create:block/shaft", "up"),
+    // StandardBogeyVisual's large bogey: its belt, pistons and wheel pins.
+    (
+        "part_bogey_drive_belt",
+        "create:block/track/bogey/bogey_drive_belt",
+        "up",
+    ),
+    (
+        "part_bogey_piston",
+        "create:block/track/bogey/bogey_drive_piston",
+        "up",
+    ),
+    (
+        "part_bogey_pin",
+        "create:block/track/bogey/bogey_drive_wheel_pin",
+        "up",
+    ),
+    // TrackRenderer.renderGirder's beams and caps (`GIRDER_SEGMENT_*`), as the rails'.
+    (
+        "part_girder_segment_top",
+        "create:block/metal_girder/segment_top",
+        "south",
+    ),
+    (
+        "part_girder_segment_middle",
+        "create:block/metal_girder/segment_middle",
+        "south",
+    ),
+    (
+        "part_girder_segment_bottom",
+        "create:block/metal_girder/segment_bottom",
+        "south",
+    ),
 ];
 
 /// The unit-cube models of `part_fluid_*`: every face the fluid's still texture, water's
@@ -3424,6 +3527,74 @@ pub const WHEEL_WOODS: [(&str, &str, &str); 12] = [
 /// `WaterWheelRenderer`'s models in each wood (`generateModel`: the oak planks, log and log top
 /// sprites swapped for the wood's): partials named `part_<wheel>_<wood>`, each a model that takes
 /// Create's wheel and gives it the wood's textures. Each points up, as Create's wheel models do.
+/// The table cloths' kinds (`AllBlocks.TABLE_CLOTHS` and the three metal ones).
+pub const TABLE_CLOTHS: [&str; 19] = [
+    "white",
+    "orange",
+    "magenta",
+    "light_blue",
+    "yellow",
+    "lime",
+    "pink",
+    "gray",
+    "light_gray",
+    "cyan",
+    "purple",
+    "blue",
+    "brown",
+    "green",
+    "red",
+    "black",
+    "andesite",
+    "brass",
+    "copper",
+];
+
+/// `TableClothModel`'s corners (`AllPartialModels.TABLE_CLOTH_*`, drawn in the cloth's own
+/// sprite) as one hidden block per cloth, `part_table_cloth_<kind>`: the corner a side's
+/// quads carry by facing (south: south west, west: north west, north: north east, east: south
+/// east; up and down unused). Each corner model is Create's, by id, with the cloth's texture.
+/// Returns `(block, blockstate, [(model file under models/block, model)])`.
+pub fn cloth_partials() -> Vec<(String, Value, Vec<(String, Value)>)> {
+    let corners = [
+        ("south", "south_west"),
+        ("west", "north_west"),
+        ("north", "north_east"),
+        ("east", "south_east"),
+        ("up", "south_west"),
+        ("down", "south_west"),
+    ];
+    TABLE_CLOTHS
+        .iter()
+        .map(|kind| {
+            let texture = format!("create:block/table_cloth/{kind}");
+            let mut variants = Map::new();
+            let mut models = Vec::new();
+            for (facing, corner) in corners {
+                let file = format!("horizon_table_cloth_{kind}_{corner}");
+                variants.insert(
+                    format!("facing={facing}"),
+                    json!({ "model": format!("create:block/{file}") }),
+                );
+                if !models.iter().any(|(f, _)| *f == file) {
+                    models.push((
+                        file,
+                        json!({
+                            "parent": format!("create:block/table_cloth/{corner}"),
+                            "textures": { "0": texture, "particle": texture }
+                        }),
+                    ));
+                }
+            }
+            (
+                format!("part_table_cloth_{kind}"),
+                json!({ "variants": variants }),
+                models,
+            )
+        })
+        .collect()
+}
+
 pub fn wheel_partials() -> Vec<(String, String, Value)> {
     let wheels = [
         ("water_wheel", "create:block/water_wheel/wheel"),
@@ -3486,11 +3657,21 @@ fn rotation(from: &str, to: &str) -> (i32, i32) {
     }
 }
 
+/// Partials drawn in the translucent layer.
+const TRANSLUCENT_PARTIALS: [&str; 1] = ["create:block/display_link/tube"];
+
 /// A partial's declaration and blockstate: one state per facing, the model turned to it as a
 /// blockstate variant turns a model.
 pub fn partial_files(model: &str, points: &str) -> (Value, Value) {
+    // A partial Create draws translucent (`LinkBulbRenderer`'s tube) takes a translucent
+    // template: a block entity draws a block's model in its block's layer.
+    let template = if TRANSLUCENT_PARTIALS.contains(&model) {
+        "minecraft:white_stained_glass"
+    } else {
+        "minecraft:stone"
+    };
     let decl = json!({
-        "template": "minecraft:stone",
+        "template": template,
         "item": false,
         "properties": { "render_shape": "INVISIBLE" },
         "state_properties": {
@@ -4184,18 +4365,12 @@ mod tests {
             states_and_default(&doc),
             (8, pairs(&[("facing", "north"), ("waterlogged", "false")]))
         );
-        // PostboxBlock: facing, open, waterlogged.
+        // PostboxBlock: facing and open of its own; waterlogged is its solid template's.
         let doc = declare("lime_postbox", (2.0, 2.0, 64));
+        assert_eq!(doc["template"], "minecraft:waxed_copper_grate");
         assert_eq!(
             states_and_default(&doc),
-            (
-                16,
-                pairs(&[
-                    ("facing", "north"),
-                    ("open", "false"),
-                    ("waterlogged", "false")
-                ])
-            )
+            (8, pairs(&[("facing", "north"), ("open", "false")]))
         );
         // NixieTubeBlock: floor by default, light 5; only the orange one has an item.
         let doc = declare("nixie_tube", (3.0, 6.0, 64));

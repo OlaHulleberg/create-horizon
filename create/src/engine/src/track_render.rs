@@ -88,6 +88,10 @@ pub enum Piece {
     Tie,
     RailLeft,
     RailRight,
+    /// A girder curve's beams (`GIRDER_SEGMENT_MIDDLE`) and their caps (`_TOP`, `_BOTTOM`).
+    GirderMiddle,
+    GirderTop,
+    GirderBottom,
 }
 
 /// A matrix product `a · b` in f64.
@@ -211,6 +215,72 @@ pub fn segment_parts(curve: &Curve, origin: [i32; 3]) -> Vec<(Piece, Mat4)> {
                 .translate([0.0, below, -1.0 / 32.0])
                 .scale_z(f64::from((length(diff) * stretch) as f32));
             out.push((piece, rail.into_mat()));
+        }
+    }
+    out
+}
+
+/// `GirderAngles` for `curve` relative to `origin` (as `segment_parts`): for segments
+/// 1..=segments, each side's beam between its top and bottom and the beam's caps, 8 and 18 px
+/// under the rails' level, a little past each rail, stretched over the step (2.3 at the ends,
+/// 2.2 between) and nudged up or down by a hair on alternate segments.
+pub fn girder_parts(curve: &Curve, origin: [i32; 3]) -> Vec<(Piece, Mat4)> {
+    let offset = [
+        -f64::from(origin[0]),
+        -f64::from(origin[1]) + f64::from(3.0f32 / 16.0),
+        -f64::from(origin[2]),
+    ];
+    let end1 = add(curve.starts[0], offset);
+    let end2 = add(curve.starts[1], offset);
+    let finish1 = add(scale(normalize(curve.axes[0]), curve.handle_length), end1);
+    let finish2 = add(scale(normalize(curve.axes[1]), curve.handle_length), end2);
+    let [fn1, fn2] = curve.normals;
+    let segments = curve.segments;
+    let mut out = Vec::with_capacity(segments * 6);
+    // Per side (left, right): top and bottom.
+    let mut previous: Option<[[Vec3; 2]; 2]> = None;
+    for i in 0..=segments {
+        let t = f64::from(curve.segment_t(i));
+        let position = bezier(end1, end2, finish1, finish2, t);
+        let derivative = normalize(bezier_derivative(end1, end2, finish1, finish2, t));
+        let face = if fn1 == fn2 {
+            fn1
+        } else {
+            let theta = dot(fn1, fn2).clamp(-1.0, 1.0).acos();
+            let a = scale(fn1, f64::from(((1.0 - t) as f32).sin()) * theta);
+            let b = scale(fn2, f64::from(((theta * t) as f32).sin()));
+            scale(add(a, b), 1.0 / f64::from((theta as f32).sin()))
+        };
+        let normal = normalize(cross(face, derivative));
+        let up = cross(derivative, normal);
+        let first = scale(up, -8.0 / 16.0);
+        let second = scale(up, -10.0 / 16.0);
+        let left_top = add(add(position, normal), first);
+        let right_top = add(sub(position, normal), first);
+        let offsets = [
+            [left_top, add(left_top, second)],
+            [right_top, add(right_top, second)],
+        ];
+        let Some(prev) = previous.replace(offsets) else {
+            continue;
+        };
+        let end = i == 0 || i == segments;
+        let stretch = if end { 2.3 } else { 2.2 };
+        let nudge = 2.0 / 16.0 + if i % 2 == 0 { 1.0 } else { -1.0 } / 2048.0 - 1.0 / 1024.0;
+        let piece = |from: Vec3, to: Vec3| {
+            let diff = sub(to, from);
+            Pose(identity())
+                .translate(from)
+                .angles(model_angles(normal, diff))
+                .translate([0.0, nudge, -1.0 / 32.0])
+                .scale_z(f64::from((length(diff) * stretch) as f32))
+                .into_mat()
+        };
+        for side in 0..2 {
+            let mid = |o: &[[Vec3; 2]; 2]| scale(add(o[side][0], o[side][1]), 0.5);
+            out.push((Piece::GirderMiddle, piece(mid(&prev), mid(&offsets))));
+            out.push((Piece::GirderTop, piece(prev[side][0], offsets[side][0])));
+            out.push((Piece::GirderBottom, piece(prev[side][1], offsets[side][1])));
         }
     }
     out

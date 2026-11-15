@@ -50,6 +50,8 @@ pub struct Port<P> {
     pub failed_export: bool,
     /// `passiveYaw`.
     pub yaw: f32,
+    /// `FrogportBlockEntity.goggles`: a frogport wearing goggles.
+    pub goggles: bool,
 }
 
 impl<P> Port<P> {
@@ -66,6 +68,7 @@ impl<P> Port<P> {
             animated: None,
             failed_export: false,
             yaw: 0.0,
+            goggles: false,
         }
     }
 

@@ -1795,10 +1795,20 @@ pub enum SignalState {
     Invalid,
 }
 
+/// A signal block's light (`SignalState.light`).
+pub const LIGHT_DARK: u8 = 0;
+pub const LIGHT_RED: u8 = 1;
+pub const LIGHT_BLINK: u8 = 2;
+
 impl SignalState {
-    /// `isRedLight` (an invalid signal's short blink is left out: it is drawn dark).
-    pub fn red_light(self) -> bool {
-        self == SignalState::Red
+    /// What `isRedLight` draws: red (`LIGHT_RED`), the short blink of an invalid signal every
+    /// two seconds (`LIGHT_BLINK`, drawn by clients on their clock), or dark.
+    pub fn light(self) -> u8 {
+        match self {
+            SignalState::Red => LIGHT_RED,
+            SignalState::Invalid => LIGHT_BLINK,
+            _ => LIGHT_DARK,
+        }
     }
 }
 
@@ -1868,8 +1878,8 @@ pub struct Railway {
     /// were last told (red or not); `lights_changed` holds the blocks to tell them of (None: the
     /// signal is gone).
     pub states: Vec<[SignalState; 2]>,
-    pub lights: HashMap<[i32; 3], bool>,
-    pub lights_changed: Vec<([i32; 3], Option<bool>)>,
+    pub lights: HashMap<[i32; 3], u8>,
+    pub lights_changed: Vec<([i32; 3], Option<u8>)>,
     /// Track observers as the world has them, the observers each train stands over as of its
     /// last move (`occupiedObservers`), and the observers whose `powered` must change.
     pub observers: HashMap<[i32; 3], ObserverBlock>,
@@ -2278,7 +2288,7 @@ impl Railway {
                 };
                 self.states[b][side] = state;
                 for &p in &boundary.blocks[side] {
-                    let red = state.red_light();
+                    let red = state.light();
                     if self.lights.insert(p, red) != Some(red) {
                         self.lights_changed.push((p, Some(red)));
                     }
@@ -2797,6 +2807,7 @@ mod tests {
             starts: [[3.0, 64.0, 0.5], [10.5, 64.0, 8.0]],
             axes: [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0]],
             normals: [UP, UP],
+            girder: false,
         });
         c
     }
@@ -3416,7 +3427,7 @@ mod tests {
         let station = r.station_index([280, 64, 1]).unwrap();
         let mut events = Vec::new();
         r.tick(&mut events);
-        assert_eq!(r.lights.get(&[100, 64, 1]), Some(&false), "green: dark");
+        assert_eq!(r.lights.get(&[100, 64, 1]), Some(&LIGHT_DARK), "green: dark");
         let free = search_from(&r, a, station).unwrap();
         // Powered: red, and a search weighs it as Create does (`REDSTONE_RED_SIGNAL`).
         r.add_signal([100, 64, 1], SignalType::Entry, true);
@@ -3424,7 +3435,7 @@ mod tests {
         assert_eq!(red.cost - free.cost, f64::from(REDSTONE_RED_SIGNAL));
         r.lights_changed.clear();
         r.tick(&mut events);
-        assert_eq!(r.lights_changed, [([100, 64, 1], Some(true))]);
+        assert_eq!(r.lights_changed, [([100, 64, 1], Some(LIGHT_RED))]);
         assert!(r.navigate(a, &[station]));
         for _ in 0..1500 {
             r.tick(&mut events);
@@ -3438,7 +3449,7 @@ mod tests {
         r.lights_changed.clear();
         r.add_signal([100, 64, 1], SignalType::Entry, false);
         r.tick(&mut events);
-        assert_eq!(r.lights_changed, [([100, 64, 1], Some(false))]);
+        assert_eq!(r.lights_changed, [([100, 64, 1], Some(LIGHT_DARK))]);
         for _ in 0..1500 {
             r.tick(&mut events);
             if events.iter().any(|e| e.run == Run::Arrived) {
@@ -3458,14 +3469,14 @@ mod tests {
         r.ensure(&curves);
         let mut events = Vec::new();
         r.tick(&mut events);
-        assert_eq!(r.lights_changed, [([10, 64, 1], Some(false))]);
+        assert_eq!(r.lights_changed, [([10, 64, 1], Some(LIGHT_DARK))]);
         r.lights_changed.clear();
         assert!(r.idle(&curves), "then nothing per tick");
         r.add_signal([10, 64, 1], SignalType::Entry, true);
         assert!(!r.idle(&curves));
         r.ensure(&curves);
         r.tick(&mut events);
-        assert_eq!(r.lights_changed, [([10, 64, 1], Some(true))]);
+        assert_eq!(r.lights_changed, [([10, 64, 1], Some(LIGHT_RED))]);
         r.lights_changed.clear();
         r.remove([10, 64, 1]);
         assert_eq!(
@@ -3501,11 +3512,11 @@ mod tests {
                 "{kind:?}: waits before x = {waits_at}: {front:?}"
             );
             assert!(
-                r.lights[&[150, 64, 1]],
+                r.lights[&[150, 64, 1]] == LIGHT_RED,
                 "the section beyond 150 is held: red"
             );
             if kind == SignalType::Cross {
-                assert!(r.lights[&[100, 64, 1]], "its chain is held: red");
+                assert!(r.lights[&[100, 64, 1]] == LIGHT_RED, "its chain is held: red");
             }
             // The other train leaves: it goes on.
             r.trains.remove(b);

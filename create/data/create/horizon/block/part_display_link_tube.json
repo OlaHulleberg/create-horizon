@@ -1,0 +1,23 @@
+{
+  "template": "minecraft:white_stained_glass",
+  "item": false,
+  "properties": {
+    "render_shape": "INVISIBLE"
+  },
+  "state_properties": {
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "east",
+        "south",
+        "west",
+        "up",
+        "down"
+      ]
+    }
+  },
+  "default_state": {
+    "facing": "north"
+  }
+}

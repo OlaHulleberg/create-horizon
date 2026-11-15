@@ -28,9 +28,11 @@
 //!   name its id's path in capitalised words); clients draw the boards' flap characters in their own.
 //! - The display boards' text alpha (`.85`, `.975` when glowing): a block entity's text is
 //!   drawn opaque.
-//! - The link's bulb flashing as it sends (`LinkBulbRenderer`): its glow is a block model drawn
-//!   additively in a fading colour, and a block entity's model is drawn in its own tints.
+//! - The glow over the link's bulb as it sends (`LinkBulbRenderer`, `bulb` draws its tube): a
+//!   block model drawn additively in a fading colour, and a block entity's model is drawn in its
+//!   own tints.
 
+mod bulb;
 pub(crate) mod carried;
 pub mod client;
 pub(crate) mod clipboard;
@@ -78,6 +80,15 @@ impl Subsystem for Display {
         client::register(r);
         clipboard::register(r, cx);
         link_item::register(r);
+        if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, bulb::BulbDraw)
+        {
+            crate::create_log!("[create] the display link's bulb part was refused: {e:?}");
+        }
+    }
+
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[bulb::PULSE]
     }
 
     fn world_closed(&self) {
@@ -87,7 +98,8 @@ impl Subsystem for Display {
 
     /// A display board's flaps turning are drawn each frame (`client`).
     fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
-        block == Block::DisplayBoard && client::animated(pos, entity)
+        (block == Block::DisplayBoard && client::animated(pos, entity))
+            || (block == Block::DisplayLink && bulb::animated(pos, entity))
     }
 
     fn right_click_block(
@@ -252,6 +264,7 @@ impl Subsystem for Display {
 
     fn client_reset(&self) {
         client::reset();
+        bulb::forget();
         clipboard::reset();
         contact_screen::reset();
         link_screen::reset();
@@ -1106,6 +1119,8 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if started {
         mark(lv, pos);
     }
+    // `sendPulseNextSync` after the transfer.
+    bulb::pulse(lv, pos);
     match target {
         Target::Nixie => {
             let text = display::provide_text(source, &config, &line, target);

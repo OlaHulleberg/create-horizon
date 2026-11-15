@@ -146,6 +146,17 @@ fn compile(create: &Path, repo: &Path) {
         write(&decl_dir.join(format!("block/{name}.json")), &pretty(&decl));
         write(&states_dir.join(format!("{name}.json")), &pretty(&states));
     }
+    for (name, states, models) in blocks::cloth_partials() {
+        let (decl, _) = blocks::partial_files("", "up");
+        write(&decl_dir.join(format!("block/{name}.json")), &pretty(&decl));
+        write(&states_dir.join(format!("{name}.json")), &pretty(&states));
+        for (file, model) in models {
+            write(
+                &out.join(format!("assets/create/models/block/{file}.json")),
+                &pretty(&model),
+            );
+        }
+    }
     write(
         &states_dir.join("blaze_burner.json"),
         &pretty(&blocks::blaze_burner_states()),

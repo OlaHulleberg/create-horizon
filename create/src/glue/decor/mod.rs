@@ -1,6 +1,6 @@
 //! Create's decorative and simple blocks: girders and their encased shafts, brackets on shafts,
-//! cogs and pipes, the large water wheel's frame, placards, the desk bell and the peculiar bell's
-//! haunting, the creative crate, the item hatch, clipboards, table cloths and cardboard, the
+//! cogs and pipes, the large water wheel's frame, placards, the desk bell (`bell`), the peculiar
+//! and haunted bells ringing and their haunting (`bells`), the creative crate, the item hatch, clipboards, table cloths (their corners, `cloth`) and cardboard, the
 //! vertical gearbox and empty blaze burner items, and Create's copper shingles and tiles
 //! weathering, scraped and waxed. The rules are `create_engine::decor`'s.
 //!
@@ -30,9 +30,12 @@
 //! - A placard shows a 3D item at half size (`PlacardRenderer`: `isGui3d`): no API reads an
 //!   item model's `gui3d`, so an item that places a block stands for it.
 
+mod bell;
+mod bells;
 mod brackets;
 mod carried;
 mod clicks;
+mod cloth;
 mod copper;
 mod crates;
 mod doors;
@@ -96,6 +99,8 @@ struct Dim {
     /// Metal ladders whose neighbour changed: whether anything still holds them.
     ladder_checks: Vec<[i32; 3]>,
     bell_checks: Vec<[i32; 3]>,
+    /// Table cloths placed or whose neighbour changed: which sides are culled.
+    cloth_checks: Vec<[i32; 3]>,
     /// Blocks whose bracket or placard item clients must see again.
     shown: Vec<[i32; 3]>,
 }
@@ -273,7 +278,12 @@ pub struct Decor;
 
 impl Subsystem for Decor {
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[BRACKET]
+        &[BRACKET, bell::DING, cloth::CULL, bells::RINGING]
+    }
+
+    fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+        (block == Block::DeskBell && bell::animated(pos, entity))
+            || (bells::is_bell(block) && bells::animated(pos, entity))
     }
 
     fn carry_out(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], b: Block, out: &mut Compound) {
@@ -315,14 +325,33 @@ impl Subsystem for Decor {
         copper::register(r);
         scaffolding::register(r);
         ladders::register(r);
+        if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, bell::BellDraw)
+        {
+            crate::create_log!("[create] the desk bell's drawing part was refused: {e:?}");
+        }
+        if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, cloth::ClothDraw)
+        {
+            crate::create_log!("[create] the table cloths' drawing part was refused: {e:?}");
+        }
+        if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, bells::BellDraw)
+        {
+            crate::create_log!("[create] the bells' drawing part was refused: {e:?}");
+        }
+        bells::register(r);
     }
 
     fn world_closed(&self) {
         DECOR.with_borrow_mut(HashMap::clear);
+        bells::forget();
     }
 
     fn client_reset(&self) {
         doors::forget();
+        bell::forget();
+        bells::client_forget();
     }
 
     /// A Create block changed: ours are looked at after the level's tick. Shafts, cogs and pipes
@@ -334,6 +363,17 @@ impl Subsystem for Decor {
             && DECOR.with_borrow(|d| d.get(&dim).is_some_and(|d| d.brackets.contains_key(&pos)));
         if mine(o) || mine(n) || bracket {
             with(dim, |d| d.changes.push((pos, old, new)));
+        }
+        if n.is_some_and(cloth::is_cloth) {
+            with(dim, |d| d.cloth_checks.push(pos));
+        }
+        if let Some((b, info)) = block_of(new)
+            && bells::is_bell(b)
+        {
+            let was = block_of(old)
+                .filter(|(o, _)| *o == b)
+                .map(|(_, i)| i.powered);
+            bells::changed(dim, pos, was, info.powered);
         }
     }
 
@@ -348,6 +388,7 @@ impl Subsystem for Decor {
             Some(b) if scaffolding::BLOCKS.contains(&b) => {
                 with(dim, |d| d.scaffold_checks.push(pos))
             }
+            Some(b) if cloth::is_cloth(b) => with(dim, |d| d.cloth_checks.push(pos)),
             _ if ladders::is_ladder(state) => with(dim, |d| d.ladder_checks.push(pos)),
             _ => {}
         }
@@ -375,6 +416,7 @@ impl Subsystem for Decor {
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         tick::tick(lv);
+        bells::tick(lv);
     }
 
     fn left_click_block(&self, host: &mut dyn ServerHost, event: &mut LeftClickBlockEvent) -> Flow {

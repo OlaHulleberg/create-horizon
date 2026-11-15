@@ -28,6 +28,7 @@
 //!   legacy glue.
 
 pub mod body;
+mod box_draw;
 mod frog_draw;
 mod frog_target;
 mod inv;
@@ -189,7 +190,7 @@ impl Subsystem for Packages {
     /// drawing is otherwise kept, and drawn anew only when its data changes).
     fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
         if block != Block::ChainConveyor {
-            return false;
+            return box_draw::animated(block, pos, entity);
         }
         let carrying = matches!(
             super::kinetics::synced(&entity.nbt, CARRYING),
@@ -207,6 +208,11 @@ impl Subsystem for Packages {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         for &b in Block::ALL.iter().filter(|&&b| is_packager(b) || is_port(b)) {
             r.block_part(states::key(b), PackageBlock);
+        }
+        if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, box_draw::BoxDraw)
+        {
+            crate::create_log!("[create] the packagers' drawing part was refused: {e:?}");
         }
         if let Some(kind) = super::kinetics::kind()
             && let Err(e) = r.block_entity_part(&kind, frog_draw::FrogDraw)
@@ -295,12 +301,19 @@ impl Subsystem for Packages {
     }
 
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[CHAINS, CARRYING, frog_draw::FROG]
+        &[
+            CHAINS,
+            CARRYING,
+            frog_draw::FROG,
+            box_draw::TRAY,
+            box_draw::FLAG,
+        ]
     }
 
     fn world_closed(&self) {
         frog_target::reset_server();
         frog_draw::reset();
+        box_draw::reset();
         PACKAGES.with_borrow_mut(|p| *p = None);
         CHANGES.with_borrow_mut(Vec::clear);
         GONE.with_borrow_mut(Vec::clear);
@@ -506,6 +519,7 @@ impl Subsystem for Packages {
         SHOWN.with_borrow_mut(HashMap::clear);
         CLEARED.with_borrow_mut(Vec::clear);
         SYNCED.set(false);
+        box_draw::client_reset();
     }
 
     /// Our debug commands, standing in for the clipboard (`address`; signs are read), the frogport
@@ -624,6 +638,8 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     let mut touched = with(dim, |pk| std::mem::take(&mut pk.changed));
     let now = now(lv);
     if with(dim, |pk| pk.is_idle()) && GONE.with_borrow(Vec::is_empty) {
+        frog_draw::sync(lv);
+        box_draw::sync(lv);
         analog_touched(lv, &touched);
         mark_unsaved(dim, &[]);
         return;
@@ -687,6 +703,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     // Frogports placed with a chain point, now known; what clients draw of frogports.
     frog_target::level_tick(lv);
     frog_draw::sync(lv);
+    box_draw::sync(lv);
     touched.extend(with(dim, |pk| std::mem::take(&mut pk.changed)));
     analog_touched(lv, &touched);
     mark_unsaved(dim, &changed);
@@ -1041,6 +1058,7 @@ fn unwrap(
             drop_stack(lv, center(pos), left.stack);
         }
     }
+    box_draw::unwrapped(dim, pos, body::item_id(&*lv.host, stack));
     with(dim, |pk| {
         pk.packager(pos).unwrapped();
         pk.activate(pos);
@@ -1075,6 +1093,7 @@ fn unwrap_whole(
     if let Some(left) = inv::insert(lv, dim, &inv, parcel(stack.clone())) {
         drop_stack(lv, center(pos), left.stack);
     }
+    box_draw::unwrapped(dim, pos, body::item_id(&*lv.host, stack));
     with(dim, |pk| {
         pk.packager(pos).unwrapped();
         pk.activate(pos);
@@ -1587,6 +1606,9 @@ pub(crate) fn use_port(
     }
     let dimension = click.dimension.key().id().to_owned();
     let mut lv = ServerLevel::new(host, &dimension)?;
+    if frog_draw::put_on_goggles(&mut lv, click) {
+        return Some(InteractionResult::Success);
+    }
     if port_clipboard(&mut lv, player, click.pos) {
         return Some(InteractionResult::Success);
     }
@@ -2421,7 +2443,11 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                 ("Pos", pos_tag(*p)),
                 (
                     "Frog",
-                    Tag::IntArray(vec![i32::from(port.frog), i32::from(port.accepts)]),
+                    Tag::IntArray(vec![
+                        i32::from(port.frog),
+                        i32::from(port.accepts),
+                        i32::from(port.goggles),
+                    ]),
                 ),
                 ("AddressFilter", Tag::String(port.filter.as_str().into())),
                 ("Inventory", Tag::List(items)),
@@ -2638,6 +2664,7 @@ fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
             let frog = f.first().is_some_and(|v| *v != 0);
             let port = pk.port(pos, frog);
             port.accepts = f.get(1).is_none_or(|v| *v != 0);
+            port.goggles = f.get(2).is_some_and(|v| *v != 0);
             port.filter = text(c.get(&"AddressFilter".into()));
             if let Some(Tag::List(items)) = c.get(&"Inventory".into()) {
                 for t in items {

@@ -27,6 +27,10 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 /// The key in the anchor's block entity data under which its structure is.
 pub const KEY: &str = "Contraption";
+/// A rope or elevator pulley's offset at rest, in its block entity's data: a rope pulley's
+/// rope length, an elevator's -1 once it came apart (`ElevatorPulleyBlockEntity.disassemble`);
+/// none for one never run (0).
+pub const PULLEY_REST: &str = "PulleyRest";
 
 const TURN: i32 = 0;
 const GLIDE: i32 = 1;
@@ -48,6 +52,7 @@ impl Subsystem for Drawing {
     fn synced_keys(&self) -> &'static [&'static str] {
         &[
             KEY,
+            PULLEY_REST,
             super::LAST_EXCEPTION,
             actor_draw::ACTORS,
             actor_draw::PSI,
@@ -273,6 +278,14 @@ fn write(lv: &mut ServerLevel<'_>, anchor: [i32; 3], c: Option<Compound>) {
         }
     }
     let _ = entity.replace_data(&mut *lv.host, data);
+}
+
+/// The pulley at `pos` came to rest `offset` blocks out (see `PULLEY_REST`).
+pub(super) fn set_pulley_rest(lv: &mut ServerLevel<'_>, pos: [i32; 3], offset: i32) {
+    if let Some(entity) = lv.host.block_entity(lv.level, pos) {
+        let data = Compound::from([(PULLEY_REST.into(), Tag::Int(offset))]);
+        let _ = entity.merge_data(&mut *lv.host, data);
+    }
 }
 
 /// The anchor at `anchor` draws nothing (its structure stopped or came apart).
@@ -1051,6 +1064,7 @@ fn submit(
     pos: [i32; 3],
     data: &Compound,
     draw: &mut dyn BlockEntityDrawContext,
+    elevator_turn: Option<f32>,
 ) {
     let Some(Tag::Compound(c)) = data.get(&KEY.into()).filter(|_| holds_structure(data)) else {
         SHOWN.with_borrow_mut(|s| s.remove(&pos));
@@ -1195,9 +1209,9 @@ fn submit(
                 draw.translate(shift);
                 draw_blocks(host, draw, pos, blocks, frame.as_ref());
                 draw.pop();
-                // Rope: whole blocks between the pulley and its magnet.
+                // The magnet and rope down to it.
                 if *rope {
-                    draw_rope(host, draw, at);
+                    draw_hanging(host, draw, None, at, true);
                 }
             }
             Shape::Elevator {
@@ -1222,6 +1236,9 @@ fn submit(
                 draw.translate(origin);
                 draw_blocks(host, draw, pos, blocks, frame.as_ref());
                 draw.pop();
+                // The magnet a block over its anchor, and the belt up to the pulley.
+                let offset = (f64::from(pos[1]) - y - 1.0) as f32;
+                draw_hanging(host, draw, elevator_turn.or(Some(180.0)), offset, true);
             }
         }
     });
@@ -1348,24 +1365,127 @@ pub fn use_key(
 }
 
 thread_local! {
-    static ROPE: RefCell<Option<Option<BlockKey>>> = const { RefCell::new(None) };
+    static HANGING: RefCell<Option<[Option<BlockKey>; 2]>> = const { RefCell::new(None) };
 }
 
-/// Rope from under the pulley down to its magnet, `offset` blocks down (`ceil - 1` whole
-/// blocks).
-fn draw_rope(host: &dyn ClientHost, draw: &mut dyn BlockEntityDrawContext, offset: f32) {
-    let Some(rope) = ROPE.with_borrow_mut(|r| {
-        *r.get_or_insert_with(|| host.block_state_id("create:rope").map(|s| s.block()))
-    }) else {
-        return;
-    };
-    let n = (offset.ceil() as i32 - 1).max(0);
-    for i in 1..=n {
+/// `AbstractPulleyRenderer.renderSafe` (a rope pulley's: `turn` none) and
+/// `ElevatorPulleyRenderer.renderSafe` (an elevator's, turned `turn` degrees about up): the
+/// magnet (or its half near the pulley) `offset` blocks down while running or at 0, the rope's
+/// (or belt's) half under the pulley, and while running the rope down to the magnet.
+fn draw_hanging(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    turn: Option<f32>,
+    offset: f32,
+    running: bool,
+) {
+    let [rope, magnet] = HANGING.with_borrow_mut(|h| {
+        *h.get_or_insert_with(|| {
+            ["create:rope", "create:pulley_magnet"]
+                .map(|b| host.block_state_id(b).map(|s| s.block()))
+        })
+    });
+    let at = |draw: &mut dyn BlockEntityDrawContext, key: Option<BlockKey>, down: f32| {
+        let Some(key) = key else {
+            return;
+        };
+        // The rope and magnet blocks have no facing; the partials are drawn as written.
+        let props: &[(&str, &str)] = if Some(key) == rope || Some(key) == magnet {
+            &[]
+        } else {
+            &[("facing", "up")]
+        };
         draw.push();
-        draw.translate([0.0, -(i as f32), 0.0]);
-        draw.block(rope, &[]);
+        draw.translate([0.0, -down, 0.0]);
+        if let Some(a) = turn {
+            draw.rotate_about([0.0, 1.0, 0.0], a, [0.5; 3]);
+        }
+        draw.block(key, props);
         draw.pop();
+    };
+    let part = states::partial;
+    let f = offset % 1.0;
+    let nudge = if f > 0.75 { f - 1.0 } else { f };
+    match turn {
+        None => {
+            if running || offset == 0.0 {
+                let m = if offset > 0.25 {
+                    magnet
+                } else {
+                    part("part_rope_half_magnet")
+                };
+                at(draw, m, offset);
+            }
+            if offset > 0.75 && !(0.25..=0.75).contains(&f) {
+                at(draw, part("part_rope_half"), nudge);
+            }
+            if running {
+                let mut i = 0;
+                while (i as f32) < offset - 1.25 && i < 512 {
+                    at(draw, rope, offset - i as f32 - 1.0);
+                    i += 1;
+                }
+            }
+        }
+        Some(_) => {
+            if running || offset == 0.0 {
+                at(draw, part("part_elevator_magnet"), offset);
+            }
+            if offset == 0.0 {
+                return;
+            }
+            if !(0.25..=0.75).contains(&f) {
+                at(draw, part("part_elevator_belt_half"), nudge);
+            }
+            if running {
+                let mut i = 0;
+                while (i as f32) < offset - 0.25 && i < 512 {
+                    at(draw, part("part_elevator_belt"), offset - i as f32);
+                    i += 1;
+                }
+            }
+        }
     }
+}
+
+/// A rope or elevator pulley at rest draws what hangs from it (`PULLEY_REST`).
+fn draw_resting(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    let elevator = match event.block {
+        "create:rope_pulley" => false,
+        "create:elevator_pulley" => true,
+        _ => return,
+    };
+    let offset = match super::super::kinetics::synced(&event.entity.nbt, PULLEY_REST) {
+        Some(Tag::Int(v)) => *v as f32,
+        _ => 0.0,
+    };
+    let turn = elevator.then(|| facing_turn(host, event.state));
+    draw_hanging(host, event.draw, turn, offset, false);
+}
+
+/// An elevator pulley's turn by its state's facing.
+fn facing_turn(host: &dyn ClientHost, state: mod_api::BlockState) -> f32 {
+    let facing = host
+        .block_state_string(state)
+        .and_then(|t| {
+            let (_, props) = states::split(&t);
+            props
+                .iter()
+                .find(|(k, _)| *k == "facing")
+                .map(|(_, v)| match *v {
+                    "south" => Dir::South,
+                    "west" => Dir::West,
+                    "east" => Dir::East,
+                    _ => Dir::North,
+                })
+        })
+        .unwrap_or(Dir::North);
+    elevator_turn(facing)
+}
+
+/// `180 + AngleHelper.horizontalAngle(facing)`.
+pub(super) fn elevator_turn(facing: Dir) -> f32 {
+    180.0 + create_engine::decor::horizontal_angle(facing)
 }
 
 /// The part every Create block entity carries that draws a structure its block anchors.
@@ -1400,9 +1520,12 @@ impl BlockEntityPart for StructurePart {
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         if !holds_structure(&event.entity.nbt) && SHOWN.with_borrow(|s| !s.contains_key(&event.pos))
         {
+            draw_resting(host, event);
             return;
         }
-        submit(host, event.pos, &event.entity.nbt, event.draw);
+        let turn =
+            (event.block == "create:elevator_pulley").then(|| facing_turn(host, event.state));
+        submit(host, event.pos, &event.entity.nbt, event.draw, turn);
     }
 
     /// A structure is drawn wherever it moves to: never culled.
