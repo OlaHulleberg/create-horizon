@@ -2,8 +2,8 @@
 //! the station shows (its name, assembly mode, bogeys, last failure, and the train at or bound
 //! for it) and keeps a player's open screen up to date, as Create's screens read the block
 //! entity each tick; the client sends what is done on them (`StationEditPacket`,
-//! `TrainEditPacket`). Closing and sending wait for the next client tick (the screen hooks get
-//! a read-only client).
+//! `TrainEditPacket`). Closing and sending are done right after the key or click that asked for
+//! them (`Subsystem::input_handled`: the screen hooks get a read-only client).
 
 use super::super::net;
 use super::super::server::ServerLevel;

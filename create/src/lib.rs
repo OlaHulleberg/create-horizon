@@ -14,14 +14,13 @@ use mod_api::{
     EntityInteractEvent, EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks,
     HostSide, InputKeyEvent, InteractionKeyMappingTriggeredEvent, InteractionResult,
     KeyMappingPreEvent, LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent,
-    LevelTickPostEvent, LevelTicksHost, MenuClosedEvent, MouseButtonPreEvent, MouseScrollingEvent,
-    MovementInputEvent, NeighborChangedEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent,
-    PlayerLoggedInEvent, PlayerTickPostEvent, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
-    RunModCommandEvent, ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
-    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, StandaloneModelsEvent,
-    TagsUpdatedEvent, WorldLifecycleEvent, WorldPhase,
+    LevelTickPostEvent, LevelTicksHost, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent,
+    NeighborChangedEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerLoggedInEvent,
+    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
+    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
+    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
+    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost, StandaloneModelsEvent, TagsUpdatedEvent, WorldLifecycleEvent, WorldPhase,
 };
 
 #[derive(Default)]
@@ -357,6 +356,19 @@ impl Hooks for Create {
         for s in SUBSYSTEMS {
             s.input_key(host, event);
         }
+        for s in SUBSYSTEMS {
+            s.input_handled(host);
+        }
+    }
+
+    fn mouse_button_post(
+        &self,
+        host: &mut dyn ClientHost,
+        _event: &mut mod_api::MouseButtonPostEvent,
+    ) {
+        for s in SUBSYSTEMS {
+            s.input_handled(host);
+        }
     }
 
     fn camera_pose(&self, host: &dyn ClientHost, event: &mut CameraPoseEvent<'_>) {
@@ -367,10 +379,6 @@ impl Hooks for Create {
 
     fn mouse_scrolling(&self, host: &mut dyn ClientHost, event: &mut MouseScrollingEvent) -> Flow {
         until_cancel(|s| s.mouse_scrolling(host, event))
-    }
-
-    fn mouse_button_pre(&self, host: &mut dyn ClientHost, event: &mut MouseButtonPreEvent) -> Flow {
-        until_cancel(|s| s.mouse_button_pre(host, event))
     }
 
     fn interaction_key_mapping_triggered(

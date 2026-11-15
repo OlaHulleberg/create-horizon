@@ -215,12 +215,10 @@ impl Subsystem for Display {
         clipboard::screen_mouse_pressed(host, event)
     }
 
-    fn mouse_button_pre(
-        &self,
-        host: &mut dyn ClientHost,
-        event: &mut mod_api::MouseButtonPreEvent,
-    ) -> Flow {
-        clipboard::mouse_button_pre(host, event)
+    fn input_handled(&self, host: &mut dyn ClientHost) {
+        contact_screen::tick(host);
+        clipboard::tick(host);
+        link_screen::tick(host);
     }
 
     fn screen_mouse_released(

@@ -4,9 +4,9 @@
 //! engine's `clipboard::Editor` editing it. The pages are kept in `minecraft:custom_data` under
 //! Create's component name.
 //!
-//! Its close button closes it and sends the pages from the raw mouse press (`mouse_button_pre`,
-//! the one mouse hook given a client it may change). Closed otherwise (escape, another screen),
-//! the screen hooks are given a read-only client: the pages go at the next client tick.
+//! The screen hooks are given a read-only client: what they leave (closing the screen from its
+//! close button, the pages to send when it closes) is done right after the key or click that
+//! asked for it (`Subsystem::input_handled`), or at the next client tick.
 //!
 //! A placed clipboard (`ClipboardBlock`) is the decor port's block: it opens the screen with
 //! [`open`] and writes back the pages a client sends for its position.
@@ -472,32 +472,6 @@ pub(super) fn screen_mouse_pressed(
         return Flow::Continue;
     }
     mouse(host, event.screen.mouse, true, event.modifiers & 1 != 0);
-    Flow::Cancel
-}
-
-/// The close button (`ClipboardScreen`'s, `onClose`): the screen closes and its pages go to
-/// the server at once (`removed`), from the raw press, where the client may be changed.
-pub(super) fn mouse_button_pre(
-    host: &mut dyn ClientHost,
-    event: &mut mod_api::MouseButtonPreEvent,
-) -> Flow {
-    if !ours(&*host) || event.button != 0 || !event.pressed {
-        return Flow::Continue;
-    }
-    let at = host.cursor();
-    let on_close = OPEN.with_borrow(|o| {
-        o.as_ref().is_some_and(|open| {
-            let (left, top) = corner(open.size);
-            inside(buttons(left, top)[1], at)
-        })
-    });
-    if !on_close {
-        return Flow::Continue;
-    }
-    if let Some(open) = OPEN.with_borrow_mut(Option::take) {
-        send_edit(host, open);
-    }
-    host.mod_screen_close(MOD);
     Flow::Cancel
 }
 

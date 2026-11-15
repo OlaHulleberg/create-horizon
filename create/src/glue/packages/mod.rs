@@ -9,8 +9,8 @@
 //! The inventories a packager packs from and unpacks into, and a frogport's below it, are any
 //! block's `ITEMS` capability through the face toward it (`inv`).
 //!
-//! Conveyors draw their wheel, shaft, guards and chains (`ChainConveyorRenderer`; a chain's
-//! scrolling is left out: vanilla's chain model is drawn a block at a time) and are joined with
+//! Conveyors draw their wheel, shaft, guards and chains (`ChainConveyorRenderer`; a turning
+//! conveyor's chains scroll a pixel at a time, through pre-shifted chain models) and are joined with
 //! chains (`ChainConveyorConnectionHandler`, the first conveyor kept on the server). A frogport is
 //! aimed at a chain point with its item (`frog_target`) and draws its body, head, tongue and
 //! catch (`frog_draw`).
@@ -196,7 +196,11 @@ impl Subsystem for Packages {
             super::kinetics::synced(&entity.nbt, CARRYING),
             Some(Tag::Byte(b)) if *b != 0
         );
+        // A turning conveyor's chains scroll (`renderChain`'s `animation`).
+        let turning = super::kinetics::speeds_of(&entity.nbt)[0] != 0.0
+            && matches!(entity.nbt.get(&CHAINS.into()), Some(Tag::IntArray(v)) if v.len() > 1);
         carrying
+            || turning
             || SHOWN.with_borrow(|s| s.contains_key(&pos))
             || CLEARED.with_borrow_mut(|c| {
                 let was = c.contains(&pos);
@@ -230,6 +234,7 @@ impl Subsystem for Packages {
 
     fn standalone_models(&self, models: &mut Vec<String>) {
         models.extend(CONVEYOR_MODELS.iter().map(|m| (*m).to_owned()));
+        models.extend((1..16).map(|k| format!("create:block/chain_conveyor/chain_{k}")));
         models.extend(RIGGING_MODELS.iter().map(|m| (*m).to_owned()));
         models.extend(frog_draw::models());
     }
@@ -2136,7 +2141,13 @@ fn conveyor_model(
             Some(m)
         });
         let Some(m) = model else { return };
-        match draw.terrain_model(m, mod_api::TerrainModelOptions::default()) {
+        // Vanilla's chain model names no render type (its block's layer is cutout): drawn
+        // cut out, as `RenderTypes.chain`.
+        let mut options = mod_api::TerrainModelOptions::default();
+        if file.ends_with("iron_chain") || file.contains("chain_conveyor/chain_") {
+            options.material = mod_api::TerrainMaterial::Cutout;
+        }
+        match draw.terrain_model(m, options) {
             Ok(()) => return,
             Err(mod_api::TerrainModelError::Model(_)) if !fresh => continue,
             Err(_) => return,
@@ -2187,6 +2198,14 @@ fn draw_conveyor(
     nbt: &Compound,
 ) {
     let speed = super::kinetics::speeds_of(nbt)[0];
+    // `renderChains`: the chains' scroll, a full texture per `360 / |speed|` ticks.
+    let time = if speed == 0.0 {
+        0.0
+    } else {
+        ((draw.game_time() as f64 + f64::from(draw.partial())) / (360.0 / f64::from(speed.abs())))
+            .rem_euclid(1.0)
+    };
+    let animation = time - 0.5;
     conveyor_model(draw, host, CONVEYOR_MODELS[0]);
     draw.spin([0.0, 1.0, 0.0], [0.5; 3], speed * 0.3, 0.0);
     conveyor_model(draw, host, CONVEYOR_MODELS[2]);
@@ -2225,17 +2244,31 @@ fn draw_conveyor(
         draw.rotate_about([0.0, 1.0, 0.0], yaw, [0.0; 3]);
         draw.rotate_about([1.0, 0.0, 0.0], 90.0 - pitch, [0.0; 3]);
         draw.rotate_about([0.0, 1.0, 0.0], 45.0, [0.0; 3]);
-        draw_chain(draw, host, stats.length);
+        draw_chain(draw, host, stats.length, animation);
         draw.pop();
     }
 }
 
 /// `renderChain`: the chain's sprite in two crossed planes `length` long up the pose's y,
 /// each block of it vanilla's chain model (`renderPart`'s quads, the same columns of the
-/// sprite). Its scrolling with the conveyor's speed (`minV` from `animation`) is left out: a
-/// block entity's model sprite can't wrap (`TerrainUvShift` doesn't); a textured world pipeline
-/// wraps one, but only as world quads drawn from a world-draw hook, outside this pose.
-fn draw_chain(draw: &mut dyn mod_api::BlockEntityDrawContext, host: &dyn ClientHost, length: f32) {
+/// sprite), its texture scrolled by `animation` (`minV`), to the pixel: the models
+/// `chain_conveyor/chain_<k>` that `create-data prepare` makes are the chain shifted `k` pixels.
+fn draw_chain(
+    draw: &mut dyn mod_api::BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    length: f32,
+    animation: f64,
+) {
+    // The top of every whole block of chain starts at `minV` plus the part of a block past
+    // the last whole one (`maxV = length + minV` at the bottom).
+    let phase = (animation + f64::from(length).fract()).rem_euclid(1.0);
+    let k = ((phase * 16.0) as usize) % 16;
+
+    let model = if k == 0 {
+        None
+    } else {
+        CHAIN_MODELS.get(k - 1).copied()
+    };
     let mut y = 0.0f32;
     while y < length {
         let piece = (length - y).min(1.0);
@@ -2244,11 +2277,30 @@ fn draw_chain(draw: &mut dyn mod_api::BlockEntityDrawContext, host: &dyn ClientH
         if piece < 1.0 {
             draw.scale([1.0, piece, 1.0]);
         }
-        conveyor_model(draw, host, CONVEYOR_MODELS[3]);
+        conveyor_model(draw, host, model.unwrap_or(CONVEYOR_MODELS[3]));
         draw.pop();
         y += 1.0;
     }
 }
+
+/// The chain scrolled 1 to 15 pixels (made by `create-data prepare`).
+const CHAIN_MODELS: [&str; 15] = [
+    "create:block/chain_conveyor/chain_1",
+    "create:block/chain_conveyor/chain_2",
+    "create:block/chain_conveyor/chain_3",
+    "create:block/chain_conveyor/chain_4",
+    "create:block/chain_conveyor/chain_5",
+    "create:block/chain_conveyor/chain_6",
+    "create:block/chain_conveyor/chain_7",
+    "create:block/chain_conveyor/chain_8",
+    "create:block/chain_conveyor/chain_9",
+    "create:block/chain_conveyor/chain_10",
+    "create:block/chain_conveyor/chain_11",
+    "create:block/chain_conveyor/chain_12",
+    "create:block/chain_conveyor/chain_13",
+    "create:block/chain_conveyor/chain_14",
+    "create:block/chain_conveyor/chain_15",
+];
 
 /// The frogport's item: used in the air on a chain point, it chooses it
 /// (`ChainConveyorInteractionHandler.onUse`).

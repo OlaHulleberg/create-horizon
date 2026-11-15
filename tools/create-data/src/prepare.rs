@@ -574,6 +574,54 @@ fn particle_behaviour(path: &str) -> Option<Value> {
     }
 }
 
+/// Vanilla's `template_chain` with `minecraft:block/iron_chain`, its texture scrolled `k` pixels
+/// down: the plane's top part shows the texture from `k` on, the bottom part its first `k` rows.
+fn scrolled_chain(k: u32) -> Value {
+    let k = f64::from(k);
+    let rotation = json!({ "origin": [8, 8, 8], "axis": "y", "angle": 45 });
+    let mut elements = Vec::new();
+    // (from, to, the face names, each face's u range)
+    let planes = [
+        (
+            [6.5, 8.0],
+            [9.5, 8.0],
+            ["north", "south"],
+            [[3.0, 0.0], [0.0, 3.0]],
+        ),
+        (
+            [8.0, 6.5],
+            [8.0, 9.5],
+            ["west", "east"],
+            [[6.0, 3.0], [3.0, 6.0]],
+        ),
+    ];
+    for (from, to, faces, us) in planes {
+        // (y from, y to, v from, v to), v running down from the face's top: the top part shows
+        // rows `k` to 16, the bottom part the wrapped rows 0 to `k`.
+        for (y0, y1, v0, v1) in [(k, 16.0, k, 16.0), (0.0, k, 0.0, k)] {
+            let mut f = Map::new();
+            for (name, u) in faces.iter().zip(us) {
+                f.insert(
+                    (*name).into(),
+                    json!({ "uv": [u[0], v0, u[1], v1], "texture": "#all" }),
+                );
+            }
+            elements.push(json!({
+                "from": [from[0], y0, from[1]],
+                "to": [to[0], y1, to[1]],
+                "rotation": rotation,
+                "shade_direction_override": "up",
+                "faces": f,
+            }));
+        }
+    }
+    json!({
+        "parent": "minecraft:block/block",
+        "textures": { "particle": "minecraft:block/iron_chain", "all": "minecraft:block/iron_chain" },
+        "elements": elements,
+    })
+}
+
 /// The fragment stage of the glue's textured world pipelines.
 const TEXTURED_SHADER: &str = "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
     return pipeline_texture(input.uv) * input.color;
@@ -715,6 +763,10 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
                     bytes,
                 )?;
             }
+            // The icon atlas (`AllIcons`), for the value boxes' frames and icons in the world.
+            if path == "assets/create/textures/gui/icons.png" {
+                put("assets/create/textures/block/special/gui_icons.png", bytes)?;
+            }
             if path == "assets/create/textures/entity/coupling.png" {
                 put("assets/create/textures/block/entity/coupling.png", bytes)?;
             }
@@ -797,6 +849,15 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         put(
             &format!("assets/create/items/{name}_bucket.json"),
             &serde_json::to_vec_pretty(&doc).unwrap(),
+        )?;
+    }
+    // The chain conveyor's chain scrolled a pixel at a time (`ChainConveyorRenderer.renderChain`'s
+    // `minV`): vanilla's chain model with its texture shifted down `k` pixels, each plane split
+    // where the texture wraps. Made here as it names vanilla's chain sprite by id.
+    for k in 1..16 {
+        put(
+            &format!("assets/create/models/block/chain_conveyor/chain_{k}.json"),
+            &serde_json::to_vec_pretty(&scrolled_chain(k)).unwrap(),
         )?;
     }
     // The glue's world pipelines' fragment shader (`create:textured`): the sampled sprite tinted

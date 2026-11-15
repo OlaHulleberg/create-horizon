@@ -16,9 +16,9 @@ use mod_api::{
     AttackEntityEvent, BreakBlockEvent, CameraPoseEvent, ClientHost, Compound, EntityInteractEvent,
     EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
     InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
-    LeftClickBlockEvent, LevelSaveEvent, MenuClosedEvent, MouseButtonPreEvent, MouseScrollingEvent,
-    MovementInputEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef,
-    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
+    LeftClickBlockEvent, LevelSaveEvent, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent,
+    PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef, PlayerTickPostEvent,
+    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
     ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
     ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
@@ -344,14 +344,10 @@ pub trait Subsystem: Sync {
         Flow::Continue
     }
 
-    /// `Hooks::mouse_button_pre`: a mouse button on any screen, with a mutable client.
-    fn mouse_button_pre(
-        &self,
-        _host: &mut dyn ClientHost,
-        _event: &mut MouseButtonPreEvent,
-    ) -> Flow {
-        Flow::Continue
-    }
+    /// After a key or mouse button was handled (`input_key`, `mouse_button_post`), with a
+    /// client that may be changed: what the read-only screen hooks left (a screen to close, edits
+    /// to send) goes now, in the same input as Create's, not at the next client tick.
+    fn input_handled(&self, _host: &mut dyn ClientHost) {}
 
     /// `Hooks::interaction_key_mapping_triggered`, on the client: `Flow::Cancel` when the
     /// click was taken.

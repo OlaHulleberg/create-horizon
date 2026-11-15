@@ -205,6 +205,11 @@ impl Subsystem for Trains {
         super::schedule_screen::tick_client(host);
     }
 
+    fn input_handled(&self, host: &mut dyn ClientHost) {
+        super::station_screen::tick_client(host);
+        super::schedule_screen::flush(host);
+    }
+
     /// A station's flag, marker and assembly track, a track's curves, and a signal's light and
     /// state (its indicator, and a nixie tube on it), for its clients.
     fn synced_keys(&self) -> &'static [&'static str] {

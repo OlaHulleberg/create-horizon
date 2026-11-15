@@ -17,15 +17,18 @@ pub enum Textured {
     Checkered,
     /// `AllSpecialTextures.GLUE`: super glue areas' faces.
     Glue,
+    /// `AllIcons.ICON_ATLAS` (`textures/gui/icons.png`): value boxes' frames and icons.
+    Icons,
 }
 
 impl Textured {
-    const ALL: [Textured; 2] = [Textured::Checkered, Textured::Glue];
+    const ALL: [Textured; 3] = [Textured::Checkered, Textured::Glue, Textured::Icons];
 
     fn id(self) -> &'static str {
         match self {
             Textured::Checkered => "create:checkered",
             Textured::Glue => "create:glue",
+            Textured::Icons => "create:icons",
         }
     }
 
@@ -33,6 +36,7 @@ impl Textured {
         match self {
             Textured::Checkered => "create:block/special/checkerboard",
             Textured::Glue => "create:block/special/glue",
+            Textured::Icons => "create:block/special/gui_icons",
         }
     }
 }

@@ -352,6 +352,11 @@ pub fn tick_client(host: &mut dyn ClientHost) {
             }
         }
     });
+    flush(host);
+}
+
+/// What the hooks left: closing and sending, and the schedule once the screen is gone.
+pub fn flush(host: &mut dyn ClientHost) {
     let (send, close) = LATER.with_borrow_mut(std::mem::take);
     if close {
         host.mod_screen_close(MOD);
