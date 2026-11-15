@@ -71,8 +71,9 @@ pub fn ingredient(v: &Value) -> Value {
             Value::Object(o)
         }
         Value::Object(o) if o.len() == 1 && o.get("item").is_some_and(Value::is_string) => {
-            o["item"].clone()
+            Value::String(renamed_item(o["item"].as_str().unwrap()).to_string())
         }
+        Value::String(s) if !s.starts_with('#') => Value::String(renamed_item(s).to_string()),
         Value::Object(o) if o.len() == 1 && o.get("tag").is_some_and(Value::is_string) => {
             Value::String(format!("#{}", o["tag"].as_str().unwrap()))
         }
@@ -93,6 +94,14 @@ fn renamed_tag(tag: &str) -> &str {
     match tag {
         "minecraft:convertable_to_mud" => "minecraft:convertible_to_mud",
         t => t,
+    }
+}
+
+/// A vanilla item Create's 1.21.1 data names by a name 26.3 changed (1.21.9 renamed the chain).
+fn renamed_item(item: &str) -> &str {
+    match item {
+        "minecraft:chain" => "minecraft:iron_chain",
+        i => i,
     }
 }
 
@@ -133,6 +142,21 @@ pub fn convert_recipe(mut doc: Value) -> Option<Value> {
         for v in list.iter_mut() {
             *v = ingredient(v);
         }
+    }
+    // A result names its item by `id` (crafting, cooking) or, in Create's 1.21.1 processing
+    // recipes, also by `item`.
+    let rename = |r: &mut Value| {
+        for key in ["id", "item"] {
+            if let Some(Value::String(i)) = r.get_mut(key) {
+                *i = renamed_item(i).to_string();
+            }
+        }
+    };
+    if let Some(r) = o.get_mut("result") {
+        rename(r);
+    }
+    if let Some(Value::Array(list)) = o.get_mut("results") {
+        list.iter_mut().for_each(rename);
     }
     // A sequenced assembly's steps are recipes of their own, nested.
     if let Some(Value::Array(steps)) = o.get_mut("sequence") {
@@ -833,6 +857,12 @@ mod tests {
             {"type": "neoforge:block_tag", "tag": "minecraft:convertable_to_mud"}]});
         let c = convert_recipe(m).unwrap();
         assert_eq!(c["ingredients"][0]["tag"], "minecraft:convertible_to_mud");
+        // 26.3's names for items 1.21.9 renamed, in results and ingredients alike.
+        let z = json!({"type": "minecraft:crafting_shaped", "key": {"N": {"item": "minecraft:chain"}},
+            "pattern": ["N"], "result": {"id": "minecraft:chain", "count": 1}});
+        let c = convert_recipe(z).unwrap();
+        assert_eq!(c["result"]["id"], "minecraft:iron_chain");
+        assert_eq!(c["key"]["N"], "minecraft:iron_chain");
     }
 
     #[test]
