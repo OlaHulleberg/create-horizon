@@ -157,6 +157,11 @@ impl Subsystem for Processing {
         let kind = r.block_entity_type_key(super::kinetics::TYPE);
         r.block_entity_capability_before_game(&mod_api::ITEMS, &kind, crafter::provide_items);
         client::register(r);
+        // Entity Part state is offered to native mods only.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = r.entity_part_with_state("minecraft:horse", fan::Haunted) {
+            crate::create_log!("[create] the haunted horse's progress is refused: {e:?}");
+        }
         for block in [Block::Basin, Block::MechanicalSaw, Block::Millstone] {
             r.block_part(super::states::key(block), Landing);
         }

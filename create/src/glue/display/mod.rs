@@ -25,7 +25,8 @@
 //! plain text, as Create's `getString()`.
 //!
 //! Left out, the API having no way to do it:
-//! - The scoreboard and death count sources: the API reads no scoreboard objectives.
+//! - The scoreboard and death count sources: the API reads scoreboard objectives only as
+//!   console text (`run_command_with_output`), with no typed read or write.
 //! - Text read on the server in the game's language: the server has no language of its own
 //!   to ask, so a display source's words and an item's name are Create's en_us text (an item's
 //!   name its id's path in capitalised words); clients draw the boards' flap characters in their own.
@@ -1823,11 +1824,13 @@ impl BlockPart for DisplayBlock {
             }
             _ => return None,
         };
-        let state = super::redstone::with_properties(
-            level,
-            event.state,
-            &[("facing", super::kinetics::dir_name(facing))],
-        )?;
+        let mut props = vec![("facing", super::kinetics::dir_name(facing))];
+        // FlapDisplayBlock: `WATERLOGGED` from the fluid where it goes.
+        if block == Block::DisplayBoard {
+            let water = super::logistics::placement::in_water(level, event);
+            props.push(("waterlogged", if water { "true" } else { "false" }));
+        }
+        let state = super::redstone::with_properties(level, event.state, &props)?;
         Some(Some(state))
     }
 }

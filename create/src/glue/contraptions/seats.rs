@@ -12,10 +12,10 @@
 //!
 //! `entity_inside` runs inside the entity's move, where its position, ground and motion can't
 //! be read: the entity is noted there and seated or turned at the end of the level's tick.
-//! Create's `setNoActionTime(20)` and `setOnGround(false)` for mobs on a turntable, and a
-//! leashed mob sitting in the player's place (`getLeashed`), have no writer. A seat bounces what
-//! won't sit on it (`bounce_restitution`); the halved fall damage (`SeatBlock.fallOn`) has no
-//! hook (`HORIZON_API.md`).
+//! A player clicking a free seat while leading a mob seats the mob instead (`getLeashed`). A
+//! seat bounces what won't sit on it (`bounce_restitution`) and halves the fall it breaks
+//! (`SeatBlock.fallOn`). Create's `setNoActionTime(20)` and `setOnGround(false)` for mobs on a
+//! turntable have no writer (`HORIZON_API.md`).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states::key;
@@ -27,8 +27,8 @@ use create_engine::dye::{self, DyeColor};
 use create_engine::{seat, turntable};
 use mod_api::{
     BlockPart, ClientHost, Compound, EntityInsideEvent, EntityJoinLevelEvent, EntityMountEvent,
-    EntityRef, Flow, InteractionResult, LevelRandomHost, Registrar, RegistrationContext,
-    ServerHost, Tag, UseItemOnEvent,
+    EntityRef, FallOnEvent, Flow, InteractionResult, LeashHolder, LevelRandomHost, Registrar,
+    RegistrationContext, ServerHost, Tag, UseItemOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -148,6 +148,22 @@ pub fn seated_mob(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<EntityRef> {
         .find(|r| kind_of(lv, *r) != "minecraft:player")
 }
 
+/// `SeatBlock.getLeashed`: a mob within 10 blocks of the player's box that the player holds on
+/// a leash and that may sit (`canBePickedUp`), which sits in the player's place.
+fn leashed(lv: &ServerLevel<'_>, player: EntityRef) -> Option<EntityRef> {
+    let host = &*lv.host;
+    let [min, max] = player.bounding_box(host)?;
+    let near = lv
+        .level
+        .entities_in(host, min.map(|v| v - 10.0), max.map(|v| v + 10.0))?;
+    near.into_iter().find(|e| {
+        e.id() != player.id()
+            && host.mob(*e).is_some()
+            && seat::can_sit(&kind_of(lv, *e))
+            && matches!(e.leash_holder(host), Some(LeashHolder::Entity(h)) if h.id() == player.id())
+    })
+}
+
 fn is_seat(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     lv.create_block(pos).is_some_and(dye::is_seat)
 }
@@ -257,7 +273,8 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let Some(seat) = SEATS.with_borrow(|s| s.get(&(dim, pos)).copied()) else {
-            sit_down(lv, pos, player);
+            let rider = leashed(lv, player).unwrap_or(player);
+            sit_down(lv, pos, rider);
             continue;
         };
         let riding = player.vehicle(&*lv.host).map(|v| v.id());
@@ -474,6 +491,13 @@ impl BlockPart for SeatPart {
         let taken = SEATS.with_borrow(|s| s.keys().any(|(_, p)| *p == pos));
         if !seat::can_sit(event.kind) || taken {
             event.factor = event.factor.max(0.66);
+        }
+    }
+
+    /// `SeatBlock.fallOn`: the fall counted at half its distance (the turntable's is whole).
+    fn fall_on(&self, _level: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
+        if event.state.block() != key(Block::Turntable) {
+            event.damage = seat::fall_damage(event.distance, event.damage);
         }
     }
 

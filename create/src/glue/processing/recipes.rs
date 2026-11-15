@@ -309,7 +309,7 @@ fn read_stonecutting(host: &dyn Host) -> Vec<Recipe> {
 
 /// `MechanicalMixerBlockEntity.matchStaticFilters`: shapeless crafting recipes of more than one
 /// ingredient that the press doesn't compress (`canCompress`: 4 or 9 of the same) mix in a
-/// basin too, after Create's own. The pinned build lists no crafting recipe yet (HORIZON_API.md).
+/// basin too, after Create's own.
 fn read_shapeless_mixing(host: &dyn Host) -> Vec<basin::Recipe> {
     let mut found = Vec::new();
     for r in crafting_of(host, "minecraft:crafting_shapeless").iter() {

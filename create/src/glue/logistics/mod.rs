@@ -59,7 +59,7 @@ mod flaps;
 pub(crate) mod funnel;
 mod handlers;
 pub(crate) mod items;
-mod placement;
+pub(crate) mod placement;
 mod slicer;
 pub(crate) mod tunnel;
 
@@ -550,16 +550,22 @@ pub fn block_step_on(event: &mut mod_api::BlockStepOnEvent<'_>) {
     if event.kind == "minecraft:item" {
         return;
     }
-    let belt = states::id(event.state)
-        .and_then(|id| with_world(|w| w.table.get(id).map(|(b, _)| b == Block::Belt)))
+    let block = states::id(event.state)
+        .and_then(|id| with_world(|w| w.table.get(id).map(|(b, _)| b)))
         .flatten();
-    if belt != Some(true) {
-        return;
-    }
     let Some(dim) = super::world::level_index(event.dimension) else {
         return;
     };
-    belt::stepped_on(dim, event.position, event.entity as u32);
+    match block {
+        Some(Block::Belt) => belt::stepped_on(dim, event.position, event.entity as u32),
+        // `EjectorBlock.updateEntityAfterFallOn`: a player's own client triggers it.
+        Some(Block::WeightedEjector)
+            if !matches!(event.kind, "minecraft:player" | "minecraft:experience_orb") =>
+        {
+            arms::ejector_stepped_on(dim, event.position, event.entity as u32)
+        }
+        _ => {}
+    }
 }
 
 pub fn info_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Block, StateInfo)> {

@@ -9,8 +9,9 @@
 //! the chain) and on sequenced gearshifts (`onWrenched`), and a horizontal gearbox picked as the
 //! vertical gearbox (`getCloneItemStack`).
 //!
-//! Left out for want of API: the break particles of a casing taken off (`levelEvent(2001)` needs
-//! a state's numeric id) and connected casing textures (`CTModel`), see `HORIZON_API.md`.
+//! A casing taken off shows its break particles and sound as `levelEvent(2001)` does (rebuilt
+//! from particles and the sound, `ServerLevel::destroy_effect`). Left out for want of API:
+//! connected casing textures (`CTModel`), see `HORIZON_API.md`.
 
 use super::items::{creative, sneaking};
 use super::server::{ServerLevel, update_all};
@@ -467,8 +468,9 @@ pub fn wrench_used(
         _ => return false,
     };
     if sneaking {
-        // EncasedShaftBlock / EncasedCogwheelBlock.onSneakWrenched: the casing comes off,
-        // nothing drops.
+        // EncasedShaftBlock / EncasedCogwheelBlock.onSneakWrenched: the casing comes off with
+        // the encased block's break particles, nothing drops.
+        lv.destroy_effect(pos, state);
         let water = if info.waterlogged { "true" } else { "false" };
         if let Some(next) = state_of(
             &*lv.host,

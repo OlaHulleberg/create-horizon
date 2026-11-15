@@ -94,6 +94,12 @@ impl Hooks for Create {
         world::level_index(event.dimension);
     }
 
+    fn server_tick(&self, _host: &mut dyn ServerHost, event: &mut mod_api::ServerTickEvent<'_>) {
+        if let mod_api::ServerTickPhase::ServerTickStart { world_running } = event.phase {
+            world::set_running(world_running);
+        }
+    }
+
     fn tags_updated(&self, host: HostSide, _event: &mut TagsUpdatedEvent) {
         let HostSide::Server(host) = host else {
             return;
@@ -160,8 +166,13 @@ impl Hooks for Create {
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
             return;
         };
+        // A frozen server ticks no block entity, so only what Create runs from its own level
+        // tick goes on (`CommonEvents.onServerWorldTick`: the railways).
+        let running = world::running();
         for s in SUBSYSTEMS {
-            s.level_tick(&mut lv);
+            if running || s.runs_frozen() {
+                s.level_tick(&mut lv);
+            }
         }
         persist::flush(&mut lv, SUBSYSTEMS);
     }

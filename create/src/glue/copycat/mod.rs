@@ -14,10 +14,6 @@
 //! - The material's light and friction (`CopycatBlock.getLightEmission`, `getFriction`): the
 //!   `light_emission` and `friction` parts could answer per copycat, but no API reads a state's
 //!   light emission or friction (`HORIZON_API.md`).
-//! - The wrench's break particles (`LevelEvent.PARTICLES_DESTROY_BLOCK` of the copycat's own
-//!   state, legacy `level_event_at(2001, pos, state)`): `LevelRef::level_event` takes the game's
-//!   numeric state id for 2001 and a `BlockState` has no way to give it. A `BlockState` to
-//!   `BlockStateId` lookup (or a 2001 call taking a `BlockState`) would close it.
 //! - `getAcceptedBlockState`'s class tests (`StairBlock`, `IronBarsBlock`, `TrapDoorBlock`,
 //!   legacy `behaviours().data(state).classes`): no API says which vanilla class a block is.
 //!   They are read from vanilla's tags (`minecraft:stairs`, `minecraft:trapdoors`) and, for bars,
@@ -25,7 +21,8 @@
 //!
 //! A copycat's block model is not drawn (`render_shape` `ENTITYBLOCK_ANIMATED` in its
 //! declaration): its block entity draws the material cut to its box, or the copycat base when it
-//! holds none. The wrench takes the material off, the item it consumed going back to the player
+//! holds none. The wrench takes the material off with its break particles and sound (rebuilt as
+//! `levelEvent(2001)` shows them, `ServerLevel::destroy_effect`), the item it consumed going back to the player
 //! outside creative (`onWrenched`), and a sneaking wrench does so before it picks the copycat up.
 
 mod body;

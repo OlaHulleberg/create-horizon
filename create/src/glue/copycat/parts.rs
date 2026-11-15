@@ -283,6 +283,10 @@ pub(super) fn wrench(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: PlayerRef)
         // `placeItemBackInInventory`: what doesn't fit drops at the player.
         let _ = player.give_stack(&mut *lv.host, item);
     }
+    // `levelEvent(PARTICLES_DESTROY_BLOCK, pos, Block.getId(ufte.getBlockState()))`.
+    if let Some(state) = lv.block_state(pos) {
+        lv.destroy_effect(pos, state);
+    }
     shown(dim, pos);
     persist::mark_pos_unsaved(dim, pos);
     true
