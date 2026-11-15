@@ -116,9 +116,9 @@ fn typed(dim: usize, pos: [i32; 3], block: Block, info: &StateInfo) -> Option<Ty
             Block::SequencedGearshift => Typed::Level(i32::from(info.sequence)),
             Block::BlazeBurner => Typed::Level(info.heat.map_or(0, cmp::blaze_burner)),
             Block::LitBlazeBurner => Typed::Level(cmp::lit_blaze_burner(info.soul)),
-            Block::TrackSignal => {
-                Typed::Level(cmp::full(d.railway.lights.get(&pos) == Some(&true)))
-            }
+            Block::TrackSignal => Typed::Level(cmp::full(
+                d.railway.lights.get(&pos).is_some_and(|s| s.red_light()),
+            )),
             Block::TrackStation => Typed::Level(cmp::full(
                 d.railway
                     .trains

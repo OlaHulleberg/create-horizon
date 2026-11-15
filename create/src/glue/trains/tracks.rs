@@ -12,6 +12,7 @@ use create_engine::Block;
 use create_engine::track::{self, End, Failure, Request, TrackShape};
 use create_engine::track_curves::Saved;
 use create_engine::track_render::{Mat4, Piece, segment_parts};
+use create_engine::trains::SignalState;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart,
     BlockEntityRenderBoundingBoxEvent, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent,
@@ -459,8 +460,8 @@ pub fn sync(lv: &mut ServerLevel<'_>) {
         match with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten() {
             Some(Block::Track) => set_curves(lv, pos),
             Some(Block::TrackSignal) => {
-                let red = with_world(|w| w.dims[dim].railway.lights.get(&pos).copied()).flatten();
-                set_light(lv, pos, red.unwrap_or(false));
+                let state = with_world(|w| w.dims[dim].railway.lights.get(&pos).copied()).flatten();
+                set_light(lv, pos, state.unwrap_or_default());
             }
             _ => {}
         }
@@ -484,20 +485,36 @@ fn set_curves(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let _ = entity.merge_data(&mut *lv.host, data);
 }
 
-/// A signal's light into its block entity's data.
-fn set_light(lv: &mut ServerLevel<'_>, pos: [i32; 3], red: bool) {
+/// A signal's light into its block entity's data: red or not (`SignalRenderer`), and its whole
+/// state (`SIGNAL_STATE`, `SignalState`'s ordinal) for a nixie tube in front of it.
+fn set_light(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: SignalState) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
-    let data = Compound::from([(LIGHT.into(), Tag::Byte(i8::from(red)))]);
+    let data = Compound::from([
+        (LIGHT.into(), Tag::Byte(i8::from(state.red_light()))),
+        (SIGNAL_STATE.into(), Tag::Byte(state.index() as i8)),
+    ]);
     let _ = entity.merge_data(&mut *lv.host, data);
 }
 
+/// The key of a signal's state in its block entity's data (`SignalBlockEntity.getState`'s
+/// ordinal).
+pub const SIGNAL_STATE: &str = "SignalState";
+
+/// A signal's state as its block entity's data says (`INVALID` when it says none).
+pub fn signal_state_of(data: &Compound) -> SignalState {
+    match data.get(&SIGNAL_STATE.into()) {
+        Some(Tag::Byte(b)) => SignalState::from_index(*b as u8),
+        _ => SignalState::Invalid,
+    }
+}
+
 /// Signal lights that changed in the railway's tick (None: the signal is gone).
-pub fn lights_changed(lv: &mut ServerLevel<'_>, lights: &[([i32; 3], Option<bool>)]) {
-    for &(pos, red) in lights {
-        if let Some(red) = red {
-            set_light(lv, pos, red);
+pub fn lights_changed(lv: &mut ServerLevel<'_>, lights: &[([i32; 3], Option<SignalState>)]) {
+    for &(pos, state) in lights {
+        if let Some(state) = state {
+            set_light(lv, pos, state);
         }
     }
 }
@@ -601,7 +618,7 @@ impl BlockEntityPart for TrackEntity {
     ) -> Option<Compound> {
         let nbt = &event.entity.nbt;
         let mut out = Compound::new();
-        for key in [CURVES, LIGHT, super::station_draw::KEY] {
+        for key in [CURVES, LIGHT, SIGNAL_STATE, super::station_draw::KEY] {
             if let Some(v) = nbt.get(&key.into()) {
                 out.insert(key.into(), v.clone());
             }
