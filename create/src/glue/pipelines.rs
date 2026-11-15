@@ -28,10 +28,12 @@ pub enum Textured {
     SignalGlow2,
     /// A nixie signal's white cube (`SIGNAL_WHITE_CUBE`), translucent.
     SignalCube,
+    /// The steam jet's frames side by side (`particles/steam_jet.json`), cut out.
+    SteamJet,
 }
 
 impl Textured {
-    const ALL: [Textured; 7] = [
+    const ALL: [Textured; 8] = [
         Textured::Checkered,
         Textured::Glue,
         Textured::Icons,
@@ -39,6 +41,7 @@ impl Textured {
         Textured::SignalGlow,
         Textured::SignalGlow2,
         Textured::SignalCube,
+        Textured::SteamJet,
     ];
 
     fn id(self) -> &'static str {
@@ -50,6 +53,7 @@ impl Textured {
             Textured::SignalGlow => "create:signal_glow",
             Textured::SignalGlow2 => "create:signal_glow_2",
             Textured::SignalCube => "create:signal_cube",
+            Textured::SteamJet => "create:steam_jet",
         }
     }
 
@@ -61,6 +65,7 @@ impl Textured {
             Textured::LinkGlow => "create:block/link_details",
             Textured::SignalGlow | Textured::SignalCube => "create:block/signal_glow",
             Textured::SignalGlow2 => "create:block/signal_glow_2",
+            Textured::SteamJet => "create:block/special/steam_jet",
         }
     }
 

@@ -622,6 +622,9 @@ fn scrolled_chain(k: u32) -> Value {
     })
 }
 
+/// Steam jet frames a row of its grid sprite (the glue's `JET_GRID`).
+const JET_GRID: usize = 5;
+
 /// The fragment stage of the glue's textured world pipelines.
 const TEXTURED_SHADER: &str = "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
     return pipeline_texture(input.uv) * input.color;
@@ -858,6 +861,46 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         put(
             &format!("assets/create/models/block/chain_conveyor/chain_{k}.json"),
             &serde_json::to_vec_pretty(&scrolled_chain(k)).unwrap(),
+        )?;
+    }
+    // The steam jet's frames (`particles/steam_jet.json`) on the block atlas, in a square grid
+    // (`JET_GRID` a row, left to right then down) as an atlas sprite is square: the glue draws
+    // the jet's quads itself (`SteamJetParticle.render`) through a world pipeline, which samples
+    // one block atlas sprite.
+    let frames: Vec<&Vec<u8>> = (0..)
+        .map_while(|i| {
+            files.get(&format!(
+                "assets/create/textures/particle/steam_jet_{i}.png"
+            ))
+        })
+        .collect();
+    if !frames.is_empty() {
+        let images = frames
+            .iter()
+            .map(|b| crate::ct::decode(b))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (w, h) = (images[0].w as usize, images[0].h as usize);
+        let side = JET_GRID * w;
+        let mut px = vec![0u8; side * JET_GRID * h * 4];
+        for (i, im) in images.iter().enumerate().take(JET_GRID * JET_GRID) {
+            if (im.w as usize, im.h as usize) != (w, h) {
+                return Err("steam jet frames of different sizes".into());
+            }
+            let (cx, cy) = (i % JET_GRID, i / JET_GRID);
+            for y in 0..h {
+                let src = &im.px[y * w * 4..(y + 1) * w * 4];
+                let at = ((cy * h + y) * side + cx * w) * 4;
+                px[at..at + src.len()].copy_from_slice(src);
+            }
+        }
+        let grid = crate::ct::Image {
+            w: side as u32,
+            h: (JET_GRID * h) as u32,
+            px,
+        };
+        put(
+            "assets/create/textures/block/special/steam_jet.png",
+            &crate::ct::encode(&grid),
         )?;
     }
     // The glue's world pipelines' fragment shader (`create:textured`): the sampled sprite tinted

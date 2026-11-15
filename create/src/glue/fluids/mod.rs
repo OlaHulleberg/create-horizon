@@ -212,6 +212,15 @@ pub const HOSE: &str = "Hose";
 pub struct Fluids;
 
 impl Subsystem for Fluids {
+    /// The steam engines' and whistles' jets (`engine::render_jets`).
+    fn render_level_stage(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        engine::render_jets(host, event);
+    }
+
     fn draw_carried(
         &self,
         host: &dyn mod_api::ClientHost,

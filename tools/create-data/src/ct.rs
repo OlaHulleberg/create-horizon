@@ -309,13 +309,13 @@ fn tile_map(ty: CtType) -> Vec<u32> {
         .collect()
 }
 
-struct Image {
-    w: u32,
-    h: u32,
-    px: Vec<u8>,
+pub(crate) struct Image {
+    pub(crate) w: u32,
+    pub(crate) h: u32,
+    pub(crate) px: Vec<u8>,
 }
 
-fn decode(bytes: &[u8]) -> Result<Image, String> {
+pub(crate) fn decode(bytes: &[u8]) -> Result<Image, String> {
     let mut dec = png::Decoder::new(bytes);
     dec.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = dec.read_info().map_err(|e| e.to_string())?;
@@ -339,7 +339,7 @@ fn decode(bytes: &[u8]) -> Result<Image, String> {
     Ok(Image { w, h, px })
 }
 
-fn encode(img: &Image) -> Vec<u8> {
+pub(crate) fn encode(img: &Image) -> Vec<u8> {
     let mut out = Vec::new();
     let mut enc = png::Encoder::new(&mut out, img.w, img.h);
     enc.set_color(png::ColorType::Rgba);

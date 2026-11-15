@@ -1,8 +1,10 @@
 //! What clients draw of steam engines (`SteamEngineRenderer`): the piston, its linkage and the
 //! connector on the powered shaft two blocks in front, moving with the shaft's turn; and once a
-//! turn the steam it lets out (`SteamEngineBlockEntity.spawnParticles`, `client_tick`): a
-//! `create:steam_jet` particle and the boiler's hiss and steam sounds, at most four a side each
-//! two ticks (`SoundPool`).
+//! turn the steam it lets out (`SteamEngineBlockEntity.spawnParticles`, `client_tick`): a steam
+//! jet and the boiler's hiss and steam sounds, at most four a side each two ticks (`SoundPool`).
+//! A jet (`SteamJetParticle`) is drawn as Create's renderer draws it, four quads turned along
+//! its motion, its frame by its age, through the glue's world pipeline (`render_jets`): as world
+//! quads, full bright (no particle light) and not sorted among the other particles.
 
 use super::super::server::ServerLevel;
 use super::super::states;
@@ -305,16 +307,98 @@ thread_local! {
     static CLIENT: std::cell::RefCell<Client> = std::cell::RefCell::new(Client::default());
 }
 
-/// `create:steam_jet` (`SteamJetParticle`): drawn from Create's sprites as declared in
-/// `assets/create/particles/steam_jet.json`.
-static JET: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
-
-pub(super) fn register_client(r: &mut dyn mod_api::Registrar) {
-    let _ = JET.set(r.particle_key("create:steam_jet"));
+/// A steam jet (`SteamJetParticle`): where and when it was spawned, turned along its motion
+/// and rolled at random.
+struct Jet {
+    at: [f64; 3],
+    born: i64,
+    yaw: f32,
+    pitch: f32,
+    roll: f32,
 }
+
+thread_local! {
+    static JETS: std::cell::RefCell<Vec<Jet>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `SteamJetParticle`'s lifetime (`setLifetime(21)`), size (`quadSize`) and frames
+/// (`particles/steam_jet.json`).
+const JET_LIFETIME: i64 = 21;
+const JET_SIZE: f64 = 0.375;
+const JET_FRAMES: i64 = 23;
+/// Frames a row of the grid sprite `create-data prepare` makes of them.
+const JET_GRID: i64 = 5;
+
+pub(super) fn register_client(_r: &mut dyn mod_api::Registrar) {}
 
 pub(super) fn reset_client() {
     CLIENT.with_borrow_mut(|c| *c = Client::default());
+    JETS.with_borrow_mut(Vec::clear);
+}
+
+/// `level.addParticle(new SteamJetParticleData(1), at, motion)`: a jet starting now.
+fn spawn_jet(host: &dyn ClientHost, at: [f64; 3], motion: [f32; 3]) {
+    let Some(born) = host.level(host.dimension()).and_then(|l| l.game_time(host)) else {
+        return;
+    };
+    let [dx, dy, dz] = motion;
+    let roll = next_float() * std::f32::consts::PI;
+    JETS.with_borrow_mut(|j| {
+        j.push(Jet {
+            at,
+            born,
+            yaw: dx.atan2(dz) - std::f32::consts::PI,
+            pitch: dy.atan2((dx * dx + dz * dz).sqrt()) - std::f32::consts::FRAC_PI_2,
+            roll,
+        })
+    });
+}
+
+/// `SteamJetParticle.render` for every live jet: four quads turned along the jet, each a
+/// quarter turn about it from the last, the frame its age picks (`setSpriteFromAge`).
+pub(super) fn render_jets(host: &dyn ClientHost, event: &mut mod_api::RenderLevelStageEvent<'_>) {
+    if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
+        return;
+    }
+    let now = event.view.game_time;
+    let mut quads = Vec::new();
+    JETS.with_borrow_mut(|jets| {
+        jets.retain(|j| {
+            let age = now - j.born;
+            if !(0..JET_LIFETIME).contains(&age) {
+                return age < 0;
+            }
+            let frame = age * (JET_FRAMES - 1) / JET_LIFETIME;
+            // The frame's cell in the grid `create-data prepare` lays them out in.
+            let cell = 1.0 / JET_GRID as f32;
+            let (cx, cy) = (
+                (frame % JET_GRID) as f32 * cell,
+                (frame / JET_GRID) as f32 * cell,
+            );
+            let (u0, u1, v0, v1) = (cx, cx + cell, cy, cy + cell);
+            for i in 0..4 {
+                let turn = 2.0 * j.roll + std::f32::consts::FRAC_PI_2 * i as f32;
+                let pose = crate::glue::pipelines::Pose::at(j.at)
+                    .rotate([0.0, 1.0, 0.0], f64::from(j.yaw.to_degrees()), [0.0; 3])
+                    .rotate([1.0, 0.0, 0.0], f64::from(j.pitch.to_degrees()), [0.0; 3])
+                    .rotate([0.0, 1.0, 0.0], f64::from(turn.to_degrees()), [0.0; 3])
+                    .scale([JET_SIZE; 3]);
+                let c = |x: f64, y: f64| pose.apply([x, y + 1.0, 0.0]);
+                quads.push(mod_api::PipelineQuad::new(
+                    [c(-1.0, -1.0), c(-1.0, 1.0), c(1.0, 1.0), c(1.0, -1.0)],
+                    [[u1, v1], [u1, v0], [u0, v0], [u0, v1]],
+                    0xFFFF_FFFF,
+                ));
+            }
+            true
+        });
+    });
+    if !quads.is_empty()
+        && let Some(p) =
+            crate::glue::pipelines::resolve(host, crate::glue::pipelines::Textured::SteamJet)
+    {
+        let _ = event.draw.pipeline_quads(p, &quads);
+    }
 }
 
 fn next_float() -> f32 {
@@ -453,10 +537,8 @@ pub(super) fn client_tick(
             .queued
             .push((pos, boiler.attached_engines));
     });
-    // The jet, half a block out of the engine's face and up to a quarter off its middle.
-    let Some(&jet) = JET.get() else {
-        return;
-    };
+    // The jet, half a block out of the engine's face and up to a quarter off its middle,
+    // moving out of it (`offset - facing * 0.75`).
     let (mut x, mut y) = (next_float() - 0.5, next_float() - 0.5);
     let len = (x * x + y * y).sqrt();
     if len > 0.0 {
@@ -469,17 +551,14 @@ pub(super) fn client_tick(
         Axis::Y => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
         Axis::Z => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
     };
-    let at = [0, 1, 2]
-        .map(|i| f64::from(pos[i]) + 0.5 + f64::from((f[i] + (u[i] * x + v[i] * y) * 0.5) * 0.5));
-    host.add_particle(&mod_api::ParticleOptions::simple(jet), at, [0.0; 3]);
+    let offset = [0, 1, 2].map(|i| f[i] + (u[i] * x + v[i] * y) * 0.5);
+    let at = [0, 1, 2].map(|i| f64::from(pos[i]) + 0.5 + f64::from(offset[i] * 0.5));
+    spawn_jet(host, at, [0, 1, 2].map(|i| offset[i] - f[i] * 0.75));
 }
 
 /// `WhistleBlockEntity.tickAudio`'s jet of steam out of a blowing whistle's mouth: up and out
 /// of its face, lower and further out for a bigger whistle.
 pub(super) fn whistle_jet(host: &mut dyn ClientHost, pos: [i32; 3], info: &StateInfo) {
-    let Some(&jet) = JET.get() else {
-        return;
-    };
     let facing = info.facing.unwrap_or(Dir::South);
     let size = match info.size.unwrap_or_default() {
         create_engine::whistle::Size::Small => 0.0,
@@ -493,5 +572,6 @@ pub(super) fn whistle_jet(host: &mut dyn ClientHost, pos: [i32; 3], info: &State
     let offset = rotate([0.0, 1.0, 0.75]);
     let at =
         [0, 1, 2].map(|i| f64::from(pos[i]) + 0.5 + f64::from(offset[i] * 0.45 + size_offset[i]));
-    host.add_particle(&mod_api::ParticleOptions::simple(jet), at, [0.0; 3]);
+    let f = facing.offset().map(|v| v as f32);
+    spawn_jet(host, at, [0, 1, 2].map(|i| offset[i] - f[i] * 0.75));
 }
