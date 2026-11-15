@@ -72,6 +72,9 @@ pub struct Pulley {
     /// `waitingForSpeedChange`: stopped and kept together by its movement mode until its speed
     /// changes.
     pub waiting: bool,
+    /// `sequencedOffsetLimit`: how far a sequenced gearshift's turn by distance still lets it
+    /// move (none for no limit), not saved.
+    pub limit: Option<f32>,
 }
 
 /// What a tick of a running pulley does.
@@ -98,6 +101,16 @@ impl Pulley {
             up: colliders(&blocks, true),
             blocks,
             waiting: false,
+            limit: None,
+        }
+    }
+
+    /// `LinearActuatorBlockEntity.getMovementSpeed`: [`movement`] held to the limit left.
+    pub fn speed(&self, rpm: f32) -> f32 {
+        let v = movement(rpm);
+        match self.limit {
+            Some(l) => v.clamp(-l, l),
+            None => v,
         }
     }
 
@@ -156,7 +169,11 @@ impl Pulley {
         free: impl Fn([i32; 3], [i32; 3]) -> bool,
         grab: impl Fn([i32; 3]) -> bool,
     ) -> Step {
-        let speed = movement(rpm);
+        let speed = self.speed(rpm);
+        // The limit is used up as it moves.
+        if let Some(l) = self.limit.filter(|l| *l > 0.0) {
+            self.limit = Some((l - speed.abs()).max(0.0));
+        }
         let new = self.offset + speed;
         // `visitNewPosition`: an empty rope going down stops at a block that needs moving.
         if new as i32 != self.offset as i32 && self.blocks.is_empty() && rpm > 0.0 {
@@ -194,6 +211,21 @@ pub fn rope_cells(pulley: [i32; 3], grid: i32) -> (Vec<[i32; 3]>, Option<[i32; 3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sequenced_limit_holds_the_rope() {
+        let mut p = Pulley::new([0, 5, 0], 2, 50, Vec::new());
+        p.limit = Some(0.6);
+        // 256 RPM: 0.49 a tick, then what is left, then nothing.
+        let free = |_: [i32; 3], _: [i32; 3]| true;
+        assert_eq!(p.step(256.0, [0, 10, 0], free, |_| false), Step::Move(0.49));
+        let Step::Move(v) = p.step(256.0, [0, 10, 0], free, |_| false) else {
+            panic!()
+        };
+        assert!((v - 0.11).abs() < 1e-5);
+        assert_eq!(p.step(256.0, [0, 10, 0], free, |_| false), Step::Move(0.0));
+        assert!((p.offset - 2.6).abs() < 1e-5);
+    }
 
     fn stone(state: u32) -> Option<Found> {
         Some(Found {

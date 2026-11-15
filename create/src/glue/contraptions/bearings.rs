@@ -690,6 +690,7 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
         };
         let carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
         take_blocks(lv, c, &blocks);
+        let limit = sequence_limit(dim, shaft, true);
         with_world(|w| {
             w.dims[dim].gantries.push(Moving {
                 start: c,
@@ -699,6 +700,7 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                 per_tick: 0.0,
                 blocks,
                 carried,
+                limit,
             })
         });
     }
@@ -739,7 +741,7 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                     g.per_tick = v;
                     show_gantry(lv, &g, false);
                 }
-                g.offset += v;
+                g.moved(v);
                 keep.push(g);
             }
             Step::Stop => {
