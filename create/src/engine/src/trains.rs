@@ -2754,6 +2754,21 @@ mod tests {
     use crate::track_curves::{Curves, Saved};
 
     #[test]
+    fn a_signal_state_gives_both_its_indicator_and_its_nixie_lights() {
+        use SignalState::*;
+        // The indicator (`SignalRenderer`): red, an invalid signal's blink, else dark.
+        let lights = [Red, Yellow, Green, Invalid].map(SignalState::light);
+        assert_eq!(lights, [LIGHT_RED, LIGHT_DARK, LIGHT_DARK, LIGHT_BLINK]);
+        // The nixie tube's red tube (`isRedLight`): red always, invalid 3 ticks in 40.
+        assert!(Red.red_light_at(17.0) && !Green.red_light_at(1.0));
+        assert!(Invalid.red_light_at(81.5) && !Invalid.red_light_at(84.0));
+        // The whole state reaches clients as its ordinal.
+        for s in [Red, Yellow, Green, Invalid] {
+            assert_eq!(SignalState::from_index(s.index()), s);
+        }
+    }
+
+    #[test]
     fn a_saved_trains_motion_reads_back_as_written() {
         for m in [
             SavedMotion {
