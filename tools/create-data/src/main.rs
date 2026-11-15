@@ -3,13 +3,16 @@
 //! (`data/create/horizon/`), the partial models' block states (`assets/create/`) and the engine's
 //! typed block table (`src/engine/src/generated.rs`).
 //!
-//! `create-data prepare`: assembles the playable native mod from this repository and a Create jar
-//! (or folders standing in for one), converting 1.21.1 formats to 26.3. See `prepare.rs`.
+//! `create-data prepare`: assembles the playable native mod from this repository and Create's jar,
+//! converting 1.21.1 formats to 26.3. With no jar given it downloads the pinned one from Modrinth
+//! into the user's cache (`jar.rs`); a jar or folders standing in for one may be given instead.
+//! See `prepare.rs`.
 
 mod blocks;
 mod common_tags;
 mod ct;
 mod equipment;
+mod jar;
 mod java;
 mod prepare;
 mod shapes;
@@ -24,7 +27,7 @@ use std::path::{Path, PathBuf};
 fn usage() -> ! {
     eprintln!(
         "usage:\n  create-data compile --create <Create checkout> --out <this repository>\n  \
-         create-data prepare --out <mod folder> <jar or folder>..."
+         create-data prepare --out <mod folder> [[--jar] <jar or folder>...]"
     );
     std::process::exit(2)
 }
@@ -57,12 +60,18 @@ fn main() {
                     skip = false;
                 } else if a == "--out" {
                     skip = true;
-                } else {
+                } else if a != "--jar" {
                     sources.push(PathBuf::from(a));
                 }
             }
             if sources.is_empty() {
-                usage();
+                match jar::fetch(&jar::CREATE) {
+                    Ok(path) => sources.push(path),
+                    Err(e) => {
+                        eprintln!("create-data prepare: {e}");
+                        std::process::exit(1);
+                    }
+                }
             }
             let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
             match prepare::prepare(&repo, &sources, &out) {
