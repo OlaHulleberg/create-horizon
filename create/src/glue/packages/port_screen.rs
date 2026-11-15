@@ -126,6 +126,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
                 let _ = player.give_stack(lv.host, b.stack);
                 mark_unsaved(dim, &[pos]);
             }
+            super::automation::sync(&mut lv);
             open(&mut lv, player, pos, true);
         }
         b'P' => {
@@ -152,6 +153,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
                     mark_unsaved(dim, &[pos]);
                 }
             }
+            super::automation::sync(&mut lv);
             open(&mut lv, player, pos, true);
         }
         _ => {}

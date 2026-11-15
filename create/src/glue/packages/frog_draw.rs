@@ -41,6 +41,8 @@ struct Shown {
     deposit: bool,
     item: String,
     goggles: bool,
+    /// `addressFilter`, shown over it on hover.
+    address: String,
     /// The tick its last anticipation began (`anticipationProgress` chasing 1 at 0.1 a tick).
     anticipated: Option<i64>,
     /// The ticks its screen was last opened and closed (`manualOpenAnimationProgress`).
@@ -151,6 +153,7 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
                             .map(|b| b.stack.item().id(host))
                             .unwrap_or_default(),
                         goggles: p.goggles,
+                        address: p.filter.clone(),
                         anticipated,
                         opened,
                         closed,
@@ -203,6 +206,7 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
             ("Deposit", Tag::Byte(i8::from(s.deposit))),
             ("Item", Tag::String(s.item.as_str().into())),
             ("Goggles", Tag::Byte(i8::from(s.goggles))),
+            ("Address", Tag::String(s.address.as_str().into())),
         ];
         for (k, v) in [
             ("Anticipated", s.anticipated),
@@ -513,8 +517,54 @@ impl BlockEntityPart for FrogDraw {
             draw.item(&stack, ItemDisplayContext::None, None, 0);
             draw.pop();
         }
-        if !moving {
+        if !nameplate(draw, host, pos, &frog) && !moving {
             draw.keep();
         }
     }
+}
+
+/// `renderNameplateOnHover` with the address (`FrogportRenderer`): while the crosshair is on
+/// the frogport, within 64 blocks, its address a block and a quarter up, turned to the camera,
+/// a fortieth of a block a font pixel. Whether it was drawn (the frogport is drawn again next
+/// frame, as the camera turns). The name tag's see-through pass over its translucent
+/// background is left out: a block entity's text is drawn only as a sign's (`HORIZON_API.md`).
+fn nameplate(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    pos: [i32; 3],
+    frog: &Compound,
+) -> bool {
+    let Some(Tag::String(address)) = frog.get(&"Address".into()) else {
+        return false;
+    };
+    let address = address.to_string_lossy();
+    if address.trim().is_empty() {
+        return false;
+    }
+    let Some(mod_api::CrosshairTarget::Block { pos: hit, .. }) = host.crosshair_target() else {
+        return false;
+    };
+    if [hit.x, hit.y, hit.z] != pos {
+        return false;
+    }
+    let Some(cam) = host.camera() else {
+        return false;
+    };
+    let d2: f64 = (0..3)
+        .map(|i| (cam.position[i] - f64::from(pos[i]) - 0.5).powi(2))
+        .sum();
+    if d2 > 4096.0 {
+        return false;
+    }
+    let text = mod_api::Text::literal(address.as_str());
+    draw.push();
+    draw.translate([0.5, 1.25, 0.5]);
+    // `cameraOrientation()`: `rotationYXZ(-yaw, pitch, 0)`.
+    draw.rotate_about([0.0, 1.0, 0.0], -cam.yaw, [0.0; 3]);
+    draw.rotate_about([1.0, 0.0, 0.0], cam.pitch, [0.0; 3]);
+    draw.scale([0.025, -0.025, 0.025]);
+    let width = draw.text_width(&text).unwrap_or(0.0);
+    let _ = draw.text(&text, [-(width / 2.0).floor(), 0.0], 0xFF_FFFF, false, None);
+    draw.pop();
+    true
 }

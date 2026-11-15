@@ -15,11 +15,10 @@
 //! aimed at a chain point with its item (`frog_target`) and draws its body, head, tongue and
 //! catch (`frog_draw`).
 //!
+//! Other blocks' automation (hoppers, funnels, chutes) reaches a packager's box and a port's
+//! packages through block entity slots mirroring them (`automation`).
+//!
 //! Left out, for want of API:
-//! - Other blocks' automation (hoppers, funnels, chutes) does not reach a packager's box or a
-//!   port's packages: their state lives here, not in storage a transaction journals, so an
-//!   `ITEMS` handler for them could not be rolled back (the legacy glue's
-//!   `automation_insert` / `automation_take` / `automation_room`).
 //! - A frogport is not told when the inventory below it changes (`contents_changed` is a Part
 //!   of the changed block only, with no hook for every container's `setChanged`): a frogport
 //!   with an inventory below looks at it on Create's own lazy tick, every 10 ticks, instead of
@@ -27,6 +26,7 @@
 //! - A dropped package is an item, not Create's package entity (`PackageEntity`), as in the
 //!   legacy glue.
 
+mod automation;
 pub mod body;
 mod box_draw;
 mod frog_draw;
@@ -214,6 +214,7 @@ impl Subsystem for Packages {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let _ = BLOCK_PARTICLE.set(r.particle_key("minecraft:block"));
         let _ = DUST_PARTICLE.set(r.particle_key("minecraft:dust"));
+        automation::register(r);
         for &b in Block::ALL.iter().filter(|&&b| is_packager(b) || is_port(b)) {
             r.block_part(states::key(b), PackageBlock);
         }
@@ -320,6 +321,7 @@ impl Subsystem for Packages {
 
     fn world_closed(&self) {
         frog_target::reset_server();
+        automation::reset();
         frog_draw::reset();
         box_draw::reset();
         PACKAGES.with_borrow_mut(|p| *p = None);
@@ -590,6 +592,18 @@ impl Subsystem for Packages {
     }
 }
 
+/// The `ITEMS` handler of the packager `side` asks, if it is one (`automation`).
+pub(crate) fn packager_items(
+    host: &mut dyn ServerHost,
+    side: mod_api::BlockSide,
+    dim: usize,
+) -> Option<Box<dyn mod_api::ResourceHandler<mod_api::ItemResource>>> {
+    if !present() {
+        return None;
+    }
+    automation::provide(host, side, dim)
+}
+
 /// The verb of a `create_debug` command when it is one of `verbs`.
 pub fn debug_verb(event: &RunModCommandEvent<'_>, verbs: &[&'static str]) -> Option<&'static str> {
     let l = &event.command.literals;
@@ -648,6 +662,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     if with(dim, |pk| pk.is_idle()) && GONE.with_borrow(Vec::is_empty) {
         frog_draw::sync(lv);
         box_draw::sync(lv);
+        automation::sync(lv);
         analog_touched(lv, &touched);
         mark_unsaved(dim, &[]);
         return;
@@ -712,6 +727,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     frog_target::level_tick(lv);
     frog_draw::sync(lv);
     box_draw::sync(lv);
+    automation::sync(lv);
     touched.extend(with(dim, |pk| std::mem::take(&mut pk.changed)));
     analog_touched(lv, &touched);
     mark_unsaved(dim, &changed);
@@ -804,7 +820,10 @@ fn block_moved(
         // `PackagerBlockEntity.destroy`: its box and queued boxes drop.
         Some(Block::Packager | Block::Repackager) => with(dim, |pk| {
             if let Some(p) = pk.packagers.remove(&pos) {
-                for b in p.held.into_iter().chain(p.sliding) {
+                // A box in its slot drops with the block (`automation`).
+                let held = p.held.filter(|_| !automation::mirrored(dim, pos));
+                automation::forget(dim, pos);
+                for b in held.into_iter().chain(p.sliding) {
                     drops.push((center(pos), b.stack));
                 }
                 for (b, n) in p.queue {
@@ -841,11 +860,14 @@ fn block_moved(
             GONE.with_borrow_mut(|g| g.push((dim, pos)));
         }
         // `PackagePortBlockEntity.destroy`: its packages drop.
-        Some(_) => with(dim, |pk| {
-            for p in pk.remove_port(pos) {
-                drops.push((center(pos), p.stack));
+        // Those in its slots drop with the block (`automation`).
+        Some(_) => {
+            let removed: Vec<ItemStack> =
+                with(dim, |pk| pk.remove_port(pos).into_iter().map(|p| p.stack).collect());
+            for s in automation::port_unmirrored(dim, pos, removed) {
+                drops.push((center(pos), s));
             }
-        }),
+        }
         None => {}
     }
     match is {
@@ -1534,6 +1556,7 @@ fn use_packager(
             return Some(InteractionResult::Success);
         }
         unwrap(&mut lv, dim, pos, &stack, false);
+        automation::sync(&mut lv);
         stock::stock_check(&mut lv, dim, pos);
         if let Some(slot) = player.selected_slot(&*lv.host) {
             let _ = player.set_inventory_slot(&mut *lv.host, slot as u32, stack.shrink(1));
@@ -1554,6 +1577,7 @@ fn use_packager(
     // `placeItemBackInInventory`: into the inventory, else dropped.
     let _ = player.give_stack(&mut *lv.host, b.stack);
     with(dim, |pk| pk.wake([pos[0], pos[1] + 1, pos[2]]));
+    automation::sync(&mut lv);
     Some(InteractionResult::Success)
 }
 
@@ -1686,6 +1710,28 @@ struct PackageBlock;
 
 #[mod_api::horizon_part]
 impl BlockPart for PackageBlock {
+    /// A packager's slots changed: automation took its box or put a package in (`automation`).
+    fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut mod_api::ContentsChangedEvent) {
+        let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
+            return;
+        };
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return;
+        };
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        let (packager, port) = with(lv.dim, |pk| {
+            (pk.packagers.contains_key(&pos), pk.ports.contains_key(&pos))
+        });
+        if packager {
+            automation::contents_changed(&mut lv, pos);
+        } else if port {
+            automation::port_contents_changed(&mut lv, pos);
+        }
+        if packager || port {
+            automation::sync(&mut lv);
+        }
+    }
+
     fn use_item_on(
         &self,
         host: &mut dyn ServerHost,

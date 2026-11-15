@@ -66,12 +66,14 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 ### Containers, items and transactions
 
 - **Rolling back mod-owned state with a transaction.** A handler cannot learn that its transaction aborted,
-  so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, packagers and
-  frogports offer no `ITEMS` handlers to hoppers, funnels and chutes, nor do belts (`ItemHandlerBeltSegment`;
+  so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, nor do belts offer
+  `ITEMS` (`ItemHandlerBeltSegment`;
   so a tunnel offers none of its belt's: an andesite tunnel none at all, a brass tunnel only its own stack to
   insert into, nothing to take out), and a portable storage interface
   offers its contraption's storage to Create's chutes and funnels only, not to hoppers. A close/abort callback
-  on `Transaction` (or a journal for mod state) would close them.
+  on `Transaction` (or a journal for mod state) would close them. (Packagers and package ports mirror their
+  boxes into block entity slots, which the game journals, and learn of automation's moves at the commit:
+  `glue/packages/automation.rs`.)
 - **A notice for any container's contents changing.** `contents_changed` reaches only the changed block's own
   parts, so a chute under a vanilla container and a frogport above an inventory re-check on a timer instead.
 - **An empty stack from `menu_quick_move`**: the clicked slot keeps what is left of `stack`, and an
