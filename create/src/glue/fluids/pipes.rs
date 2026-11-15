@@ -71,7 +71,12 @@ fn open_end(lv: &ServerLevel<'_>, p: [i32; 3], toward: Option<Dir>) -> bool {
             .level
             .block_face_sturdy(&*lv.host, p, face, mod_api::SupportType::Full)
             == Some(true);
-        if sturdy && lv.host.block_in_tag(state.block(), "create:fan_transparent") != Some(true) {
+        if sturdy
+            && lv
+                .host
+                .block_in_tag(state.block(), "create:fan_transparent")
+                != Some(true)
+        {
             return false;
         }
     }
@@ -154,7 +159,6 @@ pub(super) fn tick_pipes(lv: &mut ServerLevel<'_>) {
 fn collide(lv: &mut ServerLevel<'_>) {
     let now = lv.game_time();
     for (pos, a, b) in super::flows::collisions(lv.dim, now) {
-        crate::create_log!("DEBUG pipe collision at {pos:?}: {a:?} meets {b:?}");
         lv.destroy_block(pos, true);
         if let Some(state) =
             create_engine::open_end::flow_collision(a, b).and_then(|n| state_with(lv, n, &[]))
@@ -240,7 +244,9 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
         } else {
             // An open end: its own tank, else the source in front (`OpenEndFluidHandler.drain`,
             // simulated).
-            with_open_end(lv, &from, |end, front| end.drain(front, amount, None, false))
+            with_open_end(lv, &from, |end, front| {
+                end.drain(front, amount, None, false)
+            })
         };
         // Smart pipes on the way let only their filter's fluid through.
         let offer = offer.filter(|(f, _)| from.passes(*f));
@@ -385,7 +391,6 @@ fn with_open_end<R>(
         },
     );
     if open != before {
-        crate::create_log!("DEBUG open_end {owner:?} {:?}: {before:?} -> {open:?}", end.face);
         with_world(|w| {
             if open == OpenEnd::default() {
                 w.dims[dim].open_ends.remove(&key);

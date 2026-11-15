@@ -2278,7 +2278,10 @@ fn with_carried_tanks<R>(
 /// (`PortableFluidInterfaceBlockEntity.capability`): the tanks of the contraption it is connected
 /// to (`MountedStorageManager.getFluids`), else one tank of no capacity (`createEmptyHandler`);
 /// None for any other block.
-pub fn pfi_tanks(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Vec<create_engine::observe::TankSlot>> {
+pub fn pfi_tanks(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<create_engine::observe::TankSlot>> {
     use create_engine::observe::TankSlot;
     if lv.create_block(pos) != Some(Block::PortableFluidInterface) {
         return None;

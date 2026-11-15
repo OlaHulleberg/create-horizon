@@ -15,8 +15,7 @@ use create_engine::observe::{self, CENTRE_REACH, Seen, Slot, Watch};
 use create_engine::parts::StateInfo;
 use mod_api::{
     BlockClick, Command, CommandArgumentValue, Flow, HostTransaction, ItemStack, PlayerRef,
-    RegisterCommandsEvent,
-    RunModCommandEvent, ServerHost, Text,
+    RegisterCommandsEvent, RunModCommandEvent, ServerHost, Text,
 };
 
 /// `getSignal` / `getDirectSignal` of an analog lever (its block entity's state), a smart
@@ -409,15 +408,12 @@ fn capability_tanks(
         let capacity = handler.capacity(&mut *lv.host, i, &r);
         let fluid = r
             .fluid()
-            .clone()
             .key()
             .and_then(|k| create_engine::tank::Fluid::of_id(&k.id(&*lv.host)));
         // `drain(fluidInTank, SIMULATE)`: taken in a transaction that is then dropped.
         let drained = lv
             .host
-            .transaction(|host, tx| {
-                Err::<(), u32>(handler.extract(host, tx, i, &r, amount))
-            })
+            .transaction(|host, tx| Err::<(), u32>(handler.extract(host, tx, i, &r, amount)))
             .err()
             .unwrap_or(0);
         tanks.push(create_engine::observe::TankSlot {
@@ -538,12 +534,6 @@ fn look(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) {
                 filter: filter.as_ref(),
             };
             let found = observe::observe(&passes, &seen);
-            crate::create_log!(
-                "DEBUG observer {pos:?} target {target:?}: tanks {:?} flows {:?} looping {:?} -> {found:?} ({watch:?})",
-                seen.tanks,
-                seen.flows,
-                seen.looping
-            );
             let effect = with_world(|w| {
                 let d = &mut w.dims[dim].detectors;
                 d.watch(pos, watch, now);
@@ -563,7 +553,6 @@ fn look(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) {
                 filter: filter.as_ref(),
             };
             let reading = observe::fill_level(&passes, &seen);
-            crate::create_log!("DEBUG switch {pos:?} target {target:?}: tanks {:?} -> {reading:?}", seen.tanks);
             let Some((u, changed)) = with_world(|w| {
                 let d = &mut w.dims[dim];
                 d.detectors.watch(pos, watch, now);

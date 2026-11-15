@@ -20,10 +20,16 @@
 //! at each stroke (`engine`'s client tick), and boiler gauges swing to their level (`client`).
 //!
 //! A pump's flows grow through its pipes connection by connection and recede from the source
-//! (`flows`): glass pipes draw them, pipes splash, drip and pour them on their clients. Open ends
-//! let out every fluid: a bucket's worth of one with a block becomes a source, one without (milk,
-//! tea, potions) is taken a drop at a time, and each gives what is in front its effect (a
-//! potion its contents' custom effects too: `open_end`).
+//! (`flows`): glass pipes draw them, pipes splash, drip and pour them on their clients. Flows of
+//! two fluids meeting in a pipe break it into cobblestone, limestone or scoria
+//! (`handlePipeFlowCollision`). Each open end keeps its own tank (`OpenEndedPipe`, saved with
+//! its column): a bucket's worth of a fluid with a block becomes a source (water in a
+//! waterloggable block waterlogs it, and boils away where water evaporates), one without (milk,
+//! tea, potions) is taken a drop at a time, and each gives what is in front its effect (milk
+//! clears every effect, (removed); a potion its contents' custom
+//! effects too: `open_end`). Open ends draw from sources, waterlogged blocks, full cauldrons and
+//! beehives. Smart observers and threshold switches read the tanks of every fluid handler
+//! (`fluid_handler_tanks`) and an observer the flows in a pipe (`pipe_inflows`).
 //!
 //! Left out:
 //! - The `FLUIDS` capability on Create's tanks, so other mods' handlers and Create's pumps reach

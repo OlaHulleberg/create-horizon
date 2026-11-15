@@ -1,7 +1,8 @@
 //! What an open pipe end lets out does to what is in front of it (`OpenPipeEffectHandler`,
 //! `create_engine::open_end`): water puts out burning entities, fire, lit candles and
 //! campfires; lava sets entities burning; milk clears effects; builder's tea gives Haste; a
-//! potion gives its effects, its contents' custom ones too.
+//! potion gives its effects, its contents' custom ones too. And the space in front of an open end
+//! as `create_engine::open_end::OpenEnd` reads and changes it (`Front`).
 
 use super::super::server::ServerLevel;
 use super::{all, property, state_with};
@@ -335,11 +336,17 @@ impl create_engine::open_end::Space for Front<'_, '_> {
         let (got, left) = if honey.is_some_and(|h| h >= 5) {
             ((Fluid::Honey, 250), self.with("honey_level", "0"))
         } else if name == "minecraft:lava_cauldron" {
-            ((Fluid::Lava, 1000), state_with(self.lv, "minecraft:cauldron", &[]))
+            (
+                (Fluid::Lava, 1000),
+                state_with(self.lv, "minecraft:cauldron", &[]),
+            )
         } else if name == "minecraft:water_cauldron"
             && property(self.lv, self.pos, "level").as_deref() == Some("3")
         {
-            ((Fluid::Water, 1000), state_with(self.lv, "minecraft:cauldron", &[]))
+            (
+                (Fluid::Water, 1000),
+                state_with(self.lv, "minecraft:cauldron", &[]),
+            )
         } else {
             return None;
         };
@@ -362,7 +369,10 @@ impl create_engine::open_end::Space for Front<'_, '_> {
         if f.is_empty() {
             return None;
         }
-        Some((super::world_fluid(self.lv, self.pos).map(|w| w.0), f.is_source()))
+        Some((
+            super::world_fluid(self.lv, self.pos).map(|w| w.0),
+            f.is_source(),
+        ))
     }
 
     fn evaporates(&self) -> bool {
