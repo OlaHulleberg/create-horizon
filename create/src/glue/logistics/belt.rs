@@ -906,6 +906,7 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         let left = left.map_or(0, |l| l.count().min(255) as u8);
         if left != item.count {
             super::flaps::funnel(self.lv, pos, true);
+            crate::glue::redstone::funnel_transfer(self.lv, pos, &item.item);
         }
         Some(left)
     }

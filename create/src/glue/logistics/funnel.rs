@@ -241,6 +241,7 @@ fn push_onto_depot(
     let dim = lv.dim;
     with_world(|w| w.depot_put(dim, below, Some(held)));
     super::flaps::funnel(lv, pos, false);
+    crate::glue::redstone::funnel_transfer(lv, pos, &id);
     Some(Some(true))
 }
 
@@ -275,6 +276,7 @@ fn pull_from_depot(
             continue;
         }
         let count = stack.count();
+        let key = items::key_of(&*lv.host, &stack);
         let left = items::insert_item(lv, behind, side, stack);
         if left.as_ref().is_some_and(|l| l.count() == count) {
             continue;
@@ -285,6 +287,7 @@ fn pull_from_depot(
             with_world(|w| w.depot_put(dim, below, None));
         }
         super::flaps::funnel(lv, pos, true);
+        crate::glue::redstone::funnel_transfer(lv, pos, &key);
         return Some(Some(true));
     }
     Some(None)
@@ -498,8 +501,10 @@ fn extract_in_front(
     let Some(stack) = take_filtered(lv, pos, behind, side, max) else {
         return Some(None);
     };
+    let key = items::key_of(&*lv.host, &stack);
     items::drop_stack(lv, at, v, stack, 0);
     super::flaps::funnel(lv, pos, false);
+    crate::glue::redstone::funnel_transfer(lv, pos, &key);
     Some(Some(true))
 }
 
@@ -550,5 +555,7 @@ fn push_onto_belt(
         }
     }
     super::flaps::funnel(lv, pos, false);
+    let key = items::key_of(&*lv.host, &stack);
+    crate::glue::redstone::funnel_transfer(lv, pos, &key);
     Some(Some(true))
 }
