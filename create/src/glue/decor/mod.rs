@@ -346,6 +346,34 @@ impl Subsystem for Decor {
     fn left_click_block(&self, host: &mut dyn ServerHost, event: &mut LeftClickBlockEvent) -> Flow {
         clicks::left_click(host, event)
     }
+
+    /// A girder takes the wrench as its own (`GirderBlock.useItemOn`: its top or bottom bracket,
+    /// never turned), and an encased shaft wrenched turns back into its girder.
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        player: PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        _clicked: Dir,
+        point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        if sneaking {
+            return false;
+        }
+        match block {
+            Block::MetalGirder => {
+                girders::wrench(lv, pos, point);
+                true
+            }
+            Block::MetalGirderEncasedShaft => {
+                girders::unencase(lv, player, pos);
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 /// `BottomlessItemHandler` of a creative crate at `pos`: Some(supply) when one is there.

@@ -744,8 +744,77 @@ pub fn copper_unwaxed(block: crate::Block) -> Option<crate::Block> {
     })
 }
 
+/// `GirderWrenchBehavior.getDirectionAndAction` and `handleClick` for a wrench on the girder `g`
+/// (`hit` relative to its centre), `other(d)` the girder above or below (its `x`, `z`), if any:
+/// the side up or down nearest the hit whose bracket toggles (`top` or `bottom` cycled), and
+/// whether the girder beyond toggles its opposite one too (`PAIR`). None when the click does
+/// nothing (a girder with neither `x` nor `z`, a pole or cross against another girder).
+pub fn girder_wrench(
+    g: &Girder,
+    hit: [f64; 3],
+    other: impl Fn(Dir) -> Option<(bool, bool)>,
+) -> Option<(Dir, bool)> {
+    if !g.x && !g.z {
+        return None;
+    }
+    let valid = |d: Dir| -> Option<bool> {
+        match other(d) {
+            None => (g.x != g.z).then_some(false),
+            Some((ox, oz)) => (g.x != g.z && ox != oz).then_some(true),
+        }
+    };
+    let dirs = crate::place::ordered_by_distance(hit, |d| {
+        d.axis() == Axis::Y && valid(d).is_some()
+    });
+    let d = *dirs.first()?;
+    Some((d, valid(d)?))
+}
+
+/// `GirderWrenchBehavior.postProcess`: a girder that is not both topped and bottomed lies along
+/// its beam (`x` first) rather than standing.
+pub fn girder_post_process(mut g: Girder) -> Girder {
+    if !(g.top && g.bottom) && g.axis == Axis::Y {
+        g.axis = if g.x { Axis::X } else { Axis::Z };
+    }
+    g
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_wrench_toggles_a_beam_girders_bracket_nearest_the_hit() {
+        use super::*;
+        let beam = Girder {
+            axis: Axis::X,
+            x: true,
+            z: false,
+            top: false,
+            bottom: false,
+        };
+        // Alone: up when the hit is above the centre, down below; a single toggle.
+        assert_eq!(girder_wrench(&beam, [0.1, 0.4, 0.0], |_| None), Some((Dir::Up, false)));
+        assert_eq!(girder_wrench(&beam, [0.1, -0.4, 0.0], |_| None), Some((Dir::Down, false)));
+        // Another beam above pairs; a pole above refuses that side, so the other is taken.
+        assert_eq!(
+            girder_wrench(&beam, [0.0, 0.4, 0.0], |d| (d == Dir::Up).then_some((false, true))),
+            Some((Dir::Up, true))
+        );
+        assert_eq!(
+            girder_wrench(&beam, [0.0, 0.4, 0.0], |d| (d == Dir::Up).then_some((true, true))),
+            Some((Dir::Down, false))
+        );
+        // A pole (neither) or a cross (both) alone: nothing.
+        let pole = Girder { x: false, ..beam };
+        assert_eq!(girder_wrench(&pole, [0.0, 0.4, 0.0], |_| None), None);
+        let cross = Girder { z: true, ..beam };
+        assert_eq!(girder_wrench(&cross, [0.0, 0.4, 0.0], |_| None), None);
+        // Standing girders lie down unless both ends are held.
+        let standing = Girder { axis: Axis::Y, top: true, ..beam };
+        assert_eq!(girder_post_process(standing).axis, Axis::X);
+        let held = Girder { bottom: true, ..standing };
+        assert_eq!(girder_post_process(held).axis, Axis::Y);
+    }
+
     use super::*;
 
     #[test]

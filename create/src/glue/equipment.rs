@@ -69,6 +69,65 @@ thread_local! {
 pub struct Equipment;
 
 impl Subsystem for Equipment {
+    /// `BacktankBlock.useItemOn`: a player not sneaking, with no block in the main hand and
+    /// nothing worn on the chest, puts a placed backtank on (`getCloneItemStack`: its air and
+    /// Capacity kept), with an item pickup sound; the block goes without drops.
+    fn right_click_block(
+        &self,
+        host: HostSide,
+        event: &mut mod_api::RightClickBlockEvent<'_>,
+    ) -> Flow {
+        let HostSide::Server(host) = host else {
+            return Flow::Continue;
+        };
+        let click = event.click;
+        let Some(player) = host.player(click.player) else {
+            return Flow::Continue;
+        };
+        let dimension = click.dimension.key().id().to_owned();
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return Flow::Continue;
+        };
+        let pos = click.pos;
+        let Some((block, _)) = lv.block_state(pos).and_then(backtank_block) else {
+            return Flow::Continue;
+        };
+        let Some(living) = lv.host.living(player.entity()) else {
+            return Flow::Continue;
+        };
+        let host = &*lv.host;
+        let sneaking = player.entity().is_shift_key_down(host) == Some(true);
+        let block_in_hand = living
+            .hand_item(host, Hand::Main)
+            .is_some_and(|s| host.item_block(s.item()).is_some());
+        let worn = living.equipment(host, EquipmentSlot::Chest).is_some();
+        if sneaking || block_in_hand || worn {
+            return Flow::Continue;
+        }
+        let dim = lv.dim;
+        let tank = with_world(|w| w.dims[dim].backtanks.get(&pos).copied()).flatten();
+        let Some(mut stack) = backtank_item(block).and_then(|k| ItemStack::new(k, 1)) else {
+            return Flow::Continue;
+        };
+        if let Some(tank) = tank {
+            set_stack_air(&mut stack, tank.air);
+            set_capacity(&mut stack, tank.capacity);
+        }
+        let at = pos.map(|v| f64::from(v) + 0.5);
+        lv.level.play_sound(
+            &mut *lv.host,
+            "minecraft:entity.item.pickup",
+            at,
+            SoundSource::Players,
+            0.75,
+            1.0,
+        );
+        let _ = living.set_equipment(lv.host, EquipmentSlot::Chest, Some(stack));
+        lv.destroy_block(pos, false);
+        *event.cancellation_result = mod_api::InteractionResult::Success;
+        Flow::Cancel
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let keys = [
             r.item_key("create:copper_backtank"),

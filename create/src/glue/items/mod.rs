@@ -270,8 +270,10 @@ impl Subsystem for Items {
         Flow::Continue
     }
 
-    /// `CardboardSwordItem.cardboardSwordsCannotHurtYou`.
+    /// `CardboardSwordItem.cardboardSwordsCannotHurtYou`, and
+    /// `WrenchItem.wrenchInstaKillsMinecarts`.
     fn attack_entity(&self, host: &mut dyn ServerHost, event: &mut AttackEntityEvent<'_>) -> Flow {
+        wrench_hits_minecart(host, event);
         sword::attack(host, event)
     }
 
@@ -482,4 +484,33 @@ pub(crate) fn set_slot(host: &mut dyn ServerHost, player: PlayerRef, slot: Slot,
             let _ = player.set_inventory_slot(host, i, Some(stack));
         }
     }
+}
+
+/// `WrenchItem.wrenchInstaKillsMinecarts`: a minecart hit with a wrench in the main hand, outside
+/// creative, takes 100 of the player's attack damage.
+fn wrench_hits_minecart(host: &mut dyn ServerHost, event: &AttackEntityEvent<'_>) {
+    if !event.kind.ends_with("minecart") {
+        return;
+    }
+    let Some(player) = host.players().acting_player() else {
+        return;
+    };
+    if creative(&*host, player) {
+        return;
+    }
+    let wrench = host
+        .living(player.entity())
+        .and_then(|l| l.hand_item(&*host, Hand::Main))
+        .is_some_and(|s| s.item().id(&*host) == "create:wrench");
+    if !wrench {
+        return;
+    }
+    let Some(cart) = u32::try_from(event.entity)
+        .ok()
+        .and_then(|id| host.entity(id))
+    else {
+        return;
+    };
+    let me = Some(player.entity());
+    let _ = cart.hurt(host, "minecraft:player_attack", 100.0, me, me);
 }

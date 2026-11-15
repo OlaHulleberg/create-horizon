@@ -1,5 +1,5 @@
 {
-  "template": "minecraft:iron_bars",
+  "template": "minecraft:glass_pane",
   "properties": {
     "hardness": 0.3,
     "explosion_resistance": 0.3

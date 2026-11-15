@@ -680,6 +680,55 @@ pub fn tick_burners(lv: &mut ServerLevel<'_>) {
     }
 }
 
+/// `LivingEntity.getSlotForHand`.
+fn slot_of(hand: mod_api::Hand) -> mod_api::EquipmentSlot {
+    match hand {
+        mod_api::Hand::Main => mod_api::EquipmentSlot::MainHand,
+        mod_api::Hand::Off => mod_api::EquipmentSlot::OffHand,
+    }
+}
+
+/// `LitBlazeBurnerBlock.useItemOn`: a shovel puts the flame out (an empty burner, one use of the
+/// shovel), and a soul fire base block (soul sand, soul soil) makes a regular flame a soul flame.
+/// True when the click was the burner's.
+pub fn use_lit_burner(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    player: PlayerRef,
+    hand: mod_api::Hand,
+    stack: Option<&ItemStack>,
+) -> bool {
+    let Some(stack) = stack else {
+        return false;
+    };
+    let held = stacks::id(&*lv.host, stack);
+    if held.ends_with("_shovel") {
+        lv.play_block_sound("minecraft:block.fire.extinguish", pos, 0.5, 2.0);
+        if let Some(living) = lv.host.living(player.entity()) {
+            living.hurt_and_break(lv.host, slot_of(hand), 1);
+        }
+        if let Some(empty) = lv.host.block_state_id("create:blaze_burner") {
+            lv.set_state(pos, empty, crate::glue::server::update_all());
+        }
+        return true;
+    }
+    let regular = lv
+        .block_state(pos)
+        .is_some_and(|s| lv.state_property(s, "flame_type").as_deref() == Some("regular"));
+    if regular && matches!(held.as_str(), "minecraft:soul_sand" | "minecraft:soul_soil") {
+        let pitch = Rng::new(lv.seed_at(pos)).next_float() * 0.4 + 0.8;
+        lv.play_block_sound("minecraft:block.soul_sand.place", pos, 1.0, pitch);
+        if let Some(soul) = lv
+            .host
+            .block_state_id("create:lit_blaze_burner[flame_type=soul]")
+        {
+            lv.set_state(pos, soul, crate::glue::server::update_all());
+        }
+        return true;
+    }
+    false
+}
+
 /// `BlazeBurnerBlock.useItemOn`: flint and steel lights an empty burner (a lit burner, no
 /// blaze); fuel goes to the blaze (`tryInsert` with a player's overflow), one used up outside
 /// creative (a lava bucket leaves its bucket). True when the click was the burner's.
@@ -687,6 +736,7 @@ pub fn use_burner(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     player: PlayerRef,
+    hand: mod_api::Hand,
     stack: Option<&ItemStack>,
 ) -> bool {
     let Some((_, info)) = lv.info(pos) else {
@@ -713,14 +763,16 @@ pub fn use_burner(
     let held = stacks::id(&*lv.host, stack);
     if info.heat == Some(Heat::None) {
         if held == "minecraft:flint_and_steel" {
-            let facing = info.facing.map_or("north", crate::glue::kinetics::dir_name);
-            let lit = lv
-                .host
-                .block_state_id(&format!("create:lit_blaze_burner[facing={facing}]"));
-            if let Some(lit) = lit {
-                lv.set_state(pos, lit, crate::glue::server::update_all());
-                return true;
+            // Flint and steel's sound, one use of it, and `LIT_BLAZE_BURNER.getDefaultState()`.
+            let pitch = Rng::new(lv.seed_at(pos)).next_float() * 0.4 + 0.8;
+            lv.play_block_sound("minecraft:item.flintandsteel.use", pos, 1.0, pitch);
+            if let Some(living) = lv.host.living(player.entity()) {
+                living.hurt_and_break(lv.host, slot_of(hand), 1);
             }
+            if let Some(lit) = lv.host.block_state_id("create:lit_blaze_burner") {
+                lv.set_state(pos, lit, crate::glue::server::update_all());
+            }
+            return true;
         }
         return false;
     }

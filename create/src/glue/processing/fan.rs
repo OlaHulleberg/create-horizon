@@ -1,8 +1,13 @@
 //! The encased fan (`EncasedFanBlockEntity`, `AirCurrent`): its current pushes entities and
 //! processes items in it (`FanProcessing`: washing, haunting, smoking, blasting), on the
 //! ground and on depots and belts in it; and the nozzle on its front (`NozzleBlockEntity`).
-//! Not here (nor in the legacy glue): the processing types' effects on living entities
-//! (`affectEntity`: fire, freezing water, haunting).
+//! The processing types' effects on the other entities in a current (`affectEntity`): blasting
+//! and smoking set them alight and hurt them, washing puts them out and hurts endermen, snow
+//! golems and blazes, haunting blinds and slows them. Create's own damage types (`fan_lava`,
+//! `fan_fire`) are stood in for by vanilla's `lava` and `in_fire` (`HORIZON_API.md`: a native
+//! mod's damage types). Left out, for want of API: a horse haunted for 100 ticks turning into a
+//! skeleton horse (no persistent data on a mob for its progress, nor a conversion keeping its
+//! data).
 
 use super::{recipes, stacks};
 use crate::glue::logistics::{random_angle, upright};
@@ -387,19 +392,14 @@ fn fire_resistant(lv: &ServerLevel<'_>, stack: &ItemStack) -> bool {
 /// one is let go (`isPlayerCreativeFlying`).
 fn fan_on_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3], search: bool) {
     let dim = lv.dim;
-    let Some((facing, speed, max, pushing, none)) = with_world(|w| {
+    let Some((facing, speed, current, none)) = with_world(|w| {
         let f = w.dims[dim].fans.get(&pos)?;
-        Some((
-            f.facing?,
-            f.speed,
-            f.current.max,
-            f.current.pushing,
-            f.others.is_empty(),
-        ))
+        Some((f.facing?, f.speed, f.current.clone(), f.others.is_empty()))
     })
     .flatten() else {
         return;
     };
+    let (max, pushing) = (current.max, current.pushing);
     // Nothing caught and no search this tick: nothing to look at.
     if none && !search {
         return;
@@ -444,6 +444,69 @@ fn fan_on_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3], search: bool) {
         let motion = fan::push(flow, speed, max, distance, e.velocity, e.sneaking);
         e.entity.set_velocity(&mut *lv.host, motion);
         e.entity.reset_fall_distance(&mut *lv.host);
+        // `getTypeAt(alignedDistanceToFace)`, then `affectEntity`.
+        if let Some(kind) = current.type_at(fan::aligned_distance(e.at, pos, facing) as f32) {
+            affect_entity(lv, e.entity, kind);
+        }
+    }
+}
+
+/// `FanProcessingType.affectEntity` on the server, for an entity (not an item) in a current.
+fn affect_entity(lv: &mut ServerLevel<'_>, entity: EntityRef, kind: Kind) {
+    let host = &mut *lv.host;
+    // `igniteForSeconds`: at least that many ticks of fire.
+    let ignite = |host: &mut dyn mod_api::ServerHost, ticks: i32| {
+        if entity.fire_ticks(&*host).unwrap_or(0) < ticks {
+            entity.set_remaining_fire_ticks(host, ticks);
+        }
+    };
+    match kind {
+        // `BlastingType`: 10 s of fire and 4 lava damage (`fanLava`), unless fire-immune.
+        Kind::Blasting => {
+            if entity.fire_immune(&*host) != Some(true) {
+                ignite(host, 200);
+                let _ = entity.hurt(host, "minecraft:lava", 4.0, None, None);
+            }
+        }
+        // `SmokingType`: 2 s of fire and 2 fire damage (`fanFire`), unless fire-immune.
+        Kind::Smoking => {
+            if entity.fire_immune(&*host) != Some(true) {
+                ignite(host, 40);
+                let _ = entity.hurt(host, "minecraft:in_fire", 2.0, None, None);
+            }
+        }
+        // `SplashingType`: drowning hurts endermen, snow golems and blazes; a burning entity is
+        // put out with the extinguish sound (0.7, 1.6 ± 0.4: `Entity.extinguishFire`'s).
+        Kind::Splashing => {
+            let kind = entity.kind(&*host);
+            if matches!(
+                kind.as_deref(),
+                Some("minecraft:enderman" | "minecraft:snow_golem" | "minecraft:blaze")
+            ) {
+                let _ = entity.hurt(host, "minecraft:drown", 2.0, None, None);
+            }
+            if entity.fire_ticks(&*host).unwrap_or(0) > 0 {
+                entity.extinguish_fire(host);
+            }
+        }
+        // `HauntingType`: Blindness for 30 ticks and Slowness II for 20, without particles or
+        // icons (`MobEffectInstance(.., false, false)`).
+        Kind::Haunting => {
+            let Some(living) = host.living(entity) else {
+                return;
+            };
+            for (effect, ticks, amplifier) in [
+                ("minecraft:blindness", 30, 0),
+                ("minecraft:slowness", 20, 1),
+            ] {
+                if let Some(key) = host.effect_key(effect) {
+                    living.add_effect(
+                        host,
+                        &mod_api::ActiveEffect::new(key, ticks, amplifier, false, false, false),
+                    );
+                }
+            }
+        }
     }
 }
 

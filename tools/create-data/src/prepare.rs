@@ -513,6 +513,7 @@ fn kept(path: &str) -> bool {
             || rest.starts_with("c/tags/")
             || rest.starts_with("create/worldgen/")
             || rest.starts_with("create/neoforge/biome_modifier/")
+            || rest.starts_with("create/enchantment/")
     };
     let assets = |rest: &str| {
         rest.starts_with("create/blockstates/")
@@ -674,6 +675,14 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             } else {
                 worldgen_left_out += 1;
             }
+        } else if path.starts_with("data/create/enchantment/") {
+            // Capacity and Potato Recovery: an effect's requirements name their kind in `type`
+            // (1.21.1: `condition`), as loot conditions do.
+            let mut doc: Value =
+                serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
+            convert_loot(&mut doc);
+            put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
+            copied += 1;
         } else if path.starts_with("data/create/loot_table/") {
             let mut doc: Value =
                 serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
@@ -920,6 +929,7 @@ mod tests {
         assert!(!kept("data/neoforge/data_maps/x.json"));
         assert!(kept("data/create/worldgen/placed_feature/zinc_ore.json"));
         assert!(kept("data/create/neoforge/biome_modifier/zinc_ore.json"));
+        assert!(kept("data/create/enchantment/capacity.json"));
     }
 
     #[test]
