@@ -45,7 +45,7 @@ pub struct Drawing;
 
 impl Subsystem for Drawing {
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[KEY]
+        &[KEY, super::LAST_EXCEPTION]
     }
 
     fn animated(

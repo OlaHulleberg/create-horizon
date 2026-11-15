@@ -206,6 +206,39 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
             ));
         }
     }
+    // `MechanicalBearingBlockEntity.addToTooltip`: a bearing that hasn't taken the structure in
+    // front of it says how to (after the overstressed warning, which comes instead).
+    if !overstressed && bearing_hint(host, pos, block) {
+        if !lines.is_empty() {
+            lines.push(Vec::new());
+        }
+        let title = translated(host, "create.hint.empty_bearing.title", "Update Bearing");
+        lines.push(vec![(format!("    {title}"), 0xFFAA00)]);
+        lines.extend(cut_hint(
+            draw,
+            &translated(
+                host,
+                "create.hint.empty_bearing",
+                "_Right-click_ the bearing with an _empty_ _hand_ to _attach_ the structure you \
+                 just built in front of it.",
+            ),
+        ));
+    }
+    // `IDisplayAssemblyExceptions.addExceptionToTooltip`: why its last assembly failed.
+    if let Some(text) = assembly_exception(host, pos) {
+        if !lines.is_empty() {
+            lines.push(Vec::new());
+        }
+        let title = translated(
+            host,
+            "create.gui.assembly.exception",
+            "This Contraption was unable to assemble:",
+        );
+        lines.push(vec![(format!("    {title}"), 0xFFAA00)]);
+        for l in text.split('\n') {
+            lines.extend(cut_hint(draw, l));
+        }
+    }
     if lines.is_empty() {
         HOVER.set(None);
         return;
@@ -281,6 +314,107 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
             dx += draw.text_width(text);
         }
     }
+}
+
+/// `key`'s text in the client's language, or `english`.
+fn translated(host: &dyn ClientHost, key: &str, english: &str) -> String {
+    host.translate(key).unwrap_or_else(|| english.to_owned())
+}
+
+/// The data of the block entity at `pos` on this client.
+fn data_at(host: &dyn ClientHost, pos: [i32; 3]) -> Option<mod_api::Compound> {
+    let level = host.level(host.dimension())?;
+    host.block_entity(level, pos)?.data(host)
+}
+
+/// Whether the bearing at `pos` hints at taking its structure (`addToTooltip`): not while the
+/// player sneaks, a mechanical bearing only while it turns, not while running, and only with a
+/// block in front of it that placing would not replace.
+fn bearing_hint(host: &dyn ClientHost, pos: [i32; 3], block: create_engine::Block) -> bool {
+    use create_engine::Block as B;
+    if !matches!(block, B::MechanicalBearing | B::WindmillBearing) {
+        return false;
+    }
+    let sneaking = host
+        .local_player()
+        .is_some_and(|p| items::sneaking(host, p));
+    if sneaking {
+        return false;
+    }
+    let Some(data) = data_at(host, pos) else {
+        return false;
+    };
+    let speed = match data.get(&super::super::kinetics::SPEEDS.into()) {
+        Some(mod_api::Tag::List(l)) => match l.first() {
+            Some(mod_api::Tag::Float(bits)) => f32::from_bits(*bits),
+            _ => 0.0,
+        },
+        _ => 0.0,
+    };
+    if block == B::MechanicalBearing && speed == 0.0 {
+        return false;
+    }
+    let running = matches!(
+        super::super::kinetics::synced(&data, super::super::contraptions::draw_key()),
+        Some(mod_api::Tag::Compound(_))
+    );
+    if running {
+        return false;
+    }
+    let Some(facing) = super::super::client_table(host, |t| {
+        t.get(block_at(host, pos)).and_then(|(_, i)| i.facing)
+    })
+    .flatten() else {
+        return false;
+    };
+    let o = facing.offset();
+    let front = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+    let Some(level) = host.level(host.dimension()) else {
+        return false;
+    };
+    level
+        .block_state(host, front)
+        .and_then(|s| mod_api::HostBlockStates::block_states(host).replaceable(s))
+        == Some(false)
+}
+
+/// The message of the last assembly the block at `pos` failed (`AssemblyException`), its
+/// arguments filled in (an unmovable block's name in the client's language).
+fn assembly_exception(host: &dyn ClientHost, pos: [i32; 3]) -> Option<String> {
+    use mod_api::Tag;
+    let data = data_at(host, pos)?;
+    let Some(Tag::Compound(c)) =
+        super::super::kinetics::synced(&data, super::super::contraptions::LAST_EXCEPTION)
+    else {
+        return None;
+    };
+    let text = |k: &str| match c.get(&k.into()) {
+        Some(Tag::String(s)) => Some(s.to_string_lossy()),
+        _ => None,
+    };
+    let key = text("Key")?;
+    let mut args: Vec<String> = match c.get(&"Args".into()) {
+        Some(Tag::List(l)) => l
+            .iter()
+            .filter_map(|t| match t {
+                Tag::String(s) => Some(s.to_string_lossy()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    if let Some(block) = text("Block") {
+        let name = block
+            .split_once(':')
+            .and_then(|(ns, path)| host.translate(&format!("block.{ns}.{path}")))
+            .unwrap_or(block);
+        args.push(name);
+    }
+    let mut message = host.translate(&format!("create.gui.assembly.exception.{key}"))?;
+    for (i, a) in args.iter().enumerate() {
+        message = message.replace(&format!("%{}$s", i + 1), a);
+    }
+    Some(message)
 }
 
 std::thread_local! {

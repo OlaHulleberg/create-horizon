@@ -270,6 +270,73 @@ fn speed(dim: usize, pos: [i32; 3]) -> f32 {
     with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0)
 }
 
+/// The key of a bearing's or piston's last assembly's failure in its block entity's data
+/// (`AssemblyException.write`'s `LastException`), for its clients' overlay
+/// (`IDisplayAssemblyExceptions`): the message's key, its arguments and, for an unmovable block,
+/// the block's id.
+pub const LAST_EXCEPTION: &str = "LastException";
+
+/// `lastException`: what the last assembly of the bearing or piston at `pos` refused, or none
+/// for one that worked; nothing changes for a structure that wasn't there to assemble
+/// (`assemble` returning false).
+fn set_exception(lv: &mut ServerLevel<'_>, pos: [i32; 3], refused: Option<&contraption::Refused>) {
+    use contraption::Refused;
+    let c = match refused {
+        Some(Refused::Empty) => return,
+        Some(r) => {
+            let (key, args, block) = match r {
+                Refused::Unmovable(p) => (
+                    "unmovableBlock",
+                    p.iter().map(i32::to_string).collect(),
+                    lv.name_props(*p).map(|(n, _)| n),
+                ),
+                Refused::TooLarge => (
+                    "structureTooLarge",
+                    vec![contraption::MAX_BLOCKS.to_string()],
+                    None,
+                ),
+                Refused::NotEnoughSails(n) => (
+                    "not_enough_sails",
+                    vec![n.to_string(), contraption::MIN_SAILS.to_string()],
+                    None,
+                ),
+                Refused::Empty => return,
+            };
+            let mut c = Compound::new();
+            c.insert("Key".into(), Tag::String(key.into()));
+            c.insert(
+                "Args".into(),
+                Tag::List(
+                    args.into_iter()
+                        .map(|a: String| Tag::String(a.as_str().into()))
+                        .collect(),
+                ),
+            );
+            if let Some(b) = block {
+                c.insert("Block".into(), Tag::String(b.as_str().into()));
+            }
+            Some(c)
+        }
+        None => None,
+    };
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let Some(mut data) = entity.data(&*lv.host) else {
+        return;
+    };
+    let changed = match c {
+        Some(c) => {
+            let tag = Tag::Compound(c);
+            data.insert(LAST_EXCEPTION.into(), tag.clone()) != Some(tag)
+        }
+        None => data.remove(&LAST_EXCEPTION.into()).is_some(),
+    };
+    if changed {
+        let _ = entity.replace_data(&mut *lv.host, data);
+    }
+}
+
 /// `sequenceContext.getEffectiveValue` of the turn (`distance`: by metres, else by degrees) a
 /// sequenced gearshift or valve handle hands the block at `pos`, as its speed changes.
 fn sequence_limit(dim: usize, pos: [i32; 3], distance: bool) -> Option<f32> {
@@ -309,9 +376,14 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let gathered = contraption::gather_windmill(pos, facing, |p| found(lv, p));
-        let Ok((blocks, sails)) = gathered else {
-            continue;
+        let (blocks, sails) = match gathered {
+            Ok(g) => g,
+            Err(r) => {
+                set_exception(lv, pos, Some(&r));
+                continue;
+            }
         };
+        set_exception(lv, pos, None);
         actors::carry_storage(lv, pos, pos, &blocks);
         take_blocks(lv, pos, &blocks);
         // `RotationDirection` on its value box: clockwise unless set otherwise.
@@ -496,9 +568,14 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
             Some(None) => {}
             None if rpm != 0.0 => {
                 let gathered = contraption::gather_bearing(pos, facing, 0, |p| found(lv, p));
-                let Ok((blocks, sails)) = gathered else {
-                    continue;
+                let (blocks, sails) = match gathered {
+                    Ok(g) => g,
+                    Err(r) => {
+                        set_exception(lv, pos, Some(&r));
+                        continue;
+                    }
                 };
+                set_exception(lv, pos, None);
                 actors::carry_storage(lv, pos, pos, &blocks);
                 take_blocks(lv, pos, &blocks);
                 let w = create_engine::world::Windmill {
@@ -1060,9 +1137,14 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     let gathered = piston::gather_piston(c.anchor, facing, m < 0.0, sticky, &exclude, |p| {
         found(lv, p)
     });
-    let Ok(structure) = gathered else {
-        return;
+    let structure = match gathered {
+        Ok(s) => s,
+        Err(r) => {
+            set_exception(lv, pos, Some(&r));
+            return;
+        }
     };
+    set_exception(lv, pos, None);
     let o = facing.offset();
     let mut blocks: Vec<([i32; 3], u32)> = c
         .poles
