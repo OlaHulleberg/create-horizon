@@ -542,6 +542,11 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
         let Some(facing) = facing_of(lv, pos, Block::MechanicalBearing) else {
             continue;
         };
+        // One loaded turning has no speed until its network's first solve, which looks at it
+        // again: Create's block entity loads with its speed, and goes on turning.
+        if super::unsolved(dim, pos) {
+            continue;
+        }
         let rpm = speed(dim, pos);
         let running = with_world(|w| w.dims[dim].windmills.get(&pos).map(|m| m.bearing)).flatten();
         match running {
@@ -561,8 +566,11 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                 let stalled = BEARING_CARRIED
                     .with_borrow(|c| c.get(&(dim, pos)).is_some_and(|c| c.0.stalled));
                 turn.rebase(now, if stalled { 0.0 } else { rpm });
-                // `onSpeedChanged`: the limit starts again from the context it has now.
-                turn.limit = sequence_limit(dim, pos, false);
+                // `onSpeedChanged`: the limit starts again from the context it has now (not
+                // for the speed it is loaded with).
+                if !super::keeps_loaded_limit(dim, pos) {
+                    turn.limit = sequence_limit(dim, pos, false);
+                }
                 with_world(|w| {
                     if let Some(m) = w.dims[dim].windmills.get_mut(&pos) {
                         m.bearing = Some(turn);
@@ -808,6 +816,11 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
             }
         }
         let sp = g.shaft_pos();
+        // Loaded moving, it goes on once its shaft has a speed.
+        if super::unsolved(dim, sp) {
+            keep.push(g);
+            continue;
+        }
         let shaft = gantry_shaft(lv, sp).map(|(facing, part, powered)| Shaft {
             facing,
             part,
@@ -826,6 +839,11 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                     show_gantry(lv, &g, false);
                 }
                 g.moved(v);
+                // Saved with the column it started from as it starts, now and then while it
+                // moves, and as it stops (`gantries`).
+                if v != 0.0 && (g.offset == v || lv.game_time() % 10 == 0) {
+                    super::super::persist::mark_pos_unsaved(dim, g.start);
+                }
                 keep.push(g);
             }
             Step::Stop => {
@@ -841,6 +859,7 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                 put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
                 actors::release(lv, g.start, at, &mut g.carried);
                 show_gantry(lv, &g, true);
+                super::super::persist::mark_pos_unsaved(dim, g.start);
             }
         }
     }
@@ -922,15 +941,24 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
     }
     checks.sort();
     checks.dedup();
+    let mut later = Vec::new();
     for &pos in &checks {
+        // Loaded moving, it goes on once its network has a speed.
+        if super::unsolved(dim, pos) {
+            later.push(pos);
+            continue;
+        }
         let rpm = speed(dim, pos);
         // `onSpeedChanged`: a piston kept together by its mode moves again.
         let running = with_world(|w| {
             let limit = w.dims[dim].kinetics.sequence_limit(pos, 0, true);
             let m = w.dims[dim].pistons.get_mut(&pos)?;
             m.waiting = false;
-            // The limit starts again from the context it has now.
-            m.limit = limit;
+            // The limit starts again from the context it has now (not for the speed it is
+            // loaded with).
+            if !super::keeps_loaded_limit(dim, pos) {
+                m.limit = limit;
+            }
             Some(())
         })
         .flatten()
@@ -953,9 +981,12 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
             _ => {}
         }
     }
+    if !later.is_empty() {
+        with_world(|w| w.dims[dim].piston_checks.extend(later));
+    }
     for pos in moving {
         // One whose speed changed this tick only answers it (`assembleNextTick` returns).
-        if checks.contains(&pos) {
+        if checks.contains(&pos) || super::unsolved(dim, pos) {
             continue;
         }
         let waiting = with_world(|w| w.dims[dim].pistons.get(&pos).map(|m| m.waiting)).flatten();
@@ -1308,6 +1339,16 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
         _ => Vec::new(),
     };
     let pistons = pistons_from_nbt(lv, data);
+    let gantries = gantries_from_nbt(lv, data);
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        for g in gantries {
+            // A column loaded again while its gantry still runs keeps the running one.
+            if !d.gantries.iter().any(|m| m.start == g.start) {
+                d.gantries.push(g);
+            }
+        }
+    });
     with_world(|w| {
         w.load_windmills(dim, windmills.into_iter());
         w.dims[dim].chassis_range.extend(ranges);
@@ -1323,7 +1364,7 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
 pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
     let dim = lv.dim;
     let in_chunk = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
-    let Some((windmills, ranges, modes, pistons)) = with_world(|w| {
+    let Some((windmills, ranges, modes, pistons, gantries)) = with_world(|w| {
         let d = &w.dims[dim];
         let mut ranges: Vec<([i32; 3], i32)> = d
             .chassis_range
@@ -1346,15 +1387,25 @@ pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compo
             .map(|(p, m)| (*p, m.clone()))
             .collect();
         pistons.sort_by_key(|(p, _)| *p);
+        let gantries: Vec<create_engine::gantry::Moving> = d
+            .gantries
+            .iter()
+            .filter(|g| in_chunk(&g.start))
+            .cloned()
+            .collect();
         (
             w.column_windmills(dim, chunk[0], chunk[1]),
             ranges,
             modes,
             pistons,
+            gantries,
         )
     }) else {
         return;
     };
+    if !gantries.is_empty() {
+        data.insert("gantries".into(), gantries_to_nbt(lv, &gantries));
+    }
     if !pistons.is_empty() {
         data.insert("pistons".into(), pistons_to_nbt(lv, &pistons));
     }
@@ -1408,6 +1459,24 @@ fn windmills_to_nbt(
                 );
                 // A mechanical bearing's `Angle` (now) and that it is one.
                 let angle = w.bearing.map_or(0.0, |t| t.angle_at(now));
+                // Its column is written when its turn changes, not each tick: the turn as it
+                // follows from then (the angle, game time and speed it was set at, and its
+                // sequenced limit, `SequencedAngleLimit`), so a load finds both where they are at
+                // the save's game time.
+                if let Some(t) = w.bearing {
+                    let since = t.since.to_le_bytes();
+                    let word = |i: usize| i32::from_le_bytes(since[i..i + 4].try_into().unwrap());
+                    c.insert(
+                        "turn".into(),
+                        Tag::IntArray(vec![
+                            t.angle.to_bits() as i32,
+                            word(0),
+                            word(4),
+                            t.rpm.to_bits() as i32,
+                        ]),
+                    );
+                    super::limit_to_nbt(&mut c, t.limit);
+                }
                 c.insert(
                     "sails".into(),
                     Tag::IntArray(vec![
@@ -1482,6 +1551,7 @@ fn pistons_to_nbt(lv: &ServerLevel<'_>, all: &[([i32; 3], create_engine::world::
                     c.insert("storage".into(), t);
                 }
                 structure_to_nbt(lv, &mut c, &m.blocks);
+                super::limit_to_nbt(&mut c, m.limit);
                 c.insert(
                     "piston".into(),
                     Tag::IntArray(vec![
@@ -1524,6 +1594,7 @@ fn pistons_from_nbt(
             let carried = actors::bearing_actors(&blocks);
             let pos = [*p.first()?, *p.get(1)?, *p.get(2)?];
             actors::storage_from_nbt(lv, pos, c.get(&"storage".into()));
+            let limit = super::limit_from_nbt(lv.dim, pos, c);
             Some((
                 pos,
                 create_engine::world::Moving {
@@ -1535,9 +1606,74 @@ fn pistons_from_nbt(
                     initial,
                     facing: Dir::ALL.get(facing as usize).copied(),
                     waiting: waiting == 1,
-                    limit: None,
+                    limit,
                 },
             ))
+        })
+        .collect()
+}
+
+/// Moving gantries (`gantries`, in the column their carriage started from), as
+/// `GantryContraptionEntity` saves itself: where it started, its carriage's and shaft line's
+/// facings, how far it went, what is left of its sequenced limit, and the blocks. What they
+/// carried is found again from the blocks (their actors), as a piston's is.
+fn gantries_to_nbt(lv: &ServerLevel<'_>, all: &[create_engine::gantry::Moving]) -> Tag {
+    let index = |d: Dir| Dir::ALL.iter().position(|x| *x == d).unwrap_or(0) as i32;
+    Tag::List(
+        all.iter()
+            .map(|g| {
+                let mut c = Compound::new();
+                c.insert("pos".into(), Tag::IntArray(g.start.to_vec()));
+                if let Some(t) = actors::storage_to_nbt(lv, g.start) {
+                    c.insert("storage".into(), t);
+                }
+                structure_to_nbt(lv, &mut c, &g.blocks);
+                super::limit_to_nbt(&mut c, g.limit);
+                c.insert(
+                    "gantry".into(),
+                    Tag::IntArray(vec![
+                        index(g.carriage_facing),
+                        index(g.shaft_facing),
+                        g.offset.to_bits() as i32,
+                    ]),
+                );
+                Tag::Compound(c)
+            })
+            .collect(),
+    )
+}
+
+fn gantries_from_nbt(lv: &ServerLevel<'_>, data: &Compound) -> Vec<create_engine::gantry::Moving> {
+    let Some(Tag::List(list)) = data.get(&"gantries".into()) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|c| {
+            let Tag::Compound(c) = c else { return None };
+            let Some(Tag::IntArray(p)) = c.get(&"pos".into()) else {
+                return None;
+            };
+            let Some(Tag::IntArray(v)) = c.get(&"gantry".into()) else {
+                return None;
+            };
+            let [carriage, shaft, offset] = v[..] else {
+                return None;
+            };
+            let blocks = structure_from_nbt(lv, c)?;
+            let start = [*p.first()?, *p.get(1)?, *p.get(2)?];
+            actors::storage_from_nbt(lv, start, c.get(&"storage".into()));
+            Some(create_engine::gantry::Moving {
+                start,
+                carriage_facing: *Dir::ALL.get(carriage as usize)?,
+                shaft_facing: *Dir::ALL.get(shaft as usize)?,
+                offset: f32::from_bits(offset as u32),
+                // Shown again at the speed of its first tick.
+                per_tick: 0.0,
+                carried: actors::bearing_actors(&blocks),
+                // Its limit is set as it starts only (`limitMovement`), so no speed check resets it.
+                limit: super::saved_limit(c),
+                blocks,
+            })
         })
         .collect()
 }
@@ -1580,18 +1716,38 @@ fn windmills_from_nbt(
                 .collect();
             let pos = [*p.first()?, *p.get(1)?, *p.get(2)?];
             actors::storage_from_nbt(lv, pos, c.get(&"storage".into()));
+            let limit = super::limit_from_nbt(lv.dim, pos, c);
+            let bearing = (sails.get(3) == Some(&1)).then(|| {
+                let angle = f32::from_bits(sails.get(2).copied().unwrap_or(0) as u32);
+                match c.get(&"turn".into()) {
+                    Some(Tag::IntArray(t)) if t.len() == 4 => {
+                        let since = (i64::from(t[2]) << 32) | i64::from(t[1] as u32);
+                        let mut turn = Turn {
+                            angle: f32::from_bits(t[0] as u32),
+                            since: since.min(now),
+                            rpm: f32::from_bits(t[3] as u32),
+                            limit,
+                        };
+                        // Where it had turned to by now, and what is left of its limit; its speed
+                        // comes back with its network's.
+                        turn.rebase(now, 0.0);
+                        turn
+                    }
+                    _ => Turn {
+                        angle,
+                        since: now,
+                        rpm: 0.0,
+                        limit,
+                    },
+                }
+            });
             Some((
                 pos,
                 create_engine::world::Windmill {
                     blocks,
                     sails: (*sails.first()?).max(0) as u32,
                     clockwise: sails.get(1) != Some(&0),
-                    bearing: (sails.get(3) == Some(&1)).then(|| Turn {
-                        angle: f32::from_bits(sails.get(2).copied().unwrap_or(0) as u32),
-                        since: now,
-                        rpm: 0.0,
-                        limit: None,
-                    }),
+                    bearing,
                 },
             ))
         })

@@ -373,6 +373,20 @@ fn tick_sequencers(lv: &mut ServerLevel<'_>) {
         checked.push(pos);
     }
     steps.extend(with_world(|w| w.tick_sequencers(dim)).unwrap_or_default());
+    // Those inside a turn or delay are saved now and then too, as the structures they move
+    // save their offsets and limits (`SequencedGearshiftBlockEntity.write`'s progress).
+    if lv.game_time() % 10 == 0 {
+        let running: Vec<[i32; 3]> = with_world(|w| {
+            let d = &w.dims[dim];
+            d.sequencers
+                .iter()
+                .filter(|(_, s)| s.ticks())
+                .map(|(p, _)| *p)
+                .collect()
+        })
+        .unwrap_or_default();
+        checked.extend(running);
+    }
     for &pos in checked.iter().chain(steps.iter().map(|(p, _)| p)) {
         super::sequencer::save_run(lv, pos);
     }
