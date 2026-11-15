@@ -38,8 +38,8 @@
 //! delivery with packages aboard waits and looks again, one without and a retrieval go on to the
 //! next entry.
 //!
-//! Left out for now, not for want of API: the line of where a relocated train's wheels would go
-//! (`TrainRelocator`'s preview).
+//! Left out for now, not for want of API: signals' and observers' track markers (no
+//! `TrackTargetingBehaviour.targetDirection` is kept).
 //!
 //! What the mod API cannot do, and is left out (each with the legacy call it replaced):
 //!

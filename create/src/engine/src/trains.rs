@@ -735,23 +735,18 @@ impl Train {
         Some(t)
     }
 
-    /// `TrainRelocator.relocate`: the train put back on the track with its front bogey on the
-    /// track block `block`, facing along the track the way nearest `look`, each wheel point as
-    /// far behind as it was assembled; standing still, bound nowhere. False (and the train
-    /// unchanged) when the block is no track or a wheel would leave the track.
-    pub fn relocate(&mut self, net: &Network, block: [i32; 3], look: Vec3) -> bool {
+    /// The wheel points `relocate` puts the train at, front first: all of them and true, or those
+    /// up to the first that leaves the track (`blocked`) and false. None when `block` is no
+    /// track or no way along it is found.
+    fn relocated(&self, net: &Network, block: [i32; 3], look: Vec3) -> Option<(Vec<Point>, bool)> {
         let g = &net.graph;
-        let Some(loc) = net.blocks.get(&block) else {
-            return false;
-        };
+        let loc = net.blocks.get(&block)?;
         let centre = Point {
             edge: loc.edge,
             position: loc.position,
             blocked: false,
         };
-        let Some(front) = net.locate(centre.at(g), look) else {
-            return false;
-        };
+        let front = net.locate(centre.at(g), look)?;
         // The bogeys' places behind the front one: each carriage's first bogey its spacing
         // (`carriageSpacing`) behind the one before, its second its bogey spacing on; each
         // bogey with its two wheels.
@@ -771,15 +766,40 @@ impl Train {
             for d in [-WHEEL_SPACING / 2.0, WHEEL_SPACING / 2.0] {
                 let mut p = front;
                 p.travel_signed(g, -(f64::from(*place) + d), |_, _| 0);
-                if p.blocked {
-                    return false;
-                }
                 points.push(p);
+                if p.blocked {
+                    return Some((points, false));
+                }
             }
         }
-        if points.len() != self.points.len() {
+        let whole = points.len() == self.points.len();
+        Some((points, whole))
+    }
+
+    /// `TrainRelocator.relocateClient(.., simulate)`'s `toVisualise`: where each wheel of the
+    /// train would go with its front bogey on track `block` (`relocate`), front first (as
+    /// `TravellingPoint.getPosition`, a block over the track), and whether it fits there. None where it can't go at all (no track).
+    pub fn relocation(&self, net: &Network, block: [i32; 3], look: Vec3) -> Option<(Vec<Vec3>, bool)> {
+        let (points, ok) = self.relocated(net, block, look)?;
+        let g = &net.graph;
+        // `TravellingPoint.getPosition`: a block up along the track's normal.
+        let up = |p: &Point| {
+            let length = g.length(p.edge);
+            let t = if length == 0.0 { 0.0 } else { p.position / length };
+            let (at, n) = (p.at(g), g.normal(p.edge, t));
+            [at[0] + n[0], at[1] + n[1], at[2] + n[2]]
+        };
+        Some((points.iter().map(up).collect(), ok))
+    }
+
+    /// `TrainRelocator.relocate`: the train put back on the track with its front bogey on the
+    /// track block `block`, facing along the track the way nearest `look`, each wheel point as
+    /// far behind as it was assembled; standing still, bound nowhere. False (and the train
+    /// unchanged) when the block is no track or a wheel would leave the track.
+    pub fn relocate(&mut self, net: &Network, block: [i32; 3], look: Vec3) -> bool {
+        let Some((points, true)) = self.relocated(net, block, look) else {
             return false;
-        }
+        };
         self.points = points;
         self.speed = 0.0;
         self.nav = None;

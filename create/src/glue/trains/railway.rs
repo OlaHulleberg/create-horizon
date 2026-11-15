@@ -156,6 +156,7 @@ impl Subsystem for Trains {
         tracks::sync(lv);
         super::conductor::tick(lv);
         super::station_screen::tick(lv);
+        super::relocate::preview(lv);
     }
 
     fn entity_interact(
@@ -183,6 +184,7 @@ impl Subsystem for Trains {
             super::schedule_screen::CHANNEL => {
                 super::schedule_screen::client_message(host, player, data);
             }
+            super::relocate::CHANNEL => super::relocate::client_message(player, data),
             _ => return false,
         }
         true
@@ -195,6 +197,7 @@ impl Subsystem for Trains {
             STATES_CHANNEL => super::client::states_from_server(&*host, data),
             super::station_screen::CHANNEL => super::station_screen::server_message(host, data),
             super::schedule_screen::CHANNEL => super::schedule_screen::server_message(host, data),
+            super::relocate::CHANNEL => super::relocate::server_message(data),
             _ => return false,
         }
         true
@@ -203,6 +206,7 @@ impl Subsystem for Trains {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         super::station_screen::tick_client(host);
         super::schedule_screen::tick_client(host);
+        super::relocate::client_tick(host);
     }
 
     /// A station's flag, marker and assembly track, a track's curves, and a signal's light and
@@ -231,6 +235,7 @@ impl Subsystem for Trains {
         event: &mut mod_api::RenderLevelStageEvent<'_>,
     ) {
         super::carriage_draw::render_level_stage(host, event);
+        super::relocate::render_level_stage(event);
     }
 
     /// A station's flag moving and an invalid signal's blink (`SignalRenderer`) are drawn every
@@ -248,6 +253,7 @@ impl Subsystem for Trains {
 
     fn client_reset(&self) {
         super::station_draw::client_reset();
+        super::relocate::client_reset();
         super::carriage_draw::reset();
         super::client::reset();
         super::station_screen::reset();

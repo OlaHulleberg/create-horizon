@@ -294,9 +294,7 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - Equipment: a haunted bell's soul pulse showing where mobs may spawn (`HauntedBellPulser`, `SoulPulseEffect`)
   and the soul particles and sounds after it rings.
 - Trains: `TrackTargetingBehaviour.targetDirection` is not kept, so signals' and observers' track markers are
-  not drawn (stations draw theirs, turned by their last assembly direction); the relocator's preview of where a
-  train's wheels would go (`TrainRelocator.visualise`, the green or red line) is not drawn, its action bar says
-  what a click does.
+  not drawn (stations draw theirs, turned by their last assembly direction).
 - Stock: a placed clipboard's `#` addresses are not offered by address boxes
   (`AddressEditBoxHelper.advertiseClipboard`: its pages are not on its clients).
 - Display: the sources' colours (the boiler's bars, the gauges' marks: the engine's text is plain).
