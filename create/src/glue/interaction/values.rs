@@ -346,6 +346,7 @@ pub(crate) fn clipboard_key(block: B) -> Option<&'static str> {
         B::WindmillBearing => "RotationDirection",
         B::ClockworkBearing => "ClockHands",
         B::MechanicalRoller => "RollingMode",
+        B::CartAssembler => "CartMovementMode",
         B::PulseRepeater | B::PulseExtender | B::PulseTimer => "Timings",
         B::WeightedEjector => "Settings",
         b if create_engine::dye::is_valve_handle(b) => "Settings",

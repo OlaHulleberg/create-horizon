@@ -348,6 +348,64 @@ impl Subsystem for Decor {
     }
 }
 
+/// `ItemHatchBlockEntity.filtering`: the item the hatch at `pos` lets through, if one.
+pub(crate) fn hatch_filter(dim: usize, pos: [i32; 3]) -> Option<String> {
+    with(dim, |d| d.hatch_filters.get(&pos).cloned())
+}
+
+/// `FilteringBehaviour.setFilter` on the hatch at `pos`.
+pub(crate) fn set_hatch_filter(dim: usize, pos: [i32; 3], item: Option<String>) {
+    with(dim, |d| match item {
+        Some(item) => d.hatch_filters.insert(pos, item),
+        None => d.hatch_filters.remove(&pos),
+    });
+    super::persist::mark_pos_unsaved(dim, pos);
+}
+
+/// `FilteringBehaviour.setFilter` on the creative crate at `pos`: its supply.
+pub(crate) fn set_crate_supply(dim: usize, pos: [i32; 3], item: Option<String>) {
+    with(dim, |d| match item {
+        Some(item) => d.supplies.insert(pos, item),
+        None => d.supplies.remove(&pos),
+    });
+    super::persist::mark_pos_unsaved(dim, pos);
+}
+
+/// The creative crate's supply at `pos` (by level).
+pub(crate) fn crate_supply_of(dim: usize, pos: [i32; 3]) -> Option<String> {
+    with(dim, |d| d.supplies.get(&pos).cloned())
+}
+
+/// A clipboard of no pages.
+pub(crate) fn clipboard_stack(host: &dyn Host) -> Option<ItemStack> {
+    mod_api::Identifier::parse("create:clipboard")
+        .ok()
+        .and_then(|i| host.item_key(&i))
+        .map(ItemStack::of)
+}
+
+/// The clipboard placed at `pos` (`ClipboardBlockEntity.components()` on its stack).
+pub(crate) fn placed_clipboard(dim: usize, pos: [i32; 3]) -> Option<ItemStack> {
+    with(dim, |d| d.clipboards.get(&pos).cloned())
+}
+
+/// `ClipboardEditPacket` on a placed clipboard (`setComponents`, `onEditedBy`): its stack, and
+/// its `written` state following whether it has pages (`updateWrittenState`).
+pub(crate) fn set_placed_clipboard(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    stack: ItemStack,
+    written: bool,
+) {
+    let dim = lv.dim;
+    with(dim, |d| d.clipboards.insert(pos, stack));
+    super::persist::mark_pos_unsaved(dim, pos);
+    let value = if written { "true" } else { "false" };
+    if lv.property(pos, "written").as_deref() != Some(value) {
+        lv.set_property(pos, "written", value, super::server::update_all());
+    }
+}
+
 /// `BottomlessItemHandler` of a creative crate at `pos`: Some(supply) when one is there.
 pub fn crate_supply(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Option<String>> {
     let (b, _) = block_of(lv.block(pos))?;

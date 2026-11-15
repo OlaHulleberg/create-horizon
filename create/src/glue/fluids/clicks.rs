@@ -370,6 +370,40 @@ fn use_smart_pipe(
     true
 }
 
+/// The item in the smart pipe's filter slot at `pos`.
+pub(crate) fn smart_pipe_filter(dim: usize, pos: [i32; 3]) -> Option<String> {
+    with_world(|w| {
+        w.dims[dim]
+            .plumbing
+            .filters
+            .get(&pos)
+            .map(|f| f.item.clone())
+    })
+    .flatten()
+}
+
+/// `FilteringBehaviour.setFilter` on the smart pipe at `pos` (`forFluids`: the item's fluid, if
+/// it holds one); the pipes look again.
+pub(crate) fn set_smart_pipe_filter(lv: &mut ServerLevel<'_>, pos: [i32; 3], item: Option<String>) {
+    let filter = item.map(|item| {
+        let fluid = emptying(&item).map(|e| e.fluid);
+        create_engine::fluids::SmartFilter { item, fluid }
+    });
+    let dim = lv.dim;
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        let changed = match filter {
+            Some(f) => d.plumbing.filters.insert(pos, f.clone()) != Some(f),
+            None => d.plumbing.filters.remove(&pos).is_some(),
+        };
+        if changed {
+            d.pipes_changed = true;
+            d.plumbing.filter_changes.push(pos);
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+    });
+}
+
 /// The client's side of the clicks above (`right_click_block`): where the block's `useItemOn`
 /// answers SUCCESS on the client too, the click ends there, so the held item (a bucket) is not
 /// also used on the world.

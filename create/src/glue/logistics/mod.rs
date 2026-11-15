@@ -47,16 +47,16 @@
 pub(crate) mod amount;
 pub mod arms;
 mod belt;
-mod chute;
+pub(crate) mod chute;
 pub(crate) mod client;
 mod depot;
 mod flaps;
-mod funnel;
+pub(crate) mod funnel;
 mod handlers;
 pub(crate) mod items;
 mod placement;
 mod slicer;
-mod tunnel;
+pub(crate) mod tunnel;
 
 pub use arms::Arms;
 // What the processing machines hand their results to beside them (the legacy logistics glue's

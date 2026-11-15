@@ -24,7 +24,7 @@
 //!   engine back (no close callback on `Transaction`). Pumps reach Create's own blocks and open
 //!   ends as the legacy glue did.
 
-mod clicks;
+pub(crate) mod clicks;
 pub(crate) mod client;
 mod drawn;
 pub(crate) mod engine;

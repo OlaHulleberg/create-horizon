@@ -91,6 +91,18 @@ impl mod_api::BlockPart for DecorBlock {
             Block::Clipboard => {
                 if back {
                     collect_clipboard(&mut lv, player, click.pos);
+                } else if click.hand == Hand::Main {
+                    // `useWithoutItem`: its pages' screen (the clipboard port's).
+                    let stack = with(lv.dim, |d| d.clipboards.get(&click.pos).cloned())
+                        .or_else(|| stack_of(&*lv.host, "create:clipboard", 1));
+                    if let Some(stack) = stack {
+                        crate::glue::display::clipboard::open(
+                            lv.host,
+                            player,
+                            Some(click.pos),
+                            &stack,
+                        );
+                    }
                 }
                 Some(InteractionResult::Success)
             }
