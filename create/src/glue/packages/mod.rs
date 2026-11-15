@@ -2233,7 +2233,8 @@ fn draw_conveyor(
 /// `renderChain`: the chain's sprite in two crossed planes `length` long up the pose's y,
 /// each block of it vanilla's chain model (`renderPart`'s quads, the same columns of the
 /// sprite). Its scrolling with the conveyor's speed (`minV` from `animation`) is left out: a
-/// model's sprite can't wrap.
+/// block entity's model sprite can't wrap (`TerrainUvShift` doesn't); a textured world pipeline
+/// wraps one, but only as world quads drawn from a world-draw hook, outside this pose.
 fn draw_chain(draw: &mut dyn mod_api::BlockEntityDrawContext, host: &dyn ClientHost, length: f32) {
     let mut y = 0.0f32;
     while y < length {
