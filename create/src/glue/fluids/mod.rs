@@ -32,6 +32,7 @@
 //!   engine back (no close callback on `Transaction`). Pumps reach Create's own blocks and open
 //!   ends as the legacy glue did.
 
+mod carried;
 pub(crate) mod clicks;
 pub(crate) mod client;
 mod drawn;
@@ -115,6 +116,36 @@ pub const HOSE: &str = "Hose";
 pub struct Fluids;
 
 impl Subsystem for Fluids {
+    fn draw_carried(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        block: create_engine::Block,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        client::draw_carried(host, block, event);
+    }
+
+    fn carry_out(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        out: &mut Compound,
+    ) {
+        carried::carry_out(lv, pos, block, out);
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        data: &Compound,
+        _turn: create_engine::contraption::Transform,
+    ) {
+        carried::carry_in(lv, pos, block, data);
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         client::register(r);
         flows::register(r);

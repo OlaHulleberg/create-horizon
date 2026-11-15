@@ -119,6 +119,14 @@ struct OnCart {
     storage: Vec<([i32; 3], Vec<Option<ItemStack>>)>,
     /// The glue that held it (`Contraption.superglue`), in offsets from its anchor.
     glue: Vec<Glue>,
+    /// What its other block entities and the engine kept for its blocks
+    /// (`StructureBlockInfo.nbt`), as `actors::carry_held` saves it.
+    held: Option<Tag>,
+}
+
+/// The key a cart's contraption's block data is carried under while it is put back.
+fn held_key(uuid: u128) -> [i32; 3] {
+    [i32::MIN + 2, (uuid >> 32) as i32, uuid as i32]
 }
 
 /// A cart assembler's block entity: its cooldown, its mode (`movementMode`) and the cart that
@@ -1013,6 +1021,8 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             .collect::<Vec<_>>()
     })
     .unwrap_or_default();
+    // What their block entities and the engine keep for its other blocks rides too.
+    let held = crate::glue::contraptions::actors::carry_held(lv, held_key(nc.uuid), pos, &blocks);
     // `removeBlocksFromWorld`: anchors stay.
     let Some(air) = super::default_state(&*lv.host, "minecraft:air") else {
         return;
@@ -1056,6 +1066,7 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
                 coupled,
                 storage,
                 glue,
+                held,
             },
         );
         c.dirty = true;
@@ -1138,6 +1149,12 @@ fn put_back(lv: &mut ServerLevel<'_>, at: [f64; 3], on: OnCart) {
         at[2].floor() as i32,
     ];
     let (quarter, blocks) = mounted::placed_back(&m.blocks, mounted::y_rot(m.initial), m.turn.yaw);
+    let key = held_key(lv.game_time() as u128);
+    let place = |o: [i32; 3]| {
+        let o = create_engine::contraption::rotate(o, quarter, Axis::Y);
+        [origin[0] + o[0], origin[1] + o[1], origin[2] + o[2]]
+    };
+    crate::glue::contraptions::actors::expect_held(lv, key, on.held.as_ref(), place);
     for (o, s) in blocks {
         if is_anchor(s) {
             continue;
@@ -1160,6 +1177,7 @@ fn put_back(lv: &mut ServerLevel<'_>, at: [f64; 3], on: OnCart) {
             let _ = lv.level.spawn_item(lv.host, c[0], c[1], c[2], stack, 10);
         }
     }
+    crate::glue::contraptions::actors::release_storage(lv, key, place);
     for (o, slots) in on.storage {
         let o = create_engine::contraption::rotate(o, quarter, Axis::Y);
         put_storage_at(
@@ -1237,6 +1255,9 @@ fn contraption_tag(host: &dyn Host, on: &OnCart, with_turn: bool) -> Compound {
         .collect();
     if !storage.is_empty() {
         c.insert("Storage".into(), Tag::List(storage));
+    }
+    if let Some(held) = &on.held {
+        c.insert("Held".into(), held.clone());
     }
     let glue: Vec<Tag> = on
         .glue
@@ -1358,6 +1379,7 @@ fn contraption_of(host: &dyn Host, c: &Compound, dim: usize) -> Option<OnCart> {
         coupled,
         storage,
         glue,
+        held: get(c, "Held").cloned(),
     })
 }
 

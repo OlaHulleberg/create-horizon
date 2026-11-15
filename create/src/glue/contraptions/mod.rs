@@ -33,17 +33,34 @@
 //!   (`BearingRenderer`): the top is the kinetic block entity's part.
 //!
 //! Block entities ride with what they hold (`actors::carry_storage`, Create's
-//! `StructureBlockInfo.nbt`): Create's item slots (a depot's stack), a deployer's hand and mode,
-//! a tank's fluid (tanks keep their shape), and other block entities' saved data (a furnace's
-//! items). Deployers work while moving (`DeployerMovementBehaviour`), redstone contacts power the
-//! contacts they pass (`ContactMovementBehaviour`), elevators open their sliding doors at floors
-//! (`SlidingDoorMovementBehaviour`), and portable fluid interfaces reach a contraption's tanks.
+//! `StructureBlockInfo.nbt`), on bearings, pistons, gantries, pulleys, elevators, carts and
+//! trains: Create's item slots (a depot's stack), its block entity's own data (a copycat's
+//! material, a sequenced gearshift's program, a valve handle's angle), a deployer's hand and
+//! mode, a tank's fluid (tanks keep their shape), and other block entities' saved data (a
+//! furnace's items); and what the engine keeps for the block, which each subsystem takes from
+//! its tables and puts back where the block goes as a saved one loads (`Subsystem::carry_out`,
+//! `carry_in`): a creative motor's or speed controller's speed, a blaze burner's fuel, a basin's
+//! fluids, filter slots and their amounts (smart chutes, brass funnels, basins, saws,
+//! deployers), brass tunnels' side filters and mode, a redstone link's frequency, brass diodes,
+//! analog levers, smart observers and threshold switches, a nixie tube's text, a display link's
+//! target (turned with the structure) and source, spouts', drains' and creative tanks' fluids,
+//! smart pipes' filters, a saw's items, crafters' covers and joined inputs, an ejector's target,
+//! an arm's points (turned), a backtank's air, brackets, placards, placed clipboards, crates'
+//! supplies, hatches' filters, copycats' materials (turned), a contraption block's movement mode
+//! and a chassis' range. Saved with the moving structure (`actors::storage_to_nbt`).
 //!
-//! Left out, not for want of API:
-//! - The state the engine keeps per block for other Create blocks (a creative motor's speed, a
-//!   blaze burner's fuel, a basin's fluids, a link's frequency) is not carried.
-//! - What block entities hold is not drawn on a moving structure (a depot's item, a tank's
-//!   fluid, a deployer's held item).
+//! What their block entities hold is drawn while they move (`renderBlockEntities` with the
+//! contraption's update tags: `draw::draw_carried`, `Subsystem::draw_carried`): a depot's or
+//! ejector's stacks, a basin's items and fluids, a tank's, spout's or drain's fluid, a crafter's
+//! item, a nixie tube's text, filter slots' items, a chute's stack, an arm at rest, copycats'
+//! materials, placards' items, brackets, and vanilla chests, ender chests and shulker boxes (their
+//! item's special model). Blocks whose movement draws them (`disableBlockEntityRendering`:
+//! deployers, drills, saws, harvesters, rollers, interfaces, burners) are left to it.
+//!
+//! Deployers work while moving (`DeployerMovementBehaviour`), redstone contacts power the
+//! contacts they pass (`ContactMovementBehaviour`), elevators open their sliding doors at floors
+//! on the sides the floor's contact's door control lets open (`SlidingDoorMovementBehaviour`,
+//! `DoorControlBehaviour`), and portable fluid interfaces reach a contraption's tanks.
 //!
 //! Actors' moving parts are drawn as Create's actor visuals draw them (`actor_draw`): drill heads
 //! turn, harvester blades and roller wheels roll, saw blades run, deployers stroke and punch,
@@ -51,9 +68,14 @@
 //! its stall, its actors turned off and its interfaces. A carried mechanical bearing's top stays
 //! at rest on the structure, as Create's does when nothing is stabilized on it
 //! (`StabilizedBearingMovementBehaviour`).
+//!
+//! Left out, not for want of API:
+//! - A display board's text, a belt's items and a crafter's grid mid-craft are not carried, nor
+//!   drawn while moving; signs', banners' and beds' block entities and a deployer's held item
+//!   are not drawn while moving; trains and cart contraptions (block displays) draw none of what
+//!   their block entities hold.
 //! - A bearing's glue stays in the world while it turns and goes back turned with it; its
 //!   contraption controls are not carried.
-//! - An elevator contact's door control has no value box: doors open on every side.
 
 pub mod actor_draw;
 pub mod actors;
@@ -87,6 +109,10 @@ pub(crate) use lifts::contact_floor;
 
 pub struct Contraptions;
 
+/// What a moving structure carries for a contraption block on it (`Subsystem::carry_out`).
+const CARRIED_OPTION: &str = "ScrollOption";
+const CARRIED_RANGE: &str = "ChassisRange";
+
 impl Subsystem for Contraptions {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         bearings::register(r);
@@ -118,6 +144,49 @@ impl Subsystem for Contraptions {
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
         actors::glue_chunk_unload(dim, chunk);
+    }
+
+    /// The option on a contraption block's value box (`ScrollOptionBehaviour`: a bearing's or
+    /// piston's movement mode, a windmill's direction, a clock's hands) and a chassis' range
+    /// (`ChassisScrollValueBehaviour`) ride with it.
+    fn carry_out(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], _b: Block, out: &mut Compound) {
+        let dim = lv.dim;
+        let (option, range) = with_world(|w| {
+            let d = &mut w.dims[dim];
+            (d.scroll_options.remove(&pos), d.chassis_range.remove(&pos))
+        })
+        .unwrap_or_default();
+        if let Some(o) = option {
+            out.insert(CARRIED_OPTION.into(), mod_api::Tag::Int(i32::from(o)));
+        }
+        if let Some(r) = range {
+            out.insert(CARRIED_RANGE.into(), mod_api::Tag::Int(r));
+        }
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        _b: Block,
+        data: &Compound,
+        _turn: create_engine::contraption::Transform,
+    ) {
+        let dim = lv.dim;
+        let int = |k: &str| match data.get(&k.into()) {
+            Some(mod_api::Tag::Int(v)) => Some(*v),
+            _ => None,
+        };
+        let (option, range) = (int(CARRIED_OPTION), int(CARRIED_RANGE));
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            if let Some(o) = option {
+                d.scroll_options.insert(pos, o.clamp(0, 255) as u8);
+            }
+            if let Some(r) = range {
+                d.chassis_range.insert(pos, r);
+            }
+        });
     }
 
     /// `MechanicalBearingBlockEntity.onSpeedChanged` (`assembleNextTick`) and

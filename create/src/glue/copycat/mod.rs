@@ -128,7 +128,72 @@ fn with_prop(
 
 pub struct Copycats;
 
+/// What a moving structure carries for a copycat (`Subsystem::carry_out`).
+const CARRIED_MATERIAL: &str = "CopycatMaterial";
+const CARRIED_ITEM: &str = "CopycatItem";
+
 impl Subsystem for Copycats {
+    fn draw_carried(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        block: Block,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        if matches!(block, Block::CopycatPanel | Block::CopycatStep) {
+            parts::draw_carried(host, event);
+        }
+    }
+
+    /// A copycat's material and the item it took ride with it (`CopycatBlockEntity.write`), the
+    /// material turned with the structure (`CopycatBlockEntity.transform`).
+    fn carry_out(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], _b: Block, out: &mut Compound) {
+        let Some(c) = with(lv.dim, |d| d.copycats.remove(&pos)) else {
+            return;
+        };
+        let host = &*lv.host;
+        if let Some(m) = c.material.and_then(|m| host.block_state_string(m)) {
+            out.insert(CARRIED_MATERIAL.into(), Tag::String(m.as_str().into()));
+        }
+        if let Some(item) = c.item.and_then(|i| i.to_nbt(host)) {
+            out.insert(CARRIED_ITEM.into(), Tag::Compound(item));
+        }
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        b: Block,
+        data: &Compound,
+        turn: create_engine::contraption::Transform,
+    ) {
+        if !matches!(b, Block::CopycatPanel | Block::CopycatStep) {
+            return;
+        }
+        let host = &*lv.host;
+        let material = match data.get(&CARRIED_MATERIAL.into()) {
+            Some(Tag::String(m)) => host.block_state_id(&m.to_string_lossy()),
+            _ => None,
+        };
+        let material = match (material, turn.quarter_axis()) {
+            (Some(m), Some((quarter, axis))) => {
+                Some(crate::glue::trains::turned_state(host, m, quarter, axis))
+            }
+            (m, _) => m,
+        };
+        let item = match data.get(&CARRIED_ITEM.into()) {
+            Some(Tag::Compound(c)) => ItemStack::from_nbt(host, c),
+            _ => None,
+        };
+        if material.is_none() && item.is_none() {
+            return;
+        }
+        with(lv.dim, |d| {
+            d.copycats.insert(pos, Copycat { material, item });
+            d.shown.push(pos);
+        });
+    }
+
     /// The wrench on a copycat (legacy `use_item_on`'s copycat case): `CopycatBlock.onWrenched`
     /// takes its material off and it never turns; `onSneakWrenched` takes it off before the
     /// wrench picks the block up.

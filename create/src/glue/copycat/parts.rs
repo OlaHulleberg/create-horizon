@@ -324,3 +324,8 @@ impl BlockEntityPart for CopycatEntity {
         draw.keep();
     }
 }
+
+/// A copycat riding a moving structure: its material as it was taken (`CopycatModel`).
+pub(super) fn draw_carried(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    CopycatEntity.block_entity_submit(host, event);
+}

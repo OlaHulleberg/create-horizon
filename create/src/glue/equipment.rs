@@ -38,6 +38,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// The column's own data key: Create's equipment state beside the rest of Create's.
+/// A backtank's air a moving structure carries (`Subsystem::carry_out`).
+const CARRIED_AIR: &str = "BacktankAir";
 const KEY: &str = "create_equipment";
 
 const BLOCK_RANGE: &str = "minecraft:block_interaction_range";
@@ -87,6 +89,44 @@ impl Subsystem for Equipment {
         REACH.with_borrow_mut(Vec::clear);
         FIRE_IMMUNE.with_borrow_mut(Vec::clear);
         BREAKING.with_borrow_mut(HashMap::clear);
+    }
+
+    /// A backtank's air (`BacktankBlockEntity.write`) rides with it.
+    fn carry_out(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        _b: create_engine::Block,
+        out: &mut Compound,
+    ) {
+        let dim = lv.dim;
+        if let Some(b) = with_world(|w| w.dims[dim].backtanks.remove(&pos)).flatten() {
+            out.insert(
+                CARRIED_AIR.into(),
+                Tag::IntArray(vec![b.air, b.timer, b.capacity]),
+            );
+        }
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        _b: create_engine::Block,
+        data: &Compound,
+        _turn: create_engine::contraption::Transform,
+    ) {
+        if let Some(Tag::IntArray(v)) = data.get(&CARRIED_AIR.into())
+            && let [air, timer, capacity] = v[..]
+        {
+            let b = eq::Backtank {
+                air: air.max(0),
+                timer: timer.clamp(0, 20),
+                capacity: capacity.max(0),
+            };
+            let dim = lv.dim;
+            with_world(|w| w.load_backtanks(dim, std::iter::once((pos, b))));
+        }
     }
 
     /// Backtanks saved with a column (`BacktankBlockEntity.read`).

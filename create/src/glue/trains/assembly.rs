@@ -300,6 +300,7 @@ pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
                 (pivot[2] + f64::from(r[2])).floor() as i32,
             ]
         };
+        super::cargo::expect(lv, t.id, c, place);
         for (o, s) in car {
             // The block's centre from the pivot (the middle of the track under the
             // carriage's leading bogey), turned about it; its height from the track.

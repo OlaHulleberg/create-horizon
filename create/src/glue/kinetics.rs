@@ -23,13 +23,15 @@ use std::sync::OnceLock;
 pub const TYPE: &str = "create:kinetic";
 
 /// The key in a block entity's data under which its parts' speeds are, `[slot 0, slot 1]`.
-const SPEEDS: &str = "Speeds";
+pub(crate) const SPEEDS: &str = "Speeds";
 /// The keys of its first part's theoretical speed (`getTheoreticalSpeed`, what the goggles
 /// show) and of whether its network is overstressed (`isOverStressed`).
 pub const THEORY: &str = "Theory";
 pub const OVER: &str = "Over";
 /// Whether a speed controller shows its bracket (`SpeedControllerBlockEntity.hasBracket`).
-const BRACKET: &str = "Bracket";
+pub(crate) const BRACKET: &str = "Bracket";
+/// A speed setting a moving structure carries (`Subsystem::carry_out`).
+const CARRIED_SPEED: &str = "Speed";
 
 thread_local! {
     /// Speed controllers to look at again: one, or the large cog over one, came or went.
@@ -146,6 +148,27 @@ impl Subsystem for Kinetics {
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
         with_world(|w| w.column_unloaded(dim, chunk[0], chunk[1]));
+    }
+
+    /// A creative motor's or speed controller's speed (`ScrollValue`) rides with it.
+    fn carry_out(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], _b: Block, out: &mut Compound) {
+        if let Some(rpm) = with_world(|w| w.take_motor_setting(lv.dim, pos)).flatten() {
+            out.insert(CARRIED_SPEED.into(), Tag::Int(rpm));
+        }
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        _b: Block,
+        data: &Compound,
+        _turn: create_engine::contraption::Transform,
+    ) {
+        if let Some(Tag::Int(rpm)) = data.get(&CARRIED_SPEED.into()) {
+            let dim = lv.dim;
+            with_world(|w| w.load_settings(dim, std::iter::once((pos, *rpm))));
+        }
     }
 
     fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {

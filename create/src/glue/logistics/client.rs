@@ -1423,6 +1423,18 @@ fn draw_depot(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, pos: [i32;
     else {
         return;
     };
+    draw_depot_stacks(draw, host, &contents, prev, t);
+}
+
+/// `DepotRenderer.renderItemsOf`: the held stack, from where it was a tick ago (`prev`) to where
+/// it is, and the outputs around it.
+fn draw_depot_stacks(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    contents: &depot::Contents,
+    prev: depot::Held,
+    t: f32,
+) {
     for (slot, id, count) in &contents.stacks {
         let solid = block_item(host, id);
         let (poses, phase, offset) = if *slot == 0 {
@@ -1483,9 +1495,23 @@ fn draw_arm(draw: &mut dyn BlockEntityDrawContext, host: &dyn ClientHost, pos: [
     }) else {
         return;
     };
+    let speed = CLIENT.with_borrow(|c| c.speeds.get(&pos).copied().unwrap_or(0.0));
+    draw_arm_shown(draw, host, pos, &s, progress, speed, t);
+}
+
+/// `ArmRenderer` for an arm as `s` shows it at `progress`, turning at `speed` (a dancing one
+/// sways only while it turns).
+fn draw_arm_shown(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    pos: [i32; 3],
+    s: &arm::Shown,
+    progress: f32,
+    speed: f32,
+    t: f32,
+) {
     let mut now = arm::at_progress(s.from, s.from_base, s.to, progress);
     // `rave`: a dancing arm that turns sways to the music, its body in a rainbow.
-    let speed = CLIENT.with_borrow(|c| c.speeds.get(&pos).copied().unwrap_or(0.0));
     let rave = s.phase == arm::Phase::Dancing && speed != 0.0;
     if rave {
         let seed = (pos[0].wrapping_mul(31) ^ pos[1].wrapping_mul(17) ^ pos[2]).rem_euclid(64);
@@ -1748,6 +1774,81 @@ fn draw_filter_stack(
         }
         draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
         draw.pop();
+    }
+}
+
+/// What logistics blocks riding a moving structure show (`renderBlockEntities`), from the data
+/// they had when the structure took them: a depot's or ejector's stacks (`DepotRenderer`, its
+/// held stack at rest where it lay), a chute's stack and the filter in a slot
+/// (`FilteringRenderer`).
+pub(crate) fn draw_carried(
+    host: &dyn ClientHost,
+    block: Block,
+    event: &mut BlockEntitySubmitEvent<'_>,
+) {
+    match block {
+        Block::Depot | Block::WeightedEjector => {
+            let nbt = &event.entity.nbt;
+            let Some(Tag::List(items)) = nbt.get(&"Items".into()) else {
+                return;
+            };
+            let stacks = items
+                .iter()
+                .filter_map(|t| {
+                    let Tag::Compound(c) = t else { return None };
+                    let slot = match c.get(&"Slot".into()) {
+                        Some(Tag::Byte(b)) => *b as u8,
+                        _ => 0,
+                    };
+                    let id = match c.get(&"id".into()) {
+                        Some(Tag::String(s)) => s.to_string_lossy(),
+                        _ => return None,
+                    };
+                    let count = match c.get(&"count".into()) {
+                        Some(Tag::Int(n)) => (*n).clamp(1, 255) as u8,
+                        _ => 1,
+                    };
+                    Some((slot, id, count))
+                })
+                .collect();
+            let angle = match nbt.get(&crate::glue::contraptions::actors::SHOWN_CARRIED.into()) {
+                Some(Tag::Compound(c)) => match c.get(&super::carried::DEPOT_ANGLE.into()) {
+                    Some(Tag::Int(a)) => *a,
+                    _ => 0,
+                },
+                _ => 0,
+            };
+            let held = depot::Held::new(angle, false);
+            let contents = depot::Contents {
+                pos: event.pos,
+                held,
+                stacks,
+            };
+            draw_depot_stacks(&mut *event.draw, host, &contents, held, 1.0);
+        }
+        Block::Chute
+        | Block::SmartChute
+        | Block::BrassFunnel
+        | Block::BrassBeltFunnel
+        | Block::BrassTunnel => LogisticsEntity.block_entity_submit(host, event),
+        // An arm as it stood when the structure took it (its block entity doesn't tick
+        // riding: no turning, no dance).
+        Block::MechanicalArm => {
+            let carried = crate::glue::contraptions::actors::SHOWN_CARRIED;
+            let Some(Tag::Compound(c)) = event.entity.nbt.get(&carried.into()) else {
+                return;
+            };
+            let Some(Tag::Compound(a)) = c.get(&super::arms::CARRIED_ARM.into()) else {
+                return;
+            };
+            let Some((at, a)) = super::arms::arm_from_tag(a) else {
+                return;
+            };
+            let s = arm::Shown::of(at, &a);
+            let t = event.draw.partial();
+            draw_arm_shown(&mut *event.draw, host, event.pos, &s, s.progress, 0.0, t);
+        }
+        _ => {}
     }
 }
 

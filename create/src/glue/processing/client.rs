@@ -1080,3 +1080,16 @@ fn draw_mixer_part(draw: &mut dyn BlockEntityDrawContext, d: &parts::Draw, offse
     draw.still();
     draw.pop();
 }
+
+/// What a basin (its items and fluids) or a mechanical crafter (its item) shows while it rides
+/// a moving structure (`BasinRenderer`, `MechanicalCrafterRenderer` in
+/// `renderBlockEntities`), from the data it had when the structure took it.
+pub(super) fn draw_carried(
+    host: &dyn ClientHost,
+    block: Block,
+    event: &mut BlockEntitySubmitEvent<'_>,
+) {
+    if matches!(block, Block::Basin | Block::MechanicalCrafter) {
+        MachineDraw.block_entity_submit(host, event);
+    }
+}

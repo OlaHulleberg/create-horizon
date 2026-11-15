@@ -45,6 +45,7 @@
 mod application;
 pub(crate) mod basin;
 pub(crate) mod burner_draw;
+mod carried;
 mod client;
 mod containers;
 mod crafter;
@@ -91,6 +92,36 @@ use mod_api::{
 pub struct Processing;
 
 impl Subsystem for Processing {
+    fn draw_carried(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        block: create_engine::Block,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        client::draw_carried(host, block, event);
+    }
+
+    fn carry_out(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        out: &mut Compound,
+    ) {
+        carried::carry_out(lv, pos, block, out);
+    }
+
+    fn carry_in(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        data: &Compound,
+        turn: create_engine::contraption::Transform,
+    ) {
+        carried::carry_in(lv, pos, block, data, turn);
+    }
+
     fn animated(
         &self,
         block: create_engine::Block,

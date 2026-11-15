@@ -601,3 +601,23 @@ fn draw_boiler(event: &mut BlockEntitySubmitEvent<'_>, m: &create_engine::tank::
     }
     settled
 }
+
+/// What a fluid tank, spout, item drain or smart pipe shows while it rides a moving structure
+/// (`FluidTankRenderer`, `SpoutRenderer`, `ItemDrainRenderer`, the pipe's filter, in
+/// `renderBlockEntities`), from the data it had when the structure took it.
+pub(crate) fn draw_carried(
+    host: &dyn ClientHost,
+    block: Block,
+    event: &mut BlockEntitySubmitEvent<'_>,
+) {
+    if matches!(
+        block,
+        Block::FluidTank
+            | Block::CreativeFluidTank
+            | Block::Spout
+            | Block::ItemDrain
+            | Block::SmartFluidPipe
+    ) {
+        FluidEntity.block_entity_submit(host, event);
+    }
+}

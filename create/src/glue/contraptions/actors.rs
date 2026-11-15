@@ -59,14 +59,20 @@ thread_local! {
 /// What a carried block's block entity held besides mounted storage
 /// (`StructureBlockInfo.nbt`: `Contraption.addBlock` keeps every block entity's data, and
 /// `addBlocksToWorld` loads it into the block entity placed back): a Create block entity's item
-/// slots (a depot's stack), a deployer's hand and mode, a tank controller's fluid, or another
-/// block entity's saved data (a furnace's items, a sign's text).
+/// slots (a depot's stack), its own data and what the engine keeps for it (`Subsystem::carry_out`:
+/// a motor's speed, a burner's fuel, a link's frequency...), a deployer's hand and mode, a tank
+/// controller's fluid, or another block entity's saved data (a furnace's items, a sign's text).
 #[derive(Clone, Debug, Default)]
 struct BlockData {
     slots: Vec<Option<ItemStack>>,
     data: Option<Compound>,
     deployer: Option<create_engine::deployer::Deployer>,
     tank: Option<create_engine::tank::Multi>,
+    /// The Create block it was, its block entity's data (but what the kinetics and the
+    /// structure's drawing write again), and what the subsystems keep for it.
+    block: Option<Block>,
+    own: Option<Compound>,
+    engine: Option<Compound>,
 }
 
 impl BlockData {
@@ -75,6 +81,8 @@ impl BlockData {
             && self.data.is_none()
             && self.deployer.is_none()
             && self.tank.is_none()
+            && self.own.is_none()
+            && self.engine.is_none()
     }
 }
 
@@ -90,6 +98,25 @@ pub(super) fn deployer_punches(dim: usize, key: [i32; 3], local: [i32; 3]) -> bo
             })
         })
     })
+}
+
+/// Keys of a Create block entity's data that are not carried: its speeds and stress as the
+/// network gives them, what it generates, its bracket's look, a structure it draws and its value
+/// box's looks, all written again where it goes back; and its item slots, carried as slots.
+fn derived_key(k: &str) -> bool {
+    use super::super::kinetics;
+    [
+        kinetics::SPEEDS,
+        kinetics::THEORY,
+        kinetics::OVER,
+        kinetics::BRACKET,
+        super::super::sources::GENERATED,
+        super::draw::KEY,
+        super::super::interaction::values::LOOKS,
+        // Its item slots ride as slots.
+        "Items",
+    ]
+    .contains(&k)
 }
 
 /// The world closed: what moving contraptions carried goes with it.
@@ -721,6 +748,86 @@ pub(crate) fn carry_storage(
     }
 }
 
+/// What the block entities of contraption `key` show its clients (`Contraption.updateTags`,
+/// the update tag of each block entity as it was taken): each block's offset and its block
+/// entity's data, its item slots (`Items`) and what the engine kept for it (`Carried`).
+pub(super) fn shown_entities(lv: &ServerLevel<'_>, key: [i32; 3]) -> HashMap<[i32; 3], Compound> {
+    let host = &*lv.host;
+    HELD.with_borrow(|m| {
+        let Some(list) = m.get(&(lv.dim, key)) else {
+            return HashMap::new();
+        };
+        list.iter()
+            .filter(|(_, d)| d.block.is_some())
+            .map(|(o, d)| {
+                let mut c = d.own.clone().unwrap_or_default();
+                let items: Vec<Tag> = d
+                    .slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, s)| {
+                        let mut c = s.as_ref()?.to_nbt(host)?;
+                        c.insert("Slot".into(), Tag::Byte(i as i8));
+                        Some(Tag::Compound(c))
+                    })
+                    .collect();
+                if !items.is_empty() {
+                    c.insert("Items".into(), Tag::List(items));
+                }
+                if let Some(e) = &d.engine {
+                    c.insert(SHOWN_CARRIED.into(), Tag::Compound(e.clone()));
+                }
+                (*o, c)
+            })
+            .collect()
+    })
+}
+
+/// The key of what the engine kept for a block in its moving block entity's data
+/// ([`shown_entities`]).
+pub(crate) const SHOWN_CARRIED: &str = "Carried";
+
+/// What the block entities of a cart's contraption hold (all but its storage blocks, which
+/// the cart keeps, and the anchor at offset 0), taken as it assembles and kept with the cart
+/// as a save keeps it ([`storage_to_nbt`]); none when they hold nothing.
+pub(crate) fn carry_held(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    origin: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+) -> Option<Tag> {
+    let dim = lv.dim;
+    let mut held = Vec::new();
+    for (o, _) in blocks.iter().filter(|(o, _)| *o != [0, 0, 0]) {
+        let p = add(origin, *o);
+        if is_storage(lv, p) {
+            continue;
+        }
+        if let Some(d) = take_block_data(lv, p) {
+            held.push((*o, d));
+        }
+    }
+    if held.is_empty() {
+        return None;
+    }
+    HELD.with_borrow_mut(|m| m.insert((dim, key), held));
+    let tag = storage_to_nbt(lv, key);
+    HELD.with_borrow_mut(|m| m.remove(&(dim, key)));
+    tag
+}
+
+/// What [`carry_held`] kept, waiting for its blocks about to go back at `place(offset)`; then
+/// [`release_storage`] puts it in them.
+pub(crate) fn expect_held(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    tag: Option<&Tag>,
+    place: impl Fn([i32; 3]) -> [i32; 3],
+) {
+    storage_from_nbt(lv, key, tag);
+    expect_back(lv, key, place);
+}
+
 /// Whether the block entity at `pos` is one of Create's (its state the engine's, its stacks
 /// its declared slots), not another's whose saved data rides.
 fn create_entity(lv: &ServerLevel<'_>, e: mod_api::BlockEntityRef) -> bool {
@@ -749,8 +856,29 @@ fn take_block_data(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<BlockData>
         }
         _ => {}
     }
+    if let Some(b) = block {
+        // `getBlockEntityNBT`: what each subsystem keeps for it, taken from its tables.
+        let mut engine = Compound::new();
+        for s in super::super::SUBSYSTEMS {
+            s.carry_out(lv, pos, b, &mut engine);
+        }
+        out.block = Some(b);
+        if !engine.is_empty() {
+            // Its column is saved again without it.
+            mark_pos_unsaved(dim, pos);
+            out.engine = Some(engine);
+        }
+    }
     if let Some(e) = lv.host.block_entity(lv.level, pos) {
         if create_entity(lv, e) {
+            if let Some(data) = e.data(&*lv.host) {
+                let own: Compound = data
+                    .iter()
+                    .filter(|(k, _)| !derived_key(&k.to_string_lossy()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                out.own = (!own.is_empty()).then_some(own);
+            }
             let mut slots: Vec<Option<ItemStack>> = Vec::new();
             while let Ok(s) = e.item_slot(&*lv.host, slots.len() as u32) {
                 slots.push(s);
@@ -782,7 +910,7 @@ fn take_block_data(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<BlockData>
 /// each at `place(offset)` (`addBlocksToWorld` places a block with its block entity's data):
 /// a deployer placed there takes its state, a tank its part of its tank, which forms nothing
 /// new. Called before the blocks go back.
-pub(super) fn expect_back(
+pub(crate) fn expect_back(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     place: impl Fn([i32; 3]) -> [i32; 3],
@@ -793,6 +921,17 @@ pub(super) fn expect_back(
     let Some(list) = list else {
         return;
     };
+    // What the subsystems keep for each block, waiting for it where it goes back.
+    let turn = create_engine::contraption::Transform::from_place(&place);
+    for (o, data) in &list {
+        if let (Some(engine), Some(b)) = (&data.engine, data.block) {
+            let p = place(*o);
+            for s in super::super::SUBSYSTEMS {
+                s.carry_in(lv, p, b, engine, turn);
+            }
+            mark_pos_unsaved(dim, p);
+        }
+    }
     with_world(|w| {
         let d = &mut w.dims[dim];
         for (o, data) in &list {
@@ -859,6 +998,16 @@ fn release_held(lv: &mut ServerLevel<'_>, key: [i32; 3], place: impl Fn([i32; 3]
                 let _ = e.replace_data(&mut *lv.host, saved);
             }
             continue;
+        }
+        // The same Create block back (turned, maybe): its data and what the engine kept for it
+        // (`loadWithComponents`, `transform`).
+        let back = data.block.is_some() && lv.create_block(p) == data.block;
+        if back && let (Some(own), Some(e)) = (&data.own, entity) {
+            let _ = e.merge_data(&mut *lv.host, own.clone());
+            // What a block entity reads from its own data as it loads (`read`).
+            if data.block == Some(Block::SequencedGearshift) {
+                super::super::sequencer::loaded(&*lv.host, dim, p, e);
+            }
         }
         if data.slots.is_empty() {
             continue;
@@ -962,6 +1111,15 @@ pub(crate) fn storage_to_nbt(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<Tag>
             if let Some(data) = &d.data {
                 held.insert("data".into(), Tag::Compound(data.clone()));
             }
+            if let Some(b) = d.block {
+                held.insert("block".into(), Tag::String(b.name().into()));
+            }
+            if let Some(own) = &d.own {
+                held.insert("own".into(), Tag::Compound(own.clone()));
+            }
+            if let Some(engine) = &d.engine {
+                held.insert("engine".into(), Tag::Compound(engine.clone()));
+            }
             if let Some(dp) = &d.deployer {
                 held.insert(
                     "deployer".into(),
@@ -1033,6 +1191,15 @@ pub(crate) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<
         };
         if let Some(Tag::Compound(data)) = h.get(&"data".into()) {
             d.data = Some(data.clone());
+        }
+        if let Some(Tag::String(b)) = h.get(&"block".into()) {
+            d.block = Block::from_name(&b.to_string_lossy());
+        }
+        if let Some(Tag::Compound(own)) = h.get(&"own".into()) {
+            d.own = Some(own.clone());
+        }
+        if let Some(Tag::Compound(engine)) = h.get(&"engine".into()) {
+            d.engine = Some(engine.clone());
         }
         if let Some(t) = h.get(&"deployer".into()) {
             let c = Compound::from([("deployers".into(), t.clone())]);
@@ -2800,11 +2967,66 @@ fn toggle_controls(
     format!("{what} {}", if disable { "off" } else { "on" })
 }
 
+/// `/create_debug carried <pos>`: what the moving structure anchored at `pos` carries for its
+/// blocks (each offset, its block, data and the engine's state); for any other block, what a
+/// structure would carry for it, taken and put back where it is.
+fn debug_carried(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> String {
+    let dim = lv.dim;
+    fn text(t: &Tag) -> String {
+        match t {
+            Tag::Compound(c) => {
+                let inner: Vec<String> = c
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k.to_string_lossy(), text(v)))
+                    .collect();
+                format!("{{{}}}", inner.join(", "))
+            }
+            Tag::List(l) => format!("[{}]", l.iter().map(text).collect::<Vec<_>>().join(", ")),
+            Tag::String(s) => format!("{:?}", s.to_string_lossy()),
+            Tag::IntArray(v) => format!("{v:?}"),
+            other => format!("{other:?}"),
+        }
+    }
+    let show = |o: &[i32; 3], d: &BlockData| {
+        let slots = d.slots.iter().filter(|s| s.is_some()).count();
+        format!(
+            "{o:?} {:?} slots={slots} own={} engine={}",
+            d.block,
+            d.own
+                .clone()
+                .map_or("-".into(), |c| text(&Tag::Compound(c))),
+            d.engine
+                .clone()
+                .map_or("-".into(), |c| text(&Tag::Compound(c))),
+        )
+    };
+    if let Some(list) = HELD.with_borrow(|m| m.get(&(dim, pos)).cloned()) {
+        return list
+            .iter()
+            .map(|(o, d)| show(o, d))
+            .collect::<Vec<_>>()
+            .join("; ");
+    }
+    let Some(d) = take_block_data(lv, pos) else {
+        return "nothing carried".into();
+    };
+    let line = show(&[0; 3], &d);
+    let key = [i32::MIN + 1, pos[1], i32::MIN + 1];
+    HELD.with_borrow_mut(|m| m.insert((dim, key), vec![([0; 3], d)]));
+    expect_back(lv, key, |o| add(pos, o));
+    // The block stays: it is found again as a loaded one is, taking what waits for it.
+    let state = lv.block(pos);
+    with_world(|w| w.block_loaded(dim, pos, state));
+    release_held(lv, key, |o| add(pos, o));
+    line
+}
+
 pub(super) fn register_commands(event: &mut RegisterCommandsEvent<'_>) {
     for usage in [
         "create_debug glue <from:block_pos> <to:block_pos>",
         "create_debug roller <pos:block_pos> <mode:word>",
         "create_debug controls <pos:block_pos> <filter:text>",
+        "create_debug carried <pos:block_pos>",
     ] {
         event.commands.push(Command::op(usage, 2));
     }
@@ -2815,7 +3037,7 @@ pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
     let cmd = event.command;
     let lits: Vec<&str> = cmd.literals.iter().map(String::as_str).collect();
     let sub = match lits.as_slice() {
-        ["create_debug", s] if matches!(*s, "glue" | "roller" | "controls") => *s,
+        ["create_debug", s] if matches!(*s, "glue" | "roller" | "controls" | "carried") => *s,
         _ => return Flow::Continue,
     };
     let pos = |name: &str| match cmd.argument(name) {
@@ -2841,6 +3063,10 @@ pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
             "glue" => match (pos("from"), pos("to")) {
                 (Some(from), Some(to)) => debug_glue(&mut lv, from, to),
                 _ => "usage: create_debug glue <x> <y> <z> <x> <y> <z>".into(),
+            },
+            "carried" => match pos("pos") {
+                Some(at) => debug_carried(&mut lv, at),
+                None => "usage: create_debug carried <x> <y> <z>".into(),
             },
             "roller" => match (pos("pos"), word("mode")) {
                 (Some(at), Some(mode)) => debug_roller(&mut lv, at, &mode),

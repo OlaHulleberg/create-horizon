@@ -479,9 +479,104 @@ pub fn rotate(v: [i32; 3], quarter: i32, axis: crate::kinetics::Axis) -> [i32; 3
     }
 }
 
+/// `StructureTransform` as a moved block sees it: the quarter turns taking its offsets and
+/// directions from where it was to where it went back (none for a structure that only slid).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Transform {
+    /// Column `i` is where unit vector `i` goes.
+    m: [[i32; 3]; 3],
+}
+
+impl Transform {
+    pub const NONE: Transform = Transform {
+        m: [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    };
+
+    /// The turn of `place` (offset in the structure to where it went back), from where it puts
+    /// the three unit offsets; none when that is no quarter-turn rotation.
+    pub fn from_place(place: impl Fn([i32; 3]) -> [i32; 3]) -> Transform {
+        let o = place([0; 3]);
+        let col = |e: [i32; 3]| {
+            let p = place(e);
+            [p[0] - o[0], p[1] - o[1], p[2] - o[2]]
+        };
+        let cols = [col([1, 0, 0]), col([0, 1, 0]), col([0, 0, 1])];
+        let m = [0, 1, 2].map(|r| [0, 1, 2].map(|c| cols[c][r]));
+        let unit = |v: [i32; 3]| v.iter().map(|x| x.abs()).sum::<i32>() == 1;
+        let rows_unit = m.iter().all(|r| unit(*r));
+        let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        if cols.iter().all(|c| unit(*c)) && rows_unit && det == 1 {
+            Transform { m }
+        } else {
+            Transform::NONE
+        }
+    }
+
+    /// Offset `v` turned.
+    pub fn vec(&self, v: [i32; 3]) -> [i32; 3] {
+        let m = &self.m;
+        [0, 1, 2].map(|r| m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2])
+    }
+
+    /// Direction `d` turned.
+    pub fn dir(&self, d: crate::kinetics::Dir) -> crate::kinetics::Dir {
+        let v = self.vec(d.offset());
+        crate::kinetics::Dir::ALL
+            .into_iter()
+            .find(|x| x.offset() == v)
+            .unwrap_or(d)
+    }
+
+    /// Whether it turns anything.
+    pub fn turns(&self) -> bool {
+        *self != Transform::NONE
+    }
+
+    /// The axis it turns about and by how much ([`rotate`]'s quarter, in degrees); none when it
+    /// turns nothing (or is no single quarter turn about an axis).
+    pub fn quarter_axis(&self) -> Option<(i32, crate::kinetics::Axis)> {
+        use crate::kinetics::Axis;
+        for axis in [Axis::X, Axis::Y, Axis::Z] {
+            for quarter in [90, 180, 270] {
+                let same = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+                    .into_iter()
+                    .all(|e| self.vec(e) == rotate(e, quarter, axis));
+                if same {
+                    return Some((quarter, axis));
+                }
+            }
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_transform_is_the_turn_its_placement_makes() {
+        use crate::kinetics::{Axis, Dir};
+        let slid = Transform::from_place(|o| [o[0] + 3, o[1] - 2, o[2] + 7]);
+        assert_eq!(slid, Transform::NONE);
+        assert!(!slid.turns());
+        let turned = Transform::from_place(|o| {
+            let r = rotate(o, 90, Axis::Y);
+            [r[0] + 10, r[1], r[2] - 4]
+        });
+        assert!(turned.turns());
+        for d in Dir::ALL {
+            let v = rotate(d.offset(), 90, Axis::Y);
+            assert_eq!(turned.dir(d).offset(), v, "{d:?}");
+        }
+        assert_eq!(turned.dir(Dir::Up), Dir::Up);
+        assert_eq!(turned.quarter_axis(), Some((90, Axis::Y)));
+        assert_eq!(slid.quarter_axis(), None);
+        // Not a rotation (a mirror): none.
+        assert_eq!(Transform::from_place(|o| [-o[0], o[1], o[2]]), Transform::NONE);
+    }
 
     #[test]
     fn a_stopped_bearing_snaps_to_the_nearest_quarter_turn() {

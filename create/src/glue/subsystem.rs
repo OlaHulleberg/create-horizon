@@ -57,6 +57,49 @@ pub trait Subsystem: Sync {
     /// A column left level `dim`.
     fn chunk_unload(&self, _dim: usize, _chunk: [i32; 2]) {}
 
+    /// A moving structure takes Create block `block` at `pos` away (`Contraption.addBlock`
+    /// keeps its block entity's NBT in `StructureBlockInfo.nbt`): what this subsystem keeps for
+    /// it goes into `out` under the subsystem's own keys and leaves its tables, so the block's
+    /// removal drops nothing. Called before the block leaves the world.
+    fn carry_out(
+        &self,
+        _lv: &mut ServerLevel<'_>,
+        _pos: [i32; 3],
+        _block: create_engine::Block,
+        _out: &mut Compound,
+    ) {
+    }
+
+    /// Draws what a block entity riding a moving structure holds, under the structure's pose
+    /// at the block (`BlockEntityRenderHelper.renderBlockEntities` with the contraption's update
+    /// tags): `event.entity.nbt` is the block entity's data as the structure took it (its synced
+    /// keys, its stacks under `Items`, and what [`carry_out`](Self::carry_out) wrote under
+    /// `Carried`); `event.pos` keys nothing in the world (it stands for the block in the
+    /// subsystem's own client tables), and `keep` is the structure's to call.
+    fn draw_carried(
+        &self,
+        _host: &dyn ClientHost,
+        _block: create_engine::Block,
+        _event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+    }
+
+    /// The block [`carry_out`](Self::carry_out) took goes back at `pos`, turned by `turn`
+    /// (`addBlocksToWorld` loads the NBT into the block entity placed there, and
+    /// `TransformableBlockEntity.transform` turns what points somewhere): what it wrote, in
+    /// `data`. Called just before the block is placed, as a column's saved data is read before
+    /// its blocks are found, so the block takes it as it would from a save (a moving structure
+    /// saved with the world keeps `data`).
+    fn carry_in(
+        &self,
+        _lv: &mut ServerLevel<'_>,
+        _pos: [i32; 3],
+        _block: create_engine::Block,
+        _data: &Compound,
+        _turn: create_engine::contraption::Transform,
+    ) {
+    }
+
     /// The part at `pos` of `lv` turns at a new speed (`KineticBlockEntity.onSpeedChanged`), in
     /// this tick's solve.
     fn speed_changed(&self, _lv: &mut ServerLevel<'_>, _pos: [i32; 3], _speed: f32) {}

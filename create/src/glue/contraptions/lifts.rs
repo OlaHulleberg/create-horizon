@@ -6,9 +6,12 @@
 //! elevator last passed or reached (`broadcastFloorData`). Saved under `create_lifts` and
 //! `create_contacts`.
 //!
-//! Left out of the port, not for want of API: the door setting is kept and edited but opens no
-//! door (doors on moving structures, `SlidingDoorMovementBehaviour`, are not ported), and the
-//! elevator's contraption controls choose no floor (`ElevatorControlsHandler`).
+//! An elevator's sliding doors open at the floor it is called to on the sides that floor's
+//! contact's door control lets open (`SlidingDoorMovementBehaviour`, `DoorControlBehaviour`),
+//! and follow a door control changed while it stands there.
+//!
+//! Left out of the port, not for want of API: the elevator's contraption controls choose no
+//! floor (`ElevatorControlsHandler`).
 
 use super::super::persist;
 use super::super::server::{ServerLevel, UPDATE_CLIENTS, update_all};
@@ -613,6 +616,7 @@ fn show_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         lv,
         pos,
         draw::Glide {
+            key: pos,
             origin,
             blocks: &blocks,
             dir: [0, -1, 0],
@@ -751,6 +755,21 @@ fn contact_names(lv: &mut ServerLevel<'_>) {
     for pos in changed {
         mark_unsaved(lv, pos);
         crate::glue::display::notify_gatherers(lv, pos);
+        // Its door control changed: the doors of an elevator standing at its column follow
+        // (`SlidingDoorMovementBehaviour.tick` reads the mode each tick).
+        let elevators: Vec<[i32; 3]> = with_world(|w| {
+            w.dims[dim]
+                .lifts
+                .elevators
+                .iter()
+                .filter(|(_, e)| [e.column.x, e.column.z] == [pos[0], pos[2]])
+                .map(|(p, _)| *p)
+                .collect()
+        })
+        .unwrap_or_default();
+        for e in elevators {
+            elevator_doors(lv, e);
+        }
     }
 }
 
@@ -797,9 +816,10 @@ fn broadcast_floor(
 }
 
 /// `SlidingDoorMovementBehaviour.tickOpen` for an elevator's sliding doors: they open while
-/// it has arrived at a floor (`ec.arrived`; the floor's `DoorControl` is Create's default,
-/// all sides) and close as it leaves, the door in the world each faces out toward opening and
-/// closing with it. Not before the elevator first moved (`firstMovement`).
+/// it has arrived at a floor (`ec.arrived`) on the sides the door control of the contact it is
+/// called to lets open (`getElevatorDoorControl`, `shouldOpenAt`: none without a contact there),
+/// and close as it leaves, the door in the world each faces out toward opening and closing with
+/// it. Not before the elevator first moved (`firstMovement`).
 fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
     let Some(e) = with_world(|w| w.dims[dim].lifts.elevators.get(&pos).cloned()).flatten() else {
@@ -811,7 +831,28 @@ fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         }
         m.contains(&(dim, pos))
     });
-    let open = e.arrived && moved;
+    let arrived = e.arrived && moved;
+    // `getCurrentTargetY` and the contact there (`contactAt`); its `DoorControlBehaviour`.
+    let control = arrived
+        .then(|| {
+            let target = with_world(|w| {
+                let c = w.dims[dim].lifts.columns.get(&e.column)?.target;
+                e.reachable(c)
+            })
+            .flatten()?;
+            let contact = [e.column.x, target, e.column.z];
+            let Some((Block::ElevatorContact, _)) = create_info(lv.block(contact)) else {
+                return None;
+            };
+            with_world(|w| {
+                w.dims[dim]
+                    .lifts
+                    .contacts
+                    .get(&contact)
+                    .map_or(0, |c| c.door)
+            })
+        })
+        .flatten();
     type Door = (usize, [i32; 3], Vec<(String, String)>, String);
     let doors: Vec<Door> = e
         .blocks
@@ -844,6 +885,25 @@ fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                 .find(|(pk, _)| pk == k)
                 .map(|(_, v)| v.as_str())
         };
+        // `getDoorFacing`: along its facing's axis, away from the structure's middle.
+        let Some(facing) = prop("facing").and_then(super::dir_of) else {
+            continue;
+        };
+        let axis = facing.axis();
+        let k = match axis {
+            Axis::X => 0,
+            Axis::Y => 1,
+            Axis::Z => 2,
+        };
+        let f = facing.offset();
+        let along = f64::from(o[k]) + 0.5 - f64::from(f[k]) * 0.45 - center[k];
+        let Some(out) = Dir::ALL
+            .into_iter()
+            .find(|d| d.axis() == axis && d.positive() == (along >= 0.0))
+        else {
+            continue;
+        };
+        let open = control.is_some_and(|m| create_engine::lifts::door_control_matches(m, out));
         if prop("open") == Some(if open { "true" } else { "false" }) {
             continue;
         }
@@ -863,30 +923,6 @@ fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         if prop("half") != Some("lower") {
             continue;
         }
-        // `getDoorFacing`: along its facing's axis, away from the structure's middle.
-        let Some(facing) = prop("facing").and_then(super::dir_of) else {
-            continue;
-        };
-        let axis = facing.axis();
-        let k = match axis {
-            Axis::X => 0,
-            Axis::Y => 1,
-            Axis::Z => 2,
-        };
-        let f = facing.offset();
-        let along = f64::from(o[k]) + 0.5 - f64::from(f[k]) * 0.45 - center[k];
-        let out = if along < 0.0 {
-            Dir::ALL
-                .into_iter()
-                .find(|d| d.axis() == axis && !d.positive())
-        } else {
-            Dir::ALL
-                .into_iter()
-                .find(|d| d.axis() == axis && d.positive())
-        };
-        let Some(out) = out else {
-            continue;
-        };
         let here = [
             e.anchor[0] + o[0],
             (e.y + f64::from(o[1])).round() as i32,
@@ -1396,6 +1432,11 @@ pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compo
         .map(|((pos, held), target)| {
             let mut c = Compound::new();
             c.insert("pos".into(), Tag::IntArray(pos.to_vec()));
+            // An elevator that moved since it assembled (`MovementContext.firstMovement`
+            // false, saved as `FirstMovement`): its doors open at floors again after a load.
+            if ELEVATOR_MOVED.with_borrow(|m| m.contains(&(dim, *pos))) {
+                c.insert("moved".into(), Tag::Byte(1));
+            }
             // What its storage blocks hold (`MountedStorageManager`).
             if let Some(t) = actors::storage_to_nbt(lv, *pos) {
                 c.insert("storage".into(), t);
@@ -1518,6 +1559,9 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
             let kind = *kind.first()?;
             let pos = [*p.first()?, *p.get(1)?, *p.get(2)?];
             actors::storage_from_nbt(lv, pos, c.get(&"storage".into()));
+            if c.contains_key(&"moved".into()) {
+                ELEVATOR_MOVED.with_borrow_mut(|m| m.insert((lv.dim, pos)));
+            }
             let at = |i: usize| n.get(i).copied();
             let mut call = None;
             let held = match kind {
