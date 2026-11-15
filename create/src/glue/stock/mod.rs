@@ -27,6 +27,7 @@ mod gauge_screen;
 pub(crate) mod keeper;
 mod package_filter;
 mod requester;
+pub(crate) mod shop;
 
 use super::packages::{self as packages, add, block_of, body, command_player, coords, feedback};
 use super::packages::{debug_verb, ints, list, pos_of, text};
@@ -50,6 +51,22 @@ use mod_api::{
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+
+/// `FactoryPanelSupportBehaviour.notifyPanels` of the redstone link at `link` (its signal
+/// changed, or it is gone).
+pub(crate) fn link_panels_changed(lv: &ServerLevel<'_>, link: [i32; 3]) {
+    if present() {
+        gauge::link_panels_changed(lv, link);
+    }
+}
+
+/// `FactoryPanelSupportBehaviour.shouldBePoweredTristate` of the redstone link at `link`.
+pub(crate) fn link_panels_power(lv: &ServerLevel<'_>, link: [i32; 3]) -> Option<bool> {
+    if !present() {
+        return Some(false);
+    }
+    gauge::link_panels_power(lv, link)
+}
 
 /// A stack as an order or a summary keys it: count 1, compared as Create compares stacks.
 #[derive(Clone)]
@@ -129,6 +146,8 @@ struct Ticker {
     categories: Vec<Option<ItemStack>>,
     /// `hiddenCategoriesByPlayer`: the categories each player folded (`-1` the unsorted one).
     hidden: HashMap<u128, Vec<i32>>,
+    /// `receivedPayments`: what shoppers paid at its keeper (27 slots of up to 64).
+    payments: Vec<ItemStack>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -168,6 +187,8 @@ struct Net {
     unloaded: HashMap<Network, Vec<[i32; 3]>>,
     /// Links, requesters and gauges whose neighbours changed.
     neighbours: Vec<[i32; 3]>,
+    /// Panels whose redstone input to look at again: a link joined to them went.
+    redstone_checks: Vec<PanelPos>,
     unsaved: Vec<(i32, i32)>,
 }
 
@@ -343,12 +364,17 @@ fn block_moved(
                 mark_dirty();
             }
         }),
-        // `StockTickerBlockEntity.destroy`: its category filters are dropped.
+        // `StockTickerBlockEntity.destroy`: its payments and category filters are dropped.
         Some(Block::StockTicker) => {
-            let filters = with(dim, |n| n.tickers.remove(&pos))
-                .map(|t| t.categories)
+            let (filters, payments) = with(dim, |n| n.tickers.remove(&pos))
+                .map(|t| (t.categories, t.payments))
                 .unwrap_or_default();
             let at = pos.map(f64::from);
+            for p in payments {
+                let _ = lv
+                    .level
+                    .spawn_item(&mut *lv.host, at[0], at[1], at[2], p, 10);
+            }
             for f in filters.into_iter().flatten() {
                 if categories::is_filter(&*lv.host, &f) {
                     let _ = lv
@@ -481,6 +507,7 @@ impl Subsystem for Stock {
         }
         let key = r.item_key("create:package_filter");
         r.item_part(key, package_filter::PackageFilterPart);
+        shop::register(r);
         if let Some(kind) = super::kinetics::kind()
             && let Err(e) = r.block_entity_part(&kind, gauge_client::GaugeDraw)
         {
@@ -504,6 +531,15 @@ impl Subsystem for Stock {
         event: &mut mod_api::RenderLevelStageEvent<'_>,
     ) {
         gauge_client::render_level_stage(host, event);
+    }
+
+    /// A shop's trade overlay (`TableClothOverlayRenderer`).
+    fn render_gui_post(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::RenderGuiPostEvent<'_>,
+    ) {
+        shop::render_overlay(host, event.draw);
     }
 
     /// `FactoryPanelBlock.onSneakWrenched`: one panel off.
@@ -707,7 +743,7 @@ impl Subsystem for Stock {
         let mut lv = ServerLevel::new(host, &dimension)?;
         let entity = lv.host.entity(event.entity as u32)?;
         let ticker = keeper::ticker_beside(&lv, entity)?;
-        keeper::open(&mut lv, player, ticker);
+        keeper::interact(&mut lv, player, ticker);
         Some(InteractionResult::Success)
     }
 
@@ -763,26 +799,42 @@ impl Subsystem for Stock {
         let (Some(ticker), Some(player)) = (ticker, lv.host.player(click.player)) else {
             return Flow::Continue;
         };
-        keeper::open(&mut lv, player, ticker);
+        keeper::interact(&mut lv, player, ticker);
         *event.cancellation_result = InteractionResult::Success;
         Flow::Cancel
     }
 
     fn world_closed(&self) {
         STOCK.with_borrow_mut(|s| *s = None);
+        shop::reset();
         CHANGES.with_borrow_mut(Vec::clear);
         OWNERS.with_borrow_mut(HashMap::clear);
         DIRTY.set(false);
         LOADED.set(false);
     }
 
+    /// `TableClothBlock.getDrops`: a shop's cloth drops programmed.
+    fn block_drops(
+        &self,
+        _level: &dyn mod_api::LevelHost,
+        event: &mut mod_api::BlockDropsEvent<'_>,
+    ) -> Flow {
+        if let Some(dim) = level_index(event.dimension.key().id()) {
+            let pos = [event.pos.x, event.pos.y, event.pos.z];
+            shop::drops(dim, pos, event.drops);
+        }
+        Flow::Continue
+    }
+
     fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
-        // A display link gone: the panels joined to it let go of it.
-        if block_of(old) == Some(Block::DisplayLink)
-            && block_of(new) != Some(Block::DisplayLink)
-            && present()
-        {
-            with(dim, |n| gauge::link_gone(n, pos));
+        if block_of(old).is_some_and(shop::is_cloth) || block_of(new).is_some_and(shop::is_cloth) {
+            shop::changed(dim, pos);
+        }
+        // A display or redstone link gone: the panels joined to it let go of it.
+        for link in [Block::DisplayLink, Block::RedstoneLink] {
+            if block_of(old) == Some(link) && block_of(new) != Some(link) && present() {
+                with(dim, |n| gauge::link_gone(n, pos));
+            }
         }
         let (o, n) = (
             block_of(old).filter(|b| ours(*b)),
@@ -806,6 +858,7 @@ impl Subsystem for Stock {
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        shop::level_tick(lv);
         if lv.dimension == "minecraft:overworld" {
             if !LOADED.get() {
                 LOADED.set(true);
@@ -819,16 +872,19 @@ impl Subsystem for Stock {
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
+        shop::load(lv, data);
         if let Some(Tag::Compound(own)) = data.get(&KEY.into()) {
             chunk_load(lv, own);
         }
     }
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
+        shop::save(lv, chunk, data);
         chunk_data_save(lv, chunk, data);
     }
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
+        shop::unload(dim, chunk);
         chunk_unload(dim, chunk);
     }
 
@@ -922,6 +978,10 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     });
     for (_, pos, was, is) in changes {
         block_moved(lv, dim, pos, was, is);
+    }
+    let checks = with(dim, |n| std::mem::take(&mut n.redstone_checks));
+    for pp in checks {
+        gauge::check_redstone_input(lv, pp);
     }
     // Blocks placed from a linking item join their network now they are known.
     let joins: Vec<(Option<Network>, [i32; 3], u128)> = JOINS.with_borrow_mut(|j| {
@@ -1407,6 +1467,36 @@ fn own_use(
         if !may_interact_message(&mut lv, click.pos, player) {
             return Some(InteractionResult::Success);
         }
+        // `receivedPayments` go to the player first (`placeItemBackInInventory`).
+        let paid = with(lv.dim, |n| {
+            n.tickers
+                .get_mut(&click.pos)
+                .map(|t| std::mem::take(&mut t.payments))
+        })
+        .unwrap_or_default();
+        if !paid.is_empty() {
+            for p in paid {
+                super::items::give_back(lv.host, player, p);
+            }
+            with(lv.dim, |n| {
+                n.unsaved.push((click.pos[0] >> 4, click.pos[2] >> 4))
+            });
+            // `AllSoundEvents.playItemPickup`.
+            let at = player
+                .entity()
+                .block_position(&*lv.host)
+                .map_or([0.0; 3], |p| p.map(|v| f64::from(v) + 0.5));
+            let pitch = 1.0 + shop::random_spread(&mut lv);
+            let _ = lv.level.play_sound(
+                &mut *lv.host,
+                "minecraft:entity.item.pickup",
+                at,
+                mod_api::SoundSource::Players,
+                0.2,
+                pitch,
+            );
+            return Some(InteractionResult::Success);
+        }
         if keeper::keeper_present(&lv, click.pos) {
             categories::open(&mut lv, player, click.pos);
         } else {
@@ -1468,16 +1558,33 @@ pub(super) fn program_requester(
     let Some(mut stack) = super::items::held(&*lv.host, player, mod_api::Hand::Main) else {
         return;
     };
-    if stack.item().id(&*lv.host) != "create:redstone_requester" {
+    let id = stack.item().id(&*lv.host);
+    let cloth = id.starts_with("create:") && id.ends_with("_table_cloth");
+    if id != "create:redstone_requester" && !cloth {
         return;
     }
-    let data = Tag::compound([
+    let mut data = Tag::compound([
         (
             "EncodedRequest",
             body::order_nbt(&*lv.host, &order_stack(order)),
         ),
         ("EncodedAddress", Tag::String(address.into())),
     ]);
+    // `AutoRequestData.writeToItem`: a cloth keeps its ticker's place and dimension too, and
+    // glints (`isFoil`); it carries no network.
+    if cloth {
+        if let (Tag::Compound(c), Some(pos)) = (&mut data, OPENED.get()) {
+            c.insert(shop::TARGET_POS.into(), Tag::IntArray(pos.to_vec()));
+            c.insert(
+                shop::TARGET_DIM.into(),
+                Tag::String(lv.dimension.to_string().as_str().into()),
+            );
+        }
+        super::items::set_custom(&mut stack, &[(AUTO_REQUEST, Some(data))]);
+        let _ = stack.set(&Glint, true);
+        super::items::set_held(lv.host, player, mod_api::Hand::Main, Some(stack));
+        return;
+    }
     let net = OPENED.get().and_then(|pos| network_at(lv.dim, pos));
     let mut entries = vec![(AUTO_REQUEST, Some(data))];
     let freq = net.map(|n| Tag::String(st::network_text(n).as_str().into()));
@@ -2037,6 +2144,15 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                     ("PreviousAddress", Tag::String(t.previous.as_str().into())),
                     ("Categories", Tag::List(categories)),
                     ("HiddenCategories", Tag::List(hidden)),
+                    (
+                        "ReceivedPayments",
+                        Tag::List(
+                            t.payments
+                                .iter()
+                                .filter_map(|s| s.to_nbt(host).map(Tag::Compound))
+                                .collect(),
+                        ),
+                    ),
                 ])
             })
             .collect();
@@ -2121,6 +2237,16 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
                                 _ => None,
                             })
                             .filter(|s| s.as_ref().is_none_or(|s| categories::is_filter(host, s)))
+                            .collect(),
+                        _ => Vec::new(),
+                    },
+                    payments: match c.get(&"ReceivedPayments".into()) {
+                        Some(Tag::List(l)) => l
+                            .iter()
+                            .filter_map(|t| match t {
+                                Tag::Compound(t) => ItemStack::from_nbt(host, t),
+                                _ => None,
+                            })
                             .collect(),
                         _ => Vec::new(),
                     },

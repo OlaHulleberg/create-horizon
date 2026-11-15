@@ -8,7 +8,7 @@
 //! filter, and its amount's row and value while the amount shows): smart observers, threshold
 //! switches, brass funnels, smart chutes, basins, saws, deployers, a brass tunnel's side filters
 //! (the side clicked), smart pipes, contraption controls, rollers, item hatches, creative crates
-//! and track observers. A right click with a clipboard copies them into its `copied_values`; a
+//! track observers and table cloths' price tags. A right click with a clipboard copies them into its `copied_values`; a
 //! left click pastes them (a filter item comes out of the inventory outside creative, the one
 //! the slot held goes back). Not while sneaking. A clipboard clicked onto a placed clipboard
 //! (`ClipboardBlockEntity`) takes the entries it lacks. Looking at such a block with a clipboard
@@ -18,8 +18,8 @@
 //! server's hook, so the client takes the attack on such a block (`interaction_key`) and asks
 //! the server on `CHANNEL`, which checks reach as `BlockEntityConfigurationPacket`s do.
 //!
-//! Left out, not for want of API: a steam engine's `RotationDirection` and a table cloth's
-//! price (`TableClothFilteringBehaviour`): neither setting is ported.
+//! A steam engine's `RotationDirection` is a value box's; a table cloth's price is a filter
+//! slot's (`TableClothFilteringBehaviour`: the payment item, `stock::shop`).
 
 use super::block_at;
 use crate::glue::display::clipboard;
@@ -52,14 +52,17 @@ enum Slot {
     Detector,
     /// A brass tunnel's side filters (`SidedFilteringBehaviour`).
     Tunnel,
-    /// The rest, kept as an item: smart pipes, contraption controls, rollers, hatches, crates.
+    /// Item hatches' (`decor`).
+    Hatch,
+    /// The rest, kept as an item: smart pipes, contraption controls, rollers, crates.
     Pipe,
     Controls,
     Roller,
-    Hatch,
     Crate,
     /// Track observers' (`observer_filters`).
     Observer,
+    /// A shop's price tag (`TableClothFilteringBehaviour`, `stock::shop`).
+    Price,
 }
 
 /// A block's `ClipboardCloneable` behaviours.
@@ -92,6 +95,7 @@ fn slot_of(block: Block) -> Option<Slot> {
         Block::ItemHatch => Slot::Hatch,
         Block::CreativeCrate => Slot::Crate,
         Block::TrackObserver => Slot::Observer,
+        b if crate::glue::stock::shop::is_cloth(b) => Slot::Price,
         _ => return None,
     })
 }
@@ -211,8 +215,9 @@ fn filter_now(lv: &ServerLevel<'_>, pos: [i32; 3], slot: Slot, side: Dir) -> Opt
             pos,
             slot == Slot::Roller,
         )),
-        Slot::Hatch => item(crate::glue::decor::hatch_filter(dim, pos)),
+        Slot::Hatch => filter(crate::glue::decor::hatch_filter(dim, pos)),
         Slot::Crate => item(crate::glue::decor::crate_supply_of(dim, pos)),
+        Slot::Price => crate::glue::stock::shop::price_of(dim, pos),
     }
 }
 
@@ -299,13 +304,14 @@ fn set_filter(
             crate::glue::contraptions::actors::set_mounted_filter(lv, pos, slot == Slot::Roller, id)
         }
         Slot::Hatch => {
-            crate::glue::decor::set_hatch_filter(dim, pos, id);
+            crate::glue::decor::set_hatch_filter(dim, pos, f);
             true
         }
         Slot::Crate => {
             crate::glue::decor::set_crate_supply(dim, pos, id);
             true
         }
+        Slot::Price => crate::glue::stock::shop::paste_price(lv, pos, stack),
     }
 }
 
@@ -401,6 +407,15 @@ fn filter_settings(
     pos: [i32; 3],
     block: Block,
 ) -> Option<create_engine::board::Settings> {
+    // A shop's price amount, while it has a payment item.
+    if crate::glue::stock::shop::is_cloth(block) {
+        let dim = lv.dim;
+        crate::glue::stock::shop::price_of(dim, pos)?;
+        return Some(create_engine::board::Settings {
+            row: 0,
+            value: crate::glue::stock::shop::price_count(dim, pos)?,
+        });
+    }
     matches!(
         block,
         Block::BrassFunnel | Block::BrassBeltFunnel | Block::SmartChute
@@ -463,8 +478,8 @@ fn write(
                     .flatten()
                     .unwrap_or_default();
                 let host: &dyn mod_api::Host = &*lv.host;
-                let first = stack_of(host, &key.0);
-                let last = stack_of(host, &key.1);
+                let first = super::frequency_stack(host, &key.0);
+                let last = super::frequency_stack(host, &key.1);
                 tag.insert(
                     "Frequencies".into(),
                     Tag::Compound(Compound::from([
@@ -545,11 +560,7 @@ fn read(
                     continue;
                 };
                 let host: &dyn mod_api::Host = &*lv.host;
-                let id = |c: &Compound| {
-                    parse(host, c)
-                        .map(|s| s.item().id(host))
-                        .unwrap_or_default()
-                };
+                let id = |c: &Compound| super::frequency_key(host, parse(host, c).as_ref());
                 let (first, last) = (id(first), id(last));
                 with_world(|w| {
                     w.link_frequency(dim, pos, true, &first);
@@ -561,6 +572,28 @@ fn read(
                 let Some(t) = sub(tag, "Filtering") else {
                     continue;
                 };
+                // `TableClothFilteringBehaviour.mayInteract`: a shop's owner only; its amount
+                // set after the payment item.
+                if slot == Slot::Price {
+                    if !crate::glue::stock::shop::may_paste(lv.dim, pos, player.uuid()) {
+                        continue;
+                    }
+                    if let Some(Tag::Compound(saved)) = t.get(&"Filter".into()) {
+                        let copied = parse(&*lv.host, saved);
+                        any |= paste_filter(lv, player, pos, block, slot, side, copied);
+                    }
+                    if let Some(pick) = settings_in(t) {
+                        crate::glue::stock::shop::value_settings(
+                            lv,
+                            pos,
+                            player,
+                            Some(pick),
+                            false,
+                        );
+                        any = true;
+                    }
+                    continue;
+                }
                 if filter_settings(lv, pos, block).is_some()
                     && let Some(pick) = settings_in(t)
                 {

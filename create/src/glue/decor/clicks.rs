@@ -111,6 +111,10 @@ impl mod_api::BlockPart for DecorBlock {
             // `GirderBlock.useItemOn` with a shaft: an encased shaft.
             Block::MetalGirder => {
                 let stack = click.stack?;
+                // The placement helper (`GirderPlacementHelper`).
+                if stack.item().id(&*lv.host) == "create:metal_girder" {
+                    return girders::helper(&mut lv, player, click, stack);
+                }
                 if stack.item().id(&*lv.host) != "create:shaft" {
                     return None;
                 }
@@ -328,11 +332,23 @@ fn use_hatch(
         && decor::hatch_filter_hit(facing, local(click))
         && held.as_deref() != Some("create:wrench")
     {
-        with(dim, |d| match held {
-            Some(item) => d.hatch_filters.insert(pos, item),
-            None => d.hatch_filters.remove(&pos),
+        // The slot takes the main hand's click (`ValueSettingsInputHandler` takes the event);
+        // the client, not knowing it, also asks for the off hand, which leaves it as it is.
+        if click.hand != Hand::Main {
+            return Some(InteractionResult::Success);
+        }
+        // `FilteringBehaviour.onShortInteract`: a filter item leaves the hand (outside
+        // creative), the one the slot held comes back.
+        let filter = crate::glue::items::filters::take_filter(lv.host, player, click.hand);
+        let old = with(dim, |d| {
+            d.shown.push(pos);
+            match filter {
+                Some(f) => d.hatch_filters.insert(pos, f),
+                None => d.hatch_filters.remove(&pos),
+            }
         });
         persist::mark_pos_unsaved(dim, pos);
+        crate::glue::items::filters::return_filter(lv, player, pos, old);
         return Some(InteractionResult::Success);
     }
     let target = add(pos, facing);
@@ -356,7 +372,7 @@ fn use_hatch(
         // (`UncontainableBlockItem`).
         if id.ends_with("shulker_box")
             || (id.starts_with("create:") && id.ends_with("_toolbox"))
-            || filter.as_deref().is_some_and(|f| f != id)
+            || !crate::glue::items::filters::passes(&*host, filter.as_ref(), stack)
         {
             continue;
         }
@@ -456,58 +472,84 @@ pub(super) fn left_click(host: &mut dyn ServerHost, event: &mut LeftClickBlockEv
     Flow::Continue
 }
 
-/// Table cloths: `TableClothBlock.useItemOn` with a table cloth.
+/// Table cloths: `TableClothBlock.useItemOn`.
 struct TableCloth;
 
 #[mod_api::horizon_part]
 impl mod_api::BlockPart for TableCloth {
-    /// Not sneaking, not from below: the cloth goes on the nearest free side of the clicked one
-    /// (`PlacementHelper`).
     fn use_item_on(
         &self,
         host: &mut dyn ServerHost,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
-        let click = event.click;
-        let stack = click.stack?;
-        let item = stack.item();
-        let id = item.id(&*host);
-        if !(id.starts_with("create:") && id.ends_with("_table_cloth")) {
-            return None;
+        if event.click.stack.is_none() {
+            return Some(InteractionResult::TryWithEmptyHand);
         }
-        let mut dimension = String::new();
-        let (player, mut lv) = clicked(host, click, &mut dimension)?;
-        if sneaking(&*lv.host, player)
-            || click.hit.face == [0, -1, 0]
-            || player.may_build(&*lv.host) != Some(true)
-        {
-            return None;
-        }
-        let pos = click.pos;
-        let hit = local(click).map(|v| v - 0.5);
-        let facts = lv.host.block_states();
-        let free = decor::table_cloth_directions(hit)
-            .into_iter()
-            .map(|d| add(pos, d))
-            .find(|p| {
-                lv.block_state(*p)
-                    .is_some_and(|s| facts.replaceable(s) == Some(true))
-            });
-        let Some(at) = free else {
-            return Some(InteractionResult::Success);
-        };
-        let Some(state) = lv
-            .host
-            .item_block(item)
-            .and_then(|b| lv.host.block_state_default(b))
-        else {
-            return Some(InteractionResult::Success);
-        };
-        lv.put(at, state);
-        lv.block_sound("minecraft:block.wool.place", at, 1.0, 0.8);
-        use_one(&mut *lv.host, player, click.hand, stack);
-        Some(InteractionResult::Success)
+        use_cloth(host, event.click, event.state)
     }
+
+    fn use_without_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseWithoutItemEvent<'_>,
+    ) -> Option<InteractionResult> {
+        use_cloth(host, event.click, event.state)
+    }
+}
+
+/// Not from below, by a player who may build: a cloth item (not sneaking) goes on the nearest
+/// free side of the clicked one (`PlacementHelper`); anything else is the cloth's own use
+/// (`stock::shop`: its items and its shop).
+fn use_cloth(
+    host: &mut dyn ServerHost,
+    click: &BlockClick<'_>,
+    state: mod_api::BlockState,
+) -> Option<InteractionResult> {
+    // `TableClothBlockEntity.use` reads the main hand: the off hand's click (a client that
+    // didn't take the main hand's asks for both) leaves the cloth alone.
+    if click.hit.face == [0, -1, 0] || click.hand != Hand::Main {
+        return None;
+    }
+    let mut dimension = String::new();
+    let (player, mut lv) = clicked(host, click, &mut dimension)?;
+    if player.may_build(&*lv.host) != Some(true) {
+        return None;
+    }
+    let has_entity = super::prop(&*lv.host, state, "entity").as_deref() == Some("true");
+    let Some(stack) = click.stack.filter(|s| {
+        let id = s.item().id(&*lv.host);
+        id.starts_with("create:") && id.ends_with("_table_cloth")
+    }) else {
+        return crate::glue::stock::shop::use_cloth(&mut lv, player, click, has_entity);
+    };
+    if sneaking(&*lv.host, player) {
+        return None;
+    }
+    let item = stack.item();
+    let pos = click.pos;
+    let hit = local(click).map(|v| v - 0.5);
+    let facts = lv.host.block_states();
+    let free = decor::table_cloth_directions(hit)
+        .into_iter()
+        .map(|d| add(pos, d))
+        .find(|p| {
+            lv.block_state(*p)
+                .is_some_and(|s| facts.replaceable(s) == Some(true))
+        });
+    let Some(at) = free else {
+        return Some(InteractionResult::Success);
+    };
+    let Some(state) = lv
+        .host
+        .item_block(item)
+        .and_then(|b| lv.host.block_state_default(b))
+    else {
+        return Some(InteractionResult::Success);
+    };
+    lv.put(at, state);
+    lv.block_sound("minecraft:block.wool.place", at, 1.0, 0.8);
+    use_one(&mut *lv.host, player, click.hand, stack);
+    Some(InteractionResult::Success)
 }
 
 /// Sails and sail frames: `SailBlock.useItemOn`.

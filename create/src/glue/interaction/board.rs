@@ -140,6 +140,16 @@ pub(super) fn hovered_box(host: &dyn ClientHost) -> Option<([i32; 3], Vec<String
     if amount::client_filter_slot_hit(host, pos, hit.face, hit.point) {
         return Some((pos, amount::client_tip(host, pos)));
     }
+    let local = [0, 1, 2].map(|i| hit.point[i] - f64::from(pos[i]));
+    if crate::glue::stock::shop::client_price_hit(host, pos, local) {
+        let title = host
+            .translate("create.table_cloth.price_per_order")
+            .unwrap_or_else(|| board::TABLE_CLOTH.title.into());
+        let hint = host
+            .translate("create.gui.value_settings.hold_to_edit")
+            .unwrap_or_else(|| board::HOLD_TO_EDIT.into());
+        return Some((pos, vec![title, hint]));
+    }
     if !hits_value_box(host, pos, hit.face, hit.point) {
         return None;
     }
@@ -169,7 +179,15 @@ fn filter_board_hit(
             "create:wrench" | "create:mechanical_arm"
         )
     });
-    if bypass || !amount::client_filter_slot_hit(host, pos, face, point) {
+    if bypass {
+        return None;
+    }
+    // A shop's price tag (`TableClothFilteringBehaviour`).
+    let local = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]));
+    if crate::glue::stock::shop::client_price_hit(host, pos, local) {
+        return Some(board::TABLE_CLOTH.max);
+    }
+    if !amount::client_filter_slot_hit(host, pos, face, point) {
         return None;
     }
     amount::client_shown(host, pos)
@@ -288,7 +306,7 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
 
 /// A board's pick for the block's setting `v` (`getValueSettings`): a motor's speed, an option.
 fn board_pick(b: Board, v: i32) -> Settings {
-    if b.icons || b == board::EJECTOR {
+    if b.icons || b == board::EJECTOR || b == board::TABLE_CLOTH {
         Settings { row: 0, value: v }
     } else if b.title == board::FILTER_TITLE {
         board::filter_settings(v)
@@ -313,6 +331,7 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
         B::PulseRepeater | B::PulseExtender | B::PulseTimer => (board::DIODE, &[][..]),
         b if create_engine::dye::is_valve_handle(b) => (board::VALVE_HANDLE, &[][..]),
         B::WeightedEjector => (board::EJECTOR, &[][..]),
+        b if crate::glue::stock::shop::is_cloth(b) => (board::TABLE_CLOTH, &[][..]),
         // `FilteringBehaviour.createBoard`, up to the filter's stack size.
         B::BrassFunnel | B::BrassBeltFunnel | B::SmartChute => {
             let max = crate::glue::logistics::amount::client_shown(host, pos)?;
@@ -351,6 +370,9 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
         // Round robin and any stack size, until the server says.
         (B::MechanicalArm | B::WeightedEjector, None) => 0,
         // Up to a stack until the server says.
+        (b, None) if crate::glue::stock::shop::is_cloth(b) => {
+            crate::glue::stock::shop::client_price_count(host, pos).unwrap_or(1)
+        }
         (B::BrassFunnel | B::BrassBeltFunnel | B::SmartChute, None) => {
             board::FilterAmount::default().word(b.max)
         }
