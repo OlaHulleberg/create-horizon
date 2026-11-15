@@ -419,6 +419,7 @@ fn kept(path: &str) -> bool {
             || rest.starts_with("create/textures/")
             || rest.starts_with("create/lang/")
             || rest.starts_with("create/sounds/")
+            || rest.starts_with("create/particles/")
             || rest == "create/sounds.json"
     };
     match path.split_once('/') {
@@ -450,6 +451,26 @@ const CRATE_FILES: &[&str] = &["horizon-mod.toml", "Cargo.toml"];
 
 /// The repository's notices that go into the package beside them.
 const NOTICES: &[&str] = &["LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"];
+
+/// How Horizon moves Create's particles that the glue spawns by name. Create's particle files
+/// (`assets/create/particles/*.json`, its sprite lists) are All Rights Reserved: they come from
+/// the player's jar, and only this behaviour, which is the port's own, is added to them here.
+fn particle_behaviour(path: &str) -> Option<Value> {
+    match path {
+        "assets/create/particles/rotation_indicator.json" => {
+            Some(json!({ "velocity": [0.0, 0.0, 0.0] }))
+        }
+        "assets/create/particles/steam_jet.json" => Some(json!({
+            "velocity": [0.0, 0.0, 0.0],
+            "animation": "age",
+            "gravity": 0.0,
+            "friction": 1.0,
+            "lifetime": 21,
+            "size": [0.375, 0.375]
+        })),
+        _ => None,
+    }
+}
 
 pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, String> {
     let files = read_sources(sources)?;
@@ -507,6 +528,14 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     for (path, bytes) in &files {
         // Our own files (a blockstate we draw differently) stand over Create's.
         if !kept(path) || ours.contains_key(path) {
+            continue;
+        }
+        if let Some(behaviour) = particle_behaviour(path) {
+            let mut doc: Value =
+                serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
+            doc["horizon:behaviour"] = behaviour;
+            put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
+            copied += 1;
             continue;
         }
         if path.starts_with("data/create/recipe/") {
@@ -843,5 +872,51 @@ mod tests {
         assert!(kept(
             "assets/create/models/block/water_wheel/water_wheel.mtl"
         ));
+    }
+}
+
+/// What the repository may hold under `create/assets`: the generator's own block states and
+/// block models (which name Create's models and textures, never copy them) and Catnip's MIT
+/// placement indicator. Everything under Create's `src/main/resources/assets/` is All Rights
+/// Reserved: textures, models, particles, sounds and translations of Create's come from the
+/// player's jar in `prepare`, never from a committed file.
+#[cfg(test)]
+mod committed_assets {
+    use std::path::Path;
+
+    fn files(dir: &Path, root: &Path, out: &mut Vec<String>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                files(&p, root, out);
+            } else {
+                out.push(
+                    p.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_generated_states_and_models_and_catnip_s_indicator() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/assets");
+        let mut all = Vec::new();
+        files(&root, &root, &mut all);
+        let refused: Vec<&String> = all
+            .iter()
+            .filter(|f| {
+                !(f.starts_with("create/blockstates/") && f.ends_with(".json")
+                    || f.starts_with("create/models/block/") && f.ends_with(".json")
+                    || *f == "create/textures/gui/placement_indicator.png")
+            })
+            .collect();
+        assert!(
+            refused.is_empty(),
+            "only generated block states and models belong in create/assets; Create's own assets \
+             are All Rights Reserved and come from the player's jar in `prepare`: {refused:?}"
+        );
     }
 }

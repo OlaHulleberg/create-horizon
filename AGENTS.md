@@ -15,8 +15,11 @@ and in HORIZON_API.md; no stubs or shims.
 
 Generated files (`create/src/engine/src/generated.rs`, `create/data/`, `create/assets/`) come from
 `tools/create-data compile`: never edit them by hand. Never commit Create's
-`src/main/resources/assets` or anything derived from it; `create-data prepare` reads them from the
-player's jar.
+`src/main/resources/assets` (All Rights Reserved) or anything copied or adapted from it: textures,
+models, block states, particle files, sounds or translations. Name them by id instead; what must
+contain them is produced by `create-data prepare` from the player's jar (a test in
+`tools/create-data` allows only generated block states and models in `create/assets`). English UI
+text from Create's `src/generated/resources/assets/create/lang/en_us.json` is MIT.
 
 Validate in `create/` with the SDK's toolchain: `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy
 --all-targets -- -D warnings`, `cargo +1.99.1 test`, `cargo +1.99.1 test -p create-engine`, and
