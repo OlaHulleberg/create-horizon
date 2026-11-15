@@ -45,7 +45,7 @@ from the player's own Create jar. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICE
 ## Build and play
 
 Requirements: the fork's launcher (`horizon-launcher`) and its `cargo horizon-mod` tool (`cargo install --locked --git
-https://github.com/arismoko/horizon --rev <the pin> cargo-horizon-mod`), Rust 1.99.1 with the `wasm32-unknown-unknown`
+https://github.com/sunrise-org/sunrise --rev <the pin> cargo-horizon-mod`), Rust 1.99.1 with the `wasm32-unknown-unknown`
 target (the SDK's toolchain), and your own copy of Create 6.0.11's jar for the textures, models and sounds.
 
 ```sh
