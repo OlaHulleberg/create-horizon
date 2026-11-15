@@ -110,7 +110,7 @@ fn view(host: &dyn ClientHost) -> Option<([f64; 3], [f64; 3])> {
 }
 
 /// The face of block `pos` that `point` lies on.
-pub(super) fn face_of(pos: [i32; 3], point: [f64; 3]) -> Dir {
+pub(crate) fn face_of(pos: [i32; 3], point: [f64; 3]) -> Dir {
     let local = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]));
     let mut best = (Dir::Up, f64::MAX);
     for d in Dir::ALL {

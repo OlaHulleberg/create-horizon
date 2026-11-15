@@ -70,6 +70,7 @@ pub use arms::Arms;
 // stack placed on one needs.
 pub(crate) use belt::{
     belt_segment, direct_input_accepts, direct_input_at, insert_into_from, put_on_from_above,
+    set_casing,
 };
 pub(crate) use funnel::{funnel_at, funnel_passes};
 pub(crate) use items::{random_angle, upright};

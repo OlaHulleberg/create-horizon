@@ -49,7 +49,7 @@ impl Nbt {
             _ => None,
         }
     }
-    fn text(&self) -> Option<&str> {
+    pub fn text(&self) -> Option<&str> {
         match self {
             Nbt::String(s) => Some(s),
             _ => None,

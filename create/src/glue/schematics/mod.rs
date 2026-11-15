@@ -17,7 +17,7 @@
 //! the states a cannon meets are numbered here as it meets them (`intern`).
 //!
 //! The cannon prints as Create's does: belts with their connector from the end that lays them
-//! (`launchBelt`, without the casings, as the schematic's block entities are not read), the
+//! (`launchBelt`, each segment cased as the schematic's belt block entity's `Casing`), the
 //! second half of doors, tall plants and beds (`setPlacedBy`), and the schematic's entities
 //! last (`launchEntity`: item frames and armor stands with what they hold and wear); a book or a
 //! clipboard in its book slot becomes the print's material checklist (`tickPaperPrinter`).
@@ -39,6 +39,7 @@
 pub mod body;
 mod deploy;
 mod quill;
+pub(crate) use quill::face_of;
 mod screens;
 
 use super::packages::{self, block_of, debug_verb, feedback, ints, text};
@@ -733,8 +734,8 @@ impl CannonWorld for World<'_, '_> {
         success
     }
     /// `ForBelt.place`: a shaft where the belt's laying end is, then the belt to its other end
-    /// (`createBelts`; casings are not copied: the schematic's block entities are not read).
-    fn place_belt(&mut self, pos: [i32; 3], state: u32, to: [i32; 3]) {
+    /// (`createBelts`), and each segment cased as the schematic's was (`setCasingType`).
+    fn place_belt(&mut self, pos: [i32; 3], state: u32, to: [i32; 3], casings: &[u8]) {
         let Some(s) = interned(state) else { return };
         let host = &*self.lv.host;
         let facts = host.block_states();
@@ -750,6 +751,17 @@ impl CannonWorld for World<'_, '_> {
             self.lv.set_state(pos, shaft, super::server::update_all());
         }
         super::items::create_belts(self.lv, pos, to);
+        let n = casings.len().max(1) as i32 - 1;
+        let step = [0, 1, 2].map(|i| if n > 0 { (to[i] - pos[i]) / n } else { 0 });
+        for (i, c) in casings.iter().enumerate() {
+            let kind = match c {
+                1 => "andesite",
+                2 => "brass",
+                _ => continue,
+            };
+            let at = [0, 1, 2].map(|k| pos[k] + step[k] * i as i32);
+            super::logistics::set_casing(self.lv, at, Some(kind));
+        }
     }
 
     fn book_input(&mut self) -> bool {
@@ -1557,8 +1569,8 @@ fn nbt_file(name: &str) -> String {
 }
 
 /// `SchematicExport.saveSchematic` of the box between two corners: the blocks and the entities
-/// in it (`fillFromWorld` with entities; the blocks' block entity data is not read, and item
-/// frames and paintings are not found).
+/// in it (`fillFromWorld` with entities: each block entity's data with its `id`, as
+/// `saveWithId`; item frames and paintings are not found).
 fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
     let min = [0, 1, 2].map(|i| a[i].min(b[i]));
     let max = [0, 1, 2].map(|i| a[i].max(b[i]));
@@ -1599,6 +1611,19 @@ fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
         }
     }
     let mut structure = Structure::capture(size, cells);
+    for b in &mut structure.blocks {
+        let at = [0, 1, 2].map(|i| b.pos[i] + min[i]);
+        let host: &dyn Host = &*lv.host;
+        let Some(be) = host.block_entity(lv.level, at) else {
+            continue;
+        };
+        let (Some(data), Some(kind)) = (be.data(host), be.kind(host)) else {
+            continue;
+        };
+        let mut data = data;
+        data.insert("id".into(), Tag::String(kind.id(host).as_str().into()));
+        b.nbt = Some(body::to_engine(&Tag::Compound(data)));
+    }
     structure.entities = export_entities(lv, min, max);
     structure
 }
@@ -2147,6 +2172,10 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                                 "BeltTo",
                                 Tag::IntArray(f.belt_to.map_or(Vec::new(), |t| t.to_vec())),
                             ),
+                            (
+                                "Casing",
+                                Tag::IntArray(f.casings.iter().map(|c| i32::from(*c)).collect()),
+                            ),
                         ]))
                     })
                     .collect();
@@ -2264,6 +2293,10 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
                         target: [t[0], t[1], t[2]],
                         state,
                         belt_to: (to.len() == 3).then(|| [to[0], to[1], to[2]]),
+                        casings: ints(f.get(&"Casing".into()))
+                            .iter()
+                            .map(|c| (*c).clamp(0, 2) as u8)
+                            .collect(),
                         entity,
                         total: t[4].max(0) as u32,
                         land_at: now + t[3].max(0) as u64 + 1,
