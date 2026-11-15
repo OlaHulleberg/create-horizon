@@ -294,6 +294,25 @@ pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
         else {
             continue;
         };
+        // `tryExportingToBeltFunnel`: a pulling belt funnel on top facing against the item's way
+        // takes it first; one that takes none of it holds it.
+        if let Some(stack) = stack_of(&*lv.host, &held.item, u32::from(held.count))
+            && let Some(left) = crate::glue::logistics::export_up(lv, pos, side.opposite(), &stack)
+        {
+            let left = left.min(u32::from(held.count)) as u8;
+            if left != held.count {
+                with_world(|w| {
+                    if let Some(d) = w.dims[dim].drains.get_mut(&pos) {
+                        match d.held.as_mut() {
+                            Some(h) if left > 0 => h.count = left,
+                            _ => d.held = None,
+                        }
+                    }
+                    w.mark_unsaved(dim, pos);
+                });
+            }
+            continue;
+        }
         let next = super::offset(pos, side);
         let left = match insert_into_drain(lv, next, side, &held.item, held.count) {
             Some(left) => Some(left),

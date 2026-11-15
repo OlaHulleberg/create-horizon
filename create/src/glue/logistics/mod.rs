@@ -71,7 +71,7 @@ pub use arms::Arms;
 pub(crate) use belt::{
     belt_segment, direct_input_accepts, direct_input_at, insert_into_from, put_on_from_above,
 };
-pub(crate) use funnel::{funnel_at, funnel_passes};
+pub(crate) use funnel::{export_up, funnel_at, funnel_passes};
 pub(crate) use items::{random_angle, upright};
 pub(crate) use tunnel::set_brass_mode;
 
