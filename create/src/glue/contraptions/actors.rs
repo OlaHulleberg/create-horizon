@@ -172,6 +172,19 @@ fn takes_any(stored: &Stored) -> bool {
     stored.len() != create_engine::toolbox::SLOTS
 }
 
+/// Lends a contraption's storage (each block's offset and slots) to its actors under `key`
+/// while they tick (a cart keeps its own: `lent_back` gives it back).
+pub(crate) fn lend_storage(dim: usize, key: [i32; 3], storage: Vec<([i32; 3], Vec<Option<ItemStack>>)>) {
+    STORAGE.with_borrow_mut(|m| m.insert((dim, key), storage));
+}
+
+/// The storage lent under `key`, as the actors left it.
+pub(crate) fn lent_back(dim: usize, key: [i32; 3]) -> Vec<([i32; 3], Vec<Option<ItemStack>>)> {
+    STORAGE
+        .with_borrow_mut(|m| m.remove(&(dim, key)))
+        .unwrap_or_default()
+}
+
 /// Whether `pos` holds a storage block a contraption carries.
 pub(crate) fn is_storage(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     lv.block_name(pos)
@@ -1704,7 +1717,7 @@ fn collect(lv: &mut ServerLevel<'_>, key: [i32; 3], actor: &Actor, stack: ItemSt
 /// The actors of a bearing's structure (its blocks' offsets from the bearing and states):
 /// breakers, harvesters, ploughs and rollers, each a breaker of its own. Its storage rides it
 /// apart (`carry_storage`); its glue and controls don't.
-pub(super) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
+pub(crate) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
     let mut carried = Carried::default();
     for (o, state) in blocks {
         let Some((block, info)) = create_info(*state) else {

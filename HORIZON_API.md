@@ -295,9 +295,7 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   and the soul particles and sounds after it rings.
 - Trains: `TrackTargetingBehaviour.targetDirection` is not kept, so signals' and observers' track markers are
   not drawn (stations draw theirs, turned by their last assembly direction). No postbox is linked to a station
-  (`GlobalPackagePort`), so a schedule's package instructions find none. Actors (drills, harvesters) on a
-  minecart contraption don't act, and a chest minecart's own inventory is not added to its contraption's
-  (`addExtraInventories`).
+  (`GlobalPackagePort`), so a schedule's package instructions find none.
 - Stock: a placed clipboard's `#` addresses are not offered by address boxes
   (`AddressEditBoxHelper.advertiseClipboard`: its pages are not on its clients).
 - Display: the sources' colours (the boiler's bars, the gauges' marks: the engine's text is plain).
