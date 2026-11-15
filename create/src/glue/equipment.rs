@@ -808,6 +808,13 @@ fn extendo_reach(host: &mut dyn ServerHost, player: PlayerRef) {
             continue;
         }
         if on {
+            // `AllAdvancements.EXTENDO_GRIP` / `EXTENDO_GRIP_DUAL` as the grip is taken up.
+            let name = if modifier.0 == SINGLE_RANGE.0 {
+                "extendo_grip"
+            } else {
+                "extendo_grip_dual"
+            };
+            super::advancements::award(host, player, name);
             let m = AttributeModifier::new(id, modifier.1, AttributeOperation::AddValue);
             living.add_attribute_modifier(host, BLOCK_RANGE, m, ModifierLifetime::Transient);
         } else {

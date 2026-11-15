@@ -2,8 +2,7 @@
 //! it, a click on a second shaft that connects lays the belt (one belt connector used up outside
 //! creative) and forgets it. Refusals say nothing, as in Create (its client draws the red
 //! particles of `BeltConnectorHandler`). Remembering a shaft, or laying a belt with connectors
-//! left, starts the item's 5-tick cooldown. Not here: the `belt` advancement (the port ships no
-//! advancements).
+//! left, starts the item's 5-tick cooldown; a belt laid gives the `belt` advancement.
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
@@ -130,6 +129,7 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         bc::Click::Refused => InteractionResult::Success,
         bc::Click::Connect(start) => {
             create_belts(&mut lv, start, pos);
+            super::super::advancements::award(lv.host, player, "belt");
             if !creative(&*lv.host, player) {
                 super::shrink_held(lv.host, player, hand, 1);
             }

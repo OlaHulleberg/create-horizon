@@ -166,7 +166,13 @@ fn clicked(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<Interact
     if !can {
         return None;
     }
-    ring(&mut lv, click.pos, side);
+    // `HauntedBellBlock.ring`: the player who rang a haunted bell.
+    if ring(&mut lv, click.pos, side)
+        && lv.block_name(click.pos).as_deref() == Some("create:haunted_bell")
+        && let Some(player) = lv.host.player(click.player)
+    {
+        super::super::advancements::award(lv.host, player, "haunted_bell");
+    }
     Some(InteractionResult::Success)
 }
 

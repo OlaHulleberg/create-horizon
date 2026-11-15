@@ -43,6 +43,11 @@ fn main() {
             let out = flag("--out").unwrap_or_else(|| usage());
             compile(&create, &out);
         }
+        Some("advancements") => {
+            let create = flag("--create").unwrap_or_else(|| usage());
+            let out = flag("--out").unwrap_or_else(|| usage());
+            advancements(&create.join("src/generated/resources"), &out.join("create"));
+        }
         Some("prepare") => {
             let out = flag("--out").unwrap_or_else(|| usage());
             let mut sources = Vec::new();
@@ -97,9 +102,42 @@ fn pretty(v: &Value) -> Vec<u8> {
     s.into_bytes()
 }
 
+/// Create's advancements (`AllAdvancements`, its data generator's
+/// `data/create/advancement/*.json`, MIT; the recipe unlocks under `recipes/` are left out) as
+/// 26.3 reads them: the display's `background` is a texture id under `textures/` without its
+/// extension (`create:gui/advancements`).
+fn advancements(generated: &Path, out: &Path) {
+    let from = generated.join("data/create/advancement");
+    let to = out.join("data/create/advancement");
+    let _ = fs::remove_dir_all(&to);
+    let mut names: Vec<_> = fs::read_dir(&from)
+        .unwrap_or_else(|e| panic!("{}: {e}", from.display()))
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    names.sort();
+    for p in names {
+        let mut doc: Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+        if let Some(bg) = doc["display"]["background"].as_str() {
+            doc["display"]["background"] = json!(advancement_background(bg));
+        }
+        write(&to.join(p.file_name().unwrap()), &pretty(&doc));
+    }
+}
+
+/// A 1.21.1 background texture path (`create:textures/gui/advancements.png`) as 26.3's id.
+fn advancement_background(path: &str) -> String {
+    let (ns, rest) = path.split_once(':').unwrap_or(("minecraft", path));
+    let rest = rest.strip_prefix("textures/").unwrap_or(rest);
+    let rest = rest.strip_suffix(".png").unwrap_or(rest);
+    format!("{ns}:{rest}")
+}
+
 fn compile(create: &Path, repo: &Path) {
     let out = &repo.join("create");
     let generated = create.join("src/generated/resources");
+    advancements(&generated, out);
     let java_root = create.join("src/main/java");
     let block_java = java::read_all(&java_root);
     let item_java = java::read_items(&java_root);

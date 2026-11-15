@@ -18,7 +18,7 @@
 //! - `CureZombieVillager`'s cure (the zombie villager's `mobInteract` with a golden apple from a
 //!   fake player): a golden apple gives its food effects to anything it hits.
 //! - The cannon's recoil in the hand (`PotatoCannonRenderHandler`: a special item model is
-//!   asked once per stack, `HORIZON_API.md`) and the advancements (the port ships none).
+//!   asked once per stack, `HORIZON_API.md`) and the `potato_cannon_collide` advancement (shots of two types meeting), not wired. A monster killed or another player hit gives `potato_cannon`.
 //!
 //! A powered wither (at half health or less) takes no hit, knockback is lessened by the
 //! target's resistance, the barrel is on the side of the hand that holds the cannon (the
@@ -652,6 +652,22 @@ fn impact(
     }
     if let Some(ticks) = invulnerable {
         target.set_invulnerable_time(lv.host, ticks);
+    }
+    // `AllAdvancements.POTATO_CANNON`: a monster killed, or another player hit.
+    let owner = shot.owner.and_then(|o| {
+        lv.host
+            .players()
+            .server_players()
+            .into_iter()
+            .find(|p| p.entity() == o)
+    });
+    if let Some(owner) = owner {
+        let monster = !alive(&*lv.host, target)
+            && target.classification(&*lv.host) == Some(mod_api::MobCategory::Monster);
+        let other_player = event.entity_kind == "minecraft:player" && Some(target) != shot.owner;
+        if monster || other_player {
+            super::super::advancements::award(lv.host, owner, "potato_cannon");
+        }
     }
     let velocity = target.velocity(&*lv.host).unwrap_or([0.0; 3]);
     let ground = target.on_ground(&*lv.host) == Some(true);

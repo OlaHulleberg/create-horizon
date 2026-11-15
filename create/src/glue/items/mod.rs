@@ -16,7 +16,6 @@
 //! - The wand of symmetry's mirrored placements take the placed state turned, not
 //!   `Block.updateFromNeighbourShapes` of it (the legacy's `update_from_neighbour_shapes`): no
 //!   host call asks a state's shape against its neighbours.
-//! - The belt connector's advancement: the port ships none of Create's advancements.
 //! - Super glue's selection (`SuperGlueSelectionHandler`) is the contraptions' to port: what it
 //!   makes (`SuperGlueEntity` areas) is found and saved with contraptions (`contraption_found`,
 //!   `sticky_sides`, `create_glue`). The train schedule and its screen are the trains'
