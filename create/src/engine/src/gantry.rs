@@ -72,6 +72,9 @@ pub struct Moving {
     pub blocks: Vec<([i32; 3], u32)>,
     /// Its actors, glue and turned-off actor kinds.
     pub carried: crate::actors::Carried,
+    /// `sequencedOffsetLimit`: how far the turn by distance its shaft had when it started still
+    /// lets it go (`limitMovement`), none for no limit; not saved.
+    pub limit: Option<f32>,
 }
 
 /// The shaft under a moving carriage, as `checkPinionShaft` reads it.
@@ -134,7 +137,18 @@ impl Moving {
         if crossing && !can_assemble_on(s.part, s.powered, pinion_speed(s.speed)) {
             return Step::Stop;
         }
-        Step::Move(v)
+        Step::Move(match self.limit {
+            Some(l) => v.clamp(-l, l),
+            None => v,
+        })
+    }
+
+    /// Moved `v` this tick: the limit is used up as it goes.
+    pub fn moved(&mut self, v: f32) {
+        self.offset += v;
+        if let Some(l) = self.limit.filter(|l| *l > 0.0) {
+            self.limit = Some((l - v.abs()).max(0.0));
+        }
     }
 }
 
@@ -160,6 +174,7 @@ mod tests {
             per_tick: 0.0,
             blocks: vec![],
             carried: Default::default(),
+            limit: None,
         };
         let shaft_at = |i: i32| Shaft {
             facing: Dir::East,

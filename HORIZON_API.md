@@ -186,6 +186,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Marking an entity immune to fire** (`Entity.fireImmune`, Create's `CreateFireImmune`): a player in a whole
   netherite diving set takes no fire damage (`living_incoming_damage`) and stops burning each tick, and their
   own view shows no flames, but lava still sets them alight for a tick, so others see flames on them.
+- **Moving a playing sound** (a tickable `SoundInstance`'s `getX/Y/Z`, read each tick): turning machinery's
+  ambient hum and cog clicks (`SoundScapes`, `ContinuousSound`) follow the mean of their blocks in Create; a
+  `SoundRef` can change its volume (`fade`) but not its position, so they play at the listener with the volume
+  their distance gives them, from no side (`glue/sources/ambience.rs`). A `SoundRef::move_to(position)` would
+  close it.
 - **A particle drawn as its own quads** (`SteamJetParticle.render`'s four quads turned along the jet): steam
   engines' and whistles' steam jets are Create's sprites on a billboard.
 - **A tinted particle with a block sprite and an exact velocity** (Create's `FluidStackParticle`: the fluid's
@@ -227,6 +232,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - Display and redstone: the clipboard copies no steam engine's `RotationDirection` and no table cloth's price,
   neither setting being ported; redstone links feeding factory gauges (`RedstoneLinkBlockEntity`'s
   `FactoryPanelSupportBehaviour`) are not joined (display links are).
+- Kinetics: Create breaks a block whose speed starts, stops or turns round too often (`flickerTally`,
+  `RotationPropagator.MAX_FLICKER_SCORE`: a clutch on a fast redstone clock); the port does not count it. The
+  limit a sequenced gearshift's or valve handle's turn sets on a bearing, piston, pulley or gantry
+  (`sequencedAngleLimit`, `sequencedOffsetLimit`) is not saved: one reloaded mid-turn starts the turn's limit again.
 - Contraptions: a display board's text, a belt's items and a crafter's grid mid-craft are neither carried
   nor drawn on a moving structure; signs', banners' and beds' block entities and a deployer's held item are not
   drawn on one (the rest of what the engine keeps per block rides with it, `Subsystem::carry_out`, and is drawn

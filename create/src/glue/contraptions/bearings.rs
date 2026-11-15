@@ -270,6 +270,83 @@ fn speed(dim: usize, pos: [i32; 3]) -> f32 {
     with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0)
 }
 
+/// The key of a bearing's or piston's last assembly's failure in its block entity's data
+/// (`AssemblyException.write`'s `LastException`), for its clients' overlay
+/// (`IDisplayAssemblyExceptions`): the message's key, its arguments and, for an unmovable block,
+/// the block's id.
+pub const LAST_EXCEPTION: &str = "LastException";
+
+/// `lastException`: what the last assembly of the bearing or piston at `pos` refused, or none
+/// for one that worked; nothing changes for a structure that wasn't there to assemble
+/// (`assemble` returning false).
+pub(super) fn set_exception(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    refused: Option<&contraption::Refused>,
+) {
+    use contraption::Refused;
+    let c = match refused {
+        Some(Refused::Empty) => return,
+        Some(r) => {
+            let (key, args, block) = match r {
+                Refused::Unmovable(p) => (
+                    "unmovableBlock",
+                    p.iter().map(i32::to_string).collect(),
+                    lv.name_props(*p).map(|(n, _)| n),
+                ),
+                Refused::TooLarge => (
+                    "structureTooLarge",
+                    vec![contraption::MAX_BLOCKS.to_string()],
+                    None,
+                ),
+                Refused::NotEnoughSails(n) => (
+                    "not_enough_sails",
+                    vec![n.to_string(), contraption::MIN_SAILS.to_string()],
+                    None,
+                ),
+                Refused::Empty => return,
+            };
+            let mut c = Compound::new();
+            c.insert("Key".into(), Tag::String(key.into()));
+            c.insert(
+                "Args".into(),
+                Tag::List(
+                    args.into_iter()
+                        .map(|a: String| Tag::String(a.as_str().into()))
+                        .collect(),
+                ),
+            );
+            if let Some(b) = block {
+                c.insert("Block".into(), Tag::String(b.as_str().into()));
+            }
+            Some(c)
+        }
+        None => None,
+    };
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let Some(mut data) = entity.data(&*lv.host) else {
+        return;
+    };
+    let changed = match c {
+        Some(c) => {
+            let tag = Tag::Compound(c);
+            data.insert(LAST_EXCEPTION.into(), tag.clone()) != Some(tag)
+        }
+        None => data.remove(&LAST_EXCEPTION.into()).is_some(),
+    };
+    if changed {
+        let _ = entity.replace_data(&mut *lv.host, data);
+    }
+}
+
+/// `sequenceContext.getEffectiveValue` of the turn (`distance`: by metres, else by degrees) a
+/// sequenced gearshift or valve handle hands the block at `pos`, as its speed changes.
+fn sequence_limit(dim: usize, pos: [i32; 3], distance: bool) -> Option<f32> {
+    with_world(|w| w.dims[dim].kinetics.sequence_limit(pos, 0, distance)).flatten()
+}
+
 /// Windmills: structures whose bearing broke go back; right-clicked bearings assemble their
 /// sails (`assemble`), the blocks leaving the world; clients see the changes. Nothing runs
 /// without either.
@@ -303,9 +380,14 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let gathered = contraption::gather_windmill(pos, facing, |p| found(lv, p));
-        let Ok((blocks, sails)) = gathered else {
-            continue;
+        let (blocks, sails) = match gathered {
+            Ok(g) => g,
+            Err(r) => {
+                set_exception(lv, pos, Some(&r));
+                continue;
+            }
         };
+        set_exception(lv, pos, None);
         actors::carry_storage(lv, pos, pos, &blocks);
         take_blocks(lv, pos, &blocks);
         // `RotationDirection` on its value box: clockwise unless set otherwise.
@@ -385,6 +467,7 @@ pub(super) fn tick_bearing_actors(lv: &mut ServerLevel<'_>) {
                 angle: 0.0,
                 since: now,
                 rpm: speed(dim, pos),
+                limit: None,
             });
             BEARING_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), (carried, own)));
             with_world(|w| w.dims[dim].windmill_changes.push(pos));
@@ -478,6 +561,8 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                 let stalled = BEARING_CARRIED
                     .with_borrow(|c| c.get(&(dim, pos)).is_some_and(|c| c.0.stalled));
                 turn.rebase(now, if stalled { 0.0 } else { rpm });
+                // `onSpeedChanged`: the limit starts again from the context it has now.
+                turn.limit = sequence_limit(dim, pos, false);
                 with_world(|w| {
                     if let Some(m) = w.dims[dim].windmills.get_mut(&pos) {
                         m.bearing = Some(turn);
@@ -488,9 +573,14 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
             Some(None) => {}
             None if rpm != 0.0 => {
                 let gathered = contraption::gather_bearing(pos, facing, 0, |p| found(lv, p));
-                let Ok((blocks, sails)) = gathered else {
-                    continue;
+                let (blocks, sails) = match gathered {
+                    Ok(g) => g,
+                    Err(r) => {
+                        set_exception(lv, pos, Some(&r));
+                        continue;
+                    }
                 };
+                set_exception(lv, pos, None);
                 actors::carry_storage(lv, pos, pos, &blocks);
                 take_blocks(lv, pos, &blocks);
                 let w = create_engine::world::Windmill {
@@ -501,6 +591,7 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                         angle: 0.0,
                         since: now,
                         rpm,
+                        limit: sequence_limit(dim, pos, false),
                     }),
                 };
                 with_world(|world| world.bearing_assembled(dim, pos, w));
@@ -681,6 +772,7 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
         };
         let carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
         take_blocks(lv, c, &blocks);
+        let limit = sequence_limit(dim, shaft, true);
         with_world(|w| {
             w.dims[dim].gantries.push(Moving {
                 start: c,
@@ -690,6 +782,7 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                 per_tick: 0.0,
                 blocks,
                 carried,
+                limit,
             })
         });
     }
@@ -732,7 +825,7 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                     g.per_tick = v;
                     show_gantry(lv, &g, false);
                 }
-                g.offset += v;
+                g.moved(v);
                 keep.push(g);
             }
             Step::Stop => {
@@ -833,8 +926,11 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
         let rpm = speed(dim, pos);
         // `onSpeedChanged`: a piston kept together by its mode moves again.
         let running = with_world(|w| {
+            let limit = w.dims[dim].kinetics.sequence_limit(pos, 0, true);
             let m = w.dims[dim].pistons.get_mut(&pos)?;
             m.waiting = false;
+            // The limit starts again from the context it has now.
+            m.limit = limit;
             Some(())
         })
         .flatten()
@@ -878,18 +974,27 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
         if !stalled && piston_collides(lv, pos, facing, rpm) {
             with_world(|w| {
                 if let Some(m) = w.dims[dim].pistons.get_mut(&pos) {
-                    use create_engine::piston::{grid_offset, movement};
-                    let v = movement(rpm, facing, m.offset, m.range);
+                    use create_engine::piston::grid_offset;
+                    let v = m.step(rpm, facing);
                     m.offset = grid_offset(grid_offset(m.offset, m.range) - v, m.range);
                 }
             });
             try_disassemble_piston(lv, pos);
             continue;
         }
+        let mut locked = false;
         let end = with_world(|w| {
             let m = w.dims[dim].pistons.get_mut(&pos)?;
+            let v = m.step(rpm, facing);
+            // `LinearActuatorBlockEntity.tick`: a sequenced limit is used up as it moves; at
+            // its end the structure is set where it is (`forceMove`).
+            if let Some(l) = m.limit.filter(|l| *l > 0.0) {
+                let left = (l - v.abs()).max(0.0);
+                m.limit = Some(left);
+                locked = left == 0.0;
+            }
             if !stalled {
-                m.offset += create_engine::piston::movement(rpm, facing, m.offset, m.range);
+                m.offset += v;
             }
             let end = m.offset <= 0.0 || m.offset >= m.range as f32;
             if end {
@@ -898,6 +1003,9 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
             Some(end)
         })
         .flatten();
+        if locked {
+            show_piston(lv, pos);
+        }
         if end == Some(true) {
             try_disassemble_piston(lv, pos);
         } else if lv.game_time() % 10 == 0 {
@@ -911,12 +1019,12 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
 /// (`ContraptionCollider.isCollidingWithWorld`): a cell its leading blocks enter holds a block
 /// with a collision shape that can't be replaced, and that no breaker there can break.
 fn piston_collides(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32) -> bool {
-    use create_engine::piston::{colliders, entered_cells, movement};
+    use create_engine::piston::{colliders, entered_cells};
     let dim = lv.dim;
     let Some(m) = with_world(|w| w.dims[dim].pistons.get(&pos).cloned()).flatten() else {
         return false;
     };
-    let v = movement(rpm, facing, m.offset, m.range);
+    let v = m.step(rpm, facing);
     if v == 0.0 {
         return false;
     }
@@ -1038,9 +1146,14 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     let gathered = piston::gather_piston(c.anchor, facing, m < 0.0, sticky, &exclude, |p| {
         found(lv, p)
     });
-    let Ok(structure) = gathered else {
-        return;
+    let structure = match gathered {
+        Ok(s) => s,
+        Err(r) => {
+            set_exception(lv, pos, Some(&r));
+            return;
+        }
     };
+    set_exception(lv, pos, None);
     let o = facing.offset();
     let mut blocks: Vec<([i32; 3], u32)> = c
         .poles
@@ -1067,6 +1180,7 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     super::remove_cells(lv, &cells);
     lv.set_property(pos, "state", "moving", update_all());
     super::super::persist::mark_pos_unsaved(dim, pos);
+    let limit = sequence_limit(dim, pos, true);
     with_world(|w| {
         w.dims[dim].pistons.insert(
             pos,
@@ -1079,6 +1193,7 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
                 initial: c.progress,
                 facing: Some(facing),
                 waiting: false,
+                limit,
             },
         )
     });
@@ -1143,7 +1258,7 @@ fn show_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let per_tick = if m.carried.stalled || m.waiting {
         0.0
     } else {
-        create_engine::piston::movement(speed(dim, pos), facing, m.offset, m.range)
+        m.step(speed(dim, pos), facing)
     };
     let origin = [
         m.anchor[0] - pos[0],
@@ -1160,7 +1275,7 @@ fn show_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             dir: facing.offset(),
             offset: m.offset,
             per_tick,
-            clamp: None,
+            clamp: m.limit.map(|l| (m.offset - l, m.offset + l)),
             rope: false,
         },
     );
@@ -1420,6 +1535,7 @@ fn pistons_from_nbt(
                     initial,
                     facing: Dir::ALL.get(facing as usize).copied(),
                     waiting: waiting == 1,
+                    limit: None,
                 },
             ))
         })
@@ -1474,6 +1590,7 @@ fn windmills_from_nbt(
                         angle: f32::from_bits(sails.get(2).copied().unwrap_or(0) as u32),
                         since: now,
                         rpm: 0.0,
+                        limit: None,
                     }),
                 },
             ))

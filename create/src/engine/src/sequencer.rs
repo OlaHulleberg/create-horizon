@@ -255,6 +255,8 @@ pub struct Sequencer {
     pub speed: f32,
     /// Its network is overstressed: it shows no speed (`getSpeed` is 0).
     pub overstressed: bool,
+    /// Turning instructions started (not saved): each start is a context of its own.
+    pub runs: u32,
 }
 
 impl Default for Sequencer {
@@ -268,6 +270,7 @@ impl Default for Sequencer {
             powered_before: false,
             speed: 0.0,
             overstressed: false,
+            runs: 0,
         }
     }
 }
@@ -343,6 +346,20 @@ impl Sequencer {
             .map_or(0, |i| i.speed_modifier())
     }
 
+    /// `sequenceContext` while an instruction runs: a turn hands its value on
+    /// (`SequenceContext.fromGearshift`, none for the others).
+    pub fn context(&self) -> Option<crate::kinetics::Context> {
+        if self.is_idle() {
+            return None;
+        }
+        let i = self.instruction(self.current)?;
+        i.kind.turns().then_some(crate::kinetics::Context {
+            distance: i.kind == Kind::TurnDistance,
+            value: i.value as f32,
+            run: self.runs,
+        })
+    }
+
     /// `run`: starts instruction `index`, or ends (`END`, or past the list).
     pub fn run(&mut self, index: i32) -> State {
         let Some(instruction) = self.instruction(index).filter(|i| i.kind != Kind::End) else {
@@ -353,6 +370,7 @@ impl Sequencer {
             return Some(Step::Ended);
         };
         self.duration = instruction.duration(0.0, self.speed);
+        self.runs = self.runs.wrapping_add(1);
         self.current = index;
         self.progress = 0.0;
         self.timer = 0;

@@ -426,17 +426,32 @@ pub struct Turn {
     pub angle: f32,
     pub since: i64,
     pub rpm: f32,
+    /// `sequencedAngleLimit`: the degrees it may still turn from `since` (a sequenced
+    /// gearshift's or valve handle's turn), none for no limit.
+    pub limit: Option<f32>,
 }
 
 impl Turn {
     /// `angle += convertToAngular(speed)` (`speed × 0.3`° a tick) each tick, `% 360`.
+    /// Each tick's turn is held to the limit left, which it uses up.
     pub fn angle_at(&self, now: i64) -> f32 {
-        (self.angle + self.rpm * 0.3 * (now - self.since) as f32) % 360.0
+        (self.angle + self.turned(now)) % 360.0
     }
 
-    /// The speed changed at `now`.
+    /// The degrees turned from `since` to `now`.
+    fn turned(&self, now: i64) -> f32 {
+        let d = self.rpm * 0.3 * (now - self.since) as f32;
+        match self.limit {
+            Some(l) => d.clamp(-l, l),
+            None => d,
+        }
+    }
+
+    /// The speed changed at `now`; what is left of the limit goes on.
     pub fn rebase(&mut self, now: i64, rpm: f32) {
-        self.angle = self.angle_at(now);
+        let turned = self.turned(now);
+        self.angle = (self.angle + turned) % 360.0;
+        self.limit = self.limit.map(|l| (l - turned.abs()).max(0.0));
         self.since = now;
         self.rpm = rpm;
     }
@@ -579,12 +594,31 @@ mod tests {
     }
 
     #[test]
+    fn a_sequenced_turn_stops_at_its_limit() {
+        // 32 rpm (9.6° a tick) held to 45°: stops after 4.7 ticks, at 45.
+        let mut t = Turn {
+            angle: 10.0,
+            since: 0,
+            rpm: -32.0,
+            limit: Some(45.0),
+        };
+        assert!((t.angle_at(2) - (10.0 - 19.2)).abs() < 1e-3);
+        assert!((t.angle_at(7) + 35.0).abs() < 1e-3);
+        // A stall part way keeps what is left.
+        t.rebase(2, 0.0);
+        assert!((t.limit.unwrap() - 25.8).abs() < 1e-3);
+        t.rebase(5, -32.0);
+        assert!((t.angle_at(9) + 35.0).abs() < 1e-3);
+    }
+
+    #[test]
     fn a_stopped_bearing_snaps_to_the_nearest_quarter_turn() {
         use crate::kinetics::Axis;
         let mut t = Turn {
             angle: 0.0,
             since: 0,
             rpm: 16.0,
+            limit: None,
         };
         // 16 rpm: 4.8° a tick; after 20 ticks 96°.
         assert!((t.angle_at(20) - 96.0).abs() < 1e-3);

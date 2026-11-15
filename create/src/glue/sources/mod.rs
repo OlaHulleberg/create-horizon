@@ -1,8 +1,10 @@
 //! What the power sources draw and keep of their own: water wheels' material
-//! (`waterwheels`), and the handles of hand cranks and valve handles (`handles`); and what
-//! clients see of a network's stress changing (`stress`). Their speeds and stress are the
+//! (`waterwheels`), and the handles of hand cranks and valve handles (`handles`); what
+//! clients see of a network's stress changing (`stress`); and what they hear of turning
+//! machinery (`ambience`). Their speeds and stress are the
 //! network's (`kinetics`); a crank's and a valve's use are `interaction`'s and `blocks`'.
 
+pub mod ambience;
 pub mod handles;
 pub mod indicators;
 pub mod stress;
@@ -111,6 +113,7 @@ impl Subsystem for Sources {
         waterwheels::register(r);
         handles::register(r);
         stress::register(r);
+        ambience::register(r);
         indicators::register(r);
     }
 
@@ -146,6 +149,7 @@ impl Subsystem for Sources {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         handles::client_tick(&*host);
         stress::client_tick(host);
+        ambience::client_tick(host);
         let goggles = host.local_player().is_some_and(|p| {
             let head = host
                 .living(p.entity())
@@ -183,6 +187,7 @@ impl Subsystem for Sources {
     fn client_reset(&self) {
         handles::client_reset();
         stress::client_reset();
+        ambience::client_reset();
     }
 
     fn right_click_block(&self, host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {

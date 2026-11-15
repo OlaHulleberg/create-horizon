@@ -48,6 +48,7 @@ impl Subsystem for Drawing {
     fn synced_keys(&self) -> &'static [&'static str] {
         &[
             KEY,
+            super::LAST_EXCEPTION,
             actor_draw::ACTORS,
             actor_draw::PSI,
             actor_draw::CONTROLS_OFF,
@@ -294,6 +295,11 @@ pub(super) fn show_turn(
     c.insert("Angle".into(), float(turn.map_or(0.0, |t| t.angle_at(now))));
     if let Some(t) = turn {
         c.insert("Rpm".into(), float(t.rpm));
+        // What is left of a sequenced turn from now.
+        if let Some(l) = t.limit {
+            let left = (l - (t.angle_at(now) - t.angle).abs()).max(0.0);
+            c.insert("Limit".into(), float(left));
+        }
     }
     write(lv, anchor, Some(c));
 }
@@ -496,6 +502,8 @@ enum Shape {
         angle: f32,
         since: f64,
         rpm: Option<f32>,
+        /// The degrees a sequenced turn may still go from `since`.
+        limit: Option<f32>,
     },
     Glide {
         blocks: Vec<Drawn>,
@@ -556,6 +564,7 @@ fn parse(host: &dyn Host, c: &Compound) -> Option<Shape> {
             angle: get_float(c, "Angle").unwrap_or(0.0),
             since,
             rpm: get_float(c, "Rpm"),
+            limit: get_float(c, "Limit"),
         },
         GLIDE => Shape::Glide {
             blocks: drawn_blocks(host, c, ""),
@@ -1053,6 +1062,7 @@ fn submit(
                 angle,
                 since,
                 rpm,
+                limit,
             } => {
                 let (angle, since, rpm) = match rpm {
                     Some(r) => (*angle, *since, *r),
@@ -1066,17 +1076,21 @@ fn submit(
                     }
                 };
                 let rate = rpm * 0.3;
-                let here = angle + rate * (now - since) as f32;
-                match &view {
+                let turned = rate * (now - since) as f32;
+                // A sequenced turn is held where its limit runs out.
+                let held = limit.map(|l| turned.clamp(-l, l));
+                let here = angle + held.unwrap_or(turned);
+                match (&view, held) {
                     // Its actors move each frame: all of it is drawn each frame, turned.
-                    Some(view) => {
+                    (Some(view), _) => {
+                        let stopped = held.is_some_and(|h| h != turned);
                         let frame = Frame {
                             anchor: pos,
                             view,
                             motion: Motion::Turn {
                                 axis: axis_enum(*axis),
                                 angle: here % 360.0,
-                                rate,
+                                rate: if stopped { 0.0 } else { rate },
                             },
                             now,
                         };
@@ -1085,7 +1099,14 @@ fn submit(
                         draw_blocks(host, draw, pos, blocks, Some(&frame));
                         draw.pop();
                     }
-                    None => {
+                    // A sequenced turn is drawn each frame.
+                    (None, Some(_)) => {
+                        draw.push();
+                        draw.rotate_about(*axis, here % 360.0, [0.5; 3]);
+                        draw_blocks(host, draw, pos, blocks, None);
+                        draw.pop();
+                    }
+                    (None, None) => {
                         let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
                         draw.spin(*axis, [0.5; 3], rate, phase as f32);
                         draw_blocks(host, draw, pos, blocks, None);

@@ -80,6 +80,13 @@
 pub mod actor_draw;
 pub mod actors;
 mod bearings;
+pub(crate) use bearings::LAST_EXCEPTION;
+use bearings::set_exception;
+
+/// The key of a moving structure in its anchor's block entity data.
+pub(crate) fn draw_key() -> &'static str {
+    draw::KEY
+}
 mod blast;
 pub mod controller;
 pub mod draw;

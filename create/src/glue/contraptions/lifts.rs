@@ -308,9 +308,15 @@ pub(super) fn clock_hands_set(lv: &mut ServerLevel<'_>, pos: [i32; 3], index: u8
 /// `ClockworkBearingBlockEntity.assemble`: the hour hand and the minute hand leave the world.
 fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32) {
     let dim = lv.dim;
-    let Ok(Some(hands)) = create_engine::clock::gather(pos, facing, |p| found(lv, p)) else {
-        return;
+    let hands = match create_engine::clock::gather(pos, facing, |p| found(lv, p)) {
+        Ok(Some(hands)) => hands,
+        Ok(None) => return,
+        Err(r) => {
+            super::set_exception(lv, pos, Some(&r));
+            return;
+        }
     };
+    super::set_exception(lv, pos, None);
     let mut all = hands.hour.clone();
     if let Some((_, m)) = &hands.minute {
         all.extend(m.iter().copied());
@@ -403,9 +409,12 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
         }
         let rpm = speed(dim, pos);
         let running = with_world(|w| {
+            let limit = w.dims[dim].kinetics.sequence_limit(pos, 0, true);
             let p = w.dims[dim].lifts.pulleys.get_mut(&pos)?;
-            // `onSpeedChanged`: one kept together by its mode moves again.
+            // `onSpeedChanged`: one kept together by its mode moves again, and its limit
+            // starts again from the context it has now.
             p.waiting = false;
+            p.limit = limit;
             if rpm != 0.0 {
                 p.speed_changed(rpm);
             }
@@ -497,11 +506,17 @@ fn assemble_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
         return;
     }
     let anchor = below(pos, offset + 1);
-    let Ok(blocks) = pulley::gather(anchor, offset, |p| found(lv, p)) else {
-        return;
+    let blocks = match pulley::gather(anchor, offset, |p| found(lv, p)) {
+        Ok(b) => b,
+        Err(r) => {
+            super::set_exception(lv, pos, Some(&r));
+            return;
+        }
     };
+    super::set_exception(lv, pos, None);
     let mut p = Pulley::new(anchor, offset, range, blocks);
     p.rpm = rpm;
+    p.limit = with_world(|w| w.dims[dim].kinetics.sequence_limit(pos, 0, true)).flatten();
     // `isCollidingWithWorld` a block further down: it doesn't start.
     if rpm > 0.0
         && !p.blocks.is_empty()
@@ -621,12 +636,11 @@ fn show_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             blocks: &blocks,
             dir: [0, -1, 0],
             offset: p.offset,
-            per_tick: if p.waiting {
-                0.0
-            } else {
-                create_engine::pulley::movement(p.rpm)
-            },
-            clamp: Some((0.0, p.range as f32)),
+            per_tick: if p.waiting { 0.0 } else { p.speed(p.rpm) },
+            clamp: Some(match p.limit {
+                Some(l) => ((p.offset - l).max(0.0), (p.offset + l).min(p.range as f32)),
+                None => (0.0, p.range as f32),
+            }),
             rope: true,
         },
     );
