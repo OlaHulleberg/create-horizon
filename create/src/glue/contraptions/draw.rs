@@ -653,6 +653,8 @@ fn draw_blocks(
         draw.block(b.block, &props);
         if let Some((block, info)) = b.create {
             draw_parts(draw, block, &info, &props);
+        } else {
+            draw_entity_block(host, draw, b.block, &props);
         }
         // `BlazeBurnerMovementBehaviour.renderInContraption`: a carried burner's blaze.
         if b.block == states::key(create_engine::Block::BlazeBurner) {
@@ -677,6 +679,57 @@ fn draw_blocks(
         draw.pop();
     }
     draw.set_light(own);
+}
+
+/// A vanilla block whose block entity draws all of it (`RenderShape.ENTITYBLOCK_ANIMATED`: a
+/// chest, an ender chest, a shulker box), as `renderBlockEntities` draws it riding: its item's
+/// model as authored (the same special renderer), turned to the block's facing as
+/// `ChestRenderer` turns it (`-facing.toYRot()` about its middle), closed.
+fn draw_entity_block(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    block: BlockKey,
+    props: &[(&str, &str)],
+) {
+    let id = block.id(host);
+    let drawn = matches!(
+        id.as_str(),
+        "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:ender_chest"
+    ) || id.ends_with("shulker_box");
+    if !drawn {
+        return;
+    }
+    let Some(stack) = host
+        .block_item(block)
+        .and_then(|i| mod_api::ItemStack::new(i, 1))
+    else {
+        return;
+    };
+    let prop = |k: &str| props.iter().find(|(n, _)| *n == k).map(|(_, v)| *v);
+    let y_rot = match prop("facing") {
+        Some("west") => 90.0,
+        Some("north") => 180.0,
+        Some("east") => 270.0,
+        _ => 0.0,
+    };
+    draw.push();
+    if let Some(f) = prop("facing").filter(|_| id.ends_with("shulker_box")) {
+        // `ShulkerBoxRenderer`: the box turned from up to its facing.
+        let (axis, deg) = match f {
+            "down" => ([1.0, 0.0, 0.0], 180.0),
+            "north" => ([1.0, 0.0, 0.0], -90.0),
+            "south" => ([1.0, 0.0, 0.0], 90.0),
+            "west" => ([0.0, 0.0, 1.0], 90.0),
+            "east" => ([0.0, 0.0, 1.0], -90.0),
+            _ => ([1.0, 0.0, 0.0], 0.0),
+        };
+        draw.rotate_about(axis, deg, [0.5; 3]);
+    } else {
+        draw.rotate_about([0.0, 1.0, 0.0], -y_rot, [0.5; 3]);
+    }
+    draw.translate([0.5; 3]);
+    draw.item(&stack, mod_api::ItemDisplayContext::None, None, 0);
+    draw.pop();
 }
 
 /// Blocks whose block entity is not drawn while it rides (`MovementBehaviour
