@@ -24,7 +24,7 @@
 //!   engine back (no close callback on `Transaction`). Pumps reach Create's own blocks and open
 //!   ends as the legacy glue did.
 
-mod clicks;
+pub(crate) mod clicks;
 pub(crate) mod client;
 mod drawn;
 pub(crate) mod engine;
@@ -43,7 +43,7 @@ use super::subsystem::Subsystem;
 use super::world::with_world;
 use create_engine::Block;
 use create_engine::parts::StateInfo;
-use create_engine::tank::{Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
+use create_engine::tank::{Codes, Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
 use mod_api::{
     BlockState, BlockUpdateFlags, Compound, Flow, HostBlockStates, HostSide, ModBlockEntity,
     Registrar, RegistrationContext, RightClickBlockEvent, StateConstraint, Tag,
@@ -61,8 +61,44 @@ pub(crate) fn empties_water(item: &str) -> bool {
 }
 
 /// The key of a tank's contents in its block entity's data: fluid (255: none), amount, width,
-/// height, window; empty for a tank block that is no controller.
+/// height, window; empty for a tank block that is no controller. A potion's number names its
+/// key in the list beside it (`fluid_keys`).
 pub const TANK: &str = "Tank";
+/// The keys of the fluids `TANK` numbers (`fluid_keys`).
+pub const TANK_FLUIDS: &str = "Tank_fluids";
+
+/// Where the keys of the fluids an int array numbers (`tank::Codes`, a potion with its whole
+/// contents) are kept beside it: the array's key and `_fluids`.
+fn keys_key(array: &str) -> String {
+    format!("{array}_fluids")
+}
+
+/// Puts the keys `codes` gave numbers beside array `array` in `data` (nothing when none).
+pub(crate) fn put_fluid_keys(data: &mut Compound, array: &str, codes: Codes) {
+    if codes.keys.is_empty() {
+        return;
+    }
+    let list = codes
+        .keys
+        .into_iter()
+        .map(|k| Tag::String(k.as_str().into()))
+        .collect();
+    data.insert(keys_key(array).as_str().into(), Tag::List(list));
+}
+
+/// The fluid keys kept beside array `array` in `data`.
+pub(crate) fn fluid_keys(data: &Compound, array: &str) -> Vec<String> {
+    match data.get(&keys_key(array).as_str().into()) {
+        Some(Tag::List(l)) => l
+            .iter()
+            .map(|t| match t {
+                Tag::String(s) => s.to_string_lossy(),
+                _ => String::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
 
 /// The key of a hose pulley's hose: offset, blocks a tick it moves, the game time it was at.
 pub const HOSE: &str = "Hose";
@@ -97,6 +133,7 @@ impl Subsystem for Fluids {
         if !tanks.is_empty() {
             // x, y, z, fluid, amount, width, height, windows for each controller
             // (`FluidTankBlockEntity`'s `TankContent`, `Size`, `Height`, `Window`).
+            let mut codes = Codes::default();
             let v = tanks
                 .iter()
                 .flat_map(|(p, m)| {
@@ -104,7 +141,7 @@ impl Subsystem for Fluids {
                         p[0],
                         p[1],
                         p[2],
-                        i32::from(m.tank.fluid.map_or(255, |f| f.index())),
+                        codes.code(m.tank.fluid),
                         m.tank.amount as i32,
                         i32::from(m.width),
                         i32::from(m.height),
@@ -113,6 +150,7 @@ impl Subsystem for Fluids {
                 })
                 .collect();
             data.insert("tank_multis".into(), Tag::IntArray(v));
+            put_fluid_keys(data, "tank_multis", codes);
         }
         plumbing::chunk_data_save(dim, chunk, data);
         machines::chunk_data_save(dim, chunk, data);
@@ -165,6 +203,7 @@ impl Subsystem for Fluids {
     fn synced_keys(&self) -> &'static [&'static str] {
         &[
             TANK,
+            TANK_FLUIDS,
             HOSE,
             BOILER,
             rims::RIMS,
@@ -174,6 +213,7 @@ impl Subsystem for Fluids {
             plumbing::FILTER,
             plumbing::WHISTLE,
             glass::FLOW,
+            glass::FLOW_FLUIDS,
         ]
     }
 
@@ -266,10 +306,13 @@ pub const SPOUT_START: &str = "SpoutStart";
 /// A block entity's key by level and position.
 type ShownKey = (usize, [i32; 3], &'static str);
 
+/// What a block entity shows under a key: numbers, and the keys of the fluids they number.
+type Shown = (Vec<i32>, Vec<String>);
+
 thread_local! {
     /// What each spout's, drain's and boiler's block entity last showed its clients, by level
     /// and position.
-    static SHOWN: RefCell<HashMap<ShownKey, Vec<i32>>> =
+    static SHOWN: RefCell<HashMap<ShownKey, Shown>> =
         RefCell::new(HashMap::new());
 }
 
@@ -278,11 +321,15 @@ thread_local! {
 fn send_shown(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let time = lv.game_time();
-    let now: Vec<([i32; 3], &'static str, Vec<i32>)> = with_world(|w| {
+    let now: Vec<([i32; 3], &'static str, Shown)> = with_world(|w| {
         let d = &w.dims[dim];
-        let fluid = |f: Option<(Fluid, u32)>, capacity: u32| match f {
-            Some((f, n)) => vec![i32::from(f.index()), n as i32, capacity as i32],
-            None => vec![255, 0, capacity as i32],
+        let fluid = |f: Option<(Fluid, u32)>, capacity: u32| {
+            let mut codes = Codes::default();
+            let v = match f {
+                Some((f, n)) => vec![codes.code(Some(f)), n as i32, capacity as i32],
+                None => vec![255, 0, capacity as i32],
+            };
+            (v, codes.keys)
         };
         let spouts = d
             .spouts
@@ -304,7 +351,7 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
                 // The tank's width, for its sides' occlusion below.
                 width,
             ];
-            (*p, BOILER, v)
+            (*p, BOILER, (v, Vec::new()))
         });
         // A spout working shows when its cycle started (`processingTicks`).
         let working = d
@@ -313,7 +360,7 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
             .filter(|(_, s)| s.processing >= 0)
             .map(|(p, s)| {
                 let start = time - i64::from(create_engine::spout::FILLING_TIME - s.processing);
-                (*p, SPOUT_START, vec![start as i32])
+                (*p, SPOUT_START, (vec![start as i32], Vec::new()))
             });
         spouts.chain(drains).chain(boilers).chain(working).collect()
     })
@@ -324,9 +371,9 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
         .into_iter()
         .map(|(p, k, mut v)| {
             if k == BOILER
-                && let Some(width) = v.pop()
+                && let Some(width) = v.0.pop()
             {
-                v.push(boiler_occlusion(lv, p, width));
+                v.0.push(boiler_occlusion(lv, p, width));
             }
             (p, k, v)
         })
@@ -336,7 +383,7 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
         let mut changed: Vec<_> = shown
             .keys()
             .filter(|(d, p, k)| *d == dim && !now.iter().any(|(q, j, _)| q == p && j == k))
-            .map(|(_, p, k)| (*p, *k, Vec::new()))
+            .map(|(_, p, k)| (*p, *k, Shown::default()))
             .collect();
         for (p, k, _) in &changed {
             shown.remove(&(dim, *p, *k));
@@ -349,7 +396,7 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
         }
         changed
     });
-    for (pos, key, v) in changed {
+    for (pos, key, (v, keys)) in changed {
         // A spout's or drain's contents are saved with its column.
         if key == TANK {
             with_world(|w| w.mark_unsaved(dim, pos));
@@ -357,7 +404,15 @@ fn send_shown(lv: &mut ServerLevel<'_>) {
         let Some(entity) = lv.host.block_entity(lv.level, pos) else {
             continue;
         };
-        let data = Compound::from([(key.into(), Tag::IntArray(v))]);
+        let mut data = Compound::from([(key.into(), Tag::IntArray(v))]);
+        if key == TANK {
+            // The potion's key, or none.
+            let keys = keys
+                .iter()
+                .map(|k| Tag::String(k.as_str().into()))
+                .collect();
+            data.insert(TANK_FLUIDS.into(), Tag::List(keys));
+        }
         let _ = entity.merge_data(&mut *lv.host, data);
     }
 }
@@ -394,8 +449,9 @@ fn boiler_occlusion(lv: &ServerLevel<'_>, c: [i32; 3], width: i32) -> i32 {
 /// windows for each controller; `tanks` (before multiblock tanks) x, y, z, fluid, amount for
 /// one-block tanks.
 fn tanks_from_nbt(data: &Compound) -> Vec<([i32; 3], Multi)> {
+    let keys = fluid_keys(data, "tank_multis");
     let tank = |c: &[i32]| Tank {
-        fluid: Fluid::from_index(c[3].clamp(0, 255) as u8),
+        fluid: Codes::fluid(&keys, c[3]),
         amount: c[4].max(0) as u32,
     };
     let mut out = Vec::new();
@@ -451,16 +507,28 @@ fn set_shown_tank(lv: &mut ServerLevel<'_>, pos: [i32; 3], m: Option<&Multi>) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
+    let mut codes = Codes::default();
     let v = m.map_or_else(Vec::new, |m| {
         vec![
-            i32::from(m.tank.fluid.map_or(255, Fluid::index)),
+            codes.code(m.tank.fluid),
             m.tank.amount as i32,
             i32::from(m.width),
             i32::from(m.height),
             i32::from(m.window),
         ]
     });
-    let data = Compound::from([(TANK.into(), Tag::IntArray(v))]);
+    let mut data = Compound::from([(TANK.into(), Tag::IntArray(v))]);
+    // Always sent, so that a tank's potion key is replaced with its fluid.
+    data.insert(
+        TANK_FLUIDS.into(),
+        Tag::List(
+            codes
+                .keys
+                .iter()
+                .map(|k| Tag::String(k.as_str().into()))
+                .collect(),
+        ),
+    );
     let _ = entity.merge_data(&mut *lv.host, data);
 }
 
@@ -479,7 +547,7 @@ fn tank_in(data: &Compound) -> Option<Multi> {
     };
     Some(Multi {
         tank: Tank {
-            fluid: Fluid::from_index(fluid.clamp(0, 255) as u8),
+            fluid: Codes::fluid(&fluid_keys(data, TANK), fluid),
             amount: amount.max(0) as u32,
         },
         width: width.clamp(1, MAX_WIDTH) as u8,

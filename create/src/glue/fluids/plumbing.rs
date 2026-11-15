@@ -740,7 +740,8 @@ const KEY: &str = "create_fluids";
 
 pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
     let here = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
-    let index = |f: Option<Fluid>| i32::from(f.map_or(255, Fluid::index));
+    let codes = std::cell::RefCell::new(create_engine::tank::Codes::default());
+    let index = |f: Option<Fluid>| codes.borrow_mut().code(f);
     let (filters, hoses, creative, multis) = with_world(|w| {
         let p = &w.dims[dim].plumbing;
         let mut filters: Vec<_> = p
@@ -825,6 +826,7 @@ pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) 
         })
         .collect();
     own.insert("creative_multis".into(), Tag::IntArray(v));
+    super::put_fluid_keys(&mut own, KEY, codes.into_inner());
     data.insert(KEY.into(), Tag::Compound(own));
 }
 
@@ -837,7 +839,8 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
         Some(Tag::IntArray(v)) => v.clone(),
         _ => Vec::new(),
     };
-    let fluid = |i: i32| Fluid::from_index(i.clamp(0, 255) as u8);
+    let keys = super::fluid_keys(own, KEY);
+    let fluid = |i: i32| create_engine::tank::Codes::fluid(&keys, i);
     let filters = ints("filters");
     let filter_items: Vec<String> = match own.get(&"filter_items".into()) {
         Some(Tag::List(l)) => l

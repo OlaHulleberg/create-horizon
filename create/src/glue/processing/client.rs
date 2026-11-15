@@ -132,11 +132,12 @@ fn basin_fluids(nbt: &Compound) -> Vec<(Fluid, u32)> {
     let Some(Tag::IntArray(v)) = nbt.get(&basin_glue::FLUIDS_KEY.into()) else {
         return Vec::new();
     };
+    let keys = crate::glue::fluids::fluid_keys(nbt, basin_glue::FLUIDS_KEY);
     v.as_chunks::<2>()
         .0
         .iter()
         .filter_map(|c| {
-            let fluid = Fluid::from_index(u8::try_from(c[0]).ok()?)?;
+            let fluid = create_engine::tank::Codes::fluid(&keys, c[0])?;
             (c[1] > 0).then_some((fluid, c[1] as u32))
         })
         .collect()

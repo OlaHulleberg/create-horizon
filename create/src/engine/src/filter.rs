@@ -249,6 +249,9 @@ pub struct Spec {
     /// `ATTRIBUTE_FILTER_MATCHED_ATTRIBUTES` (None: absent): each (type, value, inverted).
     pub attributes: Option<Vec<(String, Option<String>, bool)>>,
     pub address: String,
+    /// The fluid the stack empties into (`GenericItemEmptying.emptyItem`: a potion's, with
+    /// its contents), where the glue read one; a bucket's is found from its id.
+    pub fluid: Option<Fluid>,
 }
 
 impl Spec {
@@ -268,6 +271,8 @@ pub enum Kind {
     Item {
         item: Box<str>,
         components: Box<str>,
+        /// The fluid it empties into (`resolveFluid`).
+        fluid: Option<Fluid>,
     },
     /// `ListFilterItemStack`.
     List {
@@ -330,6 +335,7 @@ impl Filter {
             None => Kind::Item {
                 item: spec.item.as_str().into(),
                 components: spec.components.as_str().into(),
+                fluid: spec.fluid.or_else(|| Fluid::of_bucket(&spec.item)),
             },
             Some(FilterItem::List) => Kind::List {
                 entries: spec
@@ -426,7 +432,9 @@ impl Filter {
     /// `FilterItemStack.test(level, stack, matchNBT)`.
     pub fn test_nbt<P: Probe + ?Sized>(&self, stack: &P, match_nbt: bool) -> bool {
         match &self.kind {
-            Kind::Item { item, components } => test_direct(item, components, stack, match_nbt),
+            Kind::Item {
+                item, components, ..
+            } => test_direct(item, components, stack, match_nbt),
             Kind::List {
                 entries,
                 respect_nbt,
@@ -459,15 +467,28 @@ impl Filter {
     }
 
     /// `FilterItemStack.test(level, FluidStack)`: the fluid the filter item empties into (a
-    /// bucket's); a list tests its entries; attribute and package filters pass no fluid.
+    /// bucket's, a potion's with its contents); a list tests its entries; attribute and package
+    /// filters pass no fluid.
     pub fn test_fluid(&self, fluid: Fluid) -> bool {
+        self.test_fluid_nbt(fluid, true)
+    }
+
+    /// The same, comparing the fluids' components (`isSameFluidSameComponents`) only with
+    /// `match_nbt` (else any potion passes a potion's filter).
+    fn test_fluid_nbt(&self, fluid: Fluid, match_nbt: bool) -> bool {
         match &self.kind {
-            Kind::Item { item, .. } => Fluid::of_bucket(item) == Some(fluid),
+            Kind::Item { fluid: f, .. } => match f {
+                Some(f) if match_nbt => *f == fluid,
+                Some(f) => f.id() == fluid.id(),
+                None => false,
+            },
             Kind::List {
-                entries, blacklist, ..
+                entries,
+                blacklist,
+                respect_nbt,
             } => {
                 for e in entries {
-                    if e.test_fluid(fluid) {
+                    if e.test_fluid_nbt(fluid, *respect_nbt) {
                         return !blacklist;
                     }
                 }

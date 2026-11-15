@@ -34,7 +34,12 @@ static DUST: OnceLock<mod_api::ParticleKey> = OnceLock::new();
 pub const GAUGE: &str = "Gauge";
 
 /// The keys `kinetics` sends to clients besides the speeds: this module's and the fluids'.
-pub const SYNCED: &[&str] = &[GAUGE, super::fluids::TANK, super::fluids::HOSE];
+pub const SYNCED: &[&str] = &[
+    GAUGE,
+    super::fluids::TANK,
+    super::fluids::TANK_FLUIDS,
+    super::fluids::HOSE,
+];
 
 pub struct Gauges;
 

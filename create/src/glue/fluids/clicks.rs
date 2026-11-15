@@ -106,7 +106,7 @@ pub(crate) fn emptying(item: &str) -> Option<Emptying> {
 
 /// How much of `fluid` filling `item` takes and what it becomes
 /// (`GenericItemFilling.getRequiredAmountForItem`, `fillItem`).
-fn filling(item: &str, fluid: Fluid) -> Option<(u32, String)> {
+pub(crate) fn filling(item: &str, fluid: Fluid) -> Option<(u32, String)> {
     let recipes = recipes::with(|r| r.filling.clone()).unwrap_or_default();
     create_engine::spout::filling(item, fluid, &recipes)
 }

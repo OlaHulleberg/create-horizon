@@ -106,6 +106,7 @@ impl Subsystem for Processing {
         &[
             basin::ITEMS_KEY,
             basin::FLUIDS_KEY,
+            basin::FLUIDS_KEYS_KEY,
             basin::MIXER_KEY,
             basin::GOGGLES_KEY,
             crafter::CRAFTER_KEY,
