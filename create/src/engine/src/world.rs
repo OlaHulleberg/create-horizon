@@ -583,7 +583,12 @@ fn has_state(block: Block) -> bool {
             | Block::Nozzle
             | Block::FactoryGauge
             | Block::PackageFrogport
+            | Block::DeskBell
+            | Block::Packager
+            | Block::Repackager
+            | Block::Controls
     ) || crate::display::is_nixie(block)
+        || crate::dye::is_postbox(block)
         || is_plumbing(block)
 }
 

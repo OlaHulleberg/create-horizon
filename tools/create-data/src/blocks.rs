@@ -2445,7 +2445,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 177] = [
+pub const PARTIALS: [(&str, &str, &str); 198] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -3270,6 +3270,81 @@ pub const PARTIALS: [(&str, &str, &str); 177] = [
     (
         "part_contraption_controls_indicator_4",
         "create:block/contraption_controls/indicator_4",
+        "south",
+    ),
+    // DeskBellRenderer's plunger and bell (`DESK_BELL_PLUNGER`, `DESK_BELL_BELL`), as written
+    // for a bell facing up.
+    ("part_desk_bell_plunger", "create:block/desk_bell/plunger", "up"),
+    ("part_desk_bell_bell", "create:block/desk_bell/bell", "up"),
+    // PostboxRenderer's flag (`POSTBOX_FLAG`), as written for a postbox facing south.
+    ("part_postbox_flag", "create:block/package_postbox/flag", "up"),
+    // PackagerRenderer's trays and hatches (`PACKAGER_TRAY_*`, `PACKAGER_HATCH_*`).
+    ("part_packager_tray", "create:block/packager/tray", "up"),
+    ("part_repackager_tray", "create:block/repackager/tray", "up"),
+    (
+        "part_packager_hatch_open",
+        "create:block/packager/hatch_open",
+        "up",
+    ),
+    (
+        "part_packager_hatch_closed",
+        "create:block/packager/hatch_closed",
+        "up",
+    ),
+    // PulleyRenderer's rope and magnet halves (`ROPE_HALF`, `ROPE_HALF_MAGNET`) and
+    // ElevatorPulleyRenderer's magnet and belt (`ELEVATOR_MAGNET`, `ELEVATOR_BELT*`).
+    ("part_rope_half", "create:block/rope_pulley/rope_half", "up"),
+    (
+        "part_rope_half_magnet",
+        "create:block/rope_pulley/rope_half_magnet",
+        "up",
+    ),
+    (
+        "part_elevator_magnet",
+        "create:block/elevator_pulley/pulley_magnet",
+        "up",
+    ),
+    ("part_elevator_belt", "create:block/elevator_pulley/rope", "up"),
+    (
+        "part_elevator_belt_half",
+        "create:block/elevator_pulley/rope_half",
+        "up",
+    ),
+    // LinkBulbRenderer's tube (`DISPLAY_LINK_TUBE`), as written for a link facing up.
+    ("part_display_link_tube", "create:block/display_link/tube", "up"),
+    // ControlsRenderer's cover and levers (`TRAIN_CONTROLS_*`), as written facing north.
+    ("part_train_controls_cover", "create:block/controls/train/cover", "up"),
+    ("part_train_controls_lever", "create:block/controls/train/lever", "up"),
+    // StandardBogeyVisual's large bogey: its belt, pistons and wheel pins.
+    (
+        "part_bogey_drive_belt",
+        "create:block/track/bogey/bogey_drive_belt",
+        "up",
+    ),
+    (
+        "part_bogey_piston",
+        "create:block/track/bogey/bogey_drive_piston",
+        "up",
+    ),
+    (
+        "part_bogey_pin",
+        "create:block/track/bogey/bogey_drive_wheel_pin",
+        "up",
+    ),
+    // TrackRenderer.renderGirder's beams and caps (`GIRDER_SEGMENT_*`), as the rails'.
+    (
+        "part_girder_segment_top",
+        "create:block/metal_girder/segment_top",
+        "south",
+    ),
+    (
+        "part_girder_segment_middle",
+        "create:block/metal_girder/segment_middle",
+        "south",
+    ),
+    (
+        "part_girder_segment_bottom",
+        "create:block/metal_girder/segment_bottom",
         "south",
     ),
 ];

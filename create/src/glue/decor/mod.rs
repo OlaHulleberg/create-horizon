@@ -30,6 +30,7 @@
 //! - A placard shows a 3D item at half size (`PlacardRenderer`: `isGui3d`): no API reads an
 //!   item model's `gui3d`, so an item that places a block stands for it.
 
+mod bell;
 mod brackets;
 mod carried;
 mod clicks;
@@ -273,7 +274,11 @@ pub struct Decor;
 
 impl Subsystem for Decor {
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[BRACKET]
+        &[BRACKET, bell::DING]
+    }
+
+    fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+        block == Block::DeskBell && bell::animated(pos, entity)
     }
 
     fn carry_out(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], b: Block, out: &mut Compound) {
@@ -315,6 +320,11 @@ impl Subsystem for Decor {
         copper::register(r);
         scaffolding::register(r);
         ladders::register(r);
+        if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, bell::BellDraw)
+        {
+            crate::create_log!("[create] the desk bell's drawing part was refused: {e:?}");
+        }
     }
 
     fn world_closed(&self) {
@@ -323,6 +333,7 @@ impl Subsystem for Decor {
 
     fn client_reset(&self) {
         doors::forget();
+        bell::forget();
     }
 
     /// A Create block changed: ours are looked at after the level's tick. Shafts, cogs and pipes

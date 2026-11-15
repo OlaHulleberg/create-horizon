@@ -265,6 +265,7 @@ pub(super) fn power(lv: &mut ServerLevel<'_>, pos: [i32; 3], on: bool) {
 fn ring_desk_bell(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     lv.block_sound("create:desk_bell", pos, 1.0, 1.0);
     power(lv, pos, true);
+    super::bell::rang(lv, pos);
     let due = lv.game_time() + i64::from(decor::DESK_BELL_TICKS);
     with(lv.dim, |d| {
         d.timers.retain(|t| !(t.0 == pos && t.2 == Timer::Bell));
