@@ -794,6 +794,21 @@ fn attr_line(kind: &str, value: Option<String>) -> filter_screen::AttrLine {
     }
 }
 
+/// The item tags `stack`'s item is in (`ItemStack.getTags`), among those the server's data
+/// defines: what the stock keeper's `#` search looks through.
+pub(crate) fn item_tags(host: &dyn Host, stack: &ItemStack) -> Vec<String> {
+    let tags = ITEM_TAGS.lock().map(|t| t.clone()).unwrap_or_default();
+    tags.into_iter()
+        .filter(|tag| {
+            Identifier::parse(tag)
+                .ok()
+                .and_then(|id| host.tags().key(&id))
+                .and_then(|k| host.tags().is_in_tag(stack.item(), k))
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
 /// Every item tag the server's data defines, in resource order (`tags/item`), as the last data
 /// reload found them.
 static ITEM_TAGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());

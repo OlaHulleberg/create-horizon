@@ -192,7 +192,7 @@ pub(super) fn shift(modifiers: u32) -> bool {
 
 /// `Screen.renderBackground` in a world, under every one of Create's screens: the blur, then the
 /// dark translucent menu background across the window.
-pub(super) fn dim(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
+pub(crate) fn dim(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
     let size = draw.size();
     host.apply_screen_blur();
     draw.draw_menu_background([0.0, 0.0, size[0], size[1]], true);

@@ -17,6 +17,7 @@
 //! The overworld's saved networks are read at its first tick (an attachment is reached through
 //! a level's own host): a link whose column loaded before then is not counted as unloaded.
 
+mod categories;
 mod gauge;
 pub(crate) mod gauge_client;
 mod gauge_screen;
@@ -40,7 +41,7 @@ use create_engine::stock::{
 use mod_api::{
     AnalogOutputEvent, AttachmentCodec, AttachmentType, BlockPart, Command, CommandArgumentValue,
     Compound, Flow, HasAnalogOutputEvent, Holder, HostBlockStates, InteractionResult, ItemPart,
-    ItemStack, LevelHost, OnBlockPlacedByEvent, RegisterCommandsEvent, Registrar,
+    ItemStack, LevelHost, OnBlockPlacedByEvent, PlayerRef, RegisterCommandsEvent, Registrar,
     RegistrationContext, RunModCommandEvent, ServerHost, Tag, UseItemOnEvent,
 };
 use std::cell::{Cell, RefCell};
@@ -119,6 +120,11 @@ struct Ticker {
     network: Option<Network>,
     /// `previouslyUsedAddress`.
     previous: String,
+    /// `categories`: the filters the request screen groups the stock by, named by their stack's
+    /// custom name (`StockKeeperCategoryScreen`); None an empty category.
+    categories: Vec<Option<ItemStack>>,
+    /// `hiddenCategoriesByPlayer`: the categories each player folded (`-1` the unsorted one).
+    hidden: HashMap<u128, Vec<i32>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -328,9 +334,20 @@ fn block_moved(
                 mark_dirty();
             }
         }),
-        Some(Block::StockTicker) => with(dim, |n| {
-            n.tickers.remove(&pos);
-        }),
+        // `StockTickerBlockEntity.destroy`: its category filters are dropped.
+        Some(Block::StockTicker) => {
+            let filters = with(dim, |n| n.tickers.remove(&pos))
+                .map(|t| t.categories)
+                .unwrap_or_default();
+            let at = pos.map(f64::from);
+            for f in filters.into_iter().flatten() {
+                if categories::is_filter(&*lv.host, &f) {
+                    let _ = lv
+                        .level
+                        .spawn_item(&mut *lv.host, at[0], at[1], at[2], f, 10);
+                }
+            }
+        }
         Some(Block::RedstoneRequester) => with(dim, |n| {
             n.requesters.remove(&pos);
         }),
@@ -518,6 +535,7 @@ impl Subsystem for Stock {
         match channel {
             gauge_screen::CHANNEL => gauge_screen::client_message(host, player, data),
             keeper::CHANNEL => keeper::client_message(host, player, data),
+            categories::CHANNEL => categories::client_message(host, player, data),
             requester::CHANNEL => requester::client_message(host, player, data),
             _ => return false,
         }
@@ -531,12 +549,14 @@ impl Subsystem for Stock {
         data: &[u8],
     ) -> bool {
         keeper::server_message(host, channel, data)
+            || categories::server_message(host, channel, data)
             || requester::server_message(host, channel, data)
             || gauge_screen::server_message(host, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
         keeper::tick(host);
+        categories::tick(host);
         requester::tick(host);
         gauge_screen::tick(host);
         gauge_client::tick(host);
@@ -544,6 +564,7 @@ impl Subsystem for Stock {
 
     fn client_reset(&self) {
         keeper::reset();
+        categories::reset();
         requester::reset();
         gauge_screen::reset();
         gauge_client::reset();
@@ -555,6 +576,7 @@ impl Subsystem for Stock {
         event: &mut mod_api::ScreenRenderPostEvent<'_>,
     ) {
         keeper::screen_render_post(host, event);
+        categories::screen_render_post(host, event);
         requester::screen_render_post(host, event);
         gauge_screen::screen_render_post(host, event);
     }
@@ -565,11 +587,20 @@ impl Subsystem for Stock {
         event: &mut mod_api::ScreenMouseButtonPressedPreEvent<'_>,
     ) -> Flow {
         if keeper::screen_mouse_pressed(host, event) == Flow::Cancel
+            || categories::screen_mouse_pressed(host, event) == Flow::Cancel
             || gauge_screen::screen_mouse_pressed(host, event) == Flow::Cancel
         {
             return Flow::Cancel;
         }
         requester::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_released(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ScreenMouseButtonReleasedPreEvent<'_>,
+    ) -> Flow {
+        keeper::screen_mouse_released(host, event)
     }
 
     fn screen_mouse_scrolled(
@@ -578,6 +609,7 @@ impl Subsystem for Stock {
         event: &mut mod_api::ScreenMouseScrolledPreEvent<'_>,
     ) -> Flow {
         if keeper::screen_mouse_scrolled(host, event) == Flow::Cancel
+            || categories::screen_mouse_scrolled(host, event) == Flow::Cancel
             || gauge_screen::screen_mouse_scrolled(host, event) == Flow::Cancel
         {
             return Flow::Cancel;
@@ -591,6 +623,7 @@ impl Subsystem for Stock {
         event: &mut mod_api::ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
         if keeper::screen_key_pressed(host, event) == Flow::Cancel
+            || categories::screen_key_pressed(host, event) == Flow::Cancel
             || gauge_screen::screen_key_pressed(host, event) == Flow::Cancel
         {
             return Flow::Cancel;
@@ -604,6 +637,7 @@ impl Subsystem for Stock {
         event: &mut mod_api::ScreenCharTypedPreEvent<'_>,
     ) -> Flow {
         if keeper::screen_char_typed(host, event) == Flow::Cancel
+            || categories::screen_char_typed(host, event) == Flow::Cancel
             || gauge_screen::screen_char_typed(host, event) == Flow::Cancel
         {
             return Flow::Cancel;
@@ -617,6 +651,7 @@ impl Subsystem for Stock {
         event: &mut mod_api::ScreenClosingEvent<'_>,
     ) {
         keeper::screen_closing(host, event);
+        categories::screen_closing(host, event);
         requester::screen_closing(host, event);
         gauge_screen::screen_closing(host, event);
     }
@@ -1309,9 +1344,8 @@ impl BlockPart for StockBlock {
 }
 
 /// A click on a link, gauge, requester or ticker, after a linking item's: a requester opens its
-/// screen (`RedstoneRequesterBlockEntity.use`); a ticker without a keeper says so
-/// (`StockTickerBlock.useItemOn`; with one, Create's category editor would open: not ported);
-/// links and gauges take the click (their screens are not ported).
+/// screen (`RedstoneRequesterBlockEntity.use`); a ticker opens its category editor when it has a
+/// keeper, else says it has none (`StockTickerBlock.useItemOn`); links and gauges take the click.
 fn own_use(
     host: &mut dyn ServerHost,
     state: mod_api::BlockState,
@@ -1325,13 +1359,20 @@ fn own_use(
         }
         let dimension = player.dimension(&*host)?.to_string();
         let mut lv = ServerLevel::new(host, &dimension)?;
-        requester::open(&mut lv, player, click.pos);
+        if may_interact_message(&mut lv, click.pos, player) {
+            requester::open(&mut lv, player, click.pos);
+        }
         return Some(InteractionResult::Success);
     }
     if b == Block::StockTicker {
         let dimension = player.dimension(&*host)?.to_string();
-        let lv = ServerLevel::new(host, &dimension)?;
-        if !keeper::keeper_present(&lv, click.pos) {
+        let mut lv = ServerLevel::new(host, &dimension)?;
+        if !may_interact_message(&mut lv, click.pos, player) {
+            return Some(InteractionResult::Success);
+        }
+        if keeper::keeper_present(&lv, click.pos) {
+            categories::open(&mut lv, player, click.pos);
+        } else {
             let line = mod_api::Text::translate("create.stock_ticker.keeper_missing", Vec::new());
             let _ = player.action_bar(lv.host, line);
         }
@@ -1461,6 +1502,12 @@ fn tune(
     let dimension = player.dimension(&*host)?.to_string();
     let dim = level_index(&dimension)?;
     let net = network_at(dim, pos)?;
+    {
+        let mut lv = ServerLevel::new(host, &dimension)?;
+        if !may_interact_message(&mut lv, pos, player) {
+            return Some(());
+        }
+    }
     super::items::set_custom(
         &mut stack,
         &[(
@@ -1733,6 +1780,65 @@ fn network_at(dim: usize, pos: [i32; 3]) -> Option<Network> {
     })
 }
 
+/// `LogisticsManager.mayInteract`: the block's network unlocked, or `player` its owner.
+pub(super) fn may_interact(dim: usize, pos: [i32; 3], player: PlayerRef) -> bool {
+    let Some(net) = network_at(dim, pos) else {
+        return true;
+    };
+    OWNERS.with_borrow(|o| {
+        o.get(&net)
+            .is_none_or(|o| !o.locked || o.owner.is_none_or(|p| p == player.uuid()))
+    })
+}
+
+/// `LogisticallyLinkedBehaviour.mayInteractMessage`: `mayInteract`, saying so when not.
+pub(super) fn may_interact_message(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    player: PlayerRef,
+) -> bool {
+    if may_interact(lv.dim, pos, player) {
+        return true;
+    }
+    let line = mod_api::Text::translate("create.logistically_linked.protected", Vec::new())
+        .with_style(keeper::style("red", false));
+    let _ = player.action_bar(lv.host, line);
+    false
+}
+
+/// `LogisticsManager.mayAdministrate`: no owner, or `player` it; and `isLockable`, whether the
+/// network is known (a link joined it).
+pub(super) fn may_administrate(dim: usize, pos: [i32; 3], player: PlayerRef) -> (bool, bool) {
+    let Some(net) = network_at(dim, pos) else {
+        return (true, false);
+    };
+    let known = OWNERS.with_borrow(|o| o.contains_key(&net))
+        || with(dim, |n| n.links.values().any(|l| l.network == Some(net)));
+    let admin = OWNERS.with_borrow(|o| {
+        o.get(&net)
+            .is_none_or(|o| o.owner.is_none_or(|p| p == player.uuid()))
+    });
+    (admin, known)
+}
+
+/// `GlobalLogisticsManager.isLocked`.
+pub(super) fn is_locked(dim: usize, pos: [i32; 3]) -> bool {
+    network_at(dim, pos)
+        .is_some_and(|net| OWNERS.with_borrow(|o| o.get(&net).is_some_and(|o| o.locked)))
+}
+
+/// `StockKeeperLockPacket`: the owner locks or opens the network.
+pub(super) fn set_locked(dim: usize, pos: [i32; 3], player: PlayerRef, lock: bool) {
+    let Some(net) = network_at(dim, pos) else {
+        return;
+    };
+    if !may_administrate(dim, pos, player).0 {
+        return;
+    }
+    OWNERS.with_borrow_mut(|o| o.entry(net).or_default().locked = lock);
+    mark_dirty();
+}
+
 /// The ticker's screen (`LogisticalStockRequestPacket`: `getRecentSummary`), or a gauge's state.
 fn describe(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) -> String {
     let host: &dyn mod_api::Host = &*lv.host;
@@ -1868,10 +1974,32 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
             .into_iter()
             .map(|p| {
                 let t = &n.tickers[&p];
+                let categories = t
+                    .categories
+                    .iter()
+                    .map(|s| {
+                        s.as_ref()
+                            .and_then(|s| s.to_nbt(host))
+                            .map_or_else(|| Tag::Compound(Compound::new()), Tag::Compound)
+                    })
+                    .collect();
+                let mut hidden: Vec<(&u128, &Vec<i32>)> = t.hidden.iter().collect();
+                hidden.sort();
+                let hidden = hidden
+                    .into_iter()
+                    .map(|(id, list)| {
+                        Tag::compound([
+                            ("Id", uuid_tag(*id)),
+                            ("Indices", Tag::IntArray(list.clone())),
+                        ])
+                    })
+                    .collect();
                 Tag::compound([
                     ("Pos", pos_tag(p)),
                     ("Freq", freq(t.network)),
                     ("PreviousAddress", Tag::String(t.previous.as_str().into())),
+                    ("Categories", Tag::List(categories)),
+                    ("HiddenCategories", Tag::List(hidden)),
                 ])
             })
             .collect();
@@ -1947,6 +2075,31 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
                 Ticker {
                     network: net_of(&c),
                     previous: text(c.get(&"PreviousAddress".into())),
+                    // `read`: stacks that are not filters are left out.
+                    categories: match c.get(&"Categories".into()) {
+                        Some(Tag::List(l)) => l
+                            .iter()
+                            .map(|t| match t {
+                                Tag::Compound(t) => ItemStack::from_nbt(host, t),
+                                _ => None,
+                            })
+                            .filter(|s| s.as_ref().is_none_or(|s| categories::is_filter(host, s)))
+                            .collect(),
+                        _ => Vec::new(),
+                    },
+                    hidden: match c.get(&"HiddenCategories".into()) {
+                        Some(Tag::List(l)) => l
+                            .iter()
+                            .filter_map(|t| match t {
+                                Tag::Compound(t) => Some((
+                                    st::network_from_ints(&ints(t.get(&"Id".into())))?,
+                                    ints(t.get(&"Indices".into())),
+                                )),
+                                _ => None,
+                            })
+                            .collect(),
+                        _ => HashMap::new(),
+                    },
                 },
             );
         }

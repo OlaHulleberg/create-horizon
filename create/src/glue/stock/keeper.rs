@@ -1,32 +1,46 @@
 //! The stock keeper's request screen (`StockKeeperRequestScreen`): a mob seated beside a stock
 //! ticker, or a blaze burner beside it, is clicked (`StockTickerInteractionHandler`) and the
 //! screen lists what the ticker's network holds (`getRecentSummary`, `LogisticalStockResponse`),
-//! asked again every second while open. Clicks put up to nine stacks on the order (shift a
-//! stack, control ten; right click takes off), the address box names where they go, and Send
-//! (`PackageOrderRequestPacket`) broadcasts the order. Holding a redstone requester, the screen
-//! programs it instead (`encodeRequester`: Configure).
+//! asked again while open (`refreshClientStockSnapshot`, every 16 ticks). The stock is grouped
+//! by the ticker's categories (`receiveStockPacket`; each player folds them, `hiddenCategories`,
+//! kept by the ticker), searched by name or id (`@` a mod's, `#` a tag's), and scrolled by the
+//! wheel or its bar. Clicks put up to nine stacks on the order (shift a stack, control ten; right
+//! click and clicks on the order take off; the wheel one), the address box names where they go
+//! (remembered by the ticker, suggested from `#` entries on clipboards in the inventory), and
+//! Send or shift-Enter (`PackageOrderRequestPacket`) broadcasts the order. The network's owner
+//! may lock it (`StockKeeperLockPacket`); a locked network's keeper serves its owner only.
+//! Holding a redstone requester, the screen programs it instead (`encodeRequester`: Configure);
+//! holding a clipboard with items on it, it requests what of them is in stock
+//! (`isSchematicListMode`). The screen closes when its keeper is gone.
 //!
-//! Left out: the keeper drawn beside the window, categories (the ticker's category editor is not
-//! ported), crafting recipes from JEI, the network lock and the search sync button.
+//! Left out: the keeper drawn beside the window (no entity or blaze head drawn in a screen, see
+//! `HORIZON_API.md`); crafting recipes and the search sync button, which come from JEI
+//! (`StockKeeperTransferHandler`, `SearchSyncMode`), a mod the game does not have; table cloths
+//! programmed as shops (the shops are not ported); addresses from clipboards placed nearby.
 
 use super::super::net;
 use super::super::server::ServerLevel;
 use super::{Key, broadcast, network_at, network_stock, with};
 use create_engine::Block;
-use create_engine::stock::{Order, RequestType};
+use create_engine::stock::{INF, Order, RequestType};
+use mod_api::text::TextStyle;
 use mod_api::{
     ClientHost, DrawContext, Flow, Host, ItemStack, PlayerRef, ScreenCharTypedPreEvent,
     ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
-    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, SoundPlay, Tag, Text,
+    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost, SoundPlay, Tag, Text,
 };
 use std::cell::RefCell;
 
 /// Server to client: the screen's contents (`0` opens it, `1` adds stacks, `2` starts a fresh
-/// list); client to server: `R` asks for the stock again, `O` sends the order.
+/// list, `3` closes it); client to server: `R` asks for the stock again, `O` sends the order (an
+/// empty one keeps the address), `H` the folded categories, `L` the lock.
 pub(super) const CHANNEL: &str = "create:stock_keeper";
 const MOD: &str = "create";
 /// The order's slots (`cols`).
 const COLS: usize = 9;
+/// The unsorted category's index on the wire.
+const UNSORTED: u8 = 255;
 
 // ---------------------------------------------------------------------------------------------
 // Wire
@@ -36,7 +50,11 @@ pub(crate) fn put_i32(out: &mut Vec<u8>, v: i32) {
 }
 
 pub(crate) fn put_str(out: &mut Vec<u8>, s: &str) {
-    let b = &s.as_bytes()[..s.len().min(255)];
+    let mut end = s.len().min(255);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let b = &s.as_bytes()[..end];
     out.push(b.len() as u8);
     out.extend_from_slice(b);
 }
@@ -120,9 +138,14 @@ pub(super) fn keeper_present(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
                 .unwrap_or_default()
                 .into_iter()
                 .any(|e| {
-                    e.tags(&*lv.host)
-                        .is_some_and(|t| t.iter().any(|t| t == "create.seat"))
-                        && e.passengers(&*lv.host).is_some_and(|p| !p.is_empty())
+                    let seat = |e: mod_api::EntityRef| {
+                        e.tags(&*lv.host)
+                            .is_some_and(|t| t.iter().any(|t| t == "create.seat"))
+                    };
+                    // The seat stand-in with a rider, or a rider on one (a stand-in that came
+                    // back from a save is not listed, its rider is).
+                    (seat(e) && e.passengers(&*lv.host).is_some_and(|p| !p.is_empty()))
+                        || e.vehicle(&*lv.host).is_some_and(seat)
                 });
             if seated {
                 return true;
@@ -156,27 +179,83 @@ pub(super) fn ticker_beside(lv: &ServerLevel<'_>, entity: mod_api::EntityRef) ->
     (found.len() == 1).then(|| found[0])
 }
 
-/// `interactWithLogisticsManagerAt`: the ticker's request screen opens for `player`, with the
-/// address it last sent to and its network's stock.
+/// `interactWithLogisticsManagerAt`: the ticker's request screen opens for `player` (a locked
+/// network's for its owner only), with the address it last sent to, the player's folded
+/// categories and its network's stock.
 pub(super) fn open(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
     let dim = lv.dim;
-    let previous =
-        with(dim, |n| n.tickers.get(&pos).map(|t| t.previous.clone())).unwrap_or_default();
-    let held = super::super::items::held(&*lv.host, player, mod_api::Hand::Main)
-        .map(|s| s.item().id(&*lv.host));
-    let encode = held.as_deref() == Some("create:redstone_requester");
+    if !super::may_interact(dim, pos, player) {
+        let line = Text::translate("create.stock_keeper.locked", Vec::new())
+            .with_style(style("red", false));
+        let _ = player.action_bar(lv.host, line);
+        return;
+    }
+    let Some((previous, cats, hidden)) = with(dim, |n| {
+        n.tickers.get(&pos).map(|t| {
+            (
+                t.previous.clone(),
+                t.categories.clone(),
+                t.hidden.get(&player.uuid()).cloned().unwrap_or_default(),
+            )
+        })
+    }) else {
+        return;
+    };
+    let held = super::super::items::held(&*lv.host, player, mod_api::Hand::Main);
+    let held_id = held.as_ref().map(|s| s.item().id(&*lv.host));
+    let encode = held_id.as_deref() == Some("create:redstone_requester");
+    let (admin, lockable) = super::may_administrate(dim, pos, player);
+    let locked = super::is_locked(dim, pos);
+    let host: &dyn Host = &*lv.host;
     let mut head = vec![0u8];
     for v in pos {
         put_i32(&mut head, v);
     }
     head.push(u8::from(encode));
+    head.push(u8::from(admin && lockable));
+    head.push(u8::from(locked));
     put_str(&mut head, &previous);
+    head.push(hidden.len().min(255) as u8);
+    for h in hidden.iter().take(255) {
+        put_i32(&mut head, *h);
+    }
+    // The categories' stacks, named on the client (`getHoverName`).
+    head.push(cats.len().min(254) as u8);
+    for c in cats.iter().take(254) {
+        match c {
+            Some(s) if put_stack(host, &mut Vec::new(), s, 1) => {
+                head.push(1);
+                put_stack(host, &mut head, s, 1);
+            }
+            _ => head.push(0),
+        }
+    }
+    // `clipboardItem`: the clipboard's entries with an item (`ClipboardEntry.icon`, `itemAmount`).
+    let mut list = Vec::new();
+    if held_id.as_deref() == Some("create:clipboard")
+        && let Some(stack) = &held
+    {
+        for page in super::super::display::clipboard::content(stack).pages {
+            for e in page {
+                if let Some((item, amount)) = e.icon
+                    && let Some(s) = super::body::new_stack(host, &item, 1)
+                {
+                    list.push((s, amount.max(0) as u32));
+                }
+            }
+        }
+    }
+    head.push(list.len().min(255) as u8);
+    for (s, n) in list.iter().take(255) {
+        put_stack(host, &mut head, s, *n);
+    }
     send_stock(lv, player, pos, head);
 }
 
 /// The ticker's network's stock to `player`, after `head` (an opening or a refresh): the
-/// number of links, then the stacks, in messages of at most 20,000 bytes (the ones after the
-/// first `1`, its position and more stacks).
+/// number of links, then the stacks, each with its category (the first of the ticker's
+/// filters it passes, `receiveStockPacket`) and its item's tags, in messages of at most 20,000
+/// bytes (the ones after the first `1`, its position and more stacks).
 fn send_stock(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3], head: Vec<u8>) {
     let dim = lv.dim;
     let (entries, links) = match network_at(dim, pos) {
@@ -187,11 +266,40 @@ fn send_stock(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3], head: 
         None => (Vec::new(), 0),
     };
     let host: &dyn Host = &*lv.host;
+    let filters: Vec<Option<create_engine::filter::Filter>> = with(dim, |n| {
+        n.tickers
+            .get(&pos)
+            .map(|t| t.categories.clone())
+            .unwrap_or_default()
+    })
+    .iter()
+    .map(|c| {
+        c.as_ref()
+            .map(|s| super::super::items::filters::filter_of(host, s))
+    })
+    .collect();
     let blobs: Vec<Vec<u8>> = entries
         .iter()
         .filter_map(|(k, count)| {
             let mut b = Vec::new();
-            put_stack(host, &mut b, &k.0, (*count).max(0) as u32).then_some(b)
+            if !put_stack(host, &mut b, &k.0, (*count).max(0) as u32) {
+                return None;
+            }
+            let cat = filters
+                .iter()
+                .take(usize::from(UNSORTED))
+                .position(|f| {
+                    f.as_ref()
+                        .is_some_and(|f| super::super::items::filters::passes(host, Some(f), &k.0))
+                })
+                .map_or(UNSORTED, |i| i as u8);
+            b.push(cat);
+            let tags = super::super::items::filters::item_tags(host, &k.0);
+            b.push(tags.len().min(255) as u8);
+            for t in tags.iter().take(255) {
+                put_str(&mut b, t);
+            }
+            Some(b)
         })
         .collect();
     let mut msgs = Vec::new();
@@ -225,7 +333,8 @@ fn send_stock(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3], head: 
     }
 }
 
-/// What the client sent: a refresh, or the order (`PackageOrderRequestPacket.applySettings`),
+/// What the client sent: a refresh, the order (`PackageOrderRequestPacket.applySettings`), the
+/// folded categories (`StockKeeperCategoryHidingPacket`) or the lock (`StockKeeperLockPacket`),
 /// from a player within reach of the ticker.
 pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
     let mut r = Reader(data);
@@ -253,8 +362,18 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
     if super::super::logistics::info_at(&lv, pos).map(|(b, _)| b) != Some(Block::StockTicker) {
         return;
     }
+    let dim = lv.dim;
     match kind {
         b'R' => {
+            // The screen's `containerTick`: its keeper gone, it closes.
+            if !keeper_present(&lv, pos) {
+                let mut m = vec![3u8];
+                for v in pos {
+                    put_i32(&mut m, v);
+                }
+                net::send_to_player(lv.host, player, CHANNEL, &m);
+                return;
+            }
             let mut head = vec![2u8];
             for v in pos {
                 put_i32(&mut head, v);
@@ -272,7 +391,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
                 return;
             };
             let mut stacks = Vec::new();
-            for _ in 0..n.min(COLS as u8) {
+            for _ in 0..n.min(COLS as u8 * 4) {
                 let Some((s, count)) = r.stack(&*lv.host) else {
                     return;
                 };
@@ -280,7 +399,32 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
                     stacks.push((Key::of(&s), count));
                 }
             }
+            if !super::may_interact(dim, pos, player) {
+                return;
+            }
             order(&mut lv, player, pos, &address, stacks, encode != 0);
+        }
+        b'H' => {
+            let n = r.u8().unwrap_or(0);
+            let mut hidden = Vec::new();
+            for _ in 0..n {
+                let Some(i) = r.i32() else { return };
+                hidden.push(i);
+            }
+            with(dim, |n| {
+                if let Some(t) = n.tickers.get_mut(&pos) {
+                    if hidden.is_empty() {
+                        t.hidden.remove(&player.uuid());
+                    } else {
+                        t.hidden.insert(player.uuid(), hidden);
+                    }
+                    n.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+                }
+            });
+        }
+        b'L' => {
+            let lock = r.u8().unwrap_or(0) != 0;
+            super::set_locked(dim, pos, player, lock);
         }
         _ => {}
     }
@@ -297,12 +441,6 @@ fn order(
     let dim = lv.dim;
     let order = Order::simple(stacks);
     let center = pos.map(|v| f64::from(v) + 0.5);
-    with(dim, |n| {
-        if let Some(t) = n.tickers.get_mut(&pos) {
-            t.previous = address.to_owned();
-        }
-        n.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-    });
     if encode {
         // `RedstoneRequesterBlock.programRequester`: the requester in hand keeps the order.
         if !order.is_empty() {
@@ -320,6 +458,14 @@ fn order(
         });
         return;
     }
+    // `StockTickerBlockEntity.broadcastPackageRequest`: the address is kept, even for an empty
+    // order (the screen closing).
+    with(dim, |n| {
+        if let Some(t) = n.tickers.get_mut(&pos) {
+            t.previous = address.to_owned();
+        }
+        n.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+    });
     if order.is_empty() {
         return;
     }
@@ -347,20 +493,63 @@ enum Focus {
     Address,
 }
 
+/// A stack of the network's stock: its count, its category (`UNSORTED` for none) and its item's
+/// tags.
+#[derive(Clone)]
+struct Entry {
+    stack: ItemStack,
+    count: u32,
+    cat: u8,
+    tags: Vec<String>,
+}
+
+/// `CategoryEntry`: a category as the list shows it.
+#[derive(Clone, Debug, PartialEq)]
+struct Category {
+    /// `targetBECategory`: the ticker's category, `-1` the unsorted one.
+    target: i32,
+    name: String,
+    hidden: bool,
+    /// Its header's offset from the top of the list.
+    y: f32,
+}
+
 struct Open {
     pos: [i32; 3],
     encode: bool,
+    /// `isAdmin`: the lock is shown; `isLocked`.
+    admin: bool,
+    locked: bool,
     address: String,
     search: String,
     focus: Focus,
-    /// What the network holds (`None` until the server answered: `checking_stocks`).
-    stock: Option<Vec<(ItemStack, u32)>>,
+    /// The ticker's category names, and those this player folded (`hiddenCategories`).
+    cat_names: Vec<String>,
+    hidden: Vec<i32>,
+    /// What the network holds (`None` until the server answered: `checking_stocks`), and a
+    /// list still arriving in parts.
+    stock: Option<Vec<Entry>>,
+    incoming: Option<Vec<Entry>>,
     links: i32,
     order: Vec<(ItemStack, u32)>,
-    scroll: i32,
-    ticks: u32,
-    /// `successTicks`.
+    /// `forcedEntries`: stacks just ordered, shown as at most what was left of them until the
+    /// stock says so (`-1 - left`).
+    forced: Vec<(ItemStack, i64)>,
+    /// `clipboardItem`: the clipboard's items, for `isSchematicListMode`.
+    list: Option<Vec<(ItemStack, u32)>>,
+    /// `itemScroll` in rows: its value, last tick's and where it chases to (and how fast).
+    scroll: f32,
+    scroll_prev: f32,
+    scroll_to: f32,
+    chase: f32,
+    /// `scrollHandleActive`.
+    dragging: bool,
+    /// `ticksSinceLastUpdate`, `emptyTicks`, `successTicks`.
+    since_update: u32,
+    empty_ticks: u32,
     sent: u32,
+    /// The address suggestion picked (`DestinationSuggestions`).
+    suggestion: usize,
     size: [f32; 2],
 }
 
@@ -368,6 +557,8 @@ thread_local! {
     static OPEN: RefCell<Option<Open>> = const { RefCell::new(None) };
     /// Messages to send at the next client tick, and whether to close the screen.
     static LATER: RefCell<(Vec<Vec<u8>>, bool)> = const { RefCell::new((Vec::new(), false)) };
+    /// `ignoreTextInput`: the chat key that focused the search types nothing.
+    static IGNORE_TEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub(super) fn reset() {
@@ -379,7 +570,25 @@ fn ours(host: &dyn ClientHost) -> bool {
     host.mod_screen() == Some(MOD) && OPEN.with_borrow(Option::is_some)
 }
 
-/// The server's stock (and the opening of the screen).
+fn read_entries(host: &dyn ClientHost, r: &mut Reader<'_>) -> Vec<Entry> {
+    let n = r.bytes(2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+    let mut out = Vec::with_capacity(usize::from(n));
+    for _ in 0..n {
+        let (Some((stack, count)), Some(cat), Some(nt)) = (r.stack(host), r.u8(), r.u8()) else {
+            break;
+        };
+        let tags = (0..nt).filter_map(|_| r.str()).collect();
+        out.push(Entry {
+            stack,
+            count,
+            cat,
+            tags,
+        });
+    }
+    out
+}
+
+/// The server's stock (and the opening and closing of the screen).
 pub(super) fn server_message(host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
     if channel != CHANNEL {
         return false;
@@ -388,82 +597,174 @@ pub(super) fn server_message(host: &mut dyn ClientHost, channel: &str, data: &[u
     let (Some(kind), Some(pos)) = (r.u8(), r.pos()) else {
         return true;
     };
-    let opening = kind == 0;
-    let (encode, address) = if opening {
-        let encode = r.u8().unwrap_or(0) != 0;
-        (encode, r.str().unwrap_or_default())
-    } else {
-        (false, String::new())
-    };
-    let links = if kind == 1 { None } else { r.i32() };
-    let n = r.bytes(2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
-    let mut stacks = Vec::with_capacity(usize::from(n));
-    for _ in 0..n {
-        let Some(s) = r.stack(&*host) else {
-            break;
-        };
-        stacks.push(s);
+    if kind == 3 {
+        if OPEN.with_borrow(|o| o.as_ref().is_some_and(|o| o.pos == pos)) {
+            LATER.with_borrow_mut(|l| l.1 = true);
+        }
+        return true;
     }
-    if opening {
+    if kind == 0 {
+        let encode = r.u8().unwrap_or(0) != 0;
+        let admin = r.u8().unwrap_or(0) != 0;
+        let locked = r.u8().unwrap_or(0) != 0;
+        let address = r.str().unwrap_or_default();
+        let hidden = (0..r.u8().unwrap_or(0)).filter_map(|_| r.i32()).collect();
+        let mut cat_names = Vec::new();
+        for _ in 0..r.u8().unwrap_or(0) {
+            match r.u8() {
+                Some(1) => match r.stack(&*host) {
+                    Some((s, _)) => cat_names.push(host.hover_name(&s)),
+                    None => break,
+                },
+                Some(_) => cat_names.push(String::new()),
+                None => break,
+            }
+        }
+        let list: Vec<(ItemStack, u32)> = (0..r.u8().unwrap_or(0))
+            .filter_map(|_| r.stack(&*host))
+            .collect();
+        let links = r.i32().unwrap_or(0);
+        let entries = read_entries(&*host, &mut r);
         OPEN.with_borrow_mut(|o| {
             *o = Some(Open {
                 pos,
                 encode,
-                address,
+                admin,
+                locked,
+                address: address.chars().take(25).collect(),
                 search: String::new(),
                 focus: Focus::None,
-                stock: Some(stacks),
-                links: links.unwrap_or(0),
+                cat_names,
+                hidden,
+                stock: None,
+                incoming: Some(entries),
+                links,
                 order: Vec::new(),
-                scroll: 0,
-                ticks: 0,
+                forced: Vec::new(),
+                list: (!list.is_empty()).then_some(list),
+                scroll: 0.0,
+                scroll_prev: 0.0,
+                scroll_to: 0.0,
+                chase: 0.5,
+                dragging: false,
+                since_update: 15,
+                empty_ticks: 0,
                 sent: 0,
+                suggestion: 0,
                 size: [0.0, 0.0],
             })
         });
         if !host.mod_screen_open(MOD) {
             OPEN.with_borrow_mut(|o| *o = None);
+            return true;
         }
+        // `init`'s first opening.
+        ui_sound(&*host, "minecraft:block.wood.hit", 0.5, 1.5);
+        ui_sound(&*host, "minecraft:item.book.page_turn", 1.0, 1.0);
         return true;
     }
+    let links = if kind == 2 { r.i32() } else { None };
+    let entries = read_entries(&*host, &mut r);
     OPEN.with_borrow_mut(|o| {
         let Some(o) = o.as_mut().filter(|o| o.pos == pos) else {
             return;
         };
+        // A list is taken whole at the next tick; a part arriving after that joins the list.
         if kind == 2 {
-            o.stock = Some(stacks);
+            o.incoming = Some(entries);
             o.links = links.unwrap_or(o.links);
-        } else {
-            o.stock.get_or_insert_with(Vec::new).extend(stacks);
+        } else if let Some(i) = o.incoming.as_mut() {
+            i.extend(entries);
+        } else if let Some(s) = o.stock.as_mut() {
+            s.extend(entries);
         }
     });
     true
 }
 
-pub(super) fn tick(host: &mut dyn ClientHost) {
-    let (send, close) = LATER.with_borrow_mut(std::mem::take);
-    if close {
-        host.mod_screen_close(MOD);
-        OPEN.with_borrow_mut(|o| *o = None);
+/// A new stock list: orders kept within it (`revalidateOrders`), the clipboard's request made
+/// again (`requestSchematicList`), the scroll kept within the list.
+fn stock_changed(host: &dyn ClientHost, o: &mut Open) {
+    let stock = o.stock.clone().unwrap_or_default();
+    let count = |s: &ItemStack| {
+        stock
+            .iter()
+            .find(|e| e.stack.is_stackable_with(s))
+            .map_or(0, |e| e.count)
+    };
+    if let Some(list) = &o.list {
+        o.order = list
+            .iter()
+            .filter_map(|(s, n)| {
+                let n = (*n).min(count(s));
+                (n > 0).then(|| (s.clone(), n))
+            })
+            .collect();
+    } else {
+        for e in &mut o.order {
+            e.1 = e.1.min(count(&e.0));
+        }
+        o.order.retain(|e| e.1 > 0);
     }
+    clamp_scroll(host, o);
+}
+
+pub(super) fn tick(host: &mut dyn ClientHost) {
+    ticked();
+    let (send, close) = LATER.with_borrow_mut(std::mem::take);
     for m in send {
         net::send_to_server(host, CHANNEL, &m);
+    }
+    if close {
+        if let Some(o) = OPEN.with_borrow_mut(Option::take) {
+            for m in closing_messages(&o) {
+                net::send_to_server(host, CHANNEL, &m);
+            }
+        }
+        host.mod_screen_close(MOD);
     }
     if host.mod_screen() != Some(MOD) {
         OPEN.with_borrow_mut(|o| *o = None);
         return;
     }
-    // `LogisticalStockRequestPacket` every 20 ticks (sooner just after an order).
     let ask = OPEN.with_borrow_mut(|o| {
         let o = o.as_mut()?;
-        o.ticks += 1;
-        if o.sent > 0 {
-            o.sent += 1;
-            if o.sent > 30 {
-                o.sent = 0;
-            }
+        // The answer that arrived since the last tick.
+        if let Some(fresh) = o.incoming.take() {
+            o.stock = Some(fresh);
+            stock_changed(host, o);
         }
-        o.ticks.is_multiple_of(20).then_some(o.pos)
+        // `forcedEntries` go once the stock is down to them.
+        if !o.forced.is_empty() {
+            let stock = o.stock.clone().unwrap_or_default();
+            o.forced.retain(|(s, f)| {
+                let limited = -f - 1;
+                let actual = stock
+                    .iter()
+                    .find(|e| e.stack.is_stackable_with(s))
+                    .map_or(0, |e| i64::from(e.count));
+                actual > limited
+            });
+        }
+        let empty = o.list.is_some() || shown(host, o).0.iter().all(Vec::is_empty);
+        o.empty_ticks = if empty { o.empty_ticks + 1 } else { 0 };
+        o.sent = if o.sent > 0 && o.order.is_empty() {
+            o.sent + 1
+        } else {
+            0
+        };
+        // `itemScroll.tickChaser`, settled within a sixteenth.
+        o.scroll_prev = o.scroll;
+        o.scroll += (o.scroll_to - o.scroll) * o.chase;
+        if (o.scroll - o.scroll_to).abs() < 1.0 / 16.0 {
+            o.scroll = o.scroll_to;
+        }
+        o.since_update = (o.since_update + 1).min(100);
+        if o.since_update > 15 {
+            o.since_update = 0;
+            return Some(o.pos);
+        }
+        None
     });
     if let Some(pos) = ask {
         let mut m = vec![b'R'];
@@ -472,6 +773,51 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
         }
         net::send_to_server(host, CHANNEL, &m);
     }
+}
+
+/// `removed`: the address is kept (an empty order) and the folded categories saved.
+fn closing_messages(o: &Open) -> Vec<Vec<u8>> {
+    let mut a = vec![b'O'];
+    for v in o.pos {
+        put_i32(&mut a, v);
+    }
+    put_str(&mut a, &o.address);
+    a.push(0);
+    a.push(0);
+    let mut h = vec![b'H'];
+    for v in o.pos {
+        put_i32(&mut h, v);
+    }
+    h.push(o.hidden.len().min(255) as u8);
+    for i in o.hidden.iter().take(255) {
+        put_i32(&mut h, *i);
+    }
+    vec![a, h]
+}
+
+thread_local! {
+    /// When the last client tick ran, for the frame's partial tick (screens are not told it).
+    static TICKED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// A text style of `color` (a name or `#RRGGBB`), italic or not.
+pub(super) fn style(color: &str, italic: bool) -> TextStyle {
+    let mut s = TextStyle::default();
+    s.color = Some(color.into());
+    s.italic = italic.then_some(true);
+    s
+}
+
+/// The fraction of a tick since the last client tick (`partialTicks`).
+pub(super) fn partial_tick() -> f32 {
+    TICKED
+        .get()
+        .map_or(1.0, |t| (t.elapsed().as_secs_f32() * 20.0).min(1.0))
+}
+
+/// Notes a client tick for `partial_tick`.
+pub(super) fn ticked() {
+    TICKED.set(Some(std::time::Instant::now()));
 }
 
 fn tr(host: &dyn ClientHost, key: &str, fallback: &str) -> String {
@@ -499,6 +845,8 @@ struct Layout {
     items_x: f32,
     items_y: f32,
     order_y: f32,
+    lock_x: f32,
+    beside_search_y: f32,
 }
 
 fn layout(size: [f32; 2]) -> Layout {
@@ -512,71 +860,185 @@ fn layout(size: [f32; 2]) -> Layout {
         items_x: x + ((WIDTH - COLS as f32 * CELL) / 2.0).floor() + 1.0,
         items_y: y + 33.0,
         order_y: y + h - 72.0,
+        lock_x: x + 186.0,
+        beside_search_y: y + 18.0,
     }
 }
 
-/// The stacks shown: the stock matching the search (by name, `@` a mod's).
-fn displayed(host: &dyn ClientHost, o: &Open) -> Vec<(ItemStack, u32)> {
-    let Some(stock) = &o.stock else {
-        return Vec::new();
+/// Whether `e` matches the search (`refreshSearchResults`): a mod's id after `@`, a tag after
+/// `#`, else the name or the item's id path.
+fn matches(host: &dyn ClientHost, e: &Entry, search: &str) -> bool {
+    if search.trim().is_empty() {
+        return true;
+    }
+    let (mods, tags, value) = if let Some(v) = search.strip_prefix('@') {
+        (true, false, v)
+    } else if let Some(v) = search.strip_prefix('#') {
+        (false, true, v)
+    } else {
+        (false, false, search)
     };
-    let q = o.search.trim().to_lowercase();
-    stock
+    let value = value.to_lowercase();
+    let id = e.stack.item().id(host);
+    let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id.as_str()));
+    if mods {
+        return namespace.contains(&value);
+    }
+    if tags {
+        return e.tags.iter().any(|t| t.contains(&value));
+    }
+    host.hover_name(&e.stack).to_lowercase().contains(&value) || path.contains(&value)
+}
+
+/// `displayedItems` (indices into the stock, by category: the ticker's, then the unsorted) and
+/// `categories` (empty when no item is in any of the ticker's, so no headers are shown).
+fn shown(host: &dyn ClientHost, o: &Open) -> (Vec<Vec<usize>>, Vec<Category>) {
+    let Some(stock) = &o.stock else {
+        return (Vec::new(), Vec::new());
+    };
+    if o.list.is_some() {
+        return (Vec::new(), Vec::new());
+    }
+    let n = o.cat_names.len();
+    let mut groups = vec![Vec::new(); n + 1];
+    for (i, e) in stock.iter().enumerate() {
+        let g = if e.cat == UNSORTED || usize::from(e.cat) >= n {
+            n
+        } else {
+            usize::from(e.cat)
+        };
+        if matches(host, e, &o.search) {
+            groups[g].push(i);
+        }
+    }
+    let mut cats: Vec<Category> = o
+        .cat_names
         .iter()
-        .filter(|(s, _)| {
-            if q.is_empty() {
-                return true;
-            }
-            if let Some(m) = q.strip_prefix('@') {
-                return s
-                    .item()
-                    .id(host)
-                    .split(':')
-                    .next()
-                    .is_some_and(|ns| ns.contains(m));
-            }
-            host.hover_name(s).to_lowercase().contains(&q)
+        .enumerate()
+        .map(|(i, name)| Category {
+            target: i as i32,
+            name: name.clone(),
+            hidden: o.hidden.contains(&(i as i32)),
+            y: 0.0,
         })
-        .cloned()
-        .collect()
+        .collect();
+    cats.push(Category {
+        target: -1,
+        name: tr(
+            host,
+            "create.gui.stock_keeper.unsorted_category",
+            "Unsorted",
+        ),
+        hidden: o.hidden.contains(&-1),
+        y: 0.0,
+    });
+    let any = place_categories(&groups, &mut cats);
+    if !any {
+        cats.clear();
+    }
+    (groups, cats)
 }
 
-/// `getMaxScroll` without categories.
-fn max_scroll(n: usize, h: f32) -> i32 {
-    let rows = 2 + n.div_ceil(COLS);
-    (((rows as f32 * CELL - (h - 84.0) + 50.0) / CELL) as i32).max(0)
+/// Each category's header offset, and whether any of the ticker's categories has items.
+fn place_categories(groups: &[Vec<usize>], cats: &mut [Category]) -> bool {
+    let mut y = 0.0;
+    let mut any = false;
+    for (i, g) in groups.iter().enumerate() {
+        cats[i].y = y;
+        if g.is_empty() {
+            continue;
+        }
+        if i + 1 < groups.len() {
+            any = true;
+        }
+        y += CELL;
+        if !cats[i].hidden {
+            y += g.len().div_ceil(COLS) as f32 * CELL;
+        }
+    }
+    any
 }
 
-/// What the cursor is over: an item of the list (its index) or of the order.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// `getMaxScroll`.
+fn max_scroll(groups: &[Vec<usize>], cats: &[Category], h: f32) -> i32 {
+    let visible = h - 84.0;
+    let mut rows = 2;
+    for (i, g) in groups.iter().enumerate() {
+        if g.is_empty() {
+            continue;
+        }
+        rows += 1;
+        if cats.get(i).is_some_and(|c| c.hidden) {
+            continue;
+        }
+        rows += g.len().div_ceil(COLS);
+    }
+    (((rows as f32 * CELL - visible + 50.0) / CELL) as i32).max(0)
+}
+
+/// `clampScrollBar`.
+fn clamp_scroll(host: &dyn ClientHost, o: &mut Open) {
+    let (groups, cats) = shown(host, o);
+    let max = max_scroll(&groups, &cats, layout(o.size).h) as f32;
+    if o.scroll_to > max {
+        o.scroll_to = max;
+        o.scroll = max;
+        o.scroll_prev = max;
+    }
+}
+
+/// What the cursor is over: a stack of the list (its category and index there) or of the order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Hover {
-    Item(usize),
+    Item(usize, usize),
     Order(usize),
 }
 
-fn hovered(l: &Layout, o: &Open, n: usize, mouse: [f32; 2]) -> Option<Hover> {
-    let [mx, my] = mouse;
-    if mx < l.items_x || mx >= l.items_x + COLS as f32 * CELL {
+/// `getHoveredSlot`.
+fn hovered(
+    l: &Layout,
+    o: &Open,
+    groups: &[Vec<usize>],
+    cats: &[Category],
+    mouse: [f32; 2],
+) -> Option<Hover> {
+    let [mx, my] = mouse.map(f32::floor);
+    let x = mx + 1.0;
+    if x < l.items_x || x >= l.items_x + COLS as f32 * CELL || o.list.is_some() {
         return None;
     }
-    let col = ((mx - l.items_x) / CELL) as usize;
+    let col = ((x - l.items_x) / CELL) as usize;
     if my >= l.order_y && my < l.order_y + CELL {
         return (col < o.order.len()).then_some(Hover::Order(col));
     }
-    if my < l.y + 16.0 || my > l.y + l.h - 80.0 {
+    if my < l.y + 16.0 || my > l.y + l.h - 80.0 || o.scroll != o.scroll_to {
         return None;
     }
-    let local = my - l.items_y - 4.0 + o.scroll as f32 * CELL;
-    if local < 0.0 {
-        return None;
+    let local = my - l.items_y;
+    for (ci, g) in groups.iter().enumerate() {
+        let (hidden, cy) = cats.get(ci).map_or((false, 0.0), |c| (c.hidden, c.y));
+        if hidden {
+            continue;
+        }
+        let first = if cats.is_empty() { 4.0 } else { CELL };
+        let row = ((local - first - cy) / CELL + o.scroll_to).floor();
+        let slot = row as i64 * COLS as i64 + col as i64;
+        if slot < 0 {
+            return None;
+        }
+        if g.len() as i64 <= slot {
+            continue;
+        }
+        return Some(Hover::Item(ci, slot as usize));
     }
-    let i = (local / CELL) as usize * COLS + col;
-    (i < n).then_some(Hover::Item(i))
+    None
 }
 
 /// `drawItemCount`'s text.
 fn count_text(count: u32) -> String {
-    if count >= 1_000_000 {
+    if count >= INF as u32 {
+        "+".into()
+    } else if count >= 1_000_000 {
         format!("{}m", count / 1_000_000)
     } else if count >= 10_000 {
         format!("{}k", count / 1000)
@@ -602,6 +1064,7 @@ fn draw_count(draw: &mut dyn DrawContext, at: [f32; 2], count: u32) {
             '.' => (60.0, 3.0),
             'k' => (64.0, 5.0),
             'm' => (70.0, 7.0),
+            '+' => (84.0, 9.0),
             d => (f32::from(d as u8 - b'0') * 6.0, 5.0),
         };
         draw.sprite(
@@ -621,6 +1084,20 @@ fn order_count(o: &Open, s: &ItemStack) -> u32 {
         .map_or(0, |e| e.1)
 }
 
+/// `renderItemEntry`'s count for a listed stack: less what is ordered, and at most what was
+/// left after the last order (`forcedEntries`).
+fn listed_count(o: &Open, e: &Entry) -> u32 {
+    if e.count >= INF as u32 {
+        return e.count;
+    }
+    let mut n = i64::from(e.count);
+    if let Some((_, f)) = o.forced.iter().find(|(s, _)| s.is_stackable_with(&e.stack)) {
+        n = n.min(-f - 1);
+    }
+    n -= i64::from(order_count(o, &e.stack));
+    n.max(0) as u32
+}
+
 pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
     if !ours(host) {
         return;
@@ -630,14 +1107,49 @@ pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
     OPEN.with_borrow_mut(|o| {
         if let Some(o) = o.as_mut() {
             o.size = size;
+            if o.dragging {
+                drag(host, o, mouse);
+            }
             render(host, event.draw, o, mouse);
         }
     });
 }
 
+/// One stack at `at` (`renderItemEntry`): its slot (in the list), the item a little larger when
+/// hovered, its count.
+fn item_entry(
+    draw: &mut dyn DrawContext,
+    at: [f32; 2],
+    stack: &ItemStack,
+    count: u32,
+    hover: bool,
+    slot: bool,
+) {
+    if slot {
+        draw.sprite(
+            TEX,
+            [32.0, 200.0, 18.0, 18.0],
+            [at[0], at[1], 18.0, 18.0],
+            None,
+        );
+    }
+    if count == 0 {
+        return;
+    }
+    let size = if hover { 16.0 * 1.075 } else { 16.0 };
+    let off = 1.0 + (16.0 - size) / 2.0;
+    draw.item_stack(stack, [at[0] + off, at[1] + off], size);
+    if count > 1 {
+        draw_count(draw, at, count);
+    }
+}
+
 fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32; 2]) {
+    super::super::items::gadget_gui::dim(host, draw);
     let l = layout(draw.size());
     let (x, y) = (l.x, l.y);
+    let partial = partial_tick();
+    let scroll = o.scroll_prev + (o.scroll - o.scroll_prev) * partial;
     // The window: its header, as many body rows as fit, its footer (`renderBg`).
     draw.sprite(
         TEX,
@@ -662,59 +1174,97 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
         [x - 15.0, foot, 256.0, FOOTER_H],
         None,
     );
-    let shown = displayed(host, o);
-    let hover = hovered(&l, o, shown.len(), mouse);
-    // The items, a row at a time within the window.
-    for (i, (s, count)) in shown.iter().enumerate() {
-        let row = (i / COLS) as i32 - o.scroll;
-        let at = [
-            l.items_x + (i % COLS) as f32 * CELL,
-            l.items_y + 4.0 + row as f32 * CELL,
-        ];
-        if at[1] < y + 14.0 || at[1] > y + l.h - 92.0 {
-            continue;
-        }
+    // The search bar scrolls with the list (`STOCK_KEEPER_REQUEST_SEARCH` under the list's
+    // translation): scrolled, the list's background takes its place.
+    let shift = scroll * CELL;
+    if scroll > 0.0 {
         draw.sprite(
             TEX,
-            [32.0, 200.0, 18.0, 18.0],
-            [at[0], at[1], 18.0, 18.0],
+            [37.0, 48.0, 182.0, 18.0],
+            [x + 22.0, y + 17.0, 182.0, 18.0],
             None,
         );
-        let left = count.saturating_sub(order_count(o, s));
-        if left > 0 {
-            let grow = if hover == Some(Hover::Item(i)) {
-                1.0
-            } else {
-                0.0
-            };
-            draw.item_stack(
-                s,
-                [at[0] + 1.0 - grow / 2.0, at[1] + 1.0 - grow / 2.0],
-                16.0 + grow,
+    } else {
+        // `STOCK_KEEPER_REQUEST_SEARCH` is the header's own; the search text and hint.
+        let search = if o.search.is_empty() && o.focus != Focus::Search {
+            tr(host, "create.gui.stock_keeper.search_items", "Search Items")
+        } else {
+            let mut s = o.search.clone();
+            if o.focus == Focus::Search && blink() {
+                s.push('_');
+            }
+            s
+        };
+        let w = draw.text_width(&search);
+        let sx = if o.search.is_empty() && o.focus != Focus::Search {
+            (x + WIDTH / 2.0 - w / 2.0).floor()
+        } else {
+            x + 71.0
+        };
+        draw.text(&search, [sx, y + 22.0], 0xFF4A_2D31, false);
+        // The lock, for the network's owner.
+        if o.admin {
+            let u = if o.locked { 16.0 } else { 32.0 };
+            draw.sprite(
+                TEX,
+                [u, 176.0, 15.0, 16.0],
+                [l.lock_x, l.beside_search_y, 15.0, 16.0],
+                None,
             );
         }
-        if left > 1 {
-            draw_count(draw, at, left);
+    }
+    let (groups, cats) = shown(host, o);
+    let stock = o.stock.as_deref().unwrap_or_default();
+    let hover = hovered(&l, o, &groups, &cats, mouse);
+    // The list, a row at a time within the window (no clip rectangle: a row is drawn while it is
+    // wholly inside `itemWindowY`..`itemWindowY2`).
+    let top = y + 17.0;
+    let bottom = y + l.h - 80.0;
+    for (ci, g) in groups.iter().enumerate() {
+        if g.is_empty() {
+            continue;
+        }
+        let cy = cats.get(ci).map_or(0.0, |c| c.y);
+        if let Some(c) = cats.get(ci) {
+            let hy = l.items_y + cy - shift;
+            if hy + 6.0 >= top && hy + 16.0 <= bottom {
+                let u = if c.hidden { 143.0 } else { 151.0 };
+                draw.sprite(
+                    TEX,
+                    [u, 176.0, 8.0, 8.0],
+                    [l.items_x, hy + 6.0, 8.0, 8.0],
+                    None,
+                );
+                draw.text(&c.name, [l.items_x + 10.0, hy + 8.0], 0xFF4A_2D31, false);
+                draw.text(&c.name, [l.items_x + 9.0, hy + 7.0], 0xFFF8_F8EC, false);
+            }
+            if c.hidden {
+                continue;
+            }
+        }
+        let first = if cats.is_empty() { 4.0 } else { CELL };
+        for (i, &si) in g.iter().enumerate() {
+            let py = l.items_y + cy + first + (i / COLS) as f32 * CELL - shift;
+            if py < top - 1.0 {
+                continue;
+            }
+            if py + 18.0 > bottom + 1.0 {
+                break;
+            }
+            let e = &stock[si];
+            let at = [l.items_x + (i % COLS) as f32 * CELL, py];
+            item_entry(
+                draw,
+                at,
+                &e.stack,
+                listed_count(o, e),
+                hover == Some(Hover::Item(ci, i)),
+                true,
+            );
         }
     }
-    // The search box (`searchBox`) and its hint.
-    let search = if o.search.is_empty() && o.focus != Focus::Search {
-        tr(host, "create.gui.stock_keeper.search_items", "Search Items")
-    } else {
-        let mut s = o.search.clone();
-        if o.focus == Focus::Search && blink() {
-            s.push('_');
-        }
-        s
-    };
-    let w = draw.text_width(&search);
-    draw.text(
-        &search,
-        [x + WIDTH / 2.0 - w / 2.0, y + 22.0],
-        0xFF4A_2D31,
-        false,
-    );
-    if o.stock.as_ref().is_none_or(|_| shown.is_empty()) {
+    // `getTroubleshootingMessage`, faded in once the list stayed empty.
+    if groups.iter().all(Vec::is_empty) {
         let msg = if o.stock.is_none() {
             tr(
                 host,
@@ -733,6 +1283,20 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
                 "create.gui.stock_keeper.inventories_empty",
                 "Linked Inventories are Empty",
             )
+        } else if o.list.is_some() {
+            if o.order.is_empty() {
+                tr(
+                    host,
+                    "create.gui.stock_keeper.schematic_list.no_results",
+                    "No items from your checklist are in stock",
+                )
+            } else {
+                tr(
+                    host,
+                    "create.gui.stock_keeper.schematic_list.requesting",
+                    "Click 'Send' to request all available items from your checklist",
+                )
+            }
         } else {
             tr(
                 host,
@@ -740,32 +1304,87 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
                 "No matching items found",
             )
         };
-        let w = draw.text_width(&msg);
-        let at = [x + WIDTH / 2.0 - w / 2.0, l.items_y + 20.0];
-        draw.text(&msg, [at[0] + 1.0, at[1] + 1.0], 0xFF4A_2D31, false);
-        draw.text(&msg, at, 0xFFF8_F8EC, false);
-    }
-    // The order.
-    for (i, (s, count)) in o.order.iter().enumerate() {
-        let at = [l.items_x + i as f32 * CELL, l.order_y];
-        let grow = if hover == Some(Hover::Order(i)) {
-            1.0
-        } else {
-            0.0
-        };
-        draw.item_stack(
-            s,
-            [at[0] + 1.0 - grow / 2.0, at[1] + 1.0 - grow / 2.0],
-            16.0 + grow,
-        );
-        if *count > 1 {
-            draw_count(draw, at, *count);
+        let alpha = ((o.empty_ticks as f32 + partial - 10.0) / 5.0).clamp(0.0, 1.0);
+        if alpha > 0.0 {
+            let a = ((alpha * 255.0) as u32).max(5) << 24;
+            for (i, line) in wrap(draw, &msg, 160.0).iter().enumerate() {
+                let w = draw.text_width(line);
+                let at = [
+                    (x + WIDTH / 2.0 - w / 2.0).floor(),
+                    l.items_y + 20.0 + i as f32 * 10.0,
+                ];
+                draw.text(line, [at[0] + 1.0, at[1] + 1.0], a | 0x4A_2D31, false);
+                draw.text(line, at, a | 0xF8_F8EC, false);
+            }
         }
     }
-    // The address box.
+    // The scroll bar.
+    let max = max_scroll(&groups, &cats, l.h) as f32;
+    let window_h = l.h - 92.0;
+    let total_h = max * CELL + window_h;
+    let bar = (window_h / total_h * (window_h - 2.0)).floor().max(5.0);
+    if bar < window_h - 2.0 {
+        let bx = l.items_x + COLS as f32 * CELL;
+        let by = (y + 15.0 + scroll * CELL / total_h * (window_h - 2.0)).floor();
+        draw.sprite(TEX, [219.0, 196.0, 5.0, 1.0], [bx, by, 5.0, bar], None);
+        draw.sprite(TEX, [219.0, 192.0, 5.0, 4.0], [bx, by, 5.0, 4.0], None);
+        if bar > 16.0 {
+            draw.sprite(
+                TEX,
+                [219.0, 197.0, 5.0, 9.0],
+                [bx, (by + bar / 2.0 - 4.0).floor(), 5.0, 9.0],
+                None,
+            );
+        }
+        draw.sprite(
+            TEX,
+            [219.0, 207.0, 5.0, 5.0],
+            [bx, by + bar - 5.0, 5.0, 5.0],
+            None,
+        );
+    }
+    // The blaze keeper beside the window (`renderBg`'s `blaze`): its burner drawn as a scene
+    // block, the blaze in it lit and wearing the logistics hat.
+    if let Some((state, mut nbt)) = blaze_keeper(host, o.pos) {
+        nbt.insert(KEEPER_KEY.into(), Tag::Byte(1));
+        let mut fields = mod_api::item::containers::ModBlockEntityFields::default();
+        fields.nbt = nbt;
+        let entity = mod_api::Identifier::parse(super::super::kinetics::TYPE)
+            .ok()
+            .map(|id| mod_api::SceneBlockEntity::new(id, fields));
+        let (ex, ey) = (x - 35.0, y + l.h - 43.0);
+        draw.draw_scene(
+            [ex - 50.0, ey - 70.0, ex + 50.0, ey + 30.0],
+            &[mod_api::SceneBlock::new([0, 0, 0], state, entity)],
+            mod_api::SceneView::new([0.5, 0.5, 0.5], -45.0, 22.5, 48.0),
+        );
+    }
+    // The requester being programmed, large beside the window.
+    if o.encode
+        && let Some(item) = mod_api::Identifier::parse("create:redstone_requester")
+            .ok()
+            .and_then(|i| host.item_key(&i))
+    {
+        draw.item(item, [x + WIDTH + 5.0, y + l.h - 70.0], 56.0);
+    }
+    // The order.
+    for (i, (s, count)) in o.order.iter().enumerate().take(COLS) {
+        let at = [l.items_x + i as f32 * CELL, l.order_y];
+        item_entry(draw, at, s, *count, hover == Some(Hover::Order(i)), false);
+    }
+    if o.order.len() > COLS {
+        let more = format!("[+{}]", o.order.len() - COLS);
+        draw.text(
+            &more,
+            [x + WIDTH - 40.0, l.order_y + 21.0],
+            0xFFF8_F8EC,
+            true,
+        );
+    }
+    // The address box, its hint, its suggestions and the clipboard beside it.
     let ax = x + 27.0;
     let ay = y + l.h - 36.0;
-    if o.address.is_empty() && o.focus != Focus::Address {
+    if o.address.trim().is_empty() && o.focus != Focus::Address {
         let hint = tr(
             host,
             "create.gui.stock_keeper.package_address",
@@ -779,7 +1398,33 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
         }
         draw.text(&s, [ax, ay], 0xFF71_4A40, false);
     }
-    // Send (Configure when programming a requester), the button lit when hovered.
+    let options = addresses(host);
+    let suggested = suggestions(o, &options);
+    if !suggested.is_empty() {
+        let rows = suggested.len().min(7);
+        let w = suggested
+            .iter()
+            .map(|s| draw.text_width(s))
+            .fold(0.0_f32, f32::max);
+        let sy = ay - 3.0 - rows as f32 * 12.0;
+        draw.fill([ax - 1.0, sy, w + 2.0, rows as f32 * 12.0], 0xEE30_3030);
+        for (i, s) in suggested.iter().take(rows).enumerate() {
+            let color = if i == o.suggestion % suggested.len() {
+                0xFFFF_FF00
+            } else {
+                0xFFAA_AAAA
+            };
+            draw.text(s, [ax, sy + 2.0 + i as f32 * 12.0], color, true);
+        }
+    } else if options.is_empty()
+        && let Some(item) = mod_api::Identifier::parse("create:clipboard")
+            .ok()
+            .and_then(|i| host.item_key(&i))
+    {
+        draw.item(item, [ax + 92.0 + 4.0, ay - 4.0], 16.0);
+    }
+    // Send (Configure when programming a requester), the button lit when hovered; once sent it
+    // slides away and "Request Sent!" shows.
     let just_sent = o.order.is_empty() && o.sent > 0;
     if confirm_hovered(&l, mouse) && !just_sent {
         draw.sprite(
@@ -793,7 +1438,7 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
     let w = draw.text_width(&title);
     draw.text(
         &title,
-        [x + WIDTH / 2.0 - w / 2.0, y + 4.0],
+        [(x + WIDTH / 2.0 - w / 2.0).floor(), y + 4.0],
         0xFF71_4A40,
         false,
     );
@@ -802,57 +1447,239 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
     } else {
         tr(host, "create.gui.stock_keeper.send", "Send")
     };
-    if !just_sent || o.sent < 10 {
-        let w = draw.text_width(&send);
-        draw.text(
-            &send,
-            [x + WIDTH - 42.0 - w / 2.0, y + l.h - 35.0],
-            0xFF25_2525,
-            false,
-        );
-    }
+    let w = draw.text_width(&send);
+    let sx = (x + WIDTH - 42.0 - w / 2.0).floor();
     if just_sent {
+        let alpha = ((o.sent as f32 + partial - 5.0) / 5.0).clamp(0.0, 1.0);
+        if o.sent < 10 {
+            let a = (((1.0 - alpha * alpha) * 255.0) as u32).max(5) << 24;
+            draw.text(
+                &send,
+                [sx + alpha * alpha * 50.0, y + l.h - 35.0],
+                a | 0x25_2525,
+                false,
+            );
+        }
         let msg = tr(
             host,
             "create.gui.stock_keeper.request_sent",
             "Request Sent!",
         );
-        let w = draw.text_width(&msg);
-        let mx = x + WIDTH / 2.0 - (w + 10.0) / 2.0;
-        let my = l.order_y + 5.0;
-        draw.sprite(
-            TEX,
-            [64.0, 228.0, 8.0, 16.0],
-            [mx - 8.0, my - 4.0, 8.0, 16.0],
-            None,
-        );
-        draw.sprite(
-            TEX,
-            [73.0, 228.0, 1.0, 16.0],
-            [mx, my - 4.0, w + 10.0, 16.0],
-            None,
-        );
-        draw.sprite(
-            TEX,
-            [75.0, 228.0, 8.0, 16.0],
-            [mx + w + 10.0, my - 4.0, 8.0, 16.0],
-            None,
-        );
-        draw.text(&msg, [mx + 5.0, my], 0xFF4A_2D31, false);
+        let alpha = ((o.sent as f32 + partial - 10.0) / 5.0).clamp(0.0, 1.0);
+        if alpha > 0.0 {
+            let w = draw.text_width(&msg);
+            let mx = (x + WIDTH / 2.0 - (w + 10.0) / 2.0).floor();
+            let my = l.order_y + 5.0;
+            draw.sprite(
+                TEX,
+                [64.0, 228.0, 8.0, 16.0],
+                [mx - 8.0, my - 4.0, 8.0, 16.0],
+                None,
+            );
+            draw.sprite(
+                TEX,
+                [73.0, 228.0, 1.0, 16.0],
+                [mx, my - 4.0, w + 14.0, 16.0],
+                None,
+            );
+            draw.sprite(
+                TEX,
+                [75.0, 228.0, 8.0, 16.0],
+                [mx + w + 10.0, my - 4.0, 8.0, 16.0],
+                None,
+            );
+            let a = ((alpha * 255.0) as u32).max(5) << 24;
+            draw.text(&msg, [mx + 5.0, my], a | 0x8C_5D4B, false);
+        }
+    } else {
+        draw.text(&send, [sx, y + l.h - 35.0], 0xFF25_2525, false);
     }
-    // The hovered stack's name and how many there are (Create shows the item's tooltip).
-    let tip = match hover {
-        Some(Hover::Item(i)) => shown.get(i).cloned(),
-        Some(Hover::Order(i)) => o.order.get(i).cloned(),
+    // `renderForeground`: the hovered stack's name (the game gives no item's tooltip lines), the
+    // lock's and the address box's tooltips.
+    let tip_stack = match hover {
+        Some(Hover::Item(ci, i)) => groups
+            .get(ci)
+            .and_then(|g| g.get(i))
+            .map(|&si| stock[si].stack.clone()),
+        Some(Hover::Order(i)) => o.order.get(i).map(|e| e.0.clone()),
         None => None,
     };
-    if let Some((s, n)) = tip {
-        let lines = [
-            Text::literal(host.hover_name(&s)),
-            Text::literal(format!("x{n}")),
-        ];
+    let line = |k: &str, f: &str| Text::literal(tr(host, k, f));
+    let gray = |k: &str, f: &str| Text::literal(tr(host, k, f)).with_style(style("gray", false));
+    let dark =
+        |k: &str, f: &str| Text::literal(tr(host, k, f)).with_style(style("dark_gray", true));
+    let [mx, my] = mouse;
+    let tip: Option<Vec<Text>> = if let Some(s) = tip_stack {
+        Some(vec![Text::literal(host.hover_name(&s))])
+    } else if scroll < 1.0
+        && o.admin
+        && my > l.beside_search_y
+        && my <= l.beside_search_y + 15.0
+        && mx > l.lock_x
+        && mx <= l.lock_x + 15.0
+    {
+        Some(vec![
+            if o.locked {
+                line(
+                    "create.gui.stock_keeper.network_locked",
+                    "Network is locked",
+                )
+            } else {
+                line("create.gui.stock_keeper.network_open", "Network is open")
+            },
+            gray(
+                "create.gui.stock_keeper.network_lock_tip",
+                "Locking prevents other Players",
+            ),
+            gray(
+                "create.gui.stock_keeper.network_lock_tip_1",
+                "from ordering items directly",
+            ),
+            dark(
+                "create.gui.stock_keeper.network_lock_tip_2",
+                "Click to toggle",
+            ),
+        ])
+    } else if o.address.trim().is_empty() && o.focus != Focus::Address && in_address(&l, mouse) {
+        Some(vec![
+            Text::literal(tr(
+                host,
+                "create.gui.factory_panel.restocker_address",
+                "Send items to...",
+            ))
+            .with_style(style("#5391E1", false)),
+            dark("create.gui.schedule.lmb_edit", "Left-Click to Edit"),
+        ])
+    } else if options.is_empty()
+        && suggested.is_empty()
+        && mx >= ax + 96.0
+        && mx < ax + 112.0
+        && my >= ay - 4.0
+        && my < ay + 12.0
+    {
+        Some(vec![
+            Text::literal(tr(
+                host,
+                "create.gui.address_box.clipboard_tip",
+                "Keeping Track",
+            ))
+            .with_style(style("#5391E1", false)),
+            gray(
+                "create.gui.address_box.clipboard_tip_1",
+                "Entries starting with '#' on",
+            ),
+            gray(
+                "create.gui.address_box.clipboard_tip_2",
+                "held or nearby clipboards will",
+            ),
+            gray(
+                "create.gui.address_box.clipboard_tip_3",
+                "help auto-complete this input.",
+            ),
+            Text::literal(tr(
+                host,
+                "create.gui.address_box.clipboard_tip_4",
+                "(e.g. #storage, #factory)",
+            ))
+            .with_style(style("dark_gray", false)),
+        ])
+    } else {
+        None
+    };
+    if let Some(lines) = tip {
         let _ = draw.gui_tooltip(&lines, mouse);
     }
+}
+
+/// The key a scene's burner carries to be drawn as a stock keeper.
+pub(crate) const KEEPER_KEY: &str = "StockKeeper";
+
+/// The blaze burner beside the ticker at `pos` (the screen's `blaze`), its state and data.
+fn blaze_keeper(
+    host: &dyn ClientHost,
+    pos: [i32; 3],
+) -> Option<(mod_api::BlockState, mod_api::Compound)> {
+    let level = host.level(host.dimension())?;
+    [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        .iter()
+        .find_map(|[dx, dz]| {
+            let at = [pos[0] + dx, pos[1], pos[2] + dz];
+            let state = level.block_state(host, at)?;
+            let block = super::super::states::id(state).and_then(|id| {
+                crate::glue::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten()
+            })?;
+            if block != Block::BlazeBurner {
+                return None;
+            }
+            let nbt = host
+                .block_entity(level, at)
+                .and_then(|e| e.data(host))
+                .unwrap_or_default();
+            Some((state, nbt))
+        })
+}
+
+/// `Font.split(msg, width)`: words to lines no wider than `width`.
+fn wrap(draw: &dyn DrawContext, msg: &str, width: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in msg.split(' ') {
+        let next = if line.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{line} {word}")
+        };
+        if !line.is_empty() && draw.text_width(&next) > width {
+            lines.push(std::mem::take(&mut line));
+            line = word.to_owned();
+        } else {
+            line = next;
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+/// `AddressEditBoxHelper.createSuggestions`: the addresses (`#` entries not ticked) on the
+/// clipboards in the player's inventory, each once.
+fn addresses(host: &dyn ClientHost) -> Vec<String> {
+    let Some(player) = host.local_player() else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for stack in player.inventory(host).unwrap_or_default() {
+        if stack.item().id(host) != "create:clipboard" {
+            continue;
+        }
+        for page in super::super::display::clipboard::content(&stack).pages {
+            for e in page {
+                if e.checked || !e.text.starts_with('#') || e.text.len() == 1 {
+                    continue;
+                }
+                let address = e.text[1..].trim().to_owned();
+                if !address.is_empty() && !out.contains(&address) {
+                    out.push(address);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `DestinationSuggestions.updateCommandInfo`: while the box has the focus, the addresses
+/// starting with what is typed (not it itself).
+fn suggestions(o: &Open, options: &[String]) -> Vec<String> {
+    if o.focus != Focus::Address {
+        return Vec::new();
+    }
+    let typed = o.address.to_lowercase();
+    options
+        .iter()
+        .filter(|a| **a != o.address && a.to_lowercase().starts_with(&typed))
+        .cloned()
+        .collect()
 }
 
 fn blink() -> bool {
@@ -867,6 +1694,20 @@ fn blink() -> bool {
 fn confirm_hovered(l: &Layout, mouse: [f32; 2]) -> bool {
     let (cx, cy) = (l.x + 143.0, l.y + l.h - 39.0);
     mouse[0] >= cx && mouse[0] < cx + 78.0 && mouse[1] >= cy && mouse[1] < cy + 18.0
+}
+
+fn in_search(l: &Layout, mouse: [f32; 2]) -> bool {
+    mouse[0] >= l.x + 71.0
+        && mouse[0] < l.x + 171.0
+        && mouse[1] >= l.y + 22.0
+        && mouse[1] < l.y + 31.0
+}
+
+fn in_address(l: &Layout, mouse: [f32; 2]) -> bool {
+    mouse[0] >= l.x + 27.0
+        && mouse[0] < l.x + 119.0
+        && mouse[1] >= l.y + l.h - 36.0
+        && mouse[1] < l.y + l.h - 26.0
 }
 
 fn ui_sound(host: &dyn ClientHost, id: &str, volume: f32, pitch: f32) {
@@ -892,7 +1733,10 @@ fn change(host: &dyn ClientHost, o: &mut Open, stack: &ItemStack, delta: i64, av
             if o.order.len() >= COLS || delta < 0 {
                 return;
             }
-            o.order.push((stack.clone(), 0));
+            o.order.push((
+                super::body::with_count(stack, 1).unwrap_or_else(|| stack.clone()),
+                0,
+            ));
             ui_sound(host, "minecraft:block.wool.step", 0.75, 1.2);
             ui_sound(host, "minecraft:block.bamboo_wood.step", 0.75, 0.8);
             o.order.len() - 1
@@ -910,43 +1754,74 @@ fn change(host: &dyn ClientHost, o: &mut Open, stack: &ItemStack, delta: i64, av
         }
         return;
     }
-    let room = (i64::from(available) - now).max(0);
-    o.order[i].1 = (now + delta.min(room)) as u32;
-    if o.order[i].1 == 0 {
-        o.order.remove(i);
-    }
+    o.order[i].1 = (now + delta.min(i64::from(available) - now)).max(0) as u32;
 }
 
 fn available(o: &Open, s: &ItemStack) -> u32 {
     o.stock
         .as_ref()
-        .and_then(|st| st.iter().find(|(x, _)| x.is_stackable_with(s)))
-        .map_or(0, |e| e.1)
+        .and_then(|st| st.iter().find(|e| e.stack.is_stackable_with(s)))
+        .map_or(0, |e| e.count)
 }
 
-/// `sendIt`: the order to the server; the screen shows "Request Sent!".
+/// `sendIt`: the order to the server; the stacks ordered show as what is left of them until the
+/// stock comes back; the screen shows "Request Sent!" (and closes in clipboard mode).
 fn send(host: &dyn ClientHost, o: &mut Open) {
+    stock_changed_orders_only(o);
     if o.order.is_empty() {
         return;
     }
+    o.forced = o
+        .order
+        .iter()
+        .filter_map(|(s, n)| {
+            let have = available(o, s);
+            (have < INF as u32).then(|| (s.clone(), -1 - (i64::from(have) - i64::from(*n)).max(0)))
+        })
+        .collect();
     let mut m = vec![b'O'];
     for v in o.pos {
         put_i32(&mut m, v);
     }
     put_str(&mut m, &o.address);
     m.push(u8::from(o.encode));
-    m.push(o.order.len() as u8);
+    m.push(o.order.len().min(255) as u8);
     for (s, n) in &o.order {
         put_stack(host, &mut m, s, *n);
     }
     o.order.clear();
     o.sent = 1;
-    o.ticks = 10;
-    let close = o.encode;
+    o.since_update = 10;
+    let close = o.encode || o.list.is_some();
     LATER.with_borrow_mut(|l| {
         l.0.push(m);
         l.1 |= close;
     });
+}
+
+/// `revalidateOrders` without the rest of a new stock's work.
+fn stock_changed_orders_only(o: &mut Open) {
+    let counts: Vec<u32> = o.order.iter().map(|(s, _)| available(o, s)).collect();
+    for (e, have) in o.order.iter_mut().zip(counts) {
+        e.1 = e.1.min(have);
+    }
+    o.order.retain(|e| e.1 > 0);
+}
+
+/// `scrollHandleActive` while the button is held: the list follows the bar (`mouseDragged`).
+fn drag(host: &dyn ClientHost, o: &mut Open, mouse: [f32; 2]) {
+    let l = layout(o.size);
+    let (groups, cats) = shown(host, o);
+    let max = max_scroll(&groups, &cats, l.h) as f32;
+    let window_h = l.h - 92.0;
+    let total_h = max * CELL + window_h;
+    let bar = (window_h / total_h * (window_h - 2.0)).floor().max(5.0);
+    if bar >= window_h - 2.0 {
+        return;
+    }
+    let target = (mouse[1] - l.y - 15.0 - bar / 2.0) * total_h / (window_h - 2.0) / CELL;
+    o.scroll_to = target.clamp(0.0, max);
+    o.chase = 0.8;
 }
 
 pub(super) fn screen_mouse_pressed(
@@ -963,42 +1838,119 @@ pub(super) fn screen_mouse_pressed(
             return;
         };
         let l = layout(o.size);
-        // The search box (right click clears it) and the address box take the focus.
-        let in_search = mouse[0] >= l.x + 71.0
-            && mouse[0] < l.x + 171.0
-            && mouse[1] >= l.y + 20.0
-            && mouse[1] < l.y + 32.0;
-        let in_address = mouse[0] >= l.x + 27.0
-            && mouse[0] < l.x + 119.0
-            && mouse[1] >= l.y + l.h - 37.0
-            && mouse[1] < l.y + l.h - 25.0;
-        if in_search {
-            if rmb {
-                o.search.clear();
-                o.scroll = 0;
+        // Search: right click clears it.
+        if rmb && in_search(&l, mouse) && o.scroll_to == 0.0 {
+            o.search.clear();
+            o.focus = Focus::Search;
+            o.scroll_to = 0.0;
+            o.scroll = 0.0;
+            return;
+        }
+        // The address box: a suggestion clicked, right click clears, a click focuses.
+        if o.focus == Focus::Address {
+            let options = addresses(host);
+            let suggested = suggestions(o, &options);
+            let rows = suggested.len().min(7);
+            let ay = l.y + l.h - 36.0;
+            let sy = ay - 3.0 - rows as f32 * 12.0;
+            if rows > 0 && mouse[1] >= sy && mouse[1] < ay - 3.0 && mouse[0] >= l.x + 26.0 {
+                let i = ((mouse[1] - sy) / 12.0) as usize;
+                if let Some(s) = suggested.get(i) {
+                    o.address = s.clone();
+                }
+                return;
             }
+        }
+        if in_address(&l, mouse) {
+            if rmb {
+                o.address.clear();
+            }
+            o.focus = Focus::Address;
+            o.suggestion = 0;
+            return;
+        }
+        if in_search(&l, mouse) && o.scroll_to == 0.0 && o.list.is_none() {
             o.focus = Focus::Search;
             return;
         }
-        if in_address {
-            o.focus = Focus::Address;
+        o.focus = Focus::None;
+        let (groups, cats) = shown(host, o);
+        // The scroll bar.
+        let bar_x = l.items_x + COLS as f32 * CELL - 1.0;
+        if max_scroll(&groups, &cats, l.h) > 0
+            && lmb
+            && mouse[0] > bar_x
+            && mouse[0] <= bar_x + 8.0
+            && mouse[1] > l.y + 15.0
+            && mouse[1] < l.y + l.h - 82.0
+        {
+            o.dragging = true;
             return;
         }
-        o.focus = Focus::None;
-        if lmb && confirm_hovered(&l, mouse) {
+        // The lock.
+        if o.scroll_to == 0.0
+            && lmb
+            && o.admin
+            && mouse[1] > l.beside_search_y
+            && mouse[1] <= l.beside_search_y + 15.0
+            && mouse[0] > l.lock_x
+            && mouse[0] <= l.lock_x + 15.0
+        {
+            o.locked = !o.locked;
+            let mut m = vec![b'L'];
+            for v in o.pos {
+                put_i32(&mut m, v);
+            }
+            m.push(u8::from(o.locked));
+            LATER.with_borrow_mut(|later| later.0.push(m));
             ui_sound(host, "minecraft:ui.button.click", 1.0, 1.0);
-            send(host, o);
             return;
+        }
+        if lmb && confirm_hovered(&l, mouse) {
+            send(host, o);
+            ui_sound(host, "minecraft:ui.button.click", 1.0, 1.0);
+            return;
+        }
+        // A category's header folds or unfolds it.
+        let local = mouse[1].floor() - l.items_y;
+        if o.scroll == o.scroll_to
+            && lmb
+            && !cats.is_empty()
+            && mouse[0] >= l.items_x
+            && mouse[0] < l.items_x + COLS as f32 * CELL
+            && mouse[1] >= l.y + 16.0
+            && mouse[1] <= l.y + l.h - 80.0
+        {
+            for (ci, c) in cats.iter().enumerate() {
+                if ((local - c.y) / CELL + o.scroll_to).floor() != 0.0 {
+                    continue;
+                }
+                if groups.get(ci).is_none_or(Vec::is_empty) {
+                    continue;
+                }
+                if c.hidden {
+                    o.hidden.retain(|h| *h != c.target);
+                    ui_sound(host, "minecraft:entity.item_frame.rotate_item", 1.0, 0.675);
+                } else {
+                    o.hidden.push(c.target);
+                    ui_sound(host, "minecraft:entity.item_frame.rotate_item", 1.0, 1.5);
+                }
+                let (g, c) = shown(host, o);
+                let max = max_scroll(&g, &c, l.h) as f32;
+                o.scroll_to = o.scroll_to.min(max);
+                o.scroll = o.scroll.min(max);
+                return;
+            }
         }
         if !lmb && !rmb {
             return;
         }
-        let shown = displayed(host, o);
-        let Some(h) = hovered(&l, o, shown.len(), mouse) else {
+        let Some(h) = hovered(&l, o, &groups, &cats, mouse) else {
             return;
         };
+        let stock = o.stock.clone().unwrap_or_default();
         let (stack, order_clicked) = match h {
-            Hover::Item(i) => (shown[i].0.clone(), false),
+            Hover::Item(ci, i) => (stock[groups[ci][i]].stack.clone(), false),
             Hover::Order(i) => (o.order[i].0.clone(), true),
         };
         let n = i64::from(transfer(host, &stack, event.modifiers));
@@ -1009,6 +1961,21 @@ pub(super) fn screen_mouse_pressed(
     Flow::Cancel
 }
 
+pub(super) fn screen_mouse_released(
+    host: &dyn ClientHost,
+    event: &mut ScreenMouseButtonReleasedPreEvent<'_>,
+) -> Flow {
+    if !ours(host) || event.button != 0 {
+        return Flow::Continue;
+    }
+    OPEN.with_borrow_mut(|o| {
+        if let Some(o) = o.as_mut() {
+            o.dragging = false;
+        }
+    });
+    Flow::Continue
+}
+
 pub(super) fn screen_mouse_scrolled(
     host: &dyn ClientHost,
     event: &mut ScreenMouseScrolledPreEvent<'_>,
@@ -1017,7 +1984,7 @@ pub(super) fn screen_mouse_scrolled(
         return Flow::Continue;
     }
     let mouse = event.screen.mouse;
-    let up = event.scroll[1] > 0.0;
+    let notches = event.scroll[1];
     let shift = event.modifiers & 1 != 0;
     let control = event.modifiers & 2 != 0;
     OPEN.with_borrow_mut(|o| {
@@ -1025,23 +1992,38 @@ pub(super) fn screen_mouse_scrolled(
             return;
         };
         let l = layout(o.size);
-        let shown = displayed(host, o);
-        let max = max_scroll(shown.len(), l.h);
-        let h = hovered(&l, o, shown.len(), mouse);
-        let list = matches!(h, Some(Hover::Item(_))) && !shift && max != 0;
+        // The address box's suggestions go round with the wheel.
+        if o.focus == Focus::Address {
+            let n = suggestions(o, &addresses(host)).len();
+            if n > 0 {
+                o.suggestion = if notches > 0.0 {
+                    (o.suggestion + n - 1) % n
+                } else {
+                    (o.suggestion + 1) % n
+                };
+                return;
+            }
+        }
+        let (groups, cats) = shown(host, o);
+        let max = max_scroll(&groups, &cats, l.h);
+        let h = hovered(&l, o, &groups, &cats, mouse);
+        let list = matches!(h, Some(Hover::Item(..))) && !shift && max != 0;
         if h.is_none() || list {
-            o.scroll = (o.scroll + if up { -1 } else { 1 }).clamp(0, max);
+            let dir = (notches.abs().ceil() * -notches.signum()) as f32;
+            o.scroll_to = (o.scroll_to + dir).round().clamp(0.0, max as f32);
+            o.chase = 0.5;
             return;
         }
+        let stock = o.stock.clone().unwrap_or_default();
         let stack = match h {
-            Some(Hover::Item(i)) => shown[i].0.clone(),
+            Some(Hover::Item(ci, i)) => stock[groups[ci][i]].stack.clone(),
             Some(Hover::Order(i)) => o.order[i].0.clone(),
             None => return,
         };
-        let n = if control { 10 } else { 1 };
+        let n = notches.abs().ceil() as i64 * if control { 10 } else { 1 };
         let avail = available(o, &stack);
         let before = order_count(o, &stack);
-        change(host, o, &stack, if up { n } else { -n }, avail);
+        change(host, o, &stack, if notches > 0.0 { n } else { -n }, avail);
         let after = order_count(o, &stack);
         if after != before && after != 0 && before != 0 {
             ui_sound(host, "create:scroll_value", 0.25, 1.2);
@@ -1057,39 +2039,91 @@ pub(super) fn screen_key_pressed(
     if !ours(host) {
         return Flow::Continue;
     }
+    IGNORE_TEXT.set(false);
     let focus = OPEN.with_borrow(|o| o.as_ref().map_or(Focus::None, |o| o.focus));
+    let enter = matches!(
+        event.key,
+        "key.keyboard.enter" | "key.keyboard.keypad.enter"
+    );
+    // Shift-Enter sends; Enter leaves the search box.
+    if enter && focus == Focus::Search {
+        OPEN.with_borrow_mut(|o| {
+            if let Some(o) = o.as_mut() {
+                o.focus = Focus::None;
+            }
+        });
+        return Flow::Cancel;
+    }
+    if enter && event.modifiers & 1 != 0 {
+        OPEN.with_borrow_mut(|o| {
+            if let Some(o) = o.as_mut() {
+                send(host, o);
+            }
+        });
+        return Flow::Cancel;
+    }
     if focus == Focus::None {
-        // `E` (inventory) closes it as a container screen would; Escape as any screen.
+        // The chat key focuses the search; `E` (inventory) closes as a container screen would.
+        if event.key == "key.keyboard.t" {
+            OPEN.with_borrow_mut(|o| {
+                if let Some(o) = o.as_mut()
+                    && o.list.is_none()
+                {
+                    o.focus = Focus::Search;
+                    IGNORE_TEXT.set(true);
+                }
+            });
+            return Flow::Cancel;
+        }
         if event.key == "key.keyboard.e" {
+            LATER.with_borrow_mut(|l| l.1 = true);
+            return Flow::Cancel;
+        }
+        if event.key == "key.keyboard.escape" {
             LATER.with_borrow_mut(|l| l.1 = true);
             return Flow::Cancel;
         }
         return Flow::Continue;
     }
-    match event.key {
-        "key.keyboard.backspace" => OPEN.with_borrow_mut(|o| {
-            if let Some(o) = o.as_mut() {
-                match o.focus {
-                    Focus::Search => {
-                        o.search.pop();
-                        o.scroll = 0;
-                    }
-                    Focus::Address => {
-                        o.address.pop();
-                    }
-                    Focus::None => {}
+    OPEN.with_borrow_mut(|o| {
+        let Some(o) = o.as_mut() else { return };
+        match event.key {
+            "key.keyboard.backspace" => match o.focus {
+                Focus::Search => {
+                    o.search.pop();
+                    o.scroll = 0.0;
+                    o.scroll_to = 0.0;
+                }
+                Focus::Address => {
+                    o.address.pop();
+                    o.suggestion = 0;
+                }
+                Focus::None => {}
+            },
+            // A suggestion taken (`CommandSuggestions`: Tab), or the box left.
+            "key.keyboard.tab" if o.focus == Focus::Address => {
+                let s = suggestions(o, &addresses(host));
+                if let Some(s) = s.get(o.suggestion % s.len().max(1)) {
+                    o.address = s.clone();
                 }
             }
-        }),
-        "key.keyboard.enter" | "key.keyboard.keypad.enter" | "key.keyboard.tab" => OPEN
-            .with_borrow_mut(|o| {
-                if let Some(o) = o.as_mut() {
-                    o.focus = Focus::None;
-                }
-            }),
-        "key.keyboard.escape" => return Flow::Continue,
-        _ => {}
-    }
+            "key.keyboard.up" | "key.keyboard.down" if o.focus == Focus::Address => {
+                let n = suggestions(o, &addresses(host)).len().max(1);
+                o.suggestion = if event.key == "key.keyboard.up" {
+                    (o.suggestion + n - 1) % n
+                } else {
+                    (o.suggestion + 1) % n
+                };
+            }
+            "key.keyboard.enter" | "key.keyboard.keypad.enter" | "key.keyboard.tab" => {
+                o.focus = Focus::None;
+            }
+            "key.keyboard.escape" => {
+                LATER.with_borrow_mut(|l| l.1 = true);
+            }
+            _ => {}
+        }
+    });
     Flow::Cancel
 }
 
@@ -1101,7 +2135,7 @@ pub(super) fn screen_char_typed(
         return Flow::Continue;
     }
     let c = event.c;
-    if c == '\u{a7}' || c < ' ' || c == '\u{7f}' {
+    if c == '\u{a7}' || c < ' ' || c == '\u{7f}' || IGNORE_TEXT.replace(false) {
         return Flow::Cancel;
     }
     OPEN.with_borrow_mut(|o| {
@@ -1111,20 +2145,28 @@ pub(super) fn screen_char_typed(
         match o.focus {
             Focus::Search if o.search.chars().count() < 50 => {
                 o.search.push(c);
-                o.scroll = 0;
+                o.scroll = 0.0;
+                o.scroll_to = 0.0;
             }
-            Focus::Address if o.address.chars().count() < 50 => o.address.push(c),
+            Focus::Address if o.address.chars().count() < 25 => {
+                o.address.push(c);
+                o.suggestion = 0;
+            }
             _ => {}
         }
     });
     Flow::Cancel
 }
 
+/// `removed`: the address and folded categories go to the server at the next tick.
 pub(super) fn screen_closing(host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
     if event.screen.id != "mod" || host.mod_screen().is_some_and(|m| m != MOD) {
         return;
     }
-    OPEN.with_borrow_mut(|o| *o = None);
+    if let Some(o) = OPEN.with_borrow_mut(Option::take) {
+        let msgs = closing_messages(&o);
+        LATER.with_borrow_mut(|l| l.0.extend(msgs));
+    }
 }
 
 #[cfg(test)]
@@ -1138,6 +2180,7 @@ mod tests {
         assert_eq!(count_text(1500), "1.5k");
         assert_eq!(count_text(25_000), "25k");
         assert_eq!(count_text(3_000_000), "3m");
+        assert_eq!(count_text(INF as u32), "+");
     }
 
     #[test]
@@ -1146,5 +2189,42 @@ mod tests {
         assert_eq!((h - HEADER_H - FOOTER_H) % BODY_H, 0.0);
         assert!(h <= 290.0);
         assert_eq!(window_height(1000.0), HEADER_H + FOOTER_H + BODY_H * 17.0);
+    }
+
+    fn cat(target: i32, hidden: bool) -> Category {
+        Category {
+            target,
+            name: String::new(),
+            hidden,
+            y: 0.0,
+        }
+    }
+
+    #[test]
+    fn categories_stack_their_headers_and_rows() {
+        // Ten items in the first category, none in the second, three unsorted.
+        let groups = vec![(0..10).collect(), Vec::new(), (10..13).collect()];
+        let mut cats = vec![cat(0, false), cat(1, false), cat(-1, false)];
+        assert!(place_categories(&groups, &mut cats));
+        assert_eq!(
+            cats.iter().map(|c| c.y).collect::<Vec<_>>(),
+            [0.0, 60.0, 60.0]
+        );
+        // Folded, the first is its header only.
+        cats[0].hidden = true;
+        place_categories(&groups, &mut cats);
+        assert_eq!(cats[2].y, 20.0);
+        // Only unsorted items: no headers.
+        let groups = vec![Vec::new(), (0..3).collect()];
+        let mut cats = vec![cat(0, false), cat(-1, false)];
+        assert!(!place_categories(&groups, &mut cats));
+    }
+
+    #[test]
+    fn the_scroll_reaches_the_last_row() {
+        let groups = vec![(0..40).collect::<Vec<usize>>()];
+        // 5 rows of items, one for the list and 2 more: 160 px against a 136 px window, plus 50.
+        assert_eq!(max_scroll(&groups, &[], 220.0), 3);
+        assert_eq!(max_scroll(&[(0..9).collect()], &[], 220.0), 0);
     }
 }
