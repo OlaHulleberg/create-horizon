@@ -107,6 +107,16 @@ fn axis_name(a: Axis) -> &'static str {
 
 /// The girder at `pos` takes `g`'s properties.
 pub(super) fn set_girder(lv: &mut ServerLevel<'_>, pos: [i32; 3], g: decor::Girder) {
+    set_girder_with(lv, pos, g, super::super::server::update_all());
+}
+
+/// The girder at `pos` takes `g`'s properties, set with `flags`.
+fn set_girder_with(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    g: decor::Girder,
+    flags: mod_api::BlockUpdateFlags,
+) {
     let Some(state) = lv.block_state(pos) else {
         return;
     };
@@ -124,7 +134,7 @@ pub(super) fn set_girder(lv: &mut ServerLevel<'_>, pos: [i32; 3], g: decor::Gird
     if let Some(next) = next
         && next != state
     {
-        lv.put(pos, next);
+        lv.set_state(pos, next, flags);
     }
 }
 
@@ -213,4 +223,84 @@ pub(super) fn encase(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState,
     };
     lv.put(pos, next);
     lv.block_sound("minecraft:block.netherite_block.hit", pos, 0.5, 1.25);
+}
+
+/// `GirderWrenchBehavior.handleClick`: the wrench toggles the girder's top or bottom bracket on
+/// the side nearest the hit, and the girder beyond's opposite one when they pair
+/// (`setBlock(.., 2 | 16)`: no neighbour updates).
+pub(super) fn wrench(lv: &mut ServerLevel<'_>, pos: [i32; 3], point: [f64; 3]) {
+    let Some(state) = lv.block_state(pos) else {
+        return;
+    };
+    let Some((_, info)) = block_of(lv.block(pos)) else {
+        return;
+    };
+    let host = &*lv.host;
+    let text = super::state_text(host, state);
+    let (_, own) = states::split(&text);
+    let props = |k: &str| own.iter().any(|(a, v)| *a == k && *v == "true");
+    let g = girder_of(&info, &props);
+    let hit = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]) - 0.5);
+    let other = |d: Dir| side(lv, pos, d).girder;
+    let Some((d, pair)) = decor::girder_wrench(&g, hit, other) else {
+        return;
+    };
+    let mut g = g;
+    if d == Dir::Up {
+        g.top = !g.top;
+    } else {
+        g.bottom = !g.bottom;
+    }
+    // `setBlock(.., 2 | 16)`: its clients told, no neighbour updated.
+    let flags = mod_api::BlockUpdateFlags::CLIENTS | mod_api::BlockUpdateFlags::KNOWN_SHAPE;
+    set_girder_with(lv, pos, decor::girder_post_process(g), flags);
+    let beyond = add(pos, d);
+    if pair && let Some((Block::MetalGirder, info)) = block_of(lv.block(beyond)) {
+        let Some(state) = lv.block_state(beyond) else {
+            return;
+        };
+        let text = super::state_text(&*lv.host, state);
+        let (_, own) = states::split(&text);
+        let props = |k: &str| own.iter().any(|(a, v)| *a == k && *v == "true");
+        let mut o = girder_of(&info, &props);
+        if d == Dir::Up {
+            o.bottom = !o.bottom;
+        } else {
+            o.top = !o.top;
+        }
+        set_girder_with(lv, beyond, decor::girder_post_process(o), flags);
+    }
+}
+
+/// `GirderEncasedShaftBlock.onWrenched`: the girder it was (`getRotatedBlockState`: beams across
+/// the shaft, its top, bottom and water kept), the turning sound, and the shaft back to a
+/// player outside creative.
+pub(super) fn unencase(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, pos: [i32; 3]) {
+    let Some(state) = lv.block_state(pos) else {
+        return;
+    };
+    let host = &*lv.host;
+    let get = |k: &str| prop(host, state, k).unwrap_or_else(|| "false".into());
+    let along_x = get("axis") == "x";
+    let Some(next) = super::state_with(
+        host,
+        Block::MetalGirder,
+        &[
+            ("x", flag(!along_x)),
+            ("z", flag(along_x)),
+            ("axis", if along_x { "z" } else { "x" }),
+            ("top", &get("top")),
+            ("bottom", &get("bottom")),
+            ("waterlogged", &get("waterlogged")),
+        ],
+    ) else {
+        return;
+    };
+    lv.put(pos, next);
+    crate::glue::items::wrench::rotate_sound(lv, pos);
+    if !super::creative(&*lv.host, player)
+        && let Some(shaft) = super::stack_of(&*lv.host, "create:shaft", 1)
+    {
+        crate::glue::items::give_back(lv.host, player, shaft);
+    }
 }

@@ -2,7 +2,8 @@
   "template": "minecraft:andesite",
   "properties": {
     "hardness": 1.25,
-    "explosion_resistance": 6.0
+    "explosion_resistance": 6.0,
+    "sounds": "minecraft:tuff"
   },
   "item": true
 }

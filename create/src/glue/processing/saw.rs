@@ -1,6 +1,8 @@
 //! The block breakers and the saw: the mechanical drill and saw breaking the block in front
-//! (`BlockBreakingKineticBlockEntity`), and the saw facing up cutting what lands on it
-//! (`SawBlockEntity`).
+//! (`BlockBreakingKineticBlockEntity`), the saw facing up cutting what lands on it
+//! (`SawBlockEntity`), and both hurting what walks into them (`entityInside`), with vanilla's
+//! `generic` damage for Create's `mechanical_saw` and `mechanical_drill` (`HORIZON_API.md`: a
+//! native mod's damage types).
 
 use super::{recipes, stacks};
 use crate::glue::logistics::{insert_into_from, random_angle, upright};
@@ -15,6 +17,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 thread_local! {
+    /// Entities inside a saw or drill this tick (dimension, block, entity), for the level's tick.
+    static BLADES: RefCell<Vec<(usize, [i32; 3], u32)>> = const { RefCell::new(Vec::new()) };
     /// Each saw's `recipeIndex` while it holds nothing (an empty saw keeps no other state).
     static SAW_INDEX: RefCell<HashMap<(usize, [i32; 3]), usize>> = RefCell::new(HashMap::new());
     /// Each cutting saw's `recipeDuration`, which its clients are told.
@@ -23,6 +27,7 @@ thread_local! {
 
 /// Forgets what was kept for the world.
 pub fn clear() {
+    BLADES.with_borrow_mut(Vec::clear);
     SAW_INDEX.with_borrow_mut(HashMap::clear);
     SAW_DURATION.with_borrow_mut(HashMap::clear);
 }
@@ -464,4 +469,67 @@ fn show_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     });
     // An empty saw's is taken away (its clients see it absent: `kinetics::synced`).
     super::basin::set_shown(lv, pos, &[(SAW_KEY, value)]);
+}
+
+/// The saw and the drill as blocks: what walks into their blades.
+pub struct Blades;
+
+#[mod_api::horizon_part]
+impl mod_api::BlockPart for Blades {
+    /// `SawBlock.entityInside` and `DrillBlock.entityInside`: the entity (not an item), for the
+    /// level's tick (its box can't be read inside its move).
+    fn entity_inside(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::EntityInsideEvent<'_>,
+    ) {
+        if event.kind == "minecraft:item" {
+            return;
+        }
+        let Some(dim) = crate::glue::world::level_index(event.dimension) else {
+            return;
+        };
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        BLADES.with_borrow_mut(|b| b.push((dim, pos, event.entity as u32)));
+    }
+}
+
+/// The entities that walked into a turning saw or drill this tick: hurt by its speed
+/// (`DrillBlock.getDamage`) when their box meets the block shrunk by 0.1. Create's
+/// `mechanical_saw` and `mechanical_drill` damage types are stood in for by vanilla's `generic`
+/// (`HORIZON_API.md`: a native mod's damage types).
+pub fn hurt_inside(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let inside: Vec<_> = BLADES.with_borrow_mut(|b| {
+        let (here, rest): (Vec<_>, Vec<_>) = b.drain(..).partition(|(d, _, _)| *d == dim);
+        *b = rest;
+        here
+    });
+    for (_, pos, id) in inside {
+        if !matches!(
+            lv.info(pos).map(|(b, _)| b),
+            Some(Block::MechanicalSaw | Block::MechanicalDrill)
+        ) {
+            continue;
+        }
+        let speed = lv.speed(pos);
+        if speed == 0.0 {
+            continue;
+        }
+        let Some(entity) = lv.host.entity(id) else {
+            continue;
+        };
+        let Some([min, max]) = entity.bounding_box(&*lv.host) else {
+            continue;
+        };
+        if drill::inside(pos, min, max) {
+            let _ = entity.hurt(
+                &mut *lv.host,
+                "minecraft:generic",
+                drill::damage(speed),
+                None,
+                None,
+            );
+        }
+    }
 }

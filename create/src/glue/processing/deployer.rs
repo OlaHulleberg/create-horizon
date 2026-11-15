@@ -3,10 +3,14 @@
 //! what it holds on the block it reaches, or punching what is there.
 //!
 //! The fake player is the game's (`ServerHost::fake_player`), acting with the deployer's held
-//! stack for one action at a time (`perform_action_scoped`): its click is the game's own path
-//! (`ServerPlayerGameMode.useItemOn`: the block's use, then the item's `useOn`, which places a
-//! block item, empties a bucket, tills with a hoe...), its punch the game's attack and block
-//! break. Left out: the slower digging of a block whose drops need another tool
+//! stack for one action at a time (`perform_action_scoped`): an entity in the block it reaches is
+//! used first (`interactOn`: shears on a sheep, a bucket on a cow, a name tag), then its click is
+//! the game's own path (`ServerPlayerGameMode.useItemOn`: the block's use, then the item's
+//! `useOn`, which places a block item, tills with a hoe...), then the item's use in the air
+//! (`item.use`: a bucket fills or empties, a bottle fills, a snowball is thrown); its punch the
+//! game's attack and block break. Sand paper polishes what lies under it. Left out: feeding food
+//! and drinks to a player in front of it (`finishUsingItem` on another player), and the slower
+//! digging of a block whose drops need another tool
 //! (`requiresCorrectToolForDrops`), the API having no query for it, so every block digs at its
 //! harvestable speed.
 
@@ -39,8 +43,9 @@ pub fn deployer_above(lv: &ServerLevel<'_>, depot: [i32; 3]) -> Option<(Deployer
     Some((d, lv.speed(above)))
 }
 
-/// The deployer's recipe for `item` with what it holds: a sequenced assembly's deploying step
-/// first, else a deploying or item application recipe.
+/// The deployer's recipe for `item` with what it holds (`DeployerBlockEntity.getRecipe`): sand
+/// paper polishes first (`SANDPAPER_POLISHING`), then a sequenced assembly's deploying step,
+/// else a deploying or item application recipe.
 fn recipe_for(
     item: &str,
     progress: Option<&create_engine::sequenced::Progress>,
@@ -49,6 +54,23 @@ fn recipe_for(
     Option<create_engine::sequenced::Assembly>,
     Option<deployer::Recipe>,
 ) {
+    if matches!(tool, "create:sand_paper" | "create:red_sand_paper") {
+        let polishing = recipes::with(|r| {
+            let id = r.polishing.find_single(item)?;
+            let p = r.polishing.get(id);
+            Some(deployer::Recipe {
+                id: p.id.clone(),
+                target: p.ingredients.first().cloned().unwrap_or_default(),
+                tool: vec![tool.to_owned()],
+                results: p.results.clone(),
+                keep_held: false,
+            })
+        })
+        .flatten();
+        if polishing.is_some() {
+            return (None, polishing);
+        }
+    }
     let sequenced = press::sequenced_for(item, progress, "create:deploying", Some(tool));
     let recipe = match &sequenced {
         Some((a, s)) => Some(deployer::Recipe {
@@ -249,6 +271,19 @@ fn deployer_used(
         .map(|s| stacks::id(host, &s));
     if let Some(rest) = d.use_for(recipe, max_damage, remainder.as_deref()) {
         lv.spawn_items(centre(pos), &rest, 1);
+    }
+    // `BeltDeployerCallbacks.activate`: the held item breaking, an item picked up, and sand
+    // paper's short sanding.
+    if d.held.is_none() {
+        lv.play_block_sound("minecraft:entity.item.break", pos, 0.25, 1.0);
+    }
+    lv.play_block_sound("minecraft:entity.item.pickup", pos, 0.25, 0.75);
+    if recipe
+        .tool
+        .iter()
+        .any(|t| matches!(t.as_str(), "create:sand_paper" | "create:red_sand_paper"))
+    {
+        lv.play_block_sound("create:sanding_short", pos, 0.35, 1.0);
     }
 }
 
@@ -496,12 +531,82 @@ pub fn activate(
         deployer::clicked_face(facing).offset(),
         false,
     );
+    // An entity in the block it reaches is used first (`Player.interactOn`), one at random but
+    // a contraption's.
+    let targets = entities_at(lv, reached);
+    if !targets.is_empty() {
+        let target = targets[random_index(lv, targets.len())];
+        let location = [0.0, 0.5, 0.0];
+        let (outcome, other) = act_with(
+            lv,
+            pos,
+            facing,
+            d,
+            PlayerAction::InteractOn {
+                hand: Hand::Main,
+                target,
+                location,
+            },
+        );
+        if outcome == Some(mod_api::ActionOutcome::Consumed) {
+            return other;
+        }
+        for s in other {
+            lv.spawn_stack(centre(pos), s, [0.0; 3]);
+        }
+    }
     let action = PlayerAction::UseOn {
         hand: Hand::Main,
         pos: reached,
         hit,
     };
-    act(lv, pos, facing, d, action)
+    let (outcome, mut other) = act_with(lv, pos, facing, d, action);
+    // Nothing used it: the held item's own use (`item.use`: buckets, bottles, snowballs...),
+    // but an ender pearl's.
+    let used = matches!(
+        outcome,
+        Some(mod_api::ActionOutcome::Consumed | mod_api::ActionOutcome::EffectBlocked(_))
+    );
+    let pearl = d
+        .held
+        .as_ref()
+        .is_some_and(|(i, _)| i == "minecraft:ender_pearl");
+    if !used && d.held.is_some() && !pearl {
+        let (_, more) = act_with(
+            lv,
+            pos,
+            facing,
+            d,
+            PlayerAction::UseItem { hand: Hand::Main },
+        );
+        other.extend(more);
+    }
+    other
+}
+
+/// The entities in the block `at`, but a contraption (`AbstractContraptionEntity`).
+fn entities_at(lv: &ServerLevel<'_>, at: [i32; 3]) -> Vec<mod_api::EntityRef> {
+    let lo = at.map(f64::from);
+    let hi = at.map(|v| f64::from(v) + 1.0);
+    lv.level
+        .entities_in(&*lv.host, lo, hi)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| {
+            e.kind(&*lv.host)
+                .is_none_or(|k| !(k.starts_with("create:") && k.ends_with("contraption")))
+        })
+        .collect()
+}
+
+/// `level.random.nextInt(n)`.
+fn random_index(lv: &mut ServerLevel<'_>, n: usize) -> usize {
+    let n = n as i32;
+    let pick = lv
+        .level
+        .with_random(&mut *lv.host, |r| r.next_int_bound(n).unwrap_or(0))
+        .unwrap_or(0) as usize;
+    pick.min(n as usize - 1)
 }
 
 /// The fake player at the deployer `pos` facing `facing` does `action` with what `d` holds;
@@ -513,8 +618,19 @@ fn act(
     d: &mut Deployer,
     action: PlayerAction,
 ) -> Vec<ItemStack> {
+    act_with(lv, pos, facing, d, action).1
+}
+
+/// `act`, with what the action came to (None when the fake could not act).
+fn act_with(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    d: &mut Deployer,
+    action: PlayerAction,
+) -> (Option<mod_api::ActionOutcome>, Vec<ItemStack>) {
     let Some(fake) = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME) else {
-        return Vec::new();
+        return (None, Vec::new());
     };
     let stack = d
         .held
@@ -525,7 +641,13 @@ fn act(
     // way of the block it places. It stands in the deployer instead: its eyes in the middle,
     // facing down above it.
     let mut eye = pos.map(|v| f64::from(v) + 0.5);
-    if facing == Dir::Down {
+    if matches!(action, PlayerAction::UseItem { .. }) {
+        // The item's own ray (a bucket's, a bottle's) starts where Create's does
+        // (`activateInner`'s ray origin, `3/2 + 1/64` ahead, eyes on its feet), so it reaches the
+        // block two ahead and not the deployer's own pole.
+        let o = facing.offset();
+        eye = std::array::from_fn(|i| eye[i] + f64::from(o[i]) * (1.5 + 1.0 / 64.0));
+    } else if facing == Dir::Down {
         eye[1] = f64::from(pos[1]) + 1.63;
     }
     // The fake player looks the way the deployer faces.
@@ -539,7 +661,7 @@ fn act(
     };
     let setup = PlayerActionSetup::new(stack, eye, yaw, pitch, false);
     let Ok(result) = fake.perform_action_scoped(&mut *lv.host, action, setup) else {
-        return Vec::new();
+        return (None, Vec::new());
     };
     let held = result.held.as_ref().map(|s| {
         (
@@ -554,7 +676,7 @@ fn act(
     };
     d.held = held;
     d.held_damage = worn;
-    result.other
+    (Some(result.outcome), result.other)
 }
 
 /// `activateInner` in `Mode.PUNCH`: an entity in the block it reaches takes the hit (one at
@@ -569,26 +691,9 @@ fn punch(
     breaker: i32,
 ) -> Vec<ItemStack> {
     let at = deployer::clicked(pos, facing);
-    let lo = at.map(f64::from);
-    let hi = at.map(|v| f64::from(v) + 1.0);
-    let targets: Vec<_> = lv
-        .level
-        .entities_in(&*lv.host, lo, hi)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|e| {
-            // `AbstractContraptionEntity`s are left out.
-            e.kind(&*lv.host)
-                .is_none_or(|k| !(k.starts_with("create:") && k.ends_with("contraption")))
-        })
-        .collect();
+    let targets = entities_at(lv, at);
     if !targets.is_empty() {
-        let n = targets.len() as i32;
-        let pick = lv
-            .level
-            .with_random(&mut *lv.host, |r| r.next_int_bound(n).unwrap_or(0))
-            .unwrap_or(0) as usize;
-        let target = targets[pick.min(targets.len() - 1)];
+        let target = targets[random_index(lv, targets.len())];
         return act(lv, pos, facing, d, PlayerAction::Attack { target });
     }
     // `getShape(..).isEmpty()`: nothing to punch, and the breaking is forgotten.

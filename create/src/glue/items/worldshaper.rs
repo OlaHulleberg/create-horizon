@@ -233,9 +233,36 @@ fn use_shaper(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> Option<()>
     }
     let dimension = player.dimension(&*host)?.to_string();
     let mut lv = ServerLevel::new(host, &dimension)?;
-    let (hit, face) = aimed(&lv, player)?;
+    let aim = aimed(&lv, player);
+    // `ShootableGadgetItemMethods.applyCooldown`: `getCooldownDelay` (2), two thirds of it with
+    // another worldshaper in the other hand; after a miss too.
+    let other = if event.hand == Hand::Main {
+        Hand::Off
+    } else {
+        Hand::Main
+    };
+    let two = is(held(&*lv.host, player, other).as_ref(), Item::Worldshaper);
+    player.set_item_cooldown(
+        lv.host,
+        "create:handheld_worldshaper",
+        if two { 1 } else { 2 },
+    );
+    let (hit, face) = aim?;
     if lv.block_state(hit).is_none_or(|s| is_air(&*lv.host, s)) {
         return None;
+    }
+    // `ZapperBeamPacket` → `ZapperRenderHandler.playSound`: `WORLDSHAPER_PLACE` at 0.1, pitched
+    // 0.1 from the main hand and 0.9 from the off hand, for everyone near.
+    if let Some(at) = player.entity().position(&*lv.host) {
+        let pitch = if event.hand == Hand::Main { 0.1 } else { 0.9 };
+        lv.level.play_sound(
+            &mut *lv.host,
+            "create:worldshaper_place",
+            at,
+            SoundSource::Players,
+            0.1,
+            pitch,
+        );
     }
     let paint = match &block {
         Some(b) => lv.host.block_state_id(b)?,

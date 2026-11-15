@@ -21,9 +21,11 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 static LARGE_SMOKE: OnceLock<ParticleKey> = OnceLock::new();
+static DUST: OnceLock<ParticleKey> = OnceLock::new();
 
 pub(super) fn register(r: &mut dyn Registrar) {
     let _ = LARGE_SMOKE.set(r.particle_key("minecraft:large_smoke"));
+    let _ = DUST.set(r.particle_key("minecraft:dust"));
     let Some(kind) = kinetics::kind() else {
         return;
     };
@@ -46,6 +48,10 @@ struct Client {
     links: HashMap<[i32; 3], (Dir, create_engine::link::Key)>,
     /// Each lever's state, face and facing.
     levers: HashMap<[i32; 3], (u8, Face, Dir)>,
+    /// Levers to puff red dust from this tick, with the dust's alpha.
+    lever_puffs: Vec<([i32; 3], Face, Dir, f32)>,
+    /// The levers' random source (the client level's `random` in Create).
+    lever_rng: Option<create_engine::processing::Rng>,
     /// Each lever's `clientState` (`LerpedFloat`): this tick's value and the last.
     lever_shown: HashMap<[i32; 3], (f32, f32)>,
     /// The animations playing: the clock, what, and its tick.
@@ -85,7 +91,14 @@ pub(super) fn server_message(_host: &mut dyn ClientHost, channel: &str, data: &[
         CLIENT.with_borrow_mut(|c| {
             for (pos, state, face, facing) in create_engine::lever::decode(data) {
                 match state {
-                    Some(s) => c.levers.insert(pos, (s, face, facing)),
+                    Some(s) => {
+                        // A lever turned by a click puffs (`AnalogLeverBlock.useWithoutItem` on
+                        // the client: `addParticles(.., 1)`).
+                        if c.levers.get(&pos).is_some_and(|l| l.0 != s) {
+                            c.lever_puffs.push((pos, face, facing, 1.0));
+                        }
+                        c.levers.insert(pos, (s, face, facing))
+                    }
                     None => c.levers.remove(&pos),
                 };
             }
@@ -124,7 +137,52 @@ fn client_block(host: &dyn ClientHost, pos: [i32; 3]) -> Option<(Block, Option<D
 
 /// `tick` on the client while an animation runs: its sounds at the clock (`playLocalSound`) and
 /// the surprise's smoke after 30; it ends past 100. Nothing runs without one.
+/// `AnalogLeverBlock.addParticles`: red dust off the lever's handle side, `alpha` its scale.
+fn lever_dust(host: &mut dyn ClientHost, pos: [i32; 3], face: Face, facing: Dir, alpha: f32) {
+    let Some(&key) = DUST.get() else {
+        return;
+    };
+    // `getConnectedDirection`: up on a floor, down on a ceiling, else its facing.
+    let connected = match face {
+        Face::Floor => Dir::Up,
+        Face::Ceiling => Dir::Down,
+        Face::Wall => facing,
+    };
+    let (a, b) = (facing.opposite().offset(), connected.opposite().offset());
+    let at =
+        [0, 1, 2].map(|i| f64::from(pos[i]) + 0.5 + 0.1 * f64::from(a[i]) + 0.2 * f64::from(b[i]));
+    host.add_particle(
+        &ParticleOptions::dust(key, [1.0, 0.0, 0.0], alpha),
+        at,
+        [0.0; 3],
+    );
+}
+
+/// The analog levers' dust: a clicked one's puff, and `animateTick`'s on a lever giving a
+/// signal (a quarter of the times the game asks a block near the player, about once in 44
+/// ticks: `ClientLevel.animateTick`), at half alpha.
+fn tick_lever_dust(host: &mut dyn ClientHost) {
+    const ASKED: f32 = 667.0 / 32768.0 + 667.0 / 262_144.0;
+    let mut puffs = CLIENT.with_borrow_mut(|c| std::mem::take(&mut c.lever_puffs));
+    CLIENT.with_borrow_mut(|c| {
+        let rng = c
+            .lever_rng
+            .get_or_insert_with(|| create_engine::processing::Rng::new(0x1e7e_5eed));
+        let mut lit = Vec::new();
+        for (pos, (state, face, facing)) in &c.levers {
+            if *state > 0 && rng.next_float() < ASKED && rng.next_float() < 0.25 {
+                lit.push((*pos, *face, *facing, 0.5));
+            }
+        }
+        puffs.extend(lit);
+    });
+    for (pos, face, facing, alpha) in puffs {
+        lever_dust(host, pos, face, facing, alpha);
+    }
+}
+
 pub(super) fn tick(host: &mut dyn ClientHost) {
+    tick_lever_dust(host);
     if CLIENT.with_borrow_mut(|c| {
         c.ticks += 1;
         c.cuckoos.is_empty()
@@ -499,4 +557,9 @@ fn draw_clock_doors(
             cuckoo::figure_pose(facing, cuckoo::figure_offset(angle)),
         );
     }
+}
+
+/// The analog lever at `pos`'s state as its client last heard it.
+pub(super) fn lever_state(pos: [i32; 3]) -> Option<u8> {
+    CLIENT.with_borrow(|c| c.levers.get(&pos).map(|l| l.0))
 }

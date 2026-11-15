@@ -69,9 +69,38 @@ pub fn breakable(hardness: f32) -> Option<f32> {
     (hardness >= 0.0).then_some(hardness)
 }
 
+/// `DrillBlock.getDamage`: what a turning drill or saw deals an entity inside it, 1 to 10 by
+/// speed.
+pub fn damage(speed: f32) -> f32 {
+    let s = speed.abs();
+    let sum = (s / 16.0).min(2.0) + (s / 32.0).min(4.0) + (s / 64.0).min(4.0);
+    sum.clamp(1.0, 10.0)
+}
+
+/// `entityInside`'s test: the entity's box `[min, max]` meets the block at `pos` shrunk by 0.1
+/// on every side (`new AABB(pos).deflate(.1f)`).
+pub fn inside(pos: [i32; 3], min: [f64; 3], max: [f64; 3]) -> bool {
+    (0..3).all(|a| {
+        let lo = f64::from(pos[a]) + 0.1;
+        let hi = f64::from(pos[a]) + 0.9;
+        min[a] < hi && max[a] > lo
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blades_hurt_by_speed_within_their_block() {
+        assert_eq!(damage(0.0), 1.0);
+        assert_eq!(damage(16.0), 1.75);
+        assert_eq!(damage(-64.0), 2.0 + 2.0 + 1.0);
+        assert_eq!(damage(256.0), 10.0);
+        // A mob standing on an upright saw (12 px tall) is inside; one on a full block above is not.
+        assert!(inside([0, 0, 0], [0.2, 0.75, 0.2], [0.8, 2.5, 0.8]));
+        assert!(!inside([0, 0, 0], [0.2, 0.95, 0.2], [0.8, 2.5, 0.8]));
+    }
 
     #[test]
     fn stone_breaks_in_steps_at_speed() {

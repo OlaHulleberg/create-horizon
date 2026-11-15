@@ -239,10 +239,49 @@ fn copper_template(name: &str) -> Option<&'static str> {
 }
 
 /// The template for one block, by its properties, then its name and Java class.
+/// Sounds set where the registration reader does not see them: `BuilderTransformers.ladder`,
+/// `scaffold` and `MetalBarsGen` (`SoundType.COPPER`), seats (`SharedProperties::wooden`, in a
+/// loop over the dyes), and the palette stones, copied from their base block
+/// (`AllPaletteStoneTypes`, `PalettesVariantEntry.initialProperties(baseBlock)`).
+fn sound_override(n: &str) -> Option<&'static str> {
+    if (n.ends_with("_ladder") || n.ends_with("_scaffolding") || n.ends_with("_bars"))
+        && n != "copycat_bars"
+    {
+        return Some("minecraft:copper_block");
+    }
+    if n.ends_with("_seat") {
+        return Some("minecraft:stripped_spruce_wood");
+    }
+    let stone = |t: &str| {
+        n == t
+            || n.starts_with(&format!("cut_{t}"))
+            || n.starts_with(&format!("polished_cut_{t}"))
+            || n.starts_with(&format!("small_{t}_brick"))
+            || n == format!("layered_{t}")
+            || n == format!("{t}_pillar")
+    };
+    [
+        ("asurine", "minecraft:deepslate"),
+        ("crimsite", "minecraft:deepslate"),
+        ("deepslate", "minecraft:deepslate"),
+        ("limestone", "minecraft:sandstone"),
+        ("ochrum", "minecraft:calcite"),
+        ("calcite", "minecraft:calcite"),
+        ("scoria", "minecraft:blackstone"),
+        ("scorchia", "minecraft:blackstone"),
+        ("veridium", "minecraft:tuff"),
+        ("tuff", "minecraft:tuff"),
+        ("dripstone", "minecraft:dripstone_block"),
+    ]
+    .into_iter()
+    .find(|(t, _)| stone(t))
+    .map(|(_, s)| s)
+}
+
 pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decision {
     let n = b.name.as_str();
     let keys = names(&b.props);
-    let sounds = sound_block(b);
+    let sounds = sound_override(n).or_else(|| sound_block(b));
     let declared = |template: &'static str| Decision::Declared {
         template,
         sounds,
@@ -315,7 +354,8 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
             declared("minecraft:stone_brick_wall")
         }
         ["east", "north", "south", "waterlogged", "west"] => {
-            if has(n, &["window"]) {
+            // WindowGen: windows' and framed and tiled glass panes on `GLASS_PANE`.
+            if has(n, &["window", "glass"]) {
                 declared("minecraft:glass_pane")
             } else {
                 declared("minecraft:iron_bars")
@@ -954,11 +994,11 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             ])),
             own(&[("axis_along_first", bools), ("facing", facing)]),
         ),
-        // DrillBlock (DirectionalKineticBlock): any facing, a full block of iron's
-        // properties here (Create's is a casing with the head out front).
+        // DrillBlock (DirectionalKineticBlock): any facing, iron's properties;
+        // AllShapes.CASING_12PX to its facing (`getShape`), the head drawn out front.
         "mechanical_drill" => (
             "minecraft:iron_block",
-            None,
+            Some(by_facing(&[[0., 0., 0., 16., 12., 16.]])),
             own(&[("facing", facing), ("waterlogged", bools)]),
         ),
         // ChuteBlock: a barrel's template for its one slot; gold's properties; its facing
@@ -2131,19 +2171,27 @@ fn copycats(b: &CreateBlock) -> Option<Decision> {
             ])),
             true,
         ),
-        // A step's shape is chosen by its facing and its half, and a declaration selects by one
-        // property: by `half`, the union of Create's steps of every facing (a slab), held 1/256
-        // off the block's side so that, as Create's `noOcclusion` copycats, it hides no
-        // neighbour's face beside the half the step leaves open. The step itself is drawn exact.
+        // CopycatStepBlock.getShape: AllShapes.STEP_BOTTOM / STEP_TOP (the half of the block
+        // toward `facing`, south's at z 8..16), by its facing and its half.
         "copycat_step" => declared(
             "minecraft:heavy_core",
-            Some(by_property_values(
-                "half",
-                &[
-                    ("bottom", &[[0., 1. / 16., 0., 16., 8., 16.]]),
-                    ("top", &[[0., 8., 0., 16., 15. + 15. / 16., 16.]]),
-                ],
-            )),
+            Some({
+                let mut values = serde_json::Map::new();
+                for (facing, [x0, z0, x1, z1]) in [
+                    ("south", [0., 8., 16., 16.]),
+                    ("north", [0., 0., 16., 8.]),
+                    ("east", [8., 0., 16., 16.]),
+                    ("west", [0., 0., 8., 16.]),
+                ] {
+                    for (half, [y0, y1]) in [("bottom", [0., 8.]), ("top", [8., 16.])] {
+                        values.insert(
+                            format!("{facing},{half}"),
+                            json!([[x0 / 16., y0 / 16., z0 / 16., x1 / 16., y1 / 16., z1 / 16.]]),
+                        );
+                    }
+                }
+                json!({ "properties": ["facing", "half"], "values": values })
+            }),
             Some(own(&[
                 ("facing", &["south", "north", "west", "east"]),
                 ("half", &["bottom", "top"]),
@@ -4185,7 +4233,11 @@ mod tests {
                 ]
             )
         );
-        assert_eq!(doc["shapes"]["values"]["top"][0][4], 1.0 - 1.0 / 256.0);
+        // STEP_TOP facing south: z 8..16, y 8..16.
+        assert_eq!(
+            doc["shapes"]["values"]["south,top"][0],
+            json!([0.0, 0.5, 0.5, 1.0, 1.0, 1.0])
+        );
         let doc = declare("copycat_panel", (3.0, 6.0, 64));
         assert_eq!(doc["properties"]["render_shape"], "ENTITYBLOCK_ANIMATED");
         assert_eq!(states_and_default(&doc).0, 12);

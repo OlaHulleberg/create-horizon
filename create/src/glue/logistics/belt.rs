@@ -902,11 +902,12 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         if !super::funnel::funnel_passes(self.lv, pos, &stack) {
             return Some(item.count);
         }
+        let moved = stack.clone();
         let left = items::insert_item(self.lv, behind, face(f.facing), stack);
         let left = left.map_or(0, |l| l.count().min(255) as u8);
         if left != item.count {
             super::flaps::funnel(self.lv, pos, true);
-            crate::glue::redstone::funnel_transfer(self.lv, pos, &item.item);
+            crate::glue::redstone::detectors::funnel_transfer(self.lv, pos, &moved);
         }
         Some(left)
     }

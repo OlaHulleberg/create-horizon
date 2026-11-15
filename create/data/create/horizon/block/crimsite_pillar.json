@@ -2,7 +2,8 @@
   "template": "minecraft:quartz_pillar",
   "properties": {
     "hardness": 1.25,
-    "explosion_resistance": 6.0
+    "explosion_resistance": 6.0,
+    "sounds": "minecraft:deepslate"
   },
   "item": true
 }

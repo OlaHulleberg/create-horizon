@@ -157,12 +157,16 @@ impl Subsystem for Processing {
         for block in [Block::Basin, Block::MechanicalSaw, Block::Millstone] {
             r.block_part(super::states::key(block), Landing);
         }
+        for block in [Block::MechanicalSaw, Block::MechanicalDrill] {
+            r.block_part(super::states::key(block), saw::Blades);
+        }
         r.block_part(super::states::key(Block::BlazeBurner), BurnerPlacement);
     }
 
     fn world_closed(&self) {
         recipes::clear();
         saw::clear();
+        press::clear();
         basin::clear();
         spoutput::clear();
         crafter::clear();
@@ -223,10 +227,27 @@ impl Subsystem for Processing {
         _point: [f64; 3],
         sneaking: bool,
     ) -> bool {
-        if block != Block::Basin || sneaking {
+        if sneaking {
             return false;
         }
-        spoutput::wrenched(lv, pos, clicked);
+        match block {
+            Block::Basin => spoutput::wrenched(lv, pos, clicked),
+            // `MechanicalCrafterBlock.onWrenched`: its front face cycles where it points
+            // (`state.cycle(POINTING)`: up, left, down, right); any other face passes, so the
+            // crafter is never turned.
+            Block::MechanicalCrafter => {
+                if lv.facing_of(pos, Block::MechanicalCrafter) == Some(clicked) {
+                    let next = match lv.property(pos, "pointing").as_deref() {
+                        Some("up") => "left",
+                        Some("left") => "down",
+                        Some("down") => "right",
+                        _ => "up",
+                    };
+                    lv.set_property(pos, "pointing", next, crate::glue::server::update_all());
+                }
+            }
+            _ => return false,
+        }
         true
     }
 
@@ -325,6 +346,7 @@ impl Subsystem for Tools {
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         saw::tick_drills(lv);
         saw::tick_saws(lv);
+        saw::hurt_inside(lv);
         press::tick_presses(lv);
         deployer::tick_deployers(lv);
     }
@@ -442,7 +464,10 @@ fn use_block(host: &mut dyn ServerHost, event: &mut RightClickBlockEvent<'_>) ->
         Block::Deployer => info
             .facing
             .is_some_and(|f| deployer::use_deployer(&mut lv, pos, f, click, player, main)),
-        Block::BlazeBurner => basin::use_burner(&mut lv, pos, player, click.stack),
+        Block::BlazeBurner => basin::use_burner(&mut lv, pos, player, click.hand, click.stack),
+        Block::LitBlazeBurner => {
+            basin::use_lit_burner(&mut lv, pos, player, click.hand, click.stack)
+        }
         Block::Basin if main => basin::use_basin(&mut lv, pos, player, click.stack),
         _ => false,
     };

@@ -13,7 +13,9 @@
 //! `entity_inside` runs inside the entity's move, where its position, ground and motion can't
 //! be read: the entity is noted there and seated or turned at the end of the level's tick.
 //! Create's `setNoActionTime(20)` and `setOnGround(false)` for mobs on a turntable, and a
-//! leashed mob sitting in the player's place (`getLeashed`), have no writer.
+//! leashed mob sitting in the player's place (`getLeashed`), have no writer. A seat bounces what
+//! won't sit on it (`bounce_restitution`); the halved fall damage (`SeatBlock.fallOn`) has no
+//! hook (`HORIZON_API.md`).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states::key;
@@ -452,6 +454,25 @@ impl BlockPart for SeatPart {
             SITS.with_borrow_mut(|s| s.push((dim, pos, player)));
             Some(InteractionResult::Success)
         })?
+    }
+
+    /// `SeatBlock.updateEntityAfterFallOn`: a player, an entity that can't sit (a shulker, a
+    /// thing not living) or a mob landing on a taken seat bounces off at 0.66 of its speed
+    /// (the game takes 0.8 of that for one not living); a mob that will sit doesn't bounce.
+    fn bounce_restitution(
+        &self,
+        _level: mod_api::LevelSide<'_>,
+        event: &mut mod_api::BounceRestitutionEvent<'_>,
+    ) {
+        // The part is on the seats and the turntable.
+        if event.state.block() == key(Block::Turntable) {
+            return;
+        }
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        let taken = SEATS.with_borrow(|s| s.keys().any(|(_, p)| *p == pos));
+        if !seat::can_sit(event.kind) || taken {
+            event.factor = event.factor.max(0.66);
+        }
     }
 
     /// `BlockBehaviour.entityInside` for seats and turntables: the entity, for the level's tick.

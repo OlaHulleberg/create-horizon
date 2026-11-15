@@ -38,6 +38,7 @@ mod crates;
 mod doors;
 mod girders;
 mod items;
+mod ladders;
 mod placard;
 mod place;
 mod saved;
@@ -92,6 +93,8 @@ struct Dim {
     girder_checks: Vec<[i32; 3]>,
     /// Metal scaffolding whose neighbour changed: whether it is a bottom one.
     scaffold_checks: Vec<[i32; 3]>,
+    /// Metal ladders whose neighbour changed: whether anything still holds them.
+    ladder_checks: Vec<[i32; 3]>,
     bell_checks: Vec<[i32; 3]>,
     /// Blocks whose bracket or placard item clients must see again.
     shown: Vec<[i32; 3]>,
@@ -311,6 +314,7 @@ impl Subsystem for Decor {
         crates::register(r);
         copper::register(r);
         scaffolding::register(r);
+        ladders::register(r);
     }
 
     fn world_closed(&self) {
@@ -344,6 +348,7 @@ impl Subsystem for Decor {
             Some(b) if scaffolding::BLOCKS.contains(&b) => {
                 with(dim, |d| d.scaffold_checks.push(pos))
             }
+            _ if ladders::is_ladder(state) => with(dim, |d| d.ladder_checks.push(pos)),
             _ => {}
         }
     }
@@ -374,6 +379,34 @@ impl Subsystem for Decor {
 
     fn left_click_block(&self, host: &mut dyn ServerHost, event: &mut LeftClickBlockEvent) -> Flow {
         clicks::left_click(host, event)
+    }
+
+    /// A girder takes the wrench as its own (`GirderBlock.useItemOn`: its top or bottom bracket,
+    /// never turned), and an encased shaft wrenched turns back into its girder.
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        player: PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        _clicked: Dir,
+        point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        if sneaking {
+            return false;
+        }
+        match block {
+            Block::MetalGirder => {
+                girders::wrench(lv, pos, point);
+                true
+            }
+            Block::MetalGirderEncasedShaft => {
+                girders::unencase(lv, player, pos);
+                true
+            }
+            _ => false,
+        }
     }
 }
 

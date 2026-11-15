@@ -336,13 +336,13 @@ fn use_hatch(
         return Some(InteractionResult::Success);
     }
     let target = add(pos, facing);
-    let face = mod_api::Direction::ALL[facing.opposite() as usize];
     let filter = with(dim, |d| d.hatch_filters.get(&pos).cloned());
     let selected = player.selected_slot(&*lv.host).unwrap_or(0);
     let slots: Vec<(u32, ItemStack)> = player.inventory_slots(&*lv.host).unwrap_or_default();
     let level = lv.level;
     let host = &mut *lv.host;
-    let Some(inventory) = level.capability(host, &ITEMS, target, Some(face)) else {
+    // `getCapability(ItemHandler.BLOCK, pos, null)`: the inventory as a whole, from no side.
+    let Some(inventory) = level.capability(host, &ITEMS, target, None) else {
         // No inventory there (`targetInv == null`).
         return Some(InteractionResult::Success);
     };
@@ -352,8 +352,12 @@ fn use_hatch(
             continue;
         };
         let id = stack.item().id(&*host);
-        // `canFitInsideContainerItems`: not shulker boxes.
-        if id.ends_with("shulker_box") || filter.as_deref().is_some_and(|f| f != id) {
+        // `canFitInsideContainerItems`: not shulker boxes, nor toolboxes
+        // (`UncontainableBlockItem`).
+        if id.ends_with("shulker_box")
+            || (id.starts_with("create:") && id.ends_with("_toolbox"))
+            || filter.as_deref().is_some_and(|f| f != id)
+        {
             continue;
         }
         let count = stack.count();

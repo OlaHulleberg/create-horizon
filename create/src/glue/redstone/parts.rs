@@ -399,14 +399,18 @@ fn use_block(
             Some(InteractionResult::SuccessServer)
         }
         b if create_engine::world::latch_kind(b).is_some() => {
-            // ToggleLatchBlock.useItemOn: not while sneaking, nor with a wrench.
-            if back || wrench {
+            // ToggleLatchBlock.useItemOn: not for a player who may not build, nor while
+            // sneaking, nor with a wrench. A powered latch held by its inputs passes the click
+            // on (`PoweredLatchBlock.activated`), so the held item is used.
+            if !may_build || back || wrench {
                 return None;
             }
             let (kind, l) = latch_of(block, &info)?;
-            if let Some(n) = create_engine::latch::activated(kind, &l) {
-                set_latch(&mut lv, pos, n);
-            }
+            let n = create_engine::latch::activated(kind, &l)?;
+            // `activated`: a lever click, 0.6 turning on, 0.5 turning off.
+            let pitch = if l.powering { 0.5 } else { 0.6 };
+            lv.play_block_sound("minecraft:block.lever.click", pos, 0.3, pitch);
+            set_latch(&mut lv, pos, n);
             Some(InteractionResult::SuccessServer)
         }
         _ => None,
@@ -449,5 +453,7 @@ fn use_link(
     };
     let dim = lv.dim;
     with_world(|w| w.link_frequency(dim, pos, first, held.unwrap_or_default()));
+    // `LinkHandler.onBlockActivated`: an item frame's add sound.
+    lv.play_block_sound("minecraft:entity.item_frame.add_item", pos, 0.25, 0.1);
     true
 }

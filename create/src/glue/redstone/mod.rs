@@ -32,7 +32,7 @@ mod analog;
 mod carried;
 mod client;
 pub(crate) mod clipboard_values;
-mod detectors;
+pub(crate) mod detectors;
 mod parts;
 pub(crate) mod pose;
 mod saved;
@@ -40,7 +40,7 @@ mod switch_screen;
 mod ticks;
 
 pub use analog::{Comparators, analog_touched};
-pub(crate) use detectors::{funnel_transfer, item_id, observed, slot_stack};
+pub(crate) use detectors::{item_id, observed, slot_stack};
 pub(crate) use parts::with_properties;
 pub(crate) use ticks::show_diode;
 
@@ -104,6 +104,24 @@ impl Subsystem for Redstone {
     fn world_closed(&self) {
         parts::forget();
         analog::forget();
+    }
+
+    /// `AnalogLeverBlockEntity.addToGoggleTooltip`: its signal strength.
+    fn goggle_tooltip(
+        &self,
+        _host: &dyn mod_api::ClientHost,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        lines: &mut Vec<Vec<(String, u32)>>,
+    ) {
+        if block == create_engine::Block::AnalogLever
+            && let Some(state) = client::lever_state(pos)
+        {
+            lines.push(create_engine::gauge::goggles(
+                0,
+                vec![(format!("Analog Strength: {state}/15"), 0xFFFFFF)],
+            ));
+        }
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {

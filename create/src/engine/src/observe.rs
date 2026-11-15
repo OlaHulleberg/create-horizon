@@ -538,6 +538,23 @@ impl Detectors {
         e
     }
 
+    /// `SmartObserverBlockEntity.activate(ticks)` from outside its own look (a funnel it watches
+    /// moved an item, `onFunnelTransfer`): on, and off `ticks` after `now` unless something
+    /// keeps it on. Whether it was off (and so turns on).
+    pub fn observer_activate(&mut self, pos: [i32; 3], ticks: i64, now: i64, powered: bool) -> bool {
+        let Some(o) = self.observers.get_mut(&pos) else {
+            return false;
+        };
+        if o.sustained.is_none() {
+            if let Some(t) = o.off_at.take() {
+                self.offs.remove(&(t, pos));
+            }
+            o.off_at = Some(now + ticks);
+            self.offs.insert((now + ticks, pos));
+        }
+        !powered
+    }
+
     /// Observers whose time is up (`tick`: `powered` false).
     pub fn take_offs(&mut self, now: i64) -> Vec<[i32; 3]> {
         let mut out = Vec::new();

@@ -81,9 +81,23 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   fake's own uncharged ticker, so a deployer's punch deals about a fifth of Create's damage (0.21 of a
   fist's 1). A `PlayerActionSetup` field for the attack strength (or a full charge) would close it.
 
+- **A native mod's enchantments in the item system**: Create's `data/create/enchantment/capacity.json` and
+  `potato_recovery.json` ship with the mod (`create-data prepare`) and commands and item components take them
+  (`/give @s create:copper_backtank[enchantments={"create:capacity":3}]`, read by the glue), but the game's
+  item enchantment table (`horizon-items`' `Enchantments`, loaded from the game's root and world packs) does not
+  hold them: `/enchant` answers "cannot support that enchantment", tooltips leave them out and enchanting tables
+  and anvils never offer them. Loading a native mod's `data/<ns>/enchantment` into that table would close it.
+- **A mob's own saved data and a conversion keeping it**: a horse in a haunting fan current turns into a skeleton
+  horse after 100 ticks (`HauntingType.affectEntity`, its progress in the horse's persistent data, then a
+  skeleton horse made from the horse's saved data); no API keeps a counter on a mob nor converts one keeping its
+  data, so haunted horses are only blinded and slowed.
+- **`Block.fallOn` as a block part hook** (or the block landed on in `living_fall`, which is given no level):
+  a seat halves the fall it breaks (`SeatBlock.fallOn`); its bounce is ported (`bounce_restitution`).
 - **A native mod's damage types**: Create's `data/create/damage_type/*.json` (`crush`, `mechanical_saw`,
-  `fan_fire`...) shipped with the mod are not registered (`EntityRef::hurt` with `create:crush` is refused), so
-  crushing wheels hurt with vanilla's `cramming`, which also goes through armour.
+  `fan_fire`...) shipped with the mod are not registered (`EntityRef::hurt` with `create:crush` is refused; with
+  the files shipped, `/damage` parses `create:crush` but the health code's damage table answers "invulnerable"),
+  so crushing wheels hurt with vanilla's `cramming`, which also goes through armour, saws and drills with
+  `generic`, and fans with `lava` (blasting) and `in_fire` (smoking).
 - **Moving colliders**: players cannot stand on, or be pushed by, bearings' and pistons' structures, trains or
   minecart contraptions (`notes/moving-structures-note.md`).
 - **Mod entity types that are not template copies**, rideable by players: Create's seat entity and carriage seats
@@ -241,6 +255,20 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   drawn on one (the rest of what the engine keeps per block rides with it, `Subsystem::carry_out`, and is drawn
   while it moves, `Subsystem::draw_carried`), but trains and cart contraptions, drawn as block displays, show
   none of it while they ride (item and text displays riding with them would).
+- Redstone: smart observers and threshold switches read a fluid only from a fluid tank (Create reads any fluid
+  handler: basins, drains, spouts, and an observer the flow through a pipe), and ignore packages on a chain
+  conveyor; a nixie tube on a train signal shows its text, not the signal's lights (`NixieTubeRenderer`); a
+  redstone contact on an elevator column is not turned into an elevator contact by the wrench; dyed items
+  (`DYED_COLOR`) make one link frequency with their undyed item.
+- Processing: a deployer does not feed food or drinks to a player in front of it (`finishUsingItem` on another
+  player), and its overflow (`overflowItems`) drops at it rather than staying for funnels and hoppers; crafting
+  remainders of saw, crushing and millstone inputs are not given back.
+- Decor: table cloths hold no items and run no shops (`TableClothBlockEntity`); copycats have no placement
+  helpers and do not take their material's sound, friction or light; girders have no placement helper; an item
+  hatch's filter compares item ids, not a filter item's list or attributes.
+- Equipment: the toolbox radial menu and picking a toolbox up with its contents, the linked controller's
+  frequency screen, the extendo grip's knockback and entity reach, the worldshaper's flatten tool, the
+  schematicannon's belts, entities and checklist books, and the second half of doors and beds it prints.
 
 ## Not to send
 

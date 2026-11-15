@@ -180,40 +180,6 @@ pub(crate) struct Observed {
 }
 
 /// `Observed` for the smart observer at `pos`.
-/// `SmartObserverBlock.onFunnelTransfer`: a funnel at `funnel` moved `item` (a stack key); each
-/// smart observer looking at it whose filter passes the item gives a pulse (`activate(4)`).
-pub(crate) fn funnel_transfer(lv: &mut ServerLevel<'_>, funnel: [i32; 3], item: &str) {
-    let dim = lv.dim;
-    let now = lv.game_time();
-    for d in Dir::ALL {
-        let o = d.offset();
-        let pos = [funnel[0] + o[0], funnel[1] + o[1], funnel[2] + o[2]];
-        let Some((Block::ContentObserver, info)) = block_at(lv, pos) else {
-            continue;
-        };
-        let (Some(t), Some(f)) = (info.target, info.facing) else {
-            continue;
-        };
-        if observe::target_pos(pos, t, f) != funnel {
-            continue;
-        }
-        let filter = with_world(|w| w.dims[dim].detectors.filter(pos).cloned()).flatten();
-        if !filters::passes_item(&*lv.host, filter.as_ref(), item) {
-            continue;
-        }
-        let effect = with_world(|w| {
-            w.dims[dim]
-                .detectors
-                .observer_look(pos, Some(4), now, info.powered)
-        })
-        .unwrap_or_default();
-        if effect.power_on {
-            lv.set_flags(pos, &[("powered", true)], update_all());
-            lv.update_signal_neighbors(pos);
-        }
-    }
-}
-
 pub(crate) fn observed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Observed {
     let Some((Block::ContentObserver, info)) = block_at(lv, pos) else {
         return Observed::default();
@@ -304,9 +270,12 @@ pub(super) fn seen_at(
 ) -> (Seen, Watch) {
     let dim = lv.dim;
     let mut seen = Seen {
+        // `new ItemStack(block)`: the block's item (a carrot crop's carrot, redstone wire's
+        // redstone), none for a block without one.
         block_item: if block_item {
             lv.block_state(target)
-                .and_then(|s| lv.state_name(s))
+                .and_then(|s| lv.host.block_item(s.block()))
+                .map(|k| k.id(&*lv.host))
                 .filter(|n| n != "minecraft:air")
         } else {
             None
@@ -807,4 +776,43 @@ fn redstone_state(d: &create_engine::world::Dimension, pos: [i32; 3], now: i64) 
         );
     }
     "no analog lever, smart observer, threshold switch or brass diode there".into()
+}
+
+/// `SmartObserverBlock.onFunnelTransfer`: the funnel at `funnel` moved `item`; each smart
+/// observer beside it looking at it, whose filter passes the item, is on for 4 ticks
+/// (`activate(4)`).
+pub(crate) fn funnel_transfer(lv: &mut ServerLevel<'_>, funnel: [i32; 3], item: &ItemStack) {
+    let dim = lv.dim;
+    let now = lv.game_time();
+    for d in Dir::ALL {
+        let o = d.offset();
+        let pos = [funnel[0] + o[0], funnel[1] + o[1], funnel[2] + o[2]];
+        let Some((Block::ContentObserver, info)) = block_at(lv, pos) else {
+            continue;
+        };
+        let (Some(t), Some(f)) = (info.target, info.facing) else {
+            continue;
+        };
+        if observe::target_pos(pos, t, f) != funnel {
+            continue;
+        }
+        let filter = with_world(|w| w.dims[dim].detectors.filter(pos).cloned()).flatten();
+        let passes = filters::Detector {
+            host: &*lv.host,
+            filter: filter.as_ref(),
+        };
+        if !create_engine::filter::Passes::item(&passes, &item_id(lv, item)) {
+            continue;
+        }
+        let on = with_world(|w| {
+            w.dims[dim]
+                .detectors
+                .observer_activate(pos, 4, now, info.powered)
+        })
+        .unwrap_or(false);
+        if on {
+            lv.set_flags(pos, &[("powered", true)], update_all());
+            lv.update_signal_neighbors(pos);
+        }
+    }
 }
