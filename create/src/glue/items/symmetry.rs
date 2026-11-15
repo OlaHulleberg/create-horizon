@@ -28,6 +28,9 @@ use mod_api::{
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
+/// The wand's item (its cooldown group).
+const WAND: &str = "create:wand_of_symmetry";
+
 pub(super) struct WandPart;
 
 #[mod_api::horizon_part]
@@ -37,6 +40,10 @@ impl ItemPart for WandPart {
     fn use_on(&self, host: HostSide, event: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
         match host {
             HostSide::Server(host) => {
+                // `getCooldowns().addCooldown(this, 5)`.
+                if let Some(player) = host.player(event.player) {
+                    player.set_item_cooldown(host, WAND, symmetry::COOLDOWN as i32);
+                }
                 clicked(host, event);
             }
             HostSide::Client(host) => {
@@ -53,6 +60,10 @@ impl ItemPart for WandPart {
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
         match host {
             HostSide::Server(host) => {
+                // `getCooldowns().addCooldown(this, 5)`.
+                if let Some(player) = host.player(event.player) {
+                    player.set_item_cooldown(host, WAND, symmetry::COOLDOWN as i32);
+                }
                 if let Some(player) = host.player(event.player)
                     && !sneaking(&*host, player)
                 {
@@ -238,6 +249,11 @@ pub(super) fn placed(host: &mut dyn ServerHost, event: &EntityPlaceEvent) -> Opt
         for copy in w.copies(pos) {
             let to = turned(&*lv.host, event.state, &copy.turns);
             let p = copy.pos;
+            // `world.isUnobstructed(block, position, ..)`: no entity that blocks building stands
+            // where the mirrored block would collide.
+            if obstructed(&lv, to, p) {
+                continue;
+            }
             if !creative {
                 let Some(here) = lv.block_state(p) else {
                     continue;
@@ -253,6 +269,42 @@ pub(super) fn placed(host: &mut dyn ServerHost, event: &EntityPlaceEvent) -> Opt
         }
     }
     Some(())
+}
+
+/// `Level.isUnobstructed`: an entity but an item, an experience orb or a spectator meets the
+/// collision shape `state` would have at `pos`.
+fn obstructed(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) -> bool {
+    let host = &*lv.host;
+    let Some(shape) = lv
+        .level
+        .block_shape(host, state, pos, mod_api::BlockShapeKind::Collision)
+    else {
+        return false;
+    };
+    if shape.is_empty() {
+        return false;
+    }
+    let lo = pos.map(f64::from);
+    let hi = pos.map(|v| f64::from(v) + 1.0);
+    lv.level
+        .entities_in(host, lo, hi)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| {
+            !matches!(
+                e.kind(host).as_deref(),
+                Some("minecraft:item" | "minecraft:experience_orb")
+            ) && e.spectator(host) != Some(true)
+        })
+        .any(|e| {
+            e.bounding_box(host).is_some_and(|[min, max]| {
+                shape.iter().any(|b| {
+                    (0..3).all(|a| {
+                        min[a] < f64::from(pos[a]) + b[a + 3] && max[a] > f64::from(pos[a]) + b[a]
+                    })
+                })
+            })
+        })
 }
 
 /// Whether `state` is air (`BlockState.isAir`).

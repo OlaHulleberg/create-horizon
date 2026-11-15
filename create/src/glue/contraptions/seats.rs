@@ -454,6 +454,25 @@ impl BlockPart for SeatPart {
         })?
     }
 
+    /// `SeatBlock.updateEntityAfterFallOn`: a player, an entity that can't sit (a shulker, a
+    /// thing not living) or a mob landing on a taken seat bounces off at 0.66 of its speed
+    /// (the game takes 0.8 of that for one not living); a mob that will sit doesn't bounce.
+    fn bounce_restitution(
+        &self,
+        _level: mod_api::LevelSide<'_>,
+        event: &mut mod_api::BounceRestitutionEvent<'_>,
+    ) {
+        // The part is on the seats and the turntable.
+        if event.state.block() == key(Block::Turntable) {
+            return;
+        }
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        let taken = SEATS.with_borrow(|s| s.keys().any(|(_, p)| *p == pos));
+        if !seat::can_sit(event.kind) || taken {
+            event.factor = event.factor.max(0.66);
+        }
+    }
+
     /// `BlockBehaviour.entityInside` for seats and turntables: the entity, for the level's tick.
     fn entity_inside(&self, _level: &mut dyn LevelRandomHost, event: &mut EntityInsideEvent<'_>) {
         let Some(dim) = level_index(event.dimension) else {
