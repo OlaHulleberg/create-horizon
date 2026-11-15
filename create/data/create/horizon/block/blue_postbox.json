@@ -1,5 +1,5 @@
 {
-  "template": "minecraft:heavy_core",
+  "template": "minecraft:waxed_copper_grate",
   "properties": {
     "hardness": 2.0,
     "explosion_resistance": 2.0,
@@ -7,9 +7,6 @@
     "sounds": "minecraft:stripped_spruce_wood"
   },
   "item": true,
-  "components": {
-    "minecraft:rarity": "common"
-  },
   "shapes": {
     "properties": [
       "facing"

@@ -1644,11 +1644,14 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
         ));
     }
     // FrogportBlock (`SharedProperties::softMetal`, netherite's sounds): no properties of its
-    // own, so heavy core's waterlogging carries AllShapes.PACKAGE_PORT. Its packages, filter and
-    // chain are the native mod's.
+    // own, so a waterloggable template carries AllShapes.PACKAGE_PORT. Waxed copper grate's: a
+    // full block's legacy solidity (`isSolid`, which a declared block keeps from its template),
+    // as Create's shape gives (its bounds average over 0.73 of a block), so a wall sign, banner
+    // or torch stays on it; no occlusion, so light passes. Its packages, filter and chain are
+    // the native mod's.
     if n == "package_frogport" {
         return Some(declared(
-            "minecraft:heavy_core",
+            "minecraft:waxed_copper_grate",
             "minecraft:netherite_block",
             true,
             Some(by_property(
@@ -1656,7 +1659,8 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
                 bools,
                 &[[0., 0., 0., 16., 4., 16.], [2., 2., 2., 14., 14., 14.]],
             )),
-            own(&[("waterlogged", bools)]),
+            // `waterlogged` is the template's own.
+            own(&[]),
             true,
         ));
     }
@@ -1678,18 +1682,15 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
         ));
     }
     // PostboxBlock (`SharedProperties::wooden`): facing, `open` (its menu is open), waterlogged;
-    // AllShapes.POSTBOX (the same box turned any way).
+    // AllShapes.POSTBOX (the same box turned any way), solid as the frogport (its bounds
+    // average 0.875 of a block), on the same template.
     if dyed(n, "postbox").is_some() {
         return Some(declared(
-            "minecraft:heavy_core",
+            "minecraft:waxed_copper_grate",
             "minecraft:stripped_spruce_wood",
             false,
             Some(by_horizontal(&[[2., 0., 0., 14., 14., 16.]])),
-            own(&[
-                ("facing", horizontal),
-                ("open", bools),
-                ("waterlogged", bools),
-            ]),
+            own(&[("facing", horizontal), ("open", bools)]),
             true,
         ));
     }
@@ -2123,11 +2124,7 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
                 [2., 4., 0., 14., 11., 5.8],
                 [2., 6., 0., 14., 9., 7.8],
             ])),
-            own(&[
-                ("facing", horizontal),
-                ("open", bools),
-                ("waterlogged", bools),
-            ]),
+            own(&[("facing", horizontal), ("open", bools)]),
             true,
         ));
     }

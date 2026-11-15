@@ -1,5 +1,5 @@
 {
-  "template": "minecraft:heavy_core",
+  "template": "minecraft:waxed_copper_grate",
   "properties": {
     "hardness": 3.0,
     "explosion_resistance": 6.0,
@@ -7,9 +7,6 @@
     "sounds": "minecraft:netherite_block"
   },
   "item": true,
-  "components": {
-    "minecraft:rarity": "common"
-  },
   "shapes": {
     "properties": [
       "waterlogged"
