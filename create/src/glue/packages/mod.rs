@@ -731,6 +731,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     for (_, pos, was, is) in changes {
         block_moved(lv, dim, pos, was, is);
     }
+    automation::reconcile(lv);
     // What comparators read of packagers and ports that changed (since the last tick too: a
     // menu took or gave a package) is looked at after this tick.
     let mut touched = with(dim, |pk| std::mem::take(&mut pk.changed));

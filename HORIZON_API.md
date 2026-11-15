@@ -84,8 +84,8 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   a portable storage interface
   offers its contraption's storage to Create's chutes and funnels only, not to hoppers. A close/abort callback
   on `Transaction` (or a journal for mod state) would close them. (Packagers and package ports mirror their
-  boxes into block entity slots, which the game journals, and learn of automation's moves at the commit:
-  `glue/packages/automation.rs`.)
+  boxes into block entity slots, which the game journals, and learn of automation's moves at their level's next
+  tick, as a handler's own slot writes give no `contents_changed`: `glue/packages/automation.rs`.)
 - **A notice for any container's contents changing.** `contents_changed` reaches only the changed block's own
   parts, so a chute under a vanilla container and a frogport above an inventory re-check on a timer instead.
 - **An empty stack from `menu_quick_move`**: the clicked slot keeps what is left of `stack`, and an

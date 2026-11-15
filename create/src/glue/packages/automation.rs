@@ -8,10 +8,13 @@
 //! Their state is the engine's, which a transaction cannot roll back, so what automation sees
 //! lives in the block entity's slots, which the game journals: a packager's slot 0 mirrors its
 //! held box and its slot 1 takes a package put in; a port's 18 slots mirror its packages. The
-//! mirrors are written whenever the engine's state changes (`sync`); at a commit
-//! (`contents_changed`) the engine learns what automation did: a packager's emptied slot 0 is
-//! its box taken (`extractItem`), a package in its slot 1 is unpacked (`unwrapBox`); a port's
-//! slots that differ from what was last written are its packages now. A broken block drops what
+//! mirrors are written whenever the engine's state changes (`sync`). A handler's slot writes
+//! give no `contents_changed` (the game gives none for a mod's own storage writes), so the
+//! blocks a handler wrote are looked at again at the start of their level's next tick
+//! (`reconcile`), when the move has committed or been rolled back, and the engine learns what
+//! automation did: a packager's emptied slot 0 is its box taken (`extractItem`), a package in
+//! its slot 1 is unpacked (`unwrapBox`); a port's slots that differ from what was last written
+//! are its packages now. A broken block drops what
 //! its slots hold, so the engine drops only what is not mirrored.
 
 use super::{Block, ServerLevel, body, center, drop_stack, inv, unwrap, with};
@@ -36,11 +39,47 @@ thread_local! {
     static MIRRORED: RefCell<HashMap<At, Option<ItemStack>>> = RefCell::new(HashMap::new());
     /// What each port's slots were last set to.
     static PORTS: RefCell<HashMap<At, Vec<Option<ItemStack>>>> = RefCell::new(HashMap::new());
+    /// The packagers and ports a handler wrote since their level last looked (`reconcile`).
+    static WRITTEN: RefCell<Vec<At>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Marks the block at `pos` as written by a handler, to be looked at in `reconcile`.
+fn written(dim: usize, pos: [i32; 3]) {
+    WRITTEN.with_borrow_mut(|w| {
+        if !w.contains(&(dim, pos)) {
+            w.push((dim, pos));
+        }
+    });
+}
+
+/// What automation did to this level's packagers and ports since the last tick (their
+/// handlers' writes, committed or rolled back by now).
+pub(super) fn reconcile(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    if WRITTEN.with_borrow(Vec::is_empty) {
+        return;
+    }
+    let mine: Vec<[i32; 3]> = WRITTEN.with_borrow_mut(|w| {
+        let mine = w.iter().filter(|x| x.0 == dim).map(|x| x.1).collect();
+        w.retain(|x| x.0 != dim);
+        mine
+    });
+    for pos in mine {
+        let (packager, port) = with(dim, |pk| {
+            (pk.packagers.contains_key(&pos), pk.ports.contains_key(&pos))
+        });
+        if packager {
+            contents_changed(lv, pos);
+        } else if port {
+            port_contents_changed(lv, pos);
+        }
+    }
 }
 
 pub(super) fn reset() {
     MIRRORED.with_borrow_mut(HashMap::clear);
     PORTS.with_borrow_mut(HashMap::clear);
+    WRITTEN.with_borrow_mut(Vec::clear);
 }
 
 /// The packagers' slots (two) and the ports' (18), reached by no face through the game's own
@@ -353,7 +392,11 @@ impl ResourceHandler<ItemResource> for PortItems {
         let Some(e) = host.block_entity(self.level, self.pos) else {
             return 0;
         };
-        u32::from(e.set_item_slot(host, tx, index as u32, Some(stack)).is_ok())
+        let ok = e.set_item_slot(host, tx, index as u32, Some(stack)).is_ok();
+        if ok {
+            written(self.dim, self.pos);
+        }
+        u32::from(ok)
     }
     fn extract(
         &self,
@@ -386,7 +429,10 @@ impl ResourceHandler<ItemResource> for PortItems {
         };
         let n = held.count().min(amount);
         match e.set_item_slot(host, tx, index as u32, held.shrink(n)) {
-            Ok(_) => n,
+            Ok(_) => {
+                written(self.dim, self.pos);
+                n
+            }
             Err(_) => 0,
         }
     }
@@ -462,6 +508,7 @@ impl ResourceHandler<ItemResource> for PackagerItems {
             return 0;
         };
         if fits && e.set_item_slot(host, tx, INCOMING, Some(stack)).is_ok() {
+            written(self.dim, self.pos);
             1
         } else {
             0
@@ -490,7 +537,10 @@ impl ResourceHandler<ItemResource> for PackagerItems {
         };
         let n = held.count().min(amount);
         match e.set_item_slot(host, tx, HELD, held.shrink(n)) {
-            Ok(_) => n,
+            Ok(_) => {
+                written(self.dim, self.pos);
+                n
+            }
             Err(_) => 0,
         }
     }
