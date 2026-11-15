@@ -149,6 +149,7 @@ impl Subsystem for Trains {
         }
         if lv.game_time() % 10 == 0 {
             super::station_draw::refresh(lv);
+            super::station_draw::refresh_marks(lv);
         }
         visuals::tick(lv);
         riding::tick(lv);
@@ -214,6 +215,7 @@ impl Subsystem for Trains {
     fn synced_keys(&self) -> &'static [&'static str] {
         &[
             super::station_draw::KEY,
+            super::station_draw::MARK,
             super::tracks::CURVES,
             super::tracks::LIGHT,
             super::tracks::SIGNAL_STATE,

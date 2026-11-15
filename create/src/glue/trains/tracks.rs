@@ -892,7 +892,13 @@ impl BlockEntityPart for TrackEntity {
     ) -> Option<Compound> {
         let nbt = &event.entity.nbt;
         let mut out = Compound::new();
-        for key in [CURVES, LIGHT, SIGNAL_STATE, super::station_draw::KEY] {
+        for key in [
+            CURVES,
+            LIGHT,
+            SIGNAL_STATE,
+            super::station_draw::KEY,
+            super::station_draw::MARK,
+        ] {
             if let Some(v) = nbt.get(&key.into()) {
                 out.insert(key.into(), v.clone());
             }
@@ -928,10 +934,17 @@ impl BlockEntityPart for TrackEntity {
             super::station_draw::draw(host, event.draw, event.pos, &event.entity.nbt);
             return;
         }
+        if block == states::key(Block::TrackObserver) {
+            super::station_draw::draw_mark(host, event.draw, &event.entity.nbt);
+            return;
+        }
         if block != states::key(Block::Track) && block != states::key(Block::TrackSignal) {
             return;
         }
         let nbt = &event.entity.nbt;
+        if block == states::key(Block::TrackSignal) {
+            super::station_draw::draw_mark(host, event.draw, nbt);
+        }
         if let Some(Tag::Byte(light)) = nbt.get(&LIGHT.into()) {
             // `SignalRenderer`: Create's `indicator_on` partial, full bright, while red (and an
             // invalid signal's blink, the first 3 ticks of every 40); `indicator_off` else.

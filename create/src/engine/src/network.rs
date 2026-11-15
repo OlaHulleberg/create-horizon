@@ -486,6 +486,51 @@ impl Network {
     }
 
     /// A station or signal on both ways of its edge.
+    /// The way along the track a block beside it at `pos` looks, from the track block `track`
+    /// it targets, on even edge `edge`: the edge's way when the block is on its right, else
+    /// back (as this port puts a signal on a boundary's side), snapped to x or z.
+    fn facing(&self, edge: usize, track: [i32; 3], pos: [i32; 3]) -> [i32; 2] {
+        let d = self.graph.direction(edge, true);
+        let right = [-d[2], 0.0, d[0]];
+        let beside = [f64::from(pos[0] - track[0]), 0.0, f64::from(pos[2] - track[2])];
+        let s = if dot(right, beside) < 0.0 { -1.0 } else { 1.0 };
+        [(d[0] * s).round() as i32, (d[2] * s).round() as i32]
+    }
+
+    /// `TrackTargetingBehaviour.render` for the signal at `pos`: its track block, the way it
+    /// looks, and how its marker shows (`SignalBoundary.getOverlayFor`: the first block of the
+    /// boundary's first side with one draws it, `DUAL` when the other side has blocks too; the
+    /// rest skip). None when it is on no boundary or skips.
+    pub fn signal_marker(
+        &self,
+        tracks: &HashMap<[i32; 3], TrackShape>,
+        pos: [i32; 3],
+    ) -> Option<([i32; 3], [i32; 2], bool)> {
+        let track = target_track(tracks, pos)?;
+        let b = self
+            .signals
+            .iter()
+            .find(|b| b.blocks.iter().any(|s| s.contains(&pos)))?;
+        let first = if b.blocks[0].is_empty() { 1 } else { 0 };
+        if b.blocks[first].first() != Some(&pos) {
+            return None;
+        }
+        let dual = first == 0 && !b.blocks[1].is_empty();
+        Some((track, self.facing(b.at.edge, track, pos), dual))
+    }
+
+    /// `TrackTargetingBehaviour.render` for the track observer at `pos`: its track block and the
+    /// way it looks.
+    pub fn observer_marker(
+        &self,
+        tracks: &HashMap<[i32; 3], TrackShape>,
+        pos: [i32; 3],
+    ) -> Option<([i32; 3], [i32; 2])> {
+        let track = target_track(tracks, pos)?;
+        let (_, at) = self.observers.iter().find(|o| o.0 == pos)?;
+        Some((track, self.facing(at.edge, track, pos)))
+    }
+
     fn mark(&mut self, loc: Location, mark: Mark) {
         let length = self.graph.length(loc.edge);
         self.marks[loc.edge].push((loc.position, mark));

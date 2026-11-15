@@ -29,7 +29,24 @@ pub const FLAG_OFF: &str = "create:block/track_station/flag_off";
 pub const FLAG_ASSEMBLE: &str = "create:block/track_station/flag_assemble";
 pub const OVERLAY: &str = "create:block/track_overlay/station";
 pub const ASSEMBLING: &str = "create:block/track_overlay/assembling";
-pub const MODELS: [&str; 5] = [FLAG_ON, FLAG_OFF, FLAG_ASSEMBLE, OVERLAY, ASSEMBLING];
+pub const SIGNAL: &str = "create:block/track_overlay/signal";
+pub const SIGNAL_DUAL: &str = "create:block/track_overlay/signal_dual";
+pub const OBSERVER: &str = "create:block/track_overlay/observer";
+pub const MODELS: [&str; 8] = [
+    FLAG_ON,
+    FLAG_OFF,
+    FLAG_ASSEMBLE,
+    OVERLAY,
+    ASSEMBLING,
+    SIGNAL,
+    SIGNAL_DUAL,
+    OBSERVER,
+];
+
+/// The block entity data key of a signal's or track observer's marker on its track: its track
+/// block from it, the way it looks, the marker (0 signal, 1 dual signal, 2 observer) and the
+/// light it is drawn with.
+pub const MARK: &str = "TrackMark";
 
 /// What a station shows, as its data carries it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -103,6 +120,8 @@ thread_local! {
     /// direction.
     static SENT: RefCell<HashMap<At, Shown>> = RefCell::new(HashMap::new());
     static DIRS: RefCell<HashMap<At, [i32; 2]>> = RefCell::new(HashMap::new());
+    /// The server's: each signal's and observer's marker as last written.
+    static MARKS: RefCell<HashMap<At, Option<Marker>>> = RefCell::new(HashMap::new());
     /// The client's flags (`StationBlockEntity.flag`): value and target as of `at` (animation
     /// ticks).
     static FLAGS: RefCell<HashMap<[i32; 3], Flag>> = RefCell::new(HashMap::new());
@@ -120,6 +139,96 @@ struct Flag {
 pub fn forget() {
     SENT.with_borrow_mut(HashMap::clear);
     DIRS.with_borrow_mut(HashMap::clear);
+    MARKS.with_borrow_mut(HashMap::clear);
+}
+
+/// A marker as the data carries it: track offset, way, kind, light.
+type Marker = ([i32; 3], [i32; 2], u8, i32);
+
+/// Each signal's and track observer's marker (`TrackTargetingBehaviour.render` from
+/// `SignalRenderer`, `TrackObserverRenderer`) written into its data where it changed; a signal
+/// that skips (`OverlayState.SKIP`) carries none.
+pub fn refresh_marks(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let marks: Vec<([i32; 3], Option<([i32; 3], [i32; 2], u8)>)> = with_world(|w| {
+        let r = &w.dims[dim].railway;
+        let signals = r.signals.keys().map(|p| {
+            let m = r
+                .net
+                .signal_marker(&r.tracks, *p)
+                .map(|(t, d, dual)| (t, d, u8::from(dual)));
+            (*p, m)
+        });
+        let observers = r.observers.keys().map(|p| {
+            let m = r.net.observer_marker(&r.tracks, *p).map(|(t, d)| (t, d, 2));
+            (*p, m)
+        });
+        signals.chain(observers).collect()
+    })
+    .unwrap_or_default();
+    for (pos, m) in marks {
+        if !lv.is_loaded(pos) {
+            continue;
+        }
+        let shown: Option<Marker> = m.map(|(t, d, k)| {
+            let light = light_near(lv, t, true) as i32;
+            ([t[0] - pos[0], t[1] - pos[1], t[2] - pos[2]], d, k, light)
+        });
+        if MARKS.with_borrow(|s| s.get(&(dim, pos)) == Some(&shown)) {
+            continue;
+        }
+        let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+            continue;
+        };
+        let value = match shown {
+            Some((t, d, k, l)) => Tag::compound([
+                ("t", Tag::IntArray(t.to_vec())),
+                ("d", Tag::IntArray(d.to_vec())),
+                ("k", Tag::Byte(k as i8)),
+                ("l", Tag::Int(l)),
+            ]),
+            None => crate::glue::kinetics::absent(),
+        };
+        let data = Compound::from([(MARK.into(), value)]);
+        if entity.merge_data(&mut *lv.host, data).is_ok() {
+            MARKS.with_borrow_mut(|s| s.insert((dim, pos), shown));
+        }
+    }
+}
+
+/// A signal's or observer's marker on its track, from its data (`MARK`).
+pub fn draw_mark(host: &dyn ClientHost, draw: &mut dyn BlockEntityDrawContext, nbt: &Compound) {
+    let Some(Tag::Compound(c)) = crate::glue::kinetics::synced(nbt, MARK) else {
+        return;
+    };
+    let ints = |k: &str| match c.get(&k.into()) {
+        Some(Tag::IntArray(v)) => v.clone(),
+        _ => Vec::new(),
+    };
+    let (t, d) = (ints("t"), ints("d"));
+    let (&[tx, ty, tz], &[dx, dz]) = (&t[..], &d[..]) else {
+        return;
+    };
+    let name = match c.get(&"k".into()) {
+        Some(Tag::Byte(1)) => SIGNAL_DUAL,
+        Some(Tag::Byte(2)) => OBSERVER,
+        _ => SIGNAL,
+    };
+    let Some(m) = model(host, name) else {
+        return;
+    };
+    let lit = draw.light();
+    if let Some(Tag::Int(l)) = c.get(&"l".into()) {
+        draw.set_light(*l as u32);
+    }
+    draw.push();
+    draw.translate([tx as f32, ty as f32, tz as f32]);
+    // `prepareTrackOverlay` on straight track: turned to the way it looks (`getModelAngles`).
+    let yaw = (dx as f32).atan2(dz as f32).to_degrees();
+    draw.rotate_about([0.0, 1.0, 0.0], yaw, [0.5, 0.0, 0.5]);
+    let _ = draw.terrain_model(m, mod_api::TerrainModelOptions::default());
+    draw.pop();
+    draw.set_light(lit);
 }
 
 pub fn client_reset() {
