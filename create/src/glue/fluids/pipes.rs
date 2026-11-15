@@ -90,9 +90,11 @@ pub(super) fn tick_pipes(lv: &mut ServerLevel<'_>) {
     let changed =
         with_world(|w| std::mem::replace(&mut w.dims[dim].pipes_changed, false)).unwrap_or(false);
     let pumps = with_world(|w| w.dims[dim].pumping.clone()).unwrap_or_default();
-    for pos in pumps {
+    for &pos in &pumps {
         pump(lv, pos, changed);
     }
+    // A pump that stopped loses its flows (`wipePressure`).
+    super::flows::keep_only(dim, &pumps);
 }
 
 fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
@@ -105,18 +107,33 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
         return;
     };
     if changed || !pump.found {
-        pump.pull = fluids::reach(pos, facing.opposite(), speed, |p| pipe_cell(lv, p));
-        pump.push = fluids::reach(pos, facing, speed, |p| pipe_cell(lv, p));
-        let glass = |p| info_at(lv, p).is_some_and(|(b, _)| b == Block::GlassFluidPipe);
-        pump.shown_pull =
-            fluids::shown_on_the_way(pos, facing.opposite(), |p| pipe_cell(lv, p), glass);
-        pump.shown_push = fluids::shown_on_the_way(pos, facing, |p| pipe_cell(lv, p), glass);
+        let pull = fluids::reach(pos, facing.opposite(), speed, |p| pipe_cell(lv, p));
+        let push = fluids::reach(pos, facing, speed, |p| pipe_cell(lv, p));
+        let ways_pull = fluids::ways(pos, facing.opposite(), |p| pipe_cell(lv, p));
+        let ways_push = fluids::ways(pos, facing, |p| pipe_cell(lv, p));
+        // Pipes changed elsewhere leave this pump's network as it was.
+        let same = pump.found
+            && pull == pump.pull
+            && push == pump.push
+            && ways_pull == pump.ways_pull
+            && ways_push == pump.ways_push;
+        if !pump.found {
+            let way = ways_pull.iter().chain(&ways_push);
+            let pipes = way.flat_map(|(_, w)| w.iter().map(|s| s.pos));
+            super::flows::found(dim, pipes.chain([pos]));
+        }
+        if !same {
+            (pump.pull, pump.push) = (pull, push);
+            (pump.ways_pull, pump.ways_push) = (ways_pull, ways_push);
+            // `wipePressure`, `FluidNetwork.reset`: the flows start again from the pump.
+            pump.pumped = 0;
+            super::flows::clear(dim, pos);
+        }
         pump.found = true;
-        // `FluidNetwork.reset`: the flows start again from the pump.
-        pump.pumped = 0;
     }
     // The first end behind it no closed valve shuts off.
     let from = pump.pull.iter().find(|e| !e.blocked).copied();
+    let mut flowing = false;
     if let (Some(from), false) = (from, pump.push.is_empty()) {
         let amount = fluids::transfer_speed(from.pressure);
         // What the source can give this tick: a creative tank or a hose pulley's, else...
@@ -167,6 +184,28 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
         };
         // Smart pipes on the way let only their filter's fluid through.
         let offer = offer.filter(|(f, _)| from.passes(*f));
+        if let Some((fluid, _)) = offer {
+            flowing = true;
+            // Flows of another fluid, or none yet: they start from the source again.
+            if super::flows::running(dim, pos) != Some(fluid) {
+                pump.pumped = 0;
+                let pull = pump
+                    .ways_pull
+                    .iter()
+                    .find(|(end, _)| *end == from.pos)
+                    .map_or(&[][..], |(_, w)| w.as_slice());
+                let push: Vec<(fluids::End, Vec<fluids::Step>)> = pump
+                    .push
+                    .iter()
+                    .filter_map(|e| {
+                        let way = pump.ways_push.iter().find(|(end, _)| *end == e.pos)?;
+                        Some((*e, way.1.clone()))
+                    })
+                    .collect();
+                let flows = fluids::flows(pos, facing, speed, &from, pull, &push, fluid);
+                super::flows::start(dim, pos, fluid, flows, lv.game_time());
+            }
+        }
         if let Some((fluid, n)) = offer {
             // The flows on the way advance (`manageFlows`); the ends in front they have
             // reached take an equal share each (`FluidNetwork.tick`'s `availableOutputs`).
@@ -178,39 +217,13 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
                 to.passes(fluid) && pumped >= fluids::arrival_ticks(&from, to, speed)
             };
             let count = push.iter().filter(reaches).count();
-            let mut filled = Vec::new();
             let moved = fluids::share(count, n, |k, give| {
                 let Some(to) = push.iter().filter(reaches).nth(k) else {
                     return 0;
                 };
-                let took = fill_end(lv, to, fluid, give, &mut pump);
-                if took > 0 {
-                    filled.push(to.pos);
-                }
-                took
+                fill_end(lv, to, fluid, give, &mut pump)
             });
             if moved > 0 {
-                // The glass pipes on the way show the fluid going through.
-                let ways = pump
-                    .shown_pull
-                    .iter()
-                    .filter(|(end, _)| *end == from.pos)
-                    .chain(
-                        pump.shown_push
-                            .iter()
-                            .filter(|(end, _)| filled.contains(end)),
-                    );
-                let now = lv.game_time();
-                for (_, way) in ways {
-                    super::glass::flowing(dim, way, fluid, now);
-                }
-                // Open ends pour the fluid out, or draw it in (`PipeConnection.spawnParticles`).
-                if !from.tank {
-                    pour(lv, from.pos, fluid, true);
-                }
-                for end in push.iter().filter(|e| !e.tank && filled.contains(&e.pos)) {
-                    pour(lv, end.pos, fluid, false);
-                }
                 if special.is_some() {
                     plumbing::take(lv, from.pos, moved);
                 } else if from_basin {
@@ -233,6 +246,11 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
             }
             pump.push = push;
         }
+    }
+    // The source gives no more: the flows recede from it, and start again from nothing.
+    if !flowing {
+        pump.pumped = 0;
+        super::flows::stop(dim, pos, lv.game_time());
     }
     with_world(|w| {
         w.dims[dim].pumps.insert(pos, pump);
@@ -283,24 +301,37 @@ fn fill_end(
         })
         .unwrap_or(0);
     }
-    // `OpenEndedPipe.provideFluidToSpace`: a bucket's worth becomes a source.
-    let have = pump.out.filter(|o| o.0 == fluid).map_or(0, |o| o.1);
-    let total = have + n;
-    if !fluid.placeable() {
-        // Milk, tea and potions have no block: the open end takes a millibucket at a time and
-        // lets it act on what is in front (`OpenEndFluidHandler.fill`, `OpenPipeEffectHandler`).
-        if !replaceable(lv, to.pos) {
+    // `OpenEndFluidHandler.fill`, `provideFluidToSpace`: only into space that can be replaced,
+    // not into a source, and into another fluid only to turn it (`handlePipeSpillCollision`).
+    if !replaceable(lv, to.pos) {
+        return 0;
+    }
+    if let Some((there, source)) = world_fluid(lv, to.pos) {
+        if there != fluid {
+            if let Some(turned) = create_engine::open_end::spill(fluid, there, source)
+                .and_then(|b| state_with(lv, b, &[]))
+            {
+                lv.set_state(to.pos, turned, all());
+            }
             return 0;
         }
-        open_effect(lv, to, fluid);
-        return n.min(1);
+        if source {
+            return 0;
+        }
     }
+    let down = to.face == Dir::Down;
+    // A fluid with no block (milk, tea, potions) is taken a drop at a time, for its effect.
+    if let Some(took) = create_engine::open_end::takes_without_block(fluid, n) {
+        super::open_end::apply(lv, to.pos, down, fluid);
+        return took;
+    }
+    let have = pump.out.filter(|o| o.0 == fluid).map_or(0, |o| o.1);
+    let total = have + n;
+    super::open_end::apply(lv, to.pos, down, fluid);
+    // A bucket's worth becomes a source.
     if total < BUCKET {
         pump.out = Some((fluid, total));
         return n;
-    }
-    if !replaceable(lv, to.pos) {
-        return 0;
     }
     if let Some(src) = state_with(lv, fluid.id(), &[("level", "0")]) {
         lv.set_state(to.pos, src, all());
@@ -397,185 +428,6 @@ pub(super) fn tick_tank_states(lv: &mut ServerLevel<'_>) {
             && next != state
         {
             lv.set_state(pos, next, UPDATE_CLIENTS);
-        }
-    }
-}
-
-/// `minecraft:block`, for the fluid poured at open pipe ends.
-static BLOCK_PARTICLE: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
-
-pub(super) fn register(r: &mut dyn mod_api::Registrar) {
-    let _ = BLOCK_PARTICLE.set(r.particle_key("minecraft:block"));
-}
-
-thread_local! {
-    static RNG: std::cell::RefCell<create_engine::processing::Rng> =
-        std::cell::RefCell::new(create_engine::processing::Rng::new(0xF10D));
-}
-
-/// `FluidFX.spawnPouringLiquid` at the pipe ending in the open space `open`: a drop of `fluid`
-/// (its block's particle, as Create's `FluidStackParticle` draws its still texture) leaving the
-/// rim, or flying back into the pipe when it is drawn in (`inbound`). Fluids with no block (milk,
-/// potions, tea) show none.
-fn pour(lv: &mut ServerLevel<'_>, open: [i32; 3], fluid: Fluid, inbound: bool) {
-    let Some(&key) = BLOCK_PARTICLE.get() else {
-        return;
-    };
-    if !fluid.placeable() {
-        return;
-    }
-    // The pipe whose side opens onto the space, and that side.
-    let Some((pipe, side)) = Dir::ALL.into_iter().find_map(|d| {
-        let o = d.offset();
-        let q = [open[0] + o[0], open[1] + o[1], open[2] + o[2]];
-        (pipe_sides_at(lv, q) & d.opposite().bit() != 0).then_some((q, d.opposite()))
-    }) else {
-        return;
-    };
-    let Some(state) = state_with(lv, fluid.id(), &[("level", "0")]) else {
-        return;
-    };
-    let r = || RNG.with_borrow_mut(|r| f64::from(r.next_float()));
-    let dir = side.offset().map(f64::from);
-    // `offsetRandomly(ZERO, r, RIM_RADIUS * .75)` across the side, then out to the rim.
-    let rim = (1.0 / 4.0 + 1.0 / 64.0) * 0.75;
-    let out = 0.5 + r() / 4.0;
-    let mut v = [0.0; 3];
-    for i in 0..3 {
-        let across = (r() - 0.5) * 2.0 * rim;
-        v[i] = if dir[i] != 0.0 { 0.0 } else { across } + dir[i] * out;
-    }
-    let mut m = v.map(|c| c / 4.0);
-    let center = pipe.map(|c| f64::from(c) + 0.5);
-    let mut at = [0, 1, 2].map(|i| center[i] + v[i]);
-    if inbound {
-        at = [0, 1, 2].map(|i| at[i] + m[i]);
-        m = [0, 1, 2].map(|i| (center[i] + dir[i] * 0.5 - at[i]) / 16.0);
-    }
-    at[1] -= 1.0 / 16.0;
-    let options = mod_api::ParticleOptions::simple(key);
-    let _ = lv
-        .level
-        .send_particles(&mut *lv.host, &options, Some(state), at, m, 1.0, 0);
-}
-
-/// Vanilla's undead (`#minecraft:undead`, which the mod API cannot read for entities): healing
-/// hurts them and harming heals them.
-const UNDEAD: [&str; 17] = [
-    "minecraft:skeleton",
-    "minecraft:stray",
-    "minecraft:wither_skeleton",
-    "minecraft:skeleton_horse",
-    "minecraft:bogged",
-    "minecraft:parched",
-    "minecraft:zombie_horse",
-    "minecraft:camel_husk",
-    "minecraft:zombie",
-    "minecraft:zombie_villager",
-    "minecraft:zombified_piglin",
-    "minecraft:zoglin",
-    "minecraft:drowned",
-    "minecraft:husk",
-    "minecraft:zombie_nautilus",
-    "minecraft:wither",
-    "minecraft:phantom",
-];
-
-/// A potion's effects (`PotionContents.forEachEffect`): its potion's, then its custom ones as
-/// saved (`MobEffectInstance`'s codec: id, amplifier, duration, ambient, show_particles,
-/// show_icon).
-fn potion_effects(
-    c: &create_engine::potion::Contents,
-) -> Vec<(String, i32, i32, bool, bool, bool)> {
-    use mod_api::Tag;
-    let mut out: Vec<_> = c
-        .potion
-        .as_deref()
-        .and_then(create_engine::potion::registered)
-        .map_or(&[][..], |i| create_engine::potion::POTIONS[i].2)
-        .iter()
-        .map(|(e, amp, d)| (format!("minecraft:{e}"), *amp, *d, false, true, true))
-        .collect();
-    let Ok((Tag::List(custom), _)) = Tag::from_network_bytes(&c.custom_effects, None) else {
-        return out;
-    };
-    let int = |t: Option<&Tag>, or: i32| match t {
-        Some(Tag::Byte(v)) => i32::from(*v),
-        Some(Tag::Short(v)) => i32::from(*v),
-        Some(Tag::Int(v)) => *v,
-        _ => or,
-    };
-    for e in custom {
-        let Tag::Compound(e) = e else { continue };
-        let Some(Tag::String(id)) = e.get(&"id".into()) else {
-            continue;
-        };
-        let visible = int(e.get(&"show_particles".into()), 1) != 0;
-        out.push((
-            id.to_string_lossy(),
-            int(e.get(&"amplifier".into()), 0),
-            int(e.get(&"duration".into()), 0),
-            int(e.get(&"ambient".into()), 0) != 0,
-            visible,
-            int(e.get(&"show_icon".into()), i32::from(visible)) != 0,
-        ));
-    }
-    out
-}
-
-/// What an open end letting out a fluid without a block does to the living in front
-/// (`OpenEndedPipe`'s `aoe`: its space and the one below, two below from a pipe facing down):
-/// a potion gives each its effects, instant ones at half strength (`PotionEffectHandler`);
-/// builder's tea gives haste every 5 ticks (`TeaEffectHandler`); milk cures every 5 ticks
-/// (`MilkEffectHandler`).
-fn open_effect(lv: &mut ServerLevel<'_>, to: &fluids::End, fluid: Fluid) {
-    let p = to.pos.map(f64::from);
-    let below = if to.face == Dir::Down { 2.0 } else { 1.0 };
-    let (lo, hi) = (
-        [p[0], p[1] - below, p[2]],
-        [p[0] + 1.0, p[1] + 1.0, p[2] + 1.0],
-    );
-    let every_fifth = lv.game_time() % 5 == 0;
-    let effects = match fluid {
-        Fluid::Potion(potion) => potion_effects(potion.contents),
-        Fluid::Tea if every_fifth => vec![("minecraft:haste".into(), 0, 21, false, false, false)],
-        Fluid::Milk if every_fifth => Vec::new(),
-        _ => return,
-    };
-    let found = lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default();
-    for e in found {
-        let Some(living) = lv.host.living(e) else {
-            continue;
-        };
-        if fluid == Fluid::Milk {
-            living.remove_all_effects(&mut *lv.host);
-            continue;
-        }
-        for (id, amp, duration, ambient, visible, icon) in &effects {
-            let short = id.strip_prefix("minecraft:").unwrap_or(id);
-            if matches!(short, "instant_health" | "instant_damage") {
-                // `HealOrHarmMobEffect.applyInstantenousEffect` at 0.5.
-                let undead = e
-                    .kind(&*lv.host)
-                    .is_some_and(|k| UNDEAD.contains(&k.as_str()));
-                if (short == "instant_health") != undead {
-                    living.heal(&mut *lv.host, (4 << amp.clamp(&0, &30)) as f32 * 0.5);
-                } else {
-                    let _ = e.hurt(
-                        &mut *lv.host,
-                        "minecraft:magic",
-                        (6 << amp.clamp(&0, &30)) as f32 * 0.5,
-                        None,
-                        None,
-                    );
-                }
-                continue;
-            }
-            if let Some(key) = lv.host.effect_key(id) {
-                let effect =
-                    mod_api::ActiveEffect::new(key, *duration, *amp, *ambient, *visible, *icon);
-                living.add_effect(&mut *lv.host, &effect);
-            }
         }
     }
 }

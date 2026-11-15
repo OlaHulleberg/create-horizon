@@ -172,6 +172,12 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   own view shows no flames, but lava still sets them alight for a tick, so others see flames on them.
 - **A particle drawn as its own quads** (`SteamJetParticle.render`'s four quads turned along the jet): steam
   engines' and whistles' steam jets are Create's sprites on a billboard.
+- **A tinted particle with a block sprite and an exact velocity** (Create's `FluidStackParticle`: the fluid's
+  still sprite, its tint times 0.8, the spawn's velocity, gravity and collision): the item particle
+  (`ParticleOptions::item`) moves as Create's does but is drawn untinted, and the block particle takes a tint
+  but its constructor randomises the velocity (`TerrainParticle`), so pipes pour and drip milk, tea, honey,
+  chocolate and lava as Create does, and water and potions in their colour but scattered (`glue/fluids/flows.rs`).
+  A tint on `ParticleOptions::item` (`rCol/gCol/bCol`) would close it.
 - **A screen layout for a mod menu opened without a block** (`player_open_mod_menu` with no `pos`: the
   client's `open_native_screen` returns without a `Screen`): the filters' and the schedule's screens are the mod's own screen,
   and clicking an inventory slot carries a ghost copy, not the stack (Create's menus carry the real one). A
@@ -211,9 +217,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   `PortableStorageInterfaceRenderer`) have no partial blocks yet, so they are drawn neither placed nor moving;
   actor heads on a moving structure are drawn at rest; an elevator contact's door control
   (`DoorControlBehaviour`) has no value box: elevators open their doors on every side.
-- Fluids: glass pipes show a steady stream, not its growth from the side it comes in
-  (`PipeConnection.Flow.progress`), and pipes don't drip on their rims while fluid passes; open pipe ends
-  pour only fluids with a block (Create's `FluidStackParticle` draws milk, tea and potions too).
 
 ## Not to send
 

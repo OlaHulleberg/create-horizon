@@ -13,17 +13,19 @@
 //! potion fluid carries its whole `potion_contents` (custom effects, colour and name:
 //! `create_engine::potion::Contents`) and its bottle, so potions of other contents never mix; the
 //! int arrays fluids are saved and sent in number a potion by its place in a list of keys kept
-//! beside them (`tank::Codes`, `fluid_keys`). An open end letting out a fluid without a block
-//! takes a millibucket at a time and gives the living in front a potion's effects, haste for tea
-//! or a cure for milk (`pipes::open_effect`, `OpenPipeEffectHandler`).
+//! beside them (`tank::Codes`, `fluid_keys`).
 //!
 //! Creative fluid tanks join into tanks as fluid tanks do (`creative_tanks` in the engine's
 //! world), each block giving the tank's fluid (`plumbing.creative`). Steam engines hiss and puff
-//! at each stroke (`engine`'s client tick), boiler gauges swing to their level (`client`), and
-//! open pipe ends pour what passes them (`pipes::pour`).
+//! at each stroke (`engine`'s client tick), and boiler gauges swing to their level (`client`).
+//!
+//! A pump's flows grow through its pipes connection by connection and recede from the source
+//! (`flows`): glass pipes draw them, pipes splash, drip and pour them on their clients. Open ends
+//! let out every fluid: a bucket's worth of one with a block becomes a source, one without (milk,
+//! tea, potions) is taken a drop at a time, and each gives what is in front its effect (a
+//! potion its contents' custom effects too: `open_end`).
 //!
 //! Left out:
-//! - A portable fluid interface's transfers: moving structures carry no tank's fluid.
 //! - The `FLUIDS` capability on Create's tanks, so other mods' handlers and Create's pumps reach
 //!   each other: the tanks' contents live in the engine's world, outside the game's transaction
 //!   journal, and a handler cannot learn that a transaction it wrote in was aborted to roll the
@@ -34,10 +36,11 @@ pub(crate) mod clicks;
 pub(crate) mod client;
 mod drawn;
 pub(crate) mod engine;
-mod glass;
+mod flows;
 mod goggles;
 mod lava;
 mod machines;
+mod open_end;
 mod pipes;
 mod place;
 mod plumbing;
@@ -114,7 +117,7 @@ pub struct Fluids;
 impl Subsystem for Fluids {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         client::register(r);
-        pipes::register(r);
+        flows::register(r);
         for block in place::PLACED {
             r.block_part(super::states::key(block), place::Placement);
         }
@@ -175,13 +178,18 @@ impl Subsystem for Fluids {
         machines::tick_spouts(lv);
         machines::tick_drains(lv);
         rims::tick(lv);
-        glass::send(lv);
+        flows::send(lv);
         drawn::send(lv);
         engine::tick(lv);
     }
 
     fn client_reset(&self) {
         client::reset();
+    }
+
+    /// The time clients' pipe flows are measured by (`flows`).
+    fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
+        flows::client_tick(&*host);
     }
 
     /// Honey and chocolate meeting lava (`AllFluids.registerFluidInteractions`), looked at when
@@ -198,7 +206,7 @@ impl Subsystem for Fluids {
 
     fn world_closed(&self) {
         lava::reset();
-        glass::reset();
+        flows::reset();
         place::reset();
         rims::reset();
         drawn::reset();
@@ -218,8 +226,8 @@ impl Subsystem for Fluids {
             engine::STEAM,
             plumbing::FILTER,
             plumbing::WHISTLE,
-            glass::FLOW,
-            glass::FLOW_FLUIDS,
+            flows::FLOW,
+            flows::FLOW_FLUIDS,
         ]
     }
 
