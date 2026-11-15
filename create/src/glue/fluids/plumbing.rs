@@ -105,7 +105,11 @@ pub(super) fn sink(
     }
     let mut hose = with_world(|w| w.dims[dim].plumbing.hoses.remove(&pos)).flatten()?;
     let now = lv.game_time();
-    let hot = lv.dimension == "minecraft:the_nether";
+    // `dimensionType().ultraWarm()`: water boils away there.
+    let hot = lv
+        .level
+        .dimension_type(&*lv.host)
+        .is_some_and(|t| t.water_evaporates);
     let took = hose.fill(&mut HoseLevel(lv), pos, fluid, amount, hot, now);
     put_hose(dim, pos, hose);
     if took > 0 {

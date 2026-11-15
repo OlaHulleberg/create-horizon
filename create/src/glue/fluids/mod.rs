@@ -20,10 +20,16 @@
 //! at each stroke (`engine`'s client tick), and boiler gauges swing to their level (`client`).
 //!
 //! A pump's flows grow through its pipes connection by connection and recede from the source
-//! (`flows`): glass pipes draw them, pipes splash, drip and pour them on their clients. Open ends
-//! let out every fluid: a bucket's worth of one with a block becomes a source, one without (milk,
-//! tea, potions) is taken a drop at a time, and each gives what is in front its effect (a
-//! potion its contents' custom effects too: `open_end`).
+//! (`flows`): glass pipes draw them, pipes splash, drip and pour them on their clients. Flows of
+//! two fluids meeting in a pipe break it into cobblestone, limestone or scoria
+//! (`handlePipeFlowCollision`). Each open end keeps its own tank (`OpenEndedPipe`, saved with
+//! its column): a bucket's worth of a fluid with a block becomes a source (water in a
+//! waterloggable block waterlogs it, and boils away where water evaporates), one without (milk,
+//! tea, potions) is taken a drop at a time, and each gives what is in front its effect (milk
+//! clears every effect, (removed); a potion its contents' custom
+//! effects too: `open_end`). Open ends draw from sources, waterlogged blocks, full cauldrons and
+//! beehives. Smart observers and threshold switches read the tanks of every fluid handler
+//! (`fluid_handler_tanks`) and an observer the flows in a pipe (`pipe_inflows`).
 //!
 //! Left out:
 //! - The `FLUIDS` capability on Create's tanks, so other mods' handlers and Create's pumps reach
@@ -68,6 +74,91 @@ pub(crate) use machines::insert_into_drain;
 /// water bucket, a water bottle.
 pub(crate) fn empties_water(item: &str) -> bool {
     clicks::emptying(item).is_some_and(|e| e.fluid == Fluid::Water)
+}
+
+/// What a smart observer looking at the pipe-like block at `pos` sees of its flows
+/// (`FluidTransportBehaviour.getFlow`: each side's inbound, complete flow); None for a block
+/// with no pipe behaviour (pipes, encased, glass and smart pipes, valves and pumps have one).
+pub(crate) fn pipe_inflows(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Vec<Fluid>> {
+    let (block, _) = info_at(lv, pos)?;
+    if !matches!(
+        block,
+        Block::FluidPipe
+            | Block::EncasedFluidPipe
+            | Block::GlassFluidPipe
+            | Block::SmartFluidPipe
+            | Block::FluidValve
+            | Block::MechanicalPump
+    ) {
+        return None;
+    }
+    let flows = flows::provided(lv.dim, pos, lv.game_time());
+    Some(flows.into_iter().map(|(_, f)| f).collect())
+}
+
+/// The tanks of the fluid handler of Create's block at `pos` as a smart observer or threshold
+/// switch reads them (`IFluidHandler.getTanks`); None for a block with none. A tank (its whole
+/// multiblock) or a boiler (`BoilerFluidHandler`: one empty tank of 10000 that gives nothing), a
+/// creative tank (always full), a basin's outputs then inputs (`CombinedTankWrapper`), a spout's,
+/// drain's and hose pulley's tank, a portable fluid interface's contraption's tanks.
+pub(crate) fn fluid_handler_tanks(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<create_engine::observe::TankSlot>> {
+    use create_engine::observe::TankSlot;
+    let (block, _) = info_at(lv, pos)?;
+    let dim = lv.dim;
+    match block {
+        Block::FluidTank => with_world(|w| {
+            if w.is_boiler(dim, pos) {
+                let boiler = TankSlot {
+                    drains: false,
+                    ..TankSlot::of(None, 10000)
+                };
+                return Some(vec![boiler]);
+            }
+            let (_, m) = w.dims[dim].tanks.get(pos)?;
+            let held = m.tank.fluid.map(|f| (f, m.tank.amount));
+            Some(vec![TankSlot::of(held, m.capacity())])
+        })
+        .flatten(),
+        Block::CreativeFluidTank => with_world(|w| {
+            let d = &w.dims[dim];
+            let cap = d
+                .creative_tanks
+                .get(pos)
+                .map_or(create_engine::tank::CAPACITY, |(_, m)| m.capacity());
+            let fluid = d.plumbing.creative_fluid(pos).flatten();
+            Some(vec![TankSlot::of(fluid.map(|f| (f, cap)), cap)])
+        })
+        .flatten(),
+        Block::Basin => {
+            let t = super::processing::basin_tanks(dim, pos);
+            let cap = create_engine::basin::TANK;
+            Some(
+                t.output
+                    .iter()
+                    .chain(&t.input)
+                    .map(|f| TankSlot::of(*f, cap))
+                    .collect(),
+            )
+        }
+        Block::Spout => with_world(|w| {
+            let fluid = w.dims[dim].spouts.get(&pos).and_then(|s| s.fluid);
+            vec![TankSlot::of(fluid, create_engine::spout::CAPACITY)]
+        }),
+        Block::ItemDrain => with_world(|w| {
+            let fluid = w.dims[dim].drains.get(&pos).and_then(|s| s.fluid);
+            vec![TankSlot::of(fluid, create_engine::drain::CAPACITY)]
+        }),
+        Block::HosePulley => with_world(|w| {
+            let tank = w.dims[dim].plumbing.hoses.get(&pos).map(|h| h.tank);
+            let fluid = tank.and_then(|t| t.fluid.map(|f| (f, t.amount)));
+            vec![TankSlot::of(fluid, create_engine::hose::CAPACITY)]
+        }),
+        Block::PortableFluidInterface => crate::glue::contraptions::actors::pfi_tanks(lv, pos),
+        _ => None,
+    }
 }
 
 /// The key of a tank's contents in its block entity's data: fluid (255: none), amount, width,
@@ -165,6 +256,7 @@ impl Subsystem for Fluids {
         with_world(|w| w.load_tanks(dim, tanks.into_iter()));
         plumbing::chunk_load(dim, data);
         machines::chunk_load(dim, data);
+        pipes::chunk_load(dim, data);
     }
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
@@ -194,6 +286,7 @@ impl Subsystem for Fluids {
         }
         plumbing::chunk_data_save(dim, chunk, data);
         machines::chunk_data_save(dim, chunk, data);
+        pipes::chunk_data_save(dim, chunk, data);
     }
 
     /// Before the solve, in the legacy order: pipes and pumps, boilers, valves, hoses and
@@ -201,6 +294,7 @@ impl Subsystem for Fluids {
     /// later.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         lava::tick(lv);
+        open_end::tick(lv);
         place::tick_layers(lv);
         pipes::tick_pipes(lv);
         pipes::tick_boilers(lv);
@@ -237,6 +331,7 @@ impl Subsystem for Fluids {
 
     fn world_closed(&self) {
         lava::reset();
+        open_end::reset();
         flows::reset();
         place::reset();
         rims::reset();
@@ -249,6 +344,7 @@ impl Subsystem for Fluids {
         &[
             TANK,
             TANK_FLUIDS,
+            SPOUT_START,
             HOSE,
             BOILER,
             rims::RIMS,
@@ -647,13 +743,6 @@ fn world_fluid(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Fluid, bool)> {
         _ => return None,
     };
     Some((fluid, f.is_source()))
-}
-
-/// Any fluid at all in the block at `pos` (`!getFluidState().isEmpty()`).
-fn has_fluid(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
-    lv.level
-        .fluid_state(&*lv.host, pos)
-        .is_some_and(|f| !f.is_empty())
 }
 
 fn offset(p: [i32; 3], d: create_engine::kinetics::Dir) -> [i32; 3] {

@@ -14,8 +14,8 @@ use create_engine::kinetics::Dir;
 use create_engine::observe::{self, CENTRE_REACH, Seen, Slot, Watch};
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockClick, Command, CommandArgumentValue, Flow, ItemStack, PlayerRef, RegisterCommandsEvent,
-    RunModCommandEvent, ServerHost, Text,
+    BlockClick, Command, CommandArgumentValue, Flow, HostTransaction, ItemStack, PlayerRef,
+    RegisterCommandsEvent, RunModCommandEvent, ServerHost, Text,
 };
 
 /// `getSignal` / `getDirectSignal` of an analog lever (its block entity's state), a smart
@@ -142,32 +142,37 @@ pub(super) fn use_detector(
 
 /// Whether a smart observer (`observer`) or threshold switch placed beside `at` would look at it
 /// (`getStateForPlacement`): an item or fluid handler, and for the observer a belt, depot,
-/// ejector, fluid pipe or funnel too.
+/// ejector, pipe (anything with a pipe behaviour) or funnel too.
 pub(super) fn detects(lv: &mut ServerLevel<'_>, at: [i32; 3], observer: bool) -> bool {
     let block = block_at(lv, at).map(|(b, _)| b);
-    if matches!(block, Some(Block::FluidTank | Block::ItemVault)) {
+    if matches!(block, Some(Block::ItemVault))
+        || crate::glue::fluids::fluid_handler_tanks(lv, at).is_some()
+    {
         return true;
     }
     if observer
-        && matches!(
+        && (matches!(
             block,
             Some(
                 Block::Belt
                     | Block::Depot
                     | Block::WeightedEjector
-                    | Block::FluidPipe
                     | Block::AndesiteFunnel
                     | Block::BrassFunnel
                     | Block::AndesiteBeltFunnel
                     | Block::BrassBeltFunnel
             )
-        )
+        ) || crate::glue::fluids::pipe_inflows(lv, at).is_some())
     {
         return true;
     }
     lv.level
         .capability(&mut *lv.host, &mod_api::ITEMS, at, None)
         .is_some()
+        || lv
+            .level
+            .capability(&mut *lv.host, &mod_api::FLUIDS, at, None)
+            .is_some()
 }
 
 /// What a smart observer's display sources read of its target (`InvManipulationBehaviour`,
@@ -204,11 +209,11 @@ pub(crate) fn observed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Observed {
                 .filter(|(item, n)| *n > 0 && passes.item(item))
                 .collect()
         }),
-        fluids: seen.tank.map(|(fluid, amount, _)| {
-            fluid
-                .filter(|f| amount > 0 && passes.fluid(*f))
-                .map(|f| (f, amount))
+        fluids: seen.tanks.map(|tanks| {
+            tanks
                 .into_iter()
+                .filter_map(|t| Some((t.fluid?, t.amount)))
+                .filter(|(f, n)| *n > 0 && passes.fluid(*f))
                 .collect()
         }),
     }
@@ -339,19 +344,33 @@ pub(super) fn seen_at(
             }
             (seen, Watch::Notified)
         }
-        // A fluid tank's fluid handler: the whole tank.
+        // `FluidTransportBehaviour`: a pipe's flows, and nothing more.
+        _ if let Some(flows) = crate::glue::fluids::pipe_inflows(lv, target) => {
+            seen.flows = Some(flows);
+            (seen, Watch::Tick)
+        }
+        // `ChainConveyorBlockEntity.getLoopingPackages`, and nothing more.
+        Some(Block::ChainConveyor) => {
+            let packages = crate::glue::packages::looping_packages(dim, target);
+            seen.looping = Some(packages.iter().map(|s| item_id(lv, s)).collect());
+            (seen, Watch::Tick)
+        }
+        // A fluid tank's fluid handler: the whole tank, telling of its changes.
         Some(Block::FluidTank) => {
-            seen.tank = with_world(|w| {
-                let (_, m) = w.dims[dim].tanks.get(target)?;
-                Some((m.tank.fluid, m.tank.amount, m.capacity()))
-            })
-            .flatten();
+            seen.tanks = crate::glue::fluids::fluid_handler_tanks(lv, target);
             (seen, Watch::Notified)
         }
-        // Another Create block's slots tell of their changes; a vanilla container does not.
+        // Another Create block's slots tell of their changes; a vanilla container does not,
+        // nor do the other fluid handlers' tanks.
         other => {
             seen.inventory = container_slots(lv, target).map(|slots| (slots, 64));
-            let watch = if seen.inventory.is_some() && other.is_none() {
+            seen.tanks = match other {
+                Some(_) => crate::glue::fluids::fluid_handler_tanks(lv, target),
+                None => capability_tanks(lv, target),
+            };
+            let watch = if other.is_some() && seen.tanks.is_some() {
+                Watch::Tick
+            } else if (seen.inventory.is_some() || seen.tanks.is_some()) && other.is_none() {
                 Watch::Lazy
             } else {
                 Watch::Notified
@@ -359,6 +378,52 @@ pub(super) fn seen_at(
             (seen, watch)
         }
     }
+}
+
+/// The tanks of another block's fluid handler (`FLUIDS`, whatever its sides): each one's fluid
+/// (none for one the port has no fluid for), amount and capacity, and whether a simulated drain
+/// of it gives any. None when it has none.
+fn capability_tanks(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<Vec<create_engine::observe::TankSlot>> {
+    let handler = lv
+        .level
+        .capability(&mut *lv.host, &mod_api::FLUIDS, pos, None)?;
+    let size = handler.size(&mut *lv.host);
+    let mut tanks = Vec::with_capacity(size);
+    for i in 0..size {
+        let amount = handler.amount(&mut *lv.host, i);
+        let resource = handler.resource(&mut *lv.host, i).filter(|_| amount > 0);
+        let Some(r) = resource else {
+            // An empty tank's capacity for nothing in particular: water's.
+            let water = lv
+                .host
+                .fluid_key("minecraft:water")
+                .map(|k| mod_api::FluidResource::of(&mod_api::FluidStack::new(k, 1)));
+            let capacity = water.map_or(0, |w| handler.capacity(&mut *lv.host, i, &w));
+            tanks.push(create_engine::observe::TankSlot::of(None, capacity));
+            continue;
+        };
+        let capacity = handler.capacity(&mut *lv.host, i, &r);
+        let fluid = r
+            .fluid()
+            .key()
+            .and_then(|k| create_engine::tank::Fluid::of_id(&k.id(&*lv.host)));
+        // `drain(fluidInTank, SIMULATE)`: taken in a transaction that is then dropped.
+        let drained = lv
+            .host
+            .transaction(|host, tx| Err::<(), u32>(handler.extract(host, tx, i, &r, amount)))
+            .err()
+            .unwrap_or(0);
+        tanks.push(create_engine::observe::TankSlot {
+            fluid,
+            amount,
+            capacity,
+            drains: drained > 0,
+        });
+    }
+    Some(tanks)
 }
 
 /// What a threshold switch finds at `target` (`updateCurrentLevel`), and how it is watched: a

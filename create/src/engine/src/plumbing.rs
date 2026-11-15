@@ -57,9 +57,18 @@ pub struct Plumbing {
 }
 
 impl Plumbing {
-    /// A valve placed or loaded: its pointer starts where its block is.
+    /// A valve placed, loaded or changed: its pointer starts where its block is. A pointer at
+    /// rest that disagrees with its block (a valve replaced by another, open or shut, as a new
+    /// block entity starts) is put where the block is, and chases its target from there.
     pub fn valve_placed(&mut self, pos: [i32; 3], open: bool) {
-        self.valves.entry(pos).or_insert_with(|| Pointer::at(open));
+        let p = self.valves.entry(pos).or_insert_with(|| Pointer::at(open));
+        let at = if open { 1.0 } else { 0.0 };
+        if !p.moving() && p.value != at {
+            p.value = at;
+            if p.moving() && !self.valve_moving.contains(&pos) {
+                self.valve_moving.push(pos);
+            }
+        }
     }
 
     /// `FluidValveBlockEntity.onSpeedChanged`.
@@ -152,6 +161,22 @@ impl Plumbing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_valve_replaced_shut_while_turning_opens_again() {
+        let mut p = Plumbing::default();
+        p.valve_placed([0, 0, 0], false);
+        p.valve_speed([0, 0, 0], 320.0);
+        assert_eq!(p.tick_valves(|_| Some(false)), [([0, 0, 0], true)]);
+        assert!(p.valve_moving.is_empty());
+        // Replaced by a shut valve: its pointer starts shut and opens again.
+        p.valve_placed([0, 0, 0], false);
+        assert_eq!(p.valve_moving, [[0, 0, 0]]);
+        assert_eq!(p.tick_valves(|_| Some(false)), [([0, 0, 0], true)]);
+        // Its own change (open as its pointer) keeps it.
+        p.valve_placed([0, 0, 0], true);
+        assert!(p.valve_moving.is_empty());
+    }
 
     #[test]
     fn only_moving_valves_tick() {

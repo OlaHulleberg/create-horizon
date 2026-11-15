@@ -171,7 +171,7 @@ fn shown(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Shown> {
     let (seen, _) = super::detectors::switch_seen(lv, target);
     let kind = if seen.inventory.is_some() {
         Kind::Item
-    } else if seen.tank.is_some() {
+    } else if seen.tanks.is_some() {
         Kind::Fluid
     } else if seen.custom.is_some() {
         Kind::Custom

@@ -165,6 +165,18 @@ fn step(p: [i32; 3], d: Dir) -> [i32; 3] {
 /// at each distance (`parallelBranches`). Pressure goes through closed valves and filters
 /// (they have pipe behaviours); only the flow stops there (`End::passes`).
 pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> Cell) -> Vec<End> {
+    reach_toward(pump, side, speed, |p, _| cell(p))
+}
+
+/// [`reach`] with `cell` told the way it is entered by (from the pipe before it): whether open
+/// space is an open end depends on its face toward the pipe (`isOpenEnd`'s
+/// `hasBlockSolidSide`).
+pub fn reach_toward(
+    pump: [i32; 3],
+    side: Dir,
+    speed: f32,
+    cell: impl Fn([i32; 3], Dir) -> Cell,
+) -> Vec<End> {
     let mut ends: Vec<(End, i32)> = Vec::new();
     let end = |pos: [i32; 3], tank: bool, pass: Pass, face: Dir| End {
         pos,
@@ -176,7 +188,7 @@ pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> C
         face,
     };
     let first = step(pump, side);
-    let first_cell = cell(first);
+    let first_cell = cell(first, side);
     match first_cell {
         Cell::Tank => ends.push((end(first, true, Pass::default(), side), 0)),
         Cell::Port(s) if s == side.opposite() => {
@@ -192,7 +204,7 @@ pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> C
                 if !visited.insert(at) {
                     continue;
                 }
-                let sides = openings(cell(at));
+                let sides = openings(cell(at, side));
                 for d in Dir::ALL {
                     if sides & d.bit() == 0 {
                         continue;
@@ -201,7 +213,7 @@ pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> C
                     if next == pump {
                         continue;
                     }
-                    let next_cell = cell(next);
+                    let next_cell = cell(next, d);
                     match next_cell {
                         Cell::Tank => ends.push((end(next, true, pass, d), distance)),
                         Cell::Port(s) if s == d.opposite() => {
@@ -255,8 +267,17 @@ pub fn ways(
     side: Dir,
     cell: impl Fn([i32; 3]) -> Cell,
 ) -> Vec<([i32; 3], Vec<Step>)> {
+    ways_toward(pump, side, |p, _| cell(p))
+}
+
+/// [`ways`] with `cell` told the way it is entered by, as [`reach_toward`].
+pub fn ways_toward(
+    pump: [i32; 3],
+    side: Dir,
+    cell: impl Fn([i32; 3], Dir) -> Cell,
+) -> Vec<([i32; 3], Vec<Step>)> {
     let first = step(pump, side);
-    let first_cell = cell(first);
+    let first_cell = cell(first, side);
     let piped = |c: Cell| matches!(c, Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..));
     if !piped(first_cell) || !connects(first_cell, side) {
         return Vec::new();
@@ -273,7 +294,7 @@ pub fn ways(
     let mut frontier = std::collections::VecDeque::from([(1, first)]);
     let mut visited = std::collections::HashSet::from([first]);
     while let Some((distance, at)) = frontier.pop_front() {
-        let sides = openings(cell(at));
+        let sides = openings(cell(at, side));
         for d in Dir::ALL {
             if sides & d.bit() == 0 {
                 continue;
@@ -282,7 +303,7 @@ pub fn ways(
             if next == pump {
                 continue;
             }
-            let next_cell = cell(next);
+            let next_cell = cell(next, d);
             match next_cell {
                 Cell::Tank | Cell::Open => ends.push((next, at, d)),
                 Cell::Port(s) if s == d.opposite() => ends.push((next, at, d)),

@@ -255,9 +255,7 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   drawn on one (the rest of what the engine keeps per block rides with it, `Subsystem::carry_out`, and is drawn
   while it moves, `Subsystem::draw_carried`), but trains and cart contraptions, drawn as block displays, show
   none of it while they ride (item and text displays riding with them would).
-- Redstone: smart observers and threshold switches read a fluid only from a fluid tank (Create reads any fluid
-  handler: basins, drains, spouts, and an observer the flow through a pipe), and ignore packages on a chain
-  conveyor; a nixie tube on a train signal shows its text, not the signal's lights (`NixieTubeRenderer`); a
+- Redstone: a nixie tube on a train signal shows its text, not the signal's lights (`NixieTubeRenderer`); a
   redstone contact on an elevator column is not turned into an elevator contact by the wrench; dyed items
   (`DYED_COLOR`) make one link frequency with their undyed item.
 - Processing: a deployer does not feed food or drinks to a player in front of it (`finishUsingItem` on another

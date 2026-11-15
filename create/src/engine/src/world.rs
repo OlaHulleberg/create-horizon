@@ -296,6 +296,9 @@ pub struct Dimension {
     /// connect again, and whether pipes, pumps or tanks changed since the ends were found.
     pub pumps: HashMap<[i32; 3], Pump>,
     pub pumping: Vec<[i32; 3]>,
+    /// The open ends of pipes and pumps, by the pipe (or pump) and the side it is open to, each
+    /// with its own tank (`PipeConnection.source`'s `OpenEndedPipe`).
+    pub open_ends: HashMap<([i32; 3], crate::kinetics::Dir), crate::open_end::OpenEnd>,
     pub pipe_checks: Vec<[i32; 3]>,
     pub pipes_changed: bool,
     /// Fluid valves, smart pipe filters, hose pulleys, creative fluid tanks, steam whistles.
@@ -477,9 +480,6 @@ pub struct Pump {
     pub pull: Vec<crate::fluids::End>,
     pub push: Vec<crate::fluids::End>,
     pub found: bool,
-    pub buffer: Option<(crate::tank::Fluid, u32)>,
-    /// What arrived at an open end in front, placed as a source block once a bucket's worth.
-    pub out: Option<(crate::tank::Fluid, u32)>,
     /// Ticks it has pumped since its pipes last changed (its flows' progress).
     pub pumped: u32,
     /// The pipes behind it and in front of it on the way to each end, by the end
@@ -1484,6 +1484,9 @@ impl CreateWorld {
             if d.pumps.remove(&pos).is_some() {
                 d.pumping.retain(|p| *p != pos);
             }
+            if !d.open_ends.is_empty() {
+                d.open_ends.retain(|(p, _), _| *p != pos);
+            }
             d.chutes.remove(&pos);
             if d.sequencers.remove(&pos).is_some() {
                 d.sequencing.retain(|p| *p != pos);
@@ -1798,6 +1801,8 @@ impl CreateWorld {
             d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.pumps.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.open_ends
+                .retain(|(p, _), _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sequencers
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sequencing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
