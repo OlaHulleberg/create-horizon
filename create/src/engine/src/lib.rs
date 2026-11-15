@@ -61,6 +61,7 @@ pub mod network;
 pub mod nozzle;
 pub mod nugget;
 pub mod observe;
+pub mod open_end;
 pub mod package;
 pub mod packager;
 pub mod parts;

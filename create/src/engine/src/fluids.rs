@@ -233,24 +233,38 @@ pub fn reach(pump: [i32; 3], side: Dir, speed: f32, cell: impl Fn([i32; 3]) -> C
     out
 }
 
-/// The pipes `shown` picks (glass pipes, which draw the fluid in them) on the way from the pump
-/// out of its `side` to each end `reach` finds the same way (breadth first, the first way
-/// found), by the end's position.
-pub fn shown_on_the_way(
+/// A pipe on the way between a pump and one of its ends: where it is, its side toward the pump
+/// (`back`) and toward the end (`on`), and what it lets through (`canPullFluidFrom`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Step {
+    pub pos: [i32; 3],
+    pub back: Dir,
+    pub on: Dir,
+    pub gate: Gate,
+}
+
+/// The pipes on the way from the pump out of its `side` to each end `reach` finds the same way
+/// (breadth first, the first way found), from the pump outward, by the end's position.
+pub fn ways(
     pump: [i32; 3],
     side: Dir,
     cell: impl Fn([i32; 3]) -> Cell,
-    shown: impl Fn([i32; 3]) -> bool,
-) -> Vec<([i32; 3], Vec<[i32; 3]>)> {
+) -> Vec<([i32; 3], Vec<Step>)> {
     let first = step(pump, side);
     let first_cell = cell(first);
     let piped = |c: Cell| matches!(c, Cell::Pipe(_) | Cell::Encased(_) | Cell::Axis(..));
     if !piped(first_cell) || !connects(first_cell, side) {
         return Vec::new();
     }
-    let mut parent: std::collections::HashMap<[i32; 3], [i32; 3]> =
+    let gate = |c: Cell| match c {
+        Cell::Axis(_, g) => g,
+        _ => Gate::Open,
+    };
+    // Each pipe's way back: the pipe before it and the side it was entered by.
+    let mut parent: std::collections::HashMap<[i32; 3], ([i32; 3], Dir)> =
         std::collections::HashMap::new();
-    let mut ends: Vec<([i32; 3], [i32; 3])> = Vec::new();
+    let mut gates = std::collections::HashMap::from([(first, gate(first_cell))]);
+    let mut ends: Vec<([i32; 3], [i32; 3], Dir)> = Vec::new();
     let mut frontier = std::collections::VecDeque::from([(1, first)]);
     let mut visited = std::collections::HashSet::from([first]);
     while let Some((distance, at)) = frontier.pop_front() {
@@ -265,13 +279,14 @@ pub fn shown_on_the_way(
             }
             let next_cell = cell(next);
             match next_cell {
-                Cell::Tank | Cell::Open => ends.push((next, at)),
-                Cell::Port(s) if s == d.opposite() => ends.push((next, at)),
+                Cell::Tank | Cell::Open => ends.push((next, at, d)),
+                Cell::Port(s) if s == d.opposite() => ends.push((next, at, d)),
                 c if piped(c) && openings(c) & d.opposite().bit() != 0 => {
                     if distance + 1 >= PUMP_RANGE || !visited.insert(next) {
                         continue;
                     }
-                    parent.insert(next, at);
+                    parent.insert(next, (at, d.opposite()));
+                    gates.insert(next, gate(c));
                     frontier.push_back((distance + 1, next));
                 }
                 _ => {}
@@ -279,18 +294,128 @@ pub fn shown_on_the_way(
         }
     }
     ends.into_iter()
-        .map(|(end, last)| {
+        .map(|(end, last, toward)| {
             let mut way = Vec::new();
-            let mut at = Some(last);
+            let (mut at, mut on) = (Some(last), toward);
             while let Some(p) = at {
-                if shown(p) {
-                    way.push(p);
-                }
-                at = parent.get(&p).copied();
+                let (before, back) = parent
+                    .get(&p)
+                    .map_or((None, side.opposite()), |(q, b)| (Some(*q), *b));
+                way.push(Step {
+                    pos: p,
+                    back,
+                    on,
+                    gate: gates.get(&p).copied().unwrap_or(Gate::Open),
+                });
+                on = back.opposite();
+                at = before;
             }
+            way.reverse();
             (end, way)
         })
         .collect()
+}
+
+/// A pipe connection with fluid flowing in it (`PipeConnection.Flow`): the block and its side,
+/// whether the fluid comes in by that side (`inbound`) and whether the side is an open end
+/// (`OpenEndedPipe`), when the flow starts in ticks after the pump's flows did, how far it grows
+/// a tick (`flow_speed`), and its place along the way, which is when it goes once the source
+/// gives no more (a connection a tick, from the source).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlowAt {
+    pub pos: [i32; 3],
+    pub side: Dir,
+    pub inbound: bool,
+    pub open: bool,
+    pub start: f32,
+    pub speed: f32,
+    pub order: u32,
+}
+
+impl FlowAt {
+    /// How far across its half of the pipe the flow is `ticks` after the pump's flows started
+    /// (`Flow.progress`, 0 to 1).
+    pub fn progress(&self, ticks: f32) -> f32 {
+        ((ticks - self.start) * self.speed).clamp(0.0, 1.0)
+    }
+}
+
+/// The flows a turning pump at `pump` facing `facing` keeps (`manageFlows`, connection by
+/// connection): from end `from` behind it (`pull`: the pipes between, from the pump outward)
+/// into the pump and out through the pipes `push` to each end in front, as far as `fluid` may go
+/// (a closed valve or another fluid's filter holds it before the pipe). Each half of a pipe
+/// (a connection) fills at its end's pressure, the pump's own two at its speed.
+pub fn flows(
+    pump: [i32; 3],
+    facing: Dir,
+    speed: f32,
+    from: &End,
+    pull: &[Step],
+    push: &[(End, Vec<Step>)],
+    fluid: Fluid,
+) -> Vec<FlowAt> {
+    let mut out: Vec<FlowAt> = Vec::new();
+    let mut t = 0.0f32;
+    let mut order = 0u32;
+    let add = |out: &mut Vec<FlowAt>, t: &mut f32, order: &mut u32, at: FlowAt| {
+        let half = 1.0 / at.speed;
+        let at = FlowAt {
+            start: *t,
+            order: *order,
+            ..at
+        };
+        *t += half;
+        *order += 1;
+        match out.iter_mut().find(|f| f.pos == at.pos && f.side == at.side) {
+            Some(f) if f.start > at.start => *f = at,
+            Some(_) => {}
+            None => out.push(at),
+        }
+    };
+    let conn = |pos, side, inbound, open, pressure: f32| FlowAt {
+        pos,
+        side,
+        inbound,
+        open,
+        start: 0.0,
+        speed: flow_speed(pressure),
+        order: 0,
+    };
+    // Behind: from the end toward the pump.
+    let n = pull.len();
+    for (i, s) in pull.iter().rev().enumerate() {
+        let open = i == 0 && !from.tank;
+        add(&mut out, &mut t, &mut order, conn(s.pos, s.on, true, open, from.pressure));
+        add(&mut out, &mut t, &mut order, conn(s.pos, s.back, false, false, from.pressure));
+    }
+    let back = facing.opposite();
+    let pump_in = conn(pump, back, true, n == 0 && !from.tank, speed.abs());
+    add(&mut out, &mut t, &mut order, pump_in);
+    let start = (t, order);
+    for (to, way) in push {
+        let (mut t, mut order) = start;
+        add(
+            &mut out,
+            &mut t,
+            &mut order,
+            conn(pump, facing, false, way.is_empty() && !to.tank, speed.abs()),
+        );
+        let last = way.len().saturating_sub(1);
+        for (i, s) in way.iter().enumerate() {
+            let held = match s.gate {
+                Gate::Open => false,
+                Gate::Closed => true,
+                Gate::Only(f) => f != fluid,
+            };
+            if held {
+                break;
+            }
+            add(&mut out, &mut t, &mut order, conn(s.pos, s.back, true, false, to.pressure));
+            let open = i == last && !to.tank;
+            add(&mut out, &mut t, &mut order, conn(s.pos, s.on, false, open, to.pressure));
+        }
+    }
+    out
 }
 
 /// `PipeConnection.manageFlows`: how far a flow gets across half a pipe in a tick at
@@ -873,6 +998,70 @@ mod tests {
             Some(Axis::Y)
         );
         assert_eq!(straight_axis(Dir::Up.bit() | Dir::East.bit()), None);
+    }
+
+    #[test]
+    fn flows_go_connection_by_connection_from_the_source_to_the_ends() {
+        // Pump at x 0 facing east: open space at x -2, a pipe at x -1; a glass pipe at x 1,
+        // a valve at x 2 and a tank at x 3.
+        let straight = Dir::East.bit() | Dir::West.bit();
+        let cell = |closed: bool| {
+            move |p: [i32; 3]| match p {
+                [0, 0, 0] => Cell::Pump(Dir::East),
+                [-1, 0, 0] => Cell::Pipe(straight),
+                [1, 0, 0] => Cell::Axis(Axis::X, Gate::Open),
+                [2, 0, 0] => Cell::Axis(Axis::X, if closed { Gate::Closed } else { Gate::Open }),
+                [3, 0, 0] => Cell::Tank,
+                [-2, 0, 0] => Cell::Open,
+                _ => Cell::Solid,
+            }
+        };
+        let pull = ways([0, 0, 0], Dir::West, cell(false));
+        assert_eq!(pull.len(), 1);
+        assert_eq!(pull[0].0, [-2, 0, 0]);
+        assert_eq!(
+            pull[0].1,
+            vec![Step {
+                pos: [-1, 0, 0],
+                back: Dir::East,
+                on: Dir::West,
+                gate: Gate::Open
+            }]
+        );
+        let push = ways([0, 0, 0], Dir::East, cell(false));
+        assert_eq!(push[0].0, [3, 0, 0]);
+        assert_eq!(push[0].1.len(), 2);
+        assert_eq!(
+            (push[0].1[1].pos, push[0].1[1].back, push[0].1[1].on),
+            ([2, 0, 0], Dir::West, Dir::East)
+        );
+        let from = reach([0, 0, 0], Dir::West, 128.0, cell(false))[0];
+        let to = reach([0, 0, 0], Dir::East, 128.0, cell(false))[0];
+        let push_ways = vec![(to, push[0].1.clone())];
+        let f = flows([0, 0, 0], Dir::East, 128.0, &from, &pull[0].1, &push_ways, Fluid::Water);
+        // At 128 rpm each half fills in a tick: the open end's side first, inbound and open.
+        let at = |pos: [i32; 3], side: Dir| *f.iter().find(|x| x.pos == pos && x.side == side).unwrap();
+        let first = at([-1, 0, 0], Dir::West);
+        assert!(first.inbound && first.open);
+        assert_eq!((first.start, first.order), (0.0, 0));
+        assert_eq!(at([-1, 0, 0], Dir::East).start, 1.0);
+        assert_eq!(at([0, 0, 0], Dir::West).start, 2.0);
+        assert_eq!(at([0, 0, 0], Dir::East).start, 3.0);
+        let glass_in = at([1, 0, 0], Dir::West);
+        assert!(glass_in.inbound && !glass_in.open);
+        assert_eq!(glass_in.start, 4.0);
+        let last = at([2, 0, 0], Dir::East);
+        assert!(!last.inbound && !last.open);
+        assert_eq!((last.start, last.order), (7.0, 7));
+        assert_eq!(last.progress(7.5), 0.5);
+        // A closed valve holds the flow in the pipe before it.
+        let push = ways([0, 0, 0], Dir::East, cell(true));
+        let push_ways = vec![(to, push[0].1.clone())];
+        let f = flows([0, 0, 0], Dir::East, 128.0, &from, &pull[0].1, &push_ways, Fluid::Water);
+        assert!(f.iter().any(|x| x.pos == [1, 0, 0]));
+        assert!(!f.iter().any(|x| x.pos == [2, 0, 0]));
+        // Slower: 1/32 + 16/128 * 31/32 a tick.
+        assert!((flow_speed(16.0) - 0.152_343_75).abs() < 1e-6);
     }
 
     #[test]

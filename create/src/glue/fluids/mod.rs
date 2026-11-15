@@ -28,10 +28,11 @@ mod clicks;
 pub(crate) mod client;
 mod drawn;
 pub(crate) mod engine;
-mod glass;
+mod flows;
 mod goggles;
 mod lava;
 mod machines;
+mod open_end;
 mod pipes;
 mod place;
 mod plumbing;
@@ -72,7 +73,7 @@ pub struct Fluids;
 impl Subsystem for Fluids {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         client::register(r);
-        pipes::register(r);
+        flows::register(r);
         for block in place::PLACED {
             r.block_part(super::states::key(block), place::Placement);
         }
@@ -131,13 +132,18 @@ impl Subsystem for Fluids {
         machines::tick_spouts(lv);
         machines::tick_drains(lv);
         rims::tick(lv);
-        glass::send(lv);
+        flows::send(lv);
         drawn::send(lv);
         engine::tick(lv);
     }
 
     fn client_reset(&self) {
         client::reset();
+    }
+
+    /// The time clients' pipe flows are measured by (`flows`).
+    fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
+        flows::client_tick(&*host);
     }
 
     /// Honey and chocolate meeting lava (`AllFluids.registerFluidInteractions`), looked at when
@@ -154,7 +160,7 @@ impl Subsystem for Fluids {
 
     fn world_closed(&self) {
         lava::reset();
-        glass::reset();
+        flows::reset();
         place::reset();
         rims::reset();
         drawn::reset();
@@ -173,7 +179,7 @@ impl Subsystem for Fluids {
             engine::STEAM,
             plumbing::FILTER,
             plumbing::WHISTLE,
-            glass::FLOW,
+            flows::FLOW,
         ]
     }
 

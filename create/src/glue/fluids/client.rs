@@ -97,6 +97,7 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
         Block::Spout => super::spouted::animated(entity),
         Block::SteamWhistle => whistle_blows(entity).is_some_and(|(on, _)| on),
         Block::FluidTank => GAUGES.with_borrow(|g| g.get(&pos).is_some_and(|g| !g.settled)),
+        Block::GlassFluidPipe => super::flows::animated(entity),
         _ => false,
     }
 }
@@ -118,9 +119,17 @@ impl BlockEntityPart for FluidEntity {
         _host: &dyn ClientHost,
         event: &mut BlockEntityClientTicksEvent<'_>,
     ) {
+        // Pipes, valves and pumps spawn their flows' particles (`flows`).
         if matches!(
             event.block,
-            "create:fluid_valve" | "create:steam_engine" | "create:steam_whistle"
+            "create:fluid_valve"
+                | "create:steam_engine"
+                | "create:steam_whistle"
+                | "create:fluid_pipe"
+                | "create:encased_fluid_pipe"
+                | "create:glass_fluid_pipe"
+                | "create:smart_fluid_pipe"
+                | "create:mechanical_pump"
         ) {
             event.ticks = true;
         }
@@ -151,7 +160,20 @@ impl BlockEntityPart for FluidEntity {
                 }
                 return;
             }
-            Some((Block::FluidValve, info)) => info,
+            Some((Block::FluidValve, info)) => {
+                super::flows::client_pipe_tick(host, event.pos, event.entity);
+                info
+            }
+            Some((
+                Block::FluidPipe
+                | Block::EncasedFluidPipe
+                | Block::GlassFluidPipe
+                | Block::SmartFluidPipe
+                | Block::MechanicalPump,
+                _,
+            )) => {
+                return super::flows::client_pipe_tick(host, event.pos, event.entity);
+            }
             _ => return,
         };
         let speed = speeds_of(&event.entity.nbt)[0];
@@ -215,7 +237,7 @@ impl BlockEntityPart for FluidEntity {
             }
             Block::GlassFluidPipe => {
                 super::rims::draw(event);
-                super::glass::draw(host, event, &info);
+                super::flows::draw(host, event);
             }
             Block::FluidPipe | Block::EncasedFluidPipe | Block::MechanicalPump => {
                 super::rims::draw(event)
