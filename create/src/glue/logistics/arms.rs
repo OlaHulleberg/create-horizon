@@ -41,6 +41,8 @@ pub struct Arms;
 
 /// What a moving structure carries for an ejector (`Subsystem::carry_out`).
 const CARRIED_EJECTOR: &str = "EjectorLauncher";
+/// What a moving structure carries for a mechanical arm (`Subsystem::carry_out`).
+pub(super) const CARRIED_ARM: &str = "Arm";
 
 impl Subsystem for Arms {
     /// A weighted ejector's target and stack size (`EjectorBlockEntity.write`: `HorizontalDistance`,
@@ -52,10 +54,25 @@ impl Subsystem for Arms {
         block: create_engine::Block,
         out: &mut Compound,
     ) {
+        let dim = lv.dim;
+        if block == create_engine::Block::MechanicalArm {
+            // `ArmBlockEntity.write`: its points (from it), phase and held stack; taken, so
+            // the stack doesn't drop as the arm goes.
+            let a = with_world(|w| {
+                let arms = &mut w.dims[dim].arms;
+                let a = arms.arms.get(&pos).cloned()?;
+                arms.removed(pos);
+                Some(a)
+            })
+            .flatten();
+            if let Some(a) = a {
+                out.insert(CARRIED_ARM.into(), Tag::Compound(arm_to_tag(pos, &a)));
+            }
+            return;
+        }
         if block != create_engine::Block::WeightedEjector {
             return;
         }
-        let dim = lv.dim;
         let e = with_world(|w| w.dims[dim].ejectors.get(&pos).cloned()).flatten();
         if let Some(e) = e {
             out.insert(
@@ -71,8 +88,23 @@ impl Subsystem for Arms {
         pos: [i32; 3],
         block: create_engine::Block,
         data: &Compound,
-        _turn: create_engine::contraption::Transform,
+        turn: create_engine::contraption::Transform,
     ) {
+        if let (Some(Tag::Compound(c)), create_engine::Block::MechanicalArm) =
+            (data.get(&CARRIED_ARM.into()), block)
+        {
+            // Its points turned with it about where it was (`ArmBlockEntity.transform`).
+            if let Some((was, mut a)) = arm_from_tag(c) {
+                for pt in a.inputs.iter_mut().chain(a.outputs.iter_mut()) {
+                    let o = turn.vec([0, 1, 2].map(|i| pt.pos[i] - was[i]));
+                    pt.pos = [0, 1, 2].map(|i| pos[i] + o[i]);
+                    pt.facing = pt.facing.map(|f| turn.dir(f));
+                }
+                let dim = lv.dim;
+                with_world(|w| w.dims[dim].arms.saved.insert(pos, a));
+            }
+            return;
+        }
         let Some(Tag::IntArray(v)) = data.get(&CARRIED_EJECTOR.into()) else {
             return;
         };
@@ -1426,6 +1458,41 @@ fn sync_arms(lv: &mut ServerLevel<'_>, player: PlayerRef) {
     send_ejectors(lv, &[player], &ejectors);
 }
 
+/// An arm as `arms_to_nbt` saves it: x, y, z, its phase, index, progress, power, selection,
+/// held count, input count, then each point's offset from it, kind and facing; its held item
+/// and goggles.
+fn arm_to_tag(p: [i32; 3], a: &arm::Arm) -> Compound {
+    let mut v = vec![
+        p[0],
+        p[1],
+        p[2],
+        i32::from(a.phase.index()),
+        a.index,
+        a.progress.to_bits() as i32,
+        i32::from(a.powered),
+        a.selection as i32,
+        i32::from(a.held.as_ref().map_or(0, |h| h.1)),
+        a.inputs.len() as i32,
+    ];
+    for pt in a.points() {
+        v.extend([
+            pt.pos[0] - p[0],
+            pt.pos[1] - p[1],
+            pt.pos[2] - p[2],
+            i32::from(pt.kind.index()),
+            pt.facing.map_or(-1, |f| f as i32),
+        ]);
+    }
+    let mut c = Compound::new();
+    c.insert("v".into(), Tag::IntArray(v));
+    let held = a.held.as_ref().map_or("", |h| h.0.as_str());
+    c.insert("held".into(), Tag::String(held.into()));
+    if a.goggles {
+        c.insert("Goggles".into(), Tag::Byte(1));
+    }
+    c
+}
+
 /// Arms and ejectors saved with their column (`ArmBlockEntity.write`: `InteractionPoints`,
 /// `Phase`, `Powered`, `HeldItem`, `TargetPointIndex`, `MovementProgress`, the selection mode;
 /// `EjectorBlockEntity.write`: `HorizontalDistance`, `VerticalDistance`, `Powered`, `State`,
@@ -1446,37 +1513,7 @@ fn arms_to_nbt(dim: usize, chunk: [i32; 2], own: &mut Compound) {
     if !arms.is_empty() {
         let list = arms
             .iter()
-            .map(|(p, a)| {
-                let mut v = vec![
-                    p[0],
-                    p[1],
-                    p[2],
-                    i32::from(a.phase.index()),
-                    a.index,
-                    a.progress.to_bits() as i32,
-                    i32::from(a.powered),
-                    a.selection as i32,
-                    i32::from(a.held.as_ref().map_or(0, |h| h.1)),
-                    a.inputs.len() as i32,
-                ];
-                for pt in a.points() {
-                    v.extend([
-                        pt.pos[0] - p[0],
-                        pt.pos[1] - p[1],
-                        pt.pos[2] - p[2],
-                        i32::from(pt.kind.index()),
-                        pt.facing.map_or(-1, |f| f as i32),
-                    ]);
-                }
-                let mut c = Compound::new();
-                c.insert("v".into(), Tag::IntArray(v));
-                let held = a.held.as_ref().map_or("", |h| h.0.as_str());
-                c.insert("held".into(), Tag::String(held.into()));
-                if a.goggles {
-                    c.insert("Goggles".into(), Tag::Byte(1));
-                }
-                Tag::Compound(c)
-            })
+            .map(|(p, a)| Tag::Compound(arm_to_tag(*p, a)))
             .collect();
         own.insert("arms".into(), Tag::List(list));
     }
@@ -1513,6 +1550,55 @@ fn arms_to_nbt(dim: usize, chunk: [i32; 2], own: &mut Compound) {
     }
 }
 
+/// What [`arm_to_tag`] wrote: the arm's position and the arm.
+pub(super) fn arm_from_tag(c: &Compound) -> Option<([i32; 3], arm::Arm)> {
+    let text = |t: Option<&Tag>| match t {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    let Some(Tag::IntArray(v)) = c.get(&"v".into()) else {
+        return None;
+    };
+    if v.len() < 10 {
+        return None;
+    }
+    let pos = [v[0], v[1], v[2]];
+    let mut a = arm::Arm::new(false);
+    a.phase = arm::Phase::from_index(v[3].clamp(0, 4) as u8);
+    a.goggles = matches!(c.get(&"Goggles".into()), Some(Tag::Byte(1)));
+    a.index = v[4];
+    a.progress = f32::from_bits(v[5] as u32).clamp(0.0, 1.0);
+    a.powered = v[6] != 0;
+    a.selection = match v[7] {
+        1 => arm::Selection::ForcedRoundRobin,
+        2 => arm::Selection::PreferFirst,
+        _ => arm::Selection::RoundRobin,
+    };
+    let held = text(c.get(&"held".into()));
+    let n = v[8].clamp(0, 64) as u8;
+    a.held = (!held.is_empty() && n > 0).then_some((held, n));
+    let inputs = v[9].max(0) as usize;
+    for (i, pt) in v[10..].as_chunks::<5>().0.iter().enumerate() {
+        let Some(kind) = Kind::from_index(pt[3].clamp(0, 255) as u8) else {
+            continue;
+        };
+        let point = Point {
+            pos: [pos[0] + pt[0], pos[1] + pt[1], pos[2] + pt[2]],
+            kind,
+            facing: usize::try_from(pt[4])
+                .ok()
+                .and_then(|i| Dir::ALL.get(i))
+                .copied(),
+        };
+        if i < inputs {
+            a.inputs.push(point);
+        } else {
+            a.outputs.push(point);
+        }
+    }
+    Some((pos, a))
+}
+
 /// What `arms_to_nbt` wrote: arms and ejectors waiting for their blocks.
 fn arms_from_nbt(dim: usize, data: &Compound) {
     let text = |t: Option<&Tag>| match t {
@@ -1523,47 +1609,7 @@ fn arms_from_nbt(dim: usize, data: &Compound) {
     if let Some(Tag::List(list)) = data.get(&"arms".into()) {
         for t in list {
             let Tag::Compound(c) = t else { continue };
-            let Some(Tag::IntArray(v)) = c.get(&"v".into()) else {
-                continue;
-            };
-            if v.len() < 10 {
-                continue;
-            }
-            let pos = [v[0], v[1], v[2]];
-            let mut a = arm::Arm::new(false);
-            a.phase = arm::Phase::from_index(v[3].clamp(0, 4) as u8);
-            a.goggles = matches!(c.get(&"Goggles".into()), Some(Tag::Byte(1)));
-            a.index = v[4];
-            a.progress = f32::from_bits(v[5] as u32).clamp(0.0, 1.0);
-            a.powered = v[6] != 0;
-            a.selection = match v[7] {
-                1 => arm::Selection::ForcedRoundRobin,
-                2 => arm::Selection::PreferFirst,
-                _ => arm::Selection::RoundRobin,
-            };
-            let held = text(c.get(&"held".into()));
-            let n = v[8].clamp(0, 64) as u8;
-            a.held = (!held.is_empty() && n > 0).then_some((held, n));
-            let inputs = v[9].max(0) as usize;
-            for (i, pt) in v[10..].as_chunks::<5>().0.iter().enumerate() {
-                let Some(kind) = Kind::from_index(pt[3].clamp(0, 255) as u8) else {
-                    continue;
-                };
-                let point = Point {
-                    pos: [pos[0] + pt[0], pos[1] + pt[1], pos[2] + pt[2]],
-                    kind,
-                    facing: usize::try_from(pt[4])
-                        .ok()
-                        .and_then(|i| Dir::ALL.get(i))
-                        .copied(),
-                };
-                if i < inputs {
-                    a.inputs.push(point);
-                } else {
-                    a.outputs.push(point);
-                }
-            }
-            arms.push((pos, a));
+            arms.extend(arm_from_tag(c));
         }
     }
     let mut ejectors = Vec::new();

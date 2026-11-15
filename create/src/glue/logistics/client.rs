@@ -1495,9 +1495,23 @@ fn draw_arm(draw: &mut dyn BlockEntityDrawContext, host: &dyn ClientHost, pos: [
     }) else {
         return;
     };
+    let speed = CLIENT.with_borrow(|c| c.speeds.get(&pos).copied().unwrap_or(0.0));
+    draw_arm_shown(draw, host, pos, &s, progress, speed, t);
+}
+
+/// `ArmRenderer` for an arm as `s` shows it at `progress`, turning at `speed` (a dancing one
+/// sways only while it turns).
+fn draw_arm_shown(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    pos: [i32; 3],
+    s: &arm::Shown,
+    progress: f32,
+    speed: f32,
+    t: f32,
+) {
     let mut now = arm::at_progress(s.from, s.from_base, s.to, progress);
     // `rave`: a dancing arm that turns sways to the music, its body in a rainbow.
-    let speed = CLIENT.with_borrow(|c| c.speeds.get(&pos).copied().unwrap_or(0.0));
     let rave = s.phase == arm::Phase::Dancing && speed != 0.0;
     if rave {
         let seed = (pos[0].wrapping_mul(31) ^ pos[1].wrapping_mul(17) ^ pos[2]).rem_euclid(64);
@@ -1817,6 +1831,23 @@ pub(crate) fn draw_carried(
         | Block::BrassFunnel
         | Block::BrassBeltFunnel
         | Block::BrassTunnel => LogisticsEntity.block_entity_submit(host, event),
+        // An arm as it stood when the structure took it (its block entity doesn't tick
+        // riding: no turning, no dance).
+        Block::MechanicalArm => {
+            let carried = crate::glue::contraptions::actors::SHOWN_CARRIED;
+            let Some(Tag::Compound(c)) = event.entity.nbt.get(&carried.into()) else {
+                return;
+            };
+            let Some(Tag::Compound(a)) = c.get(&super::arms::CARRIED_ARM.into()) else {
+                return;
+            };
+            let Some((at, a)) = super::arms::arm_from_tag(a) else {
+                return;
+            };
+            let s = arm::Shown::of(at, &a);
+            let t = event.draw.partial();
+            draw_arm_shown(&mut *event.draw, host, event.pos, &s, s.progress, 0.0, t);
+        }
         _ => {}
     }
 }

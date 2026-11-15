@@ -750,6 +750,21 @@ fn contact_names(lv: &mut ServerLevel<'_>) {
     for pos in changed {
         mark_unsaved(lv, pos);
         crate::glue::display::notify_gatherers(lv, pos);
+        // Its door control changed: the doors of an elevator standing at its column follow
+        // (`SlidingDoorMovementBehaviour.tick` reads the mode each tick).
+        let elevators: Vec<[i32; 3]> = with_world(|w| {
+            w.dims[dim]
+                .lifts
+                .elevators
+                .iter()
+                .filter(|(_, e)| [e.column.x, e.column.z] == [pos[0], pos[2]])
+                .map(|(p, _)| *p)
+                .collect()
+        })
+        .unwrap_or_default();
+        for e in elevators {
+            elevator_doors(lv, e);
+        }
     }
 }
 
@@ -1412,6 +1427,11 @@ pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compo
         .map(|((pos, held), target)| {
             let mut c = Compound::new();
             c.insert("pos".into(), Tag::IntArray(pos.to_vec()));
+            // An elevator that moved since it assembled (`MovementContext.firstMovement`
+            // false, saved as `FirstMovement`): its doors open at floors again after a load.
+            if ELEVATOR_MOVED.with_borrow(|m| m.contains(&(dim, *pos))) {
+                c.insert("moved".into(), Tag::Byte(1));
+            }
             // What its storage blocks hold (`MountedStorageManager`).
             if let Some(t) = actors::storage_to_nbt(lv, *pos) {
                 c.insert("storage".into(), t);
@@ -1534,6 +1554,9 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
             let kind = *kind.first()?;
             let pos = [*p.first()?, *p.get(1)?, *p.get(2)?];
             actors::storage_from_nbt(lv, pos, c.get(&"storage".into()));
+            if c.contains_key(&"moved".into()) {
+                ELEVATOR_MOVED.with_borrow_mut(|m| m.insert((lv.dim, pos)));
+            }
             let at = |i: usize| n.get(i).copied();
             let mut call = None;
             let held = match kind {
