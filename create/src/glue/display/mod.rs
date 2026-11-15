@@ -3,7 +3,8 @@
 //! display boards; the boards' flaps turn toward their text and the tubes glow on clients
 //! (`client`). A nixie tube on a train signal shows the signal's panel and lights instead of
 //! text (`NixieTubeRenderer.renderAsSignal`, from the signal's state in its block entity data),
-//! without the lights' additive glow (`HORIZON_API.md`). A board's lines also take dyes, glow ink, name tags and clipboards by hand.
+//! the lights and their glows added to the frame through the glue's world pipelines. A board's
+//! lines also take dyes, glow ink, name tags and clipboards by hand.
 //!
 //! The sources: speedometers and stressometers, target blocks' redstone power, cuckoo clocks'
 //! time and stopwatch, item names along depots, belts and ejectors, nixie tubes' text, a smart
@@ -213,6 +214,16 @@ impl Subsystem for Display {
             return Flow::Cancel;
         }
         clipboard::screen_mouse_pressed(host, event)
+    }
+
+    /// The display link bulbs' and the nixie signals' glows (additive world quads).
+    fn render_level_stage(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        bulb::render_level_stage(host, event);
+        client::render_signal_glows(host, event);
     }
 
     fn input_handled(&self, host: &mut dyn ClientHost) {
