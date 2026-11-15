@@ -14,8 +14,10 @@
 //! (`isSchematicListMode`). Holding a table cloth, it programs the cloth as a shop of what is
 //! ordered (`shop`). The screen closes when its keeper is gone.
 //!
-//! Left out: the keeper drawn beside the window (no entity or blaze head drawn in a screen, see
-//! `HORIZON_API.md`); crafting recipes and the search sync button, which come from JEI
+//! The seated keeper is drawn beside the window turned toward the cursor, and a blaze keeper in
+//! its burner.
+//!
+//! Left out: crafting recipes and the search sync button, which come from JEI
 //! (`StockKeeperTransferHandler`, `SearchSyncMode`), a mod the game does not have; addresses from
 //! clipboards placed nearby.
 
@@ -122,38 +124,48 @@ impl Reader<'_> {
 /// `StockTickerBlockEntity.isKeeperPresent`: a seat with a rider beside the ticker or below that,
 /// or a blaze burner beside it.
 pub(super) fn keeper_present(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    keeper_entity(lv, pos).is_some()
+        || [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dz)| {
+            super::super::logistics::info_at(lv, [pos[0] + dx, pos[1], pos[2] + dz])
+                .is_some_and(|(b, _)| b == Block::BlazeBurner)
+        })
+}
+
+/// The screen's `stockKeeper` (`init`): the rider of a seat beside the ticker or below that, the
+/// last one found, as Create's search keeps it; None when a blaze burner beside it is found
+/// first.
+fn keeper_entity(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<mod_api::EntityRef> {
+    let mut found = None;
     for dy in [0, 1] {
         for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
             let p = [pos[0] + dx, pos[1] - dy, pos[2] + dz];
+            let lo = p.map(f64::from);
+            let hi = p.map(|v| f64::from(v) + 1.0);
+            let seat = |e: mod_api::EntityRef| {
+                e.tags(&*lv.host)
+                    .is_some_and(|t| t.iter().any(|t| t == "create.seat"))
+            };
+            for e in lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default() {
+                // The seat stand-in's rider, or a rider on one (a stand-in that came back
+                // from a save is not listed, its rider is).
+                let rider = if seat(e) {
+                    e.passengers(&*lv.host).and_then(|p| p.first().copied())
+                } else {
+                    e.vehicle(&*lv.host).is_some_and(seat).then_some(e)
+                };
+                if rider.is_some() {
+                    found = rider;
+                }
+            }
             if dy == 0
                 && super::super::logistics::info_at(lv, p)
                     .is_some_and(|(b, _)| b == Block::BlazeBurner)
             {
-                return true;
-            }
-            let lo = p.map(f64::from);
-            let hi = p.map(|v| f64::from(v) + 1.0);
-            let seated = lv
-                .level
-                .entities_in(&*lv.host, lo, hi)
-                .unwrap_or_default()
-                .into_iter()
-                .any(|e| {
-                    let seat = |e: mod_api::EntityRef| {
-                        e.tags(&*lv.host)
-                            .is_some_and(|t| t.iter().any(|t| t == "create.seat"))
-                    };
-                    // The seat stand-in with a rider, or a rider on one (a stand-in that came
-                    // back from a save is not listed, its rider is).
-                    (seat(e) && e.passengers(&*lv.host).is_some_and(|p| !p.is_empty()))
-                        || e.vehicle(&*lv.host).is_some_and(seat)
-                });
-            if seated {
-                return true;
+                return found;
             }
         }
     }
-    false
+    found
 }
 
 /// `getStockTickerPosition`: the one stock ticker beside a seated entity, or above that.
@@ -265,6 +277,11 @@ pub(super) fn open(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
     for (s, n) in list.iter().take(255) {
         put_stack(host, &mut head, s, *n);
     }
+    // The seated keeper, drawn beside the window: its entity id, -1 for none.
+    put_i32(
+        &mut head,
+        keeper_entity(lv, pos).map_or(-1, |e| e.id() as i32),
+    );
     send_stock(lv, player, pos, head);
 }
 
@@ -532,6 +549,8 @@ struct Category {
 
 struct Open {
     pos: [i32; 3],
+    /// The seated keeper's entity id (`stockKeeper`).
+    keeper: Option<u32>,
     encode: bool,
     /// `isAdmin`: the lock is shown; `isLocked`.
     admin: bool,
@@ -639,6 +658,7 @@ pub(super) fn server_message(host: &mut dyn ClientHost, channel: &str, data: &[u
         let list: Vec<(ItemStack, u32)> = (0..r.u8().unwrap_or(0))
             .filter_map(|_| r.stack(&*host))
             .collect();
+        let keeper = r.i32().and_then(|id| u32::try_from(id).ok());
         let links = r.i32().unwrap_or(0);
         let entries = read_entries(&*host, &mut r);
         OPEN.with_borrow_mut(|o| {
@@ -658,6 +678,7 @@ pub(super) fn server_message(host: &mut dyn ClientHost, channel: &str, data: &[u
                 order: Vec::new(),
                 forced: Vec::new(),
                 list: (!list.is_empty()).then_some(list),
+                keeper,
                 scroll: 0.0,
                 scroll_prev: 0.0,
                 scroll_to: 0.0,
@@ -825,7 +846,7 @@ pub(super) fn style(color: &str, italic: bool) -> TextStyle {
 }
 
 /// The fraction of a tick since the last client tick (`partialTicks`).
-pub(super) fn partial_tick() -> f32 {
+pub(crate) fn partial_tick() -> f32 {
     TICKED
         .get()
         .map_or(1.0, |t| (t.elapsed().as_secs_f32() * 20.0).min(1.0))
@@ -1190,18 +1211,37 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
         [x - 15.0, foot, 256.0, FOOTER_H],
         None,
     );
-    // The search bar scrolls with the list (`STOCK_KEEPER_REQUEST_SEARCH` under the list's
-    // translation): scrolled, the list's background takes its place.
     let shift = scroll * CELL;
-    if scroll > 0.0 {
-        draw.sprite(
-            TEX,
-            [37.0, 48.0, 182.0, 18.0],
-            [x + 22.0, y + 17.0, 182.0, 18.0],
-            None,
-        );
-    } else {
-        // `STOCK_KEEPER_REQUEST_SEARCH` is the header's own; the search text and hint.
+    let (groups, cats) = shown(host, o);
+    let stock = o.stock.as_deref().unwrap_or_default();
+    let hover = hovered(&l, o, &groups, &cats, mouse);
+    // The list window, cut to `itemWindowX - 5, itemWindowY, itemWindowX2 + 10, itemWindowY2`;
+    // its background, the search bar, the lock and the stacks scroll with the list.
+    let top = y + 17.0;
+    let bottom = y + l.h - 80.0;
+    let _ = draw.push_clip([x + 16.0, top, 199.0, bottom - top]);
+    let reach = max_scroll(&groups, &cats, l.h) as f32 * CELL + l.h - 72.0;
+    let mut slice = -2.0;
+    while slice < reach {
+        let at = slice - shift;
+        if (-20.0..=l.h - 72.0).contains(&at) {
+            draw.sprite(
+                TEX,
+                [37.0, 48.0, 182.0, 20.0],
+                [x + 22.0, y + at + 18.0, 182.0, 20.0],
+                None,
+            );
+        }
+        slice += 20.0;
+    }
+    draw.sprite(
+        TEX,
+        [57.0, 17.0, 142.0, 18.0],
+        [x + 42.0, y + 17.0 - shift, 142.0, 18.0],
+        None,
+    );
+    {
+        // The search text and hint.
         let search = if o.search.is_empty() && o.focus != Focus::Search {
             tr(host, "create.gui.stock_keeper.search_items", "Search Items")
         } else {
@@ -1217,25 +1257,8 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
         } else {
             x + 71.0
         };
-        draw.text(&search, [sx, y + 22.0], 0xFF4A_2D31, false);
-        // The lock, for the network's owner.
-        if o.admin {
-            let u = if o.locked { 16.0 } else { 32.0 };
-            draw.sprite(
-                TEX,
-                [u, 176.0, 15.0, 16.0],
-                [l.lock_x, l.beside_search_y, 15.0, 16.0],
-                None,
-            );
-        }
+        draw.text(&search, [sx, y + 22.0 - shift], 0xFF4A_2D31, false);
     }
-    let (groups, cats) = shown(host, o);
-    let stock = o.stock.as_deref().unwrap_or_default();
-    let hover = hovered(&l, o, &groups, &cats, mouse);
-    // The list, a row at a time within the window (no clip rectangle: a row is drawn while it is
-    // wholly inside `itemWindowY`..`itemWindowY2`).
-    let top = y + 17.0;
-    let bottom = y + l.h - 80.0;
     for (ci, g) in groups.iter().enumerate() {
         if g.is_empty() {
             continue;
@@ -1243,17 +1266,15 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
         let cy = cats.get(ci).map_or(0.0, |c| c.y);
         if let Some(c) = cats.get(ci) {
             let hy = l.items_y + cy - shift;
-            if hy + 6.0 >= top && hy + 16.0 <= bottom {
-                let u = if c.hidden { 143.0 } else { 151.0 };
-                draw.sprite(
-                    TEX,
-                    [u, 176.0, 8.0, 8.0],
-                    [l.items_x, hy + 6.0, 8.0, 8.0],
-                    None,
-                );
-                draw.text(&c.name, [l.items_x + 10.0, hy + 8.0], 0xFF4A_2D31, false);
-                draw.text(&c.name, [l.items_x + 9.0, hy + 7.0], 0xFFF8_F8EC, false);
-            }
+            let u = if c.hidden { 143.0 } else { 151.0 };
+            draw.sprite(
+                TEX,
+                [u, 176.0, 8.0, 8.0],
+                [l.items_x, hy + 6.0, 8.0, 8.0],
+                None,
+            );
+            draw.text(&c.name, [l.items_x + 10.0, hy + 8.0], 0xFF4A_2D31, false);
+            draw.text(&c.name, [l.items_x + 9.0, hy + 7.0], 0xFFF8_F8EC, false);
             if c.hidden {
                 continue;
             }
@@ -1261,10 +1282,10 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
         let first = if cats.is_empty() { 4.0 } else { CELL };
         for (i, &si) in g.iter().enumerate() {
             let py = l.items_y + cy + first + (i / COLS) as f32 * CELL - shift;
-            if py < top - 1.0 {
+            if py < y {
                 continue;
             }
-            if py + 18.0 > bottom + 1.0 {
+            if py > y + l.h - 72.0 {
                 break;
             }
             let e = &stock[si];
@@ -1278,6 +1299,16 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
                 true,
             );
         }
+    }
+    // The lock, for the network's owner.
+    if o.admin {
+        let u = if o.locked { 16.0 } else { 32.0 };
+        draw.sprite(
+            TEX,
+            [u, 176.0, 15.0, 16.0],
+            [l.lock_x, l.beside_search_y - shift, 15.0, 16.0],
+            None,
+        );
     }
     // `getTroubleshootingMessage`, faded in once the list stayed empty.
     if groups.iter().all(Vec::is_empty) {
@@ -1334,6 +1365,7 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
             }
         }
     }
+    let _ = draw.pop_clip();
     // The scroll bar.
     let max = max_scroll(&groups, &cats, l.h) as f32;
     let window_h = l.h - 92.0;
@@ -1357,6 +1389,23 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
             [219.0, 207.0, 5.0, 5.0],
             [bx, by + bar - 5.0, 5.0, 5.0],
             None,
+        );
+    }
+    // The seated keeper beside the window (`renderBg`'s `stockKeeper`), turned toward the
+    // cursor (`renderEntityInInventoryFollowsMouse`, its height clamped round its head).
+    if let Some((keeper, bb)) = keeper_mob(host, o.pos, o.keeper) {
+        let wide = ((bb[1][0] - bb[0][0]).max(0.0) - 1.0).max(0.0) * 50.0;
+        let tall = ((bb[1][1] - bb[0][1]).max(0.0) - 1.0).max(0.0) * 25.0;
+        let ex = x - 35.0 - (wide as i32) as f32;
+        let ey = y + l.h - 47.0 - (tall as i32) as f32;
+        let _ = draw.entity(
+            &mod_api::GuiEntity::existing(keeper),
+            mod_api::GuiEntityView::new(
+                [ex - 100.0, ey - 100.0, ex + 100.0, ey + 100.0],
+                50.0,
+                0.0,
+                mod_api::GuiEntityLook::At([mouse[0], mouse[1].clamp(ey - 50.0, ey + 10.0)]),
+            ),
         );
     }
     // The blaze keeper beside the window (`renderBg`'s `blaze`): its burner drawn as a scene
@@ -1612,6 +1661,25 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
 
 /// The key a scene's burner carries to be drawn as a stock keeper.
 pub(crate) const KEEPER_KEY: &str = "StockKeeper";
+
+/// The seated keeper (the screen's `stockKeeper`, found by the server as the screen opened),
+/// while it is alive beside the ticker at `pos`, and its box.
+fn keeper_mob(
+    host: &dyn ClientHost,
+    pos: [i32; 3],
+    id: Option<u32>,
+) -> Option<(mod_api::EntityRef, [[f64; 3]; 2])> {
+    let id = id?;
+    let level = host.level(host.dimension())?;
+    let lo = [pos[0] - 1, pos[1] - 1, pos[2] - 1].map(f64::from);
+    let hi = [pos[0] + 2, pos[1] + 1, pos[2] + 2].map(f64::from);
+    let e = level
+        .entities_in(host, lo, hi)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|e| e.id() == id)?;
+    Some((e, e.bounding_box(host)?))
+}
 
 /// The blaze burner beside the ticker at `pos` (the screen's `blaze`), its state and data.
 fn blaze_keeper(

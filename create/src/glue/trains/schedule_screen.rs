@@ -282,6 +282,9 @@ struct Open {
     schedule: Schedule,
     slot: u8,
     scroll: f32,
+    /// Each entry's condition columns scrolled across (`horizontalScrolls`): the column index
+    /// shown first, chased, as (previous tick, now, target).
+    columns: Vec<[f32; 3]>,
     editing: Option<Editing>,
     size: [f32; 2],
     /// The player's inventory as the server sent it, and the slot whose ghost is carried.
@@ -322,6 +325,7 @@ pub fn server_message(host: &mut dyn ClientHost, data: &[u8]) {
             schedule,
             slot,
             scroll: 0.0,
+            columns: Vec::new(),
             editing: None,
             size: [0.0, 0.0],
             inventory,
@@ -334,6 +338,16 @@ pub fn server_message(host: &mut dyn ClientHost, data: &[u8]) {
 }
 
 pub fn tick_client(host: &mut dyn ClientHost) {
+    OPEN.with_borrow_mut(|o| {
+        if let Some(o) = o.as_mut() {
+            // `LerpedFloat.tickChaser` with `Chaser.EXP` at 0.5.
+            for c in &mut o.columns {
+                c[0] = c[1];
+                let d = c[2] - c[1];
+                c[1] = if d.abs() < 1.0 / 128.0 { c[2] } else { c[1] + d * 0.5 };
+            }
+        }
+    });
     let (send, close) = LATER.with_borrow_mut(std::mem::take);
     if close {
         host.mod_screen_close(MOD);
@@ -383,6 +397,9 @@ const STRIP_DOTTED: [f32; 4] = [23.0, 239.0, 11.0, 16.0];
 const STRIP_END: [f32; 4] = [34.0, 239.0, 11.0, 16.0];
 const STRIP_ACTION: [f32; 4] = [209.0, 239.0, 11.0, 16.0];
 const POINTER: [f32; 4] = [185.0, 239.0, 21.0, 16.0];
+const POINTER_OFFSCREEN: [f32; 4] = [171.0, 239.0, 13.0, 16.0];
+const SCROLL_LEFT: [f32; 4] = [161.0, 247.0, 4.0, 8.0];
+const SCROLL_RIGHT: [f32; 4] = [166.0, 247.0, 4.0, 8.0];
 /// `SCHEDULE_EDITOR` in `schedule_2.png`, the data boxes in `display_link.png`.
 const EDITOR: [f32; 4] = [0.0, 0.0, 256.0, 89.0];
 const INACTIVE_SLOT: [f32; 4] = [0.0, 91.0, 18.0, 18.0];
@@ -592,6 +609,54 @@ fn column_width(host: &dyn ClientHost, draw: &dyn DrawContext, g: &[Condition]) 
         .fold(0.0, f32::max)
 }
 
+/// `getConditionColumnWidth` for each of `e`'s columns, measured as the client's font does.
+fn column_widths(host: &dyn ClientHost, e: &Entry) -> Vec<f32> {
+    e.conditions
+        .iter()
+        .map(|g| {
+            g.iter()
+                .map(|c| {
+                    let s = summary(host, &Field::Condition(c.clone()));
+                    let tw = host
+                        .text_width(&mod_api::Text::literal(s.1.as_str()))
+                        .unwrap_or(0) as f32;
+                    (tw + if s.0.is_some() { 20.0 } else { 0.0 } + 16.0).max(32.0)
+                })
+                .fold(0.0, f32::max)
+        })
+        .collect()
+}
+
+/// `isConditionAreaScrollable`.
+fn scrollable(widths: &[f32]) -> bool {
+    26.0 + widths.iter().map(|w| w + 10.0).sum::<f32>() + 16.0 > CARD_WIDTH - 26.0
+}
+
+/// `getConditionScroll`: how far `widths`' columns are scrolled at column index `index`.
+fn column_scroll(widths: &[f32], mut index: f32) -> f32 {
+    let mut out = 0.0;
+    for w in widths {
+        let part = index.min(1.0);
+        out += (w + 10.0) * part;
+        index -= part;
+    }
+    out
+}
+
+impl Open {
+    /// Entry `i`'s column chaser (`horizontalScrolls.get(i)`), at rest at 0 until scrolled.
+    fn column(&self, i: usize) -> [f32; 3] {
+        self.columns.get(i).copied().unwrap_or([0.0; 3])
+    }
+
+    fn chase_column(&mut self, i: usize, target: f32) {
+        if self.columns.len() <= i {
+            self.columns.resize(i + 1, [0.0; 3]);
+        }
+        self.columns[i][2] = target;
+    }
+}
+
 pub fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
     if !ours(host) {
         return;
@@ -639,14 +704,22 @@ fn draw_schedule(
     let s = &o.schedule;
     let mut y_offset = 25.0;
     let scroll = -o.scroll;
-    let visible = |y: f32, h: f32| y >= 16.0 && y + h <= 189.0;
+    let partial = crate::glue::stock::keeper::partial_tick();
+    // The cards are cut to the list (`enableScissor(leftPos + 16, topPos + 16, leftPos + 236,
+    // topPos + 189)`).
+    let _ = draw.push_clip([left + 16.0, top + 16.0, 220.0, 173.0]);
     for i in 0..=s.entries.len() {
         if s.saved_progress == i && !s.entries.is_empty() {
             let expected = scroll + y_offset + 4.0;
             let actual = expected.clamp(18.0, 170.0);
-            sprite(draw, SHEET, POINTER, [left, top + actual]);
+            let pointer = if expected == actual {
+                POINTER
+            } else {
+                POINTER_OFFSCREEN
+            };
+            sprite(draw, SHEET, pointer, [left, top + actual]);
         }
-        if (i == 0 || s.entries.is_empty()) && visible(16.0 + scroll, 10.0) {
+        if i == 0 || s.entries.is_empty() {
             stretched(
                 draw,
                 STRIP_LIGHT,
@@ -657,41 +730,75 @@ fn draw_schedule(
             if i > 0 {
                 y_offset += 9.0;
             }
-            if visible(y_offset + scroll, 16.0) {
-                sprite(
-                    draw,
-                    SHEET,
-                    STRIP_END,
-                    [left + 29.0, top + y_offset + scroll],
-                );
-                sprite(
-                    draw,
-                    SHEET,
-                    CARD_NEW,
-                    [left + 43.0, top + y_offset + scroll],
-                );
-            }
+            sprite(
+                draw,
+                SHEET,
+                STRIP_END,
+                [left + 29.0, top + y_offset + scroll],
+            );
+            sprite(
+                draw,
+                SHEET,
+                CARD_NEW,
+                [left + 43.0, top + y_offset + scroll],
+            );
             break;
         }
         let e = &s.entries[i];
         let h = card_height(e);
-        let card_y = y_offset + scroll;
-        if visible(card_y, h) {
-            draw_entry(host, draw, s, i, [left + 25.0, top + card_y]);
-        }
+        let card_y = y_offset;
+        draw_entry(host, draw, s, i, [left + 25.0, top + card_y + scroll]);
         y_offset += h;
         if i + 1 < s.entries.len() {
-            if visible(y_offset - 3.0 + scroll, 16.0) {
+            sprite(
+                draw,
+                SHEET,
+                STRIP_DOTTED,
+                [left + 29.0, top + y_offset - 3.0 + scroll],
+            );
+            y_offset += 10.0;
+        }
+        if !e.instruction.supports_conditions() {
+            continue;
+        }
+        // The conditions, scrolled across and cut to the card (`enableScissor(leftPos + 43,
+        // 0, leftPos + 204, 400)` inside the list's).
+        let widths = column_widths(host, e);
+        let c = o.column(i);
+        let index = c[0] + (c[1] - c[0]) * partial;
+        let _ = draw.push_clip([left + 43.0, 0.0, 161.0, 400.0]);
+        draw_conditions(
+            host,
+            draw,
+            e,
+            [left + 25.0, top + card_y + scroll],
+            column_scroll(&widths, index),
+            h,
+        );
+        let _ = draw.pop_clip();
+        if scrollable(&widths) {
+            let center = ((h - 8.0 + CARD_HEADER) / 2.0).floor();
+            if c[2] != 0.0 {
                 sprite(
                     draw,
                     SHEET,
-                    STRIP_DOTTED,
-                    [left + 29.0, top + y_offset - 3.0 + scroll],
+                    SCROLL_LEFT,
+                    [left + 40.0, top + card_y + scroll + center],
                 );
             }
-            y_offset += 10.0;
+            if c[2] != (e.conditions.len() as f32 - 1.0) {
+                sprite(
+                    draw,
+                    SHEET,
+                    SCROLL_RIGHT,
+                    [left + 203.0, top + card_y + scroll + center],
+                );
+            }
         }
     }
+    let _ = draw.pop_clip();
+    draw.fill_gradient([left + 16.0, top + 16.0, 220.0, 10.0], 0x7700_0000, 0);
+    draw.fill_gradient([left + 16.0, top + 179.0, 220.0, 10.0], 0, 0x7700_0000);
     // The buttons (hidden while editing).
     if o.editing.is_none() {
         let c = [left + W - 42.0, top + H - 30.0];
@@ -827,9 +934,18 @@ fn draw_entry(
     }
     let sum = summary(host, &Field::Instruction(e.instruction.clone()));
     render_input(host, draw, &sum, [x + 26.0, y + 5.0], false, 100.0);
-    if !conditions {
-        return;
-    }
+}
+
+/// `renderScheduleConditions` for entry `e`'s card at `at`, its columns scrolled `shift` across.
+fn draw_conditions(
+    host: &dyn ClientHost,
+    draw: &mut dyn DrawContext,
+    e: &Entry,
+    at: [f32; 2],
+    shift: f32,
+    h: f32,
+) {
+    let (x, y) = (at[0] - shift, at[1]);
     let mut x_offset = 26.0;
     for g in &e.conditions {
         let w = column_width(host, &*draw, g);
@@ -856,6 +972,21 @@ fn draw_entry(
         x_offset += w + 10.0;
     }
     sprite(draw, SHEET, CONDITION_NEW, [x + x_offset - 3.0, y + 29.0]);
+    // Shadows at the card's edges when the columns don't fit across it (the gradients turned
+    // a quarter: dark at the left edge and at the right).
+    if x_offset + 16.0 > CARD_WIDTH - 26.0 {
+        let (cx, band) = (at[0], [y + 2.0 + CARD_HEADER, h - 4.0 - CARD_HEADER]);
+        for (gx, from, to) in [
+            (cx + 18.0, 0x4400_0000u32, 0u32),
+            (cx + CARD_WIDTH - 26.0, 0, 0x4400_0000),
+        ] {
+            for k in 0..10 {
+                let t = (k as f32 + 0.5) / 10.0;
+                let a = ((from >> 24) as f32 * (1.0 - t) + (to >> 24) as f32 * t) as u32;
+                draw.fill([gx + k as f32, band[0], 1.0, band[1]], a << 24);
+            }
+        }
+    }
 }
 
 /// What a click at `mouse` does on the schedule (`action`): with `click` None only its
@@ -932,6 +1063,19 @@ fn action(
                 return Some(vec![tr(host, "create.gui.schedule.move_down", &[])]);
             }
         }
+        let widths = column_widths(host, e);
+        let center = ((h - 8.0 + CARD_HEADER) / 2.0).floor();
+        if y > center - 1.0 && y <= center + 7.0 && scrollable(&widths) {
+            let target = o.column(i)[2];
+            if x > 12.0 && x <= 19.0 && target != 0.0 {
+                push(Change::Column(i, target - 1.0), 0);
+                return Some(Vec::new());
+            }
+            if x > 177.0 && x <= 184.0 && target != e.conditions.len() as f32 - 1.0 {
+                push(Change::Column(i, target + 1.0), 0);
+                return Some(Vec::new());
+            }
+        }
         if !e.instruction.supports_conditions() {
             return None;
         }
@@ -940,21 +1084,12 @@ fn action(
         if x < 0.0 || y < 0.0 || x > 160.0 {
             return None;
         }
-        x -= 8.0;
+        x += column_scroll(&widths, o.column(i)[1]) - 8.0;
         for (j, g) in e.conditions.iter().enumerate() {
             if x < 0.0 {
                 return None;
             }
-            let w = g
-                .iter()
-                .map(|c| {
-                    let s = summary(host, &Field::Condition(c.clone()));
-                    let tw = host
-                        .text_width(&mod_api::Text::literal(s.1.as_str()))
-                        .unwrap_or(0) as f32;
-                    (tw + if s.0.is_some() { 20.0 } else { 0.0 } + 16.0).max(32.0)
-                })
-                .fold(0.0, f32::max);
+            let w = widths[j];
             if x >= w {
                 x -= w + 10.0;
                 continue;
@@ -1149,21 +1284,31 @@ enum Change {
     Duplicate(usize),
     Move(usize, usize),
     RemoveCondition(usize, usize, usize),
+    /// Entry `i`'s columns chased to a column index.
+    Column(usize, f32),
 }
 
 fn apply(host: &dyn ClientHost, o: &mut Open, change: Change) {
     let s = &mut o.schedule;
     match change {
+        Change::Column(i, target) => {
+            o.chase_column(i, target);
+            return;
+        }
+        // These `init()` the screen again, which starts every column scroll at 0.
         Change::Remove(i) => {
             s.entries.remove(i);
+            o.columns.clear();
         }
         Change::Duplicate(i) => {
             let e = s.entries[i].clone();
             s.entries.insert(i, e);
+            o.columns.clear();
         }
         Change::Move(a, b) => {
             let e = s.entries.remove(a);
             s.entries.insert(b, e);
+            o.columns.clear();
         }
         Change::RemoveCondition(i, j, row) => {
             let groups = &mut s.entries[i].conditions;
@@ -1950,6 +2095,40 @@ pub fn screen_mouse_scrolled(
         };
         if o.editing.is_some() {
             return step_editor(o, mouse, up);
+        }
+        // Shift scrolls the columns of the card under the cursor.
+        if host.modifiers().shift() {
+            let (left, top) = corner(o.size);
+            let mut y = (mouse[1] - top - 25.0 + o.scroll).floor();
+            let mut over = None;
+            for (i, e) in o.schedule.entries.iter().enumerate() {
+                let rows = e.conditions.iter().map(Vec::len).max().unwrap_or(0) as f32;
+                let h = CARD_HEADER + 24.0 + rows * 18.0;
+                if y >= h {
+                    y -= h + 9.0;
+                    if y < 0.0 {
+                        break;
+                    }
+                    continue;
+                }
+                if scrollable(&column_widths(host, e))
+                    && y >= 24.0
+                    && mouse[0] >= left + 25.0
+                    && mouse[0] <= left + 205.0
+                {
+                    over = Some((i, e.conditions.len() as f32 - 1.0));
+                }
+                break;
+            }
+            if let Some((i, last)) = over {
+                let target = o.column(i)[2];
+                if up && target != 0.0 {
+                    o.chase_column(i, target - 1.0);
+                } else if !up && target != last {
+                    o.chase_column(i, target + 1.0);
+                }
+                return false;
+            }
         }
         // `mouseScrolled`: the list scrolls 12 a notch, within its length.
         let mut max = 40.0 - 173.0;

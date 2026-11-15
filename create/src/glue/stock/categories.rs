@@ -601,15 +601,16 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
     let partial = super::keeper::partial_tick();
     let scroll = o.scroll_prev + (o.scroll - o.scroll_prev) * partial;
     if o.editing.is_none() {
-        // The cards, scrolled; without a clip rectangle a card is drawn only while it is wholly
-        // inside the list (`enableScissor(.., topPos + 16, .., topPos + 99)`).
+        // The cards, scrolled, cut to the list
+        // (`enableScissor(leftPos + 3, topPos + 16, leftPos + 187, topPos + 19 + 20 * slices)`).
         let top = y + 16.0;
         let bottom = y + 99.0;
+        let _ = draw.push_clip([x + 3.0, top, 184.0, bottom - top]);
         let mut at = 25.0;
         for (i, card) in o.cards.iter().enumerate() {
             let cy = y + at - scroll;
             at += CARD;
-            if cy < top || cy + 18.0 > bottom {
+            if cy + 18.0 < top || cy > bottom {
                 continue;
             }
             let cx = x + 7.0;
@@ -641,7 +642,7 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
             draw.text(&shown, [cx + 35.0, cy + 5.0], 0xFF65_6565, false);
         }
         let ny = y + at - scroll;
-        if ny >= top && ny + 18.0 <= bottom {
+        if ny + 18.0 >= top && ny <= bottom {
             draw.sprite(
                 TEX,
                 [38.0, 127.0, 27.0, 18.0],
@@ -649,6 +650,7 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
                 None,
             );
         }
+        let _ = draw.pop_clip();
         let cr = confirm_rect(x, y, false);
         icon_button(draw, cr, [0.0, 16.0], inside(cr, mouse));
         // `action(graphics, ..)`: the hovered control's tooltip.
