@@ -3271,10 +3271,18 @@ pub const PARTIALS: [(&str, &str, &str); 201] = [
     ),
     // DeskBellRenderer's plunger and bell (`DESK_BELL_PLUNGER`, `DESK_BELL_BELL`), as written
     // for a bell facing up.
-    ("part_desk_bell_plunger", "create:block/desk_bell/plunger", "up"),
+    (
+        "part_desk_bell_plunger",
+        "create:block/desk_bell/plunger",
+        "up",
+    ),
     ("part_desk_bell_bell", "create:block/desk_bell/bell", "up"),
     // PostboxRenderer's flag (`POSTBOX_FLAG`), as written for a postbox facing south.
-    ("part_postbox_flag", "create:block/package_postbox/flag", "up"),
+    (
+        "part_postbox_flag",
+        "create:block/package_postbox/flag",
+        "up",
+    ),
     // PackagerRenderer's trays and hatches (`PACKAGER_TRAY_*`, `PACKAGER_HATCH_*`).
     ("part_packager_tray", "create:block/packager/tray", "up"),
     ("part_repackager_tray", "create:block/repackager/tray", "up"),
@@ -3301,17 +3309,33 @@ pub const PARTIALS: [(&str, &str, &str); 201] = [
         "create:block/elevator_pulley/pulley_magnet",
         "up",
     ),
-    ("part_elevator_belt", "create:block/elevator_pulley/rope", "up"),
+    (
+        "part_elevator_belt",
+        "create:block/elevator_pulley/rope",
+        "up",
+    ),
     (
         "part_elevator_belt_half",
         "create:block/elevator_pulley/rope_half",
         "up",
     ),
     // LinkBulbRenderer's tube (`DISPLAY_LINK_TUBE`), as written for a link facing up.
-    ("part_display_link_tube", "create:block/display_link/tube", "up"),
+    (
+        "part_display_link_tube",
+        "create:block/display_link/tube",
+        "up",
+    ),
     // ControlsRenderer's cover and levers (`TRAIN_CONTROLS_*`), as written facing north.
-    ("part_train_controls_cover", "create:block/controls/train/cover", "up"),
-    ("part_train_controls_lever", "create:block/controls/train/lever", "up"),
+    (
+        "part_train_controls_cover",
+        "create:block/controls/train/cover",
+        "up",
+    ),
+    (
+        "part_train_controls_lever",
+        "create:block/controls/train/lever",
+        "up",
+    ),
     // BellRenderer's bodies (`PECULIAR_BELL`, `HAUNTED_BELL`), as written for a bell facing
     // south on the floor.
     ("part_peculiar_bell", "create:block/peculiar_bell", "up"),
@@ -3505,8 +3529,25 @@ pub const WHEEL_WOODS: [(&str, &str, &str); 12] = [
 /// Create's wheel and gives it the wood's textures. Each points up, as Create's wheel models do.
 /// The table cloths' kinds (`AllBlocks.TABLE_CLOTHS` and the three metal ones).
 pub const TABLE_CLOTHS: [&str; 19] = [
-    "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray",
-    "cyan", "purple", "blue", "brown", "green", "red", "black", "andesite", "brass", "copper",
+    "white",
+    "orange",
+    "magenta",
+    "light_blue",
+    "yellow",
+    "lime",
+    "pink",
+    "gray",
+    "light_gray",
+    "cyan",
+    "purple",
+    "blue",
+    "brown",
+    "green",
+    "red",
+    "black",
+    "andesite",
+    "brass",
+    "copper",
 ];
 
 /// `TableClothModel`'s corners (`AllPartialModels.TABLE_CLOTH_*`, drawn in the cloth's own
@@ -4324,18 +4365,12 @@ mod tests {
             states_and_default(&doc),
             (8, pairs(&[("facing", "north"), ("waterlogged", "false")]))
         );
-        // PostboxBlock: facing, open, waterlogged.
+        // PostboxBlock: facing and open of its own; waterlogged is its solid template's.
         let doc = declare("lime_postbox", (2.0, 2.0, 64));
+        assert_eq!(doc["template"], "minecraft:waxed_copper_grate");
         assert_eq!(
             states_and_default(&doc),
-            (
-                16,
-                pairs(&[
-                    ("facing", "north"),
-                    ("open", "false"),
-                    ("waterlogged", "false")
-                ])
-            )
+            (8, pairs(&[("facing", "north"), ("open", "false")]))
         );
         // NixieTubeBlock: floor by default, light 5; only the orange one has an item.
         let doc = declare("nixie_tube", (3.0, 6.0, 64));
