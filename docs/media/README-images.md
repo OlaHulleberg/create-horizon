@@ -17,7 +17,7 @@ item vaults) between three stations.
 
 | File | Size | Shows | Goes |
 |---|---|---|---|
-| `banner.webp` | 1600x600 | The train on the viaduct into the sunset, the factory hall and windmill; title "Create / for Sunrise" | Top of the README, `width="100%"` |
+| `banner.webp` | 1600x600 | The train on the viaduct into the sunset, the factory hall and windmill; title "Create / for Sunrise & Horizon" | Top of the README, `width="100%"` |
 | `readme/panel-machines.webp` | 1200x760 | The factory hall: belts, arms, presses, mixers on blaze burners, nixie tubes, display board | Feature grid, row 1 left |
 | `readme/panel-trains.webp` | 1200x760 | The locomotive head-on, coming off the viaduct past the hall | Feature grid, row 1 right |
 | `readme/panel-kinetics.webp` | 1200x760 | The eight-bladed windmill against the sunset | Feature grid, row 2 left |
@@ -38,7 +38,7 @@ item vaults) between three stations.
 
 | File | Alt text | Caption |
 |---|---|---|
-| `banner.webp` | Create for Sunrise: a copper locomotive on a stone viaduct at sunset beside a Create factory and windmill | — |
+| `banner.webp` | Create for Sunrise & Horizon: a copper locomotive on a stone viaduct at sunset beside a Create factory and windmill | — |
 | `panel-machines.webp` | A Create factory hall with belts, mechanical arms, presses, mixers on blaze burners and nixie tubes | Every machine, natively in Rust (baked in) |
 | `panel-trains.webp` | A copper-and-brass locomotive coming off a viaduct towards the camera | Trains, contraptions, logistics (baked in) |
 | `panel-kinetics.webp` | An eight-bladed windmill on a tall tower at sunset | Kinetics you can watch (baked in) |
@@ -82,7 +82,7 @@ the gallery 2 per row, ending with `<sub>` lines naming the Sunrise build and th
 - Banner: 8:3, the shape of Sunrise's, so the two read as one family. The left third is sea and
   sunset sky under a left-to-right andesite gradient, which keeps the title calm; the train,
   hall and windmill fill the right. Fira Sans Heavy for "Create", SemiBold brass for
-  "for Sunrise", a tracked condensed kicker and a short brass rule.
+  "for Sunrise & Horizon", a tracked condensed kicker and a short brass rule.
 - Palette from Create's materials: andesite greys (#1E1F22 band), brass (#E2AC52, rule #966828),
   cream type (#F6EEDE), muted grey for subtitles. No transparency, so no light/dark variants.
 - Panels: all 1200x760 (~1.58:1) with one 150 px andesite caption band and a brass rule, one

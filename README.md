@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/banner.webp" alt="Create for Sunrise: a copper locomotive on a stone viaduct at sunset beside a Create factory and windmill" width="100%">
+  <img src="docs/media/banner.webp" alt="Create for Sunrise &amp; Horizon: a copper locomotive on a stone viaduct at sunset beside a Create factory and windmill" width="100%">
 </p>
 
 <p align="center">
@@ -15,7 +15,7 @@
   <a href="https://playsunrise.net"><img src="https://img.shields.io/badge/runs%20on-Sunrise%20(Minecraft%2026.3)-F0795A" alt="Runs on Sunrise, Minecraft 26.3"></a>
 </p>
 
-# Create for Sunrise
+# Create for Sunrise & Horizon
 
 **[Create](https://github.com/Creators-of-Create/Create) 6.0.11, ported to native Rust.** A native mod for
 Sunrise and Horizon. No Java at build time or play time, and no mixins.
