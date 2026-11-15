@@ -175,24 +175,22 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A placement answering another block's state**: `state_for_placement` ignores a state of another block,
   so a shaft placed in front of a steam engine becomes its powered shaft a tick later
   (`ShaftBlock.pickCorrectShaftType`), from any placement, not only a player's.
-- **A special item model told its display context and the time** (`SpecialModelRenderer.extract` is asked
-  once per stack, with neither): the extendo grip is drawn with its arms, hand and cog at Create's resting pose
-  everywhere, its cog still and its arms not reaching out in a first-person hand as the player swings
-  (`ExtendoGripItemRenderer`, `ExtendoGripRenderHandler`). `item_model_update` is told the display context and
-  the game time but only picks whole named models, so a turning cog and a reaching arm would be one baked item
-  model per frame; the swing progress is told to neither.
+- **The local player's swing on its client** (`RenderHandEvent.getSwingProgress`): the extendo grip's arms
+  reach out in a first-person hand as Create's (`ExtendoGripRenderHandler`), started by a raw click in the
+  world (`mouse_button_post`), as nothing on the client tells a swing (`attack_strength_scale` is the
+  server's); a swing started otherwise (a held attack, a key) doesn't move them. Its poses are picked by
+  `item_model_update` from ones `create-data` lists (the cog in tenths of its 45° repeat, the swing in eight
+  steps), by game ticks, as the node is told no partial tick.
 - **Whether an item's model is 3D** (`BakedModel.isGui3d`): belts, depots, placards and link slots approximate
   it by "the item places a block".
 - **Keeping only some of a block entity's drawing**: `keep()` keeps everything drawn for it, so a block with
   one animated part is drawn every frame (the glue decides through `Subsystem::animated`). A way to hide
   another part's model would let the clockwork bearing's hour hand replace its top.
 - **A colour over a block model a block entity draws** (`SuperByteBuffer.color`): an overstressed
-  network's turning parts flash red, and a recovered one's green (`KineticEffectHandler.overStressedEffect`);
-  `BlockEntityDrawContext::block` draws a model in its own tints, and `terrain_model`'s tint reaches only
-  quads with a tint index. The smoke and cloud that go with the flash are played. The display link's bulb
-  flash (`LinkBulbRenderer`) draws its tube full bright in the translucent layer, but not the glow model
-  drawn additively in a fading grey over it, for the same want (see the additive blend below). A station's assembly track (`StationRenderer`: blue where a
-  bogey may go, green where one is) is drawn in the overlay model's own colours for the same reason.
+  network's turning parts flash red, and a recovered one's green, fading (`KineticEffectHandler
+  .overStressedEffect`); `terrain_model`'s tint reaches only quads with a tint index, so every kinetic part
+  would need a tinted copy (`create-data` makes them for the arm, the gauge's arrows and the station's
+  assembly overlay), and the flash is left out. The smoke and cloud that go with it are played.
 - **A train station's signal and observer overlays' facing** is not an API gap but not kept: the port keeps
   no `TrackTargetingBehaviour.targetDirection`, so signals' and observers' track markers are not drawn
   (stations draw theirs, turned by their last assembly direction).
@@ -200,11 +198,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   only against air or a fluid as it is placed, where Create asks for any collision shape behind it (the
   neighbour check after placement reads them through `LevelRef::collision_boxes`).
 - **Text alpha in `BlockEntityDrawContext::text`** (display boards' 0.85 / 0.975).
-- **A mutable `ClientHost` in screen hooks**: the clipboard's close button closes it and sends its pages at
-  once (from `mouse_button_pre`, the one mouse hook with a mutable client), but a clipboard closed by a key
-  (`screen_closing` has a read-only client) sends its pages at the next client tick. The other screens of
-  the mod's own (display link, contacts, station, schedule, value boxes' boards) still close and send from
-  their next tick; their buttons could take the same route.
 - **The local player's ground flag and swimming on its client**: the diving boots sink, jump and stride as
   Create's (`player_tick_pre`, `movement_input`, `push_player`), but the client can't read its own player's
   `onGround`/`verticalCollision` (`EntityRef::on_ground` is the server's; a block shape just under or over the
@@ -254,10 +247,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   `SoundRef` can change its volume (`fade`) but not its position, so they play at the listener with the volume
   their distance gives them, from no side (`glue/sources/ambience.rs`). A `SoundRef::move_to(position)` would
   close it.
-- **A particle drawn as its own quads** (`SteamJetParticle.render`'s four quads turned along the jet): steam
-  engines' and whistles' steam jets are Create's sprites on a billboard. A textured world pipeline could draw
-  the four quads from a world-draw hook, but as world geometry the mod ticks itself: no particle lifetime,
-  particle lighting or sorting with the other particles.
+- **Light at a position on the client**: the steam jets (`SteamJetParticle`) are drawn as Create's four
+  turned quads through the glue's world pipeline, but a pipeline is unlit and the client has no light read
+  (`LevelRef::brightness` is the server's), so a jet is full bright where Create's takes the light at its
+  position; as world quads they are not sorted among the particles.
 - **A tinted particle with a block sprite and an exact velocity** (Create's `FluidStackParticle`: the fluid's
   still sprite, its tint times 0.8, the spawn's velocity, gravity and collision): the item particle
   (`ParticleOptions::item`) moves as Create's does but is drawn untinted, and the block particle takes a tint
@@ -282,24 +275,16 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   .breathingAlpha()`), for the shaft and cog helpers, copycats, girders, table cloths, sails, ladders and
   display boards; a `WorldDrawContext` call drawing a `BlockState` at a position with an alpha, for one frame,
   would close both (the helpers themselves place as Create's do).
-- **GUI sprites in a block entity's draw**, and **text and sprites on a block face in the world** outside one:
-  a value box's number is drawn by its block's block entity (creative motors, speed controllers, valve
-  handles, brass diodes), but the icon boxes (`IconValueBox`: movement and selection modes) and the filter
-  slots' items and counts (`FilteringRenderer`) are left out. A kept block entity is drawn anew only when its
-  data changes, so the server resends a looked-at block's entity with a look count. A textured world pipeline
-  can now draw a sprite the mod puts on the block atlas (an icon's cell picked by its UVs) from a world-draw
-  hook, but not text, items or an item count, nor in the block entity's pose.
+- **Items in the world outside a block entity**: a value box's number is drawn by its block's block entity
+  (creative motors, speed controllers, valve handles, brass diodes) and the option boxes' icons and frames
+  (`IconValueBox`, `VALUE_BOX_HOVER`) as world quads of the icon atlas, but the filter slots' items and
+  counts (`FilteringRenderer`) are left out: a world-draw hook can draw neither an item nor text. A kept
+  block entity is drawn anew only when its data changes, so the server resends a looked-at block's entity
+  with a look count.
 - **A slot holding more than 99**: a toolbox compartment holds 4 stacks (256); its screen draws the
   compartment's total over its one slot after the screen is drawn, but the other three stacks are filled by the
   deposit button and hoppers, not by clicks.
 - **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
-- **An additive blend for a block entity's drawing** (`RenderTypes.additive()`): a nixie tube on a train signal
-  draws the signal's panel and lit tubes, but not the glow round each lit tube (`SIGNAL_RED_GLOW`,
-  `SIGNAL_YELLOW_GLOW`, `SIGNAL_WHITE_GLOW` and the translucent `SIGNAL_WHITE_CUBE`, scaled to the light,
-  within 128 blocks): `BlockEntityDrawContext::block` draws a model in its own layer only. An additive world
-  pipeline sampling the glow's sprite (`RenderPipeline::textured`) could draw the glow from a world-draw hook,
-  but only as world quads the mod flattens from the glow models itself, for blocks it tracks on the client,
-  outside the block entity's pose. A blend (or render-type) option on `block`/`terrain_model` would close it.
 
 ## Left out of the port, not for want of API
 
