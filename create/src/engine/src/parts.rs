@@ -2,7 +2,7 @@
 //! cog type, generated speed and stress, decoded once per state when a world opens.
 
 use crate::Block;
-use crate::kinetics::{Axis, Chain, Couple, Dir, Part, convert_to_direction};
+use crate::kinetics::{Axis, Chain, Couple, Dir, Gantry, Part, convert_to_direction};
 
 /// What the kinetic rules read of one block state, decoded from its property strings once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -390,9 +390,23 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         }),
         // GantryShaftBlock (DirectionalKineticBlock): turns on its facing's axis, shafts at both
         // ends.
-        Block::GantryShaft => s
-            .facing
-            .map_or([None, None], |f| one(Part::shaft(f.axis()))),
+        Block::GantryShaft => s.facing.map_or([None, None], |f| {
+            one(Part {
+                gantry: Some(Gantry::Shaft {
+                    facing: f,
+                    powered: s.powered,
+                }),
+                ..Part::shaft(f.axis())
+            })
+        }),
+        // GantryCarriageBlock (DirectionalAxisKineticBlock): a shaft through it on its rotation
+        // axis, across its facing, and the pinion on the gantry shaft behind it.
+        Block::GantryCarriage => s.facing.map_or([None, None], |f| {
+            one(Part {
+                gantry: Some(Gantry::Carriage { facing: f }),
+                ..Part::shaft(directional_axis(f, s.along_first))
+            })
+        }),
         // MechanicalBearingBlock and ClockworkBearingBlock (BearingBlock): a shaft out of its
         // back, turning what it carries.
         Block::MechanicalBearing | Block::ClockworkBearing => s
@@ -687,6 +701,38 @@ mod tests {
         let w = parts(Block::LargeWaterWheel, &info(&[("axis", "z")]), &flowing)[0].unwrap();
         assert_eq!((w.axis, w.generated, w.capacity), (Axis::Z, -4.0, 128.0));
         assert!(is_kinetic(Block::LargeWaterWheel) && is_kinetic(Block::Turntable));
+    }
+
+    #[test]
+    fn a_gantry_carriage_turns_with_its_shaft_and_a_powered_gantry() {
+        let st = Settings::default();
+        let mut k = Kinetics::new();
+        // A carriage facing up on a gantry shaft along x, its own shaft along z.
+        let carriage = info(&[("facing", "up"), ("axis_along_first", "false")]);
+        let c = parts(Block::GantryCarriage, &carriage, &st)[0].unwrap();
+        assert_eq!(c.axis, Axis::Z);
+        k.set([0, 0, 0], 0, c);
+        let motor = info(&[("facing", "south")]);
+        k.set(
+            [0, 0, -1],
+            0,
+            parts(Block::CreativeMotor, &motor, &st)[0].unwrap(),
+        );
+        let shaft = |powered: &str| {
+            let s = info(&[("facing", "east"), ("powered", powered)]);
+            parts(Block::GantryShaft, &s, &st)[0].unwrap()
+        };
+        k.set([0, -1, 0], 0, shaft("false"));
+        k.solve(&mut Vec::new());
+        assert_eq!(k.speed([0, 0, 0], 0), Some(16.0), "turned by the motor's shaft");
+        assert_eq!(k.speed([0, -1, 0], 0), Some(0.0), "an unpowered gantry is not");
+        // Powered, the carriage turns the gantry (`getGantryPinionModifier`: x, pinion up: +1).
+        k.set([0, -1, 0], 0, shaft("true"));
+        k.solve(&mut Vec::new());
+        assert_eq!(k.speed([0, -1, 0], 0), Some(16.0));
+        assert_eq!(crate::kinetics::gantry_pinion_modifier(Dir::East, Dir::Down), -1.0);
+        assert_eq!(crate::kinetics::gantry_pinion_modifier(Dir::Up, Dir::North), -1.0);
+        assert_eq!(crate::kinetics::gantry_pinion_modifier(Dir::North, Dir::Up), 1.0);
     }
 
     #[test]

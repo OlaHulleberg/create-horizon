@@ -167,6 +167,28 @@ pub struct Part {
     /// a valve handle's use, on its part; a sequenced gearshift's running instruction, on its
     /// second half (for whichever half it turns).
     pub context: Option<Context>,
+    /// A gantry shaft or carriage, which a powered shaft and the carriage on it join across
+    /// (`GantryShaftBlockEntity.isCustomConnection`, `propagateRotationTo`).
+    pub gantry: Option<Gantry>,
+}
+
+/// The gantry's side of a part: a gantry shaft's facing and power, or a carriage's facing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gantry {
+    Shaft { facing: Dir, powered: bool },
+    Carriage { facing: Dir },
+}
+
+/// `GantryCarriageBlockEntity.getGantryPinionModifier`: the speed a powered gantry shaft facing
+/// `shaft` and the carriage facing `pinion` on it turn each other at.
+pub fn gantry_pinion_modifier(shaft: Dir, pinion: Dir) -> f32 {
+    let direction = if shaft.positive() { 1.0 } else { -1.0 };
+    let reversed = match shaft.axis() {
+        Axis::Y => matches!(pinion, Dir::North | Dir::East),
+        Axis::X => matches!(pinion, Dir::Down | Dir::South),
+        Axis::Z => matches!(pinion, Dir::Up | Dir::West),
+    };
+    if reversed { -direction } else { direction }
 }
 
 /// `SequencedGearshiftBlockEntity.SequenceContext` as its holder sets it: turn so many degrees
@@ -221,6 +243,7 @@ impl Part {
             chain: None,
             couple: None,
             context: None,
+            gantry: None,
         }
     }
     pub fn cog(axis: Axis, large: bool) -> Part {
@@ -278,6 +301,24 @@ pub fn ratio(a: &Part, b: &Part, diff: [i32; 3]) -> f32 {
         && b.shafts & d.opposite().bit() != 0
     {
         return a.face_sign[d as usize] as f32 / b.face_sign[d.opposite() as usize] as f32;
+    }
+    // A powered gantry shaft and the carriage on its side facing away from it, either way
+    // (`GantryShaftBlockEntity.propagateRotationTo`, `GantryCarriageBlockEntity
+    // .propagateRotationTo`); an unpowered one conveys nothing to it.
+    if let (Some(d), Some(x), Some(y)) = (Dir::from_offset(diff), a.gantry, b.gantry) {
+        match (x, y) {
+            (Gantry::Shaft { facing, powered }, Gantry::Carriage { facing: c })
+            | (Gantry::Carriage { facing: c }, Gantry::Shaft { facing, powered })
+                if (if matches!(x, Gantry::Shaft { .. }) { d } else { d.opposite() }) == c =>
+            {
+                return if powered {
+                    gantry_pinion_modifier(facing, c)
+                } else {
+                    0.0
+                };
+            }
+            _ => {}
+        }
     }
     // Attached encased chain drives: ChainDriveBlock.areBlocksConnected, at
     // `ChainDriveBlock.getRotationSpeedModifier` (from's modifier over to's).
@@ -474,6 +515,14 @@ impl Kinetics {
     /// One tick went by: every part's flicker score falls by one (`KineticBlockEntity.tick`).
     pub fn advance(&mut self) {
         self.now += 1;
+    }
+
+    /// Whether the part at `pos` is waiting for its first solve: a part just placed or loaded
+    /// has no speed yet, and its first solve reports one. False where there is none.
+    pub fn unsolved(&self, pos: [i32; 3]) -> bool {
+        self.at
+            .get(&pos)
+            .is_some_and(|s| s[0] != NONE && self.nodes[s[0] as usize].fresh)
     }
 
     /// The flicker score of the part at `pos` (`getFlickerScore`).

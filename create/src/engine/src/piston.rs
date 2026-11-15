@@ -236,6 +236,11 @@ fn search(
         {
             frontier.push_back(p);
         }
+        for p in crate::contraption::belt_neighbours(pos, &found) {
+            if !visited.contains(&p) && !exclude.contains(&p) {
+                frontier.push_back(p);
+            }
+        }
         for d in Dir::ALL {
             let next = add(pos, d, 1);
             if visited.contains(&next) || exclude.contains(&next) {

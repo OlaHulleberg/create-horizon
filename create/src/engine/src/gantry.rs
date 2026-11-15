@@ -73,7 +73,7 @@ pub struct Moving {
     /// Its actors, glue and turned-off actor kinds.
     pub carried: crate::actors::Carried,
     /// `sequencedOffsetLimit`: how far the turn by distance its shaft had when it started still
-    /// lets it go (`limitMovement`), none for no limit; not saved.
+    /// lets it go (`limitMovement`), none for no limit; saved with it.
     pub limit: Option<f32>,
 }
 
