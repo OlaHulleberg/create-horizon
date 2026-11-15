@@ -5,9 +5,8 @@
 //! and smoking set them alight and hurt them, washing puts them out and hurts endermen, snow
 //! golems and blazes, haunting blinds and slows them. Create's own damage types (`fan_lava`,
 //! `fan_fire`) are stood in for by vanilla's `lava` and `in_fire` (`HORIZON_API.md`: a native
-//! mod's damage types). Left out, for want of API: a horse haunted for 100 ticks turning into a
-//! skeleton horse (no persistent data on a mob for its progress, nor a conversion keeping its
-//! data).
+//! mod's damage types). A horse haunted for 100 ticks turns into a skeleton horse made from its
+//! saved data (`Haunted`, its progress kept on the horse as Create's `CreateHaunting`).
 
 use super::{recipes, stacks};
 use crate::glue::logistics::{random_angle, upright};
@@ -16,7 +15,10 @@ use crate::glue::world::with_world;
 use create_engine::fan::{self, Catalyst, Current, Heat, Kind, Way};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::{Block, belt, depot, nozzle, processing};
-use mod_api::{BlockShapeKind, EntityRef, ItemStack};
+use mod_api::{
+    AttachmentCodec, AttachmentError, AttachmentType, BlockShapeKind, Compound, EntityPart,
+    EntityPartState, EntityRef, ItemStack, SoundSource, Tag,
+};
 use std::collections::HashMap;
 
 /// Encased fans that turn (`EncasedFanBlockEntity.tick`): the current looked at again when due
@@ -508,8 +510,111 @@ fn affect_entity(lv: &mut ServerLevel<'_>, entity: EntityRef, kind: Kind) {
                     );
                 }
             }
+            haunt_horse(lv, entity);
         }
     }
+}
+
+/// A horse's haunting progress (`getPersistentData().getInt("CreateHaunting")`), saved with it.
+static HAUNTING: AttachmentType<u32> = AttachmentType {
+    namespace: "create",
+    name: "haunting",
+    default: || 0,
+    codec: Some(AttachmentCodec {
+        encode: |n| Ok([("CreateHaunting".into(), Tag::Int(*n as i32))].into()),
+        decode: |saved: &Compound| match saved.get(&"CreateHaunting".into()) {
+            Some(Tag::Int(n)) => Ok((*n).max(0) as u32),
+            _ => Err(AttachmentError::Decode),
+        },
+    }),
+    copy_on_death: false,
+    sync: false,
+};
+
+/// Keeps the haunting progress on each horse (`HauntingType.affectEntity`'s `Horse`).
+pub struct Haunted;
+#[mod_api::horizon_part]
+impl EntityPart for Haunted {}
+impl EntityPartState for Haunted {
+    type Data = u32;
+    const DATA: &'static AttachmentType<u32> = &HAUNTING;
+}
+
+/// `HauntingType.affectEntity` for a horse: 100 ticks in a haunting current, with the soul
+/// escape sound every 10th rising in pitch, then the extinguish sound and a skeleton horse from
+/// the horse's saved data (its UUID left out) where it stood, its armour dropped, the horse gone.
+fn haunt_horse(lv: &mut ServerLevel<'_>, entity: EntityRef) {
+    let host = &mut *lv.host;
+    if entity.kind(&*host).map(|k| k.id(&*host)).as_deref() != Some("minecraft:horse") {
+        return;
+    }
+    let Some(at) = entity.position(&*host) else {
+        return;
+    };
+    let block = at.map(|v| v.floor() + 0.5);
+    let Ok(progress) = Haunted::edit_state(host, entity, |_, n| {
+        let was = *n;
+        if was < 100 {
+            *n = was + 1;
+        }
+        was
+    }) else {
+        return;
+    };
+    if progress < 100 {
+        if progress % 10 == 0 {
+            let pitch = 1.5 * progress as f32 / 100.0;
+            let _ = lv.level.play_sound(
+                &mut *lv.host,
+                "minecraft:particle.soul_escape",
+                block,
+                SoundSource::Neutral,
+                1.0,
+                pitch,
+            );
+        }
+        return;
+    }
+    let _ = lv.level.play_sound(
+        &mut *lv.host,
+        "minecraft:block.fire.extinguish",
+        block,
+        SoundSource::Neutral,
+        1.25,
+        0.65,
+    );
+    let host = &mut *lv.host;
+    let Some(mut saved) = entity.nbt(host) else {
+        return;
+    };
+    saved.remove(&"UUID".into());
+    // `getBodyArmorItem`: the horse's body slot (`equipment.body`), dropped where it stood.
+    let armour = match saved.get(&"equipment".into()) {
+        Some(Tag::Compound(e)) => match e.get(&"body".into()) {
+            Some(Tag::Compound(body)) => ItemStack::from_nbt(&*host, body),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(armour) = armour {
+        let _ = lv
+            .level
+            .spawn_item(&mut *lv.host, at[0], at[1], at[2], armour, 10);
+    }
+    // `EntityType.SKELETON_HORSE.create`, then `deserializeNBT` of the horse's data.
+    let spawned = lv
+        .host
+        .summon(
+            lv.dimension,
+            "minecraft:skeleton_horse",
+            at,
+            Compound::new(),
+        )
+        .and_then(|id| lv.host.entity(id));
+    if let Some(s) = spawned {
+        s.merge_nbt(&mut *lv.host, saved);
+    }
+    entity.discard(&mut *lv.host);
 }
 
 /// The depots and belts in a current, with the processing type each is in.
