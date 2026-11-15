@@ -477,6 +477,15 @@ pub trait Subsystem: Sync {
         Flow::Continue
     }
 
+    /// `Hooks::screen_key_released_pre`.
+    fn screen_key_released(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut mod_api::ScreenKeyReleasedPreEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
     /// `Hooks::screen_char_typed_pre`.
     fn screen_char_typed(
         &self,

@@ -61,6 +61,7 @@ pub mod recipes;
 pub(crate) mod saw;
 mod spoutput;
 mod stacks;
+pub(crate) mod toolbelt;
 
 pub use containers::TOOLBOX_TYPE;
 // A deployer riding a contraption (`DeployerMovementBehaviour`) acts and is carried as one in
@@ -163,6 +164,19 @@ impl Subsystem for Processing {
             r.block_part(super::states::key(block), saw::Blades);
         }
         r.block_part(super::states::key(Block::BlazeBurner), BurnerPlacement);
+        toolbelt::register(r);
+        let mut items = Vec::new();
+        for b in Block::ALL
+            .iter()
+            .copied()
+            .filter(|b| toolbelt::toolbox_block(*b))
+        {
+            r.block_part(super::states::key(b), ToolboxPart);
+            let item = r.item_key(&format!("create:{}", b.name()));
+            r.item_part(item, ToolboxItem);
+            items.push(item);
+        }
+        let _ = toolbelt::TOOLBOX_ITEMS.set(items);
     }
 
     fn world_closed(&self) {
@@ -172,6 +186,7 @@ impl Subsystem for Processing {
         basin::clear();
         spoutput::clear();
         crafter::clear();
+        toolbelt::clear();
     }
 
     fn tags_updated(&self, host: &mut dyn ServerHost) {
@@ -181,15 +196,22 @@ impl Subsystem for Processing {
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         persist::load(lv.dim, data);
+        toolbelt::load(lv.dim, data);
     }
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
         persist::save(lv.dim, chunk, data);
+        toolbelt::save(lv.dim, chunk, data);
+    }
+
+    fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
+        toolbelt::chunk_unload(dim, chunk);
     }
 
     /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
     /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        toolbelt::level_tick();
         crafter::tick_crafters(lv);
         millstone::tick_millstones(lv);
         fan::tick_fans(lv);
@@ -256,18 +278,128 @@ impl Subsystem for Processing {
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
         press::player_joined(host, player);
         deployer::player_joined(host, player);
+        toolbelt::player_joined(host, player);
     }
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
-        client::server_message(host, channel, data)
+        toolbelt::server_message(host, channel, data) || client::server_message(host, channel, data)
+    }
+
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != toolbelt::CHANNEL {
+            return false;
+        }
+        toolbelt::client_message(host, player, data);
+        true
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick(host);
+        toolbelt::client_tick(host);
     }
 
     fn client_reset(&self) {
         client::reset();
+        toolbelt::client_reset();
+    }
+
+    fn player_tick(&self, host: HostSide, event: &mut mod_api::PlayerTickPostEvent) {
+        if let HostSide::Server(host) = host {
+            toolbelt::player_tick(host, event.player);
+        }
+    }
+
+    /// `ToolboxBlock.attack`: a left click picks a toolbox up.
+    fn left_click_block(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::LeftClickBlockEvent,
+    ) -> mod_api::Flow {
+        toolbelt::left_click(host, event.pos)
+    }
+
+    /// A player breaking a toolbox: its contents go with its drop.
+    fn break_block(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::BreakBlockEvent<'_>,
+    ) -> mod_api::Flow {
+        if event.cancelled {
+            return mod_api::Flow::Continue;
+        }
+        let Some(player) = host.players().acting_player() else {
+            return mod_api::Flow::Continue;
+        };
+        let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+            return mod_api::Flow::Continue;
+        };
+        if let Some(mut lv) = ServerLevel::new(host, &dimension) {
+            toolbelt::before_removal(&mut lv, event.pos);
+        }
+        mod_api::Flow::Continue
+    }
+
+    fn block_drops(
+        &self,
+        level: &dyn mod_api::LevelHost,
+        event: &mut mod_api::BlockDropsEvent<'_>,
+    ) -> mod_api::Flow {
+        toolbelt::block_drops(level, event);
+        mod_api::Flow::Continue
+    }
+
+    fn render_gui_post(&self, host: &dyn ClientHost, event: &mut mod_api::RenderGuiPostEvent<'_>) {
+        toolbelt::render_gui_post(host, event);
+    }
+
+    fn screen_render_post(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenRenderPostEvent<'_>,
+    ) {
+        toolbelt::screen_render_post(host, event);
+    }
+
+    fn screen_mouse_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenMouseButtonPressedPreEvent<'_>,
+    ) -> mod_api::Flow {
+        toolbelt::screen_mouse_pressed(host, event)
+    }
+
+    fn screen_mouse_scrolled(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenMouseScrolledPreEvent<'_>,
+    ) -> mod_api::Flow {
+        toolbelt::screen_mouse_scrolled(host, event)
+    }
+
+    fn screen_key_pressed(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenKeyPressedPreEvent<'_>,
+    ) -> mod_api::Flow {
+        toolbelt::screen_key_pressed(host, event)
+    }
+
+    fn screen_closing(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenClosingEvent<'_>) {
+        toolbelt::screen_closing(host, event);
+    }
+
+    fn screen_key_released(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenKeyReleasedPreEvent<'_>,
+    ) -> mod_api::Flow {
+        toolbelt::screen_key_released(host, event)
     }
 
     fn standalone_models(&self, models: &mut Vec<String>) {
@@ -313,6 +445,45 @@ impl Subsystem for Processing {
                 }
                 mod_api::Flow::Continue
             }
+        }
+    }
+}
+
+/// A toolbox exploding: its contents go with its drop.
+struct ToolboxPart;
+
+#[mod_api::horizon_part]
+impl BlockPart for ToolboxPart {
+    fn on_block_exploded(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::OnBlockExplodedEvent<'_>,
+    ) {
+        let dimension = event.explosion.dimension.to_owned();
+        if let Some(mut lv) = ServerLevel::new(host, &dimension) {
+            toolbelt::before_removal(&mut lv, [event.pos.x, event.pos.y, event.pos.z]);
+        }
+    }
+}
+
+/// A toolbox placed from its item takes the contents the item keeps.
+struct ToolboxItem;
+
+#[mod_api::horizon_part]
+impl mod_api::ItemPart for ToolboxItem {
+    fn on_block_placed_by(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::OnBlockPlacedByEvent<'_>,
+    ) {
+        let Some(player) = event.placer else { return };
+        let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+            return;
+        };
+        let pos = event.pos;
+        let stack = event.stack.clone();
+        if let Some(mut lv) = ServerLevel::new(host, &dimension) {
+            toolbelt::placed(&mut lv, pos, &stack);
         }
     }
 }

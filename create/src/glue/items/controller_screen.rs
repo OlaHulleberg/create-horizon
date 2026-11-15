@@ -575,7 +575,13 @@ mod tests {
         assert_eq!(slot_at(11), [143.0, 52.0]);
         let mut out = Vec::new();
         let items: Vec<String> = (0..SLOTS)
-            .map(|i| if i % 3 == 0 { format!("minecraft:item{i}") } else { String::new() })
+            .map(|i| {
+                if i % 3 == 0 {
+                    format!("minecraft:item{i}")
+                } else {
+                    String::new()
+                }
+            })
             .collect();
         encode_items(&mut out, &items);
         assert_eq!(chosen(&out), Some(items));

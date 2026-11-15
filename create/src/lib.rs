@@ -490,6 +490,14 @@ impl Hooks for Create {
         until_cancel(|s| s.screen_key_pressed(host, event))
     }
 
+    fn screen_key_released_pre(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenKeyReleasedPreEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.screen_key_released(host, event))
+    }
+
     fn screen_char_typed_pre(
         &self,
         host: &dyn ClientHost,

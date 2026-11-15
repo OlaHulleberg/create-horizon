@@ -97,8 +97,11 @@ impl<'a> ServerLevel<'a> {
         self.level.signal(&*self.host, pos, direction).unwrap_or(0)
     }
 
-    /// `Level.destroyBlock(pos, drops)`.
+    /// `Level.destroyBlock(pos, drops)`. A toolbox's drop keeps its contents.
     pub fn destroy_block(&mut self, pos: [i32; 3], drops: bool) -> bool {
+        if drops {
+            crate::glue::processing::toolbelt::before_removal(self, pos);
+        }
         matches!(
             self.level
                 .destroy_block(&mut *self.host, pos, drops, None, false),

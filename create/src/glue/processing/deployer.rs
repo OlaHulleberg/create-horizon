@@ -309,12 +309,20 @@ fn held_of(lv: &ServerLevel<'_>, d: &Deployer) -> Option<ItemStack> {
 }
 
 /// The deployer's hand takes `stack` (its id, count, wear and the rest of its components).
-pub(crate) fn set_held_stack(host: &dyn mod_api::Host, d: &mut Deployer, stack: Option<&ItemStack>) {
+pub(crate) fn set_held_stack(
+    host: &dyn mod_api::Host,
+    d: &mut Deployer,
+    stack: Option<&ItemStack>,
+) {
     d.held = stack.map(|s| (stacks::id(host, s), s.count().min(64) as u8));
     d.held_damage = stack.map_or(0, ItemStack::damage);
     d.held_components = stack
         .and_then(|s| s.components())
-        .and_then(|c| mod_api::Tag::Compound(c.as_nbt().clone()).to_network_bytes().ok())
+        .and_then(|c| {
+            mod_api::Tag::Compound(c.as_nbt().clone())
+                .to_network_bytes()
+                .ok()
+        })
         .unwrap_or_default();
 }
 
@@ -735,8 +743,14 @@ fn finish_using(
         })
         .unwrap_or((1.0, 1.0));
     if !sound.is_empty() {
-        lv.level
-            .play_sound(&mut *lv.host, &sound, at, SoundSource::Players, volume, pitch);
+        lv.level.play_sound(
+            &mut *lv.host,
+            &sound,
+            at,
+            SoundSource::Players,
+            volume,
+            pitch,
+        );
     }
     // `FoodProperties.onConsume`.
     if let Some((nutrition, saturation, _)) = food {
@@ -770,13 +784,16 @@ fn finish_using(
         );
     }
     // `PotionContents.onConsume`.
-    if let Some(t) = component(&*lv.host, stack, crate::glue::logistics::items::POTION_CONTENTS) {
+    if let Some(t) = component(
+        &*lv.host,
+        stack,
+        crate::glue::logistics::items::POTION_CONTENTS,
+    ) {
         let contents = crate::glue::logistics::items::contents_of_tag(&t);
         crate::glue::fluids::drink_potion(lv, target.entity(), &contents);
     }
     // `SuspiciousStewEffects.onConsume`: each entry at amplifier 0.
-    if let Some(Tag::List(stew)) =
-        component(&*lv.host, stack, "minecraft:suspicious_stew_effects")
+    if let Some(Tag::List(stew)) = component(&*lv.host, stack, "minecraft:suspicious_stew_effects")
     {
         for e in stew {
             let Tag::Compound(e) = e else { continue };
