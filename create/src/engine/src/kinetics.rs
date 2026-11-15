@@ -151,6 +151,9 @@ pub struct Part {
     /// A belt segment's controller (its chain's start): segments of one belt turn together
     /// (`BeltBlockEntity.propagateRotationTo`).
     pub belt: Option<[i32; 3]>,
+    /// A sloped belt segment reaches its neighbours on the slope, across an edge
+    /// (`BeltBlockEntity.canPropagateDiagonally`).
+    pub diagonal: bool,
     /// An encased chain drive's chain to its neighbours (`ChainDriveBlock`).
     pub chain: Option<Chain>,
     /// A speed set across to another part instead of a ratio: a rotation speed controller's, or a
@@ -196,6 +199,7 @@ impl Part {
             impact: 0.0,
             link: None,
             belt: None,
+            diagonal: false,
             chain: None,
             couple: None,
         }
@@ -243,12 +247,12 @@ impl Part {
 pub fn ratio(a: &Part, b: &Part, diff: [i32; 3]) -> f32 {
     // BeltBlockEntity.propagateRotationTo: a belt's segments, side by side, unless their
     // shafts already meet.
-    if let Some(d) = Dir::from_offset(diff)
-        && a.belt.is_some()
-        && a.belt == b.belt
-        && !(a.shafts & d.bit() != 0 && b.shafts & d.opposite().bit() != 0)
-    {
-        return 1.0;
+    if a.belt.is_some() && a.belt == b.belt {
+        let via_axes = Dir::from_offset(diff)
+            .is_some_and(|d| a.shafts & d.bit() != 0 && b.shafts & d.opposite().bit() != 0);
+        if !via_axes {
+            return 1.0;
+        }
     }
     if let Some(d) = Dir::from_offset(diff)
         && a.shafts & d.bit() != 0
@@ -312,17 +316,21 @@ pub fn ratio(a: &Part, b: &Part, diff: [i32; 3]) -> f32 {
     0.0
 }
 
-/// Positions a part may connect to: the six faces, and for cogs the twelve edge diagonals
-/// (Create's `getPotentialNeighbourLocations` and `addPropagationLocations`).
+/// Positions a part may connect to: the six faces, and for small cogs and sloped belts the
+/// edge diagonals across their axis (Create's `getPotentialNeighbourLocations` and
+/// `addPropagationLocations`; a large cog's diagonals are its small neighbours' too).
 fn neighbour_offsets(p: &Part) -> impl Iterator<Item = [i32; 3]> {
     let faces = Dir::ALL.into_iter().map(Dir::offset);
-    let diagonals = (p.cog != Cog::None)
+    let axis = p.axis;
+    let across = p.diagonal;
+    let diagonals = (p.cog != Cog::None || across)
         .then(|| {
-            (-1..=1).flat_map(|x| {
+            (-1..=1).flat_map(move |x| {
                 (-1..=1).flat_map(move |y| {
                     (-1..=1)
                         .map(move |z| [x, y, z])
                         .filter(|o| o.iter().map(|c| c * c).sum::<i32>() == 2)
+                        .filter(move |o| !across || Axis::of(*o, axis) == 0)
                 })
             })
         })

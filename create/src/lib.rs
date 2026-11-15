@@ -108,6 +108,11 @@ impl Hooks for Create {
         }
     }
 
+    /// Hot: an entity on the ground over one of Create's blocks, each tick it moves.
+    fn block_step_on(&self, event: &mut mod_api::BlockStepOnEvent<'_>) {
+        glue::logistics::block_step_on(event);
+    }
+
     /// Hot: every committed block change on the server. Two lookups, then return, for any
     /// change that is not Create's.
     fn block_changed(&self, _level: &dyn LevelHost, event: &mut BlockChangedEvent) {
