@@ -14,13 +14,15 @@ use create_engine::train_controls::Frame;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+/// A carriage's pivot last tick and the entities its blocks met then.
+type Touching = ([f64; 3], Vec<u32>);
+
 thread_local! {
     /// Each carriage's actors (`MovementContext`s), by level, train and carriage.
     static CARRIED: RefCell<HashMap<(usize, u32, usize), Carried>> = RefCell::new(HashMap::new());
     /// Each carriage's pivot last tick and the entities touching it then
     /// (`collidingEntities`), for its motion and its run-over damage.
-    static LAST: RefCell<HashMap<(usize, u32, usize), ([f64; 3], Vec<u32>)>> =
-        RefCell::new(HashMap::new());
+    static LAST: RefCell<HashMap<(usize, u32, usize), Touching>> = RefCell::new(HashMap::new());
 }
 
 /// The world closed.
