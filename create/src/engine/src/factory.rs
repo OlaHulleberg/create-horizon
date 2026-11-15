@@ -320,13 +320,14 @@ pub fn mix_colors(a: u32, b: u32, t: f32) -> u32 {
 /// path, with the bulb's `glow` and whether the last request went out (`success`).
 pub fn path_look(s: Status, glow: f32, success: bool) -> (u32, f32) {
     let mut color = ingredient_color(s);
-    let mut y = 1.0 + if s.promised_satisfied {
-        1.0
-    } else if s.satisfied {
-        0.0
-    } else {
-        2.0
-    };
+    let mut y = 1.0
+        + if s.promised_satisfied {
+            1.0
+        } else if s.satisfied {
+            0.0
+        } else {
+            2.0
+        };
     if !s.redstone_powered && !s.waiting && glow > 0.0 && !s.satisfied {
         let p = 1.0 - (1.0 - glow) * (1.0 - glow);
         color = mix_colors(color, if success { 0xEAF2EC } else { 0xE5654B }, p);
@@ -455,7 +456,10 @@ mod tests {
     #[test]
     fn neighbouring_panels_of_one_gauge_differ_by_half_a_block() {
         let d = path_diff(Face::Floor, Dir::South, ([0, 0, 0], 0), ([0, 0, 0], 1));
-        assert!((d[0].abs() - 0.5).abs() < 1e-9 && d[2].abs() < 1e-9, "{d:?}");
+        assert!(
+            (d[0].abs() - 0.5).abs() < 1e-9 && d[2].abs() < 1e-9,
+            "{d:?}"
+        );
     }
 
     #[test]

@@ -264,10 +264,7 @@ pub fn update_state(
     {
         return (facing, Shape::Intersection);
     }
-    if count == 1
-        && connected(facing)
-        && facing_at(above) != Some(Dir::Down)
-        && !funnel_down_above
+    if count == 1 && connected(facing) && facing_at(above) != Some(Dir::Down) && !funnel_down_above
     {
         let s = if shape == Shape::Encased {
             Shape::Encased
@@ -350,8 +347,8 @@ mod tests {
     #[test]
     fn diagonal_chutes_lead_down_beside_and_join_as_create_s_do() {
         // A chute at the origin; a diagonal one facing east sits up and east of it.
-        let chutes = |list: Vec<([i32; 3], Dir)>| move |p: [i32; 3]| {
-            list.iter().find(|(q, _)| *q == p).map(|(_, f)| *f)
+        let chutes = |list: Vec<([i32; 3], Dir)>| {
+            move |p: [i32; 3]| list.iter().find(|(q, _)| *q == p).map(|(_, f)| *f)
         };
         assert_eq!(target([1, 1, 0], Dir::East), [0, 0, 0]);
         let world = chutes(vec![([0, 0, 0], Dir::Down), ([1, 1, 0], Dir::East)]);

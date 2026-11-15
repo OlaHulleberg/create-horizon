@@ -724,15 +724,32 @@ mod tests {
         };
         k.set([0, -1, 0], 0, shaft("false"));
         k.solve(&mut Vec::new());
-        assert_eq!(k.speed([0, 0, 0], 0), Some(16.0), "turned by the motor's shaft");
-        assert_eq!(k.speed([0, -1, 0], 0), Some(0.0), "an unpowered gantry is not");
+        assert_eq!(
+            k.speed([0, 0, 0], 0),
+            Some(16.0),
+            "turned by the motor's shaft"
+        );
+        assert_eq!(
+            k.speed([0, -1, 0], 0),
+            Some(0.0),
+            "an unpowered gantry is not"
+        );
         // Powered, the carriage turns the gantry (`getGantryPinionModifier`: x, pinion up: +1).
         k.set([0, -1, 0], 0, shaft("true"));
         k.solve(&mut Vec::new());
         assert_eq!(k.speed([0, -1, 0], 0), Some(16.0));
-        assert_eq!(crate::kinetics::gantry_pinion_modifier(Dir::East, Dir::Down), -1.0);
-        assert_eq!(crate::kinetics::gantry_pinion_modifier(Dir::Up, Dir::North), -1.0);
-        assert_eq!(crate::kinetics::gantry_pinion_modifier(Dir::North, Dir::Up), 1.0);
+        assert_eq!(
+            crate::kinetics::gantry_pinion_modifier(Dir::East, Dir::Down),
+            -1.0
+        );
+        assert_eq!(
+            crate::kinetics::gantry_pinion_modifier(Dir::Up, Dir::North),
+            -1.0
+        );
+        assert_eq!(
+            crate::kinetics::gantry_pinion_modifier(Dir::North, Dir::Up),
+            1.0
+        );
     }
 
     #[test]

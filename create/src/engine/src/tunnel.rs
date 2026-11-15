@@ -498,7 +498,11 @@ mod tests {
         assert!(!distributes(Axis::X, Shape::Window, |_| false));
         assert_eq!(Mode::from_option(4), Some(Mode::PreferNearest));
         assert_eq!(
-            (Mode::from_option(6), Mode::from_option(7), Mode::from_option(-1)),
+            (
+                Mode::from_option(6),
+                Mode::from_option(7),
+                Mode::from_option(-1)
+            ),
             (Some(Mode::Synchronize), None, None)
         );
         assert_eq!(OPTIONS[Mode::Randomize.index()], Mode::Randomize.label());

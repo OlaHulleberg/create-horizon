@@ -1401,7 +1401,8 @@ mod tests {
     fn only_states_that_keep_their_data_print_it() {
         // A sign's data at (1, 0, 0), turned a quarter: it lands where the turn puts it.
         let mut s = structure([2, 1, 1], &[([0, 0, 0], 0), ([1, 0, 0], 1)], 2);
-        let text = crate::schematic::Nbt::compound([("Text", crate::schematic::Nbt::String("hi".into()))]);
+        let text =
+            crate::schematic::Nbt::compound([("Text", crate::schematic::Nbt::String("hi".into()))]);
         s.blocks[1].nbt = Some(text.clone());
         let p = Printer::load(&s, [0; 3], Rotation::Clockwise90, Mirror::None);
         let at = transform([1, 0, 0], Mirror::None, Rotation::Clockwise90, [0; 3]);

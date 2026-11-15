@@ -152,11 +152,9 @@ impl Point {
                 Some(f) => (centre - normal(f) * 0.15, f.opposite()),
                 None => (centre, Dir::Up),
             },
-            Kind::Basin
-            | Kind::BlazeBurner
-            | Kind::Millstone
-            | Kind::Packager
-            | Kind::Campfire => (centre, Dir::Down),
+            Kind::Basin | Kind::BlazeBurner | Kind::Millstone | Kind::Packager | Kind::Campfire => {
+                (centre, Dir::Down)
+            }
         }
     }
 }

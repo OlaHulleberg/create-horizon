@@ -201,7 +201,13 @@ pub fn gather_piston(
             break;
         }
     }
-    search(start, frontier, (!retracting).then_some(facing), exclude, at)
+    search(
+        start,
+        frontier,
+        (!retracting).then_some(facing),
+        exclude,
+        at,
+    )
 }
 
 /// `Contraption.searchMovedStructure` from `frontier`, pushing ahead in `forced`.
@@ -423,7 +429,12 @@ mod tests {
         out.sort();
         assert_eq!(
             out,
-            vec![([0, 0, 0], 1), ([0, 1, 0], 2), ([1, 0, 0], 1), ([2, 0, 0], 1)],
+            vec![
+                ([0, 0, 0], 1),
+                ([0, 1, 0], 2),
+                ([1, 0, 0], 1),
+                ([2, 0, 0], 1)
+            ],
             "extending pushes the row and what hangs on it"
         );
         assert!(

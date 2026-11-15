@@ -308,9 +308,6 @@ mod tests {
         assert_eq!(v, [-0.09999999999999998, -0.5, 0.0]);
         assert!(!taken);
         assert!(hold([0, 0, 0], Dir::Down, 1.28, [0.5, 0.2, 0.5]).1);
-        assert_eq!(
-            output([0, 0, 0], Dir::Down),
-            ([0.5, -0.3, 0.5], [0.0; 3])
-        );
+        assert_eq!(output([0, 0, 0], Dir::Down), ([0.5, -0.3, 0.5], [0.0; 3]));
     }
 }

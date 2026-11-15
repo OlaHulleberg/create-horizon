@@ -244,8 +244,7 @@ pub(crate) fn attached_towards(f: &Found, toward: Dir) -> bool {
 
 /// `BlockMovementChecks.isNotSupportive`: the face `facing` of the block pushes nothing.
 pub(crate) fn not_supportive(f: &Found, facing: Dir) -> bool {
-    f.unsupportive & facing.bit() != 0
-        || f.sail_facing.is_some_and(|d| facing.axis() == d.axis())
+    f.unsupportive & facing.bit() != 0 || f.sail_facing.is_some_and(|d| facing.axis() == d.axis())
 }
 
 /// `canStickTo` both ways (removed).
@@ -609,7 +608,10 @@ mod tests {
         assert_eq!(turned.quarter_axis(), Some((90, Axis::Y)));
         assert_eq!(slid.quarter_axis(), None);
         // Not a rotation (a mirror): none.
-        assert_eq!(Transform::from_place(|o| [-o[0], o[1], o[2]]), Transform::NONE);
+        assert_eq!(
+            Transform::from_place(|o| [-o[0], o[1], o[2]]),
+            Transform::NONE
+        );
     }
 
     #[test]
@@ -824,6 +826,9 @@ mod tests {
             }),
             _ => None,
         };
-        assert_eq!(chassis_reach([0, 0, 0], chassis, None, &at), vec![[0, 0, -1]]);
+        assert_eq!(
+            chassis_reach([0, 0, 0], chassis, None, &at),
+            vec![[0, 0, -1]]
+        );
     }
 }

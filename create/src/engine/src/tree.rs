@@ -90,7 +90,14 @@ pub fn find(pos: [i32; 3], broken: Cell, height: i32, at: impl Fn([i32; 3]) -> C
         while let Some(current) = frontier.pop_front() {
             visited.insert(current);
             tree.logs.push(current);
-            for d in [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]] {
+            for d in [
+                [0, -1, 0],
+                [0, 1, 0],
+                [0, 0, -1],
+                [0, 0, 1],
+                [-1, 0, 0],
+                [1, 0, 0],
+            ] {
                 let offset = add(current, d);
                 if visited.contains(&offset) || !at(offset).chorus {
                     continue;
@@ -156,9 +163,7 @@ pub fn find(pos: [i32; 3], broken: Cell, height: i32, at: impl Fn([i32; 3]) -> C
                 visited.insert(current);
                 continue;
             }
-            let horizontal = (current[0] - pos[0])
-                .abs()
-                .max((current[2] - pos[2]).abs());
+            let horizontal = (current[0] - pos[0]).abs().max((current[2] - pos[2]).abs());
             if horizontal <= c.non_decaying && visited.insert(current) {
                 tree.leaves.push(current);
                 frontier.push_back(current);

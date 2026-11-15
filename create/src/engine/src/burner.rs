@@ -196,7 +196,11 @@ mod tests {
             "kindled goes on to seething"
         );
         assert_eq!(b.creative_fuel(b.heat()), Heat::Smouldering);
-        assert_eq!(b.creative_fuel(b.heat()), Heat::Kindled, "fading is skipped");
+        assert_eq!(
+            b.creative_fuel(b.heat()),
+            Heat::Kindled,
+            "fading is skipped"
+        );
         // The block's heat counts, not what the burner last burned.
         assert_eq!(b.creative_fuel(Heat::Smouldering), Heat::Kindled);
         assert!(!b.try_fuel(Fuel::Special, 3200, true));

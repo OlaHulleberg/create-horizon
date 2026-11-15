@@ -71,7 +71,12 @@ pub fn cutting(items: &[String]) -> Vec<Recipe> {
         if word(path) {
             matched = path.match_indices("stripped_").find_map(|(i, _)| {
                 let (name, t) = name_and_type(&path[i + "stripped_".len()..])?;
-                Some((path[..i].to_string(), name.to_string(), t.to_string(), String::new()))
+                Some((
+                    path[..i].to_string(),
+                    name.to_string(),
+                    t.to_string(),
+                    String::new(),
+                ))
             });
             stripped_in_prefix = matched.is_some();
         }
@@ -122,7 +127,11 @@ pub fn cutting(items: &[String]) -> Vec<Recipe> {
         let Some((prefix, name, kind, suffix)) = matched else {
             continue;
         };
-        let prefix = if stripped_in_prefix { prefix } else { String::new() };
+        let prefix = if stripped_in_prefix {
+            prefix
+        } else {
+            String::new()
+        };
         let suffix = if !stripped_in_prefix && !no_stripped_variant {
             suffix
         } else {
@@ -147,7 +156,13 @@ pub fn cutting(items: &[String]) -> Vec<Recipe> {
                 add(wood_recipe(ns, from, vec![non_stripped.clone()], id, 1));
             }
             if has(&planks) {
-                add(wood_recipe(ns, path, vec![id.clone()], &planks, planks_count));
+                add(wood_recipe(
+                    ns,
+                    path,
+                    vec![id.clone()],
+                    &planks,
+                    planks_count,
+                ));
             }
         } else if has(&planks) {
             let key = (base_ns.to_string(), base_path.to_string());
@@ -159,8 +174,16 @@ pub fn cutting(items: &[String]) -> Vec<Recipe> {
         if !path.contains("_wood") && !path.contains("_hyphae") && has(&planks) {
             let from = planks.split_once(':').map_or("", |(_, p)| p);
             let pns = planks.split_once(':').map_or("", |(n, _)| n);
-            let stairs = if planks_in_name { "_planks_stairs" } else { "_stairs" };
-            let slab = if planks_in_name { "_planks_slab" } else { "_slab" };
+            let stairs = if planks_in_name {
+                "_planks_stairs"
+            } else {
+                "_stairs"
+            };
+            let slab = if planks_in_name {
+                "_planks_slab"
+            } else {
+                "_slab"
+            };
             for (to, count) in [
                 (stairs, 1),
                 (slab, 2),
@@ -225,7 +248,11 @@ mod tests {
     fn made(rs: &[Recipe], from: &str) -> Vec<(String, u8)> {
         let mut v: Vec<_> = rs
             .iter()
-            .filter(|r| r.ingredients[0].iter().any(|i| i == &format!("minecraft:{from}")))
+            .filter(|r| {
+                r.ingredients[0]
+                    .iter()
+                    .any(|i| i == &format!("minecraft:{from}"))
+            })
             .map(|r| (r.results[0].item.clone(), r.results[0].count))
             .collect();
         v.sort();
@@ -251,11 +278,26 @@ mod tests {
             "iron_block",
         ]);
         let rs = cutting(&items);
-        assert_eq!(made(&rs, "oak_log"), [("minecraft:stripped_oak_log".into(), 1)]);
-        assert_eq!(made(&rs, "oak_wood"), [("minecraft:stripped_oak_wood".into(), 1)]);
-        assert_eq!(made(&rs, "stripped_oak_log"), [("minecraft:oak_planks".into(), 6)]);
-        assert_eq!(made(&rs, "stripped_oak_wood"), [("minecraft:oak_planks".into(), 6)]);
-        assert_eq!(made(&rs, "stripped_bamboo_block"), [("minecraft:bamboo_planks".into(), 3)]);
+        assert_eq!(
+            made(&rs, "oak_log"),
+            [("minecraft:stripped_oak_log".into(), 1)]
+        );
+        assert_eq!(
+            made(&rs, "oak_wood"),
+            [("minecraft:stripped_oak_wood".into(), 1)]
+        );
+        assert_eq!(
+            made(&rs, "stripped_oak_log"),
+            [("minecraft:oak_planks".into(), 6)]
+        );
+        assert_eq!(
+            made(&rs, "stripped_oak_wood"),
+            [("minecraft:oak_planks".into(), 6)]
+        );
+        assert_eq!(
+            made(&rs, "stripped_bamboo_block"),
+            [("minecraft:bamboo_planks".into(), 3)]
+        );
         assert_eq!(
             made(&rs, "oak_planks"),
             [

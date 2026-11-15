@@ -161,7 +161,10 @@ pub fn slide_offset(facing: Dir, hinge_right: bool, value: f32) -> [f32; 3] {
 pub enum FoldStep {
     Translate([f32; 3]),
     /// Degrees about y through `pivot` (blocks).
-    TurnY { degrees: f32, pivot: [f32; 3] },
+    TurnY {
+        degrees: f32,
+        pivot: [f32; 3],
+    },
 }
 
 /// The pose of a folding door's leaf: `left` the first of the two partials drawn (the left

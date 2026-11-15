@@ -288,7 +288,9 @@ pub fn save(list: &[Saved]) -> (Vec<i32>, Vec<String>) {
 
 /// `save` read back; a broken list gives what lines up.
 pub fn load(pos: &[i32], materials: &[String]) -> Vec<Saved> {
-    pos.chunks_exact(3)
+    pos.as_chunks::<3>()
+        .0
+        .iter()
         .zip(materials)
         .map(|(p, m)| Saved {
             pos: [p[0], p[1], p[2]],

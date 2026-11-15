@@ -608,7 +608,13 @@ impl Detectors {
     /// `SmartObserverBlockEntity.activate(ticks)` from outside its own look (a funnel it watches
     /// moved an item, `onFunnelTransfer`): on, and off `ticks` after `now` unless something
     /// keeps it on. Whether it was off (and so turns on).
-    pub fn observer_activate(&mut self, pos: [i32; 3], ticks: i64, now: i64, powered: bool) -> bool {
+    pub fn observer_activate(
+        &mut self,
+        pos: [i32; 3],
+        ticks: i64,
+        now: i64,
+        powered: bool,
+    ) -> bool {
         let Some(o) = self.observers.get_mut(&pos) else {
             return false;
         };
@@ -845,7 +851,10 @@ mod tests {
             ]),
             ..Seen::default()
         };
-        assert_eq!(observe(Some("minecraft:lava_bucket"), &basin), Some(DEFAULT_DELAY));
+        assert_eq!(
+            observe(Some("minecraft:lava_bucket"), &basin),
+            Some(DEFAULT_DELAY)
+        );
         let boiler = Seen {
             tanks: Some(vec![TankSlot {
                 drains: false,
@@ -860,7 +869,10 @@ mod tests {
             tanks: Some(vec![TankSlot::of(Some((Fluid::Lava, 10)), 1000)]),
             ..Seen::default()
         };
-        assert_eq!(observe(Some("minecraft:water_bucket"), &pipe), Some(DEFAULT_DELAY));
+        assert_eq!(
+            observe(Some("minecraft:water_bucket"), &pipe),
+            Some(DEFAULT_DELAY)
+        );
         assert_eq!(observe(Some("minecraft:lava_bucket"), &pipe), None);
         let chain = Seen {
             looping: Some(vec!["create:cardboard_package_10x12".into()]),

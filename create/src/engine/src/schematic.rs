@@ -408,7 +408,12 @@ pub fn transform(pos: [i32; 3], mirror: Mirror, rotation: Rotation, pivot: [i32;
 
 /// `StructureTemplate.transform(Vec3, ..)`: an entity's position in the template turned and
 /// mirrored about `pivot` (a block's corner, so the far side is one further).
-pub fn transform_vec(pos: [f64; 3], mirror: Mirror, rotation: Rotation, pivot: [i32; 3]) -> [f64; 3] {
+pub fn transform_vec(
+    pos: [f64; 3],
+    mirror: Mirror,
+    rotation: Rotation,
+    pivot: [i32; 3],
+) -> [f64; 3] {
     let [mut x, y, mut z] = pos;
     let mirrored = match mirror {
         Mirror::LeftRight => {

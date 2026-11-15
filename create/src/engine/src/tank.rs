@@ -853,6 +853,32 @@ pub fn fluid_box(m: &Multi) -> Option<([f32; 3], [f32; 3])> {
     Some(([hull, y0, hull], [width - hull, y0 + clamped, width - hull]))
 }
 
+/// `IHaveGoggleInformation.containedFluidTooltip` for one tank (en_us): its fluid and amount of
+/// its capacity, or only its capacity while empty.
+pub fn tooltip(tank: Tank, capacity: u32) -> Vec<crate::gauge::Line> {
+    use crate::gauge::{goggles, number};
+    let mb = |v: u32| format!("{}mB", number(f64::from(v)));
+    let mut lines = vec![goggles(0, vec![("Fluid Container Info:".into(), 0xFFFFFF)])];
+    match tank.fluid.filter(|_| tank.amount > 0) {
+        Some(f) => {
+            lines.push(goggles(1, vec![(f.name(), 0xAAAAAA)]));
+            lines.push(goggles(
+                1,
+                vec![
+                    (mb(tank.amount), 0xFFAA00),
+                    (" / ".into(), 0xAAAAAA),
+                    (mb(capacity), 0x555555),
+                ],
+            ));
+        }
+        None => lines.push(goggles(
+            1,
+            vec![("Capacity: ".into(), 0xAAAAAA), (mb(capacity), 0xFFAA00)],
+        )),
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -864,7 +890,11 @@ mod tests {
         t.place([0, 1, 0]);
         let (c, m) = t.get([0, 1, 0]).map(|(c, m)| (c, *m)).unwrap();
         assert_eq!((c, m.height), ([0, 0, 0], 2));
-        t.get_mut(c).unwrap().1.tank.fill_amount(Fluid::Water, 5000, 16000);
+        t.get_mut(c)
+            .unwrap()
+            .1
+            .tank
+            .fill_amount(Fluid::Water, 5000, 16000);
         // Taken by a contraption: no split, nothing shared out.
         let taken = t.take([0, 0, 0]);
         assert_eq!(t.take([0, 1, 0]), None);
@@ -945,11 +975,15 @@ mod tests {
         );
         let splash = potion_fluid("minecraft:splash_potion|minecraft:water").unwrap();
         assert!(matches!(splash, Fluid::Potion(p) if p.bottle == Bottle::Splash));
-        let Some(Fluid::Potion(p)) = potion_fluid("minecraft:lingering_potion|minecraft:long_swiftness")
+        let Some(Fluid::Potion(p)) =
+            potion_fluid("minecraft:lingering_potion|minecraft:long_swiftness")
         else {
             panic!("a lingering potion holds its potion");
         };
-        assert_eq!(p.item(), "minecraft:lingering_potion|minecraft:long_swiftness");
+        assert_eq!(
+            p.item(),
+            "minecraft:lingering_potion|minecraft:long_swiftness"
+        );
         assert_eq!(p.name(), "Lingering Potion of Swiftness");
         assert_eq!(potion_fluid("minecraft:glass_bottle"), None);
         assert_eq!(Fluid::Tea.bucket(), None);
@@ -1227,30 +1261,4 @@ mod tests {
         assert_eq!(t.multis.len(), 1);
         assert_eq!(size(&t, [1, 1, 0]), ([0, 0, 0], 2, 2));
     }
-}
-
-/// `IHaveGoggleInformation.containedFluidTooltip` for one tank (en_us): its fluid and amount of
-/// its capacity, or only its capacity while empty.
-pub fn tooltip(tank: Tank, capacity: u32) -> Vec<crate::gauge::Line> {
-    use crate::gauge::{goggles, number};
-    let mb = |v: u32| format!("{}mB", number(f64::from(v)));
-    let mut lines = vec![goggles(0, vec![("Fluid Container Info:".into(), 0xFFFFFF)])];
-    match tank.fluid.filter(|_| tank.amount > 0) {
-        Some(f) => {
-            lines.push(goggles(1, vec![(f.name().into(), 0xAAAAAA)]));
-            lines.push(goggles(
-                1,
-                vec![
-                    (mb(tank.amount), 0xFFAA00),
-                    (" / ".into(), 0xAAAAAA),
-                    (mb(capacity), 0x555555),
-                ],
-            ));
-        }
-        None => lines.push(goggles(
-            1,
-            vec![("Capacity: ".into(), 0xAAAAAA), (mb(capacity), 0xFFAA00)],
-        )),
-    }
-    lines
 }

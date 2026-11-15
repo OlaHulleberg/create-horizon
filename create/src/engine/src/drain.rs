@@ -188,7 +188,10 @@ mod tests {
     #[test]
     fn a_bucket_crosses_is_emptied_in_the_middle_and_leaves() {
         let mut d = Drain::default();
-        assert_eq!(insert(&mut d, "minecraft:water_bucket", 2, Dir::East, &[]), 1);
+        assert_eq!(
+            insert(&mut d, "minecraft:water_bucket", 2, Dir::East, &[]),
+            1
+        );
         assert_eq!(insert(&mut d, "minecraft:stone", 1, Dir::East, &[]), 0);
         // Four ticks to the middle, the 20-tick cycle emptying at its 5th-last.
         let events = run(&mut d, &[], 4 + 15);
@@ -229,7 +232,10 @@ mod tests {
             },
         )];
         let mut d = Drain::default();
-        assert_eq!(insert(&mut d, "minecraft:honey_bottle", 7, Dir::South, &recipes), 1);
+        assert_eq!(
+            insert(&mut d, "minecraft:honey_bottle", 7, Dir::South, &recipes),
+            1
+        );
         assert_eq!(run(&mut d, &recipes, 30)[0], Tick::Emptied);
         assert_eq!(d.fluid, Some((Fluid::Honey, 250)));
         assert_eq!(d.held.as_ref().unwrap().item, "minecraft:glass_bottle");

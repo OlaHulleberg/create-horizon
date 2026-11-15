@@ -309,7 +309,11 @@ pub fn ratio(a: &Part, b: &Part, diff: [i32; 3]) -> f32 {
         match (x, y) {
             (Gantry::Shaft { facing, powered }, Gantry::Carriage { facing: c })
             | (Gantry::Carriage { facing: c }, Gantry::Shaft { facing, powered })
-                if (if matches!(x, Gantry::Shaft { .. }) { d } else { d.opposite() }) == c =>
+                if (if matches!(x, Gantry::Shaft { .. }) {
+                    d
+                } else {
+                    d.opposite()
+                }) == c =>
             {
                 return if powered {
                     gantry_pinion_modifier(facing, c)
@@ -1085,9 +1089,8 @@ impl Kinetics {
                 let id = self.queue[i];
                 let turned = theoretical(self, id);
                 let shown = if overstressed { 0.0 } else { turned };
-                let seq = held[self.side[&id] as usize].map(|(c, base)| {
-                    (c, if base == 0.0 { 0.0 } else { c.value / base })
-                });
+                let seq = held[self.side[&id] as usize]
+                    .map(|(c, base)| (c, if base == 0.0 { 0.0 } else { c.value / base }));
                 let n = &mut self.nodes[id as usize];
                 n.stress = stress;
                 n.capacity = capacity;
@@ -1662,14 +1665,21 @@ mod tests {
         assert_eq!(k.sequence_limit([1, 0, 0], 0, false), Some(90.0));
         assert_eq!(k.sequence_limit([1, 1, 1], 0, false), Some(45.0));
         assert_eq!(k.sequence_limit([1, 0, 0], 0, true), None, "not a distance");
-        assert_eq!(k.sequence_limit([-1, 0, 0], 0, false), None, "the side turning it");
+        assert_eq!(
+            k.sequence_limit([-1, 0, 0], 0, false),
+            None,
+            "the side turning it"
+        );
         // A new run of the same turn tells the parts again, unchanged speeds and all.
         k.set(
             [0, 0, 0],
             1,
             Part {
                 couple: Some(Couple::Relay(2.0)),
-                context: Some(Context { run: 2, ..ctx(false, 90.0) }),
+                context: Some(Context {
+                    run: 2,
+                    ..ctx(false, 90.0)
+                }),
                 ..Part::half(Dir::East)
             },
         );

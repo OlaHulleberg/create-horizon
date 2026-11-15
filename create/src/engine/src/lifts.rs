@@ -105,12 +105,12 @@ pub fn init_names(names: &[String]) -> Vec<(usize, String)> {
             current = Some(p + 1);
         }
         let mut next = None;
-        for peek in i + 1..names.len() {
-            let Some(v) = number(&names[peek]) else {
+        for (peek, name) in names.iter_mut().enumerate().skip(i + 1) {
+            let Some(v) = number(name) else {
                 continue;
             };
             if current.is_some_and(|c| c >= v) {
-                names[peek].clear();
+                name.clear();
                 out.push((peek, String::new()));
                 break;
             }
@@ -287,7 +287,12 @@ impl Lifts {
         let at: Vec<[i32; 3]> = c.contacts.iter().map(|y| [key.x, *y, key.z]).collect();
         let names: Vec<String> = at
             .iter()
-            .map(|p| self.contacts.get(p).map(|c| c.short.clone()).unwrap_or_default())
+            .map(|p| {
+                self.contacts
+                    .get(p)
+                    .map(|c| c.short.clone())
+                    .unwrap_or_default()
+            })
             .collect();
         let mut changed = Vec::new();
         for (i, name) in init_names(&names) {

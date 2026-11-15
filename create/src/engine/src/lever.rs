@@ -202,7 +202,9 @@ pub fn encode(levers: &[Shown]) -> Vec<u8> {
 }
 
 pub fn decode(data: &[u8]) -> Vec<Shown> {
-    data.chunks_exact(15)
+    data.as_chunks::<15>()
+        .0
+        .iter()
         .filter_map(|c| {
             let at = |i: usize| i32::from_le_bytes(c[i..i + 4].try_into().unwrap());
             let face = [Face::Floor, Face::Wall, Face::Ceiling]
@@ -307,7 +309,8 @@ mod tests {
         assert!((p - crate::math::Vec3::new(0.5, 1.0 / 16.0, 0.75)).length() < 1e-5);
         // At 0 on the floor facing south, nothing moves.
         assert!(
-            handle_pose(Face::Floor, Dir::South, 0.0).abs_diff_eq(crate::math::Mat4::IDENTITY, 1e-6)
+            handle_pose(Face::Floor, Dir::South, 0.0)
+                .abs_diff_eq(crate::math::Mat4::IDENTITY, 1e-6)
         );
     }
 }

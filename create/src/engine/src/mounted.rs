@@ -425,7 +425,9 @@ impl Pose {
             let n = word(57).map_or(0, u32::from_le_bytes) as usize;
             d.get(61..)
                 .unwrap_or(&[])
-                .chunks_exact(16)
+                .as_chunks::<16>()
+                .0
+                .iter()
                 .take(n.min(MAX_SENT_BLOCKS))
                 .map(|r| {
                     let i = |j: usize| i32::from_le_bytes([r[j], r[j + 1], r[j + 2], r[j + 3]]);

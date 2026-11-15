@@ -252,7 +252,14 @@ pub fn crafter(ctx: Context, against: Option<Dir>) -> (Dir, &'static str) {
         Some(facing) if !ctx.sneaking => (facing, pointing(facing)),
         _ => {
             let facing = horizontal_direction(ctx.yaw).opposite();
-            (facing, if facing == face { "up" } else { pointing(facing) })
+            (
+                facing,
+                if facing == face {
+                    "up"
+                } else {
+                    pointing(facing)
+                },
+            )
         }
     }
 }
@@ -310,8 +317,7 @@ pub fn axis(
         Block::Cogwheel | Block::LargeCogwheel => {
             let axis = if ctx.sneaking {
                 ctx.clicked_face.axis()
-            } else if let (Some(a), true) = (near.controller_below, block == Block::LargeCogwheel)
-            {
+            } else if let (Some(a), true) = (near.controller_below, block == Block::LargeCogwheel) {
                 across(a)
             } else if let Some(a) = near.small_cog_clicked {
                 a
@@ -772,12 +778,25 @@ mod tests {
             Some((Axis::X, false))
         );
         assert_eq!(
-            axis(b, ctx(0.0, 0.0, false), none, Nearby { large_cog_above: Some(Axis::X), ..Nearby::default() }),
+            axis(
+                b,
+                ctx(0.0, 0.0, false),
+                none,
+                Nearby {
+                    large_cog_above: Some(Axis::X),
+                    ..Nearby::default()
+                }
+            ),
             Some((Axis::Z, false))
         );
         // A shaft to the north: along it.
         assert_eq!(
-            axis(b, ctx(0.0, 0.0, false), |d| d == Dir::North, Nearby::default()),
+            axis(
+                b,
+                ctx(0.0, 0.0, false),
+                |d| d == Dir::North,
+                Nearby::default()
+            ),
             Some((Axis::Z, false))
         );
         let s = Block::SequencedGearshift;
@@ -796,10 +815,18 @@ mod tests {
             axis(s, ctx(0.0, 0.0, true), below, Nearby::default()),
             Some((Axis::Z, false))
         );
-        assert_eq!(axis(Block::Belt, ctx(0.0, 0.0, false), none, Nearby::default()), None);
+        assert_eq!(
+            axis(Block::Belt, ctx(0.0, 0.0, false), none, Nearby::default()),
+            None
+        );
         // Requesters along the player's facing; tickers facing the player.
         assert_eq!(
-            axis(Block::RedstoneRequester, ctx(90.0, 0.0, false), none, Nearby::default()),
+            axis(
+                Block::RedstoneRequester,
+                ctx(90.0, 0.0, false),
+                none,
+                Nearby::default()
+            ),
             Some((Axis::X, false))
         );
         assert_eq!(
@@ -888,7 +915,12 @@ mod tests {
             ..near
         };
         assert_eq!(
-            axis(Block::LargeCogwheel, on(Dir::Up, false), none, on_controller),
+            axis(
+                Block::LargeCogwheel,
+                on(Dir::Up, false),
+                none,
+                on_controller
+            ),
             Some((Axis::Z, false))
         );
         // Gearboxes stand upright; encased shafts take the view's axis.

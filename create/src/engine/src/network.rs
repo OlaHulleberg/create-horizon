@@ -1039,8 +1039,17 @@ mod tests {
         assert_eq!(at(10.5).blocks[1 - east_side], [[10, 64, -3]]);
         assert_eq!(at(15.5).blocks[1 - east_side], [[15, 64, -1]]);
         // The marker's model turned against the trains it stands for.
-        assert_eq!(n.signal_marker([5, 64, -1]), Some(([5, 64, 0], [-1, 0], false)));
-        assert_eq!(n.signal_marker([10, 64, -3]), Some(([10, 64, 0], [1, 0], false)));
-        assert_eq!(n.signal_marker([15, 64, -1]), Some(([15, 64, 0], [1, 0], false)));
+        assert_eq!(
+            n.signal_marker([5, 64, -1]),
+            Some(([5, 64, 0], [-1, 0], false))
+        );
+        assert_eq!(
+            n.signal_marker([10, 64, -3]),
+            Some(([10, 64, 0], [1, 0], false))
+        );
+        assert_eq!(
+            n.signal_marker([15, 64, -1]),
+            Some(([15, 64, 0], [1, 0], false))
+        );
     }
 }

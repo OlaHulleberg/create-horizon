@@ -833,7 +833,9 @@ pub fn encode(all: &[Record]) -> Vec<Vec<u8>> {
 pub fn decode(data: &[u8]) -> Vec<Record> {
     let i = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
     let f = |b: &[u8]| f32::from_le_bytes(b.try_into().unwrap());
-    data.chunks_exact(RECORD)
+    data.as_chunks::<RECORD>()
+        .0
+        .iter()
         .map(|r| {
             let h = (r[12] != 0).then(|| (f(&r[13..17]), f(&r[17..21])));
             ([i(&r[0..4]), i(&r[4..8]), i(&r[8..12])], h)

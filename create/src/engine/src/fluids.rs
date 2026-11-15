@@ -392,7 +392,10 @@ pub fn flows(
         };
         *t += half;
         *order += 1;
-        match out.iter_mut().find(|f| f.pos == at.pos && f.side == at.side) {
+        match out
+            .iter_mut()
+            .find(|f| f.pos == at.pos && f.side == at.side)
+        {
             Some(f) if f.start > at.start => *f = at,
             Some(_) => {}
             None => out.push(at),
@@ -411,8 +414,18 @@ pub fn flows(
     let n = pull.len();
     for (i, s) in pull.iter().rev().enumerate() {
         let open = i == 0 && !from.tank;
-        add(&mut out, &mut t, &mut order, conn(s.pos, s.on, true, open, from.pressure));
-        add(&mut out, &mut t, &mut order, conn(s.pos, s.back, false, false, from.pressure));
+        add(
+            &mut out,
+            &mut t,
+            &mut order,
+            conn(s.pos, s.on, true, open, from.pressure),
+        );
+        add(
+            &mut out,
+            &mut t,
+            &mut order,
+            conn(s.pos, s.back, false, false, from.pressure),
+        );
     }
     let back = facing.opposite();
     let pump_in = conn(pump, back, true, n == 0 && !from.tank, speed.abs());
@@ -436,9 +449,19 @@ pub fn flows(
             if held {
                 break;
             }
-            add(&mut out, &mut t, &mut order, conn(s.pos, s.back, true, false, to.pressure));
+            add(
+                &mut out,
+                &mut t,
+                &mut order,
+                conn(s.pos, s.back, true, false, to.pressure),
+            );
             let open = i == last && !to.tank;
-            add(&mut out, &mut t, &mut order, conn(s.pos, s.on, false, open, to.pressure));
+            add(
+                &mut out,
+                &mut t,
+                &mut order,
+                conn(s.pos, s.on, false, open, to.pressure),
+            );
         }
     }
     out
@@ -547,7 +570,8 @@ pub fn smart_pipe_filter_slot(face: crate::steam::Face, facing: Dir) -> ([f64; 3
         angle += 180.0;
     }
     // `VecHelper.rotateCentered(voxelSpace(8, y, z), angle, Y)`.
-    let (x, z) = (8.0 / 16.0 - 0.5, z / 16.0 - 0.5);
+    // x: 8 / 16 - 0.5.
+    let (x, z) = (0.0, z / 16.0 - 0.5);
     let r = f64::from(angle).to_radians();
     let (sin, cos) = r.sin_cos();
     let offset = [x * cos + z * sin + 0.5, y / 16.0, z * cos - x * sin + 0.5];
@@ -751,7 +775,10 @@ pub enum Piped {
     Pump(Dir),
     /// Anything else: whether it holds fluid toward the pipe (`hasFluidCapability`), and
     /// whether it is a hose pulley.
-    Other { fluid: bool, hose: bool },
+    Other {
+        fluid: bool,
+        hose: bool,
+    },
 }
 
 /// `FluidTransportBehaviour.AttachmentTypes`: the pieces drawn on a side.
@@ -844,7 +871,10 @@ pub fn rim(own: Piped, d: Dir, n: Piped) -> Rim {
         match n {
             Piped::Pump(f) if f == d.opposite() => Rim::None,
             Piped::Encased(s) if s & d.opposite().bit() != 0 => Rim::Rim,
-            Piped::Other { fluid: true, hose: false } => Rim::Drain,
+            Piped::Other {
+                fluid: true,
+                hose: false,
+            } => Rim::Drain,
             _ => Rim::Rim,
         }
     };
@@ -877,8 +907,7 @@ pub fn rim(own: Piped, d: Dir, n: Piped) -> Rim {
             if base == Rim::Rim && matches!(own, Piped::Valve(_)) {
                 return Rim::None;
             }
-            if base == Rim::Rim && !matches!(own, Piped::Glass(_)) && matches!(n, Piped::Glass(_))
-            {
+            if base == Rim::Rim && !matches!(own, Piped::Glass(_)) && matches!(n, Piped::Glass(_)) {
                 return Rim::PartialRim;
             }
             if base == Rim::Rim && matches!(n, Piped::Pipe(_)) {
@@ -926,17 +955,30 @@ mod tests {
         let (west, _, _) = smart_pipe_filter_slot(Face::Floor, Dir::West);
         assert!(west[0] > 0.5);
         assert!(smart_pipe_filter_hit(Face::Floor, Dir::East, east));
-        assert!(!smart_pipe_filter_hit(Face::Floor, Dir::East, [0.5, 0.5, 0.5]));
+        assert!(!smart_pipe_filter_hit(
+            Face::Floor,
+            Dir::East,
+            [0.5, 0.5, 0.5]
+        ));
     }
 
     #[test]
     fn rims_follow_create() {
         let x = Dir::East.bit() | Dir::West.bit();
         // A straight pipe between two pipes: plain connections.
-        assert_eq!(rim(Piped::Pipe(x), Dir::East, Piped::Pipe(x)), Rim::Connection);
+        assert_eq!(
+            rim(Piped::Pipe(x), Dir::East, Piped::Pipe(x)),
+            Rim::Connection
+        );
         // Into a tank: a drain; an open end: a rim; a closed side: nothing.
-        let tank = Piped::Other { fluid: true, hose: false };
-        let air = Piped::Other { fluid: false, hose: false };
+        let tank = Piped::Other {
+            fluid: true,
+            hose: false,
+        };
+        let air = Piped::Other {
+            fluid: false,
+            hose: false,
+        };
         assert_eq!(rim(Piped::Pipe(x), Dir::East, tank), Rim::Drain);
         assert_eq!(rim(Piped::Pipe(x), Dir::East, air), Rim::Rim);
         assert_eq!(rim(Piped::Pipe(x), Dir::Up, air), Rim::None);
@@ -954,7 +996,10 @@ mod tests {
         assert_eq!(rim(Piped::Pump(Dir::East), Dir::East, tank), Rim::Drain);
         assert_eq!(rim(Piped::Pump(Dir::East), Dir::East, air), Rim::None);
         // Glass pipes in a row: nothing between them; a rim without its connector at an end.
-        assert_eq!(rim(Piped::Glass(Axis::X), Dir::East, Piped::Glass(Axis::X)), Rim::None);
+        assert_eq!(
+            rim(Piped::Glass(Axis::X), Dir::East, Piped::Glass(Axis::X)),
+            Rim::None
+        );
         assert_eq!(rim(Piped::Glass(Axis::X), Dir::East, air), Rim::PartialRim);
         assert!(draws_casing(x | Dir::Up.bit() | Dir::North.bit()));
         assert!(draws_casing(x | Dir::Up.bit()), "a T joint");
@@ -1066,9 +1111,18 @@ mod tests {
         let from = reach([0, 0, 0], Dir::West, 128.0, cell(false))[0];
         let to = reach([0, 0, 0], Dir::East, 128.0, cell(false))[0];
         let push_ways = vec![(to, push[0].1.clone())];
-        let f = flows([0, 0, 0], Dir::East, 128.0, &from, &pull[0].1, &push_ways, Fluid::Water);
+        let f = flows(
+            [0, 0, 0],
+            Dir::East,
+            128.0,
+            &from,
+            &pull[0].1,
+            &push_ways,
+            Fluid::Water,
+        );
         // At 128 rpm each half fills in a tick: the open end's side first, inbound and open.
-        let at = |pos: [i32; 3], side: Dir| *f.iter().find(|x| x.pos == pos && x.side == side).unwrap();
+        let at =
+            |pos: [i32; 3], side: Dir| *f.iter().find(|x| x.pos == pos && x.side == side).unwrap();
         let first = at([-1, 0, 0], Dir::West);
         assert!(first.inbound && first.open);
         assert_eq!((first.start, first.order), (0.0, 0));
@@ -1085,7 +1139,15 @@ mod tests {
         // A closed valve holds the flow in the pipe before it.
         let push = ways([0, 0, 0], Dir::East, cell(true));
         let push_ways = vec![(to, push[0].1.clone())];
-        let f = flows([0, 0, 0], Dir::East, 128.0, &from, &pull[0].1, &push_ways, Fluid::Water);
+        let f = flows(
+            [0, 0, 0],
+            Dir::East,
+            128.0,
+            &from,
+            &pull[0].1,
+            &push_ways,
+            Fluid::Water,
+        );
         assert!(f.iter().any(|x| x.pos == [1, 0, 0]));
         assert!(!f.iter().any(|x| x.pos == [2, 0, 0]));
         // Slower: 1/32 + 16/128 * 31/32 a tick.

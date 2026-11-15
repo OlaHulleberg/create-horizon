@@ -172,7 +172,11 @@ impl Boiler {
         }
         let for_size = max_heat_for_size(size);
         let for_water = self.max_heat_for_water();
-        let heat = if self.passive_heat { 1 } else { self.active_heat };
+        let heat = if self.passive_heat {
+            1
+        } else {
+            self.active_heat
+        };
         let min = heat.min(for_water.min(for_size));
         let max = heat.max(for_water.max(for_size));
         let level = self.active_heat.min(for_water.min(for_size));
@@ -187,10 +191,7 @@ impl Boiler {
         };
         let mut lines = vec![goggles(
             0,
-            vec![
-                ("Boiler Status:  ".into(), 0xFFFFFF),
-                (status, 0x55FF55),
-            ],
+            vec![("Boiler Status:  ".into(), 0xFFFFFF), (status, 0x55FF55)],
         )];
         // `componentHelper` / `barComponent`.
         let bars = |label: &str, dots: &str, v: i32| {
@@ -220,7 +221,10 @@ impl Boiler {
             lines.push(goggles(
                 1,
                 vec![
-                    (format!("{}mB", number(f64::from(self.water_supply))), 0x5555FF),
+                    (
+                        format!("{}mB", number(f64::from(self.water_supply))),
+                        0x5555FF,
+                    ),
                     (" / ".into(), 0xAAAAAA),
                     (
                         format!("{}mB per Tick", number(f64::from(WATER_SUPPLY_PER_LEVEL))),
@@ -239,7 +243,10 @@ impl Boiler {
         } else {
             format!("via {} engines", self.attached_engines)
         };
-        lines.push(goggles(0, vec![("Kinetic Stress Capacity:".into(), 0xAAAAAA)]));
+        lines.push(goggles(
+            0,
+            vec![("Kinetic Stress Capacity:".into(), 0xAAAAAA)],
+        ));
         lines.push(goggles(
             1,
             vec![(format!("{}su ", number(su)), 0x55FFFF), (via, 0x555555)],
@@ -707,10 +714,20 @@ mod tests {
     fn the_rotation_direction_box_is_on_the_engine_s_open_sides() {
         let px = |v: Option<[f64; 3]>| v.map(|v| v.map(|x| (x * 16.0 * 100.0).round() / 100.0));
         // On a wall facing north: west and east, a pixel toward its front.
-        assert_eq!(px(value_box_slot(Face::Wall, Dir::North, Dir::East)), Some([14.5, 8.0, 7.0]));
-        assert_eq!(px(value_box_slot(Face::Wall, Dir::North, Dir::West)), Some([1.5, 8.0, 7.0]));
+        assert_eq!(
+            px(value_box_slot(Face::Wall, Dir::North, Dir::East)),
+            Some([14.5, 8.0, 7.0])
+        );
+        assert_eq!(
+            px(value_box_slot(Face::Wall, Dir::North, Dir::West)),
+            Some([1.5, 8.0, 7.0])
+        );
         for side in [Dir::Up, Dir::Down, Dir::North, Dir::South] {
-            assert_eq!(value_box_slot(Face::Wall, Dir::North, side), None, "{side:?}");
+            assert_eq!(
+                value_box_slot(Face::Wall, Dir::North, side),
+                None,
+                "{side:?}"
+            );
         }
         // On the floor its `facing` picks the open sides.
         assert!(value_box_slot(Face::Floor, Dir::North, Dir::East).is_some());
@@ -722,7 +739,11 @@ mod tests {
 
     #[test]
     fn counter_clockwise_turns_the_shaft_the_other_way() {
-        for (f, axis) in [(Dir::South, Axis::X), (Dir::North, Axis::X), (Dir::East, Axis::Z)] {
+        for (f, axis) in [
+            (Dir::South, Axis::X),
+            (Dir::North, Axis::X),
+            (Dir::East, Axis::Z),
+        ] {
             assert_eq!(
                 conveyed_direction(1.0, f, f, axis, true),
                 -conveyed_direction(1.0, f, f, axis, false)

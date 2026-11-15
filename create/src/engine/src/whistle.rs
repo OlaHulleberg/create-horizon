@@ -114,7 +114,9 @@ pub fn pitch(above: impl Fn(i32) -> Option<Shape>) -> i32 {
 
 /// `addToGoggleTooltip`'s note for `pitch` (`create.generic.notes`, en_us).
 pub fn note(pitch: i32) -> &'static str {
-    const NOTES: [&str; 12] = ["F#", "F", "E", "D#", "D", "C#", "C", "B", "A#", "A", "G#", "G"];
+    const NOTES: [&str; 12] = [
+        "F#", "F", "E", "D#", "D", "C#", "C", "B", "A#", "A", "G#", "G",
+    ];
     NOTES[pitch.rem_euclid(12) as usize]
 }
 

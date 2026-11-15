@@ -994,7 +994,10 @@ impl Train {
     pub fn carriage_ends(&self, g: &Graph, c: usize) -> (Vec3, Vec3) {
         let s = self.carriages[c];
         let last = s.first + usize::from(s.two);
-        (self.points[2 * s.first].at(g), self.points[2 * last + 1].at(g))
+        (
+            self.points[2 * s.first].at(g),
+            self.points[2 * last + 1].at(g),
+        )
     }
 
     /// `Train.crash`: it stops navigating; not derailed yet, it bounces back at up to half a
@@ -2502,7 +2505,11 @@ impl Railway {
             if !t.bound || t.derailed || t.speed == 0.0 || t.carriages.is_empty() {
                 continue;
             }
-            let c = if t.speed < 0.0 { t.carriages.len() - 1 } else { 0 };
+            let c = if t.speed < 0.0 {
+                t.carriages.len() - 1
+            } else {
+                0
+            };
             let (lead, trail) = t.carriage_ends(g, c);
             let (start, end) = if t.speed < 0.0 {
                 (trail, lead)
@@ -2536,7 +2543,10 @@ impl Railway {
                 continue;
             }
             let combined = self.trains[i].train.speed.abs() + self.trains[j].train.speed.abs();
-            let backwards = [self.trains[i].train.backwards, self.trains[j].train.backwards];
+            let backwards = [
+                self.trains[i].train.backwards,
+                self.trains[j].train.backwards,
+            ];
             self.trains[i].train.crash();
             self.trains[j].train.crash();
             self.trains[i].runtime.interrupted();

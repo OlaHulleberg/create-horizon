@@ -193,7 +193,12 @@ mod tests {
             slots: vec![("minecraft:oak_log".into(), 2)],
             ..Saw::default()
         };
-        s.apply(Some(&log), |_| 64, &mut Rng::new(1), Some("minecraft:bucket"));
+        s.apply(
+            Some(&log),
+            |_| 64,
+            &mut Rng::new(1),
+            Some("minecraft:bucket"),
+        );
         assert_eq!(
             s.slots,
             vec![

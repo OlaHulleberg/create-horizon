@@ -557,9 +557,8 @@ pub fn casing_model(seg: &Segment) -> (&'static str, i32, i32) {
         Dir::East => 270,
         _ => 0,
     };
-    let y = y_rot
-        + if seg.slope == Slope::Upward { 180 } else { 0 }
-        + if vertical { 90 } else { 0 };
+    let y =
+        y_rot + if seg.slope == Slope::Upward { 180 } else { 0 } + if vertical { 90 } else { 0 };
     (name, x, y % 360)
 }
 
@@ -746,7 +745,12 @@ pub fn item_place(c: &Segment, length: i32, position: f32, side_offset: f32) -> 
 /// each copy turned 10° (flat items) and lifted, laid flat (flat items) or nudged by
 /// `new Random(angle)` (block items), at half size; a package (`PackageItem.isPackage`, a block
 /// item) lifted 4 px at one and a half times its size, never nudged.
-pub fn item_copies(count: u32, block_item: bool, angle: i32, package: bool) -> Vec<crate::math::Mat4> {
+pub fn item_copies(
+    count: u32,
+    block_item: bool,
+    angle: i32,
+    package: bool,
+) -> Vec<crate::math::Mat4> {
     use crate::math::{Mat4, Vec3};
     let copies = crate::depot::copies(count);
     let mut rng = crate::depot::JavaRandom::new(i64::from(angle));

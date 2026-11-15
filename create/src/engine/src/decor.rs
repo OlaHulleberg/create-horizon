@@ -789,9 +789,8 @@ pub fn girder_wrench(
             Some((ox, oz)) => (g.x != g.z && ox != oz).then_some(true),
         }
     };
-    let dirs = crate::place::ordered_by_distance(hit, |d| {
-        d.axis() == Axis::Y && valid(d).is_some()
-    });
+    let dirs =
+        crate::place::ordered_by_distance(hit, |d| d.axis() == Axis::Y && valid(d).is_some());
     let d = *dirs.first()?;
     Some((d, valid(d)?))
 }
@@ -818,15 +817,23 @@ mod tests {
             bottom: false,
         };
         // Alone: up when the hit is above the centre, down below; a single toggle.
-        assert_eq!(girder_wrench(&beam, [0.1, 0.4, 0.0], |_| None), Some((Dir::Up, false)));
-        assert_eq!(girder_wrench(&beam, [0.1, -0.4, 0.0], |_| None), Some((Dir::Down, false)));
+        assert_eq!(
+            girder_wrench(&beam, [0.1, 0.4, 0.0], |_| None),
+            Some((Dir::Up, false))
+        );
+        assert_eq!(
+            girder_wrench(&beam, [0.1, -0.4, 0.0], |_| None),
+            Some((Dir::Down, false))
+        );
         // Another beam above pairs; a pole above refuses that side, so the other is taken.
         assert_eq!(
-            girder_wrench(&beam, [0.0, 0.4, 0.0], |d| (d == Dir::Up).then_some((false, true))),
+            girder_wrench(&beam, [0.0, 0.4, 0.0], |d| (d == Dir::Up)
+                .then_some((false, true))),
             Some((Dir::Up, true))
         );
         assert_eq!(
-            girder_wrench(&beam, [0.0, 0.4, 0.0], |d| (d == Dir::Up).then_some((true, true))),
+            girder_wrench(&beam, [0.0, 0.4, 0.0], |d| (d == Dir::Up)
+                .then_some((true, true))),
             Some((Dir::Down, false))
         );
         // A pole (neither) or a cross (both) alone: nothing.
@@ -835,9 +842,16 @@ mod tests {
         let cross = Girder { z: true, ..beam };
         assert_eq!(girder_wrench(&cross, [0.0, 0.4, 0.0], |_| None), None);
         // Standing girders lie down unless both ends are held.
-        let standing = Girder { axis: Axis::Y, top: true, ..beam };
+        let standing = Girder {
+            axis: Axis::Y,
+            top: true,
+            ..beam
+        };
         assert_eq!(girder_post_process(standing).axis, Axis::X);
-        let held = Girder { bottom: true, ..standing };
+        let held = Girder {
+            bottom: true,
+            ..standing
+        };
         assert_eq!(girder_post_process(held).axis, Axis::Y);
     }
 

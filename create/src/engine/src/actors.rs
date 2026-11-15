@@ -1895,7 +1895,10 @@ mod tests {
         assert_eq!(e, vec![Effect::Contact([1, 0, 1])]);
         e.clear();
         a.tick([2.5, 0.5, 1.15], Dir::South, 0.0, &world, &mut e);
-        assert_eq!(e, vec![Effect::ContactLeft([1, 0, 1]), Effect::Contact([2, 0, 1])]);
+        assert_eq!(
+            e,
+            vec![Effect::ContactLeft([1, 0, 1]), Effect::Contact([2, 0, 1])]
+        );
         e.clear();
         a.cancel(&mut e);
         assert_eq!(e, vec![Effect::ContactLeft([2, 0, 1])]);

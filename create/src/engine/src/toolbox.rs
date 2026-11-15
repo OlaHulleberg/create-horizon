@@ -30,7 +30,7 @@ pub const BACKGROUND: [f32; 2] = [188.0, 171.0];
 pub fn slot_position(slot: usize) -> Option<[f32; 2]> {
     const X: [f32; 8] = [79.0, 112.0, 145.0, 151.0, 145.0, 112.0, 79.0, 73.0];
     const Y: [f32; 8] = [37.0, 31.0, 37.0, 70.0, 103.0, 109.0, 103.0, 70.0];
-    if slot >= STORED || slot % STACKS_PER_COMPARTMENT != 0 {
+    if slot >= STORED || !slot.is_multiple_of(STACKS_PER_COMPARTMENT) {
         return None;
     }
     let compartment = slot / STACKS_PER_COMPARTMENT;

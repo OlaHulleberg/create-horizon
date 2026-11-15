@@ -521,7 +521,9 @@ pub fn decode(words: &[i32]) -> Option<Vec<Instruction>> {
     let (&n, rest) = words.split_first()?;
     let n = usize::try_from(n).ok().filter(|n| *n <= ROWS)?;
     let list: Vec<Instruction> = rest
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .take(n)
         .map(|c| {
             Some(Instruction {

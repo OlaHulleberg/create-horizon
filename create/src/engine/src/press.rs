@@ -179,7 +179,9 @@ pub fn encode(all: &[([i32; 3], Press)]) -> Vec<Vec<u8>> {
 
 pub fn decode(data: &[u8]) -> Vec<([i32; 3], Press)> {
     let i = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
-    data.chunks_exact(RECORD)
+    data.as_chunks::<RECORD>()
+        .0
+        .iter()
         .map(|r| {
             (
                 [i(&r[0..4]), i(&r[4..8]), i(&r[8..12])],

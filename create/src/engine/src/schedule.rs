@@ -203,7 +203,11 @@ pub enum Condition {
     Delay { value: i32, unit: TimeUnit },
     /// `TimeOfDayCondition`: at this hour and minute, every `rotation` (an index of
     /// `getRotation`: 0 every day ... 9 every quarter hour).
-    TimeOfDay { hour: i32, minute: i32, rotation: i32 },
+    TimeOfDay {
+        hour: i32,
+        minute: i32,
+        rotation: i32,
+    },
     /// `FluidThresholdCondition`: the train holds more, less or exactly this many buckets of
     /// the fluid of `item` (a bucket or a filter; none: any).
     FluidThreshold { op: Op, threshold: i32, item: Stack },
@@ -740,9 +744,7 @@ impl Runtime {
             // `DeliverPackagesInstruction.start`: no station takes the packages aboard: wait
             // and look again, or with none aboard, on to the next entry.
             Instruction::DeliverPackages => match &probes.packages {
-                Some((stations, _)) if !stations.is_empty() => {
-                    Order::NavigateTo(stations.clone())
-                }
+                Some((stations, _)) if !stations.is_empty() => Order::NavigateTo(stations.clone()),
                 Some((_, true)) | None => {
                     self.no_path();
                     Order::Nothing
@@ -755,9 +757,7 @@ impl Runtime {
             // `FetchPackagesInstruction.start`: no station has packages for it: on to the
             // next entry after a wait.
             Instruction::FetchPackages(_) => match &probes.packages {
-                Some((stations, _)) if !stations.is_empty() => {
-                    Order::NavigateTo(stations.clone())
-                }
+                Some((stations, _)) if !stations.is_empty() => Order::NavigateTo(stations.clone()),
                 _ => {
                     self.no_path();
                     self.current += 1;
@@ -1035,7 +1035,10 @@ mod tests {
     fn a_shuttle_goes_waits_and_starts_over() {
         let s = shuttle(true);
         let mut r = Runtime::new();
-        assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Navigate("Depot".into()));
+        assert_eq!(
+            r.tick(&s, false, idle(0), &none()),
+            Order::Navigate("Depot".into())
+        );
         // No path: it looks again 40 ticks later.
         r.no_path();
         let asks = (0..41)
@@ -1072,7 +1075,10 @@ mod tests {
         assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Nothing);
         assert_eq!(r.current, 0);
         assert!(!r.paused);
-        assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Navigate("Depot".into()));
+        assert_eq!(
+            r.tick(&s, false, idle(0), &none()),
+            Order::Navigate("Depot".into())
+        );
     }
 
     #[test]
@@ -1107,7 +1113,10 @@ mod tests {
         assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Nothing);
         assert_eq!(r.title, "Express");
         assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Throttle(50));
-        assert_eq!(r.tick(&s, false, idle(0), &none()), Order::Navigate("Depot".into()));
+        assert_eq!(
+            r.tick(&s, false, idle(0), &none()),
+            Order::Navigate("Depot".into())
+        );
         r.already_there(&s);
         // Unpowered it waits; powered it is done.
         for _ in 0..10 {

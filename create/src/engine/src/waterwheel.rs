@@ -201,7 +201,10 @@ mod tests {
     #[test]
     fn wheels_take_vanilla_planks_only() {
         assert_eq!(wood_of_planks("minecraft:oak_planks"), Some("oak"));
-        assert_eq!(wood_of_planks("minecraft:pale_oak_planks"), Some("pale_oak"));
+        assert_eq!(
+            wood_of_planks("minecraft:pale_oak_planks"),
+            Some("pale_oak")
+        );
         assert_eq!(wood_of_planks("minecraft:oak_log"), None);
         assert_eq!(wood_of_planks("create:oak_planks"), None);
         assert!(WOODS.is_sorted() && WOODS.contains(&DEFAULT_WOOD));

@@ -398,7 +398,10 @@ mod tests {
         assert!((up - Vec3::new(0.0, 0.0, 0.5)).length() < 1e-6, "{up}");
         let block = stack_poses(1, true, false, &mut JavaRandom::new(0));
         assert!((block[0].transform_vector3(Vec3::Y) - Vec3::new(0.0, 0.5, 0.0)).length() < 1e-6);
-        assert_eq!(stack_poses(64, true, false, &mut JavaRandom::new(0)).len(), 4);
+        assert_eq!(
+            stack_poses(64, true, false, &mut JavaRandom::new(0)).len(),
+            4
+        );
     }
 
     #[test]

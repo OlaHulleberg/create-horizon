@@ -286,10 +286,12 @@ pub fn spill(pipe: Fluid, world: Fluid, source: bool) -> Option<&'static str> {
         if let Some(s) = lava_with(world) {
             state = Some(s);
         }
-    } else if world == Fluid::Lava && !source && pipe.placeable() {
-        if let Some(s) = lava_with(pipe) {
-            state = Some(s);
-        }
+    } else if world == Fluid::Lava
+        && !source
+        && pipe.placeable()
+        && let Some(s) = lava_with(pipe)
+    {
+        state = Some(s);
     }
     state
 }
@@ -328,11 +330,14 @@ pub fn instant_at(effect: &str, amplifier: i32, inverted: bool, health: f64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn registered_potions_have_their_effects() {
         assert_eq!(potion_effects("minecraft:swiftness"), &[("speed", 0, 3600)]);
-        assert_eq!(potion_effects("strong_healing"), &[("instant_health", 1, 1)]);
+        assert_eq!(
+            potion_effects("strong_healing"),
+            &[("instant_health", 1, 1)]
+        );
         assert_eq!(potion_effects("minecraft:awkward"), &[]);
         assert_eq!(potion_effects("minecraft:unknown"), &[]);
     }
@@ -351,12 +356,30 @@ mod tests {
 
     #[test]
     fn spills_turn_the_world_fluid_as_create_does() {
-        assert_eq!(spill(Fluid::Water, Fluid::Lava, true), Some("minecraft:obsidian"));
-        assert_eq!(spill(Fluid::Water, Fluid::Lava, false), Some("minecraft:cobblestone"));
-        assert_eq!(spill(Fluid::Lava, Fluid::Water, true), Some("minecraft:stone"));
-        assert_eq!(spill(Fluid::Lava, Fluid::Water, false), Some("minecraft:cobblestone"));
-        assert_eq!(spill(Fluid::Lava, Fluid::Honey, true), Some("create:limestone"));
-        assert_eq!(spill(Fluid::Chocolate, Fluid::Lava, false), Some("create:scoria"));
+        assert_eq!(
+            spill(Fluid::Water, Fluid::Lava, true),
+            Some("minecraft:obsidian")
+        );
+        assert_eq!(
+            spill(Fluid::Water, Fluid::Lava, false),
+            Some("minecraft:cobblestone")
+        );
+        assert_eq!(
+            spill(Fluid::Lava, Fluid::Water, true),
+            Some("minecraft:stone")
+        );
+        assert_eq!(
+            spill(Fluid::Lava, Fluid::Water, false),
+            Some("minecraft:cobblestone")
+        );
+        assert_eq!(
+            spill(Fluid::Lava, Fluid::Honey, true),
+            Some("create:limestone")
+        );
+        assert_eq!(
+            spill(Fluid::Chocolate, Fluid::Lava, false),
+            Some("create:scoria")
+        );
         assert_eq!(spill(Fluid::Chocolate, Fluid::Lava, true), None);
         assert_eq!(spill(Fluid::Honey, Fluid::Water, true), None);
     }
@@ -510,14 +533,23 @@ mod tests {
         assert_eq!(lava.fill(&mut slab, Fluid::Lava, 5, true), 0);
         // Drained: a bucket, what the pump does not take kept.
         let mut pull = OpenEnd::default();
-        assert_eq!(pull.drain(&mut slab, 40, None, false), Some((Fluid::Water, 40)));
+        assert_eq!(
+            pull.drain(&mut slab, 40, None, false),
+            Some((Fluid::Water, 40))
+        );
         assert_eq!(slab.waterlogged, Some(true));
-        assert_eq!(pull.drain(&mut slab, 40, None, true), Some((Fluid::Water, 40)));
+        assert_eq!(
+            pull.drain(&mut slab, 40, None, true),
+            Some((Fluid::Water, 40))
+        );
         assert_eq!(slab.waterlogged, Some(false));
         assert_eq!(pull.tank, Some((Fluid::Water, 960)));
         assert!(pull.pulling);
         assert_eq!(pull.drain(&mut slab, 40, Some(Fluid::Lava), true), None);
-        assert_eq!(pull.drain(&mut slab, 40, Some(Fluid::Water), true), Some((Fluid::Water, 40)));
+        assert_eq!(
+            pull.drain(&mut slab, 40, Some(Fluid::Water), true),
+            Some((Fluid::Water, 40))
+        );
         assert_eq!(pull.tank, Some((Fluid::Water, 920)));
     }
 
@@ -548,10 +580,22 @@ mod tests {
 
     #[test]
     fn meeting_flows_break_the_pipe_into_stone() {
-        assert_eq!(flow_collision(Fluid::Water, Fluid::Lava), Some("minecraft:cobblestone"));
-        assert_eq!(flow_collision(Fluid::Lava, Fluid::Water), Some("minecraft:cobblestone"));
-        assert_eq!(flow_collision(Fluid::Honey, Fluid::Lava), Some("create:limestone"));
-        assert_eq!(flow_collision(Fluid::Lava, Fluid::Chocolate), Some("create:scoria"));
+        assert_eq!(
+            flow_collision(Fluid::Water, Fluid::Lava),
+            Some("minecraft:cobblestone")
+        );
+        assert_eq!(
+            flow_collision(Fluid::Lava, Fluid::Water),
+            Some("minecraft:cobblestone")
+        );
+        assert_eq!(
+            flow_collision(Fluid::Honey, Fluid::Lava),
+            Some("create:limestone")
+        );
+        assert_eq!(
+            flow_collision(Fluid::Lava, Fluid::Chocolate),
+            Some("create:scoria")
+        );
         assert_eq!(flow_collision(Fluid::Lava, Fluid::Milk), None);
         assert_eq!(flow_collision(Fluid::Water, Fluid::Honey), None);
     }

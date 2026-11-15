@@ -235,7 +235,10 @@ mod tests {
     #[test]
     fn a_pump_turns_around() {
         let p = props(&[("facing", "east"), ("waterlogged", "false")]);
-        assert_eq!(reversed(&p), props(&[("facing", "west"), ("waterlogged", "false")]));
+        assert_eq!(
+            reversed(&p),
+            props(&[("facing", "west"), ("waterlogged", "false")])
+        );
     }
 
     fn props(kv: &[(&str, &str)]) -> BTreeMap<String, String> {

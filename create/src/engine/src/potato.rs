@@ -356,7 +356,12 @@ mod tests {
         assert!((at[2] - 4.5).abs() < 1e-9);
         // The nearer of two; one holding the start is hit at once.
         let near = (8, [[-0.2, 0.0, 3.9], [0.2, 0.7, 4.1]]);
-        assert_eq!(entity_hit(from, to, &[chicken, near], HIT_MARGIN).unwrap().0, 8);
+        assert_eq!(
+            entity_hit(from, to, &[chicken, near], HIT_MARGIN)
+                .unwrap()
+                .0,
+            8
+        );
         let around = (9, [[-0.5, 0.0, 2.5], [0.5, 1.0, 3.5]]);
         assert_eq!(entity_hit(from, to, &[around], 0.0), Some((9, from)));
     }

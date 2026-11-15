@@ -21,7 +21,10 @@ pub enum Model {
     CrankBase(Dir),
     /// A cog without its shaft (`SHAFTLESS_COGWHEEL`, `SHAFTLESS_LARGE_COGWHEEL`) on an axis:
     /// encased cogs' and the large cog's.
-    Cog { large: bool, axis: Axis },
+    Cog {
+        large: bool,
+        axis: Axis,
+    },
     /// The large cog's shaft (`COGWHEEL_SHAFT`), drawn apart at a shaft's angle.
     CogShaft(Axis),
     /// The water wheel (`AllPartialModels.WATER_WHEEL`), its axle along a face.
@@ -65,7 +68,9 @@ pub enum Model {
     ElevatorCoil(Dir),
     /// A backtank's shaft input (`COPPER_BACKTANK_SHAFT`, `NETHERITE_BACKTANK_SHAFT`), turning
     /// about up as written.
-    BacktankShaft { netherite: bool },
+    BacktankShaft {
+        netherite: bool,
+    },
 }
 
 /// `FlywheelBlockEntity.visualSpeed` on a client: the wheel's drawn speed, which starts at 0 and
@@ -131,13 +136,15 @@ pub fn rotation_offset(block: Block, axis: Axis, pos: [i32; 3]) -> f32 {
         + if sum % 2 == 0 {
             22.5
         } else if matches!(
-        block,
-        Block::LargeCogwheel | Block::AndesiteEncasedLargeCogwheel | Block::BrassEncasedLargeCogwheel
-    ) {
-        11.25
-    } else {
-        0.0
-    }
+            block,
+            Block::LargeCogwheel
+                | Block::AndesiteEncasedLargeCogwheel
+                | Block::BrassEncasedLargeCogwheel
+        ) {
+            11.25
+        } else {
+            0.0
+        }
 }
 
 /// The parts block `block` draws at `pos`, turning at `speeds` (its first and second half).
@@ -166,7 +173,13 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
             .axis
             .map(|a| {
                 vec![
-                    own(a, Model::Cog { large: true, axis: a }),
+                    own(
+                        a,
+                        Model::Cog {
+                            large: true,
+                            axis: a,
+                        },
+                    ),
                     Draw {
                         slot: 1,
                         model: Model::CogShaft(a),
@@ -649,7 +662,9 @@ pub fn encode(updates: &[Update]) -> Vec<Vec<u8>> {
 
 /// A message's updates; a malformed tail (a server of another version) is dropped.
 pub fn decode(data: &[u8]) -> Vec<Update> {
-    data.chunks_exact(RECORD)
+    data.as_chunks::<RECORD>()
+        .0
+        .iter()
         .filter_map(|r| {
             let int = |i: usize| i32::from_le_bytes(r[i..i + 4].try_into().unwrap());
             let pos = [int(1), int(5), int(9)];

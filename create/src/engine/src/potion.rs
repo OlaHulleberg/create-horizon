@@ -82,9 +82,16 @@ pub const EFFECTS: [(&str, u32); 40] = [
     ("breath_of_the_nautilus", 65518),
 ];
 
+/// A potion: id, name suffix and effects (effect, amplifier, duration in ticks).
+pub type Potion = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, i32, i32)],
+);
+
 /// The registered potions (`minecraft:potion`, vanilla's order): id, name suffix
 /// (`Potion.name`) and effects (effect, amplifier, duration in ticks).
-pub const POTIONS: [(&str, &str, &[(&str, i32, i32)]); 46] = [
+pub const POTIONS: [Potion; 46] = [
     ("water", "water", &[]),
     ("mundane", "mundane", &[]),
     ("thick", "thick", &[]),
@@ -236,7 +243,7 @@ fn mix<'a>(effects: impl Iterator<Item = (&'a str, i32)>) -> Option<u32> {
         b += w * (color & 255);
         total += w;
     }
-    (total > 0).then(|| (r / total) << 16 | (g / total) << 8 | b / total)
+    (total > 0).then(|| ((r / total) << 16) | ((g / total) << 8) | (b / total))
 }
 
 fn hex(bytes: &[u8]) -> String {

@@ -194,6 +194,26 @@ pub fn tick_millstone(
     None
 }
 
+/// `ItemHelper.addToList`: `n` of `item` onto the stacks of it in `list` (up to `max` each),
+/// the rest as a new stack.
+pub fn add_to_list(
+    list: &mut Vec<(String, u8)>,
+    item: String,
+    mut n: u8,
+    max: &impl Fn(&str) -> u8,
+) {
+    for (have, m) in list.iter_mut() {
+        if n > 0 && *have == item {
+            let moved = n.min(max(have).saturating_sub(*m));
+            *m += moved;
+            n -= moved;
+        }
+    }
+    if n > 0 {
+        list.push((item, n));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,20 +308,5 @@ mod tests {
             vec![Some(("a".into(), 6)), Some(("a".into(), 64)), None]
         );
         assert_eq!(insert_stacked(&mut slots, "b", 200, 64), 200 - 64);
-    }
-}
-
-/// `ItemHelper.addToList`: `n` of `item` onto the stacks of it in `list` (up to `max` each),
-/// the rest as a new stack.
-pub fn add_to_list(list: &mut Vec<(String, u8)>, item: String, mut n: u8, max: &impl Fn(&str) -> u8) {
-    for (have, m) in list.iter_mut() {
-        if n > 0 && *have == item {
-            let moved = n.min(max(have).saturating_sub(*m));
-            *m += moved;
-            n -= moved;
-        }
-    }
-    if n > 0 {
-        list.push((item, n));
     }
 }
