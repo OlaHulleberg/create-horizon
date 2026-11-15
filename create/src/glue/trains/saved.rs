@@ -684,6 +684,9 @@ pub fn curves_to_nbt(list: &[Saved]) -> Tag {
                     "curve".into(),
                     Tag::List(f.iter().map(|v| Tag::Double(v.to_bits())).collect()),
                 );
+                if s.girder {
+                    c.insert("Girder".into(), Tag::Byte(1));
+                }
                 Tag::Compound(c)
             })
             .collect(),
@@ -709,7 +712,9 @@ pub fn curves_of(tag: Option<&Tag>) -> Vec<Saved> {
                     _ => None,
                 })
                 .collect();
-            Some(Saved::from_numbers(i, f.try_into().ok()?))
+            let mut s = Saved::from_numbers(i, f.try_into().ok()?);
+            s.girder = matches!(c.get(&"Girder".into()), Some(Tag::Byte(1)));
+            Some(s)
         })
         .collect()
 }
@@ -776,9 +781,11 @@ mod tests {
             starts: [[0.5, 64.0, 1.0], [8.0, 64.0, 8.5]],
             axes: [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]],
             normals: [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            girder: true,
         };
         let back = curves_of(Some(&curves_to_nbt(&[s])));
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].numbers(), s.numbers());
+        assert!(back[0].girder);
     }
 }

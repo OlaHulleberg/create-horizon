@@ -207,7 +207,11 @@ impl Subsystem for Trains {
 
     /// A station's flag, marker and assembly track, for its clients.
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[super::station_draw::KEY]
+        &[
+            super::station_draw::KEY,
+            super::tracks::CURVES,
+            super::tracks::LIGHT,
+        ]
     }
 
     fn standalone_models(&self, models: &mut Vec<String>) {

@@ -12,6 +12,8 @@ pub struct Connection {
     pub curve: Curve,
     /// `isPrimary`: the copy that draws it.
     pub primary: bool,
+    /// `hasGirder`: laid with metal girders under it.
+    pub girder: bool,
 }
 
 /// What a curve is made of, as saved and sent: its ends' blocks, starts, axes and normals.
@@ -22,6 +24,8 @@ pub struct Saved {
     pub starts: [Vec3; 2],
     pub axes: [Vec3; 2],
     pub normals: [Vec3; 2],
+    /// `hasGirder`.
+    pub girder: bool,
 }
 
 impl Saved {
@@ -51,6 +55,7 @@ impl Saved {
             starts: [v(0), v(3)],
             axes: [v(6), v(9)],
             normals: [v(12), v(15)],
+            girder: false,
         }
     }
 }
@@ -66,6 +71,9 @@ pub struct Curves {
     /// Fake track to lay (true) or take up (false) along curves added or gone
     /// (`manageFakeTracksAlong`), for the glue.
     pub fake: Vec<([i32; 3], bool)>,
+    /// Curves taken up with a track (`removeInboundConnections(dropAndDiscard)`), for the glue
+    /// to drop their items (`spawnItems`).
+    pub dropped: Vec<Saved>,
 }
 
 /// `manageFakeTracksAlong`: the blocks a curve's fake track takes, a block above each column it
@@ -98,6 +106,7 @@ impl Curves {
                 to: there,
                 curve,
                 primary,
+                girder: s.girder,
             });
         }
         self.changed.push(s.from);
@@ -115,16 +124,24 @@ impl Curves {
         // Each curve's fake track goes with it (drawn from its primary copy either end).
         for c in &list {
             let primary = if c.primary {
-                Some(c.curve.clone())
+                Some((pos, c.to, c.curve.clone(), c.girder))
             } else {
                 self.at
                     .get(&c.to)
                     .and_then(|l| l.iter().find(|o| o.to == pos && o.primary))
-                    .map(|o| o.curve.clone())
+                    .map(|o| (c.to, pos, o.curve.clone(), o.girder))
             };
-            if let Some(curve) = primary {
+            if let Some((from, to, curve, girder)) = primary {
                 self.fake
                     .extend(fake_track_along(&curve).into_iter().map(|p| (p, false)));
+                self.dropped.push(Saved {
+                    from,
+                    to,
+                    starts: curve.starts,
+                    axes: curve.axes,
+                    normals: curve.normals,
+                    girder,
+                });
             }
         }
         for o in &others {
@@ -154,6 +171,7 @@ impl Curves {
                     starts: c.curve.starts,
                     axes: c.curve.axes,
                     normals: c.curve.normals,
+                    girder: c.girder,
                 })
             })
             .collect();
@@ -172,6 +190,7 @@ impl Curves {
                     starts: c.curve.starts,
                     axes: c.curve.axes,
                     normals: c.curve.normals,
+                    girder: c.girder,
                 })
                 .collect()
         })
@@ -198,6 +217,7 @@ pub fn encode(list: &[([i32; 3], Vec<Saved>)]) -> Vec<u8> {
             for v in f {
                 out.extend_from_slice(&v.to_le_bytes());
             }
+            out.push(u8::from(s.girder));
         }
     }
     out
@@ -212,7 +232,7 @@ pub fn decode(mut data: &[u8]) -> Vec<([i32; 3], Vec<Saved>)> {
         data = &data[13..];
         let mut curves = Vec::with_capacity(n);
         for _ in 0..n {
-            if data.len() < 24 + 144 {
+            if data.len() < 24 + 144 + 1 {
                 return out;
             }
             let i: [i32; 6] = std::array::from_fn(|k| int(data, 4 * k));
@@ -220,8 +240,10 @@ pub fn decode(mut data: &[u8]) -> Vec<([i32; 3], Vec<Saved>)> {
                 let b = &data[24 + 8 * k..32 + 8 * k];
                 f64::from_le_bytes(b.try_into().unwrap_or([0; 8]))
             });
-            curves.push(Saved::from_numbers(i, f));
-            data = &data[24 + 144..];
+            let mut s = Saved::from_numbers(i, f);
+            s.girder = data[24 + 144] != 0;
+            curves.push(s);
+            data = &data[24 + 144 + 1..];
         }
         out.push((pos, curves));
     }
@@ -241,6 +263,7 @@ mod tests {
             starts: [[0.5, 0.0, 0.5], [8.5, 0.0, 8.5]],
             axes: [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0]],
             normals: [UP, UP],
+            girder: false,
         }
     }
 

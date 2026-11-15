@@ -11,7 +11,7 @@ use crate::glue::items;
 use create_engine::Block;
 use create_engine::track::{self, End, Failure, Request, TrackShape};
 use create_engine::track_curves::Saved;
-use create_engine::track_render::{Mat4, Piece, segment_parts};
+use create_engine::track_render::{Mat4, Piece, girder_parts, segment_parts};
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart,
     BlockEntityRenderBoundingBoxEvent, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent,
@@ -23,9 +23,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// The key in a track block entity's data holding the curves drawn from it.
-const CURVES: &str = "Curves";
+pub const CURVES: &str = "Curves";
 /// The key in a signal's block entity data: 1 while it shows red.
-const LIGHT: &str = "Light";
+pub const LIGHT: &str = "Light";
 
 thread_local! {
     /// The track each player picked first with the track item (`TRACK_CONNECTING_FROM`, kept
@@ -263,6 +263,25 @@ fn lay_track(
     if !info.valid {
         return Err(info.message);
     }
+    // `TrackBlockItem.useOn`: metal girders in the off hand lay a girder curve, paving under
+    // the straight runs with girders (`TrackPaver`, wall-like: under both rails) and costing
+    // two girders per two sleeper segments of the curve.
+    let girder = items::held(&*lv.host, player, mod_api::Hand::Off)
+        .is_some_and(|s| s.item().id(&*lv.host) == "create:metal_girder");
+    let paving = if girder {
+        girder_paving(lv, &info)
+    } else {
+        Vec::new()
+    };
+    let pavement = if girder {
+        paving.len() as i32
+            + info
+                .curve
+                .as_ref()
+                .map_or(0, |c| (c.segments as i32 + 1) / 2 * 2)
+    } else {
+        0
+    };
     // `tryConnect` outside creative: the player pays a track for each one laid where the block
     // is replaceable, and half a track per sleeper segment of the curve, from their stacks of
     // the held track (the selected slot after the others, then the off hand), or nothing is
@@ -277,9 +296,18 @@ fn lay_track(
             })
             .count() as i32;
         let need = straight + info.turn_tracks();
+        if pavement > 0 && count_offhand_kind(lv, player) < pavement {
+            return Err(Some(Failure::NotEnoughPavement));
+        }
         if !pay_tracks(lv, player, need) {
             return Err(Some(Failure::NotEnoughTracks));
         }
+        if pavement > 0 {
+            pay_offhand_kind(lv, player, pavement);
+        }
+    }
+    for (p, state) in paving {
+        lv.set_state(p, state, update_all());
     }
     // `placeTracks`: each end's state (a T junction's straight part) along its run.
     for (i, state) in [state1, state2].into_iter().enumerate() {
@@ -322,6 +350,7 @@ fn lay_track(
         starts: curve.starts,
         axes: curve.axes,
         normals: curve.normals,
+        girder,
     };
     let dim = lv.dim;
     with_world(|w| {
@@ -330,6 +359,126 @@ fn lay_track(
         w.mark_unsaved(dim, saved.to);
     });
     Ok(info.message)
+}
+
+/// `TrackPaver.paveStraight` with a metal girder: under each straight run (and the curve's own
+/// end block) a girder under either rail where the block is free, along the run (`AXIS`, its
+/// `x` or `z` side, neither top nor bottom) when the run is not diagonal.
+fn girder_paving(lv: &ServerLevel<'_>, info: &track::Placement) -> Vec<([i32; 3], BlockState)> {
+    let mut out: Vec<([i32; 3], BlockState)> = Vec::new();
+    let Some(base) = super::default_state(&*lv.host, "create:metal_girder") else {
+        return out;
+    };
+    let facts = lv.host.block_states();
+    for i in 0..2 {
+        let a = info.axes[i];
+        // `direction.cross(UP)`, not normalised.
+        let normal = [-a[2], 0.0, a[0]];
+        let side = if a[0] != 0.0 && a[2] == 0.0 {
+            Some("x")
+        } else if a[2] != 0.0 && a[0] == 0.0 {
+            Some("z")
+        } else {
+            None
+        };
+        let state = match side {
+            Some(s) => super::with_props(&*lv.host, base, &[(s, "true")]).unwrap_or(base),
+            None => base,
+        };
+        for p in info.straight(i).collect::<Vec<_>>() {
+            let centre = [
+                f64::from(p[0]) + 0.5,
+                f64::from(p[1]) - 0.5,
+                f64::from(p[2]) + 0.5,
+            ];
+            for s in [1.0, -1.0] {
+                let q = [0, 1, 2].map(|k| (centre[k] + normal[k] * s).floor() as i32);
+                if out.iter().any(|(o, _)| *o == q) {
+                    continue;
+                }
+                // `placeBlockIfFree`: another block that can be replaced.
+                let free = lv.block_state(q).is_some_and(|at| {
+                    at.block() != base.block() && facts.replaceable(at) == Some(true)
+                });
+                if free {
+                    out.push((q, state));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// How many of the off hand's item `player` has (its stacks anywhere and the off hand's).
+fn count_offhand_kind(lv: &ServerLevel<'_>, player: mod_api::PlayerRef) -> i32 {
+    use mod_api::Hand;
+    let Some(item) = items::held(&*lv.host, player, Hand::Off).map(|s| s.item()) else {
+        return 0;
+    };
+    let slots: i32 = player
+        .inventory_slots(&*lv.host)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, s)| s.item() == item)
+        .map(|(_, s)| s.count() as i32)
+        .sum();
+    slots + items::held(&*lv.host, player, Hand::Off).map_or(0, |s| s.count() as i32)
+}
+
+/// Takes `need` of the off hand's item from `player`: the inventory's stacks of it, then the
+/// off hand (`tryConnect`'s pavement pass).
+fn pay_offhand_kind(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, need: i32) {
+    use items::{held, set_held};
+    use mod_api::Hand;
+    let Some(item) = held(&*lv.host, player, Hand::Off).map(|s| s.item()) else {
+        return;
+    };
+    let mut left = need;
+    for (i, s) in player
+        .inventory_slots(&*lv.host)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, s)| s.item() == item)
+    {
+        if left <= 0 {
+            return;
+        }
+        let take = left.min(s.count() as i32);
+        left -= take;
+        let _ = player.set_inventory_slot(lv.host, i, s.shrink(take as u32));
+    }
+    if left > 0
+        && let Some(s) = held(&*lv.host, player, Hand::Off)
+    {
+        set_held(lv.host, player, Hand::Off, s.shrink(left as u32));
+    }
+}
+
+/// `BezierConnection.spawnItems` for curves taken up with their track: a track at every other
+/// sleeper segment but the last, and two metal girders beside it on a girder curve.
+fn drop_curves(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let dropped =
+        with_world(|w| std::mem::take(&mut w.dims[dim].track_curves.dropped)).unwrap_or_default();
+    for s in dropped {
+        let curve = s.curve();
+        for i in (0..curve.segments).step_by(2) {
+            let p = curve.position(f64::from(curve.segment_t(i)));
+            let at = [p[0], p[1] + f64::from(3.0f32 / 16.0), p[2]];
+            let ids: &[&str] = if s.girder {
+                &["create:track", "create:metal_girder", "create:metal_girder"]
+            } else {
+                &["create:track"]
+            };
+            for id in ids {
+                if let Some(stack) = crate::glue::packages::body::new_stack(&*lv.host, id, 1) {
+                    let _ = lv
+                        .level
+                        .spawn_item(&mut *lv.host, at[0], at[1], at[2], stack, 10);
+                }
+            }
+        }
+    }
 }
 
 /// The key in the track stack's custom data marking its pick (`TRACK_CONNECTING_FROM`).
@@ -421,6 +570,7 @@ fn pay_tracks(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, need: i32) -
 /// signal block entities that came in get their data.
 pub fn sync(lv: &mut ServerLevel<'_>) {
     lay_fake_track(lv);
+    drop_curves(lv);
     let dim = lv.dim;
     let changed = with_world(|w| {
         let c = &mut w.dims[dim].track_curves.changed;
@@ -683,12 +833,33 @@ impl BlockEntityPart for TrackEntity {
         ) else {
             return;
         };
+        // `renderBezierTurn`: a girder curve's beams and caps (`renderGirder`), then the
+        // sleepers and rails.
+        let girders = [
+            "part_girder_segment_middle",
+            "part_girder_segment_top",
+            "part_girder_segment_bottom",
+        ]
+        .map(part);
         for s in &curves {
-            for (piece, m) in segment_parts(&s.curve(), event.pos) {
+            let curve = s.curve();
+            let mut pieces = if s.girder {
+                girder_parts(&curve, event.pos)
+            } else {
+                Vec::new()
+            };
+            pieces.extend(segment_parts(&curve, event.pos));
+            for (piece, m) in pieces {
                 let key = match piece {
-                    Piece::Tie => tie,
-                    Piece::RailLeft => left,
-                    Piece::RailRight => right,
+                    Piece::Tie => Some(tie),
+                    Piece::RailLeft => Some(left),
+                    Piece::RailRight => Some(right),
+                    Piece::GirderMiddle => girders[0],
+                    Piece::GirderTop => girders[1],
+                    Piece::GirderBottom => girders[2],
+                };
+                let Some(key) = key else {
+                    continue;
                 };
                 draw_posed(event.draw, &m, |d| {
                     d.block(key, &[("facing", "south")]);
