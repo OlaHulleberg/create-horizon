@@ -23,7 +23,7 @@ use std::sync::OnceLock;
 pub const TYPE: &str = "create:kinetic";
 
 /// The key in a block entity's data under which its parts' speeds are, `[slot 0, slot 1]`.
-const SPEEDS: &str = "Speeds";
+pub const SPEEDS: &str = "Speeds";
 /// The keys of its first part's theoretical speed (`getTheoreticalSpeed`, what the goggles
 /// show) and of whether its network is overstressed (`isOverStressed`).
 pub const THEORY: &str = "Theory";

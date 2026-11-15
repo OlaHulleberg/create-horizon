@@ -170,6 +170,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Marking an entity immune to fire** (`Entity.fireImmune`, Create's `CreateFireImmune`): a player in a whole
   netherite diving set takes no fire damage (`living_incoming_damage`) and stops burning each tick, and their
   own view shows no flames, but lava still sets them alight for a tick, so others see flames on them.
+- **Moving a playing sound** (a tickable `SoundInstance`'s `getX/Y/Z`, read each tick): turning machinery's
+  ambient hum and cog clicks (`SoundScapes`, `ContinuousSound`) follow the mean of their blocks in Create; a
+  `SoundRef` can change its volume (`fade`) but not its position, so they play at the listener with the volume
+  their distance gives them, from no side (`glue/sources/ambience.rs`). A `SoundRef::move_to(position)` would
+  close it.
 - **A particle drawn as its own quads** (`SteamJetParticle.render`'s four quads turned along the jet): steam
   engines' and whistles' steam jets are Create's sprites on a billboard.
 - **A screen layout for a mod menu opened without a block** (`player_open_mod_menu` with no `pos`: the
