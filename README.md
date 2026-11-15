@@ -5,7 +5,6 @@
 <p align="center">
   <a href="#install"><b>Install</b></a> ·
   <a href="#documentation"><b>Docs</b></a> ·
-  <a href="https://discord.gg/eswQcHfRKC"><b>Sunrise Discord</b></a> ·
   <a href="CONTRIBUTING.md"><b>Contributing</b></a>
 </p>
 
