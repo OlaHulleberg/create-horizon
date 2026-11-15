@@ -379,9 +379,7 @@ pub(super) fn interaction_key(
                 .local_player()
                 .and_then(|p| p.entity().is_shift_key_down(host))
                 .unwrap_or(false);
-            let target = CLIENT
-                .with_borrow(|c| c.target)
-                .filter(|_| !sneaking);
+            let target = CLIENT.with_borrow(|c| c.target).filter(|_| !sneaking);
             stop();
             match target {
                 Some(to) => {
@@ -542,9 +540,12 @@ pub(super) fn render_level_stage(
     };
     let color = if t % 16 > 8 { 0xFF38_B764 } else { 0xFFA7_F070 };
     let mut lines = Vec::new();
-    for (p, color) in [Some((pp, color)), CLIENT.with_borrow(|c| c.target).map(|t| (t, 0xFFEE_EEEE))]
-        .into_iter()
-        .flatten()
+    for (p, color) in [
+        Some((pp, color)),
+        CLIENT.with_borrow(|c| c.target).map(|t| (t, 0xFFEE_EEEE)),
+    ]
+    .into_iter()
+    .flatten()
     {
         let (min, max) = panel_bb(face, facing, p);
         crate::glue::logistics::client::box_lines(&mut lines, min, max, color);

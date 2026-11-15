@@ -21,10 +21,13 @@ struct Pick {
     origin: [f64; 3],
 }
 
+/// A track block looked at, and the way (the signs of x and z from the eye to it).
+type Looked = ([i32; 3], [i32; 2]);
+
 thread_local! {
     static PICKS: RefCell<HashMap<u128, Pick>> = RefCell::new(HashMap::new());
     /// What each picking player was last sent: the track looked at (and the way), or none.
-    static SENT: RefCell<HashMap<u128, Option<([i32; 3], [i32; 2])>>> = RefCell::new(HashMap::new());
+    static SENT: RefCell<HashMap<u128, Option<Looked>>> = RefCell::new(HashMap::new());
     /// The track block each player's crosshair is on, as their client says (`H`).
     static HOVERS: RefCell<HashMap<u128, [i32; 3]>> = RefCell::new(HashMap::new());
     /// The client's: the track block it last told of.
@@ -104,8 +107,7 @@ pub fn client_message(player: PlayerRef, data: &[u8]) {
 /// where the picked train's wheels would go on it, sent when what they look at changes. A pick
 /// given up stops the preview.
 pub fn preview(lv: &mut ServerLevel<'_>) {
-    let picks: Vec<(u128, Pick)> =
-        PICKS.with_borrow(|p| p.iter().map(|(k, v)| (*k, *v)).collect());
+    let picks: Vec<(u128, Pick)> = PICKS.with_borrow(|p| p.iter().map(|(k, v)| (*k, *v)).collect());
     let gone: Vec<u128> = SENT.with_borrow(|s| {
         s.keys()
             .filter(|k| !picks.iter().any(|(p, _)| p == *k))
@@ -206,7 +208,11 @@ pub fn render_level_stage(event: &mut mod_api::RenderLevelStageEvent<'_>) {
         for i in 0..n.saturating_sub(1) {
             let down = |v: [f64; 3]| [v[0], v[1] - f64::from(0.925f32), v[2]];
             let (a, b) = (down(points[i]), down(points[i + 1]));
-            let colour = if *ok || i != n - 2 { 0xFF95_CD41 } else { 0xFFEA_5C2B };
+            let colour = if *ok || i != n - 2 {
+                0xFF95_CD41
+            } else {
+                0xFFEA_5C2B
+            };
             let w = if i % 2 == 1 { 1.0 / 6.0 } else { 1.0 / 4.0 };
             let d = [b[0] - a[0], b[2] - a[2]];
             let l = (d[0] * d[0] + d[1] * d[1]).sqrt();
@@ -219,10 +225,20 @@ pub fn render_level_stage(event: &mut mod_api::RenderLevelStageEvent<'_>) {
                     [c(a, -1.0), c(a, 1.0), c(b, 1.0), c(b, -1.0)],
                     [c(b, -1.0), c(b, 1.0), c(a, 1.0), c(a, -1.0)],
                 ] {
-                    quads.push(mod_api::WorldQuad::new(corners, colour, mod_api::WorldDepth::Tested));
+                    quads.push(mod_api::WorldQuad::new(
+                        corners,
+                        colour,
+                        mod_api::WorldDepth::Tested,
+                    ));
                 }
             }
-            lines.push(mod_api::WorldLine::new(a, b, colour, 2.0, mod_api::WorldDepth::Tested));
+            lines.push(mod_api::WorldLine::new(
+                a,
+                b,
+                colour,
+                2.0,
+                mod_api::WorldDepth::Tested,
+            ));
         }
         (quads, lines)
     });

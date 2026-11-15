@@ -231,7 +231,13 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
             && before.as_ref().is_some_and(|b| b.closed != s.closed)
         {
             // `sounds.close` when the screen's animation has closed again: at once here.
-            play(lv, pos, "create:frogport_close", 1.0, 1.25 + random(lv, pos) * 0.25);
+            play(
+                lv,
+                pos,
+                "create:frogport_close",
+                1.0,
+                1.25 + random(lv, pos) * 0.25,
+            );
         }
         if before.is_some()
             && s.opened.is_some()

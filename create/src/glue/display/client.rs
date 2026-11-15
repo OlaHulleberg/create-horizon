@@ -518,7 +518,14 @@ fn draw_nixie_text(
     let texts = {
         let draw = &*draw;
         let flicker = [flicker(), flicker()];
-        display::nixie_flickering(face, facing, colour, [left, right], |s| width(draw, s), flicker)
+        display::nixie_flickering(
+            face,
+            facing,
+            colour,
+            [left, right],
+            |s| width(draw, s),
+            flicker,
+        )
     };
     for t in texts {
         draw_text(draw, &t.pose, &t.text, t.color, true);

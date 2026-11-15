@@ -370,7 +370,10 @@ fn paver(lv: &ServerLevel<'_>, player: mod_api::PlayerRef, at: [i32; 3]) -> Opti
     let host = &*lv.host;
     let stack = items::held(host, player, mod_api::Hand::Off)?;
     let id = stack.item().id(host);
-    if matches!(id.as_str(), "create:wooden_bracket" | "create:metal_bracket") {
+    if matches!(
+        id.as_str(),
+        "create:wooden_bracket" | "create:metal_bracket"
+    ) {
         return None;
     }
     let block = host.item_block(stack.item())?;
@@ -425,8 +428,12 @@ fn free_for(lv: &ServerLevel<'_>, p: [i32; 3], state: BlockState) -> Option<Bloc
         .flatten()
         .is_some();
     Some(if has {
-        super::with_props(host, state, &[("waterlogged", if source { "true" } else { "false" })])
-            .unwrap_or(state)
+        super::with_props(
+            host,
+            state,
+            &[("waterlogged", if source { "true" } else { "false" })],
+        )
+        .unwrap_or(state)
     } else {
         state
     })
@@ -458,7 +465,12 @@ fn pave(
                 state = super::with_props(
                     host,
                     state,
-                    &[("top", "false"), ("bottom", "false"), ("axis", axis), (flag, "true")],
+                    &[
+                        ("top", "false"),
+                        ("bottom", "false"),
+                        ("axis", axis),
+                        (flag, "true"),
+                    ],
                 )
                 .unwrap_or(state);
             }

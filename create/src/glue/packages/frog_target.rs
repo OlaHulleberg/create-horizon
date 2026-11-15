@@ -84,7 +84,13 @@ fn validate(target: [f64; 3], pos: [i32; 3]) -> u8 {
 
 /// `animateConnection`: four dust specks of `rgb` running from `source` to `target` over ten
 /// ticks, a third as fast as the render time.
-fn animate_connection(host: &mut dyn ClientHost, ticks: u64, source: [f64; 3], target: [f64; 3], rgb: u32) {
+fn animate_connection(
+    host: &mut dyn ClientHost,
+    ticks: u64,
+    source: [f64; 3],
+    target: [f64; 3],
+    rgb: u32,
+) {
     let Some(&key) = super::DUST_PARTICLE.get() else {
         return;
     };
@@ -148,7 +154,11 @@ fn selection_tick(host: &mut dyn ClientHost, player: PlayerRef) {
                 _ => None,
             });
         if let Some(target) = target {
-            let source = [f64::from(pos[0]) + 0.5, f64::from(pos[1]), f64::from(pos[2]) + 0.5];
+            let source = [
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]),
+                f64::from(pos[2]) + 0.5,
+            ];
             animate_connection(host, ticks, source, target, STATUS[0].1);
             CLIENT.with_borrow_mut(|c| c.selection = Some((target, None, true)));
         }
@@ -156,9 +166,9 @@ fn selection_tick(host: &mut dyn ClientHost, player: PlayerRef) {
     }
     let Some(chosen) = chosen else { return };
     let replaceable = |p: [i32; 3]| {
-        level
-            .block_state(host, p)
-            .is_some_and(|s| mod_api::HostBlockStates::block_states(&*host).replaceable(s) == Some(true))
+        level.block_state(host, p).is_some_and(|s| {
+            mod_api::HostBlockStates::block_states(&*host).replaceable(s) == Some(true)
+        })
     };
     if !replaceable(pos) {
         let o = hit.face;
@@ -180,7 +190,11 @@ fn selection_tick(host: &mut dyn ClientHost, player: PlayerRef) {
     }
     CLIENT.with_borrow_mut(|c| c.selection = Some((chosen.at, free.then_some(pos), code == 0)));
     if free {
-        let source = [f64::from(pos[0]) + 0.5, f64::from(pos[1]), f64::from(pos[2]) + 0.5];
+        let source = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]),
+            f64::from(pos[2]) + 0.5,
+        ];
         animate_connection(host, ticks, source, chosen.at, STATUS[usize::from(code)].1);
     }
 }
@@ -493,7 +507,12 @@ pub(super) fn render_level_stage(
     let mut lines = Vec::new();
     let point = |lines: &mut Vec<_>, at: [f64; 3], color: u32| {
         let r = 1.0 / 12.0;
-        crate::glue::logistics::client::box_lines(lines, at.map(|v| v - r), at.map(|v| v + r), color);
+        crate::glue::logistics::client::box_lines(
+            lines,
+            at.map(|v| v - r),
+            at.map(|v| v + r),
+            color,
+        );
     };
     // `ChainPointSelected` (green, or red where it can't be reached from the block looked at)
     // and `TargetedFrogPos`: the block's floor, an eighth in from each side.

@@ -28,13 +28,14 @@ const HELD: u32 = 0;
 /// A package put in, unpacked at the commit.
 const INCOMING: u32 = 1;
 
+/// A block by its level and position.
+type At = (usize, [i32; 3]);
+
 thread_local! {
     /// What each packager's slot 0 was last set to: the held box, or none.
-    static MIRRORED: RefCell<HashMap<(usize, [i32; 3]), Option<ItemStack>>> =
-        RefCell::new(HashMap::new());
+    static MIRRORED: RefCell<HashMap<At, Option<ItemStack>>> = RefCell::new(HashMap::new());
     /// What each port's slots were last set to.
-    static PORTS: RefCell<HashMap<(usize, [i32; 3]), Vec<Option<ItemStack>>>> =
-        RefCell::new(HashMap::new());
+    static PORTS: RefCell<HashMap<At, Vec<Option<ItemStack>>>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn reset() {
@@ -45,7 +46,10 @@ pub(super) fn reset() {
 /// The packagers' slots (two) and the ports' (18), reached by no face through the game's own
 /// handler (`provide` answers for them first).
 pub(super) fn register(r: &mut dyn mod_api::Registrar) {
-    for &b in Block::ALL.iter().filter(|&&b| super::is_packager(b) || super::is_port(b)) {
+    for &b in Block::ALL
+        .iter()
+        .filter(|&&b| super::is_packager(b) || super::is_port(b))
+    {
         r.block_container(
             &crate::glue::states::key(b),
             ModContainer {
@@ -62,11 +66,7 @@ pub(super) fn register(r: &mut dyn mod_api::Registrar) {
 const PORT_SLOTS: usize = create_engine::port::SLOTS;
 
 /// Of `items` (a removed port's), those its slots don't hold: what the engine still drops.
-pub(super) fn port_unmirrored(
-    dim: usize,
-    pos: [i32; 3],
-    items: Vec<ItemStack>,
-) -> Vec<ItemStack> {
+pub(super) fn port_unmirrored(dim: usize, pos: [i32; 3], items: Vec<ItemStack>) -> Vec<ItemStack> {
     let mut mirrored: Vec<ItemStack> = PORTS
         .with_borrow_mut(|m| m.remove(&(dim, pos)))
         .unwrap_or_default()
@@ -75,13 +75,15 @@ pub(super) fn port_unmirrored(
         .collect();
     items
         .into_iter()
-        .filter(|s| match mirrored.iter().position(|m| same(Some(m), Some(s))) {
-            Some(i) => {
-                mirrored.swap_remove(i);
-                false
-            }
-            None => true,
-        })
+        .filter(
+            |s| match mirrored.iter().position(|m| same(Some(m), Some(s))) {
+                Some(i) => {
+                    mirrored.swap_remove(i);
+                    false
+                }
+                None => true,
+            },
+        )
         .collect()
 }
 
@@ -116,7 +118,10 @@ fn sync_ports(lv: &mut ServerLevel<'_>) {
         pk.ports
             .iter()
             .map(|(p, port)| {
-                let items = port.items.iter().map(|s| s.as_ref().map(|b| b.stack.clone()));
+                let items = port
+                    .items
+                    .iter()
+                    .map(|s| s.as_ref().map(|b| b.stack.clone()));
                 (*p, items.collect())
             })
             .collect()
@@ -172,13 +177,13 @@ pub(super) fn port_contents_changed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         let Some(port) = pk.ports.get_mut(&pos) else {
             return;
         };
-        for i in 0..PORT_SLOTS {
+        for (i, stack) in now.iter().enumerate() {
             let was = last.get(i).cloned().flatten();
-            if same(was.as_ref(), now[i].as_ref()) {
+            if same(was.as_ref(), stack.as_ref()) {
                 continue;
             }
             if let Some(slot) = port.items.get_mut(i) {
-                *slot = now[i].clone().map(super::parcel);
+                *slot = stack.clone().map(super::parcel);
                 any = true;
             }
         }
@@ -203,7 +208,10 @@ fn sync_packagers(lv: &mut ServerLevel<'_>) {
     });
     for (pos, box_) in held {
         let last = MIRRORED.with_borrow(|m| m.get(&(dim, pos)).cloned());
-        if last.as_ref().is_some_and(|l| same(l.as_ref(), box_.as_ref())) {
+        if last
+            .as_ref()
+            .is_some_and(|l| same(l.as_ref(), box_.as_ref()))
+        {
             continue;
         }
         let Some(e) = lv.host.block_entity(lv.level, pos) else {

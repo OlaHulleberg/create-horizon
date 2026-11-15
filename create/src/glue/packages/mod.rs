@@ -865,8 +865,9 @@ fn block_moved(
         // `PackagePortBlockEntity.destroy`: its packages drop.
         // Those in its slots drop with the block (`automation`).
         Some(_) => {
-            let removed: Vec<ItemStack> =
-                with(dim, |pk| pk.remove_port(pos).into_iter().map(|p| p.stack).collect());
+            let removed: Vec<ItemStack> = with(dim, |pk| {
+                pk.remove_port(pos).into_iter().map(|p| p.stack).collect()
+            });
             for s in automation::port_unmirrored(dim, pos, removed) {
                 drops.push((center(pos), s));
             }
@@ -1714,7 +1715,11 @@ struct PackageBlock;
 #[mod_api::horizon_part]
 impl BlockPart for PackageBlock {
     /// A packager's slots changed: automation took its box or put a package in (`automation`).
-    fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut mod_api::ContentsChangedEvent) {
+    fn contents_changed(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ContentsChangedEvent,
+    ) {
         let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
             return;
         };

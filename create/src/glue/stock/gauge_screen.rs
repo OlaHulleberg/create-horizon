@@ -430,10 +430,14 @@ struct Open {
     size: [f32; 2],
 }
 
+/// What the screen does at the next client tick: messages to send, whether it closes, and a
+/// panel to start joining or relocating from (`true`: relocating).
+type Later = (Vec<Vec<u8>>, bool, Option<(PanelPos, bool)>);
+
 thread_local! {
     static OPEN: RefCell<Option<Open>> = const { RefCell::new(None) };
     /// Messages to send and whether to close, at the next client tick.
-    static LATER: RefCell<(Vec<Vec<u8>>, bool, Option<(PanelPos, bool)>)> =
+    static LATER: RefCell<Later> =
         const { RefCell::new((Vec::new(), false, None)) };
 }
 
@@ -1009,7 +1013,13 @@ fn render_config(
             )]);
         }
         // `I_MOVE_GAUGE`.
-        icon_button(draw, r.relocate, [64.0, 192.0], false, inside(r.relocate, mouse));
+        icon_button(
+            draw,
+            r.relocate,
+            [64.0, 192.0],
+            false,
+            inside(r.relocate, mouse),
+        );
         if inside(r.relocate, mouse) {
             tip = Some(vec![line("create.gui.factory_panel.relocate", "Relocate")]);
         }

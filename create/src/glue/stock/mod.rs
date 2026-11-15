@@ -209,7 +209,10 @@ fn sync_ticker_network(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let value = net.map_or_else(super::kinetics::absent, |id| {
         Tag::IntArray(st::network_ints(id).to_vec())
     });
-    let _ = entity.merge_data(&mut *lv.host, Compound::from([(TICKER_NETWORK.into(), value)]));
+    let _ = entity.merge_data(
+        &mut *lv.host,
+        Compound::from([(TICKER_NETWORK.into(), value)]),
+    );
 }
 
 /// A block of ours placed or removed: level, position, was, is.

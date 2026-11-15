@@ -1769,18 +1769,22 @@ fn seated(host: &dyn ClientHost, keeper: mod_api::EntityRef) -> bool {
     };
     let kind = keeper.kind(host).unwrap_or_default();
     let floor = at.map(|v| v.floor() as i32);
-    [floor, [floor[0], floor[1] + 1, floor[2]]].into_iter().any(|p| {
-        let seat = level
-            .block_state(host, p)
-            .and_then(states::id)
-            .and_then(|id| super::super::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten())
-            .is_some_and(create_engine::dye::is_seat);
-        let s = create_engine::seat::seat_at(p, &kind);
-        seat && (at[0] - s[0]).abs() < 1e-3
-            && (at[2] - s[2]).abs() < 1e-3
-            && at[1] <= s[1] + 1e-3
-            && at[1] > s[1] - 1.0
-    })
+    [floor, [floor[0], floor[1] + 1, floor[2]]]
+        .into_iter()
+        .any(|p| {
+            let seat = level
+                .block_state(host, p)
+                .and_then(states::id)
+                .and_then(|id| {
+                    super::super::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten()
+                })
+                .is_some_and(create_engine::dye::is_seat);
+            let s = create_engine::seat::seat_at(p, &kind);
+            seat && (at[0] - s[0]).abs() < 1e-3
+                && (at[2] - s[2]).abs() < 1e-3
+                && at[1] <= s[1] + 1e-3
+                && at[1] > s[1] - 1.0
+        })
 }
 
 /// `TableClothOverlayRenderer.tick` on a seated keeper with a shopping list in hand, and
