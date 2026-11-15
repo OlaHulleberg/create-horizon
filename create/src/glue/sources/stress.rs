@@ -1,7 +1,7 @@
 //! What clients see of a network's stress changing (`KineticEffectHandler`): two ticks after a
 //! turning block's network becomes overstressed, smoke puffs out of it; when it recovers, a little
 //! cloud. Create also flashes the turning parts red or green (`overStressedEffect`), which needs
-//! a colour on a block model drawn by a block entity (see `HORIZON_API.md`).
+//! a colour on a block model drawn by a block entity (see `API_GAPS.md`).
 
 use super::super::kinetics;
 use create_engine::processing::Rng;

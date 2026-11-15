@@ -1,7 +1,7 @@
 //! Table cloths' hanging corners (`TableClothModel`): each side's quads carry a corner (south:
 //! south west, west: north west, north: north east, east: south east), drawn unless that side
 //! or the next one clockwise is culled. Create's model reads the neighbours as the chunk is
-//! built; a terrain model here can't (`HORIZON_API.md`), so the server works out which sides
+//! built; a terrain model here can't (`API_GAPS.md`), so the server works out which sides
 //! are culled when a cloth is placed or a neighbour changes (`Cull`, in its block entity's
 //! data) and the block entity draws the corners (`create:part_table_cloth_<kind>`). That is
 //! the cloths' own type (`create:table_cloth`, `stock::shop`), whose update tag carries `Cull`.

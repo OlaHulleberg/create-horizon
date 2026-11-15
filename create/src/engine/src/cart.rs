@@ -3,7 +3,7 @@
 //! (`onMinecartPass` → `assembleNextTick`) or sets it down, by the rail it stands in for and its
 //! power; a powered one sends the cart on, an unpowered powered rail brakes it.
 //!
-//! The glue (`carts.rs`) runs them for each cart on an assembler (`native_minecart_pass`).
+//! The glue (`carts.rs`) runs them for each cart on an assembler.
 
 use crate::kinetics::{Axis, Dir};
 

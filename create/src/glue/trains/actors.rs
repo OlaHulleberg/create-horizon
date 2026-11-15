@@ -126,7 +126,7 @@ pub fn disassembled(lv: &mut ServerLevel<'_>, train: u32) {
 /// blocks a tick (and faster than the entity, by as much) is hurt by 16 times that difference
 /// (twice for a monster; not a creative or spectating player), with a critical hit's sound, and
 /// thrown along the carriage's way and up; one it kills gives the driver `TRAIN_ROADKILL`.
-/// Create's run-over damage type is stood in for by `generic` (`HORIZON_API.md`). The entity is
+/// Create's run-over damage type is stood in for by `generic` (`API_GAPS.md`). The entity is
 /// not stopped by the carriage: that is the moving-collider gap (`ContraptionCollider`).
 fn run_over(lv: &mut ServerLevel<'_>, train: u32, car: usize, frame: &Frame) {
     let dim = lv.dim;

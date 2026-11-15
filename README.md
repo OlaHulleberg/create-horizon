@@ -54,7 +54,7 @@ Every subsystem of Create is ported to the mod API. Highlights:
 
 Some things need API that the game doesn't have yet, so they are left out for now. Examples: standing on or
 bumping into moving contraptions and trains, Create's own enchantments at enchanting tables, and hoppers
-reaching into belts and tanks. The full list, with what would fix each one: **[HORIZON_API.md](HORIZON_API.md)**.
+reaching into belts and tanks. The full list, with what would fix each one: **[API_GAPS.md](API_GAPS.md)**.
 
 ## Install
 
@@ -165,7 +165,13 @@ cargo +1.99.1 clippy --all-targets -- -D warnings
 cargo +1.99.1 test                      # the glue's tests
 cargo +1.99.1 test -p create-engine     # the engine's tests
 cargo horizon-mod check                 # Sunrise's package rules, then cargo check for the pinned build
-cd ../tools/create-data && cargo test
+cd src/engine                           # the engine crate's own format and lints
+cargo +1.99.1 fmt --check
+cargo +1.99.1 clippy --all-targets -- -D warnings
+cd ../../../tools/create-data
+cargo +1.99.1 fmt --check
+cargo +1.99.1 clippy --locked --all-targets -- -D warnings
+cargo +1.99.1 test --locked
 ```
 
 The latest results, and what was tried in game: [VALIDATION.md](VALIDATION.md).
@@ -180,16 +186,14 @@ create/                 The native mod: what the launcher builds
   src/engine/           create-engine: Create's rules as plain Rust, no game types
   data/, assets/        Generated block, item and fluid declarations
 tools/create-data/      compile: Create's MIT data -> tables; prepare: Create's jar -> playable mod
-notes/                  Porting notes
+docs/                   Architecture and README media
 ```
 
 ## Documentation
 
-- [notes/native-port.md](notes/native-port.md): how the mod is put together, and the rules for the glue.
-- [HORIZON_API.md](HORIZON_API.md): what the mod API can't do yet, and what the port leaves out because of it.
+- [docs/architecture.md](docs/architecture.md): how the mod is put together, and how to add to it.
+- [API_GAPS.md](API_GAPS.md): what the mod SDK can't do yet, and what the mod leaves out because of it.
 - [VALIDATION.md](VALIDATION.md): what was checked, on which build, and what was not.
-- [PORTING.md](PORTING.md) and [benchmarks/](benchmarks/): history. The port began as a mixin-based mod on
-  the arismoko/horizon fork, whose mod API Sunrise carries on.
 
 ## Licences
 

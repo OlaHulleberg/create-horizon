@@ -314,7 +314,7 @@ pub(super) fn forget() {
 /// `SmartObserverBlock.getStateForPlacement` / `ThresholdSwitchBlock`'s for the detectors placed
 /// in `lv` since its last tick: the first side, nearest the placer's look first, with something
 /// to watch, and the facing (`target`, `facing`) set at once. The game's placement reads no
-/// item handlers, so it is set here, as the legacy glue set it after placing.
+/// item handlers, so it is set here, after placing.
 pub(super) fn place_detectors(lv: &mut ServerLevel<'_>) {
     if PLACING.with_borrow(Vec::is_empty) {
         return;

@@ -94,7 +94,7 @@ impl Subsystem for Gauges {
     }
 
     /// `GaugeBlockEntity.addToGoggleTooltip`: what the server last said of the gauge, in its
-    /// block entity's data (legacy `goggle_overlay`'s gauge lines).
+    /// block entity's data.
     fn goggle_tooltip(
         &self,
         host: &dyn ClientHost,

@@ -574,7 +574,7 @@ impl BlockEntityPart for FrogDraw {
 /// the frogport, within 64 blocks, its address a block and a quarter up, turned to the camera,
 /// a fortieth of a block a font pixel. Whether the frogport has an address (it is drawn again
 /// next frame, for the crosshair coming onto it or the camera turning). The name tag's see-through pass over its translucent
-/// background is left out: a block entity's text is drawn only as a sign's (`HORIZON_API.md`).
+/// background is left out: a block entity's text is drawn only as a sign's (`API_GAPS.md`).
 fn nameplate(
     draw: &mut dyn BlockEntityDrawContext,
     host: &dyn ClientHost,

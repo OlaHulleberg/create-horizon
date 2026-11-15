@@ -40,11 +40,10 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use subsystem::Subsystem;
 
-/// Every subsystem, in the order their level ticks run: the legacy level tick's
-/// (`legacy/glue/level_tick.rs`, and `runtime.rs` `level_tick_post` within it).
+/// Every subsystem, in the order their level ticks run.
 ///
 /// Before the kinetic solve, so that what they change turns in this tick's solve:
-/// - `Equipment`: backtanks fill (the legacy's first, ahead of Create's own tick).
+/// - `Equipment`: backtanks fill (first, ahead of Create's own tick).
 /// - `Kinetics`: cranks and valves turn down, water wheels, clutches and gearshifts follow
 ///   redstone, chain drives, sequenced gearshifts. It declares the `create:kinetic` block entity
 ///   type in `register`, so whatever attaches to `kinetics::kind()` there comes after it.
@@ -68,8 +67,8 @@ use subsystem::Subsystem;
 ///
 /// After the solve:
 /// - `Gauges`: dials the solve moved.
-/// - `Packages`, `Stock`, `Schematics`, `Decor`, `Seats`, `Copycats`, `Items`: the legacy's
-///   subsystems ticked after Create's own.
+/// - `Packages`, `Stock`, `Schematics`, `Decor`, `Seats`, `Copycats`, `Items`: the
+///   subsystems that tick after Create's own.
 /// - `Comparators`, last: comparators beside every block whose output changed read it again.
 ///
 /// The same order is the order the shared moments ask them in: the wheel goes to the train

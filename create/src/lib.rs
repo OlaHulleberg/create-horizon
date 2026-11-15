@@ -1,4 +1,4 @@
-//! Create 6.0.11 for Horizon, as a native mod on the fork's mod API.
+//! Create 6.0.11 for Sunrise & Horizon, as a native mod on the mod SDK.
 //!
 //! Create's rules are the `create-engine` crate (`src/engine`): plain Rust with no game types,
 //! unit-tested on their own. `glue` drives them through the mod API: each hook below is written

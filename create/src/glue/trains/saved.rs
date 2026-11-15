@@ -1,4 +1,4 @@
-//! What trains, station names and curves keep with their columns, in the legacy layouts
+//! What trains, station names and curves keep with their columns
 //! (`trains`, `station_names`, `track_curves` of the column's compound).
 
 use create_engine::schedule::{

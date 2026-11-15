@@ -7,14 +7,13 @@
 //! The machines live in the `create:kinetic` block entity type; their slots are declared on it
 //! (`containers`). Recipes are read once per data load (`recipes`, on `tags_updated`).
 //!
-//! The clicks on the machines are the shared `right_click_block` (as in the legacy glue), the
+//! The clicks on the machines are the shared `right_click_block`, the
 //! wrench's on a deployer and a crafter's edge among them; items landing on a basin or a saw
 //! are those blocks' `item_after_vertical_collision`. Some functions here are what other
-//! subsystems call, as the legacy glue's siblings did: the sequenced assembly steps the spout
+//! subsystems call: the sequenced assembly steps the spout
 //! runs on a belt or depot (`sequenced_*`, `belt_left`), basins' tanks, a stack's sequenced
 //! progress. The machines over a belt answer `Subsystem::belt_process`; a crafter's group takes
-//! items through its `ITEMS` handler (`crafter::provide_items`, the legacy
-//! `crafter_handler_insert`), whoever puts them in.
+//! items through its `ITEMS` handler (`crafter::provide_items`), whoever puts them in.
 //! The saw, the crushing wheels and the crafter hand their results to whatever takes items from
 //! that side (`DirectBeltInputBehaviour`: a belt, depot, funnel, chute, drain or machine) through
 //! logistics' `insert_into_from`, which in turn hands belts' items to upward saws, basins,
@@ -23,8 +22,7 @@
 //! slots are `filtering`'s.
 //!
 //! Left out, the API having no way yet:
-//! - A toolbox's one item kind per compartment: `ModContainer` has no per-slot insert check
-//!   (left out in the legacy glue too).
+//! - A toolbox's one item kind per compartment: `ModContainer` has no per-slot insert check.
 //! - The deployer's slower digging of a block whose drops need another tool
 //!   (`requiresCorrectToolForDrops` and `isCorrectToolForDrops`): no query for either, so it
 //!   digs every block at its harvestable speed (the drops still follow the game's rules).
@@ -70,7 +68,7 @@ pub(crate) use deployer::activate as activate_deployer;
 pub(crate) use deployer::set_held_stack as set_deployer_held;
 pub(crate) use persist::{deployers_from_nbt, deployers_to_nbt};
 pub use press::transitional_of;
-// What the other subsystems call (the legacy glue's siblings did): fluids (the spout on a belt
+// What the other subsystems call: fluids (the spout on a belt
 // or depot runs a sequenced assembly's filling step, pumps reach basins' tanks), logistics (a
 // stack's sequenced progress onto and off a belt).
 pub use basin::basin_tanks;
@@ -238,8 +236,8 @@ impl Subsystem for Processing {
         basin::show_basins(lv);
     }
 
-    /// `BeltProcessingBehaviour` of the machine two above belt segment `segment` (the legacy
-    /// `BeltSide.process`): a deployer facing down (`BeltDeployerCallbacks`), else a press
+    /// `BeltProcessingBehaviour` of the machine two above belt segment `segment`
+    /// (`BeltSide.process`): a deployer facing down (`BeltDeployerCallbacks`), else a press
     /// (`BeltPressingCallbacks`). A spout's is `fluids`'.
     fn belt_process(
         &self,
@@ -535,9 +533,9 @@ fn passes_item_use(
     }
 }
 
-/// The drills and saws (after the vaults and chutes in the legacy order), then the presses and
+/// The drills and saws (after the vaults and chutes), then the presses and
 /// deployers, which work the depots and belts logistics moved this tick (`DepotBehaviour.tick`
-/// before `PressingBehaviour.tick`, as the legacy `tick_depots`, `tick_belts`, `tick_presses`).
+/// before `PressingBehaviour.tick`).
 pub struct Tools;
 
 impl Subsystem for Tools {
@@ -551,7 +549,7 @@ impl Subsystem for Tools {
 }
 
 /// The basin, the saw and the millstone taking an item that lands on them
-/// (`updateEntityAfterFallOn`, legacy `item_landed`): a basin puts it into its inputs, a saw
+/// (`updateEntityAfterFallOn`): a basin puts it into its inputs, a saw
 /// facing up takes it to cut, a millstone into its input when it can mill it. Stacks with
 /// components stay entities, but on a saw a sequenced assembly's transitional item (its
 /// progress with it).
@@ -611,7 +609,7 @@ impl BlockPart for BurnerPlacement {
     }
 }
 
-/// `useItemOn` of the machines a player clicks (legacy `right_click_block`): the millstone, the
+/// `useItemOn` of the machines a player clicks: the millstone, the
 /// mechanical crafter, the deployer and the blaze burner. Cancelled as used when it took the
 /// click.
 fn use_block(host: &mut dyn ServerHost, event: &mut RightClickBlockEvent<'_>) -> mod_api::Flow {
@@ -756,7 +754,7 @@ impl ServerLevel<'_> {
         with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0)
     }
 
-    /// A seed for this tick's rolls at `pos` (the legacy glue's).
+    /// A seed for this tick's rolls at `pos`.
     pub fn seed_at(&self, pos: [i32; 3]) -> u64 {
         self.game_time() as u64 ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9) ^ (pos[2] as u64) << 20
     }

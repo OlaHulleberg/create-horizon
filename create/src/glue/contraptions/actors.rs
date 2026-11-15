@@ -7,7 +7,7 @@
 //! (`/create_debug controls`). Create's rules are in `create_engine::glue` and
 //! `create_engine::actors`. Saved under `create_glue`.
 //! Track observers' filters (the trains' slot, read as the items port reads filters) are kept
-//! there too (`observers`), as in the legacy glue.
+//! there too (`observers`).
 
 use super::super::items::filters;
 use super::super::persist::{mark_pos_unsaved, mark_unsaved};
@@ -1446,7 +1446,7 @@ const FALLING: [&str; 11] = [
 
 impl actors::Probe for Reader<'_, '_> {
     /// `isRedstoneConductor`, read as a full collision cube (vanilla's default for it; the
-    /// blocks that override it are not known to the API, `HORIZON_API.md`).
+    /// blocks that override it are not known to the API, `API_GAPS.md`).
     fn conductor(&self, pos: [i32; 3]) -> bool {
         let Some(state) = self.lv.block_state(pos) else {
             return false;
@@ -2021,7 +2021,7 @@ fn drawing_entity(kind: &str) -> bool {
 
 /// `BlockBreakingMovementBehaviour.damageEntities` at block `pos`: every entity in it but items
 /// and the structure's own (its drawing, what rides it, its cart) is hurt by `damage` (Create's
-/// drill, saw and roller damage types are stood in for by `generic`, `HORIZON_API.md`) and
+/// drill, saw and roller damage types are stood in for by `generic`, `API_GAPS.md`) and
 /// thrown by `boost`; a player's own client throws it (`push_player`). A plough throwing an
 /// anvil hard enough gives `ANVIL_PLOUGH` to the players within 32 blocks.
 fn hit_entities(

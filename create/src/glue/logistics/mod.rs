@@ -17,7 +17,7 @@
 //! - The machines above a belt or depot (presses, deployers, spouts: `Subsystem::belt_process`),
 //!   and items landing on basins, saws and item drains are the processing and fluids
 //!   subsystems'. A sequenced assembly's progress on a stack (processing's `stacks`) goes with
-//!   it onto and off a belt, as the legacy glue's `belt_stack` and `stack_progress` did.
+//!   it onto and off a belt (`belt_stack`).
 //! - Containers that are not Create's (vanilla's, other mods') say nothing to Create when they
 //!   change (`contents_changed` reaches only a block's own parts), so a chute under one looks
 //!   again every `RETRY` ticks.
@@ -41,7 +41,7 @@
 //! - A brass tunnel's mode value box and the comparators beside a vault's other blocks are the
 //!   interaction and redstone subsystems'.
 //! - Belts offer no `ITEMS` handler (their items are the engine's, and a handler can't learn its
-//!   transaction aborted: HORIZON_API.md), so tunnels pass none of their belt's on: a brass
+//!   transaction aborted: API_GAPS.md), so tunnels pass none of their belt's on: a brass
 //!   tunnel's handler (`handlers::TunnelItems`) only takes a stack to hand out.
 //!
 //! The kinetic block entity type is declared by `Kinetics`; `Entities`, after it, adds the
@@ -64,9 +64,8 @@ mod slicer;
 pub(crate) mod tunnel;
 
 pub use arms::Arms;
-// What the processing machines hand their results to beside them (the legacy logistics glue's
-// siblings called these): a belt or depot taking a stack from a side, and the two facts every
-// stack placed on one needs.
+// What the processing machines hand their results to beside them: a belt or depot taking a stack
+// from a side, and the two facts every stack placed on one needs.
 pub(crate) use belt::{
     belt_segment, direct_input_accepts, direct_input_at, insert_into_from, put_on_from_above,
     set_casing,

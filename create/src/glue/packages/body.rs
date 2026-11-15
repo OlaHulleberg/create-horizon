@@ -1,6 +1,6 @@
 //! What Create's packages read and write of a stack: a package's address and nine stacks of
 //! contents (`PACKAGE_ADDRESS`, `PACKAGE_CONTENTS`) and its order data
-//! (`PACKAGE_ORDER_DATA`), kept in `minecraft:custom_data` as the legacy glue kept them; a stack
+//! (`PACKAGE_ORDER_DATA`), kept in `minecraft:custom_data`; a stack
 //! as NBT for the chunk save (`ItemStack.CODEC`, the API's NBT escape); and the item ids the
 //! engine's rules name items by.
 

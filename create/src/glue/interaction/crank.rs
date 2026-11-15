@@ -1,6 +1,6 @@
 //! Hand cranks turned by hand: their block's own use (`HandCrankBlock.useItemOn`), on the server.
 //! The client predicts the same answer for a crank and for a valve handle (whose use, a turn or a
-//! recolour, is `blocks`', as in the legacy glue) in `right_click_block` (`board::right_click`),
+//! recolour, is `blocks`') in `right_click_block` (`board::right_click`),
 //! so the click ends there too.
 
 use super::super::items::{self, Item};

@@ -220,7 +220,7 @@ impl ServerLevel<'_> {
     }
 
     /// The item entities whose position is in `lo`..`hi` (`Level.getEntitiesOfClass(ItemEntity
-    /// .class, box)`, by the legacy glue's test of the position).
+    /// .class, box)`, tested by position).
     pub fn items_in(&self, lo: [f64; 3], hi: [f64; 3]) -> Vec<Dropped> {
         let host = &*self.host;
         let grown = (lo.map(|v| v - 0.25), hi.map(|v| v + 0.25));
@@ -273,7 +273,7 @@ pub struct Dropped {
 }
 
 impl Dropped {
-    /// Its id (the network id the legacy glue kept progress by).
+    /// Its id (the network id progress is kept by).
     pub fn id(&self) -> u32 {
         self.entity.id()
     }

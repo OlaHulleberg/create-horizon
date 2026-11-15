@@ -17,7 +17,7 @@
 //! `fluid_container` and `has_fluid` know the buckets (the items the game gives a fluid
 //! handler), `has_color` dyes, (removed), fireworks and colour-named items, and
 //! `shulker_fill_level` a shulker box's `container`. Left out: `in_item_group`, as no API reads
-//! the creative tabs (`HORIZON_API.md`).
+//! the creative tabs (`API_GAPS.md`).
 //!
 //! `max_enchanted` reads each enchantment's maximum level from the server's data
 //! (`enchantment/*.json`'s `max_level`, listed by a data reload listener), as the host answers
@@ -499,7 +499,7 @@ impl Probe for Looked<'_> {
 }
 
 /// Whether a recipe of the book `pick` takes `item` alone (`RecipeManager.getRecipeFor` with
-/// the item's single-slot input, as the legacy glue read Create's recipe store).
+/// the item's single-slot input, read from Create's recipe store).
 fn recipe(item: &str, pick: fn(&Recipes) -> &create_engine::processing::Book) -> bool {
     recipes::with(|r| pick(r).find_single(item).is_some()) == Some(true)
 }

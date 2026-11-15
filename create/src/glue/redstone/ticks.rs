@@ -469,7 +469,7 @@ pub(super) fn tick_cuckoos(lv: &mut ServerLevel<'_>) {
     let players = lv.players();
     for (pos, kind, boom) in events {
         if boom {
-            // The surprise: `contraptions`' blast (legacy `blast_body`).
+            // The surprise: `contraptions`' blast.
             lv.cuckoo_surprise(pos);
             continue;
         }

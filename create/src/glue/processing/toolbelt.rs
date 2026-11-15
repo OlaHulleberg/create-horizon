@@ -27,7 +27,7 @@
 //! (`onRemove` drops nothing), and a piston can't move it. Left out (no API for it): one the level
 //! destroys with its drops (`/setblock .. destroy`, `Level.destroyBlock`) drops an empty toolbox,
 //! where Create's loot copies its contents (`BlockDropsEvent` gives no read of the block entity;
-//! `HORIZON_API.md`).
+//! `API_GAPS.md`).
 
 use super::super::net;
 use super::super::persist::mark_pos_unsaved;

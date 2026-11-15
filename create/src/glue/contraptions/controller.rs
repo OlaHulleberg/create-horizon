@@ -9,7 +9,7 @@
 //! runs without an active controller, a held frequency, a lectern in use or a message waiting.
 //!
 //! The controller's frequencies are kept on the stack's custom data
-//! (`create:linked_controller_items`), as the legacy glue kept them, and set in its frequency
+//! (`create:linked_controller_items`), and set in its frequency
 //! screen (`items::controller_screen`), opened by a sneaking use.
 
 use super::super::net;

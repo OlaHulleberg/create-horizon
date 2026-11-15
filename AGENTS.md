@@ -1,30 +1,13 @@
 # Working on the Create native mod
 
-Read README.md and notes/native-port.md before editing. The mod is `create/`: a native mod on the
-mod API of Sunrise (sunrise-org/sunrise, the arismoko/horizon fork's successor), pinned to one
-Sunrise build in `create/horizon-mod.toml`. Keep this repository separate from Horizon; never modify a Horizon checkout or player resources. Do not commit
-binaries, `.horizon/` (the fetched SDK) or Minecraft assets.
+Read [README.md](README.md) and [docs/architecture.md](docs/architecture.md) first.
 
-Gameplay rules live in the create-engine crate (`create/src/engine`), plain Rust with no game types,
-unit-tested with cargo test. The glue (`create/src/glue`) only reads the world through `mod_api`,
-calls the engine and writes back; `create/src/lib.rs` is the one `impl Hooks`, handing each hook to
-every subsystem. Per-block, per-item and per-block-entity moments are Parts the subsystem attaches
-to its own blocks. Only `mod_api` and `create_engine`: no game internals, no `[[native.mixin]]`, no
-registry dependencies. Where the API cannot do something, leave it out, say so in the module's doc
-and in HORIZON_API.md; no stubs or shims.
-
-Generated files (`create/src/engine/src/generated.rs`, `create/data/`, `create/assets/`) come from
-`tools/create-data compile`: never edit them by hand. Never commit Create's
-`src/main/resources/assets` (All Rights Reserved) or anything copied or adapted from it: textures,
-models, block states, particle files, sounds or translations. Name them by id instead; what must
-contain them is produced by `create-data prepare` from Create's jar, which the player's machine
-downloads from Modrinth (pinned URL and SHA-512 in `tools/create-data/src/jar.rs`, the same file
-as `[[jar]]` in `create/horizon-mod.toml`, which the launcher layers under the mod); never commit
-the jar or anything extracted from it (a test in `tools/create-data` allows only generated block
-states and models in `create/assets`). English UI
-text from Create's `src/generated/resources/assets/create/lang/en_us.json` is MIT.
-
-Validate in `create/` with the SDK's toolchain: `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy
---all-targets -- -D warnings`, `cargo +1.99.1 test`, `cargo +1.99.1 test -p create-engine`, and
-`cargo horizon-mod check`; in `tools/create-data`, `cargo test --locked`. Keep validation claims honest:
-say what was run, and what was not run in game.
+- The mod is `create/`, built on Sunrise's mod SDK at the build pinned in `create/horizon-mod.toml`.
+- Rules go in the engine (`create/src/engine`); the glue (`create/src/glue`) only reads the world, calls the
+  engine and writes back. Only `mod_api` and `create_engine`; no game internals or mixins.
+- If the API can't do something, leave it out and record it in [API_GAPS.md](API_GAPS.md). No stubs or shims.
+- Never edit generated files by hand (`create/src/engine/src/generated.rs`, `create/data/`, `create/assets/`); they
+  come from `tools/create-data compile`.
+- Never commit Create's assets (All Rights Reserved), its jar or anything extracted from it, binaries, or
+  `create/.horizon/`. Details: [CONTRIBUTING.md](CONTRIBUTING.md).
+- Run the checks in [VALIDATION.md](VALIDATION.md) and report honestly what was run and what was tried in game.

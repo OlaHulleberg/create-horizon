@@ -1,6 +1,6 @@
 //! Create's blasts (`Level.explode` on the server), for the nozzle and the mysterious cuckoo
-//! clock (legacy `blast_body.rs`). The surprise's smoke on clients (`LARGE_SMOKE` about the
-//! clock) is the cuckoo clock's own client effect, drawn by its glue.
+//! clock. The surprise's smoke on clients (`LARGE_SMOKE` about the clock) is the cuckoo clock's
+//! own client effect, drawn by its glue.
 
 use super::super::server::ServerLevel;
 use mod_api::{ExplosionInteraction, ExplosionSettings};

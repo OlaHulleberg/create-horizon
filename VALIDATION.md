@@ -29,14 +29,14 @@ On a local unsigned developer base built from Sunrise at the pin, the mod built 
 - A mechanical pump driven through a cogwheel pulls a water source through pipes into a fluid tank (1000 mB).
 - A mechanical bearing assembles the block on it and turns it.
 
-Trains were not tried. Shapeless crafting recipes don't mix in a basin on this build (HORIZON_API.md).
+Trains were not tried.
 
 ## Not run
 
 - **A player's build.** No SDK release exists for the pin, so a launcher can build the mod only on a
   developer base built from Sunrise at the pin
   (`docs/modding/src/how-to/native-mods/07-local-developer-builds.md`), until Sunrise publishes that
-  build's SDK. The proofs and benchmarks in PORTING.md and `benchmarks/` are the earlier mixin-based port's.
+  build's SDK.
 - **`create-data compile` against Create's sources.** The declarations were converted to the fork's
   content schema (typed `state_properties` without the template's own, `default_state`, shape
   tables over `properties` covering every template value, upper-case `render_shape`, fluids'

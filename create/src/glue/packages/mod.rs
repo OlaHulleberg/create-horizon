@@ -25,7 +25,7 @@
 //!   of the changed block only, with no hook for every container's `setChanged`): a frogport
 //!   with an inventory below looks at it on Create's own lazy tick, every 10 ticks, instead of
 //!   at once.
-//! - A dropped package is an item, not Create's package entity (`PackageEntity`, HORIZON_API.md).
+//! - A dropped package is an item, not Create's package entity (`PackageEntity`, API_GAPS.md).
 
 mod automation;
 pub mod body;
@@ -2515,8 +2515,7 @@ impl BlockEntityPart for ConveyorDraw {
                     draw.translate([0.5, 0.5 + lift, 0.5]);
                     draw.rotate_about([0.0, 1.0, 0.0], d.yaw, [0.0; 3]);
                 }
-                // The item model is drawn about its centre; the legacy part was posed from its
-                // corner.
+                // The item model is drawn about its centre.
                 draw.translate([0.5; 3]);
                 // Its rigging (`PACKAGE_RIGGING`), posed as the box's model is.
                 if let Some(rig) = rigging(&d.item) {

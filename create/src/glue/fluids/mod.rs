@@ -39,7 +39,7 @@
 //!   each other: the tanks' contents live in the engine's world, outside the game's transaction
 //!   journal, and a handler cannot learn that a transaction it wrote in was aborted to roll the
 //!   engine back (no close callback on `Transaction`). Pumps reach Create's own blocks and open
-//!   ends as the legacy glue did.
+//!   ends.
 
 mod carried;
 pub(crate) mod clicks;
@@ -303,7 +303,7 @@ impl Subsystem for Fluids {
         pipes::chunk_data_save(dim, chunk, data);
     }
 
-    /// Before the solve, in the legacy order: pipes and pumps, boilers, valves, hoses and
+    /// Before the solve, in this order: pipes and pumps, boilers, valves, hoses and
     /// whistles, tank block states, spouts and drains. What clients must see again is `Tanks`',
     /// later.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
@@ -396,8 +396,8 @@ impl Subsystem for Fluids {
         goggles::tooltip(host, pos, block, lines);
     }
 
-    /// The wrench on a tank, a pipe or a whistle, not sneaking (legacy `use_item_on`'s
-    /// `wrench_pipe` / `wrench_whistle`, after a bracket came off: `decor`'s part).
+    /// The wrench on a tank, a pipe or a whistle, not sneaking (`wrench_pipe` / `wrench_whistle`,
+    /// after a bracket came off: `decor`'s part).
     fn wrench_used(
         &self,
         lv: &mut ServerLevel<'_>,
@@ -440,9 +440,8 @@ impl Subsystem for Fluids {
     }
 }
 
-/// The tanks whose contents changed this tick, to their comparators and clients (legacy
-/// `send_tank_changes`): after redstone's `Detectors`, which read the changes, and before the
-/// solve.
+/// The tanks whose contents changed this tick, to their comparators and clients: after redstone's
+/// `Detectors`, which read the changes, and before the solve.
 pub struct Tanks;
 
 impl Subsystem for Tanks {

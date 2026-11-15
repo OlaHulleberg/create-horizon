@@ -1,7 +1,7 @@
 id = "create"
 name = "Create"
 version = "6.0.11"
-description = "Create 6.0.11 for Horizon: kinetics, processing, logistics and contraptions as a native mod"
+description = "Create 6.0.11 for Sunrise & Horizon: kinetics, processing, logistics and contraptions as a native mod"
 authors = ["The Create Team / The Creators of Create"]
 # Native mod: Rust in src/ compiled by the launcher against the game build [native] pins, beside
 # the generated content declarations in data/ and assets/.

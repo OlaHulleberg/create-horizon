@@ -1,5 +1,5 @@
 //! Spouts and item drains, and the `create:filling` / `create:emptying` recipes they run (read
-//! with processing's recipes, one store as in the legacy glue). A sequenced assembly's filling
+//! with processing's recipes, from the same store). A sequenced assembly's filling
 //! step comes first (`SequencedAssemblyRecipe.getRecipe`): the assemblies and the progress on a
 //! stack are processing's.
 

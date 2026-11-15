@@ -3,7 +3,4 @@
 /create/.horizon/
 /create/Cargo.lock
 /tools/create-data/target/
-__pycache__/
-*.pyc
-saves/
 /create/src/engine/target/

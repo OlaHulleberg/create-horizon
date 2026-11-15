@@ -20,7 +20,7 @@
 //!   the shooter. A save keeps the snowballs, not the glue's flights: one flying when the world
 //!   is saved comes back as a plain snowball showing its item.
 //! - The cannon's recoil in the hand (`PotatoCannonRenderHandler`: a special item model is
-//!   asked once per stack, `HORIZON_API.md`) and the `potato_cannon_collide` advancement (shots of two types meeting), not wired. A monster killed or another player hit gives `potato_cannon`.
+//!   asked once per stack, `API_GAPS.md`) and the `potato_cannon_collide` advancement (shots of two types meeting), not wired. A monster killed or another player hit gives `potato_cannon`.
 //!
 //! A powered wither (at half health or less) takes no hit, knockback is lessened by the
 //! target's resistance, the barrel is on the side of the hand that holds the cannon (the

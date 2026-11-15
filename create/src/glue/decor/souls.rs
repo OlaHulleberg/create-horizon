@@ -9,7 +9,7 @@
 //! particles and `SOUL_ESCAPE` a quarter of the ticks.
 //!
 //! Create's client runs the pulses where its packet arrives; here the server runs them and sends
-//! the souls to the players within 32 blocks. Left out (`HORIZON_API.md`, Client): the souls are
+//! the souls to the players within 32 blocks. Left out (`API_GAPS.md`, Client): the souls are
 //! drawn facing the camera, where Create turns a soul only about the vertical and lays its base
 //! flat on the ground (`CustomRotationParticle.getCustomRotation`), and a soul that the light
 //! reaches is not taken away (`SoulParticle.tick` reading the client level's light).

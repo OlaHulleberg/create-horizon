@@ -4,10 +4,10 @@
 //! (bars, rails, redstone parts...) is picked up the same way when sneaking
 //! (`onItemUseOnOther`); the rest are left alone. A block a subsystem wrenches its own way
 //! answers first (`Subsystem::wrench_used`: a copycat's material, a pipe's glass, a whistle's
-//! size, a belt's casing, a funnel's mode). What takes the click before the wrench's use (the legacy
-//! `use_item_on` order) is each block's own: a crafter's edge and a deployer's mode
-//! (processing's `right_click_block`), a bracket (decor's part), a cart assembler (trains'
-//! part), a redstone link (redstone's part).
+//! size, a belt's casing, a funnel's mode). What takes the click before the wrench's use
+//! is each block's own: a crafter's edge and a deployer's mode (processing's
+//! `right_click_block`), a bracket (decor's part), a cart assembler (trains' part), a redstone
+//! link (redstone's part).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;

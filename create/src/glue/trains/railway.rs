@@ -3,7 +3,7 @@
 //! track observers light (`TrackObserverBlockEntity.tick`), and clients hear of each train as
 //! it starts, stops, arrives, runs a curve or passes onto another edge. A track observer's
 //! cargo filter is set on its filter slot (`Observer`); it is saved with the contraptions'
-//! `create_glue`, as in the legacy glue.
+//! `create_glue`.
 
 use super::super::net;
 use super::super::server::{ServerLevel, update_all};
@@ -761,7 +761,7 @@ impl BlockPart for Observer {
     }
 }
 
-/// A click on a track observer (legacy `use_observer`): on its filter slot
+/// A click on a track observer: on its filter slot
 /// (`TrackObserverBlockEntity.createFilter`: on top, 15.5 px up; `FilteringBehaviour
 /// .onShortInteract` through `ValueSettingsInputHandler`) the held stack becomes its cargo filter
 /// (a filter item taken from the hand, the one it held given back), an empty hand clears it

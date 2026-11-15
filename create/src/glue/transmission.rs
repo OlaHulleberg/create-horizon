@@ -11,7 +11,7 @@
 //!
 //! A casing taken off shows its break particles and sound as `levelEvent(2001)` does (rebuilt
 //! from particles and the sound, `ServerLevel::destroy_effect`). Left out for want of API:
-//! connected casing textures (`CTModel`), see `HORIZON_API.md`.
+//! connected casing textures (`CTModel`), see `API_GAPS.md`.
 
 use super::items::{creative, sneaking};
 use super::server::{ServerLevel, update_all};

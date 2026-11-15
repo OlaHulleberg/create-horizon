@@ -1,9 +1,8 @@
 //! The item slots of the processing machines' inventories and the toolboxes', as hoppers,
 //! comparators and breaking the block see them (`ModContainer`): the millstone, basin,
 //! mechanical crafter and toolboxes; and what a change of their contents sets off
-//! (`contents_changed`), as the legacy `block_entity_container` and `contents_changed` did for
-//! them. The depot's, weighted ejector's, item vault's and chutes' are logistics', with their
-//! `ITEMS` handlers.
+//! (`contents_changed`). The depot's, weighted ejector's, item vault's and chutes' are logistics',
+//! with their `ITEMS` handlers.
 //!
 //! The slots are on the blocks' block entities: the `create:kinetic` type for all but the
 //! toolboxes, which keep no other state and have their own type, `create:toolbox`.
@@ -93,7 +92,7 @@ impl mod_api::BlockEntityPart for ToolboxDraw {
     }
 }
 
-/// Every block's container, as the legacy glue declared it.
+/// Every block's container.
 fn containers() -> Vec<(Block, ModContainer)> {
     let every = |slots: &[usize]| std::array::from_fn(|_| slots.to_vec());
     let mut out = Vec::new();
@@ -182,7 +181,7 @@ impl BlockPart for ContentsChanged {
     }
 }
 
-/// `contents_changed` (legacy): chutes asleep under this container look into it again, arms
+/// `contents_changed`: chutes asleep under this container look into it again, arms
 /// using it as a point look again, and so do smart observers and threshold switches looking at
 /// it; then each block's own: an item put into a crafter may start its chain, a basin's mixer
 /// looks again.

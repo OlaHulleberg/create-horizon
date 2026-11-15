@@ -193,7 +193,7 @@ impl Subsystem for Kinetics {
         with_world(|w| w.neighbor_changed(dim, pos, state));
     }
 
-    /// Before the rest of the level tick (legacy `level_tick_post`'s head): cranks and valves
+    /// Before the rest of the level tick: cranks and valves
     /// turning down, water wheels, split shafts following redstone, chain drives and sequenced
     /// gearshifts. The solve is `Solve`'s, later.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
@@ -201,8 +201,8 @@ impl Subsystem for Kinetics {
     }
 }
 
-/// The kinetic solve, after every tick that may change what turns (legacy `level_tick_post`:
-/// `settle_belts`, `w.tick`, its events).
+/// The kinetic solve, after every tick that may change what turns: `settle_belts`, `w.tick`,
+/// its events.
 pub struct Solve;
 
 impl Subsystem for Solve {

@@ -1,7 +1,7 @@
 //! The block breakers and the saw: the mechanical drill and saw breaking the block in front
 //! (`BlockBreakingKineticBlockEntity`), the saw facing up cutting what lands on it
 //! (`SawBlockEntity`), and both hurting what walks into them (`entityInside`), with vanilla's
-//! `generic` damage for Create's `mechanical_saw` and `mechanical_drill` (`HORIZON_API.md`: a
+//! `generic` damage for Create's `mechanical_saw` and `mechanical_drill` (`API_GAPS.md`: a
 //! native mod's damage types).
 
 use super::{recipes, stacks};
@@ -545,7 +545,7 @@ impl mod_api::BlockPart for Blades {
 /// The entities that walked into a turning saw or drill this tick: hurt by its speed
 /// (`DrillBlock.getDamage`) when their box meets the block shrunk by 0.1. Create's
 /// `mechanical_saw` and `mechanical_drill` damage types are stood in for by vanilla's `generic`
-/// (`HORIZON_API.md`: a native mod's damage types).
+/// (`API_GAPS.md`: a native mod's damage types).
 pub fn hurt_inside(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let inside: Vec<_> = BLADES.with_borrow_mut(|b| {

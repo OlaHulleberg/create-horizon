@@ -15,7 +15,7 @@
 //! A player clicking a free seat while leading a mob seats the mob instead (`getLeashed`). A
 //! seat bounces what won't sit on it (`bounce_restitution`) and halves the fall it breaks
 //! (`SeatBlock.fallOn`). Create's `setNoActionTime(20)` and `setOnGround(false)` for mobs on a
-//! turntable have no writer (`HORIZON_API.md`).
+//! turntable have no writer (`API_GAPS.md`).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states::key;

@@ -35,7 +35,7 @@
 //!
 //! Trains meeting on the track crash and derail (`Train.collideWithOtherTrains`, `crash`), standing
 //! where they met until the wrench puts them back; a train hurts the grounded mobs it meets
-//! (`handleDamageFromTrain`). Portal tracks are left out (`HORIZON_API.md`: a portal's
+//! (`handleDamageFromTrain`). Portal tracks are left out (`API_GAPS.md`: a portal's
 //! destination).
 //! - `cargo`: what carriages' storage blocks hold, and portable storage interfaces on slow
 //!   carriages connecting to the stationary ones at a station.
@@ -46,11 +46,11 @@
 //! `station_ports`) take the packages aboard or hold packages to fetch, and a train standing at
 //! a station trades packages with its postboxes.
 //!
-//! What the mod API cannot do, and is left out (each with the legacy call it replaced):
+//! What the mod API cannot do, and is left out:
 //!
-//! - **Standing on and colliding with carriages** (`entity_collisions`, `ContraptionCollider`):
+//! - **Standing on and colliding with carriages** (`ContraptionCollider`):
 //!   the API has collision exclusions (boxes where blocks don't stop a player), not moving
-//!   colliders. Needs `notes/moving-structures-note.md`'s level colliders.
+//!   colliders. Needs level colliders (`API_GAPS.md`, moving colliders).
 //! - **Taking the controls' keys from the game** is done with `movement_input` (the player
 //!   neither walks, jumps nor sneaks), as Create's `setDown(false)` does; `input_key` can't
 //!   consume a key, so a key bound to something else still does it.

@@ -4,8 +4,8 @@
 //! and couplings (`MinecartCouplingItem`, `CouplingHandler`, `CouplingPhysics`,
 //! `MinecartController`). The rules are `create_engine::cart`'s, `mounted`'s and `coupling`'s.
 //! A contraption is typed data keyed by its cart's UUID, followed each level tick through the
-//! cart's entity, and kept in the overworld's level attachment (`create:minecart_contraptions`,
-//! the legacy `create/minecart_contraptions` saved data's layout) with the couplings and the
+//! cart's entity, and kept in the overworld's level attachment (`create:minecart_contraptions`)
+//! with the couplings and the
 //! assemblers' modes. Nothing runs in a level tick while no cart carries a contraption, no
 //! carts are coupled and no assembler has a cart to handle.
 //!
@@ -16,13 +16,13 @@
 //!
 //! Left out, as the mod API can't do it (beyond drawing, see the parent module):
 //!
-//! - A carrying cart counting as ridden (`native_set_minecart_carrying`, Horizon API 68): its
+//! - A carrying cart counting as ridden: its
 //!   rails slow it as an empty cart's, which `rail_drag` gives back each tick, but it still moves
 //!   its full step where a ridden one moves three quarters (`moveMinecartOnRail`). Needs
 //!   `MinecartRef::set_carrying`.
 //! - The hard coupling step moving a cart off its rail with collisions
-//!   (`native_move_minecart`, `Entity.move(MoverType.SELF)`): such a cart only has its motion
-//!   damped. Needs `EntityRef::move_by` (HORIZON_API.md's entity motion row).
+//!   (`Entity.move(MoverType.SELF)`): such a cart only has its motion
+//!   damped. Needs `EntityRef::move_by` (API_GAPS.md).
 //! - A redstone conductor beside an assembler turning an accelerated cart
 //!   (`BlockState.isRedstoneConductor`): no API reads it, so none is seen. Needs a state fact.
 //!

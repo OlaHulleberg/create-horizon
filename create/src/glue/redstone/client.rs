@@ -1,7 +1,7 @@
 //! What clients draw of the redstone blocks, as Create's renderers do: a redstone link's two
 //! frequency items (`LinkRenderer`), an analog lever's handle (`AnalogLeverRenderer`), and a
 //! cuckoo clock's hands, doors and the pig or creeper coming out (`CuckooClockRenderer`), with
-//! the clock's sounds and the surprise's smoke. The server sends what changes on the legacy
+//! the clock's sounds and the surprise's smoke. The server sends what changes on the redstone
 //! channels; each block entity draws from what its client was told, every frame.
 
 use super::pose;

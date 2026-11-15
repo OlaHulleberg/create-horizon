@@ -435,10 +435,10 @@ fn send_changes(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// `WrenchItem` on a fluid pipe, glass pipe or encased pipe (`onWrenched`, legacy
-/// `wrench_pipe`); true when it was one. A straight pipe (or, bent, the axis of the face centre
-/// nearest the click at `point`, across the clicked face) becomes a glass pipe; a glass pipe a
-/// plain one again; an encased pipe loses its casing. A wrench on the pipe's own axis passes.
+/// `WrenchItem` on a fluid pipe, glass pipe or encased pipe (`onWrenched`); true when it
+/// was one. A straight pipe (or, bent, the axis of the face centre nearest the click at
+/// `point`, across the clicked face) becomes a glass pipe; a glass pipe a plain one again;
+/// an encased pipe loses its casing. A wrench on the pipe's own axis passes.
 pub(super) fn wrench_pipe(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
@@ -534,7 +534,7 @@ fn axis_name(a: Axis) -> &'static str {
     }
 }
 
-/// `WrenchItem` on a whistle or extension (legacy `wrench_whistle`): its size cycles
+/// `WrenchItem` on a whistle or extension: its size cycles
 /// (`getRotatedBlockState`), an extension's whistle's; the extensions follow (`updateShape`).
 /// True when it was one.
 pub(super) fn wrench_whistle(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block) -> bool {

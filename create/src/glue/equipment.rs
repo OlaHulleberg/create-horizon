@@ -6,7 +6,7 @@
 //! some. The grip's entity reach is the game's entity interaction range lent the distance
 //! Create picks to (the block reach, half a block less out of creative), so an entity nearer
 //! than a block behind it is picked, where Create picks entities only past a missed block (no
-//! client pick hook: `HORIZON_API.md`, Client).
+//! client pick hook: `API_GAPS.md`, Client).
 //! A whole netherite diving set makes its wearer immune to fire (`NetheriteDivingHandler`), and a
 //! diving helmet sees further under water, the netherite one in lava (`getFogDensity`). The
 //! extendo grip is drawn by a special item model (`GripModel`) posed as Create's: an item model
@@ -62,7 +62,7 @@ const ENTITY_REACH: &str = "create:extendo_entity_range";
 /// The extendo grip's item key, requested at registration.
 static GRIP_ITEM: std::sync::OnceLock<ItemKey> = std::sync::OnceLock::new();
 
-/// The armour slots in the legacy order the engine's `Tank::slot` counts (head first).
+/// The armour slots in the order the engine's `Tank::slot` counts (head first).
 const ARMOR: [EquipmentSlot; 4] = [
     EquipmentSlot::Head,
     EquipmentSlot::Chest,

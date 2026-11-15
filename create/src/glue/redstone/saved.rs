@@ -1,4 +1,4 @@
-//! What the redstone blocks keep with a column, in the legacy layouts: redstone links
+//! What the redstone blocks keep with a column: redstone links
 //! (`links`) and brass diodes (`diodes`) beside the kinetic settings, and analog levers, smart
 //! observers and threshold switches under `create_redstone`.
 
@@ -116,8 +116,7 @@ fn diodes_from_nbt(data: &Compound) -> Vec<([i32; 3], (i32, i32))> {
         .collect()
 }
 
-/// A detector's filter as saved: its stack (`filters::filter_to_nbt`), or "" for none (legacy
-/// `filter_to_nbt` of the items glue).
+/// A detector's filter as saved: its stack (`filters::filter_to_nbt`), or "" for none.
 fn filter_to_nbt(lv: &ServerLevel<'_>, f: Option<&Filter>) -> Tag {
     f.and_then(|f| filters::filter_to_nbt(&*lv.host, f))
         .unwrap_or_else(|| Tag::String("".into()))

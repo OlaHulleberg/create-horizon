@@ -6,7 +6,7 @@
 //! carriage at the whistle's pitch, fading in and out, with its end sound as it stops.
 //!
 //! The sound stays where it started for as long as it plays: the API has no way to move a
-//! playing sound (`HORIZON_API.md`, `SoundInstance.getX/Y/Z` read each tick).
+//! playing sound (`API_GAPS.md`, `SoundInstance.getX/Y/Z` read each tick).
 
 use super::super::net;
 use super::super::server::ServerLevel;

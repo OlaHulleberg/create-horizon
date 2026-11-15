@@ -217,7 +217,7 @@ const CRUSHING_DAMAGE: f32 = 4.0;
 
 /// The damage the wheels deal. Create's own `create:crush` (through armour, `bypasses_armor`)
 /// is not among the world's damage types: a native mod's `data/<ns>/damage_type` files are not
-/// read (HORIZON_API.md), so vanilla's cramming, which also goes through armour, stands in.
+/// read (API_GAPS.md), so vanilla's cramming, which also goes through armour, stands in.
 const CRUSH: &str = "minecraft:cramming";
 
 /// `CrushingWheelControllerBlock.checkEntityForProcessing` for what is not an item: the first

@@ -1,7 +1,7 @@
 //! `TreeFertilizerItem.useOn` on a sapling (not a hanging propagule): its tree grows now. Create
 //! grows it in a simulated world at stage 1; here the sapling is set to stage 1 and bone meal is
 //! applied as a dispenser applies it (vanilla's 45% rolls) until it grows, so the tree needs
-//! vanilla's room to grow, as in the legacy glue.
+//! vanilla's room to grow.
 
 use super::super::server::{ServerLevel, UPDATE_CLIENTS};
 use super::{creative, shrink_held};

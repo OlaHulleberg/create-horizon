@@ -10,7 +10,7 @@
 //! once in creative (`SchematicPlacePacket`, `super::print_instantly`).
 //!
 //! The deployed schematic's blocks are not drawn (`SchematicRenderer`): no world draw takes a
-//! block state's model outside a block entity (`HORIZON_API.md`). Its outline, checkered faces,
+//! block state's model outside a block entity (`API_GAPS.md`). Its outline, checkered faces,
 //! the face looked at, the rotation axis and the mirror plane are drawn as Create's
 //! (`AABBOutline`, `LineOutline`); the checkerboard is the pipeline `create:checkerboard`.
 

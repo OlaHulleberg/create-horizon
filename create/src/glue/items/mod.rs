@@ -14,8 +14,8 @@
 //!
 //! Left out (no API for it):
 //! - The wand of symmetry's mirrored placements take the placed state turned, not
-//!   `Block.updateFromNeighbourShapes` of it (the legacy's `update_from_neighbour_shapes`): no
-//!   host call asks a state's shape against its neighbours.
+//!   `Block.updateFromNeighbourShapes` of it: no host call asks a state's shape
+//!   against its neighbours.
 //! - Super glue's selection (`SuperGlueSelectionHandler`) is the contraptions' to port: what it
 //!   makes (`SuperGlueEntity` areas) is found and saved with contraptions (`contraption_found`,
 //!   `sticky_sides`, `create_glue`). The train schedule and its screen are the trains'
@@ -495,8 +495,8 @@ impl Subsystem for Items {
     }
 }
 
-/// The slot a debug command names: `hand`, `offhand` or an inventory slot (0 to 35), as the
-/// legacy commands take it, and the stack there.
+/// The slot a debug command names: `hand`, `offhand` or an inventory slot (0 to 35), and
+/// the stack there.
 pub(crate) fn slot_stack(
     host: &dyn Host,
     player: PlayerRef,

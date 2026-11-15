@@ -11,7 +11,7 @@
 //! (`contraptions::actors::shown_entities`). The items are found by the renderers' own code
 //! drawing into a [`Recorder`], which keeps each item and where it was drawn.
 //!
-//! What the API cannot do, left out (HORIZON_API.md): fluids (tanks, basins, spouts, drains), a
+//! What the API cannot do, left out (API_GAPS.md): fluids (tanks, basins, spouts, drains), a
 //! dyed belt's colour and a cased belt's casing (models with a sprite swapped), and a wall
 //! banner's own model (drawn as its item, the standing banner).
 //!

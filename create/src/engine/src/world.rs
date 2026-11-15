@@ -598,7 +598,7 @@ fn has_state(block: Block) -> bool {
         || is_plumbing(block)
 }
 
-/// Phase 5's pipes, tanks and whistles with state of their own (`plumbing.rs`).
+/// Pipes, tanks and whistles with state of their own (`plumbing.rs`).
 fn is_plumbing(block: Block) -> bool {
     matches!(
         block,
@@ -1164,7 +1164,7 @@ impl CreateWorld {
         }
     }
 
-    /// A committed block change (`native_block_changed`). The first lines are the hot path: two
+    /// A committed block change. The first lines are the hot path: two
     /// range tests that miss for every non-Create block.
     #[inline]
     pub fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
@@ -4215,7 +4215,7 @@ impl CreateWorld {
     }
 }
 
-/// Phase 5's valves, smart pipes, hose pulleys, creative tanks and whistles.
+/// Valves, smart pipes, hose pulleys, creative tanks and whistles.
 impl CreateWorld {
     /// A valve, smart pipe, hose pulley, creative tank, whistle or extension placed, loaded or
     /// changed.

@@ -1,7 +1,7 @@
 //! Create's copycat panel and step (`content/decoration/copycat`); the rules are
 //! `create_engine::copycat`'s. A copycat's material (a block state) and the item it consumed for
 //! it (`CopycatBlockEntity`: `material`, `consumedItem`) are kept per level, saved with their
-//! column as `create_copycat` in the legacy layout. Its block moments are Parts on its blocks
+//! column as `create_copycat`. Its block moments are Parts on its blocks
 //! (`parts.rs`: `useItemOn`, `getStateForPlacement`, `setPlacedBy` on the copycat items); its
 //! block entity (`create:copycat`) carries what clients draw, the material cut to the copycat's
 //! box (`CopycatModel`), the copycat base when it holds none. Nothing runs per tick: the level's
@@ -13,9 +13,9 @@
 //! Left out, for want of API:
 //! - The material's light and friction (`CopycatBlock.getLightEmission`, `getFriction`): the
 //!   `light_emission` and `friction` parts could answer per copycat, but no API reads a state's
-//!   light emission or friction (`HORIZON_API.md`).
-//! - `getAcceptedBlockState`'s class tests (`StairBlock`, `IronBarsBlock`, `TrapDoorBlock`,
-//!   legacy `behaviours().data(state).classes`): no API says which vanilla class a block is.
+//!   light emission or friction (`API_GAPS.md`).
+//! - `getAcceptedBlockState`'s class tests (`StairBlock`, `IronBarsBlock`, `TrapDoorBlock`):
+//!   no API says which vanilla class a block is.
 //!   They are read from vanilla's tags (`minecraft:stairs`, `minecraft:trapdoors`) and, for bars,
 //!   a `_bars` id that is no pane; a block-class query would make them exact.
 //!
@@ -197,7 +197,7 @@ impl Subsystem for Copycats {
         });
     }
 
-    /// The wrench on a copycat (legacy `use_item_on`'s copycat case): `CopycatBlock.onWrenched`
+    /// The wrench on a copycat: `CopycatBlock.onWrenched`
     /// takes its material off and it never turns; `onSneakWrenched` takes it off before the
     /// wrench picks the block up.
     fn wrench_used(

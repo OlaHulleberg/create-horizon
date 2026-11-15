@@ -30,24 +30,21 @@ This port translates Create 6.0.11's Java code and compiles its data (everything
 
 ## Ponder and Catnip (MIT)
 
-Create's utility library Catnip ships in its Ponder project; the port translates a few of its helpers
-(`VecHelper.rotate` for the water wheel's flow score; `LerpedFloat`'s `Chaser.EXP` for the flywheel and
-the train HUD; `AngleHelper.getShortestAngleDiff` for the train HUD's arrow), and the content mod carries
-its placement indicator texture unchanged (`content/assets/create/textures/gui/placement_indicator.png`, under Create's namespace,
-from `common/src/main/resources/assets/ponder/textures/gui/placement_indicator.png` at commit
-`c3e5a41380203e1dd1e2431c494ec491a51965a5`; the repository's only license is this MIT one). Source:
-<https://github.com/Creators-of-Create/Ponder>, branch `mc1.21.1/dev`, file `LICENSE`:
-"MIT License, Copyright (c) 2022 The Create Team", with the same permission notice as above.
+A few helpers of Catnip, Create's utility library in its Ponder project, are translated (`VecHelper.rotate`,
+`LerpedFloat`'s `Chaser.EXP`, `AngleHelper.getShortestAngleDiff`). Its placement indicator texture is committed
+unchanged as `create/assets/create/textures/gui/placement_indicator.png` (from
+`common/src/main/resources/assets/ponder/textures/gui/placement_indicator.png` at commit
+`c3e5a41380203e1dd1e2431c494ec491a51965a5`). Source: <https://github.com/Creators-of-Create/Ponder>, branch
+`mc1.21.1/dev`, file `LICENSE`: "MIT License, Copyright (c) 2022 The Create Team", with the permission notice above.
 
 ## Create (assets: All Rights Reserved)
 
-`src/main/resources/assets/` (textures, hand-written models, sounds, shaders, ponder) is
-"All Rights Reserved, Copyright (c) The Create Team / The Creators of Create". None of it is in
-this repository or in the mod's bundle: the player's own machine downloads Create's official jar
-from Modrinth (by its pinned SHA-512), where the launcher layers it under the mod and
-`tools/create-data prepare` reads it.
+`src/main/resources/assets/` (textures, models, sounds, shaders, ponder) is "All Rights Reserved, Copyright (c)
+The Create Team / The Creators of Create". None of it is in this repository or shipped from it: the player's
+machine downloads Create's official jar from Modrinth (checked by its pinned SHA-512), and the launcher and
+`tools/create-data prepare` read it there.
 
-## Horizon Veinminer
+## Horizon Veinminer (MIT)
 
-The build and staging tools (`tools/`) are adapted from the MIT-licensed Veinminer port; see
-`LICENSE`.
+This repository started from the MIT-licensed Horizon Veinminer port's scaffold; its contributors' copyright line is
+kept in `LICENSE`.

@@ -304,7 +304,7 @@ pub fn use_belt(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> bool {
 }
 
 /// How a belt names `stack` (`belt_stack` turns it back): a sequenced assembly's transitional
-/// item by its id with its progress apart (legacy `belt_stack`), any other by `items::key_of`,
+/// item by its id with its progress apart, any other by `items::key_of`,
 /// its components kept (a package, a potion, a named or damaged item).
 pub fn belt_name(
     host: &dyn mod_api::Host,
@@ -319,7 +319,7 @@ pub fn belt_name(
     }
 }
 
-/// A belt item as a stack, its sequenced assembly progress with it (legacy `belt_stack`).
+/// A belt item as a stack, its sequenced assembly progress with it.
 pub fn belt_stack(lv: &ServerLevel<'_>, item: &belt::Item) -> Option<ItemStack> {
     let mut stack = items::stack_of(&*lv.host, &item.item, u32::from(item.count))?;
     if let Some((_, p, fraction)) = item

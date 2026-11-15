@@ -1,57 +1,32 @@
 # Contributing
 
-Issues and pull requests are welcome. Bug reports help most with the steps to reproduce, the Sunrise
-build, and the game log.
+Issues and pull requests are welcome. Bug reports help most with steps to reproduce, the Sunrise build and the
+game log.
 
 ## Before you start
 
-Read [notes/native-port.md](notes/native-port.md). In short:
-
-- Gameplay rules go in the engine (`create/src/engine`): plain Rust with no game types, tested with
-  `cargo test`. The glue (`create/src/glue`) reads the world through `mod_api`, calls the engine and
-  writes back.
-- Use only `mod_api` and `create_engine`: no game internals, no `[[native.mixin]]`, no registry
-  dependencies.
-- If the API can't do something, leave it out and say so in the module's doc and in
-  [HORIZON_API.md](HORIZON_API.md). No stubs or shims.
-- Generated files (`create/src/engine/src/generated.rs`, `create/data/`, `create/assets/`) come from
-  `tools/create-data compile`. Don't edit them by hand.
+Read [docs/architecture.md](docs/architecture.md). Rules go in the engine, the glue only uses `mod_api`, and
+missing API goes in [API_GAPS.md](API_GAPS.md) instead of a workaround.
 
 ## Never commit Create's assets
 
-Create's `src/main/resources/assets` is All Rights Reserved. Never commit it, or anything copied or
-adapted from it: textures, models, block states, particle files, sounds or translations. Name them by
-id instead. Whatever must contain them is produced by `create-data prepare` from the player's own jar.
-A test in `tools/create-data` allows only generated block states and models in `create/assets`.
+Create's `src/main/resources/assets` is All Rights Reserved. Don't commit it or anything copied or adapted from it
+(textures, models, block states, particles, sounds, translations), nor Create's jar. Name assets by id; what needs
+them is built by `create-data prepare` on the player's machine. A test in `tools/create-data` enforces this.
+Create's English UI text (`src/generated/resources/assets/create/lang/en_us.json`) is MIT and may be used.
 
-English UI text from Create's `src/generated/resources/assets/create/lang/en_us.json` is MIT and may be
-used.
-
-Also don't commit binaries, `create/.horizon/` (the fetched SDK) or any Minecraft files.
+Also don't commit binaries or `create/.horizon/`.
 
 ## Checks
 
-Run these before opening a pull request:
-
-```sh
-cd create
-cargo +1.99.1 fmt --check
-cargo +1.99.1 clippy --all-targets -- -D warnings
-cargo +1.99.1 test
-cargo +1.99.1 test -p create-engine
-cargo horizon-mod check
-cd ../tools/create-data && cargo test
-```
-
-In the pull request, say what you ran, and what you tried in game (or that you didn't).
+Run the checks listed in [VALIDATION.md](VALIDATION.md). In the pull request, say what you ran and what you tried in
+game.
 
 ## Sign-off (DCO)
 
-Every commit needs a `Signed-off-by` line: commit with `git commit -s`. It states that you wrote the
-change, or have the right to submit it, under the
+Commit with `git commit -s`: the `Signed-off-by` line certifies the
 [Developer Certificate of Origin](https://developercertificate.org).
 
 ## AI-assisted pull requests
 
-If AI tools helped write a pull request, say so in its description. You are responsible for every line
-and must have read and tested it.
+Say so in the description if AI tools helped. You are responsible for every line, and must have read and tested it.

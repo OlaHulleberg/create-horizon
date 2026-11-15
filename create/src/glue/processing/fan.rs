@@ -4,7 +4,7 @@
 //! The processing types' effects on the other entities in a current (`affectEntity`): blasting
 //! and smoking set them alight and hurt them, washing puts them out and hurts endermen, snow
 //! golems and blazes, haunting blinds and slows them. Create's own damage types (`fan_lava`,
-//! `fan_fire`) are stood in for by vanilla's `lava` and `in_fire` (`HORIZON_API.md`: a native
+//! `fan_fire`) are stood in for by vanilla's `lava` and `in_fire` (`API_GAPS.md`: a native
 //! mod's damage types). A horse haunted for 100 ticks turns into a skeleton horse made from its
 //! saved data (`Haunted`, its progress kept on the horse as Create's `CreateHaunting`).
 

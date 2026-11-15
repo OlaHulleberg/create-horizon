@@ -149,7 +149,7 @@ pub fn crafter_handler_insert(
 }
 
 /// A crafter's `ITEMS` handler (`MechanicalCrafterBlockEntity`'s capability: a
-/// `CombinedInvWrapper` over its group's `Inventory`s; the legacy `crafter_handler_insert` that
+/// `CombinedInvWrapper` over its group's `Inventory`s, which
 /// funnels, arms, chutes and hoppers put through): one item into each crafter of the group that
 /// is idle, uncovered and empty (`Inventory.insertItem`); nothing comes out. None for any other
 /// block of the kinetic type.

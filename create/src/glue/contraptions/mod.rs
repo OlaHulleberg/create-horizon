@@ -18,9 +18,9 @@
 //! vaults and toolboxes ride every contraption as mounted storage (saved with it), bearings,
 //! windmills and clocks included.
 //!
-//! What the API cannot do, left out (for HORIZON_API.md's gaps):
+//! What the API cannot do, left out (for API_GAPS.md's gaps):
 //! - Entities can't stand on, be pushed by or ride moving structures: there is no level
-//!   collider an entity's motion reads (`notes/moving-structures-note.md`), and no mod entity
+//!   collider an entity's motion reads (`API_GAPS.md`, moving colliders), and no mod entity
 //!   type to be one.
 //! - A moving block cannot be clicked, and riders cannot sit on a moving structure's seats
 //!   (`Contraption.seats`): there is no moving entity to pick or ride. Contraption controls on a
@@ -117,7 +117,7 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 pub use super::kinetics::dir_name;
-// The chassis group a value box scrolls the range of (legacy `contraptions::chassis_group`).
+// The chassis group a value box scrolls the range of.
 pub use bearings::chassis_group;
 pub(crate) use lifts::{contact_floor, contact_wrenched};
 
@@ -215,7 +215,7 @@ impl Subsystem for Contraptions {
         }
     }
 
-    /// Before the kinetic solve, in the legacy order: mechanical bearings and their actors,
+    /// Before the kinetic solve, in this order: mechanical bearings and their actors,
     /// gantries, windmills, stickers, pistons, mounted blocks, then clocks, pulleys and
     /// elevators.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {

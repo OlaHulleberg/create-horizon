@@ -1,4 +1,4 @@
-//! The machines' state saved with each column, in the legacy layouts and keys: `deployers`
+//! The machines' state saved with each column, under these keys: `deployers`
 //! (`DeployerBlockEntity.write`), `crushers` (the controllers' contents), `burners` (fuel and
 //! burn time), `basins` (their tanks), `crafter_inputs` (crafters joined with the wrench) and
 //! `crafter_covers` (slot covers).

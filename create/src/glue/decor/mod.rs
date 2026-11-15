@@ -8,7 +8,7 @@
 //! writes them back onto it and its `written` state; sneaking or a left click picks it up.
 //!
 //! What blocks hold (brackets, placards' items, crates' supplies, hatches' filters, clipboards)
-//! is kept per level and saved with its column as `create_decor`, in the legacy layout. Only
+//! is kept per level and saved with its column as `create_decor`. Only
 //! placards, bells and hatches with a timer running, and blocks that changed, are looked at each
 //! tick. Clients see a bracket through its shaft's, cog's or pipe's block entity (`Bracket` in
 //! the kinetic block entity's data), a placard's item through the placard's own block entity
@@ -20,18 +20,18 @@
 //!
 //! The placement helpers' targets (cloths, sails, girders, metal ladders) are offered to the
 //! indicator round the crosshair (`interaction::placement`); their ghost of the block a click
-//! would place is left out for want of API (`HORIZON_API.md`, Client). A haunted bell's souls are
+//! would place is left out for want of API (`API_GAPS.md`, Client). A haunted bell's souls are
 //! `souls`'.
 //!
 //! Lightning clears Create's copper as vanilla's: the glue gives the server's data Create's
 //! chains as NeoForge's `neoforge:oxidizables` and `neoforge:waxables` block data maps
 //! (`data_pack_files`), which the game's own `clearCopperOnLightningStrike` reads.
 //!
-//! Left out, for want of API (each in `HORIZON_API.md`):
-//! - The weathering neighbours of Create's copper (`WeatheringCopper` and its age, legacy
-//!   `behaviours().data(state)`): no API says which blocks are weathering copper nor their age;
-//!   Create's own are known to the engine and vanilla's are read from their ids (`exposed_`,
-//!   `weathered_`, `oxidized_`, never `waxed_`). A state fact for it would make it exact.
+//! Left out, for want of API (each in `API_GAPS.md`):
+//! - The weathering neighbours of Create's copper (`WeatheringCopper` and its age): no API says
+//!   which blocks are weathering copper nor their age; Create's own are known to the
+//!   engine and vanilla's are read from their ids (`exposed_`, `weathered_`, `oxidized_`, never
+//!   `waxed_`). A state fact for it would make it exact.
 //! - What follows a placement from an item (placards and clipboards turned, a clipboard's pages,
 //!   girders joining, a large water wheel's room, a peculiar bell) runs in the item's
 //!   `on_block_placed_by`, which names no level: a dispenser's placement, with no placer, is left
@@ -305,7 +305,7 @@ fn stack_of(host: &dyn Host, id: &str, count: u32) -> Option<ItemStack> {
     ItemStack::new(key, count)
 }
 
-/// Gives `player` one of item `id` (`native_give_items`: what doesn't fit drops at them).
+/// Gives `player` one of item `id` (what doesn't fit drops at them).
 fn give(host: &mut dyn ServerHost, player: PlayerRef, id: &str) {
     if let Some(stack) = stack_of(&*host, id, 1) {
         let _ = player.give_stack(host, stack);

@@ -4,9 +4,9 @@
 //! menu's screen laid out as compartments), postboxes (`open` while their menu is) and the train
 //! and framed glass trapdoors. Rules live in `create_engine`.
 //!
-//! The toolboxes' block entity type, `create:toolbox`, is processing's, with the slots
-//! (legacy `block_entity_container`); their menu's screen and its recolouring are here (legacy
-//! `screen`). A postbox's packages are the packages port's (`port_stacks`).
+//! The toolboxes' block entity type, `create:toolbox`, is processing's, with the slots;
+//! their menu's screen and its recolouring are here. A postbox's packages are the packages
+//! port's (`port_stacks`).
 
 use super::server::{ServerLevel, UPDATE_CLIENTS, update_all};
 use super::states;
@@ -55,8 +55,7 @@ impl Subsystem for Blocks {
         toolbox_totals(host, event);
     }
 
-    /// `PostboxBlockEntity.stopOpen`: the last menu closed on a postbox shuts it (legacy
-    /// `menu_closed`).
+    /// `PostboxBlockEntity.stopOpen`: the last menu closed on a postbox shuts it.
     fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut MenuClosedEvent) {
         let Some(Some((dim, at))) = with_world(|w| w.postboxes.closed(event.uuid, event.window))
         else {

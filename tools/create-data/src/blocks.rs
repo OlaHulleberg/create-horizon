@@ -2,8 +2,8 @@
 //! and the vanilla template each one is declared from in Horizon's content-mod layer.
 //!
 //! Horizon gives a mod block its template's state properties, behaviour class and shapes. A Create
-//! block whose properties no vanilla block has stays out until Horizon can declare its own states
-//! (PORTING.md gap 2); `Decision::Pending` says why.
+//! block whose properties no vanilla block has stays out until Horizon can declare its own states;
+//! `Decision::Pending` says why.
 
 use crate::java::JavaFacts;
 use serde_json::{Map, Value, json};
@@ -378,7 +378,7 @@ pub fn decide(b: &CreateBlock, shapes: &BTreeMap<&'static str, Value>) -> Decisi
     }
 }
 
-/// Phase 2's kinetic blocks: templates where vanilla has their properties (a shaft is an iron
+/// Kinetic blocks: templates where vanilla has their properties (a shaft is an iron
 /// chain's axis and waterlogging), own states where it doesn't, and Create's shapes.
 fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
     use crate::shapes::*;
@@ -2214,7 +2214,7 @@ fn copycats(b: &CreateBlock) -> Option<Decision> {
     })
 }
 
-/// Phase 5's fluid blocks with state of their own (`AllBlocks`: all `SharedProperties
+/// Fluid blocks with state of their own (`AllBlocks`: all `SharedProperties
 /// ::copperMetal`, copper's sounds, pickaxe): valves, smart, glass and encased pipes, the hose
 /// pulley, the creative fluid tank, steam whistles and their extensions. Their behaviour is the
 /// glue's; Create's shapes selected by one property.
@@ -2539,7 +2539,7 @@ pub const PARTIALS: [(&str, &str, &str); 207] = [
         "create:block/mechanical_press/head",
         "south",
     ),
-    // BeltRenderer's segments and pulley, posed by the glue (`native_part_model_posed`): only
+    // BeltRenderer's segments and pulley, posed by the glue: only
     // their unturned `up` state is drawn.
     ("part_belt_start", "create:block/belt/start", "up"),
     ("part_belt_middle", "create:block/belt/middle", "up"),
@@ -4079,7 +4079,7 @@ fn template_properties(
         .map_or(&[][..], |(_, p)| *p)
 }
 
-/// A shape table selected by one property (`{"property": p, "values": {..}}`) in the fork's form
+/// A shape table selected by one property (`{"property": p, "values": {..}}`) in the content schema's form
 /// (`{"properties": [p], "values": {..}}`). Where `p` is the template's and Create never sets
 /// some of its values (a barrel template's `up` and `down` for a horizontal block), those
 /// states still exist: they take the shape of the block's default value of `p`, as `default`,
@@ -4106,7 +4106,7 @@ pub fn fork_shapes(template: &str, default_state: &Map<String, Value>, shapes: &
     out
 }
 
-/// A block's own properties (`{name: [values, Create's default first]}`) in the fork's form
+/// A block's own properties (`{name: [values, Create's default first]}`) in the content schema's form
 /// (`docs/modding/src/how-to/content-mods.md`): the properties its template lacks, typed
 /// (`{"type": "boolean"}`, `{"type": "enum", "values": [..]}`), and its `default_state`: each
 /// declared property's default, and Create's default of a template property where it is not

@@ -1,6 +1,4 @@
-//! Moving structures on clients. The legacy glue sent each structure on its own channels
-//! (`create:contraption`, `create:piston`, `create:lift`) and drew it as one part model turning
-//! or gliding on the GPU. Here a structure travels in its anchor's block entity data
+//! Moving structures on clients. A structure travels in its anchor's block entity data
 //! (`Contraption`), which the game sends to every client that sees the anchor (when its chunk
 //! is sent and whenever it changes), and the anchor's block entity draws it: each block's model
 //! (`BlockEntityDrawContext::block`) under a pose turning about the bearing's axis (`spin`, kept
@@ -37,8 +35,7 @@ const GLIDE: i32 = 1;
 const CLOCK: i32 = 2;
 const ELEVATOR: i32 = 3;
 
-/// How far from the camera anchors draw their structures, in blocks: the legacy parts were
-/// drawn at any distance.
+/// How far from the camera anchors draw their structures, in blocks.
 const VIEW_DISTANCE: f64 = 256.0;
 
 /// Each structure written gets a new number, so a client knows it changed.

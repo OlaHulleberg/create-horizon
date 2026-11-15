@@ -1,7 +1,7 @@
 //! What schematics read and write of the game beyond the hooks: the `schematics/` files (gzip
 //! NBT, as `NbtIo` reads and writes them, through the engine's `gzip` and the API's NBT
-//! encoding), a schematic's data on its stack (`minecraft:custom_data`, as the legacy glue kept
-//! it) and each block's item (`Block.asItem`).
+//! encoding), a schematic's data on its stack (`minecraft:custom_data`) and each block's
+//! item (`Block.asItem`).
 //!
 //! The files live in the mod's game data folder (`horizon-mod-data/create/schematics/`): the
 //! API reaches a mod's own folders only, not the game folder's `schematics/` where Create keeps

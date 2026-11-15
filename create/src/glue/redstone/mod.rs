@@ -8,7 +8,7 @@
 //! (`ticks`), as do lamps, links, rails and cuckoo clocks; levers, observers and switches look
 //! after the solve (`detectors`); comparators last (`analog`, the `Comparators` subsystem).
 //! What clients draw (link frequencies, lever handles and indicators, brass diodes' progress
-//! indicators, cuckoo hands, doors and figures) is in `client`, sent on the legacy channels or
+//! indicators, cuckoo hands, doors and figures) is in `client`, sent on the redstone channels or
 //! in the block entity's data (`ticks::DIODE_SHOWN`); clocks and levers ease on the client's
 //! block entity ticks, and clocks tick there.
 //!
@@ -18,7 +18,7 @@
 //! while one is satisfied.
 //!
 //! A smart observer's or threshold switch's filter is read, set by hand, saved and tested by the
-//! items port's filter helpers (`items::filters`), as the legacy glue's were; the filters of
+//! items port's filter helpers (`items::filters`); the filters of
 //! broken detectors (`detectors.dropped`) are dropped there too. The threshold switch's screen
 //! is `switch_screen`; the clipboard's copying and pasting of these blocks' settings is
 //! `clipboard_values`.
@@ -159,7 +159,7 @@ pub(crate) fn frequency_stack(host: &dyn mod_api::Host, key: &str) -> Option<mod
 
 pub struct Redstone;
 
-/// Smart observers and threshold switches looking at their targets (legacy `tick_detectors`):
+/// Smart observers and threshold switches looking at their targets:
 /// late in the level tick, after the machines, belts and arms moved items and before `fluids`'
 /// `Tanks` hands on the tick's tank changes, which they read.
 pub struct Detectors;

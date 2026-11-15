@@ -9,7 +9,7 @@
 //! Create's sound plays at its blocks' mean, which it follows every tick (`ContinuousSound.getX`),
 //! fading with distance as any sound does. A playing sound cannot be moved through the API, so
 //! it plays at the listener at the volume that fade gives it (`Attenuation.LINEAR` over 16
-//! blocks), heard from no side (see `HORIZON_API.md`).
+//! blocks), heard from no side (see `API_GAPS.md`).
 
 use super::super::kinetics;
 use create_engine::Block;
