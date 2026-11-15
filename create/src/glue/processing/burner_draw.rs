@@ -160,11 +160,36 @@ pub fn draw(
     let partial = draw.partial();
     let angle = head.last_angle + (head.angle - head.last_angle) * partial;
     let animation = (head.last_sink + (head.sink - head.last_sink) * partial) * 0.175;
-    let above = animation > 0.125;
     // `renderTick`: the render time, set apart per burner (`hashCode % 13`).
     let hash = (pos[0].wrapping_mul(31).wrapping_add(pos[1]))
         .wrapping_mul(31)
         .wrapping_add(pos[2]);
+    shared(draw, heat, angle, animation, true, goggles, hash);
+}
+
+/// `renderInContraption`: a burner carried by a moving structure, its blaze at least fading,
+/// facing its front (`headAngle`), with no flame and no goggles (its block entity's data stays
+/// behind). `hash` sets its bobbing apart.
+pub fn draw_moving(draw: &mut dyn BlockEntityDrawContext, heat: Heat, facing: Dir, hash: i32) {
+    if heat == Heat::None {
+        return;
+    }
+    let heat = heat.max(Heat::Fading);
+    shared(draw, heat, front_angle(facing), 0.0, false, false, hash);
+}
+
+/// `renderShared`: the head at `angle`, sunk by `animation`, its rods, and (when it may and
+/// something is above) its flame.
+fn shared(
+    draw: &mut dyn BlockEntityDrawContext,
+    heat: Heat,
+    angle: f32,
+    animation: f32,
+    can_draw_flame: bool,
+    goggles: bool,
+    hash: i32,
+) {
+    let above = animation > 0.125;
     let time = draw.animation_time() as f32;
     let tick = time + (hash % 13) as f32 * 16.0;
     let mult = if heat >= Heat::Fading { 64.0 } else { 16.0 };
@@ -224,7 +249,10 @@ pub fn draw(
                 draw.pop();
             }
         }
-        if above && let Some(flame) = FLAME.get() {
+        if can_draw_flame
+            && above
+            && let Some(flame) = FLAME.get()
+        {
             // `shiftUVScrolling`: half the scrolling sprite slides by, at a speed by heat.
             let speed = 1.0 / 32.0 + 1.0 / 64.0 * heat as u8 as f32;
             let v = (speed * time).fract() / 2.0;
