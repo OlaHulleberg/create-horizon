@@ -20,8 +20,9 @@
 //! helper). Every source Create registers is here but the computer's (no computers) and the two
 //! below.
 //!
-//! Left out, not for want of API: the sources' colours (the boiler's bars, the gauges' marks):
-//! the engine's text is plain.
+//! The sources' colours (the boiler's bars, the gauges' marks) ride their text as coloured runs
+//! (`display::coloured`): signs and lecterns' books show them, boards and nixie tubes take the
+//! plain text, as Create's `getString()`.
 //!
 //! Left out, the API having no way to do it:
 //! - The scoreboard and death count sources: the API reads no scoreboard objectives.

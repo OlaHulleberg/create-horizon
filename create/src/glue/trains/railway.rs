@@ -553,7 +553,7 @@ fn probe_schedules(lv: &mut ServerLevel<'_>) -> Vec<(u32, create_engine::schedul
         usize,
         Option<[i32; 3]>,
         Vec<((usize, usize), Condition)>,
-        bool,
+        Option<create_engine::schedule::Instruction>,
     );
     let wanted: Vec<Wanted> = with_world(|w| {
         w.dims[dim]
@@ -572,6 +572,7 @@ fn probe_schedules(lv: &mut ServerLevel<'_>) -> Vec<(u32, create_engine::schedul
                     .into_iter()
                     .filter_map(|(g, r)| Some(((g, r), entry.conditions.get(g)?.get(r)?.clone())))
                     .collect();
+                let packages = packages.then(|| entry.instruction.clone());
                 Some((t.id, t.cars.len(), t.train.at_station, conditions, packages))
             })
             .collect()
@@ -580,7 +581,7 @@ fn probe_schedules(lv: &mut ServerLevel<'_>) -> Vec<(u32, create_engine::schedul
     let mut out = Vec::new();
     for (id, cars, station, conditions, packages) in wanted {
         let mut p = Probes::default();
-        let needs_items = packages
+        let needs_items = packages.is_some()
             || conditions
                 .iter()
                 .any(|(_, c)| matches!(c, Condition::ItemThreshold { .. }));
@@ -630,15 +631,21 @@ fn probe_schedules(lv: &mut ServerLevel<'_>) -> Vec<(u32, create_engine::schedul
             };
             p.measures.push((at, v));
         }
-        if packages {
-            // No postbox here is linked to a station (`GlobalPackagePort`), so no station is
-            // found for either instruction; whether packages are aboard still decides what a
-            // delivery does.
+        if let Some(instruction) = packages {
+            // The stations whose postboxes (`GlobalPackagePort`) take the packages aboard, or
+            // hold packages to fetch; whether packages are aboard decides what a delivery with
+            // none does.
             let any = stacks.iter().any(|s| {
-                let id = s.item().id(&*lv.host);
-                id.starts_with("create:cardboard_package") || id.starts_with("create:rare_")
+                create_engine::package::is_package(&crate::glue::packages::body::item_id(
+                    &*lv.host, s,
+                ))
             });
-            p.packages = Some((Vec::new(), any));
+            let fetch = match &instruction {
+                create_engine::schedule::Instruction::FetchPackages(f) => Some(f.as_str()),
+                _ => None,
+            };
+            let stations = crate::glue::packages::package_stations(lv, fetch, &stacks);
+            p.packages = Some((stations, any));
         }
         out.push((id, p));
     }

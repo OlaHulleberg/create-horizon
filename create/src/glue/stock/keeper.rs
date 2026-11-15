@@ -14,9 +14,10 @@
 //! (`isSchematicListMode`). Holding a table cloth, it programs the cloth as a shop of what is
 //! ordered (`shop`). The screen closes when its keeper is gone.
 //!
-//! Left out: the keeper drawn beside the window (no entity drawn in a screen, `HORIZON_API.md`);
-//! addresses from clipboards placed nearby (`AddressEditBoxHelper.advertiseClipboard`: a placed
-//! clipboard's pages are not on its clients).
+//! The address box also offers the `#` addresses on clipboards placed within 32 blocks, which
+//! the server tells each player of every second (`advertise_clipboards`).
+//!
+//! Left out: the keeper drawn beside the window (no entity drawn in a screen, `HORIZON_API.md`).
 
 use super::super::net;
 use super::super::server::ServerLevel;

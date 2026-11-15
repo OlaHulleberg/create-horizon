@@ -53,6 +53,8 @@ struct Client {
     /// This tick's selection (`tick`): the point, the block a frogport would go on (if it can
     /// go there), and whether it may reach the point.
     selection: Option<([f64; 3], Option<[i32; 3]>, bool)>,
+    /// Whether the chosen point is a station, for a postbox (`isPostbox`: it may reach down).
+    postbox: bool,
     /// The status last asked for and when (client ticks), and the ticks counted.
     status: Option<(u8, u64)>,
     ticks: u64,
@@ -65,15 +67,15 @@ const STATUS: [(&str, u32); 3] = [
     ("create.package_port.too_far", 0xFF7171),
 ];
 
-/// `validateDiff(target, placedPos)` for a frogport: 0 when it may reach.
-fn validate(target: [f64; 3], pos: [i32; 3]) -> u8 {
+/// `validateDiff(target, placedPos)`: 0 when it may reach; a postbox may reach down.
+fn validate(target: [f64; 3], pos: [i32; 3], postbox: bool) -> u8 {
     let source = [
         f64::from(pos[0]) + 0.5,
         f64::from(pos[1]),
         f64::from(pos[2]) + 0.5,
     ];
     let diff = [0, 1, 2].map(|i| target[i] - source[i]);
-    if diff[1] < 0.0 {
+    if diff[1] < 0.0 && !postbox {
         1
     } else if (diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2]).sqrt() > RANGE {
         2
@@ -117,8 +119,10 @@ fn selection_tick(host: &mut dyn ClientHost, player: PlayerRef) {
         c.selection = None;
         c.ticks
     });
-    let chosen = CLIENT.with_borrow(|c| c.chosen);
-    if !wrench && (chosen.is_none() || id != "create:package_frogport") {
+    let (chosen, postbox) = CLIENT.with_borrow(|c| (c.chosen, c.postbox));
+    let holds_postbox = id.starts_with("create:") && id.ends_with("_postbox");
+    let held_kind = if postbox { holds_postbox } else { id == "create:package_frogport" };
+    if !wrench && (chosen.is_none() || !held_kind) {
         return;
     }
     let Some(mod_api::CrosshairTarget::Block { pos, hit, .. }) = host.crosshair_target() else {
@@ -174,7 +178,7 @@ fn selection_tick(host: &mut dyn ClientHost, player: PlayerRef) {
         let o = hit.face;
         pos = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
     }
-    let code = validate(chosen.at, pos);
+    let code = validate(chosen.at, pos, postbox);
     let refresh = CLIENT.with_borrow_mut(|c| {
         let due = c
             .status
@@ -459,7 +463,10 @@ pub(super) fn use_on_chain(host: &mut dyn ClientHost) -> bool {
     let Some(p) = CLIENT.with_borrow(|c| c.hovered) else {
         return false;
     };
-    CLIENT.with_borrow_mut(|c| c.chosen = Some(p));
+    CLIENT.with_borrow_mut(|c| {
+        c.chosen = Some(p);
+        c.postbox = false;
+    });
     let mut m = Vec::new();
     for v in p.conveyor {
         put_i(&mut m, v);
@@ -502,7 +509,11 @@ pub(super) fn render_level_stage(
         .local_player()
         .and_then(|p| super::super::items::held(host, p, mod_api::Hand::Main))
         .map(|s| s.item().id(host));
-    let holding = held.as_deref() == Some("create:package_frogport");
+    let postbox = CLIENT.with_borrow(|c| c.postbox);
+    let holding = match held.as_deref() {
+        Some(id) if postbox => id.starts_with("create:") && id.ends_with("_postbox"),
+        id => id == Some("create:package_frogport"),
+    };
     let (hovered, chosen, selection) = CLIENT.with_borrow(|c| (c.hovered, c.chosen, c.selection));
     let mut lines = Vec::new();
     let point = |lines: &mut Vec<_>, at: [f64; 3], color: u32| {
@@ -543,7 +554,52 @@ pub(super) fn render_level_stage(
 // Server
 
 /// A point chosen by a player's client.
+/// `onUse` with a postbox on the station at `pos` (a station of the client's: the server checks
+/// it is one): chosen, its centre the point. Whether it was a station.
+pub(super) fn choose_station(host: &mut dyn ClientHost, pos: [i32; 3]) -> bool {
+    let Some(level) = host.level(host.dimension()) else {
+        return false;
+    };
+    let station = level
+        .block_state(&*host, pos)
+        .is_some_and(|s| s.block() == super::states::key(create_engine::Block::TrackStation));
+    if !station {
+        return false;
+    }
+    let point = Point {
+        conveyor: pos,
+        chain_pos: 0.0,
+        connection: None,
+        at: pos.map(|v| f64::from(v) + 0.5),
+    };
+    CLIENT.with_borrow_mut(|c| {
+        c.chosen = Some(point);
+        c.postbox = true;
+    });
+    let mut m = vec![b'P'];
+    for v in pos {
+        put_i(&mut m, v);
+    }
+    net::send_to_server(host, CHANNEL, &m);
+    true
+}
+
 pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
+    // A station chosen with a postbox (`P`).
+    if data.len() == 13 && data[0] == b'P' {
+        let v = |i: usize| i32::from_le_bytes(data[1 + i * 4..5 + i * 4].try_into().unwrap_or([0; 4]));
+        let pos = [v(0), v(1), v(2)];
+        let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+            return;
+        };
+        let Some(lv) = ServerLevel::new(host, &dimension) else {
+            return;
+        };
+        if super::block_of(lv.block(pos)) == Some(create_engine::Block::TrackStation) {
+            super::station_ports::choose(player, lv.dim, pos);
+        }
+        return;
+    }
     // The status line a client asks for (`sendStatus`).
     if let [b'S', code] = *data {
         if let Some((key, rgb)) = STATUS.get(usize::from(code)) {

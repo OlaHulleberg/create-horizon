@@ -1394,7 +1394,7 @@ pub fn debug_command(
         .unwrap_or_else(|| "minecraft:overworld".to_owned());
     let line = (|| {
         let [x, y, z, op, rest @ ..] = words.as_slice() else {
-            return "usage: <x> <y> <z> <name N | assemble | exit | disassemble | go N>".to_owned();
+            return "usage: <x> <y> <z> <name N | assemble | exit | disassemble | go N | packages F>".to_owned();
         };
         let pos = [x, y, z].map(|v| v.parse::<i32>().unwrap_or(0));
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -1423,6 +1423,36 @@ pub fn debug_command(
             "disassemble" => {
                 let ok = assembly::disassemble(&mut lv, pos, None);
                 format!("disassemble {pos:?}: {ok}")
+            }
+            // The schedule's package instructions, for tests: deliver, then fetch for `filter`.
+            "packages" => {
+                let Some(train) = assembly::present_train(dim, pos) else {
+                    return format!("no train at {pos:?}");
+                };
+                use create_engine::schedule::{Condition, Entry, Instruction, Schedule, TimeUnit};
+                // Each waits a second at its station (an entry with no condition waits forever).
+                let wait = || {
+                    vec![vec![Condition::Delay {
+                        value: 1,
+                        unit: TimeUnit::Seconds,
+                    }]]
+                };
+                let schedule = Schedule {
+                    entries: vec![
+                        Entry {
+                            instruction: Instruction::DeliverPackages,
+                            conditions: wait(),
+                        },
+                        Entry {
+                            instruction: Instruction::FetchPackages(rest.join(" ")),
+                            conditions: wait(),
+                        },
+                    ],
+                    cyclic: true,
+                    saved_progress: 0,
+                };
+                let ok = super::conductor::set_schedule(dim, train, schedule, false);
+                format!("train {train} delivers and fetches \"{}\": {ok}", rest.join(" "))
             }
             "go" => {
                 let Some(train) = assembly::present_train(dim, pos) else {

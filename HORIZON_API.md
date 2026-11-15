@@ -293,12 +293,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   arrows toward where the click places): catnip's source is not among the port's references.
 - Equipment: a haunted bell's soul pulse showing where mobs may spawn (`HauntedBellPulser`, `SoulPulseEffect`)
   and the soul particles and sounds after it rings.
-- Trains: `TrackTargetingBehaviour.targetDirection` is not kept, so signals' and observers' track markers are
-  not drawn (stations draw theirs, turned by their last assembly direction). No postbox is linked to a station
-  (`GlobalPackagePort`), so a schedule's package instructions find none.
-- Stock: a placed clipboard's `#` addresses are not offered by address boxes
-  (`AddressEditBoxHelper.advertiseClipboard`: its pages are not on its clients).
-- Display: the sources' colours (the boiler's bars, the gauges' marks: the engine's text is plain).
 
 ## Not to send
 

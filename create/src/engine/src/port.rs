@@ -4,8 +4,9 @@
 //!
 //! A port keeps 18 packages and an address filter. A frogport sends packages that are not for
 //! it (its own, or from the inventory below) onto its chain conveyor, and catches those that
-//! match its filter, handing them down to the inventory below. Postboxes hold packages for
-//! trains, which are not ported: they keep what automation and the menu put in. Nothing here
+//! match its filter, handing them down to the inventory below. A postbox joined to a train
+//! station (`station`) hands packages to the trains there and takes theirs (the glue's
+//! `station_ports`). Nothing here
 //! ticks for an idle port: a frogport looks at its inventories when something changes (a
 //! package caught or put in, the inventory below or the packager below, its chain's speed) and
 //! again every 10 ticks only while something it could send is held back.
@@ -55,6 +56,8 @@ pub struct Port<P> {
     /// How often it was told a package for it is coming (`sendAnticipate`), for its clients'
     /// `anticipationProgress`.
     pub anticipations: u32,
+    /// A postbox's train station (`TrainStationFrogportTarget`): where the station is.
+    pub station: Option<[i32; 3]>,
 }
 
 impl<P> Port<P> {
@@ -73,6 +76,7 @@ impl<P> Port<P> {
             yaw: 0.0,
             goggles: false,
             anticipations: 0,
+            station: None,
         }
     }
 

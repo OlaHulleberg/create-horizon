@@ -110,6 +110,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
             });
             mark_unsaved(dim, &[pos]);
             super::frog_draw::viewer(dim, pos, player.uuid(), false);
+            super::station_ports::filter_changed(dim, pos);
             super::super::blocks::postbox_closed(&mut lv, pos);
         }
         b'T' => {
