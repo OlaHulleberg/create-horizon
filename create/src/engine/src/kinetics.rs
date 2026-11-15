@@ -24,6 +24,10 @@ use std::collections::{HashMap, HashSet};
 /// Create's `maxRotationSpeed` (CKinetics, default 256).
 pub const MAX_SPEED: f32 = 256.0;
 
+/// `RotationPropagator.MAX_FLICKER_SCORE`: a part whose flicker score is past this breaks when
+/// speed next reaches it.
+pub const MAX_FLICKER_SCORE: i32 = 128;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Axis {
     X,
@@ -400,6 +404,18 @@ struct Node {
     /// The sequence context it took from what turns it (`copySequenceContextFrom`): its
     /// holder's, and the value per RPM of its own speed (`SequenceContext.relativeValue`).
     seq: Option<(Context, f32)>,
+    /// `KineticBlockEntity.flickerTally` as of tick `flicker_at`: 5 more each time its speed
+    /// starts, stops or turns round (`onSpeedChanged`), one less each tick (`tick`).
+    flicker: i32,
+    flicker_at: u64,
+}
+
+impl Node {
+    /// Its flicker score at tick `now`.
+    fn flicker(&self, now: u64) -> i32 {
+        let gone = now.saturating_sub(self.flicker_at).min(i32::MAX as u64) as i32;
+        (self.flicker - gone).max(0)
+    }
 }
 
 /// The kinetic parts of one dimension.
@@ -425,6 +441,8 @@ pub struct Kinetics {
     /// looked at since the last `take_touched`.
     watched: HashSet<[i32; 3]>,
     touched: Vec<[i32; 3]>,
+    /// The ticks counted (`advance`), for the parts' flicker scores.
+    now: u64,
 }
 
 const NONE: u32 = u32::MAX;
@@ -451,6 +469,19 @@ impl Kinetics {
 
     pub fn has_dirty(&self) -> bool {
         !self.dirty.is_empty()
+    }
+
+    /// One tick went by: every part's flicker score falls by one (`KineticBlockEntity.tick`).
+    pub fn advance(&mut self) {
+        self.now += 1;
+    }
+
+    /// The flicker score of the part at `pos` (`getFlickerScore`).
+    pub fn flicker_score(&self, pos: [i32; 3]) -> i32 {
+        self.at
+            .get(&pos)
+            .and_then(|s| (s[0] != NONE).then(|| self.nodes[s[0] as usize].flicker(self.now)))
+            .unwrap_or(0)
     }
 
     /// Adds or replaces the part at `pos` (`sub` 1 is a split shaft's second half).
@@ -482,6 +513,8 @@ impl Kinetics {
             live: true,
             fresh: true,
             seq: None,
+            flicker: 0,
+            flicker_at: 0,
         };
         let id = match self.free.pop() {
             Some(id) => {
@@ -906,6 +939,28 @@ impl Kinetics {
                 .map(|&id| self.nodes[id as usize].part.impact * theoretical(self, id).abs())
                 .sum();
             let overstressed = stress > capacity;
+            // `RotationPropagator.propagateNewSource`: speed reaching a part whose speed changed
+            // too often (`getFlickerScore() > MAX_FLICKER_SCORE`, its tally counting this change)
+            // breaks it, the nearest to the change first. A split shaft's far half is the same
+            // block entity as its near one in Create, which keeps one tally for both.
+            let victim = self.queue.iter().copied().find(|&id| {
+                let n = &self.nodes[id as usize];
+                let turned = theoretical(self, id);
+                if n.sub != 0 || turned == 0.0 || (n.theoretical == turned && !n.fresh) {
+                    return false;
+                }
+                let shown = if overstressed { 0.0 } else { turned };
+                n.flicker(self.now) + flicker_gain(n.speed, shown) > MAX_FLICKER_SCORE
+            });
+            if let Some(victim) = victim {
+                let pos = self.nodes[victim as usize].pos;
+                events.push(Event::Break { pos });
+                for &id in &self.queue {
+                    done.remove(&id);
+                }
+                self.remove(pos);
+                continue;
+            }
             // `copySequenceContextFrom`: a side turned by a generator holding a context (a valve
             // handle in use) takes it, and so does the side a sequenced gearshift turns; the value
             // goes as one per RPM of the holder's turned speed (`SequenceContext.fromGearshift`).
@@ -959,6 +1014,11 @@ impl Kinetics {
                     || n.overstressed != overstressed
                     || n.seq != seq
                 {
+                    let gain = flicker_gain(n.speed, shown);
+                    if gain != 0 && n.sub == 0 {
+                        n.flicker = n.flicker(self.now) + gain;
+                        n.flicker_at = self.now;
+                    }
                     n.seq = seq;
                     n.fresh = false;
                     n.speed = shown;
@@ -985,6 +1045,14 @@ impl Kinetics {
             b
         }
     }
+}
+
+/// What `KineticBlockEntity.onSpeedChanged` adds to a part's flicker tally when its speed goes
+/// from `before` to `after`: 5 when it starts, stops or turns round.
+fn flicker_gain(before: f32, after: f32) -> i32 {
+    let from_or_to_zero = (before == 0.0) != (after == 0.0);
+    let swap = !from_or_to_zero && before != 0.0 && before.signum() != after.signum();
+    if from_or_to_zero || swap { 5 } else { 0 }
 }
 
 /// A coupling found while solving: `from` holds the setting (the controller, a split shaft's
@@ -1241,6 +1309,55 @@ mod tests {
         solve(&mut k);
         assert_eq!(k.speed([1, 0, 0], 0), Some(0.0), "a powered clutch cuts");
         assert_eq!(k.speed([0, 0, 0], 0), Some(12.0));
+    }
+
+    #[test]
+    fn a_clutch_on_a_fast_clock_breaks_what_it_drives() {
+        // A clutch toggled every tick: the shaft it drives starts and stops each tick, 5 more
+        // each time and one less each tick, until speed reaching it past 128 breaks it.
+        let clutch = |k: &mut Kinetics, on: bool| {
+            let part = Part {
+                link: Some(if on { 0.0 } else { 1.0 }),
+                ..Part::half(Dir::East)
+            };
+            k.set([0, 0, 0], 1, part);
+        };
+        let mut k = Kinetics::new();
+        k.set([-1, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([0, 0, 0], 0, Part::half(Dir::West));
+        clutch(&mut k, false);
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        k.advance();
+        solve(&mut k);
+        let mut broke = None;
+        for t in 1..200 {
+            k.advance();
+            clutch(&mut k, t % 2 == 1);
+            let e = solve(&mut k);
+            if e.contains(&Event::Break { pos: [1, 0, 0] }) {
+                broke = Some(t);
+                break;
+            }
+        }
+        // 4 a tick net (5 a change, 1 a tick): past 128 at the start on tick 32.
+        let t = broke.expect("the driven shaft breaks");
+        assert!((30..34).contains(&t), "broke at {t}");
+        assert_eq!(k.speed([0, 0, 0], 0), Some(16.0), "the clutch stays");
+        // Toggled every 20 ticks it never breaks: the tally falls back to 0 between.
+        let mut k = Kinetics::new();
+        k.set([-1, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([0, 0, 0], 0, Part::half(Dir::West));
+        clutch(&mut k, false);
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        for t in 0..2000 {
+            k.advance();
+            if t % 20 == 0 {
+                clutch(&mut k, t % 40 == 0);
+            }
+            let e = solve(&mut k);
+            assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })));
+        }
+        assert!(k.flicker_score([1, 0, 0]) <= 5);
     }
 
     #[test]

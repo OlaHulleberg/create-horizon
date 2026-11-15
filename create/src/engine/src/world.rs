@@ -1944,6 +1944,7 @@ impl CreateWorld {
     #[inline]
     pub fn tick(&mut self, dim: usize, events: &mut Vec<Event>) -> SolveStats {
         let d = &mut self.dims[dim];
+        d.kinetics.advance();
         if !d.kinetics.has_dirty() {
             return SolveStats::default();
         }
