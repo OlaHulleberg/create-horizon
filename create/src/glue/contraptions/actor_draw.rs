@@ -53,26 +53,144 @@ const UP: [f32; 3] = [0.0, 1.0, 0.0];
 const EAST: [f32; 3] = [1.0, 0.0, 0.0];
 const SOUTH: [f32; 3] = [0.0, 0.0, 1.0];
 
-/// Draws partial `name` as written (its `up` state).
-fn partial(draw: &mut dyn BlockEntityDrawContext, name: &str) {
-    if let Some(key) = states::partial(name) {
-        draw.block(key, &[("facing", "up")]);
+/// Where an actor's parts go: a block entity's draw (`Drawing`), or the poses of displays
+/// (`Poses`), with a pose stack as `PoseStack`'s.
+pub trait Parts {
+    fn push(&mut self);
+    fn pop(&mut self);
+    fn translate(&mut self, by: [f32; 3]);
+    /// Turns what comes next `degrees` about `axis` through `pivot` (counterclockwise seen from
+    /// the axis' positive end).
+    fn rotate_about(&mut self, axis: [f32; 3], degrees: f32, pivot: [f32; 3]);
+    /// Partial `name` (`part_*`) in its state facing `facing`.
+    fn part(&mut self, name: &str, facing: &'static str);
+}
+
+/// A block entity's draw as a `Parts`.
+pub struct Drawing<'a>(pub &'a mut dyn BlockEntityDrawContext);
+
+impl Parts for Drawing<'_> {
+    fn push(&mut self) {
+        self.0.push();
+    }
+    fn pop(&mut self) {
+        self.0.pop();
+    }
+    fn translate(&mut self, by: [f32; 3]) {
+        self.0.translate(by);
+    }
+    fn rotate_about(&mut self, axis: [f32; 3], degrees: f32, pivot: [f32; 3]) {
+        self.0.rotate_about(axis, degrees, pivot);
+    }
+    fn part(&mut self, name: &str, facing: &'static str) {
+        if let Some(key) = states::partial(name) {
+            self.0.block(key, &[("facing", facing)]);
+        }
+    }
+}
+
+/// A rigid pose: a model point `v` goes to `t + q·v` (`q` a quaternion `[x, y, z, w]`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pose {
+    pub q: [f64; 4],
+    pub t: [f64; 3],
+}
+
+impl Pose {
+    pub const IDENTITY: Pose = Pose {
+        q: [0.0, 0.0, 0.0, 1.0],
+        t: [0.0; 3],
+    };
+}
+
+/// The quaternion of `degrees` about `axis` (a unit vector).
+pub fn quat(axis: [f64; 3], degrees: f64) -> [f64; 4] {
+    let (s, c) = (degrees.to_radians() / 2.0).sin_cos();
+    [axis[0] * s, axis[1] * s, axis[2] * s, c]
+}
+
+/// `a·b`: `b` first, then `a`.
+pub fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    let [ax, ay, az, aw] = a;
+    let [bx, by, bz, bw] = b;
+    [
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ]
+}
+
+/// `v` turned by `q`.
+pub fn quat_apply(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+    let p = quat_mul(
+        quat_mul(q, [v[0], v[1], v[2], 0.0]),
+        [-q[0], -q[1], -q[2], q[3]],
+    );
+    [p[0], p[1], p[2]]
+}
+
+/// The poses of an actor's parts, for displays: each part's name, facing state and pose in its
+/// block (from the block's corner).
+#[derive(Default)]
+pub struct Poses {
+    stack: Vec<Pose>,
+    now: Option<Pose>,
+    pub out: Vec<(String, &'static str, Pose)>,
+}
+
+impl Poses {
+    fn now(&self) -> Pose {
+        self.now.unwrap_or(Pose::IDENTITY)
+    }
+}
+
+impl Parts for Poses {
+    fn push(&mut self) {
+        let now = self.now();
+        self.stack.push(now);
+    }
+    fn pop(&mut self) {
+        self.now = self.stack.pop();
+    }
+    fn translate(&mut self, by: [f32; 3]) {
+        let p = self.now();
+        let d = quat_apply(p.q, by.map(f64::from));
+        self.now = Some(Pose {
+            q: p.q,
+            t: [0, 1, 2].map(|i| p.t[i] + d[i]),
+        });
+    }
+    fn rotate_about(&mut self, axis: [f32; 3], degrees: f32, pivot: [f32; 3]) {
+        let p = self.now();
+        let r = quat(axis.map(f64::from), f64::from(degrees));
+        let pivot = pivot.map(f64::from);
+        let turned = quat_apply(r, pivot);
+        let d = quat_apply(p.q, [0, 1, 2].map(|i| pivot[i] - turned[i]));
+        self.now = Some(Pose {
+            q: quat_mul(p.q, r),
+            t: [0, 1, 2].map(|i| p.t[i] + d[i]),
+        });
+    }
+    fn part(&mut self, name: &str, facing: &'static str) {
+        let now = self.now();
+        self.out.push((name.to_owned(), facing, now));
     }
 }
 
 /// `HarvesterActorVisual.beginFrame` (and `HarvesterRenderer` at rest): the blade turned to the
 /// harvester's facing and rolled `roll` degrees about its pivot.
-fn draw_blade(draw: &mut dyn BlockEntityDrawContext, facing: Dir, roll: f32) {
+fn draw_blade(draw: &mut dyn Parts, facing: Dir, roll: f32) {
     draw.push();
     draw.rotate_about(UP, horizontal_angle(facing), CENTRE);
     draw.rotate_about(EAST, roll, [0.5, 0.375, 0.5625]);
-    partial(draw, "part_harvester_blade");
+    draw.part("part_harvester_blade", "up");
     draw.pop();
 }
 
 /// `RollerActorVisual.beginFrame` (and `RollerRenderer` at rest): the wheel in front of the
 /// roller, a quarter block down, rolled `roll` degrees; the frame turned to its back.
-fn draw_roller(draw: &mut dyn BlockEntityDrawContext, facing: Dir, roll: f32) {
+fn draw_roller(draw: &mut dyn Parts, facing: Dir, roll: f32) {
     let angle = horizontal_angle(facing);
     draw.push();
     draw.rotate_about(UP, angle, CENTRE);
@@ -80,23 +198,17 @@ fn draw_roller(draw: &mut dyn BlockEntityDrawContext, facing: Dir, roll: f32) {
     draw.rotate_about(EAST, roll, [0.0; 3]);
     draw.translate([0.0, -0.5, 0.5]);
     draw.rotate_about(UP, 90.0, [0.0; 3]);
-    partial(draw, "part_roller_wheel");
+    draw.part("part_roller_wheel", "up");
     draw.pop();
     draw.push();
     draw.rotate_about(UP, angle + 180.0, CENTRE);
-    partial(draw, "part_roller_frame");
+    draw.part("part_roller_frame", "up");
     draw.pop();
 }
 
 /// `PIInstance.beginFrame`: the middle (lit: powered) and top turned to the interface's facing,
 /// out by `progress`.
-fn draw_interface(
-    draw: &mut dyn BlockEntityDrawContext,
-    fluid: bool,
-    facing: Dir,
-    lit: bool,
-    progress: f32,
-) {
+fn draw_interface(draw: &mut dyn Parts, fluid: bool, facing: Dir, lit: bool, progress: f32) {
     let kind = if fluid { "pfi" } else { "psi" };
     let x = match facing {
         Dir::Up => 0.0,
@@ -116,9 +228,137 @@ fn draw_interface(
         draw.rotate_about(UP, horizontal_angle(facing), CENTRE);
         draw.rotate_about(EAST, x, CENTRE);
         draw.translate([0.0, out, 0.0]);
-        partial(draw, &name);
+        draw.part(&name, "up");
         draw.pop();
     }
+}
+
+/// `SawRenderer.renderInContraption`'s blade (`running`: the active one), as the saw's own
+/// renderer places it: its partial facing the saw's way, a vertical saw's turned a quarter when
+/// its shaft runs along the first axis.
+fn draw_saw_blade(draw: &mut dyn Parts, facing: Dir, along_first: bool, running: bool) {
+    let vertical = facing.axis() == Axis::Y;
+    let name = format!(
+        "part_saw_blade_{}_{}",
+        if vertical { "vertical" } else { "horizontal" },
+        if running { "active" } else { "inactive" }
+    );
+    draw.push();
+    if vertical && along_first {
+        draw.rotate_about(UP, 90.0, CENTRE);
+    }
+    draw.part(&name, dir_name(facing));
+    draw.pop();
+}
+
+/// `DrillActorVisual.beginFrame`: the head facing the drill's way, turned `roll` degrees about it.
+fn draw_drill_head(draw: &mut dyn Parts, facing: Dir, roll: f32) {
+    draw.push();
+    draw.rotate_about(facing.offset().map(|v| v as f32), roll, CENTRE);
+    draw.part("part_drill_head", dir_name(facing));
+    draw.pop();
+}
+
+/// What an actor's moving parts are doing (`ActorVisual`s' state): a drill head's, harvester
+/// blade's or roller wheel's turn, a deployer's stroke and fist, a saw's running blade, an
+/// interface's reach and light.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Doing {
+    pub roll: f32,
+    pub stroke: f32,
+    pub punch: bool,
+    pub running: bool,
+    pub reach: f32,
+    pub lit: bool,
+}
+
+/// Draws actor `block`'s moving parts (state facts `info`) doing `d`, under its block's pose.
+pub fn actor_parts(draw: &mut dyn Parts, block: Block, info: &StateInfo, d: &Doing) {
+    let Some(facing) = info.facing else {
+        return;
+    };
+    match block {
+        Block::MechanicalDrill => draw_drill_head(draw, facing, d.roll),
+        Block::MechanicalHarvester => draw_blade(draw, facing, d.roll),
+        Block::MechanicalRoller => draw_roller(draw, facing, d.roll),
+        Block::MechanicalSaw => draw_saw_blade(draw, facing, info.along_first, d.running),
+        Block::Deployer => draw_deployer(draw, facing, info.along_first, d.punch, d.stroke),
+        Block::PortableStorageInterface | Block::PortableFluidInterface => draw_interface(
+            draw,
+            block == Block::PortableFluidInterface,
+            facing,
+            d.lit,
+            d.reach,
+        ),
+        _ => {}
+    }
+}
+
+/// `MovementContext.getAnimationSpeed` on a client.
+fn client_animation_speed(relative: [f64; 3], disabled: bool, stalled: bool) -> f32 {
+    if disabled {
+        0.0
+    } else if stalled {
+        700.0
+    } else {
+        actors::animation_speed(relative, false)
+    }
+}
+
+/// The degrees a tick actor `block` facing `facing` turns its head, blade or wheel, moving
+/// `relative` blocks a tick in its structure's frame (`DrillActorVisual.tick`: the animation speed
+/// over 20; `HarvesterActorVisual.tick`: the arc over the blade's or wheel's radius, whole
+/// degrees, a quarter more), none while off or moving backwards (a stalled harvester or roller
+/// neither).
+pub fn roll_rate(
+    block: Block,
+    facing: Dir,
+    relative: [f64; 3],
+    disabled: bool,
+    stalled: bool,
+) -> f32 {
+    if disabled || actors::pointing_towards(relative, facing.opposite()) {
+        return 0.0;
+    }
+    match block {
+        Block::MechanicalDrill => client_animation_speed(relative, disabled, stalled) / 20.0,
+        Block::MechanicalHarvester | Block::MechanicalRoller if !stalled => {
+            let radius = if block == Block::MechanicalRoller {
+                16.5
+            } else {
+                6.5
+            };
+            let length = relative.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let deg = (length * 16.0 / radius).to_degrees() as f32;
+            ((deg * 3000.0) as i32 / 3000) as f32 * 1.25
+        }
+        _ => 0.0,
+    }
+}
+
+/// `SawRenderer.renderInContraption`'s `shouldAnimate`: a saw cuts while stalled facing sideways
+/// in the world (`horizontal`), or while moving and not backwards.
+pub fn saw_runs(
+    facing: Dir,
+    relative: [f64; 3],
+    horizontal: bool,
+    disabled: bool,
+    stalled: bool,
+) -> bool {
+    let backwards = actors::pointing_towards(relative, facing.opposite());
+    let moving = client_animation_speed(relative, disabled, stalled) != 0.0;
+    (stalled && horizontal) || (!stalled && !backwards && moving)
+}
+
+/// `DeployerActorVisual.deploymentDistance` while moving: out half a block at a block's centre,
+/// in as it passes between blocks; `world` is where it acts (its centre two blocks out).
+pub fn deployer_stroke(world: [f64; 3]) -> f32 {
+    let centre = world.map(|v| v.floor() + 0.5);
+    let d = (0..3)
+        .map(|i| (world[i] - centre[i]).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    (0.5 - d.clamp(0.0, 1.0)) as f32
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -285,8 +525,8 @@ impl BlockEntityPart for PlacedActors {
         };
         let draw = &mut *event.draw;
         match block {
-            Block::MechanicalHarvester => draw_blade(draw, facing, 0.0),
-            Block::MechanicalRoller => draw_roller(draw, facing, 0.0),
+            Block::MechanicalHarvester => draw_blade(&mut Drawing(draw), facing, 0.0),
+            Block::MechanicalRoller => draw_roller(&mut Drawing(draw), facing, 0.0),
             Block::PortableStorageInterface | Block::PortableFluidInterface => {
                 let fluid = block == Block::PortableFluidInterface;
                 let (now, before, distance) =
@@ -295,7 +535,8 @@ impl BlockEntityPart for PlacedActors {
                 let p = timer_progress(before)
                     + (timer_progress(now) - timer_progress(before)) * draw.partial();
                 let lit = (ANIMATION..=TIMEOUT + ANIMATION).contains(&now);
-                draw_interface(draw, fluid, facing, lit, p * p * distance / 2.0);
+                let reach = p * p * distance / 2.0;
+                draw_interface(&mut Drawing(draw), fluid, facing, lit, reach);
             }
             _ => {}
         }
@@ -553,139 +794,71 @@ pub fn draw_moving(
     };
     let view = frame.view;
     let o = facing.offset().map(f64::from);
-    let reach = kind.reach();
     // Where it acts in the structure, from the anchor's corner.
-    let point = [0, 1, 2].map(|i| f64::from(local[i]) + 0.5 + o[i] * reach);
+    let point = [0, 1, 2].map(|i| f64::from(local[i]) + 0.5 + o[i] * kind.reach());
     // `relativeMotion` (in the structure's own frame) and the point in the world, from the
-    // anchor's corner.
-    let (relative, world) = match frame.motion {
+    // anchor's corner; the way it faces in the world.
+    let (relative, world, world_facing) = match frame.motion {
         Motion::Glide { shift, velocity } => (
             velocity.map(f64::from),
             [0, 1, 2].map(|i| point[i] + f64::from(shift[i])),
+            facing,
         ),
         Motion::Turn { axis, angle, rate } => {
             let r = [0, 1, 2].map(|i| point[i] - 0.5);
             let w = f64::from(rate).to_radians();
             let v = cross(axis_of(axis), r).map(|c| c * w);
             let turned = actors::turn_vec(r, axis, f64::from(angle));
-            (v, [0, 1, 2].map(|i| turned[i] + 0.5))
+            (
+                v,
+                [0, 1, 2].map(|i| turned[i] + 0.5),
+                actors::turned_facing(facing, axis, f64::from(angle)),
+            )
         }
     };
-    let speed_len = relative.iter().map(|v| v * v).sum::<f64>().sqrt();
     let disabled = view.off.contains(&local);
-    // `MovementContext.getAnimationSpeed` on a client.
-    let animation_speed = if disabled {
-        0.0
-    } else if view.stalled {
-        700.0
-    } else {
-        actors::animation_speed(relative, false)
+    let stalled = view.stalled;
+    let mut d = Doing {
+        punch: view.punch.contains(&local),
+        lit: true,
+        ..Doing::default()
     };
-    let backwards = actors::pointing_towards(relative, facing.opposite());
     match block {
-        Block::MechanicalDrill => {
-            // `DrillActorVisual`: `deg / 20` a tick while not off or moving backwards.
-            let rate = if disabled || backwards {
-                0.0
-            } else {
-                animation_speed / 20.0
-            };
-            let angle = roll(frame, local, rate);
-            let Some(head) = states::partial("part_drill_head") else {
-                return;
-            };
-            draw.push();
-            draw.rotate_about(facing.offset().map(|v| v as f32), angle, CENTRE);
-            draw.block(head, &[("facing", dir_name(facing))]);
-            draw.pop();
-        }
-        Block::MechanicalHarvester | Block::MechanicalRoller => {
-            // `HarvesterActorVisual.tick`: the arc travelled over the blade's or wheel's radius,
-            // whole degrees, a quarter more.
-            let radius = if block == Block::MechanicalRoller {
-                16.5
-            } else {
-                6.5
-            };
-            let rate = if view.stalled || disabled || backwards {
-                0.0
-            } else {
-                let deg = (speed_len * 16.0 / radius).to_degrees() as f32;
-                ((deg * 3000.0) as i32 / 3000) as f32 * 1.25
-            };
-            let angle = roll(frame, local, rate);
-            if block == Block::MechanicalRoller {
-                draw_roller(draw, facing, angle);
-            } else {
-                draw_blade(draw, facing, angle);
-            }
+        Block::MechanicalDrill | Block::MechanicalHarvester | Block::MechanicalRoller => {
+            d.roll = roll(
+                frame,
+                local,
+                roll_rate(block, facing, relative, disabled, stalled),
+            );
         }
         Block::MechanicalSaw => {
-            // `SawRenderer.renderInContraption`: the running blade while it cuts.
-            let world_facing = match frame.motion {
-                Motion::Turn { axis, angle, .. } => {
-                    actors::turned_facing(facing, axis, f64::from(angle))
-                }
-                Motion::Glide { .. } => facing,
-            };
             let horizontal = world_facing.axis() != Axis::Y;
-            let moving = animation_speed != 0.0;
-            let animate = (view.stalled && horizontal) || (!view.stalled && !backwards && moving);
-            let kind = if animate { "active" } else { "inactive" };
-            crate::glue::processing::draw_saw_blade_kind(draw, info, kind);
+            d.running = saw_runs(facing, relative, horizontal, disabled, stalled);
         }
         Block::Deployer => {
-            // `DeployerActorVisual.deploymentDistance`.
-            let factor = if disabled {
+            d.stroke = if disabled {
                 0.0
-            } else if view.stalled {
+            } else if stalled {
                 ((frame.now * 0.5).sin() * 0.25 + 0.25) as f32
             } else {
-                let centre = world.map(|v| v.floor() + 0.5);
-                let d = (0..3)
-                    .map(|i| (world[i] - centre[i]).powi(2))
-                    .sum::<f64>()
-                    .sqrt();
-                (0.5 - d.clamp(0.0, 1.0)) as f32
+                deployer_stroke(world)
             };
-            draw_deployer(
-                draw,
-                facing,
-                info.along_first,
-                view.punch.contains(&local),
-                factor,
-            );
         }
         Block::PortableStorageInterface | Block::PortableFluidInterface => {
-            let (value, lit) = view.chases.iter().find(|c| c.0 == local).map_or(
-                (0.0, true),
-                |&(_, from, to, since)| {
-                    let elapsed = (frame.now - since as f64).max(0.0) as f32;
-                    let value = approach(from, to, 0.25 * elapsed);
-                    (value, value == to)
-                },
-            );
-            draw_interface(
-                draw,
-                block == Block::PortableFluidInterface,
-                facing,
-                lit,
-                value,
-            );
+            if let Some(&(_, from, to, since)) = view.chases.iter().find(|c| c.0 == local) {
+                let elapsed = (frame.now - since as f64).max(0.0) as f32;
+                d.reach = approach(from, to, 0.25 * elapsed);
+                d.lit = d.reach == to;
+            }
         }
         _ => {}
     }
+    actor_parts(&mut Drawing(draw), block, info, &d);
 }
 
 /// `DeployerActorVisual`: the pole (turned a quarter about the facing when its shaft runs across
 /// it) and the hand (`getHandPose`: a fist when it punches), out `factor` along the facing.
-fn draw_deployer(
-    draw: &mut dyn BlockEntityDrawContext,
-    facing: Dir,
-    along_first: bool,
-    punch: bool,
-    factor: f32,
-) {
+fn draw_deployer(draw: &mut dyn Parts, facing: Dir, along_first: bool, punch: bool, factor: f32) {
     let y = horizontal_angle(facing);
     let x = match facing {
         Dir::Up => 270.0,
@@ -704,15 +877,12 @@ fn draw_deployer(
     };
     let o = facing.offset().map(|v| v as f32 * factor);
     for (name, roll) in [("part_deployer_pole", z), (hand, 0.0)] {
-        let Some(key) = states::partial(name) else {
-            continue;
-        };
         draw.push();
         draw.translate(o);
         draw.rotate_about(UP, y, CENTRE);
         draw.rotate_about(EAST, x, CENTRE);
         draw.rotate_about(SOUTH, roll, CENTRE);
-        draw.block(key, &[("facing", "south")]);
+        draw.part(name, "south");
         draw.pop();
     }
 }
@@ -737,6 +907,23 @@ mod tests {
         assert_eq!(timer_progress(TIMEOUT + ANIMATION), 1.0);
         assert_eq!(timer_progress(2), 0.5);
         assert_eq!(timer_progress(0), 0.0);
+    }
+
+    #[test]
+    fn a_pose_turns_about_its_pivot_and_moves_in_its_turned_frame() {
+        let mut p = Poses::default();
+        p.rotate_about(UP, 90.0, CENTRE);
+        p.translate([0.0, 0.0, 1.0]);
+        p.part("x", "up");
+        let pose = p.out[0].2;
+        // The corner (0, 0, 0) turned a quarter about the centre goes to (0, 0, 1); +z then
+        // points to +x.
+        let at = |v: [f64; 3]| {
+            let r = quat_apply(pose.q, v);
+            [0, 1, 2].map(|i| ((pose.t[i] + r[i]) * 1e6).round() / 1e6)
+        };
+        assert_eq!(at([0.0; 3]), [1.0, 0.0, 1.0]);
+        assert_eq!(at([0.0, 0.0, 1.0]), [2.0, 0.0, 1.0]);
     }
 
     #[test]

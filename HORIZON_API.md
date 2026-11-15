@@ -206,10 +206,7 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   mods' and vanilla block entities their saved data, but the state the engine keeps per block for other Create
   blocks (a creative motor's speed, a blaze burner's fuel, a basin's fluids, a redstone link's frequency, a
   nixie tube's text, a smart chute's filter) is not carried; what block entities hold is not drawn on a moving
-  structure (a depot's item, a tank's fluid, a deployer's held item and its pole's stroke); the harvester's blade,
-  the roller's wheel and frame and the portable interfaces' moving parts (`HarvesterRenderer`, `RollerRenderer`,
-  `PortableStorageInterfaceRenderer`) have no partial blocks yet, so they are drawn neither placed nor moving;
-  actor heads on a moving structure are drawn at rest; an elevator contact's door control
+  structure (a depot's item, a tank's fluid, a deployer's held item); an elevator contact's door control
   (`DoorControlBehaviour`) has no value box: elevators open their doors on every side.
 - Fluids: potion fluids keep registered potions only (custom effects and colours are lost: the engine's
   `tank::Fluid` is a fixed set of ids saved and sent as one byte, which would need a world-saved table of

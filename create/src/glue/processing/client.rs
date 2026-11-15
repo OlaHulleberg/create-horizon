@@ -1017,6 +1017,10 @@ fn draw_saw_items(
 /// `SawRenderer.renderBlade`: the blade turned to the saw's facing, its texture running forward,
 /// backward or still with the speed's sign; facing up or down along x, turned a quarter.
 fn draw_saw_blade(draw: &mut dyn BlockEntityDrawContext, info: &StateInfo, speed: f32) {
+    let Some(facing) = info.facing else {
+        return;
+    };
+    let vertical = facing.axis() == create_engine::kinetics::Axis::Y;
     let kind = if speed > 0.0 {
         "active"
     } else if speed < 0.0 {
@@ -1024,16 +1028,6 @@ fn draw_saw_blade(draw: &mut dyn BlockEntityDrawContext, info: &StateInfo, speed
     } else {
         "inactive"
     };
-    draw_saw_blade_kind(draw, info, kind);
-}
-
-/// The saw's blade model `kind` (`active`, `reversed`, `inactive`) as `draw_saw_blade` places
-/// it; a saw on a moving structure draws its own kind (`SawRenderer.renderInContraption`).
-pub fn draw_saw_blade_kind(draw: &mut dyn BlockEntityDrawContext, info: &StateInfo, kind: &str) {
-    let Some(facing) = info.facing else {
-        return;
-    };
-    let vertical = facing.axis() == create_engine::kinetics::Axis::Y;
     let name = format!(
         "part_saw_blade_{}_{kind}",
         if vertical { "vertical" } else { "horizontal" }

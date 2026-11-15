@@ -46,7 +46,6 @@ mod application;
 pub(crate) mod basin;
 pub(crate) mod burner_draw;
 mod client;
-pub(crate) use client::draw_saw_blade_kind;
 mod containers;
 mod crafter;
 mod crusher;
