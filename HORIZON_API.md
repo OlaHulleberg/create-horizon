@@ -288,6 +288,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   overlay doesn't cycle the tooltips of what it sells (`renderComponentTooltip`), and a seated keeper's
   overlay of a shopping list shows for any list (Create's client also matches the ticker's network, which its
   client doesn't have here).
+- Contraptions: contraption controls on a bearing's structure are not carried (their setting doesn't turn its
+  actors off, `ContraptionControlsMovement.startMoving`), and a bearing's glue stays in the world while it turns,
+  going back turned with it; an elevator's contraption controls choose no floor (`ElevatorControlsHandler`, the
+  floor list and `ElevatorTargetFloorPacket`).
 - Equipment: a haunted bell's soul pulse showing where mobs may spawn (`HauntedBellPulser`, `SoulPulseEffect`)
   and the soul particles and sounds after it rings.
 - Trains: a track's paving with an off-hand block other than metal girders (`TrackPaver`: slabs, full
