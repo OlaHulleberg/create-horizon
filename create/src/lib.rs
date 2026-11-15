@@ -221,6 +221,14 @@ impl Hooks for Create {
         until_cancel(|s| s.left_click_block(host, event))
     }
 
+    fn player_pick_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerPickItemEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.player_pick_item(host, event))
+    }
+
     fn break_block(&self, host: &mut dyn ServerHost, event: &mut BreakBlockEvent<'_>) -> Flow {
         until_cancel(|s| s.break_block(host, event))
     }
@@ -366,6 +374,19 @@ impl Hooks for Create {
         for s in SUBSYSTEMS {
             s.movement_input(host, event);
         }
+    }
+
+    fn living_entity_use_item_tick(
+        &self,
+        host: HostSide,
+        event: &mut mod_api::LivingEntityUseItemTickEvent<'_>,
+    ) -> Flow {
+        if let HostSide::Server(host) = host {
+            for s in SUBSYSTEMS {
+                s.use_item_tick(&mut *host, event);
+            }
+        }
+        Flow::Continue
     }
 
     fn living_entity_use_item_finish(

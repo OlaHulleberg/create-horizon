@@ -206,6 +206,16 @@ impl Subsystem for Processing {
         toolbelt::chunk_unload(dim, chunk);
     }
 
+    /// A toolbox's block replaced by anything but a toolbox (`ToolboxBlock.onRemove` removing
+    /// its block entity): its compartment kinds and id go with it.
+    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        let toolbox =
+            |s: u32| super::packages::block_of(s).is_some_and(create_engine::dye::is_toolbox);
+        if toolbox(old) && !toolbox(new) {
+            toolbelt::removed(dim, pos);
+        }
+    }
+
     /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
     /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
@@ -320,6 +330,15 @@ impl Subsystem for Processing {
         event: &mut mod_api::LeftClickBlockEvent,
     ) -> mod_api::Flow {
         toolbelt::left_click(host, event.pos)
+    }
+
+    /// `ToolboxHandlerClient.onPickItem`: the picked item from a toolbox in reach.
+    fn player_pick_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerPickItemEvent<'_>,
+    ) -> mod_api::Flow {
+        toolbelt::pick_item(host, event)
     }
 
     /// A player breaking a toolbox: its contents go with its drop.
