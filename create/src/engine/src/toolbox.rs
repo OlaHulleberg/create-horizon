@@ -37,9 +37,78 @@ pub fn slot_position(slot: usize) -> Option<[f32; 2]> {
     Some([X[compartment], Y[compartment]])
 }
 
+/// `CEquipment.toolboxRange`: how far a player reaches toolboxes from (10 blocks).
+pub const RANGE: f64 = 10.0;
+/// `ToolboxHandler.validationTimer`: equipped slots are checked against their toolbox this often.
+pub const VALIDATION: u64 = 20;
+/// `RadialToolboxMenu`'s centre (unequip) and deposit choices.
+pub const UNEQUIP: i32 = -5;
+pub const DEPOSIT: i32 = -7;
+
+/// `ToolboxHandler.distance`: the squared distance from a player at `at` to the toolbox at
+/// `pos` (its middle, at its bottom).
+pub fn distance(at: [f64; 3], pos: [i32; 3]) -> f64 {
+    let d = [
+        at[0] - (f64::from(pos[0]) + 0.5),
+        at[1] - f64::from(pos[1]),
+        at[2] - (f64::from(pos[2]) + 0.5),
+    ];
+    d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+}
+
+/// `ToolboxHandler.withinRange`.
+pub fn in_range(at: [f64; 3], pos: [i32; 3]) -> bool {
+    distance(at, pos) < RANGE * RANGE
+}
+
+/// `tickPlayers`: an equipped hotbar slot is kept at half its stack size (rounded up).
+pub fn target_amount(max_stack: u32) -> u32 {
+    max_stack.div_ceil(2)
+}
+
+/// `RadialToolboxMenu.renderWindow`: the ring slot under the mouse, `d` from the screen's
+/// middle (none within 5 pixels or 100 and more away). Slot 0 is up and to the left of the
+/// top, going clockwise.
+pub fn hovered(d: [f32; 2]) -> Option<usize> {
+    let distance = d[0] * d[0] + d[1] * d[1];
+    if !(distance > 25.0 && distance < 10000.0) {
+        return None;
+    }
+    let deg = d[1].atan2(d[0]).to_degrees();
+    let v = (deg + 360.0 + 180.0 - 22.5).floor() as i32;
+    Some((v.rem_euclid(360) / 45) as usize)
+}
+
+/// Where ring slot `slot` sits from the middle (`rotateZDegrees(slot * 45 - 45)`, 40 out).
+pub fn ring_offset(slot: usize, out: f32) -> [f32; 2] {
+    let a = ((slot as f32) * 45.0 - 45.0).to_radians();
+    // (0, -out) turned by `a`.
+    [out * a.sin(), -out * a.cos()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ring_counts_clockwise_from_the_top_left() {
+        // Up and left (-45 degrees from the top) is slot 0, the top 1, the right 3.
+        assert_eq!(hovered([-30.0, -30.0]), Some(0));
+        assert_eq!(hovered([0.0, -40.0]), Some(1));
+        assert_eq!(hovered([40.0, 0.0]), Some(3));
+        assert_eq!(hovered([0.0, 40.0]), Some(5));
+        assert_eq!(hovered([-40.0, 0.0]), Some(7));
+        assert_eq!(hovered([1.0, 1.0]), None);
+        assert_eq!(hovered([200.0, 0.0]), None);
+        for slot in 0..8 {
+            let o = ring_offset(slot, 40.0);
+            assert_eq!(hovered(o), Some(slot), "slot {slot} at {o:?}");
+        }
+        assert_eq!(target_amount(64), 32);
+        assert_eq!(target_amount(1), 1);
+        assert_eq!(target_amount(16), 8);
+        assert!(in_range([0.5, 0.0, 9.0], [0, 0, 0]) && !in_range([0.5, 0.0, 10.6], [0, 0, 0]));
+    }
 
     #[test]
     fn each_compartment_shows_its_first_stack_round_the_toolbox() {

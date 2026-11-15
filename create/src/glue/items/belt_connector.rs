@@ -142,7 +142,7 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
 /// (`switchToBlockState`, waterlogged in a water source; what can't be replaced, the shafts, is
 /// broken without drops first); an unbreakable block on the way stops it and takes every belt
 /// block laid away again.
-fn create_belts(lv: &mut ServerLevel<'_>, start: [i32; 3], end: [i32; 3]) {
+pub(crate) fn create_belts(lv: &mut ServerLevel<'_>, start: [i32; 3], end: [i32; 3]) {
     let at = bc::sound_at(start, end).map(|v| f64::from(v) + 0.5);
     lv.level.play_sound(
         &mut *lv.host,

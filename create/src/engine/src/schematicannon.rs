@@ -173,6 +173,74 @@ pub struct Entry {
     pub defer: bool,
     /// The other block a two-block state replaces, from it.
     pub other: Option<[i32; 3]>,
+    /// A belt segment's shape, printed with its connector (`launchBlockOrBelt`).
+    pub belt: Option<BeltPiece>,
+}
+
+/// A belt segment as the printer reads it: its facing (a horizontal offset), slope and part,
+/// and the shaft printed in its place when another end of the belt lays it
+/// (`stripBeltIfNotLast`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BeltPiece {
+    pub facing: [i32; 3],
+    pub slope: BeltSlope,
+    pub part: BeltPart,
+    pub shaft: u32,
+}
+
+/// `BeltSlope`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BeltSlope {
+    Horizontal,
+    Upward,
+    Downward,
+    Vertical,
+    Sideways,
+}
+
+/// `BeltPart` (the pulley is the belt's middle with a shaft through it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BeltPart {
+    Start,
+    Middle,
+    End,
+    Pulley,
+}
+
+impl BeltPiece {
+    /// `BeltBlock.nextSegmentPosition`: the next segment from `pos`, forward or back; none past
+    /// the belt's end that way.
+    pub fn next(&self, pos: [i32; 3], forward: bool) -> Option<[i32; 3]> {
+        let offset = if forward { 1 } else { -1 };
+        if (self.part == BeltPart::End && forward) || (self.part == BeltPart::Start && !forward) {
+            return None;
+        }
+        let positive = self.facing.iter().sum::<i32>() > 0;
+        if self.slope == BeltSlope::Vertical {
+            let up = if positive { offset } else { -offset };
+            return Some([pos[0], pos[1] + up, pos[2]]);
+        }
+        let mut p = [0, 1, 2].map(|i| pos[i] + self.facing[i] * offset);
+        match self.slope {
+            BeltSlope::Upward => p[1] += offset,
+            BeltSlope::Downward => p[1] -= offset,
+            _ => {}
+        }
+        Some(p)
+    }
+
+    /// `stripBeltIfNotLast`: whether this end lays the belt (the highest end of a slope, else
+    /// the end further along a positive facing).
+    pub fn is_last(&self) -> bool {
+        let start = self.part == BeltPart::Start;
+        let end = self.part == BeltPart::End;
+        let positive = self.facing.iter().sum::<i32>() > 0;
+        match self.slope {
+            BeltSlope::Downward => start,
+            BeltSlope::Upward => end,
+            _ => (positive && end) || (!positive && start),
+        }
+    }
 }
 
 /// `SchematicPrinter.PrintStage`.
@@ -199,6 +267,10 @@ pub struct Printer {
     pub current: [i32; 3],
     pub stage: Stage,
     pub deferred: VecDeque<[i32; 3]>,
+    /// The template's entities where they are placed, relative to the anchor
+    /// (`getEntityList().get(i).blockPosition()`), and the one printing (`printingEntityIndex`).
+    pub entities: Vec<[i32; 3]>,
+    pub entity_index: i32,
 }
 
 impl Printer {
@@ -235,6 +307,15 @@ impl Printer {
             current: [min[0] - 1, min[1], min[2]],
             stage: Stage::Blocks,
             deferred: VecDeque::new(),
+            entities: s
+                .entities
+                .iter()
+                .map(|e| {
+                    crate::schematic::transform_vec(e.pos, mirror, rotation, [0; 3])
+                        .map(|v| v.floor() as i32)
+                })
+                .collect(),
+            entity_index: -1,
         };
         for (pos, state) in placed {
             let i = p.index(pos).unwrap();
@@ -331,7 +412,15 @@ impl Printer {
                 }
             }
             if self.stage == Stage::Entities {
-                return false;
+                let next = self.entity_index + 1;
+                match self.entities.get(next as usize) {
+                    Some(&p) => {
+                        self.entity_index = next;
+                        self.current = p;
+                    }
+                    // The end of printing.
+                    None => return false,
+                }
             }
             if self.inside(self.current) {
                 return true;
@@ -398,10 +487,14 @@ pub fn flight_ticks(from: [i32; 3], to: [i32; 3]) -> u32 {
 
 /// A block on its way (`LaunchedItem.ForBlockState`): it lands at `land_at`, after
 /// `ticksRemaining` counts down from `total`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Flying {
     pub target: [i32; 3],
     pub state: u32,
+    /// A belt (`LaunchedItem.ForBelt`): the other end of the belt it lays from `target`.
+    pub belt_to: Option<[i32; 3]>,
+    /// An entity (`LaunchedItem.ForEntity`).
+    pub entity: Option<Box<PlacedEntity>>,
     pub total: u32,
     pub land_at: u64,
 }
@@ -419,8 +512,21 @@ pub enum Blueprint {
 pub struct Loaded {
     pub printer: Printer,
     pub entries: Vec<Entry>,
+    /// Each of the template's entities: what it costs, and what is spawned.
+    pub entities: Vec<(Requirement, PlacedEntity)>,
     /// What the level reads where nothing was placed (`Blocks.AIR`).
     pub air: Entry,
+}
+
+/// A template's entity as the printer launches it (`LaunchedItem.ForEntity`): its saved data,
+/// where it lands (the anchor added) and the template's turn and mirror.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedEntity {
+    pub nbt: crate::schematic::Nbt,
+    pub pos: [f64; 3],
+    pub block_pos: [i32; 3],
+    pub rotation: Rotation,
+    pub mirror: Mirror,
 }
 
 /// What a cannon reaches of the game.
@@ -447,6 +553,31 @@ pub trait CannonWorld {
     fn grab(&mut self, item: &str, count: u32, simulate: bool) -> bool;
     /// `LaunchedItem.place`.
     fn place(&mut self, pos: [i32; 3], state: u32);
+    /// `LaunchedItem.ForBelt.place`: a shaft at `pos`, then the belt from it to `to`.
+    fn place_belt(&mut self, pos: [i32; 3], state: u32, to: [i32; 3]) {
+        let _ = to;
+        self.place(pos, state);
+    }
+    /// Slot 2 (book input) holds something.
+    fn book_input(&mut self) -> bool {
+        false
+    }
+    /// Slot 3 (book output) is at its limit.
+    fn book_output_full(&mut self) -> bool {
+        false
+    }
+    /// One from slot 2 written as `checklist` into slot 3 (a book, or a clipboard from one).
+    fn write_checklist(&mut self, checklist: &Checklist) {
+        let _ = checklist;
+    }
+    /// What the inventories beside the cannon could give, item by item (`updateChecklist`).
+    fn inventory_items(&mut self) -> Vec<(String, u32)> {
+        Vec::new()
+    }
+    /// `LaunchedItem.ForEntity.place`: the entity spawned.
+    fn place_entity(&mut self, entity: &PlacedEntity) {
+        let _ = entity;
+    }
     /// A block launched (`playFiringSound`).
     fn fired(&mut self, now: u64) {
         let _ = now;
@@ -481,6 +612,70 @@ pub struct Cannon {
     /// The last attempt to load what slot 0 holds failed (retried when its slots change).
     pub init_failed: bool,
     has_blueprint: bool,
+    /// `bookPrintingProgress`, `dontUpdateChecklist` and the `checklist` it writes.
+    pub paper: f32,
+    dont_update_checklist: bool,
+    pub checklist: Checklist,
+    /// A checklist is being written (the cannon ticks every tick for it).
+    printing_paper: bool,
+}
+
+/// `MaterialChecklist`: the items the print still needs, in the order first required, and what
+/// the inventories beside the cannon hold of them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Checklist {
+    pub required: Vec<(String, u32)>,
+    pub gathered: Vec<(String, u32)>,
+    pub not_loaded: bool,
+}
+
+impl Checklist {
+    /// `require`: each consumed item counted.
+    pub fn require(&mut self, r: &Requirement) {
+        let Requirement::Items(items) = r else { return };
+        for (item, n) in items {
+            if item == "minecraft:air" {
+                continue;
+            }
+            match self.required.iter_mut().find(|(i, _)| i == item) {
+                Some(e) => e.1 += n,
+                None => self.required.push((item.clone(), *n)),
+            }
+        }
+    }
+
+    /// `collect`: a stack of a required item is counted as gathered.
+    pub fn collect(&mut self, item: &str, n: u32) {
+        if !self.required.iter().any(|(i, _)| i == item) {
+            return;
+        }
+        match self.gathered.iter_mut().find(|(i, _)| i == item) {
+            Some(e) => e.1 += n,
+            None => self.gathered.push((item.to_owned(), n)),
+        }
+    }
+
+    /// `createWrittenBook`'s order: the items still missing (with what is missing), then the
+    /// completed ones (with what was required), each sorted by `name` lowercased.
+    pub fn entries(&self, name: impl Fn(&str) -> String) -> (Vec<(String, u32)>, Vec<(String, u32)>) {
+        let mut keys: Vec<&(String, u32)> = self.required.iter().collect();
+        keys.sort_by_key(|(i, _)| name(i).to_lowercase());
+        let mut missing = Vec::new();
+        let mut done = Vec::new();
+        for (item, n) in keys {
+            let have = self
+                .gathered
+                .iter()
+                .find(|(i, _)| i == item)
+                .map_or(0, |e| e.1);
+            if *n > have {
+                missing.push((item.clone(), n - have));
+            } else {
+                done.push((item.clone(), *n));
+            }
+        }
+        (missing, done)
+    }
 }
 
 impl Cannon {
@@ -522,16 +717,38 @@ impl Cannon {
         while i < self.flying.len() {
             if self.flying[i].land_at <= now {
                 let f = self.flying.remove(i);
-                w.place(f.target, f.state);
+                match (&f.entity, f.belt_to) {
+                    (Some(e), _) => w.place_entity(e),
+                    (None, Some(to)) => w.place_belt(f.target, f.state, to),
+                    (None, None) => w.place(f.target, f.state),
+                }
             } else {
                 i += 1;
             }
         }
-        // tickPaperPrinter: a schematic in slot 0 is loaded (its checklist book isn't printed).
+        // tickPaperPrinter: a schematic in slot 0 is loaded; a book in slot 2 becomes its
+        // checklist in 20 ticks.
         let blueprint = w.blueprint();
         self.has_blueprint = blueprint != Blueprint::Empty;
-        if self.loaded.is_none() && self.has_blueprint {
-            self.initialize(&blueprint, w);
+        self.printing_paper = false;
+        if self.loaded.is_none() {
+            if self.has_blueprint {
+                self.initialize(&blueprint, w);
+            }
+        } else if !w.book_input() || w.book_output_full() {
+            self.paper = 0.0;
+            self.dont_update_checklist = false;
+        } else if self.paper >= 1.0 {
+            self.paper = 0.0;
+            if !self.dont_update_checklist {
+                self.update_checklist(w);
+            }
+            self.dont_update_checklist = true;
+            w.write_checklist(&self.checklist);
+            self.printing_paper = true;
+        } else {
+            self.paper += 0.05;
+            self.printing_paper = true;
         }
         self.refill(w);
         let mut skips = SKIPS_PER_TICK;
@@ -573,6 +790,9 @@ impl Cannon {
             }
         }
         if self.loaded.is_none() && self.has_blueprint && !self.init_failed {
+            at(now + 1);
+        }
+        if self.printing_paper {
             at(now + 1);
         }
         wake
@@ -650,29 +870,44 @@ impl Cannon {
         self.state = State::Paused;
         self.status = Status::Ready;
         // updateChecklist, then `blocksToPlace += blocksPlaced`.
-        self.blocks_to_place = self.blocks_placed + self.count_to_place(w);
+        self.update_checklist(w);
         self.blocks_to_place += self.blocks_placed;
     }
 
-    /// `markAllBlockRequirements`: the blocks the printer would place now and that cost
-    /// something.
-    fn count_to_place(&self, w: &mut impl CannonWorld) -> i32 {
-        let Some(l) = &self.loaded else { return 0 };
-        let mut n = 0;
-        for (rel, i) in l.printer.positions() {
-            let pos = [0, 1, 2].map(|k| l.printer.anchor[k] + rel[k]);
-            if !w.loaded(pos) {
-                continue;
+    /// `updateChecklist`: what the print still needs (`markAllBlockRequirements`, which also
+    /// counts `blocksToPlace`, and `markAllEntityRequirements`, which stops at the first entity
+    /// that can't be printed, as Create's does), and what the inventories beside it hold of that.
+    pub fn update_checklist(&mut self, w: &mut impl CannonWorld) {
+        let mut c = Checklist::default();
+        if let Some(l) = &self.loaded {
+            let mut n = self.blocks_placed;
+            for (rel, i) in l.printer.positions() {
+                let pos = [0, 1, 2].map(|k| l.printer.anchor[k] + rel[k]);
+                if !w.loaded(pos) {
+                    c.not_loaded = true;
+                    continue;
+                }
+                let e = &l.entries[i as usize];
+                if !self.should_place_at(w, pos, e) {
+                    continue;
+                }
+                if matches!(e.requirement, Requirement::Items(_)) {
+                    c.require(&e.requirement);
+                    n += 1;
+                }
             }
-            let e = &l.entries[i as usize];
-            if !self.should_place_at(w, pos, e) {
-                continue;
+            for (r, _) in &l.entities {
+                if !matches!(r, Requirement::Items(_)) {
+                    break;
+                }
+                c.require(r);
             }
-            if matches!(e.requirement, Requirement::Items(_)) {
-                n += 1;
-            }
+            self.blocks_to_place = n;
         }
-        n
+        for (item, n) in w.inventory_items() {
+            c.collect(&item, n);
+        }
+        self.checklist = c;
     }
 
     fn should_place_at(&self, w: &mut impl CannonWorld, pos: [i32; 3], e: &Entry) -> bool {
@@ -765,11 +1000,20 @@ impl Cannon {
             Some(i) => &l.entries[i as usize],
             None => &l.air,
         };
-        if entry.requirement == Requirement::Invalid || !self.should_place_at(w, target, entry) {
+        // An entity's turn (`PrintStage.ENTITIES`): its own requirement, always placed.
+        let entity = if l.printer.stage == Stage::Entities {
+            l.entities.get(l.printer.entity_index as usize)
+        } else {
+            None
+        };
+        let requirement = entity.map_or(&entry.requirement, |e| &e.0);
+        if *requirement == Requirement::Invalid
+            || (entity.is_none() && !self.should_place_at(w, target, entry))
+        {
             self.status = Status::Searching;
             return true;
         }
-        if let Requirement::Items(items) = &entry.requirement {
+        if let Requirement::Items(items) = requirement {
             for (item, count) in items {
                 if !w.grab(item, *count, true) {
                     if self.options.skip_missing {
@@ -791,18 +1035,65 @@ impl Cannon {
             }
         }
         self.state = State::Running;
-        self.status = if entry.plain_air {
+        self.status = if entry.plain_air && entity.is_none() {
             Status::Clearing
         } else {
             Status::Placing
         };
+        if let Some((_, e)) = entity {
+            // `launchEntity`.
+            self.blocks_placed += 1;
+            let total = flight_ticks(self.pos, target);
+            self.flying.push(Flying {
+                target,
+                state: 0,
+                belt_to: None,
+                entity: Some(Box::new(e.clone())),
+                total,
+                land_at: now + u64::from(total) + 1,
+            });
+            w.fired(now);
+            self.cooldown = DELAY;
+            self.fuel -= 1;
+            self.missing = None;
+            return false;
+        }
         if !entry.air {
             self.blocks_placed += 1;
         }
+        // `launchBlockOrBelt`: a belt's end that doesn't lay it goes as a shaft; the one that
+        // does lays the whole belt (`beltLength` segments, found along the schematic's belt).
+        let (state, belt_to) = match entry.belt {
+            Some(b) if !b.is_last() => (b.shaft, None),
+            Some(b) => {
+                let forward = b.part != BeltPart::End;
+                let mut at = rel;
+                let mut piece = b;
+                let mut length = 1;
+                while let Some(next) = piece.next(at, forward) {
+                    let Some(e) = l.printer.at(next).and_then(|i| l.entries[i as usize].belt)
+                    else {
+                        break;
+                    };
+                    at = next;
+                    piece = e;
+                    length += 1;
+                }
+                let step = b.next([0; 3], b.part == BeltPart::Start).unwrap_or([0; 3]);
+                let n = length - 1;
+                (
+                    entry.placed,
+                    Some([0, 1, 2].map(|i| target[i] + step[i] * n)),
+                )
+            }
+            None => (entry.placed, None),
+        };
         let total = flight_ticks(self.pos, target);
         self.flying.push(Flying {
             target,
-            state: entry.placed,
+            state,
+            belt_to,
+            entity: None,
             total,
             land_at: now + u64::from(total) + 1,
         });
@@ -988,6 +1279,53 @@ pub fn decode(mut d: &[u8]) -> Vec<Aim> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_checklist_lists_what_is_missing_then_what_is_done() {
+        let mut c = Checklist::default();
+        c.require(&Requirement::Items(vec![("minecraft:stone".into(), 3)]));
+        c.require(&Requirement::Items(vec![
+            ("minecraft:dirt".into(), 2),
+            ("minecraft:stone".into(), 1),
+        ]));
+        c.require(&Requirement::Invalid);
+        c.collect("minecraft:dirt", 5);
+        c.collect("minecraft:stone", 1);
+        c.collect("minecraft:glass", 9);
+        let name = |i: &str| i.trim_start_matches("minecraft:").to_owned();
+        let (missing, done) = c.entries(name);
+        assert_eq!(missing, vec![("minecraft:stone".to_owned(), 3)]);
+        assert_eq!(done, vec![("minecraft:dirt".to_owned(), 2)]);
+        assert!(c.gathered.iter().all(|(i, _)| i != "minecraft:glass"));
+    }
+
+    #[test]
+    fn a_belt_is_laid_from_its_last_end() {
+        let east = |part| BeltPiece {
+            facing: [1, 0, 0],
+            slope: BeltSlope::Horizontal,
+            part,
+            shaft: 7,
+        };
+        // Facing east (positive): the end lays it; the start goes as a shaft.
+        assert!(east(BeltPart::End).is_last() && !east(BeltPart::Start).is_last());
+        assert_eq!(east(BeltPart::Start).next([0; 3], true), Some([1, 0, 0]));
+        assert_eq!(east(BeltPart::End).next([5, 0, 0], false), Some([4, 0, 0]));
+        assert_eq!(east(BeltPart::End).next([5, 0, 0], true), None);
+        // Upward: the end is the highest, a step up along the facing.
+        let up = BeltPiece {
+            slope: BeltSlope::Upward,
+            ..east(BeltPart::End)
+        };
+        assert!(up.is_last());
+        assert_eq!(up.next([3, 2, 0], false), Some([2, 1, 0]));
+        let vertical = BeltPiece {
+            facing: [0, 0, -1],
+            slope: BeltSlope::Vertical,
+            ..east(BeltPart::Start)
+        };
+        assert_eq!(vertical.next([0, 0, 0], true), Some([0, -1, 0]));
+    }
     use crate::schematic::{BlockInfo, PaletteState};
     use std::collections::HashMap;
 
@@ -1019,6 +1357,7 @@ mod tests {
             ignore: false,
             defer,
             other: None,
+            belt: None,
         }
     }
 
@@ -1033,6 +1372,7 @@ mod tests {
             ignore: false,
             defer: false,
             other: None,
+            belt: None,
         }
     }
 
@@ -1280,6 +1620,7 @@ mod tests {
         fn load(&mut self, d: &SchematicData) -> Loaded {
             self.loads += 1;
             Loaded {
+                entities: Vec::new(),
                 printer: Printer::load(&self.structure, d.anchor.unwrap(), d.rotation, d.mirror),
                 entries: self.entries.clone(),
                 air: air(),

@@ -27,7 +27,7 @@ fn files(host: &dyn Host) -> &'static dyn ConfigFiles {
     host.data_files()
 }
 
-fn to_engine(t: &Tag) -> Nbt {
+pub(crate) fn to_engine(t: &Tag) -> Nbt {
     match t {
         Tag::End => Nbt::Compound(Default::default()),
         Tag::Byte(v) => Nbt::Byte(*v),
@@ -49,7 +49,7 @@ fn to_engine(t: &Tag) -> Nbt {
     }
 }
 
-fn to_game(t: &Nbt) -> Tag {
+pub(crate) fn to_game(t: &Nbt) -> Tag {
     match t {
         Nbt::Byte(v) => Tag::Byte(*v),
         Nbt::Short(v) => Tag::Short(*v),

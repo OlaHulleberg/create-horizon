@@ -1593,12 +1593,14 @@ fn contact_reached(lv: &mut ServerLevel<'_>, p: [i32; 3], facing: Dir) {
 /// The drops, for the actor to collect or drop.
 fn break_block(lv: &mut ServerLevel<'_>, at: [i32; 3], tool: Option<&ItemStack>) -> Vec<ItemStack> {
     let ice = lv.block_name(at).is_some_and(|n| n == "minecraft:ice");
-    let drops = lv
+    crate::glue::processing::toolbelt::before_removal(lv, at);
+    let mut drops = lv
         .level
         .destroy_block(&mut *lv.host, at, true, tool, true)
         .ok()
         .flatten()
         .unwrap_or_default();
+    crate::glue::processing::toolbelt::attach(lv.dim, at, &mut drops);
     // `IceBlock.playerDestroy`: over a block that blocks motion or a liquid, water.
     if ice {
         let under = [at[0], at[1] - 1, at[2]];
@@ -1992,8 +1994,7 @@ fn deploy(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, at: Option<[i32; 3
     if d.held.is_none()
         && let Some(s) = take_one(lv, key)
     {
-        d.held = Some((item_id(lv, &s), 1));
-        d.held_damage = s.damage();
+        crate::glue::processing::set_deployer_held(&*lv.host, &mut d, Some(&s));
     }
     let facing = actors::posed_facing(a.facing, &a.turns);
     let mut stall = false;

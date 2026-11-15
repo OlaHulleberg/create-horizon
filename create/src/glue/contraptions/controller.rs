@@ -9,7 +9,8 @@
 //! runs without an active controller, a held frequency, a lectern in use or a message waiting.
 //!
 //! The controller's frequencies are kept on the stack's custom data
-//! (`create:linked_controller_items`), as the legacy glue kept them.
+//! (`create:linked_controller_items`), as the legacy glue kept them, and set in its frequency
+//! screen (`items::controller_screen`), opened by a sneaking use.
 
 use super::super::net;
 use super::super::persist::mark_pos_unsaved;
@@ -378,9 +379,20 @@ impl ItemPart for ControllerItem {
         };
         let player = host.player(event.player)?;
         if sneaking(&*host, Some(player)) {
-            return None;
+            // Sneaking with it in the main hand opens its frequency screen
+            // (`LinkedControllerMenu`), for a player who may build.
+            if event.hand != Hand::Main {
+                return None;
+            }
+            if player.may_build(&*host).unwrap_or(false) {
+                let items = controller_items(event.stack);
+                crate::glue::items::controller_screen::open(host, player, &items);
+            }
+            return Some(InteractionResult::Success);
         }
         send_client(host, player, ToClient::Toggle);
+        // `getCooldowns().addCooldown(this, 2)`.
+        player.set_item_cooldown(host, ITEM, 2);
         None
     }
 
@@ -514,6 +526,25 @@ fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) ->
     };
     let _ = host.commands().feedback(Text::literal(line));
     Flow::Cancel
+}
+
+/// The frequency screen closed (`HeldItemGhostItemMenu.removed`, `saveData`): its twelve
+/// frequencies go on the controller still in the player's main hand.
+pub(crate) fn chosen(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
+    let Some(items) = crate::glue::items::controller_screen::chosen(data) else {
+        return;
+    };
+    let Some(living) = host.living(player.entity()) else {
+        return;
+    };
+    let Some(mut stack) = living.hand_item(&*host, Hand::Main) else {
+        return;
+    };
+    if !is_controller(&*host, Some(&stack)) {
+        return;
+    }
+    set_controller_items(&mut stack, &items);
+    let _ = living.set_hand_item(host, Hand::Main, Some(stack));
 }
 
 /// A player's packet (`LinkedControllerPacketBase.handle`): a lectern's at once, the hand's in

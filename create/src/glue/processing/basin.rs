@@ -698,6 +698,28 @@ pub fn compact_in_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 /// written to the block (`blaze`), which fans and basins read.
 pub fn tick_burners(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    // `updateBlockState` of a burner whose block changed: a burner set by a command (or turned
+    // by a structure) takes the heat its fuel gives, smouldering without any, in its next tick.
+    let checks = with_world(|w| std::mem::take(&mut w.dims[dim].burner_checks)).unwrap_or_default();
+    for pos in checks {
+        let Some((Block::BlazeBurner, info)) = lv.info(pos) else {
+            continue;
+        };
+        // `if (isCreative) return;`: a creative burner keeps whatever its block shows.
+        let burner = with_world(|w| w.dims[dim].burners.get(&pos).copied()).flatten();
+        if burner.is_some_and(|b| b.creative.is_some()) {
+            continue;
+        }
+        let heat = burner.map_or(Heat::Smouldering, |b| b.heat());
+        if info.heat != Some(heat) {
+            lv.set_property(
+                pos,
+                "blaze",
+                burner::heat_name(heat),
+                crate::glue::server::update_all(),
+            );
+        }
+    }
     let changed = with_world(|w| {
         if w.dims[dim].burning.is_empty() {
             Vec::new()

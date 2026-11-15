@@ -293,6 +293,17 @@ impl Hooks for Create {
         until_cancel(|s| s.living_incoming_damage(level, event))
     }
 
+    fn living_knockback(
+        &self,
+        level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::LivingKnockbackEvent<'_>,
+    ) -> Flow {
+        for s in SUBSYSTEMS {
+            s.living_knockback(level, event);
+        }
+        Flow::Continue
+    }
+
     fn render_fog(&self, host: &dyn ClientHost, event: &mut mod_api::RenderFogEvent<'_>) {
         for s in SUBSYSTEMS {
             s.render_fog(host, event);
@@ -477,6 +488,14 @@ impl Hooks for Create {
         event: &mut ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
         until_cancel(|s| s.screen_key_pressed(host, event))
+    }
+
+    fn screen_key_released_pre(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ScreenKeyReleasedPreEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.screen_key_released(host, event))
     }
 
     fn screen_char_typed_pre(

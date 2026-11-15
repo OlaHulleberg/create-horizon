@@ -16,7 +16,16 @@
 //! The engine numbers block states as `u32`s; the API's `BlockState` is a key and an ordinal, so
 //! the states a cannon meets are numbered here as it meets them (`intern`).
 //!
+//! The cannon prints as Create's does: belts with their connector from the end that lays them
+//! (`launchBelt`, without the casings, as the schematic's block entities are not read), the
+//! second half of doors, tall plants and beds (`setPlacedBy`), and the schematic's entities
+//! last (`launchEntity`: item frames and armor stands with what they hold and wear); a book or a
+//! clipboard in its book slot becomes the print's material checklist (`tickPaperPrinter`).
+//!
 //! Left out, for want of API:
+//! - A schematic saved by the port holds no item frames or paintings: `LevelRef::entities_in`
+//!   doesn't list them (a box lookup of hanging entities would close it); schematics that hold
+//!   them print them.
 //! - Past `maxSchematics` uploads, the player's oldest is not deleted
 //!   (`tryDeleteOldestSchematic`): a mod's data files can be written but not removed.
 //! - `isRedstoneConductor` is read as a full collision cube (vanilla's default for it); the
@@ -723,9 +732,130 @@ impl CannonWorld for World<'_, '_> {
         }
         success
     }
+    /// `ForBelt.place`: a shaft where the belt's laying end is, then the belt to its other end
+    /// (`createBelts`; casings are not copied: the schematic's block entities are not read).
+    fn place_belt(&mut self, pos: [i32; 3], state: u32, to: [i32; 3]) {
+        let Some(s) = interned(state) else { return };
+        let host = &*self.lv.host;
+        let facts = host.block_states();
+        let props: BTreeMap<String, String> = ["facing", "slope", "part"]
+            .iter()
+            .filter_map(|k| Some(((*k).to_owned(), s.property(&facts, k).ok()??.to_owned())))
+            .collect();
+        let Some(piece) = belt_piece(host, &props) else {
+            return;
+        };
+        let axis = shaft_axis(piece.slope, piece.facing);
+        if let Some(shaft) = host.block_state_id(&format!("create:shaft[axis={axis}]")) {
+            self.lv.set_state(pos, shaft, super::server::update_all());
+        }
+        super::items::create_belts(self.lv, pos, to);
+    }
+
+    fn book_input(&mut self) -> bool {
+        self.item(2).is_some()
+    }
+
+    /// `getSlotLimit` (64), or the stack's own limit where it is less (a written book's 16, a
+    /// clipboard's 1), which the game won't let the slot pass.
+    fn book_output_full(&mut self) -> bool {
+        let host = &*self.lv.host;
+        self.item(3)
+            .is_some_and(|s| s.count() >= host.max_stack_size(s.item()).unwrap_or(64).min(64))
+    }
+
+    /// `updateChecklist`'s gathering: every stack an inventory beside the cannon would give.
+    fn inventory_items(&mut self) -> Vec<(String, u32)> {
+        self.found();
+        let Some((invs, _)) = self.found.as_ref() else {
+            return Vec::new();
+        };
+        let host = &mut *self.lv.host;
+        let mut out = Vec::new();
+        for inv in invs {
+            for index in 0..inv.size(host) {
+                if let Some(r) = inv.resource(host, index) {
+                    let n = inv.amount(host, index);
+                    if n > 0 {
+                        out.push((r.item().id(&*host), n));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// `tickPaperPrinter`'s finished page: one book (or clipboard) from slot 2 becomes the
+    /// checklist (`createWrittenBook`, `createWrittenClipboard`) in slot 3, one more of it there.
+    fn write_checklist(&mut self, checklist: &cn::Checklist) {
+        let Some(input) = self.item(2) else { return };
+        let host: &dyn Host = &*self.lv.host;
+        let clipboard = item_is(host, &input, "create:clipboard");
+        let Some(mut out) = (if clipboard {
+            checklist_clipboard(host, checklist)
+        } else {
+            checklist_book(host, checklist)
+        }) else {
+            return;
+        };
+        let n = self.item(3).map_or(0, |s| s.count()) + 1;
+        let _ = out.set_count(n);
+        set_slots(self.lv, self.pos, &[(2, input.shrink(1)), (3, Some(out))]);
+    }
+
+    /// `ForEntity.place` (`StructureTemplate.placeEntities`' entity): its data without its
+    /// UUID, at its place, turned and mirrored with the template (its yaw; a hanging entity's
+    /// facing and block), spawned.
+    fn place_entity(&mut self, e: &cn::PlacedEntity) {
+        let Tag::Compound(mut nbt) = body::to_game(&e.nbt) else {
+            return;
+        };
+        let kind = text(nbt.get(&"id".into()));
+        nbt.remove(&"id".into());
+        nbt.remove(&"UUID".into());
+        nbt.insert(
+            "Pos".into(),
+            Tag::List(e.pos.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+        );
+        if let Some(Tag::List(r)) = nbt.get(&"Rotation".into()).cloned()
+            && let Some(Tag::Float(yaw)) = r.first()
+        {
+            let yaw = sch::transform_yaw(f32::from_bits(*yaw), e.mirror, e.rotation);
+            let mut r = r;
+            r[0] = Tag::Float(yaw.to_bits());
+            nbt.insert("Rotation".into(), Tag::List(r));
+        }
+        // An item frame's `Facing` (3D data value) and a painting's `facing` (2D).
+        const D3: [&str; 6] = ["down", "up", "north", "south", "west", "east"];
+        const D2: [&str; 4] = ["south", "west", "north", "east"];
+        for (key, names) in [("Facing", &D3[..]), ("facing", &D2[..])] {
+            let Some(Tag::Byte(f)) = nbt.get(&key.into()).cloned() else {
+                continue;
+            };
+            let Some(name) = names.get(f as usize) else {
+                continue;
+            };
+            let turned = sch::transform_dir(name, e.mirror, e.rotation);
+            if let Some(i) = names.iter().position(|n| *n == turned) {
+                nbt.insert(key.into(), Tag::Byte(i as i8));
+            }
+        }
+        if nbt.contains_key(&"block_pos".into()) {
+            nbt.insert("block_pos".into(), Tag::IntArray(e.block_pos.to_vec()));
+        }
+        for (i, key) in ["TileX", "TileY", "TileZ"].iter().enumerate() {
+            if nbt.contains_key(&(*key).into()) {
+                nbt.insert((*key).into(), Tag::Int(e.block_pos[i]));
+            }
+        }
+        let dimension = self.lv.dimension.to_owned();
+        let _ = self.lv.host.summon(&dimension, &kind, e.pos, nbt);
+    }
+
     fn place(&mut self, pos: [i32; 3], state: u32) {
         if let Some(s) = interned(state) {
             self.lv.set_state(pos, s, place_flags());
+            second_half(self.lv, pos, s);
         }
     }
     fn fired(&mut self, _now: u64) {
@@ -750,6 +880,42 @@ impl CannonWorld for World<'_, '_> {
             0.7,
         );
     }
+}
+
+/// `placeSchematicBlock`'s `setPlacedBy` for the blocks of two (`DoorBlock`, `DoublePlantBlock`
+/// and `SmallDripleafBlock`: the upper half above; `BedBlock`: the head toward its facing),
+/// written with the game's updates: the printer ignores those halves in the schematic.
+fn second_half(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState) {
+    let facts = lv.host.block_states();
+    let prop = |k: &str| state.property(&facts, k).ok().flatten();
+    let (at, other) = if prop("half") == Some("lower") {
+        let Ok(upper) = state.with(&facts, "half", "upper") else {
+            return;
+        };
+        // `copyWaterloggedFrom` the block above (the printer's placed state is dry).
+        ([pos[0], pos[1] + 1, pos[2]], upper)
+    } else if prop("part") == Some("foot") && prop("occupied").is_some() {
+        let o = match prop("facing") {
+            Some("north") => [0, 0, -1],
+            Some("south") => [0, 0, 1],
+            Some("west") => [-1, 0, 0],
+            Some("east") => [1, 0, 0],
+            _ => return,
+        };
+        let Ok(head) = state.with(&facts, "part", "head") else {
+            return;
+        };
+        ([pos[0] + o[0], pos[1], pos[2] + o[2]], head)
+    } else {
+        return;
+    };
+    let other = match lv.block_name(at).as_deref() {
+        Some("minecraft:water") if prop("half").is_some() => {
+            other.with(&facts, "waterlogged", "true").unwrap_or(other)
+        }
+        _ => other,
+    };
+    lv.set_state(at, other, super::server::update_all());
 }
 
 /// Whether `state`'s collision shape at `pos` is a whole block (`isCollisionShapeFullBlock`).
@@ -801,8 +967,22 @@ fn entry(lv: &ServerLevel<'_>, p: &PaletteState, rotation: Rotation, mirror: Mir
     let need = sch::need(&name, &props);
     let requirement = match &need {
         Need::Nothing => Requirement::Empty,
-        // A belt is printed with its connector (`launchBelt`), which isn't ported.
-        Need::Item { .. } if name == "create:belt" => Requirement::Invalid,
+        // `BeltBlock.getRequiredItems`: a shaft at each end, and the connector at the start.
+        Need::Item { .. } if name == "create:belt" => {
+            let part = props.get("part").map(String::as_str);
+            let mut items = Vec::new();
+            if part != Some("middle") {
+                items.push(("create:shaft".to_owned(), 1));
+            }
+            if part == Some("start") {
+                items.push(("create:belt_connector".to_owned(), 1));
+            }
+            if items.is_empty() {
+                Requirement::Empty
+            } else {
+                Requirement::Items(items)
+            }
+        }
         Need::Item { count, item } => {
             match item
                 .map(str::to_owned)
@@ -817,6 +997,9 @@ fn entry(lv: &ServerLevel<'_>, p: &PaletteState, rotation: Rotation, mirror: Mir
     let ignore = sch::ignored(&name, &props, valid.then_some(&need));
     let defer = sch::deferred(&name, &props);
     let other = sch::other_half(&props);
+    let belt = (name == "create:belt")
+        .then(|| belt_piece(host, &props))
+        .flatten();
     let plain_air = name == sch::AIR;
     let (mut placed_name, mut placed_props) = (name, props);
     sch::placed_state(&mut placed_name, &mut placed_props);
@@ -831,6 +1014,53 @@ fn entry(lv: &ServerLevel<'_>, p: &PaletteState, rotation: Rotation, mirror: Mir
         ignore,
         defer,
         other,
+        belt,
+    }
+}
+
+/// A belt state's shape for the printer, and the shaft it leaves where it doesn't lay the belt
+/// (`stripBeltIfNotLast`: sideways, upright; else across its facing).
+fn belt_piece(host: &dyn Host, props: &BTreeMap<String, String>) -> Option<cn::BeltPiece> {
+    let p = |k: &str| props.get(k).map(String::as_str);
+    let facing = match p("facing")? {
+        "north" => [0, 0, -1],
+        "south" => [0, 0, 1],
+        "west" => [-1, 0, 0],
+        _ => [1, 0, 0],
+    };
+    let slope = match p("slope")? {
+        "upward" => cn::BeltSlope::Upward,
+        "downward" => cn::BeltSlope::Downward,
+        "vertical" => cn::BeltSlope::Vertical,
+        "sideways" => cn::BeltSlope::Sideways,
+        _ => cn::BeltSlope::Horizontal,
+    };
+    let part = match p("part")? {
+        "start" => cn::BeltPart::Start,
+        "end" => cn::BeltPart::End,
+        "pulley" => cn::BeltPart::Pulley,
+        _ => cn::BeltPart::Middle,
+    };
+    let axis = shaft_axis(slope, facing);
+    let shaft = host
+        .block_state_id(&format!("create:shaft[axis={axis}]"))
+        .map_or(0, intern);
+    Some(cn::BeltPiece {
+        facing,
+        slope,
+        part,
+        shaft,
+    })
+}
+
+/// `slope == SIDEWAYS ? Y : facing.getClockWise().getAxis()`.
+fn shaft_axis(slope: cn::BeltSlope, facing: [i32; 3]) -> &'static str {
+    if slope == cn::BeltSlope::Sideways {
+        "y"
+    } else if facing[0] != 0 {
+        "z"
+    } else {
+        "x"
     }
 }
 
@@ -862,9 +1092,28 @@ fn load(lv: &ServerLevel<'_>, data: &SchematicData) -> Loaded {
         .iter()
         .map(|p| entry(lv, p, data.rotation, data.mirror))
         .collect();
+    let entities = structure
+        .entities
+        .iter()
+        .map(|e| {
+            let pos = sch::transform_vec(e.pos, data.mirror, data.rotation, [0; 3]);
+            let block = sch::transform(e.block_pos, data.mirror, data.rotation, [0; 3]);
+            (
+                entity_requirement(e),
+                cn::PlacedEntity {
+                    nbt: e.nbt.clone(),
+                    pos: [0, 1, 2].map(|i| pos[i] + f64::from(anchor[i])),
+                    block_pos: [0, 1, 2].map(|i| block[i] + anchor[i]),
+                    rotation: data.rotation,
+                    mirror: data.mirror,
+                },
+            )
+        })
+        .collect();
     Loaded {
         printer,
         entries,
+        entities,
         air: entry(lv, &PaletteState::air(), Rotation::None, Mirror::None),
     }
 }
@@ -1307,9 +1556,10 @@ fn nbt_file(name: &str) -> String {
     }
 }
 
-/// `SchematicExport.saveSchematic` of the box between two corners: the blocks (`fillFromWorld`;
-/// their block entities' data and the entities in it are not read).
-fn export(lv: &ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
+/// `SchematicExport.saveSchematic` of the box between two corners: the blocks and the entities
+/// in it (`fillFromWorld` with entities; the blocks' block entity data is not read, and item
+/// frames and paintings are not found).
+fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
     let min = [0, 1, 2].map(|i| a[i].min(b[i]));
     let max = [0, 1, 2].map(|i| a[i].max(b[i]));
     let size = [0, 1, 2].map(|i| max[i] - min[i] + 1);
@@ -1348,7 +1598,263 @@ fn export(lv: &ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
             }
         }
     }
-    Structure::capture(size, cells)
+    let mut structure = Structure::capture(size, cells);
+    structure.entities = export_entities(lv, min, max);
+    structure
+}
+
+/// `StructureTemplate.fillEntityList`: the entities in the box but players and passengers
+/// (`Entity.save` writes none for a passenger), each at its offset from the box's corner, its
+/// block a painting's own (`getPos`) else the one it stands in, and its data with its `id`.
+fn export_entities(lv: &mut ServerLevel<'_>, min: [i32; 3], max: [i32; 3]) -> Vec<sch::EntityInfo> {
+    let lo = min.map(f64::from);
+    let hi = max.map(|v| f64::from(v) + 1.0);
+    let found = lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default();
+    let mut out = Vec::new();
+    for e in found {
+        let host: &dyn Host = &*lv.host;
+        let Some(kind) = e.kind(host) else { continue };
+        if kind == "minecraft:player" || e.is_passenger(host) == Some(true) {
+            continue;
+        }
+        let Some(at) = e.position(host) else { continue };
+        let Some(mut nbt) = e.nbt(&mut *lv.host) else {
+            continue;
+        };
+        nbt.insert("id".into(), Tag::String(kind.as_str().into()));
+        let pos = [0, 1, 2].map(|i| at[i] - f64::from(min[i]));
+        let tile = ints(nbt.get(&"block_pos".into()));
+        let block_pos = if kind == "minecraft:painting" && tile.len() == 3 {
+            [0, 1, 2].map(|i| tile[i] - min[i])
+        } else {
+            pos.map(|v| v.floor() as i32)
+        };
+        out.push(sch::EntityInfo {
+            pos,
+            block_pos,
+            nbt: body::to_engine(&Tag::Compound(nbt)),
+        });
+    }
+    out
+}
+
+/// A text component as its NBT is written (`text`, a colour, children).
+fn text_tag(text: &str, color: Option<&str>, extra: Vec<Tag>) -> Tag {
+    let mut c = Compound::new();
+    c.insert("text".into(), Tag::String(text.into()));
+    if let Some(color) = color {
+        c.insert("color".into(), Tag::String(color.into()));
+    }
+    if !extra.is_empty() {
+        c.insert("extra".into(), Tag::List(extra));
+    }
+    Tag::Compound(c)
+}
+
+/// An item's name key (`getDescriptionId`: a block's item is named as its block).
+fn description_id(host: &dyn Host, item: &str) -> String {
+    let (ns, path) = item.split_once(':').unwrap_or(("minecraft", item));
+    let block = packages::body::item_key(host, item).and_then(|k| host.item_block(k));
+    if block.is_some() {
+        format!("block.{ns}.{path}")
+    } else {
+        format!("item.{ns}.{path}")
+    }
+}
+
+/// `MaterialChecklist.entry` for a book: the item's name (hovering shows it) in blue, or green
+/// with a tick when done, then the count and the stacks it makes.
+fn checklist_entry(host: &dyn Host, item: &str, amount: u32, unfinished: bool) -> Tag {
+    let mut name = Compound::new();
+    name.insert(
+        "translate".into(),
+        Tag::String(description_id(host, item).as_str().into()),
+    );
+    let mut hover = Compound::new();
+    hover.insert("action".into(), Tag::String("show_item".into()));
+    hover.insert("id".into(), Tag::String(item.into()));
+    name.insert("hover_event".into(), Tag::Compound(hover));
+    let mut extra = vec![Tag::Compound(name)];
+    if !unfinished {
+        extra.push(text_tag(" \u{2714}", None, Vec::new()));
+    }
+    extra.push(text_tag(
+        &format!("\n x{amount}"),
+        Some("black"),
+        Vec::new(),
+    ));
+    extra.push(text_tag(
+        &format!(" | {}\u{25A4} +{}\n", amount / 64, amount % 64),
+        Some("gray"),
+        Vec::new(),
+    ));
+    text_tag(
+        "",
+        Some(if unfinished { "blue" } else { "dark_green" }),
+        extra,
+    )
+}
+
+/// `MaterialChecklist.createWrittenBook`: five entries a page, the missing ones first, each
+/// page ending in a blue (or green) ">>>" when another follows.
+fn checklist_book(host: &dyn Host, c: &cn::Checklist) -> Option<ItemStack> {
+    const PER_PAGE: usize = 5;
+    let mut pages: Vec<Tag> = Vec::new();
+    if c.not_loaded {
+        let mut t = Compound::new();
+        t.insert(
+            "translate".into(),
+            Tag::String("create.materialChecklist.blocksNotLoaded".into()),
+        );
+        pages.push(text_tag("\n\u{a7}c", None, vec![Tag::Compound(t)]));
+    }
+    // Sorted by the English name (the server has no other: `display::item_name`).
+    let name = super::display::item_name;
+    let (missing, done) = c.entries(name);
+    let mut page: Vec<Tag> = Vec::new();
+    let mut written = 0;
+    for (list, unfinished, more) in [(&missing, true, "blue"), (&done, false, "dark_green")] {
+        for (item, n) in list {
+            if written == PER_PAGE {
+                written = 0;
+                page.push(text_tag("\n >>>", Some(more), Vec::new()));
+                pages.push(text_tag("", None, std::mem::take(&mut page)));
+            }
+            written += 1;
+            page.push(checklist_entry(host, item, *n, unfinished));
+        }
+    }
+    pages.push(text_tag("", None, page));
+    let raw = |t: Tag| {
+        let mut c = Compound::new();
+        c.insert("raw".into(), t);
+        Tag::Compound(c)
+    };
+    let mut content = Compound::new();
+    content.insert(
+        "title".into(),
+        raw(Tag::String("\u{a7}9Material Checklist".into())),
+    );
+    content.insert("author".into(), Tag::String("Schematicannon".into()));
+    content.insert("generation".into(), Tag::Int(0));
+    content.insert(
+        "pages".into(),
+        Tag::List(pages.into_iter().map(raw).collect()),
+    );
+    content.insert("resolved".into(), Tag::Byte(1));
+    let mut book = packages::body::new_stack(host, "minecraft:written_book", 1)?;
+    let mut patch = Compound::new();
+    patch.insert(
+        "minecraft:written_book_content".into(),
+        Tag::Compound(content),
+    );
+    patch.insert("minecraft:custom_name".into(), checklist_name(Some("blue")));
+    book.apply_components(&patch).ok()?;
+    Some(book)
+}
+
+/// `CreateLang.translateDirect("materialChecklist")`, not italic.
+fn checklist_name(color: Option<&str>) -> Tag {
+    let mut c = Compound::new();
+    c.insert(
+        "translate".into(),
+        Tag::String("create.materialChecklist".into()),
+    );
+    if let Some(color) = color {
+        c.insert("color".into(), Tag::String(color.into()));
+    }
+    c.insert("italic".into(), Tag::Byte(0));
+    Tag::Compound(c)
+}
+
+/// `MaterialChecklist.createWrittenClipboard`: seven entries a page, each beside its item; the
+/// done ones ticked.
+fn checklist_clipboard(host: &dyn Host, c: &cn::Checklist) -> Option<ItemStack> {
+    use create_engine::clipboard::{Content, Entry, Kind};
+    const PER_PAGE: usize = 7;
+    // Sorted by the English name (the server has no other: `display::item_name`).
+    let name = super::display::item_name;
+    let mut pages = Vec::new();
+    let mut page = Vec::new();
+    if c.not_loaded {
+        page.push(Entry {
+            checked: false,
+            text: create_engine::display::en_us("create.materialChecklist.blocksNotLoaded")
+                .unwrap_or("create.materialChecklist.blocksNotLoaded")
+                .to_owned(),
+            icon: None,
+        });
+    }
+    let (missing, done) = c.entries(name);
+    let mut written = 0;
+    for (list, finished) in [(&missing, false), (&done, true)] {
+        for (item, n) in list {
+            if written == PER_PAGE {
+                written = 0;
+                page.push(Entry {
+                    checked: finished,
+                    text: ">>>".into(),
+                    icon: None,
+                });
+                pages.push(std::mem::take(&mut page));
+            }
+            written += 1;
+            page.push(Entry {
+                checked: finished,
+                text: format!("{}\n x{n} | {}\u{25A4} +{}", name(item), n / 64, n % 64),
+                icon: Some((item.clone(), if finished { 0 } else { *n as i32 })),
+            });
+        }
+    }
+    pages.push(page);
+    let clip = packages::body::new_stack(host, "create:clipboard", 1)?;
+    let content = Content {
+        kind: Kind::Written,
+        pages,
+        read_only: true,
+        previously_opened_page: 0,
+    };
+    let mut clip = super::display::clipboard::with_content(&clip, Some(&content));
+    let mut patch = Compound::new();
+    patch.insert("minecraft:custom_name".into(), checklist_name(None));
+    clip.apply_components(&patch).ok()?;
+    Some(clip)
+}
+
+/// `ItemRequirement.of(Entity)`: an item frame its frame and the item in it, an armor stand
+/// itself and what it wears and holds; any other entity can't be printed.
+fn entity_requirement(e: &sch::EntityInfo) -> Requirement {
+    let Tag::Compound(nbt) = body::to_game(&e.nbt) else {
+        return Requirement::Invalid;
+    };
+    let kind = text(nbt.get(&"id".into()));
+    let item_of = |t: &Tag| match t {
+        Tag::Compound(c) => {
+            let id = text(c.get(&"id".into()));
+            (!id.is_empty() && id != "minecraft:air").then_some((id, 1))
+        }
+        _ => None,
+    };
+    match kind.as_str() {
+        "minecraft:item_frame" | "minecraft:glow_item_frame" => {
+            let mut items = vec![(kind.clone(), 1)];
+            items.extend(nbt.get(&"Item".into()).and_then(item_of));
+            Requirement::Items(items)
+        }
+        "minecraft:armor_stand" => {
+            let mut items = vec![("minecraft:armor_stand".to_owned(), 1)];
+            for key in ["ArmorItems", "HandItems"] {
+                if let Some(Tag::List(l)) = nbt.get(&key.into()) {
+                    items.extend(l.iter().filter_map(item_of));
+                }
+            }
+            if let Some(Tag::Compound(eq)) = nbt.get(&"equipment".into()) {
+                items.extend(eq.values().filter_map(item_of));
+            }
+            Requirement::Items(items)
+        }
+        _ => Requirement::Invalid,
+    }
 }
 
 /// The stack in the player's selected slot, and that slot.
@@ -1601,7 +2107,28 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                     .iter()
                     .map(|f| {
                         let left = f.land_at.saturating_sub(now + 1) as i32;
-                        Tag::compound([
+                        let mut entity = Vec::new();
+                        if let Some(e) = &f.entity {
+                            entity.push((
+                                "Entity",
+                                Tag::compound([
+                                    ("Nbt", body::to_game(&e.nbt)),
+                                    (
+                                        "Pos",
+                                        Tag::List(
+                                            e.pos
+                                                .iter()
+                                                .map(|v| Tag::Double(v.to_bits()))
+                                                .collect(),
+                                        ),
+                                    ),
+                                    ("Block", Tag::IntArray(e.block_pos.to_vec())),
+                                    ("Rotation", Tag::String(e.rotation.name().into())),
+                                    ("Mirror", Tag::String(e.mirror.name().into())),
+                                ]),
+                            ));
+                        }
+                        Tag::compound(entity.into_iter().chain([
                             (
                                 "Target",
                                 Tag::IntArray(vec![
@@ -1616,7 +2143,11 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                                 "BlockState",
                                 Tag::String(state_text(f.state).as_str().into()),
                             ),
-                        ])
+                            (
+                                "BeltTo",
+                                Tag::IntArray(f.belt_to.map_or(Vec::new(), |t| t.to_vec())),
+                            ),
+                        ]))
                     })
                     .collect();
                 // Fuel, the options, progress and the barrel's resting yaw.
@@ -1688,16 +2219,52 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
                 for t in f {
                     let Tag::Compound(f) = t else { continue };
                     let t = ints(f.get(&"Target".into()));
-                    let Some(state) = host.block_state_id(&text(f.get(&"BlockState".into())))
-                    else {
-                        continue;
+                    // A launched entity (`ForEntity`): its data and where it lands.
+                    let entity = match f.get(&"Entity".into()) {
+                        Some(Tag::Compound(e)) => {
+                            let pos = match e.get(&"Pos".into()) {
+                                Some(Tag::List(l)) if l.len() == 3 => {
+                                    let d = |t: &Tag| match t {
+                                        Tag::Double(v) => f64::from_bits(*v),
+                                        _ => 0.0,
+                                    };
+                                    [d(&l[0]), d(&l[1]), d(&l[2])]
+                                }
+                                _ => [0.0; 3],
+                            };
+                            let b = ints(e.get(&"Block".into()));
+                            e.get(&"Nbt".into()).map(|n| {
+                                Box::new(cn::PlacedEntity {
+                                    nbt: body::to_engine(n),
+                                    pos,
+                                    block_pos: [
+                                        b.first().copied().unwrap_or(0),
+                                        b.get(1).copied().unwrap_or(0),
+                                        b.get(2).copied().unwrap_or(0),
+                                    ],
+                                    rotation: Rotation::parse(&text(e.get(&"Rotation".into())))
+                                        .unwrap_or_default(),
+                                    mirror: Mirror::parse(&text(e.get(&"Mirror".into())))
+                                        .unwrap_or_default(),
+                                })
+                            })
+                        }
+                        _ => None,
+                    };
+                    let state = match host.block_state_id(&text(f.get(&"BlockState".into()))) {
+                        Some(s) => intern(s),
+                        None if entity.is_some() => 0,
+                        None => continue,
                     };
                     if t.len() != 5 {
                         continue;
                     }
+                    let to = ints(f.get(&"BeltTo".into()));
                     cannon.flying.push(cn::Flying {
                         target: [t[0], t[1], t[2]],
-                        state: intern(state),
+                        state,
+                        belt_to: (to.len() == 3).then(|| [to[0], to[1], to[2]]),
+                        entity,
                         total: t[4].max(0) as u32,
                         land_at: now + t[3].max(0) as u64 + 1,
                     });

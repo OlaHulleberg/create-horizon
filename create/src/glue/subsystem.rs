@@ -288,6 +288,14 @@ pub trait Subsystem: Sync {
     /// `Hooks::render_fog`: the world's fog on a client, before it is drawn.
     fn render_fog(&self, _host: &dyn ClientHost, _event: &mut mod_api::RenderFogEvent<'_>) {}
 
+    /// `LivingKnockBackEvent`: a living entity is about to be pushed.
+    fn living_knockback(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        _event: &mut mod_api::LivingKnockbackEvent<'_>,
+    ) {
+    }
+
     /// `Hooks::extract_block_screen_effect`: a first-person overlay (fire, water, a block) is
     /// about to be drawn; the first subsystem to answer `Flow::Cancel` leaves it out.
     fn screen_effect(
@@ -465,6 +473,15 @@ pub trait Subsystem: Sync {
         &self,
         _host: &dyn ClientHost,
         _event: &mut ScreenKeyPressedPreEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::screen_key_released_pre`.
+    fn screen_key_released(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut mod_api::ScreenKeyReleasedPreEvent<'_>,
     ) -> Flow {
         Flow::Continue
     }

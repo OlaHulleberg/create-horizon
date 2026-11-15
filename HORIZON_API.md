@@ -193,12 +193,16 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   same tick's level tick (`GearshiftBlock.getStateForPlacement` reads it at once).
 - **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
   light inside the chute is dark.
+- **Hanging entities in a box** (`Level.getEntitiesOfClass` over an `AABB`): `LevelRef::entities_in` leaves
+  item frames and paintings out, so a schematic saved by the port (`StructureTemplate.fillEntityList`) holds
+  none; one that holds them prints them. Listing them in `entities_in` (or a lookup of its own) would close it.
+- **Calling a block's `setPlacedBy` from code**: the schematicannon writes a door's, tall plant's and bed's
+  other half itself as those blocks' `setPlacedBy` does (`glue/schematics`), where Create calls the block's own.
 - **The local player's inventory slots on its client** (`player_inventory_slots` answers on the server only;
   `player_inventory` on a client lists stacks without their slots): the wand of symmetry's mirrors, drawn for
   every wand in the hotbar (`SymmetryHandler.onRenderWorld`), are sent to the client by the server.
 - **A turned item in a screen** (`GuiGameElement.of(stack).rotate(..)`): the wand of symmetry's screen draws the
   wand flat.
-- **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).
 - **Marking an entity immune to fire** (`Entity.fireImmune`, Create's `CreateFireImmune`): a player in a whole
   netherite diving set takes no fire damage (`living_incoming_damage`) and stops burning each tick, and their
   own view shows no flames, but lava still sets them alight for a tick, so others see flames on them.
@@ -260,14 +264,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - Redstone: a nixie tube on a train signal shows its text, not the signal's lights (`NixieTubeRenderer`); a
   redstone contact on an elevator column is not turned into an elevator contact by the wrench; dyed items
   (`DYED_COLOR`) make one link frequency with their undyed item.
-- Processing: a deployer does not feed food or drinks to a player in front of it (`finishUsingItem` on another
-  player).
 - Decor: table cloths hold no items and run no shops (`TableClothBlockEntity`); copycats have no placement
   helpers and do not take their material's sound, friction or light; girders have no placement helper; an item
   hatch's filter compares item ids, not a filter item's list or attributes.
-- Equipment: the toolbox radial menu and picking a toolbox up with its contents, the linked controller's
-  frequency screen, the extendo grip's knockback and entity reach, the worldshaper's flatten tool, the
-  schematicannon's belts, entities and checklist books, and the second half of doors and beds it prints.
 
 ## Not to send
 

@@ -108,7 +108,7 @@ pub struct BlockInfo {
     pub nbt: Option<Nbt>,
 }
 
-/// `StructureEntityInfo`, kept as read (the printer doesn't place entities yet).
+/// `StructureEntityInfo`, kept as read: where in the template, its block, its saved data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityInfo {
     pub pos: [f64; 3],
@@ -404,6 +404,65 @@ pub fn transform(pos: [i32; 3], mirror: Mirror, rotation: Rotation, pivot: [i32;
         Rotation::Clockwise180 => [l + l - x, y, i1 + i1 - z],
         Rotation::None => [x, y, z],
     }
+}
+
+/// `StructureTemplate.transform(Vec3, ..)`: an entity's position in the template turned and
+/// mirrored about `pivot` (a block's corner, so the far side is one further).
+pub fn transform_vec(pos: [f64; 3], mirror: Mirror, rotation: Rotation, pivot: [i32; 3]) -> [f64; 3] {
+    let [mut x, y, mut z] = pos;
+    let mirrored = match mirror {
+        Mirror::LeftRight => {
+            z = 1.0 - z;
+            true
+        }
+        Mirror::FrontBack => {
+            x = 1.0 - x;
+            true
+        }
+        Mirror::None => false,
+    };
+    let (i, j) = (f64::from(pivot[0]), f64::from(pivot[2]));
+    match rotation {
+        Rotation::Counterclockwise90 => [i - j + z, y, i + j + 1.0 - x],
+        Rotation::Clockwise90 => [i + j + 1.0 - z, y, j - i + x],
+        Rotation::Clockwise180 => [i + i + 1.0 - x, y, j + j + 1.0 - z],
+        Rotation::None if mirrored => [x, y, z],
+        Rotation::None => pos,
+    }
+}
+
+/// `Entity.rotate(rotation) + Entity.mirror(mirror) - yRot`: an entity's yaw after its
+/// template is placed turned and mirrored.
+pub fn transform_yaw(yaw: f32, mirror: Mirror, rotation: Rotation) -> f32 {
+    let wrap = |v: f32| {
+        let mut v = v % 360.0;
+        if v >= 180.0 {
+            v -= 360.0;
+        }
+        if v < -180.0 {
+            v += 360.0;
+        }
+        v
+    };
+    let f = wrap(yaw);
+    let rotated = match rotation {
+        Rotation::Clockwise180 => f + 180.0,
+        Rotation::Counterclockwise90 => f + 270.0,
+        Rotation::Clockwise90 => f + 90.0,
+        Rotation::None => f,
+    };
+    let mirrored = match mirror {
+        Mirror::FrontBack => -f,
+        Mirror::LeftRight => 180.0 - f,
+        Mirror::None => f,
+    };
+    rotated + mirrored - yaw
+}
+
+/// A horizontal direction's turn and mirror (`Rotation.rotate`, `Mirror.mirror`), by name.
+pub fn transform_dir(d: &str, mirror: Mirror, rotation: Rotation) -> String {
+    let m = mirror_rotation(mirror, d);
+    rotate_dir(&rotate_dir(d, m), rotation)
 }
 
 const HORIZONTAL: [&str; 4] = ["north", "east", "south", "west"];

@@ -212,6 +212,9 @@ pub struct Dimension {
     /// column waiting for its burner.
     pub burners: HashMap<[i32; 3], crate::burner::Burner>,
     pub burning: Vec<[i32; 3]>,
+    /// Burners whose block changed: their heat is checked against their fuel's in the next tick
+    /// (`BlazeBurnerBlockEntity.tick`'s `updateBlockState`, which a burner set by a command meets).
+    pub burner_checks: Vec<[i32; 3]>,
     burner_saved: HashMap<[i32; 3], crate::burner::Burner>,
     /// Redstone links and their networks; the saved frequencies and input of links not placed
     /// yet; links whose input to read again (placed, a neighbour changed, toggled); receivers
@@ -1157,6 +1160,13 @@ impl CreateWorld {
     /// range tests that miss for every non-Create block.
     #[inline]
     pub fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        if self
+            .table
+            .get(new)
+            .is_some_and(|(b, _)| b == Block::BlazeBurner)
+        {
+            self.dims[dim].burner_checks.push(pos);
+        }
         // Another block: what comparators were told of the old one no longer holds.
         if !self.dims[dim].analog_levels.is_empty() {
             self.dims[dim].analog_levels.remove(&pos);

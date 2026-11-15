@@ -301,6 +301,12 @@ pub fn potion_effects(id: &str) -> &'static [(&'static str, i32, i32)] {
 /// for an entity whose healing and harm are inverted (`inverted`: the undead) or not; none for
 /// an effect that is not instant.
 pub fn instant(effect: &str, amplifier: i32, inverted: bool) -> Option<f32> {
+    instant_at(effect, amplifier, inverted, 0.5)
+}
+
+/// `HealOrHarmMobEffect.applyInstantenousEffect` at `health` (1 for a potion drunk,
+/// `PotionContents.applyToLivingEntity`; 0.5 for a fluid's splash).
+pub fn instant_at(effect: &str, amplifier: i32, inverted: bool, health: f64) -> Option<f32> {
     let harm = match effect.strip_prefix("minecraft:").unwrap_or(effect) {
         "instant_health" => false,
         "instant_damage" => true,
@@ -308,9 +314,9 @@ pub fn instant(effect: &str, amplifier: i32, inverted: bool) -> Option<f32> {
     };
     let amp = amplifier.clamp(0, 30);
     if harm == inverted {
-        Some((0.5 * f64::from(4 << amp) + 0.5) as i32 as f32)
+        Some((health * f64::from(4 << amp) + 0.5) as i32 as f32)
     } else {
-        Some(-((0.5 * f64::from(6 << amp) + 0.5) as i32 as f32))
+        Some(-((health * f64::from(6 << amp) + 0.5) as i32 as f32))
     }
 }
 

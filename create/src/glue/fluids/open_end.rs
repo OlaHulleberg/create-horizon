@@ -103,6 +103,33 @@ pub(super) fn apply(lv: &mut ServerLevel<'_>, out: [i32; 3], down: bool, fluid: 
     }
 }
 
+/// `PotionContents.onConsume` for the living entity `e` drinking a potion of `contents`
+/// (`applyToLivingEntity` at a duration scale of 1): instant effects heal or harm at full
+/// strength, the others are given.
+pub(crate) fn drink_potion(
+    lv: &mut ServerLevel<'_>,
+    e: EntityRef,
+    contents: &create_engine::potion::Contents,
+) {
+    let inverted = e.kind(&*lv.host).is_some_and(|k| {
+        lv.host
+            .entity_type_in_tag(&k, "minecraft:inverted_healing_and_harm")
+    });
+    for given in &potion_effects(contents) {
+        match open_end::instant_at(&given.id, given.amplifier, inverted, 1.0) {
+            Some(h) if h > 0.0 => {
+                if let Some(living) = lv.host.living(e) {
+                    living.heal(&mut *lv.host, h);
+                }
+            }
+            Some(h) => {
+                let _ = e.hurt(&mut *lv.host, "minecraft:magic", -h, None, None);
+            }
+            None => give(lv, e, given),
+        }
+    }
+}
+
 /// A `MobEffectInstance` to give: effect id, amplifier, ticks, ambient, with its particles,
 /// with its icon.
 struct Given {
