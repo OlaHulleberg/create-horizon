@@ -1,70 +1,160 @@
-# Create for Horizon
+<p align="center">
+  <img src="docs/media/banner.webp" alt="Create for Sunrise: a copper locomotive on a stone viaduct at sunset beside a Create factory and windmill" width="100%">
+</p>
 
-A port of [Create](https://github.com/Creators-of-Create/Create) 6.0.11 to Horizon (Minecraft 26.3 in Rust), as a
-native mod on the mod API of the [arismoko/horizon](https://github.com/arismoko/horizon) fork: hooks, Parts, block
-entities, attachments, capabilities under transactions, payloads and draw contexts. It depends only on `mod_api`:
-no game internals, no mixins, and no registry dependencies. No Java runs, at build time or play time.
+<p align="center">
+  <a href="#install"><b>Install</b></a> ·
+  <a href="#documentation"><b>Docs</b></a> ·
+  <a href="https://discord.gg/eswQcHfRKC"><b>Sunrise Discord</b></a> ·
+  <a href="CONTRIBUTING.md"><b>Contributing</b></a>
+</p>
 
-The mod pins one exact fork build in `create/horizon-mod.toml` (`[native] horizon`). The launcher compiles it
-against that build's prebuilt game; nothing of the game is rebuilt.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-E2AC52" alt="Licence: MIT"></a>
+  <a href="https://modrinth.com/mod/create"><img src="https://img.shields.io/badge/Create-6.0.11-966828" alt="Create 6.0.11"></a>
+  <a href="https://playsunrise.net"><img src="https://img.shields.io/badge/runs%20on-Sunrise%20(Minecraft%2026.3)-F0795A" alt="Runs on Sunrise, Minecraft 26.3"></a>
+</p>
 
-**Status:** every legacy subsystem is ported to the API; the mod passes the fork's package check and builds against
-its pinned SDK, with the engine's and the glue's unit tests passing. It has not yet been played on this API, and the
-launcher can build it for players once a Nightly at or after the pinned build ships with its SDK: see
-[VALIDATION.md](VALIDATION.md).
-What the API cannot do yet, and so what the port leaves out, is listed in [HORIZON_API.md](HORIZON_API.md).
+# Create for Sunrise
 
-## Layout
+**[Create](https://github.com/Creators-of-Create/Create) 6.0.11, ported to native Rust.** A native mod for
+Sunrise and Horizon. No Java at build time or play time, and no mixins.
 
-```text
-create/                        The native mod: what the launcher builds
-  horizon-mod.toml             Identity and the pinned fork build
-  Cargo.toml                   The mod's crate (only the pinned SDK and the engine)
-  src/lib.rs                   The one `impl Hooks`: each hook handed to every subsystem
-  src/glue/                    The game glue on the mod API, one module per subsystem
-  src/engine/                  create-engine: Create's rules as plain Rust with no game types
-    src/generated.rs           @generated block table (tools/create-data compile)
-  data/create/horizon/         @generated block, item and fluid declarations
-  assets/create/               @generated block states of the partial models
-tools/create-data/             compile: Create's MIT data -> tables; prepare: Create jar -> playable mod
-notes/                         Porting notes (start with notes/native-port.md)
-benchmarks/, PORTING.md        Measurements and the porting log of the earlier mixin-based port
-```
+- **[Sunrise](https://playsunrise.net)** ([GitHub](https://github.com/sunrise-org/sunrise)): works now.
+- **Horizon**: once its mod API ships ([horizon-rust/horizon#16941](https://github.com/horizon-rust/horizon/pull/16941)).
 
-`create/src/glue/` holds the core (`states`, `world`, `server`, `persist`, `net`, `subsystem`) and the subsystems:
-kinetics, logistics, processing, fluids, equipment and gauges, redstone and display, contraptions, trains and carts,
-packages, stock and schematics, interaction and items, decor, blocks and copycats.
-[notes/native-port.md](notes/native-port.md) explains how they fit together.
+Create is the mod by the Create Team: shafts and cogs, belts and presses, contraptions and trains. This port
+brings it to Minecraft 26.3 in Rust. It is built on the game's mod SDK (`mod_api`) and nothing else.
 
-## Licences
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/readme/panel-machines.webp" alt="A Create factory hall with belts, mechanical arms, presses, mixers on blaze burners and nixie tubes"></td>
+    <td width="50%"><img src="docs/media/readme/panel-trains.webp" alt="A copper-and-brass locomotive coming off a viaduct towards the camera"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/readme/panel-kinetics.webp" alt="An eight-bladed windmill on a tall tower at sunset"></td>
+    <td width="50%"><img src="docs/media/readme/panel-world.webp" alt="Aerial view of a train on a coastal viaduct, a factory hall and a windmill"></td>
+  </tr>
+</table>
 
-Create's code and data (everything outside its `src/main/resources/assets/`) are MIT and are read, translated and
-compiled here; its assets are All Rights Reserved and never committed or shipped: `create-data prepare` reads them
-from the player's own Create jar. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+## What works
 
-## Build and play
+Every subsystem of Create is ported to the mod API. Highlights:
 
-Requirements: the fork's launcher (`horizon-launcher`) and its `cargo horizon-mod` tool (`cargo install --locked --git
-https://github.com/sunrise-org/sunrise --rev <the pin> cargo-horizon-mod`), Rust 1.99.1 with the `wasm32-unknown-unknown`
-target (the SDK's toolchain), and your own copy of Create 6.0.11's jar for the textures, models and sounds.
+- **Kinetics.** Shafts, cogs, gearboxes, belts, water wheels, windmills, steam engines, gauges.
+- **Logistics.** Funnels, chutes, tunnels, mechanical arms, ejectors, filters, item hatches.
+- **Processing.** Presses, mixers and basins, blaze burners, saws, millstones, crushing wheels, deployers, fans.
+- **Fluids.** Pumps, pipes, tanks, spouts, item drains, honey and chocolate.
+- **Contraptions.** Bearings, pistons, pulleys, gantries, elevators, minecart contraptions, with their actors.
+- **Trains.** Tracks and girder curves, stations, schedules, signals, bogeys and train controls.
+- **Packages and stock.** Packagers, frogports, postboxes, chain conveyors, stock tickers, factory gauges, shops.
+- **Redstone and display.** Redstone links, smart observers, display links and boards, nixie tubes.
+- **Equipment.** Wrench, goggles, backtank and diving gear, potato cannon, extendo grip, toolboxes, worldshaper.
+- **Schematics.** Schematic tools, the schematic table and schematicannon.
+- **Advancements.** Create's advancement tree, awarded where Create awards them.
+
+Some things need API that the game doesn't have yet, so they are left out for now. Examples: shapeless
+crafting recipes in a basin, Create's own enchantments at enchanting tables, and hoppers reaching into belts
+and tanks. The full list, with what would fix each one: **[HORIZON_API.md](HORIZON_API.md)**.
+
+## Install
+
+> [!NOTE]
+> Create's textures, models and sounds are All Rights Reserved, so they are not in this repository. They come
+> from Create's official jar: the build takes them from it on your machine, and they never leave it.
+
+<!-- TODO: final player commands. The automatic download of Create's jar from Modrinth is being added;
+     until it lands, `prepare` needs the path to a Create jar. Replace this section once it is merged. -->
+
+You need:
+
+- **The Sunrise launcher**, from [playsunrise.net/download](https://playsunrise.net/download), and a Minecraft:
+  Java Edition account. Play once so the launcher has an instance.
+- **Rust** ([rustup](https://rustup.rs)), for the one-time prepare step.
+
+Then:
 
 ```sh
-cd create && cargo horizon-mod check                     # fetches the pinned SDK into create/.horizon/, checks
-cd tools/create-data && cargo run -- prepare --out ../../target/create-mod /path/to/create-6.0.11.jar
+git clone https://github.com/OlaHulleberg/create-horizon.git
+cd create-horizon/tools/create-data
+
+# Assemble the mod. The first build fetches Create's official jar from Modrinth,
+# or point it at your own Create 6.0.11 jar.
+cargo run --release -- prepare --out ../../target/create-mod /path/to/create-6.0.11.jar
+
+# Build it into your instance.
+cd ../..
 horizon-launcher native-build target/create-mod --instance "My Instance" --trust-native-code
 ```
 
-`prepare` assembles a complete mod folder: this repository's crate and declarations, Create's data converted from
-1.21.1 to 26.3, and Create's assets from your jar. That folder contains Create's assets: it is for your own game,
-never for redistribution.
+Start the instance from the launcher and open a world. Native mods run with your rights, which is why the
+launcher asks for `--trust-native-code`.
 
-After a Create data change, regenerate the committed tables and declarations from a Create checkout:
+The folder in `target/create-mod` holds Create's assets. It is for your own game: don't share it.
+
+<!-- TODO: drop this note once Sunrise publishes the SDK for the pinned build. -->
+> [!IMPORTANT]
+> The launcher builds a native mod against the SDK of the Sunrise build it pins (`create/horizon-mod.toml`).
+> Until Sunrise publishes that SDK, the build works only on a local developer base built from Sunrise at the
+> pin ([how](https://github.com/sunrise-org/sunrise/blob/main/docs/modding/src/how-to/native-mods/07-local-developer-builds.md)).
+> See [VALIDATION.md](VALIDATION.md).
+
+## See it running
+
+Every capture is in game on Sunrise, with every machine running. Nothing is painted over.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/readme/anim-factory.webp" alt="Belts, mechanical arms, mixers and presses working in a factory hall"><br><sub>The factory at work</sub></td>
+    <td width="50%"><img src="docs/media/readme/anim-train-arrival.webp" alt="A train arriving over a viaduct"><br><sub>A train on its schedule</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/readme/anim-windmill.webp" alt="Windmill sails turning"><br><sub>Windmill bearing</sub></td>
+    <td width="50%"><img src="docs/media/readme/anim-water-wheel.webp" alt="A large water wheel turning in a stream"><br><sub>Water wheel and gearing</sub></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/readme/sunset-line.webp" alt="A train on a viaduct at sunset beside a factory and windmill"></td>
+    <td width="50%"><img src="docs/media/readme/approach.webp" alt="A railway viaduct leading to a factory and windmill"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/readme/locomotive.webp" alt="A Create locomotive on large bogeys, head-on"></td>
+    <td width="50%"><img src="docs/media/readme/factory-floor.webp" alt="A mechanical arm moving items from a belt to depots"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/readme/water-wheel.webp" alt="A large water wheel in a stream beside a factory"></td>
+    <td width="50%"><img src="docs/media/readme/gearworks.webp" alt="Cogwheels and large cogwheels meshing to drive a press line"></td>
+  </tr>
+</table>
+
+<sub>Sunrise, Minecraft 26.3, HUD hidden. Screenshots show Create's textures and models, © the Create Team.</sub>
+
+## Build from source
+
+You need Rust 1.99.1 with the `wasm32-unknown-unknown` target (the SDK's toolchain), and Sunrise's
+`cargo horizon-mod` tool:
+
+```sh
+rustup toolchain install 1.99.1 --target wasm32-unknown-unknown
+cargo install --locked --git https://github.com/sunrise-org/sunrise --rev <the pin> cargo-horizon-mod
+```
+
+`<the pin>` is `[native] horizon` in [create/horizon-mod.toml](create/horizon-mod.toml).
+
+```sh
+cd create && cargo horizon-mod check        # fetches the pinned SDK into create/.horizon/, then checks
+```
+
+`create-data prepare` and `native-build` (see [Install](#install)) turn the checkout into a playable mod.
+After a change to Create's data, regenerate the committed tables and declarations from a Create checkout:
 
 ```sh
 cd tools/create-data && cargo run -- compile --create /path/to/Create --out ../..
 ```
 
-## Validation
+### Validation
 
 ```sh
 cd create
@@ -72,6 +162,47 @@ cargo +1.99.1 fmt --check
 cargo +1.99.1 clippy --all-targets -- -D warnings
 cargo +1.99.1 test                      # the glue's tests
 cargo +1.99.1 test -p create-engine     # the engine's tests
-cargo horizon-mod check                 # the fork's package rules, then cargo check for the pinned build
+cargo horizon-mod check                 # Sunrise's package rules, then cargo check for the pinned build
 cd ../tools/create-data && cargo test
 ```
+
+The latest results, and what was tried in game: [VALIDATION.md](VALIDATION.md).
+
+### Layout
+
+```text
+create/                 The native mod: what the launcher builds
+  horizon-mod.toml      Identity and the pinned Sunrise build
+  src/lib.rs            The one `impl Hooks`, handing each hook to every subsystem
+  src/glue/             The game glue on the mod API, one module per subsystem
+  src/engine/           create-engine: Create's rules as plain Rust, no game types
+  data/, assets/        Generated block, item and fluid declarations
+tools/create-data/      compile: Create's MIT data -> tables; prepare: Create's jar -> playable mod
+notes/                  Porting notes
+```
+
+## Documentation
+
+- [notes/native-port.md](notes/native-port.md): how the mod is put together, and the rules for the glue.
+- [HORIZON_API.md](HORIZON_API.md): what the mod API can't do yet, and what the port leaves out because of it.
+- [VALIDATION.md](VALIDATION.md): what was checked, on which build, and what was not.
+- [PORTING.md](PORTING.md) and [benchmarks/](benchmarks/): history. The port began as a mixin-based mod on
+  the arismoko/horizon fork, whose mod API Sunrise carries on.
+
+## Licences
+
+This repository is [MIT](LICENSE). It translates Create's code and compiles its data, which are MIT too.
+
+Create's textures, models and sounds are All Rights Reserved, © the Create Team. They are not in this
+repository and are never shipped from it: they come from Create's official jar. Details:
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+This is an unofficial port. Create is made by [the Create Team](https://github.com/Creators-of-Create).
+
+## Contributing
+
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first. In short:
+
+- Sign off every commit (`git commit -s`, the [Developer Certificate of Origin](https://developercertificate.org)).
+- Say in the pull request if AI tools helped write it.
+- Never commit Create's assets.
