@@ -840,11 +840,11 @@ impl CannonWorld for World<'_, '_> {
                 nbt.insert(key.into(), Tag::Byte(i as i8));
             }
         }
-        if nbt.get(&"block_pos".into()).is_some() {
+        if nbt.contains_key(&"block_pos".into()) {
             nbt.insert("block_pos".into(), Tag::IntArray(e.block_pos.to_vec()));
         }
         for (i, key) in ["TileX", "TileY", "TileZ"].iter().enumerate() {
-            if nbt.get(&(*key).into()).is_some() {
+            if nbt.contains_key(&(*key).into()) {
                 nbt.insert((*key).into(), Tag::Int(e.block_pos[i]));
             }
         }
@@ -888,14 +888,14 @@ impl CannonWorld for World<'_, '_> {
 fn second_half(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState) {
     let facts = lv.host.block_states();
     let prop = |k: &str| state.property(&facts, k).ok().flatten();
-    let (at, other) = if prop("half").as_deref() == Some("lower") {
+    let (at, other) = if prop("half") == Some("lower") {
         let Ok(upper) = state.with(&facts, "half", "upper") else {
             return;
         };
         // `copyWaterloggedFrom` the block above (the printer's placed state is dry).
         ([pos[0], pos[1] + 1, pos[2]], upper)
-    } else if prop("part").as_deref() == Some("foot") && prop("occupied").is_some() {
-        let o = match prop("facing").as_deref() {
+    } else if prop("part") == Some("foot") && prop("occupied").is_some() {
+        let o = match prop("facing") {
             Some("north") => [0, 0, -1],
             Some("south") => [0, 0, 1],
             Some("west") => [-1, 0, 0],
