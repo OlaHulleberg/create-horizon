@@ -71,6 +71,15 @@ pub const HOSE: &str = "Hose";
 pub struct Fluids;
 
 impl Subsystem for Fluids {
+    fn draw_carried(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        block: create_engine::Block,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        client::draw_carried(host, block, event);
+    }
+
     fn carry_out(
         &self,
         lv: &mut ServerLevel<'_>,

@@ -734,6 +734,45 @@ pub(crate) fn carry_storage(
     }
 }
 
+/// What the block entities of contraption `key` show its clients (`Contraption.updateTags`,
+/// the update tag of each block entity as it was taken): each block's offset and its block
+/// entity's data, its item slots (`Items`) and what the engine kept for it (`Carried`).
+pub(super) fn shown_entities(lv: &ServerLevel<'_>, key: [i32; 3]) -> HashMap<[i32; 3], Compound> {
+    let host = &*lv.host;
+    HELD.with_borrow(|m| {
+        let Some(list) = m.get(&(lv.dim, key)) else {
+            return HashMap::new();
+        };
+        list.iter()
+            .filter(|(_, d)| d.block.is_some())
+            .map(|(o, d)| {
+                let mut c = d.own.clone().unwrap_or_default();
+                let items: Vec<Tag> = d
+                    .slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, s)| {
+                        let mut c = s.as_ref()?.to_nbt(host)?;
+                        c.insert("Slot".into(), Tag::Byte(i as i8));
+                        Some(Tag::Compound(c))
+                    })
+                    .collect();
+                if !items.is_empty() {
+                    c.insert("Items".into(), Tag::List(items));
+                }
+                if let Some(e) = &d.engine {
+                    c.insert(SHOWN_CARRIED.into(), Tag::Compound(e.clone()));
+                }
+                (*o, c)
+            })
+            .collect()
+    })
+}
+
+/// The key of what the engine kept for a block in its moving block entity's data
+/// ([`shown_entities`]).
+pub(crate) const SHOWN_CARRIED: &str = "Carried";
+
 /// What the block entities of a cart's contraption hold (all but its storage blocks, which
 /// the cart keeps, and the anchor at offset 0), taken as it assembles and kept with the cart
 /// as a save keeps it ([`storage_to_nbt`]); none when they hold nothing.

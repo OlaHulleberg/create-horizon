@@ -70,6 +70,20 @@ pub trait Subsystem: Sync {
     ) {
     }
 
+    /// Draws what a block entity riding a moving structure holds, under the structure's pose
+    /// at the block (`BlockEntityRenderHelper.renderBlockEntities` with the contraption's update
+    /// tags): `event.entity.nbt` is the block entity's data as the structure took it (its synced
+    /// keys, its stacks under `Items`, and what [`carry_out`](Self::carry_out) wrote under
+    /// `Carried`); `event.pos` keys nothing in the world (it stands for the block in the
+    /// subsystem's own client tables), and `keep` is the structure's to call.
+    fn draw_carried(
+        &self,
+        _host: &dyn ClientHost,
+        _block: create_engine::Block,
+        _event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+    }
+
     /// The block [`carry_out`](Self::carry_out) took goes back at `pos`, turned by `turn`
     /// (`addBlocksToWorld` loads the NBT into the block entity placed there, and
     /// `TransformableBlockEntity.transform` turns what points somewhere): what it wrote, in

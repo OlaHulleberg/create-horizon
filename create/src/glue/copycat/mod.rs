@@ -133,6 +133,17 @@ const CARRIED_MATERIAL: &str = "CopycatMaterial";
 const CARRIED_ITEM: &str = "CopycatItem";
 
 impl Subsystem for Copycats {
+    fn draw_carried(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        block: Block,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        if matches!(block, Block::CopycatPanel | Block::CopycatStep) {
+            parts::draw_carried(host, event);
+        }
+    }
+
     /// A copycat's material and the item it took ride with it (`CopycatBlockEntity.write`), the
     /// material turned with the structure (`CopycatBlockEntity.transform`).
     fn carry_out(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], _b: Block, out: &mut Compound) {

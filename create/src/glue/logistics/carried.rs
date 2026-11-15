@@ -15,12 +15,17 @@ const FILTER: &str = "Filter";
 const AMOUNT: &str = "FilterAmount";
 const SIDES: &str = "SideFilters";
 const BRASS: &str = "BrassTunnel";
+/// The angle a depot's held stack lies at (`HeldItem`'s `Angle`), for drawing it moving.
+pub(super) const DEPOT_ANGLE: &str = "DepotAngle";
 
 pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: &mut Compound) {
     let dim = lv.dim;
     let host = &*lv.host;
     let Some((filter, amount, sides, brass)) = with_world(|w| {
         let d = &mut w.dims[dim];
+        if let Some(Some(h)) = d.depots.get(&pos) {
+            out.insert(DEPOT_ANGLE.into(), Tag::Int(h.angle));
+        }
         let filter = d.chute_filters.remove(&pos);
         let amount = d.filter_amounts.remove(&pos);
         let sides: Vec<_> = create_engine::kinetics::Dir::ALL

@@ -612,6 +612,7 @@ fn show_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         lv,
         pos,
         draw::Glide {
+            key: pos,
             origin,
             blocks: &blocks,
             dir: [0, -1, 0],

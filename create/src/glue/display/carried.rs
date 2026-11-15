@@ -14,6 +14,8 @@ use mod_api::{Compound, Tag};
 
 const NIXIE: &str = "NixieText";
 const NIXIE_INDEX: &str = "NixieIndex";
+/// A tube's two characters as it showed them (`NixieTubeRenderer`), for drawing it moving.
+pub(crate) const SHOWN: &str = "NixieShown";
 const LINK: &str = "DisplayLink";
 const LINK_TEXTS: &str = "DisplayLinkTexts";
 
@@ -25,6 +27,15 @@ pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: 
             if let Some(n) = d.nixies.remove(&pos) {
                 // Its clients forget it where it was (`nixie_removed`).
                 d.forgotten.push(pos);
+                // What it shows, for the moving structure's clients to draw.
+                let (left, right) = n.displayed();
+                out.insert(
+                    SHOWN.into(),
+                    Tag::List(vec![
+                        Tag::String(left.as_str().into()),
+                        Tag::String(right.as_str().into()),
+                    ]),
+                );
                 if let Some(text) = n.custom {
                     out.insert(NIXIE.into(), Tag::String(text.as_str().into()));
                     out.insert(NIXIE_INDEX.into(), Tag::Int(n.index));

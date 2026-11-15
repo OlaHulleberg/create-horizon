@@ -28,7 +28,7 @@
 //! - The link's bulb flashing as it sends (`LinkBulbRenderer`): its glow is a block model drawn
 //!   additively in a fading colour, and a block entity's model is drawn in its own tints.
 
-mod carried;
+pub(crate) mod carried;
 pub mod client;
 pub(crate) mod clipboard;
 pub(crate) mod contact_screen;
@@ -96,6 +96,15 @@ impl Subsystem for Display {
 
     fn carry_out(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], b: Block, out: &mut Compound) {
         carried::carry_out(lv, pos, b, out);
+    }
+
+    fn draw_carried(
+        &self,
+        host: &dyn ClientHost,
+        block: Block,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        client::draw_carried(host, block, event);
     }
 
     fn carry_in(

@@ -89,3 +89,8 @@ impl BlockEntityPart for PlacardEntity {
         draw.keep();
     }
 }
+
+/// A placard riding a moving structure: its item as it was taken (`PlacardRenderer`).
+pub(super) fn draw_carried(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    PlacardEntity.block_entity_submit(host, event);
+}

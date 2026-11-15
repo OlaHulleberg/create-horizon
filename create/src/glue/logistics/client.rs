@@ -1423,6 +1423,18 @@ fn draw_depot(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, pos: [i32;
     else {
         return;
     };
+    draw_depot_stacks(draw, host, &contents, prev, t);
+}
+
+/// `DepotRenderer.renderItemsOf`: the held stack, from where it was a tick ago (`prev`) to where
+/// it is, and the outputs around it.
+fn draw_depot_stacks(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    contents: &depot::Contents,
+    prev: depot::Held,
+    t: f32,
+) {
     for (slot, id, count) in &contents.stacks {
         let solid = block_item(host, id);
         let (poses, phase, offset) = if *slot == 0 {
@@ -1748,6 +1760,64 @@ fn draw_filter_stack(
         }
         draw.item(&stack, ItemDisplayContext::Fixed, None, 0);
         draw.pop();
+    }
+}
+
+/// What logistics blocks riding a moving structure show (`renderBlockEntities`), from the data
+/// they had when the structure took them: a depot's or ejector's stacks (`DepotRenderer`, its
+/// held stack at rest where it lay), a chute's stack and the filter in a slot
+/// (`FilteringRenderer`).
+pub(crate) fn draw_carried(
+    host: &dyn ClientHost,
+    block: Block,
+    event: &mut BlockEntitySubmitEvent<'_>,
+) {
+    match block {
+        Block::Depot | Block::WeightedEjector => {
+            let nbt = &event.entity.nbt;
+            let Some(Tag::List(items)) = nbt.get(&"Items".into()) else {
+                return;
+            };
+            let stacks = items
+                .iter()
+                .filter_map(|t| {
+                    let Tag::Compound(c) = t else { return None };
+                    let slot = match c.get(&"Slot".into()) {
+                        Some(Tag::Byte(b)) => *b as u8,
+                        _ => 0,
+                    };
+                    let id = match c.get(&"id".into()) {
+                        Some(Tag::String(s)) => s.to_string_lossy(),
+                        _ => return None,
+                    };
+                    let count = match c.get(&"count".into()) {
+                        Some(Tag::Int(n)) => (*n).clamp(1, 255) as u8,
+                        _ => 1,
+                    };
+                    Some((slot, id, count))
+                })
+                .collect();
+            let angle = match nbt.get(&crate::glue::contraptions::actors::SHOWN_CARRIED.into()) {
+                Some(Tag::Compound(c)) => match c.get(&super::carried::DEPOT_ANGLE.into()) {
+                    Some(Tag::Int(a)) => *a,
+                    _ => 0,
+                },
+                _ => 0,
+            };
+            let held = depot::Held::new(angle, false);
+            let contents = depot::Contents {
+                pos: event.pos,
+                held,
+                stacks,
+            };
+            draw_depot_stacks(&mut *event.draw, host, &contents, held, 1.0);
+        }
+        Block::Chute
+        | Block::SmartChute
+        | Block::BrassFunnel
+        | Block::BrassBeltFunnel
+        | Block::BrassTunnel => LogisticsEntity.block_entity_submit(host, event),
+        _ => {}
     }
 }
 

@@ -145,17 +145,30 @@ fn holds_structure(data: &Compound) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Server: writing a structure into its anchor
 
-/// `blocks` (offsets from `place`, in whole blocks from the anchor) with their states, and the
-/// light each is drawn with.
+/// `blocks` (offsets from `place`, in whole blocks from the anchor) with their states, the
+/// light each is drawn with, and what the block entity of each shows (`Contraption.updateTags`:
+/// what contraption `key` carries for it, by the same offset).
 fn blocks_tags(
     c: &mut Compound,
     suffix: &str,
     lv: &ServerLevel<'_>,
-    anchor: [i32; 3],
+    (anchor, key): ([i32; 3], [i32; 3]),
     place: [i32; 3],
     blocks: &[([i32; 3], u32)],
 ) {
     let host = &*lv.host;
+    let mut entities = super::actors::shown_entities(lv, key);
+    if !entities.is_empty() {
+        c.insert(
+            format!("Entities{suffix}").as_str().into(),
+            Tag::List(
+                blocks
+                    .iter()
+                    .map(|(o, _)| Tag::Compound(entities.remove(o).unwrap_or_default()))
+                    .collect(),
+            ),
+        );
+    }
     c.insert(
         format!("Lights{suffix}").as_str().into(),
         Tag::IntArray(
@@ -262,7 +275,7 @@ pub(super) fn show_turn(
 ) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(TURN));
-    blocks_tags(&mut c, "", lv, anchor, [0; 3], blocks);
+    blocks_tags(&mut c, "", lv, (anchor, anchor), [0; 3], blocks);
     c.insert("Axis".into(), Tag::Int(axis_index(axis)));
     let now = lv.game_time();
     c.insert("Angle".into(), float(turn.map_or(0.0, |t| t.angle_at(now))));
@@ -276,6 +289,8 @@ pub(super) fn show_turn(
 /// at `origin + dir × offset` now, moving `per_tick` blocks a tick, within `clamp`; `rope`: a
 /// rope pulley's, with rope down to its magnet.
 pub(super) struct Glide<'a> {
+    /// The contraption whose carried block entities it shows (`actors`' key).
+    pub key: [i32; 3],
     pub origin: [i32; 3],
     pub blocks: &'a [([i32; 3], u32)],
     pub dir: [i32; 3],
@@ -289,7 +304,7 @@ pub(super) fn show_glide(lv: &mut ServerLevel<'_>, anchor: [i32; 3], g: Glide<'_
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(GLIDE));
     let place = [0, 1, 2].map(|i| g.origin[i] + (g.dir[i] as f32 * g.offset).round() as i32);
-    blocks_tags(&mut c, "", lv, anchor, place, g.blocks);
+    blocks_tags(&mut c, "", lv, (anchor, g.key), place, g.blocks);
     c.insert("Origin".into(), Tag::IntArray(g.origin.to_vec()));
     c.insert("Dir".into(), Tag::IntArray(g.dir.to_vec()));
     c.insert("Offset".into(), float(g.offset));
@@ -317,8 +332,8 @@ pub(super) struct Hands<'a> {
 pub(super) fn show_clock(lv: &mut ServerLevel<'_>, anchor: [i32; 3], h: Hands<'_>) {
     let mut c = Compound::new();
     c.insert("Kind".into(), Tag::Int(CLOCK));
-    blocks_tags(&mut c, "", lv, anchor, [0; 3], h.hour);
-    blocks_tags(&mut c, "2", lv, anchor, [0; 3], h.minute);
+    blocks_tags(&mut c, "", lv, (anchor, anchor), [0; 3], h.hour);
+    blocks_tags(&mut c, "2", lv, (anchor, anchor), [0; 3], h.minute);
     c.insert("Axis".into(), Tag::Int(axis_index(h.axis)));
     c.insert("Angle".into(), float(h.angles.0));
     c.insert("Angle2".into(), float(h.angles.1));
@@ -343,7 +358,7 @@ pub(super) fn show_elevator(
         e.y.round() as i32 - anchor[1],
         e.anchor[2] - anchor[2],
     ];
-    blocks_tags(&mut c, "", lv, anchor, place, &e.blocks);
+    blocks_tags(&mut c, "", lv, (anchor, anchor), place, &e.blocks);
     let y = e.y.to_bits();
     let nums = vec![
         e.anchor[0],
@@ -401,6 +416,9 @@ fn vec3(v: &[i32]) -> [i32; 3] {
 /// A block of a structure as the client draws it: its offset, block and properties.
 struct Drawn {
     at: [f32; 3],
+    state: mod_api::BlockState,
+    /// What its block entity showed when the structure took it (`Contraption.updateTags`).
+    entity: Option<mod_api::ModBlockEntity>,
     /// The light it is drawn with (none from an older save: the anchor's).
     light: Option<u32>,
     block: BlockKey,
@@ -412,6 +430,10 @@ struct Drawn {
 fn drawn_blocks(host: &dyn Host, c: &Compound, suffix: &str) -> Vec<Drawn> {
     let offsets = ints(c, &format!("Blocks{suffix}"));
     let lights = ints(c, &format!("Lights{suffix}"));
+    let entities = match c.get(&format!("Entities{suffix}").as_str().into()) {
+        Some(Tag::List(l)) => l.as_slice(),
+        _ => &[],
+    };
     let Some(Tag::List(texts)) = c.get(&format!("States{suffix}").as_str().into()) else {
         return Vec::new();
     };
@@ -429,8 +451,18 @@ fn drawn_blocks(host: &dyn Host, c: &Compound, suffix: &str) -> Vec<Drawn> {
             let create = states::id(state).and_then(|id| {
                 super::super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
             });
+            let entity = match entities.get(i) {
+                Some(Tag::Compound(e)) if !e.is_empty() => {
+                    let mut entity = mod_api::ModBlockEntity::default();
+                    entity.nbt = e.clone();
+                    Some(entity)
+                }
+                _ => None,
+            };
             Some(Drawn {
                 at: o.map(|v| v as f32),
+                state,
+                entity,
                 light: lights.get(i).map(|l| *l as u32),
                 block: state.block(),
                 create,
@@ -597,7 +629,12 @@ fn client_tick(_host: &mut dyn ClientHost) {
     });
 }
 
-fn draw_blocks(draw: &mut dyn BlockEntityDrawContext, blocks: &[Drawn]) {
+fn draw_blocks(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    anchor: [i32; 3],
+    blocks: &[Drawn],
+) {
     let own = draw.light();
     for b in blocks {
         let props: Vec<(&str, &str)> = b
@@ -608,6 +645,11 @@ fn draw_blocks(draw: &mut dyn BlockEntityDrawContext, blocks: &[Drawn]) {
         draw.set_light(b.light.unwrap_or(own));
         draw.push();
         draw.translate(b.at);
+        // What its block entity holds first: a translucent model (a nixie tube's glass) then
+        // blends over it rather than hiding it.
+        if let (Some((block, _)), Some(entity)) = (b.create, &b.entity) {
+            draw_carried(host, draw, anchor, b, block, entity);
+        }
         draw.block(b.block, &props);
         if let Some((block, info)) = b.create {
             draw_parts(draw, block, &info, &props);
@@ -635,6 +677,162 @@ fn draw_blocks(draw: &mut dyn BlockEntityDrawContext, blocks: &[Drawn]) {
         draw.pop();
     }
     draw.set_light(own);
+}
+
+/// Blocks whose block entity is not drawn while it rides (`MovementBehaviour
+/// .disableBlockEntityRendering`): their movement draws them (`renderInContraption`).
+fn drawn_by_movement(block: create_engine::Block) -> bool {
+    use create_engine::Block as B;
+    matches!(
+        block,
+        B::Deployer
+            | B::MechanicalDrill
+            | B::MechanicalSaw
+            | B::MechanicalHarvester
+            | B::MechanicalRoller
+            | B::PortableStorageInterface
+            | B::PortableFluidInterface
+            | B::BlazeBurner
+            | B::MechanicalBearing
+    )
+}
+
+/// `BlockEntityRenderHelper.renderBlockEntities` for one block of a structure: what its block
+/// entity held, drawn by each subsystem as its renderer draws it (`Subsystem::draw_carried`),
+/// for a position of its own far from the world's blocks (`anchor`, the block's offset, and
+/// far up), with the structure keeping what it draws.
+fn draw_carried(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    anchor: [i32; 3],
+    b: &Drawn,
+    block: create_engine::Block,
+    entity: &mod_api::ModBlockEntity,
+) {
+    if drawn_by_movement(block) {
+        return;
+    }
+    let pos = [
+        anchor[0] + b.at[0] as i32,
+        anchor[1] + b.at[1] as i32 + CARRIED_UP,
+        anchor[2] + b.at[2] as i32,
+    ];
+    let name = format!("create:{}", block.name());
+    let mut inner = Unkept(draw);
+    let mut event = mod_api::BlockEntitySubmitEvent {
+        pos,
+        block: &name,
+        state: b.state,
+        entity,
+        draw: &mut inner,
+    };
+    for s in super::super::SUBSYSTEMS {
+        s.draw_carried(host, block, &mut event);
+    }
+}
+
+/// How far up a riding block entity's stand-in position is ([`draw_carried`]): above any level.
+const CARRIED_UP: i32 = 1 << 20;
+
+/// A draw context whose `keep` does nothing: the structure keeps what is drawn, or not.
+struct Unkept<'a>(&'a mut dyn BlockEntityDrawContext);
+
+impl BlockEntityDrawContext for Unkept<'_> {
+    fn push(&mut self) {
+        self.0.push();
+    }
+    fn pop(&mut self) {
+        self.0.pop();
+    }
+    fn translate(&mut self, by: [f32; 3]) {
+        self.0.translate(by);
+    }
+    fn rotate_about(&mut self, axis: [f32; 3], degrees: f32, pivot: [f32; 3]) {
+        self.0.rotate_about(axis, degrees, pivot);
+    }
+    fn scale(&mut self, by: [f32; 3]) {
+        self.0.scale(by);
+    }
+    fn keep(&mut self) {}
+    fn partial(&self) -> f32 {
+        self.0.partial()
+    }
+    fn game_time(&self) -> i64 {
+        self.0.game_time()
+    }
+    fn animation_time(&self) -> f64 {
+        self.0.animation_time()
+    }
+    fn light(&self) -> u32 {
+        self.0.light()
+    }
+    fn set_light(&mut self, light: u32) {
+        self.0.set_light(light);
+    }
+    fn quad(&mut self, sprite: &str, corners: [[f32; 3]; 4], uv: [f32; 4], tint: u32) -> bool {
+        self.0.quad(sprite, corners, uv, tint)
+    }
+    fn cube(
+        &mut self,
+        from: [f32; 3],
+        to: [f32; 3],
+        faces: [Option<mod_api::CubeFace<'_>>; 6],
+        tint: u32,
+    ) -> bool {
+        self.0.cube(from, to, faces, tint)
+    }
+    fn block(&mut self, block: BlockKey, properties: &[(&str, &str)]) -> bool {
+        self.0.block(block, properties)
+    }
+    fn item(
+        &mut self,
+        stack: &mod_api::ItemStack,
+        display: mod_api::ItemDisplayContext,
+        owner_yaw: Option<f32>,
+        seed: i32,
+    ) -> bool {
+        self.0.item(stack, display, owner_yaw, seed)
+    }
+    fn spin(&mut self, axis: [f32; 3], pivot: [f32; 3], degrees_per_tick: f32, phase: f32) {
+        self.0.spin(axis, pivot, degrees_per_tick, phase);
+    }
+    fn still(&mut self) {
+        self.0.still();
+    }
+    fn model(&mut self, model: mod_api::ModelRef, tint: u32) -> Result<(), mod_api::ModelError> {
+        self.0.model(model, tint)
+    }
+    fn terrain_model(
+        &mut self,
+        model: mod_api::ModelRef,
+        options: mod_api::TerrainModelOptions<'_>,
+    ) -> Result<(), mod_api::TerrainModelError> {
+        self.0.terrain_model(model, options)
+    }
+    fn text(
+        &mut self,
+        text: &mod_api::Text,
+        at: [f32; 2],
+        color: u32,
+        glowing: bool,
+        outline: Option<u32>,
+    ) -> Result<f32, mod_api::TextFormError> {
+        self.0.text(text, at, color, glowing, outline)
+    }
+    fn text_width(&self, text: &mod_api::Text) -> Result<f32, mod_api::TextFormError> {
+        self.0.text_width(text)
+    }
+    fn model_part(&mut self, part: &mod_api::ModelPart, sprite: &str, tint: u32) -> bool {
+        self.0.model_part(part, sprite, tint)
+    }
+    fn fluid_box(
+        &mut self,
+        stack: &mod_api::FluidStack,
+        bounds: [f32; 6],
+        options: mod_api::FluidBoxOptions,
+    ) -> Result<(), mod_api::FluidBoxError> {
+        self.0.fluid_box(stack, bounds, options)
+    }
 }
 
 /// Blocks whose model is the whole block, drawn by its block entity in the world
@@ -769,7 +967,7 @@ fn submit(
                 let here = angle + rate * (now - since) as f32;
                 let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
                 draw.spin(*axis, [0.5; 3], rate, phase as f32);
-                draw_blocks(draw, blocks);
+                draw_blocks(host, draw, pos, blocks);
                 draw.still();
                 draw.keep();
             }
@@ -787,7 +985,7 @@ fn submit(
                     let here = angle + rate * (now - since) as f32;
                     let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
                     draw.spin(*axis, [0.5; 3], rate, phase as f32);
-                    draw_blocks(draw, blocks);
+                    draw_blocks(host, draw, pos, blocks);
                     draw.still();
                 }
                 draw.keep();
@@ -810,7 +1008,7 @@ fn submit(
                 shown.drawn_at = Some([0, 1, 2].map(|i| f64::from(pos[i]) + f64::from(shift[i])));
                 draw.push();
                 draw.translate(shift);
-                draw_blocks(draw, blocks);
+                draw_blocks(host, draw, pos, blocks);
                 draw.pop();
                 // Rope: whole blocks between the pulley and its magnet.
                 if *rope {
@@ -828,7 +1026,7 @@ fn submit(
                 ];
                 draw.push();
                 draw.translate(origin);
-                draw_blocks(draw, blocks);
+                draw_blocks(host, draw, pos, blocks);
                 draw.pop();
             }
         }

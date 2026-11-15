@@ -277,6 +277,19 @@ impl Subsystem for Decor {
         carried::carry_out(lv, pos, b, out);
     }
 
+    fn draw_carried(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        block: Block,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        if block == Block::Placard {
+            placard::draw_carried(host, event);
+        } else if bracketed(block) {
+            brackets::draw_carried(host, event);
+        }
+    }
+
     fn carry_in(
         &self,
         lv: &mut ServerLevel<'_>,

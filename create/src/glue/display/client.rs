@@ -354,6 +354,19 @@ fn draw_nixie(
     let Some((left, right)) = DISPLAYS.with_borrow(|d| d.nixies.get(&pos).cloned()) else {
         return;
     };
+    draw_nixie_text(host, draw, state, block, facing, &left, &right);
+}
+
+/// `NixieTubeRenderer`: the tube's two characters, `left` and `right`, in its colour.
+fn draw_nixie_text(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    state: mod_api::BlockState,
+    block: Block,
+    facing: Dir,
+    left: &str,
+    right: &str,
+) {
     let Some(i) = create_engine::dye::NIXIE_TUBES
         .iter()
         .position(|b| *b == block)
@@ -372,7 +385,7 @@ fn draw_nixie(
     let colour = create_engine::dye::DyeColor::ALL[i];
     let texts = {
         let draw = &*draw;
-        display::nixie_texts(face, facing, colour, &left, &right, |s| width(draw, s))
+        display::nixie_texts(face, facing, colour, left, right, |s| width(draw, s))
     };
     for t in texts {
         draw_text(draw, &t.pose, &t.text, t.color, true);
@@ -406,4 +419,43 @@ fn draw_board(
     for t in texts.unwrap_or_default() {
         draw_text(draw, &t.pose, &t.text, t.color, t.full_bright);
     }
+}
+
+/// A nixie tube riding a moving structure: the characters it showed when the structure took it
+/// (`NixieTubeRenderer` in `renderBlockEntities`).
+pub(super) fn draw_carried(
+    host: &dyn ClientHost,
+    block: Block,
+    event: &mut BlockEntitySubmitEvent<'_>,
+) {
+    if !display::is_nixie(block) {
+        return;
+    }
+    let carried = crate::glue::contraptions::actors::SHOWN_CARRIED;
+    let Some(Tag::Compound(c)) = event.entity.nbt.get(&carried.into()) else {
+        return;
+    };
+    let Some(Tag::List(shown)) = c.get(&super::carried::SHOWN.into()) else {
+        return;
+    };
+    let text = |i: usize| match shown.get(i) {
+        Some(Tag::String(s)) => s.to_string_lossy(),
+        _ => String::new(),
+    };
+    let Some(id) = states::id(event.state) else {
+        return;
+    };
+    let Some(facing) = client_table(host, |t| t.get(id).and_then(|(_, i)| i.facing)).flatten()
+    else {
+        return;
+    };
+    draw_nixie_text(
+        host,
+        event.draw,
+        event.state,
+        block,
+        facing,
+        &text(0),
+        &text(1),
+    );
 }

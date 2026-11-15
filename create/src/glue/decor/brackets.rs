@@ -218,3 +218,8 @@ pub(super) fn shown_text(b: Option<decor::Bracket>) -> String {
     })
     .unwrap_or_default()
 }
+
+/// A shaft, cog or pipe riding a moving structure: its bracket as it was taken.
+pub(super) fn draw_carried(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    BracketEntity.block_entity_submit(host, event);
+}

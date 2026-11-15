@@ -785,6 +785,7 @@ fn show_gantry(lv: &mut ServerLevel<'_>, g: &create_engine::gantry::Moving, gone
         lv,
         shaft,
         draw::Glide {
+            key: g.start,
             origin,
             blocks: &g.blocks,
             dir: g.shaft_facing.offset(),
@@ -1149,6 +1150,7 @@ fn show_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         lv,
         pos,
         draw::Glide {
+            key: pos,
             origin,
             blocks: &m.blocks,
             dir: facing.offset(),
