@@ -1364,6 +1364,94 @@ pub fn screen_closing(host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>)
     }
 }
 
+/// `create_debug station <x> <y> <z> <name NAME | assemble | exit | disassemble | go NAME>`, for tests
+/// (operators only): what the station's screen does (`StationEditPacket`: its name, assembling
+/// the bogeys on its track, taking apart the train at it), and the train standing at it given a
+/// schedule to station `NAME` and back (`ScheduleItem.handScheduleTo`, `DestinationInstruction`
+/// with an empty condition list each).
+pub fn debug_command(
+    host: &mut dyn mod_api::ServerHost,
+    event: &mut mod_api::RunModCommandEvent<'_>,
+) -> mod_api::Flow {
+    let cmd = event.command;
+    if cmd
+        .literals
+        .iter()
+        .map(String::as_str)
+        .ne(["create_debug", "station"])
+    {
+        return mod_api::Flow::Continue;
+    }
+    let args = match cmd.argument("args") {
+        Some(mod_api::CommandArgumentValue::String(s)) => s.clone(),
+        _ => String::new(),
+    };
+    let words: Vec<&str> = args.split_whitespace().collect();
+    let dimension = cmd
+        .dimension
+        .id(&*host)
+        .map(|d| d.to_string())
+        .unwrap_or_else(|| "minecraft:overworld".to_owned());
+    let line = (|| {
+        let [x, y, z, op, rest @ ..] = words.as_slice() else {
+            return "usage: <x> <y> <z> <name N | assemble | exit | disassemble | go N>".to_owned();
+        };
+        let pos = [x, y, z].map(|v| v.parse::<i32>().unwrap_or(0));
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return "no level".to_owned();
+        };
+        let dim = lv.dim;
+        match *op {
+            "name" => {
+                rename(&lv, pos, rest.join(" "));
+                format!("station {pos:?} named {}", rest.join(" "))
+            }
+            "assemble" => {
+                if !assembly::assembling(dim, pos) {
+                    assembly::enter_assembly(&mut lv, pos, None);
+                }
+                let ok = assembly::assemble(&mut lv, pos);
+                format!(
+                    "assemble {pos:?}: {ok} {:?}",
+                    assembly::failure(dim, pos).map(|f| f.0)
+                )
+            }
+            "exit" => {
+                let ok = assembly::exit_assembly(&mut lv, pos);
+                format!("exit assembly {pos:?}: {ok}")
+            }
+            "disassemble" => {
+                let ok = assembly::disassemble(&mut lv, pos, None);
+                format!("disassemble {pos:?}: {ok}")
+            }
+            "go" => {
+                let Some(train) = assembly::present_train(dim, pos) else {
+                    return format!("no train at {pos:?}");
+                };
+                let here = with_world(|w| w.dims[dim].railway.stations.get(&pos).cloned())
+                    .flatten()
+                    .unwrap_or_default();
+                let schedule = create_engine::schedule::Schedule {
+                    entries: vec![
+                        create_engine::schedule::Entry::station(&rest.join(" "), Vec::new()),
+                        create_engine::schedule::Entry::station(&here, Vec::new()),
+                    ],
+                    cyclic: false,
+                    saved_progress: 0,
+                };
+                let ok = super::conductor::set_schedule(dim, train, schedule, false);
+                format!(
+                    "train {train} to {} and back to {here}: {ok}",
+                    rest.join(" ")
+                )
+            }
+            _ => "unknown".to_owned(),
+        }
+    })();
+    let _ = host.commands().feedback(mod_api::Text::literal(line));
+    mod_api::Flow::Cancel
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

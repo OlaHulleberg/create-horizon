@@ -209,6 +209,9 @@ impl Subsystem for Carts {
         event
             .commands
             .push(mod_api::Command::op("create_debug carts <args:text>", 2));
+        event
+            .commands
+            .push(mod_api::Command::op("create_debug station <args:text>", 2));
     }
 
     fn run_mod_command(
@@ -216,6 +219,9 @@ impl Subsystem for Carts {
         host: &mut dyn ServerHost,
         event: &mut mod_api::RunModCommandEvent<'_>,
     ) -> Flow {
+        if super::station_screen::debug_command(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
         debug_command(host, event)
     }
 
