@@ -279,7 +279,11 @@ pub const LAST_EXCEPTION: &str = "LastException";
 /// `lastException`: what the last assembly of the bearing or piston at `pos` refused, or none
 /// for one that worked; nothing changes for a structure that wasn't there to assemble
 /// (`assemble` returning false).
-fn set_exception(lv: &mut ServerLevel<'_>, pos: [i32; 3], refused: Option<&contraption::Refused>) {
+pub(super) fn set_exception(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    refused: Option<&contraption::Refused>,
+) {
     use contraption::Refused;
     let c = match refused {
         Some(Refused::Empty) => return,

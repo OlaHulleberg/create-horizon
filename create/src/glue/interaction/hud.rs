@@ -112,6 +112,11 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
         HOVER.set(None);
         return;
     };
+    // A value box looked at (its outline highlighted, not passive) hides the overlay.
+    if board::hovered_box(host).is_some() {
+        HOVER.set(None);
+        return;
+    }
     let head = host
         .living(player.entity())
         .and_then(|l| l.equipment(host, EquipmentSlot::Head));

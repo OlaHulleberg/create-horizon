@@ -305,9 +305,15 @@ pub(super) fn clock_hands_set(lv: &mut ServerLevel<'_>, pos: [i32; 3], index: u8
 /// `ClockworkBearingBlockEntity.assemble`: the hour hand and the minute hand leave the world.
 fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32) {
     let dim = lv.dim;
-    let Ok(Some(hands)) = create_engine::clock::gather(pos, facing, |p| found(lv, p)) else {
-        return;
+    let hands = match create_engine::clock::gather(pos, facing, |p| found(lv, p)) {
+        Ok(Some(hands)) => hands,
+        Ok(None) => return,
+        Err(r) => {
+            super::set_exception(lv, pos, Some(&r));
+            return;
+        }
     };
+    super::set_exception(lv, pos, None);
     let mut all = hands.hour.clone();
     if let Some((_, m)) = &hands.minute {
         all.extend(m.iter().copied());
@@ -496,9 +502,14 @@ fn assemble_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
         return;
     }
     let anchor = below(pos, offset + 1);
-    let Ok(blocks) = pulley::gather(anchor, offset, |p| found(lv, p)) else {
-        return;
+    let blocks = match pulley::gather(anchor, offset, |p| found(lv, p)) {
+        Ok(b) => b,
+        Err(r) => {
+            super::set_exception(lv, pos, Some(&r));
+            return;
+        }
     };
+    super::set_exception(lv, pos, None);
     let mut p = Pulley::new(anchor, offset, range, blocks);
     p.rpm = rpm;
     p.limit = with_world(|w| w.dims[dim].kinetics.sequence_limit(pos, 0, true)).flatten();
