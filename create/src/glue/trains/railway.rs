@@ -205,12 +205,14 @@ impl Subsystem for Trains {
         super::schedule_screen::tick_client(host);
     }
 
-    /// A station's flag, marker and assembly track, for its clients.
+    /// A station's flag, marker and assembly track, a track's curves, and a signal's light and
+    /// state (its indicator, and a nixie tube on it), for its clients.
     fn synced_keys(&self) -> &'static [&'static str] {
         &[
             super::station_draw::KEY,
             super::tracks::CURVES,
             super::tracks::LIGHT,
+            super::tracks::SIGNAL_STATE,
         ]
     }
 
