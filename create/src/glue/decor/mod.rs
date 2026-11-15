@@ -1,6 +1,6 @@
 //! Create's decorative and simple blocks: girders and their encased shafts, brackets on shafts,
-//! cogs and pipes, the large water wheel's frame, placards, the desk bell and the peculiar bell's
-//! haunting, the creative crate, the item hatch, clipboards, table cloths and cardboard, the
+//! cogs and pipes, the large water wheel's frame, placards, the desk bell (`bell`), the peculiar
+//! and haunted bells ringing and their haunting (`bells`), the creative crate, the item hatch, clipboards, table cloths (their corners, `cloth`) and cardboard, the
 //! vertical gearbox and empty blaze burner items, and Create's copper shingles and tiles
 //! weathering, scraped and waxed. The rules are `create_engine::decor`'s.
 //!

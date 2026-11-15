@@ -1,7 +1,10 @@
 //! Track: the track item's placement (`TrackBlockItem`, `TrackPlacement`), the curves it lays
 //! and the fake track above them (`manageFakeTracksAlong`), and what clients draw of the
-//! railway on its own blocks: each track block's curves (`TrackRenderer.renderBezierTurn`) and
-//! each signal's light (`SignalRenderer`), carried in the block entity's data.
+//! railway on its own blocks: each track block's curves (`TrackRenderer.renderBezierTurn`, with
+//! a girder curve's beams, `renderGirder`) and each signal's light (`SignalRenderer`), carried
+//! in the block entity's data. Metal girders in the off hand lay a girder curve, paving girders
+//! under its straight runs (`TrackPaver`); a curve taken up drops its tracks and girders
+//! (`BezierConnection.spawnItems`). Paving with other blocks is left out.
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;

@@ -28,8 +28,9 @@
 //!   name its id's path in capitalised words); clients draw the boards' flap characters in their own.
 //! - The display boards' text alpha (`.85`, `.975` when glowing): a block entity's text is
 //!   drawn opaque.
-//! - The link's bulb flashing as it sends (`LinkBulbRenderer`): its glow is a block model drawn
-//!   additively in a fading colour, and a block entity's model is drawn in its own tints.
+//! - The glow over the link's bulb as it sends (`LinkBulbRenderer`, `bulb` draws its tube): a
+//!   block model drawn additively in a fading colour, and a block entity's model is drawn in its
+//!   own tints.
 
 mod bulb;
 pub(crate) mod carried;
