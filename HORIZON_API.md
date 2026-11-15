@@ -128,18 +128,15 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **The player in `left_click_block`**: an arm's chosen point and an ejector's target can't be dropped
   by left-clicking them with the item.
 - **A terrain model that reads its neighbours** (Create's `CTModel` and `CTSpriteShifter`, connected textures):
-  casings, framed glass, windows and layered stone join through the connected-texture rules `create-data
-  prepare` writes, but gearboxes, encased shafts and cogs and fluid tanks wider than one keep each its own
-  frame, where Create's `EncasedCTBehaviour`, `EncasedCogCTBehaviour` and `FluidTankCTBehaviour` join them
-  into one (their models are not plain cubes a rule can retexture). A model hook given the neighbouring
-  states (or a sprite shift per face) would close it.
+  casings, framed glass, windows, layered stone, pillars, weathered iron windows, scaffolding, chassis, girder
+  poles, trapdoors, vaults and encased blocks join through the OptiFine connected-texture rules `create-data
+  prepare` writes, but a rule joins by block or by block state only: an encased block never joins its casing
+  (`CasingConnectivity`), a vault joins a neighbouring vault in the same state, and joins decided by a block
+  entity or by collision heights are left out (fluid tanks wider than one, crafters, brass tunnels' tops,
+  copper roofs). A model hook given the neighbouring states (or a sprite shift per face) would close it.
 - **The level's redstone in `state_for_placement`** (`LevelHost` has no `has_neighbor_signal`): a clutch,
   gearshift or adjustable chain gearshift placed beside power is placed unpowered and takes `powered` in the
   same tick's level tick (`GearshiftBlock.getStateForPlacement` reads it at once).
-- **More than one UV shift in a `terrain_model` draw** (`TerrainModelOptions::uv_shift` takes one
-  sprite's): item vaults' connected textures (`ItemVaultCTBehaviour` picks each face's tile of the
-  front, side, top and bottom sheets by the vault's size) would be drawn by the vault's block entity
-  with one shift per sprite; they are not drawn.
 - **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
   light inside the chute is dark.
 - **The local player's inventory slots on its client** (`player_inventory_slots` answers on the server only;
@@ -152,19 +149,19 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   client's `open_native_screen` returns without a `Screen`): the filters' and the schedule's screens are the mod's own screen,
   and clicking an inventory slot carries a ghost copy, not the stack (Create's menus carry the real one). A
   `Screen` for a menu type (not only a block entity's), or a `screen` part hook keyed by menu, would close it.
-- **An item's tags** (`ItemStack.getTags`) and **an item's tooltip lines**: the attribute filter offers no
-  `in_tag` attributes for its reference item, and the filters' screens show a slot's name, not its tooltip.
+- **An item's tooltip lines**: the filters' screens show a slot's name, not its tooltip. (An item's tags are
+  found by testing the tags a data reload listener lists under `tags/item`.)
 - **A block state's model drawn in the world without a block entity** (`SchematicRenderer`'s ghost blocks):
   a deployed schematic is outlined, not drawn; `draw_model_instances` takes only registered standalone models,
   not any block state's.
-- **Text and sprites on a block face in the world** outside a block entity's draw: a value box's value and icon
-  (`ValueBox.renderContents`) are left out; only its outline is drawn.
-- **Block textures in `draw_scene`**: the wand of symmetry's mirror preview (a part block's model in a scene)
-  shows nothing in game, while a toolbox's draws; the scene looks its sprites up in the GUI atlas
-  (`native_scene.rs`), which likely lacks textures that no item uses. Not confirmed further.
-- **A slot's count text and a slot holding more than 99**: a toolbox compartment holds 4 stacks (256), Create's
-  screen shows the compartment's total on its one slot; here a slot shows its own stack, and the other three are
-  filled by the deposit button and hoppers, not by clicks.
+- **GUI sprites in a block entity's draw**, and **text and sprites on a block face in the world** outside one:
+  a value box's number is drawn by its block's block entity (creative motors, speed controllers, valve
+  handles, brass diodes), but the icon boxes (`IconValueBox`: movement and selection modes) and the filter
+  slots' items and counts (`FilteringRenderer`) are left out. A kept block entity is drawn anew only when its
+  data changes, so the server resends a looked-at block's entity with a look count.
+- **A slot holding more than 99**: a toolbox compartment holds 4 stacks (256); its screen draws the
+  compartment's total over its one slot after the screen is drawn, but the other three stacks are filled by the
+  deposit button and hoppers, not by clicks.
 - **A clip rectangle in `DrawContext`** (`GuiGraphics.enableScissor`): the schedule's cards scrolled past its
   panel are covered by the panel's frame drawn again, and a card's condition groups that don't fit across it are
   left out until scrolled to, where Create cuts them at the card's edge.
