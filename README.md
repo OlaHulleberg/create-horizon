@@ -59,11 +59,9 @@ reaching into belts and tanks. The full list, with what would fix each one: **[H
 ## Install
 
 > [!NOTE]
-> Create's textures, models and sounds are All Rights Reserved, so they are not in this repository. They come
-> from Create's official jar: the build takes them from it on your machine, and they never leave it.
-
-<!-- TODO: final player commands. The automatic download of Create's jar from Modrinth is being added;
-     until it lands, `prepare` needs the path to a Create jar. Replace this section once it is merged. -->
+> Create's textures, models and sounds are All Rights Reserved, so they are not in this repository. Your own
+> machine downloads Create's official jar from Modrinth, where the Create Team publishes it, and checks it
+> against the hash pinned here. Nothing from it is ever shipped from this repository.
 
 You need:
 
@@ -77,19 +75,24 @@ Then:
 git clone https://github.com/OlaHulleberg/create-horizon.git
 cd create-horizon/tools/create-data
 
-# Assemble the mod. The first build fetches Create's official jar from Modrinth,
-# or point it at your own Create 6.0.11 jar.
-cargo run --release -- prepare --out ../../target/create-mod /path/to/create-6.0.11.jar
+# Assemble the mod. This downloads Create's official jar from Modrinth into your cache
+# and checks its SHA-512. Offline? Add --jar /path/to/create-1.21.1-6.0.10.jar
+cargo run --release -- prepare --out ../../target/create-mod/create
 
-# Build it into your instance.
+# Build it into your instance, then play.
 cd ../..
 horizon-launcher native-build target/create-mod --instance "My Instance" --trust-native-code
+horizon-launcher play --instance "My Instance" --allow-jar-downloads
 ```
 
-Start the instance from the launcher and open a world. Native mods run with your rights, which is why the
-launcher asks for `--trust-native-code`.
+Or start the instance from the launcher's window: it asks before downloading Create's jar into the instance.
+Native mods run with your rights, which is why the launcher asks for `--trust-native-code`.
 
-The folder in `target/create-mod` holds Create's assets. It is for your own game: don't share it.
+The folder in `target/create-mod` holds files made from Create's assets. It is for your own game: don't share it.
+
+> [!NOTE]
+> The port follows Create 6.0.11's source. Its assets come from the newest published jar, 1.21.1-6.0.10
+> (6.0.11 isn't released yet); the two differ in only two textures.
 
 <!-- TODO: drop this note once Sunrise publishes the SDK for the pinned build. -->
 > [!IMPORTANT]

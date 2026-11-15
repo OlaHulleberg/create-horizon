@@ -43,8 +43,9 @@ from `common/src/main/resources/assets/ponder/textures/gui/placement_indicator.p
 
 `src/main/resources/assets/` (textures, hand-written models, sounds, shaders, ponder) is
 "All Rights Reserved, Copyright (c) The Create Team / The Creators of Create". None of it is in
-this repository or in the mod's bundle: `tools/create-prepare` reads it from the player's own
-Create jar on their machine.
+this repository or in the mod's bundle: the player's own machine downloads Create's official jar
+from Modrinth (by its pinned SHA-512), where the launcher layers it under the mod and
+`tools/create-data prepare` reads it.
 
 ## Horizon Veinminer
 

@@ -1,10 +1,14 @@
 //! The one-time prepare step. A Create jar holds MIT data (`data/`, generated `assets/`) and All
 //! Rights Reserved assets (textures, hand-written models, sounds); neither ships with the port. This
-//! reads them from the player's own jar (or folders laid out like one) and writes the native mod
-//! the launcher builds: the mod's crate (`create/`: `horizon-mod.toml`, `Cargo.toml`, `src/`) and
-//! declarations (`data/`, `assets/`), Create's data converted from 1.21.1 to 26.3, and its assets
-//! with the item model definitions 26.3 needs. Reading a zip runs no Java. The folder holds
-//! Create's assets: it is for the player's own game, never for redistribution.
+//! reads them from Create's jar on the player's machine (`jar.rs` downloads the pinned one from
+//! Modrinth; a jar or folders laid out like one may be given) and writes the native mod the
+//! launcher builds: the mod's crate (`create/`: `horizon-mod.toml`, `Cargo.toml`, `src/`) and
+//! declarations (`data/`, `assets/`), Create's data converted from 1.21.1 to 26.3, and what 26.3
+//! needs made from its assets (item model definitions, flattened and tinted models, connected
+//! texture tiles). `horizon-mod.toml` names the pinned jar (`[[jar]]`): the launcher fetches it
+//! and layers its assets and data under the mod, so a file the jar already holds as it is is not
+//! written again. Reading a zip runs no Java. The folder holds what is made from Create's assets:
+//! it is for the player's own game, never for redistribution.
 
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -599,7 +603,54 @@ fn particle_behaviour(path: &str) -> Option<Value> {
     }
 }
 
+/// Whether the sources are exactly the jar `create/horizon-mod.toml` names, which the launcher
+/// layers under the mod: then what would be copied from it unchanged is left to that layer.
+fn layered(sources: &[PathBuf]) -> Result<bool, String> {
+    let [source] = sources else {
+        return Ok(false);
+    };
+    if source.is_dir() {
+        return Ok(false);
+    }
+    let hash = crate::jar::sha512_of(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    if hash != crate::jar::CREATE.sha512 {
+        eprintln!(
+            "{}: not the jar create/horizon-mod.toml names (Create {}, {}); copying all of it",
+            source.display(),
+            crate::jar::CREATE.version,
+            crate::jar::CREATE.file
+        );
+    }
+    Ok(hash == crate::jar::CREATE.sha512)
+}
+
+/// The mod's own file that keeps a data file of the jar layer from loading: a data map removes
+/// the jar's entries (layers of data maps merge), any other file fails a load condition (the top
+/// layer's file is the one read). `None` where the mod cannot: tags merge and have no removal in
+/// 26.3, and a mod's files stay in its own namespace (the jar's `data/neoforge/data_maps` load).
+fn left_out(path: &str, bytes: &[u8]) -> Option<Value> {
+    if !path.starts_with("data/create/") || path.contains("/tags/") {
+        return None;
+    }
+    if path.contains("/data_maps/") {
+        let doc: Value = serde_json::from_slice(bytes).ok()?;
+        let keys: Vec<&String> = doc["values"].as_object()?.keys().collect();
+        return Some(json!({ "remove": keys }));
+    }
+    // World generation reads every layer's placed features and biome modifiers, load conditions
+    // or not, so the jar's modifiers still add these to biomes: a placed feature that runs no
+    // times stands in for each.
+    if path.starts_with("data/create/worldgen/placed_feature/") {
+        return Some(json!({
+            "feature": "minecraft:ore_dirt",
+            "placement": [{ "type": "minecraft:count", "count": 0 }]
+        }));
+    }
+    Some(json!({ "neoforge:conditions": [{ "type": "(removed)" }] }))
+}
+
 pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, String> {
+    let layered = layered(sources)?;
     let files = read_sources(sources)?;
     if !files
         .keys()
@@ -609,7 +660,13 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     }
     let tmp = out.with_extension("preparing");
     let _ = fs::remove_dir_all(&tmp);
+    // Files the jar layer already gives as they are, so they are not written again.
+    let from_jar = std::cell::RefCell::new(std::collections::BTreeSet::new());
     let put = |rel: &str, bytes: &[u8]| -> Result<(), String> {
+        if layered && files.get(rel).is_some_and(|b| b == bytes) {
+            from_jar.borrow_mut().insert(rel.to_owned());
+            return Ok(());
+        }
         let p = tmp.join(rel);
         fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
         fs::write(&p, bytes).map_err(|e| format!("{}: {e}", p.display()))
@@ -810,6 +867,22 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             &serde_json::to_vec_pretty(&doc).unwrap(),
         )?;
     }
+    // The jar layer (`[[jar]]` in horizon-mod.toml) also holds the data left out above (recipes for
+    // other mods, the worldgen 26.3 cannot place, recipe advancements...): the mod's own file at
+    // the same path keeps each out, as it was when the mod carried copies of what it kept.
+    let mut kept_out = 0;
+    {
+        let from_jar = from_jar.borrow();
+        for (path, bytes) in &files {
+            if !path.ends_with(".json") || from_jar.contains(path) || tmp.join(path).exists() {
+                continue;
+            }
+            if let Some(doc) = left_out(path, bytes) {
+                put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
+                kept_out += 1;
+            }
+        }
+    }
     let _ = fs::remove_dir_all(out);
     fs::rename(&tmp, out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut report = Map::new();
@@ -818,7 +891,13 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     report.insert("recipes".into(), json!(recipes));
     report.insert("recipes_skipped_for_other_mods".into(), json!(skipped));
     report.insert("worldgen_left_out".into(), json!(worldgen_left_out));
-    report.insert("files_copied".into(), json!(copied));
+    let from_jar = from_jar.borrow().len();
+    report.insert(
+        "files_copied".into(),
+        json!((copied as usize).saturating_sub(from_jar)),
+    );
+    report.insert("files_left_to_the_jar_layer".into(), json!(from_jar));
+    report.insert("jar_files_kept_out".into(), json!(kept_out));
     report.insert("common_tags_added".into(), json!(common));
     report.insert("connected_texture_files".into(), json!(ct_files.len()));
     report.insert("connected_textures_left_out".into(), json!(ct_left_out));
@@ -829,6 +908,26 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn keeps_left_out_jar_data_out() {
+        let recipe = left_out("data/create/recipe/crushing/tin_ore.json", b"{}").unwrap();
+        assert_eq!(recipe["neoforge:conditions"][0]["type"], "(removed)");
+        let placed = left_out(
+            "data/create/worldgen/placed_feature/striated_ores_overworld.json",
+            b"{}",
+        )
+        .unwrap();
+        assert_eq!(placed["placement"][0]["count"], 0);
+        let map = left_out(
+            "data/create/data_maps/item/fuels.json",
+            br#"{"values": {"create:a": 1, "create:b": 2}}"#,
+        )
+        .unwrap();
+        assert_eq!(map, json!({ "remove": ["create:a", "create:b"] }));
+        assert!(left_out("data/create/tags/item/x.json", b"{}").is_none());
+        assert!(left_out("data/neoforge/data_maps/block/waxables.json", b"{}").is_none());
+    }
 
     #[test]
     fn converts_1_21_1_ingredients() {

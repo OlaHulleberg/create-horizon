@@ -17,11 +17,14 @@ Generated files (`create/src/engine/src/generated.rs`, `create/data/`, `create/a
 `tools/create-data compile`: never edit them by hand. Never commit Create's
 `src/main/resources/assets` (All Rights Reserved) or anything copied or adapted from it: textures,
 models, block states, particle files, sounds or translations. Name them by id instead; what must
-contain them is produced by `create-data prepare` from the player's jar (a test in
-`tools/create-data` allows only generated block states and models in `create/assets`). English UI
+contain them is produced by `create-data prepare` from Create's jar, which the player's machine
+downloads from Modrinth (pinned URL and SHA-512 in `tools/create-data/src/jar.rs`, the same file
+as `[[jar]]` in `create/horizon-mod.toml`, which the launcher layers under the mod); never commit
+the jar or anything extracted from it (a test in `tools/create-data` allows only generated block
+states and models in `create/assets`). English UI
 text from Create's `src/generated/resources/assets/create/lang/en_us.json` is MIT.
 
 Validate in `create/` with the SDK's toolchain: `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy
 --all-targets -- -D warnings`, `cargo +1.99.1 test`, `cargo +1.99.1 test -p create-engine`, and
-`cargo horizon-mod check`; in `tools/create-data`, `cargo test`. Keep validation claims honest:
+`cargo horizon-mod check`; in `tools/create-data`, `cargo test --locked`. Keep validation claims honest:
 say what was run, and what was not run in game.
