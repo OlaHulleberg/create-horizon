@@ -25,8 +25,10 @@
 //!   damped. Needs `EntityRef::move_by` (HORIZON_API.md's entity motion row).
 //! - A redstone conductor beside an assembler turning an accelerated cart
 //!   (`BlockState.isRedstoneConductor`): no API reads it, so none is seen. Needs a state fact.
-//! - Actors (drills, harvesters) on a cart, and a chest minecart's own inventory added to the
-//!   contraption's (`addExtraInventories`, which only actors fill).
+//!
+//! A contraption's actors (drills, saws, harvesters, ploughs, rollers, deployers) work as it
+//! rides (`tick_cart_actors`), dropping into its storage blocks and then into a chest
+//! minecart's own inventory (`addExtraInventories`).
 
 use super::super::net;
 use super::super::persist::mark_unsaved;
@@ -122,6 +124,106 @@ struct OnCart {
     /// What its other block entities and the engine kept for its blocks
     /// (`StructureBlockInfo.nbt`), as `actors::carry_held` saves it.
     held: Option<Tag>,
+    /// Its actors (drills, saws, harvesters, ploughs, rollers, deployers) and what they work
+    /// on (`MovementContext`), made again from its blocks when it loads.
+    carried: create_engine::actors::Carried,
+}
+
+/// The offset a chest minecart's own inventory is lent to its contraption's actors under
+/// (`MountedContraption.addExtraInventories`: after the storage blocks).
+const CART_INVENTORY: [i32; 3] = [i32::MIN, i32::MIN, i32::MIN];
+
+/// `AbstractContraptionEntity.tickActors` for the contraptions on carts of `lv`, turned as
+/// players see them (`OrientedContraptionEntity`: about its anchor's centre half a block over
+/// its cart, `Y(angle - base) Z(pitch) Y(base)`): each actor works where it is. Their drops go
+/// into its storage blocks, then into a chest minecart's own inventory, else to the ground.
+fn tick_cart_actors(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) {
+    let dim = lv.dim;
+    let list: Vec<u128> = CARTS.with_borrow(|c| {
+        c.mounted
+            .iter()
+            .filter(|(u, on)| {
+                on.dim == dim && carts.contains_key(u) && !on.carried.actors.is_empty()
+            })
+            .map(|(u, _)| *u)
+            .collect()
+    });
+    for uuid in list {
+        let nc = &carts[&uuid];
+        let Some(mut on) = CARTS.with_borrow_mut(|c| c.mounted.remove(&uuid)) else {
+            continue;
+        };
+        let pivot = [nc.pos[0], nc.pos[1] + 0.5, nc.pos[2]];
+        let base = f64::from(mounted::y_rot(on.m.initial));
+        let yaw = -(f64::from(on.m.angle()) - base - 90.0);
+        let turns = [
+            (Axis::Y, base + 90.0),
+            (Axis::X, f64::from(on.m.turn.pitch)),
+            (Axis::Y, -yaw),
+        ];
+        // The cart's own items (a chest minecart's), lent after the storage blocks.
+        let items = nc
+            .entity
+            .capability(lv.host, &mod_api::ENTITY_ITEMS, ())
+            .filter(|_| nc.kind == "minecraft:chest_minecart");
+        let before: Vec<Option<ItemStack>> = match &items {
+            Some(items) => {
+                let host = &mut *lv.host;
+                (0..items.size(host))
+                    .map(|i| {
+                        let r = items.resource(host, i)?;
+                        r.to_stack(items.amount(host, i))
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        let key = held_key(uuid);
+        let mut lent = on.storage.clone();
+        if items.is_some() {
+            lent.push((CART_INVENTORY, before.clone()));
+        }
+        crate::glue::contraptions::actors::lend_storage(dim, key, lent);
+        let stalled = crate::glue::contraptions::actors::tick_posed_actors(
+            lv,
+            key,
+            &mut on.carried,
+            pivot,
+            &turns,
+        );
+        on.carried.stalled = stalled;
+        let mut back = crate::glue::contraptions::actors::lent_back(dim, key);
+        let after = back
+            .iter()
+            .position(|(o, _)| *o == CART_INVENTORY)
+            .map(|i| back.remove(i).1);
+        if back != on.storage {
+            on.storage = back;
+            CARTS.with_borrow_mut(|c| c.dirty = true);
+        }
+        // What the actors put into the cart's own inventory goes into it.
+        if let (Some(items), Some(after)) = (&items, after) {
+            let _ = mod_api::HostTransaction::transaction(&mut *lv.host, |h, tx| {
+                for (i, now) in after.iter().enumerate() {
+                    let Some(now) = now else { continue };
+                    let was = before.get(i).cloned().flatten();
+                    let added = match &was {
+                        Some(w) if w.is_stackable_with(now) => {
+                            now.count().saturating_sub(w.count())
+                        }
+                        Some(_) => 0,
+                        None => now.count(),
+                    };
+                    if added > 0 {
+                        let r = mod_api::ItemResource::of(now);
+                        items.insert(h, tx, i, &r, added);
+                    }
+                }
+                Ok::<(), ()>(())
+            });
+        }
+        CARTS.with_borrow_mut(|c| c.mounted.insert(uuid, on));
+    }
 }
 
 /// The key a cart's contraption's block data is carried under while it is put back.
@@ -440,14 +542,22 @@ fn debug_command(host: &mut dyn ServerHost, event: &mut mod_api::RunModCommandEv
                 .mounted
                 .iter()
                 .map(|(u, on)| {
+                    let stored: u32 = on
+                        .storage
+                        .iter()
+                        .flat_map(|(_, slots)| slots.iter().flatten())
+                        .map(ItemStack::count)
+                        .sum();
                     format!(
-                        "cart {:08x} {} blocks mode {} initial {:?} yaw {:.1} coupled {}",
+                        "cart {:08x} {} blocks mode {} initial {:?} yaw {:.1} coupled {} \
+                         actors {} stored {stored}",
                         (u >> 96) as u32,
                         on.m.blocks.len(),
                         on.m.mode.name(),
                         on.m.initial,
                         on.m.turn.yaw,
-                        on.coupled
+                        on.coupled,
+                        on.carried.actors.len()
                     )
                 })
                 .collect();
@@ -1047,6 +1157,7 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             .map(|s| s.mode)
             .unwrap_or_default()
     });
+    let carried = crate::glue::contraptions::actors::bearing_actors(&blocks);
     let m = Mounted::new(blocks, mode, initial);
     // A furnace cart's push is zeroed (`PushX`, `PushZ` saved as 0 and loaded back).
     if nc.kind == "minecraft:furnace_minecart"
@@ -1073,6 +1184,7 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
                 storage,
                 glue,
                 held,
+                carried,
             },
         );
         c.dirty = true;
@@ -1379,6 +1491,7 @@ fn contraption_of(host: &dyn Host, c: &Compound, dim: usize) -> Option<OnCart> {
             .collect(),
         _ => Vec::new(),
     };
+    let carried = crate::glue::contraptions::actors::bearing_actors(&m.blocks);
     Some(OnCart {
         dim,
         m,
@@ -1386,6 +1499,7 @@ fn contraption_of(host: &dyn Host, c: &Compound, dim: usize) -> Option<OnCart> {
         storage,
         glue,
         held: get(c, "Held").cloned(),
+        carried,
     })
 }
 
@@ -1661,6 +1775,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
         }
         carts = follow(lv);
         tick_mounted(lv, &carts);
+        tick_cart_actors(lv, &carts);
         tick_couplings(lv, &carts);
     }
     tell_couplings(lv, &carts);

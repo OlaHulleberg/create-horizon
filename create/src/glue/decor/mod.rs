@@ -139,6 +139,23 @@ fn with<R>(dim: usize, f: impl FnOnce(&mut Dim) -> R) -> R {
     DECOR.with_borrow_mut(|d| f(d.entry(dim).or_default()))
 }
 
+/// The clipboards placed within `range` blocks of `at` in level `dim` (their centres), with
+/// their pages.
+pub(crate) fn clipboards_near(dim: usize, at: [f64; 3], range: f64) -> Vec<ItemStack> {
+    with(dim, |d| {
+        d.clipboards
+            .iter()
+            .filter(|(p, _)| {
+                (0..3)
+                    .map(|i| (f64::from(p[i]) + 0.5 - at[i]).powi(2))
+                    .sum::<f64>()
+                    <= range * range
+            })
+            .map(|(_, s)| s.clone())
+            .collect()
+    })
+}
+
 /// The block and state facts of engine state `id` (server side).
 fn block_of(id: u32) -> Option<(Block, StateInfo)> {
     with_world(|w| w.table.get(id).map(|(b, i)| (b, *i))).flatten()

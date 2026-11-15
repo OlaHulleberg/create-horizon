@@ -14,10 +14,10 @@
 //! (`isSchematicListMode`). Holding a table cloth, it programs the cloth as a shop of what is
 //! ordered (`shop`). The screen closes when its keeper is gone.
 //!
-//! Left out: the keeper drawn beside the window (no entity or blaze head drawn in a screen, see
-//! `HORIZON_API.md`); crafting recipes and the search sync button, which come from JEI
-//! (`StockKeeperTransferHandler`, `SearchSyncMode`), a mod the game does not have; addresses from
-//! clipboards placed nearby.
+//! The address box also offers the `#` addresses on clipboards placed within 32 blocks, which
+//! the server tells each player of every second (`advertise_clipboards`).
+//!
+//! Left out: the keeper drawn beside the window (no entity drawn in a screen, `HORIZON_API.md`).
 
 use super::super::net;
 use super::super::server::ServerLevel;
@@ -32,6 +32,7 @@ use mod_api::{
     ServerHost, SoundPlay, Tag, Text,
 };
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// Server to client: the screen's contents (`0` opens it, `1` adds stacks, `2` starts a fresh
 /// list, `3` closes it); client to server: `R` asks for the stock again, `O` sends the order (an
@@ -1513,8 +1514,8 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
     } else {
         draw.text(&send, [sx, y + l.h - 35.0], 0xFF25_2525, false);
     }
-    // `renderForeground`: the hovered stack's name (the game gives no item's tooltip lines), the
-    // lock's and the address box's tooltips.
+    // `renderForeground`: the hovered stack's tooltip (`renderTooltip`), the lock's and the
+    // address box's tooltips.
     let tip_stack = match hover {
         Some(Hover::Item(ci, i)) => groups
             .get(ci)
@@ -1529,7 +1530,12 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
         |k: &str, f: &str| Text::literal(tr(host, k, f)).with_style(style("dark_gray", true));
     let [mx, my] = mouse;
     let tip: Option<Vec<Text>> = if let Some(s) = tip_stack {
-        Some(vec![Text::literal(host.hover_name(&s))])
+        let lines = crate::glue::items::tooltip_lines(host, &s);
+        Some(if lines.is_empty() {
+            vec![Text::literal(host.hover_name(&s))]
+        } else {
+            lines
+        })
     } else if scroll < 1.0
         && o.admin
         && my > l.beside_search_y
@@ -1662,7 +1668,8 @@ fn wrap(draw: &dyn DrawContext, msg: &str, width: f32) -> Vec<String> {
 }
 
 /// `AddressEditBoxHelper.createSuggestions`: the addresses (`#` entries not ticked) on the
-/// clipboards in the player's inventory, each once.
+/// clipboards in the player's inventory, then on those placed nearby (`NEARBY_CLIPBOARDS`, as
+/// the server last told), each once.
 pub(super) fn addresses(host: &dyn ClientHost) -> Vec<String> {
     let Some(player) = host.local_player() else {
         return Vec::new();
@@ -1672,19 +1679,92 @@ pub(super) fn addresses(host: &dyn ClientHost) -> Vec<String> {
         if stack.item().id(host) != "create:clipboard" {
             continue;
         }
-        for page in super::super::display::clipboard::content(&stack).pages {
-            for e in page {
-                if e.checked || !e.text.starts_with('#') || e.text.len() == 1 {
-                    continue;
-                }
-                let address = e.text[1..].trim().to_owned();
-                if !address.is_empty() && !out.contains(&address) {
-                    out.push(address);
-                }
+        for a in clipboard_addresses(&stack) {
+            if !out.contains(&a) {
+                out.push(a);
+            }
+        }
+    }
+    for a in NEARBY.with_borrow(Clone::clone) {
+        if !out.contains(&a) {
+            out.push(a);
+        }
+    }
+    out
+}
+
+/// `appendAddresses`: a clipboard's `#` entries not ticked, the `#` taken off.
+pub(crate) fn clipboard_addresses(stack: &ItemStack) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for page in super::super::display::clipboard::content(stack).pages {
+        for e in page {
+            if e.checked || !e.text.starts_with('#') || e.text.len() == 1 {
+                continue;
+            }
+            let address = e.text[1..].trim().to_owned();
+            if !address.is_empty() && !out.contains(&address) {
+                out.push(address);
             }
         }
     }
     out
+}
+
+/// The channel of the addresses on clipboards placed near a player, server to client.
+pub(super) const NEARBY_CHANNEL: &str = "create:nearby_addresses";
+
+thread_local! {
+    /// The client's: the addresses on clipboards placed nearby.
+    static NEARBY: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The server's: what each player was last told.
+    static TOLD: RefCell<HashMap<u128, Vec<String>>> = RefCell::new(HashMap::new());
+}
+
+/// `ClipboardBlockEntity`'s client tick advertising itself (`advertiseClipboard`, within 32
+/// blocks, kept 20 ticks): every second the server tells each player of `lv` the addresses on
+/// the clipboards placed within 32 blocks, when they changed.
+pub(super) fn advertise_clipboards(lv: &mut ServerLevel<'_>) {
+    if lv.game_time() % 20 != 0 {
+        return;
+    }
+    for player in lv.players() {
+        let Some(at) = player.entity().position(&*lv.host) else {
+            continue;
+        };
+        let mut addresses: Vec<String> = Vec::new();
+        for stack in crate::glue::decor::clipboards_near(lv.dim, at, 32.0) {
+            for a in clipboard_addresses(&stack) {
+                if !addresses.contains(&a) {
+                    addresses.push(a);
+                }
+            }
+        }
+        let uuid = player.uuid();
+        if TOLD.with_borrow(|t| t.get(&uuid) == Some(&addresses)) {
+            continue;
+        }
+        let mut m = Vec::new();
+        for a in &addresses {
+            put_str(&mut m, a);
+        }
+        TOLD.with_borrow_mut(|t| t.insert(uuid, addresses));
+        net::send_to_player(lv.host, player, NEARBY_CHANNEL, &m);
+    }
+}
+
+/// The nearby clipboards' addresses, from the server.
+pub(super) fn nearby_from_server(data: &[u8]) {
+    let mut r = Reader(data);
+    let mut list = Vec::new();
+    while let Some(s) = r.str() {
+        list.push(s);
+    }
+    NEARBY.with_borrow_mut(|n| *n = list);
+}
+
+pub(super) fn forget_nearby() {
+    NEARBY.with_borrow_mut(Vec::clear);
+    TOLD.with_borrow_mut(HashMap::clear);
 }
 
 /// `DestinationSuggestions.updateCommandInfo`: while the box has the focus, the addresses

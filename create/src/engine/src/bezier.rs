@@ -248,6 +248,38 @@ impl Curve {
         levels
     }
 
+    /// `TrackPaver.paveCurve`'s columns: under each sleeper segment's middle (3/16 above the
+    /// curve, 1.125 down along its up), at either rail (.97 out) and between them, each column
+    /// with the lowest height met in it, in the order first met.
+    pub fn pave_levels(&self) -> Vec<([i32; 2], f64)> {
+        let segments = self.segments;
+        let [fn1, fn2] = self.normals;
+        let up = [0.0, f64::from(3.0f32 / 16.0), 0.0];
+        let mut levels: Vec<([i32; 2], f64)> = Vec::new();
+        for i in 0..segments {
+            let mut t = i as f32 * self.step_lut[i] / segments as f32;
+            t += 0.5 / segments as f32;
+            let t = f64::from(t);
+            let result = add(self.position(t), up);
+            let derivative = normalize(self.derivative(t));
+            let face = if fn1 == fn2 { fn1 } else { slerp(t, fn1, fn2) };
+            let normal = normalize(cross(face, derivative));
+            let below = add(result, scale(face, f64::from(-1.125f32)));
+            let rail1 = add(below, scale(normal, f64::from(0.97f32)));
+            let rail2 = sub(below, scale(normal, f64::from(0.97f32)));
+            let middle = scale(add(rail1, rail2), 0.5);
+            for v in [rail1, rail2, middle] {
+                let key = [v[0].floor() as i32, v[2].floor() as i32];
+                match levels.iter_mut().find(|(k, _)| *k == key) {
+                    Some(l) if l.1 > v[1] => l.1 = v[1],
+                    Some(_) => {}
+                    None => levels.push((key, v[1])),
+                }
+            }
+        }
+        levels
+    }
+
     /// `getNormal(t)`: the track's up, between the ends' normals.
     pub fn normal(&self, t: f64) -> Vec3 {
         let derivative = normalize(self.derivative(t));

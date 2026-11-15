@@ -117,6 +117,33 @@ pub(crate) fn item_tooltip(host: &dyn ClientHost, event: &mut mod_api::ItemToolt
     tooltip::item_tooltip(host, event);
 }
 
+/// `ItemStack.getTooltipLines(.., TooltipFlag.NORMAL)` on a client: the game's lines with
+/// Create's added, as `item_tooltip` adds them (other mods' callbacks are not run).
+pub(crate) fn tooltip_lines(host: &dyn ClientHost, stack: &ItemStack) -> Vec<mod_api::Text> {
+    let Some(game) = mod_api::ItemResource::of(stack).tooltip(host, false, false) else {
+        return Vec::new();
+    };
+    let mut lines: Vec<(mod_api::Text, u32)> = game
+        .into_iter()
+        .filter_map(|e| match e {
+            mod_api::TooltipElement::Text(t, c) => Some((t, c)),
+            _ => None,
+        })
+        .collect();
+    let display = mod_api::TooltipDisplay::for_stack(stack);
+    let mut event = mod_api::ItemTooltipEvent {
+        player: 0,
+        player_entity_id: -1,
+        stack,
+        display: &display,
+        advanced: false,
+        creative: false,
+        lines: &mut lines,
+    };
+    item_tooltip(host, &mut event);
+    lines.into_iter().map(|(t, _)| t).collect()
+}
+
 pub(crate) fn key(item: Item) -> Option<ItemKey> {
     KEYS.get().map(|k| k[item as usize])
 }

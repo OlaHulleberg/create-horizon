@@ -437,7 +437,9 @@ impl Config {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     Nixie,
-    Sign { hanging: bool },
+    Sign {
+        hanging: bool,
+    },
     Board,
     /// A lectern's book (`LecternDisplayTarget`): a page a line.
     Lectern,
@@ -679,7 +681,8 @@ impl BoilerView {
         } else if level == 18 {
             lang.get("create.boiler.max_lvl")
         } else {
-            lang.get("create.boiler.lvl").replace("%1$s", &level.to_string())
+            lang.get("create.boiler.lvl")
+                .replace("%1$s", &level.to_string())
         }
     }
 
@@ -695,15 +698,19 @@ impl BoilerView {
         )
     }
 
-    /// `barComponent`: the goggles' bars (their colours are not kept).
+    /// `barComponent`: the bars, dark green to the minimum, green at it, dark green to the
+    /// level, dark red to the maximum, dark grey to the next five (in `coloured` runs).
     fn bars(&self, level: i32) -> String {
         let (min, max) = (self.min(), self.max());
-        let n = (min - 1).max(0)
-            + i32::from(min > 0)
-            + (level - min).max(0)
-            + (max - level).max(0)
-            + (18 - max).min((max / 5 + 1) * 5 - max).max(0);
-        "|".repeat(n.max(0) as usize)
+        let run = |k: i32, rgb: u32| coloured(&"|".repeat(k.max(0) as usize), rgb);
+        [
+            run(min - 1, DARK_GREEN),
+            run(i32::from(min > 0), GREEN),
+            run(level - min, DARK_GREEN),
+            run(max - level, DARK_RED),
+            run((18 - max).min((max / 5 + 1) * 5 - max), DARK_GRAY),
+        ]
+        .concat()
     }
 
     /// The size, water and heat rows: (label key, level).
@@ -779,8 +786,8 @@ pub fn train_status(
         } => {
             let rotation = rotation_ticks(rotation) as i32;
             let now = (day_time % i64::from(rotation)) as i32;
-            let target = ((((hour + 18) % 24) * 1000) as f32 + (minute as f32 / 60.0 * 1000.0).ceil())
-                as i32
+            let target = ((((hour + 18) % 24) * 1000) as f32
+                + (minute as f32 / 60.0 * 1000.0).ceil()) as i32
                 % rotation;
             let mut diff = target - now;
             if diff < 0 {
@@ -806,6 +813,82 @@ pub fn train_status(
     })
 }
 
+// ---------------------------------------------------------------------------------------------
+// Coloured runs
+
+/// Marks a run of text coloured `0xRRGGBB`: this character, six hex digits, the run, then
+/// `END`. What a source styles (`withStyle`) survives to the targets that draw styles (signs,
+/// lecterns' books); boards and nixie tubes take the `plain` text, as Create's take
+/// `getString()`.
+pub const COLOUR: char = '\u{E000}';
+/// Ends a coloured run.
+pub const END: char = '\u{E001}';
+/// `ChatFormatting`'s colours.
+pub const DARK_GREEN: u32 = 0x00AA00;
+pub const GREEN: u32 = 0x55FF55;
+pub const DARK_RED: u32 = 0xAA0000;
+pub const DARK_GRAY: u32 = 0x555555;
+
+/// `text` as a run coloured `rgb` (nothing for empty text).
+pub fn coloured(text: &str, rgb: u32) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    format!("{COLOUR}{:06X}{text}{END}", rgb & 0xFF_FFFF)
+}
+
+/// `text`'s runs: each piece and its colour (None: the text's own).
+pub fn spans(text: &str) -> Vec<(String, Option<u32>)> {
+    let mut out: Vec<(String, Option<u32>)> = Vec::new();
+    let mut colour = None;
+    let mut piece = String::new();
+    let mut chars = text.chars().peekable();
+    let flush = |piece: &mut String, colour, out: &mut Vec<(String, Option<u32>)>| {
+        if !piece.is_empty() {
+            out.push((std::mem::take(piece), colour));
+        }
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            COLOUR => {
+                flush(&mut piece, colour, &mut out);
+                let hex: String = chars.by_ref().take(6).collect();
+                colour = u32::from_str_radix(&hex, 16).ok();
+            }
+            END => {
+                flush(&mut piece, colour, &mut out);
+                colour = None;
+            }
+            c => piece.push(c),
+        }
+    }
+    flush(&mut piece, colour, &mut out);
+    out
+}
+
+/// `text` without its colours (`getString()`).
+pub fn plain(text: &str) -> String {
+    spans(text).into_iter().map(|(t, _)| t).collect()
+}
+
+/// The first `n` characters of `text`'s plain text, keeping their colours.
+pub fn truncate(text: &str, n: usize) -> String {
+    let mut left = n;
+    let mut out = String::new();
+    for (t, c) in spans(text) {
+        if left == 0 {
+            break;
+        }
+        let piece: String = t.chars().take(left).collect();
+        left -= piece.chars().count();
+        match c {
+            Some(rgb) => out.push_str(&coloured(&piece, rgb)),
+            None => out.push_str(&piece),
+        }
+    }
+    out
+}
+
 /// `BoilerDisplaySource.provideText` (`stats.maxRows`, a lectern's book in one page) and
 /// `provideFlapDisplayText` (a board `columns` wide): the lines for other targets, and the
 /// board's (each its sections), and whether the board's are the boiler's own (`Boiler` layout on
@@ -828,12 +911,17 @@ pub fn boiler_text(
             // `Stream.of(EMPTY)`: one entry of no lines.
             None => vec![String::new()],
             Some(b) => {
-                let mut lines = vec![lang.get("create.boiler.status_short").replace("%1$s", &b.level_text(lang))];
+                let mut lines = vec![
+                    lang.get("create.boiler.status_short")
+                        .replace("%1$s", &b.level_text(lang)),
+                ];
                 for (label, level) in b.rows() {
+                    // `componentHelper(.., forGoggles, .., RESET)`: the label as it is, the
+                    // dots dark grey.
                     lines.push(format!(
                         "{}{}{}",
                         lang.get(&format!("create.boiler.{label}")),
-                        lang.get(&format!("create.boiler.{label}_dots")),
+                        coloured(&lang.get(&format!("create.boiler.{label}_dots")), DARK_GRAY),
                         b.bars(level)
                     ));
                 }
@@ -857,7 +945,10 @@ pub fn boiler_text(
         .map(|(l, _)| lang.get(&format!("create.boiler.{l}")))
         .collect();
     let width = labels.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    let mut flap = vec![vec![lang.get("create.boiler.status").replace("%1$s", &b.level_text(lang))]];
+    let mut flap = vec![vec![
+        lang.get("create.boiler.status")
+            .replace("%1$s", &b.level_text(lang)),
+    ]];
     for ((_, level), label) in b.rows().iter().zip(&labels) {
         let pad = " ".repeat(width - label.chars().count());
         flap.push(vec![format!("{pad}{label}"), b.blocks(*level)]);
@@ -1019,7 +1110,9 @@ pub fn provide_line(
         // FluidAmountDisplaySource: `FluidFormatter.asString(collected, false)`.
         (Source::CountFluids, Reading::Fluid(n)) => n.map(|v| fluid_string(v, false, lang)),
         // FillLevelDisplaySource.getProgress.
-        (Source::FillLevel, Reading::Fill(p)) => percent_or_bar(source, config, *p, target, stats, lang),
+        (Source::FillLevel, Reading::Fill(p)) => {
+            percent_or_bar(source, config, *p, target, stats, lang)
+        }
         (Source::EntityName, Reading::Text(t)) => t.clone(),
         (Source::AccumulateItems, _) => Some(config.collected.to_string()),
         (Source::ItemThroughput, Reading::Now(now)) => {
@@ -1136,7 +1229,10 @@ pub fn fluid_components(amount: i64, shorten: bool, lang: &Lang) -> (String, Str
             lang.get("create.generic.unit.buckets"),
         );
     }
-    (amount.to_string(), lang.get("create.generic.unit.millibuckets"))
+    (
+        amount.to_string(),
+        lang.get("create.generic.unit.millibuckets"),
+    )
 }
 
 /// `FluidFormatter.asString`.
@@ -1816,7 +1912,9 @@ pub fn load_list_layout(
 ) {
     let shortened = config.format == 0;
     if source == Source::ListFluids {
-        let length = fluid_string(highest, shortened, &Lang::EN_US).chars().count() as i32;
+        let length = fluid_string(highest, shortened, &Lang::EN_US)
+            .chars()
+            .count() as i32;
         let key = format!("FluidList_{length}");
         if layout.is_layout(&key) {
             return;
@@ -2707,8 +2805,7 @@ pub fn horizontal_angle(d: Dir) -> f32 {
 
 /// `NixieTubeRenderer.renderSafe` without a signal: each tube's character (`left` 4 px to its
 /// left, `right` 4 px right) drawn front and back with their shadows (`drawTube`), full bright.
-/// `width` is the font's width of a string. The flicker (`random.nextFloat() / 4` of the way to
-/// the dark colour every frame) is left out: the text holds its bright colour.
+/// `width` is the font's width of a string. Without flicker: `nixie_flickering`'s with none.
 pub fn nixie_texts(
     face: Face,
     facing: Dir,
@@ -2717,6 +2814,20 @@ pub fn nixie_texts(
     right: &str,
     width: impl Fn(&str) -> f32,
 ) -> Vec<TubeText> {
+    nixie_flickering(face, facing, colour, [left, right], width, [0.0; 2])
+}
+
+/// `nixie_texts` with each tube's front flickering `flicker` (`random.nextFloat()`, drawn anew
+/// each frame) of a quarter of the way toward the dark colour.
+pub fn nixie_flickering(
+    face: Face,
+    facing: Dir,
+    colour: crate::dye::DyeColor,
+    chars: [&str; 2],
+    width: impl Fn(&str) -> f32,
+    flicker: [f32; 2],
+) -> Vec<TubeText> {
+    let [left, right] = chars;
     use crate::math::{Mat4, Vec3};
     use Face as DoubleFace;
     let y_rot = horizontal_angle(facing) - 90.0
@@ -2743,7 +2854,10 @@ pub fn nixie_texts(
     let (bright, dark) = dye_colors(colour);
     let shadow = 0.5;
     let mut out = Vec::new();
-    for (dx, c) in [(-4.0 / 16.0, left), (4.0 / 16.0, right)] {
+    for (k, (dx, c)) in [(-4.0 / 16.0, left), (4.0 / 16.0, right)]
+        .into_iter()
+        .enumerate()
+    {
         let tube = base
             * Mat4::from_translation(Vec3::new(dx, 0.0, 0.0))
             * Mat4::from_scale(Vec3::new(scale, -scale, scale));
@@ -2753,7 +2867,7 @@ pub fn nixie_texts(
         out.push(TubeText {
             pose: front,
             text: c.to_owned(),
-            color: bright,
+            color: mix_colors(bright, dark, flicker[k] / 4.0),
         });
         out.push(TubeText {
             pose: front * Mat4::from_translation(Vec3::new(shadow, shadow, -1.0 / 16.0)),
@@ -2947,23 +3061,48 @@ mod tests {
             for_size: 1,
             for_water: 0,
         };
-        let sign = Stats { rows: 4, columns: 15 };
+        let sign = Stats {
+            rows: 4,
+            columns: 15,
+        };
         let (text, _, _) = boiler_text(Some(&b), Target::Sign { hanging: false }, sign, &lang);
         assert_eq!(text[0], "Boiler:  Idle");
-        // min 0, max 1: no green, one dark red for the size's missing level, four greys.
-        assert_eq!(text[1], "Size....... |||||");
-        assert_eq!(text[3], "Heat...... |||||");
-        let board = Stats { rows: 4, columns: 22 };
+        // min 0, max 1: no green, the size's one level dark green, four greys.
+        assert_eq!(plain(&text[1]), "Size....... |||||");
+        assert_eq!(plain(&text[3]), "Heat...... |||||");
+        assert_eq!(
+            spans(&text[1]),
+            vec![
+                ("Size".to_string(), None),
+                ("....... ".to_string(), Some(DARK_GRAY)),
+                ("|".to_string(), Some(DARK_GREEN)),
+                ("||||".to_string(), Some(DARK_GRAY)),
+            ]
+        );
+        assert_eq!(
+            truncate(&text[1], 13),
+            "Size\u{E000}555555....... \u{E001}\u{E000}00AA00|\u{E001}"
+        );
+        let board = Stats {
+            rows: 4,
+            columns: 22,
+        };
         let (_, flap, _) = boiler_text(Some(&b), Target::Board, board, &lang);
         assert_eq!(flap[0], vec!["Boiler Status:  Idle".to_string()]);
         assert_eq!(flap[1], vec![" Size".to_string(), "\u{2592}".to_string()]);
         assert_eq!(flap[2], vec!["Water".to_string(), "\u{2591}".to_string()]);
         // Too few rows: the two lines of "not enough space".
-        let small = Stats { rows: 2, columns: 22 };
+        let small = Stats {
+            rows: 2,
+            columns: 22,
+        };
         let (text, flap, _) = boiler_text(Some(&b), Target::Board, small, &lang);
         assert_eq!(text, vec!["Not enough space ", "for Boiler Status"]);
         assert_eq!(flap.len(), 2);
-        let one = Stats { rows: 1, columns: 22 };
+        let one = Stats {
+            rows: 1,
+            columns: 22,
+        };
         let (text, _, _) = boiler_text(Some(&b), Target::Nixie, one, &lang);
         assert_eq!(text, vec!["Not enough space for Boiler Status"]);
     }
@@ -3801,12 +3940,20 @@ mod tests {
         );
         // The largest first, as many as the target has rows.
         let entries = line.entries.clone().unwrap();
-        assert_eq!(entries, vec![(1024, "Cobblestone".into()), (20, "Oak Planks".into())]);
+        assert_eq!(
+            entries,
+            vec![(1024, "Cobblestone".into()), (20, "Oak Planks".into())]
+        );
         let flap = provide_flap_text(Source::ListItems, &config, &line);
         assert_eq!(flap[0], vec!["1", "k ", "Cobblestone "]);
         // A sign reads them in one line each; a full number keeps its digits.
         config.format = 1;
-        let text = provide_text(Source::ListItems, &config, &line, Target::Sign { hanging: false });
+        let text = provide_text(
+            Source::ListItems,
+            &config,
+            &line,
+            Target::Sign { hanging: false },
+        );
         assert_eq!(text, vec!["1024 Cobblestone ", "20 Oak Planks "]);
         // ValueList_true_0: three digits right-aligned, a suffix, then the name.
         let mut b = Board::default();
@@ -3869,7 +4016,11 @@ mod tests {
         assert_eq!(b.line_index_at(10, 10.9), 0);
         assert_eq!(b.line_index_at(10, 10.2), 1);
         assert_eq!(b.line_index_at(10, 9.6), 2);
-        assert_eq!(b.line_index_at(10, 9.0), 3, "the bottom edge stays on the board");
+        assert_eq!(
+            b.line_index_at(10, 9.0),
+            3,
+            "the bottom edge stays on the board"
+        );
         b.set_colour(1, crate::dye::DyeColor::Red);
         b.set_colour(2, crate::dye::DyeColor::White);
         assert!(b.colour[1].is_some());
@@ -4070,7 +4221,12 @@ mod tests {
             destination: dest.into(),
         };
         let rows = station_summary_text(
-            &[a(150, "Main"), a(323, "Main"), a(1300, "Main"), a(-1, "Main")],
+            &[
+                a(150, "Main"),
+                a(323, "Main"),
+                a(1300, "Main"),
+                a(-1, "Main"),
+            ],
             "Main",
             5,
             &Lang::EN_US,
@@ -4085,7 +4241,12 @@ mod tests {
         assert_eq!(rows[0][..2], ["1".to_owned(), " min".to_owned()]);
         assert_eq!(rows[1][1], " ~ ");
         // A filter with `*` adds the platform: the destination without the filter's text.
-        let rows = station_summary_text(&[a(400, "Main Platform 2")], "Main Platform *", 2, &Lang::EN_US);
+        let rows = station_summary_text(
+            &[a(400, "Main Platform 2")],
+            "Main Platform *",
+            2,
+            &Lang::EN_US,
+        );
         assert_eq!(rows[0][4], "2");
         assert_eq!(rows[1], vec![" ", " . ", " ", " ", " "]);
     }

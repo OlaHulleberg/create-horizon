@@ -165,8 +165,9 @@ pub fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEve
             };
             let ends = [at(*pa), at(*pb)];
             let centre = [0, 1, 2].map(|k| (ends[0][k] + ends[1][k]) / 2.0);
-            let (e0, t0) = coupling::endpoint(ends[0], centre, &rails);
-            let (e1, t1) = coupling::endpoint(ends[1], centre, &rails);
+            let jitter = |id: u32| coupling::jitter(id as i32);
+            let (e0, t0) = coupling::endpoint(ends[0], centre, jitter(*a), &rails);
+            let (e1, t1) = coupling::endpoint(ends[1], centre, jitter(*b), &rails);
             let (yaw, pitch, length) = coupling::connector(e0, e1);
             let lights = [light(host, ends[0]), light(host, ends[1])];
             let mut draw = |model: ModelRef, origin: [f64; 3], m: [f32; 12], l: LightCoords| {

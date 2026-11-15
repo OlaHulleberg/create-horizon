@@ -24,8 +24,9 @@
 //! panels is satisfied (`shouldBePoweredTristate`). Which panels a link feeds is read from the
 //! panels' `targetedByLinks` (each link's `LinkedGauges` in Create).
 //!
-//! Left out: relocating a panel, and the block's per-panel shape (the declared shape is
-//! Create's `FACTORY_PANEL_FALLBACK`, the whole face).
+//! A panel is relocated from its screen's move button (`relocate`, `moveTo`). Left out: the
+//! block's per-panel shape (the declared shape is Create's `FACTORY_PANEL_FALLBACK`, the whole
+//! face; HORIZON_API.md).
 
 use super::super::items;
 use super::super::server::ServerLevel;
@@ -1096,6 +1097,128 @@ pub(super) fn sneak_wrenched(
         lv.destroy_block(pos, false);
     }
     true
+}
+
+/// `FactoryPanelBehaviour.moveTo`: the panel `from` moves to `to` (`FactoryPanelConnectionPacket`
+/// with `relocate`): onto a free panel of a gauge as its own, or into the air (a gauge placed as
+/// its own), while every panel and link joined to it stays within 24 blocks of the new place
+/// (`closerThan`); the joined panels and links follow it. A gauge left with no panel goes
+/// (`FactoryPanelBlockEntity.lazyTick`).
+pub(super) fn relocate(lv: &mut ServerLevel<'_>, player: PlayerRef, from: PanelPos, to: PanelPos) {
+    let dim = lv.dim;
+    let Some(state) = lv.block_state(from.0) else {
+        return;
+    };
+    if orientation(lv, from.0).is_none() {
+        return;
+    }
+    let Some(panel) = with(dim, |n| n.gauges.get(&from).cloned()) else {
+        return;
+    };
+    if with(dim, |n| n.gauges.contains_key(&to)) {
+        return;
+    }
+    let Some(existing) = lv.block_state(to.0) else {
+        return;
+    };
+    let gauge = orientation(lv, to.0).is_some();
+    let air = existing.block().id(&*lv.host) == "minecraft:air";
+    if !air && !gauge || gauge && existing != state {
+        return;
+    }
+    // `canSurvive` (the client asks it before sending): a sturdy face behind it.
+    if !gauge && let Some((face, facing)) = orientation(lv, from.0) {
+        let o = fx::connected_direction(face, facing).offset();
+        let behind = [to.0[0] - o[0], to.0[1] - o[1], to.0[2] - o[2]];
+        let side = crate::glue::decor::face_of(fx::connected_direction(face, facing));
+        let sturdy = lv
+            .level
+            .block_face_sturdy(&*lv.host, behind, side, mod_api::SupportType::Full)
+            .unwrap_or(false);
+        if !sturdy {
+            say(lv.host, player, "create.factory_panel.relocation_aborted");
+            return;
+        }
+    }
+    let close = |p: [i32; 3]| (0..3).map(|i| (p[i] - to.0[i]).pow(2)).sum::<i32>() < 24 * 24;
+    if !panel.links.iter().all(|l| close(l.from.0))
+        || !panel.inputs.iter().all(|i| close(i.from.0))
+        || !panel.outputs.iter().all(|o| close(o.0))
+    {
+        return;
+    }
+    if !gauge {
+        lv.set_state(to.0, state, super::super::server::update_all());
+    }
+    // Links let go of it, and take it again where it is.
+    for l in &panel.links {
+        crate::glue::display::panel_disconnected(dim, l.from.0, from);
+    }
+    with(dim, |n| {
+        let Some(p) = n.gauges.remove(&from) else {
+            return;
+        };
+        for (k, v) in [(n.due.remove(&from), true), (n.timers.remove(&from), false)] {
+            if let Some(t) = k {
+                if v {
+                    n.due.insert(to, t);
+                } else {
+                    n.timers.insert(to, t);
+                }
+            }
+        }
+        if let Some(f) = n.flashes.remove(&from) {
+            n.flashes.insert(to, f);
+        }
+        for out in &p.outputs {
+            if let Some(g) = n.gauges.get_mut(out) {
+                for i in g.inputs.iter_mut().filter(|i| i.from == from) {
+                    i.from = to;
+                }
+                n.redraw.push(out.0);
+                n.unsaved.push(chunk_of(out.0));
+            }
+        }
+        for input in &p.inputs {
+            if let Some(g) = n.gauges.get_mut(&input.from) {
+                for o in g.outputs.iter_mut().filter(|o| **o == from) {
+                    *o = to;
+                }
+                n.redraw.push(input.from.0);
+                n.unsaved.push(chunk_of(input.from.0));
+            }
+        }
+        n.gauges.insert(to, p);
+        n.redraw.push(from.0);
+        n.redraw.push(to.0);
+        n.unsaved.push(chunk_of(from.0));
+        n.unsaved.push(chunk_of(to.0));
+    });
+    for l in &panel.links {
+        if super::block_at(lv, l.from.0) == Some(Block::DisplayLink) {
+            crate::glue::display::panel_connected(dim, l.from.0, to);
+        }
+        crate::glue::redstone::notify_link(dim, l.from.0);
+    }
+    with(dim, |n| n.redstone_checks.push(to));
+    let mut style = mod_api::text::TextStyle::default();
+    style.color = Some("green".to_owned());
+    let _ = player.action_bar(
+        lv.host,
+        Text::translate("create.factory_panel.relocated", Vec::new()).with_style(style),
+    );
+    let at = to.0.map(|v| f64::from(v) + 0.5);
+    let _ = lv.level.play_sound(
+        &mut *lv.host,
+        "minecraft:block.copper.break",
+        at,
+        SoundSource::Blocks,
+        1.0,
+        1.0,
+    );
+    if with(dim, |n| panels_at(n, from.0).is_empty()) {
+        lv.destroy_block(from.0, false);
+    }
 }
 
 /// `FactoryPanelBlock.tryDestroySubPanelFirst`: a player breaking a gauge with two panels or

@@ -235,6 +235,9 @@ fn put_pp(m: &mut Vec<u8>, pp: PanelPos) {
 struct Client {
     /// `connectingFrom`, and the ticks since its message was last shown.
     connecting: Option<(PanelPos, u32)>,
+    /// `relocating`, and `validRelocationTarget` this tick.
+    relocating: bool,
+    target: Option<PanelPos>,
     /// Each panel's bulb (`bulb`: value, last tick's value) and the flashes seen.
     bulbs: HashMap<PanelPos, (f32, f32, i32)>,
     models: HashMap<&'static str, mod_api::ModelRef>,
@@ -248,12 +251,72 @@ pub(super) fn reset() {
     CLIENT.with_borrow_mut(|c| *c = Client::default());
 }
 
-/// `FactoryPanelConnectionHandler.startConnection` (the screen's `+`).
-pub(super) fn start_connection(host: &mut dyn ClientHost, from: PanelPos) {
-    CLIENT.with_borrow_mut(|c| c.connecting = Some((from, 0)));
+/// `FactoryPanelConnectionHandler.startConnection` (the screen's `+`), or `startRelocating`
+/// (its move button).
+pub(super) fn start_connection(host: &mut dyn ClientHost, from: PanelPos, relocate: bool) {
+    CLIENT.with_borrow_mut(|c| {
+        c.connecting = Some((from, 0));
+        c.relocating = relocate;
+        c.target = None;
+    });
     let mut m = vec![b'S'];
     put_pp(&mut m, from);
+    m.push(u8::from(relocate));
     net::send_to_server(host, CHANNEL, &m);
+}
+
+/// Ends the joining or relocating.
+fn stop() {
+    CLIENT.with_borrow_mut(|c| {
+        c.connecting = None;
+        c.relocating = false;
+        c.target = None;
+    });
+}
+
+/// `clientTick` while relocating: the panel the crosshair is on, a 32nd of a block into the
+/// face it hits (`getTargetedSlot`), on the gauge's surface (no step along its facing), where a
+/// gauge as this one could hang (a support behind it: the server checks it is sturdy) and not on
+/// a packager.
+fn relocation_target(host: &dyn ClientHost, from: PanelPos) -> Option<PanelPos> {
+    let Some(mod_api::CrosshairTarget::Block { hit, .. }) = host.crosshair_target() else {
+        return None;
+    };
+    let (face, facing) = orientation(host, from.0)?;
+    let offset = [0, 1, 2].map(|i| hit.point[i] + f64::from(hit.face[i]) / 32.0);
+    let pos = offset.map(|v| v.floor() as i32);
+    let local = [0, 1, 2].map(|i| offset[i] - f64::from(pos[i]));
+    let slot = fx::targeted_slot(face, facing, local);
+    let connected = fx::connected_direction(face, facing);
+    let diff = [0, 1, 2].map(|i| pos[i] - from.0[i]);
+    let along = match connected.axis() {
+        create_engine::kinetics::Axis::X => diff[0],
+        create_engine::kinetics::Axis::Y => diff[1],
+        create_engine::kinetics::Axis::Z => diff[2],
+    };
+    if along != 0 {
+        return None;
+    }
+    let level = host.level(host.dimension())?;
+    let o = connected.offset();
+    let behind = [pos[0] - o[0], pos[1] - o[1], pos[2] - o[2]];
+    let here = level.block_state(host, pos)?;
+    let free = mod_api::HostBlockStates::block_states(host).replaceable(here) == Some(true)
+        || orientation(host, pos) == Some((face, facing));
+    let support = level
+        .block_state(host, behind)
+        .is_some_and(|s| mod_api::HostBlockStates::block_states(host).replaceable(s) != Some(true));
+    if !free || !support {
+        return None;
+    }
+    let packager = level
+        .block_state(host, behind)
+        .and_then(states::id)
+        .and_then(|id| super::super::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten());
+    if packager == Some(Block::Packager) {
+        return None;
+    }
+    Some((pos, slot))
 }
 
 /// A short click on a panel with an item (`onShortInteract` on the client): a second panel
@@ -273,8 +336,11 @@ pub(crate) fn short_click(host: &mut dyn ClientHost, pos: [i32; 3], slot: u8, wr
     if wrench && feeds {
         return;
     }
+    if CLIENT.with_borrow(|c| c.relocating) {
+        return;
+    }
     if let Some((from, _)) = CLIENT.with_borrow(|c| c.connecting) {
-        CLIENT.with_borrow_mut(|c| c.connecting = None);
+        stop();
         if from == pp {
             let m = vec![b'A', 0];
             net::send_to_server(host, CHANNEL, &m);
@@ -305,6 +371,30 @@ pub(super) fn interaction_key(
     let Some((from, _)) = CLIENT.with_borrow(|c| c.connecting) else {
         return mod_api::Flow::Continue;
     };
+    // `onRightClick` while relocating: the panel goes to the target, unless sneaking or there is
+    // none (`relocation_aborted`).
+    if CLIENT.with_borrow(|c| c.relocating) {
+        if event.attempt == mod_api::InteractionAttempt::Press {
+            let sneaking = host
+                .local_player()
+                .and_then(|p| p.entity().is_shift_key_down(host))
+                .unwrap_or(false);
+            let target = CLIENT.with_borrow(|c| c.target).filter(|_| !sneaking);
+            stop();
+            match target {
+                Some(to) => {
+                    let mut m = vec![b'R'];
+                    put_pp(&mut m, to);
+                    put_pp(&mut m, from);
+                    net::send_to_server(host, CHANNEL, &m);
+                }
+                None => {
+                    net::send_to_server(host, CHANNEL, &[b'A', 2]);
+                }
+            }
+        }
+        return mod_api::Flow::Cancel;
+    }
     let Some(mod_api::CrosshairTarget::Block { pos, .. }) = host.crosshair_target() else {
         return mod_api::Flow::Continue;
     };
@@ -315,7 +405,7 @@ pub(super) fn interaction_key(
     ) {
         return mod_api::Flow::Continue;
     }
-    CLIENT.with_borrow_mut(|c| c.connecting = None);
+    stop();
     if event.attempt == mod_api::InteractionAttempt::Press {
         let mut m = vec![b'D'];
         put_pp(&mut m, from);
@@ -341,7 +431,7 @@ pub(super) fn right_click_off_panel(
     if gauge && !sneaking {
         return false;
     }
-    CLIENT.with_borrow_mut(|c| c.connecting = None);
+    stop();
     let m = vec![b'A', 1];
     net::send_to_server(host, CHANNEL, &m);
     true
@@ -367,11 +457,17 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
                 d2 < 16.0 * 16.0
             });
         if !near || panel(host, pp).is_none() {
-            CLIENT.with_borrow_mut(|c| c.connecting = None);
-        } else if t % 40 == 0 {
-            let mut m = vec![b'S'];
-            put_pp(&mut m, pp);
-            net::send_to_server(host, CHANNEL, &m);
+            stop();
+        } else {
+            let relocating = CLIENT.with_borrow(|c| c.relocating);
+            if t % 40 == 0 {
+                let mut m = vec![b'S'];
+                put_pp(&mut m, pp);
+                m.push(u8::from(relocating));
+                net::send_to_server(host, CHANNEL, &m);
+            }
+            let target = relocating.then(|| relocation_target(host, pp)).flatten();
+            CLIENT.with_borrow_mut(|c| c.target = target);
         }
     }
     CLIENT.with_borrow_mut(|c| {
@@ -442,6 +538,23 @@ pub(super) fn render_level_stage(
     let Some((face, facing)) = orientation(host, pp.0) else {
         return;
     };
+    let color = if t % 16 > 8 { 0xFF38_B764 } else { 0xFFA7_F070 };
+    let mut lines = Vec::new();
+    for (p, color) in [
+        Some((pp, color)),
+        CLIENT.with_borrow(|c| c.target).map(|t| (t, 0xFFEE_EEEE)),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let (min, max) = panel_bb(face, facing, p);
+        crate::glue::logistics::client::box_lines(&mut lines, min, max, color);
+    }
+    let _ = event.draw.lines(&lines);
+}
+
+/// `getBB`: the slot's centre, 3/16 out in the face's plane.
+fn panel_bb(face: Face, facing: Dir, pp: PanelPos) -> ([f64; 3], [f64; 3]) {
     let b = fx::panel_box(face, facing, pp.1);
     let c = [0, 1, 2].map(|i| (b[i] + b[i + 3]) / 2.0);
     // `getBB`: the slot's centre, 3/16 out in the face's plane.
@@ -465,10 +578,7 @@ pub(super) fn render_level_stage(
         min[i] = f64::from(pp.0[i]) + center - r;
         max[i] = f64::from(pp.0[i]) + center + r;
     }
-    let color = if t % 16 > 8 { 0xFF38_B764 } else { 0xFFA7_F070 };
-    let mut lines = Vec::new();
-    crate::glue::logistics::client::box_lines(&mut lines, min, max, color);
-    let _ = event.draw.lines(&lines);
+    (min, max)
 }
 
 // ---------------------------------------------------------------------------------------------

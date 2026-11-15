@@ -17,6 +17,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A moment before a chunk is saved** ((removed)). The glue writes each changed
   column's data into its chunk attachment at the end of the tick that changed it (`glue/persist.rs`);
   a pre-save hook would let it write only when the game saves.
+- **A block's shape from its block entity** (`FactoryPanelBlock.getShape`, built from the gauge's active panels):
+  shapes are declared per state, so a factory gauge's outline and collision are Create's
+  `FACTORY_PANEL_FALLBACK`, the whole face, however few panels it has (`glue/stock/gauge.rs`). A shape hook
+  for a block part (outline and collision, with the position) would close it.
 - **The server's tick freeze** (`TickRateManager.runsNormally`): under `/tick freeze` Create's block
   entities stop, but a mod's level tick still runs, so the glue's machines go on (`glue/redstone`).
 - **Reading and writing the scoreboard** (`Scoreboard.getObjective`, `listPlayerScores`, `addObjective`,
@@ -73,13 +77,15 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 ### Containers, items and transactions
 
 - **Rolling back mod-owned state with a transaction.** A handler cannot learn that its transaction aborted,
-  so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, packagers and
-  frogports offer no `ITEMS` handlers to hoppers, funnels and chutes, nor do belts (`ItemHandlerBeltSegment`;
+  so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, nor do belts offer
+  `ITEMS` (`ItemHandlerBeltSegment`;
   so a tunnel offers none of its belt's: an andesite tunnel none at all, a brass tunnel only its own stack to
   insert into, nothing to take out), nor do upward saws (`SawBlockEntity`'s inventory: hoppers can't feed one), and
   a portable storage interface
   offers its contraption's storage to Create's chutes and funnels only, not to hoppers. A close/abort callback
-  on `Transaction` (or a journal for mod state) would close them.
+  on `Transaction` (or a journal for mod state) would close them. (Packagers and package ports mirror their
+  boxes into block entity slots, which the game journals, and learn of automation's moves at the commit:
+  `glue/packages/automation.rs`.)
 - **A notice for any container's contents changing.** `contents_changed` reaches only the changed block's own
   parts, so a chute under a vanilla container and a frogport above an inventory re-check on a timer instead.
 - **An empty stack from `menu_quick_move`**: the clicked slot keeps what is left of `stack`, and an
@@ -123,7 +129,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Mod entity types that are not template copies**, rideable by players: Create's seat entity and carriage seats
   are stood in by tagged item display entities; riding a moving structure's seats on bearings and pistons and
   clicking its blocks are out (contraption controls on a gliding structure are the exception: the client
-  raycasts the structures it draws, as `ContraptionHandlerClient` does, and sends the click).
+  raycasts the structures it draws, as `ContraptionHandlerClient` does, and sends the click). Create's package
+  entity (`PackageEntity`: a dropped package with its own model, physics and unpacking on a hit) is the same want:
+  a dropped package is a plain item entity (`glue/packages`). A client can't ask an entity's vehicle
+  (`EntityRef::vehicle` answers on the server only) nor find a seat's stand-in (`LevelRef::entities_in` leaves
+  displays out), so a shop's checkout overlay takes a keeper as seated by where it is (`glue/stock/shop.rs`).
 - **A block entity type for a block by its name**: the game gives `create:mechanical_piston_head` a
   `minecraft:skull` block entity (its path ends in `_head`), and one is left behind on the block that takes the
   head's place when a piston retracts. A declaration field naming a block's entity type (or none) would close it.
@@ -184,6 +194,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Keeping only some of a block entity's drawing**: `keep()` keeps everything drawn for it, so a block with
   one animated part is drawn every frame (the glue decides through `Subsystem::animated`). A way to hide
   another part's model would let the clockwork bearing's hour hand replace its top.
+- **A sprite scrolled within itself** (a UV offset that wraps inside the sprite): a chain conveyor's chains
+  (`ChainConveyorRenderer.renderChain`, `minV` moving with the conveyor's speed) are drawn still, as vanilla's
+  chain model a block at a time (`glue/packages`); `TerrainModelOptions` moves a sprite's UVs onto another sprite,
+  which a texture that tiles on itself has none of.
 - **A colour over a block model a block entity draws** (`SuperByteBuffer.color`): an overstressed
   network's turning parts flash red, and a recovered one's green (`KineticEffectHandler.overStressedEffect`);
   `BlockEntityDrawContext::block` draws a model in its own tints, and `terrain_model`'s tint reaches only
@@ -191,14 +205,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   flash (`LinkBulbRenderer`) draws its tube full bright in the translucent layer, but not the glow model
   drawn additively in a fading grey over it, for the same want (and of an additive render type). A station's assembly track (`StationRenderer`: blue where a
   bogey may go, green where one is) is drawn in the overlay model's own colours for the same reason.
-- **A train station's signal and observer overlays' facing** is not an API gap but not kept: the port keeps
-  no `TrackTargetingBehaviour.targetDirection`, so signals' and observers' track markers are not drawn
-  (stations draw theirs, turned by their last assembly direction).
 - **Collision shapes in `can_survive`** (`LevelHost` has none): a hand crank or valve handle is refused
   only against air or a fluid as it is placed, where Create asks for any collision shape behind it (the
   neighbour check after placement reads them through `LevelRef::collision_boxes`).
 - **Text alpha in `BlockEntityDrawContext::text`** (display boards' 0.85 / 0.975), and more than one colour per
-  line in tooltips (goggles).
+  line in tooltips (goggles). The same call has no name tag mode (`Font.DisplayMode.SEE_THROUGH` with a
+  background colour): a frogport's address over it on hover (`renderNameplateOnHover`) is drawn as its normal
+  pass only, without the translucent box behind it or the faint copy seen through blocks.
 - **A mutable `ClientHost` in screen hooks**: the clipboard screen closes and sends its pages from the next
   client tick.
 - **Reading and setting the local player's movement on the client** (diving boots sinking), **consuming a key
@@ -310,15 +323,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 ## Left out of the port, not for want of API
 
-- Stock (table cloths' shops): a shop's overlay doesn't cycle the tooltips of what it sells
-  (`renderComponentTooltip`), and a seated keeper's overlay of a shopping list shows for any list (Create's
-  client also matches the ticker's network, which its client doesn't have here).
 - Contraptions: contraption controls on a bearing's structure are not carried (their setting doesn't turn its
   actors off, `ContraptionControlsMovement.startMoving`), and a bearing's glue stays in the world while it turns,
   going back turned with it; an elevator's contraption controls choose no floor (`ElevatorControlsHandler`, the
   floor list and `ElevatorTargetFloorPacket`).
-- Trains: a track's paving with an off-hand block other than metal girders (`TrackPaver`: slabs, full
-  blocks and walls under a placement; girder curves pave and pay as Create's).
 
 ## Not to send
 

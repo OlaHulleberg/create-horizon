@@ -33,13 +33,10 @@
 //!   carriages connecting to the stationary ones at a station.
 //!
 //! Every schedule instruction and condition is offered and run; carriages carry no fluid (a
-//! tank keeps only its block when moved), so a fluid threshold reads none, and no postbox is
-//! linked to a station (`GlobalPackagePort`), so the package instructions find no station: a
-//! delivery with packages aboard waits and looks again, one without and a retrieval go on to the
-//! next entry.
-//!
-//! Left out for now, not for want of API: the line of where a relocated train's wheels would go
-//! (`TrainRelocator`'s preview).
+//! tank keeps only its block when moved), so a fluid threshold reads none. The package
+//! instructions go to the stations whose postboxes (`GlobalPackagePort`, the packages'
+//! `station_ports`) take the packages aboard or hold packages to fetch, and a train standing at
+//! a station trades packages with its postboxes.
 //!
 //! What the mod API cannot do, and is left out (each with the legacy call it replaced):
 //!
@@ -71,6 +68,8 @@ mod station_screen;
 mod structure;
 mod tracks;
 mod visuals;
+
+pub(crate) use cargo::key as cargo_key;
 
 pub use carts::{Carts, assembler_mode, set_assembler_mode};
 pub use controls::TrainControls;

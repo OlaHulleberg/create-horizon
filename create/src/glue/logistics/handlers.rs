@@ -48,6 +48,12 @@ pub fn provide(
         }
         Block::Chute | Block::SmartChute => Some(Box::new(ChuteItems(at))),
         Block::BrassTunnel => Some(Box::new(TunnelItems(at))),
+        Block::Packager | Block::Repackager | Block::PackageFrogport => {
+            crate::glue::packages::packager_items(host, side, dim)
+        }
+        b if create_engine::dye::is_postbox(b) => {
+            crate::glue::packages::packager_items(host, side, dim)
+        }
         _ => None,
     }
 }
