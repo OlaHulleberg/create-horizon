@@ -56,6 +56,7 @@ mod carriage_draw;
 mod carts;
 mod client;
 mod conductor;
+mod contents;
 mod controls;
 mod coupling_draw;
 mod doors;

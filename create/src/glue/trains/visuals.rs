@@ -88,6 +88,8 @@ fn sweep(lv: &mut ServerLevel<'_>) {
     let now = session_tag();
     for (kind, tag) in [
         ("minecraft:block_display", TAG),
+        ("minecraft:item_display", TAG),
+        ("minecraft:text_display", TAG),
         ("minecraft:item_display", super::riding::TAG),
     ] {
         lv.run_command(&format!("kill @e[type={kind},tag={tag},tag=!{now}]"));
@@ -143,6 +145,9 @@ struct Now {
     loaded: bool,
     /// A cart's contraption's blocks, when it has no displays yet.
     blocks: Option<Vec<([i32; 3], u32)>>,
+    /// What a cart's contraption's block entities hold (`actors::storage_to_nbt`), when it has
+    /// no displays yet.
+    held: Option<Tag>,
 }
 
 /// The heading's quarter `a` (degrees): `Ry(a)` turns +x onto the train's side (`heading`
@@ -223,6 +228,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                     front,
                     loaded: false,
                     blocks: None,
+                    held: None,
                 });
             }
             for b in 0..t.train.bogeys.len() {
@@ -242,6 +248,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                     front,
                     loaded: false,
                     blocks: None,
+                    held: None,
                 });
             }
         }
@@ -265,7 +272,15 @@ pub fn refresh_car(lv: &mut ServerLevel<'_>, train: u32, car: usize) {
 }
 
 /// A cart's contraption as `carts` takes it.
-pub type CartPose<'a> = (u128, [f64; 3], f32, f32, f32, &'a [([i32; 3], u32)]);
+pub type CartPose<'a> = (
+    u128,
+    [f64; 3],
+    f32,
+    f32,
+    f32,
+    &'a [([i32; 3], u32)],
+    Option<&'a Tag>,
+);
 
 /// The cart contraptions of a level after its carts moved (`OrientedContraptionEntity`'s
 /// drawing): each cart's UUID, its contraption's pivot (its anchor block's centre), its turn
@@ -278,7 +293,7 @@ pub fn carts(lv: &mut ServerLevel<'_>, list: Vec<CartPose<'_>>) {
     }
     let now = list
         .into_iter()
-        .map(|(uuid, at, angle, pitch, base, blocks)| {
+        .map(|(uuid, at, angle, pitch, base, blocks, held)| {
             let key = (dim, uuid, CART, 0);
             let shown = SHOWN.with_borrow(|s| s.contains_key(&key));
             // `Ry(angle - base) Rz(pitch) Ry(base)` is `Ry(angle - base - 90) Rx(pitch)
@@ -293,6 +308,7 @@ pub fn carts(lv: &mut ServerLevel<'_>, list: Vec<CartPose<'_>>) {
                 front: [0.0; 3],
                 loaded: false,
                 blocks: (!shown).then(|| blocks.to_vec()),
+                held: if shown { None } else { held.cloned() },
             }
         })
         .collect();
@@ -450,6 +466,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
     // Each display: its state, its point in the carriage's space, and its own turn about that
     // point (the partials' quarter) with the offset of its model's origin from the point.
     let mut parts: Vec<Shape> = Vec::new();
+    let mut extras: Vec<([f64; 3], super::contents::Extra)> = Vec::new();
     let mut actors: Vec<(Block, StateInfo, [f64; 3], usize)> = Vec::new();
     let mut radius = 0.0;
     if kind == BOGEY {
@@ -496,6 +513,22 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             .flatten()
             .unwrap_or_default(),
         };
+        // What their block entities hold (`renderBlockEntities`), shown by displays of their own.
+        let entities = if kind == CART {
+            crate::glue::contraptions::actors::shown_entities_of(lv, n.held.as_ref())
+        } else {
+            crate::glue::contraptions::actors::shown_entities(lv, super::cargo::key(train, i))
+        };
+        for (o, s) in &blocks {
+            let Some(entity) = entities.get(o) else {
+                continue;
+            };
+            let up = if kind == CART { 0.0 } else { 1.5 };
+            let centre = [f64::from(o[0]), f64::from(o[1]) + up, f64::from(o[2])];
+            for e in super::contents::extras(lv, *s, entity) {
+                extras.push((centre, e));
+            }
+        }
         for (o, s) in blocks {
             // A cart's anchor is its assembler, not drawn (Create puts its rail back there).
             if kind == CART && o == [0, 0, 0] {
@@ -547,6 +580,38 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             .host
             .summon(lv.dimension, "minecraft:block_display", pos, nbt)
         {
+            displays.push((id, part));
+        }
+    }
+    for (centre, e) in extras {
+        // Posed in its block (from the corner) as the block's display is turned, the block
+        // centred on the display's point.
+        let Some((t, turn, scale)) = crate::glue::logistics::client::decompose(e.pose) else {
+            continue;
+        };
+        let q = turn.map_or([0.0, 0.0, 0.0, 1.0], |(axis, deg)| {
+            actor_draw::quat(axis.map(f64::from), f64::from(deg))
+        });
+        let left = actor_draw::quat_mul(actor_draw::quat([0.0, 1.0, 0.0], n.turn), q);
+        let part = Part {
+            at: turn_y(centre, n.turn),
+            translation: turn_y(t.map(|v| f64::from(v) - 0.5), n.turn).map(|v| v as f32),
+            left: left.map(|v| v as f32),
+            wheel: false,
+            actor: None,
+        };
+        let mut nbt = e.nbt;
+        let base = display_nbt("", &[], part.translation, part.left, n.yaw, n.pitch);
+        for (k, v) in base.iter() {
+            if k.to_string_lossy() != "block_state" {
+                nbt.insert(k.clone(), v.clone());
+            }
+        }
+        if let Some(Tag::Compound(tr)) = nbt.get_mut(&"transformation".into()) {
+            let floats = Tag::List(scale.iter().map(|f| Tag::Float(f.to_bits())).collect());
+            tr.insert("scale".into(), floats);
+        }
+        if let Some(id) = lv.host.summon(lv.dimension, e.kind, place(n, part), nbt) {
             displays.push((id, part));
         }
     }

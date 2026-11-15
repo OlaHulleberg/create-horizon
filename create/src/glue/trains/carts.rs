@@ -1675,6 +1675,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
                     on.m.turn.pitch,
                     mounted::y_rot(on.m.initial),
                     on.m.blocks.as_slice(),
+                    on.held.as_ref(),
                 )
             })
             .collect();
