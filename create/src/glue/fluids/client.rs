@@ -26,6 +26,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
     if let Err(e) = r.block_entity_part(&kind, FluidEntity) {
         crate::create_log!("[create] the fluids' block entity part was refused: {e:?}");
     }
+    super::engine::register_client(r);
     // Equipment registers before kinetics makes the type.
     super::super::equipment::register_cogs(r, &kind);
 }
@@ -39,12 +40,33 @@ struct Valve {
     speed: f32,
 }
 
+/// A boiler's gauge on a client (`BoilerData.gauge`, chased at 0.125 a tick, `Chaser.EXP`): where
+/// it set off from and when, the level it chases, and whether it is there.
+#[derive(Clone, Copy)]
+struct Gauge {
+    from: f32,
+    since: f64,
+    target: f32,
+    settled: bool,
+}
+
+impl Gauge {
+    /// Where the dial is at animation time `now`: each tick it moves an eighth of the way left.
+    fn at(&self, now: f64) -> f32 {
+        let ticks = (now - self.since).max(0.0);
+        self.target + (self.from - self.target) * 0.875f64.powf(ticks) as f32
+    }
+}
+
 thread_local! {
     static VALVES: RefCell<HashMap<[i32; 3], Valve>> = RefCell::new(HashMap::new());
+    static GAUGES: RefCell<HashMap<[i32; 3], Gauge>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn reset() {
     VALVES.with_borrow_mut(HashMap::clear);
+    GAUGES.with_borrow_mut(HashMap::clear);
+    super::engine::reset_client();
 }
 
 /// A pulley's hose as its block entity shows it: offset, blocks a tick it moves, and the game
@@ -74,6 +96,7 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
         Block::SteamEngine => super::engine::animated(entity),
         Block::Spout => super::spouted::animated(entity),
         Block::SteamWhistle => whistle_blows(entity).is_some_and(|(on, _)| on),
+        Block::FluidTank => GAUGES.with_borrow(|g| g.get(&pos).is_some_and(|g| !g.settled)),
         _ => false,
     }
 }
@@ -95,7 +118,10 @@ impl BlockEntityPart for FluidEntity {
         _host: &dyn ClientHost,
         event: &mut BlockEntityClientTicksEvent<'_>,
     ) {
-        if event.block == "create:fluid_valve" {
+        if matches!(
+            event.block,
+            "create:fluid_valve" | "create:steam_engine" | "create:steam_whistle"
+        ) {
             event.ticks = true;
         }
     }
@@ -107,8 +133,26 @@ impl BlockEntityPart for FluidEntity {
         host: &mut dyn ClientHost,
         event: &mut BlockEntityClientTickEvent<'_>,
     ) {
-        let Some((Block::FluidValve, info)) = client_block(&*host, event.state) else {
-            return;
+        let info = match client_block(&*host, event.state) {
+            Some((Block::SteamEngine, info)) => {
+                return super::engine::client_tick(host, event, &info);
+            }
+            Some((Block::SteamWhistle, info)) => {
+                if let Some((true, since)) = whistle_blows(event.entity) {
+                    let now = event
+                        .block_entity
+                        .level(&*host)
+                        .and_then(|l| l.game_time(&*host))
+                        .unwrap_or(0);
+                    // `tickAudio`: a jet every 8 ticks, and as it starts.
+                    if now % 8 == 0 || i64::from(now as i32) == since {
+                        super::engine::whistle_jet(host, event.pos, &info);
+                    }
+                }
+                return;
+            }
+            Some((Block::FluidValve, info)) => info,
+            _ => return,
         };
         let speed = speeds_of(&event.entity.nbt)[0];
         VALVES.with_borrow_mut(|v| {
@@ -189,8 +233,9 @@ fn draw_tank(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         return;
     };
     if !m.window {
-        draw_boiler(event, &m);
-        event.draw.keep();
+        if draw_boiler(event, &m) {
+            event.draw.keep();
+        }
         return;
     }
     let Some((min, max)) = create_engine::tank::fluid_box(&m) else {
@@ -451,12 +496,16 @@ fn draw_whistle(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
 /// dial at the middle of the bottom layer, the dial turned by the boiler's level (a passive
 /// boiler an eighth, else its heat over the most its size allows). The dial is drawn at that
 /// level, without `gauge`'s chase to it.
-fn draw_boiler(event: &mut BlockEntitySubmitEvent<'_>, m: &create_engine::tank::Multi) {
+/// `BoilerRenderer` for a controller without windows: its gauges and their dials, each dial
+/// swinging to the boiler's level (`gauge.chase(target, .125, EXP)` as the boiler's data comes).
+/// Whether it stands still (it may be kept).
+fn draw_boiler(event: &mut BlockEntitySubmitEvent<'_>, m: &create_engine::tank::Multi) -> bool {
     let Some(Tag::IntArray(v)) = event.entity.nbt.get(&super::BOILER.into()) else {
-        return;
+        GAUGES.with_borrow_mut(|g| g.remove(&event.pos));
+        return true;
     };
     let &[heat, passive, water, engines, whistles, occluded] = v.as_slice() else {
-        return;
+        return true;
     };
     let boiler = create_engine::steam::Boiler {
         active_heat: heat,
@@ -467,13 +516,14 @@ fn draw_boiler(event: &mut BlockEntitySubmitEvent<'_>, m: &create_engine::tank::
         ..Default::default()
     };
     if !boiler.is_active() {
-        return;
+        GAUGES.with_borrow_mut(|g| g.remove(&event.pos));
+        return true;
     }
     let (Some(gauge), Some(dial)) = (
         states::partial("part_boiler_gauge"),
         states::partial("part_boiler_gauge_dial"),
     ) else {
-        return;
+        return true;
     };
     let size = i32::from(m.width) * i32::from(m.width) * i32::from(m.height);
     let for_size = create_engine::steam::max_heat_for_size(size);
@@ -484,6 +534,27 @@ fn draw_boiler(event: &mut BlockEntitySubmitEvent<'_>, m: &create_engine::tank::
     } else {
         boiler.level(size) as f32 / for_size as f32
     };
+    let now = event.draw.animation_time();
+    let (progress, settled) = GAUGES.with_borrow_mut(|g| {
+        // A gauge first seen sets off from empty (`LerpedFloat` starts at 0).
+        let gauge = g.entry(event.pos).or_insert(Gauge {
+            from: 0.0,
+            since: now,
+            target: progress,
+            settled: false,
+        });
+        if gauge.target != progress {
+            *gauge = Gauge {
+                from: gauge.at(now),
+                since: now,
+                target: progress,
+                settled: false,
+            };
+        }
+        let at = gauge.at(now);
+        gauge.settled = (at - gauge.target).abs() < 1.0 / 512.0;
+        (if gauge.settled { gauge.target } else { at }, gauge.settled)
+    });
     let w = f32::from(m.width);
     let draw = &mut *event.draw;
     // `Iterate.horizontalDirections` by `get2DDataValue` (south, west, north, east) and their
@@ -506,4 +577,5 @@ fn draw_boiler(event: &mut BlockEntitySubmitEvent<'_>, m: &create_engine::tank::
         draw.block(dial, &[("facing", "south")]);
         draw.pop();
     }
+    settled
 }

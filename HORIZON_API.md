@@ -104,8 +104,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A placement answering another block's state**: `state_for_placement` ignores a state of another block,
   so a shaft placed in front of a steam engine becomes its powered shaft a tick later
   (`ShaftBlock.pickCorrectShaftType`), from any placement, not only a player's.
-- **An item's own renderer** (`BlockEntityWithoutLevelRenderer`): the extendo grip is drawn as its plain item
-  model, not Create's extending arm.
+- **A special item model told its display context and the time** (`SpecialModelRenderer` is asked once per
+  stack): the extendo grip is drawn with its arms, hand and cog at Create's resting pose everywhere, its cog
+  still and its arms not reaching out in a first-person hand as the player swings
+  (`ExtendoGripItemRenderer`, `ExtendoGripRenderHandler`).
 - **Whether an item's model is 3D** (`BakedModel.isGui3d`): belts, depots, placards and link slots approximate
   it by "the item places a block".
 - **Keeping only some of a block entity's drawing**: `keep()` keeps everything drawn for it, so a block with
@@ -130,10 +132,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A terrain model that reads its neighbours** (Create's `CTModel` and `CTSpriteShifter`, connected textures):
   casings, framed glass, windows, layered stone and item vaults join through the connected-texture rules
   `create-data prepare` writes (a vault joins any vault block of its axis and size beside it, where
-  `ItemVaultCTBehaviour` joins only its own vault's blocks: a rule cannot read the multiblock), but gearboxes, encased shafts and cogs and fluid tanks wider than one keep each its own
-  frame, where Create's `EncasedCTBehaviour`, `EncasedCogCTBehaviour` and `FluidTankCTBehaviour` join them
-  into one (their models are not plain cubes a rule can retexture). A model hook given the neighbouring
-  states (or a sprite shift per face) would close it.
+  `ItemVaultCTBehaviour` joins only its own vault's blocks: a rule cannot read the multiblock), and fluid and
+  creative tanks join as far as their states tell (up and down by `top` and `bottom`, a two-wide windowed
+  tank's sides by its corner `shape`), but gearboxes, encased shafts and cogs keep each its own frame, and
+  plain tanks two or three wide (and three-wide windowed ones) keep a seam between their columns, where
+  Create's `EncasedCTBehaviour`, `EncasedCogCTBehaviour` and `FluidTankCTBehaviour` join them by the block
+  entities (`ConnectivityHandler.isConnected`). A model hook given the neighbouring states and block entity
+  data (or a sprite shift per face) would close it.
 - **The level's redstone in `state_for_placement`** (`LevelHost` has no `has_neighbor_signal`): a clutch,
   gearshift or adjustable chain gearshift placed beside power is placed unpowered and takes `powered` in the
   same tick's level tick (`GearshiftBlock.getStateForPlacement` reads it at once).
@@ -145,6 +150,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A turned item in a screen** (`GuiGameElement.of(stack).rotate(..)`): the wand of symmetry's screen draws the
   wand flat.
 - **A global hit hook naming the attacker** (an extendo grip in the off hand wearing on hits).
+- **Marking an entity immune to fire** (`Entity.fireImmune`, Create's `CreateFireImmune`): a player in a whole
+  netherite diving set takes no fire damage (`living_incoming_damage`) and stops burning each tick, and their
+  own view shows no flames, but lava still sets them alight for a tick, so others see flames on them.
+- **A particle drawn as its own quads** (`SteamJetParticle.render`'s four quads turned along the jet): steam
+  engines' and whistles' steam jets are Create's sprites on a billboard.
 - **A screen layout for a mod menu opened without a block** (`player_open_mod_menu` with no `pos`: the
   client's `open_native_screen` returns without a `Screen`): the filters' and the schedule's screens are the mod's own screen,
   and clicking an inventory slot carries a ghost copy, not the stack (Create's menus carry the real one). A
@@ -174,12 +184,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - Contraptions: a deployer on a moving contraption does nothing (`DeployerMovementBehaviour`), and moving
   block entities other than mounted storage (chests, barrels, vaults, toolboxes) keep only their block (a
   depot's item, a deployer's held item, a tank's fluid are not carried).
-- Fluids: creative fluid tanks stay one block each (Create's join into tanks up to 3 wide); potion fluids
-  keep registered potions only (custom effects are lost); the boiler's gauge is drawn at its level without
-  its swing; glass pipes show a steady stream, not its growth, and open pipe ends have no flow particles.
-- Steam engines: their jets and the boiler's hiss come only from engines being drawn (the client's draw
-  of the engine times them, not a client tick), and the hiss is at the volume of a boiler with up to
-  eleven engines.
+- Fluids: potion fluids keep registered potions only (custom effects and colours are lost: the engine's
+  `tank::Fluid` is a fixed set of ids saved and sent as one byte, which would need a world-saved table of
+  potion contents), and belts carry only the potions a spout fills on them (the logistics glue keeps no
+  components on belts); glass pipes show a steady stream, not its growth from the side it comes in
+  (`PipeConnection.Flow.progress`), and pipes don't drip on their rims while fluid passes; open pipe ends
+  pour only fluids with a block (Create's `FluidStackParticle` draws milk, tea and potions too); a portable
+  fluid interface docks but has nothing to hand over, as moving structures carry no tank's fluid.
 
 ## Not to send
 

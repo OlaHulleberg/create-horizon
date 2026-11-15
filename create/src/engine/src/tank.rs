@@ -468,6 +468,10 @@ pub struct Tanks {
     pub cleared: Vec<[i32; 3]>,
     /// Tanks that look for a tank to form again (`updateConnectivity`).
     pending: Vec<[i32; 3]>,
+    /// Creative fluid tanks (`CreativeSmartFluidTank`): a tank's fluid is all it holds (its
+    /// amount is not kept), taken by a new tank that has none and given to every block of a
+    /// split one.
+    pub creative: bool,
 }
 
 fn add(p: [i32; 3], x: i32, y: i32, z: i32) -> [i32; 3] {
@@ -743,8 +747,17 @@ impl Tanks {
             if pos == origin || !self.parts.contains_key(&pos) {
                 continue;
             }
-            // A controller's fluid is poured into the new tank (what doesn't fit is lost).
-            if self.parts.get(&pos) == Some(&pos)
+            // A controller's fluid is poured into the new tank (what doesn't fit is lost); a
+            // creative tank without fluid takes it (`setContainedFluid`).
+            if self.creative {
+                if self.parts.get(&pos) == Some(&pos)
+                    && let Some(f) = self.multis.get_mut(&pos).and_then(|m| m.tank.fluid.take())
+                    && let Some(m) = self.multis.get_mut(&origin)
+                    && m.tank.fluid.is_none()
+                {
+                    m.tank.fluid = Some(f);
+                }
+            } else if self.parts.get(&pos) == Some(&pos)
                 && let Some(t) = self
                     .multis
                     .get_mut(&pos)
@@ -781,7 +794,8 @@ impl Tanks {
             return;
         }
         let mut share = m.tank;
-        if !removed {
+        // A creative tank's blocks each keep its fluid (`setContainedFluid`).
+        if !self.creative && !removed {
             share.amount = share.amount.saturating_sub(CAPACITY);
             if share.amount == 0 {
                 share.fluid = None;
@@ -799,7 +813,9 @@ impl Tanks {
             } else {
                 Tank::default()
             };
-            if let Some(f) = share.fluid
+            if self.creative {
+                tank.fluid = share.fluid;
+            } else if let Some(f) = share.fluid
                 && pos != c
             {
                 let split = share.amount.min(CAPACITY);

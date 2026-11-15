@@ -174,6 +174,11 @@ pub struct Dimension {
     /// a column wait here for their controller.
     pub tanks: crate::tank::Tanks,
     tank_saved: HashMap<[i32; 3], crate::tank::Multi>,
+    /// Creative fluid tanks joined as tanks are (`CreativeFluidTankBlockEntity` is a
+    /// `FluidTankBlockEntity` of its own type): each controller's size and fluid; the fluid of
+    /// each block is also `plumbing.creative`'s. Saved sizes wait here for their controller.
+    pub creative_tanks: crate::tank::Tanks,
+    creative_tank_saved: HashMap<[i32; 3], crate::tank::Multi>,
     /// Tank blocks clients must see again (a controller's fluid, or none).
     pub tank_changes: Vec<[i32; 3]>,
     /// Tank blocks whose `top`, `bottom` and `shape` follow their tank again.
@@ -1065,6 +1070,22 @@ impl CreateWorld {
             self.tanks_touched(dim, false);
         }
         let d = &mut self.dims[dim];
+        if block == Block::CreativeFluidTank && !d.creative_tanks.parts.contains_key(&pos) {
+            let fluid = d.plumbing.creative.get(&pos).copied().flatten();
+            let saved = d.creative_tank_saved.remove(&pos).map(|mut m| {
+                m.tank.fluid = fluid;
+                m
+            });
+            d.creative_tanks.creative = true;
+            d.creative_tanks.load(pos, saved);
+            if let Some(m) = d.creative_tanks.multis.get_mut(&pos)
+                && saved.is_none()
+            {
+                m.tank.fluid = fluid;
+            }
+            self.creative_tanks_touched(dim, false);
+        }
+        let d = &mut self.dims[dim];
         // A wheel loaded with its column looks at its flow (`lazyTick`); placed ones are listed
         // by `block_changed`.
         if matches!(block, Block::WaterWheel | Block::LargeWaterWheel) && !d.wheels.contains(&pos) {
@@ -1229,6 +1250,22 @@ impl CreateWorld {
                 self.dims[dim].tanks.remove(pos);
             }
             self.tanks_touched(dim, true);
+        }
+        let creative = |s: u32| {
+            self.table
+                .get(s)
+                .is_some_and(|(b, _)| b == Block::CreativeFluidTank)
+        };
+        let (was_creative, is_creative) = (creative(old), creative(new));
+        if was_creative != is_creative {
+            let d = &mut self.dims[dim];
+            d.creative_tanks.creative = true;
+            if is_creative {
+                d.creative_tanks.place(pos);
+            } else {
+                d.creative_tanks.remove(pos);
+            }
+            self.creative_tanks_touched(dim, true);
         }
         // Track, a station or a signal gone (placed ones are added by `place`).
         let rail = |s: u32| {
@@ -1808,6 +1845,9 @@ impl CreateWorld {
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tanks.unload_column(cx, cz);
             d.tank_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.creative_tanks.unload_column(cx, cz);
+            d.creative_tank_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.boilers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.boiler_checks
@@ -3312,6 +3352,87 @@ impl CreateWorld {
         out
     }
 
+    /// Creative tanks' sizes saved with a column (by controller).
+    pub fn load_creative_tanks(
+        &mut self,
+        dim: usize,
+        saved: impl Iterator<Item = ([i32; 3], crate::tank::Multi)>,
+    ) {
+        self.dims[dim].creative_tank_saved.extend(saved);
+    }
+
+    /// The controllers of a column's creative tanks bigger than a block or without windows, to
+    /// save (their fluid is saved with each block).
+    pub fn column_creative_tanks(
+        &self,
+        dim: usize,
+        cx: i32,
+        cz: i32,
+    ) -> Vec<([i32; 3], crate::tank::Multi)> {
+        let mut out: Vec<_> = self.dims[dim]
+            .creative_tanks
+            .multis
+            .iter()
+            .filter(|(p, m)| {
+                (p[0] >> 4, p[2] >> 4) == (cx, cz) && (m.width, m.height, m.window) != (1, 1, true)
+            })
+            .map(|(p, m)| (*p, *m))
+            .collect();
+        out.sort_by_key(|(p, _)| *p);
+        out
+    }
+
+    /// Creative tank blocks whose part changed: each takes its tank's fluid, its state and
+    /// drawing follow, its column is saved again unless just loaded.
+    fn creative_tanks_touched(&mut self, dim: usize, save: bool) {
+        let d = &mut self.dims[dim];
+        d.creative_tanks.cleared.clear();
+        for p in std::mem::take(&mut d.creative_tanks.touched) {
+            if let Some((_, m)) = d.creative_tanks.get(p) {
+                let fluid = m.tank.fluid;
+                d.plumbing.creative.insert(p, fluid);
+            }
+            d.plumbing.creative_changes.push(p);
+            d.tank_states.push(p);
+            if save {
+                d.unsaved.push((p[0] >> 4, p[2] >> 4));
+            }
+        }
+    }
+
+    /// The creative tank the block at `pos` is part of: its controller and tank.
+    pub fn creative_tank(&self, dim: usize, pos: [i32; 3]) -> Option<([i32; 3], crate::tank::Multi)> {
+        self.dims[dim].creative_tanks.get(pos).map(|(c, m)| (c, *m))
+    }
+
+    /// `CreativeSmartFluidTank.setContainedFluid` on the creative tank of the block at `pos`:
+    /// each of its blocks gives `fluid` (none: empty). Whether it changed.
+    pub fn set_creative_fluid(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        fluid: Option<crate::tank::Fluid>,
+    ) -> bool {
+        let d = &mut self.dims[dim];
+        let Some((c, m)) = d.creative_tanks.get_mut(pos) else {
+            return false;
+        };
+        if m.tank.fluid == fluid {
+            return false;
+        }
+        m.tank.fluid = fluid;
+        let (w, h) = (m.width, m.height);
+        for p in crate::tank::blocks(c, w, h) {
+            if d.plumbing.creative.contains_key(&p) {
+                d.plumbing.creative.insert(p, fluid);
+                d.plumbing.creative_changes.push(p);
+                d.analog_checks.push(p);
+            }
+            d.unsaved.push((p[0] >> 4, p[2] >> 4));
+        }
+        true
+    }
+
     /// Tank blocks whose part changed (formed, split or loaded): their states, drawing and
     /// boilers follow, and their columns are saved again unless just loaded
     /// (`removeController`'s `boiler.clear()` for blocks split off).
@@ -3341,6 +3462,14 @@ impl CreateWorld {
     /// them, unless it is an active boiler. Whether it changed.
     pub fn toggle_tank_windows(&mut self, dim: usize, pos: [i32; 3]) -> bool {
         let d = &mut self.dims[dim];
+        if let Some((c, m)) = d.creative_tanks.get_mut(pos) {
+            m.window = !m.window;
+            let (width, height) = (m.width, m.height);
+            d.tank_states.extend(crate::tank::blocks(c, width, height));
+            d.plumbing.creative_changes.push(c);
+            d.unsaved.push((c[0] >> 4, c[2] >> 4));
+            return true;
+        }
         let Some((c, m)) = d.tanks.get_mut(pos) else {
             return false;
         };
@@ -3357,7 +3486,10 @@ impl CreateWorld {
 
     /// The `top`, `bottom` and `shape` the tank block at `pos` should have.
     pub fn tank_shape(&self, dim: usize, pos: [i32; 3]) -> Option<crate::tank::BlockShape> {
-        self.dims[dim].tanks.block_shape(pos)
+        let d = &self.dims[dim];
+        d.tanks
+            .block_shape(pos)
+            .or_else(|| d.creative_tanks.block_shape(pos))
     }
 
     /// Tank blocks whose states must follow their tank, each once.
@@ -3463,6 +3595,15 @@ impl CreateWorld {
             efficiency: 0.0,
         };
         self.set_shaft_output(dim, shaft, stopped);
+    }
+
+    /// What drives the powered shaft at `pos` (its engine's direction and efficiency).
+    pub fn shaft_steam(&self, dim: usize, pos: [i32; 3]) -> crate::steam::Output {
+        self.dims[dim]
+            .settings
+            .get(&pos)
+            .map(|s| s.steam)
+            .unwrap_or_default()
     }
 
     /// A powered shaft's engine output, re-placed when it changed (`PoweredShaftBlockEntity
@@ -4743,6 +4884,44 @@ mod tests {
         assert_eq!(w.dims[0].plumbing.creative.get(&tank), Some(&None));
         w.block_changed(0, tank, 13, 0);
         assert!(w.dims[0].plumbing.creative.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn creative_tanks_join_share_their_fluid_and_split() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_fluid_tank", vec![]),
+            ("create:fluid_tank", vec![]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let water = Some(crate::tank::Fluid::Water);
+        w.block_changed(0, [1, 0, 0], 0, 10);
+        assert!(w.set_creative_fluid(0, [1, 0, 0], water));
+        // A fluid tank beside it stays a tank of its own kind.
+        w.block_changed(0, [2, 0, 0], 0, 11);
+        assert_eq!(w.creative_tank(0, [2, 0, 0]), None);
+        for p in [[0, 0, 0], [0, 0, 1], [1, 0, 1], [0, 1, 0], [1, 1, 0], [0, 1, 1], [1, 1, 1]] {
+            w.block_changed(0, p, 0, 10);
+        }
+        let (c, m) = w.creative_tank(0, [1, 1, 1]).unwrap();
+        assert_eq!((c, m.width, m.height), ([0, 0, 0], 2, 2));
+        // The new controller had none: it takes the fluid, and every block gives it.
+        assert_eq!(m.tank.fluid, water);
+        assert!(w.dims[0].plumbing.creative.values().all(|f| *f == water));
+        assert_eq!(w.dims[0].plumbing.creative.len(), 8);
+        let saved = w.column_creative_tanks(0, 0, 0);
+        assert_eq!(saved.len(), 1);
+        // Its controller broken: the rest split and form again, each keeping the fluid.
+        w.block_changed(0, [0, 0, 0], 10, 0);
+        assert_eq!(w.dims[0].plumbing.creative.len(), 7);
+        assert!(w.dims[0].plumbing.creative.values().all(|f| *f == water));
+        let shape = w.tank_shape(0, [1, 1, 1]).unwrap();
+        assert!(shape.top);
         states::clear_range();
     }
 

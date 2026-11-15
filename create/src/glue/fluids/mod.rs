@@ -11,8 +11,13 @@
 //! potions as their potion fluid (a regular water bottle as water), spouts fill bottles with it;
 //! the engine names a potion item with its contents (`tank::potion_item`).
 //!
+//! Creative fluid tanks join into tanks as fluid tanks do (`creative_tanks` in the engine's
+//! world), each block giving the tank's fluid (`plumbing.creative`). Steam engines hiss and puff
+//! at each stroke (`engine`'s client tick), boiler gauges swing to their level (`client`), and
+//! open pipe ends pour what passes them (`pipes::pour`).
+//!
 //! Left out:
-//! - Creative fluid tanks wider or taller than one block (Create joins them as it does tanks).
+//! - A portable fluid interface's transfers: moving structures carry no tank's fluid.
 //! - The `FLUIDS` capability on Create's tanks, so other mods' handlers and Create's pumps reach
 //!   each other: the tanks' contents live in the engine's world, outside the game's transaction
 //!   journal, and a handler cannot learn that a transaction it wrote in was aborted to roll the
@@ -22,7 +27,7 @@
 mod clicks;
 pub(crate) mod client;
 mod drawn;
-mod engine;
+pub(crate) mod engine;
 mod glass;
 mod goggles;
 mod lava;
@@ -67,6 +72,7 @@ pub struct Fluids;
 impl Subsystem for Fluids {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         client::register(r);
+        pipes::register(r);
         for block in place::PLACED {
             r.block_part(super::states::key(block), place::Placement);
         }
@@ -164,6 +170,7 @@ impl Subsystem for Fluids {
             rims::RIMS,
             drawn::DRAIN_ITEM,
             engine::ENGINE_SPEED,
+            engine::STEAM,
             plumbing::FILTER,
             plumbing::WHISTLE,
             glass::FLOW,

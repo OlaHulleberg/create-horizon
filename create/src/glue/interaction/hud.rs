@@ -110,7 +110,17 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
     let goggles = items::is(head.as_ref(), Item::Goggles);
     let Some((block, impact, capacity)) = super::super::client_table(host, |t| {
         let (block, info) = t.get(block_at(host, pos))?;
-        let [part, _] = create_engine::parts::parts(block, info, &Default::default());
+        // A powered shaft's capacity is its engine's share (`calculateAddedStressCapacity`).
+        let mut settings = create_engine::parts::Settings::default();
+        if block == create_engine::Block::PoweredShaft
+            && let Some(d) = host
+                .level(host.dimension())
+                .and_then(|l| host.block_entity(l, pos))
+                .and_then(|e| e.data(host))
+        {
+            settings.steam = super::super::fluids::engine::shown_steam(&d);
+        }
+        let [part, _] = create_engine::parts::parts(block, info, &settings);
         Some(part.map_or((block, 0.0, 0.0), |p| (block, p.impact, p.capacity)))
     })
     .flatten() else {

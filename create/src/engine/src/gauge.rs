@@ -449,7 +449,7 @@ const GRAY: u32 = 0xAAAAAA;
 const DARK_GRAY: u32 = 0x555555;
 
 /// `forGoggles`: four spaces, and one more per indent.
-pub(crate) fn goggles(indent: usize, pieces: Line) -> Line {
+pub fn goggles(indent: usize, pieces: Line) -> Line {
     let mut line = vec![(" ".repeat(4 + indent), WHITE)];
     line.extend(pieces);
     line

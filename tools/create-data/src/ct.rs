@@ -17,7 +17,7 @@
 //! Left out: pillars (`RotatedPillarCTBehaviour` turns its axes by the pillar's axis and joins by
 //! its `ConnectedPillarBlock` sides), the weathered iron window's position-picked sheets, copper
 //! roofs (`ROOF`), metal scaffolding, chassis, the encased blocks' and crafters' state-dependent
-//! sides, tanks (their sheets follow the multiblock's size and the block entity), the
+//! sides, tanks' joins their state doesn't tell (`tank_files`), the
 //! glass panes' mirrored left and right on their north and west faces
 //! (`GlassPaneCTBehaviour.reverseUVsHorizontally`), and casings joining the encased blocks of their
 //! casing (`CasingConnectivity`): a casing joins only its own block. Item vaults join any vault
@@ -601,6 +601,153 @@ fn properties(plan: &Plan, rule: &Rule, tiles: &str) -> String {
     out
 }
 
+/// `FluidTankCTBehaviour` (`HorizontalCTBehaviour` of `RECTANGLE` sheets) for the fluid and
+/// creative tanks, as far as a tank block's state tells which of its neighbours are in its tank:
+/// up and down by `top` and `bottom`, the sides of a two-wide tank with windows by its corner
+/// `shape`. Each face of each state takes the tile of its context, by a `fixed` rule matching the
+/// state and the face; a block whose neighbours its state doesn't tell (a plain shape, or a
+/// window that may be one block wide or the middle of a three-wide side) joins only up and down.
+/// The block's own sprites name the sheets (`FluidTankModel`: the sides, the top and the
+/// inside's floor and ceiling).
+fn tank_files(
+    read: &dyn Fn(&str) -> Option<Vec<u8>>,
+    out: &mut BTreeMap<String, Vec<u8>>,
+    skipped: &mut Vec<String>,
+) {
+    type V = [i32; 3];
+    const N: V = [0, 0, -1];
+    const S: V = [0, 0, 1];
+    const E: V = [1, 0, 0];
+    const W: V = [-1, 0, 0];
+    const U: V = [0, 1, 0];
+    // (block, side, top, inside) sprites; each has a `_connected` sheet.
+    let tanks = [
+        (
+            "fluid_tank",
+            "fluid_tank",
+            "fluid_tank_top",
+            "fluid_tank_inner",
+        ),
+        (
+            "creative_fluid_tank",
+            "creative_fluid_tank",
+            "creative_casing",
+            "creative_casing",
+        ),
+    ];
+    // Each face and its texture's up and right as read from outside (`buildContext`).
+    let faces: [(&str, V, V); 6] = [
+        ("north", U, W),
+        ("south", U, E),
+        ("east", U, N),
+        ("west", U, S),
+        ("up", N, E),
+        ("down", S, E),
+    ];
+    let shapes = [
+        "plain",
+        "window",
+        "window_nw",
+        "window_ne",
+        "window_sw",
+        "window_se",
+    ];
+    let mut cut_sheets: BTreeMap<&str, bool> = BTreeMap::new();
+    for (block, side, top, inner) in tanks {
+        if read(&format!("assets/create/blockstates/{block}.json")).is_none() {
+            skipped.push(format!("{block}: no blockstate"));
+            continue;
+        }
+        for sprite in [side, top, inner] {
+            if cut_sheets.contains_key(sprite) {
+                continue;
+            }
+            let src = format!("assets/create/textures/block/{sprite}_connected.png");
+            let ok = match read(&src).map(|b| decode(&b)) {
+                Some(Ok(img)) if img.w == img.h && img.w % 4 == 0 => {
+                    let t = img.w / 4;
+                    for i in 0..16u32 {
+                        let (sx, sy) = ((i % 4) * t, (i / 4) * t);
+                        let mut px = Vec::with_capacity((t * t * 4) as usize);
+                        for y in 0..t {
+                            let s = (((sy + y) * img.w + sx) * 4) as usize;
+                            px.extend_from_slice(&img.px[s..s + (t * 4) as usize]);
+                        }
+                        out.insert(
+                            format!(
+                                "assets/create/optifine/ctm/tiles/{sprite}_connected/sheet_{i}.png"
+                            ),
+                            encode(&Image { w: t, h: t, px }),
+                        );
+                    }
+                    true
+                }
+                _ => {
+                    skipped.push(format!(
+                        "{sprite}_connected: not a 4x4 sheet in the sources"
+                    ));
+                    false
+                }
+            };
+            cut_sheets.insert(sprite, ok);
+        }
+        let mut n = 0;
+        for shape in shapes {
+            // The horizontal neighbours in its tank a block of this shape surely has.
+            let (dx, dz): (i32, i32) = match shape {
+                "window_nw" => (1, 1),
+                "window_ne" => (-1, 1),
+                "window_sw" => (1, -1),
+                "window_se" => (-1, -1),
+                _ => (0, 0),
+            };
+            for top_v in [false, true] {
+                for bottom_v in [false, true] {
+                    let joined = |d: V| match d {
+                        [0, 1, 0] => !top_v,
+                        [0, -1, 0] => !bottom_v,
+                        [x, 0, 0] => x == dx,
+                        [0, 0, z] => z == dz,
+                        _ => false,
+                    };
+                    let neg = |v: V| v.map(|c| -c);
+                    for (face, up, right) in faces {
+                        let sprites: &[&str] = match face {
+                            "up" | "down" if top == inner => &[top],
+                            "up" | "down" => &[top, inner],
+                            _ => &[side],
+                        };
+                        let ctx = Ctx {
+                            up: joined(up),
+                            down: joined(neg(up)),
+                            left: joined(neg(right)),
+                            right: joined(right),
+                            ..Ctx::default()
+                        };
+                        if ctx == Ctx::default() {
+                            continue;
+                        }
+                        let index = CtType::Rectangle.index(ctx);
+                        for sprite in sprites {
+                            if !cut_sheets.get(sprite).copied().unwrap_or(false) {
+                                continue;
+                            }
+                            let props = format!(
+                                "method=fixed\nmatchTiles=create:block/{sprite}\nmatchBlocks=create:{block}:top={top_v}:bottom={bottom_v}:shape={shape}\nfaces={face}\ntiles=create:optifine/ctm/tiles/{sprite}_connected/sheet_{index}\n"
+                            );
+                            out.insert(
+                                format!("assets/create/optifine/ctm/{block}/tank_{n}.properties"),
+                                props.into_bytes(),
+                            );
+                            n += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The files connected textures add: one OptiFine `ctm` properties file per block and sheet,
 /// and each sheet's tiles. Block models stay as Create's: only the terrain mesher swaps the
 /// tiles in. `read` gives a file of the sources. Returns the files and what was left out, with
@@ -652,6 +799,7 @@ pub fn files(read: &dyn Fn(&str) -> Option<Vec<u8>>) -> (BTreeMap<String, Vec<u8
             }
         }
     }
+    tank_files(read, &mut out, &mut skipped);
     (out, skipped)
 }
 

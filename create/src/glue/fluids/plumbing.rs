@@ -10,7 +10,7 @@ use create_engine::Block;
 use create_engine::fluids::{Cell, Gate, SmartFilter};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
-use create_engine::tank::{CAPACITY, Fluid, Multi, Tank};
+use create_engine::tank::{Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
 use mod_api::{BlockShapeKind, Compound, HostBlockStates, SoundSource, Tag};
 
 /// What a valve, a smart, glass or encased pipe, a hose pulley or a creative tank is to the
@@ -376,19 +376,22 @@ fn send_changes(lv: &mut ServerLevel<'_>) {
         (take(&mut p.creative_changes), take(&mut p.hose_changes))
     })
     .unwrap_or_default();
+    // Each controller as a tank full of its fluid (`getFluidAmount` is its capacity), the other
+    // blocks as no tank.
     for pos in tanks {
-        let fluid = with_world(|w| w.dims[dim].plumbing.creative_fluid(pos))
+        let m = with_world(|w| w.dims[dim].creative_tanks.multis.get(&pos).copied())
             .flatten()
-            .flatten();
-        let m = fluid.map(|f| Multi {
-            tank: Tank {
-                fluid: Some(f),
-                amount: CAPACITY,
-            },
-            width: 1,
-            height: 1,
-            window: true,
-        });
+            .map(|m| Multi {
+                tank: Tank {
+                    fluid: m.tank.fluid,
+                    amount: if m.tank.fluid.is_some() {
+                        m.capacity()
+                    } else {
+                        0
+                    },
+                },
+                ..m
+            });
         super::set_shown_tank(lv, pos, m.as_ref());
     }
     let now = lv.game_time();
@@ -730,7 +733,7 @@ const KEY: &str = "create_fluids";
 pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
     let here = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
     let index = |f: Option<Fluid>| i32::from(f.map_or(255, Fluid::index));
-    let (filters, hoses, creative) = with_world(|w| {
+    let (filters, hoses, creative, multis) = with_world(|w| {
         let p = &w.dims[dim].plumbing;
         let mut filters: Vec<_> = p
             .filters
@@ -760,7 +763,8 @@ pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) 
             .map(|(q, f)| (*q, *f))
             .collect();
         creative.sort_by_key(|e| e.0);
-        (filters, hoses, creative)
+        let multis = w.column_creative_tanks(dim, chunk[0], chunk[1]);
+        (filters, hoses, creative, multis)
     })
     .unwrap_or_default();
     if filters.is_empty() && hoses.is_empty() && creative.is_empty() {
@@ -797,6 +801,22 @@ pub(super) fn chunk_data_save(dim: usize, chunk: [i32; 2], data: &mut Compound) 
         .flat_map(|(p, f)| [p[0], p[1], p[2], index(*f)])
         .collect();
     own.insert("creative_tanks".into(), Tag::IntArray(v));
+    // x, y, z, width, height, window of each creative tank bigger than a block or without
+    // windows (`Size`, `Height`, `Window`).
+    let v: Vec<i32> = multis
+        .iter()
+        .flat_map(|(p, m)| {
+            [
+                p[0],
+                p[1],
+                p[2],
+                i32::from(m.width),
+                i32::from(m.height),
+                i32::from(m.window),
+            ]
+        })
+        .collect();
+    own.insert("creative_multis".into(), Tag::IntArray(v));
     data.insert(KEY.into(), Tag::Compound(own));
 }
 
@@ -823,6 +843,7 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
     };
     let hoses = ints("hoses");
     let creative = ints("creative_tanks");
+    let multis = ints("creative_multis");
     with_world(|w| {
         let p = &mut w.dims[dim].plumbing;
         for (i, c) in filters.as_chunks::<4>().0.iter().enumerate() {
@@ -847,6 +868,16 @@ pub(super) fn chunk_load(dim: usize, data: &Compound) {
         for c in creative.as_chunks::<4>().0 {
             p.creative_saved.insert([c[0], c[1], c[2]], fluid(c[3]));
         }
+        let multis = multis.as_chunks::<6>().0.iter().map(|c| {
+            let m = Multi {
+                width: c[3].clamp(1, MAX_WIDTH) as u8,
+                height: c[4].clamp(1, MAX_HEIGHT) as u8,
+                window: c[5] != 0,
+                tank: Tank::default(),
+            };
+            ([c[0], c[1], c[2]], m)
+        });
+        w.load_creative_tanks(dim, multis);
     });
 }
 

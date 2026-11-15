@@ -189,7 +189,6 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
                 }
                 took
             });
-            pump.push = push;
             if moved > 0 {
                 // The glass pipes on the way show the fluid going through.
                 let ways = pump
@@ -204,6 +203,13 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
                 let now = lv.game_time();
                 for (_, way) in ways {
                     super::glass::flowing(dim, way, fluid, now);
+                }
+                // Open ends pour the fluid out, or draw it in (`PipeConnection.spawnParticles`).
+                if !from.tank {
+                    pour(lv, from.pos, fluid, true);
+                }
+                for end in push.iter().filter(|e| !e.tank && filled.contains(&e.pos)) {
+                    pour(lv, end.pos, fluid, false);
                 }
                 if special.is_some() {
                     plumbing::take(lv, from.pos, moved);
@@ -225,6 +231,7 @@ fn pump(lv: &mut ServerLevel<'_>, pos: [i32; 3], changed: bool) {
                 }
                 with_world(|w| w.mark_unsaved(dim, pos));
             }
+            pump.push = push;
         }
     }
     with_world(|w| {
@@ -367,7 +374,10 @@ pub(super) fn tick_tank_states(lv: &mut ServerLevel<'_>) {
         let Some(want) = with_world(|w| w.tank_shape(dim, pos)).flatten() else {
             continue;
         };
-        if info_at(lv, pos).map(|(b, _)| b) != Some(Block::FluidTank) {
+        if !matches!(
+            info_at(lv, pos).map(|(b, _)| b),
+            Some(Block::FluidTank | Block::CreativeFluidTank)
+        ) {
             continue;
         }
         let Some(state) = lv.block_state(pos) else {
@@ -384,4 +394,62 @@ pub(super) fn tick_tank_states(lv: &mut ServerLevel<'_>) {
             lv.set_state(pos, next, UPDATE_CLIENTS);
         }
     }
+}
+
+/// `minecraft:block`, for the fluid poured at open pipe ends.
+static BLOCK_PARTICLE: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
+
+pub(super) fn register(r: &mut dyn mod_api::Registrar) {
+    let _ = BLOCK_PARTICLE.set(r.particle_key("minecraft:block"));
+}
+
+thread_local! {
+    static RNG: std::cell::RefCell<create_engine::processing::Rng> =
+        std::cell::RefCell::new(create_engine::processing::Rng::new(0xF10D));
+}
+
+/// `FluidFX.spawnPouringLiquid` at the pipe ending in the open space `open`: a drop of `fluid`
+/// (its block's particle, as Create's `FluidStackParticle` draws its still texture) leaving the
+/// rim, or flying back into the pipe when it is drawn in (`inbound`). Fluids with no block (milk,
+/// potions, tea) show none.
+fn pour(lv: &mut ServerLevel<'_>, open: [i32; 3], fluid: Fluid, inbound: bool) {
+    let Some(&key) = BLOCK_PARTICLE.get() else {
+        return;
+    };
+    if !fluid.placeable() {
+        return;
+    }
+    // The pipe whose side opens onto the space, and that side.
+    let Some((pipe, side)) = Dir::ALL.into_iter().find_map(|d| {
+        let o = d.offset();
+        let q = [open[0] + o[0], open[1] + o[1], open[2] + o[2]];
+        (pipe_sides_at(lv, q) & d.opposite().bit() != 0).then_some((q, d.opposite()))
+    }) else {
+        return;
+    };
+    let Some(state) = state_with(lv, fluid.id(), &[("level", "0")]) else {
+        return;
+    };
+    let r = || RNG.with_borrow_mut(|r| f64::from(r.next_float()));
+    let dir = side.offset().map(f64::from);
+    // `offsetRandomly(ZERO, r, RIM_RADIUS * .75)` across the side, then out to the rim.
+    let rim = (1.0 / 4.0 + 1.0 / 64.0) * 0.75;
+    let out = 0.5 + r() / 4.0;
+    let mut v = [0.0; 3];
+    for i in 0..3 {
+        let across = (r() - 0.5) * 2.0 * rim;
+        v[i] = if dir[i] != 0.0 { 0.0 } else { across } + dir[i] * out;
+    }
+    let mut m = v.map(|c| c / 4.0);
+    let center = pipe.map(|c| f64::from(c) + 0.5);
+    let mut at = [0, 1, 2].map(|i| center[i] + v[i]);
+    if inbound {
+        at = [0, 1, 2].map(|i| at[i] + m[i]);
+        m = [0, 1, 2].map(|i| (center[i] + dir[i] * 0.5 - at[i]) / 16.0);
+    }
+    at[1] -= 1.0 / 16.0;
+    let options = mod_api::ParticleOptions::simple(key);
+    let _ = lv
+        .level
+        .send_particles(&mut *lv.host, &options, Some(state), at, m, 1.0, 0);
 }

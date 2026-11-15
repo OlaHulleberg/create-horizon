@@ -7,7 +7,6 @@
 
 use super::super::items;
 use super::super::processing::recipes;
-use super::super::redstone::analog_touched;
 use super::super::server::ServerLevel;
 use super::super::states;
 use super::super::world::with_world;
@@ -153,16 +152,8 @@ fn use_tank(
     // ITEM_TO_TANK.
     if let Some(e) = emptying(&id) {
         let took = if creative_tank {
-            with_world(|w| {
-                let p = &mut w.dims[dim].plumbing;
-                if p.creative.get(&pos).copied().flatten() != Some(e.fluid) {
-                    p.creative.insert(pos, Some(e.fluid));
-                    p.creative_changes.push(pos);
-                    w.mark_unsaved(dim, pos);
-                }
-                true
-            })
-            .unwrap_or(false)
+            with_world(|w| w.set_creative_fluid(dim, pos, Some(e.fluid)));
+            true
         } else {
             with_world(|w| {
                 if let Some(took) = w.fill_boiler(dim, pos, e.fluid, e.amount) {
@@ -181,9 +172,6 @@ fn use_tank(
             .unwrap_or(false)
         };
         if took {
-            if creative_tank {
-                analog_touched(dim, pos);
-            }
             bucket_sound(lv, pos, e.fluid, false);
             return true;
         }
@@ -209,13 +197,7 @@ fn use_tank(
         && need <= have
     {
         if creative_tank {
-            with_world(|w| {
-                let p = &mut w.dims[dim].plumbing;
-                p.creative.insert(pos, None);
-                p.creative_changes.push(pos);
-                w.mark_unsaved(dim, pos);
-            });
-            analog_touched(dim, pos);
+            with_world(|w| w.set_creative_fluid(dim, pos, None));
         } else {
             with_world(|w| w.drain_tank(dim, pos, need));
         }

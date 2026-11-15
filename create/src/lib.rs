@@ -181,6 +181,16 @@ impl Hooks for Create {
         }
     }
 
+    fn register_special_model_renderer(
+        &self,
+        _context: &RegistrationContext,
+        event: &mut mod_api::RegisterSpecialModelRendererEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.special_model_renderers(&mut *event.renderers);
+        }
+    }
+
     fn right_click_block(&self, mut host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
         until_cancel(|s| s.right_click_block(reborrow(&mut host), event))
     }
@@ -255,6 +265,28 @@ impl Hooks for Create {
         for s in SUBSYSTEMS {
             s.player_tick(reborrow(&mut host), event);
         }
+    }
+
+    fn living_incoming_damage(
+        &self,
+        level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::LivingIncomingDamageEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.living_incoming_damage(level, event))
+    }
+
+    fn render_fog(&self, host: &dyn ClientHost, event: &mut mod_api::RenderFogEvent<'_>) {
+        for s in SUBSYSTEMS {
+            s.render_fog(host, event);
+        }
+    }
+
+    fn extract_block_screen_effect(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ExtractBlockScreenEffectEvent,
+    ) -> Flow {
+        until_cancel(|s| s.screen_effect(host, event))
     }
 
     fn register_commands(&self, host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {

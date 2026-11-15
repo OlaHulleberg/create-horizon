@@ -1,6 +1,11 @@
 //! Create's equipment (`create_engine::equipment` holds the rules): backtanks filled by their
 //! shaft, their air kept on the item (and shown as its bar, and on a potato cannon's while it
 //! uses it: `backtank_bar`), the diving helmet's breathing, the extendo grip's reach and wear.
+//! A whole netherite diving set makes its wearer immune to fire (`NetheriteDivingHandler`), and a
+//! diving helmet sees further under water, the netherite one in lava (`getFogDensity`). The
+//! extendo grip is drawn by a special item model (`GripModel`) at Create's resting pose: its cog
+//! does not turn and its arms don't reach out in a first-person hand (the renderer is asked once
+//! per stack, without the display context or the time).
 //! Free when unused: a player's tick reads their armour and hands and looks each item up once
 //! (the gear each item is, cached by key), and only backtanks with something to do tick.
 //!
@@ -53,6 +58,9 @@ thread_local! {
     static GEAR: RefCell<HashMap<ItemKey, Gear>> = RefCell::new(HashMap::new());
     /// Players given an extendo grip's reach (`EXTENDO_MARKER`): empty while nobody holds one.
     static REACH: RefCell<Vec<u128>> = const { RefCell::new(Vec::new()) };
+    /// Players wearing a whole netherite diving set, by entity id: fire can't hurt them
+    /// (`NetheriteDivingHandler.setFireImmune`).
+    static FIRE_IMMUNE: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     /// Backtanks a player is breaking with air in them, by level and position: their drop takes
     /// the air (`CopyComponentsFunction` of `BACKTANK_AIR`).
     static BREAKING: RefCell<HashMap<(usize, [i32; 3]), eq::Backtank>> = RefCell::new(HashMap::new());
@@ -77,6 +85,7 @@ impl Subsystem for Equipment {
     fn world_closed(&self) {
         GEAR.with_borrow_mut(HashMap::clear);
         REACH.with_borrow_mut(Vec::clear);
+        FIRE_IMMUNE.with_borrow_mut(Vec::clear);
         BREAKING.with_borrow_mut(HashMap::clear);
     }
 
@@ -166,6 +175,80 @@ impl Subsystem for Equipment {
         };
         if let Gear::Helmet(fire_resistant) = gear(host, living.equipment(&*host, ARMOR[0])) {
             breathe(host, player, fire_resistant);
+        }
+        netherite_set(host, player);
+    }
+
+    /// A player in a whole netherite diving set takes no fire damage (`Entity.fireImmune` with
+    /// Create's `CreateFireImmune`: `isInvulnerableTo` any `#minecraft:is_fire` damage).
+    fn living_incoming_damage(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::LivingIncomingDamageEvent<'_>,
+    ) -> Flow {
+        let fire = matches!(
+            event.source.damage_type,
+            "minecraft:in_fire"
+                | "minecraft:campfire"
+                | "minecraft:on_fire"
+                | "minecraft:lava"
+                | "minecraft:hot_floor"
+                | "minecraft:fireball"
+                | "minecraft:unattributed_fireball"
+        );
+        let Ok(id) = u32::try_from(event.entity) else {
+            return Flow::Continue;
+        };
+        if fire && FIRE_IMMUNE.with_borrow(|f| f.contains(&id)) {
+            return Flow::Cancel;
+        }
+        Flow::Continue
+    }
+
+    fn special_model_renderers(&self, renderers: &mut dyn mod_api::SpecialModelRenderers) {
+        renderers.register("create:extendo_grip".into(), std::sync::Arc::new(GripModel));
+    }
+
+    /// A player immune to fire is never set alight, so their view shows no flames.
+    fn screen_effect(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ExtractBlockScreenEffectEvent,
+    ) -> Flow {
+        if event.effect == mod_api::BlockScreenEffect::Fire
+            && host.local_player().is_some_and(|p| full_netherite(host, p))
+        {
+            return Flow::Cancel;
+        }
+        Flow::Continue
+    }
+
+    /// `ClientEvents.getFogDensity`: under water a diving helmet sees 6.25 times as far; in lava
+    /// the netherite one sees 20 blocks.
+    fn render_fog(&self, host: &dyn mod_api::ClientHost, event: &mut mod_api::RenderFogEvent<'_>) {
+        use mod_api::FogType;
+        if !matches!(event.fog_type, FogType::Water | FogType::Lava) {
+            return;
+        }
+        let Some(player) = host.local_player() else {
+            return;
+        };
+        if matches!(player.game_mode(host), Some(GameMode::Spectator)) {
+            return;
+        }
+        let Some(living) = host.living(player.entity()) else {
+            return;
+        };
+        let Some(helmet) = living.equipment(host, ARMOR[0]) else {
+            return;
+        };
+        match (gear_of(host, &helmet), event.fog_type) {
+            (Gear::Helmet(_), FogType::Water) => event.fog.environmental_end *= 6.25,
+            (Gear::Helmet(true), FogType::Lava) => {
+                event.fog.environmental_start = -4.0;
+                event.fog.environmental_end = 20.0;
+            }
+            _ => {}
         }
     }
 
@@ -401,6 +484,46 @@ fn tanks(host: &dyn ServerHost, living: LivingRef) -> Vec<Tank> {
             }
         })
         .collect()
+}
+
+/// Whether `player` wears a whole netherite diving set (`NetheriteDivingHandler`'s four bits),
+/// on either side.
+fn full_netherite(host: &dyn mod_api::Host, player: PlayerRef) -> bool {
+    let Some(living) = host.living(player.entity()) else {
+        return false;
+    };
+    let worn = ARMOR.map(|slot| living.equipment(host, slot));
+    let is = |s: &Option<ItemStack>, ids: &[&str]| {
+        s.as_ref()
+            .is_some_and(|s| ids.contains(&s.item().id(host).as_str()))
+    };
+    is(&worn[0], &["create:netherite_diving_helmet"])
+        && is(&worn[1], &["create:netherite_backtank"])
+        && worn[1].as_ref().is_some_and(|s| stack_air(s) > 0)
+        && is(&worn[2], &["minecraft:netherite_leggings"])
+        && is(
+            &worn[3],
+            &["minecraft:netherite_boots", "create:netherite_diving_boots"],
+        )
+}
+
+/// `NetheriteDivingHandler`: a netherite diving helmet, a netherite backtank with air, and
+/// fire-resistant (netherite) leggings and boots make the wearer immune to fire; while they are,
+/// they stop burning.
+fn netherite_set(host: &mut dyn ServerHost, player: PlayerRef) {
+    let full = full_netherite(&*host, player);
+    let id = player.entity().id();
+    FIRE_IMMUNE.with_borrow_mut(|f| {
+        let was = f.contains(&id);
+        if full && !was {
+            f.push(id);
+        } else if !full && was {
+            f.retain(|e| *e != id);
+        }
+    });
+    if full {
+        player.entity().clear_fire(host);
+    }
 }
 
 /// `DivingHelmetItem.breatheUnderwater`: one air a second from the emptiest tank, and breath.
@@ -657,4 +780,123 @@ pub(crate) fn backtank_bar(host: &dyn mod_api::ClientHost) -> Option<(i32, u32)>
         let width = (13.0 * (air as f32 / max as f32).clamp(0.0, 1.0)).round() as i32;
         (width, BAR_COLOR)
     })
+}
+
+/// `ExtendoGripItemRenderer` at rest (`animation` .25, as Create draws the grip anywhere but in
+/// a first-person hand): the grip, its scissor arms folded to their angle, the pointing deployer
+/// hand at their end and the cog. A special model is posed once per stack, so the cog does not
+/// turn and the arms do not reach out as the player swings.
+struct GripModel;
+
+/// A 4×4 pose, row-major, multiplied on the right as `PoseStack` does.
+#[derive(Clone, Copy)]
+struct Pose([[f32; 4]; 4]);
+
+impl Pose {
+    const IDENTITY: Pose = Pose([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]);
+    fn mul(self, o: Pose) -> Pose {
+        let mut r = [[0.0; 4]; 4];
+        for (i, row) in r.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                *v = (0..4).map(|k| self.0[i][k] * o.0[k][j]).sum();
+            }
+        }
+        Pose(r)
+    }
+    fn translate(self, v: [f32; 3]) -> Pose {
+        let mut t = Pose::IDENTITY;
+        t.0[0][3] = v[0];
+        t.0[1][3] = v[1];
+        t.0[2][3] = v[2];
+        self.mul(t)
+    }
+    fn scale(self, v: [f32; 3]) -> Pose {
+        let mut t = Pose::IDENTITY;
+        t.0[0][0] = v[0];
+        t.0[1][1] = v[1];
+        t.0[2][2] = v[2];
+        self.mul(t)
+    }
+    /// `Axis.XP/YP/ZP.rotationDegrees`.
+    fn rotate(self, axis: usize, degrees: f32) -> Pose {
+        let (s, c) = degrees.to_radians().sin_cos();
+        let mut t = Pose::IDENTITY;
+        let (a, b) = match axis {
+            0 => (1, 2),
+            1 => (2, 0),
+            _ => (0, 1),
+        };
+        t.0[a][a] = c;
+        t.0[a][b] = -s;
+        t.0[b][a] = s;
+        t.0[b][b] = c;
+        self.mul(t)
+    }
+    /// The part's 3×4 transform from the item's corner: Create's pose is about the item's
+    /// middle, and draws each model from its own middle (`PartialItemModelRenderer`).
+    fn part(self, model: &str) -> mod_api::SpecialModelPart {
+        let m = Pose::IDENTITY
+            .translate([0.5; 3])
+            .mul(self)
+            .translate([-0.5; 3]);
+        let t = m.0;
+        mod_api::SpecialModelPart::new(model).with_transform([
+            t[0][0], t[0][1], t[0][2], t[0][3], t[1][0], t[1][1], t[1][2], t[1][3], t[2][0],
+            t[2][1], t[2][2], t[2][3],
+        ])
+    }
+}
+
+impl mod_api::SpecialModelRenderer for GripModel {
+    fn extract(
+        &self,
+        _host: &dyn mod_api::ClientHost,
+        _stack: &ItemStack,
+        _config: &Tag,
+    ) -> Result<Vec<mod_api::SpecialModelPart>, String> {
+        const ROT: [f32; 3] = [0.0, 0.5, 0.5];
+        const BACK: [f32; 3] = [0.0, -0.5, -0.5];
+        let item = |m: &str| format!("create:item/extendo_grip/{m}");
+        let animation: f32 = 0.25f32.powi(3);
+        let extension = 24.0 + (156.0 - 24.0) * animation;
+        let half = extension / 2.0;
+        let opposite = 180.0 - extension;
+        let mut parts = vec![Pose::IDENTITY.part(&item("item"))];
+        let base = Pose::IDENTITY
+            .translate([0.0, 1.0 / 16.0, -7.0 / 16.0])
+            .scale([1.0, 1.0, 1.0 + animation]);
+        // One scissor arm.
+        let mut ms = base.rotate(0, -half).translate(ROT);
+        parts.push(ms.part(&item("thin_short")));
+        ms = ms.translate(BACK).translate([0.0, 5.5 / 16.0, 0.0]);
+        ms = ms.rotate(0, -opposite).translate(ROT);
+        parts.push(ms.part(&item("wide_long")));
+        ms = ms.translate(BACK).translate([0.0, 11.0 / 16.0, 0.0]);
+        ms = ms.rotate(0, opposite).translate(ROT);
+        ms = ms.translate([0.0, 0.5 / 16.0, 0.0]);
+        parts.push(ms.part(&item("thin_short")));
+        // The other, and the hand at its end.
+        let mut ms = base.rotate(0, -180.0 + half).translate(ROT);
+        parts.push(ms.part(&item("wide_short")));
+        ms = ms.translate(BACK).translate([0.0, 5.5 / 16.0, 0.0]);
+        ms = ms.rotate(0, opposite).translate(ROT);
+        parts.push(ms.part(&item("thin_long")));
+        ms = ms.translate(BACK).translate([0.0, 11.0 / 16.0, 0.0]);
+        ms = ms.rotate(0, -opposite).translate(ROT);
+        ms = ms.translate([0.0, 0.5 / 16.0, 0.0]);
+        parts.push(ms.part(&item("wide_short")));
+        ms = ms.translate(BACK).translate([0.0, 5.5 / 16.0, 0.0]);
+        ms = ms.rotate(0, 180.0 - half).rotate(1, 180.0);
+        ms = ms.translate([0.0, 0.0, -4.0 / 16.0]);
+        ms = ms.scale([1.0, 1.0, 1.0 / (1.0 + animation)]);
+        parts.push(ms.part("create:block/deployer/hand_pointing"));
+        // The cog, still.
+        parts.push(Pose::IDENTITY.part(&item("cog")));
+        Ok(parts)
+    }
 }

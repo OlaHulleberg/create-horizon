@@ -165,6 +165,15 @@ fn custom_rendered(name: &str) -> Option<Value> {
         "potato_cannon" => &["item", "cog"],
         // `WorldshaperItemRenderer`: CORE, CORE_GLOW, ACCELERATOR.
         "handheld_worldshaper" => &["item", "core", "core_glow", "accelerator"],
+        // `ExtendoGripItemRenderer`: its arms, hand and cog posed by the mod's special model
+        // renderer (`create:extendo_grip`, `glue/equipment.rs`).
+        "extendo_grip" => {
+            return Some(json!({
+                "type": "minecraft:special",
+                "base": "create:item/extendo_grip",
+                "model": { "type": "create:extendo_grip" },
+            }));
+        }
         "cardboard_sword" => {
             return Some(json!({
                 "type": "minecraft:select",

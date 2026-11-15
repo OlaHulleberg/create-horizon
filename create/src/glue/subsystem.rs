@@ -148,6 +148,9 @@ pub trait Subsystem: Sync {
     /// `Hooks::register_particle_providers`: the mod's particle types moved by code.
     fn particle_providers(&self, _providers: &mut dyn mod_api::ParticleProviders) {}
 
+    /// `Hooks::register_special_model_renderer`: the special item models the mod draws.
+    fn special_model_renderers(&self, _renderers: &mut dyn mod_api::SpecialModelRenderers) {}
+
     /// `Hooks::model_baking_completed`: resolve the standalone models drawn from now on.
     fn models_baked(&self, _host: &mut dyn ClientHost) {}
 
@@ -228,6 +231,29 @@ pub trait Subsystem: Sync {
 
     /// `Hooks::player_tick_post`, on either side.
     fn player_tick(&self, _host: HostSide, _event: &mut PlayerTickPostEvent) {}
+
+    /// `Hooks::living_incoming_damage`: a living entity is about to be hurt; the first
+    /// subsystem to answer `Flow::Cancel` spares it.
+    fn living_incoming_damage(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        _event: &mut mod_api::LivingIncomingDamageEvent<'_>,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::render_fog`: the world's fog on a client, before it is drawn.
+    fn render_fog(&self, _host: &dyn ClientHost, _event: &mut mod_api::RenderFogEvent<'_>) {}
+
+    /// `Hooks::extract_block_screen_effect`: a first-person overlay (fire, water, a block) is
+    /// about to be drawn; the first subsystem to answer `Flow::Cancel` leaves it out.
+    fn screen_effect(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut mod_api::ExtractBlockScreenEffectEvent,
+    ) -> Flow {
+        Flow::Continue
+    }
 
     /// `Hooks::register_commands`: push this subsystem's commands.
     fn register_commands(
