@@ -244,6 +244,18 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
             lines.extend(cut_hint(draw, l));
         }
     }
+    // With goggles, a piston's pole tells the length of the poles it is in.
+    if goggles && block == create_engine::Block::PistonExtensionPole {
+        let Some(poles) = pole_length(host, pos) else {
+            HOVER.set(None);
+            return;
+        };
+        if !lines.is_empty() {
+            lines.push(Vec::new());
+        }
+        let label = translated(host, "create.gui.goggles.pole_length", "Pole Length:");
+        lines.push(vec![(format!("    {label} {poles}"), 0xFFFFFF)]);
+    }
     if lines.is_empty() {
         HOVER.set(None);
         return;
@@ -381,6 +393,43 @@ fn bearing_hint(host: &dyn ClientHost, pos: [i32; 3], block: create_engine::Bloc
         .block_state(host, front)
         .and_then(|s| mod_api::HostBlockStates::block_states(host).replaceable(s))
         == Some(false)
+}
+
+/// `GoggleOverlayRenderer`'s piston poles: the poles in line with the one at `pos` (on its
+/// axis), when a mechanical piston is at either end; None without one.
+fn pole_length(host: &dyn ClientHost, pos: [i32; 3]) -> Option<u32> {
+    use create_engine::Block as B;
+    let at = |p: [i32; 3]| {
+        super::super::client_table(host, |t| {
+            t.get(block_at(host, p)).map(|(b, i)| (b, i.facing))
+        })
+        .flatten()
+    };
+    let axis = at(pos)?.1?.axis();
+    let mut poles = 1;
+    let mut piston = false;
+    for d in create_engine::kinetics::Dir::ALL
+        .into_iter()
+        .filter(|d| d.axis() == axis)
+    {
+        let o = d.offset();
+        let mut n = 1;
+        loop {
+            let p = [0, 1, 2].map(|i| pos[i] + o[i] * n);
+            match at(p) {
+                Some((B::PistonExtensionPole, Some(f))) if f.axis() == axis => n += 1,
+                found => {
+                    piston |= matches!(
+                        found,
+                        Some((B::MechanicalPiston | B::StickyMechanicalPiston, _))
+                    );
+                    break;
+                }
+            }
+        }
+        poles += n as u32 - 1;
+    }
+    piston.then_some(poles)
 }
 
 /// The message of the last assembly the block at `pos` failed (`AssemblyException`), its
