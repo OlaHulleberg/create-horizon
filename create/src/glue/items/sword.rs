@@ -2,8 +2,9 @@
 //! back as a blow would, slowing creatures it hits (`MobCategory.CREATURE`/`MISC`, players not)
 //! and the attacker. Left out: knockback enchantments and resistance, and stopping the
 //! attacker's sprint (no API sets it). Its click on a block
-//! (`cardboardSwordsMakeNoiseOnClick`, a sound only the clicking client plays) is heard here
-//! from the server, so the players near it hear it too: `left_click_block` is the server's.
+//! (`cardboardSwordsMakeNoiseOnClick`: the clicking client plays it, the server plays it to the
+//! others) is played here from the server to every player near it, the clicker included: the
+//! API has no sound at a position that leaves one player out (HORIZON_API.md).
 
 use super::{Item, held, is};
 use mod_api::{
