@@ -34,6 +34,9 @@ pub(crate) fn open(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3], a
     let Some(port) = with(dim, |pk| pk.ports.get(&pos).cloned()) else {
         return;
     };
+    if !again && port.frog {
+        super::frog_draw::viewer(dim, pos, player.uuid(), true);
+    }
     let mut m = vec![u8::from(again)];
     for v in pos {
         put_i32(&mut m, v);
@@ -106,6 +109,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
                 pk.touch(pos);
             });
             mark_unsaved(dim, &[pos]);
+            super::frog_draw::viewer(dim, pos, player.uuid(), false);
             super::super::blocks::postbox_closed(&mut lv, pos);
         }
         b'T' => {

@@ -183,6 +183,12 @@ fn speed_of(dim: usize, pos: [i32; 3]) -> f32 {
     with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0)
 }
 
+/// `minecraft:block`, for the rope's dust as a frogport catches.
+static BLOCK_PARTICLE: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
+
+/// `minecraft:dust`, for a frogport's line to its point (`animateConnection`).
+static DUST_PARTICLE: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
+
 pub struct Packages;
 
 impl Subsystem for Packages {
@@ -206,6 +212,8 @@ impl Subsystem for Packages {
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        let _ = BLOCK_PARTICLE.set(r.particle_key("minecraft:block"));
+        let _ = DUST_PARTICLE.set(r.particle_key("minecraft:dust"));
         for &b in Block::ALL.iter().filter(|&&b| is_packager(b) || is_port(b)) {
             r.block_part(states::key(b), PackageBlock);
         }

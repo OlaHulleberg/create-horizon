@@ -4,8 +4,10 @@
 //! data (`Frog`), written when it changes: the target's exact place, the placed yaw, and the
 //! tick an animation started, whether it deposits, and its package.
 //!
-//! Left out: the anticipation before a package arrives (`anticipate`), the head opening while
-//! its screen is open (`manualOpenAnimationProgress`) and the address shown over it on hover.
+//! A package for it a few ticks away opens its mouth (`anticipate`, `anticipationProgress`), and
+//! so does its screen while a player has it open (`manualOpenAnimationProgress`), from the ticks
+//! each began in the same data. Its sounds (`FrogportSounds`) and the rope's dust as it catches
+//! are the server's, played where the clients would play them.
 
 use super::super::server::ServerLevel;
 use super::{body, chain, with};
@@ -39,15 +41,60 @@ struct Shown {
     deposit: bool,
     item: String,
     goggles: bool,
+    /// The tick its last anticipation began (`anticipationProgress` chasing 1 at 0.1 a tick).
+    anticipated: Option<i64>,
+    /// The ticks its screen was last opened and closed (`manualOpenAnimationProgress`).
+    opened: Option<i64>,
+    closed: Option<i64>,
+}
+
+/// What a frogport keeps for its clients beside the engine's state: its anticipations seen
+/// (the engine's count) and when the last began, the players with its screen open, and when
+/// it was last opened and closed.
+#[derive(Default)]
+struct Kept {
+    anticipations: u32,
+    anticipated: Option<i64>,
+    viewers: Vec<u128>,
+    /// Whether it had viewers at the last look.
+    open: bool,
+    opened: Option<i64>,
+    closed: Option<i64>,
 }
 
 thread_local! {
     static SENT: RefCell<HashMap<(usize, [i32; 3]), Shown>> = RefCell::new(HashMap::new());
+    static KEPT: RefCell<HashMap<(usize, [i32; 3]), Kept>> = RefCell::new(HashMap::new());
     static MODEL_REFS: RefCell<HashMap<&'static str, mod_api::ModelRef>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn reset() {
     SENT.with_borrow_mut(HashMap::clear);
+    KEPT.with_borrow_mut(HashMap::clear);
+}
+
+/// `openTracker`: `player` opened the screen of the port at `pos` (`open`) or closed it.
+pub(super) fn viewer(dim: usize, pos: [i32; 3], player: u128, open: bool) {
+    KEPT.with_borrow_mut(|k| {
+        let kept = k.entry((dim, pos)).or_default();
+        kept.viewers.retain(|p| *p != player);
+        if open {
+            kept.viewers.push(player);
+        }
+    });
+}
+
+/// `manualOpenAnimationProgress` at `now` (ticks with the partial tick): chasing 1 at 0.35 a
+/// tick from when it was opened, then 0 from where it was when it closed.
+fn manual_open(opened: Option<i64>, closed: Option<i64>, now: f32) -> f32 {
+    let Some(opened) = opened else { return 0.0 };
+    let rising = |at: f32| ((at - opened as f32) * 0.35).clamp(0.0, 1.0);
+    match closed {
+        Some(closed) if closed >= opened => {
+            (rising(closed as f32) - (now - closed as f32) * 0.35).clamp(0.0, 1.0)
+        }
+        _ => rising(now),
+    }
 }
 
 /// Each frogport's state to its block entity's data, when it changed; an animation starting
@@ -56,11 +103,32 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let now = lv.game_time();
     let host: &dyn mod_api::Host = &*lv.host;
+    let players: Vec<u128> = lv.players().iter().map(|p| p.uuid()).collect();
     let shown: Vec<([i32; 3], Shown)> = with(dim, |pk| {
         pk.ports
             .iter()
             .filter(|(_, p)| p.frog)
             .map(|(pos, p)| {
+                let (anticipated, opened, closed) = KEPT.with_borrow_mut(|k| {
+                    let kept = k.entry((dim, *pos)).or_default();
+                    // Told again while its last is under way (`chase(1)` again), it goes on.
+                    if kept.anticipations != p.anticipations {
+                        kept.anticipations = p.anticipations;
+                        if kept.anticipated.is_none_or(|a| now - a > 10) {
+                            kept.anticipated = Some(now);
+                        }
+                    }
+                    // A viewer gone from the level has closed it.
+                    kept.viewers.retain(|v| players.contains(v));
+                    let open = !kept.viewers.is_empty();
+                    if open && !kept.open {
+                        kept.opened = Some(now);
+                    } else if kept.open && !open {
+                        kept.closed = Some(now);
+                    }
+                    kept.open = open;
+                    (kept.anticipated, kept.opened, kept.closed)
+                });
                 let target = p.target.and_then(|t| {
                     let c = pk.chains.conveyors.get(&t.conveyor)?;
                     Some(chain::package_position(
@@ -83,10 +151,25 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
                             .map(|b| b.stack.item().id(host))
                             .unwrap_or_default(),
                         goggles: p.goggles,
+                        anticipated,
+                        opened,
+                        closed,
                     },
                 )
             })
             .collect()
+    });
+    let gone: Vec<[i32; 3]> = KEPT.with_borrow(|k| {
+        k.keys()
+            .filter(|(d, _)| *d == dim)
+            .map(|(_, p)| *p)
+            .filter(|p| !shown.iter().any(|(s, _)| s == p))
+            .collect()
+    });
+    KEPT.with_borrow_mut(|k| {
+        for p in gone {
+            k.remove(&(dim, p));
+        }
     });
     for (pos, s) in shown {
         let before = SENT.with_borrow(|m| m.get(&(dim, pos)).cloned());
@@ -97,6 +180,23 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
         let Some(entity) = lv.host.block_entity(lv.level, pos) else {
             continue;
         };
+        if started {
+            sounds_on_start(lv, pos, &s);
+        }
+        if before.is_some()
+            && s.closed.is_some()
+            && before.as_ref().is_some_and(|b| b.closed != s.closed)
+        {
+            // `sounds.close` when the screen's animation has closed again: at once here.
+            play(lv, pos, "create:frogport_close", 1.0, 1.25 + random(lv, pos) * 0.25);
+        }
+        if before.is_some()
+            && s.opened.is_some()
+            && before.as_ref().is_some_and(|b| b.opened != s.opened)
+        {
+            // `onOpenedManually`.
+            play(lv, pos, "create:frogport_open", 0.5, 1.0);
+        }
         let mut c = vec![
             ("Yaw", Tag::Float(s.yaw.to_bits())),
             ("Animating", Tag::Byte(i8::from(s.animating))),
@@ -104,6 +204,15 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
             ("Item", Tag::String(s.item.as_str().into())),
             ("Goggles", Tag::Byte(i8::from(s.goggles))),
         ];
+        for (k, v) in [
+            ("Anticipated", s.anticipated),
+            ("Opened", s.opened),
+            ("Closed", s.closed),
+        ] {
+            if let Some(v) = v {
+                c.push((k, Tag::Long(v)));
+            }
+        }
         if let Some(t) = s.target {
             c.push((
                 "Target",
@@ -124,6 +233,58 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
             SENT.with_borrow_mut(|m| m.insert((dim, pos), s));
         }
     }
+}
+
+/// `FrogportSounds` and `startAnimation`'s client half: it opens, and deposits or catches,
+/// the rope's dust falling where it caught the package.
+fn sounds_on_start(lv: &mut ServerLevel<'_>, pos: [i32; 3], s: &Shown) {
+    play(lv, pos, "create:frogport_open", 0.5, 1.0);
+    if s.deposit {
+        play(lv, pos, "create:frogport_deposit", 1.0, 1.0);
+        return;
+    }
+    play(lv, pos, "create:frogport_catch", 1.0, 1.0);
+    let (Some(t), Some(&key)) = (s.target, super::BLOCK_PARTICLE.get()) else {
+        return;
+    };
+    let Some(rope) = lv.host.block_state_id("create:rope") else {
+        return;
+    };
+    let options = mod_api::ParticleOptions::simple(key);
+    // Five at the point, up to a quarter below it.
+    let _ = lv.level.send_particles(
+        &mut *lv.host,
+        &options,
+        Some(rope),
+        [t[0], t[1] - 0.125, t[2]],
+        [0.0, 0.0625, 0.0],
+        0.0,
+        5,
+    );
+}
+
+fn play(lv: &mut ServerLevel<'_>, pos: [i32; 3], sound: &str, volume: f32, pitch: f32) {
+    let at = pos.map(|v| f64::from(v) + 0.5);
+    let _ = lv.level.play_sound(
+        &mut *lv.host,
+        sound,
+        at,
+        mod_api::SoundSource::Blocks,
+        volume,
+        pitch,
+    );
+}
+
+/// A number in 0..1 for a sound's pitch, from the tick and place.
+fn random(lv: &ServerLevel<'_>, pos: [i32; 3]) -> f32 {
+    let mut x = (lv.game_time() as u64)
+        ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (pos[1] as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ (pos[2] as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
+    x ^= x >> 31;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 29;
+    (x >> 40) as f32 / (1u64 << 24) as f32
 }
 
 /// `FrogportBlockEntity.use`: goggles in the main hand go on a frogport without them (the
@@ -273,9 +434,38 @@ impl BlockEntityPart for FrogDraw {
             package = Some((scale, distance));
         } else {
             tongue_length = 0.0;
-            head_modifier = 0.0;
+            // `anticipationProgress`: 0 to 1 in ten ticks from when it was told, then 0 again.
+            let now = (draw.game_time() as f32) + draw.partial();
+            let a = match frog.get(&"Anticipated".into()) {
+                Some(Tag::Long(t)) => {
+                    let a = (now - *t as f32) / 10.0;
+                    if (0.0..1.0).contains(&a) {
+                        moving = true;
+                        a
+                    } else {
+                        0.0
+                    }
+                }
+                _ => 0.0,
+            };
+            head_modifier = if a > 0.0 {
+                (1.0 - ((a * 1.25) * 2.0 - 1.0).powi(4)).max(0.0)
+            } else {
+                0.0
+            };
         }
         head_pitch *= head_modifier;
+        let long = |k: &str| match frog.get(&k.into()) {
+            Some(Tag::Long(v)) => Some(*v),
+            _ => None,
+        };
+        let now = (draw.game_time() as f32) + draw.partial();
+        let manual = manual_open(long("Opened"), long("Closed"), now);
+        if manual > 0.0 && manual < 1.0 {
+            moving = true;
+        }
+        head_pitch = head_pitch.max(manual * 60.0);
+        tongue_length = tongue_length.max(manual * 0.25);
         // Body, head and tongue.
         draw.push();
         draw.rotate_about([0.0, 1.0, 0.0], yaw, [0.5; 3]);

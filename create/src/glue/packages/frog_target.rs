@@ -5,7 +5,10 @@
 //! chooses it (the server keeps the choice). The next frogport placed takes it, when it is not
 //! below the frogport nor more than `packagePortRange` away (`validateDiff`).
 //!
-//! Left out: the chosen point's status line and the dust drawn toward it while placing
+//! While a frogport with a chosen point is held, the block a click would place it at is
+//! outlined, the point boxed green or red as it may be reached from there, with the reason on
+//! the action bar (the client asks its server to say it: `S`), and dust runs from the block to
+//! the point; a wrench on a frogport shows its target the same way
 //! (`PackagePortTargetSelectionHandler.tick`).
 
 use super::super::net;
@@ -47,6 +50,139 @@ struct Client {
     conveyors: HashMap<[i32; 3], (bool, Vec<[i32; 3]>)>,
     hovered: Option<Point>,
     chosen: Option<Point>,
+    /// This tick's selection (`tick`): the point, the block a frogport would go on (if it can
+    /// go there), and whether it may reach the point.
+    selection: Option<([f64; 3], Option<[i32; 3]>, bool)>,
+    /// The status last asked for and when (client ticks), and the ticks counted.
+    status: Option<(u8, u64)>,
+    ticks: u64,
+}
+
+/// `validateDiff`'s answers: may reach, can't reach down, too far.
+const STATUS: [(&str, u32); 3] = [
+    ("create.package_port.valid", 0x9EDE73),
+    ("create.package_port.cannot_reach_down", 0xFF7171),
+    ("create.package_port.too_far", 0xFF7171),
+];
+
+/// `validateDiff(target, placedPos)` for a frogport: 0 when it may reach.
+fn validate(target: [f64; 3], pos: [i32; 3]) -> u8 {
+    let source = [
+        f64::from(pos[0]) + 0.5,
+        f64::from(pos[1]),
+        f64::from(pos[2]) + 0.5,
+    ];
+    let diff = [0, 1, 2].map(|i| target[i] - source[i]);
+    if diff[1] < 0.0 {
+        1
+    } else if (diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2]).sqrt() > RANGE {
+        2
+    } else {
+        0
+    }
+}
+
+/// `animateConnection`: four dust specks of `rgb` running from `source` to `target` over ten
+/// ticks, a third as fast as the render time.
+fn animate_connection(host: &mut dyn ClientHost, ticks: u64, source: [f64; 3], target: [f64; 3], rgb: u32) {
+    let Some(&key) = super::DUST_PARTICLE.get() else {
+        return;
+    };
+    let colour = [16, 8, 0].map(|s| ((rgb >> s) & 0xFF) as f32 / 255.0);
+    let options = mod_api::ParticleOptions::dust(key, colour, 1.0);
+    let total = 10.0;
+    let segments = 10 / 3 + 1;
+    let offset = total / f64::from(segments);
+    for i in 0..segments {
+        let t = ((ticks as f64 / 3.0) % offset) + f64::from(i) * offset;
+        let v = [0, 1, 2].map(|k| source[k] + (target[k] - source[k]) * t / total);
+        host.add_particle(&options, v, [0.0; 3]);
+    }
+}
+
+/// `PackagePortTargetSelectionHandler.tick`: a wrench on a frogport shows its target; a
+/// frogport held with a point chosen shows where it would go and whether it reaches.
+fn selection_tick(host: &mut dyn ClientHost, player: PlayerRef) {
+    let held = super::super::items::held(host, player, mod_api::Hand::Main);
+    let id = held.as_ref().map(|s| s.item().id(host)).unwrap_or_default();
+    let wrench = id == "create:wrench";
+    let ticks = CLIENT.with_borrow_mut(|c| {
+        c.ticks += 1;
+        c.selection = None;
+        c.ticks
+    });
+    let chosen = CLIENT.with_borrow(|c| c.chosen);
+    if !wrench && (chosen.is_none() || id != "create:package_frogport") {
+        return;
+    }
+    let Some(mod_api::CrosshairTarget::Block { pos, hit, .. }) = host.crosshair_target() else {
+        // Looking at nothing: the point, green.
+        if !wrench && let Some(c) = chosen {
+            CLIENT.with_borrow_mut(|cl| cl.selection = Some((c.at, None, true)));
+        }
+        return;
+    };
+    let mut pos = [pos.x, pos.y, pos.z];
+    let Some(level) = host.level(host.dimension()) else {
+        return;
+    };
+    if wrench {
+        // `getExactTargetLocation` of the frogport looked at, from its data.
+        let target = host
+            .block_entity(level, pos)
+            .and_then(|e| e.data(host))
+            .and_then(|d| match d.get(&super::frog_draw::FROG.into()) {
+                Some(mod_api::Tag::Compound(f)) => match f.get(&"Target".into()) {
+                    Some(mod_api::Tag::List(l)) if l.len() == 3 => {
+                        let v: Vec<f64> = l
+                            .iter()
+                            .map(|t| match t {
+                                mod_api::Tag::Double(d) => f64::from_bits(*d),
+                                _ => 0.0,
+                            })
+                            .collect();
+                        Some([v[0], v[1], v[2]])
+                    }
+                    _ => None,
+                },
+                _ => None,
+            });
+        if let Some(target) = target {
+            let source = [f64::from(pos[0]) + 0.5, f64::from(pos[1]), f64::from(pos[2]) + 0.5];
+            animate_connection(host, ticks, source, target, STATUS[0].1);
+            CLIENT.with_borrow_mut(|c| c.selection = Some((target, None, true)));
+        }
+        return;
+    }
+    let Some(chosen) = chosen else { return };
+    let replaceable = |p: [i32; 3]| {
+        level
+            .block_state(host, p)
+            .is_some_and(|s| mod_api::HostBlockStates::block_states(&*host).replaceable(s) == Some(true))
+    };
+    if !replaceable(pos) {
+        let o = hit.face;
+        pos = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+    }
+    let code = validate(chosen.at, pos);
+    let refresh = CLIENT.with_borrow_mut(|c| {
+        let due = c
+            .status
+            .is_none_or(|(last, at)| last != code || ticks - at >= 20);
+        if due {
+            c.status = Some((code, ticks));
+        }
+        due
+    });
+    let free = replaceable(pos);
+    if refresh {
+        net::send_to_server(host, CHANNEL, &[b'S', code]);
+    }
+    CLIENT.with_borrow_mut(|c| c.selection = Some((chosen.at, free.then_some(pos), code == 0)));
+    if free {
+        let source = [f64::from(pos[0]) + 0.5, f64::from(pos[1]), f64::from(pos[2]) + 0.5];
+        animate_connection(host, ticks, source, chosen.at, STATUS[usize::from(code)].1);
+    }
 }
 
 pub(super) fn reset_server() {
@@ -221,10 +357,10 @@ pub(super) fn client_tick(host: &mut dyn ClientHost) {
         });
         c.hovered = None;
     });
+    selection_tick(host, player);
     if !holding {
         return;
     }
-    let _ = player;
     // The camera (`getEyePosition`, `getViewVector`).
     let Some(cam) = host.camera() else {
         return;
@@ -348,21 +484,36 @@ pub(super) fn render_level_stage(
     if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
         return;
     }
-    let holding = host
+    let held = host
         .local_player()
         .and_then(|p| super::super::items::held(host, p, mod_api::Hand::Main))
-        .is_some_and(|s| s.item().id(host) == "create:package_frogport");
-    if !holding {
-        return;
-    }
-    let (hovered, chosen) = CLIENT.with_borrow(|c| (c.hovered, c.chosen));
+        .map(|s| s.item().id(host));
+    let holding = held.as_deref() == Some("create:package_frogport");
+    let (hovered, chosen, selection) = CLIENT.with_borrow(|c| (c.hovered, c.chosen, c.selection));
     let mut lines = Vec::new();
-    for (p, color) in [(chosen, 0xFF9E_DE73u32), (hovered, 0xFFFF_FFFF)] {
-        let Some(p) = p else { continue };
+    let point = |lines: &mut Vec<_>, at: [f64; 3], color: u32| {
         let r = 1.0 / 12.0;
-        let min = p.at.map(|v| v - r);
-        let max = p.at.map(|v| v + r);
-        crate::glue::logistics::client::box_lines(&mut lines, min, max, color);
+        crate::glue::logistics::client::box_lines(lines, at.map(|v| v - r), at.map(|v| v + r), color);
+    };
+    // `ChainPointSelected` (green, or red where it can't be reached from the block looked at)
+    // and `TargetedFrogPos`: the block's floor, an eighth in from each side.
+    if let Some((at, block, ok)) = selection {
+        let color = if ok { 0xFF9E_DE73 } else { 0xFFFF_7171 };
+        point(&mut lines, at, color);
+        if let Some(b) = block {
+            let b = b.map(f64::from);
+            crate::glue::logistics::client::box_lines(
+                &mut lines,
+                [b[0] + 0.125, b[1], b[2] + 0.125],
+                [b[0] + 0.875, b[1], b[2] + 0.875],
+                color,
+            );
+        }
+    } else if holding && let Some(p) = chosen {
+        point(&mut lines, p.at, 0xFF9E_DE73);
+    }
+    if holding && let Some(p) = hovered {
+        point(&mut lines, p.at, 0xFFFF_FFFF);
     }
     if !lines.is_empty() {
         let _ = event.draw.lines(&lines);
@@ -374,6 +525,15 @@ pub(super) fn render_level_stage(
 
 /// A point chosen by a player's client.
 pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
+    // The status line a client asks for (`sendStatus`).
+    if let [b'S', code] = *data {
+        if let Some((key, rgb)) = STATUS.get(usize::from(code)) {
+            let mut style = mod_api::text::TextStyle::default();
+            style.color = Some(format!("#{rgb:06x}"));
+            let _ = player.action_bar(host, Text::translate(*key, Vec::new()).with_style(style));
+        }
+        return;
+    }
     let mut d = data;
     let mut take = |n: usize| -> Option<&[u8]> {
         if d.len() < n {

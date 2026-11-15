@@ -52,6 +52,9 @@ pub struct Port<P> {
     pub yaw: f32,
     /// `FrogportBlockEntity.goggles`: a frogport wearing goggles.
     pub goggles: bool,
+    /// How often it was told a package for it is coming (`sendAnticipate`), for its clients'
+    /// `anticipationProgress`.
+    pub anticipations: u32,
 }
 
 impl<P> Port<P> {
@@ -69,6 +72,15 @@ impl<P> Port<P> {
             failed_export: false,
             yaw: 0.0,
             goggles: false,
+            anticipations: 0,
+        }
+    }
+
+    /// `sendAnticipate`: a package it will catch is a few ticks away; one not animating with a
+    /// free slot tells its clients.
+    pub fn send_anticipate(&mut self) {
+        if !self.animating && self.items.iter().any(Option::is_none) {
+            self.anticipations = self.anticipations.wrapping_add(1);
         }
     }
 
@@ -461,7 +473,11 @@ impl<P: Clone> Packaging<P> {
         for e in events {
             match e {
                 ChainEvent::Catch(at, parcel) => self.start(at, parcel, false),
-                ChainEvent::Anticipate(_) => {}
+                ChainEvent::Anticipate(at) => {
+                    if let Some(p) = self.ports.get_mut(&at) {
+                        p.send_anticipate();
+                    }
+                }
                 ChainEvent::Drop(v, parcel) => out.push(Out::Drop(v, parcel)),
             }
         }
