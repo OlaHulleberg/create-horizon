@@ -133,6 +133,7 @@ impl Subsystem for Processing {
     fn world_closed(&self) {
         recipes::clear();
         saw::clear();
+        press::clear();
         basin::clear();
         spoutput::clear();
         crafter::clear();

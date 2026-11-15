@@ -1,4 +1,5 @@
-//! The mechanical press (`MechanicalPressBlockEntity`, `PressingBehaviour`) over a depot, and
+//! The mechanical press (`MechanicalPressBlockEntity`, `PressingBehaviour`) over a depot or
+//! items lying on the ground, and
 //! what a machine does to a depot's held stack or a belt's (`BeltProcessingBehaviour`): the
 //! processing results, a sequenced assembly's steps. The press over a basin is `basin`'s.
 
@@ -9,12 +10,142 @@ use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::{belt, depot, press, processing, sequenced};
 use mod_api::{PlayerRef, ServerHost};
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+thread_local! {
+    /// Each idle press's `entityScanCooldown` (`PressingBehaviour.ENTITY_SCAN`).
+    static SCAN: RefCell<HashMap<(usize, [i32; 3]), i32>> = RefCell::new(HashMap::new());
+}
+
+/// `PressingBehaviour.ENTITY_SCAN`.
+const ENTITY_SCAN: i32 = 10;
+
+/// Forgets what was kept for the world.
+pub fn clear() {
+    SCAN.with_borrow_mut(HashMap::clear);
+}
+
+/// Whether a press over `at` (two below it) stands over a belt, depot or ejector
+/// (`TransportedItemStackHandlerBehaviour`) or a basin, which it works on instead of the ground.
+fn over_handler(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
+    use create_engine::Block;
+    matches!(
+        lv.info([at[0], at[1] - 2, at[2]]).map(|(b, _)| b),
+        Some(Block::Belt | Block::Depot | Block::WeightedEjector | Block::Basin)
+    )
+}
+
+/// The item entities on the ground in the block under the press at `at`
+/// (`new AABB(below)`, `isAlive() && onGround()`), and whether each has a pressing recipe.
+fn grounded_below(lv: &ServerLevel<'_>, at: [i32; 3]) -> Vec<(super::stacks::Dropped, bool)> {
+    let below = [at[0], at[1] - 1, at[2]].map(f64::from);
+    let hi = below.map(|v| v + 1.0);
+    lv.items_in(below, hi)
+        .into_iter()
+        .filter(|d| d.entity.on_ground(&*lv.host) == Some(true))
+        .map(|d| {
+            let item = stacks::id(&*lv.host, &d.stack);
+            let fits = recipes::with(|r| r.pressing.find_single(&item).is_some()) == Some(true);
+            (d, fits)
+        })
+        .collect()
+}
+
+/// `PressingBehaviour.tick` of an idle turning press over neither a belt, depot nor basin:
+/// every `ENTITY_SCAN` ticks it looks for an item on the ground under it that a pressing recipe
+/// takes, and starts in the world (`start(Mode.WORLD)`).
+fn scan_world(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let idle: Vec<[i32; 3]> = with_world(|w| {
+        w.dims[dim]
+            .presses
+            .iter()
+            .filter(|(_, p)| !p.running)
+            .map(|(k, _)| *k)
+            .collect()
+    })
+    .unwrap_or_default();
+    SCAN.with_borrow_mut(|s| s.retain(|(d, p), _| *d != dim || idle.contains(p)));
+    for at in idle {
+        if lv.speed(at) == 0.0 {
+            continue;
+        }
+        let due = SCAN.with_borrow_mut(|s| {
+            let c = s.entry((dim, at)).or_insert(0);
+            if *c > 0 {
+                *c -= 1;
+            }
+            if *c > 0 {
+                return false;
+            }
+            *c = ENTITY_SCAN;
+            true
+        });
+        if !due || over_handler(lv, at) {
+            continue;
+        }
+        if grounded_below(lv, at).iter().any(|(_, fits)| *fits) {
+            with_world(|w| {
+                if let Some(p) = w.dims[dim].presses.get_mut(&at) {
+                    p.start(press::Mode::World);
+                    w.dims[dim].press_changes.push(at);
+                }
+            });
+        }
+    }
+}
+
+/// `PressingBehaviour.applyInWorld` with `MechanicalPressBlockEntity.tryProcessInWorld`, the
+/// head at its lowest: the first item on the ground under the press (not `bulkPressing`, off by
+/// default) is pressed; a single item becomes the recipe's results where it lies
+/// (`RecipeApplier.applyRecipeOn(entity)`), a stack of more gives one item's results as new
+/// items, moving a little, and shrinks by one.
+fn press_in_world(lv: &mut ServerLevel<'_>, at: [i32; 3]) {
+    let Some((d, fits)) = grounded_below(lv, at).into_iter().next() else {
+        return;
+    };
+    SCAN.with_borrow_mut(|s| s.insert((lv.dim, at), 0));
+    if !fits {
+        return;
+    }
+    let item = stacks::id(&*lv.host, &d.stack);
+    let seed = lv.seed_at(at) ^ u64::from(d.id());
+    let mut rng = processing::Rng::new(seed);
+    let Some(results) = recipes::with(|r| {
+        let id = r.pressing.find_single(&item)?;
+        Some(processing::roll(r.pressing.get(id), &mut rng))
+    })
+    .flatten() else {
+        return;
+    };
+    if d.stack.count() == 1 {
+        let mut out = results.into_iter();
+        let first = out
+            .next()
+            .and_then(|(i, n)| stacks::stack(&*lv.host, &i, u32::from(n)));
+        for (i, n) in out {
+            lv.spawn_moving(d.at, &i, u32::from(n), d.velocity);
+        }
+        lv.set_dropped(&d, first, d.velocity);
+    } else {
+        for (i, n) in results {
+            let m = [0, 1, 2].map(|_| (f64::from(rng.next_float()) - 0.5) * 0.05 * 2.0);
+            lv.spawn_moving(d.at, &i, u32::from(n), m);
+        }
+        let rest = d.stack.clone().shrink(1);
+        lv.set_dropped(&d, rest, d.velocity);
+    }
+}
 
 /// Depots that ask their press, then running presses: `DepotBehaviour.tick` with
 /// `BeltPressingCallbacks`, then `PressingBehaviour.tick`. Nothing runs without either.
 pub fn tick_presses(lv: &mut ServerLevel<'_>) {
     use press::{Step, Tick};
     let dim = lv.dim;
+    if recipes::ready() {
+        scan_world(lv);
+    }
     let Some((work, running)) = with_world(|w| {
         let d = &mut w.dims[dim];
         let running: Vec<[i32; 3]> = d
@@ -106,9 +237,16 @@ pub fn tick_presses(lv: &mut ServerLevel<'_>) {
                     }
                 }
             }
-            (p.mode == press::Mode::Basin).then_some(tick)
+            Some((p.mode, tick))
         })
         .flatten();
+        // On the ground: pressed at the bottom (`applyInWorld`).
+        if basin_mode == Some((press::Mode::World, Tick::Down)) {
+            press_in_world(lv, at);
+        }
+        let basin_mode = basin_mode
+            .filter(|(m, _)| *m == press::Mode::Basin)
+            .map(|(_, t)| t);
         // Over a basin: compact at the bottom (`tryProcessInBasin`), look again when done
         // (`onPressingCompleted`).
         match basin_mode {
