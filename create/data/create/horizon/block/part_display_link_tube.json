@@ -1,5 +1,5 @@
 {
-  "template": "minecraft:stone",
+  "template": "minecraft:white_stained_glass",
   "item": false,
   "properties": {
     "render_shape": "INVISIBLE"

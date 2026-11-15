@@ -1356,15 +1356,9 @@ fn draw_hanging(
                 .map(|b| host.block_state_id(b).map(|s| s.block()))
         })
     });
-    // Create's rope and magnet blocks have no facing; the partials are drawn facing up.
     let at = |draw: &mut dyn BlockEntityDrawContext, key: Option<BlockKey>, down: f32| {
         let Some(key) = key else {
             return;
-        };
-        let props: &[(&str, &str)] = if Some(key) == rope || Some(key) == magnet {
-            &[]
-        } else {
-            &[("facing", "up")]
         };
         // The rope and magnet blocks have no facing; the partials are drawn as written.
         let props: &[(&str, &str)] = if Some(key) == rope || Some(key) == magnet {

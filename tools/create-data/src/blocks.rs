@@ -3561,11 +3561,21 @@ fn rotation(from: &str, to: &str) -> (i32, i32) {
     }
 }
 
+/// Partials drawn in the translucent layer.
+const TRANSLUCENT_PARTIALS: [&str; 1] = ["create:block/display_link/tube"];
+
 /// A partial's declaration and blockstate: one state per facing, the model turned to it as a
 /// blockstate variant turns a model.
 pub fn partial_files(model: &str, points: &str) -> (Value, Value) {
+    // A partial Create draws translucent (`LinkBulbRenderer`'s tube) takes a translucent
+    // template: a block entity draws a block's model in its block's layer.
+    let template = if TRANSLUCENT_PARTIALS.contains(&model) {
+        "minecraft:white_stained_glass"
+    } else {
+        "minecraft:stone"
+    };
     let decl = json!({
-        "template": "minecraft:stone",
+        "template": template,
         "item": false,
         "properties": { "render_shape": "INVISIBLE" },
         "state_properties": {
