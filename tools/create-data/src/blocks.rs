@@ -3248,11 +3248,7 @@ pub const PARTIALS: [(&str, &str, &str); 177] = [
         "create:block/toolbox/lid/green",
         "up",
     ),
-    (
-        "part_toolbox_lid_red",
-        "create:block/toolbox/lid/red",
-        "up",
-    ),
+    ("part_toolbox_lid_red", "create:block/toolbox/lid/red", "up"),
     (
         "part_toolbox_lid_black",
         "create:block/toolbox/lid/black",
