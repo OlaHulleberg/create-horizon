@@ -404,8 +404,9 @@ pub fn wrench_used(
             Block::LargeCogwheel
         }
         // SequencedGearshiftBlock.onWrenched: clicked on a side across its axis, it stands up or
-        // lies down; its horizontal axis turns only when clicked on top or bottom.
-        Block::SequencedGearshift if clicked.axis() != Axis::Y => {
+        // lies down; its horizontal axis turns only when clicked on top or bottom. Sneaking, it
+        // is picked up as any block (`onSneakWrenched` is not its own).
+        Block::SequencedGearshift if clicked.axis() != Axis::Y && !sneaking => {
             if axis == clicked.axis() {
                 return true;
             }

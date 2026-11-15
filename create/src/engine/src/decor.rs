@@ -465,6 +465,85 @@ pub fn table_cloth_directions(hit: [f64; 3]) -> Vec<Dir> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Sails
+
+/// What a dye (or shears) finds of a block beside a sail being dyed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SailSide {
+    /// A sail frame (not a cloth sail).
+    pub frame: bool,
+    /// Facing the dyed sail's way.
+    pub same_facing: bool,
+    /// Already in the dye's colour (the clicked sail's state).
+    pub same_state: bool,
+}
+
+/// `SailBlock.applyDye` on the sail at `pos` facing along `axis`, hit at `hit` (from its
+/// centre): the sails that take the colour (`dyeing`, false for shears, which make frames).
+/// The clicked sail when it is not yet that colour; else the nearest beside it in its plane that
+/// is a cloth sail facing its way of another colour; else every sail joined to it that way (100
+/// steps at most), frames included only for shears. `sail` reads a sail at a position.
+pub fn sail_dye_targets(
+    pos: [i32; 3],
+    axis: Axis,
+    hit: [f64; 3],
+    clicked_changes: bool,
+    dyeing: bool,
+    sail: impl Fn([i32; 3]) -> Option<SailSide>,
+) -> Vec<[i32; 3]> {
+    let add = |p: [i32; 3], d: Dir| {
+        let o = d.offset();
+        [p[0] + o[0], p[1] + o[1], p[2] + o[2]]
+    };
+    if clicked_changes {
+        return vec![pos];
+    }
+    for d in crate::place::ordered_by_distance(hit, |d| d.axis() != axis) {
+        let at = add(pos, d);
+        if let Some(s) = sail(at)
+            && !s.frame
+            && s.same_facing
+            && !s.same_state
+        {
+            return vec![at];
+        }
+    }
+    let mut out = Vec::new();
+    let mut frontier = std::collections::VecDeque::from([pos]);
+    let mut visited = std::collections::HashSet::new();
+    let mut timeout = 100;
+    while let Some(current) = frontier.pop_front() {
+        // `timeout-- < 0`.
+        if timeout < 0 {
+            break;
+        }
+        timeout -= 1;
+        visited.insert(current);
+        for d in Dir::ALL {
+            if d.axis() == axis {
+                continue;
+            }
+            let at = add(current, d);
+            if visited.contains(&at) {
+                continue;
+            }
+            let Some(s) = sail(at) else {
+                continue;
+            };
+            if (s.frame && dyeing) || !s.same_facing {
+                continue;
+            }
+            if !s.same_state {
+                out.push(at);
+            }
+            frontier.push_back(at);
+            visited.insert(at);
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------------------------
 // What clients draw: brackets and placards' items
 
 /// The channel bringing clients a block's bracket or shown item.
@@ -668,6 +747,49 @@ pub fn copper_unwaxed(block: crate::Block) -> Option<crate::Block> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dye_takes_the_clicked_sail_then_a_neighbour_then_the_whole_sail() {
+        // A row of five white sails facing north (along z) at x = 0..5; x = 2 is red already.
+        let red = |p: [i32; 3]| p == [2, 0, 0];
+        let row = |p: [i32; 3]| {
+            ((0..5).contains(&p[0]) && p[1] == 0 && p[2] == 0).then_some(SailSide {
+                frame: false,
+                same_facing: true,
+                same_state: red(p),
+            })
+        };
+        // A white sail clicked with red dye turns red itself.
+        assert_eq!(
+            sail_dye_targets([0, 0, 0], Axis::Z, [0.0; 3], true, true, row),
+            vec![[0, 0, 0]]
+        );
+        // The red one clicked on its east half: its east neighbour.
+        assert_eq!(
+            sail_dye_targets([2, 0, 0], Axis::Z, [0.4, 0.0, 0.0], false, true, row),
+            vec![[3, 0, 0]]
+        );
+        // Every sail red but the clicked one's neighbours none: the whole sail.
+        let all_red = |p: [i32; 3]| {
+            row(p).map(|s| SailSide {
+                same_state: p[0] != 4,
+                ..s
+            })
+        };
+        assert_eq!(
+            sail_dye_targets([0, 0, 0], Axis::Z, [0.0; 3], false, true, all_red),
+            vec![[4, 0, 0]]
+        );
+        // Frames are skipped by a dye.
+        let framed = |p: [i32; 3]| {
+            row(p).map(|s| SailSide {
+                frame: p[0] == 1,
+                same_state: p[0] == 0,
+                ..s
+            })
+        };
+        assert!(sail_dye_targets([0, 0, 0], Axis::Z, [0.0; 3], false, true, framed).is_empty());
+    }
 
     #[test]
     fn copper_weathers_one_age_at_a_time_in_its_shape() {

@@ -180,8 +180,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - Fluids: creative fluid tanks stay one block each (Create's join into tanks up to 3 wide); potion fluids
   keep registered potions only (custom effects are lost), and belts carry only the potions a spout fills on
   them (the logistics glue keeps no components on belts); the boiler's gauge is drawn at its level without
-  its swing, and its steam sounds are not played; glass pipes show a steady stream, not its growth, and open
-  pipe ends have no flow particles.
+  its swing; glass pipes show a steady stream, not its growth, and open pipe ends have no flow particles.
+- Steam engines: their jets and the boiler's hiss come only from engines being drawn (the client's draw
+  of the engine times them, not a client tick), and the hiss is at the volume of a boiler with up to
+  eleven engines.
 
 ## Not to send
 

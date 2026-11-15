@@ -66,7 +66,7 @@ impl BlockPart for Placement {
         let table = |s: u32| -> Option<(Block, StateInfo)> {
             with_world(|w| w.table.get(s).map(|(b, i)| (b, *i))).flatten()
         };
-        let (block, info) = table(id)?;
+        let (block, _) = table(id)?;
         let dim = level_index(event.dimension.key().id())?;
         let c = event.context;
         let pos = [c.pos.x, c.pos.y, c.pos.z];
@@ -299,9 +299,9 @@ impl BlockPart for Placement {
                 return Some(None);
             }
         }
-        if let Some((a, vertical)) = axis
-            && (info.axis != Some(a) || info.vertical != vertical)
-        {
+        // Set even when it is the default state's: a template's own placement (a pillar's, from
+        // the clicked face) would otherwise turn an upright gearbox or shaft.
+        if let Some((a, vertical)) = axis {
             state = set(state, "axis", axis_name(a));
             if block == Block::SequencedGearshift {
                 state = set(state, "vertical", if vertical { "true" } else { "false" });
