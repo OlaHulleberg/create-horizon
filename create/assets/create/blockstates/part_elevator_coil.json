@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/elevator_pulley/rope_coil",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/elevator_pulley/rope_coil",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/elevator_pulley/rope_coil"
+    },
+    "facing=west": {
+      "model": "create:block/elevator_pulley/rope_coil",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/elevator_pulley/rope_coil",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/elevator_pulley/rope_coil",
+      "x": 270
+    }
+  }
+}

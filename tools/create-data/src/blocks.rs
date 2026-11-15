@@ -2400,7 +2400,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 150] = [
+pub const PARTIALS: [(&str, &str, &str); 173] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -3099,6 +3099,118 @@ pub const PARTIALS: [(&str, &str, &str); 150] = [
         "create:block/portable_fluid_interface/block_top",
         "up",
     ),
+    // The rope and elevator pulleys' coils (`ROPE_COIL`, `ELEVATOR_COIL`), as the hose pulley's
+    // (`partialFacing`); the backtanks' shaft inputs (`*_BACKTANK_SHAFT`), turning about up as
+    // written; the sticker's head (`STICKER_HEAD`), the gantry carriage's cogs (`GANTRY_COGS`),
+    // the toolboxes' lids by colour (`TOOLBOX_LIDS`) and drawer (`TOOLBOX_DRAWER`), posed by the
+    // glue from their `up` state.
+    (
+        "part_rope_coil",
+        "create:block/rope_pulley/rope_coil",
+        "south",
+    ),
+    (
+        "part_elevator_coil",
+        "create:block/elevator_pulley/rope_coil",
+        "south",
+    ),
+    (
+        "part_copper_backtank_shaft",
+        "create:block/copper_backtank/block_shaft_input",
+        "up",
+    ),
+    (
+        "part_netherite_backtank_shaft",
+        "create:block/netherite_backtank/block_shaft_input",
+        "up",
+    ),
+    ("part_sticker_head", "create:block/sticker/head", "up"),
+    (
+        "part_gantry_cogs",
+        "create:block/gantry_carriage/wheels",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_white",
+        "create:block/toolbox/lid/white",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_orange",
+        "create:block/toolbox/lid/orange",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_magenta",
+        "create:block/toolbox/lid/magenta",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_light_blue",
+        "create:block/toolbox/lid/light_blue",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_yellow",
+        "create:block/toolbox/lid/yellow",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_lime",
+        "create:block/toolbox/lid/lime",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_pink",
+        "create:block/toolbox/lid/pink",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_gray",
+        "create:block/toolbox/lid/gray",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_light_gray",
+        "create:block/toolbox/lid/light_gray",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_cyan",
+        "create:block/toolbox/lid/cyan",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_purple",
+        "create:block/toolbox/lid/purple",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_blue",
+        "create:block/toolbox/lid/blue",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_brown",
+        "create:block/toolbox/lid/brown",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_green",
+        "create:block/toolbox/lid/green",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_red",
+        "create:block/toolbox/lid/red",
+        "up",
+    ),
+    (
+        "part_toolbox_lid_black",
+        "create:block/toolbox/lid/black",
+        "up",
+    ),
+    ("part_toolbox_drawer", "create:block/toolbox/drawer", "up"),
 ];
 
 /// The unit-cube models of `part_fluid_*`: every face the fluid's still texture, water's

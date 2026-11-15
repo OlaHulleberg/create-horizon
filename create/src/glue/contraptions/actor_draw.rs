@@ -538,9 +538,90 @@ impl BlockEntityPart for PlacedActors {
                 let reach = p * p * distance / 2.0;
                 draw_interface(&mut Drawing(draw), fluid, facing, lit, reach);
             }
+            // StickerRenderer: the head out a quarter block while extended (its piston's
+            // `LerpedFloat` at its end: the head is drawn where its state has it).
+            Block::Sticker => {
+                let text = host.block_state_string(event.state).unwrap_or_default();
+                let extended = states::split(&text).1.contains(&("extended", "true"));
+                let out = if extended { 0.25 } else { 0.0 };
+                let vertical = match facing {
+                    Dir::Up => -90.0,
+                    Dir::Down => 90.0,
+                    _ => 0.0,
+                };
+                draw.push();
+                draw.rotate_about(UP, horizontal_angle(facing), CENTRE);
+                draw.rotate_about(EAST, vertical + 90.0, CENTRE);
+                draw.translate([0.0, out, 0.0]);
+                Drawing(draw).part("part_sticker_head", "up");
+                draw.pop();
+            }
+            Block::GantryCarriage => {
+                let rpm = super::super::kinetics::speeds_of(&event.entity.nbt)[0];
+                draw_gantry_cogs(draw, event.pos, facing, info.along_first, rpm);
+            }
             _ => {}
         }
     }
+}
+
+/// `GantryCarriageRenderer`: the cogs turned to the carriage's facing and across its shaft,
+/// turning about a point 9 px in from its middle at half a shaft's rate (`getAngleForBE`), the
+/// way the carriage runs along its gantry.
+fn draw_gantry_cogs(
+    draw: &mut dyn BlockEntityDrawContext,
+    pos: [i32; 3],
+    facing: Dir,
+    along_first: bool,
+    rpm: f32,
+) {
+    let rotation_axis = create_engine::parts::directional_axis(facing, along_first);
+    let gantry_axis = [Axis::X, Axis::Y, Axis::Z]
+        .into_iter()
+        .find(|a| *a != rotation_axis && *a != facing.axis())
+        .unwrap_or(Axis::X);
+    let flip = (gantry_axis == Axis::X && facing == Dir::Up)
+        || (gantry_axis == Axis::Y && matches!(facing, Dir::North | Dir::East));
+    let sign = if flip { -1.0 } else { 1.0 };
+    // `visualPos`: its own block facing a positive way, else the block behind it.
+    let visual = if facing.positive() {
+        pos
+    } else {
+        let o = facing.opposite().offset();
+        [0, 1, 2].map(|i| pos[i] + o[i])
+    };
+    let offset =
+        create_engine::client::rotation_offset(Block::GantryCarriage, rotation_axis, visual);
+    let x = match facing {
+        Dir::Up => 0.0,
+        Dir::Down => 180.0,
+        _ => 90.0,
+    };
+    let y2 = if along_first ^ (facing.axis() == Axis::X) {
+        0.0
+    } else {
+        90.0
+    };
+    // The pose before the turn, to find the turn's axis and pivot in the block.
+    let mut pose = Poses::default();
+    pose.rotate_about(UP, horizontal_angle(facing), CENTRE);
+    pose.rotate_about(EAST, x, CENTRE);
+    pose.rotate_about(UP, y2, CENTRE);
+    pose.part("", "up");
+    let p = pose.out[0].2;
+    let axis = quat_apply(p.q, [1.0, 0.0, 0.0]).map(|v| v as f32);
+    let local = quat_apply(p.q, [0.5, 0.5 - 9.0 / 16.0, 0.5]);
+    let pivot = [0, 1, 2].map(|i| (p.t[i] + local[i]) as f32);
+    // `rotateXDegrees(-angle)`, `angle = time × speed × 3 / 20 + offset`, flipped on some sides.
+    let rate = -sign * rpm * 0.15;
+    draw.spin(axis, pivot, rate, -sign * offset);
+    draw.push();
+    draw.rotate_about(UP, horizontal_angle(facing), CENTRE);
+    draw.rotate_about(EAST, x, CENTRE);
+    draw.rotate_about(UP, y2, CENTRE);
+    Drawing(draw).part("part_gantry_cogs", "up");
+    draw.pop();
+    draw.still();
 }
 
 // ---------------------------------------------------------------------------------------------

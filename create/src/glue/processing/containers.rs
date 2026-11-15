@@ -35,7 +35,62 @@ pub fn register(r: &mut dyn Registrar) {
         .map(|b| format!("create:{}", b.name()))
         .collect();
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
-    r.block_entity_type(TOOLBOX_TYPE).blocks(&names).build();
+    let kind = r.block_entity_type(TOOLBOX_TYPE).blocks(&names).build();
+    if let Err(e) = r.block_entity_part(&kind, ToolboxDraw) {
+        crate::create_log!("[create] the toolboxes' drawing part was refused: {e:?}");
+    }
+}
+
+/// `ToolboxRenderer`: a toolbox's lid in its colour and its two drawers, turned to its back, shut
+/// (the lid and drawers stay closed: the port keeps no count of players looking in).
+struct ToolboxDraw;
+
+#[mod_api::horizon_part]
+impl mod_api::BlockPart for ToolboxDraw {}
+
+#[mod_api::horizon_part]
+impl mod_api::BlockEntityPart for ToolboxDraw {
+    fn block_entity_submit(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let Some(text) = host.block_state_string(event.state) else {
+            return;
+        };
+        let (name, props) = states::split(&text);
+        let Some(colour) = name
+            .strip_prefix("create:")
+            .and_then(|n| n.strip_suffix("_toolbox"))
+        else {
+            return;
+        };
+        let Some(facing) = props.iter().find(|(k, _)| *k == "facing").map(|(_, v)| *v) else {
+            return;
+        };
+        // `-facing.getOpposite().toYRot()`.
+        let turn = match facing {
+            "north" => 0.0,
+            "east" => 270.0,
+            "south" => 180.0,
+            _ => 90.0,
+        };
+        let draw = &mut *event.draw;
+        let part = |draw: &mut dyn mod_api::BlockEntityDrawContext, name: &str, up: f32| {
+            if let Some(key) = states::partial(name) {
+                draw.push();
+                draw.rotate_about([0.0, 1.0, 0.0], turn, [0.5; 3]);
+                draw.translate([0.0, up, 0.0]);
+                draw.block(key, &[("facing", "up")]);
+                draw.pop();
+            }
+        };
+        part(draw, &format!("part_toolbox_lid_{colour}"), 0.0);
+        for offset in [0.0, 1.0] {
+            part(draw, "part_toolbox_drawer", offset / 8.0);
+        }
+        draw.keep();
+    }
 }
 
 /// Every block's container, as the legacy glue declared it.

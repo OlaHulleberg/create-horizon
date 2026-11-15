@@ -627,6 +627,16 @@ fn model_block(
         Model::GaugeDial(d) => part("part_gauge_dial", dir_name(d)),
         Model::ArmCog => part("part_arm_cog", "up"),
         Model::HoseCoil(d) => part("part_hose_coil", dir_name(d)),
+        Model::RopeCoil(d) => part("part_rope_coil", dir_name(d)),
+        Model::ElevatorCoil(d) => part("part_elevator_coil", dir_name(d)),
+        Model::BacktankShaft { netherite } => part(
+            if netherite {
+                "part_netherite_backtank_shaft"
+            } else {
+                "part_copper_backtank_shaft"
+            },
+            "up",
+        ),
         // Posed partials (belts, the mixer's pole and head) and the press head on its stroke
         // are drawn by their own systems.
         Model::Belt(..)

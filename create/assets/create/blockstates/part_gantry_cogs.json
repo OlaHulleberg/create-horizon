@@ -1,0 +1,30 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/gantry_carriage/wheels",
+      "x": 90
+    },
+    "facing=east": {
+      "model": "create:block/gantry_carriage/wheels",
+      "x": 90,
+      "y": 90
+    },
+    "facing=south": {
+      "model": "create:block/gantry_carriage/wheels",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create:block/gantry_carriage/wheels",
+      "x": 90,
+      "y": 270
+    },
+    "facing=up": {
+      "model": "create:block/gantry_carriage/wheels"
+    },
+    "facing=down": {
+      "model": "create:block/gantry_carriage/wheels",
+      "x": 180
+    }
+  }
+}
