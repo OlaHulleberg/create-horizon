@@ -195,6 +195,9 @@ impl Subsystem for Packages {
     /// A chain conveyor carrying packages is drawn every frame, as they move along it (its
     /// drawing is otherwise kept, and drawn anew only when its data changes).
     fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+        if block == Block::PackageFrogport {
+            return frog_draw::animated(&entity.nbt);
+        }
         if block != Block::ChainConveyor {
             return box_draw::animated(block, pos, entity);
         }
@@ -451,6 +454,7 @@ impl Subsystem for Packages {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         port_screen::tick(host);
         frog_target::client_tick(host);
+        frog_draw::client_tick(host);
         if !SYNCED.get() && net::send_to_server(host, create_engine::client::CHANNEL, b"sync") {
             SYNCED.set(true);
         }

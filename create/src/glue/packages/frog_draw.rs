@@ -65,6 +65,11 @@ struct Kept {
 }
 
 thread_local! {
+    /// The block under the crosshair at the last client tick.
+    static HOVERED: std::cell::Cell<Option<[i32; 3]>> = const { std::cell::Cell::new(None) };
+    /// The client level's game time at the last client tick.
+    static NOW: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+
     static SENT: RefCell<HashMap<(usize, [i32; 3]), Shown>> = RefCell::new(HashMap::new());
     static KEPT: RefCell<HashMap<(usize, [i32; 3]), Kept>> = RefCell::new(HashMap::new());
     static MODEL_REFS: RefCell<HashMap<&'static str, mod_api::ModelRef>> = RefCell::new(HashMap::new());
@@ -73,6 +78,41 @@ thread_local! {
 pub(super) fn reset() {
     SENT.with_borrow_mut(HashMap::clear);
     KEPT.with_borrow_mut(HashMap::clear);
+}
+
+/// A client tick: the block under the crosshair, for the nameplates.
+pub(super) fn client_tick(host: &dyn ClientHost) {
+    let hovered = match host.crosshair_target() {
+        Some(mod_api::CrosshairTarget::Block { pos, .. }) => Some([pos.x, pos.y, pos.z]),
+        _ => None,
+    };
+    HOVERED.set(hovered);
+    if let Some(t) = host.level(host.dimension()).and_then(|l| l.game_time(host)) {
+        NOW.set(t);
+    }
+}
+
+/// Whether the frogport moves and is drawn again each frame (`Subsystem::animated`; a still
+/// one's drawing is kept): while it catches or sends, anticipates, and opens or shuts with its
+/// screen. One with an address always is: a kept drawing is not asked again when the crosshair
+/// comes onto it, for its nameplate.
+pub(super) fn animated(nbt: &Compound) -> bool {
+    let Some(Tag::Compound(frog)) = nbt.get(&FROG.into()) else {
+        return false;
+    };
+    let now = NOW.get();
+    let long = |k: &str| match frog.get(&k.into()) {
+        Some(Tag::Long(v)) => Some(*v),
+        _ => None,
+    };
+    let within = |t: Option<i64>, ticks: i64| t.is_some_and(|t| (0..=ticks).contains(&(now - t)));
+    let addressed = matches!(frog.get(&"Address".into()),
+        Some(Tag::String(a)) if !a.to_string_lossy().trim().is_empty());
+    flag(frog, "Animating") && within(long("Start"), 11)
+        || within(long("Anticipated"), 11)
+        || within(long("Opened"), 4)
+        || within(long("Closed"), 4)
+        || addressed
 }
 
 /// `openTracker`: `player` opened the screen of the port at `pos` (`open`) or closed it.
@@ -517,7 +557,8 @@ impl BlockEntityPart for FrogDraw {
             draw.item(&stack, ItemDisplayContext::None, None, 0);
             draw.pop();
         }
-        if !nameplate(draw, host, pos, &frog) && !moving {
+        let plated = nameplate(draw, host, pos, &frog);
+        if !moving && !plated {
             draw.keep();
         }
     }
@@ -525,8 +566,8 @@ impl BlockEntityPart for FrogDraw {
 
 /// `renderNameplateOnHover` with the address (`FrogportRenderer`): while the crosshair is on
 /// the frogport, within 64 blocks, its address a block and a quarter up, turned to the camera,
-/// a fortieth of a block a font pixel. Whether it was drawn (the frogport is drawn again next
-/// frame, as the camera turns). The name tag's see-through pass over its translucent
+/// a fortieth of a block a font pixel. Whether the frogport has an address (it is drawn again
+/// next frame, for the crosshair coming onto it or the camera turning). The name tag's see-through pass over its translucent
 /// background is left out: a block entity's text is drawn only as a sign's (`HORIZON_API.md`).
 fn nameplate(
     draw: &mut dyn BlockEntityDrawContext,
@@ -541,10 +582,19 @@ fn nameplate(
     if address.trim().is_empty() {
         return false;
     }
-    let Some(mod_api::CrosshairTarget::Block { pos: hit, .. }) = host.crosshair_target() else {
-        return false;
-    };
-    if [hit.x, hit.y, hit.z] != pos {
+    nameplate_hovered(draw, host, pos, &address);
+    true
+}
+
+fn nameplate_hovered(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    pos: [i32; 3],
+    address: &str,
+) -> bool {
+    // The crosshair's block as the last client tick saw it (a block entity's drawing is not
+    // told of the crosshair).
+    if HOVERED.get() != Some(pos) {
         return false;
     }
     let Some(cam) = host.camera() else {
@@ -556,12 +606,12 @@ fn nameplate(
     if d2 > 4096.0 {
         return false;
     }
-    let text = mod_api::Text::literal(address.as_str());
+    let text = mod_api::Text::literal(address);
     draw.push();
     draw.translate([0.5, 1.25, 0.5]);
-    // `cameraOrientation()`: `rotationYXZ(-yaw, pitch, 0)`.
-    draw.rotate_about([0.0, 1.0, 0.0], -cam.yaw, [0.0; 3]);
-    draw.rotate_about([1.0, 0.0, 0.0], cam.pitch, [0.0; 3]);
+    // `cameraOrientation()`: `rotationYXZ(PI - yaw, -pitch, 0)`.
+    draw.rotate_about([0.0, 1.0, 0.0], 180.0 - cam.yaw, [0.0; 3]);
+    draw.rotate_about([1.0, 0.0, 0.0], -cam.pitch, [0.0; 3]);
     draw.scale([0.025, -0.025, 0.025]);
     let width = draw.text_width(&text).unwrap_or(0.0);
     let _ = draw.text(&text, [-(width / 2.0).floor(), 0.0], 0xFF_FFFF, false, None);

@@ -189,7 +189,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   only against air or a fluid as it is placed, where Create asks for any collision shape behind it (the
   neighbour check after placement reads them through `LevelRef::collision_boxes`).
 - **Text alpha in `BlockEntityDrawContext::text`** (display boards' 0.85 / 0.975), and more than one colour per
-  line in tooltips (goggles).
+  line in tooltips (goggles). The same call has no name tag mode (`Font.DisplayMode.SEE_THROUGH` with a
+  background colour): a frogport's address over it on hover (`renderNameplateOnHover`) is drawn as its normal
+  pass only, without the translucent box behind it or the faint copy seen through blocks.
 - **A mutable `ClientHost` in screen hooks**: the clipboard screen closes and sends its pages from the next
   client tick.
 - **Reading and setting the local player's movement on the client** (diving boots sinking), **consuming a key
