@@ -194,9 +194,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   flash (`LinkBulbRenderer`) draws its tube full bright in the translucent layer, but not the glow model
   drawn additively in a fading grey over it, for the same want (and of an additive render type). A station's assembly track (`StationRenderer`: blue where a
   bogey may go, green where one is) is drawn in the overlay model's own colours for the same reason.
-- **A train station's signal and observer overlays' facing** is not an API gap but not kept: the port keeps
-  no `TrackTargetingBehaviour.targetDirection`, so signals' and observers' track markers are not drawn
-  (stations draw theirs, turned by their last assembly direction).
 - **Collision shapes in `can_survive`** (`LevelHost` has none): a hand crank or valve handle is refused
   only against air or a fluid as it is placed, where Create asks for any collision shape behind it (the
   neighbour check after placement reads them through `LevelRef::collision_boxes`).
@@ -296,6 +293,15 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   arrows toward where the click places): catnip's source is not among the port's references.
 - Equipment: a haunted bell's soul pulse showing where mobs may spawn (`HauntedBellPulser`, `SoulPulseEffect`)
   and the soul particles and sounds after it rings.
+- Trains: `TrackTargetingBehaviour.targetDirection` is not kept, so signals' and observers' track markers are
+  not drawn (stations draw theirs, turned by their last assembly direction); the relocator's preview of where a
+  train's wheels would go (`TrainRelocator.visualise`, the green or red line) is not drawn, its action bar says
+  what a click does.
+- Stock: a placed clipboard's `#` addresses are not offered by address boxes
+  (`AddressEditBoxHelper.advertiseClipboard`: its pages are not on its clients).
+- Display: the sources' colours (the boiler's bars, the gauges' marks: the engine's text is plain) and a nixie
+  tube's flicker (`NixieTubeRenderer`'s `random.nextFloat() / 4` toward the dark colour each frame; a kept
+  drawing is still).
 
 ## Not to send
 
