@@ -1,7 +1,7 @@
 //! What moving contraptions carry besides their blocks, and Create's glue and stickers: super
 //! glue areas the structure search reads (set by the glue item, `superglue`, or
 //! `/create_debug glue`), the sticker's redstone, actors (drills, saws, harvesters, ploughs,
-//! rollers, interfaces) ticked only while their contraption moves, mounted storage (chests,
+//! rollers, deployers, redstone contacts, interfaces) ticked only while their contraption moves, mounted storage (chests,
 //! barrels, item vaults and toolboxes) that keeps its items and takes what the actors collect
 //! (a toolbox takes nothing), and contraption controls
 //! (`/create_debug controls`). Create's rules are in `create_engine::glue` and

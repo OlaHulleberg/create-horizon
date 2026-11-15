@@ -23,20 +23,30 @@
 //!   collider an entity's motion reads (`notes/moving-structures-note.md`), and no mod entity
 //!   type to be one.
 //! - A moving block cannot be clicked, and riders cannot sit on a moving structure's seats
-//!   (`Contraption.seats`): there is no moving entity to pick or ride. So contraption controls
-//!   on a moving structure are clicked with `/create_debug controls`.
+//!   (`Contraption.seats`): there is no moving entity to pick or ride. Contraption controls on a
+//!   gliding structure (piston, gantry) are clicked through the client's own raycast of what it
+//!   draws (`draw::use_key`); elsewhere with `/create_debug controls`.
 //! - Each moving block is lit with the world's light where the structure was last sent from
 //!   (the server reads it: `LevelRef::brightness` is the server's only), not where it is each
 //!   frame.
 //! - A clockwork bearing's top turns at its kinetic speed, not with the hour hand
 //!   (`BearingRenderer`): the top is the kinetic block entity's part.
 //!
+//! Block entities ride with what they hold (`actors::carry_storage`, Create's
+//! `StructureBlockInfo.nbt`): Create's item slots (a depot's stack), a deployer's hand and mode,
+//! a tank's fluid (tanks keep their shape), and other block entities' saved data (a furnace's
+//! items). Deployers work while moving (`DeployerMovementBehaviour`), redstone contacts power the
+//! contacts they pass (`ContactMovementBehaviour`), elevators open their sliding doors at floors
+//! (`SlidingDoorMovementBehaviour`), and portable fluid interfaces reach a contraption's tanks.
+//!
 //! Left out, not for want of API:
-//! - Other moving block entities keep only their block: a depot's item, a deployer's held item
-//!   and a tank's fluid are not carried, and a deployer on a contraption does nothing
-//!   (`DeployerMovementBehaviour`). Block entities of other mods are refused.
+//! - The state the engine keeps per block for other Create blocks (a creative motor's speed, a
+//!   blaze burner's fuel, a basin's fluids, a link's frequency) is not carried.
+//! - What block entities hold is not drawn on a moving structure (a depot's item, a tank's
+//!   fluid, a deployer's pole and hand); actors' heads are drawn at rest.
 //! - A bearing's glue stays in the world while it turns and goes back turned with it; its
 //!   contraption controls are not carried.
+//! - An elevator contact's door control has no value box: doors open on every side.
 
 pub mod actors;
 mod bearings;

@@ -2,7 +2,9 @@
 //! `MovementContext`, `AbstractContraptionEntity.tickActors`): drills and saws breaking what
 //! they pass (`BlockBreakingMovementBehaviour`, `DrillMovementBehaviour`,
 //! `SawMovementBehaviour`), harvesters (`HarvesterMovementBehaviour`), ploughs
-//! (`PloughMovementBehaviour`), rollers (`RollerMovementBehaviour`) and portable storage
+//! (`PloughMovementBehaviour`), rollers (`RollerMovementBehaviour`), deployers
+//! (`DeployerMovementBehaviour`, the glue's fake player), redstone contacts
+//! (`ContactMovementBehaviour`) and portable storage
 //! interfaces (`PortableStorageInterfaceMovement`, with `crate::psi`); a contraption's storage
 //! taking what they collect (`MovementBehaviour.collectOrDropItem`,
 //! `ItemHandlerHelper.insertItem`); and contraption controls turning kinds of actor off
@@ -1798,5 +1800,46 @@ mod tests {
         let v = [0.3, -0.2, 0.7];
         let w = unturn(turn_all(v, &turns), &turns);
         assert!((0..3).all(|i| (w[i] - v[i]).abs() < 1e-12));
+    }
+
+    #[test]
+    fn a_stalled_deployer_punches_again_every_21st_tick() {
+        let world = World(HashMap::new());
+        let mut a = Actor::new([0; 3], Kind::Deployer, Dir::East, -1);
+        let mut effects = Vec::new();
+        a.tick([0.5, 0.5, 0.5], Dir::East, 0.0, &world, &mut effects);
+        // Its first move visits where it is.
+        a.tick([0.6, 0.5, 0.5], Dir::East, 0.0, &world, &mut effects);
+        assert_eq!(effects, vec![Effect::Deploy([0, 0, 0])]);
+        // Its fake player breaks a block: the glue stalls it.
+        a.stall = true;
+        let mut punches = Vec::new();
+        for tick in 1..=42 {
+            let mut e = Vec::new();
+            a.tick([0.6, 0.5, 0.5], Dir::East, 0.0, &world, &mut e);
+            if e.contains(&Effect::Redeploy) {
+                punches.push(tick);
+            }
+        }
+        assert_eq!(punches, vec![21, 42]);
+    }
+
+    #[test]
+    fn a_moving_contact_powers_what_it_passes_and_lets_go_after() {
+        let world = World(HashMap::new());
+        let mut a = Actor::new([0; 3], Kind::Contact, Dir::South, -1);
+        let mut e = Vec::new();
+        // Not where it started from.
+        a.tick([0.5, 0.5, 1.15], Dir::South, 0.0, &world, &mut e);
+        a.tick([0.6, 0.5, 1.15], Dir::South, 0.0, &world, &mut e);
+        assert!(e.is_empty());
+        a.tick([1.5, 0.5, 1.15], Dir::South, 0.0, &world, &mut e);
+        assert_eq!(e, vec![Effect::Contact([1, 0, 1])]);
+        e.clear();
+        a.tick([2.5, 0.5, 1.15], Dir::South, 0.0, &world, &mut e);
+        assert_eq!(e, vec![Effect::ContactLeft([1, 0, 1]), Effect::Contact([2, 0, 1])]);
+        e.clear();
+        a.cancel(&mut e);
+        assert_eq!(e, vec![Effect::ContactLeft([2, 0, 1])]);
     }
 }

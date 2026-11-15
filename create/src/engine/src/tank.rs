@@ -917,6 +917,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_carried_tank_comes_back_whole_with_its_fluid() {
+        let mut t = Tanks::default();
+        t.place([0, 0, 0]);
+        t.place([0, 1, 0]);
+        let (c, m) = t.get([0, 1, 0]).map(|(c, m)| (c, *m)).unwrap();
+        assert_eq!((c, m.height), ([0, 0, 0], 2));
+        t.get_mut(c).unwrap().1.tank.fill_amount(Fluid::Water, 5000, 16000);
+        // Taken by a contraption: no split, nothing shared out.
+        let taken = t.take([0, 0, 0]);
+        assert_eq!(t.take([0, 1, 0]), None);
+        t.remove([0, 0, 0]);
+        t.remove([0, 1, 0]);
+        assert!(t.parts.is_empty() && t.multis.is_empty());
+        // Put back two blocks east: placed, they take what they held.
+        t.arriving.insert([2, 0, 0], taken);
+        t.arriving.insert([2, 1, 0], None);
+        t.place([2, 1, 0]);
+        t.place([2, 0, 0]);
+        let (c, m) = t.get([2, 1, 0]).map(|(c, m)| (c, *m)).unwrap();
+        assert_eq!(c, [2, 0, 0]);
+        assert_eq!((m.height, m.tank.amount), (2, 5000));
+    }
+
+    #[test]
     fn every_fluid_keeps_its_index() {
         for i in 0..=255u8 {
             if let Some(f) = Fluid::from_index(i) {
