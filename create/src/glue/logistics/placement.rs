@@ -322,7 +322,13 @@ pub struct VaultItem;
 
 /// Vault layers to fill: level, the player, the hand holding the vaults, the axis, the
 /// positions.
-type Layer = (usize, mod_api::PlayerRef, mod_api::Hand, Axis, Vec<[i32; 3]>);
+type Layer = (
+    usize,
+    mod_api::PlayerRef,
+    mod_api::Hand,
+    Axis,
+    Vec<[i32; 3]>,
+);
 
 thread_local! {
     static LAYERS: std::cell::RefCell<Vec<Layer>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -384,7 +390,9 @@ impl mod_api::ItemPart for VaultItem {
                 c[2] + along[2] * length,
             ]
         };
-        if create_engine::kinetics::Axis::of(start, axis) != create_engine::kinetics::Axis::of(pos, axis) {
+        if create_engine::kinetics::Axis::of(start, axis)
+            != create_engine::kinetics::Axis::of(pos, axis)
+        {
             return;
         }
         let Some(level) = player.level(&*host) else {
@@ -422,8 +430,7 @@ impl mod_api::ItemPart for VaultItem {
         let Some(hand) = hand else {
             return;
         };
-        if !player_items::creative(&*host, player) && event.stack.count() < free.len() as u32 + 1
-        {
+        if !player_items::creative(&*host, player) && event.stack.count() < free.len() as u32 + 1 {
             return;
         }
         LAYERS.with_borrow_mut(|l| l.push((dim, player, hand, axis, free)));

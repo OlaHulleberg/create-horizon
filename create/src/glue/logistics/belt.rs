@@ -971,7 +971,8 @@ impl BeltSide<'_, '_> {
             let took = with_world(|w| {
                 let d = &mut w.dims[dim];
                 let b = d.brass.get_mut(&t)?;
-                if b.stack.is_some() {
+                // `canTakeItems`: none held, and not handing out with its synchronized group.
+                if b.stack.is_some() || b.synced {
                     return Some(false);
                 }
                 // `setStackToDistribute`.
