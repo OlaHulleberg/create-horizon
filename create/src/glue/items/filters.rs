@@ -14,8 +14,9 @@
 //! The item tags `in_tag` offers for a reference item (`ItemStack.getTags`) are the tags it is in
 //! among those the server's data defines (`tags/item`, listed by a data reload listener).
 //!
-//! Left out: `max_enchanted`, which needs each enchantment's maximum level (the host answers it
-//! on the client only, `ItemsClientHost::enchantments`): it tests false.
+//! `max_enchanted` reads each enchantment's maximum level from the server's data
+//! (`enchantment/*.json`'s `max_level`, listed by a data reload listener), as the host answers
+//! `Enchantment.getMaxLevel` on the client only.
 
 use super::super::net;
 use super::super::processing::recipes::{self, Recipes};
@@ -32,6 +33,7 @@ use mod_api::{
     InteractionResult, ItemPart, ItemStack, PlayerRef, RunModCommandEvent, ServerHost, SoundSource,
     Tag, UseItemEvent, UseOnEvent,
 };
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 fn flag(t: Option<&Tag>) -> bool {
@@ -188,6 +190,28 @@ pub(crate) fn component(host: &dyn Host, stack: &ItemStack, id: &str) -> Option<
 }
 
 /// The enchantment ids of an `ItemEnchantments` component (`{levels: {..}}` or the map).
+/// The enchantments and their levels in an `enchantments` component.
+fn enchantment_levels(tag: Option<Tag>) -> Vec<(String, i32)> {
+    let Some(Tag::Compound(c)) = tag else {
+        return Vec::new();
+    };
+    let map = match c.get(&"levels".into()) {
+        Some(Tag::Compound(l)) => l.clone(),
+        _ => c,
+    };
+    map.iter()
+        .filter_map(|(k, v)| {
+            let level = match v {
+                Tag::Int(i) => *i,
+                Tag::Byte(b) => i32::from(*b),
+                Tag::Short(s) => i32::from(*s),
+                _ => return None,
+            };
+            Some((k.to_string_lossy(), level))
+        })
+        .collect()
+}
+
 fn enchantment_ids(tag: Option<Tag>) -> Vec<String> {
     let Some(Tag::Compound(c)) = tag else {
         return Vec::new();
@@ -312,8 +336,16 @@ impl Probe for Looked<'_> {
             Attribute::Smeltable => recipe(&self.id, |r| &r.smelting),
             Attribute::Smokable => recipe(&self.id, |r| &r.smoking),
             Attribute::Blastable => recipe(&self.id, |r| &r.blasting),
-            // `max_enchanted`: see the module's doc.
-            _ => false,
+            // `maxEnchanted`: an enchantment (`getTagEnchantments`) at its maximum level or past it.
+            Attribute::MaxEnchanted => {
+                let max = ENCHANTMENT_MAX
+                    .lock()
+                    .map(|m| m.clone())
+                    .unwrap_or_default();
+                enchantment_levels(component(host, stack, "minecraft:enchantments"))
+                    .iter()
+                    .any(|(id, level)| max.get(id).is_some_and(|m| *m <= *level))
+            }
         }
     }
 }
@@ -832,15 +864,86 @@ impl mod_api::ServerReloadListener for ItemTagNames {
     }
 }
 
-/// Registers the item tag listing with each data load.
+/// Each enchantment's maximum level (`Enchantment.getMaxLevel`), by id, as the last data reload
+/// defined it.
+static ENCHANTMENT_MAX: std::sync::Mutex<BTreeMap<String, i32>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// Reads the enchantments' `max_level` with each data load.
+struct EnchantmentLevels;
+
+impl mod_api::ServerReloadListener for EnchantmentLevels {
+    fn prepare(
+        &self,
+        context: &mod_api::ServerReloadContext,
+    ) -> Result<Box<dyn mod_api::ReloadApply>, mod_api::ReloadResourceError> {
+        let levels: BTreeMap<String, i32> = context
+            .list()
+            .filter_map(|id| {
+                let text = std::str::from_utf8(context.read(id)?).ok()?;
+                Some((id.to_string(), max_level(text)?))
+            })
+            .collect();
+        Ok(<dyn mod_api::ReloadApply>::new(move || {
+            if let Ok(mut m) = ENCHANTMENT_MAX.lock() {
+                *m = levels;
+            }
+        }))
+    }
+}
+
+/// An enchantment definition's `max_level` (a top-level number of the JSON object).
+fn max_level(json: &str) -> Option<i32> {
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    let bytes = json.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_string = false;
+            }
+        } else {
+            match c {
+                b'{' | b'[' => depth += 1,
+                b'}' | b']' => depth -= 1,
+                b'"' if depth == 1 && json[i..].starts_with("\"max_level\"") => {
+                    let rest = json[i + "\"max_level\"".len()..].trim_start();
+                    let rest = rest.strip_prefix(':')?.trim_start();
+                    let end = rest
+                        .find(|c: char| !(c.is_ascii_digit() || c == '-'))
+                        .unwrap_or(rest.len());
+                    return rest[..end].parse().ok();
+                }
+                b'"' => in_string = true,
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Registers the item tag listing and the enchantments' levels with each data load.
 pub(crate) fn add_reload_listeners(listeners: &mut dyn mod_api::ServerReloadListeners) {
-    let (Ok(id), Ok(converter)) = (
+    if let (Ok(id), Ok(converter)) = (
         Identifier::parse("create:item_tag_names"),
         mod_api::FileToIdConverter::json("tags/item"),
-    ) else {
-        return;
-    };
-    let _ = listeners.add_listener(id, converter, std::sync::Arc::new(ItemTagNames));
+    ) {
+        let _ = listeners.add_listener(id, converter, std::sync::Arc::new(ItemTagNames));
+    }
+    if let (Ok(id), Ok(converter)) = (
+        Identifier::parse("create:enchantment_levels"),
+        mod_api::FileToIdConverter::json("enchantment"),
+    ) {
+        let _ = listeners.add_listener(id, converter, std::sync::Arc::new(EnchantmentLevels));
+    }
 }
 
 /// `ItemAttribute.getAllAttributes` of each type, in Create's registration order (the types
@@ -980,4 +1083,22 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
         );
     }
     set_held(host, player, Hand::Main, Some(stack));
+}
+
+#[cfg(test)]
+mod enchantment_tests {
+    #[test]
+    fn an_enchantments_max_level_is_its_top_level_field() {
+        let sharpness = r##"{"description":{"translate":"enchantment.minecraft.sharpness"},
+            "effects":{"minecraft:damage":[{"effect":{"type":"minecraft:add",
+            "value":{"type":"minecraft:linear","base":1.0,"per_level_above_first":0.5}}}]},
+            "exclusive_set":"#minecraft:exclusive_set/damage","max_level":5,"weight":10}"##;
+        assert_eq!(super::max_level(sharpness), Some(5));
+        // A nested `max_level` is not the enchantment's.
+        assert_eq!(
+            super::max_level(r##"{"a":{"max_level":3},"max_level": 1}"##),
+            Some(1)
+        );
+        assert_eq!(super::max_level(r##"{"text":"\"max_level\": 9"}"##), None);
+    }
 }

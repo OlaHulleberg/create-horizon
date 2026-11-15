@@ -559,7 +559,9 @@ const NOTICES: &[&str] = &["LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"];
 /// the player's jar, and only this behaviour, which is the port's own, is added to them here.
 fn particle_behaviour(path: &str) -> Option<Value> {
     match path {
-        "assets/create/particles/rotation_indicator.json" => {
+        "assets/create/particles/rotation_indicator.json"
+        | "assets/create/particles/soul.json"
+        | "assets/create/particles/soul_base.json" => {
             Some(json!({ "velocity": [0.0, 0.0, 0.0] }))
         }
         "assets/create/particles/steam_jet.json" => Some(json!({

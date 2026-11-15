@@ -5,8 +5,9 @@
 //! `ConfigureWorldshaperPacket` and are kept in its custom data under Create's component names.
 //! While held, the client outlines the blocks a use would reach (`WorldshaperRenderHandler`).
 //!
-//! Left out: the outline's checkered face texture (`AllSpecialTextures.CHECKERED`): its faces
-//! are drawn in the outline's colour, faint, as world quads take no texture.
+//! The outline's faces show Create's checkered face texture (`AllSpecialTextures.CHECKERED`:
+//! white, its two squares at alphas 0x00 and 0x00, once over each block face) as quads of those
+//! alphas in the outline's colour, as world quads take no texture.
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
@@ -150,14 +151,32 @@ fn aimed(lv: &ServerLevel<'_>, player: PlayerRef) -> Option<([i32; 3], Dir)> {
     let entity = player.entity();
     let eye = entity.eye_position(&*lv.host)?;
     let look = entity.view_vector(&*lv.host)?;
-    let to = [0, 1, 2].map(|i| eye[i] + look[i] * ws::RANGE);
-    let hit = lv
-        .level
-        .clip(&*lv.host, eye, to, ClipBlock::Outline, ClipFluid::None)?;
-    if hit.miss {
-        return None;
-    }
+    let hit = clip_far(&*lv.host, lv.level, eye, look)?;
     Some((hit.block, dir_of(hit.face)?))
+}
+
+/// `Level.clip` from `eye` along `look` for `ws::RANGE` blocks (`Block.OUTLINE`, no fluids), in
+/// steps: the API's clip answers None for a ray entering a column the level doesn't hold, which
+/// vanilla's reads as air, so the ray stops there as a miss.
+fn clip_far(
+    host: &dyn Host,
+    level: mod_api::LevelRef,
+    eye: [f64; 3],
+    look: [f64; 3],
+) -> Option<mod_api::ClipHit> {
+    const STEP: f64 = 8.0;
+    let mut from = 0.0;
+    while from < ws::RANGE {
+        let to = (from + STEP).min(ws::RANGE);
+        let a = [0, 1, 2].map(|i| eye[i] + look[i] * from);
+        let b = [0, 1, 2].map(|i| eye[i] + look[i] * to);
+        let hit = level.clip(host, a, b, ClipBlock::Outline, ClipFluid::None)?;
+        if !hit.miss {
+            return Some(hit);
+        }
+        from = to;
+    }
+    None
 }
 
 /// Whether `state` is air (`BlockState.isAir`).
@@ -475,18 +494,13 @@ fn outlined(host: &dyn ClientHost) -> Option<Vec<[i32; 3]>> {
     let (settings, _) = shaper(&stack);
     settings.params?;
     let level = host.level(host.dimension())?;
-    let entity = player.entity();
-    let eye = entity.eye_position(host)?;
-    let look = entity.view_vector(host)?;
-    let to = [0, 1, 2].map(|i| eye[i] + look[i] * ws::RANGE);
-    let hit = level.clip(host, eye, to, ClipBlock::Outline, ClipFluid::None)?;
-    if hit.miss {
-        return None;
-    }
-    let face = dir_of(hit.face)?;
+    // `RaycastHelper.rayTraceRange(.., 128)` from the camera.
+    let hit = host.raycast(ws::RANGE as f32)?;
+    let block = [hit.block_x, hit.block_y, hit.block_z];
+    let face = super::super::schematics::face_of(block, [hit.x, hit.y, hit.z]);
     Some(ws::reached(
         &settings,
-        hit.block,
+        block,
         face,
         &mut Ground::new(host, level),
     ))
@@ -511,6 +525,17 @@ pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelS
 
 const OUTLINE: u32 = 0xFFBF_BFBF;
 
+/// `BlockClusterOutline.loadFaceData`: each face's first corner (the texture's `(0, 0)`), in
+/// `Dir::ALL`'s order (down, up, north, south, west, east).
+const FIRST_CORNER: [[i32; 3]; 6] = [
+    [0, 0, 1],
+    [0, 1, 0],
+    [1, 1, 0],
+    [0, 1, 1],
+    [0, 1, 0],
+    [1, 1, 1],
+];
+
 /// The faces between a member and a non-member, and the edges of those faces that don't run on
 /// into a flat continuation of the same face.
 fn cluster(cells: &[[i32; 3]]) -> (Vec<WorldLine>, Vec<WorldQuad>) {
@@ -534,7 +559,7 @@ fn cluster(cells: &[[i32; 3]]) -> (Vec<WorldLine>, Vec<WorldQuad>) {
             // The face's plane, a hair outside the block.
             let plane = f64::from(p[axis])
                 + if n[axis] > 0 { 1.0 } else { 0.0 }
-                + f64::from(n[axis]) * 0.002;
+                + f64::from(n[axis]) / 128.0;
             let corner = |a: i32, b: i32| {
                 let mut c = [0.0; 3];
                 c[axis] = plane;
@@ -542,11 +567,34 @@ fn cluster(cells: &[[i32; 3]]) -> (Vec<WorldLine>, Vec<WorldQuad>) {
                 c[v] = f64::from(p[v] + b);
                 c
             };
-            quads.push(WorldQuad::new(
-                [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)],
-                0x30BF_BFBF,
-                WorldDepth::Tested,
-            ));
+            // `BlockClusterOutline.bufferBlockFace` with the checkerboard (`(0, 0)` to `(1, 1)` of
+            // it over the face): a square at 0x00 by each end of the face's diagonal through its
+            // first corner, a square at 0x00 by each end of the other.
+            let first = FIRST_CORNER[d as usize];
+            let (fu, fv) = (first[u], first[v]);
+            for (a, b) in [(0, 0), (1, 0), (1, 1), (0, 1)] {
+                let lo = |k: i32| f64::from(k) * 0.5;
+                let bright = (a == fu) == (b == fv);
+                let alpha = if bright { 0x00 } else { 0x00 };
+                let at = |x: f64, y: f64| {
+                    let mut c = [0.0; 3];
+                    c[axis] = plane;
+                    c[u] = f64::from(p[u]) + x;
+                    c[v] = f64::from(p[v]) + y;
+                    c
+                };
+                let (x0, y0) = (lo(a), lo(b));
+                quads.push(WorldQuad::new(
+                    [
+                        at(x0, y0),
+                        at(x0 + 0.5, y0),
+                        at(x0 + 0.5, y0 + 0.5),
+                        at(x0, y0 + 0.5),
+                    ],
+                    alpha << 24 | (OUTLINE & 0xFF_FFFF),
+                    WorldDepth::Tested,
+                ));
+            }
             // Each edge: (step to the neighbour across it, its two ends).
             for (step, a, b) in [
                 ((u, -1), corner(0, 0), corner(0, 1)),
@@ -574,11 +622,11 @@ mod tests {
     fn a_cluster_outlines_its_outer_edges_once_per_face() {
         // One block: 6 faces, 4 edges each.
         let (lines, quads) = super::cluster(&[[0, 0, 0]]);
-        assert_eq!((lines.len(), quads.len()), (24, 6));
+        assert_eq!((lines.len(), quads.len()), (24, 6 * 4));
         // Two side by side: 10 faces; the shared face's edges are gone from the four faces
         // that run on, which keep 3 edges each.
         let (lines, quads) = super::cluster(&[[0, 0, 0], [1, 0, 0]]);
-        assert_eq!(quads.len(), 10);
+        assert_eq!(quads.len(), 10 * 4);
         assert_eq!(lines.len(), 2 * 4 + 8 * 3);
     }
 }

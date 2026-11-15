@@ -527,17 +527,7 @@ fn use_cloth(
         return None;
     }
     let item = stack.item();
-    let pos = click.pos;
-    let hit = local(click).map(|v| v - 0.5);
-    let facts = lv.host.block_states();
-    let free = decor::table_cloth_directions(hit)
-        .into_iter()
-        .map(|d| add(pos, d))
-        .find(|p| {
-            lv.block_state(*p)
-                .is_some_and(|s| facts.replaceable(s) == Some(true))
-        });
-    let Some(at) = free else {
+    let Some(at) = cloth_target(&lv, click.pos, click.hit.point) else {
         return Some(InteractionResult::Success);
     };
     let Some(state) = lv
@@ -551,6 +541,63 @@ fn use_cloth(
     lv.block_sound("minecraft:block.wool.place", at, 1.0, 0.8);
     use_one(&mut *lv.host, player, click.hand, stack);
     Some(InteractionResult::Success)
+}
+
+/// `TableClothBlock.PlacementHelper.getOffset`: the free side of the cloth at `pos` nearest the
+/// hit `point`.
+fn cloth_target(lv: &ServerLevel<'_>, pos: [i32; 3], point: [f64; 3]) -> Option<[i32; 3]> {
+    let hit = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]) - 0.5);
+    let facts = lv.host.block_states();
+    decor::table_cloth_directions(hit)
+        .into_iter()
+        .map(|d| add(pos, d))
+        .find(|p| {
+            lv.block_state(*p)
+                .is_some_and(|s| facts.replaceable(s) == Some(true))
+        })
+}
+
+/// `SailBlock.PlacementHelper.getOffset`: the free side nearest the hit `point` of the sail at
+/// `pos` facing `facing`, in its plane.
+fn sail_target(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    point: [f64; 3],
+    facing: Dir,
+) -> Option<[i32; 3]> {
+    let hit = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]) - 0.5);
+    let facts = lv.host.block_states();
+    create_engine::place::ordered_by_distance(hit, |d| d.axis() != facing.axis())
+        .into_iter()
+        .map(|d| add(pos, d))
+        .find(|p| {
+            lv.block_state(*p)
+                .is_some_and(|s| facts.replaceable(s) == Some(true))
+        })
+}
+
+/// The cloth, sail and girder helpers' targets for the indicator (`PlacementClient`).
+pub(crate) fn helper_target(
+    lv: &ServerLevel<'_>,
+    player: PlayerRef,
+    pos: [i32; 3],
+    point: [f64; 3],
+    item: &str,
+) -> Option<[i32; 3]> {
+    let (block, info) = lv
+        .block_state(pos)
+        .and_then(states::id)
+        .and_then(block_of)?;
+    if item.starts_with("create:")
+        && item.ends_with("_table_cloth")
+        && super::cloth::is_cloth(block)
+    {
+        return cloth_target(lv, pos, point);
+    }
+    if is_sail(block) && (item == "create:white_sail" || item == "create:sail_frame") {
+        return sail_target(lv, pos, point, info.facing?);
+    }
+    girders::helper_target(lv, player, pos, point, item)
 }
 
 /// Sails and sail frames: `SailBlock.useItemOn`.
@@ -581,15 +628,7 @@ impl mod_api::BlockPart for Sail {
         let hit = local(click).map(|v| v - 0.5);
         let helped = id == "create:white_sail" || id == "create:sail_frame";
         if helped && !sneaking(&*lv.host, player) && player.may_build(&*lv.host) == Some(true) {
-            let facts = lv.host.block_states();
-            let free =
-                create_engine::place::ordered_by_distance(hit, |d| d.axis() != facing.axis())
-                    .into_iter()
-                    .map(|d| add(pos, d))
-                    .find(|p| {
-                        lv.block_state(*p)
-                            .is_some_and(|s| facts.replaceable(s) == Some(true))
-                    });
+            let free = sail_target(&lv, pos, click.hit.point, facing);
             let facing_name = super::super::kinetics::dir_name(facing);
             let state = lv
                 .host

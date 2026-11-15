@@ -114,7 +114,33 @@ fn extend(
     state: BlockState,
     base: BlockState,
 ) -> Option<InteractionResult> {
-    let pos = click.pos;
+    let (at, facing) = target(lv, player, click.pos, state)?;
+    let water = lv
+        .block_state(at)
+        .and_then(|s| lv.state_name(s))
+        .is_some_and(|n| n == "minecraft:water");
+    let next = with_props(
+        &*lv.host,
+        base,
+        &[
+            ("facing", super::super::kinetics::dir_name(facing)),
+            ("waterlogged", if water { "true" } else { "false" }),
+        ],
+    )?;
+    lv.set_state(at, next, update_all());
+    lv.place_sound(at);
+    use_one(&mut *lv.host, player, click.hand, stack);
+    Some(InteractionResult::Success)
+}
+
+/// `MetalLadderBlock.PlacementHelper.getOffset`: where a ladder goes past the line from the
+/// clicked one at `pos` (`state`), and its facing.
+fn target(
+    lv: &ServerLevel<'_>,
+    player: PlayerRef,
+    pos: [i32; 3],
+    state: BlockState,
+) -> Option<([i32; 3], Dir)> {
     let pitch = player.entity().rotation(&*lv.host).map_or(0.0, |r| r[1]);
     let dir = if pitch < 0.0 { Dir::Up } else { Dir::Down };
     let mut range = create_engine::place::PLACEMENT_ASSIST_RANGE;
@@ -138,22 +164,24 @@ fn extend(
     if !holds(lv, at, state, facing) || !lv.free(at) {
         return None;
     }
-    let water = lv
-        .block_state(at)
-        .and_then(|s| lv.state_name(s))
-        .is_some_and(|n| n == "minecraft:water");
-    let next = with_props(
-        &*lv.host,
-        base,
-        &[
-            ("facing", super::super::kinetics::dir_name(facing)),
-            ("waterlogged", if water { "true" } else { "false" }),
-        ],
-    )?;
-    lv.set_state(at, next, update_all());
-    lv.place_sound(at);
-    use_one(&mut *lv.host, player, click.hand, stack);
-    Some(InteractionResult::Success)
+    Some((at, facing))
+}
+
+/// The ladder helper's target for the indicator: a metal ladder item on a metal ladder
+/// (`matchesItem`: the held block is one, `matchesState`: the clicked one is).
+pub(crate) fn helper_target(
+    lv: &ServerLevel<'_>,
+    player: PlayerRef,
+    pos: [i32; 3],
+    item: mod_api::ItemKey,
+) -> Option<[i32; 3]> {
+    let held = lv.host.item_block(item)?;
+    let base = lv.host.block_state_default(held)?;
+    if !states::id(base).is_some_and(is_ladder) || !is_ladder(lv.block(pos)) {
+        return None;
+    }
+    let state = lv.block_state(pos)?;
+    target(lv, player, pos, state).map(|t| t.0)
 }
 
 /// A ladder whose neighbour changed drops when nothing holds it (`updateShape`).

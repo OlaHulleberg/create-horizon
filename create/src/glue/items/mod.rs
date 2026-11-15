@@ -222,6 +222,7 @@ pub struct Items;
 impl Subsystem for Items {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         symmetry::register(r);
+        let _ = sandpaper::ITEM_PARTICLE.set(r.particle_key("minecraft:item"));
         let keys: Vec<ItemKey> = IDS.iter().map(|id| r.item_key(id)).collect();
         let _ = KEYS.set(keys);
         let Some(k) = KEYS.get() else {
@@ -438,6 +439,14 @@ impl Subsystem for Items {
         event: &mut mod_api::LivingEntityUseItemFinishEvent<'_>,
     ) {
         sandpaper::finished(host, event);
+    }
+
+    fn use_item_tick(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::LivingEntityUseItemTickEvent<'_>,
+    ) {
+        sandpaper::use_tick(host, event.stack, event.entity, event.duration);
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {

@@ -33,6 +33,7 @@
 mod body;
 mod parts;
 mod sound;
+pub(crate) use parts::helper_target;
 
 use super::persist;
 use super::server::ServerLevel;

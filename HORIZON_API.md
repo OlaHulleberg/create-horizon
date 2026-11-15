@@ -79,7 +79,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   schematicannon's gunpowder slot); an `Option<ItemStack>` there would close it.
 - **Per-slot insert rules on `ModContainer`**: "insert only while empty" (depot, ejector, crafter, chute) and
   the toolbox's one item kind per compartment.
-- **Enchantment maximum levels on the server** (the `max_enchanted` filter attribute).
+- **The block entity in `BlockDropsEvent`** (or its saved data through the event's `LevelHost`): a toolbox
+  the level destroys with its drops (`/setblock .. destroy`, `Level.destroyBlock`) drops an empty toolbox,
+  where Create's loot copies its contents (`copy_components` of `TOOLBOX_INVENTORY`); a player's break, an
+  explosion and the port's own machines keep them, as the glue empties the toolbox first.
 - **`ConfigFiles::remove`** (deleting the oldest schematic upload), and a mod reaching the game folder's
   `schematics/` (uploads live in the mod's own data folder).
 
@@ -228,8 +231,19 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   `SoundRef` can change its volume (`fade`) but not its position, so they play at the listener with the volume
   their distance gives them, from no side (`glue/sources/ambience.rs`). A `SoundRef::move_to(position)` would
   close it.
-- **A particle drawn as its own quads** (`SteamJetParticle.render`'s four quads turned along the jet): steam
-  engines' and whistles' steam jets are Create's sprites on a billboard.
+- **A particle drawn as its own quads** (`SteamJetParticle.render`'s four quads turned along the jet, or a
+  `CustomRotationParticle`'s turn): steam engines' and whistles' steam jets are Create's sprites on a
+  billboard, and so are the haunted bell's souls, where Create turns a soul only about the vertical and lays
+  its base flat on the ground (`SoulParticle`, `SoulBaseParticle.getCustomRotation`). A rotation mode on
+  `ModParticle` (a fixed quaternion, or a vertical-only billboard) would close both.
+- **The level in a particle provider's tick** (`ParticleProvider::tick` has no host): a soul the light
+  reaches is not taken away (`SoulParticle.tick`, `SoulBaseParticle.tick` reading `isDark`); the server
+  spawns them only where it is dark.
+- **The client's pick** (`GameRenderer.pick`'s hit result, replaceable by a client hook, as Create's
+  `ExtendoGripItem.dontMissEntitiesWhenYouHaveHighReachDistance` sets `mc.hitResult`): the extendo grip lends
+  the game's entity interaction range its reach, so an entity before a block within reach is picked, where
+  Create picks entities that far only when the block pick missed. `client_attack_target` covers attacks
+  only and can't let a block win.
 - **A tinted particle with a block sprite and an exact velocity** (Create's `FluidStackParticle`: the fluid's
   still sprite, its tint times 0.8, the spawn's velocity, gravity and collision): the item particle
   (`ParticleOptions::item`) moves as Create's does but is drawn untinted, and the block particle takes a tint
@@ -276,13 +290,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 ## Left out of the port, not for want of API
 
-- Decor: the placement helpers' indicator round the crosshair (catnip's `PlacementHelpers.afterRenderOverlay`,
-  arrows toward where the click places): catnip's source is not among the port's references. A shop's
-  overlay doesn't cycle the tooltips of what it sells (`renderComponentTooltip`), and a seated keeper's
-  overlay of a shopping list shows for any list (Create's client also matches the ticker's network, which its
-  client doesn't have here).
-- Equipment: a haunted bell's soul pulse showing where mobs may spawn (`HauntedBellPulser`, `SoulPulseEffect`)
-  and the soul particles and sounds after it rings.
+- Stock (table cloths' shops): a shop's overlay doesn't cycle the tooltips of what it sells
+  (`renderComponentTooltip`), and a seated keeper's overlay of a shopping list shows for any list (Create's
+  client also matches the ticker's network, which its client doesn't have here).
 - Trains: a track's paving with an off-hand block other than metal girders (`TrackPaver`: slabs, full
   blocks and walls under a placement; girder curves pave and pay as Create's).
 

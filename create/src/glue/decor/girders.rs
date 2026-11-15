@@ -342,23 +342,8 @@ pub(super) fn helper(
     click: &mod_api::BlockClick<'_>,
     stack: &mod_api::ItemStack,
 ) -> Option<mod_api::InteractionResult> {
-    let pos = click.pos;
-    let hit = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]) - 0.5);
-    let mut range = create_engine::place::PLACEMENT_ASSIST_RANGE;
-    if super::ladders::gripping(lv, player) {
-        range += 4;
-    }
-    let dirs = create_engine::place::ordered_by_distance(hit, |d| can_extend_toward(lv, pos, d));
-    for d in dirs {
-        let mut poles = 0;
-        let mut at = add(pos, d);
-        while can_extend_toward(lv, at, d) {
-            poles += 1;
-            at = add(at, d);
-        }
-        if poles >= range || !lv.free(at) {
-            continue;
-        }
+    let (at, d) = target(lv, player, click.pos, click.hit.point)?;
+    {
         let water = lv
             .block_state(at)
             .and_then(|s| lv.state_name(s))
@@ -378,7 +363,51 @@ pub(super) fn helper(
         reshape(lv, at);
         lv.place_sound(at);
         super::use_one(&mut *lv.host, player, click.hand, stack);
-        return Some(mod_api::InteractionResult::Success);
+        Some(mod_api::InteractionResult::Success)
+    }
+}
+
+/// `GirderPlacementHelper.getOffset`: where a girder item clicked at `point` on the girder at
+/// `pos` goes, and the way it extends.
+fn target(
+    lv: &ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    pos: [i32; 3],
+    point: [f64; 3],
+) -> Option<([i32; 3], Dir)> {
+    let hit = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]) - 0.5);
+    let mut range = create_engine::place::PLACEMENT_ASSIST_RANGE;
+    if super::ladders::gripping(lv, player) {
+        range += 4;
+    }
+    let dirs = create_engine::place::ordered_by_distance(hit, |d| can_extend_toward(lv, pos, d));
+    for d in dirs {
+        let mut poles = 0;
+        let mut at = add(pos, d);
+        while can_extend_toward(lv, at, d) {
+            poles += 1;
+            at = add(at, d);
+        }
+        if poles >= range || !lv.free(at) {
+            continue;
+        }
+        return Some((at, d));
     }
     None
+}
+
+/// The girder helper's target for the indicator: a girder item on a girder.
+pub(crate) fn helper_target(
+    lv: &ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    pos: [i32; 3],
+    point: [f64; 3],
+    item: &str,
+) -> Option<[i32; 3]> {
+    if item != "create:metal_girder"
+        || block_of(lv.block(pos)).map(|b| b.0) != Some(Block::MetalGirder)
+    {
+        return None;
+    }
+    target(lv, player, pos, point).map(|t| t.0)
 }
