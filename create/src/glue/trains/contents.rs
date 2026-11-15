@@ -2,9 +2,21 @@
 //! (`ContraptionEntityRenderer` drawing the contraption's block entities): the blocks are block
 //! displays (`visuals`), so what a renderer draws over its block is item and text displays riding
 //! with them, posed as the renderer poses it in the block: a depot's or ejector's stacks
-//! (`DepotRenderer`), a nixie tube's characters (`NixieTubeRenderer`) and a sign's lines
-//! (`SignRenderer`). Each comes from the block entity's data as the structure took it
-//! (`contraptions::actors::shown_entities`).
+//! (`DepotRenderer`), a chute's stack, a belt (its halves and pulleys, undyed, and its items:
+//! `BeltRenderer`), a basin's items
+//! (`BasinRenderer`), a crafter's grid (`MechanicalCrafterRenderer`), a nixie tube's characters
+//! (`NixieTubeRenderer`), a display board's lines (`FlapDisplayRenderer`), a sign's lines
+//! (`SignRenderer`) and a banner (its item, `BannerRenderer`'s model with its patterns). Each
+//! comes from the block entity's data as the structure took it
+//! (`contraptions::actors::shown_entities`). The items are found by the renderers' own code
+//! drawing into a [`Recorder`], which keeps each item and where it was drawn.
+//!
+//! What the API cannot do, left out (HORIZON_API.md): fluids (tanks, basins, spouts, drains), a
+//! dyed belt's colour and a cased belt's casing (models with a sprite swapped), and a wall
+//! banner's own model (drawn as its item, the standing banner).
+//!
+//! `create_debug station <x> <y> <z> <name N | assemble | exit | disassemble | go N>`
+//! (`station_screen::debug_command`) does what a station's screen does, for tests.
 
 use super::super::server::ServerLevel;
 use super::super::states;
@@ -31,7 +43,33 @@ pub fn extras(lv: &ServerLevel<'_>, car: u32, entity: &Compound) -> Vec<Extra> {
     let prop = |k: &str| prop_of(&props, k);
     if let Some((block, info)) = crate::glue::contraptions::create_info(car) {
         return match block {
-            Block::Depot | Block::WeightedEjector => depot(lv, entity),
+            Block::Depot
+            | Block::WeightedEjector
+            | Block::Chute
+            | Block::SmartChute
+            | Block::Belt => {
+                let mut r = Recorder::new(host);
+                if block == Block::Belt {
+                    crate::glue::logistics::client::draw_riding_segment(
+                        &mut r, block, &info, [0; 3],
+                    );
+                }
+                crate::glue::logistics::client::draw_riding_items(&mut r, host, block, entity);
+                r.out
+            }
+            Block::Basin | Block::MechanicalCrafter => {
+                let mut r = Recorder::new(host);
+                crate::glue::processing::client::draw_riding_items(
+                    &mut r,
+                    host,
+                    block,
+                    info.facing,
+                    prop("pointing"),
+                    entity,
+                );
+                r.out
+            }
+            Block::DisplayBoard => board(info.facing, entity),
             b if create_engine::display::is_nixie(b) => {
                 let Some(facing) = info.facing else {
                     return Vec::new();
@@ -48,7 +86,300 @@ pub fn extras(lv: &ServerLevel<'_>, car: u32, entity: &Compound) -> Vec<Extra> {
     if name.ends_with("_sign") {
         return sign(name, &props, entity);
     }
+    if name.ends_with("_banner") {
+        return banner(name, &props, entity);
+    }
     Vec::new()
+}
+
+/// A draw context that draws nothing and keeps each item and block drawn into it, as an item or
+/// block display, at the pose it was drawn at (from the block's corner). Its parts stand still,
+/// at rest.
+struct Recorder<'a> {
+    host: &'a dyn mod_api::Host,
+    stack: Vec<Mat4>,
+    out: Vec<Extra>,
+}
+
+impl<'a> Recorder<'a> {
+    fn new(host: &'a dyn mod_api::Host) -> Self {
+        Recorder {
+            host,
+            stack: vec![Mat4::IDENTITY],
+            out: Vec::new(),
+        }
+    }
+    fn top(&mut self) -> &mut Mat4 {
+        self.stack.last_mut().expect("the block's own pose")
+    }
+    fn apply(&mut self, m: Mat4) {
+        let t = self.top();
+        *t *= m;
+    }
+}
+
+/// `degrees` about the unit `axis`.
+fn rotation(axis: [f32; 3], degrees: f32) -> Mat4 {
+    let q = create_engine::math::Quat::from_axis_angle(
+        Vec3::new(axis[0], axis[1], axis[2]),
+        degrees.to_radians(),
+    );
+    let c = |v: Vec3| {
+        let r = q * v;
+        [r.x, r.y, r.z, 0.0]
+    };
+    Mat4::from_cols_array_2d(&[
+        c(Vec3::new(1.0, 0.0, 0.0)),
+        c(Vec3::new(0.0, 1.0, 0.0)),
+        c(Vec3::new(0.0, 0.0, 1.0)),
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+}
+
+impl mod_api::BlockEntityDrawContext for Recorder<'_> {
+    fn push(&mut self) {
+        let t = *self.top();
+        self.stack.push(t);
+    }
+    fn pop(&mut self) {
+        if self.stack.len() > 1 {
+            self.stack.pop();
+        }
+    }
+    fn translate(&mut self, by: [f32; 3]) {
+        self.apply(Mat4::from_translation(Vec3::new(by[0], by[1], by[2])));
+    }
+    fn rotate_about(&mut self, axis: [f32; 3], degrees: f32, pivot: [f32; 3]) {
+        let p = Vec3::new(pivot[0], pivot[1], pivot[2]);
+        self.apply(
+            Mat4::from_translation(p)
+                * rotation(axis, degrees)
+                * Mat4::from_translation(Vec3::new(-p.x, -p.y, -p.z)),
+        );
+    }
+    fn scale(&mut self, by: [f32; 3]) {
+        self.apply(Mat4::from_scale(Vec3::new(by[0], by[1], by[2])));
+    }
+    fn keep(&mut self) {}
+    fn partial(&self) -> f32 {
+        0.0
+    }
+    fn game_time(&self) -> i64 {
+        0
+    }
+    fn animation_time(&self) -> f64 {
+        0.0
+    }
+    fn light(&self) -> u32 {
+        0xF0F0
+    }
+    fn set_light(&mut self, _light: u32) {}
+    fn quad(&mut self, _: &str, _: [[f32; 3]; 4], _: [f32; 4], _: u32) -> bool {
+        false
+    }
+    fn cube(
+        &mut self,
+        _: [f32; 3],
+        _: [f32; 3],
+        _: [Option<mod_api::CubeFace<'_>>; 6],
+        _: u32,
+    ) -> bool {
+        false
+    }
+    fn block(&mut self, block: mod_api::BlockKey, properties: &[(&str, &str)]) -> bool {
+        let mut state = Compound::from([(
+            "Name".into(),
+            Tag::String(block.id(self.host).as_str().into()),
+        )]);
+        if !properties.is_empty() {
+            let props = properties
+                .iter()
+                .map(|(k, v)| ((*k).into(), Tag::String((*v).into())))
+                .collect();
+            state.insert("Properties".into(), Tag::Compound(props));
+        }
+        let pose = *self.top();
+        self.out.push(Extra {
+            kind: "minecraft:block_display",
+            nbt: Compound::from([("block_state".into(), Tag::Compound(state))]),
+            pose,
+        });
+        true
+    }
+    fn item(
+        &mut self,
+        stack: &mod_api::ItemStack,
+        display: mod_api::ItemDisplayContext,
+        _owner_yaw: Option<f32>,
+        _seed: i32,
+    ) -> bool {
+        let Some(mut nbt) = stack.to_nbt(self.host) else {
+            return false;
+        };
+        nbt.insert("count".into(), Tag::Int(1));
+        let context = match display {
+            mod_api::ItemDisplayContext::Fixed => "fixed",
+            mod_api::ItemDisplayContext::Ground => "ground",
+            mod_api::ItemDisplayContext::Gui => "gui",
+            _ => "none",
+        };
+        let pose = *self.top();
+        self.out.push(Extra {
+            kind: "minecraft:item_display",
+            nbt: Compound::from([
+                ("item".into(), Tag::Compound(nbt)),
+                ("item_display".into(), Tag::String(context.into())),
+            ]),
+            pose,
+        });
+        true
+    }
+    fn spin(&mut self, axis: [f32; 3], pivot: [f32; 3], _: f32, phase: f32) {
+        self.push();
+        self.rotate_about(axis, phase, pivot);
+    }
+    fn still(&mut self) {
+        self.pop();
+    }
+    fn model(&mut self, _: mod_api::ModelRef, _: u32) -> Result<(), mod_api::ModelError> {
+        Ok(())
+    }
+    fn terrain_model(
+        &mut self,
+        _: mod_api::ModelRef,
+        _: mod_api::TerrainModelOptions<'_>,
+    ) -> Result<(), mod_api::TerrainModelError> {
+        Ok(())
+    }
+    fn text(
+        &mut self,
+        _: &mod_api::Text,
+        _: [f32; 2],
+        _: u32,
+        _: bool,
+        _: Option<u32>,
+    ) -> Result<f32, mod_api::TextFormError> {
+        Ok(0.0)
+    }
+    fn text_width(&self, _: &mod_api::Text) -> Result<f32, mod_api::TextFormError> {
+        Ok(0.0)
+    }
+    fn model_part(&mut self, _: &mod_api::ModelPart, _: &str, _: u32) -> bool {
+        false
+    }
+    fn fluid_box(
+        &mut self,
+        _: &mod_api::FluidStack,
+        _: [f32; 6],
+        _: mod_api::FluidBoxOptions,
+    ) -> Result<(), mod_api::FluidBoxError> {
+        Ok(())
+    }
+}
+
+/// `FlapDisplayRenderer` for a controlling board: each line's flaps as they stood when the
+/// structure took it, settled (a riding board has no speed).
+fn board(facing: Option<create_engine::kinetics::Dir>, entity: &Compound) -> Vec<Extra> {
+    use create_engine::display;
+    let Some(facing) = facing else {
+        return Vec::new();
+    };
+    let Some(b) = carried(entity).and_then(crate::glue::display::carried::board_of) else {
+        return Vec::new();
+    };
+    let lines: Vec<(String, Vec<display::ShownSection>)> = b
+        .lines
+        .unwrap_or_default()
+        .into_iter()
+        .map(|l| {
+            let sections = l
+                .sections
+                .into_iter()
+                .map(|mut s| {
+                    s.transition = false;
+                    display::ShownSection::new(s, 1)
+                })
+                .collect();
+            (l.key, sections)
+        })
+        .collect();
+    let options = vec![Vec::new(); display::Cycle::ALL.len()];
+    // Laid out with no width: each flap's character is centred where the renderer centres it.
+    display::board_texts(
+        facing,
+        b.x_size,
+        &lines,
+        &b.colour,
+        &b.glowing,
+        &options,
+        false,
+        0,
+        |_| 0.0,
+    )
+    .into_iter()
+    .filter(|t| !t.text.trim().is_empty())
+    .map(|t| {
+        text(
+            Tag::String(t.text.as_str().into()),
+            t.color,
+            t.full_bright,
+            text_pose(t.pose, 1, 0.0),
+        )
+    })
+    .collect()
+}
+
+/// `BannerRenderer`: the banner's item (the same model, with its patterns), stood as the block
+/// stands, turned by its rotation; a wall banner hung on its wall, without its pole.
+fn banner(name: &str, props: &[(&str, &str)], entity: &Compound) -> Vec<Extra> {
+    let wall = name.contains("_wall_banner");
+    let item = name.replace("_wall_banner", "_banner");
+    let angle = if wall {
+        match prop_of(props, "facing") {
+            Some("west") => 90.0f32,
+            Some("north") => 180.0,
+            Some("east") => 270.0,
+            _ => 0.0,
+        }
+    } else {
+        prop_of(props, "rotation")
+            .and_then(|r| r.parse::<f32>().ok())
+            .unwrap_or(0.0)
+            * 22.5
+    };
+    let mut stack = Compound::from([
+        ("id".into(), Tag::String(item.as_str().into())),
+        ("count".into(), Tag::Int(1)),
+    ]);
+    if let Some(p @ Tag::List(_)) = entity.get(&"patterns".into()) {
+        stack.insert(
+            "components".into(),
+            Tag::Compound(Compound::from([(
+                "minecraft:banner_patterns".into(),
+                p.clone(),
+            )])),
+        );
+    }
+    let t = |x: f32, y: f32, z: f32| Mat4::from_translation(Vec3::new(x, y, z));
+    // The item's model as authored is the standing banner from the block's corner; a wall
+    // banner's sits 5 px lower and 7 px back (`BannerRenderer`'s wall offset).
+    let wall_offset = if wall {
+        t(0.0, -0.3125, -0.4375)
+    } else {
+        Mat4::IDENTITY
+    };
+    let pose = t(0.5, 0.0, 0.5)
+        * Mat4::from_rotation_y((-angle).to_radians())
+        * wall_offset
+        * t(0.0, 0.5, 0.0);
+    vec![Extra {
+        kind: "minecraft:item_display",
+        nbt: Compound::from([
+            ("item".into(), Tag::Compound(stack)),
+            ("item_display".into(), Tag::String("none".into())),
+        ]),
+        pose,
+    }]
 }
 
 fn carried(entity: &Compound) -> Option<&Compound> {
@@ -56,72 +387,6 @@ fn carried(entity: &Compound) -> Option<&Compound> {
         Some(Tag::Compound(c)) => Some(c),
         _ => None,
     }
-}
-
-/// An item display of one of `id`.
-fn item(id: &str, pose: Mat4) -> Extra {
-    let stack = Compound::from([
-        ("id".into(), Tag::String(id.into())),
-        ("count".into(), Tag::Int(1)),
-    ]);
-    Extra {
-        kind: "minecraft:item_display",
-        nbt: Compound::from([
-            ("item".into(), Tag::Compound(stack)),
-            ("item_display".into(), Tag::String("fixed".into())),
-        ]),
-        pose,
-    }
-}
-
-/// `DepotRenderer.renderItemsOf` at rest: the held stack at its offset, turned by its angle, and
-/// each output 0.35 out at 45° steps.
-fn depot(lv: &ServerLevel<'_>, entity: &Compound) -> Vec<Extra> {
-    use create_engine::depot;
-    let Some(Tag::List(items)) = entity.get(&"Items".into()) else {
-        return Vec::new();
-    };
-    let angle = match carried(entity)
-        .and_then(|c| c.get(&crate::glue::logistics::carried::DEPOT_ANGLE.into()))
-    {
-        Some(Tag::Int(a)) => *a,
-        _ => 0,
-    };
-    let held = depot::Held::new(angle, false);
-    let mut out = Vec::new();
-    for t in items {
-        let Tag::Compound(c) = t else { continue };
-        let slot = match c.get(&"Slot".into()) {
-            Some(Tag::Byte(b)) => *b as u8,
-            _ => 0,
-        };
-        let Some(Tag::String(id)) = c.get(&"id".into()) else {
-            continue;
-        };
-        let id = id.to_string_lossy();
-        let count = match c.get(&"count".into()) {
-            Some(Tag::Int(n)) => (*n).clamp(1, 255) as u32,
-            _ => 1,
-        };
-        let solid = crate::glue::logistics::items::is_block_item(&*lv.host, &id);
-        let package = create_engine::package::is_package(create_engine::arm::item_id(&id));
-        let (poses, phase, offset) = if slot == 0 {
-            let poses = depot::stack_poses(count, solid, package, &mut depot::JavaRandom::new(0));
-            (poses, angle as f32, held.offset())
-        } else {
-            let (poses, phase) = depot::output_place(usize::from(slot) - 1, count, solid, package);
-            (poses, phase, Vec3::new(0.0, 0.0, 0.0))
-        };
-        let pivot = Vec3::new(0.5, 0.0, 0.5);
-        let turn = Mat4::from_translation(offset)
-            * Mat4::from_translation(pivot)
-            * Mat4::from_rotation_y(phase.to_radians())
-            * Mat4::from_translation(Vec3::new(-0.5, 0.0, -0.5));
-        for p in poses {
-            out.push(item(&id, turn * depot::top_centre() * p));
-        }
-    }
-    out
 }
 
 /// A text display's pose for text laid out as the game's `Font` lays it under `pose` (font pixels,

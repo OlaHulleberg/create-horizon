@@ -80,8 +80,6 @@
 //! (`StabilizedBearingMovementBehaviour`).
 //!
 //! Left out, not for want of API:
-//! - Trains and cart contraptions (block displays) show only depots' and ejectors' stacks and
-//!   nixie tubes' and signs' text of what their block entities hold (`trains::contents`).
 //! - A bearing's glue stays in the world while it turns and goes back turned with it; its
 //!   contraption controls are not carried.
 

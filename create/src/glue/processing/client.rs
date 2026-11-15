@@ -213,6 +213,20 @@ fn draw_basin(
         }
         fluid_top = y_max;
     }
+    let rotation = ingredient_rotation(host, draw, pos);
+    draw_basin_items(host, draw, pos, nbt, fluid_top, rotation);
+}
+
+/// `BasinRenderer`'s items: in a ring on the bottom or bobbing on the fluid, turned by
+/// `rotation` (`ingredientRotation`), a stack's every eight one more.
+fn draw_basin_items(
+    host: &dyn mod_api::Host,
+    draw: &mut dyn BlockEntityDrawContext,
+    pos: [i32; 3],
+    nbt: &Compound,
+    fluid_top: f32,
+    rotation: f32,
+) {
     let items = basin_items(nbt);
     if items.is_empty() {
         return;
@@ -229,11 +243,7 @@ fn draw_basin(
     let time = draw.game_time() as f32 + draw.partial();
     draw.push();
     draw.translate([0.5, 0.2, 0.5]);
-    draw.rotate_about(
-        [0.0, 1.0, 0.0],
-        ingredient_rotation(host, draw, pos),
-        [0.0; 3],
-    );
+    draw.rotate_about([0.0, 1.0, 0.0], rotation, [0.0; 3]);
     for (id, n) in items {
         let Some(stack) = stacks::stack(host, &id, 1) else {
             count -= 1;
@@ -724,11 +734,25 @@ fn draw_crafter(
     } else {
         posed(draw, "part_crafter_arrow");
     }
+    crafter_items(host, draw, facing, pointing, phase, item.as_deref(), nbt);
+}
+
+/// `MechanicalCrafterRenderer.renderItems`: the grid at work, else the item in its slot.
+fn crafter_items(
+    host: &dyn mod_api::Host,
+    draw: &mut dyn BlockEntityDrawContext,
+    facing: Dir,
+    pointing: &str,
+    phase: i32,
+    item: Option<&str>,
+    nbt: &Compound,
+) {
+    const IDLE: i32 = 0;
     if phase != IDLE {
         draw_crafter_grid(host, draw, facing, pointing, phase, nbt);
         return;
     }
-    if let Some(stack) = item.as_deref().and_then(|i| stacks::stack(host, i, 1)) {
+    if let Some(stack) = item.and_then(|i| stacks::stack(host, i, 1)) {
         let f = facing.offset().map(|v| v as f32 * 0.58 + 0.5);
         draw.push();
         draw.translate(f);
@@ -764,7 +788,7 @@ fn crafter_cells(c: &Compound, key: &str) -> Vec<((i32, i32), String)> {
 /// gathering, shrinking away and the result spinning up in their place. Its `countDown` runs on
 /// from the server's word at the phase's start (`S`, `D`) at the crafter's speed.
 fn draw_crafter_grid(
-    host: &dyn ClientHost,
+    host: &dyn mod_api::Host,
     draw: &mut dyn BlockEntityDrawContext,
     facing: Dir,
     pointing: &str,
@@ -1112,5 +1136,50 @@ pub(super) fn draw_carried(
 ) {
     if matches!(block, Block::Basin | Block::MechanicalCrafter) {
         MachineDraw.block_entity_submit(host, event);
+    }
+}
+
+/// The items a riding basin or crafter's renderer draws, from its block entity data `nbt` as the
+/// structure took it (its fluids are left out: they are no item): a basin's ring of items at the
+/// height its fluids give them, at rest; a crafter's grid as it stood in its phase, or the item in
+/// its slot. Needs no
+/// client: the trains' riding displays are posed by it.
+pub(crate) fn draw_riding_items(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn mod_api::Host,
+    block: Block,
+    facing: Option<Dir>,
+    pointing: Option<&str>,
+    nbt: &Compound,
+) {
+    match block {
+        Block::Basin => {
+            let total: u32 = basin_fluids(nbt).iter().map(|f| f.1).sum();
+            let fluid_top = if total >= 1 {
+                let level = (total as f32 / 2000.0).clamp(0.0, 1.0);
+                2.0 / 16.0 + 12.0 / 16.0 * (1.0 - (1.0 - level) * (1.0 - level))
+            } else {
+                0.0
+            };
+            draw_basin_items(host, draw, [0; 3], nbt, fluid_top, 0.0);
+        }
+        Block::MechanicalCrafter => {
+            let (Some(facing), Some(pointing)) = (facing, pointing) else {
+                return;
+            };
+            let Some(Tag::Compound(c)) = nbt.get(&super::crafter::CRAFTER_KEY.into()) else {
+                return;
+            };
+            let phase = match c.get(&"P".into()) {
+                Some(Tag::Int(p)) => *p,
+                _ => 0,
+            };
+            let item = match c.get(&"I".into()) {
+                Some(Tag::String(s)) => s.to_string().ok(),
+                _ => None,
+            };
+            crafter_items(host, draw, facing, pointing, phase, item.as_deref(), nbt);
+        }
+        _ => {}
     }
 }
