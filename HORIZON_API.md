@@ -202,15 +202,14 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   chassis' range, tunnels' side filters, deployers' filters), nor from a placed clipboard.
 - Logistics: a sloped belt collides as a flat one; Create's `BeltShapes` (by facing, slope and part) are
   not declared yet, though content shapes can select by several properties (as the steam engine's do).
-- Contraptions: moving block entities carry their item slots, a deployer's state and a tank's fluid, and other
-  mods' and vanilla block entities their saved data, but the state the engine keeps per block for other Create
-  blocks (a creative motor's speed, a blaze burner's fuel, a basin's fluids, a redstone link's frequency, a
-  nixie tube's text, a smart chute's filter) is not carried; what block entities hold is not drawn on a moving
-  structure (a depot's item, a tank's fluid, a deployer's held item and its pole's stroke); the harvester's blade,
-  the roller's wheel and frame and the portable interfaces' moving parts (`HarvesterRenderer`, `RollerRenderer`,
-  `PortableStorageInterfaceRenderer`) have no partial blocks yet, so they are drawn neither placed nor moving;
-  actor heads on a moving structure are drawn at rest; an elevator contact's door control
-  (`DoorControlBehaviour`) has no value box: elevators open their doors on every side.
+- Contraptions: a display board's text, a belt's items and a crafter's grid mid-craft are neither carried
+  nor drawn on a moving structure; signs', banners' and beds' block entities are not drawn on one (the rest
+  of what the engine keeps per block rides with it, `Subsystem::carry_out`, and is drawn while it moves,
+  `Subsystem::draw_carried`), but trains and cart contraptions, drawn as block displays, show none of it
+  while they ride (item and text displays riding with them would); the harvester's blade, the roller's
+  wheel and frame and the portable interfaces' moving parts (`HarvesterRenderer`, `RollerRenderer`,
+  `PortableStorageInterfaceRenderer`) have no partial blocks yet, so they are drawn neither placed nor
+  moving; actor heads on a moving structure are drawn at rest.
 - Fluids: potion fluids keep registered potions only (custom effects and colours are lost: the engine's
   `tank::Fluid` is a fixed set of ids saved and sent as one byte, which would need a world-saved table of
   potion contents), and belts carry only the potions a spout fills on them (the logistics glue keeps no

@@ -6,9 +6,12 @@
 //! elevator last passed or reached (`broadcastFloorData`). Saved under `create_lifts` and
 //! `create_contacts`.
 //!
-//! Left out of the port, not for want of API: the door setting is kept and edited but opens no
-//! door (doors on moving structures, `SlidingDoorMovementBehaviour`, are not ported), and the
-//! elevator's contraption controls choose no floor (`ElevatorControlsHandler`).
+//! An elevator's sliding doors open at the floor it is called to on the sides that floor's
+//! contact's door control lets open (`SlidingDoorMovementBehaviour`, `DoorControlBehaviour`),
+//! and follow a door control changed while it stands there.
+//!
+//! Left out of the port, not for want of API: the elevator's contraption controls choose no
+//! floor (`ElevatorControlsHandler`).
 
 use super::super::persist;
 use super::super::server::{ServerLevel, UPDATE_CLIENTS, update_all};

@@ -33,20 +33,42 @@
 //!   (`BearingRenderer`): the top is the kinetic block entity's part.
 //!
 //! Block entities ride with what they hold (`actors::carry_storage`, Create's
-//! `StructureBlockInfo.nbt`): Create's item slots (a depot's stack), a deployer's hand and mode,
-//! a tank's fluid (tanks keep their shape), and other block entities' saved data (a furnace's
-//! items). Deployers work while moving (`DeployerMovementBehaviour`), redstone contacts power the
+//! `StructureBlockInfo.nbt`), on bearings, pistons, gantries, pulleys, elevators, carts and
+//! trains: Create's item slots (a depot's stack), its block entity's own data (a copycat's
+//! material, a sequenced gearshift's program, a valve handle's angle), a deployer's hand and
+//! mode, a tank's fluid (tanks keep their shape), and other block entities' saved data (a
+//! furnace's items); and what the engine keeps for the block, which each subsystem takes from
+//! its tables and puts back where the block goes as a saved one loads (`Subsystem::carry_out`,
+//! `carry_in`): a creative motor's or speed controller's speed, a blaze burner's fuel, a basin's
+//! fluids, filter slots and their amounts (smart chutes, brass funnels, basins, saws,
+//! deployers), brass tunnels' side filters and mode, a redstone link's frequency, brass diodes,
+//! analog levers, smart observers and threshold switches, a nixie tube's text, a display link's
+//! target (turned with the structure) and source, spouts', drains' and creative tanks' fluids,
+//! smart pipes' filters, a saw's items, crafters' covers and joined inputs, an ejector's target,
+//! an arm's points (turned), a backtank's air, brackets, placards, placed clipboards, crates'
+//! supplies, hatches' filters, copycats' materials (turned), a contraption block's movement mode
+//! and a chassis' range. Saved with the moving structure (`actors::storage_to_nbt`).
+//!
+//! What their block entities hold is drawn while they move (`renderBlockEntities` with the
+//! contraption's update tags: `draw::draw_carried`, `Subsystem::draw_carried`): a depot's or
+//! ejector's stacks, a basin's items and fluids, a tank's, spout's or drain's fluid, a crafter's
+//! item, a nixie tube's text, filter slots' items, a chute's stack, an arm at rest, copycats'
+//! materials, placards' items, brackets, and vanilla chests, ender chests and shulker boxes (their
+//! item's special model). Blocks whose movement draws them (`disableBlockEntityRendering`:
+//! deployers, drills, saws, harvesters, rollers, interfaces, burners) are left to it.
+//!
+//! Deployers work while moving (`DeployerMovementBehaviour`), redstone contacts power the
 //! contacts they pass (`ContactMovementBehaviour`), elevators open their sliding doors at floors
-//! (`SlidingDoorMovementBehaviour`), and portable fluid interfaces reach a contraption's tanks.
+//! on the sides the floor's contact's door control lets open (`SlidingDoorMovementBehaviour`,
+//! `DoorControlBehaviour`), and portable fluid interfaces reach a contraption's tanks.
 //!
 //! Left out, not for want of API:
-//! - The state the engine keeps per block for other Create blocks (a creative motor's speed, a
-//!   blaze burner's fuel, a basin's fluids, a link's frequency) is not carried.
-//! - What block entities hold is not drawn on a moving structure (a depot's item, a tank's
-//!   fluid, a deployer's pole and hand); actors' heads are drawn at rest.
+//! - A display board's text, a belt's items and a crafter's grid mid-craft are not carried, nor
+//!   drawn while moving; signs', banners' and beds' block entities are not drawn while moving;
+//!   trains and cart contraptions (block displays) draw none of what their block entities hold.
+//! - Actors' heads are drawn at rest.
 //! - A bearing's glue stays in the world while it turns and goes back turned with it; its
 //!   contraption controls are not carried.
-//! - An elevator contact's door control has no value box: doors open on every side.
 
 pub mod actors;
 mod bearings;
