@@ -1644,7 +1644,7 @@ fn wrap(draw: &dyn DrawContext, msg: &str, width: f32) -> Vec<String> {
 
 /// `AddressEditBoxHelper.createSuggestions`: the addresses (`#` entries not ticked) on the
 /// clipboards in the player's inventory, each once.
-fn addresses(host: &dyn ClientHost) -> Vec<String> {
+pub(super) fn addresses(host: &dyn ClientHost) -> Vec<String> {
     let Some(player) = host.local_player() else {
         return Vec::new();
     };

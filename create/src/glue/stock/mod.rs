@@ -25,6 +25,7 @@ mod gauge;
 pub(crate) mod gauge_client;
 mod gauge_screen;
 pub(crate) mod keeper;
+mod package_filter;
 mod requester;
 
 use super::packages::{self as packages, add, block_of, body, command_player, coords, feedback};
@@ -473,6 +474,8 @@ impl Subsystem for Stock {
             let key = r.item_key(item);
             r.item_part(key, StockItem);
         }
+        let key = r.item_key("create:package_filter");
+        r.item_part(key, package_filter::PackageFilterPart);
         if let Some(kind) = super::kinetics::kind()
             && let Err(e) = r.block_entity_part(&kind, gauge_client::GaugeDraw)
         {
@@ -539,6 +542,7 @@ impl Subsystem for Stock {
             gauge_screen::CHANNEL => gauge_screen::client_message(host, player, data),
             keeper::CHANNEL => keeper::client_message(host, player, data),
             categories::CHANNEL => categories::client_message(host, player, data),
+            package_filter::CHANNEL => package_filter::client_message(host, player, data),
             requester::CHANNEL => requester::client_message(host, player, data),
             _ => return false,
         }
@@ -553,6 +557,7 @@ impl Subsystem for Stock {
     ) -> bool {
         keeper::server_message(host, channel, data)
             || categories::server_message(host, channel, data)
+            || package_filter::server_message(host, channel, data)
             || requester::server_message(host, channel, data)
             || gauge_screen::server_message(host, channel, data)
     }
@@ -560,6 +565,7 @@ impl Subsystem for Stock {
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
         keeper::tick(host);
         categories::tick(host);
+        package_filter::tick(host);
         requester::tick(host);
         gauge_screen::tick(host);
         gauge_client::tick(host);
@@ -568,6 +574,7 @@ impl Subsystem for Stock {
     fn client_reset(&self) {
         keeper::reset();
         categories::reset();
+        package_filter::reset();
         requester::reset();
         gauge_screen::reset();
         gauge_client::reset();
@@ -580,6 +587,7 @@ impl Subsystem for Stock {
     ) {
         keeper::screen_render_post(host, event);
         categories::screen_render_post(host, event);
+        package_filter::screen_render_post(host, event);
         requester::screen_render_post(host, event);
         gauge_screen::screen_render_post(host, event);
     }
@@ -591,6 +599,7 @@ impl Subsystem for Stock {
     ) -> Flow {
         if keeper::screen_mouse_pressed(host, event) == Flow::Cancel
             || categories::screen_mouse_pressed(host, event) == Flow::Cancel
+            || package_filter::screen_mouse_pressed(host, event) == Flow::Cancel
             || gauge_screen::screen_mouse_pressed(host, event) == Flow::Cancel
         {
             return Flow::Cancel;
@@ -613,6 +622,7 @@ impl Subsystem for Stock {
     ) -> Flow {
         if keeper::screen_mouse_scrolled(host, event) == Flow::Cancel
             || categories::screen_mouse_scrolled(host, event) == Flow::Cancel
+            || package_filter::screen_mouse_scrolled(host, event) == Flow::Cancel
             || gauge_screen::screen_mouse_scrolled(host, event) == Flow::Cancel
         {
             return Flow::Cancel;
@@ -627,6 +637,7 @@ impl Subsystem for Stock {
     ) -> Flow {
         if keeper::screen_key_pressed(host, event) == Flow::Cancel
             || categories::screen_key_pressed(host, event) == Flow::Cancel
+            || package_filter::screen_key_pressed(host, event) == Flow::Cancel
             || gauge_screen::screen_key_pressed(host, event) == Flow::Cancel
         {
             return Flow::Cancel;
@@ -641,6 +652,7 @@ impl Subsystem for Stock {
     ) -> Flow {
         if keeper::screen_char_typed(host, event) == Flow::Cancel
             || categories::screen_char_typed(host, event) == Flow::Cancel
+            || package_filter::screen_char_typed(host, event) == Flow::Cancel
             || gauge_screen::screen_char_typed(host, event) == Flow::Cancel
         {
             return Flow::Cancel;
@@ -655,6 +667,7 @@ impl Subsystem for Stock {
     ) {
         keeper::screen_closing(host, event);
         categories::screen_closing(host, event);
+        package_filter::screen_closing(host, event);
         requester::screen_closing(host, event);
         gauge_screen::screen_closing(host, event);
     }

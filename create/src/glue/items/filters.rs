@@ -6,7 +6,7 @@
 //! (`FilterScreenPacket`, the menus' `saveData`). A filter's settings are kept in the stack's
 //! custom data under Create's component names, its list as `ItemContainerContents` (`Slot` and
 //! the stack's own NBT). `/create_debug filter` sets a filter in a slot or hand for tests, and
-//! is the package filter's address until its screen is ported.
+//! sets a package filter's address too (its screen is the stock glue's, `stock::package_filter`).
 //!
 //! The attributes that read a recipe book (`washable`, `hauntable`, `crushable`, `smeltable`,
 //! `smokable`, `blastable`) ask processing's recipes.
