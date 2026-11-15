@@ -437,7 +437,9 @@ impl Config {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     Nixie,
-    Sign { hanging: bool },
+    Sign {
+        hanging: bool,
+    },
     Board,
     /// A lectern's book (`LecternDisplayTarget`): a page a line.
     Lectern,
@@ -679,7 +681,8 @@ impl BoilerView {
         } else if level == 18 {
             lang.get("create.boiler.max_lvl")
         } else {
-            lang.get("create.boiler.lvl").replace("%1$s", &level.to_string())
+            lang.get("create.boiler.lvl")
+                .replace("%1$s", &level.to_string())
         }
     }
 
@@ -783,8 +786,8 @@ pub fn train_status(
         } => {
             let rotation = rotation_ticks(rotation) as i32;
             let now = (day_time % i64::from(rotation)) as i32;
-            let target = ((((hour + 18) % 24) * 1000) as f32 + (minute as f32 / 60.0 * 1000.0).ceil())
-                as i32
+            let target = ((((hour + 18) % 24) * 1000) as f32
+                + (minute as f32 / 60.0 * 1000.0).ceil()) as i32
                 % rotation;
             let mut diff = target - now;
             if diff < 0 {
@@ -908,7 +911,10 @@ pub fn boiler_text(
             // `Stream.of(EMPTY)`: one entry of no lines.
             None => vec![String::new()],
             Some(b) => {
-                let mut lines = vec![lang.get("create.boiler.status_short").replace("%1$s", &b.level_text(lang))];
+                let mut lines = vec![
+                    lang.get("create.boiler.status_short")
+                        .replace("%1$s", &b.level_text(lang)),
+                ];
                 for (label, level) in b.rows() {
                     // `componentHelper(.., forGoggles, .., RESET)`: the label as it is, the
                     // dots dark grey.
@@ -939,7 +945,10 @@ pub fn boiler_text(
         .map(|(l, _)| lang.get(&format!("create.boiler.{l}")))
         .collect();
     let width = labels.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    let mut flap = vec![vec![lang.get("create.boiler.status").replace("%1$s", &b.level_text(lang))]];
+    let mut flap = vec![vec![
+        lang.get("create.boiler.status")
+            .replace("%1$s", &b.level_text(lang)),
+    ]];
     for ((_, level), label) in b.rows().iter().zip(&labels) {
         let pad = " ".repeat(width - label.chars().count());
         flap.push(vec![format!("{pad}{label}"), b.blocks(*level)]);
@@ -1101,7 +1110,9 @@ pub fn provide_line(
         // FluidAmountDisplaySource: `FluidFormatter.asString(collected, false)`.
         (Source::CountFluids, Reading::Fluid(n)) => n.map(|v| fluid_string(v, false, lang)),
         // FillLevelDisplaySource.getProgress.
-        (Source::FillLevel, Reading::Fill(p)) => percent_or_bar(source, config, *p, target, stats, lang),
+        (Source::FillLevel, Reading::Fill(p)) => {
+            percent_or_bar(source, config, *p, target, stats, lang)
+        }
         (Source::EntityName, Reading::Text(t)) => t.clone(),
         (Source::AccumulateItems, _) => Some(config.collected.to_string()),
         (Source::ItemThroughput, Reading::Now(now)) => {
@@ -1218,7 +1229,10 @@ pub fn fluid_components(amount: i64, shorten: bool, lang: &Lang) -> (String, Str
             lang.get("create.generic.unit.buckets"),
         );
     }
-    (amount.to_string(), lang.get("create.generic.unit.millibuckets"))
+    (
+        amount.to_string(),
+        lang.get("create.generic.unit.millibuckets"),
+    )
 }
 
 /// `FluidFormatter.asString`.
@@ -1898,7 +1912,9 @@ pub fn load_list_layout(
 ) {
     let shortened = config.format == 0;
     if source == Source::ListFluids {
-        let length = fluid_string(highest, shortened, &Lang::EN_US).chars().count() as i32;
+        let length = fluid_string(highest, shortened, &Lang::EN_US)
+            .chars()
+            .count() as i32;
         let key = format!("FluidList_{length}");
         if layout.is_layout(&key) {
             return;
@@ -2838,7 +2854,10 @@ pub fn nixie_flickering(
     let (bright, dark) = dye_colors(colour);
     let shadow = 0.5;
     let mut out = Vec::new();
-    for (k, (dx, c)) in [(-4.0 / 16.0, left), (4.0 / 16.0, right)].into_iter().enumerate() {
+    for (k, (dx, c)) in [(-4.0 / 16.0, left), (4.0 / 16.0, right)]
+        .into_iter()
+        .enumerate()
+    {
         let tube = base
             * Mat4::from_translation(Vec3::new(dx, 0.0, 0.0))
             * Mat4::from_scale(Vec3::new(scale, -scale, scale));
@@ -3042,7 +3061,10 @@ mod tests {
             for_size: 1,
             for_water: 0,
         };
-        let sign = Stats { rows: 4, columns: 15 };
+        let sign = Stats {
+            rows: 4,
+            columns: 15,
+        };
         let (text, _, _) = boiler_text(Some(&b), Target::Sign { hanging: false }, sign, &lang);
         assert_eq!(text[0], "Boiler:  Idle");
         // min 0, max 1: no green, the size's one level dark green, four greys.
@@ -3057,18 +3079,30 @@ mod tests {
                 ("||||".to_string(), Some(DARK_GRAY)),
             ]
         );
-        assert_eq!(truncate(&text[1], 13), "Size\u{E000}555555....... \u{E001}\u{E000}00AA00|\u{E001}");
-        let board = Stats { rows: 4, columns: 22 };
+        assert_eq!(
+            truncate(&text[1], 13),
+            "Size\u{E000}555555....... \u{E001}\u{E000}00AA00|\u{E001}"
+        );
+        let board = Stats {
+            rows: 4,
+            columns: 22,
+        };
         let (_, flap, _) = boiler_text(Some(&b), Target::Board, board, &lang);
         assert_eq!(flap[0], vec!["Boiler Status:  Idle".to_string()]);
         assert_eq!(flap[1], vec![" Size".to_string(), "\u{2592}".to_string()]);
         assert_eq!(flap[2], vec!["Water".to_string(), "\u{2591}".to_string()]);
         // Too few rows: the two lines of "not enough space".
-        let small = Stats { rows: 2, columns: 22 };
+        let small = Stats {
+            rows: 2,
+            columns: 22,
+        };
         let (text, flap, _) = boiler_text(Some(&b), Target::Board, small, &lang);
         assert_eq!(text, vec!["Not enough space ", "for Boiler Status"]);
         assert_eq!(flap.len(), 2);
-        let one = Stats { rows: 1, columns: 22 };
+        let one = Stats {
+            rows: 1,
+            columns: 22,
+        };
         let (text, _, _) = boiler_text(Some(&b), Target::Nixie, one, &lang);
         assert_eq!(text, vec!["Not enough space for Boiler Status"]);
     }
@@ -3906,12 +3940,20 @@ mod tests {
         );
         // The largest first, as many as the target has rows.
         let entries = line.entries.clone().unwrap();
-        assert_eq!(entries, vec![(1024, "Cobblestone".into()), (20, "Oak Planks".into())]);
+        assert_eq!(
+            entries,
+            vec![(1024, "Cobblestone".into()), (20, "Oak Planks".into())]
+        );
         let flap = provide_flap_text(Source::ListItems, &config, &line);
         assert_eq!(flap[0], vec!["1", "k ", "Cobblestone "]);
         // A sign reads them in one line each; a full number keeps its digits.
         config.format = 1;
-        let text = provide_text(Source::ListItems, &config, &line, Target::Sign { hanging: false });
+        let text = provide_text(
+            Source::ListItems,
+            &config,
+            &line,
+            Target::Sign { hanging: false },
+        );
         assert_eq!(text, vec!["1024 Cobblestone ", "20 Oak Planks "]);
         // ValueList_true_0: three digits right-aligned, a suffix, then the name.
         let mut b = Board::default();
@@ -3974,7 +4016,11 @@ mod tests {
         assert_eq!(b.line_index_at(10, 10.9), 0);
         assert_eq!(b.line_index_at(10, 10.2), 1);
         assert_eq!(b.line_index_at(10, 9.6), 2);
-        assert_eq!(b.line_index_at(10, 9.0), 3, "the bottom edge stays on the board");
+        assert_eq!(
+            b.line_index_at(10, 9.0),
+            3,
+            "the bottom edge stays on the board"
+        );
         b.set_colour(1, crate::dye::DyeColor::Red);
         b.set_colour(2, crate::dye::DyeColor::White);
         assert!(b.colour[1].is_some());
@@ -4175,7 +4221,12 @@ mod tests {
             destination: dest.into(),
         };
         let rows = station_summary_text(
-            &[a(150, "Main"), a(323, "Main"), a(1300, "Main"), a(-1, "Main")],
+            &[
+                a(150, "Main"),
+                a(323, "Main"),
+                a(1300, "Main"),
+                a(-1, "Main"),
+            ],
             "Main",
             5,
             &Lang::EN_US,
@@ -4190,7 +4241,12 @@ mod tests {
         assert_eq!(rows[0][..2], ["1".to_owned(), " min".to_owned()]);
         assert_eq!(rows[1][1], " ~ ");
         // A filter with `*` adds the platform: the destination without the filter's text.
-        let rows = station_summary_text(&[a(400, "Main Platform 2")], "Main Platform *", 2, &Lang::EN_US);
+        let rows = station_summary_text(
+            &[a(400, "Main Platform 2")],
+            "Main Platform *",
+            2,
+            &Lang::EN_US,
+        );
         assert_eq!(rows[0][4], "2");
         assert_eq!(rows[1], vec![" ", " . ", " ", " ", " "]);
     }

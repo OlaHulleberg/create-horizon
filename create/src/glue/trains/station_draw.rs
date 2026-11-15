@@ -145,12 +145,15 @@ pub fn forget() {
 /// A marker as the data carries it: track offset, way, kind, light.
 type Marker = ([i32; 3], [i32; 2], u8, i32);
 
+/// A marker as the railway finds it: track block, way, kind.
+type Pointing = ([i32; 3], [i32; 2], u8);
+
 /// Each signal's and track observer's marker (`TrackTargetingBehaviour.render` from
 /// `SignalRenderer`, `TrackObserverRenderer`) written into its data where it changed; a signal
 /// that skips (`OverlayState.SKIP`) carries none.
 pub fn refresh_marks(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let marks: Vec<([i32; 3], Option<([i32; 3], [i32; 2], u8)>)> = with_world(|w| {
+    let marks: Vec<([i32; 3], Option<Pointing>)> = with_world(|w| {
         let r = &w.dims[dim].railway;
         let signals = r.signals.keys().map(|p| {
             let m = r

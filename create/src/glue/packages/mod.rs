@@ -27,12 +27,12 @@
 
 mod automation;
 pub mod body;
-mod station_ports;
 mod box_draw;
 mod frog_draw;
 mod frog_target;
 mod inv;
 pub(crate) mod port_screen;
+mod station_ports;
 
 use super::server::{ServerLevel, UPDATE_CLIENTS};
 use super::states;
@@ -281,7 +281,10 @@ impl Subsystem for Packages {
             mod_api::HostSide::Server(h) => id(&**h),
         };
         // `PackagePortTargetSelectionHandler.onUse`: a postbox used on a station chooses it.
-        if chains.as_deref().is_some_and(|i| i.starts_with("create:") && i.ends_with("_postbox")) {
+        if chains
+            .as_deref()
+            .is_some_and(|i| i.starts_with("create:") && i.ends_with("_postbox"))
+        {
             if let mod_api::HostSide::Client(h) = host
                 && click.hand == Hand::Main
                 && frog_target::choose_station(h, click.pos)
@@ -407,7 +410,8 @@ impl Subsystem for Packages {
         level_tick(lv);
         let dim = lv.dim;
         let placed: Vec<([i32; 3], PlayerRef)> = POSTBOX_PLACED.with_borrow_mut(|p| {
-            let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(p).into_iter().partition(|x| x.0 == dim);
+            let (mine, rest): (Vec<_>, Vec<_>) =
+                std::mem::take(p).into_iter().partition(|x| x.0 == dim);
             *p = rest;
             mine.into_iter().map(|x| (x.1, x.2)).collect()
         });
@@ -2864,8 +2868,11 @@ fn chunk_unload(dim: usize, chunk: [i32; 2]) {
         for p in ports {
             // `saveOfflineBuffer`: a postbox joined to a station leaves its packages there.
             if let Some(port) = pk.ports.get(&p) {
-                let items: Vec<Option<ItemStack>> =
-                    port.items.iter().map(|s| s.as_ref().map(|b| b.stack.clone())).collect();
+                let items: Vec<Option<ItemStack>> = port
+                    .items
+                    .iter()
+                    .map(|s| s.as_ref().map(|b| b.stack.clone()))
+                    .collect();
                 station_ports::save_buffer(dim, p, &items);
             }
             pk.remove_port(p);

@@ -121,7 +121,11 @@ fn selection_tick(host: &mut dyn ClientHost, player: PlayerRef) {
     });
     let (chosen, postbox) = CLIENT.with_borrow(|c| (c.chosen, c.postbox));
     let holds_postbox = id.starts_with("create:") && id.ends_with("_postbox");
-    let held_kind = if postbox { holds_postbox } else { id == "create:package_frogport" };
+    let held_kind = if postbox {
+        holds_postbox
+    } else {
+        id == "create:package_frogport"
+    };
     if !wrench && (chosen.is_none() || !held_kind) {
         return;
     }
@@ -587,7 +591,8 @@ pub(super) fn choose_station(host: &mut dyn ClientHost, pos: [i32; 3]) -> bool {
 pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
     // A station chosen with a postbox (`P`).
     if data.len() == 13 && data[0] == b'P' {
-        let v = |i: usize| i32::from_le_bytes(data[1 + i * 4..5 + i * 4].try_into().unwrap_or([0; 4]));
+        let v =
+            |i: usize| i32::from_le_bytes(data[1 + i * 4..5 + i * 4].try_into().unwrap_or([0; 4]));
         let pos = [v(0), v(1), v(2)];
         let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
             return;

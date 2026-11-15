@@ -174,7 +174,11 @@ fn takes_any(stored: &Stored) -> bool {
 
 /// Lends a contraption's storage (each block's offset and slots) to its actors under `key`
 /// while they tick (a cart keeps its own: `lent_back` gives it back).
-pub(crate) fn lend_storage(dim: usize, key: [i32; 3], storage: Vec<([i32; 3], Vec<Option<ItemStack>>)>) {
+pub(crate) fn lend_storage(
+    dim: usize,
+    key: [i32; 3],
+    storage: Vec<([i32; 3], Vec<Option<ItemStack>>)>,
+) {
     STORAGE.with_borrow_mut(|m| m.insert((dim, key), storage));
 }
 

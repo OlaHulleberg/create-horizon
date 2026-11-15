@@ -536,7 +536,12 @@ pub struct Request {
 /// `start`, the blocks a step out either side (`direction × up`, not normalised) and, unless
 /// `wall_like`, the step's own and its diagonal fillers 0.45 out and along (toward the next
 /// step but at the last, back toward the previous but at the first). In the order first met.
-pub fn pave_straight(start: BlockPos, direction: Vec3, extent: i32, wall_like: bool) -> Vec<BlockPos> {
+pub fn pave_straight(
+    start: BlockPos,
+    direction: Vec3,
+    extent: i32,
+    wall_like: bool,
+) -> Vec<BlockPos> {
     let centre = [0, 1, 2].map(|k| f64::from(start[k]) + 0.5);
     let main_normal = cross(direction, [0.0, 1.0, 0.0]);
     let normal = normalize(main_normal);
@@ -559,12 +564,18 @@ pub fn pave_straight(start: BlockPos, direction: Vec3, extent: i32, wall_like: b
         put(main);
         if i < extent - 1 {
             for x in [1.0, -1.0] {
-                put(add(add(main, scale(normal, x * filler)), scale(along, filler)));
+                put(add(
+                    add(main, scale(normal, x * filler)),
+                    scale(along, filler),
+                ));
             }
         }
         if i > 0 {
             for x in [1.0, -1.0] {
-                put(add(add(main, scale(normal, x * filler)), scale(along, -filler)));
+                put(add(
+                    add(main, scale(normal, x * filler)),
+                    scale(along, -filler),
+                ));
             }
         }
     }

@@ -1452,7 +1452,10 @@ pub fn debug_command(
                     saved_progress: 0,
                 };
                 let ok = super::conductor::set_schedule(dim, train, schedule, false);
-                format!("train {train} delivers and fetches \"{}\": {ok}", rest.join(" "))
+                format!(
+                    "train {train} delivers and fetches \"{}\": {ok}",
+                    rest.join(" ")
+                )
             }
             "go" => {
                 let Some(train) = assembly::present_train(dim, pos) else {

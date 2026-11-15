@@ -142,7 +142,9 @@ fn tick_cart_actors(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) {
     let list: Vec<u128> = CARTS.with_borrow(|c| {
         c.mounted
             .iter()
-            .filter(|(u, on)| on.dim == dim && carts.contains_key(u) && !on.carried.actors.is_empty())
+            .filter(|(u, on)| {
+                on.dim == dim && carts.contains_key(u) && !on.carried.actors.is_empty()
+            })
             .map(|(u, _)| *u)
             .collect()
     });
@@ -206,7 +208,9 @@ fn tick_cart_actors(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) {
                     let Some(now) = now else { continue };
                     let was = before.get(i).cloned().flatten();
                     let added = match &was {
-                        Some(w) if w.is_stackable_with(now) => now.count().saturating_sub(w.count()),
+                        Some(w) if w.is_stackable_with(now) => {
+                            now.count().saturating_sub(w.count())
+                        }
                         Some(_) => 0,
                         None => now.count(),
                     };

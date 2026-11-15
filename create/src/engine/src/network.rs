@@ -492,7 +492,11 @@ impl Network {
     fn facing(&self, edge: usize, track: [i32; 3], pos: [i32; 3]) -> [i32; 2] {
         let d = self.graph.direction(edge, true);
         let right = [-d[2], 0.0, d[0]];
-        let beside = [f64::from(pos[0] - track[0]), 0.0, f64::from(pos[2] - track[2])];
+        let beside = [
+            f64::from(pos[0] - track[0]),
+            0.0,
+            f64::from(pos[2] - track[2]),
+        ];
         let s = if dot(right, beside) < 0.0 { -1.0 } else { 1.0 };
         [(d[0] * s).round() as i32, (d[2] * s).round() as i32]
     }

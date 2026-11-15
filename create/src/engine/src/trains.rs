@@ -779,13 +779,22 @@ impl Train {
     /// `TrainRelocator.relocateClient(.., simulate)`'s `toVisualise`: where each wheel of the
     /// train would go with its front bogey on track `block` (`relocate`), front first (as
     /// `TravellingPoint.getPosition`, a block over the track), and whether it fits there. None where it can't go at all (no track).
-    pub fn relocation(&self, net: &Network, block: [i32; 3], look: Vec3) -> Option<(Vec<Vec3>, bool)> {
+    pub fn relocation(
+        &self,
+        net: &Network,
+        block: [i32; 3],
+        look: Vec3,
+    ) -> Option<(Vec<Vec3>, bool)> {
         let (points, ok) = self.relocated(net, block, look)?;
         let g = &net.graph;
         // `TravellingPoint.getPosition`: a block up along the track's normal.
         let up = |p: &Point| {
             let length = g.length(p.edge);
-            let t = if length == 0.0 { 0.0 } else { p.position / length };
+            let t = if length == 0.0 {
+                0.0
+            } else {
+                p.position / length
+            };
             let (at, n) = (p.at(g), g.normal(p.edge, t));
             [at[0] + n[0], at[1] + n[1], at[2] + n[2]]
         };
@@ -1833,7 +1842,8 @@ impl SignalState {
 
     /// `isRedLight(renderTime)`: an invalid signal blinks red 3 ticks in 40.
     pub fn red_light_at(self, render_time: f64) -> bool {
-        self == SignalState::Red || self == SignalState::Invalid && render_time.rem_euclid(40.0) < 3.0
+        self == SignalState::Red
+            || self == SignalState::Invalid && render_time.rem_euclid(40.0) < 3.0
     }
 
     /// The state as clients get it (its ordinal).
@@ -2621,12 +2631,12 @@ impl Railway {
                 t.train.throttle = f64::from(p.clamp(5, 100)) / 100.0;
             }
             if let Order::Navigate(filter) = &order {
-                let targets = self.matching(&filter);
+                let targets = self.matching(filter);
                 let here = self.trains[i].train.at_station;
                 if here.is_some_and(|h| {
                     self.stations
                         .get(&h)
-                        .is_some_and(|n| station_matches(&filter, n))
+                        .is_some_and(|n| station_matches(filter, n))
                 }) {
                     self.trains[i].runtime.already_there(&schedule);
                     self.trains[i].idle = 0;
@@ -3574,7 +3584,10 @@ mod tests {
                 "the section beyond 150 is held: red"
             );
             if kind == SignalType::Cross {
-                assert!(r.lights[&[100, 64, 1]] == SignalState::Red, "its chain is held: red");
+                assert!(
+                    r.lights[&[100, 64, 1]] == SignalState::Red,
+                    "its chain is held: red"
+                );
             }
             // The other train leaves: it goes on.
             r.trains.remove(b);
@@ -3712,8 +3725,14 @@ mod tests {
         assert!(t.relocate(&r.net, [40, 64, 0], [-1.0, 0.0, 0.0]));
         assert_eq!(t.points.len(), before);
         let xs: Vec<f64> = t.points.iter().map(|p| p.at(&g)[0]).collect();
-        assert!((xs[0] - 39.5).abs() < 1.0e-6 && (xs[1] - 41.5).abs() < 1.0e-6, "{xs:?}");
-        assert!((xs[2] - 43.5).abs() < 1.0e-6 && (xs[3] - 45.5).abs() < 1.0e-6, "{xs:?}");
+        assert!(
+            (xs[0] - 39.5).abs() < 1.0e-6 && (xs[1] - 41.5).abs() < 1.0e-6,
+            "{xs:?}"
+        );
+        assert!(
+            (xs[2] - 43.5).abs() < 1.0e-6 && (xs[3] - 45.5).abs() < 1.0e-6,
+            "{xs:?}"
+        );
         // Off the end of the track: refused, the train as it was.
         let kept = t.points.clone();
         assert!(!t.relocate(&r.net, [98, 64, 0], [-1.0, 0.0, 0.0]));

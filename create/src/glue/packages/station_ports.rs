@@ -39,12 +39,15 @@ pub(super) struct StationPort {
 /// A station by level and position.
 type At = (usize, [i32; 3]);
 
+/// A train's station last tick and the ticks since its last transfer.
+type Standing = ([i32; 3], u32);
+
 thread_local! {
     static PORTS: RefCell<HashMap<At, Vec<StationPort>>> = RefCell::new(HashMap::new());
     /// Each player's chosen station (`activePackageTarget`), by level.
     static CHOSEN: RefCell<HashMap<u128, At>> = RefCell::new(HashMap::new());
     /// Each train's station last tick and the ticks since its last transfer.
-    static AT: RefCell<HashMap<(usize, u32), ([i32; 3], u32)>> = RefCell::new(HashMap::new());
+    static AT: RefCell<HashMap<(usize, u32), Standing>> = RefCell::new(HashMap::new());
     static LOADED: Cell<bool> = const { Cell::new(false) };
     static DIRTY: Cell<bool> = const { Cell::new(false) };
 }
@@ -74,7 +77,6 @@ pub(super) fn choose(player: PlayerRef, dim: usize, station: [i32; 3]) {
     CHOSEN.with_borrow_mut(|c| c.insert(player.uuid(), (dim, station)));
 }
 
-
 /// `flushSettings` for a postbox placed at `pos` by `player`: joined to the station chosen when
 /// it is in reach (`validateDiff` for a postbox: within `packagePortRange` of the placed block's
 /// bottom centre), else why not. False when no station was chosen.
@@ -86,7 +88,11 @@ pub(super) fn placed(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3])
         return false;
     }
     let s = station.1;
-    let source = [f64::from(pos[0]) + 0.5, f64::from(pos[1]), f64::from(pos[2]) + 0.5];
+    let source = [
+        f64::from(pos[0]) + 0.5,
+        f64::from(pos[1]),
+        f64::from(pos[2]) + 0.5,
+    ];
     let target = s.map(|v| f64::from(v) + 0.5);
     let d: f64 = (0..3).map(|i| (target[i] - source[i]).powi(2)).sum();
     if d.sqrt() > 5.0 {
@@ -155,9 +161,11 @@ pub(super) fn attach(dim: usize, pos: [i32; 3]) {
 /// `filterChanged`: the postbox at `pos` (joined to a station) joins it again with its address
 /// now (`deregister`, `register`: a new join, its offline buffer empty).
 pub(super) fn filter_changed(dim: usize, pos: [i32; 3]) {
-    let Some((station, filter)) =
-        with(dim, |pk| pk.ports.get(&pos).and_then(|p| Some((p.station?, p.filter.clone()))))
-    else {
+    let Some((station, filter)) = with(dim, |pk| {
+        pk.ports
+            .get(&pos)
+            .and_then(|p| Some((p.station?, p.filter.clone())))
+    }) else {
         return;
     };
     let same = PORTS.with_borrow(|m| {
@@ -205,9 +213,12 @@ pub(super) fn save_buffer(dim: usize, pos: [i32; 3], items: &[Option<ItemStack>]
 /// A postbox's slots: its own while it is loaded, else its offline buffer.
 fn slots_of(dim: usize, port: &StationPort) -> (Vec<Option<ItemStack>>, bool) {
     let loaded = with(dim, |pk| {
-        pk.ports
-            .get(&port.pos)
-            .map(|p| p.items.iter().map(|s| s.as_ref().map(|b| b.stack.clone())).collect())
+        pk.ports.get(&port.pos).map(|p| {
+            p.items
+                .iter()
+                .map(|s| s.as_ref().map(|b| b.stack.clone()))
+                .collect()
+        })
     });
     match loaded {
         Some(items) => (items, true),
@@ -216,7 +227,13 @@ fn slots_of(dim: usize, port: &StationPort) -> (Vec<Option<ItemStack>>, bool) {
 }
 
 /// Writes a postbox's slots back: into it while loaded, else into its buffer (primed).
-fn put_slots(dim: usize, station: [i32; 3], pos: [i32; 3], items: Vec<Option<ItemStack>>, loaded: bool) {
+fn put_slots(
+    dim: usize,
+    station: [i32; 3],
+    pos: [i32; 3],
+    items: Vec<Option<ItemStack>>,
+    loaded: bool,
+) {
     if loaded {
         with(dim, |pk| {
             if let Some(port) = pk.ports.get_mut(&pos) {
@@ -348,7 +365,11 @@ fn spawn_particles(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         return;
     };
     let options = mod_api::ParticleOptions::simple(key);
-    let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
+    let at = [
+        f64::from(pos[0]) + 0.5,
+        f64::from(pos[1]) + 0.5,
+        f64::from(pos[2]) + 0.5,
+    ];
     let _ = lv
         .level
         .send_particles(&mut *lv.host, &options, None, at, [0.3; 3], 0.0, 5);
@@ -405,7 +426,10 @@ pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
                             let port = pk.ports.get(&pos)?;
                             Some((
                                 pos,
-                                port.items.iter().map(|s| s.as_ref().map(|b| b.stack.clone())).collect(),
+                                port.items
+                                    .iter()
+                                    .map(|s| s.as_ref().map(|b| b.stack.clone()))
+                                    .collect(),
                             ))
                         })
                     })
@@ -449,7 +473,11 @@ pub(crate) fn package_stations(
                 is_package(lv, s) && package::match_address(&body::address(s), &port.address)
             }),
             Some(filter) => {
-                let filter = if filter.trim().is_empty() { "*" } else { filter };
+                let filter = if filter.trim().is_empty() {
+                    "*"
+                } else {
+                    filter
+                };
                 slots_of(dim, &port).0.iter().flatten().any(|s| {
                     let address = body::address(s);
                     is_package(lv, s)
@@ -557,7 +585,8 @@ fn load(lv: &mut ServerLevel<'_>) {
                         Some(Tag::Int(v)) => *v as usize,
                         _ => continue,
                     };
-                    if let (Some(b), Some(s)) = (buffer.get_mut(slot), ItemStack::from_nbt(host, i)) {
+                    if let (Some(b), Some(s)) = (buffer.get_mut(slot), ItemStack::from_nbt(host, i))
+                    {
                         *b = Some(s);
                     }
                 }

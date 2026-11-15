@@ -2547,19 +2547,20 @@ pub(crate) fn gauge_status(lv: &ServerLevel<'_>, link: [i32; 3]) -> Vec<(i64, St
                     "\u{25aa}"
                 };
                 // The mark in `getIngredientStatusColor`, the name as it is.
-                let colour = create_engine::factory::ingredient_color(create_engine::factory::Status {
-                    count: g.count,
-                    missing_address: create_engine::factory::missing_address(
-                        !g.inputs.is_empty(),
-                        g.restocker,
-                        g.count,
-                        &g.recipe_address,
-                    ),
-                    redstone_powered: g.redstone_powered,
-                    waiting: g.waiting,
-                    satisfied: g.satisfied,
-                    promised_satisfied: g.promised_satisfied,
-                });
+                let colour =
+                    create_engine::factory::ingredient_color(create_engine::factory::Status {
+                        count: g.count,
+                        missing_address: create_engine::factory::missing_address(
+                            !g.inputs.is_empty(),
+                            g.restocker,
+                            g.count,
+                            &g.recipe_address,
+                        ),
+                        redstone_powered: g.redstone_powered,
+                        waiting: g.waiting,
+                        satisfied: g.satisfied,
+                        promised_satisfied: g.promised_satisfied,
+                    });
                 Some((
                     i64::from(g.last_level),
                     format!(
