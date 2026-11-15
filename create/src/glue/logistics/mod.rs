@@ -41,6 +41,9 @@
 //!   fans' real pull), and a portable storage interface gives up to the amount, never exactly.
 //! - A brass tunnel's mode value box and the comparators beside a vault's other blocks are the
 //!   interaction and redstone subsystems'.
+//! - Belts offer no `ITEMS` handler (their items are the engine's, and a handler can't learn its
+//!   transaction aborted: HORIZON_API.md), so tunnels pass none of their belt's on: a brass
+//!   tunnel's handler (`handlers::TunnelItems`) only takes a stack to hand out.
 //!
 //! The kinetic block entity type is declared by `Kinetics`; `Entities`, after it, adds the
 //! handlers and the renderer to it. Belts' segments and pulleys are posed partials that
@@ -89,13 +92,15 @@ use mod_api::{
 
 pub struct Logistics;
 
-/// The blocks whose stacks are their block entity's slots, with the slot count.
-const CONTAINERS: [(Block, usize); 5] = [
+/// The blocks whose stacks are their block entity's slots, with the slot count (a brass
+/// tunnel's: the stack it hands out).
+const CONTAINERS: [(Block, usize); 6] = [
     (Block::Depot, create_engine::depot::SLOTS),
     (Block::WeightedEjector, create_engine::depot::SLOTS),
     (Block::ItemVault, create_engine::vault::SLOTS),
     (Block::Chute, 1),
     (Block::SmartChute, 1),
+    (Block::BrassTunnel, 1),
 ];
 
 /// The blocks a player uses, items land on, or whose contents a hopper changes.
@@ -152,6 +157,9 @@ impl Subsystem for Logistics {
             // `handlers`', asked first.
             let inputs = if matches!(block, Block::Depot | Block::WeightedEjector) {
                 vec![0]
+            } else if block == Block::BrassTunnel {
+                // Only through its handler (`BrassTunnelItemHandler`, `handlers`).
+                Vec::new()
             } else {
                 all.clone()
             };
@@ -161,7 +169,11 @@ impl Subsystem for Logistics {
                     slots,
                     faces: std::array::from_fn(|_| all.clone()),
                     inputs,
-                    outputs: all,
+                    outputs: if block == Block::BrassTunnel {
+                        Vec::new()
+                    } else {
+                        all
+                    },
                     menu: None,
                 },
             );
@@ -273,6 +285,7 @@ impl Subsystem for Logistics {
         belt::tick_covers(lv);
         belt::tick_belts(lv);
         belt::transport_passengers(lv);
+        funnel::collect_inside(lv);
         flaps::send(lv);
     }
 
@@ -617,7 +630,12 @@ fn use_block(
         Block::BrassFunnel | Block::BrassBeltFunnel => {
             funnel::use_funnel_filter(&mut lv, pos, click)
         }
-        Block::BrassTunnel => tunnel::use_tunnel_filter(&mut lv, pos, click),
+        // A filter slot first (`ValueSettingsInputHandler`), then `useWithoutItem`: an empty
+        // hand takes the stacks of the tunnel's group.
+        Block::BrassTunnel => {
+            tunnel::use_tunnel_filter(&mut lv, pos, click)
+                || click.stack.is_none() && main && tunnel::grab_stacks(&mut lv, pos, click.player)
+        }
         Block::Belt => {
             // A potion named with its contents: a water bottle washes the belt as water does.
             let potion = click
@@ -711,12 +729,25 @@ impl BlockPart for LogisticsBlock {
         _level: &mut dyn mod_api::LevelRandomHost,
         event: &mut mod_api::EntityInsideEvent<'_>,
     ) {
-        if event.kind == "minecraft:item" {
-            return;
-        }
         let Some(id) = states::id(event.state) else {
             return;
         };
+        if event.kind == "minecraft:item" {
+            // `FunnelBlock.entityInside`: an item inside a funnel, taken at the level's tick.
+            let funnel = with_world(|w| {
+                w.table
+                    .get(id)
+                    .map(|(b, _)| matches!(b, Block::AndesiteFunnel | Block::BrassFunnel))
+            })
+            .flatten();
+            if funnel == Some(true)
+                && let Some(dim) = super::world::level_index(event.dimension)
+            {
+                let pos = [event.pos.x, event.pos.y, event.pos.z];
+                funnel::item_inside(dim, pos, event.entity as u32);
+            }
+            return;
+        }
         let belt = with_world(|w| w.table.get(id).map(|(b, _)| b == Block::Belt)).flatten();
         if belt != Some(true) {
             return;
@@ -763,6 +794,7 @@ fn contents_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
             }
         }
         Block::Depot | Block::WeightedEjector => depot::depot_contents_changed(lv, pos),
+        Block::BrassTunnel => tunnel::slot_changed(lv, pos),
         _ => {}
     }
 }

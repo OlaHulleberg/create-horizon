@@ -340,7 +340,14 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
                         .filter(|x| passes(host, filter.as_ref(), x))
                         .collect();
                     let recipe = list.get(saw.index).copied();
-                    saw.apply(recipe, |i: &str| stacks::limit(host, i), &mut rng);
+                    // The input's crafting remainder comes out with each roll.
+                    let left = stacks::remainder(host, &item);
+                    saw.apply(
+                        recipe,
+                        |i: &str| stacks::limit(host, i),
+                        &mut rng,
+                        left.as_deref(),
+                    );
                 });
             }
             Step::Out => {

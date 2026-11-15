@@ -1551,13 +1551,9 @@ impl CreateWorld {
             if d.scroll_options.remove(&pos).is_some() {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
-            if let Some(b) = d.brass.remove(&pos) {
+            // What it held drops with its block entity's slot (`BrassTunnelBlockEntity.destroy`).
+            if d.brass.remove(&pos).is_some() {
                 d.brass_running.retain(|p| *p != pos);
-                // What it held drops (`BrassTunnelBlockEntity.destroy`).
-                if let Some((item, n)) = b.stack {
-                    d.crafter_drops
-                        .extend(std::iter::repeat_n((pos, item), usize::from(n)));
-                }
             }
             if d.crafter_inputs.contains_key(&pos) {
                 match self.table.get(old).and_then(|(_, i)| i.facing) {

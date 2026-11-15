@@ -36,9 +36,6 @@
 //!   of 1/64): the game's fake player attacks with its own, uncharged, attack strength, so a
 //!   punch deals about a fifth of its damage.
 //!
-//! Left out otherwise: a deployer's `overflowItems` (what its filter turns away, a crafting
-//! remainder) drop at the deployer instead of waiting in it for a funnel to take.
-//!
 //! A blaze burner carried by a moving structure is drawn by the structure's anchor
 //! (`burner_draw::draw_moving`): its blaze faces its front rather than the nearest player.
 
@@ -52,6 +49,7 @@ mod crafter;
 mod crusher;
 mod deployer;
 mod fan;
+pub(crate) use fan::flow_limit_from;
 mod filtering;
 pub(crate) use filtering::filter_at as machine_filter;
 mod millstone;
@@ -586,7 +584,22 @@ pub(crate) fn belt_input(
     side: Dir,
     item: &create_engine::belt::Item,
 ) -> Option<u8> {
+    belt_input_sim(lv, next, side, item, false)
+}
+
+/// `belt_input`, or (`simulate`) what it would leave without taking any.
+pub(crate) fn belt_input_sim(
+    lv: &mut ServerLevel<'_>,
+    next: [i32; 3],
+    side: Dir,
+    item: &create_engine::belt::Item,
+    simulate: bool,
+) -> Option<u8> {
     let (block, info) = lv.info(next)?;
+    if simulate {
+        belt_input_side(lv, next)?;
+        return Some(belt_input_room(lv, next, block, info, side, item));
+    }
     let count = item.count;
     let stack = || stacks::stack(&*lv.host, &item.item, u32::from(count));
     let left = |s: &Option<mod_api::ItemStack>| s.as_ref().map_or(0, |s| s.count().min(255) as u8);
@@ -628,6 +641,63 @@ pub(crate) fn belt_input(
             })
         }
         _ => None,
+    }
+}
+
+/// What `belt_input` would leave of `item` at the processing machine `block` at `pos`.
+fn belt_input_room(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    block: Block,
+    info: create_engine::parts::StateInfo,
+    side: Dir,
+    item: &create_engine::belt::Item,
+) -> u8 {
+    let count = item.count;
+    let dim = lv.dim;
+    let stacked = |lv: &ServerLevel<'_>, slots: std::ops::Range<usize>| {
+        let max = stacks::limit(&*lv.host, &item.item);
+        let Some(mut inputs) = lv.read_slots(pos, slots.start, slots.end) else {
+            return count;
+        };
+        create_engine::processing::insert_stacked(&mut inputs, &item.item, count, max)
+    };
+    match block {
+        Block::MechanicalSaw => {
+            let empty = with_world(|w| {
+                w.dims[dim]
+                    .saws
+                    .get(&pos)
+                    .is_none_or(|s| s.slots.is_empty())
+            })
+            .unwrap_or(false);
+            if info.facing != Some(Dir::Up) || side == Dir::Down || !empty {
+                count
+            } else {
+                count - 1
+            }
+        }
+        Block::Basin => stacked(lv, create_engine::basin::INPUTS),
+        Block::Millstone => {
+            let mills = recipes::with(|r| r.milling.find_single(&item.item))
+                .flatten()
+                .is_some();
+            if mills { stacked(lv, 0..1) } else { count }
+        }
+        Block::CrushingWheelController => {
+            if info.facing != Some(Dir::Down) && info.facing != Some(side) {
+                return count;
+            }
+            let free = with_world(|w| {
+                w.dims[dim]
+                    .crushers
+                    .get(&pos)
+                    .is_some_and(|(c, _)| !c.occupied())
+            })
+            .unwrap_or(false);
+            if free { 0 } else { count }
+        }
+        _ => count,
     }
 }
 

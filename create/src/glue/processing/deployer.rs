@@ -248,8 +248,8 @@ pub fn deployer_on_belt(
 }
 
 /// The deployer at `pos` after applying `recipe` (`activate`): its tool wears, other items are
-/// used up (`Deployer::use_for`); a crafting remainder that finds no room in the hand drops at
-/// the deployer (the fake player's overflow).
+/// used up (`Deployer::use_for`); a crafting remainder that finds no room in the hand goes into
+/// its overflow (`overflowItems`).
 fn deployer_used(
     lv: &mut ServerLevel<'_>,
     d: &mut Deployer,
@@ -269,8 +269,10 @@ fn deployer_used(
         .as_ref()
         .and_then(|s| host.item_crafting_remainder(s))
         .map(|s| stacks::id(host, &s));
-    if let Some(rest) = d.use_for(recipe, max_damage, remainder.as_deref()) {
-        lv.spawn_items(centre(pos), &rest, 1);
+    if let Some(rest) = d.use_for(recipe, max_damage, remainder.as_deref())
+        && let Some(s) = stacks::stack(&*lv.host, &rest, 1)
+    {
+        keep_overflow(lv, pos, vec![s]);
     }
     // `BeltDeployerCallbacks.activate`: the held item breaking, an item picked up, and sand
     // paper's short sanding.
@@ -341,8 +343,18 @@ pub fn tick_deployers(lv: &mut ServerLevel<'_>) {
         let Some(facing) = lv.facing_of(pos, Block::Deployer) else {
             continue;
         };
-        // `WAITING`: a held stack its filter doesn't let through leaves its hand (the fake
-        // player's overflow, dropped at the deployer).
+        // `WAITING`: while it holds overflow it waits for a funnel or hopper to take it.
+        if has_overflow(lv, pos) {
+            with_world(|w| {
+                let d = &mut w.dims[dim];
+                if let Some(dp) = d.deployers.get_mut(&pos) {
+                    dp.wait(rpm);
+                    d.deploying.push(pos);
+                }
+            });
+            continue;
+        }
+        // A held stack its filter doesn't let through leaves its hand into the overflow.
         if let Some(f) = super::filtering::filter_at(dim, pos)
             && let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten()
             && let Some(held) = d.held.clone()
@@ -352,9 +364,7 @@ pub fn tick_deployers(lv: &mut ServerLevel<'_>) {
             d.held = None;
             d.held_damage = 0;
             with_world(|w| w.set_deployer(dim, pos, d));
-            if let Some(s) = stack {
-                lv.spawn_stack(centre(pos), s, [0.0; 3]);
-            }
+            keep_overflow(lv, pos, stack.into_iter().collect());
             continue;
         }
         let below = super::step(pos, facing, 2);
@@ -503,8 +513,62 @@ fn deployer_activate(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if d != before {
         with_world(|w| w.set_deployer(dim, pos, d));
     }
-    for s in other {
-        lv.spawn_stack(centre(pos), s, [0.0; 3]);
+    keep_overflow(lv, pos, other);
+}
+
+/// The slots a deployer keeps its fake player's other items in (`overflowItems`), for funnels
+/// and hoppers to take; it waits while they hold any.
+pub const OVERFLOW_SLOTS: usize = 11;
+
+/// Whether the deployer at `pos` holds overflow.
+fn has_overflow(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    lv.slots(pos, OVERFLOW_SLOTS)
+        .is_some_and(|s| s.iter().any(Option::is_some))
+}
+
+/// `overflowItems.add`: `stacks` go into the deployer at `pos`'s overflow slots, onto stacks
+/// of their kind first; what finds no slot drops at the deployer.
+fn keep_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], stacks_in: Vec<ItemStack>) {
+    if stacks_in.is_empty() {
+        return;
+    }
+    let Some(mut slots) = lv.slots(pos, OVERFLOW_SLOTS) else {
+        for s in stacks_in {
+            lv.spawn_stack(centre(pos), s, [0.0; 3]);
+        }
+        return;
+    };
+    let before = slots.clone();
+    for s in stacks_in {
+        let mut left = Some(s);
+        for slot in slots.iter_mut() {
+            let Some(l) = left.take() else { break };
+            match slot {
+                None => {
+                    *slot = Some(l);
+                }
+                Some(have) if mod_api::ItemResource::of(have).matches(&l) => {
+                    let max = lv.host.max_stack_size(have.item()).unwrap_or(64);
+                    let n = l.count().min(max.saturating_sub(have.count()));
+                    if n > 0 {
+                        have.set_count(have.count() + n).ok();
+                    }
+                    left = l.shrink(n);
+                }
+                Some(_) => left = Some(l),
+            }
+        }
+        if let Some(l) = left {
+            lv.spawn_stack(centre(pos), l, [0.0; 3]);
+        }
+    }
+    let changes: Vec<(usize, Option<ItemStack>)> = slots
+        .into_iter()
+        .enumerate()
+        .filter(|(i, s)| before[*i] != *s)
+        .collect();
+    if !changes.is_empty() {
+        lv.set_slots(pos, &changes);
     }
 }
 

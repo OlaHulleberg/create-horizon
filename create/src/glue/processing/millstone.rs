@@ -60,6 +60,14 @@ pub fn tick_millstones(lv: &mut ServerLevel<'_>) {
             let limit = stacks::limit(&*lv.host, &item);
             processing::insert_stacked(&mut outputs, &item, n, limit);
         }
+        // The input's crafting remainder goes into the outputs too.
+        if let Some(left) = input
+            .as_deref()
+            .and_then(|i| stacks::remainder(&*lv.host, i))
+        {
+            let limit = stacks::limit(&*lv.host, &left);
+            processing::insert_stacked(&mut outputs, &left, 1, limit);
+        }
         let mut changes: Vec<(usize, Option<ItemStack>)> = vec![(0, input_left)];
         for (i, s) in outputs.iter().enumerate() {
             if stacks::slot_of(&*lv.host, &slots[i + 1]) != *s {

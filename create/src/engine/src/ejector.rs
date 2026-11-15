@@ -292,6 +292,12 @@ pub trait World {
     fn clip(&mut self, from: [f64; 3], to: [f64; 3]) -> Option<([f64; 3], [i32; 3], Dir)>;
     /// Whether the block at `pos` is an extracting funnel (items fly through those).
     fn extracting_funnel(&mut self, pos: [i32; 3]) -> bool;
+    /// A funnel on top facing the ejector's back (`getFunnelFacing(above) == facing.opposite`):
+    /// None without one; else whether its belt funnel would take the whole held stack
+    /// (`tryExportingToBeltFunnel(held, funnelFacing, true)` empty).
+    fn funnel_on_top_takes(&mut self) -> Option<bool> {
+        None
+    }
 }
 
 fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -467,6 +473,11 @@ impl Ejector {
             return;
         }
         if present.held_position.is_some_and(|p| p < 0.49) {
+            return;
+        }
+        // A funnel on top facing its back takes the held stack instead (`launchItems`); it
+        // waits until all of it fits.
+        if present.held_position.is_some() && world.funnel_on_top_takes() == Some(false) {
             return;
         }
         if present.held_position.is_some() && world.target_refuses(self.target(pos, facing)) {

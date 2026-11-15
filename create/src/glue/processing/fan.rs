@@ -513,17 +513,10 @@ fn affect_entity(lv: &mut ServerLevel<'_>, entity: EntityRef, kind: Kind) {
 /// The depots and belts in a current, with the processing type each is in.
 type Handlers = Vec<([i32; 3], Option<Kind>)>;
 
-/// `AirCurrent.rebuild` and `findAffectedHandlers` for the fan at `pos`.
-fn fan_current(
-    lv: &ServerLevel<'_>,
-    pos: [i32; 3],
-    facing: Dir,
-    speed: f32,
-) -> (Current, Handlers) {
-    let dim = lv.dim;
-    let at = |i: i32| super::step(pos, facing, i);
+/// `AirCurrent.getFlowLimit` from `pos` along `facing`, up to `max` blocks.
+pub(crate) fn flow_limit_from(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir, max: f32) -> f32 {
     let way = |i: i32| {
-        let p = at(i);
+        let p = super::step(pos, facing, i);
         if !lv.is_loaded(p) {
             return Way::Unloaded;
         }
@@ -539,7 +532,19 @@ fn fan_current(
             Way::Depth(max_depth(&shape, facing))
         }
     };
-    let max = fan::flow_limit(fan::max_distance(speed), way);
+    fan::flow_limit(max, way)
+}
+
+/// `AirCurrent.rebuild` and `findAffectedHandlers` for the fan at `pos`.
+fn fan_current(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    speed: f32,
+) -> (Current, Handlers) {
+    let dim = lv.dim;
+    let at = |i: i32| super::step(pos, facing, i);
+    let max = flow_limit_from(lv, pos, facing, fan::max_distance(speed));
     let current = Current::build(max, fan::pushing(speed, facing), |i| catalyst_at(lv, at(i)));
     let mut handlers = Vec::new();
     for i in 1..=current.limit() {

@@ -140,9 +140,11 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                 let max = |i: &str| stacks::limit(host, i);
                 let mut rng = processing::Rng::new(lv.seed_at(pos));
                 let item = c.slots[0].0.clone();
+                // The input's crafting remainder comes out with the results.
+                let left = stacks::remainder(host, &item);
                 recipes::with(|r| {
                     let recipe = crusher::recipe(&r.crushing, &r.milling, &item);
-                    crusher::apply(&mut c, recipe, max, &mut rng);
+                    crusher::apply(&mut c, recipe, max, &mut rng, left.as_deref());
                 });
             }
             crusher::Step::Output => {

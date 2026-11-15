@@ -1185,6 +1185,49 @@ struct EjectorWorld<'a, 'l> {
     pos: [i32; 3],
 }
 
+impl EjectorWorld<'_, '_> {
+    /// The funnel on top of the ejector facing its back (`getFunnelFacing(above) ==
+    /// getFacing().getOpposite()`), if there is one.
+    fn funnel_on_top(&self) -> Option<([i32; 3], super::funnel::FunnelState)> {
+        let facing = info_at(self.lv, self.pos)?.1.facing?;
+        let above = [self.pos[0], self.pos[1] + 1, self.pos[2]];
+        let f = funnel_at(self.lv, above)?;
+        (f.facing == facing.opposite()).then_some((above, f))
+    }
+}
+
+/// `DirectBeltInputBehaviour.tryExportingToBeltFunnel(stack, null, simulate)` of a depot or
+/// ejector under the funnel `f` at `pos`: None unless it is a pulling belt funnel; a powered one
+/// takes nothing; else what is left of `stack` once it took what its inventory takes and its
+/// filter passes (`FunnelBlock.tryInsert`).
+pub(super) fn export_to_belt_funnel(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    f: super::funnel::FunnelState,
+    stack: &mod_api::ItemStack,
+    simulate: bool,
+) -> Option<u32> {
+    if f.belt != Some(create_engine::funnel::BeltShape::Pulling) {
+        return None;
+    }
+    let count = stack.count();
+    if f.powered || !super::funnel::funnel_passes(lv, pos, stack) {
+        return Some(count);
+    }
+    let behind = create_engine::funnel::behind(pos, f.facing);
+    let side = items::face(f.facing);
+    if simulate {
+        let room = items::insert_room(lv, behind, side, stack).unwrap_or(0);
+        return Some(count.saturating_sub(room));
+    }
+    let left = items::insert_item(lv, behind, side, stack.clone()).map_or(0, |l| l.count());
+    if left != count {
+        super::flaps::funnel(lv, pos, true);
+        crate::glue::redstone::detectors::funnel_transfer(lv, pos, stack);
+    }
+    Some(left)
+}
+
 /// `DirectBeltInputBehaviour.handleInsertion(stack, UP)` at `target`: a depot or ejector (empty,
 /// charged), else a belt segment that carries items. The count left, None when nothing there
 /// takes items.
@@ -1217,6 +1260,13 @@ fn land(
         }
         return Some(count - n);
     }
+    // Funnels, chutes, item drains and processing machines: their own
+    // `handleInsertion(stack, UP, simulate)`.
+    let belt = with_world(|w| w.dims[dim].belt_of.contains_key(&target)) == Some(true);
+    if !belt && super::belt::direct_input_at(lv, target) {
+        let one = create_engine::belt::Item::new(item, count, random_angle(lv, target), false);
+        return super::belt::handle_insertion(lv, target, Dir::Up, &one, false, simulate);
+    }
     put_on_from_above(lv, target, item, count, None, simulate)
 }
 
@@ -1244,7 +1294,29 @@ impl ejector::World for EjectorWorld<'_, '_> {
         land(self.lv, target, &item, count, true) == Some(count)
     }
 
+    fn funnel_on_top_takes(&mut self) -> Option<bool> {
+        let (above, f) = self.funnel_on_top()?;
+        let held = items::slot(self.lv, self.pos, 0)?;
+        Some(export_to_belt_funnel(self.lv, above, f, &held, true) == Some(0))
+    }
+
     fn take_all(&mut self) -> Vec<(String, u8)> {
+        // `launchItems`: a pulling belt funnel on top facing its back takes what it can first.
+        if let Some((above, f)) = self.funnel_on_top() {
+            for slot in 0..create_engine::depot::SLOTS as u32 {
+                let Some(stack) = items::slot(self.lv, self.pos, slot) else {
+                    continue;
+                };
+                let count = stack.count();
+                let Some(left) = export_to_belt_funnel(self.lv, above, f, &stack, false) else {
+                    continue;
+                };
+                if left != count {
+                    let rest = items::with_count(&stack, left).filter(|_| left > 0);
+                    items::set_slot(self.lv, self.pos, slot, rest);
+                }
+            }
+        }
         let Some(slots) = items::slots(self.lv, self.pos, create_engine::depot::SLOTS as u32)
         else {
             return Vec::new();

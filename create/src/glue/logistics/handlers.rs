@@ -47,6 +47,7 @@ pub fn provide(
             Some(Box::new(VaultItems { at, parts }))
         }
         Block::Chute | Block::SmartChute => Some(Box::new(ChuteItems(at))),
+        Block::BrassTunnel => Some(Box::new(TunnelItems(at))),
         _ => None,
     }
 }
@@ -340,5 +341,72 @@ fn accepts(host: &dyn mod_api::Host, at: At, stack: &ItemStack) -> bool {
                 .unwrap_or(false)
         }
         _ => false,
+    }
+}
+
+/// `BrassTunnelItemHandler`: one slot, the stack the tunnel hands out. A distributing tunnel
+/// (`hasDistributionBehaviour`) takes a stack, up to its stack size, while it holds none and
+/// hands out with no synchronized group (`canTakeItems`); the rest (Create's: into the belt
+/// below, and every extraction) go to the belt's handler, which belts have none of here.
+struct TunnelItems(At);
+
+impl TunnelItems {
+    /// Whether the tunnel takes a stack now: distributing, its slot empty, not handing out
+    /// with its synchronized group.
+    fn takes(&self, host: &mut dyn ServerHost) -> bool {
+        let Some(dimension) = self.0.level.dimension().id(&*host) else {
+            return false;
+        };
+        let Some(lv) = super::super::server::ServerLevel::new(host, &dimension) else {
+            return false;
+        };
+        let pos = self.0.pos;
+        if !super::tunnel::has_distribution(&lv, pos) {
+            return false;
+        }
+        let synced = with_world(|w| w.dims[self.0.dim].brass.get(&pos).is_some_and(|b| b.synced));
+        synced == Some(false) && read(&*lv.host, lv.host.block_entity(lv.level, pos), 0).is_none()
+    }
+}
+
+impl ResourceHandler<ItemResource> for TunnelItems {
+    fn size(&self, _host: &mut dyn ServerHost) -> usize {
+        1
+    }
+    fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<ItemResource> {
+        read(&*host, self.0.entity(&*host, self.0.pos), index).map(|s| ItemResource::of(&s))
+    }
+    fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
+        read(&*host, self.0.entity(&*host, self.0.pos), index).map_or(0, |s| s.count())
+    }
+    fn capacity(&self, host: &mut dyn ServerHost, _index: usize, resource: &ItemResource) -> u32 {
+        limit(&*host, resource)
+    }
+    fn insert(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        index: usize,
+        resource: &ItemResource,
+        amount: u32,
+    ) -> u32 {
+        if index != 0 || !self.takes(host) {
+            return 0;
+        }
+        let Some(e) = self.0.entity(&*host, self.0.pos) else {
+            return 0;
+        };
+        let room = limit(&*host, resource);
+        put(host, tx, e, 0, resource, amount, room)
+    }
+    fn extract(
+        &self,
+        _host: &mut dyn ServerHost,
+        _tx: &Transaction,
+        _index: usize,
+        _resource: &ItemResource,
+        _amount: u32,
+    ) -> u32 {
+        0
     }
 }

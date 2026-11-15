@@ -4,8 +4,7 @@
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::world::with_world;
-use super::belt::{belt_segment, insert_into};
-use super::depot::depot_items;
+use super::belt::{belt_segment, handle_insertion};
 use super::info_at;
 use create_engine::Block;
 use create_engine::belt::Slope;
@@ -26,13 +25,155 @@ fn brass_axis(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Axis> {
     (block == Block::BrassTunnel).then_some(info.axis?)
 }
 
-/// `BeltTunnelBlockEntity.flaps` not empty: an open side of the tunnel at `pos` (axis `axis`,
-/// shape `shape`) that no tunnel continues.
+/// `BeltTunnelBlockEntity.flaps` (`updateTunnelConnections`): the open sides of the tunnel at
+/// `pos` (axis `axis`, shape `shape`) that no tunnel continues and no extended belt funnel
+/// facing back into it closes.
+fn flaps(lv: &ServerLevel<'_>, pos: [i32; 3], axis: Axis, shape: tunnel::Shape) -> Vec<Dir> {
+    tunnel::sides(axis, shape)
+        .into_iter()
+        .filter(|d| {
+            let o = d.offset();
+            let next = [pos[0] + o[0], pos[1], pos[2] + o[2]];
+            if tunnel_state(lv, next).is_some() {
+                return false;
+            }
+            !super::funnel::funnel_at(lv, next).is_some_and(|f| {
+                f.belt == Some(create_engine::funnel::BeltShape::Extended)
+                    && f.facing == d.opposite()
+            })
+        })
+        .collect()
+}
+
+/// `flaps` not empty.
 fn has_flaps(lv: &ServerLevel<'_>, pos: [i32; 3], axis: Axis, shape: tunnel::Shape) -> bool {
-    tunnel::sides(axis, shape).into_iter().any(|d| {
-        let o = d.offset();
-        tunnel_state(lv, [pos[0] + o[0], pos[1], pos[2] + o[2]]).is_none()
+    !flaps(lv, pos, axis, shape).is_empty()
+}
+
+/// `BrassTunnelBlockEntity.hasDistributionBehaviour` of the brass tunnel at `pos`: it has flaps,
+/// and is connected with a brass tunnel beside it or has a flap across its axis.
+pub fn has_distribution(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    let Some(axis) = brass_axis(lv, pos) else {
+        return false;
+    };
+    let Some((_, shape)) = tunnel_state(lv, pos) else {
+        return false;
+    };
+    let f = flaps(lv, pos, axis, shape);
+    !f.is_empty() && (brass_connected(lv, pos) || f.iter().any(|d| d.axis() != axis))
+}
+
+/// `canTakeItems`: the brass tunnel at `pos` holds no stack and does not hand out with its
+/// synchronized group.
+pub fn can_take(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    let dim = lv.dim;
+    with_world(|w| {
+        w.dims[dim]
+            .brass
+            .get(&pos)
+            .is_some_and(|b| b.stack.is_none() && !b.synced)
     })
+    .unwrap_or(false)
+}
+
+/// `setStackToDistribute`: the brass tunnel at `pos` holds `item` (come in by side `from`) to
+/// hand out, in its block entity's slot (for hoppers and funnels) and its state.
+pub fn set_stack(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    item: &create_engine::belt::Item,
+    from: Option<Dir>,
+) {
+    let dim = lv.dim;
+    let stack = super::belt::belt_stack(lv, item);
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        let Some(b) = d.brass.get_mut(&pos) else {
+            return;
+        };
+        b.stack = (item.count > 0).then(|| (item.item.clone(), item.count));
+        b.stack_progress = item.progress.clone();
+        b.entered_from = from;
+        b.progress = -1;
+        b.new_item = item.count > 0;
+        if !d.brass_running.contains(&pos) {
+            d.brass_running.push(pos);
+        }
+        w.mark_unsaved(dim, pos);
+    });
+    super::items::set_slot(lv, pos, 0, stack);
+}
+
+/// The stack a brass tunnel's slot holds changed by a hopper, a funnel or another mod (its
+/// `BrassTunnelItemHandler`): its state takes it as `setStackToDistribute(stack, null)`; a
+/// write of the tunnel's own is no change.
+pub fn slot_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let now = super::items::slot(lv, pos, 0).map(|s| {
+        let (name, progress) = super::belt::belt_name(&*lv.host, &s);
+        (name, s.count().min(255) as u8, progress)
+    });
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        let Some(b) = d.brass.get_mut(&pos) else {
+            return;
+        };
+        let held = now.as_ref().map(|(n, c, _)| (n.clone(), *c));
+        if held == b.stack {
+            return;
+        }
+        b.stack = held;
+        b.stack_progress = now.and_then(|n| n.2);
+        b.entered_from = None;
+        b.progress = -1;
+        b.new_item = b.stack.is_some();
+        if !d.brass_running.contains(&pos) {
+            d.brass_running.push(pos);
+        }
+        w.mark_unsaved(dim, pos);
+    });
+}
+
+/// `BrassTunnelBlock.useWithoutItem`: an empty hand takes the stacks of the brass tunnel at
+/// `pos` and those connected with it (`grabAllStacksOfGroup`), with the pick-up sound. True
+/// when there were any.
+pub fn grab_stacks(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> bool {
+    let Some(axis) = brass_axis(lv, pos) else {
+        return false;
+    };
+    let dim = lv.dim;
+    let mut taken = Vec::new();
+    for t in brass_group(lv, pos, axis) {
+        let held = with_world(|w| w.dims[dim].brass.get(&t).is_some_and(|b| b.stack.is_some()));
+        if held != Some(true) {
+            continue;
+        }
+        let held = with_world(|w| w.dims[dim].brass.get(&t).and_then(|b| b.stack.clone()));
+        let kept = held.flatten().and_then(|(item, n)| {
+            super::belt::belt_stack(lv, &create_engine::belt::Item::new(&item, n, 0, false))
+        });
+        if let Some(stack) = super::items::slot(lv, t, 0).or(kept) {
+            taken.push(stack);
+        }
+        let empty = create_engine::belt::Item::new("minecraft:air", 0, 0, false);
+        set_stack(lv, t, &empty, None);
+    }
+    if taken.is_empty() {
+        return false;
+    }
+    for stack in taken {
+        super::items::give(&mut *lv.host, player, stack);
+    }
+    let seed = super::items::random_angle(lv, pos) as f32 / 360.0;
+    lv.level.play_sound(
+        &mut *lv.host,
+        "minecraft:entity.item.pickup",
+        pos.map(|v| f64::from(v) + 0.5),
+        mod_api::SoundSource::Players,
+        0.2,
+        1.0 + seed,
+    );
+    true
 }
 
 /// `BrassTunnelBlockEntity.getAdjacent`: the brass tunnel of the same axis beside the one at
@@ -120,15 +261,16 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let axis = seg.facing.axis();
-        // `hasValidOutput` beside the belt segment: a belt across it, or a depot.
+        // `hasValidOutput` beside the belt segment: a belt across it, or anything taking items
+        // from that side (`DirectBeltInputBehaviour.canInsertFromSide`: a depot, an ejector, a
+        // floor funnel, a chute, an item drain, a processing machine).
         let output = |lv: &ServerLevel<'_>, side: Dir| {
             let o = side.offset();
             let p = [pos[0] + o[0], pos[1] - 1, pos[2] + o[2]];
-            match info_at(lv, p) {
-                Some((Block::Depot, _)) => true,
-                Some((_, i)) => i.belt.is_some_and(|b| b.facing.axis() == side.axis()),
-                None => false,
+            if let Some((Block::Belt, i)) = info_at(lv, p) {
+                return i.belt.is_some_and(|b| b.facing.axis() == side.axis());
             }
+            super::belt::direct_input_at(lv, p) && super::belt::direct_input_accepts(lv, p, side)
         };
         let left = tunnel::left(axis);
         let (on_left, on_right) = (output(lv, left), output(lv, left.opposite()));
@@ -138,10 +280,17 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
         } else {
             Dir::South
         };
-        let window = [fw, fw.opposite()].into_iter().all(|d| {
+        // Or an extended belt funnel facing back into it, but not on both.
+        let ends = [fw, fw.opposite()].map(|d| {
             let o = d.offset();
-            tunnel_state(lv, [pos[0] + o[0], pos[1], pos[2] + o[2]]).is_some()
+            let next = [pos[0] + o[0], pos[1], pos[2] + o[2]];
+            let funnel = super::funnel::funnel_at(lv, next).is_some_and(|f| {
+                f.belt == Some(create_engine::funnel::BeltShape::Extended)
+                    && f.facing == d.opposite()
+            });
+            (tunnel_state(lv, next).is_some() || funnel, funnel)
         });
+        let window = ends[0].0 && ends[1].0 && !(ends[0].1 && ends[1].1);
         let fresh = (axis, tunnel::shape_for(on_left, on_right, window));
         let (axis2, shape2) = if at_once {
             fresh
@@ -281,6 +430,17 @@ pub fn flap_filter_passes(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir, item: 
     .unwrap_or(true)
 }
 
+/// `SidedFilteringBehaviour.test(side, stack)`: the brass tunnel at `pos`'s own filter on side
+/// `side` passes item `item` (none passes anything).
+pub fn own_filter_passes(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir, item: &str) -> bool {
+    let dim = lv.dim;
+    with_world(|w| {
+        let f = w.dims[dim].tunnel_filters.get(&(pos, side));
+        crate::glue::items::filters::passes_item(&*lv.host, f, item)
+    })
+    .unwrap_or(true)
+}
+
 /// `flapFilterEmpty`: no filter on side `side` of the brass tunnel at `pos`, nor beside it.
 fn flap_filter_empty(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> bool {
     let dim = lv.dim;
@@ -399,19 +559,12 @@ fn insert_into_tunnel(
         if !super::belt::direct_input_accepts(lv, p, d) {
             return None;
         }
-        if simulate {
-            // A depot takes a stack only while empty; the rest are asked when it is handed on.
-            let depot = with_world(|w| w.dims[dim].depots.contains_key(&p)) == Some(true);
-            if depot && !depot_items(lv, p).is_empty() {
-                return Some(item.count);
-            }
-            return Some(0);
-        }
-        let left = insert_into(lv, p, d, item);
-        if left == Some(0) {
+        // `sideOutput.handleInsertion(stack, side, simulate)`: what it takes, or would.
+        let left = handle_insertion(lv, p, d, item, false, simulate).unwrap_or(item.count);
+        if left == 0 && !simulate {
             super::flaps::tunnel(lv, below, d, false);
         }
-        return left;
+        return Some(left);
     }
     let speed = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
     let movement = create_engine::belt::movement_facing(speed, seg.facing);
@@ -580,7 +733,7 @@ pub fn tick_brass(lv: &mut ServerLevel<'_>) {
                 continue;
             }
             let random = super::items::random_angle(lv, t) as usize;
-            left = tunnel::distribute(
+            let dealt = tunnel::distribute(
                 left,
                 outputs.len(),
                 b.previous_output,
@@ -593,8 +746,14 @@ pub fn tick_brass(lv: &mut ServerLevel<'_>) {
                     insert_into_tunnel(lv, g, d, &part, simulate)
                 },
             );
-            b.previous_output = (b.previous_output + 1) % outputs.len().max(1);
+            // A forced mode with an output refusing hands out nothing and stays on the same
+            // output (`distribute` returns early).
+            if let Some(l) = dealt {
+                left = l;
+                b.previous_output = (b.previous_output + 1) % outputs.len().max(1);
+            }
         }
+        let changed = left != count;
         b.stack = (left > 0).then(|| (item.clone(), left));
         if b.stack.is_none() {
             b.entered_from = None;
@@ -602,5 +761,17 @@ pub fn tick_brass(lv: &mut ServerLevel<'_>) {
         }
         b.progress = -1;
         save(&b);
+        if changed {
+            let rest = if left == 0 {
+                None
+            } else {
+                let mut part = one.clone();
+                part.count = left;
+                super::items::slot(lv, t, 0)
+                    .and_then(|s| super::items::with_count(&s, u32::from(left)))
+                    .or_else(|| super::belt::belt_stack(lv, &part))
+            };
+            super::items::set_slot(lv, t, 0, rest);
+        }
     }
 }
