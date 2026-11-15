@@ -135,13 +135,16 @@ pub fn tick(host: &dyn ClientHost) {
     }
 }
 
-/// `renderShared` for the burner at `pos` of `heat` facing `facing`.
+/// `renderShared` for the burner at `pos` of `heat` facing `facing`; beside a stock ticker it is
+/// its keeper (`stockKeeper`): lit at least as a fading blaze (`getHeatLevelForRender`) and
+/// wearing the logistics hat.
 pub fn draw(
     draw: &mut dyn BlockEntityDrawContext,
     pos: [i32; 3],
     heat: Heat,
     facing: Dir,
     goggles: bool,
+    keeper: bool,
 ) {
     if heat == Heat::None {
         return;
@@ -164,7 +167,8 @@ pub fn draw(
     let hash = (pos[0].wrapping_mul(31).wrapping_add(pos[1]))
         .wrapping_mul(31)
         .wrapping_add(pos[2]);
-    shared(draw, heat, angle, animation, true, goggles, hash);
+    let heat = if keeper { heat.max(Heat::Fading) } else { heat };
+    shared(draw, heat, angle, animation, true, goggles, keeper, hash);
 }
 
 /// `renderInContraption`: a burner carried by a moving structure, its blaze at least fading,
@@ -175,7 +179,16 @@ pub fn draw_moving(draw: &mut dyn BlockEntityDrawContext, heat: Heat, facing: Di
         return;
     }
     let heat = heat.max(Heat::Fading);
-    shared(draw, heat, front_angle(facing), 0.0, false, false, hash);
+    shared(
+        draw,
+        heat,
+        front_angle(facing),
+        0.0,
+        false,
+        false,
+        false,
+        hash,
+    );
 }
 
 /// `renderShared`: the head at `angle`, sunk by `animation`, its rods, and (when it may and
@@ -187,6 +200,7 @@ fn shared(
     animation: f32,
     can_draw_flame: bool,
     goggles: bool,
+    hat: bool,
     hash: i32,
 ) {
     let above = animation > 0.125;
@@ -228,6 +242,22 @@ fn shared(
         draw.push();
         draw.translate([0.0, head_y + 0.5, 0.0]);
         draw.rotate_about([0.0, 1.0, 0.0], angle, [0.5; 3]);
+        draw.block(part, &[("facing", "up")]);
+        draw.pop();
+    }
+    // `drawHat`: the logistics hat on the head, smaller on the inert one.
+    if hat && let Some(part) = states::partial("part_logistics_hat") {
+        draw.push();
+        if model == "part_blaze_inert" {
+            draw.translate([0.0, head_y + 0.5, 0.0]);
+            draw.translate([0.5, 0.5, 0.5]);
+            draw.scale([0.75, 0.75, 0.75]);
+            draw.translate([-0.5, -0.5, -0.5]);
+        } else {
+            draw.translate([0.0, head_y + 0.75, 0.0]);
+        }
+        draw.rotate_about([0.0, 1.0, 0.0], angle + 180.0, [0.5; 3]);
+        draw.translate([0.5, 0.0, 0.5]);
         draw.block(part, &[("facing", "up")]);
         draw.pop();
     }

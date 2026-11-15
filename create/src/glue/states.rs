@@ -135,6 +135,7 @@ pub const PARTIALS: &[&str] = &[
     "part_large_water_wheel_pale_oak",
     "part_large_water_wheel_spruce",
     "part_large_water_wheel_warped",
+    "part_logistics_hat",
     "part_millstone_cog",
     "part_mixer_head",
     "part_mixer_pole",

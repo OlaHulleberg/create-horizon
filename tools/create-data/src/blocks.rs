@@ -2402,7 +2402,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 141] = [
+pub const PARTIALS: [(&str, &str, &str); 142] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -2460,6 +2460,9 @@ pub const PARTIALS: [(&str, &str, &str); 141] = [
         "create:block/blaze_burner/goggles_small",
         "up",
     ),
+    // AllPartialModels.LOGISTICS_HAT: a stock keeper's hat, on a blaze burner beside a stock
+    // ticker (`BlazeBurnerRenderer.renderShared`'s `drawHat`).
+    ("part_logistics_hat", "create:entity/logistics_hat", "up"),
     ("part_shaft_half", "create:block/shaft_half", "south"),
     // AllPartialModels.FOLDING_DOORS: the folding doors' two leaves, drawn unturned (`north`)
     // and posed by the glue as SlidingDoorRenderer poses them.

@@ -399,6 +399,21 @@ fn press_speed(host: &dyn ClientHost, pos: [i32; 3]) -> f32 {
         .map_or(0.0, |d| kinetics::speeds_of(&d)[0])
 }
 
+/// `BlazeBurnerBlockEntity.getStockTicker`: a stock ticker on one of the burner's sides makes
+/// it a stock keeper.
+fn beside_ticker(host: &dyn ClientHost, pos: [i32; 3]) -> bool {
+    let Some(level) = host.level(host.dimension()) else {
+        return false;
+    };
+    [[1, 0], [-1, 0], [0, 1], [0, -1]].iter().any(|[dx, dz]| {
+        level
+            .block_state(host, [pos[0] + dx, pos[1], pos[2] + dz])
+            .and_then(states::id)
+            .and_then(|id| crate::glue::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten())
+            == Some(Block::StockTicker)
+    })
+}
+
 /// Draws the press head, the deployer's pole and hand, the mixer's pole and head.
 struct MachineDraw;
 
@@ -447,6 +462,12 @@ impl BlockEntityPart for MachineDraw {
                 info.heat.unwrap_or(create_engine::fan::Heat::None),
                 info.facing.unwrap_or(Dir::South),
                 event.entity.nbt.get(&basin_glue::GOGGLES_KEY.into()) == Some(&Tag::Byte(1)),
+                beside_ticker(host, event.pos)
+                    || event
+                        .entity
+                        .nbt
+                        .get(&crate::glue::stock::keeper::KEEPER_KEY.into())
+                        == Some(&Tag::Byte(1)),
             ),
             Block::MechanicalCrafter => {
                 draw_crafter(host, event.draw, event.pos, &event.entity.nbt);
