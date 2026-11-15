@@ -759,9 +759,11 @@ fn item_landed(
             }
             let behind = create_engine::funnel::behind(spot, f.facing);
             let count = s.count();
+            let moved = s.clone();
             *stack = items::insert_item(lv, behind, items::face(f.facing), s);
             if stack.as_ref().is_none_or(|l| l.count() != count) {
                 flaps::funnel(lv, spot, true);
+                crate::glue::redstone::detectors::funnel_transfer(lv, spot, &moved);
             }
         }
         Block::Depot => {
