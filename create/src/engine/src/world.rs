@@ -4600,6 +4600,47 @@ mod tests {
     }
 
     #[test]
+    fn a_sloped_belt_turns_as_one_across_its_diagonal_segments() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let belt = |part: &'static str| {
+            (
+                "create:belt",
+                vec![
+                    ("facing", "east"),
+                    ("slope", "upward"),
+                    ("part", part),
+                    ("casing", "false"),
+                    ("waterlogged", "false"),
+                ],
+            )
+        };
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            belt("start"),
+            belt("middle"),
+            belt("end"),
+            ("create:creative_motor", vec![("facing", "south")]),
+        ];
+        states::set_range(10, 4);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        // Up east: each segment one over and one up from the last.
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, [1, 1, 0], 0, 11);
+        w.block_changed(0, [2, 2, 0], 0, 12);
+        w.block_changed(0, [0, 0, -1], 0, 13);
+        w.settle_belts(0);
+        assert_eq!(w.dims[0].belts[&[0, 0, 0]].chain.len(), 3);
+        w.tick(0, &mut Vec::new());
+        let start = w.speed(0, [0, 0, 0]).unwrap();
+        assert!(start != 0.0);
+        assert_eq!(w.speed(0, [1, 1, 0]), Some(start));
+        assert_eq!(w.speed(0, [2, 2, 0]), Some(start));
+        states::clear_range();
+    }
+
+    #[test]
     fn a_turned_crank_drives_for_ten_ticks() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![

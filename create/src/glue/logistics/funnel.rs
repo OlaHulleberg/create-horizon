@@ -241,6 +241,7 @@ fn push_onto_depot(
     let dim = lv.dim;
     with_world(|w| w.depot_put(dim, below, Some(held)));
     super::flaps::funnel(lv, pos, false);
+    crate::glue::redstone::funnel_transfer(lv, pos, &id);
     Some(Some(true))
 }
 
@@ -275,6 +276,7 @@ fn pull_from_depot(
             continue;
         }
         let count = stack.count();
+        let key = items::key_of(&*lv.host, &stack);
         let left = items::insert_item(lv, behind, side, stack);
         if left.as_ref().is_some_and(|l| l.count() == count) {
             continue;
@@ -285,6 +287,7 @@ fn pull_from_depot(
             with_world(|w| w.depot_put(dim, below, None));
         }
         super::flaps::funnel(lv, pos, true);
+        crate::glue::redstone::funnel_transfer(lv, pos, &key);
         return Some(Some(true));
     }
     Some(None)
@@ -449,15 +452,26 @@ pub fn tick_funnels(lv: &mut ServerLevel<'_>) {
                 push_onto_depot(lv, pos, f.facing, side, behind, max)
             }
             Mode::PushingToBelt => push_onto_belt(lv, pos, f.facing, side, behind, max),
-            Mode::TakingFromBelt if depot_below(lv, pos) => pull_from_depot(lv, pos, side, behind),
+            Mode::TakingFromBelt if depot_below(lv, pos) => {
+                // The depot hands its stack over each tick it holds one
+                // (`DepotBehaviour.tick`, `handleBeltFunnelOutput`).
+                pull_from_depot(lv, pos, side, behind);
+                Some(Some(false))
+            }
             // Inserting, pulling from a belt (the belt does it), paused or invalid: dormant.
             _ => None,
         };
+        // `startCooldown` after a stack left: counted down over 8 ticks, the funnel acts on the
+        // 9th. Blocked, or the inventory empty (`awaitNewVersion`, a check each tick), it tries
+        // again the next tick.
         schedule(
             pos,
             match next {
-                Some(Some(false)) => now + 1,
-                Some(_) => now + u64::from(EXTRACTION_COOLDOWN),
+                Some(Some(true)) => now + u64::from(EXTRACTION_COOLDOWN) + 1,
+                Some(_) => now + 1,
+                // A belt funnel looks at the belt's way each tick (Create's mode is read each
+                // tick): the belt reversed or started, it may push.
+                None if f.belt.is_some() => now + 1,
                 None => u64::MAX,
             },
         );
@@ -487,8 +501,10 @@ fn extract_in_front(
     let Some(stack) = take_filtered(lv, pos, behind, side, max) else {
         return Some(None);
     };
+    let key = items::key_of(&*lv.host, &stack);
     items::drop_stack(lv, at, v, stack, 0);
     super::flaps::funnel(lv, pos, false);
+    crate::glue::redstone::funnel_transfer(lv, pos, &key);
     Some(Some(true))
 }
 
@@ -539,5 +555,7 @@ fn push_onto_belt(
         }
     }
     super::flaps::funnel(lv, pos, false);
+    let key = items::key_of(&*lv.host, &stack);
+    crate::glue::redstone::funnel_transfer(lv, pos, &key);
     Some(Some(true))
 }

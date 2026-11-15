@@ -40,7 +40,7 @@ mod switch_screen;
 mod ticks;
 
 pub use analog::{Comparators, analog_touched};
-pub(crate) use detectors::{item_id, observed, slot_stack};
+pub(crate) use detectors::{funnel_transfer, item_id, observed, slot_stack};
 pub(crate) use parts::with_properties;
 pub(crate) use ticks::show_diode;
 

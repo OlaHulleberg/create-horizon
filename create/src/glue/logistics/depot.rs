@@ -47,6 +47,10 @@ pub fn use_depot(
     if !main_hand {
         return true;
     }
+    // `canAcceptItems`: an ejector only while charged (its plate down).
+    if !super::arms::ejector_accepts(lv.dim, pos) {
+        return true;
+    }
     let Some(p) = lv.host.player(player) else {
         return true;
     };

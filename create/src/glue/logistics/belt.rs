@@ -398,6 +398,23 @@ pub fn insert_into_from(
     let dim = lv.dim;
     let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
     if is_depot {
+        // An ejector merges onto what it holds, up to its stack size (`enableMerging`).
+        let mut item = item.clone();
+        let mut rest = 0;
+        if super::arms::is_ejector(dim, next) {
+            let left = super::arms::depot_insert(lv, next, &item.item, item.count, true);
+            if left == item.count {
+                return Some(item.count);
+            }
+            if !depot_items(lv, next).is_empty() {
+                return Some(super::arms::depot_insert(
+                    lv, next, &item.item, item.count, false,
+                ));
+            }
+            item.count -= left;
+            rest = left;
+        }
+        let item = &item;
         // DepotBehaviour.tryInsertingFromSide: only into an empty depot (an ejector's only
         // while charged, `canAcceptItems`).
         if !depot_items(lv, next).is_empty() || !ejector_accepts(dim, next) {
@@ -416,7 +433,7 @@ pub fn insert_into_from(
             fan: item.fan,
         };
         with_world(|w| w.depot_put(dim, next, Some(held)));
-        return Some(0);
+        return Some(rest);
     }
     // BeltBlockEntity.tryInsertingFromSide on the next belt.
     let (c2, index, seg2) = belt_segment(lv, next)?;
@@ -495,7 +512,11 @@ pub fn direct_input_accepts(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> b
     if let Some((c, _, seg)) = belt_segment(lv, pos) {
         let dim = lv.dim;
         let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
-        return rpm != 0.0 && belt::movement_facing(rpm, seg.facing) != side.opposite();
+        // BeltBlockEntity.canInsertFrom: a running belt, not sideways or vertical, not moving
+        // toward the side.
+        return rpm != 0.0
+            && !matches!(seg.slope, belt::Slope::Sideways | belt::Slope::Vertical)
+            && belt::movement_facing(rpm, seg.facing) != side.opposite();
     }
     if let Some(only) = super::super::processing::belt_input_side(lv, pos) {
         return only.is_none_or(|d| d == side);
@@ -885,6 +906,7 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         let left = left.map_or(0, |l| l.count().min(255) as u8);
         if left != item.count {
             super::flaps::funnel(self.lv, pos, true);
+            crate::glue::redstone::funnel_transfer(self.lv, pos, &item.item);
         }
         Some(left)
     }
@@ -949,7 +971,8 @@ impl BeltSide<'_, '_> {
             let took = with_world(|w| {
                 let d = &mut w.dims[dim];
                 let b = d.brass.get_mut(&t)?;
-                if b.stack.is_some() {
+                // `canTakeItems`: none held, and not handing out with its synchronized group.
+                if b.stack.is_some() || b.synced {
                     return Some(false);
                 }
                 // `setStackToDistribute`.
@@ -984,6 +1007,10 @@ impl BeltSide<'_, '_> {
                 continue;
             }
             let out = [at[0] + o[0], at[1], at[2] + o[2]];
+            // `canInsertFromSide`: a stopped belt, or one running into the tunnel, is passed by.
+            if !direct_input_accepts(self.lv, out, d) {
+                continue;
+            }
             let one = belt::Item {
                 count: 1,
                 ..item.clone()
@@ -1003,34 +1030,47 @@ impl BeltSide<'_, '_> {
     }
 }
 
+/// An entity noted on a belt this tick: its level, the block, its id, and whether it stepped
+/// on that block (`stepped_on`) rather than being inside a segment.
+type Passenger = (usize, [i32; 3], u32, bool);
+
 thread_local! {
     /// Entities inside a belt segment this tick (`BeltBlock.entityInside`), by level: noted in
     /// the entity's move, where it can't be moved, and carried at the end of the level's tick.
-    static PASSENGERS: std::cell::RefCell<Vec<(usize, [i32; 3], u32)>> =
+    static PASSENGERS: std::cell::RefCell<Vec<Passenger>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// `BeltBlock.entityInside` for an entity that is not an item (items land on the belt): noted
 /// to be carried.
 pub fn passenger_inside(dim: usize, pos: [i32; 3], entity: u32) {
-    PASSENGERS.with_borrow_mut(|p| p.push((dim, pos, entity)));
+    PASSENGERS.with_borrow_mut(|p| p.push((dim, pos, entity, false)));
+}
+
+/// `BeltBlock.updateEntityAfterFallOn` (`block_step_on`, the block under an entity on the
+/// ground): noted to be carried by the segment at its feet or the one below them, found at the
+/// end of the tick. On a slope the segment holding it up reaches above its own block, where
+/// `entity_inside` can't see it.
+pub fn stepped_on(dim: usize, on: [i32; 3], entity: u32) {
+    PASSENGERS.with_borrow_mut(|p| p.push((dim, on, entity, true)));
 }
 
 /// `BeltMovementHandler.transportEntity` for the entities other than players on this level's
-/// belts: each is moved as the belt runs (`passenger_motion`), up and down slopes and toward the
-/// middle. The mod API moves an entity only by its motion (`EntityRef::set_velocity`), so a
-/// passenger is given the belt's motion each tick rather than moved by it; mobs are not slowed
-/// (Create's slowness).
+/// belts: each is moved as the belt runs (`passenger_motion`), toward the middle, up a slope
+/// by stepping up its stairs (`BeltShapes`) and down it at the belt's speed. The mod API moves an
+/// entity only by its motion (`EntityRef::set_velocity`), so a passenger is given the belt's
+/// motion each tick rather than moved by it. Mobs are slowed (slowness II for half a second)
+/// and take no fall damage while carried.
 pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let mut mine: Vec<([i32; 3], u32)> = PASSENGERS.with_borrow_mut(|p| {
+    let mut mine: Vec<([i32; 3], u32, bool)> = PASSENGERS.with_borrow_mut(|p| {
         if p.is_empty() {
             return Vec::new();
         }
         let mine = p
             .iter()
             .filter(|e| e.0 == dim)
-            .map(|e| (e.1, e.2))
+            .map(|e| (e.1, e.2, e.3))
             .collect();
         p.retain(|e| e.0 != dim);
         mine
@@ -1039,9 +1079,10 @@ pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
         return;
     }
     // One belt segment per entity: the one it stands in (`lastCollidedPos`).
-    mine.sort_by_key(|e| e.1);
+    mine.sort_by_key(|e| (e.1, e.2));
     mine.dedup_by_key(|e| e.1);
-    for (pos, id) in mine {
+    let slowness = lv.host.effect_key("minecraft:slowness");
+    for (pos, id, stepped) in mine {
         let Some(e) = lv.host.entity(id) else {
             continue;
         };
@@ -1051,18 +1092,46 @@ pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
         if kind == "minecraft:item" || kind == "minecraft:player" {
             continue;
         }
-        let Some((c, _, seg)) = belt_segment(lv, pos) else {
-            continue;
-        };
         let (Some(feet), Some(v)) = (e.position(&*lv.host), e.velocity(&*lv.host)) else {
             continue;
         };
+        let at = feet.map(|v| v.floor() as i32);
+        let below = [at[0], at[1] - 1, at[2]];
+        let pos = if !stepped {
+            pos
+        } else if belt_segment(lv, at).is_some() {
+            at
+        } else if belt_segment(lv, below).is_some() {
+            below
+        } else {
+            // Over the edge of the segment holding it up.
+            pos
+        };
+        let Some((c, _, seg)) = belt_segment(lv, pos) else {
+            continue;
+        };
         let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
+        let living = lv.host.living(e);
         let Some(m) = belt::passenger_motion(&seg, pos, feet, rpm, false) else {
             continue;
         };
-        // On a slope its motion carries it up or down against gravity (0.08 a tick).
-        let vy = if m[1] != 0.0 { m[1] + 0.08 } else { v[1] };
+        // Lock mobs in place: MOVEMENT_SLOWDOWN 10 ticks, amplifier 1, hidden.
+        if let (Some(living), Some(key)) = (living, slowness) {
+            living.add_effect(
+                &mut *lv.host,
+                &mod_api::ActiveEffect::new(key, 10, 1, false, false, false),
+            );
+        }
+        e.reset_fall_distance(&mut *lv.host);
+        // Up a slope it climbs the belt's stairs as it is pushed along (gravity keeps it on
+        // them); down one it sinks at the belt's speed against gravity (0.08 a tick).
+        let vy = if m[1] < 0.0 {
+            m[1] + 0.08
+        } else if m[1] > 0.0 {
+            v[1].min(0.0)
+        } else {
+            v[1]
+        };
         e.set_velocity(&mut *lv.host, [m[0], vy, m[2]]);
     }
 }
@@ -1087,13 +1156,40 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost) {
     {
         return;
     }
-    let pos = [feet[0], feet[1] - 1.0e-5, feet[2]].map(|v| v.floor() as i32);
-    let Some(seg) = level
-        .block_state(&*host, pos)
-        .and_then(super::super::states::id)
-        .and_then(|id| {
-            super::super::client_table(&*host, |t| t.get(id).and_then(|(_, i)| i.belt)).flatten()
-        })
+    // `updateEntityAfterFallOn`: the segment at its feet, else the one below them (a slope's
+    // segment reaches above its block).
+    let at = feet.map(|v| v.floor() as i32);
+    let segment = |p: [i32; 3]| {
+        level
+            .block_state(&*host, p)
+            .and_then(super::super::states::id)
+            .and_then(|id| {
+                super::super::client_table(&*host, |t| t.get(id).and_then(|(_, i)| i.belt))
+                    .flatten()
+            })
+    };
+    let below = [at[0], at[1] - 1, at[2]];
+    // `entityInside` of the blocks its box is in (Create's `checkInsideBlocks` asks every block
+    // the box reaches, whatever its shape): off the end of a belt, the segment still under the
+    // box's edge carries it until it falls.
+    let under_box = || {
+        let [lo, hi] = e.bounding_box(&*host)?;
+        let (x0, x1) = (
+            (lo[0] + 1.0e-7).floor() as i32,
+            (hi[0] - 1.0e-7).floor() as i32,
+        );
+        let (z0, z1) = (
+            (lo[2] + 1.0e-7).floor() as i32,
+            (hi[2] - 1.0e-7).floor() as i32,
+        );
+        (x0..=x1)
+            .flat_map(|x| (z0..=z1).map(move |z| [x, at[1], z]))
+            .find_map(|p| segment(p).map(|s| (p, s)))
+    };
+    let Some((pos, seg)) = segment(at)
+        .map(|s| (at, s))
+        .or_else(|| segment(below).map(|s| (below, s)))
+        .or_else(under_box)
     else {
         return;
     };
@@ -1102,12 +1198,14 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost) {
         return;
     };
     let keep = 1.0 - GROUND_FRICTION;
+    // Up a slope the player steps up the belt's stairs as it is pushed along; down one it is
+    // pushed down at the belt's speed.
     host.push_player([
         (m[0] * keep) as f32,
-        if m[1] > 0.0 {
-            (m[1] + 0.08) as f32
-        } else {
+        if m[1] < 0.0 {
             (m[1] * keep) as f32
+        } else {
+            0.0
         },
         (m[2] * keep) as f32,
     ]);

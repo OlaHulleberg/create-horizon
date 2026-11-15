@@ -39,6 +39,8 @@ pub fn register(r: &mut dyn Registrar) {
             r.block_part(states::key(block), Placement);
         }
     }
+    let vault = r.item_key("create:item_vault");
+    r.item_part(vault, VaultItem);
 }
 
 fn axis_name(a: Axis) -> &'static str {
@@ -309,5 +311,175 @@ impl BlockPart for Placement {
             changed = true;
         }
         changed.then_some(Some(state))
+    }
+}
+
+/// `ItemVaultItem.tryMultiPlace`: a vault placed by a player (not sneaking) on the end face of a
+/// vault wider than one fills the rest of that cross-section with vaults, when it is free and
+/// the player has the vaults (creative: always). Done in the level's next tick, as the
+/// placement is not finished yet (its stack not used up).
+pub struct VaultItem;
+
+/// Vault layers to fill: level, the player, the hand holding the vaults, the axis, the
+/// positions.
+type Layer = (
+    usize,
+    mod_api::PlayerRef,
+    mod_api::Hand,
+    Axis,
+    Vec<[i32; 3]>,
+);
+
+thread_local! {
+    static LAYERS: std::cell::RefCell<Vec<Layer>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[mod_api::horizon_part]
+impl mod_api::ItemPart for VaultItem {
+    fn on_block_placed_by(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::OnBlockPlacedByEvent<'_>,
+    ) {
+        use super::super::items as player_items;
+        let Some(player) = event.placer else {
+            return;
+        };
+        if player_items::sneaking(&*host, player) {
+            return;
+        }
+        let Some(dim) = player
+            .dimension(&*host)
+            .and_then(|d| level_index(&d.to_string()))
+        else {
+            return;
+        };
+        let face = match event.face {
+            mod_api::BlockFace::Up => Dir::Up,
+            mod_api::BlockFace::Down => Dir::Down,
+            mod_api::BlockFace::North => Dir::North,
+            mod_api::BlockFace::South => Dir::South,
+            mod_api::BlockFace::West => Dir::West,
+            mod_api::BlockFace::East => Dir::East,
+            _ => return,
+        };
+        let pos = event.pos;
+        let o = face.opposite().offset();
+        let on = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+        let vault = with_world(|w| {
+            let v = &w.dims[dim].vaults;
+            let c = v.controller_of(on)?;
+            let part = v.parts.get(&c)?;
+            Some((c, part.axis, part.width, part.length))
+        })
+        .flatten();
+        let Some((c, axis, width, length)) = vault else {
+            return;
+        };
+        if width == 1 || face.axis() != axis {
+            return;
+        }
+        // The layer past either end of the vault, where the block went.
+        let along = Dir::from_axis(axis, true).offset();
+        let start = if face == Dir::from_axis(axis, false) {
+            [c[0] - along[0], c[1] - along[1], c[2] - along[2]]
+        } else {
+            [
+                c[0] + along[0] * length,
+                c[1] + along[1] * length,
+                c[2] + along[2] * length,
+            ]
+        };
+        if create_engine::kinetics::Axis::of(start, axis)
+            != create_engine::kinetics::Axis::of(pos, axis)
+        {
+            return;
+        }
+        let Some(level) = player.level(&*host) else {
+            return;
+        };
+        let mut free = Vec::new();
+        for x in 0..width {
+            for z in 0..width {
+                let p = create_engine::vault::offset(start, axis, 0, x, z);
+                let Some(state) = level.block_state(&*host, p) else {
+                    return;
+                };
+                let is_vault = states::id(state).is_some_and(|id| {
+                    with_world(|w| w.table.get(id).map(|(b, _)| b))
+                        .flatten()
+                        .is_some_and(|b| b == Block::ItemVault)
+                });
+                if is_vault || p == pos {
+                    continue;
+                }
+                if mod_api::HostBlockStates::block_states(&*host).replaceable(state) != Some(true) {
+                    return;
+                }
+                free.push(p);
+            }
+        }
+        if free.is_empty() {
+            return;
+        }
+        // The stack still holds the vault just placed (it is used up after this).
+        let key = event.stack.item();
+        let hand = [mod_api::Hand::Main, mod_api::Hand::Off]
+            .into_iter()
+            .find(|h| player_items::held(&*host, player, *h).is_some_and(|s| s.item() == key));
+        let Some(hand) = hand else {
+            return;
+        };
+        if !player_items::creative(&*host, player) && event.stack.count() < free.len() as u32 + 1 {
+            return;
+        }
+        LAYERS.with_borrow_mut(|l| l.push((dim, player, hand, axis, free)));
+    }
+}
+
+/// The vault layers asked for in this level: each free place takes a vault of the layer's
+/// axis, the player's stack one each outside creative.
+pub fn tick_vault_layers(lv: &mut super::super::server::ServerLevel<'_>) {
+    use super::super::items as player_items;
+    let dim = lv.dim;
+    let layers: Vec<Layer> = LAYERS.with_borrow_mut(|l| {
+        if l.is_empty() {
+            return Vec::new();
+        }
+        let (here, rest): (Vec<_>, Vec<_>) = l.drain(..).partition(|e| e.0 == dim);
+        *l = rest;
+        here
+    });
+    for (_, player, hand, axis, free) in layers {
+        let Some(key) = lv.host.block_key("create:item_vault") else {
+            continue;
+        };
+        let constraint = [mod_api::StateConstraint::new("axis", axis_name(axis))];
+        let Ok(state) = BlockState::of(
+            &mod_api::HostBlockStates::block_states(&*lv.host),
+            key,
+            &constraint,
+        ) else {
+            continue;
+        };
+        let creative = player_items::creative(&*lv.host, player);
+        for p in free {
+            let replaceable = lv
+                .block_state(p)
+                .and_then(|s| mod_api::HostBlockStates::block_states(&*lv.host).replaceable(s))
+                .unwrap_or(false);
+            if !replaceable {
+                continue;
+            }
+            if !creative {
+                let has = player_items::held(&*lv.host, player, hand)
+                    .is_some_and(|s| s.item().id(&*lv.host) == "create:item_vault");
+                if !has {
+                    break;
+                }
+                player_items::shrink_held(lv.host, player, hand, 1);
+            }
+            lv.set_state(p, state, super::super::server::update_all());
+        }
     }
 }

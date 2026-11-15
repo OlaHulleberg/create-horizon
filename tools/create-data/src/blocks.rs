@@ -600,26 +600,21 @@ fn kinetic(b: &CreateBlock, sounds: Option<&'static str>) -> Option<Decision> {
             None,
         ),
         // BeltBlock: drawn by its renderer only (the block model is a particle). Shapes:
-        // BeltShapes' flat part (`box(1,3,0,15,13,16)` along the belt) for every slope, for now.
-        "belt" => {
-            let along_z = json!([[0.0625, 0.1875, 0.0, 0.9375, 0.8125, 1.0]]);
-            let along_x = json!([[0.0, 0.1875, 0.0625, 1.0, 0.8125, 0.9375]]);
-            (
-                "minecraft:iron_block",
-                Some(json!({ "property": "facing", "values": {
-                    "north": along_z, "south": along_z, "west": along_x, "east": along_x } })),
-                own(&[
-                    ("facing", &["north", "south", "west", "east"]),
-                    (
-                        "slope",
-                        &["horizontal", "upward", "downward", "vertical", "sideways"],
-                    ),
-                    ("part", &["start", "middle", "end", "pulley"]),
-                    ("casing", bools),
-                    ("waterlogged", bools),
-                ]),
-            )
-        }
+        // BeltShapes' by facing, slope, part and casing (`getShape`); its collision below.
+        "belt" => (
+            "minecraft:iron_block",
+            Some(belt_shapes().0),
+            own(&[
+                ("facing", &["north", "south", "west", "east"]),
+                (
+                    "slope",
+                    &["horizontal", "upward", "downward", "vertical", "sideways"],
+                ),
+                ("part", &["start", "middle", "end", "pulley"]),
+                ("casing", bools),
+                ("waterlogged", bools),
+            ]),
+        ),
         // Create's diodes are vanilla diodes (`AbstractDiodeBlock`, REPEATER's properties): the
         // repeater gives shape, placement and survival; the glue gives the latch's rules.
         "powered_toggle_latch" => (
@@ -3626,6 +3621,12 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     };
     if let Some(s) = shapes {
         doc.insert("shapes".into(), fork_shapes(template, &default, s));
+    }
+    if b.name == "belt" {
+        // BeltBlock.getCollisionShape: BeltShapes.getCollisionShape (cut at 19 px) for what is
+        // not yet riding the belt. Create gives its passengers the whole outline; a content shape
+        // can't tell a passenger, so every entity has the cut one.
+        doc.insert("collision_shapes".into(), crate::shapes::belt_shapes().1);
     }
     if b.name == "factory_gauge" {
         // FactoryPanelBlock.getCollisionShape: empty for entities.

@@ -102,7 +102,12 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   are drawn by it, lit with the anchor's light (no per-block light in a block entity's draw); trains and cart
   contraptions are drawn as vanilla block displays the server moves every tick.
 - **`EntityRef::move_by` for any entity** (`Entity.move`): belts carry mobs by setting their motion
-  each tick, and players by a push from their own client (`push_player`), where Create moves them.
+  each tick, and players by a push from their own client (`push_player`), where Create moves them; up a
+  slope they climb `BeltShapes`' stairs by stepping up, where Create moves them down 0.13 and across with a
+  step height of 1.
+- **A collision shape for an entity riding the block** (`BeltBlock.getCollisionShape`: the whole outline for
+  a belt's passengers, cut at 19 px for others): content shapes select by entity class only, so every entity
+  collides with a belt's cut shape.
 - **`MinecartRef::set_carrying`** (a cart with a contraption counting as ridden: the glue gives back the
   drag an empty cart's rails take, but not the three-quarter step a ridden cart moves) and
   **`EntityRef::move_by`** (moving a coupled cart off its rail with collisions). `MinecartRef::is_on_rails`
@@ -222,8 +227,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - Display and redstone: the clipboard copies no steam engine's `RotationDirection` and no table cloth's price,
   neither setting being ported; redstone links feeding factory gauges (`RedstoneLinkBlockEntity`'s
   `FactoryPanelSupportBehaviour`) are not joined (display links are).
-- Logistics: a sloped belt collides as a flat one; Create's `BeltShapes` (by facing, slope and part) are
-  not declared yet, though content shapes can select by several properties (as the steam engine's do).
 - Contraptions: a display board's text, a belt's items and a crafter's grid mid-craft are neither carried
   nor drawn on a moving structure; signs', banners' and beds' block entities and a deployer's held item are not
   drawn on one (the rest of what the engine keeps per block rides with it, `Subsystem::carry_out`, and is drawn

@@ -25,12 +25,14 @@
 //!   (`arms::select_point`, `arms::select_ejector_target`), but the outlines Create's client draws
 //!   around the chosen blocks are not, and left-clicking a point to drop it is out: the mod API's
 //!   `left_click_block` names no player.
-//! - Belts: a sloped belt collides as a flat one (`BeltShapes` by facing, slope and part are not
-//!   declared yet, though content shapes can select by several properties). A belt's casing is
-//!   drawn by its block entity (its block is never a terrain model, `ENTITYBLOCK_ANIMATED` in
-//!   every state), as `BeltModel` would draw it.
+//! - Belts outline and collide as Create's `BeltShapes` (declared by `tools/create-data`), but
+//!   every entity collides with the shape cut at 19 px, where Create gives its passengers the whole
+//!   outline (content shapes select by entity class, not by riding). A belt's casing is drawn by
+//!   its block entity (its block is never a terrain model, `ENTITYBLOCK_ANIMATED` in every
+//!   state), as `BeltModel` would draw it.
 //! - Players riding a belt are pushed by their own client (`push_player`), other entities by
-//!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`.
+//!   their motion (`EntityRef::set_velocity`): the mod API has no `Entity.move`. Up a slope they
+//!   climb the belt's stairs by stepping up, where Create moves them.
 //! - Item vaults' connected textures (`ItemVaultCTBehaviour`) are the connected-texture rules
 //!   `create-data prepare` writes: a vault joins any vault block of its axis and size beside it,
 //!   not only its own vault's.
@@ -259,6 +261,7 @@ impl Subsystem for Logistics {
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        placement::tick_vault_layers(lv);
         chute::tick_vaults(lv);
         chute::tick_chute_shapes(lv);
         chute::tick_chutes(lv);
@@ -527,6 +530,24 @@ impl Subsystem for Entities {
 }
 
 /// The Create block at `pos` of `lv` and its state's facts.
+/// `BeltBlock.updateEntityAfterFallOn`: an entity other than an item on the ground over a belt
+/// is noted to be carried (`belt::stepped_on`).
+pub fn block_step_on(event: &mut mod_api::BlockStepOnEvent<'_>) {
+    if event.kind == "minecraft:item" {
+        return;
+    }
+    let belt = states::id(event.state)
+        .and_then(|id| with_world(|w| w.table.get(id).map(|(b, _)| b == Block::Belt)))
+        .flatten();
+    if belt != Some(true) {
+        return;
+    }
+    let Some(dim) = super::world::level_index(event.dimension) else {
+        return;
+    };
+    belt::stepped_on(dim, event.position, event.entity as u32);
+}
+
 pub fn info_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Block, StateInfo)> {
     let id = lv.block(pos);
     if id == 0 {
@@ -790,15 +811,27 @@ fn item_landed(
             }
             let behind = create_engine::funnel::behind(spot, f.facing);
             let count = s.count();
+            let key = items::key_of(&*lv.host, &s);
             *stack = items::insert_item(lv, behind, items::face(f.facing), s);
             if stack.as_ref().is_none_or(|l| l.count() != count) {
                 flaps::funnel(lv, spot, true);
+                super::redstone::funnel_transfer(lv, spot, &key);
             }
         }
         Block::Depot => {
             // DirectBeltInputBehaviour from above: only into an empty depot (an ejector's while
             // charged).
             let dim = lv.dim;
+            // An ejector merges it onto what it holds, up to its stack size (`enableMerging`).
+            if arms::is_ejector(dim, spot) {
+                let key = items::key_of(&*lv.host, &s);
+                let count = s.count().min(255) as u8;
+                let left = arms::depot_insert(lv, spot, &key, count, false);
+                if left < count {
+                    *stack = s.shrink(u32::from(count - left));
+                }
+                return;
+            }
             if !depot::depot_items(lv, spot).is_empty() || !arms::ejector_accepts(dim, spot) {
                 return;
             }

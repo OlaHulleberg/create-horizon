@@ -356,6 +356,10 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                     p.shafts = 0;
                 }
                 p.belt = Some(controller);
+                p.diagonal = matches!(
+                    seg.slope,
+                    crate::belt::Slope::Upward | crate::belt::Slope::Downward
+                );
                 one(p)
             }
             _ => [None, None],
