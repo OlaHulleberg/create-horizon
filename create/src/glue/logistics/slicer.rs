@@ -159,6 +159,7 @@ pub fn use_wrench(
 
     // Shorten from an end.
     if seg.hovering_end(hit) {
+        let clicked = lv.block_state(pos);
         let (_, taken) = with_world(|w| w.take_belt(dim, pos)).flatten()?;
         let next = if seg.part == Part::End {
             sub(pos, v)
@@ -170,6 +171,10 @@ pub fn use_wrench(
         set_segment(lv, next, seg, next_cased);
         with_world(|w| w.remove_belt_quietly(dim, pos));
         set_air(lv, pos);
+        // `levelEvent(PARTICLES_DESTROY_BLOCK, pos, Block.getId(state))`.
+        if let Some(state) = clicked {
+            lv.destroy_effect(pos, state);
+        }
         if !creative
             && replaced.is_some_and(|r| r.part == Part::Pulley)
             && let Some(shaft) = items::stack_of(&*lv.host, "create:shaft", 1)

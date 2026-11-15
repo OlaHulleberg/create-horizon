@@ -348,7 +348,13 @@ impl Subsystem for Logistics {
                 let down = prop(lv, "facing").as_deref() == Some("down");
                 match prop(lv, "shape").as_deref() {
                     Some("intersection") => {}
-                    Some("encased") => set(lv, "shape", "normal"),
+                    Some("encased") => {
+                        set(lv, "shape", "normal");
+                        // The casing's particles: the industrial iron block's.
+                        if let Some(iron) = lv.host.block_state_id("create:industrial_iron_block") {
+                            lv.destroy_effect(pos, iron);
+                        }
+                    }
                     Some("normal") if down => set(lv, "shape", "window"),
                     Some(_) if down => set(lv, "shape", "normal"),
                     _ => {}

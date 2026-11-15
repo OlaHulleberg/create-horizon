@@ -502,6 +502,11 @@ pub(super) fn wrench_pipe(
         // EncasedPipeBlock.onWrenched: a pipe with its sides, connected again preferring the
         // first open side.
         Block::EncasedFluidPipe => {
+            // `levelEvent(PARTICLES_DESTROY_BLOCK, pos, Block.getId(state))`: the encased
+            // pipe's.
+            if let Some(own) = lv.block_state(pos) {
+                lv.destroy_effect(pos, own);
+            }
             let sides = pipe_sides_of(lv, state);
             let first = Dir::ALL
                 .into_iter()

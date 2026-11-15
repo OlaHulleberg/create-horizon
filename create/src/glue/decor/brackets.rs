@@ -142,6 +142,7 @@ fn wrench(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: PlayerRef) -> bool {
     let Some(b) = with(dim, |d| d.brackets.remove(&pos)) else {
         return false;
     };
+    removed_effect(lv, pos, b);
     with(dim, |d| d.shown.push(pos));
     girders::around(dim, pos);
     persist::mark_pos_unsaved(dim, pos);
@@ -149,6 +150,14 @@ fn wrench(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: PlayerRef) -> bool {
         give(&mut *lv.host, player, b.block());
     }
     true
+}
+
+/// `BracketedBlockEntityBehaviour.removeBracket`: the bracket's break particles and sound
+/// (`levelEvent(PARTICLES_DESTROY_BLOCK, pos, Block.getId(bracket))`).
+pub(super) fn removed_effect(lv: &mut ServerLevel<'_>, pos: [i32; 3], b: decor::Bracket) {
+    if let Some(state) = lv.host.block_state_id(&shown_text(Some(b))) {
+        lv.destroy_effect(pos, state);
+    }
 }
 
 /// Shafts, cogs and pipes: the wrench's `onWrenched` reaches their bracket first.

@@ -47,11 +47,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   (deployers dig every block at its harvestable speed: `can_harvest_block` and `player_harvest_check` hear the
   game's own dig and break, but a deployer counts its progress itself, before any break); the weathering-copper class and age; a block's class
   (copycats guess stairs, bars and trapdoors from tags and ids).
-- **A state's numeric id**, for `level_event(2001, ..)`: a wrenched copycat and an encased shaft's or cog's
-  casing taken off show the state's block particles (`LevelRef::send_particles`) and its break sound
-  (`BlockStates::sound`), rebuilt in `ServerLevel::destroy_effect`, not the client's own
-  `addDestroyBlockEffect` burst; a belt's casing, an encased pipe's, a bracket and the belt slicer's cut show
-  none yet. `BlockStates::state_id` (or a 2001 call taking a `BlockState`) would make them exact.
+- **A state's numeric id**, for `level_event(2001, ..)`: a wrenched copycat, an encased shaft's or cog's
+  casing, a belt's casing, an encased pipe's and chute's casing, a bracket taken off and the belt slicer's cut
+  show the state's block particles (`LevelRef::send_particles`) and its break sound (`BlockStates::sound`),
+  rebuilt in `ServerLevel::destroy_effect`, not the client's own `addDestroyBlockEffect` burst.
+  `BlockStates::state_id` (or a 2001 call taking a `BlockState`) would make them exact.
 - **The neighbour-shape update of a state placed by code** (`updateShape` against its neighbours): mirrored
   placements of the wand of symmetry skip it.
 - **`OnBlockPlacedByEvent` without a level**: decor's fix-ups after a placement with no placer are skipped.
