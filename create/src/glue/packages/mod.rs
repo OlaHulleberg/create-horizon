@@ -80,6 +80,8 @@ thread_local! {
     static MAXES: RefCell<HashMap<ItemKey, u32>> = RefCell::new(HashMap::new());
     /// The client's conveyors' packages, by conveyor.
     static SHOWN: RefCell<HashMap<[i32; 3], Shown>> = RefCell::new(HashMap::new());
+    /// Conveyors whose packages are all gone: drawn once more without them.
+    static CLEARED: RefCell<Vec<[i32; 3]>> = const { RefCell::new(Vec::new()) };
     /// Whether this client asked the server for what it draws (`sync`).
     static SYNCED: Cell<bool> = const { Cell::new(false) };
 }
@@ -183,6 +185,25 @@ fn speed_of(dim: usize, pos: [i32; 3]) -> f32 {
 pub struct Packages;
 
 impl Subsystem for Packages {
+    /// A chain conveyor carrying packages is drawn every frame, as they move along it (its
+    /// drawing is otherwise kept, and drawn anew only when its data changes).
+    fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+        if block != Block::ChainConveyor {
+            return false;
+        }
+        let carrying = matches!(
+            super::kinetics::synced(&entity.nbt, CARRYING),
+            Some(Tag::Byte(b)) if *b != 0
+        );
+        carrying
+            || SHOWN.with_borrow(|s| s.contains_key(&pos))
+            || CLEARED.with_borrow_mut(|c| {
+                let was = c.contains(&pos);
+                c.retain(|p| *p != pos);
+                was
+            })
+    }
+
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         for &b in Block::ALL.iter().filter(|&&b| is_packager(b) || is_port(b)) {
             r.block_part(states::key(b), PackageBlock);
@@ -203,6 +224,7 @@ impl Subsystem for Packages {
 
     fn standalone_models(&self, models: &mut Vec<String>) {
         models.extend(CONVEYOR_MODELS.iter().map(|m| (*m).to_owned()));
+        models.extend(RIGGING_MODELS.iter().map(|m| (*m).to_owned()));
         models.extend(frog_draw::models());
     }
 
@@ -273,7 +295,7 @@ impl Subsystem for Packages {
     }
 
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[CHAINS, frog_draw::FROG]
+        &[CHAINS, CARRYING, frog_draw::FROG]
     }
 
     fn world_closed(&self) {
@@ -389,7 +411,10 @@ impl Subsystem for Packages {
         if let Some((pos, drawn)) = chain::decode(data) {
             SHOWN.with_borrow_mut(|s| {
                 if drawn.is_empty() {
-                    s.remove(&pos);
+                    // Drawn once more without them, then kept.
+                    if s.remove(&pos).is_some() {
+                        CLEARED.with_borrow_mut(|c| c.push(pos));
+                    }
                 } else {
                     let drawn = drawn.into_iter().map(|d| (d, None)).collect();
                     s.insert(pos, Shown { since: None, drawn });
@@ -479,6 +504,7 @@ impl Subsystem for Packages {
         frog_target::reset_client();
         port_screen::reset();
         SHOWN.with_borrow_mut(HashMap::clear);
+        CLEARED.with_borrow_mut(Vec::clear);
         SYNCED.set(false);
     }
 
@@ -1971,6 +1997,8 @@ fn lift(item: &str) -> f32 {
 /// The key of a conveyor's chains in its block entity's data, for its clients: whether it runs
 /// backwards, then each connection's offset.
 pub const CHAINS: &str = "Chains";
+/// The key of whether a conveyor carries packages in its block entity's data, for its clients.
+const CARRYING: &str = "Carrying";
 
 /// The conveyor's partial models (`AllPartialModels.CHAIN_CONVEYOR_*`).
 const CONVEYOR_MODELS: [&str; 4] = [
@@ -1980,8 +2008,28 @@ const CONVEYOR_MODELS: [&str; 4] = [
     "minecraft:block/iron_chain",
 ];
 
+/// The packages' riggings (`PackageStyle.getRiggingModel`), by size.
+const RIGGING_MODELS: [&str; 4] = [
+    "create:item/package/rigging_12x12",
+    "create:item/package/rigging_10x12",
+    "create:item/package/rigging_12x10",
+    "create:item/package/rigging_10x8",
+];
+
+/// The rigging a package hangs from on a chain, by its style's size.
+fn rigging(item: &str) -> Option<&'static str> {
+    let s = package::style(item)?;
+    Some(match (s.width, s.height) {
+        (12, 12) => RIGGING_MODELS[0],
+        (10, 12) => RIGGING_MODELS[1],
+        (12, 10) => RIGGING_MODELS[2],
+        (10, 8) => RIGGING_MODELS[3],
+        _ => return None,
+    })
+}
+
 /// What each conveyor's block entity was last told of its chains, by level and position.
-type SentChains = HashMap<(usize, [i32; 3]), Vec<i32>>;
+type SentChains = HashMap<(usize, [i32; 3]), (Vec<i32>, bool)>;
 
 thread_local! {
     static CONVEYOR_MODEL_REFS: RefCell<HashMap<&'static str, mod_api::ModelRef>> =
@@ -2015,7 +2063,9 @@ fn conveyor_model(
     }
 }
 
-/// The conveyor's chains in its block entity's data, written when they changed.
+/// The conveyor's chains in its block entity's data, and whether it carries packages, written
+/// when they changed: a conveyor carrying packages is drawn anew every frame (`animated`), its
+/// drawing kept again once they are gone.
 fn sync_chains(lv: &mut ServerLevel<'_>, conveyors: &[[i32; 3]]) {
     let dim = lv.dim;
     for &pos in conveyors {
@@ -2023,7 +2073,7 @@ fn sync_chains(lv: &mut ServerLevel<'_>, conveyors: &[[i32; 3]]) {
             pk.chains.conveyors.get(&pos).map(|c| {
                 let mut v = vec![i32::from(c.reversed)];
                 v.extend(c.connections.iter().flatten());
-                v
+                (v, !c.is_empty())
             })
         });
         let Some(data) = data else {
@@ -2036,7 +2086,10 @@ fn sync_chains(lv: &mut ServerLevel<'_>, conveyors: &[[i32; 3]]) {
         let Some(entity) = lv.host.block_entity(lv.level, pos) else {
             continue;
         };
-        let tag = Compound::from([(CHAINS.into(), Tag::IntArray(data.clone()))]);
+        let tag = Compound::from([
+            (CHAINS.into(), Tag::IntArray(data.0.clone())),
+            (CARRYING.into(), Tag::Byte(i8::from(data.1))),
+        ]);
         if entity.merge_data(&mut *lv.host, tag).is_ok() {
             CHAINS_SENT.with_borrow_mut(|s| s.insert((dim, pos), data));
         }
@@ -2183,6 +2236,13 @@ impl BlockEntityPart for ConveyorDraw {
                 // The item model is drawn about its centre; the legacy part was posed from its
                 // corner.
                 draw.translate([0.5; 3]);
+                // Its rigging (`PACKAGE_RIGGING`), posed as the box's model is.
+                if let Some(rig) = rigging(&d.item) {
+                    draw.push();
+                    draw.translate([-0.5; 3]);
+                    conveyor_model(draw, host, rig);
+                    draw.pop();
+                }
                 draw.item(stack, ItemDisplayContext::None, None, d.id as i32);
                 draw.pop();
             }
