@@ -24,6 +24,7 @@
 //!   (`trains::schedule_screen`, `trains::conductor`).
 
 mod belt_connector;
+pub(crate) mod controller_screen;
 mod fertilizer;
 pub(crate) mod filter_screen;
 pub(crate) mod gadget_gui;
@@ -298,6 +299,9 @@ impl Subsystem for Items {
             symmetry_screen::CHANNEL => symmetry::configure(host, player, data),
             worldshaper_screen::CHANNEL => worldshaper::configure(host, player, data),
             filter_screen::CHANNEL => filters::client_message(host, player, data),
+            controller_screen::CHANNEL => {
+                super::contraptions::controller::chosen(host, player, data)
+            }
             _ => return false,
         }
         true
@@ -306,6 +310,7 @@ impl Subsystem for Items {
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         symmetry::server_message(channel, data)
             || filter_screen::server_message(host, channel, data)
+            || controller_screen::server_message(host, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
@@ -314,6 +319,7 @@ impl Subsystem for Items {
         worldshaper::tick(&*host);
         worldshaper_screen::tick(host);
         filter_screen::tick(host);
+        controller_screen::tick(host);
     }
 
     fn client_reset(&self) {
@@ -322,6 +328,7 @@ impl Subsystem for Items {
         worldshaper::reset();
         worldshaper_screen::reset();
         filter_screen::reset();
+        controller_screen::reset();
     }
 
     fn standalone_models(&self, models: &mut Vec<String>) {
@@ -342,6 +349,7 @@ impl Subsystem for Items {
         symmetry_screen::screen_render_post(host, event);
         worldshaper_screen::screen_render_post(host, event);
         filter_screen::screen_render_post(host, event);
+        controller_screen::screen_render_post(host, event);
     }
 
     fn screen_mouse_pressed(
@@ -352,10 +360,11 @@ impl Subsystem for Items {
         let screens: [for<'e> fn(
             &dyn ClientHost,
             &mut ScreenMouseButtonPressedPreEvent<'e>,
-        ) -> Flow; 3] = [
+        ) -> Flow; 4] = [
             symmetry_screen::screen_mouse_pressed,
             worldshaper_screen::screen_mouse_pressed,
             filter_screen::screen_mouse_pressed,
+            controller_screen::screen_mouse_pressed,
         ];
         screens
             .iter()
@@ -372,10 +381,11 @@ impl Subsystem for Items {
         let screens: [for<'e> fn(
             &dyn ClientHost,
             &mut ScreenMouseButtonReleasedPreEvent<'e>,
-        ) -> Flow; 3] = [
+        ) -> Flow; 4] = [
             symmetry_screen::screen_mouse_released,
             worldshaper_screen::screen_mouse_released,
             filter_screen::screen_mouse_released,
+            controller_screen::screen_mouse_released,
         ];
         screens
             .iter()
@@ -407,13 +417,17 @@ impl Subsystem for Items {
         host: &dyn ClientHost,
         event: &mut ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
-        filter_screen::screen_key_pressed(host, event)
+        match filter_screen::screen_key_pressed(host, event) {
+            Flow::Continue => controller_screen::screen_key_pressed(host, event),
+            f => f,
+        }
     }
 
     fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
         symmetry_screen::screen_closing(host, event);
         worldshaper_screen::screen_closing(host, event);
         filter_screen::screen_closing(host, event);
+        controller_screen::screen_closing(host, event);
     }
 
     /// `SandPaperItem.finishUsingItem`.
