@@ -547,7 +547,8 @@ fn clear_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) -> bool {
             if facing == Dir::Down {
                 return false;
             }
-            target.is_some_and(|t| !fill_whole(lv, t, f, n))
+            // Nothing holding fluids there: they wait (`targetTank == null`).
+            target.is_none_or(|t| !fill_whole(lv, t, f, n))
         });
     }
     if fluids_left != fluids {
