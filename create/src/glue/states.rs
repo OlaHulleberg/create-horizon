@@ -211,6 +211,7 @@ pub const PARTIALS: &[&str] = &[
     "part_saw_blade_vertical_reversed",
     "part_schematicannon_connector",
     "part_schematicannon_pipe",
+    "part_shaft",
     "part_shaft_half",
     "part_signal_indicator_off",
     "part_signal_indicator_on",

@@ -35,10 +35,11 @@ const GLIDE: i32 = 2;
 struct Shown {
     displays: Vec<(u32, Part)>,
     last: Option<([f64; 3], f32, f32)>,
-    /// A bogey's wheels' turn (`CarriageBogey.wheelAngle`), degrees, and the radius they
-    /// roll on.
+    /// A bogey's wheels' turn (`CarriageBogey.wheelAngle`), degrees, the radius they roll on
+    /// and its size.
     wheel: f64,
     radius: f64,
+    size: Option<BogeySize>,
     /// Each actor's head, blade or wheel turn (degrees), by its block's centre in the carriage.
     rolls: Vec<([f64; 3], f32)>,
     /// Each train controls' levers (`LeverAngles`: hand, speed, steering), by its block's
@@ -54,7 +55,8 @@ struct Part {
     at: [f64; 3],
     translation: [f32; 3],
     left: [f32; 4],
-    wheel: bool,
+    /// A bogey's part: its index in `bogey_parts`, posed by the wheels' turn.
+    bogey: Option<u8>,
     /// An actor's moving part (`ActorVisual`): the actor's block, its state's facts, its centre in
     /// the carriage's space (unturned) and which of its parts this is.
     actor: Option<(Block, StateInfo, [f64; 3], usize)>,
@@ -174,12 +176,6 @@ fn turn_y(v: [f64; 3], deg: f64) -> [f64; 3] {
 fn turn_x(v: [f64; 3], deg: f64) -> [f64; 3] {
     let (s, c) = deg.to_radians().sin_cos();
     [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c]
-}
-
-/// The quaternion of `deg` about the x axis, `[x, y, z, w]`.
-fn quat_x(deg: f64) -> [f32; 4] {
-    let (s, c) = (deg.to_radians() / 2.0).sin_cos();
-    [s as f32, 0.0, 0.0, c as f32]
 }
 
 /// The quaternion of `deg` about up, `[x, y, z, w]`.
@@ -351,7 +347,7 @@ fn sync(lv: &mut ServerLevel<'_>, mut now: Vec<Now>, kinds: &[u8]) {
         if !moved {
             continue;
         }
-        let (displays, wheel, rolls) = SHOWN.with_borrow_mut(|s| {
+        let (displays, (wheel, size), rolls) = SHOWN.with_borrow_mut(|s| {
             let v = s.get_mut(&n.key).expect("known");
             // Each actor's head, blade or wheel turns on by the way it moved
             // (`HarvesterActorVisual.tick`, `DrillActorVisual.tick`).
@@ -410,7 +406,7 @@ fn sync(lv: &mut ServerLevel<'_>, mut now: Vec<Now>, kinds: &[u8]) {
             v.last = Some(pose);
             (
                 v.displays.clone(),
-                v.wheel,
+                (v.wheel, v.size),
                 (v.rolls.clone(), motion, v.levers.clone()),
             )
         });
@@ -468,13 +464,15 @@ fn sync(lv: &mut ServerLevel<'_>, mut now: Vec<Now>, kinds: &[u8]) {
                     }
                 }
             }
-            if part.wheel
+            if let Some(i) = part.bogey
+                && let Some(size) = size
+                && let Some((_, _, pose)) = bogey_parts(size, wheel as f32).get(usize::from(i))
                 && let Some(d) = lv.host.display(e)
             {
+                let (translation, left) = bogey_transform(*pose, n.turn);
                 let mut t = Transformation::IDENTITY;
-                t.translation = part.translation;
-                t.left_rotation = part.left;
-                t.right_rotation = quat_x(wheel);
+                t.translation = translation;
+                t.left_rotation = left;
                 d.set_start_interpolation(lv.host, 0);
                 d.set_interpolation_duration(lv.host, 1);
                 d.set_transformation(lv.host, t);
@@ -485,7 +483,13 @@ fn sync(lv: &mut ServerLevel<'_>, mut now: Vec<Now>, kinds: &[u8]) {
 
 /// A display to make: its block and properties, its point in the carriage's space, and its
 /// model's corner from there.
-type Shape = (String, Vec<(String, String)>, [f64; 3], [f64; 3], bool);
+type Shape = (
+    String,
+    Vec<(String, String)>,
+    [f64; 3],
+    [f64; 3],
+    Option<u8>,
+);
 
 /// The displays of a carriage or bogey, made where it stands now.
 fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
@@ -497,6 +501,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
     let mut parts: Vec<Shape> = Vec::new();
     let mut actors: Vec<(Block, StateInfo, [f64; 3], usize)> = Vec::new();
     let mut radius = 0.0;
+    let mut bogey_size = None;
     if kind == BOGEY {
         let Some(size) = with_world(|w| {
             let t = w.dims[dim].railway.trains.iter().find(|t| t.id == train)?;
@@ -508,29 +513,22 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
                 last: None,
                 wheel: 0.0,
                 radius: 0.0,
+                size: None,
                 rolls: Vec::new(),
                 levers: Vec::new(),
             };
         };
         radius = size.wheel_radius();
-        // `StandardBogeyVisual`: a small bogey's frame with a wheel 12 px up a block before
-        // and behind; a large one's drive with its wheels a block up.
-        let (frame, wheel, wheels): (&str, &str, &[[f64; 3]]) = match size {
-            BogeySize::Small => (
-                "create:part_bogey_frame",
-                "create:part_bogey_wheel",
-                &[[0.0, 0.75, -1.0], [0.0, 0.75, 1.0]],
-            ),
-            BogeySize::Large => (
-                "create:part_bogey_drive",
-                "create:part_bogey_drive_wheel",
-                &[[0.0, 1.0, 0.0]],
-            ),
-        };
-        let up = vec![("facing".to_owned(), "up".to_owned())];
-        parts.push((frame.to_owned(), up.clone(), [0.0; 3], [0.0; 3], false));
-        for w in wheels {
-            parts.push((wheel.to_owned(), up.clone(), *w, [0.0; 3], true));
+        bogey_size = Some(size);
+        for (i, (name, facing, _)) in bogey_parts(size, 0.0).into_iter().enumerate() {
+            let props = vec![("facing".to_owned(), facing.to_owned())];
+            parts.push((
+                format!("create:{name}"),
+                props,
+                [0.0; 3],
+                [0.0; 3],
+                Some(i as u8),
+            ));
         }
     } else {
         let blocks = match &n.blocks {
@@ -560,7 +558,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             // over the pivot, its centre over it; a cart's anchor block is centred on its pivot.
             let up = if kind == CART { 0.0 } else { 1.5 };
             let centre = [f64::from(o[0]), f64::from(o[1]) + up, f64::from(o[2])];
-            parts.push((name, props, centre, [-0.5; 3], false));
+            parts.push((name, props, centre, [-0.5; 3], None));
             // An actor's moving parts, at rest until it moves.
             // Train controls draw their cover and levers on a train only.
             let train_controls = |b: Block| b == Block::Controls && kind == CAR;
@@ -578,15 +576,20 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
         }
     }
     let mut displays = Vec::new();
-    for (name, props, at, origin, wheel) in parts {
+    let posed = bogey_size.map(|s| bogey_parts(s, 0.0)).unwrap_or_default();
+    for (name, props, at, origin, bogey) in parts {
         // The part's point in the display's turned space (the carriage's space turned back by
         // the heading's quarter), the model's corner from there, and the quarter as the
-        // display's left rotation.
+        // display's left rotation; a bogey's part posed as its renderer poses it.
+        let (translation, left) = match bogey.and_then(|i| posed.get(usize::from(i))) {
+            Some((_, _, pose)) => bogey_transform(*pose, n.turn),
+            None => (turn_y(origin, n.turn).map(|v| v as f32), quat_y(n.turn)),
+        };
         let part = Part {
             at: turn_y(at, n.turn),
-            translation: turn_y(origin, n.turn).map(|v| v as f32),
-            left: quat_y(n.turn),
-            wheel,
+            translation,
+            left,
+            bogey,
             actor: None,
         };
         let nbt = display_nbt(&name, &props, part.translation, part.left, n.yaw, n.pitch);
@@ -612,7 +615,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             at: turn_y(centre, n.turn),
             translation,
             left,
-            wheel: false,
+            bogey: None,
             actor: Some((block, info, centre, i)),
         };
         let props = vec![("facing".to_owned(), facing.to_owned())];
@@ -630,6 +633,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
         last: Some((n.at, n.yaw, n.pitch)),
         wheel: 0.0,
         radius,
+        size: bogey_size,
         rolls: Vec::new(),
         levers: Vec::new(),
     }
@@ -688,6 +692,69 @@ fn lever_targets(n: &Now) -> Vec<([f64; 3], [f32; 3])> {
             (centre, target)
         })
         .collect()
+}
+
+/// `StandardBogeyRenderer` (`Small`, `Large`): a bogey's parts with its wheels turned `angle`
+/// degrees, posed from its anchor (Create's partials' origin): the two shafts along it, then a
+/// small bogey's frame and wheels a block before and behind, or a large one's two shafts across,
+/// drive, belt, pistons sliding with the wheels, wheels a block up and pins going round on
+/// them. Each part's partial, facing and pose. The large
+/// bogey's belt texture does not scroll (`shiftUVScrolling`: a display draws a model as baked).
+fn bogey_parts(size: BogeySize, angle: f32) -> Vec<(String, &'static str, actor_draw::Pose)> {
+    use actor_draw::Parts as _;
+    const X: [f32; 3] = [1.0, 0.0, 0.0];
+    const Z: [f32; 3] = [0.0, 0.0, 1.0];
+    let mut p = Poses::default();
+    for i in [0.0, 1.0] {
+        p.push();
+        p.translate([-0.5, 0.25, -i]);
+        p.rotate_about(Z, angle, [0.5; 3]);
+        p.part("part_shaft", "south");
+        p.pop();
+    }
+    match size {
+        BogeySize::Small => {
+            p.part("part_bogey_frame", "up");
+            for side in [1.0, -1.0] {
+                p.push();
+                p.translate([0.0, 12.0 / 16.0, side]);
+                p.rotate_about(X, angle, [0.0; 3]);
+                p.part("part_bogey_wheel", "up");
+                p.pop();
+            }
+        }
+        BogeySize::Large => {
+            for z in [0.5, -1.5] {
+                p.push();
+                p.translate([-0.5, 0.25, z]);
+                p.rotate_about(X, angle, [0.5; 3]);
+                p.part("part_shaft", "east");
+                p.pop();
+            }
+            p.part("part_bogey_drive", "up");
+            p.part("part_bogey_drive_belt", "up");
+            p.push();
+            p.translate([0.0, 0.0, 0.25 * angle.to_radians().sin()]);
+            p.part("part_bogey_piston", "up");
+            p.pop();
+            p.push();
+            p.translate([0.0, 1.0, 0.0]);
+            p.rotate_about(X, angle, [0.0; 3]);
+            p.part("part_bogey_drive_wheel", "up");
+            p.translate([0.0, 0.25, 0.0]);
+            p.rotate_about(X, -angle, [0.0; 3]);
+            p.part("part_bogey_pin", "up");
+            p.pop();
+        }
+    }
+    p.out
+}
+
+/// A display's translation and left rotation for a bogey part posed `pose` from the bogey's
+/// anchor, turned `turn` about up as the bogey.
+fn bogey_transform(pose: actor_draw::Pose, turn: f64) -> ([f32; 3], [f32; 4]) {
+    let q = actor_draw::quat_mul(actor_draw::quat([0.0, 1.0, 0.0], turn), pose.q);
+    (turn_y(pose.t, turn).map(|v| v as f32), q.map(|v| v as f32))
 }
 
 /// The poses of actor `block`'s moving parts doing `doing` (`actor_draw::actor_parts`).
