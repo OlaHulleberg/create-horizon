@@ -34,6 +34,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   all of them as in Create; a block needing waterlogging, a solid face and the template of another class
   has no such choice. Computing `isSolid` from the declared collision shape (or a `solid` declaration
   field) would close it.
+- **A block state's light emission and friction** (`BlockState.getLightEmission`, `getFriction`):
+  copycats sound as their material (the `sound_type` part, with `HostBlockStates::sound`), but can't glow or
+  slide as it does (`CopycatBlock.getLightEmission`, `getFriction`): the `light_emission` and `friction` parts
+  would answer per copycat, but nothing reads a material state's light or friction. Two `HostBlockStates`
+  facts, `light_emission(state) -> Option<u8>` and `friction(state) -> Option<f32>`, would close it.
 - **Block-state facts:** `isRedstoneConductor` and `isSolidRender` (cart assemblers, stock links, schematic
   export approximate them by "full collision cube"); `requiresCorrectToolForDrops` / `isCorrectToolForDrops`
   (deployers dig every block at its harvestable speed); the weathering-copper class and age; a block's class
@@ -239,7 +244,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   found by testing the tags a data reload listener lists under `tags/item`.)
 - **A block state's model drawn in the world without a block entity** (`SchematicRenderer`'s ghost blocks):
   a deployed schematic is outlined, not drawn; `draw_model_instances` takes only registered standalone models,
-  not any block state's.
+  not any block state's. The placement helpers' preview is the same want, translucent: catnip's
+  `PlacementHelpers.tick` shows the block a click would place as a ghost (`GhostBlocks.showGhostState(..)
+  .breathingAlpha()`), for the shaft and cog helpers, copycats, girders, table cloths, sails, ladders and
+  display boards; a `WorldDrawContext` call drawing a `BlockState` at a position with an alpha, for one frame,
+  would close both (the helpers themselves place as Create's do).
 - **GUI sprites in a block entity's draw**, and **text and sprites on a block face in the world** outside one:
   a value box's number is drawn by its block's block entity (creative motors, speed controllers, valve
   handles, brass diodes), but the icon boxes (`IconValueBox`: movement and selection modes) and the filter
@@ -258,18 +267,20 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   keeper beside the window. A `DrawContext` call drawing an `EntityRef` at a size, looking at a point, would
   close it.
 - **Translations on the server** (`hover_name`, `translate`): display links use Create's en_us text.
+- **An additive blend for a block entity's drawing** (`RenderTypes.additive()`): a nixie tube on a train signal
+  draws the signal's panel and lit tubes, but not the glow round each lit tube (`SIGNAL_RED_GLOW`,
+  `SIGNAL_YELLOW_GLOW`, `SIGNAL_WHITE_GLOW` and the translucent `SIGNAL_WHITE_CUBE`, scaled to the light,
+  within 128 blocks): `BlockEntityDrawContext::block` draws a model in its own layer only. A blend (or
+  render-type) option on `block`/`terrain_model` would close it (`pipeline_quads` are world quads of a mod
+  shader, outside the block entity's pose and with no block texture).
 
 ## Left out of the port, not for want of API
 
-- Display and redstone: the clipboard copies no steam engine's `RotationDirection` and no table cloth's price,
-  neither setting being ported; redstone links feeding factory gauges (`RedstoneLinkBlockEntity`'s
-  `FactoryPanelSupportBehaviour`) are not joined (display links are).
-- Redstone: a nixie tube on a train signal shows its text, not the signal's lights (`NixieTubeRenderer`); a
-  redstone contact on an elevator column is not turned into an elevator contact by the wrench; dyed items
-  (`DYED_COLOR`) make one link frequency with their undyed item.
-- Decor: table cloths hold no items and run no shops (`TableClothBlockEntity`); copycats have no placement
-  helpers and do not take their material's sound, friction or light; girders have no placement helper; an item
-  hatch's filter compares item ids, not a filter item's list or attributes.
+- Decor: the placement helpers' indicator round the crosshair (catnip's `PlacementHelpers.afterRenderOverlay`,
+  arrows toward where the click places): catnip's source is not among the port's references. A shop's
+  overlay doesn't cycle the tooltips of what it sells (`renderComponentTooltip`), and a seated keeper's
+  overlay of a shopping list shows for any list (Create's client also matches the ticker's network, which its
+  client doesn't have here).
 - Equipment: a haunted bell's soul pulse showing where mobs may spawn (`HauntedBellPulser`, `SoulPulseEffect`)
   and the soul particles and sounds after it rings.
 - Trains: a track's paving with an off-hand block other than metal girders (`TrackPaver`: slabs, full

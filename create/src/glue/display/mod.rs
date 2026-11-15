@@ -1,7 +1,9 @@
 //! Create's display links, display boards and nixie tubes (and the clipboard): links read the
 //! block they are attached to and write its text to nixie tubes, signs, lecterns' books and
 //! display boards; the boards' flaps turn toward their text and the tubes glow on clients
-//! (`client`). A board's lines also take dyes, glow ink, name tags and clipboards by hand.
+//! (`client`). A nixie tube on a train signal shows the signal's panel and lights instead of
+//! text (`NixieTubeRenderer.renderAsSignal`, from the signal's state in its block entity data),
+//! without the lights' additive glow (`HORIZON_API.md`). A board's lines also take dyes, glow ink, name tags and clipboards by hand.
 //!
 //! The sources: speedometers and stressometers, target blocks' redstone power, cuckoo clocks'
 //! time and stopwatch, item names along depots, belts and ejectors, nixie tubes' text, a smart
@@ -96,9 +98,13 @@ impl Subsystem for Display {
         summary::forget();
     }
 
-    /// A display board's flaps turning are drawn each frame (`client`).
+    /// Drawn every frame: a display board's flaps turning (`client`), a display link's tube while
+    /// it flashes (`bulb`), and nixie tubes as Create's renderer does: one on a train signal shows
+    /// its lights (and an invalid one's blink) as the signal changes (`NixieTubeBlockEntity.tick`
+    /// looks at it each tick).
     fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
-        (block == Block::DisplayBoard && client::animated(pos, entity))
+        display::is_nixie(block)
+            || (block == Block::DisplayBoard && client::animated(pos, entity))
             || (block == Block::DisplayLink && bulb::animated(pos, entity))
     }
 

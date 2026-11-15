@@ -11,12 +11,13 @@
 //! may lock it (`StockKeeperLockPacket`); a locked network's keeper serves its owner only.
 //! Holding a redstone requester, the screen programs it instead (`encodeRequester`: Configure);
 //! holding a clipboard with items on it, it requests what of them is in stock
-//! (`isSchematicListMode`). The screen closes when its keeper is gone.
+//! (`isSchematicListMode`). Holding a table cloth, it programs the cloth as a shop of what is
+//! ordered (`shop`). The screen closes when its keeper is gone.
 //!
 //! Left out: the keeper drawn beside the window (no entity or blaze head drawn in a screen, see
 //! `HORIZON_API.md`); crafting recipes and the search sync button, which come from JEI
-//! (`StockKeeperTransferHandler`, `SearchSyncMode`), a mod the game does not have; table cloths
-//! programmed as shops (the shops are not ported); addresses from clipboards placed nearby.
+//! (`StockKeeperTransferHandler`, `SearchSyncMode`), a mod the game does not have; addresses from
+//! clipboards placed nearby.
 
 use super::super::net;
 use super::super::server::ServerLevel;
@@ -179,6 +180,17 @@ pub(super) fn ticker_beside(lv: &ServerLevel<'_>, entity: mod_api::EntityRef) ->
     (found.len() == 1).then(|| found[0])
 }
 
+/// `interactWithLogisticsManagerAt`: a shopping list in the main hand is handed over
+/// (`interactWithShop`); else the request screen opens.
+pub(super) fn interact(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
+    let held = super::super::items::held(&*lv.host, player, mod_api::Hand::Main);
+    if held.is_some_and(|s| s.item().id(&*lv.host) == "create:shopping_list") {
+        super::shop::checkout(lv, player, pos);
+        return;
+    }
+    open(lv, player, pos);
+}
+
 /// `interactWithLogisticsManagerAt`: the ticker's request screen opens for `player` (a locked
 /// network's for its owner only), with the address it last sent to, the player's folded
 /// categories and its network's stock.
@@ -203,7 +215,11 @@ pub(super) fn open(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
     };
     let held = super::super::items::held(&*lv.host, player, mod_api::Hand::Main);
     let held_id = held.as_ref().map(|s| s.item().id(&*lv.host));
-    let encode = held_id.as_deref() == Some("create:redstone_requester");
+    // `encodeRequester`: a redstone requester or a table cloth in hand is programmed.
+    let encode = held_id.as_deref().is_some_and(|i| {
+        i == "create:redstone_requester"
+            || (i.starts_with("create:") && i.ends_with("_table_cloth"))
+    });
     let (admin, lockable) = super::may_administrate(dim, pos, player);
     let locked = super::is_locked(dim, pos);
     let host: &dyn Host = &*lv.host;
@@ -1361,13 +1377,14 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
             mod_api::SceneView::new([0.5, 0.5, 0.5], -45.0, 22.5, 48.0),
         );
     }
-    // The requester being programmed, large beside the window.
+    // The requester or table cloth being programmed (`itemToProgram`, the main hand's),
+    // large beside the window.
     if o.encode
-        && let Some(item) = mod_api::Identifier::parse("create:redstone_requester")
-            .ok()
-            .and_then(|i| host.item_key(&i))
+        && let Some(item) = host
+            .local_player()
+            .and_then(|p| super::super::items::held(host, p, mod_api::Hand::Main))
     {
-        draw.item(item, [x + WIDTH + 5.0, y + l.h - 70.0], 56.0);
+        draw.item(item.item(), [x + WIDTH + 5.0, y + l.h - 70.0], 56.0);
     }
     // The order.
     for (i, (s, count)) in o.order.iter().enumerate().take(COLS) {

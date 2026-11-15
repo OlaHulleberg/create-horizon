@@ -117,7 +117,7 @@ fn typed(dim: usize, pos: [i32; 3], block: Block, info: &StateInfo) -> Option<Ty
             Block::BlazeBurner => Typed::Level(info.heat.map_or(0, cmp::blaze_burner)),
             Block::LitBlazeBurner => Typed::Level(cmp::lit_blaze_burner(info.soul)),
             Block::TrackSignal => Typed::Level(cmp::full(
-                d.railway.lights.get(&pos) == Some(&create_engine::trains::LIGHT_RED),
+                d.railway.lights.get(&pos) == Some(&create_engine::trains::SignalState::Red),
             )),
             Block::TrackStation => Typed::Level(cmp::full(
                 d.railway

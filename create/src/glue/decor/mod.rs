@@ -11,8 +11,15 @@
 //! is kept per level and saved with its column as `create_decor`, in the legacy layout. Only
 //! placards, bells and hatches with a timer running, and blocks that changed, are looked at each
 //! tick. Clients see a bracket through its shaft's, cog's or pipe's block entity (`Bracket` in
-//! the kinetic block entity's data) and a placard's item through the placard's own block entity
-//! (`create:placard`), each drawn by its renderer.
+//! the kinetic block entity's data), a placard's item through the placard's own block entity
+//! (`create:placard`) and a hatch's filter through the hatch's (`create:item_hatch`), each drawn
+//! by its renderer. An item hatch lets through what its filter passes (`items::filters`: a list
+//! filter's items, an attribute filter's attributes, or an item). A girder item clicked on a
+//! girder extends its line (`GirderPlacementHelper`). Table cloths' items and shops are the stock
+//! logistics' (`stock::shop`); their placement helper is here.
+//!
+//! The placement helpers' ghost of the block a click would place is left out for want of API
+//! (`HORIZON_API.md`, Client).
 //!
 //! Left out, for want of API (each in `HORIZON_API.md`):
 //! - The weathering neighbours of Create's copper (`WeatheringCopper` and its age, legacy
@@ -40,6 +47,7 @@ mod copper;
 mod crates;
 mod doors;
 mod girders;
+mod hatch;
 mod items;
 mod ladders;
 mod placard;
@@ -86,7 +94,8 @@ struct Dim {
     brackets: HashMap<[i32; 3], Bracket>,
     placards: HashMap<[i32; 3], ItemStack>,
     supplies: HashMap<[i32; 3], String>,
-    hatch_filters: HashMap<[i32; 3], String>,
+    /// `ItemHatchBlockEntity.filtering`: a filter item's list and attributes, or a plain item.
+    hatch_filters: HashMap<[i32; 3], create_engine::filter::Filter>,
     clipboards: HashMap<[i32; 3], ItemStack>,
     timers: Vec<([i32; 3], i64, Timer)>,
     /// Blocks of ours placed, changed or removed: position, old and new engine state.
@@ -163,7 +172,7 @@ fn dir(d: Direction) -> Dir {
     Dir::ALL[d as usize]
 }
 
-fn face_of(d: Dir) -> BlockFace {
+pub(crate) fn face_of(d: Dir) -> BlockFace {
     match d {
         Dir::Down => BlockFace::Down,
         Dir::Up => BlockFace::Up,
@@ -320,6 +329,7 @@ impl Subsystem for Decor {
         items::register(r);
         brackets::register(r);
         placard::register(r);
+        hatch::register(r);
         doors::register(r);
         crates::register(r);
         copper::register(r);
@@ -452,16 +462,23 @@ impl Subsystem for Decor {
     }
 }
 
-/// `ItemHatchBlockEntity.filtering`: the item the hatch at `pos` lets through, if one.
-pub(crate) fn hatch_filter(dim: usize, pos: [i32; 3]) -> Option<String> {
+/// `ItemHatchBlockEntity.filtering`: the filter of the hatch at `pos`, if one.
+pub(crate) fn hatch_filter(dim: usize, pos: [i32; 3]) -> Option<create_engine::filter::Filter> {
     with(dim, |d| d.hatch_filters.get(&pos).cloned())
 }
 
 /// `FilteringBehaviour.setFilter` on the hatch at `pos`.
-pub(crate) fn set_hatch_filter(dim: usize, pos: [i32; 3], item: Option<String>) {
-    with(dim, |d| match item {
-        Some(item) => d.hatch_filters.insert(pos, item),
-        None => d.hatch_filters.remove(&pos),
+pub(crate) fn set_hatch_filter(
+    dim: usize,
+    pos: [i32; 3],
+    filter: Option<create_engine::filter::Filter>,
+) {
+    with(dim, |d| {
+        d.shown.push(pos);
+        match filter {
+            Some(f) => d.hatch_filters.insert(pos, f),
+            None => d.hatch_filters.remove(&pos),
+        }
     });
     super::persist::mark_pos_unsaved(dim, pos);
 }

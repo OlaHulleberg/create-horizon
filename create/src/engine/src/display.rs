@@ -2690,7 +2690,7 @@ fn mix_colors(a: u32, b: u32, w: f32) -> u32 {
 }
 
 /// Catnip's `AngleHelper.horizontalAngle`.
-fn horizontal_angle(d: Dir) -> f32 {
+pub fn horizontal_angle(d: Dir) -> f32 {
     let y = match d {
         Dir::South => 0.0,
         Dir::West => 90.0,

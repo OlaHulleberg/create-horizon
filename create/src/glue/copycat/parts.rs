@@ -49,6 +49,78 @@ fn play(lv: &mut ServerLevel<'_>, sound: &str, pos: [i32; 3], volume: f32, pitch
     );
 }
 
+/// The copycats' placement helpers and `PlacementOffset.placeInWorld`. A panel
+/// (`CopycatPanelBlock.PlacementHelper`): on the free side nearest the hit across its facing,
+/// facing the same way; the click is taken even with no place. A step (`CopycatStepBlock
+/// .PlacementHelper`, a `PoleHelper` along its facing turned clockwise): past the steps in line
+/// with it, with its facing and half; with no place the click goes on as usual. The new copycat
+/// holds no material.
+fn helper(
+    lv: &mut ServerLevel<'_>,
+    player: PlayerRef,
+    click: &mod_api::BlockClick<'_>,
+    stack: &ItemStack,
+    state: BlockState,
+    shape: Shape,
+) -> Option<InteractionResult> {
+    let pos = click.pos;
+    let hit = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]) - 0.5);
+    let step_axis = |f: Dir| match f {
+        Dir::North | Dir::South => create_engine::kinetics::Axis::X,
+        _ => create_engine::kinetics::Axis::Z,
+    };
+    let at = match shape {
+        Shape::Panel(facing) => {
+            let at = create_engine::place::ordered_by_distance(hit, |d| {
+                d.axis() != facing.axis() && lv.free(add(pos, d))
+            })
+            .first()
+            .map(|d| add(pos, *d));
+            let Some(at) = at else {
+                return Some(InteractionResult::Success);
+            };
+            at
+        }
+        Shape::Step { facing, .. } => {
+            let axis = step_axis(facing);
+            let pole = |p: [i32; 3]| {
+                lv.block_state(p).is_some_and(|s| {
+                    matches!(shape_of(&*lv.host, s), Some(Shape::Step { facing: f, .. })
+                        if step_axis(f) == axis)
+                })
+            };
+            create_engine::place::pole_helper(pos, axis, hit, pole, |p| lv.free(p))?
+        }
+    };
+    let water = lv
+        .block_state(at)
+        .and_then(|s| lv.host.block_state_string(s))
+        .is_some_and(|t| t.starts_with("minecraft:water"));
+    let base = lv.host.block_state_default(state.block())?;
+    let mut next = base;
+    let facts = mod_api::HostBlockStates::block_states(&*lv.host);
+    let mut props: Vec<(&str, String)> = vec![("waterlogged", water.to_string())];
+    for k in ["facing", "half"] {
+        if let Ok(Some(v)) = state.property(&facts, k) {
+            props.push((k, v.to_owned()));
+        }
+    }
+    for (k, v) in &props {
+        if let Some(n) = with_prop(&*lv.host, next, k, v) {
+            next = n;
+        }
+    }
+    lv.set_state(at, next, crate::glue::server::update_all());
+    lv.place_sound(at);
+    use_one(&mut *lv.host, player, click.hand, stack);
+    Some(InteractionResult::Success)
+}
+
+fn add(p: [i32; 3], d: Dir) -> [i32; 3] {
+    let o = d.offset();
+    [p[0] + o[0], p[1] + o[1], p[2] + o[2]]
+}
+
 /// The copycat panel's and step's block moments.
 pub(super) struct CopycatBlock;
 
@@ -72,6 +144,18 @@ impl BlockPart for CopycatBlock {
             return None;
         }
         let shape = shape_of(&*lv.host, event.state)?;
+        // `CopycatPanelBlock` / `CopycatStepBlock.useItemOn`: not sneaking, its own item goes
+        // beside it by the placement helper.
+        let sneaking = player.entity().is_shift_key_down(&*lv.host) == Some(true);
+        if !sneaking && player.may_build(&*lv.host) == Some(true) {
+            let own = match shape {
+                Shape::Panel(_) => "create:copycat_panel",
+                Shape::Step { .. } => "create:copycat_step",
+            };
+            if stack.item().id(&*lv.host) == own {
+                return helper(&mut lv, player, click, stack, event.state, shape);
+            }
+        }
         let clicked = Dir::from_offset(click.hit.face);
         let pass = Some(InteractionResult::TryWithEmptyHand);
         let Some((mut material, special)) = body::accepted(&lv, pos, shape, stack, clicked) else {
@@ -277,6 +361,10 @@ impl BlockEntityPart for CopycatEntity {
         } else {
             host.block_state_id(&text)
         };
+        // `getSoundType` on this client: the material's.
+        super::sound::set_client(event.pos, &text, || {
+            material.and_then(|m| mod_api::HostBlockStates::block_states(host).sound(m))
+        });
         let Some(material) = material else {
             return;
         };

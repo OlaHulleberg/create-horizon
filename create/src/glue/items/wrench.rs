@@ -98,6 +98,9 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     if let Some(next) = turned(&lv, pos, clicked) {
         lv.set_state(pos, next, update_all());
         rotate_sound(&mut lv, pos);
+        if matches!(block, Block::RedstoneContact | Block::ElevatorContact) {
+            crate::glue::contraptions::contact_wrenched(&mut lv, pos);
+        }
     }
     Some(InteractionResult::Success)
 }

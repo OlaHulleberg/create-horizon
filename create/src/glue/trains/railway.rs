@@ -607,9 +607,8 @@ fn probe_schedules(lv: &mut ServerLevel<'_>) -> Vec<(u32, create_engine::schedul
                         if b.is_empty() {
                             return String::new();
                         }
-                        crate::glue::items::filter_screen::stack_of(&*lv.host, b)
-                            .map(|s| s.item().id(&*lv.host))
-                            .unwrap_or_default()
+                        let s = crate::glue::items::filter_screen::stack_of(&*lv.host, b);
+                        crate::glue::redstone::frequency_key(&*lv.host, s.as_ref())
                     };
                     let key = (name(&freq[0]), name(&freq[1]));
                     with_world(|w| w.dims[dim].links.any_power(&key)).map_or(0, i32::from)

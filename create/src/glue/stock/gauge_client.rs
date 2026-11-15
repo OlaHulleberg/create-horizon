@@ -51,7 +51,8 @@ pub(super) struct Shown {
     /// Whether it feeds another panel (`targeting`).
     pub feeds: bool,
     pub inputs: Vec<ShownInput>,
-    /// `targetedByLinks`: the display links joined to it (their slot and arrow's bend).
+    /// `targetedByLinks`: the display and redstone links joined to it (their slot and arrow's
+    /// bend).
     pub links: Vec<ShownInput>,
     pub craft: Vec<ItemStack>,
 }
@@ -291,7 +292,7 @@ pub(crate) fn short_click(host: &mut dyn ClientHost, pos: [i32; 3], slot: u8, wr
     gauge_screen::open_config(host, pp);
 }
 
-/// `FactoryPanelConnectionHandler.onRightClick` on a display link (one with a
+/// `FactoryPanelConnectionHandler.onRightClick` on a display or redstone link (one with a
 /// `FactoryPanelSupportBehaviour`) while joining: the use key is taken (the link's screen does
 /// not open) and the server checks and joins them.
 pub(super) fn interaction_key(
@@ -308,7 +309,10 @@ pub(super) fn interaction_key(
         return mod_api::Flow::Continue;
     };
     let pos = [pos.x, pos.y, pos.z];
-    if crate::glue::redstone::client_block_of(host, pos) != Some(Block::DisplayLink) {
+    if !matches!(
+        crate::glue::redstone::client_block_of(host, pos),
+        Some(Block::DisplayLink | Block::RedstoneLink)
+    ) {
         return mod_api::Flow::Continue;
     }
     CLIENT.with_borrow_mut(|c| c.connecting = None);
@@ -625,14 +629,19 @@ fn draw_path(
     }
 }
 
-/// `renderPath` for a display link joined to panel `to` (`displayLinkMode`): green dots, from
-/// the panel toward the link (`pathReversed`, the link not being an output).
+/// `renderPath` for a display or redstone link joined to panel `to`. A display link
+/// (`displayLinkMode`): green dots, from the panel toward the link (`pathReversed`, the link
+/// being no output). A redstone link (`redstoneLinkMode`, half a step up): arrows and lines
+/// toward the panel from a receiving link (red while it powers the panel, dark red else), from
+/// the panel toward a transmitting one (red while the panel is satisfied, dark red while not,
+/// grey with no amount set).
 fn draw_link_path(
     draw: &mut dyn BlockEntityDrawContext,
     host: &dyn ClientHost,
     face: Face,
     facing: Dir,
     to: PanelPos,
+    p: &Shown,
     link: &ShownInput,
 ) {
     let diff = fx::path_diff(face, facing, link.from, to);
@@ -642,25 +651,69 @@ fn draw_link_path(
         let o = fx::path_point(face, facing, t);
         blocked(host, [0, 1, 2].map(|i| origin[i] + o[i]))
     });
+    // The link's block as this client sees it: a redstone link listens while a receiver.
+    let redstone = host
+        .level(host.dimension())
+        .and_then(|l| l.block_state(host, link.from.0))
+        .and_then(states::id)
+        .and_then(|id| {
+            crate::glue::client_table(host, |t| {
+                t.get(id)
+                    .filter(|(b, _)| *b == Block::RedstoneLink)
+                    .map(|(_, i)| i.receiver)
+            })
+            .flatten()
+        });
+    let reversed = redstone != Some(true);
+    let (color, lift) = match redstone {
+        None => (0x3C9852, 0.0),
+        Some(false) => (
+            if p.count == 0 {
+                0x888898
+            } else if p.satisfied {
+                0xEF0000
+            } else {
+                0x580101
+            },
+            0.5,
+        ),
+        Some(true) => (if p.powered { 0xEF0000 } else { 0x580101 }, 0.5),
+    };
     let (sx, sy) = fx::slot_offset(to.1);
     let (mut x, mut z) = (0.0f32, 0.0f32);
-    for d in &path {
+    for (i, d) in path.iter().enumerate() {
         let o = d.offset();
+        if !reversed {
+            x += o[0] as f32 * 0.5;
+            z += o[2] as f32 * 0.5;
+        }
         let data2d = match d {
             Dir::South => 0.0,
             Dir::West => 1.0,
             Dir::North => 2.0,
             _ => 3.0,
         };
-        let y = ((data2d % 2.0) * 0.125) / 512.0;
+        let y = (lift + (data2d % 2.0) * 0.125) / 512.0;
         draw.push();
         panel_frame(draw, face, facing);
         draw.translate([sx as f32 * 0.5 + 0.25 + x, y, sy as f32 * 0.5 + 0.25 + z]);
-        let options = TerrainModelOptions::default().with_tint(0x3C9852);
-        draw_model_with(draw, host, dotted_model(*d), options);
+        let options = TerrainModelOptions::default().with_tint(color);
+        let model = if redstone.is_none() {
+            dotted_model(*d)
+        } else {
+            let arrow = if reversed {
+                i == path.len() - 1
+            } else {
+                i == 0
+            };
+            segment_model(if reversed { *d } else { d.opposite() }, arrow)
+        };
+        draw_model_with(draw, host, model, options);
         draw.pop();
-        x += o[0] as f32 * 0.5;
-        z += o[2] as f32 * 0.5;
+        if reversed {
+            x += o[0] as f32 * 0.5;
+            z += o[2] as f32 * 0.5;
+        }
     }
 }
 
@@ -762,7 +815,7 @@ impl BlockEntityPart for GaugeDraw {
                 draw_path(draw, host, face, facing, pp, p, input, g);
             }
             for link in &p.links {
-                draw_link_path(draw, host, face, facing, pp, link);
+                draw_link_path(draw, host, face, facing, pp, p, link);
             }
             if let Some(f) = &p.filter {
                 draw_item(draw, host, face, facing, p.slot, f);

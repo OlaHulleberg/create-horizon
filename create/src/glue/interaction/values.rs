@@ -124,6 +124,11 @@ pub(crate) fn value_box_slot(
             let shaft = create_engine::parts::directional_axis(f, info.along_first);
             board::extender_slot(f, Some(shaft), side)
         }),
+        // `SteamEngineValueBox`: its rotation direction, on the two sides not recessed.
+        (B::SteamEngine, ..) => match (info.face, info.facing) {
+            (Some(face), Some(facing)) => create_engine::steam::value_box_slot(face, facing, side),
+            _ => None,
+        },
         // `PulleyBlockEntity.getMovementModeSlot`: on top.
         (B::RopePulley, ..) => (side == Dir::Up).then(|| board::centred_slot(side)),
         // `RollerBlockEntity.RollerValueBox(-3)`: the mode, beside its filter, from any side.
@@ -177,7 +182,10 @@ pub(crate) fn option_names(block: B) -> Option<(&'static str, &'static [&'static
         B::MechanicalPiston | B::StickyMechanicalPiston | B::RopePulley => {
             ("Movement Mode", &board::MOVEMENT_MODES[..])
         }
-        B::WindmillBearing => ("Rotation Direction", &board::ROTATION_DIRECTIONS[..]),
+        // `contraptions.windmill.rotation_direction`, the windmill's and the steam engine's.
+        B::WindmillBearing | B::SteamEngine => {
+            ("Rotation Direction", &board::ROTATION_DIRECTIONS[..])
+        }
         B::ClockworkBearing => ("Clock Hand Arrangement", &board::CLOCK_HANDS[..]),
         B::MechanicalRoller => ("Roller Mode", &board::ROLLER_MODES[..]),
         B::CartAssembler => (
@@ -343,7 +351,7 @@ pub(crate) fn clipboard_key(block: B) -> Option<&'static str> {
         B::MechanicalArm | B::BrassTunnel => "SelectionMode",
         B::MechanicalBearing => "RotationMode",
         B::MechanicalPiston | B::StickyMechanicalPiston | B::RopePulley => "MovementMode",
-        B::WindmillBearing => "RotationDirection",
+        B::WindmillBearing | B::SteamEngine => "RotationDirection",
         B::ClockworkBearing => "ClockHands",
         B::MechanicalRoller => "RollingMode",
         B::CartAssembler => "CartMovementMode",
@@ -438,8 +446,14 @@ pub(crate) fn settings_at(
         | B::MechanicalPiston
         | B::StickyMechanicalPiston
         | B::RopePulley
-        | B::MechanicalRoller => {
+        | B::MechanicalRoller
+        | B::SteamEngine => {
             use crate::glue::contraptions::{scroll_option, set_scroll_option};
+            // `SteamEngineBlockEntity.movementDirection.onlyActiveWhen`: not while another
+            // source turns its shaft.
+            if block == B::SteamEngine && crate::glue::fluids::engine_sourced(lv, pos) {
+                return None;
+            }
             let count = option_names(block).map_or(1, |(_, o)| o.len() as i32);
             let now = scroll_option(lv, pos, block);
             if let Some(v) = pick.and_then(|s| board::option_value(s, now, count)) {
@@ -447,6 +461,10 @@ pub(crate) fn settings_at(
             }
             Some(Some(scroll_option(lv, pos, block)))
         }
+        // `TableClothFilteringBehaviour`: a shop's price tag.
+        b if crate::glue::stock::shop::is_cloth(b) => Some(
+            crate::glue::stock::shop::value_settings(lv, pos, player, pick, short.is_some()),
+        ),
         // `FilteringBehaviour`: a short click sets the filter, a pick its amount.
         B::BrassFunnel | B::BrassBeltFunnel | B::SmartChute => Some(
             crate::glue::logistics::amount::value_settings(lv, pos, player, pick, short.is_some()),

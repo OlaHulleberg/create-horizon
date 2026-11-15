@@ -351,10 +351,125 @@ fn draw_nixie(
     facing: Dir,
     pos: [i32; 3],
 ) {
+    if draw_nixie_signal(host, draw, state, facing, pos) {
+        return;
+    }
     let Some((left, right)) = DISPLAYS.with_borrow(|d| d.nixies.get(&pos).cloned()) else {
         return;
     };
     draw_nixie_text(host, draw, state, block, facing, &left, &right);
+}
+
+/// `NixieTubeBlockEntity.tick` on a client (`signalState`): the state of the train signal the
+/// tube at `pos` is on (behind it, against `getFacing`), if it is on one.
+fn signal_behind(
+    host: &dyn ClientHost,
+    pos: [i32; 3],
+    face: Face,
+    facing: Dir,
+) -> Option<create_engine::trains::SignalState> {
+    let getfacing = match face {
+        Face::Ceiling => Dir::Down,
+        Face::Floor => Dir::Up,
+        _ => facing,
+    };
+    let o = getfacing.opposite().offset();
+    let at = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+    let level = host.level(host.dimension())?;
+    let id = states::id(level.block_state(host, at)?)?;
+    client_table(host, |t| t.get(id).map(|(b, _)| b))
+        .flatten()
+        .filter(|b| *b == Block::TrackSignal)?;
+    let data = host.block_entity(level, at)?.data(host)?;
+    Some(crate::glue::trains::signal_state_of(&data))
+}
+
+/// `NixieTubeRenderer.renderAsSignal`: on a train signal, the tube shows the signal's panel and
+/// its lights (`AllPartialModels.SIGNAL_PANEL`, then the red tube while it is red or blinking
+/// invalid, and the yellow or white one while it is yellow or green), full bright. Create also
+/// draws each lit tube's glow (`SIGNAL_*_GLOW` and `SIGNAL_WHITE_CUBE`, additive within 128
+/// blocks); that is left out (see the module's doc). Whether it drew as a signal.
+fn draw_nixie_signal(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    state: mod_api::BlockState,
+    facing: Dir,
+    pos: [i32; 3],
+) -> bool {
+    let text = host.block_state_string(state).unwrap_or_default();
+    let (_, props) = states::split(&text);
+    let Some(face) = props
+        .iter()
+        .find(|(k, _)| *k == "double_face")
+        .and_then(|(_, v)| Face::read(v))
+    else {
+        return false;
+    };
+    let Some(signal) = signal_behind(host, pos, face, facing) else {
+        return false;
+    };
+    let getfacing = match face {
+        Face::Ceiling => Dir::Down,
+        Face::Floor => Dir::Up,
+        _ => facing,
+    };
+    let y_rot = display::horizontal_angle(facing) - 90.0
+        + if face == Face::WallReversed {
+            180.0
+        } else {
+            0.0
+        };
+    let x_rot = match face {
+        Face::Wall => -90.0,
+        Face::WallReversed => 90.0,
+        _ => 0.0,
+    };
+    let centre = [0.5f32; 3];
+    draw.push();
+    draw.rotate_about([0.0, 1.0, 0.0], y_rot, centre);
+    draw.rotate_about([0.0, 0.0, 1.0], x_rot, centre);
+    if getfacing == Dir::Down {
+        draw.rotate_about([0.0, 0.0, 1.0], 180.0, centre);
+    }
+    let invert = getfacing == Dir::Down || face == Face::WallReversed;
+    if let Some(panel) = states::partial("part_signal_panel") {
+        draw.block(panel, &[("facing", "up")]);
+    }
+    draw.translate([0.5, 7.5 / 16.0, 0.5]);
+    // `AnimationTickHolder.getRenderTime`.
+    let time = draw.game_time() as f64 + f64::from(draw.partial());
+    let light = draw.light();
+    draw.set_light(0xF0_00F0);
+    for first in [true, false] {
+        use create_engine::trains::SignalState;
+        let yellow = signal == SignalState::Yellow;
+        let lit = if first {
+            signal.red_light_at(time)
+        } else {
+            yellow || signal == SignalState::Green
+        };
+        if !lit {
+            continue;
+        }
+        let flip = first == invert;
+        let name = if first {
+            "part_signal_red_tube"
+        } else if yellow {
+            "part_signal_yellow_tube"
+        } else {
+            "part_signal_white_tube"
+        };
+        draw.push();
+        draw.translate([if flip { 4.0 / 16.0 } else { -4.0 / 16.0 }, 0.0, 0.0]);
+        draw.scale([1.0 + 1.0 / 16.0; 3]);
+        if let Some(tube) = states::partial(name) {
+            draw.block(tube, &[("facing", "up")]);
+        }
+        draw.pop();
+    }
+    draw.set_light(light);
+    draw.pop();
+    true
 }
 
 /// `NixieTubeRenderer`: the tube's two characters, `left` and `right`, in its colour.

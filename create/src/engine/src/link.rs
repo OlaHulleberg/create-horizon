@@ -10,8 +10,9 @@ use std::collections::HashMap;
 /// `linkRange`.
 pub const RANGE: i32 = 256;
 
-/// A network's key (`Couple<Frequency>`): the first and last slot's item, "" for none. Create
-/// also tells dyed items apart by colour; items here are told apart by id.
+/// A network's key (`Couple<Frequency>`): the first and last slot's frequency, "" for none. A
+/// frequency is the item's id, followed by its colour when it is dyed (the glue's
+/// `frequency_key`), as Create's `Frequency.equals` compares the item and `DYED_COLOR`.
 pub type Key = (String, String);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -278,7 +279,7 @@ pub const CHANNEL: &str = "create:link";
 /// A link's frequencies as clients get them: none, both "", hides its items.
 pub type Shown = ([i32; 3], Dir, Key);
 
-/// `[x, y, z, facing]` then each item as a byte length and its id, per link.
+/// `[x, y, z, facing]` then each frequency as a two-byte length and its text, per link.
 pub fn encode(links: &[Shown]) -> Vec<u8> {
     let mut out = Vec::new();
     for (pos, facing, key) in links {
@@ -287,8 +288,9 @@ pub fn encode(links: &[Shown]) -> Vec<u8> {
         }
         out.push(*facing as u8);
         for item in [&key.0, &key.1] {
-            let b = &item.as_bytes()[..item.len().min(255)];
-            out.push(b.len() as u8);
+            // A dyed item's frequency carries its colour: lengths take two bytes.
+            let b = &item.as_bytes()[..item.len().min(usize::from(u16::MAX))];
+            out.extend_from_slice(&(b.len() as u16).to_le_bytes());
             out.extend_from_slice(b);
         }
     }
@@ -312,10 +314,10 @@ pub fn decode(mut data: &[u8]) -> Vec<Shown> {
         };
         let mut items = [String::new(), String::new()];
         for item in &mut items {
-            let Some(n) = take(1, &mut data) else {
+            let Some(n) = take(2, &mut data) else {
                 return out;
             };
-            let Some(b) = take(usize::from(n[0]), &mut data) else {
+            let Some(b) = take(usize::from(u16::from_le_bytes([n[0], n[1]])), &mut data) else {
                 return out;
             };
             *item = String::from_utf8_lossy(&b).into_owned();

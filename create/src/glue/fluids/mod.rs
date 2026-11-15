@@ -18,6 +18,9 @@
 //! Creative fluid tanks join into tanks as fluid tanks do (`creative_tanks` in the engine's
 //! world), each block giving the tank's fluid (`plumbing.creative`). Steam engines hiss and puff
 //! at each stroke (`engine`'s client tick), and boiler gauges swing to their level (`client`).
+//! An engine turns its shaft clockwise or counter-clockwise as its value box says
+//! (`movementDirection`, kept as a contraption block's option; `interaction::values`), the box
+//! inactive and the direction turned round to match while another source turns the shaft.
 //!
 //! A pump's flows grow through its pipes connection by connection and recede from the source
 //! (`flows`): glass pipes draw them, pipes splash, drip and pour them on their clients. Flows of
@@ -43,6 +46,7 @@ pub(crate) mod clicks;
 pub(crate) mod client;
 mod drawn;
 pub(crate) mod engine;
+pub(crate) use engine::engine_sourced;
 mod flows;
 mod goggles;
 mod lava;

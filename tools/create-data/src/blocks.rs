@@ -2442,7 +2442,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 201] = [
+pub const PARTIALS: [(&str, &str, &str); 207] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -2756,6 +2756,34 @@ pub const PARTIALS: [(&str, &str, &str); 201] = [
     (
         "part_signal_indicator_off",
         "create:block/track_signal/indicator_off",
+        "up",
+    ),
+    // TableClothRenderer: a shop's price tag on top or down its side, turned by the glue.
+    (
+        "part_table_cloth_price_side",
+        "create:block/table_cloth/price_tag_side",
+        "up",
+    ),
+    (
+        "part_table_cloth_price_top",
+        "create:block/table_cloth/price_tag_top",
+        "up",
+    ),
+    // NixieTubeRenderer.renderAsSignal: a nixie tube on a signal shows its panel and lit tubes.
+    ("part_signal_panel", "create:block/track_signal/panel", "up"),
+    (
+        "part_signal_red_tube",
+        "create:block/track_signal/red_tube",
+        "up",
+    ),
+    (
+        "part_signal_yellow_tube",
+        "create:block/track_signal/yellow_tube",
+        "up",
+    ),
+    (
+        "part_signal_white_tube",
+        "create:block/track_signal/white_tube",
         "up",
     ),
     (

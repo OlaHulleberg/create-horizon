@@ -289,6 +289,59 @@ pub fn connected_direction(face: Face, facing: Dir) -> Dir {
     }
 }
 
+/// `VecHelper.rotateCentered` by quarter turns about `axis` (0 x, 1 y, 2 z) through the block's
+/// centre, as catnip's `VecHelper.rotate` turns.
+fn rotate_centered(v: [f64; 3], deg: f64, axis: usize) -> [f64; 3] {
+    let q = ((deg / 90.0).round() as i64).rem_euclid(4);
+    let (s, c) = [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)][q as usize];
+    let [x, y, z] = [v[0] - 0.5, v[1] - 0.5, v[2] - 0.5];
+    let r = match axis {
+        0 => [x, y * c - z * s, z * c + y * s],
+        1 => [x * c + z * s, y, z * c - x * s],
+        _ => [x * c - y * s, y * c + x * s, z],
+    };
+    [r[0] + 0.5, r[1] + 0.5, r[2] + 0.5]
+}
+
+/// `SteamEngineValueBox` (`ValueBoxTransform.Sided`) on `side` of an engine on `face` facing
+/// `facing`: its rotation direction's box, `voxelSpace(8, 14.5, 9)` rolled about z to that
+/// side (`Pointing.getCombinedDirection`; the roll whose box lands on `side`), then turned by the
+/// engine's `horizontalAngle` and `verticalAngle`. None on a side without one (`isSideActive`):
+/// along the engine's axis, or recessed (a roll of 0 or 180, the other way round for an engine
+/// on the floor or ceiling whose `facing` is along x).
+pub fn value_box_slot(face: Face, facing: Dir, side: Dir) -> Option<[f64; 3]> {
+    let engine = connected_direction(face, facing);
+    if engine.axis() == side.axis() {
+        return None;
+    }
+    let horizontal = match engine {
+        Dir::West => -90.0,
+        Dir::North => 180.0,
+        Dir::East => -270.0,
+        _ => 0.0,
+    };
+    let vertical = match engine {
+        Dir::Up => -90.0,
+        Dir::Down => 90.0,
+        _ => 0.0,
+    };
+    let (roll, at) = [0.0, 90.0, 180.0, 270.0].into_iter().find_map(|roll| {
+        let v = [0.5, 14.5 / 16.0, 9.0 / 16.0];
+        let v = rotate_centered(v, roll, 2);
+        let v = rotate_centered(v, horizontal, 1);
+        let v = rotate_centered(v, vertical, 0);
+        let d = [v[0] - 0.5, v[1] - 0.5, v[2] - 0.5];
+        let k = (0..3).max_by(|&a, &b| d[a].abs().total_cmp(&d[b].abs()))?;
+        let o = side.offset();
+        (f64::from(o[k]) * d[k] > 0.0).then_some((roll, v))
+    })?;
+    let mut recessed = roll % 180.0 == 0.0;
+    if engine.axis() == Axis::Y {
+        recessed ^= facing.axis() == Axis::X;
+    }
+    (!recessed).then_some(at)
+}
+
 /// `FaceAttachedHorizontalDirectionalBlock.getStateForPlacement` with `SteamEngineBlock
 /// .canSurvive`: the first of the directions nearest the player's view (`looking`) with a tank
 /// that way; up or down puts it on the ceiling or floor turned to the player's `horizontal`
@@ -648,5 +701,32 @@ mod tests {
         // The tank north of it counts it; one beside it doesn't.
         assert_eq!(attached_engines([[0, 0, -1]], engine), vec![[0, 0, 0]]);
         assert!(attached_engines([[1, 0, 0]], engine).is_empty());
+    }
+
+    #[test]
+    fn the_rotation_direction_box_is_on_the_engine_s_open_sides() {
+        let px = |v: Option<[f64; 3]>| v.map(|v| v.map(|x| (x * 16.0 * 100.0).round() / 100.0));
+        // On a wall facing north: west and east, a pixel toward its front.
+        assert_eq!(px(value_box_slot(Face::Wall, Dir::North, Dir::East)), Some([14.5, 8.0, 7.0]));
+        assert_eq!(px(value_box_slot(Face::Wall, Dir::North, Dir::West)), Some([1.5, 8.0, 7.0]));
+        for side in [Dir::Up, Dir::Down, Dir::North, Dir::South] {
+            assert_eq!(value_box_slot(Face::Wall, Dir::North, side), None, "{side:?}");
+        }
+        // On the floor its `facing` picks the open sides.
+        assert!(value_box_slot(Face::Floor, Dir::North, Dir::East).is_some());
+        assert!(value_box_slot(Face::Floor, Dir::North, Dir::North).is_none());
+        assert!(value_box_slot(Face::Floor, Dir::East, Dir::North).is_some());
+        assert!(value_box_slot(Face::Floor, Dir::East, Dir::East).is_none());
+        assert!(value_box_slot(Face::Floor, Dir::North, Dir::Up).is_none());
+    }
+
+    #[test]
+    fn counter_clockwise_turns_the_shaft_the_other_way() {
+        for (f, axis) in [(Dir::South, Axis::X), (Dir::North, Axis::X), (Dir::East, Axis::Z)] {
+            assert_eq!(
+                conveyed_direction(1.0, f, f, axis, true),
+                -conveyed_direction(1.0, f, f, axis, false)
+            );
+        }
     }
 }

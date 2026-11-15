@@ -663,6 +663,16 @@ pub fn valve_text(s: Settings) -> String {
 }
 
 /// `logistics.filter.extracted_amount`: a filter slot's board's title.
+/// `TableClothFilteringBehaviour.createBoard`: a shop's price, 1 to 100 of its payment item
+/// (`table_cloth.price_per_order`, one row `table_cloth.amount`), a milestone every 10.
+pub const TABLE_CLOTH: Board = Board {
+    title: "Price per Order",
+    max: 100,
+    milestone: 10,
+    rows: &["Amount"],
+    icons: false,
+};
+
 pub const FILTER_TITLE: &str = "Extracted Amount";
 
 /// `FilteringBehaviour.createBoard`: "Up to" and "Exactly" rows of 0 to `max` (the filter's
