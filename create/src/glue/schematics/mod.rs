@@ -22,6 +22,9 @@
 //! second half of doors, tall plants and beds (`setPlacedBy`), and the schematic's entities
 //! last (`launchEntity`: item frames and armor stands with what they hold and wear); a book or a
 //! clipboard in its book slot becomes the print's material checklist (`tickPaperPrinter`).
+//! A printed block loads the schematic's block entity data where Create keeps it
+//! (`prepareBlockEntityData`: blocks tagged `create:safe_nbt`, such as signs, banners, placards
+//! and links, and copycats; not a chest's items), merged into the placed block entity.
 //!
 //! Left out, for want of API:
 //! - A schematic saved by the port holds no item frames or paintings: `LevelRef::entities_in`
@@ -893,8 +896,14 @@ impl CannonWorld for World<'_, '_> {
     }
 
     fn place(&mut self, pos: [i32; 3], state: u32) {
+        self.place_data(pos, state, None);
+    }
+    fn place_data(&mut self, pos: [i32; 3], state: u32, data: Option<&sch::Nbt>) {
         if let Some(s) = interned(state) {
             self.lv.set_state(pos, s, place_flags());
+            if let Some(data) = data {
+                merge_block_data(self.lv, pos, s, data);
+            }
             second_half(self.lv, pos, s);
         }
     }
@@ -920,6 +929,51 @@ impl CannonWorld for World<'_, '_> {
             0.7,
         );
     }
+}
+
+/// `placeSchematicBlock`'s data: the block entity placed at `pos` (`state`) loads the
+/// schematic's data (`loadWithComponents`, its `x`, `y`, `z` set to where it is), after
+/// `NBTProcessors.process`: a sign whose text runs a click command keeps none.
+fn merge_block_data(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState, data: &sch::Nbt) {
+    let Tag::Compound(mut data) = body::to_game(data) else {
+        return;
+    };
+    for k in ["id", "x", "y", "z"] {
+        data.remove(&k.into());
+    }
+    if lv.host.block_in_tag(state.block(), "minecraft:all_signs") == Some(true)
+        && sign_has_click(&data)
+    {
+        return;
+    }
+    let Some(be) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    if let Err(e) = be.merge_data(&mut *lv.host, data) {
+        crate::create_log!("[create] a printed block's data was refused at {pos:?}: {e:?}");
+    }
+}
+
+/// `NBTProcessors.signProcessor`: a line of either side's text with a click event.
+fn sign_has_click(data: &Compound) -> bool {
+    fn clicks(t: &Tag) -> bool {
+        match t {
+            Tag::Compound(c) => {
+                c.contains_key(&"click_event".into())
+                    || c.contains_key(&"clickEvent".into())
+                    || c.values().any(clicks)
+            }
+            Tag::List(l) => l.iter().any(clicks),
+            Tag::String(s) => {
+                let s = s.to_string_lossy();
+                s.contains("click_event") || s.contains("clickEvent")
+            }
+            _ => false,
+        }
+    }
+    ["front_text", "back_text"]
+        .iter()
+        .any(|k| data.get(&(*k).into()).is_some_and(clicks))
 }
 
 /// `placeSchematicBlock`'s `setPlacedBy` for the blocks of two (`DoorBlock`, `DoublePlantBlock`
@@ -1055,6 +1109,14 @@ fn entry(lv: &ServerLevel<'_>, p: &PaletteState, rotation: Rotation, mirror: Mir
         defer,
         other,
         belt,
+        // `prepareBlockEntityData`: `AllBlockTags.SAFE_NBT`, or a copycat's `writeSafe`.
+        safe_nbt: state.is_some_and(|s| {
+            host.block_in_tag(s.block(), "create:safe_nbt") == Some(true)
+                || matches!(
+                    states::id(s).and_then(block_of),
+                    Some(Block::CopycatPanel | Block::CopycatStep)
+                )
+        }),
     }
 }
 
@@ -2193,7 +2255,7 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
         let (state, belt_to, casings) = cn::launch(&printer, &entries, rel, target, entry);
         match belt_to {
             Some(to) => w.place_belt(target, state, to, &casings),
-            None => w.place(target, state),
+            None => w.place_data(target, state, printer.block_data(rel, entry).as_ref()),
         }
     }
 }
@@ -2296,30 +2358,37 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                                 ]),
                             ));
                         }
-                        Tag::compound(entity.into_iter().chain([
-                            (
-                                "Target",
-                                Tag::IntArray(vec![
-                                    f.target[0],
-                                    f.target[1],
-                                    f.target[2],
-                                    left,
-                                    f.total as i32,
-                                ]),
-                            ),
-                            (
-                                "BlockState",
-                                Tag::String(state_text(f.state).as_str().into()),
-                            ),
-                            (
-                                "BeltTo",
-                                Tag::IntArray(f.belt_to.map_or(Vec::new(), |t| t.to_vec())),
-                            ),
-                            (
-                                "Casing",
-                                Tag::IntArray(f.casings.iter().map(|c| i32::from(*c)).collect()),
-                            ),
-                        ]))
+                        Tag::compound(
+                            entity
+                                .into_iter()
+                                .chain([
+                                    (
+                                        "Target",
+                                        Tag::IntArray(vec![
+                                            f.target[0],
+                                            f.target[1],
+                                            f.target[2],
+                                            left,
+                                            f.total as i32,
+                                        ]),
+                                    ),
+                                    (
+                                        "BlockState",
+                                        Tag::String(state_text(f.state).as_str().into()),
+                                    ),
+                                    (
+                                        "BeltTo",
+                                        Tag::IntArray(f.belt_to.map_or(Vec::new(), |t| t.to_vec())),
+                                    ),
+                                    (
+                                        "Casing",
+                                        Tag::IntArray(
+                                            f.casings.iter().map(|c| i32::from(*c)).collect(),
+                                        ),
+                                    ),
+                                ])
+                                .chain(f.data.iter().map(|d| ("Data", body::to_game(d)))),
+                        )
                     })
                     .collect();
                 // Fuel, the options, progress and the barrel's resting yaw.
@@ -2440,6 +2509,7 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
                             .iter()
                             .map(|c| (*c).clamp(0, 2) as u8)
                             .collect(),
+                        data: f.get(&"Data".into()).map(body::to_engine),
                         entity,
                         total: t[4].max(0) as u32,
                         land_at: now + t[3].max(0) as u64 + 1,

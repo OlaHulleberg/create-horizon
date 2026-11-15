@@ -175,6 +175,9 @@ pub struct Entry {
     pub other: Option<[i32; 3]>,
     /// A belt segment's shape, printed with its connector (`launchBlockOrBelt`).
     pub belt: Option<BeltPiece>,
+    /// `BlockHelper.prepareBlockEntityData` keeps the schematic's block entity data for the
+    /// state: a block tagged `create:safe_nbt` (all of it) or a copycat (`writeSafe`).
+    pub safe_nbt: bool,
 }
 
 /// A belt segment as the printer reads it: its facing (a horizontal offset), slope and part,
@@ -274,6 +277,8 @@ pub struct Printer {
     /// The casing of each cased belt segment in the template (its block entity's `Casing`), by
     /// where it is placed: `CasingType.ANDESITE` 1, `BRASS` 2.
     pub casings: std::collections::HashMap<[i32; 3], u8>,
+    /// The template's block entity data (`StructureBlockInfo.nbt`), by where it is placed.
+    pub data: std::collections::HashMap<[i32; 3], crate::schematic::Nbt>,
 }
 
 /// A belt block entity's `Casing` (`CasingType`'s name; the port's own block entity keeps it in
@@ -292,6 +297,15 @@ pub fn casing_of(nbt: Option<&crate::schematic::Nbt>) -> u8 {
 }
 
 impl Printer {
+    /// `prepareBlockEntityData` for the block at `rel`: the template's data when its state
+    /// keeps it (`Entry::safe_nbt`).
+    pub fn block_data(&self, rel: [i32; 3], entry: &Entry) -> Option<crate::schematic::Nbt> {
+        entry
+            .safe_nbt
+            .then(|| self.data.get(&rel).cloned())
+            .flatten()
+    }
+
     /// `SchematicPrinter.loadSchematic`: the template placed into a `SchematicLevel` at the
     /// anchor (each block at `transform(pos)`, the level's bounds growing from the origin over
     /// them), the bounds grown over the transformed far corner, printing from before the first
@@ -318,6 +332,11 @@ impl Printer {
                 (c != 0).then(|| (transform(b.pos, mirror, rotation, [0; 3]), c))
             })
             .collect();
+        let data = s
+            .blocks
+            .iter()
+            .filter_map(|b| Some((transform(b.pos, mirror, rotation, [0; 3]), b.nbt.clone()?)))
+            .collect();
         for (p, _) in &placed {
             grow(*p, &mut min, &mut max);
         }
@@ -343,6 +362,7 @@ impl Printer {
                 .collect(),
             entity_index: -1,
             casings,
+            data,
         };
         for (pos, state) in placed {
             let i = p.index(pos).unwrap();
@@ -522,6 +542,8 @@ pub struct Flying {
     pub belt_to: Option<[i32; 3]>,
     /// The belt's segments' casings from `target` (`ForBelt.casings`, `casing_of`'s numbers).
     pub casings: Vec<u8>,
+    /// A block's block entity data (`ForBlockState.data`: `prepareBlockEntityData`'s).
+    pub data: Option<crate::schematic::Nbt>,
     /// An entity (`LaunchedItem.ForEntity`).
     pub entity: Option<Box<PlacedEntity>>,
     pub total: u32,
@@ -637,6 +659,12 @@ pub trait CannonWorld {
     fn grab(&mut self, item: &str, count: u32, simulate: bool) -> bool;
     /// `LaunchedItem.place`.
     fn place(&mut self, pos: [i32; 3], state: u32);
+    /// `LaunchedItem.ForBlockState.place`: `placeSchematicBlock` with the block entity data the
+    /// cannon took (`prepareBlockEntityData`), loaded into the placed block entity.
+    fn place_data(&mut self, pos: [i32; 3], state: u32, data: Option<&crate::schematic::Nbt>) {
+        let _ = data;
+        self.place(pos, state);
+    }
     /// `LaunchedItem.ForBelt.place`: a shaft at `pos`, then the belt from it to `to`, each
     /// segment from `pos` then cased as `casings` says (`setCasingType`).
     fn place_belt(&mut self, pos: [i32; 3], state: u32, to: [i32; 3], casings: &[u8]) {
@@ -805,7 +833,7 @@ impl Cannon {
                 match (&f.entity, f.belt_to) {
                     (Some(e), _) => w.place_entity(e),
                     (None, Some(to)) => w.place_belt(f.target, f.state, to, &f.casings),
-                    (None, None) => w.place(f.target, f.state),
+                    (None, None) => w.place_data(f.target, f.state, f.data.as_ref()),
                 }
             } else {
                 i += 1;
@@ -1137,6 +1165,7 @@ impl Cannon {
                 state: 0,
                 belt_to: None,
                 casings: Vec::new(),
+                data: None,
                 entity: Some(Box::new(e.clone())),
                 total,
                 land_at: now + u64::from(total) + 1,
@@ -1151,12 +1180,17 @@ impl Cannon {
             self.blocks_placed += 1;
         }
         let (state, belt_to, casings) = l.launch(rel, target, entry);
+        let data = belt_to
+            .is_none()
+            .then(|| l.printer.block_data(rel, entry))
+            .flatten();
         let total = flight_ticks(self.pos, target);
         self.flying.push(Flying {
             target,
             state,
             belt_to,
             casings,
+            data,
             entity: None,
             total,
             land_at: now + u64::from(total) + 1,
@@ -1364,6 +1398,21 @@ mod tests {
     }
 
     #[test]
+    fn only_states_that_keep_their_data_print_it() {
+        // A sign's data at (1, 0, 0), turned a quarter: it lands where the turn puts it.
+        let mut s = structure([2, 1, 1], &[([0, 0, 0], 0), ([1, 0, 0], 1)], 2);
+        let text = crate::schematic::Nbt::compound([("Text", crate::schematic::Nbt::String("hi".into()))]);
+        s.blocks[1].nbt = Some(text.clone());
+        let p = Printer::load(&s, [0; 3], Rotation::Clockwise90, Mirror::None);
+        let at = transform([1, 0, 0], Mirror::None, Rotation::Clockwise90, [0; 3]);
+        let mut safe = entry(1, false);
+        assert_eq!(p.block_data(at, &safe), None);
+        safe.safe_nbt = true;
+        assert_eq!(p.block_data(at, &safe), Some(text));
+        assert_eq!(p.block_data([0; 3], &safe), None);
+    }
+
+    #[test]
     fn a_belt_is_laid_from_its_last_end() {
         let east = |part| BeltPiece {
             facing: [1, 0, 0],
@@ -1422,6 +1471,7 @@ mod tests {
             defer,
             other: None,
             belt: None,
+            safe_nbt: false,
         }
     }
 
@@ -1437,6 +1487,7 @@ mod tests {
             defer: false,
             other: None,
             belt: None,
+            safe_nbt: false,
         }
     }
 
