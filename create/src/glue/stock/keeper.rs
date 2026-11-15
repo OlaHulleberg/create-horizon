@@ -1513,8 +1513,8 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
     } else {
         draw.text(&send, [sx, y + l.h - 35.0], 0xFF25_2525, false);
     }
-    // `renderForeground`: the hovered stack's name (the game gives no item's tooltip lines), the
-    // lock's and the address box's tooltips.
+    // `renderForeground`: the hovered stack's tooltip (`renderTooltip`), the lock's and the
+    // address box's tooltips.
     let tip_stack = match hover {
         Some(Hover::Item(ci, i)) => groups
             .get(ci)
@@ -1529,7 +1529,12 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
         |k: &str, f: &str| Text::literal(tr(host, k, f)).with_style(style("dark_gray", true));
     let [mx, my] = mouse;
     let tip: Option<Vec<Text>> = if let Some(s) = tip_stack {
-        Some(vec![Text::literal(host.hover_name(&s))])
+        let lines = crate::glue::items::tooltip_lines(host, &s);
+        Some(if lines.is_empty() {
+            vec![Text::literal(host.hover_name(&s))]
+        } else {
+            lines
+        })
     } else if scroll < 1.0
         && o.admin
         && my > l.beside_search_y

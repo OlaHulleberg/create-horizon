@@ -277,14 +277,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 ## Left out of the port, not for want of API
 
 - Decor: the placement helpers' indicator round the crosshair (catnip's `PlacementHelpers.afterRenderOverlay`,
-  arrows toward where the click places): catnip's source is not among the port's references. A shop's
-  overlay doesn't cycle the tooltips of what it sells (`renderComponentTooltip`), and a seated keeper's
-  overlay of a shopping list shows for any list (Create's client also matches the ticker's network, which its
-  client doesn't have here).
+  arrows toward where the click places): catnip's source is not among the port's references.
 - Equipment: a haunted bell's soul pulse showing where mobs may spawn (`HauntedBellPulser`, `SoulPulseEffect`)
   and the soul particles and sounds after it rings.
-- Trains: a track's paving with an off-hand block other than metal girders (`TrackPaver`: slabs, full
-  blocks and walls under a placement; girder curves pave and pay as Create's).
 
 ## Not to send
 

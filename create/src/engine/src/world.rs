@@ -585,6 +585,7 @@ fn has_state(block: Block) -> bool {
             | Block::CartAssembler
             | Block::Nozzle
             | Block::FactoryGauge
+            | Block::StockTicker
             | Block::PackageFrogport
             | Block::DeskBell
             | Block::Packager

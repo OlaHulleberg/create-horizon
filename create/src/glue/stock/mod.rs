@@ -189,7 +189,27 @@ struct Net {
     neighbours: Vec<[i32; 3]>,
     /// Panels whose redstone input to look at again: a link joined to them went.
     redstone_checks: Vec<PanelPos>,
+    /// Tickers whose network their clients are told again (`TICKER_NETWORK`).
+    ticker_syncs: Vec<[i32; 3]>,
     unsaved: Vec<(i32, i32)>,
+}
+
+/// A stock ticker's network in its block entity's data, for its clients
+/// (`StockTickerBlockEntity.behaviour.freqId`, which Create's client reads to match a shopping
+/// list to the ticker its keeper serves: `TableClothOverlayRenderer.tick`).
+pub(super) const TICKER_NETWORK: &str = "TickerFreq";
+
+/// Tells the clients of the ticker at `pos` its network.
+fn sync_ticker_network(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let net = with(lv.dim, |n| n.tickers.get(&pos).map(|t| t.network));
+    let Some(net) = net else { return };
+    let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let value = net.map_or_else(super::kinetics::absent, |id| {
+        Tag::IntArray(st::network_ints(id).to_vec())
+    });
+    let _ = entity.merge_data(&mut *lv.host, Compound::from([(TICKER_NETWORK.into(), value)]));
 }
 
 /// A block of ours placed or removed: level, position, was, is.
@@ -516,7 +536,7 @@ impl Subsystem for Stock {
     }
 
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[gauge::PANELS]
+        &[gauge::PANELS, TICKER_NETWORK]
     }
 
     fn standalone_models(&self, models: &mut Vec<String>) {
@@ -613,6 +633,7 @@ impl Subsystem for Stock {
     }
 
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
+        shop::tick(host);
         keeper::tick(host);
         categories::tick(host);
         package_filter::tick(host);
@@ -890,8 +911,8 @@ impl Subsystem for Stock {
 
     /// Our debug commands, for tests: a block's network (`network`), a ticker's stock and an
     /// order (`stock`, `order`; its screen does both), a requester's order (`requester`), and the
-    /// gauge's settings and connections (`gauge`, `gauge_connect`, `gauge_craft`: its screens are
-    /// not ported).
+    /// gauge's settings and connections (`gauge`, `gauge_connect`, `gauge_craft`: what its
+    /// screens do).
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         for usage in [
             "create_debug network <pos:block_pos> <id:text>",
@@ -982,6 +1003,10 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     let checks = with(dim, |n| std::mem::take(&mut n.redstone_checks));
     for pp in checks {
         gauge::check_redstone_input(lv, pp);
+    }
+    let syncs = with(dim, |n| std::mem::take(&mut n.ticker_syncs));
+    for pos in syncs {
+        sync_ticker_network(lv, pos);
     }
     // Blocks placed from a linking item join their network now they are known.
     let joins: Vec<(Option<Network>, [i32; 3], u128)> = JOINS.with_borrow_mut(|j| {
@@ -1880,7 +1905,10 @@ fn set_network(
     let set = with(dim, |n| {
         let set = match block {
             Some(Block::StockLink) => n.links.get_mut(&pos).map(|l| l.network = Some(net)),
-            Some(Block::StockTicker) => n.tickers.get_mut(&pos).map(|t| t.network = Some(net)),
+            Some(Block::StockTicker) => n.tickers.get_mut(&pos).map(|t| {
+                t.network = Some(net);
+                n.ticker_syncs.push(pos);
+            }),
             Some(Block::RedstoneRequester) => {
                 n.requesters.get_mut(&pos).map(|r| r.network = Some(net))
             }
@@ -2223,6 +2251,7 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
         }
         for c in list(data, "tickers") {
             let Some(pos) = pos_of(&c) else { continue };
+            n.ticker_syncs.push(pos);
             n.tickers.insert(
                 pos,
                 Ticker {

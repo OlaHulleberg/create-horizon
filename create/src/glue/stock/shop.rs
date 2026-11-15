@@ -27,7 +27,7 @@ use mod_api::{
     Compound, Hand, Host, InteractionResult, ItemDisplayContext, ItemStack, PlayerRef, SoundSource,
     SupportType, Tag, Text,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 /// The cloths' block entity type.
@@ -1709,14 +1709,78 @@ pub(super) fn render_overlay(host: &dyn ClientHost, draw: &mut dyn mod_api::Draw
     }
     x += 25.0;
     // What it gives.
+    let mut results = Vec::new();
     for (k, n) in &shop.order {
         let lit = !invalid && stock_level > purchases;
         draw.sprite("create:gui/widgets", slot(lit), [x, y, 22.0, 22.0], None);
-        if let Some(s) = body::with_count(&k.0, *n) {
-            draw.gui_draw_item_with(&s, [x + 3.0, y + 3.0], None);
+        let stack = body::with_count(&k.0, *n);
+        if let Some(s) = &stack {
+            draw.gui_draw_item_with(s, [x + 3.0, y + 3.0], None);
         }
+        results.push(stack);
         x += 21.0;
     }
+    // Each result's tooltip in turn, 40 GUI ticks each, at the screen's corner. As Create's:
+    // the turn counts only results with more than their name, but is matched against every
+    // result's index.
+    let tips: Vec<Vec<Text>> = results
+        .iter()
+        .map(|s| {
+            s.as_ref()
+                .map(|s| items::tooltip_lines(host, s))
+                .unwrap_or_default()
+        })
+        .collect();
+    let cycle = tips.iter().filter(|t| t.len() > 1).count() as u32;
+    if cycle > 0 {
+        let turn = (GUI_TICKS.with(Cell::get) / 40) % cycle;
+        for (i, lines) in tips.iter().enumerate() {
+            if lines.len() > 1 && turn == i as u32 {
+                let _ = draw.gui_tooltip(lines, size);
+            }
+        }
+    }
+}
+
+thread_local! {
+    /// `Gui.tickCount`: the client ticks run while the game is not paused.
+    static GUI_TICKS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// A client tick: `Gui.tick` counts it unless the game is paused.
+pub(super) fn tick(host: &dyn ClientHost) {
+    if !host.is_paused() {
+        GUI_TICKS.with(|t| t.set(t.get().wrapping_add(1)));
+    }
+}
+
+/// Whether `keeper` rides something (`getVehicle() != null`) as its client sees it. A client
+/// can't ask an entity's vehicle (`EntityRef::vehicle` answers on the server only) nor list the
+/// seat's stand-in (a display, which the client's entity search leaves out), so a keeper counts
+/// as seated where a seat puts its rider: at the centre of a seat block, no higher than the
+/// stand-in (`seat::seat_at`; a rider hangs its own vehicle attachment below it), where a mob
+/// standing on the seat would be half a block up.
+fn seated(host: &dyn ClientHost, keeper: mod_api::EntityRef) -> bool {
+    if keeper.vehicle(host).is_some() {
+        return true;
+    }
+    let (Some(at), Some(level)) = (keeper.position(host), host.level(host.dimension())) else {
+        return false;
+    };
+    let kind = keeper.kind(host).unwrap_or_default();
+    let floor = at.map(|v| v.floor() as i32);
+    [floor, [floor[0], floor[1] + 1, floor[2]]].into_iter().any(|p| {
+        let seat = level
+            .block_state(host, p)
+            .and_then(states::id)
+            .and_then(|id| super::super::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten())
+            .is_some_and(create_engine::dye::is_seat);
+        let s = create_engine::seat::seat_at(p, &kind);
+        seat && (at[0] - s[0]).abs() < 1e-3
+            && (at[2] - s[2]).abs() < 1e-3
+            && at[1] <= s[1] + 1e-3
+            && at[1] > s[1] - 1.0
+    })
 }
 
 /// `TableClothOverlayRenderer.tick` on a seated keeper with a shopping list in hand, and
@@ -1735,7 +1799,7 @@ fn checkout_overlay(
         return;
     };
     let Some(list) = List::of(&held) else { return };
-    if keeper.vehicle(host).is_none() || keeper.kind(host).as_deref() == Some("create:package") {
+    if !seated(host, keeper) || keeper.kind(host).as_deref() == Some("create:package") {
         return;
     }
     let Some(at) = keeper.block_position(host) else {
@@ -1744,17 +1808,29 @@ fn checkout_overlay(
     let Some(level) = host.level(host.dimension()) else {
         return;
     };
-    let mut tickers = 0;
+    let mut tickers = Vec::new();
     for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
         for dy in [0, 1] {
             let p = [at[0] + dx, at[1] + dy, at[2] + dz];
-            let ticker = level
+            if level
                 .block_state(host, p)
-                .is_some_and(|s| s.block() == states::key(Block::StockTicker));
-            tickers += i32::from(ticker);
+                .is_some_and(|s| s.block() == states::key(Block::StockTicker))
+            {
+                tickers.push(p);
+            }
         }
     }
-    if tickers != 1 {
+    let [ticker] = tickers[..] else { return };
+    // `tickerBE.behaviour.freqId.equals(list.shopNetwork())`: the keeper serves the list's shop.
+    let network = host
+        .block_entity(level, ticker)
+        .and_then(|e| e.data(host))
+        .and_then(|d| {
+            crate::glue::kinetics::synced(&d, super::TICKER_NETWORK)
+                .map(|t| st::network_from_ints(&ints(Some(t))))
+        })
+        .flatten();
+    if network != Some(list.network) {
         return;
     }
     let (order, cost) = client_bake(host, &list);
