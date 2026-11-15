@@ -299,9 +299,7 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   what a click does.
 - Stock: a placed clipboard's `#` addresses are not offered by address boxes
   (`AddressEditBoxHelper.advertiseClipboard`: its pages are not on its clients).
-- Display: the sources' colours (the boiler's bars, the gauges' marks: the engine's text is plain) and a nixie
-  tube's flicker (`NixieTubeRenderer`'s `random.nextFloat() / 4` toward the dark colour each frame; a kept
-  drawing is still).
+- Display: the sources' colours (the boiler's bars, the gauges' marks: the engine's text is plain).
 
 ## Not to send
 

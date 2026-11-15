@@ -2707,8 +2707,7 @@ pub fn horizontal_angle(d: Dir) -> f32 {
 
 /// `NixieTubeRenderer.renderSafe` without a signal: each tube's character (`left` 4 px to its
 /// left, `right` 4 px right) drawn front and back with their shadows (`drawTube`), full bright.
-/// `width` is the font's width of a string. The flicker (`random.nextFloat() / 4` of the way to
-/// the dark colour every frame) is left out: the text holds its bright colour.
+/// `width` is the font's width of a string. Without flicker: `nixie_flickering`'s with none.
 pub fn nixie_texts(
     face: Face,
     facing: Dir,
@@ -2717,6 +2716,20 @@ pub fn nixie_texts(
     right: &str,
     width: impl Fn(&str) -> f32,
 ) -> Vec<TubeText> {
+    nixie_flickering(face, facing, colour, [left, right], width, [0.0; 2])
+}
+
+/// `nixie_texts` with each tube's front flickering `flicker` (`random.nextFloat()`, drawn anew
+/// each frame) of a quarter of the way toward the dark colour.
+pub fn nixie_flickering(
+    face: Face,
+    facing: Dir,
+    colour: crate::dye::DyeColor,
+    chars: [&str; 2],
+    width: impl Fn(&str) -> f32,
+    flicker: [f32; 2],
+) -> Vec<TubeText> {
+    let [left, right] = chars;
     use crate::math::{Mat4, Vec3};
     use Face as DoubleFace;
     let y_rot = horizontal_angle(facing) - 90.0
@@ -2743,7 +2756,7 @@ pub fn nixie_texts(
     let (bright, dark) = dye_colors(colour);
     let shadow = 0.5;
     let mut out = Vec::new();
-    for (dx, c) in [(-4.0 / 16.0, left), (4.0 / 16.0, right)] {
+    for (k, (dx, c)) in [(-4.0 / 16.0, left), (4.0 / 16.0, right)].into_iter().enumerate() {
         let tube = base
             * Mat4::from_translation(Vec3::new(dx, 0.0, 0.0))
             * Mat4::from_scale(Vec3::new(scale, -scale, scale));
@@ -2753,7 +2766,7 @@ pub fn nixie_texts(
         out.push(TubeText {
             pose: front,
             text: c.to_owned(),
-            color: bright,
+            color: mix_colors(bright, dark, flicker[k] / 4.0),
         });
         out.push(TubeText {
             pose: front * Mat4::from_translation(Vec3::new(shadow, shadow, -1.0 / 16.0)),
