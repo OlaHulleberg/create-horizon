@@ -81,7 +81,7 @@ pub(super) fn apply(lv: &mut ServerLevel<'_>, out: [i32; 3], down: bool, fluid: 
                 return;
             }
             for e in affected(lv, &entities) {
-                let inverted = e.kind(&*lv.host).is_some_and(|k| {
+                let inverted = e.kind(&*lv.host).map(|k| k.id(&*lv.host)).is_some_and(|k| {
                     lv.host
                         .entity_type_in_tag(&k, "minecraft:inverted_healing_and_harm")
                 });
@@ -111,7 +111,7 @@ pub(crate) fn drink_potion(
     e: EntityRef,
     contents: &create_engine::potion::Contents,
 ) {
-    let inverted = e.kind(&*lv.host).is_some_and(|k| {
+    let inverted = e.kind(&*lv.host).map(|k| k.id(&*lv.host)).is_some_and(|k| {
         lv.host
             .entity_type_in_tag(&k, "minecraft:inverted_healing_and_harm")
     });
@@ -207,7 +207,9 @@ fn affected(lv: &ServerLevel<'_>, entities: &[EntityRef]) -> Vec<EntityRef> {
             if living.alive(&*lv.host) != Some(true) {
                 return false;
             }
-            if e.kind(&*lv.host).as_deref() == Some("minecraft:armor_stand") {
+            if e.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref()
+                == Some("minecraft:armor_stand")
+            {
                 return false;
             }
             !spectators.contains(e)

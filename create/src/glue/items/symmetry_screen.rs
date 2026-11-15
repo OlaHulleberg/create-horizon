@@ -189,9 +189,9 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn mod_api::DrawContext, o: &Open, mo
             _ => "create:part_symmetry_plane[facing=up]",
         };
         if let Some(state) = host.block_state_id(part) {
-            draw.draw_scene(
+            let _ = draw.draw_scene(
                 [x + 18.0, y + 15.0, x + 50.0, y + 47.0],
-                &[SceneBlock::new([0, 0, 0], state, None)],
+                &mod_api::Scene::new(vec![SceneBlock::new([0, 0, 0], state, None)]),
                 SceneView::new([0.5, 0.5, 0.5], turn - 22.5, 6.5, 16.0),
             );
         }

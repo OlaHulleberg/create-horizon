@@ -910,6 +910,7 @@ fn entities_at(lv: &ServerLevel<'_>, at: [i32; 3]) -> Vec<mod_api::EntityRef> {
         .into_iter()
         .filter(|e| {
             e.kind(&*lv.host)
+                .map(|k| k.id(&*lv.host))
                 .is_none_or(|k| !(k.starts_with("create:") && k.ends_with("contraption")))
         })
         .collect()

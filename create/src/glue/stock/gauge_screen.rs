@@ -491,7 +491,7 @@ fn find_recipe(
     distinct.sort();
     distinct.dedup();
     for kind in ["minecraft:crafting_shaped", "minecraft:crafting_shapeless"] {
-        for r in host.recipes_of_type(kind).iter() {
+        for r in crate::glue::processing::recipes::crafting_of(host, kind).iter() {
             let Some(result) = r.results.first() else {
                 continue;
             };

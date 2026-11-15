@@ -230,7 +230,7 @@ fn crushable_in(lv: &mut ServerLevel<'_>, lo: [f64; 3], hi: [f64; 3]) -> Option<
             if lv.host.item_entity(e).is_some() || lv.host.living(e).is_none() {
                 return false;
             }
-            if e.kind(&*lv.host).as_deref() == Some("minecraft:player") {
+            if e.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref() == Some("minecraft:player") {
                 let creative = e
                     .uuid(&mut *lv.host)
                     .and_then(|u| lv.host.player(u))

@@ -292,7 +292,7 @@ fn obstructed(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) -> bool {
         .into_iter()
         .filter(|e| {
             !matches!(
-                e.kind(host).as_deref(),
+                e.kind(host).map(|k| k.id(host)).as_deref(),
                 Some("minecraft:item" | "minecraft:experience_orb")
             ) && e.spectator(host) != Some(true)
         })

@@ -476,7 +476,7 @@ pub fn items_in(lv: &ServerLevel<'_>, min: [f64; 3], max: [f64; 3]) -> Vec<Entit
         .entities_in(&*lv.host, min, max)
         .unwrap_or_default()
         .into_iter()
-        .filter(|e| e.kind(&*lv.host).as_deref() == Some("minecraft:item"))
+        .filter(|e| e.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref() == Some("minecraft:item"))
         .collect()
 }
 

@@ -81,7 +81,7 @@ struct Cart {
 
 impl Cart {
     fn read(host: &mut dyn ServerHost, entity: EntityRef) -> Option<Cart> {
-        let kind = entity.kind(&*host)?;
+        let kind = entity.kind(&*host).map(|k| k.id(&*host))?;
         if !kind.ends_with("minecart") {
             return None;
         }
@@ -586,7 +586,7 @@ impl BlockPart for AssemblerBlock {
     /// `onMinecartPass`: a cart Create may load (`canAssembleTo`) is handled at its next tick
     /// (`assembleNextTick`: the first cart to pass since then).
     fn minecart_pass(&self, host: &mut dyn ServerHost, event: &mut MinecartPassEvent) {
-        let Some(kind) = event.entity.kind(&*host) else {
+        let Some(kind) = event.entity.kind(&*host).map(|k| k.id(&*host)) else {
             return;
         };
         if !cart::can_assemble_to(&kind) {

@@ -57,6 +57,52 @@ impl Recipes {
     }
 }
 
+/// Create's recipe serializers (`AllRecipeTypes`), each declaring a recipe type of the same id:
+/// the game loads a recipe file only through a registered serializer, and lists it under its
+/// serializer's type (`recipes_of_type`), the file as written. `toolbox_dyeing` and
+/// `item_copying` are crafting recipes in Create, special ones no grid here runs: they keep a
+/// type of their own, as their files were listed before.
+const SERIALIZERS: [&str; 19] = [
+    "create:conversion",
+    "create:crushing",
+    "create:cutting",
+    "create:milling",
+    "create:basin",
+    "create:mixing",
+    "create:compacting",
+    "create:pressing",
+    "create:sandpaper_polishing",
+    "create:splashing",
+    "create:haunting",
+    "create:deploying",
+    "create:filling",
+    "create:emptying",
+    "create:item_application",
+    "create:mechanical_crafting",
+    "create:sequenced_assembly",
+    "create:toolbox_dyeing",
+    "create:item_copying",
+];
+
+/// Declares Create's recipe types and their serializers, which read a file as its JSON.
+pub fn register(r: &mut dyn mod_api::Registrar) {
+    for id in SERIALIZERS {
+        r.register_recipe_type(id);
+        r.register_raw_recipe_serializer(id, id);
+    }
+}
+
+/// The crafting recipes whose file is of serializer `serializer` (`minecraft:crafting_shaped`,
+/// `minecraft:crafting_shapeless`): the game lists every crafting serializer's recipes under
+/// `minecraft:crafting`.
+pub fn crafting_of(host: &dyn Host, serializer: &str) -> Vec<mod_api::Recipe> {
+    host.recipes_of_type("minecraft:crafting")
+        .iter()
+        .filter(|r| r.json["type"].as_str() == Some(serializer))
+        .cloned()
+        .collect()
+}
+
 thread_local! {
     static RECIPES: RefCell<Option<Recipes>> = const { RefCell::new(None) };
 }
@@ -266,8 +312,7 @@ fn read_stonecutting(host: &dyn Host) -> Vec<Recipe> {
 /// basin too, after Create's own.
 fn read_shapeless_mixing(host: &dyn Host) -> Vec<basin::Recipe> {
     let mut found = Vec::new();
-    // The game lists recipes by their file's type.
-    for r in host.recipes_of_type("minecraft:crafting_shapeless").iter() {
+    for r in crafting_of(host, "minecraft:crafting_shapeless").iter() {
         if r.ingredients.len() < 2 || r.id.ends_with("_manual_only") {
             continue;
         }

@@ -1149,7 +1149,10 @@ pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
         };
         // Items land on the belt; players are carried by their own clients
         // (`carry_local_player`), which move them.
-        let kind = e.kind(&*lv.host).unwrap_or_default();
+        let kind = e
+            .kind(&*lv.host)
+            .map(|k| k.id(&*lv.host))
+            .unwrap_or_default();
         if kind == "minecraft:item" || kind == "minecraft:player" {
             continue;
         }

@@ -1613,7 +1613,9 @@ fn export_entities(lv: &mut ServerLevel<'_>, min: [i32; 3], max: [i32; 3]) -> Ve
     let mut out = Vec::new();
     for e in found {
         let host: &dyn Host = &*lv.host;
-        let Some(kind) = e.kind(host) else { continue };
+        let Some(kind) = e.kind(host).map(|k| k.id(host)) else {
+            continue;
+        };
         if kind == "minecraft:player" || e.is_passenger(host) == Some(true) {
             continue;
         }
