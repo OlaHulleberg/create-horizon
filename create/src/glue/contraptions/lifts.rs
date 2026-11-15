@@ -795,9 +795,10 @@ fn broadcast_floor(
 }
 
 /// `SlidingDoorMovementBehaviour.tickOpen` for an elevator's sliding doors: they open while
-/// it has arrived at a floor (`ec.arrived`; the floor's `DoorControl` is Create's default,
-/// all sides) and close as it leaves, the door in the world each faces out toward opening and
-/// closing with it. Not before the elevator first moved (`firstMovement`).
+/// it has arrived at a floor (`ec.arrived`) on the sides the door control of the contact it is
+/// called to lets open (`getElevatorDoorControl`, `shouldOpenAt`: none without a contact there),
+/// and close as it leaves, the door in the world each faces out toward opening and closing with
+/// it. Not before the elevator first moved (`firstMovement`).
 fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
     let Some(e) = with_world(|w| w.dims[dim].lifts.elevators.get(&pos).cloned()).flatten() else {
@@ -809,7 +810,28 @@ fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         }
         m.contains(&(dim, pos))
     });
-    let open = e.arrived && moved;
+    let arrived = e.arrived && moved;
+    // `getCurrentTargetY` and the contact there (`contactAt`); its `DoorControlBehaviour`.
+    let control = arrived
+        .then(|| {
+            let target = with_world(|w| {
+                let c = w.dims[dim].lifts.columns.get(&e.column)?.target;
+                e.reachable(c)
+            })
+            .flatten()?;
+            let contact = [e.column.x, target, e.column.z];
+            let Some((Block::ElevatorContact, _)) = create_info(lv.block(contact)) else {
+                return None;
+            };
+            with_world(|w| {
+                w.dims[dim]
+                    .lifts
+                    .contacts
+                    .get(&contact)
+                    .map_or(0, |c| c.door)
+            })
+        })
+        .flatten();
     type Door = (usize, [i32; 3], Vec<(String, String)>, String);
     let doors: Vec<Door> = e
         .blocks
@@ -842,6 +864,25 @@ fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                 .find(|(pk, _)| pk == k)
                 .map(|(_, v)| v.as_str())
         };
+        // `getDoorFacing`: along its facing's axis, away from the structure's middle.
+        let Some(facing) = prop("facing").and_then(super::dir_of) else {
+            continue;
+        };
+        let axis = facing.axis();
+        let k = match axis {
+            Axis::X => 0,
+            Axis::Y => 1,
+            Axis::Z => 2,
+        };
+        let f = facing.offset();
+        let along = f64::from(o[k]) + 0.5 - f64::from(f[k]) * 0.45 - center[k];
+        let Some(out) = Dir::ALL
+            .into_iter()
+            .find(|d| d.axis() == axis && d.positive() == (along >= 0.0))
+        else {
+            continue;
+        };
+        let open = control.is_some_and(|m| create_engine::lifts::door_control_matches(m, out));
         if prop("open") == Some(if open { "true" } else { "false" }) {
             continue;
         }
@@ -861,30 +902,6 @@ fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         if prop("half") != Some("lower") {
             continue;
         }
-        // `getDoorFacing`: along its facing's axis, away from the structure's middle.
-        let Some(facing) = prop("facing").and_then(super::dir_of) else {
-            continue;
-        };
-        let axis = facing.axis();
-        let k = match axis {
-            Axis::X => 0,
-            Axis::Y => 1,
-            Axis::Z => 2,
-        };
-        let f = facing.offset();
-        let along = f64::from(o[k]) + 0.5 - f64::from(f[k]) * 0.45 - center[k];
-        let out = if along < 0.0 {
-            Dir::ALL
-                .into_iter()
-                .find(|d| d.axis() == axis && !d.positive())
-        } else {
-            Dir::ALL
-                .into_iter()
-                .find(|d| d.axis() == axis && d.positive())
-        };
-        let Some(out) = out else {
-            continue;
-        };
         let here = [
             e.anchor[0] + o[0],
             (e.y + f64::from(o[1])).round() as i32,

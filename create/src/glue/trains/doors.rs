@@ -41,14 +41,7 @@ pub fn set_mode(lv: &mut ServerLevel<'_>, pos: [i32; 3], mode: u8) {
 
 /// `DoorControl.matches` of a door facing `d`.
 fn matches(mode: u8, d: Dir) -> bool {
-    match mode {
-        0 => true,
-        1 => d == Dir::North,
-        2 => d == Dir::East,
-        3 => d == Dir::South,
-        4 => d == Dir::West,
-        _ => false,
-    }
+    create_engine::lifts::door_control_matches(mode, d)
 }
 
 pub fn is_sliding_door(name: &str) -> bool {

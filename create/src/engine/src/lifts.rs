@@ -59,6 +59,20 @@ impl Held {
 /// `DoorControl`: which side's doors a contraption opens at a floor or station.
 pub const DOOR_CONTROLS: [&str; 6] = ["all", "north", "east", "south", "west", "none"];
 
+/// `DoorControl.matches` (with `shouldOpenAt`'s `ALL` and `NONE`): whether door control `mode`
+/// (an index of [`DOOR_CONTROLS`]) opens a door facing out `d`.
+pub fn door_control_matches(mode: u8, d: crate::kinetics::Dir) -> bool {
+    use crate::kinetics::Dir;
+    match mode {
+        0 => true,
+        1 => d == Dir::North,
+        2 => d == Dir::East,
+        3 => d == Dir::South,
+        4 => d == Dir::West,
+        _ => false,
+    }
+}
+
 /// `ElevatorContactBlockEntity`: its floor's names (`shortName`, `longName`), its doors'
 /// setting (`DoorControlBehaviour.mode`, an index of [`DOOR_CONTROLS`]) and the floor it was
 /// last told the elevator is at (`lastReportedCurrentFloor`).
@@ -428,6 +442,20 @@ mod tests {
             v[i] = s;
         }
         v
+    }
+
+    #[test]
+    fn door_control_opens_the_chosen_sides() {
+        use super::door_control_matches as m;
+        use crate::kinetics::Dir;
+        for d in Dir::ALL {
+            assert!(m(0, d), "all opens {d:?}");
+            assert!(!m(5, d), "none opens nothing");
+        }
+        assert!(m(1, Dir::North) && !m(1, Dir::South) && !m(1, Dir::Up));
+        assert!(m(2, Dir::East) && !m(2, Dir::West));
+        assert!(m(3, Dir::South) && !m(3, Dir::North));
+        assert!(m(4, Dir::West) && !m(4, Dir::East));
     }
 
     #[test]
