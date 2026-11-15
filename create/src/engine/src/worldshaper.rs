@@ -1,8 +1,8 @@
 //! Create's handheld worldshaper (`WorldshaperItem`, `ZapperItem`, `ZapperInteractionHandler`,
 //! `TerrainBrushes`: `CuboidBrush`, `SphereBrush`, `CylinderBrush`, `DynamicBrush`;
 //! `TerrainTools`, `PlacementOptions`, `PlacementPatterns`): the blocks a use reaches and what it
-//! does to each, and what its screen offers for each brush. The flatten tool is not ported: it
-//! changes nothing.
+//! does to each, and what its screen offers for each brush; the flatten tool's smoothing
+//! (`FlattenTool`).
 //!
 //! Its settings ride the stack's `minecraft:custom_data` under Create's component names
 //! (`create:shaper_brush`, `create:shaper_brush_params`, `create:shaper_tool`,
@@ -437,6 +437,200 @@ pub fn run(
     out
 }
 
+/// The world the flatten tool reads and writes, a block at a time (`setBlockAndUpdate`).
+pub trait FlattenWorld {
+    type State: Clone;
+    fn state(&mut self, pos: [i32; 3]) -> Self::State;
+    /// `canBeReplaced` of the block now at `pos`.
+    fn replaceable(&mut self, pos: [i32; 3]) -> bool;
+    fn set(&mut self, pos: [i32; 3], state: Self::State);
+    /// `state.getFluidState().createLegacyBlock()`: air, or the fluid it holds.
+    fn fluid_block(&mut self, state: &Self::State) -> Self::State;
+    /// Whether `state` is a `LiquidBlock` (water, lava).
+    fn liquid(&mut self, state: &Self::State) -> bool;
+}
+
+/// `FlattenTool.kernel`: a gaussian with sigma 1.
+const KERNEL: [[f32; 5]; 5] = [
+    [0.003765, 0.015019, 0.023792, 0.015019, 0.003765],
+    [0.015019, 0.059912, 0.094907, 0.059912, 0.015019],
+    [0.023792, 0.094907, 0.150342, 0.094907, 0.023792],
+    [0.015019, 0.059912, 0.094907, 0.059912, 0.015019],
+    [0.003765, 0.015019, 0.023792, 0.015019, 0.003765],
+];
+
+/// `Mth.floor(float)`.
+fn floor_f(v: f32) -> i32 {
+    let i = v as i32;
+    if v < i as f32 { i - 1 } else { i }
+}
+
+/// `FlattenTool.applyKernel`: each height blurred with its 5 x 5 neighbours (one outside the
+/// map or unknown counts as itself).
+fn apply_kernel(values: &[Vec<i32>]) -> Vec<Vec<i32>> {
+    let (w, h) = (values.len() as i32, values[0].len() as i32);
+    let mut out = vec![vec![0; h as usize]; w as usize];
+    for i in 0..w {
+        for j in 0..h {
+            let value = values[i as usize][j as usize];
+            let mut sum = 0f32;
+            for io in -2..=2 {
+                for jo in -2..=2 {
+                    let (ti, tj) = (i + io, j + jo);
+                    let mut r = if ti < 0 || ti >= w || tj < 0 || tj >= h {
+                        value
+                    } else {
+                        values[ti as usize][tj as usize]
+                    };
+                    if r == i32::MIN {
+                        r = value;
+                    }
+                    sum += KERNEL[(io + 2) as usize][(jo + 2) as usize] * r as f32;
+                }
+            }
+            out[i as usize][j as usize] = floor_f(sum + 0.5);
+        }
+    }
+    out
+}
+
+/// `FlattenTool.getCoords`: a position's two coordinates across `facing`'s axis.
+fn across(p: [i32; 3], facing: Dir) -> (i32, i32) {
+    match facing.axis() {
+        crate::kinetics::Axis::X => (p[2], p[1]),
+        crate::kinetics::Axis::Y => (p[0], p[2]),
+        crate::kinetics::Axis::Z => (p[0], p[1]),
+    }
+}
+
+/// `facing.getAxis().choose(x, y, z)`.
+fn along(p: [i32; 3], facing: Dir) -> i32 {
+    match facing.axis() {
+        crate::kinetics::Axis::X => p[0],
+        crate::kinetics::Axis::Y => p[1],
+        crate::kinetics::Axis::Z => p[2],
+    }
+}
+
+fn step(p: [i32; 3], o: [i32; 3], n: i32) -> [i32; 3] {
+    [p[0] + o[0] * n, p[1] + o[1] * n, p[2] + o[2] * n]
+}
+
+/// `FlattenTool.apply`: the surface over the brush's blocks (the first free block past each
+/// along `facing`, the face clicked) is smoothed: a height map of the highest surface across
+/// the face, blurred by the kernel, then each surface is lowered (its block below takes the
+/// surface's state, the surface its fluid) or raised (the block past it takes the surface's
+/// state, but a liquid's, and the surface the block before it) a block at a time to the
+/// blurred height.
+pub fn flatten<W: FlattenWorld>(world: &mut W, targets: &[[i32; 3]], facing: Dir) {
+    let o = facing.offset();
+    let offset = o[0] + o[1] + o[2];
+    let mut surfaces = Vec::new();
+    let mut map: std::collections::HashMap<(i32, i32), i32> = std::collections::HashMap::new();
+    let (mut min_entry, mut max_entry) = (i32::MAX, i32::MIN);
+    let (mut min1, mut min2, mut max1, mut max2) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for &target in targets {
+        let coords = across(target, facing);
+        min1 = min1.min(coords.0);
+        min2 = min2.min(coords.1);
+        max1 = max1.max(coords.0);
+        max2 = max2.max(coords.1);
+        if world.replaceable(target) {
+            map.entry(coords).or_insert(i32::MIN);
+            continue;
+        }
+        let p = step(target, o, 1);
+        if !world.replaceable(p) {
+            if map.get(&coords).is_none_or(|h| *h == i32::MIN) {
+                map.insert(coords, i32::MAX);
+            }
+            continue;
+        }
+        surfaces.push(p);
+        let coordinate = along(p, facing);
+        let replace = match map.get(&coords) {
+            None => true,
+            Some(&h) => {
+                h == i32::MAX
+                    || h == i32::MIN
+                    || h.wrapping_mul(offset) < coordinate.wrapping_mul(offset)
+            }
+        };
+        if replace {
+            map.insert(coords, coordinate);
+            max_entry = max_entry.max(coordinate);
+            min_entry = min_entry.min(coordinate);
+        }
+    }
+    if surfaces.is_empty() {
+        return;
+    }
+    let heights: Vec<Vec<i32>> = (0..=(max1 - min1))
+        .map(|i| {
+            (0..=(max2 - min2))
+                .map(|j| match map.get(&(min1 + i, min2 + j)) {
+                    None => i32::MIN,
+                    Some(&i32::MAX) => {
+                        if offset == 1 {
+                            max_entry + 2
+                        } else {
+                            min_entry - 2
+                        }
+                    }
+                    Some(&i32::MIN) => {
+                        if offset == 1 {
+                            min_entry - 2
+                        } else {
+                            max_entry + 2
+                        }
+                    }
+                    Some(&h) => h,
+                })
+                .collect()
+        })
+        .collect();
+    let heights = apply_kernel(&heights);
+    let back = [-o[0], -o[1], -o[2]];
+    for mut p in surfaces {
+        let coords = across(p, facing);
+        let mut surface = along(p, facing) * offset;
+        let target = heights[(coords.0 - min1) as usize][(coords.1 - min2) as usize] * offset;
+        if surface == target {
+            continue;
+        }
+        let state = world.state(p);
+        let mut time_out = 1000;
+        // Lower the surface.
+        while surface > target {
+            let below = step(p, back, 1);
+            world.set(below, state.clone());
+            let fluid = world.fluid_block(&state);
+            world.set(p, fluid);
+            p = below;
+            surface -= 1;
+            if time_out <= 0 {
+                break;
+            }
+            time_out -= 1;
+        }
+        // Raise it.
+        while surface < target {
+            let above = step(p, o, 1);
+            if !world.liquid(&state) {
+                world.set(above, state.clone());
+            }
+            let before = world.state(step(p, back, 1));
+            world.set(p, before);
+            p = above;
+            surface += 1;
+            if time_out <= 0 {
+                break;
+            }
+            time_out -= 1;
+        }
+    }
+}
+
 /// `ZapperInteractionHandler.trySelect`'s state, or None when it can't be picked (a door's or
 /// a plant's half, an attached, hanging or bed block); then `BlockHelper.setZeroAge`, as the
 /// use takes it.
@@ -728,6 +922,67 @@ mod tests {
         assert!(run(Tool::Flatten, &at, world).is_empty());
         assert!(Tool::Fill.requires_block() && !Tool::Clear.requires_block());
         assert_eq!(Pattern::parse("chance25"), Some(Pattern::Chance25));
+    }
+
+    /// Stone (1) below y 1 but where taken out, air (0) above; water is 2.
+    struct Terrain(std::collections::HashMap<[i32; 3], u8>);
+
+    impl FlattenWorld for Terrain {
+        type State = u8;
+        fn state(&mut self, pos: [i32; 3]) -> u8 {
+            *self.0.get(&pos).unwrap_or(&u8::from(pos[1] <= 0))
+        }
+        fn replaceable(&mut self, pos: [i32; 3]) -> bool {
+            self.state(pos) != 1
+        }
+        fn set(&mut self, pos: [i32; 3], state: u8) {
+            self.0.insert(pos, state);
+        }
+        fn fluid_block(&mut self, state: &u8) -> u8 {
+            if *state == 2 { 2 } else { 0 }
+        }
+        fn liquid(&mut self, state: &u8) -> bool {
+            *state == 2
+        }
+    }
+
+    fn slab(y0: i32, y1: i32) -> Vec<[i32; 3]> {
+        let mut out = Vec::new();
+        for x in -2..=2 {
+            for y in y0..=y1 {
+                for z in -2..=2 {
+                    out.push([x, y, z]);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn flattening_fills_a_pit_and_cuts_a_spike() {
+        // A flat ground stays as it is.
+        let mut flat = Terrain(Default::default());
+        flatten(&mut flat, &slab(-1, 0), Dir::Up);
+        assert!(flat.0.is_empty());
+        // A pit one deep: the blurred surface over it is back at 1, so it fills with the stone
+        // under it.
+        let mut pit = Terrain([([0, 0, 0], 0)].into_iter().collect());
+        flatten(&mut pit, &slab(-1, 0), Dir::Up);
+        assert_eq!(pit.state([0, 0, 0]), 1);
+        assert_eq!(pit.state([0, 1, 0]), 0);
+        // A spike two high: lowered to the ground's surface, the air above it taking its place.
+        let mut spike = Terrain([([0, 1, 0], 1), ([0, 2, 0], 1)].into_iter().collect());
+        flatten(&mut spike, &slab(0, 2), Dir::Up);
+        assert_eq!(spike.state([0, 2, 0]), 0);
+        assert_eq!(spike.state([0, 1, 0]), 0);
+        assert_eq!(spike.state([0, 0, 0]), 1);
+        // Nothing to stand on: no surface, nothing changes.
+        let mut sky = Terrain(Default::default());
+        flatten(&mut sky, &slab(5, 6), Dir::Up);
+        assert!(sky.0.is_empty());
+        // The kernel's rounding (`Mth.floor(v + .5)`) and its edges.
+        assert_eq!(apply_kernel(&[vec![3]]), vec![vec![3]]);
+        assert_eq!(floor_f(-0.5), -1);
     }
 
     #[test]

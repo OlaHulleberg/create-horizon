@@ -288,6 +288,12 @@ fn use_shaper(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> Option<()>
         },
     );
     let air = lv.host.block_state_id("minecraft:air");
+    if settings.brush.redirect(settings.tool) == ws::Tool::Flatten {
+        if let Some(air) = air {
+            ws::flatten(&mut Flattening { lv: &mut lv, air }, &positions, face);
+        }
+        return Some(());
+    }
     let writes = ws::run(settings.brush.redirect(settings.tool), &positions, |p| {
         let here = lv.block_state(p);
         ws::Seen {
@@ -308,6 +314,49 @@ fn use_shaper(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> Option<()>
         lv.set_state(p, to, update_all());
     }
     Some(())
+}
+
+/// The level as the flatten tool reads and writes it.
+struct Flattening<'a, 'b> {
+    lv: &'a mut ServerLevel<'b>,
+    air: BlockState,
+}
+
+impl ws::FlattenWorld for Flattening<'_, '_> {
+    type State = BlockState;
+    fn state(&mut self, pos: [i32; 3]) -> BlockState {
+        self.lv.block_state(pos).unwrap_or(self.air)
+    }
+    fn replaceable(&mut self, pos: [i32; 3]) -> bool {
+        let s = self.state(pos);
+        self.lv.host.block_states().replaceable(s).unwrap_or(false)
+    }
+    fn set(&mut self, pos: [i32; 3], state: BlockState) {
+        self.lv.set_state(pos, state, update_all());
+    }
+    /// `getFluidState().createLegacyBlock()`: a water or lava block keeps its level, a
+    /// waterlogged block gives a source, anything dry air.
+    fn fluid_block(&mut self, state: &BlockState) -> BlockState {
+        let host = &*self.lv.host;
+        let Some(f) = host.state_fluid_state(*state).filter(|f| !f.is_empty()) else {
+            return self.air;
+        };
+        let id = f.fluid.id(host);
+        let block = id.replace("flowing_", "");
+        let level = if f.is_source() {
+            0
+        } else {
+            8 - i32::from(f.amount.min(8)) + if f.falling { 8 } else { 0 }
+        };
+        host.block_state_id(&format!("{block}[level={level}]"))
+            .or_else(|| host.block_state_id(&block))
+            .unwrap_or(self.air)
+    }
+    fn liquid(&mut self, state: &BlockState) -> bool {
+        let name = self.lv.host.block_state_string(*state).unwrap_or_default();
+        let name = name.split('[').next().unwrap_or_default();
+        matches!(name, "minecraft:water" | "minecraft:lava")
+    }
 }
 
 /// `ConfigureWorldshaperPacket.handle`: the settings into the worldshaper still in that hand
