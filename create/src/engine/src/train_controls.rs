@@ -87,6 +87,21 @@ impl Frame {
         std::array::from_fn(|i| self.pivot[i] + w[i])
     }
 
+    /// The carriage's pose as its actors take it (`actors::posed_position`: block offsets
+    /// turned by the turns about a point): that point (block `[0, 0, 0]`'s centre, turned with
+    /// the carriage) and the tilt about the train's side, then the yaw.
+    pub fn actor_pose(&self) -> (Vec3, crate::actors::Turns) {
+        use crate::kinetics::Axis;
+        let tilt = if self.heading[0] != 0 {
+            (Axis::Z, f64::from(self.heading[0]) * self.pitch)
+        } else {
+            (Axis::X, -f64::from(self.heading[1]) * self.pitch)
+        };
+        let turns = [tilt, (Axis::Y, self.yaw), crate::actors::NO_TURNS[2]];
+        let up = crate::actors::turn_all([0.0, 1.5, 0.0], &turns);
+        (std::array::from_fn(|i| self.pivot[i] + up[i]), turns)
+    }
+
     /// `toLocalVector`: a point of the world in the carriage's blocks' space.
     pub fn to_local(&self, world: Vec3) -> Vec3 {
         let d = std::array::from_fn(|i| world[i] - self.pivot[i]);
@@ -599,6 +614,26 @@ pub struct Driving {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_carriage_s_actors_work_where_its_blocks_are() {
+        for heading in [[1, 0], [-1, 0], [0, 1], [0, -1]] {
+            let f = Frame {
+                pivot: [3.5, 64.0, -7.25],
+                yaw: 37.0,
+                pitch: 12.0,
+                heading,
+            };
+            let (at, turns) = f.actor_pose();
+            for o in [[0, 0, 0], [2, 1, -3], [-4, 0, 5]] {
+                let want = f.to_world(o.map(|v| f64::from(v) + 0.5));
+                let got = crate::actors::turn_all(o.map(f64::from), &turns);
+                for i in 0..3 {
+                    assert!((at[i] + got[i] - want[i]).abs() < 1e-9, "{heading:?} {o:?}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_carriage_s_blocks_collide_where_they_are_drawn() {
         let frame = Frame {

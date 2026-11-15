@@ -218,7 +218,7 @@ impl Actor {
 }
 
 /// What an actor's tick asks of the world, in order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Effect {
     /// `destroyBlockProgress`: the breaker's cracks at a block (0..=9), or none (-1).
     Crack([i32; 3], i32),
@@ -245,10 +245,42 @@ pub enum Effect {
     /// A stationary contact a moving one powered is left (`deactivateLastVisitedContact`): it
     /// looks at what it faces again a tick later.
     ContactLeft([i32; 3]),
+    /// `BlockBreakingMovementBehaviour.damageEntities` in the block at `pos`: each entity there
+    /// (but items and the contraption's own) is hurt by `damage` (drills, saws, rollers; none
+    /// for a plough) and thrown by `boost` (`throwEntity`).
+    Entities {
+        pos: [i32; 3],
+        damage: Option<f32>,
+        boost: [f64; 3],
+    },
+}
+
+/// `damageEntities`' damage at a relative motion of `relative_motion`:
+/// `clamp(6 * |motion|^0.4 + 1, 2, 10)`.
+pub fn entity_damage(relative_motion: [f64; 3]) -> f32 {
+    (6.0 * length(relative_motion).powf(0.4) + 1.0).clamp(2.0, 10.0) as f32
+}
+
+/// `throwEntity`'s boost for a contraption moving by `motion`: the motion and a quarter of its
+/// length up, shortened to at most 4.
+pub fn throw_boost(motion: [f64; 3]) -> [f64; 3] {
+    let up = length(motion) / 4.0;
+    let b = [motion[0], motion[1] + up, motion[2]];
+    let l = length(b);
+    if l > 4.0 {
+        let k = (l - 4.0) / l;
+        return b.map(|v| v - v * k);
+    }
+    b
 }
 
 /// What an actor reads of the world.
 pub trait Probe {
+    /// `isRedstoneConductor` of the block at `pos`: entities in such a block are not reached.
+    fn conductor(&self, pos: [i32; 3]) -> bool {
+        let _ = pos;
+        false
+    }
     /// `canBreak` for this kind of breaker, and the block's hardness when it may.
     fn breakable(&self, kind: Kind, pos: [i32; 3]) -> Option<f32>;
     /// Whether the block is a `FallingBlock` (sand, gravel, concrete powder, anvils...).
@@ -674,6 +706,18 @@ impl Actor {
             effects.push(Effect::Contact(pos));
             self.reference = Some(pos);
             return;
+        }
+        // `damageEntities`, unless the block is a redstone conductor.
+        if matches!(
+            self.kind,
+            Kind::Drill | Kind::Saw | Kind::Plough | Kind::Roller
+        ) && !probe.conductor(pos)
+        {
+            effects.push(Effect::Entities {
+                pos,
+                damage: (self.kind != Kind::Plough).then(|| entity_damage(self.relative_motion)),
+                boost: throw_boost(self.motion),
+            });
         }
         if self.kind == Kind::Roller {
             self.roller_visit(pos, probe, effects);
@@ -1758,7 +1802,11 @@ mod tests {
             material: 0,
             loaded_below: -2,
         };
-        assert!(roll(&mut ground, RollingMode::StraightFill, 40).is_empty());
+        assert!(
+            roll(&mut ground, RollingMode::StraightFill, 40)
+                .iter()
+                .all(|e| matches!(e, Effect::Entities { .. }))
+        );
     }
 
     #[test]
@@ -1822,6 +1870,16 @@ mod tests {
             }
         }
         assert_eq!(punches, vec![21, 42]);
+    }
+
+    #[test]
+    fn breakers_hurt_and_throw_what_they_pass() {
+        assert!((entity_damage([0.0, 0.0, 0.125]) - 3.612).abs() < 1e-3);
+        assert_eq!(entity_damage([0.0; 3]), 2.0);
+        assert_eq!(entity_damage([0.0, 0.0, 10.0]), 10.0);
+        assert_eq!(throw_boost([0.0, 0.0, 1.0]), [0.0, 0.25, 1.0]);
+        let b = throw_boost([8.0, 0.0, 0.0]);
+        assert!((length(b) - 4.0).abs() < 1e-9 && (b[1] / b[0] - 0.25).abs() < 1e-9);
     }
 
     #[test]

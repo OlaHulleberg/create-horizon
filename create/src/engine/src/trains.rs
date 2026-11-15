@@ -145,6 +145,10 @@ pub struct Train {
     /// are on the current graph.
     pub placed: Vec<Placed>,
     pub bound: bool,
+    /// A carriage's actor holds it (`Carriage.stalled`, set by its contraption's actors each
+    /// tick), and the speed it had when it stalled (`speedBeforeStall`).
+    pub stalled: bool,
+    pub speed_before_stall: Option<f64>,
 }
 
 /// What a tick did.
@@ -730,6 +734,8 @@ impl Train {
             reserved: Vec::new(),
             placed: Vec::new(),
             bound: true,
+            stalled: false,
+            speed_before_stall: None,
         };
         t.remember(net);
         Some(t)
@@ -869,6 +875,8 @@ impl Train {
             reserved: Vec::new(),
             placed: Vec::new(),
             bound: true,
+            stalled: false,
+            speed_before_stall: None,
         };
         t.remember(net);
         Some(t)
@@ -1314,6 +1322,16 @@ impl Train {
     pub fn tick(&mut self, net: &Network, occ: &mut Occupancy, me: u32) -> Run {
         if !self.bound {
             return Run::Still;
+        }
+        // `Train.tick`: a stalled carriage holds the train where it is, its speed kept for when
+        // the actor lets go (no faster than a block a tick).
+        if self.stalled {
+            self.speed_before_stall.get_or_insert(self.speed);
+            self.speed = 0.0;
+            return Run::Still;
+        }
+        if let Some(s) = self.speed_before_stall.take() {
+            self.speed = s.clamp(-1.0, 1.0);
         }
         let g = &net.graph;
         let steer = self.manual.map_or(0, |m| m.steer);

@@ -269,6 +269,10 @@ impl Subsystem for Contraptions {
         channel: &str,
         data: &[u8],
     ) -> bool {
+        if channel == actors::THROW_CHANNEL {
+            actors::thrown(_host, data);
+            return true;
+        }
         if channel != superglue::CHANNEL {
             return false;
         }

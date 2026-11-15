@@ -595,6 +595,8 @@ pub fn trains_from_nbt(host: &dyn Host, data: &Compound) -> Vec<TrainOnTrack> {
                     reserved: Vec::new(),
                     placed,
                     bound: false,
+                    stalled: false,
+                    speed_before_stall: None,
                 },
                 cars,
                 heading: m.heading,

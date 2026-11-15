@@ -61,6 +61,7 @@ impl Subsystem for Trains {
         super::station_draw::forget();
         super::carriage_draw::forget();
         visuals::forget();
+        super::actors::forget();
         riding::forget();
     }
 
@@ -144,6 +145,7 @@ impl Subsystem for Trains {
         // The controls drive before the trains move; their HUD hears of the move after.
         super::controls::before_trains(lv);
         tick_trains(lv);
+        super::actors::tick(lv);
         super::cargo::tick_interfaces(lv);
         super::carriage_draw::tick(lv);
         if lv.game_time() % 4 == 0 {

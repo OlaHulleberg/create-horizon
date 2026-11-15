@@ -47,6 +47,7 @@
 //!   neither walks, jumps nor sneaks), as Create's `setDown(false)` does; `input_key` can't
 //!   consume a key, so a key bound to something else still does it.
 
+pub mod actors;
 pub mod assembly;
 mod cargo;
 mod carriage_draw;
