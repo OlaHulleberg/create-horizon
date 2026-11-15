@@ -695,15 +695,19 @@ impl BoilerView {
         )
     }
 
-    /// `barComponent`: the goggles' bars (their colours are not kept).
+    /// `barComponent`: the bars, dark green to the minimum, green at it, dark green to the
+    /// level, dark red to the maximum, dark grey to the next five (in `coloured` runs).
     fn bars(&self, level: i32) -> String {
         let (min, max) = (self.min(), self.max());
-        let n = (min - 1).max(0)
-            + i32::from(min > 0)
-            + (level - min).max(0)
-            + (max - level).max(0)
-            + (18 - max).min((max / 5 + 1) * 5 - max).max(0);
-        "|".repeat(n.max(0) as usize)
+        let run = |k: i32, rgb: u32| coloured(&"|".repeat(k.max(0) as usize), rgb);
+        [
+            run(min - 1, DARK_GREEN),
+            run(i32::from(min > 0), GREEN),
+            run(level - min, DARK_GREEN),
+            run(max - level, DARK_RED),
+            run((18 - max).min((max / 5 + 1) * 5 - max), DARK_GRAY),
+        ]
+        .concat()
     }
 
     /// The size, water and heat rows: (label key, level).
@@ -806,6 +810,82 @@ pub fn train_status(
     })
 }
 
+// ---------------------------------------------------------------------------------------------
+// Coloured runs
+
+/// Marks a run of text coloured `0xRRGGBB`: this character, six hex digits, the run, then
+/// `END`. What a source styles (`withStyle`) survives to the targets that draw styles (signs,
+/// lecterns' books); boards and nixie tubes take the `plain` text, as Create's take
+/// `getString()`.
+pub const COLOUR: char = '\u{E000}';
+/// Ends a coloured run.
+pub const END: char = '\u{E001}';
+/// `ChatFormatting`'s colours.
+pub const DARK_GREEN: u32 = 0x00AA00;
+pub const GREEN: u32 = 0x55FF55;
+pub const DARK_RED: u32 = 0xAA0000;
+pub const DARK_GRAY: u32 = 0x555555;
+
+/// `text` as a run coloured `rgb` (nothing for empty text).
+pub fn coloured(text: &str, rgb: u32) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    format!("{COLOUR}{:06X}{text}{END}", rgb & 0xFF_FFFF)
+}
+
+/// `text`'s runs: each piece and its colour (None: the text's own).
+pub fn spans(text: &str) -> Vec<(String, Option<u32>)> {
+    let mut out: Vec<(String, Option<u32>)> = Vec::new();
+    let mut colour = None;
+    let mut piece = String::new();
+    let mut chars = text.chars().peekable();
+    let flush = |piece: &mut String, colour, out: &mut Vec<(String, Option<u32>)>| {
+        if !piece.is_empty() {
+            out.push((std::mem::take(piece), colour));
+        }
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            COLOUR => {
+                flush(&mut piece, colour, &mut out);
+                let hex: String = chars.by_ref().take(6).collect();
+                colour = u32::from_str_radix(&hex, 16).ok();
+            }
+            END => {
+                flush(&mut piece, colour, &mut out);
+                colour = None;
+            }
+            c => piece.push(c),
+        }
+    }
+    flush(&mut piece, colour, &mut out);
+    out
+}
+
+/// `text` without its colours (`getString()`).
+pub fn plain(text: &str) -> String {
+    spans(text).into_iter().map(|(t, _)| t).collect()
+}
+
+/// The first `n` characters of `text`'s plain text, keeping their colours.
+pub fn truncate(text: &str, n: usize) -> String {
+    let mut left = n;
+    let mut out = String::new();
+    for (t, c) in spans(text) {
+        if left == 0 {
+            break;
+        }
+        let piece: String = t.chars().take(left).collect();
+        left -= piece.chars().count();
+        match c {
+            Some(rgb) => out.push_str(&coloured(&piece, rgb)),
+            None => out.push_str(&piece),
+        }
+    }
+    out
+}
+
 /// `BoilerDisplaySource.provideText` (`stats.maxRows`, a lectern's book in one page) and
 /// `provideFlapDisplayText` (a board `columns` wide): the lines for other targets, and the
 /// board's (each its sections), and whether the board's are the boiler's own (`Boiler` layout on
@@ -830,10 +910,12 @@ pub fn boiler_text(
             Some(b) => {
                 let mut lines = vec![lang.get("create.boiler.status_short").replace("%1$s", &b.level_text(lang))];
                 for (label, level) in b.rows() {
+                    // `componentHelper(.., forGoggles, .., RESET)`: the label as it is, the
+                    // dots dark grey.
                     lines.push(format!(
                         "{}{}{}",
                         lang.get(&format!("create.boiler.{label}")),
-                        lang.get(&format!("create.boiler.{label}_dots")),
+                        coloured(&lang.get(&format!("create.boiler.{label}_dots")), DARK_GRAY),
                         b.bars(level)
                     ));
                 }
@@ -2963,9 +3045,19 @@ mod tests {
         let sign = Stats { rows: 4, columns: 15 };
         let (text, _, _) = boiler_text(Some(&b), Target::Sign { hanging: false }, sign, &lang);
         assert_eq!(text[0], "Boiler:  Idle");
-        // min 0, max 1: no green, one dark red for the size's missing level, four greys.
-        assert_eq!(text[1], "Size....... |||||");
-        assert_eq!(text[3], "Heat...... |||||");
+        // min 0, max 1: no green, the size's one level dark green, four greys.
+        assert_eq!(plain(&text[1]), "Size....... |||||");
+        assert_eq!(plain(&text[3]), "Heat...... |||||");
+        assert_eq!(
+            spans(&text[1]),
+            vec![
+                ("Size".to_string(), None),
+                ("....... ".to_string(), Some(DARK_GRAY)),
+                ("|".to_string(), Some(DARK_GREEN)),
+                ("||||".to_string(), Some(DARK_GRAY)),
+            ]
+        );
+        assert_eq!(truncate(&text[1], 13), "Size\u{E000}555555....... \u{E001}\u{E000}00AA00|\u{E001}");
         let board = Stats { rows: 4, columns: 22 };
         let (_, flap, _) = boiler_text(Some(&b), Target::Board, board, &lang);
         assert_eq!(flap[0], vec!["Boiler Status:  Idle".to_string()]);

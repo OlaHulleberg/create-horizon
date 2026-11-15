@@ -912,6 +912,23 @@ fn quoted(s: &str) -> String {
     out
 }
 
+/// A line as a text component in SNBT: plain text as a string, a styled one (`display::spans`)
+/// as an empty text with each run in its colour.
+fn text_snbt(s: &str) -> String {
+    let spans = display::spans(s);
+    if spans.iter().all(|(_, c)| c.is_none()) {
+        return quoted(&display::plain(s));
+    }
+    let extra: Vec<String> = spans
+        .iter()
+        .map(|(t, c)| match c {
+            Some(rgb) => format!("{{text:{},color:\"#{rgb:06X}\"}}", quoted(t)),
+            None => format!("{{text:{}}}", quoted(t)),
+        })
+        .collect();
+    format!("{{text:\"\",extra:[{}]}}", extra.join(","))
+}
+
 /// `SignDisplayTarget.acceptText`: from `line` down both sides, each cut to the sign's line
 /// width (`getString(getMaxTextLineWidth)`: 90, a hanging sign's 60); only lines that differ
 /// are written, through `/data`, which redraws the sign.
@@ -950,16 +967,18 @@ fn write_sign(
         if reserved == Some(true) {
             break;
         }
-        let content: String = t.chars().take(width).collect();
+        let content = display::truncate(t, width);
+        let styled = display::spans(&content).iter().any(|(_, c)| c.is_some());
         let (front, back) = &current[at as usize];
         for (side, now) in [("front_text", front), ("back_text", back)] {
-            if *now != content {
+            // A styled line is written again: its colours may change under the same text.
+            if *now != display::plain(&content) || styled {
                 commands.push(format!(
                     "data modify block {} {} {} {side}.messages[{at}] set value {}",
                     target[0],
                     target[1],
                     target[2],
-                    quoted(&content)
+                    text_snbt(&content)
                 ));
             }
         }
@@ -1058,7 +1077,7 @@ fn write_lectern(
     }
     let list = pages
         .iter()
-        .map(|p| format!("{{raw:{}}}", quoted(p)))
+        .map(|p| format!("{{raw:{}}}", text_snbt(p)))
         .collect::<Vec<_>>()
         .join(",");
     let command = if written {
@@ -1130,7 +1149,8 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     match target {
         Target::Nixie => {
             let text = display::provide_text(source, &config, &line, target);
-            let first = text.into_iter().next().unwrap_or_default();
+            // A tube shows plain text (`getString()`).
+            let first = display::plain(&text.into_iter().next().unwrap_or_default());
             let row = display::walk_nixies(target_pos, |p| nixie_at(lv, p));
             let facings: HashMap<[i32; 3], Dir> = row
                 .iter()
@@ -1177,7 +1197,11 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             if speed.abs() < create_engine::gauge::MEDIUM_SPEED {
                 return;
             }
-            let text = display::provide_flap_text(source, &config, &line);
+            // A board shows plain text (`FlapDisplaySection.refresh`: `getString()`).
+            let text: Vec<Vec<String>> = display::provide_flap_text(source, &config, &line)
+                .into_iter()
+                .map(|l| l.iter().map(|t| display::plain(t)).collect())
+                .collect();
             // `flapDisplayContext`: a list's largest amount.
             let highest = line
                 .entries
