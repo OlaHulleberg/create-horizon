@@ -5,8 +5,10 @@
 //! wrench chooses or shuts a side (`onWrenched`). The items going out are drawn falling from the
 //! spout for a moment (`visualizedOutputItems`).
 //!
-//! Left out: fluid results going out to a tank below (they stay in the basin's own output tank,
-//! as Create's do when nothing below takes fluids).
+//! Its fluid results go out the same way into what holds fluids there (an item drain or a
+//! basin, force-filled whole or not at all; `spoutputFluidBuffer`); with nothing there that
+//! holds fluids they stay in its own output tank, as Create's do. The fluids leaving the spout
+//! are not drawn (`visualizedOutputFluids`).
 
 use super::stacks;
 use crate::glue::logistics::{self, items};
@@ -15,12 +17,16 @@ use crate::glue::world::with_world;
 use create_engine::basin;
 use create_engine::kinetics::Dir;
 use create_engine::processing::Slot;
+use create_engine::tank::{Codes, Fluid};
 use mod_api::{Compound, Tag};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// Where a basin keeps the results waiting to go out (`Overflow`), by id and count.
 const OVERFLOW_KEY: &str = "Overflow";
+/// Where it keeps the fluid results waiting to go out (`FluidOverflow`): fluid (`tank::Codes`,
+/// its keys beside it) and amount, in turn.
+const FLUID_OVERFLOW_KEY: &str = "FluidOverflow";
 /// The side the wrench chose (`PreferredSpoutput`).
 const PREFERRED_KEY: &str = "PreferredSpoutput";
 /// The sides the wrench shut (`DisabledSpoutput`).
@@ -182,7 +188,133 @@ fn overflow_tag(list: &[(String, u8)]) -> Tag {
 
 /// `canContinueProcessing`: nothing waits to go out of the spout.
 pub fn can_continue(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
-    data(lv, pos).is_none_or(|d| overflow(&d).is_empty())
+    data(lv, pos).is_none_or(|d| overflow(&d).is_empty() && fluid_overflow(&d).is_empty())
+}
+
+/// What holds fluids below the side `d` (`FluidHandler.BLOCK` there): an item drain or a basin.
+fn fluid_target(lv: &ServerLevel<'_>, pos: [i32; 3], d: Dir) -> Option<FluidTarget> {
+    let output = below_side(pos, d);
+    let dim = lv.dim;
+    if with_world(|w| w.dims[dim].drains.contains_key(&output)) == Some(true) {
+        return Some(FluidTarget::Drain(output));
+    }
+    super::basin::basin_at(lv, output).then_some(FluidTarget::Basin(output))
+}
+
+#[derive(Clone, Copy)]
+enum FluidTarget {
+    Drain([i32; 3]),
+    Basin([i32; 3]),
+}
+
+/// `forceFill` of `amount` of `fluid` into `t`, all of it or none: whether it went in.
+fn fill_whole(lv: &ServerLevel<'_>, t: FluidTarget, fluid: Fluid, amount: u32) -> bool {
+    let dim = lv.dim;
+    match t {
+        FluidTarget::Drain(p) => with_world(|w| {
+            let d = w.dims[dim].drains.get_mut(&p)?;
+            let next = match d.fluid {
+                None => amount,
+                Some((f, n)) if f == fluid => n + amount,
+                _ => return Some(false),
+            };
+            if next > create_engine::drain::CAPACITY {
+                return Some(false);
+            }
+            d.fluid = Some((fluid, next));
+            w.dims[dim].analog_checks.push(p);
+            w.mark_unsaved(dim, p);
+            Some(true)
+        })
+        .flatten()
+        .unwrap_or(false),
+        FluidTarget::Basin(p) => {
+            // Into its inputs (its outputs forbid insertion).
+            let mut tanks = super::basin::basin_tanks(dim, p);
+            let mut input = tanks.input;
+            if basin::fill(&mut input, fluid, amount) != amount {
+                return false;
+            }
+            tanks.input = input;
+            with_world(|w| w.set_basin_fluids(dim, p, tanks));
+            true
+        }
+    }
+}
+
+fn fluid_overflow(data: &Compound) -> Vec<(Fluid, u32)> {
+    let Some(Tag::IntArray(v)) = data.get(&FLUID_OVERFLOW_KEY.into()) else {
+        return Vec::new();
+    };
+    let keys = crate::glue::fluids::fluid_keys(data, FLUID_OVERFLOW_KEY);
+    v.as_chunks::<2>()
+        .0
+        .iter()
+        .filter_map(|c| Some((Codes::fluid(&keys, c[0])?, c[1].max(0) as u32)))
+        .collect()
+}
+
+/// The fluid buffer's values to write: the array and the keys beside it.
+fn fluid_overflow_values(list: &[(Fluid, u32)]) -> Vec<(String, Option<Tag>)> {
+    let mut codes = Codes::default();
+    let v = list
+        .iter()
+        .flat_map(|(f, n)| [codes.code(Some(*f)), *n as i32])
+        .collect();
+    let mut c = Compound::new();
+    crate::glue::fluids::put_fluid_keys(&mut c, FLUID_OVERFLOW_KEY, codes);
+    let keys_key = format!("{FLUID_OVERFLOW_KEY}_fluids");
+    let keys = c.get(&keys_key.as_str().into()).cloned();
+    vec![
+        (FLUID_OVERFLOW_KEY.to_owned(), Some(Tag::IntArray(v))),
+        (keys_key, keys),
+    ]
+}
+
+fn set_values(lv: &mut ServerLevel<'_>, pos: [i32; 3], values: &[(String, Option<Tag>)]) {
+    let refs: Vec<(&str, Option<Tag>)> = values
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.clone()))
+        .collect();
+    super::basin::set_shown(lv, pos, &refs);
+}
+
+/// `acceptOutputs` for a recipe's fluid results, after it put them into `after`'s output tanks:
+/// facing a side with something holding fluids below it, what it added goes into the spout's
+/// fluid buffer instead (`spoutputFluidBuffer`); else it stays in the basin.
+pub fn route_fluids(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    before: &basin::Tanks,
+    after: &mut basin::Tanks,
+) {
+    let d = facing(lv, pos);
+    if d == Dir::Down || fluid_target(lv, pos, d).is_none() {
+        return;
+    }
+    let mut added: Vec<(Fluid, u32)> = Vec::new();
+    for i in 0..after.output.len() {
+        let Some((f, n)) = after.output[i] else {
+            continue;
+        };
+        let had = before.output[i]
+            .filter(|(g, _)| *g == f)
+            .map_or(0, |(_, m)| m);
+        if n > had {
+            added.push((f, n - had));
+            after.output[i] = (had > 0).then_some((f, had));
+        }
+    }
+    if added.is_empty() {
+        return;
+    }
+    let mut list = data(lv, pos)
+        .map(|d| fluid_overflow(&d))
+        .unwrap_or_default();
+    list.extend(added);
+    let values = fluid_overflow_values(&list);
+    set_values(lv, pos, &values);
+    BUSY.with_borrow_mut(|b| b.insert((lv.dim, pos), ()));
 }
 
 /// `acceptOutputs(.., simulate)` for a recipe with item results: facing a side, something
@@ -404,11 +536,37 @@ fn clear_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) -> bool {
             i += 1;
         }
     }
+    // The fluids: each into what holds fluids there whole, or it waits (facing down, gone).
+    let fluids = fluid_overflow(&d);
+    let mut fluids_left = fluids.clone();
+    if !fluids.is_empty() {
+        let target = (facing != Dir::Down)
+            .then(|| fluid_target(lv, pos, facing))
+            .flatten();
+        fluids_left.retain(|&(f, n)| {
+            if facing == Dir::Down {
+                return false;
+            }
+            // Nothing holding fluids there: they wait (`targetTank == null`).
+            target.is_none_or(|t| !fill_whole(lv, t, f, n))
+        });
+    }
+    if fluids_left != fluids {
+        let values = fluid_overflow_values(&fluids_left);
+        set_values(lv, pos, &values);
+        if list.is_empty() && fluids_left.is_empty() {
+            with_world(|w| {
+                w.dims[lv.dim]
+                    .mixer_checks
+                    .push([pos[0], pos[1] + 2, pos[2]])
+            });
+        }
+    }
     seen.retain(|(_, at)| now - at < OUTPUT_ANIMATION_TIME);
     let mut values = Vec::new();
     if list != before {
         values.push((OVERFLOW_KEY, Some(overflow_tag(&list))));
-        if list.is_empty() {
+        if list.is_empty() && fluids_left.is_empty() {
             // `notifyChangeOfContents`: its mixer or press may go on.
             with_world(|w| {
                 w.dims[lv.dim]
@@ -433,7 +591,7 @@ fn clear_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) -> bool {
     if !values.is_empty() {
         super::basin::set_shown(lv, pos, &values);
     }
-    !list.is_empty() || !seen.is_empty()
+    !list.is_empty() || !fluids_left.is_empty() || !seen.is_empty()
 }
 
 /// The items seen leaving a basin's spout: id and the game time they left.

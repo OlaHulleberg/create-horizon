@@ -1975,9 +1975,19 @@ fn deployer_should_use(lv: &ServerLevel<'_>, held: Option<&(String, u8)>, at: [i
 }
 
 /// `ItemHelper.extract(storage, filter, 1, false)` for a deployer's empty hand: one of the first
-/// stack in contraption `key`'s storage (its filter not ported: anything passes).
-fn take_one(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<ItemStack> {
+/// stack in contraption `key`'s storage that the deployer's filter (`getFilterFromBE`, carried
+/// with its block) passes.
+fn take_one(lv: &ServerLevel<'_>, key: [i32; 3], local: [i32; 3]) -> Option<ItemStack> {
     let dim = lv.dim;
+    let host = &*lv.host;
+    let filter = HELD.with_borrow(|m| {
+        let (_, d) = m.get(&(dim, key))?.iter().find(|(o, _)| *o == local)?;
+        let tag = d
+            .engine
+            .as_ref()?
+            .get(&crate::glue::logistics::carried::FILTER.into())?;
+        filters::filter_from_nbt(host, tag)
+    });
     STORAGE.with_borrow_mut(|m| {
         let list = m.get_mut(&(dim, key))?;
         for (_, s) in list.iter_mut() {
@@ -1985,6 +1995,9 @@ fn take_one(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<ItemStack> {
                 let Some(stack) = slot.as_ref() else {
                     continue;
                 };
+                if !filters::passes(host, filter.as_ref(), stack) {
+                    continue;
+                }
                 let mut one = stack.clone();
                 let _ = one.set_count(1);
                 *slot = slot.take().and_then(|s| s.shrink(1));
@@ -2020,7 +2033,7 @@ fn deploy(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, at: Option<[i32; 3
         return false;
     };
     if d.held.is_none()
-        && let Some(s) = take_one(lv, key)
+        && let Some(s) = take_one(lv, key, a.local)
     {
         crate::glue::processing::set_deployer_held(&*lv.host, &mut d, Some(&s));
     }

@@ -29,9 +29,9 @@
 //! - `/tick freeze` holds Create's block entities, but the glue's level tick still runs: the API
 //!   does not say whether the server's ticks are frozen (`TickRateManager.runsNormally`).
 //!
-//! Not ported (the API could do it): a rope pulley as a threshold switch's target
-//! (`ThresholdSwitchObservable`), a belt as one (its item handler), and the switch screen's
-//! link to Ponder.
+//! A rope pulley (`ThresholdSwitchObservable`) and a belt segment (its item handler) are read by
+//! threshold switches as Create's are (`detectors::switch_seen`). The switch screen's link to
+//! Ponder is left out with Ponder, which the port does not have.
 
 mod analog;
 mod carried;

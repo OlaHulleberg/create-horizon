@@ -197,8 +197,7 @@ pub fn belt_movement_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Dir> {
     Some(create_engine::belt::movement_facing(rpm, seg.facing))
 }
 
-/// The facing of a belt that carries items below `pos` (`BeltFunnelBlock.isOnValidBelt`; Create
-/// also lets saws and item drains carry belt funnels: not yet).
+/// The facing of a belt that carries items below `pos` (`BeltFunnelBlock.isOnValidBelt`).
 fn belt_facing_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Dir> {
     let (_, info) = info_at(lv, [pos[0], pos[1] - 1, pos[2]])?;
     let seg = info.belt?;
@@ -210,6 +209,86 @@ fn belt_facing_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Dir> {
 fn depot_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     info_at(lv, [pos[0], pos[1] - 1, pos[2]])
         .is_some_and(|(b, _)| matches!(b, Block::Depot | Block::WeightedEjector))
+}
+
+/// Whether an item drain or an upward saw is below `pos`: their inputs take belt funnels too
+/// (`ItemDrainBlockEntity`'s `allowingBeltFunnels`, `SawBlockEntity`'s
+/// `allowingBeltFunnelsWhen(canProcess)`).
+fn machine_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    info_at(lv, [pos[0], pos[1] - 1, pos[2]]).is_some_and(|(b, i)| match b {
+        Block::ItemDrain => true,
+        Block::MechanicalSaw => i.facing == Some(Dir::Up),
+        _ => false,
+    })
+}
+
+/// `DirectBeltInputBehaviour.tryExportingToBeltFunnel(stack, side, false)` of the saw or drain
+/// at `pos`: None unless a pulling belt funnel on top faces `side`; else what is left of `stack`
+/// once its inventory took what it takes and its filter passes.
+pub(crate) fn export_up(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    side: Dir,
+    stack: &mod_api::ItemStack,
+) -> Option<u32> {
+    let above = [pos[0], pos[1] + 1, pos[2]];
+    let f = funnel_at(lv, above)?;
+    if f.facing != side {
+        return None;
+    }
+    super::arms::export_to_belt_funnel(lv, above, f, stack, false)
+}
+
+/// `activateExtractingBeltFunnel` over an item drain or upward saw: up to `max` of the inventory
+/// behind into it from the funnel's side (`handleInsertion(stack, facing)`), only what it takes
+/// whole (Create extracts only an amount its simulated insertion takes in full). Answers as
+/// `extract_in_front`.
+fn push_into_machine(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    side: Direction,
+    behind: [i32; 3],
+    (amount, exact): (u32, bool),
+) -> Option<Option<bool>> {
+    let below = [pos[0], pos[1] - 1, pos[2]];
+    let dim = lv.dim;
+    // A saw takes one item and a drain one stack, each only while empty (`isOccupied`).
+    let (busy, most) = with_world(|w| {
+        let d = &w.dims[dim];
+        match d.drains.get(&below) {
+            Some(drain) => (drain.held.is_some(), amount),
+            None => (d.saws.contains_key(&below), 1),
+        }
+    })
+    .unwrap_or((true, 0));
+    if busy || exact && amount > most {
+        return Some(Some(false));
+    }
+    let Some(stack) = take_filtered(lv, pos, behind, side, (amount.min(most), exact)) else {
+        return Some(None);
+    };
+    let count = stack.count().min(64) as u8;
+    let moved = stack.clone();
+    let (id, progress) = super::belt::belt_name(&*lv.host, &stack);
+    let mut item =
+        create_engine::belt::Item::new(&id, count, random_angle(lv, pos), upright(&*lv.host, &id));
+    item.progress = progress;
+    let left =
+        super::belt::handle_insertion(lv, below, facing, &item, false, false).unwrap_or(count);
+    if left > 0
+        && let Some(back) = items::with_count(&stack, u32::from(left))
+        && let Some(rest) = items::insert_item(lv, behind, side, back)
+    {
+        let at = pos.map(|v| f64::from(v) + 0.5);
+        items::drop_stack(lv, at, [0.0; 3], rest, 0);
+    }
+    if left == count {
+        return Some(Some(false));
+    }
+    super::flaps::funnel(lv, pos, false);
+    crate::glue::redstone::detectors::funnel_transfer(lv, pos, &moved);
+    Some(Some(true))
 }
 
 /// `activateExtractingBeltFunnel` over a depot: up to `max` of the inventory behind onto the
@@ -356,10 +435,10 @@ pub fn tick_funnel_shapes(lv: &mut ServerLevel<'_>) {
                 .unwrap_or("false")
                 .to_owned()
         };
-        // What carries a belt funnel below: a belt (its facing), or a depot.
+        // What carries a belt funnel below: a belt (its facing), a depot, a drain or an upward saw.
         let belt = belt_facing_below(lv, pos)
             .map(Some)
-            .or_else(|| depot_below(lv, pos).then_some(None));
+            .or_else(|| (depot_below(lv, pos) || machine_below(lv, pos)).then_some(None));
         let flag = |b: bool| if b { "true" } else { "false" };
         let (block, shape) = match (f.belt, belt) {
             (None, Some(b)) => (
@@ -486,6 +565,9 @@ pub fn tick_funnels(lv: &mut ServerLevel<'_>) {
             Mode::Extract => extract_in_front(lv, pos, f.facing, side, behind, max),
             Mode::PushingToBelt if depot_below(lv, pos) => {
                 push_onto_depot(lv, pos, f.facing, side, behind, max)
+            }
+            Mode::PushingToBelt if machine_below(lv, pos) => {
+                push_into_machine(lv, pos, f.facing, side, behind, max)
             }
             Mode::PushingToBelt => push_onto_belt(lv, pos, f.facing, side, behind, max),
             Mode::TakingFromBelt if depot_below(lv, pos) => {

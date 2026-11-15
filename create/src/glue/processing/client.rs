@@ -661,8 +661,8 @@ fn horizontal_angle(d: Dir) -> f32 {
 
 /// `MechanicalCrafterRenderer`: its cog turning on its facing's axis; its lid while covered or
 /// at work (not crafting or putting out); the belt toward the crafter it points at, else its
-/// arrow (`renderAndTransform`); the item in its slot while idle. The items of a grid moving
-/// between crafters are not drawn.
+/// arrow (`renderAndTransform`); the item in its slot while idle, the grid moving between
+/// crafters while they work (`crafter_items`).
 fn draw_crafter(
     host: &dyn ClientHost,
     draw: &mut dyn BlockEntityDrawContext,

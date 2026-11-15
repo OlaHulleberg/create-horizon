@@ -24,8 +24,8 @@
 //! The snowball is summoned with its item (`/summon`'s compound): a projectile spawned from a
 //! rotation carries its own type's item. During its hit on an entity the snowball can't be
 //! reached (`host.entity` answers None), so that hit is applied by its id and the snowball's own
-//! hit ends it: a sticky shot doesn't stick to an entity, and an item left behind is dropped
-//! where the hit was.
+//! hit ends it (an item left behind is dropped where the hit was); a sticky shot's hit is
+//! cancelled instead and the snowball, there again the next tick, follows what it hit.
 
 use super::super::server::ServerLevel;
 use super::super::subsystem::Subsystem;
@@ -101,9 +101,11 @@ impl Subsystem for PotatoCannon {
             return Flow::Continue;
         };
         // During an entity hit the snowball can't be reached (`host.entity` answers None for
-        // it): the hit is applied here and the snowball's own hit ends it.
-        event.cancelled = host.entity(event.projectile).is_some();
+        // it): the hit is applied here and the snowball's own hit ends it, unless the shot
+        // sticks to what it hit (its hit cancelled, the snowball is there the next tick).
+        let reachable = host.entity(event.projectile).is_some();
         let keep = impact(host, event, shot);
+        event.cancelled = reachable || keep.as_ref().is_some_and(|s| s.stuck.is_some());
         if let Some(shot) = keep {
             SHOTS.with_borrow_mut(|s| s.insert(event.projectile, shot));
         }
@@ -512,16 +514,18 @@ fn impact(
     if let Some(v) = potato::knockback(velocity, shot.motion, knockback, ground) {
         target.set_velocity(lv.host, v);
     }
+    // `setStuckEntity`: the offset from the target to the shot (where it hit, the snowball
+    // being out of reach during an entity hit).
     if shot.kind.sticky
         && alive(&*lv.host, target)
-        && let Some(projectile) = projectile
+        && let Some(at) = target.position(&*lv.host)
     {
-        let (Some(at), Some(own)) = (target.position(&*lv.host), projectile.position(&*lv.host))
-        else {
-            projectile.discard(lv.host);
-            return None;
-        };
-        projectile.set_velocity(lv.host, [0.0; 3]);
+        let own = projectile
+            .and_then(|p| p.position(&*lv.host))
+            .unwrap_or(event.at);
+        if let Some(p) = projectile {
+            p.set_velocity(lv.host, [0.0; 3]);
+        }
         shot.stuck = Some((
             target,
             [own[0] - at[0], own[1] - at[1], own[2] - at[2]],

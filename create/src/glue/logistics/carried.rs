@@ -13,7 +13,7 @@ use crate::glue::world::with_world;
 use create_engine::Block;
 use mod_api::{Compound, Tag};
 
-const FILTER: &str = "Filter";
+pub(crate) const FILTER: &str = "Filter";
 const AMOUNT: &str = "FilterAmount";
 const SIDES: &str = "SideFilters";
 const BRASS: &str = "BrassTunnel";
