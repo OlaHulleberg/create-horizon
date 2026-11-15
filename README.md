@@ -26,7 +26,7 @@ create/                        The native mod: what the launcher builds
     src/generated.rs           @generated block table (tools/create-data compile)
   data/create/horizon/         @generated block, item and fluid declarations
   assets/create/               @generated block states of the partial models
-tools/create-data/             compile: Create's MIT data -> tables; prepare: Create jar -> playable mod
+tools/create-data/             compile: Create's MIT data -> tables; prepare: Create's jar -> playable mod
 notes/                         Porting notes (start with notes/native-port.md)
 benchmarks/, PORTING.md        Measurements and the porting log of the earlier mixin-based port
 ```
@@ -39,24 +39,33 @@ packages, stock and schematics, interaction and items, decor, blocks and copycat
 ## Licences
 
 Create's code and data (everything outside its `src/main/resources/assets/`) are MIT and are read, translated and
-compiled here; its assets are All Rights Reserved and never committed or shipped: `create-data prepare` reads them
-from the player's own Create jar. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+compiled here; its assets are All Rights Reserved and never committed or shipped. The player's own machine downloads
+Create's official jar from Modrinth, where the Create team publishes it, checked against the SHA-512 pinned here: the
+launcher does it for the `[[jar]]` in `create/horizon-mod.toml` and layers the jar's assets and data under the mod,
+and `create-data prepare` does it into the user's cache to make what 26.3 needs from them. See [LICENSE](LICENSE) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Build and play
 
 Requirements: the fork's launcher (`horizon-launcher`) and its `cargo horizon-mod` tool (`cargo install --locked --git
 https://github.com/sunrise-org/sunrise --rev <the pin> cargo-horizon-mod`), Rust 1.99.1 with the `wasm32-unknown-unknown`
-target (the SDK's toolchain), and your own copy of Create 6.0.11's jar for the textures, models and sounds.
+target (the SDK's toolchain). Create's jar (1.21.1-6.0.10, the newest published; 6.0.11 is not released) is
+downloaded for you.
 
 ```sh
 cd create && cargo horizon-mod check                     # fetches the pinned SDK into create/.horizon/, checks
-cd tools/create-data && cargo run -- prepare --out ../../target/create-mod /path/to/create-6.0.11.jar
+cd tools/create-data && cargo run -- prepare --out ../../target/create-mod/create
 horizon-launcher native-build target/create-mod --instance "My Instance" --trust-native-code
+horizon-launcher play --instance "My Instance" --allow-jar-downloads
 ```
 
-`prepare` assembles a complete mod folder: this repository's crate and declarations, Create's data converted from
-1.21.1 to 26.3, and Create's assets from your jar. That folder contains Create's assets: it is for your own game,
-never for redistribution.
+`prepare` downloads Create's jar from Modrinth's CDN into your cache folder (`$CREATE_DATA_CACHE`, else
+`~/.cache/create-horizon/`), checks its SHA-512, and assembles the mod folder: this repository's crate and
+declarations, Create's data converted from 1.21.1 to 26.3, and what 26.3 needs made from Create's assets (item
+model definitions, flattened and tinted models, connected-texture tiles). Offline, give it the jar:
+`prepare --out <folder> --jar /path/to/create-1.21.1-6.0.10.jar`. On first play the launcher fetches the same jar
+into the instance's `jars/` (the launcher's window asks first; on the command line `--allow-jar-downloads` says yes).
+The folder holds what is made from Create's assets: it is for your own game, never for redistribution.
 
 After a Create data change, regenerate the committed tables and declarations from a Create checkout:
 
@@ -73,5 +82,5 @@ cargo +1.99.1 clippy --all-targets -- -D warnings
 cargo +1.99.1 test                      # the glue's tests
 cargo +1.99.1 test -p create-engine     # the engine's tests
 cargo horizon-mod check                 # the fork's package rules, then cargo check for the pinned build
-cd ../tools/create-data && cargo test
+cd ../tools/create-data && cargo test --locked
 ```
