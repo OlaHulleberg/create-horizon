@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=north": {
+      "model": "create:block/contraption_controls/button",
+      "y": 180
+    },
+    "facing=east": {
+      "model": "create:block/contraption_controls/button",
+      "y": 270
+    },
+    "facing=south": {
+      "model": "create:block/contraption_controls/button"
+    },
+    "facing=west": {
+      "model": "create:block/contraption_controls/button",
+      "y": 90
+    },
+    "facing=up": {
+      "model": "create:block/contraption_controls/button",
+      "x": 90
+    },
+    "facing=down": {
+      "model": "create:block/contraption_controls/button",
+      "x": 270
+    }
+  }
+}

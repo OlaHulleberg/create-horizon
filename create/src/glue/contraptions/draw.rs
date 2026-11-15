@@ -46,7 +46,12 @@ pub struct Drawing;
 
 impl Subsystem for Drawing {
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[KEY, actor_draw::ACTORS, actor_draw::PSI]
+        &[
+            KEY,
+            actor_draw::ACTORS,
+            actor_draw::PSI,
+            actor_draw::CONTROLS_OFF,
+        ]
     }
 
     fn animated(
@@ -637,8 +642,22 @@ fn draw_blocks(
         if let Some((block, info)) = b.create {
             let actor = actors.filter(|_| actor_draw::draws(block));
             draw_parts(draw, block, &info, &props, actor.is_some());
-            if let Some(frame) = actor {
-                actor_draw::draw_moving(draw, frame, block, &info, b.at.map(|v| v.round() as i32));
+            match actor {
+                Some(frame) => {
+                    let local = b.at.map(|v| v.round() as i32);
+                    actor_draw::draw_moving(draw, frame, block, &info, local);
+                }
+                // No word of its actors yet (or a clock's hands): at rest.
+                None if actor_draw::draws(block)
+                    && block != create_engine::Block::MechanicalDrill =>
+                {
+                    let rest = actor_draw::Doing {
+                        lit: true,
+                        ..actor_draw::Doing::default()
+                    };
+                    actor_draw::actor_parts(&mut actor_draw::Drawing(draw), block, &info, &rest);
+                }
+                None => {}
             }
         }
         // `BlazeBurnerMovementBehaviour.renderInContraption`: a carried burner's blaze.

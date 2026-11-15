@@ -2400,7 +2400,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 173] = [
+pub const PARTIALS: [(&str, &str, &str); 176] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -3211,6 +3211,23 @@ pub const PARTIALS: [(&str, &str, &str); 173] = [
         "up",
     ),
     ("part_toolbox_drawer", "create:block/toolbox/drawer", "up"),
+    // ContraptionControlsRenderer's button and indicator (`CONTRAPTION_CONTROLS_BUTTON`,
+    // `CONTRAPTION_CONTROLS_INDICATOR`: on, and its half turn while off), `partialFacing`.
+    (
+        "part_contraption_controls_button",
+        "create:block/contraption_controls/button",
+        "south",
+    ),
+    (
+        "part_contraption_controls_indicator_0",
+        "create:block/contraption_controls/indicator_0",
+        "south",
+    ),
+    (
+        "part_contraption_controls_indicator_4",
+        "create:block/contraption_controls/indicator_4",
+        "south",
+    ),
 ];
 
 /// The unit-cube models of `part_fluid_*`: every face the fluid's still texture, water's

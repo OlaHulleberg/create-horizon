@@ -33,6 +33,8 @@ use std::collections::HashMap;
 pub const ACTORS: &str = "Actors";
 /// The key in a stationary interface's data under which its timer and reach are.
 pub const PSI: &str = "Psi";
+/// The key in contraption controls' data: whether they are turned off.
+pub const CONTROLS_OFF: &str = "ControlsOff";
 
 // ---------------------------------------------------------------------------------------------
 // Shared
@@ -270,6 +272,8 @@ pub struct Doing {
     pub running: bool,
     pub reach: f32,
     pub lit: bool,
+    /// Contraption controls turned off.
+    pub off: bool,
 }
 
 /// Draws actor `block`'s moving parts (state facts `info`) doing `d`, under its block's pose.
@@ -290,8 +294,22 @@ pub fn actor_parts(draw: &mut dyn Parts, block: Block, info: &StateInfo, d: &Doi
             d.lit,
             d.reach,
         ),
+        Block::ContraptionControls => draw_controls(draw, facing, d.off),
         _ => {}
     }
+}
+
+/// `ContraptionControlsRenderer`: the button at rest and the indicator, its half turn while the
+/// controls are off.
+fn draw_controls(draw: &mut dyn Parts, facing: Dir, off: bool) {
+    let back = dir_name(facing.opposite());
+    draw.part("part_contraption_controls_button", back);
+    let indicator = if off {
+        "part_contraption_controls_indicator_4"
+    } else {
+        "part_contraption_controls_indicator_0"
+    };
+    draw.part(indicator, back);
 }
 
 /// `MovementContext.getAnimationSpeed` on a client.
@@ -466,6 +484,16 @@ pub(super) fn sync_interface(lv: &mut ServerLevel<'_>, pos: [i32; 3], s: &psi::S
     write_key(lv, pos, PSI, Some(Tag::Compound(c)));
 }
 
+/// Contraption controls at `pos` tell their clients whether they are off (their indicator).
+pub(super) fn sync_controls(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let off =
+        super::super::world::with_world(|w| w.dims[dim].controls.get(&pos).map(|c| c.disabled))
+            .flatten()
+            .unwrap_or(false);
+    write_key(lv, pos, CONTROLS_OFF, Some(Tag::Byte(i8::from(off))));
+}
+
 /// A stationary interface's timer and reach as its client runs them: (timer now, timer a tick
 /// ago, reach).
 fn interface_timer(nbt: &Compound, game_time: i64) -> Option<(i32, i32, f32)> {
@@ -556,6 +584,15 @@ impl BlockEntityPart for PlacedActors {
                 Drawing(draw).part("part_sticker_head", "up");
                 draw.pop();
             }
+            // ContraptionControlsRenderer: the button at rest and the indicator, its half turn
+            // while the controls are off.
+            Block::ContraptionControls => {
+                let off = matches!(
+                    super::super::kinetics::synced(&event.entity.nbt, CONTROLS_OFF),
+                    Some(Tag::Byte(1))
+                );
+                draw_controls(&mut Drawing(draw), facing, off);
+            }
             Block::GantryCarriage => {
                 let rpm = super::super::kinetics::speeds_of(&event.entity.nbt)[0];
                 draw_gantry_cogs(draw, event.pos, facing, info.along_first, rpm);
@@ -639,7 +676,7 @@ pub(super) fn show_actors(
 ) {
     let dim = lv.dim;
     let now = lv.game_time();
-    if carried.actors.is_empty() {
+    if carried.actors.is_empty() && carried.controls.is_empty() {
         return;
     }
     let mut sent = SENT
@@ -658,6 +695,17 @@ pub(super) fn show_actors(
         )
     };
     c.insert("Off".into(), locals(&|a| a.disabled));
+    c.insert(
+        "CtlOff".into(),
+        Tag::IntArray(
+            carried
+                .controls
+                .iter()
+                .filter(|c| c.1.disabled)
+                .flat_map(|c| c.0)
+                .collect(),
+        ),
+    );
     c.insert(
         "Punch".into(),
         locals(&|a| a.kind == Kind::Deployer && super::actors::deployer_punches(dim, key, a.local)),
@@ -736,6 +784,8 @@ pub struct View {
     punch: Vec<[i32; 3]>,
     /// Each interface's chase: its block, the value it started from, its target and since when.
     chases: Vec<([i32; 3], f32, f32, i64)>,
+    /// The contraption controls it carries that are off.
+    controls_off: Vec<[i32; 3]>,
 }
 
 fn locals(c: &Compound, key: &str) -> Vec<[i32; 3]> {
@@ -774,6 +824,7 @@ pub fn view(nbt: &Compound) -> Option<View> {
         off: locals(c, "Off"),
         punch: locals(c, "Punch"),
         chases,
+        controls_off: locals(c, "CtlOff"),
     })
 }
 
@@ -855,6 +906,7 @@ pub fn draws(block: Block) -> bool {
             | Block::Deployer
             | Block::PortableStorageInterface
             | Block::PortableFluidInterface
+            | Block::ContraptionControls
     )
 }
 
@@ -867,6 +919,14 @@ pub fn draw_moving(
     info: &StateInfo,
     local: [i32; 3],
 ) {
+    if block == Block::ContraptionControls {
+        let d = Doing {
+            off: frame.view.controls_off.contains(&local),
+            ..Doing::default()
+        };
+        actor_parts(&mut Drawing(draw), block, info, &d);
+        return;
+    }
     let Some(kind) = Kind::of(block) else {
         return;
     };

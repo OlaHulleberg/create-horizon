@@ -1091,6 +1091,7 @@ pub(super) fn release(
         if lv.create_block(p) == Some(Block::ContraptionControls) {
             c.disabled = actors::stays_disabled(&carried.disabled, &c.filter);
             with_world(|w| w.dims[dim].controls.insert(p, c));
+            super::actor_draw::sync_controls(lv, p);
             settled = true;
         }
     }
@@ -2445,6 +2446,7 @@ pub(super) fn tick_mounted(lv: &mut ServerLevel<'_>) {
         });
         if changed == Some(true) {
             mark_pos_unsaved(dim, pos);
+            super::actor_draw::sync_controls(lv, pos);
         }
     }
     for pos in psis {
@@ -2612,6 +2614,7 @@ fn use_mounted(
     })?;
     controls_status(lv, c.player, pos, filter.as_deref(), on);
     mark_pos_unsaved(dim, pos);
+    super::actor_draw::sync_controls(lv, pos);
     Some(InteractionResult::Success)
 }
 
