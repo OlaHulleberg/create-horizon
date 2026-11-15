@@ -135,6 +135,12 @@ pub trait Subsystem: Sync {
     /// After a server level's tick.
     fn level_tick(&self, _lv: &mut ServerLevel<'_>) {}
 
+    /// Whether `level_tick` runs while the server is frozen (`/tick freeze`): only for what
+    /// Create ticks from `LevelTickEvent` rather than from block entities.
+    fn runs_frozen(&self) -> bool {
+        false
+    }
+
     /// A world fluid's scheduled tick is about to run (`FlowingFluid.tick`): set `cancelled` to
     /// skip it. Read-only: what changes is done from the next `level_tick`.
     fn fluid_tick(

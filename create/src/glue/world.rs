@@ -14,6 +14,20 @@ thread_local! {
     /// The levels this world has opened, by index: the vanilla three first, then mod
     /// dimensions in the order they opened.
     static LEVELS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Whether this server tick advances the world (`TickRateManager.runsNormally`): false
+    /// under `/tick freeze`, except for a `/tick step`.
+    static RUNNING: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// The server tick starts: whether it advances the world (`ServerTickStart`'s `world_running`).
+pub fn set_running(running: bool) {
+    RUNNING.set(running);
+}
+
+/// Whether this tick advances the world: a frozen server (`/tick freeze`) holds block entities,
+/// so Create's machines stand still (`ServerLevel.tick` skips `tickBlockEntities`).
+pub fn running() -> bool {
+    RUNNING.get()
 }
 
 /// Opens Create's world for this server's world. False, and the mod stays idle, when Create's
@@ -45,6 +59,7 @@ pub fn open(host: &dyn Host) -> bool {
 
 /// The world closed (or failed to open): forget all of it.
 pub fn close() {
+    RUNNING.set(true);
     WORLD.with_borrow_mut(|w| *w = None);
     LEVELS.with_borrow_mut(Vec::clear);
 }

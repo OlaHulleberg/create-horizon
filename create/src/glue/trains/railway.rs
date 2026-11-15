@@ -135,6 +135,11 @@ impl Subsystem for Trains {
         }
     }
 
+    /// `Create.RAILWAYS.tick` runs from `LevelTickEvent.Post`, frozen or not.
+    fn runs_frozen(&self) -> bool {
+        true
+    }
+
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         // The controls drive before the trains move; their HUD hears of the move after.
         super::controls::before_trains(lv);

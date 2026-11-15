@@ -26,8 +26,6 @@
 //! Left out, the API having no way to do it:
 //! - A redstone link slot's item is drawn as a block item (`isGui3d`) when the item places a
 //!   block: the API does not say whether an item model is 3D (`ItemRenderer` `isGui3d`).
-//! - `/tick freeze` holds Create's block entities, but the glue's level tick still runs: the API
-//!   does not say whether the server's ticks are frozen (`TickRateManager.runsNormally`).
 //!
 //! A rope pulley (`ThresholdSwitchObservable`) and a belt segment (its item handler) are read by
 //! threshold switches as Create's are (`detectors::switch_seen`). The switch screen's link to
