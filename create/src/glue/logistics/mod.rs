@@ -22,9 +22,8 @@
 //!   change (`contents_changed` reaches only a block's own parts), so a chute under one looks
 //!   again every `RETRY` ticks.
 //! - An arm's points and an ejector's target are chosen with their items as in Create
-//!   (`arms::select_point`, `arms::select_ejector_target`), but the outlines Create's client draws
-//!   around the chosen blocks are not, and left-clicking a point to drop it is out: the mod API's
-//!   `left_click_block` names no player.
+//!   (`arms::select_point`, `arms::select_ejector_target`), and outlined on their chooser's client;
+//!   left-clicking a point to drop it is out: the mod API's `left_click_block` names no player.
 //! - Belts outline and collide as Create's `BeltShapes` (declared by `tools/create-data`), but
 //!   every entity collides with the shape cut at 19 px, where Create gives its passengers the whole
 //!   outline (content shapes select by entity class, not by riding). A belt's casing is drawn by

@@ -41,7 +41,8 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   facts, `light_emission(state) -> Option<u8>` and `friction(state) -> Option<f32>`, would close it.
 - **Block-state facts:** `isRedstoneConductor` and `isSolidRender` (cart assemblers, stock links, schematic
   export approximate them by "full collision cube"); `requiresCorrectToolForDrops` / `isCorrectToolForDrops`
-  (deployers dig every block at its harvestable speed); the weathering-copper class and age; a block's class
+  (deployers dig every block at its harvestable speed: `can_harvest_block` and `player_harvest_check` hear the
+  game's own dig and break, but a deployer counts its progress itself, before any break); the weathering-copper class and age; a block's class
   (copycats guess stairs, bars and trapdoors from tags and ids).
 - **A state's numeric id**, for `level_event(2001, ..)` (block-break particles on a wrenched copycat, a
   belt's casing taken off, an encased shaft's or cog's casing taken off with the wrench).
@@ -69,7 +70,8 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, packagers and
   frogports offer no `ITEMS` handlers to hoppers, funnels and chutes, nor do belts (`ItemHandlerBeltSegment`;
   so a tunnel offers none of its belt's: an andesite tunnel none at all, a brass tunnel only its own stack to
-  insert into, nothing to take out), and a portable storage interface
+  insert into, nothing to take out), nor do upward saws (`SawBlockEntity`'s inventory: hoppers can't feed one), and
+  a portable storage interface
   offers its contraption's storage to Create's chutes and funnels only, not to hoppers. A close/abort callback
   on `Transaction` (or a journal for mod state) would close them.
 - **A notice for any container's contents changing.** `contents_changed` reaches only the changed block's own
@@ -236,6 +238,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   but its constructor randomises the velocity (`TerrainParticle`), so pipes pour and drip milk, tea, honey,
   chocolate and lava as Create does, and water and potions in their colour but scattered (`glue/fluids/flows.rs`).
   A tint on `ParticleOptions::item` (`rCol/gCol/bCol`) would close it.
+- **A texture on world quads** (catnip's `Outliner` `withFaceTexture`, drawn with
+  `RenderTypes.outlineTranslucent(texture)`): the super glue's areas are outlined as Create's are, but their faces
+  are not covered with `AllSpecialTextures.GLUE` (`SuperGlueSelectionHandler`); `WorldDrawContext::quads` draws with
+  the white atlas texel and a mod pipeline's shader binds no texture. A texture (or block-atlas sprite) for
+  `quads`, or a sampler for `pipeline_quads`, would close it.
 - **A screen layout for a mod menu opened without a block** (`player_open_mod_menu` with no `pos`: the
   client's `open_native_screen` returns without a `Screen`): the filters' and the schedule's screens are the mod's own screen,
   and clicking an inventory slot carries a ghost copy, not the stack (Create's menus carry the real one). A

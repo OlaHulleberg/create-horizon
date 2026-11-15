@@ -9,8 +9,8 @@
 //! tells a player holding the glue of their first corner and the glue areas near them
 //! (`create:glue`), and their client outlines them as Create's does: each area in Create's
 //! passive green, the one looked at highlighted, and the selection from the first corner to the
-//! block looked at. Create's glue face texture (`AllSpecialTextures.GLUE`) is not drawn: the
-//! lines are plain.
+//! block looked at. Create's glue face texture (`AllSpecialTextures.GLUE`) is not drawn: world
+//! quads take no texture (HORIZON_API.md).
 
 use super::super::items::{action_bar, creative, held, sneaking};
 use super::super::persist::mark_unsaved;
