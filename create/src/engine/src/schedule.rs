@@ -482,6 +482,34 @@ pub struct Runtime {
     pub title: String,
     /// `isAutoSchedule`: given by a station, not by a player (it is not handed back).
     pub auto: bool,
+    /// `predictionTicks`: each entry's last transit time in ticks ([`TBD`] until known).
+    pub predictions: Vec<i32>,
+    /// `displayLinkUpdateRequested`: the station's display links should refresh.
+    pub display_update: bool,
+}
+
+/// `ScheduleRuntime.TBD` and `INVALID`: a transit time not known yet, and a time that cannot
+/// be told.
+pub const TBD: i32 = -1;
+pub const INVALID: i32 = -2;
+
+/// `TrainDeparturePrediction` (without its train): ticks until the train is at `destination`
+/// (a station's name, or the filter of an entry to come), and the schedule's title then.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Prediction {
+    pub ticks: i32,
+    pub title: String,
+    pub destination: String,
+}
+
+/// What `submitPredictions` reads of the train: the station it stands at, and its destination
+/// with the distance left and the distance it set off with (`distanceStartedAt`), and its speed
+/// (`min(throttle * maxSpeed, (maxSpeed + maxTurnSpeed) / 2)`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Whereabouts {
+    pub station: Option<String>,
+    pub destination: Option<(String, f64, f64)>,
+    pub speed: f64,
 }
 
 impl Runtime {
@@ -497,8 +525,142 @@ impl Runtime {
                 .saved_progress
                 .min(schedule.entries.len().saturating_sub(1)),
             auto,
+            predictions: vec![TBD; schedule.entries.len()],
+            display_update: true,
             ..Runtime::default()
         }
+    }
+
+    /// `submitPredictions`: when the train is next at each station of its schedule, from the
+    /// transit times it measured and the delays it waits.
+    pub fn predict(&self, schedule: &Schedule, at: &Whereabouts) -> Vec<Prediction> {
+        let mut out: Vec<Option<Prediction>> = Vec::new();
+        let count = schedule.entries.len();
+        let mut time: i32 = 0;
+        let current = self.current;
+        if self.state == State::PostTransit || current >= count {
+            if let Some(station) = &at.station {
+                out.push(self.prediction(schedule, current, station, &self.title, 0));
+            }
+            let stay = stay_duration(schedule, current);
+            time = if stay == INVALID {
+                INVALID
+            } else {
+                time.wrapping_add(stay)
+            };
+        } else if let Some((name, distance, started)) = &at.destination {
+            // `(int) (distance / speed) * 2`, in Java's arithmetic.
+            let mut remaining = java_int(distance / at.speed).wrapping_mul(2);
+            if self.predictions.len() > current && *started != 0.0 {
+                let mut predicted = self.predictions[current] as f32;
+                if predicted > 0.0 {
+                    predicted *= (distance / started).clamp(0.0, 1.0) as f32;
+                    remaining = remaining.wrapping_add(predicted as i32) / 2;
+                }
+            }
+            time = time.wrapping_add(remaining);
+            out.push(self.prediction(schedule, current, name, &self.title, time));
+            let stay = stay_duration(schedule, current);
+            time = if stay != INVALID {
+                time.wrapping_add(stay)
+            } else {
+                INVALID
+            };
+        } else {
+            time = self.predict_entry(schedule, current, &self.title, time, &mut out);
+        }
+        let mut title = self.title.clone();
+        for i in 1..count {
+            let index = (i + current) % count;
+            if index == 0 && !schedule.cyclic {
+                break;
+            }
+            if let Instruction::Rename(t) = &schedule.entries[index].instruction {
+                title.clone_from(t);
+                continue;
+            }
+            time = self.predict_entry(schedule, index, &title, time, &mut out);
+        }
+        out.into_iter().flatten().collect()
+    }
+
+    /// `predictForEntry`.
+    fn predict_entry(
+        &self,
+        schedule: &Schedule,
+        index: usize,
+        title: &str,
+        mut time: i32,
+        out: &mut Vec<Option<Prediction>>,
+    ) -> i32 {
+        let Some(Instruction::Destination(filter)) =
+            schedule.entries.get(index).map(|e| &e.instruction)
+        else {
+            return time;
+        };
+        if self.predictions.len() <= self.current {
+            return time;
+        }
+        let stay = stay_duration(schedule, index);
+        if time < 0 {
+            out.push(self.prediction(schedule, index, filter, title, time));
+            return time.min(stay);
+        }
+        let predicted = self.predictions.get(index).copied().unwrap_or(TBD);
+        time = time.wrapping_add(predicted);
+        if predicted == TBD {
+            time = TBD;
+        }
+        out.push(self.prediction(schedule, index, filter, title, time));
+        if time != TBD {
+            time = time.wrapping_add(stay);
+        }
+        if stay == INVALID {
+            time = INVALID;
+        }
+        time
+    }
+
+    /// `createPrediction`: none for an `INVALID` time; the title is the next station
+    /// instruction's filter without its `*` when the schedule has none.
+    fn prediction(
+        &self,
+        schedule: &Schedule,
+        index: usize,
+        destination: &str,
+        title: &str,
+        ticks: i32,
+    ) -> Option<Prediction> {
+        if ticks == INVALID {
+            return None;
+        }
+        let size = schedule.entries.len();
+        let mut index = index;
+        if index >= size {
+            if !schedule.cyclic {
+                return Some(Prediction {
+                    ticks,
+                    title: " ".to_owned(),
+                    destination: destination.to_owned(),
+                });
+            }
+            index %= size.max(1);
+        }
+        let mut text = title.to_owned();
+        if text.trim().is_empty() {
+            for i in 1..size {
+                let j = (index + i) % size;
+                if let Instruction::Destination(f) = &schedule.entries[j].instruction {
+                    text = f.replace('*', "").trim().to_owned();
+                    break;
+                }
+            }
+        }
+        Some(Prediction {
+            ticks,
+            title: text,
+            destination: destination.to_owned(),
+        })
     }
 
     /// `tick`: `navigating` while the train has a destination.
@@ -651,6 +813,16 @@ impl Runtime {
         }
         self.state = State::PostTransit;
         self.progress.clear();
+        self.display_update = true;
+        // The transit time measured, averaged with the last one.
+        if self.ticks_in_transit > 0
+            && let Some(p) = self.predictions.get_mut(self.current)
+        {
+            if *p > 0 {
+                self.ticks_in_transit = (*p + self.ticks_in_transit) / 2;
+            }
+            *p = self.ticks_in_transit;
+        }
         if let Some(entry) = schedule.entries.get(self.current) {
             self.progress = vec![(0, 0); entry.conditions.len()];
         }
@@ -688,18 +860,28 @@ impl Runtime {
                 return;
             }
             let measure = probes.measure((g, *done));
+            // `requestDisplayIfNecessary`: the first group's status shows a new time.
+            let timed = |time: i32, total: i32| {
+                let left = total - time;
+                (left < 20 * 60 && left % 100 == 0) || (left >= 20 * 60 && left % (20 * 60) == 0)
+            };
+            let first = g == 0;
             let met = match &group[*done] {
                 Condition::Delay { value, unit } => {
-                    if *time >= Condition::ticks(*value, *unit) {
+                    let total = Condition::ticks(*value, *unit);
+                    if *time >= total {
                         true
                     } else {
+                        self.display_update |= first && timed(*time, total);
                         *time += 1;
                         false
                     }
                 }
                 Condition::Idle { value, unit } => {
                     *time = inputs.idle_cargo;
-                    inputs.idle_cargo > Condition::ticks(*value, *unit)
+                    let total = Condition::ticks(*value, *unit);
+                    self.display_update |= first && timed(*time, total);
+                    inputs.idle_cargo > total
                 }
                 Condition::TimeOfDay {
                     hour,
@@ -715,6 +897,9 @@ impl Runtime {
                     (0..=40).contains(&diff)
                 }
                 Condition::PlayerCount { count, exact } => {
+                    // `PrevPlayerCount` (kept in the condition's time): a change shows.
+                    self.display_update |= first && *time != inputs.players;
+                    *time = inputs.players;
                     if *exact {
                         inputs.players == *count
                     } else {
@@ -743,9 +928,42 @@ impl Runtime {
             if met {
                 *done += 1;
                 *time = 0;
+                self.display_update |= first;
             }
         }
     }
+}
+
+/// `estimateStayDuration`: the ticks the train waits at entry `index`: the first condition
+/// group made only of delays (their sum), else [`INVALID`] (past the end: the first entry's of a
+/// cyclic schedule).
+pub fn stay_duration(schedule: &Schedule, index: usize) -> i32 {
+    let mut index = index;
+    if index >= schedule.entries.len() {
+        if !schedule.cyclic {
+            return INVALID;
+        }
+        index = 0;
+    }
+    let Some(entry) = schedule.entries.get(index) else {
+        return INVALID;
+    };
+    'groups: for group in &entry.conditions {
+        let mut total: i32 = 0;
+        for c in group {
+            let Condition::Delay { value, unit } = c else {
+                continue 'groups;
+            };
+            total = total.wrapping_add(Condition::ticks(*value, *unit));
+        }
+        return total;
+    }
+    INVALID
+}
+
+/// Java's `(int) d`: NaN is 0, out of range saturates.
+fn java_int(d: f64) -> i32 {
+    if d.is_nan() { 0 } else { d as i32 }
 }
 
 /// A station name filter as Create's schedule offers it ("Use * as a text wildcard"): `*`
@@ -1078,5 +1296,103 @@ mod tests {
         assert!(!station_matches("Depot", "Depot 2"));
         assert!(!station_matches("Mine*2", "Mine 3"));
         assert!(station_matches("a*b*c", "a-b-b-c"));
+    }
+
+    fn delay(seconds: i32) -> Vec<Vec<Condition>> {
+        vec![vec![Condition::Delay {
+            value: seconds,
+            unit: TimeUnit::Seconds,
+        }]]
+    }
+
+    #[test]
+    fn transit_times_are_measured_and_averaged() {
+        let s = Schedule {
+            entries: vec![Entry::station("A", delay(1)), Entry::station("B", delay(1))],
+            ..Schedule::default()
+        };
+        let mut r = Runtime::for_schedule(&s, false);
+        assert_eq!(r.predictions, vec![TBD, TBD]);
+        r.started();
+        r.ticks_in_transit = 100;
+        r.arrived(&s);
+        assert_eq!(r.predictions, vec![100, TBD]);
+        assert!(r.display_update);
+        r.state = State::InTransit;
+        r.ticks_in_transit = 140;
+        r.arrived(&s);
+        assert_eq!(r.predictions[0], 120, "averaged with the last");
+    }
+
+    #[test]
+    fn predictions_follow_create() {
+        let s = Schedule {
+            entries: vec![
+                Entry::station("South", delay(10)),
+                Entry::station("North", delay(10)),
+            ],
+            ..Schedule::default()
+        };
+        // Waiting at North (entry 1), both transits measured at 123 ticks.
+        let mut r = Runtime::for_schedule(&s, false);
+        r.current = 1;
+        r.state = State::PostTransit;
+        r.predictions = vec![123, 123];
+        let at = Whereabouts {
+            station: Some("North".into()),
+            ..Whereabouts::default()
+        };
+        let p = r.predict(&s, &at);
+        assert_eq!(
+            p,
+            vec![
+                Prediction {
+                    ticks: 0,
+                    title: "South".into(),
+                    destination: "North".into()
+                },
+                Prediction {
+                    ticks: 200 + 123,
+                    title: "North".into(),
+                    destination: "South".into()
+                },
+            ]
+        );
+        // On its way to South, half way, at 0.7 blocks a tick: the estimate is averaged with the
+        // measured time scaled by the distance left.
+        r.state = State::InTransit;
+        r.current = 0;
+        let at = Whereabouts {
+            station: None,
+            destination: Some(("South".into(), 17.0, 34.0)),
+            speed: 0.7,
+        };
+        let p = r.predict(&s, &at);
+        let remaining = ((17.0f64 / 0.7) as i32) * 2;
+        let first = (remaining + (123.0f32 * 0.5) as i32) / 2;
+        assert_eq!(p[0].ticks, first);
+        assert_eq!(p[1].ticks, first + 200 + 123);
+        // Unknown transit times: TBD on, and a condition group that is no delay ends it.
+        let mut r = Runtime::for_schedule(&s, false);
+        r.current = 1;
+        r.state = State::PostTransit;
+        let p = r.predict(&s, &Whereabouts::default());
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].ticks, TBD);
+        let s2 = Schedule {
+            entries: vec![
+                Entry::station("A", vec![vec![Condition::Powered]]),
+                Entry::station("B", delay(1)),
+            ],
+            ..Schedule::default()
+        };
+        let mut r = Runtime::for_schedule(&s2, false);
+        r.state = State::PostTransit;
+        r.predictions = vec![50, 50];
+        let at = Whereabouts {
+            station: Some("A".into()),
+            ..Whereabouts::default()
+        };
+        assert_eq!(r.predict(&s2, &at).len(), 1, "no stay is known after A");
     }
 }

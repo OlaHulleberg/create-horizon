@@ -73,6 +73,16 @@ pub fn en_us(key: &str) -> Option<&'static str> {
         "create.display_source.train_status" => "Train Schedule Status",
         "create.display_source.observed_train_name" => "Detected Train Name",
         "create.display_source.read_package_address" => "Read Package Address",
+        "create.display_source.station_summary" => "Train Station Summary",
+        "create.display_source.station_summary.filter" => "Station name filter",
+        "create.display_source.station_summary.minutes" => " min",
+        "create.display_source.station_summary.now" => "now",
+        "create.display_source.station_summary.platform_column" => "Platform column size",
+        "create.display_source.station_summary.seconds" => "%1$ss",
+        "create.display_source.station_summary.train_name_column" => "Train column size",
+        "create.display_source.gauge_status" => "Factory gauge status",
+        "create.flap_display.cycles.arrival_time" => "   ; min;now;15s;30s;45s",
+        "create.train.unnamed" => "Unnamed Train",
         "create.boiler.status" => "Boiler Status:  %1$s",
         "create.boiler.status_short" => "Boiler:  %1$s",
         "create.boiler.passive" => "Passive",
@@ -158,10 +168,14 @@ pub enum Source {
     ObservedTrainName,
     /// A smart observer's package's address (`PackageAddressDisplaySource`).
     PackageAddress,
+    /// The trains coming to stations (`StationSummaryDisplaySource`).
+    StationSummary,
+    /// The factory gauges a link is joined to (`FactoryGaugeDisplaySource`).
+    GaugeStatus,
 }
 
 impl Source {
-    pub const ALL: [Source; 21] = [
+    pub const ALL: [Source; 23] = [
         Source::KineticSpeed,
         Source::KineticStress,
         Source::RedstonePower,
@@ -183,6 +197,8 @@ impl Source {
         Source::TrainStatus,
         Source::ObservedTrainName,
         Source::PackageAddress,
+        Source::StationSummary,
+        Source::GaugeStatus,
     ];
 
     /// Its registry id's path (`create:<id>`).
@@ -209,6 +225,8 @@ impl Source {
             Source::TrainStatus => "train_status",
             Source::ObservedTrainName => "observed_train_name",
             Source::PackageAddress => "read_package_address",
+            Source::StationSummary => "station_summary",
+            Source::GaugeStatus => "gauge_status",
         }
     }
 
@@ -238,6 +256,12 @@ impl Source {
             "andesite_tunnel_source_item_throughput" | "brass_tunnel_source_item_throughput" => {
                 Some(Source::ItemThroughput)
             }
+            "fluid_tank_source_boiler_status" => Some(Source::Boiler),
+            "elevator_contact_source_current_floor" => Some(Source::CurrentFloor),
+            "track_station_source_station_summary" => Some(Source::StationSummary),
+            "track_station_source_train_status" => Some(Source::TrainStatus),
+            "track_observer_source_observed_train_name" => Some(Source::ObservedTrainName),
+            "factory_gauge_source_gauge_status" => Some(Source::GaugeStatus),
             _ => None,
         })
     }
@@ -266,6 +290,8 @@ impl Source {
             Source::TrainStatus => "create.display_source.train_status",
             Source::ObservedTrainName => "create.display_source.observed_train_name",
             Source::PackageAddress => "create.display_source.read_package_address",
+            Source::StationSummary => "create.display_source.station_summary",
+            Source::GaugeStatus => "create.display_source.gauge_status",
         }
     }
 
@@ -285,7 +311,9 @@ impl Source {
     pub fn allows_labeling(self, target: Target) -> bool {
         match self {
             Source::NixieTube => target != Target::Nixie,
-            Source::ListItems | Source::ListFluids => false,
+            Source::ListItems | Source::ListFluids | Source::GaugeStatus => false,
+            // No `SingleLineDisplaySource`.
+            Source::StationSummary => false,
             // `allowsLabeling` false; the boiler is no `SingleLineDisplaySource`.
             Source::CurrentFloor | Source::TrainStatus | Source::Boiler => false,
             _ => true,
@@ -297,7 +325,11 @@ impl Source {
     pub fn single_line(self) -> bool {
         !matches!(
             self,
-            Source::ListItems | Source::ListFluids | Source::Boiler
+            Source::ListItems
+                | Source::ListFluids
+                | Source::Boiler
+                | Source::StationSummary
+                | Source::GaugeStatus
         )
     }
 }
@@ -319,6 +351,12 @@ pub struct Config {
     /// keeps of the items it was told of.
     pub interval: i32,
     pub throughput: Throughput,
+    /// `StationSummaryDisplaySource`: its station name `Filter` (`*` any text: the rest is the
+    /// platform), and the train name's and platform's columns (`NameColumn` in percent,
+    /// `PlatformColumn` in characters); None until `populateData` sets them.
+    pub filter: Option<String>,
+    pub name_column: Option<i32>,
+    pub platform_column: Option<i32>,
 }
 
 /// `ItemThroughputDisplaySource`'s source config: `LastReceived`, `LastReceivedAmount`,
@@ -386,6 +424,9 @@ impl Config {
             "Cycle" => self.cycle = int(),
             "Format" => self.format = int(),
             "Interval" => self.interval = int(),
+            "Filter" => self.filter = Some(value.to_owned()),
+            "NameColumn" => self.name_column = Some(int()),
+            "PlatformColumn" => self.platform_column = Some(int()),
             _ => return false,
         }
         true
@@ -447,6 +488,161 @@ pub enum Reading {
     Now(i64),
     /// A fluid tank's boiler (None: not a tank).
     Boiler(Option<BoilerView>),
+    /// The arrivals the station summary's filter matches, soonest first and as many as the
+    /// board has rows (`GlobalTrainDisplayData.prepare`).
+    Summary(Vec<Arrival>),
+}
+
+/// `TrainDeparturePrediction` as the summary shows it: ticks until it is there (-1 unknown),
+/// the train's name, the schedule's title and where it goes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Arrival {
+    pub ticks: i32,
+    pub train: String,
+    pub title: String,
+    pub destination: String,
+}
+
+impl Arrival {
+    /// `getCompareTicks`.
+    fn compare_ticks(&self) -> i32 {
+        if self.ticks == -1 {
+            i32::MAX
+        } else if self.ticks < 200 {
+            0
+        } else {
+            self.ticks
+        }
+    }
+}
+
+/// `GlobalTrainDisplayData.prepare`: the arrivals at destinations matching `filter`, sorted by
+/// their time (soon ones together, unknown ones last), then by train name, at most `max`.
+pub fn prepare_arrivals(
+    by_destination: &HashMap<String, Vec<Arrival>>,
+    filter: &str,
+    max: usize,
+) -> Vec<Arrival> {
+    let mut all: Vec<Arrival> = by_destination
+        .iter()
+        .filter(|(d, _)| crate::schedule::station_matches(filter, d))
+        .flat_map(|(_, a)| a.iter().cloned())
+        .collect();
+    all.sort_by(|a, b| {
+        a.compare_ticks()
+            .cmp(&b.compare_ticks())
+            .then_with(|| a.train.cmp(&b.train))
+    });
+    all.truncate(max);
+    all
+}
+
+/// `StationSummaryDisplaySource.provideFlapDisplayText`: each arrival's minutes and time
+/// sections, train name, title and (with a `*` in the filter) its platform, padded with empty
+/// rows to the board's.
+pub fn station_summary_text(
+    arrivals: &[Arrival],
+    filter: &str,
+    rows: i32,
+    lang: &Lang,
+) -> Vec<Vec<String>> {
+    let platform = filter.contains('*');
+    let mut list: Vec<Vec<String>> = Vec::new();
+    for a in arrivals {
+        let mut lines = Vec::new();
+        if a.ticks == -1 || a.ticks >= 12000 - 15 * 20 {
+            lines.push(" ".to_owned());
+            lines.push(" ~ ".to_owned());
+        } else if a.ticks < 200 {
+            lines.push(" ".to_owned());
+            lines.push(lang.get("create.display_source.station_summary.now"));
+        } else {
+            let mut min = a.ticks / 1200;
+            let mut sec = (a.ticks / 20) % 60;
+            sec = (sec as f32 / 15.0).ceil() as i32 * 15;
+            if sec == 60 {
+                min += 1;
+                sec = 0;
+            }
+            lines.push(if min > 0 {
+                min.to_string()
+            } else {
+                " ".to_owned()
+            });
+            lines.push(if min > 0 {
+                lang.get("create.display_source.station_summary.minutes")
+            } else {
+                lang.get("create.display_source.station_summary.seconds")
+                    .replace("%1$s", &sec.to_string())
+            });
+        }
+        lines.push(a.train.clone());
+        lines.push(a.title.clone());
+        if platform {
+            let mut p = a.destination.clone();
+            for part in filter.split('*') {
+                if !part.is_empty() {
+                    p = p.replace(part, "");
+                }
+            }
+            lines.push(p.replace('*', "?").trim().to_owned());
+        }
+        list.push(lines);
+    }
+    let empty: Vec<String> = [" ", " . ", " ", " ", " "]
+        .iter()
+        .take(if platform { 5 } else { 4 })
+        .map(|s| (*s).to_owned())
+        .collect();
+    while (list.len() as i32) < rows {
+        list.push(empty.clone());
+    }
+    list
+}
+
+/// `StationSummaryDisplaySource.loadFlapDisplayLayout` for a board `x_size` wide.
+pub fn load_summary_layout(layout: &mut Layout, config: &Config, x_size: i32) {
+    let column = config.name_column.unwrap_or(50);
+    let column2 = config.platform_column.unwrap_or(3);
+    let platform = config.filter.as_deref().unwrap_or("").contains('*');
+    let key = format!("StationSummary{column}{platform}{column2}");
+    if layout.is_layout(&key) {
+        return;
+    }
+    let time_width = 20.0f32;
+    let gap = 8.0f32;
+    let mut platform_width = column2 as f32 * MONOSPACE;
+    let minutes = Section::new(MONOSPACE, Cycle::Numeric, false, false);
+    let time = Section::new(time_width, Cycle::ArrivalTime, true, true);
+    let mut total = x_size as f32 * 32.0 - 4.0 - gap * 2.0;
+    total = total - time_width - MONOSPACE;
+    platform_width = platform_width.min(total - gap);
+    platform_width = (platform_width / MONOSPACE) as i32 as f32 * MONOSPACE;
+    if platform {
+        total = total - gap - platform_width;
+    }
+    if platform_width == 0.0 && platform {
+        total += gap;
+    }
+    let name_width = ((column as f32 / 100.0) * total / MONOSPACE) as i32;
+    let destination_width = ((1.0 - column as f32 / 100.0) * total / MONOSPACE).round() as i32;
+    let name = Section::new(
+        name_width as f32 * MONOSPACE,
+        Cycle::Alphabet,
+        false,
+        name_width > 0,
+    );
+    let destination = Section::new(
+        destination_width as f32 * MONOSPACE,
+        Cycle::Alphabet,
+        false,
+        platform && destination_width > 0 && platform_width > 0.0,
+    );
+    let mut sections = vec![minutes, time, name, destination];
+    if platform {
+        sections.push(Section::new(platform_width, Cycle::Numeric, false, false).right_aligned());
+    }
+    layout.configure(&key, sections);
 }
 
 /// What `BoilerDisplaySource` reads of a boiler (`BoilerData` after `calcMinMaxForSize`).
@@ -849,6 +1045,35 @@ pub fn provide_line(
             | Source::PackageAddress,
             Reading::Text(t),
         ) => t.clone(),
+        // StationSummaryDisplaySource: a board's rows only (`provideText` is `EMPTY`).
+        (Source::StationSummary, Reading::Summary(arrivals)) => {
+            let filter = config.filter.clone().unwrap_or_default();
+            let shown = &arrivals[..arrivals.len().min(stats.rows.max(0) as usize)];
+            let flap = station_summary_text(shown, &filter, stats.rows, lang);
+            return Line {
+                text: None,
+                numeric: false,
+                entries: None,
+                rows: Some((vec![String::new()], flap, true)),
+            };
+        }
+        // FactoryGaugeDisplaySource.provideEntries: the joined panels in their order.
+        (Source::GaugeStatus, Reading::Entries(e)) => {
+            let rows = stats.rows.max(0) as usize
+                * if target == Target::Lectern {
+                    ENTRIES_PER_PAGE
+                } else {
+                    1
+                };
+            let mut e = e.clone();
+            e.truncate(rows);
+            return Line {
+                text: None,
+                numeric: false,
+                entries: Some(e),
+                rows: None,
+            };
+        }
         (Source::ListItems | Source::ListFluids, Reading::Entries(e)) => {
             let rows = stats.rows.max(0) as usize
                 * if target == Target::Lectern {
@@ -1101,10 +1326,12 @@ pub enum Cycle {
     Number,
     ShortenedNumbers,
     FluidUnits,
+    /// The station summary's time (` min`, `now`, `15s`...).
+    ArrivalTime,
 }
 
 impl Cycle {
-    pub const ALL: [Cycle; 7] = [
+    pub const ALL: [Cycle; 8] = [
         Cycle::Alphabet,
         Cycle::Numeric,
         Cycle::Instant,
@@ -1112,6 +1339,7 @@ impl Cycle {
         Cycle::Number,
         Cycle::ShortenedNumbers,
         Cycle::FluidUnits,
+        Cycle::ArrivalTime,
     ];
 
     pub fn key(self) -> &'static str {
@@ -1123,6 +1351,7 @@ impl Cycle {
             Cycle::Number => "number",
             Cycle::ShortenedNumbers => "shortened_numbers",
             Cycle::FluidUnits => "fluid_units",
+            Cycle::ArrivalTime => "arrival_time",
         }
     }
 
@@ -1496,7 +1725,9 @@ pub fn load_flap_layout(
         | Source::TrainStatus
         | Source::ObservedTrainName
         | Source::PackageAddress
-        | Source::Boiler => "Default",
+        | Source::Boiler
+        | Source::StationSummary
+        | Source::GaugeStatus => "Default",
     };
     let value = |size: i32| -> Section {
         let width = size as f32 * MONOSPACE;
@@ -1641,6 +1872,7 @@ pub fn accept_flap_text(
 ) -> bool {
     let max = board.max_chars();
     let max_list = board.max_chars_with(1);
+    let x_size = board.x_size;
     let mut manual = board.manual.clone();
     let lines = board.lines();
     let mut changed = false;
@@ -1678,6 +1910,8 @@ pub fn accept_flap_text(
                 .and_then(|r| r.first())
                 .map_or(0, |l| l.chars().count() as i32);
             load_boiler_layout(layout, i, own, label, max, max_list);
+        } else if source == Source::StationSummary {
+            load_summary_layout(layout, config, x_size);
         } else if source.single_line() {
             load_flap_layout(layout, source, config, numeric, max);
         } else {
@@ -1968,6 +2202,9 @@ pub struct Link {
     pub due: Option<i64>,
     /// The last reading and the text it made, kept so an unchanged reading formats nothing.
     pub last: Option<(Reading, Target, Stats, Line)>,
+    /// `factoryPanelSupport.getLinkedPanels`: the factory gauge panels joined to it (position
+    /// and slot), in the order they were joined.
+    pub panels: Vec<([i32; 3], u8)>,
 }
 
 impl Link {
@@ -3822,5 +4059,84 @@ mod tests {
             "no custom text to save"
         );
         assert_eq!(d.forgotten, vec![[8, 8, 8]]);
+    }
+
+    #[test]
+    fn station_summary_rows() {
+        let a = |ticks: i32, dest: &str| Arrival {
+            ticks,
+            train: "Express".into(),
+            title: "Docks".into(),
+            destination: dest.into(),
+        };
+        let rows = station_summary_text(
+            &[a(150, "Main"), a(323, "Main"), a(1300, "Main"), a(-1, "Main")],
+            "Main",
+            5,
+            &Lang::EN_US,
+        );
+        assert_eq!(rows[0][..2], [" ".to_owned(), "now".to_owned()]);
+        assert_eq!(rows[1][..2], [" ".to_owned(), "30s".to_owned()]);
+        assert_eq!(rows[2][..2], ["1".to_owned(), " min".to_owned()]);
+        assert_eq!(rows[3][..2], [" ".to_owned(), " ~ ".to_owned()]);
+        assert_eq!(rows[4], vec![" ", " . ", " ", " "]);
+        // 45 s rounds up to the next minute, 11 min 45 s and later is unknown.
+        let rows = station_summary_text(&[a(1100, "M"), a(11_800, "M")], "M", 0, &Lang::EN_US);
+        assert_eq!(rows[0][..2], ["1".to_owned(), " min".to_owned()]);
+        assert_eq!(rows[1][1], " ~ ");
+        // A filter with `*` adds the platform: the destination without the filter's text.
+        let rows = station_summary_text(&[a(400, "Main Platform 2")], "Main Platform *", 2, &Lang::EN_US);
+        assert_eq!(rows[0][4], "2");
+        assert_eq!(rows[1], vec![" ", " . ", " ", " ", " "]);
+    }
+
+    #[test]
+    fn arrivals_sort_soon_first_then_by_name() {
+        let mut map = HashMap::new();
+        let a = |ticks: i32, train: &str| Arrival {
+            ticks,
+            train: train.into(),
+            title: String::new(),
+            destination: "Main".into(),
+        };
+        map.insert(
+            "Main".to_owned(),
+            vec![a(-1, "A"), a(500, "B"), a(150, "Z"), a(20, "C")],
+        );
+        map.insert("Other".to_owned(), vec![a(10, "D")]);
+        let got: Vec<String> = prepare_arrivals(&map, "Ma*", 3)
+            .into_iter()
+            .map(|x| x.train)
+            .collect();
+        assert_eq!(got, vec!["C", "Z", "B"]);
+    }
+
+    #[test]
+    fn station_summary_layout() {
+        let mut l = Layout::new(26);
+        let config = Config {
+            filter: Some("North".into()),
+            name_column: Some(50),
+            platform_column: Some(3),
+            ..Config::default()
+        };
+        load_summary_layout(&mut l, &config, 6);
+        assert_eq!(l.key, "StationSummary50false3");
+        let sizes: Vec<f32> = l.sections.iter().map(|s| s.size).collect();
+        assert_eq!(sizes, vec![7.0, 20.0, 70.0, 70.0]);
+        assert_eq!(l.sections[1].cycle, Cycle::ArrivalTime);
+        assert!(l.sections[1].single_flap);
+        let config = Config {
+            filter: Some("North *".into()),
+            name_column: Some(48),
+            platform_column: Some(4),
+            ..Config::default()
+        };
+        load_summary_layout(&mut l, &config, 6);
+        assert_eq!(l.key, "StationSummary48true4");
+        // 145 - 8 - 28 = 109 left for the names.
+        let sizes: Vec<f32> = l.sections.iter().map(|s| s.size).collect();
+        assert_eq!(sizes, vec![7.0, 20.0, 49.0, 56.0, 28.0]);
+        assert!(l.sections[4].right_aligned);
     }
 }

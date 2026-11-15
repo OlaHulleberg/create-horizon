@@ -33,6 +33,7 @@ pub(crate) mod clipboard;
 pub(crate) mod contact_screen;
 mod link_item;
 mod link_screen;
+mod summary;
 
 use super::items::filters;
 use super::net;
@@ -77,6 +78,7 @@ impl Subsystem for Display {
 
     fn world_closed(&self) {
         link_item::forget();
+        summary::forget();
     }
 
     /// A display board's flaps turning are drawn each frame (`client`).
@@ -254,7 +256,7 @@ const LANG: Lang<'static> = Lang::EN_US;
 /// `ItemStack.getHoverName` of an item id, as the server can name it: Create's en_us text of
 /// its `item.` then `block.` key, else its path in capitalised words (as most English names
 /// read).
-fn item_name(id: &str) -> String {
+pub(crate) fn item_name(id: &str) -> String {
     let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
     ["item", "block"]
         .iter()
@@ -385,8 +387,8 @@ fn sources_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> &'static [Source] {
         ],
         Some(Block::FluidTank) => &[Source::Boiler],
         Some(Block::ElevatorContact) => &[Source::CurrentFloor],
-        // AllBlocks.TRACK_STATION: its station summary is not ported.
-        Some(Block::TrackStation) => &[Source::TrainStatus],
+        Some(Block::TrackStation) => &[Source::StationSummary, Source::TrainStatus],
+        Some(Block::FactoryGauge) => &[Source::GaugeStatus],
         Some(Block::TrackObserver) => &[Source::ObservedTrainName],
         Some(Block::StockpileSwitch) => &[Source::FillLevel],
         Some(Block::AndesiteTunnel | Block::BrassTunnel) => {
@@ -399,6 +401,93 @@ fn sources_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> &'static [Source] {
         None if block_name(lv, pos) == "minecraft:target" => &[Source::RedstonePower],
         _ => &[],
     }
+}
+
+/// `FactoryPanelSupportBehaviour.getLinkedPanels` of the link at `pos`.
+pub(crate) fn link_panels(dim: usize, pos: [i32; 3]) -> Vec<([i32; 3], u8)> {
+    with_world(|w| {
+        w.dims[dim]
+            .displays
+            .links
+            .get(&pos)
+            .map(|l| l.panels.clone())
+    })
+    .flatten()
+    .unwrap_or_default()
+}
+
+/// `FactoryPanelSupportBehaviour.connect`: the panel joins the link, which refreshes
+/// (`changed` → `notifyLink`).
+pub(crate) fn panel_connected(dim: usize, link: [i32; 3], panel: ([i32; 3], u8)) {
+    let changed = with_world(|w| {
+        let d = &mut w.dims[dim].displays;
+        let l = d.links.entry(link).or_default();
+        if l.panels.contains(&panel) {
+            return false;
+        }
+        l.panels.push(panel);
+        l.last = None;
+        d.pulses.push(link);
+        true
+    })
+    .unwrap_or(false);
+    if changed {
+        persist::mark_pos_unsaved(dim, link);
+    }
+}
+
+/// `FactoryPanelSupportBehaviour.disconnect`: the panel lets go of the link, which refreshes.
+pub(crate) fn panel_disconnected(dim: usize, link: [i32; 3], panel: ([i32; 3], u8)) {
+    let changed = with_world(|w| {
+        let d = &mut w.dims[dim].displays;
+        let Some(l) = d.links.get_mut(&link) else {
+            return false;
+        };
+        let before = l.panels.len();
+        l.panels.retain(|p| *p != panel);
+        if l.panels.len() == before {
+            return false;
+        }
+        l.last = None;
+        d.pulses.push(link);
+        true
+    })
+    .unwrap_or(false);
+    if changed {
+        persist::mark_pos_unsaved(dim, link);
+    }
+}
+
+/// `FactoryPanelSupportBehaviour.notifyLink` (`updateGatheredData`): the link refreshes in the
+/// level's tick.
+pub(crate) fn notify_link(dim: usize, link: [i32; 3]) {
+    with_world(|w| {
+        let d = &mut w.dims[dim].displays;
+        if let Some(l) = d.links.get_mut(&link) {
+            l.last = None;
+            d.pulses.push(link);
+        }
+    });
+}
+
+/// The facing of the display link at `pos` (`WrenchableDirectionalBlock.FACING`), if one is.
+pub(crate) fn display_link_facing(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Dir> {
+    link_at(lv, pos).map(|(f, _)| f)
+}
+
+/// `DisplayLinkBlockEntity.getSourcePosition`: the first factory gauge joined to it, else the
+/// block it is attached to.
+fn source_of(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> [i32; 3] {
+    let dim = lv.dim;
+    with_world(|w| {
+        w.dims[dim]
+            .displays
+            .links
+            .get(&pos)
+            .and_then(|l| l.panels.first().map(|p| p.0))
+    })
+    .flatten()
+    .unwrap_or_else(|| display::source_pos(pos, facing))
 }
 
 /// `DisplayTarget.get`: by block first (display boards), then by block entity (nixie tubes,
@@ -466,7 +555,7 @@ fn stats_of(lv: &ServerLevel<'_>, pos: [i32; 3], target: Target) -> Stats {
 fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Reading {
     let dim = lv.dim;
     let (link_facing, _) = link_at(lv, pos).unwrap_or((Dir::Up, false));
-    let at = display::source_pos(pos, link_facing);
+    let at = source_of(lv, pos, link_facing);
     match source {
         Source::KineticSpeed | Source::KineticStress => {
             let shown = with_world(|w| {
@@ -628,6 +717,19 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
         Source::TrainStatus => Reading::Text(super::trains::waiting_status(lv, at)),
         Source::ObservedTrainName => Reading::Text(super::trains::observed_train_name(lv, at)),
         Source::PackageAddress => Reading::Text(package_address(lv, at)),
+        Source::StationSummary => {
+            let filter = with_world(|w| {
+                w.dims[dim]
+                    .displays
+                    .links
+                    .get(&pos)
+                    .and_then(|l| l.config.filter.clone())
+            })
+            .flatten()
+            .unwrap_or_default();
+            Reading::Summary(summary::arrivals(&filter))
+        }
+        Source::GaugeStatus => Reading::Entries(super::stock::gauge_status(lv, pos)),
     }
 }
 
@@ -938,7 +1040,7 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some(link) = with_world(|w| w.dims[dim].displays.links.get(&pos).cloned()).flatten() else {
         return;
     };
-    let source_pos = display::source_pos(pos, facing);
+    let source_pos = source_of(lv, pos, facing);
     let target_pos = link.target(pos);
     if !lv.is_loaded(target_pos) || !lv.is_loaded(source_pos) {
         return;
@@ -1155,7 +1257,11 @@ fn tick_boards(lv: &mut ServerLevel<'_>, checks: Vec<[i32; 3]>) {
 /// Nothing runs when nothing is due.
 fn tick_displays(lv: &mut ServerLevel<'_>) {
     link_item::take_placed(lv);
+    summary::tick(lv);
     let dim = lv.dim;
+    for station in summary::stations_to_tell(dim) {
+        notify_gatherers(lv, station);
+    }
     let now = lv.game_time();
     if with_world(|w| w.dims[dim].displays.idle(now)).unwrap_or(true) {
         return;
@@ -1853,7 +1959,7 @@ fn open_screen(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
     }
     let target_pos = link.target(pos);
     let target = target_at(lv, target_pos);
-    let sources = sources_at(lv, display::source_pos(pos, facing)).to_vec();
+    let sources = sources_at(lv, source_of(lv, pos, facing)).to_vec();
     let source = link
         .source
         .and_then(|s| sources.iter().position(|a| *a == s))
@@ -1863,11 +1969,16 @@ fn open_screen(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
         .iter()
         .map(|s| target.is_some_and(|t| s.allows_labeling(t)))
         .collect();
-    let config = if link.source.is_some_and(|s| sources.get(source) == Some(&s)) {
+    let mut config = if link.source.is_some_and(|s| sources.get(source) == Some(&s)) {
         link.config.clone()
     } else {
         Config::default()
     };
+    let source_pos = source_of(lv, pos, facing);
+    let station = summary::station_name(lv, source_pos);
+    if sources.get(source) == Some(&Source::StationSummary) {
+        summary::populate(&mut config, station.as_deref());
+    }
     let settings = link_screen::Settings {
         pos,
         sources,
@@ -1882,8 +1993,9 @@ fn open_screen(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
         rows,
         line: link.target_line.min(rows.max(1) - 1).max(0),
         labels,
-        source_pos: display::source_pos(pos, facing),
+        source_pos,
         target_pos,
+        station: station.unwrap_or_default(),
     };
     net::send_to_player(
         &mut *lv.host,
@@ -1920,7 +2032,7 @@ fn configure_from_client(host: &mut dyn ServerHost, player: PlayerRef, data: &[u
     let Some((facing, _)) = link_at(&lv, pos) else {
         return;
     };
-    let available = sources_at(&lv, display::source_pos(pos, facing));
+    let available = sources_at(&lv, source_of(&lv, pos, facing));
     let source = s
         .sources
         .get(s.source)
@@ -1946,6 +2058,9 @@ fn configure_from_client(host: &mut dyn ServerHost, player: PlayerRef, data: &[u
                 l.config.cycle = s.config.cycle;
                 l.config.format = s.config.format;
                 l.config.interval = s.config.interval;
+                l.config.filter.clone_from(&s.config.filter);
+                l.config.name_column = s.config.name_column;
+                l.config.platform_column = s.config.platform_column;
             }
             None => {}
         }
@@ -2029,7 +2144,7 @@ fn bind(lv: &mut ServerLevel<'_>, pos: [i32; 3], target: [i32; 3], words: &[&str
     if d >= 64 * 64 {
         return lang("create.display_link.too_far");
     }
-    let available = sources_at(lv, display::source_pos(pos, facing));
+    let available = sources_at(lv, source_of(lv, pos, facing));
     let mut source = None;
     let mut config = Config::default();
     let mut line = 0;
@@ -2067,6 +2182,10 @@ fn bind(lv: &mut ServerLevel<'_>, pos: [i32; 3], target: [i32; 3], words: &[&str
             None => return lang("create.display_link.no_source"),
         },
     };
+    if source == Source::StationSummary {
+        let station = summary::station_name(lv, source_of(lv, pos, facing));
+        summary::populate(&mut config, station.as_deref());
+    }
     let now = lv.game_time();
     with_world(|w| {
         let d = &mut w.dims[dim].displays;
@@ -2086,6 +2205,11 @@ fn bind(lv: &mut ServerLevel<'_>, pos: [i32; 3], target: [i32; 3], words: &[&str
             l.config.cycle = config.cycle;
             l.config.format = config.format;
             l.config.interval = config.interval;
+            if config.filter.is_some() {
+                l.config.filter = config.filter;
+            }
+            l.config.name_column = config.name_column.or(l.config.name_column);
+            l.config.platform_column = config.platform_column.or(l.config.platform_column);
         }
         l.last = None;
         d.schedule(pos, now);
@@ -2245,6 +2369,51 @@ fn displays_chunk_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
         if !extra.is_empty() {
             own.insert("link_extra".into(), Tag::IntArray(extra));
         }
+        // The station summary's settings and the gauges joined (`LinkedGauges`: x, y, z, slot),
+        // where a link has any.
+        let mut more: Vec<(&[i32; 3], &Link)> = d
+            .links
+            .iter()
+            .filter(|(p, l)| {
+                inside(p)
+                    && (l.config.filter.is_some()
+                        || l.config.name_column.is_some()
+                        || l.config.platform_column.is_some()
+                        || !l.panels.is_empty())
+            })
+            .collect();
+        more.sort_by_key(|(p, _)| **p);
+        if !more.is_empty() {
+            let list = more
+                .into_iter()
+                .map(|(p, l)| {
+                    let mut c = Compound::new();
+                    c.insert("Pos".into(), Tag::IntArray(p.to_vec()));
+                    if let Some(f) = &l.config.filter {
+                        c.insert("Filter".into(), s(f));
+                    }
+                    if let Some(n) = l.config.name_column {
+                        c.insert("NameColumn".into(), Tag::Int(n));
+                    }
+                    if let Some(n) = l.config.platform_column {
+                        c.insert("PlatformColumn".into(), Tag::Int(n));
+                    }
+                    if !l.panels.is_empty() {
+                        c.insert(
+                            "LinkedGauges".into(),
+                            Tag::IntArray(
+                                l.panels
+                                    .iter()
+                                    .flat_map(|(q, slot)| [q[0], q[1], q[2], i32::from(*slot)])
+                                    .collect(),
+                            ),
+                        );
+                    }
+                    Tag::Compound(c)
+                })
+                .collect();
+            own.insert("link_more".into(), Tag::List(list));
+        }
         // Tubes with custom text: x, y, z, index; the text.
         let mut nixies: Vec<_> = d
             .nixies
@@ -2377,6 +2546,7 @@ fn displays_from_nbt(dim: usize, data: &Compound) {
                     },
                     due: None,
                     last: None,
+                    panels: Vec::new(),
                 };
                 d.links.insert([v[0], v[1], v[2]], link);
             }
@@ -2387,6 +2557,37 @@ fn displays_from_nbt(dim: usize, data: &Compound) {
                     l.config.format = f[3];
                     l.config.collected = f[4];
                     l.config.interval = f[5];
+                }
+            }
+        }
+        if let Some(Tag::List(list)) = data.get(&"link_more".into()) {
+            for c in list {
+                let Tag::Compound(c) = c else { continue };
+                let Some(Tag::IntArray(p)) = c.get(&"Pos".into()) else {
+                    continue;
+                };
+                let Some(l) = p
+                    .get(..3)
+                    .and_then(|p| d.links.get_mut(&[p[0], p[1], p[2]]))
+                else {
+                    continue;
+                };
+                if let Some(Tag::String(f)) = c.get(&"Filter".into()) {
+                    l.config.filter = Some(f.to_string_lossy());
+                }
+                if let Some(Tag::Int(n)) = c.get(&"NameColumn".into()) {
+                    l.config.name_column = Some(*n);
+                }
+                if let Some(Tag::Int(n)) = c.get(&"PlatformColumn".into()) {
+                    l.config.platform_column = Some(*n);
+                }
+                if let Some(Tag::IntArray(g)) = c.get(&"LinkedGauges".into()) {
+                    l.panels = g
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|v| ([v[0], v[1], v[2]], v[3].clamp(0, 3) as u8))
+                        .collect();
                 }
             }
         }

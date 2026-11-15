@@ -150,6 +150,11 @@ pub fn trains_to_nbt(
                     if !t.runtime.title.is_empty() {
                         c.insert("title".into(), Tag::String(t.runtime.title.as_str().into()));
                     }
+                    // `TransitTimes`.
+                    c.insert(
+                        "transit".into(),
+                        Tag::IntArray(t.runtime.predictions.clone()),
+                    );
                 }
                 Tag::Compound(c)
             })
@@ -541,6 +546,13 @@ pub fn trains_from_nbt(host: &dyn Host, data: &Compound) -> Vec<TrainOnTrack> {
                     _ => State::PreTransit,
                 };
                 runtime.paused = r[3] != 0;
+                // `TransitTimes`, kept when there is one an entry.
+                runtime.predictions = vec![create_engine::schedule::TBD; s.entries.len()];
+                if let Some(t) = ints(c, "transit")
+                    && t.len() == s.entries.len()
+                {
+                    runtime.predictions.clone_from(t);
+                }
                 if runtime.state == State::PostTransit {
                     runtime.progress = s
                         .entries
@@ -552,6 +564,7 @@ pub fn trains_from_nbt(host: &dyn Host, data: &Compound) -> Vec<TrainOnTrack> {
             let nav = m.nav.filter(|_| schedule.is_none()).map(|station| Nav {
                 station,
                 distance: f64::MAX,
+                started_at: 0.0,
                 path: Vec::new(),
                 behind: m.behind,
                 signal: None,

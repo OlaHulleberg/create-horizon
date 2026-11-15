@@ -13,9 +13,14 @@
 //! reads are each gauge's panels in its block entity's data (`FactoryPanels`), written when they
 //! change.
 //!
-//! Left out: redstone and display links feeding a panel (`FactoryPanelSupportBehaviour`,
-//! `targetedByLinks`), relocating a panel, and the block's per-panel shape (the declared shape is
-//! Create's `FACTORY_PANEL_FALLBACK`, the whole face).
+//! Display links join a panel from its screen's `+` too (the link clicked next,
+//! `FactoryPanelConnectionHandler.onRightClick`): the panel's `targetedByLinks` here, the link's
+//! `LinkedGauges` in the display port, which reads them (`FactoryGaugeDisplaySource`); a panel
+//! whose satisfaction or amount changes tells its links (`notifyRedstoneOutputs`).
+//!
+//! Left out: redstone links feeding a panel (`RedstoneLinkBlockEntity`'s
+//! `FactoryPanelSupportBehaviour`), relocating a panel, and the block's per-panel shape (the
+//! declared shape is Create's `FACTORY_PANEL_FALLBACK`, the whole face).
 
 use super::super::items;
 use super::super::server::ServerLevel;
@@ -82,10 +87,33 @@ pub(super) fn remove_panel(n: &mut Net, pp: PanelPos) -> bool {
             n.unsaved.push(chunk_of(other.0));
         }
     }
-    let _ = p;
+    // `disconnectAllLinks`.
+    for l in &p.links {
+        crate::glue::display::panel_disconnected(n.dim, l.from.0, pp);
+    }
     n.redraw.push(pp.0);
     n.unsaved.push(chunk_of(pp.0));
     true
+}
+
+/// `FactoryPanelSupportBehaviour.destroy`: the display link at `link` is gone from the panels it
+/// was joined to.
+pub(super) fn link_gone(n: &mut Net, link: [i32; 3]) {
+    for (pp, g) in n.gauges.iter_mut() {
+        let before = g.links.len();
+        g.links.retain(|l| l.from.0 != link);
+        if g.links.len() != before {
+            n.redraw.push(pp.0);
+            n.unsaved.push(chunk_of(pp.0));
+        }
+    }
+}
+
+/// `notifyRedstoneOutputs`: the display links joined to the panel refresh (`notifyLink`).
+fn notify_links(dim: usize, links: &[Input]) {
+    for l in links {
+        crate::glue::display::notify_link(dim, l.from.0);
+    }
 }
 
 /// The panels of the gauge at `pos`.
@@ -183,6 +211,9 @@ pub(super) fn look(lv: &mut ServerLevel<'_>, dim: usize, pp: PanelPos, now: u64)
         }
     }
     let changed = shown_changed(&before, &panel);
+    if before.satisfied != panel.satisfied {
+        notify_links(dim, &panel.links);
+    }
     let (net, address) = (panel.network, panel.recipe_address.clone());
     with(dim, |n| {
         if let Some(g) = n.gauges.get_mut(&pp) {
@@ -395,6 +426,21 @@ fn panel_tag(host: &dyn mod_api::Host, n: &Net, pp: PanelPos, g: &Panel<Key>) ->
         ),
         ("Inputs", Tag::List(inputs)),
         (
+            "Links",
+            Tag::List(
+                g.links
+                    .iter()
+                    .map(|l| {
+                        Tag::compound([
+                            ("Pos", Tag::IntArray(l.from.0.to_vec())),
+                            ("Slot", Tag::Byte(l.from.1 as i8)),
+                            ("Bend", Tag::Int(l.bend)),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
             "Craft",
             Tag::List(g.craft.iter().map(|k| body::to_nbt(host, &k.0)).collect()),
         ),
@@ -603,8 +649,8 @@ pub(super) fn short_interact(
         return;
     }
     let held = items::held(&*lv.host, player, hand);
-    // The wrench bends the arrows of the panels it feeds.
-    if wrench && !panel.outputs.is_empty() {
+    // The wrench bends the arrows of the panels it feeds, and of the links joined to it.
+    if wrench && panel.outputs.len() + panel.links.len() > 0 {
         let mut mode = -1;
         with(dim, |n| {
             for to in panel.outputs.clone() {
@@ -620,6 +666,18 @@ pub(super) fn short_interact(
                 i.bend = mode;
                 n.redraw.push(to.0);
                 n.unsaved.push(chunk_of(to.0));
+            }
+            if let Some(g) = n.gauges.get_mut(&pp)
+                && !g.links.is_empty()
+            {
+                for l in &mut g.links {
+                    if mode == -1 {
+                        mode = (l.bend + 1).rem_euclid(4);
+                    }
+                    l.bend = mode;
+                }
+                n.redraw.push(pp.0);
+                n.unsaved.push(chunk_of(pp.0));
             }
         });
         if mode >= 0 {
@@ -729,6 +787,8 @@ pub(super) fn set_amount(lv: &mut ServerLevel<'_>, pp: PanelPos, row: i32, value
         Some(true)
     });
     if changed == Some(true) {
+        let links = with(dim, |n| n.gauges.get(&pp).map(|g| g.links.clone()));
+        notify_links(dim, &links.unwrap_or_default());
         // `playFeedbackSound`.
         let _ = lv.level.play_sound(
             &mut *lv.host,
@@ -772,6 +832,63 @@ pub(super) fn connect(lv: &mut ServerLevel<'_>, from: PanelPos, to: PanelPos) ->
     })
 }
 
+/// `FactoryPanelConnectionPacket` for a display link (`addConnection` with a
+/// `FactoryPanelSupportBehaviour` there): the link at `link` joins panel `pp`, its arrow from the
+/// link's slot nearest the panel (`onRightClick`'s choice). Create's message key of what stops
+/// it (`checkForIssues`), or None once joined.
+pub(super) fn connect_link(
+    lv: &mut ServerLevel<'_>,
+    pp: PanelPos,
+    link: [i32; 3],
+    link_facing: Dir,
+) -> Result<(), &'static str> {
+    let dim = lv.dim;
+    if !with(dim, |n| n.gauges.contains_key(&pp)) {
+        return Err("factory_panel.connection_aborted");
+    }
+    let Some((face, facing)) = orientation(lv, pp.0) else {
+        return Err("factory_panel.connection_aborted");
+    };
+    let connected = fx::connected_direction(face, facing);
+    if connected != link_facing {
+        return Err("factory_panel.same_orientation");
+    }
+    let diff = [0, 1, 2].map(|i| link[i] - pp.0[i]);
+    let along = match connected.axis() {
+        create_engine::kinetics::Axis::X => diff[0],
+        create_engine::kinetics::Axis::Y => diff[1],
+        create_engine::kinetics::Axis::Z => diff[2],
+    };
+    if along != 0 {
+        return Err("factory_panel.same_surface");
+    }
+    if diff.iter().map(|v| v * v).sum::<i32>() >= 16 * 16 {
+        return Err("factory_panel.too_far_apart");
+    }
+    // The link's slot whose path to the panel is shortest (the last of equals).
+    let mut best = 0;
+    let mut best_distance = f64::INFINITY;
+    for slot in SLOTS {
+        let d = fx::path_diff(face, facing, (link, slot), pp);
+        let l = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+        if best_distance < l {
+            continue;
+        }
+        best_distance = l;
+        best = slot;
+    }
+    with(dim, |n| {
+        if let Some(g) = n.gauges.get_mut(&pp) {
+            g.links.retain(|l| l.from.0 != link);
+            g.links.push(Input::new((link, best), 1));
+        }
+        n.redraw.push(pp.0);
+        n.unsaved.push(chunk_of(pp.0));
+    });
+    crate::glue::display::panel_connected(dim, link, pp);
+    Ok(())
+}
+
 /// What the configuration screen sends (`FactoryPanelConfigurationPacket.applySettings`).
 pub(super) struct Config {
     pub address: String,
@@ -782,6 +899,8 @@ pub(super) struct Config {
     pub remove: Option<PanelPos>,
     pub clear_promises: bool,
     pub reset: bool,
+    /// `redstoneReset`: the links joined to it let go (`disconnectAllLinks`).
+    pub links_reset: bool,
 }
 
 pub(super) fn configure(lv: &mut ServerLevel<'_>, player: PlayerRef, pp: PanelPos, c: Config) {
@@ -798,6 +917,19 @@ pub(super) fn configure(lv: &mut ServerLevel<'_>, player: PlayerRef, pp: PanelPo
         with(dim, |n| {
             remove_panel(n, pp);
             add_panel(n, pp, net);
+        });
+        return;
+    }
+    if c.links_reset {
+        with(dim, |n| {
+            let Some(g) = n.gauges.get_mut(&pp) else {
+                return;
+            };
+            for l in std::mem::take(&mut g.links) {
+                crate::glue::display::panel_disconnected(dim, l.from.0, pp);
+            }
+            n.redraw.push(pp.0);
+            n.unsaved.push(chunk_of(pp.0));
         });
         return;
     }
@@ -984,6 +1116,18 @@ pub(super) fn save(
                     ),
                 ),
                 (
+                    "TargetedByLinks",
+                    Tag::IntArray(
+                        g.links
+                            .iter()
+                            .flat_map(|l| {
+                                let p = l.from.0;
+                                [p[0], p[1], p[2], i32::from(l.from.1), l.bend]
+                            })
+                            .collect(),
+                    ),
+                ),
+                (
                     "Outputs",
                     Tag::IntArray(
                         g.outputs
@@ -1064,6 +1208,17 @@ pub(super) fn load(host: &dyn mod_api::Host, n: &mut Net, now: u64, list: &[Comp
                 .iter()
                 .map(|v| Input::new(([v[0], v[1], v[2]], 2), v[3].max(0) as u32)),
         );
+        g.links = ints(c.get(&"TargetedByLinks".into()))
+            .as_chunks::<5>()
+            .0
+            .iter()
+            .map(|v| Input {
+                from: ([v[0], v[1], v[2]], v[3].clamp(0, 3) as u8),
+                amount: 1,
+                bend: v[4],
+                success: true,
+            })
+            .collect();
         g.outputs = ints(c.get(&"Outputs".into()))
             .as_chunks::<4>()
             .0

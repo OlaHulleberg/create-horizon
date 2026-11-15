@@ -130,6 +130,8 @@ struct Req {
 /// A level's stock logistics.
 #[derive(Default)]
 struct Net {
+    /// Its level's index.
+    dim: usize,
     links: HashMap<[i32; 3], Link>,
     tickers: HashMap<[i32; 3], Ticker>,
     requesters: HashMap<[i32; 3], Req>,
@@ -196,6 +198,9 @@ fn with<R>(dim: usize, f: impl FnOnce(&mut Net) -> R) -> R {
         let levels = s.get_or_insert_with(Vec::new);
         if levels.len() <= dim {
             levels.resize_with(dim + 1, Net::default);
+            for (i, n) in levels.iter_mut().enumerate() {
+                n.dim = i;
+            }
         }
         f(&mut levels[dim])
     })
@@ -467,6 +472,7 @@ impl Subsystem for Stock {
     fn standalone_models(&self, models: &mut Vec<String>) {
         models.extend(gauge_client::MODELS.iter().map(|m| (*m).to_owned()));
         models.extend(gauge_client::SEGMENTS.iter().map(|m| (*m).to_owned()));
+        models.extend(gauge_client::DOTS.iter().map(|m| (*m).to_owned()));
     }
 
     fn render_level_stage(
@@ -533,6 +539,14 @@ impl Subsystem for Stock {
         keeper::server_message(host, channel, data)
             || requester::server_message(host, channel, data)
             || gauge_screen::server_message(host, channel, data)
+    }
+
+    fn interaction_key(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
+    ) -> Flow {
+        gauge_client::interaction_key(host, event)
     }
 
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
@@ -712,6 +726,13 @@ impl Subsystem for Stock {
     }
 
     fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        // A display link gone: the panels joined to it let go of it.
+        if block_of(old) == Some(Block::DisplayLink)
+            && block_of(new) != Some(Block::DisplayLink)
+            && present()
+        {
+            with(dim, |n| gauge::link_gone(n, pos));
+        }
         let (o, n) = (
             block_of(old).filter(|b| ours(*b)),
             block_of(new).filter(|b| ours(*b)),
@@ -2165,4 +2186,38 @@ fn level_save(lv: &mut ServerLevel<'_>) {
         Ok(()) => DIRTY.set(false),
         Err(e) => crate::create_log!("[create] saving the logistics networks: {e:?}"),
     }
+}
+
+/// `FactoryGaugeDisplaySource.provideEntries` for the display link at `link`: each joined
+/// panel's stock and its mark (`✔` satisfied, `↑` promised, `▪` asking, blank without an amount)
+/// before its item's name; a panel no longer there is skipped. The stock and promises are those
+/// the panel last looked at (`lastReportedLevelInStorage`, at the gauges' summary age).
+pub(crate) fn gauge_status(lv: &ServerLevel<'_>, link: [i32; 3]) -> Vec<(i64, String)> {
+    let dim = lv.dim;
+    let host: &dyn mod_api::Host = &*lv.host;
+    super::display::link_panels(dim, link)
+        .into_iter()
+        .filter_map(|pp| {
+            with(dim, |n| {
+                let g = n.gauges.get(&pp)?;
+                let (id, max) = match &g.filter {
+                    Some(k) => (k.0.item().id(host), body::stack_limit(host, &k.0)),
+                    None => ("minecraft:air".to_owned(), 64),
+                };
+                let mark = if g.demand(max) == 0 {
+                    " "
+                } else if g.satisfied {
+                    "\u{2714}"
+                } else if g.last_promised != 0 {
+                    "\u{2191}"
+                } else {
+                    "\u{25aa}"
+                };
+                Some((
+                    i64::from(g.last_level),
+                    format!("{mark} {}", super::display::item_name(&id)),
+                ))
+            })
+        })
+        .collect()
 }

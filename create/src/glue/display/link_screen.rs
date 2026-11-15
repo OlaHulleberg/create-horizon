@@ -35,6 +35,8 @@ pub(super) struct Settings {
     /// The blocks read and written, for their icons.
     pub source_pos: [i32; 3],
     pub target_pos: [i32; 3],
+    /// The name of the station read, for the station summary's filter (`populateData`).
+    pub station: String,
 }
 
 fn put_i32(out: &mut Vec<u8>, v: i32) {
@@ -92,6 +94,11 @@ impl Settings {
         for v in self.source_pos.into_iter().chain(self.target_pos) {
             put_i32(&mut out, v);
         }
+        put_str(&mut out, &self.station);
+        out.push(u8::from(self.config.filter.is_some()));
+        put_str(&mut out, self.config.filter.as_deref().unwrap_or(""));
+        put_i32(&mut out, self.config.name_column.unwrap_or(-1));
+        put_i32(&mut out, self.config.platform_column.unwrap_or(-1));
         out
     }
 
@@ -106,7 +113,7 @@ impl Settings {
             labels.push(r.u8()? != 0);
         }
         let source = usize::from(r.u8()?);
-        let config = Config {
+        let mut config = Config {
             label: r.str()?,
             directional: r.i32()?,
             mode: r.i32()?,
@@ -116,17 +123,27 @@ impl Settings {
             interval: r.i32()?,
             ..Config::default()
         };
+        let (target, rows, line) = (r.u8()?, r.i32()?, r.i32()?);
+        let source_pos = [r.i32()?, r.i32()?, r.i32()?];
+        let target_pos = [r.i32()?, r.i32()?, r.i32()?];
+        let station = r.str()?;
+        let has_filter = r.u8()? != 0;
+        let filter = r.str()?;
+        config.filter = has_filter.then_some(filter);
+        config.name_column = Some(r.i32()?).filter(|v| *v >= 0);
+        config.platform_column = Some(r.i32()?).filter(|v| *v >= 0);
         Some(Settings {
             pos,
             sources,
             source,
             config,
-            target: r.u8()?,
-            rows: r.i32()?,
-            line: r.i32()?,
+            target,
+            rows,
+            line,
             labels,
-            source_pos: [r.i32()?, r.i32()?, r.i32()?],
-            target_pos: [r.i32()?, r.i32()?, r.i32()?],
+            source_pos,
+            target_pos,
+            station,
         })
     }
 }
@@ -298,6 +315,56 @@ const SOURCE_INPUT: [f32; 4] = [61.0, 26.0, 135.0, 16.0];
 const LABEL_INPUT: [f32; 4] = [60.0, 47.0, 137.0, 18.0];
 const LINE_INPUT: [f32; 4] = [61.0, 105.0, 135.0, 16.0];
 const CONFIRM: [f32; 4] = [SIZE[0] - 33.0, SIZE[1] - 24.0, 18.0, 18.0];
+/// The station summary's columns (`addScrollInput(0, 32, ..)` and `(36, 22, ..)` on the second
+/// row).
+const NAME_COLUMN: [f32; 4] = [60.0, 68.0, 32.0, 18.0];
+const PLATFORM_COLUMN: [f32; 4] = [96.0, 68.0, 22.0, 18.0];
+
+/// The text a source's first-row text box edits: the station summary's filter, else the label.
+fn text_of(s: &mut Settings) -> &mut String {
+    if s.sources.get(s.source) == Some(&Source::StationSummary) {
+        return s.config.filter.get_or_insert_with(String::new);
+    }
+    &mut s.config.label
+}
+
+/// Whether the chosen source has a text box (`addTextInput`): a label, or the summary's filter.
+fn has_text_box(s: &Settings) -> bool {
+    s.labels.get(s.source).copied().unwrap_or(false)
+        || s.sources.get(s.source) == Some(&Source::StationSummary)
+}
+
+/// A scroll input: its rect, value, range end (exclusive), shift step, suffix and title key.
+type ScrollInput = ([f32; 4], i32, i32, i32, &'static str, &'static str);
+
+/// The station summary's scroll inputs.
+fn summary_inputs(c: &Config) -> [ScrollInput; 2] {
+    [
+        (
+            NAME_COLUMN,
+            c.name_column.unwrap_or(50),
+            73,
+            12,
+            "%",
+            "create.display_source.station_summary.train_name_column",
+        ),
+        (
+            PLATFORM_COLUMN,
+            c.platform_column.unwrap_or(3),
+            16,
+            4,
+            "",
+            "create.display_source.station_summary.platform_column",
+        ),
+    ]
+}
+
+fn styled(text: String, color: &str, italic: bool) -> mod_api::Text {
+    let mut style = mod_api::text::TextStyle::default();
+    style.color = Some(color.to_owned());
+    style.italic = italic.then_some(true);
+    mod_api::Text::literal(text).with_style(style)
+}
 
 fn choice_input(width: f32, first_row: bool) -> [f32; 4] {
     [60.0, if first_row { 47.0 } else { 68.0 }, width, 18.0]
@@ -375,6 +442,64 @@ fn draw(
             if s.sources.len() > 1 && inside(at(SOURCE_INPUT, x, y), mouse) {
                 let tip = tr(host, "create.display_link.information_type");
                 draw.text(&tip, [mouse[0] + 8.0, mouse[1] - 12.0], 0xFFFF_FFFF, true);
+            }
+            // The station summary: its filter's text box, and its columns' scroll inputs.
+            if source == Source::StationSummary {
+                let r = at(LABEL_INPUT, x, y);
+                draw.fill(r, 0xFF39_3939);
+                draw.fill(
+                    [r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0],
+                    0xFF0F_0F0F,
+                );
+                let mut text = s.config.filter.clone().unwrap_or_default();
+                if editing && (host_millis() / 300).is_multiple_of(2) {
+                    text.push('_');
+                }
+                draw.text(&text, [r[0] + 5.0, r[1] + 5.0], 0xFFFF_FFFF, true);
+                let mut tips = Vec::new();
+                if inside(r, mouse) {
+                    tips = vec![
+                        styled(
+                            tr(host, "create.display_source.station_summary.filter"),
+                            "#5391E1",
+                            false,
+                        ),
+                        styled(tr(host, "create.gui.schedule.lmb_edit"), "dark_gray", true),
+                    ];
+                }
+                for (rect, value, _, _, suffix, title) in summary_inputs(&s.config) {
+                    let r = at(rect, x, y);
+                    draw.fill(r, 0xFF39_3939);
+                    draw.fill(
+                        [r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0],
+                        0xFF5A_4A3A,
+                    );
+                    draw.text(
+                        &format!("{value}{suffix}"),
+                        [r[0] + 5.0, r[1] + 5.0],
+                        0xFFFF_FFFF,
+                        true,
+                    );
+                    if inside(r, mouse) {
+                        // `ScrollInput.updateTooltip`.
+                        tips = vec![
+                            styled(tr(host, title), "#5391E1", false),
+                            styled(
+                                tr(host, "create.gui.scrollInput.scrollToModify"),
+                                "dark_gray",
+                                true,
+                            ),
+                            styled(
+                                tr(host, "create.gui.scrollInput.shiftScrollsFaster"),
+                                "dark_gray",
+                                true,
+                            ),
+                        ];
+                    }
+                }
+                if !tips.is_empty() {
+                    let _ = draw.gui_tooltip(&tips, mouse);
+                }
             }
             // The first row: the label (`addLabelingTextBox`).
             if s.labels.get(s.source).copied().unwrap_or(false) {
@@ -504,8 +629,33 @@ fn host_millis() -> u128 {
 
 /// A step of the input under `mouse` (`ScrollInput`): the source, the source's choice or the
 /// line. True when one took it.
-fn step(s: &mut Settings, mouse: [f32; 2], size: [f32; 2], up: bool) -> bool {
+fn step(s: &mut Settings, mouse: [f32; 2], size: [f32; 2], up: bool, shift: bool) -> bool {
     let (x, y) = corner(size);
+    if s.sources.get(s.source) == Some(&Source::StationSummary) {
+        // `ScrollInput.mouseScrolled`: up adds, shift by its shift step (then to a multiple).
+        for (i, (rect, value, max, shift_step, _, _)) in
+            summary_inputs(&s.config).into_iter().enumerate()
+        {
+            if !inside(at(rect, x, y), mouse) {
+                continue;
+            }
+            let delta = if shift { shift_step } else { 1 };
+            let mut v = value + if up { delta } else { -delta };
+            if shift {
+                v -= v % shift_step;
+            }
+            let v = v.clamp(0, max - 1);
+            if v == value {
+                return false;
+            }
+            if i == 0 {
+                s.config.name_column = Some(v);
+            } else {
+                s.config.platform_column = Some(v);
+            }
+            return true;
+        }
+    }
     if s.sources.len() > 1 && inside(at(SOURCE_INPUT, x, y), mouse) {
         let n = s.sources.len();
         s.source = if up {
@@ -513,8 +663,13 @@ fn step(s: &mut Settings, mouse: [f32; 2], size: [f32; 2], up: bool) -> bool {
         } else {
             (s.source + 1) % n
         };
-        // `DisplayLinkConfigurationPacket`: another source starts from its own settings.
+        // `DisplayLinkConfigurationPacket`: another source starts from its own settings
+        // (`populateData` fills the station summary's).
         s.config = Config::default();
+        if s.sources.get(s.source) == Some(&Source::StationSummary) {
+            let station = (!s.station.is_empty()).then_some(s.station.as_str());
+            super::summary::populate(&mut s.config, station);
+        }
         return true;
     }
     if let Some(source) = s.sources.get(s.source).copied()
@@ -546,9 +701,11 @@ pub(super) fn screen_mouse_scrolled(
     }
     let up = event.scroll[1] > 0.0;
     let mouse = event.screen.mouse;
+    // GLFW's shift modifier.
+    let shift = event.modifiers & 1 != 0;
     let stepped = OPEN.with_borrow_mut(|o| {
         o.as_mut()
-            .is_some_and(|o| step(&mut o.settings, mouse, o.size, up))
+            .is_some_and(|o| step(&mut o.settings, mouse, o.size, up, shift))
     });
     if stepped {
         click_sound(host);
@@ -580,11 +737,10 @@ pub(super) fn screen_mouse_pressed(
         let Some(o) = o.as_mut() else {
             return;
         };
-        let labels = o.settings.labels.get(o.settings.source).copied() == Some(true);
-        o.editing = labels && inside(at(LABEL_INPUT, x, y), mouse);
+        o.editing = has_text_box(&o.settings) && inside(at(LABEL_INPUT, x, y), mouse);
         if event.button == 0 && !o.editing {
             // A click steps on like the wheel down.
-            if step(&mut o.settings, mouse, size, false) {
+            if step(&mut o.settings, mouse, size, false, false) {
                 click_sound(host);
             }
         }
@@ -607,7 +763,7 @@ pub(super) fn screen_key_pressed(
         "key.keyboard.backspace" => {
             OPEN.with_borrow_mut(|o| {
                 if let Some(o) = o.as_mut() {
-                    o.settings.config.label.pop();
+                    text_of(&mut o.settings).pop();
                 }
             });
             Flow::Cancel
@@ -640,9 +796,14 @@ pub(super) fn screen_char_typed(
     OPEN.with_borrow_mut(|o| {
         if let Some(o) = o.as_mut()
             && o.editing
-            && o.settings.config.label.chars().count() < 64
         {
-            o.settings.config.label.push(c);
+            // `EditBox`'s 32 characters for the filter.
+            let summary =
+                o.settings.sources.get(o.settings.source) == Some(&Source::StationSummary);
+            let text = text_of(&mut o.settings);
+            if text.chars().count() < if summary { 32 } else { 64 } {
+                text.push(c);
+            }
         }
     });
     Flow::Cancel
@@ -679,6 +840,7 @@ mod tests {
             labels: vec![true, false],
             source_pos: [1, -2, 2],
             target_pos: [9, 9, 9],
+            station: "Main".into(),
         };
         assert_eq!(Settings::decode(&s.encode()), Some(s));
     }
