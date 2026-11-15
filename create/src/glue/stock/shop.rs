@@ -1767,7 +1767,7 @@ fn seated(host: &dyn ClientHost, keeper: mod_api::EntityRef) -> bool {
     let (Some(at), Some(level)) = (keeper.position(host), host.level(host.dimension())) else {
         return false;
     };
-    let kind = keeper.kind(host).unwrap_or_default();
+    let kind = keeper.kind(host).map(|k| k.id(host)).unwrap_or_default();
     let floor = at.map(|v| v.floor() as i32);
     [floor, [floor[0], floor[1] + 1, floor[2]]]
         .into_iter()
@@ -1803,7 +1803,9 @@ fn checkout_overlay(
         return;
     };
     let Some(list) = List::of(&held) else { return };
-    if !seated(host, keeper) || keeper.kind(host).map(|k| k.id(host)).as_deref() == Some("create:package") {
+    if !seated(host, keeper)
+        || keeper.kind(host).map(|k| k.id(host)).as_deref() == Some("create:package")
+    {
         return;
     }
     let Some(at) = keeper.block_position(host) else {

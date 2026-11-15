@@ -279,8 +279,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A texture on world quads** (catnip's `Outliner` `withFaceTexture`, drawn with
   `RenderTypes.outlineTranslucent(texture)`): the super glue's areas are outlined as Create's are, but their faces
   are not covered with `AllSpecialTextures.GLUE` (`SuperGlueSelectionHandler`); `WorldDrawContext::quads` draws with
-  the white atlas texel and a mod pipeline's shader binds no texture. A texture (or block-atlas sprite) for
-  `quads`, or a sampler for `pipeline_quads`, would close it.
+  the white atlas texel, and a mod pipeline's shader samples only a block or item atlas sprite
+  (`RenderPipeline::textured`), where Create's special textures are files of their own (`textures/special/`).
+  A texture for `quads`, or `PipelineTexture` of a mod's texture file, would close it.
 - **A screen layout for a mod menu opened without a block** (`player_open_mod_menu` with no `pos`: the
   client's `open_native_screen` returns without a `Screen`): the filters' and the schedule's screens are the mod's own screen,
   and clicking an inventory slot carries a ghost copy, not the stack (Create's menus carry the real one), so the
