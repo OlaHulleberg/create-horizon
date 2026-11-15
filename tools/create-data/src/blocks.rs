@@ -1467,11 +1467,13 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
     }
     // PackagerBlock (BuilderTransformers.packager: `SharedProperties::softMetal`, netherite's
     // sounds, not a redstone conductor): facing (DirectionalBlock's, down first), `powered`,
-    // `linked`; a full block. Its box and address are the native mod's.
+    // `linked`; a full block. Its box and address are the native mod's. On iron's template
+    // (a solid block: a declared shape leaves the template's `isSolid`), so a sign on its side
+    // stays (`WallSignBlock.canSurvive`) and gives the packager its address.
     if n == "packager" {
         let full = [[0., 0., 0., 16., 16., 16.]];
         return Some(declared(
-            "minecraft:heavy_core",
+            "minecraft:iron_block",
             "minecraft:netherite_block",
             true,
             Some(by_property("powered", bools, &full)),
@@ -1487,7 +1489,7 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
     if n == "repackager" {
         let full = [[0., 0., 0., 16., 16., 16.]];
         return Some(declared(
-            "minecraft:heavy_core",
+            "minecraft:iron_block",
             "minecraft:netherite_block",
             true,
             Some(by_property("powered", bools, &full)),
@@ -1594,7 +1596,7 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
     // horizontal `axis`, a full block.
     if n == "redstone_requester" {
         return Some(declared(
-            "minecraft:heavy_core",
+            "minecraft:iron_block",
             "minecraft:netherite_block",
             true,
             Some(by_property(
@@ -3359,6 +3361,13 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     // below.)
     // The factory gauge and the chain conveyor (`noOcclusion`, with declared shapes): nothing
     // behind them is hidden, and light reaches the wheel and chains a conveyor draws inside.
+    // Packagers and the redstone requester (`noOcclusion`) on a full block's template.
+    if matches!(
+        b.name.as_str(),
+        "packager" | "repackager" | "redstone_requester"
+    ) {
+        props.insert("occludes".into(), json!(false));
+    }
     if b.name == "factory_gauge" || b.name == "chain_conveyor" {
         props.insert("occludes".into(), json!(false));
     }

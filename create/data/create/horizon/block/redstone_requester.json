@@ -1,15 +1,13 @@
 {
-  "template": "minecraft:heavy_core",
+  "template": "minecraft:iron_block",
   "properties": {
     "hardness": 1.5,
     "explosion_resistance": 6.0,
     "requires_tool": true,
-    "sounds": "minecraft:netherite_block"
+    "sounds": "minecraft:netherite_block",
+    "occludes": false
   },
   "item": true,
-  "components": {
-    "minecraft:rarity": "common"
-  },
   "shapes": {
     "properties": [
       "axis"
