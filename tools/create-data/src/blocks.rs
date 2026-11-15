@@ -1503,7 +1503,26 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
     // gauge on any face with a collision shape), and gives no signal (the link's `powered` is
     // its input; the gauge's is never set). Their shapes follow two properties (AllShapes.
     // STOCK_LINK, the panels'), which one property can't select: the template's are kept.
+    // The gauge's outline is AllShapes.FACTORY_PANEL_FALLBACK (two pixels over the face it hangs
+    // on, `forDirectional(UP)`), by `face` and `facing`; Create's per-panel shape follows its
+    // block entity, which a declaration can't. Entities pass through it (`getCollisionShape`).
     if n == "stock_link" || n == "factory_gauge" {
+        let gauge = n == "factory_gauge";
+        let shapes = gauge.then(|| {
+            let mut values = Map::new();
+            for facing in ["north", "south", "west", "east"] {
+                let wall = match facing {
+                    "north" => [0., 0., 14. / 16., 1., 1., 1.],
+                    "south" => [0., 0., 0., 1., 1., 2. / 16.],
+                    "west" => [14. / 16., 0., 0., 1., 1., 1.],
+                    _ => [0., 0., 0., 2. / 16., 1., 1.],
+                };
+                values.insert(format!("floor,{facing}"), json!([[0., 0., 0., 1., 2. / 16., 1.]]));
+                values.insert(format!("ceiling,{facing}"), json!([[0., 14. / 16., 0., 1., 1., 1.]]));
+                values.insert(format!("wall,{facing}"), json!([wall]));
+            }
+            json!({ "properties": ["face", "facing"], "values": values })
+        });
         return Some(declared(
             "minecraft:grindstone",
             if n == "stock_link" {
@@ -1512,7 +1531,7 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
                 "minecraft:copper_block"
             },
             true,
-            None,
+            shapes,
             own(&[
                 ("face", &["floor", "wall", "ceiling"]),
                 ("facing", horizontal),
@@ -2374,7 +2393,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 139] = [
+pub const PARTIALS: [(&str, &str, &str); 140] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -2710,6 +2729,12 @@ pub const PARTIALS: [(&str, &str, &str); 139] = [
         "create:block/mechanical_arm/claw_base",
         "up",
     ),
+    // `ARM_CLAW_BASE_GOGGLES`: the claw of an arm that wears goggles.
+    (
+        "part_arm_claw_base_goggles",
+        "create:block/mechanical_arm/claw_base_goggles",
+        "up",
+    ),
     (
         "part_arm_upper_claw_grip",
         "create:block/mechanical_arm/upper_claw_grip",
@@ -3020,7 +3045,10 @@ pub const PARTIALS: [(&str, &str, &str); 139] = [
 /// belts' scrolling textures, undyed and in each dye's colour, and the andesite belt casing's),
 /// in one model the native mod registers as a standalone model (`standalone_models`) so the
 /// block sprites hold them.
-pub fn sprite_models() -> [(&'static str, Value); 1] {
+/// Models that only name sprites a part is drawn with (Horizon stitches the textures models
+/// use): the belts' scrolling sprites, and the factory gauge's arrows (`FactoryPanelRenderer`:
+/// lines, dots and the scrolling `FACTORY_PANEL_CONNECTIONS` shift's target).
+pub fn sprite_models() -> [(&'static str, Value); 2] {
     const DYES: [&str; 16] = [
         "white",
         "orange",
@@ -3048,6 +3076,21 @@ pub fn sprite_models() -> [(&'static str, Value); 1] {
         sprites.push(format!("create:block/belt/{d}_diagonal_scroll"));
     }
     sprites.push("create:block/belt/andesite_belt_casing".to_owned());
+    let gauge: Vec<String> = [
+        "create:block/factory_panel_connections",
+        "create:block/factory_panel_connections_animated",
+        "create:block/factory_panel_dotted_connections",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    [
+        ("belt_scroll_sprites", sprite_model(&sprites)),
+        ("factory_panel_sprites", sprite_model(&gauge)),
+    ]
+}
+
+/// A model with one face per sprite of `sprites`, never drawn.
+fn sprite_model(sprites: &[String]) -> Value {
     let textures: Map<String, Value> = sprites
         .iter()
         .enumerate()
@@ -3063,10 +3106,7 @@ pub fn sprite_models() -> [(&'static str, Value); 1] {
             })
         })
         .collect();
-    [(
-        "belt_scroll_sprites",
-        json!({ "textures": textures, "elements": elements }),
-    )]
+    json!({ "textures": textures, "elements": elements })
 }
 
 pub fn fluid_models() -> [(&'static str, Value); 5] {
@@ -3304,6 +3344,11 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     // hide no neighbour's face and let light through, so the floor under a saw shows and the
     // blade drawn inside it is lit. (The crafter's and mixer's `noOcclusion` is the general rule
     // below.)
+    // The factory gauge and the chain conveyor (`noOcclusion`, with declared shapes): nothing
+    // behind them is hidden, and light reaches the wheel and chains a conveyor draws inside.
+    if b.name == "factory_gauge" || b.name == "chain_conveyor" {
+        props.insert("occludes".into(), json!(false));
+    }
     if matches!(b.name.as_str(), "mechanical_saw" | "mechanical_drill") {
         props.insert("occludes".into(), json!(false));
     }
@@ -3378,6 +3423,10 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     };
     if let Some(s) = shapes {
         doc.insert("shapes".into(), fork_shapes(template, &default, s));
+    }
+    if b.name == "factory_gauge" {
+        // FactoryPanelBlock.getCollisionShape: empty for entities.
+        doc.insert("collision_shapes".into(), json!({ "default": [] }));
     }
     if b.name == "crushing_wheel_controller" {
         // CrushingWheelControllerBlock.getCollisionShape: items stop on

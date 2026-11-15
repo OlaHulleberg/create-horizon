@@ -540,6 +540,8 @@ fn has_state(block: Block) -> bool {
             | Block::ControllerRail
             | Block::CartAssembler
             | Block::Nozzle
+            | Block::FactoryGauge
+            | Block::PackageFrogport
     ) || crate::display::is_nixie(block)
         || is_plumbing(block)
 }
