@@ -21,17 +21,14 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   shapes are declared per state, so a factory gauge's outline and collision are Create's
   `FACTORY_PANEL_FALLBACK`, the whole face, however few panels it has (`glue/stock/gauge.rs`). A shape hook
   for a block part (outline and collision, with the position) would close it.
-- **The server's tick freeze** (`TickRateManager.runsNormally`): under `/tick freeze` Create's block
-  entities stop, but a mod's level tick still runs, so the glue's machines go on (`glue/redstone`).
 - **Reading and writing the scoreboard** (`Scoreboard.getObjective`, `listPlayerScores`, `addObjective`,
   `getOrCreatePlayerScore(..).set`): Create's scoreboard and death count display sources
   (`ScoreboardDisplaySource`, `DeathCounterDisplaySource`) are left out (`glue/display`). A player's deaths
   are readable (`player_stat`), but the death counter keeps them in its own objective (`create_auto_deaths`),
-  whose scores outlive a player going offline and show in `/scoreboard`; a host call listing an objective's
-  scores (owner and value) by its name, and one adding a dummy objective and setting a holder's score, would
-  close both.
-- **A world-open phase.** `world_lifecycle` reports only failures and closing; Create's world opens at the
-  first `level_load`.
+  whose scores outlive a player going offline and show in `/scoreboard`. `Commands::run_command_with_output`
+  reaches them only as console text (`scoreboard players list`, `.. get`) to be parsed in the server's
+  language; a typed host call listing an objective's scores (owner and value) by its name, and one adding a
+  dummy objective and setting a holder's score, would close both.
 - **`isSolid` (legacy solidity) of a declared shape**: a declared block keeps its template's `isSolid`
   (`BlockBehaviour.calculateSolid` is not run on the declared shapes), so a sign, banner or torch on a wall
   (`WallSignBlock.canSurvive`) drops off a block on the heavy core's template, however full its shape.
@@ -50,13 +47,15 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   (deployers dig every block at its harvestable speed: `can_harvest_block` and `player_harvest_check` hear the
   game's own dig and break, but a deployer counts its progress itself, before any break); the weathering-copper class and age; a block's class
   (copycats guess stairs, bars and trapdoors from tags and ids).
-- **A state's numeric id**, for `level_event(2001, ..)` (block-break particles on a wrenched copycat, a
-  belt's casing taken off, an encased shaft's or cog's casing taken off with the wrench).
+- **A state's numeric id**, for `level_event(2001, ..)`: a wrenched copycat and an encased shaft's or cog's
+  casing taken off show the state's block particles (`LevelRef::send_particles`) and its break sound
+  (`BlockStates::sound`), rebuilt in `ServerLevel::destroy_effect`, not the client's own
+  `addDestroyBlockEffect` burst; a belt's casing, an encased pipe's, a bracket and the belt slicer's cut show
+  none yet. `BlockStates::state_id` (or a 2001 call taking a `BlockState`) would make them exact.
 - **The neighbour-shape update of a state placed by code** (`updateShape` against its neighbours): mirrored
   placements of the wand of symmetry skip it.
-- **Waterlogging in `state_for_placement`**: the event carries no fluid at the position, so rails and display
-  boards are not waterlogged when placed in water.
-- **`OnBlockPlacedByEvent` without a level**: decor's fix-ups after a dispenser places a block are skipped.
+- **`OnBlockPlacedByEvent` without a level**: decor's fix-ups after a placement with no placer are skipped.
+  `ConfigHost::dimension` may name the level there, unverified: no vanilla dispenser places these items.
 - **Scaffolding's collision for a templated block**: Horizon gives `ScaffoldingBlock.getCollisionShape` (solid
   only from above, unless descending) and its dynamic shape only to `minecraft:scaffolding` by name; a copy
   without declared shapes has none (placing it fails, and an entity touching it stops the game). Create's metal
@@ -67,12 +66,23 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   when the lava or the honey next ticks (`fluid_tick`) and turns the lava in the level's next tick, where
   Create's happen at once on the neighbour's change.
 
-- **Crafting recipes in `recipes_of_type`**: at the pinned build `recipes_of_type("minecraft:crafting")`
-  lists no recipe (nor any `minecraft:crafting_*` serializer id, the key the earlier build used), though
-  smelting, stonecutting, smithing and the mod's own types list and the game crafts. So shapeless crafting
-  recipes don't mix in a basin (`MechanicalMixerBlockEntity.matchStaticFilters`) and the factory gauge finds
-  no crafting recipe for its output; the glue reads them as the API documents (`recipes::crafting_of`), so
-  they come back once the game lists them.
+- **One recipe naming an unknown item empties its type for mods** (a game bug, found at `b77574eb1b`):
+  `recipes_of_type` converts the type's whole list at once, and one recipe whose result (or a rule's stack)
+  is an item the game doesn't know fails it, so the mod gets an empty list. The generated
+  `impl RecipesHost for Game` (`game_host_modules.rs`, from the host generator) returns
+  `Game::recipes_of_type(self, kind).try_into_api().unwrap_or_default()`;
+  `TryIntoApi for Arc<[T]>` (`crates/horizon-client/src/game/modding/api_values.rs:573`) collects
+  element by element with `?`, and `TryIntoApi for EngineStack` (`api_values.rs:733`) answers
+  `StackReadError::UnknownItem` for an item with no `item_key`. `Recipes::from_resolved`
+  (`crates/horizon-client/src/crafting.rs:1863-1898`) lists a shaped or shapeless recipe with
+  `result.create()` without checking that the result's item exists. Create 6.0.10's
+  `crafting/appliances/chain_from_zinc.json` names `minecraft:chain` (`minecraft:iron_chain` since 1.21.9),
+  so `minecraft:crafting` gave 0 recipes where smelting and smithing listed. Repro: a world data pack with
+  `data/repro/recipe/bad.json` = `{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stick"],"result":{"id":"minecraft:no_such_item"}}`;
+  after `/reload` a mod's `recipes_of_type("minecraft:crafting")` gives 0 (1914 without the pack). Leaving
+  out the recipes that fail (or failing the recipe at load) would fix it. The port renames the chain in its
+  recipes (`tools/create-data`): the list is whole again (1914), a basin mixes shapeless recipes (mushroom
+  stew, checked in game), and the factory gauge's crafting lookup reads the same list.
 
 ### Containers, items and transactions
 
@@ -83,7 +93,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   insert into, nothing to take out), nor do upward saws (`SawBlockEntity`'s inventory: hoppers can't feed one), and
   a portable storage interface
   offers its contraption's storage to Create's chutes and funnels only, not to hoppers. A close/abort callback
-  on `Transaction` (or a journal for mod state) would close them. (Packagers and package ports mirror their
+  on `Transaction` (or a journal for mod state) would close them. Block entity slots, attachments and
+  Part state (block entity and entity) are journaled, so moving these contents there is the route the API
+  has. (Packagers and package ports mirror their
   boxes into block entity slots, which the game journals, and learn of automation's moves at their level's next
   tick, as a handler's own slot writes give no `contents_changed`: `glue/packages/automation.rs`.)
 - **A notice for any container's contents changing.** `contents_changed` reaches only the changed block's own
@@ -92,7 +104,7 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   `ItemStack` is never empty, so a part cannot move a whole stack to a slot of its choosing (the
   schematicannon's gunpowder slot); an `Option<ItemStack>` there would close it.
 - **Per-slot insert rules on `ModContainer`**: "insert only while empty" (depot, ejector, crafter, chute) and
-  the toolbox's one item kind per compartment.
+  the toolbox's one item kind per compartment for hoppers and funnels (its menu keeps it, `menu_slot_rules`).
 - **The block entity in `BlockDropsEvent`** (or its saved data through the event's `LevelHost`): a toolbox
   the level destroys with its drops (`/setblock .. destroy`, `Level.destroyBlock`) drops an empty toolbox,
   where Create's loot copies its contents (`copy_components` of `TOOLBOX_INVENTORY`); a player's break, an
@@ -107,18 +119,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   fake's own uncharged ticker, so a deployer's punch deals about a fifth of Create's damage (0.21 of a
   fist's 1). A `PlayerActionSetup` field for the attack strength (or a full charge) would close it.
 
-- **A native mod's enchantments in the item system**: Create's `data/create/enchantment/capacity.json` and
-  `potato_recovery.json` ship with the mod (`create-data prepare`) and commands and item components take them
-  (`/give @s create:copper_backtank[enchantments={"create:capacity":3}]`, read by the glue), but the game's
-  item enchantment table (`horizon-items`' `Enchantments`, loaded from the game's root and world packs) does not
-  hold them: `/enchant` answers "cannot support that enchantment", tooltips leave them out and enchanting tables
-  and anvils never offer them. Loading a native mod's `data/<ns>/enchantment` into that table would close it.
-- **A mob's own saved data and a conversion keeping it**: a horse in a haunting fan current turns into a skeleton
-  horse after 100 ticks (`HauntingType.affectEntity`, its progress in the horse's persistent data, then a
-  skeleton horse made from the horse's saved data); no API keeps a counter on a mob nor converts one keeping its
-  data, so haunted horses are only blinded and slowed.
-- **`Block.fallOn` as a block part hook** (or the block landed on in `living_fall`, which is given no level):
-  a seat halves the fall it breaks (`SeatBlock.fallOn`); its bounce is ported (`bounce_restitution`).
+- **A native mod's enchantments in the item system**: at this pin `/enchant` applies Create's
+  `create:capacity` to a backtank; whether tooltips, enchanting tables and anvils offer Capacity and Potato
+  Recovery is not checked yet.
+- **`Block.fallOn`'s distance**: a seat counts a fall at half its distance (`SeatBlock.fallOn`), but
+  `FallOnEvent` lets a part change only the damage, so the glue works the halved fall's damage out from the
+  game's (`seat::fall_damage`: vanilla's safe distance of 3, or the one the damage implies at a multiplier
+  of 1). A writable `distance` would make it exact under other fall damage multipliers.
 - **A native mod's damage types**: Create's `data/create/damage_type/*.json` (`crush`, `mechanical_saw`,
   `fan_fire`...) shipped with the mod are not registered (`EntityRef::hurt` with `create:crush` is refused; with
   the files shipped, `/damage` parses `create:crush` but the health code's damage table answers "invulnerable"),
@@ -134,9 +141,14 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   a dropped package is a plain item entity (`glue/packages`). A client can't ask an entity's vehicle
   (`EntityRef::vehicle` answers on the server only) nor find a seat's stand-in (`LevelRef::entities_in` leaves
   displays out), so a shop's checkout overlay takes a keeper as seated by where it is (`glue/stock/shop.rs`).
-- **A block entity type for a block by its name**: the game gives `create:mechanical_piston_head` a
-  `minecraft:skull` block entity (its path ends in `_head`), and one is left behind on the block that takes the
-  head's place when a piston retracts. A declaration field naming a block's entity type (or none) would close it.
+- **A block entity type for a block by its name** (a game bug at `b77574eb1b`): `create:mechanical_piston_head`
+  (template `minecraft:andesite`, which has none) still gets a `minecraft:skull` block entity, against
+  `behaviour:block_entity_templates`. `BlockEntity::for_block` (`crates/horizon-client-render/src/containers.rs:495`)
+  falls back to the block's own name when `block_entity_types::factory_block` finds no template entry, and
+  `for_factory` then matches `is_skull` (`containers.rs:371`, used at `:554`: any `_head` or `_skull`, in any
+  namespace). Repro: a content block `mymod:test_head` on template `minecraft:andesite`, `/setblock ~ ~ ~
+  mymod:test_head`, `/data get block ~ ~ ~` shows `id: "minecraft:skull"`. Checking the `minecraft:`
+  namespace there would fix it.
 - **Reading the client level's light** (`LevelRef::brightness` answers on the logical server only): a
   moving structure's blocks are lit with the light the server read where they were last sent from,
   not where they are each frame (`ContraptionRenderer`'s per-block world light).
@@ -148,13 +160,15 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **`EntityRef::move_by` for any entity** (`Entity.move`): belts carry mobs by setting their motion
   each tick, and players by a push from their own client (`push_player`), where Create moves them; up a
   slope they climb `BeltShapes`' stairs by stepping up, where Create moves them down 0.13 and across with a
-  step height of 1.
+  step height of 1. `Hooks::entity_move` can only change an entity's own move, takes no host and runs on the
+  server only (a client does not predict it), so it is not that extra move.
 - **A collision shape for an entity riding the block** (`BeltBlock.getCollisionShape`: the whole outline for
   a belt's passengers, cut at 19 px for others): content shapes select by entity class only, so every entity
   collides with a belt's cut shape.
 - **`MinecartRef::set_carrying`** (a cart with a contraption counting as ridden: the glue gives back the
   drag an empty cart's rails take, but not the three-quarter step a ridden cart moves) and
-  **`EntityRef::move_by`** (moving a coupled cart off its rail with collisions). `MinecartRef::is_on_rails`
+  **`EntityRef::move_by`** (moving a coupled cart off its rail with collisions; `entity_move` replaces only
+  the cart's own move, not the coupling's pull). `MinecartRef::is_on_rails`
   answered false for a cart running on a rail when read in a level tick, so the glue looks at the rail itself.
 - **A mod's own projectile entity type with its own class** (Create's `create:potato_projectile`,
   with its damage type `create:potato_cannon`): the potato cannon's shots are vanilla snowballs
@@ -173,8 +187,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   them with `fluid_box` and `terrain_model`) is offered only for thrown and living types and has no
   `ClientHost` to read what the entity carries. A fluid display (a fluid stack and a box), or a display type a
   mod draws with `BlockEntityDrawContext` and its host, would close it.
-- **A zombie villager's cure from code** (`ZombieVillager.mobInteract` with a golden apple, or
-  `startConverting`): a golden apple from the potato cannon gives its food effects instead.
 
 ### Client
 
@@ -237,8 +249,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Hanging entities in a box** (`Level.getEntitiesOfClass` over an `AABB`): `LevelRef::entities_in` leaves
   item frames and paintings out, so a schematic saved by the port (`StructureTemplate.fillEntityList`) holds
   none; one that holds them prints them. Listing them in `entities_in` (or a lookup of its own) would close it.
-- **Calling a block's `setPlacedBy` from code**: the schematicannon writes a door's, tall plant's and bed's
-  other half itself as those blocks' `setPlacedBy` does (`glue/schematics`), where Create calls the block's own.
+- **Calling a block's `setPlacedBy` from code with no player**: the schematicannon writes a door's, tall
+  plant's and bed's other half itself as those blocks' `setPlacedBy` does (`glue/schematics`), where Create
+  calls the block's own (a piston's extension check too). `PlayerRef::place_block` runs it, but needs a player
+  in that level and writes with `NEIGHBORS`, where `placeSchematicBlock` writes `UPDATE_CLIENTS |
+  UPDATE_KNOWN_SHAPE` with none; a `LevelRef` call (or a flags argument) would close it.
 - **The local player's inventory slots on its client** (`player_inventory_slots` answers on the server only;
   `player_inventory` on a client lists stacks without their slots): the wand of symmetry's mirrors, drawn for
   every wand in the hotbar (`SymmetryHandler.onRenderWorld`), are sent to the client by the server.
