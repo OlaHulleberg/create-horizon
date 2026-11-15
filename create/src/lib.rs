@@ -94,22 +94,6 @@ impl Hooks for Create {
         world::level_index(event.dimension);
     }
 
-    fn data_pack_files(
-        &self,
-        _host: &mut dyn ServerHost,
-        event: &mut mod_api::DataPackFilesEvent<'_>,
-    ) {
-        glue::decor::copper::data_pack_files(event.files);
-    }
-
-    fn player_pick_item(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::PlayerPickItemEvent<'_>,
-    ) -> Flow {
-        glue::processing::pick_item(host, event)
-    }
-
     fn server_tick(&self, _host: &mut dyn ServerHost, event: &mut mod_api::ServerTickEvent<'_>) {
         if let mod_api::ServerTickPhase::ServerTickStart { world_running } = event.phase {
             world::set_running(world_running);

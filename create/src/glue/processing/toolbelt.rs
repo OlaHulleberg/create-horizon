@@ -1789,8 +1789,69 @@ pub(crate) fn render_gui_post(host: &dyn ClientHost, event: &mut mod_api::Render
     }
 }
 
+/// `ToolboxInventory.isItemValid` in a toolbox's menu: a compartment with a kind takes only
+/// that kind, and no stack that can't go inside an item (a
+/// shulker box, `canFitInsideContainerItems`), as `canItemsShareCompartment` compares them. The
+/// kind is the kept one on the server, else what is in the compartment (all the client's
+/// prediction knows).
+struct CompartmentRules;
+
+#[mod_api::horizon_part]
+impl mod_api::MenuPart for CompartmentRules {
+    fn menu_slot_rules(
+        &self,
+        host: &dyn mod_api::Host,
+        event: &mut mod_api::MenuSlotRulesEvent<'_>,
+    ) {
+        let (Some(pos), mod_api::MenuContainer::Main) = (event.context.pos, event.container) else {
+            return;
+        };
+        if event.slot >= tb::STORED {
+            return;
+        }
+        let player = event.context.player.and_then(|u| host.player(u));
+        let level = player
+            .and_then(|p| p.dimension(host))
+            .map(|d| d.to_string())
+            .and_then(|d| Some((level_index(&d)?, host.level(&d)?)));
+        let Some((dim, level)) = level else {
+            return;
+        };
+        // By name, which the client's prediction can read too (it has no Create world).
+        let toolbox = level.block_state(host, pos).is_some_and(|s| {
+            let name = s.block().id(host);
+            name.starts_with("create:") && name.ends_with("_toolbox")
+        });
+        if !toolbox {
+            return;
+        }
+        let id = event.stack.item().id(host);
+        if id.ends_with("shulker_box") {
+            event.may_place = false;
+            return;
+        }
+        let c = event.slot / STACKS_PER_COMPARTMENT;
+        let kept = FILTERS.with_borrow(|m| m.get(&(dim, pos)).and_then(|k| k.filters[c].clone()));
+        let kind = kept
+            .and_then(|f| ItemStack::from_nbt(host, &f))
+            .or_else(|| {
+                (0..STACKS_PER_COMPARTMENT)
+                    .find_map(|i| {
+                        event
+                            .context
+                            .slot(event.container, c * STACKS_PER_COMPARTMENT + i)
+                    })
+                    .cloned()
+            });
+        if kind.is_some_and(|k| !same_kind(host, &k, event.stack)) {
+            event.may_place = false;
+        }
+    }
+}
+
 /// The tool belt key: left Alt (`AllKeys.TOOLBELT`).
 pub(crate) fn register(r: &mut dyn mod_api::Registrar) {
+    r.menu_part(tb::MENU, CompartmentRules);
     let mut k = mod_api::KeyRegistration::new(KEY, "key.keyboard.left.alt");
     k.label = "create.keyinfo.toolbelt".into();
     r.register_key_mapping(k);

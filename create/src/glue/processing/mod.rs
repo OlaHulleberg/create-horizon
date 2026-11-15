@@ -92,14 +92,6 @@ use mod_api::{
 
 pub struct Processing;
 
-/// `ToolboxHandlerClient.onPickItem` (`Hooks::player_pick_item`).
-pub fn pick_item(
-    host: &mut dyn ServerHost,
-    event: &mod_api::PlayerPickItemEvent<'_>,
-) -> mod_api::Flow {
-    toolbelt::pick_item(host, event)
-}
-
 impl Subsystem for Processing {
     fn draw_carried(
         &self,
@@ -327,22 +319,6 @@ impl Subsystem for Processing {
     fn client_reset(&self) {
         client::reset();
         toolbelt::client_reset();
-    }
-
-    fn player_container_open(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::PlayerContainerOpenEvent<'_>,
-    ) {
-        toolbelt::menu_opened(host, event);
-    }
-
-    fn player_container_close(
-        &self,
-        _host: &mut dyn ServerHost,
-        event: &mut mod_api::PlayerContainerCloseEvent<'_>,
-    ) {
-        toolbelt::menu_closed(event);
     }
 
     fn player_tick(&self, host: HostSide, event: &mut mod_api::PlayerTickPostEvent) {
