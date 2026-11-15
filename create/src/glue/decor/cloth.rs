@@ -3,7 +3,8 @@
 //! or the next one clockwise is culled. Create's model reads the neighbours as the chunk is
 //! built; a terrain model here can't (`HORIZON_API.md`), so the server works out which sides
 //! are culled when a cloth is placed or a neighbour changes (`Cull`, in its block entity's
-//! data) and the block entity draws the corners (`create:part_table_cloth_<kind>`).
+//! data) and the block entity draws the corners (`create:part_table_cloth_<kind>`). That is
+//! the cloths' own type (`create:table_cloth`, `stock::shop`), whose update tag carries `Cull`.
 //!
 //! A side counts as culled (`Block.shouldRenderFace` false) beside another table cloth or a
 //! carpet (the same face) and beside a block whose face toward the cloth is sturdy (a full,
@@ -91,7 +92,7 @@ impl BlockEntityPart for ClothDraw {
         let Some(part) = states::partial(&format!("part_table_cloth_{kind}")) else {
             return;
         };
-        let mask = match super::super::kinetics::synced(&event.entity.nbt, CULL) {
+        let mask = match event.entity.nbt.get(&CULL.into()) {
             Some(Tag::Byte(b)) => *b,
             _ => 0,
         };

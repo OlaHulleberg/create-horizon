@@ -42,7 +42,7 @@ mod bells;
 mod brackets;
 mod carried;
 mod clicks;
-mod cloth;
+pub(crate) mod cloth;
 mod copper;
 mod crates;
 mod doors;
@@ -287,7 +287,7 @@ pub struct Decor;
 
 impl Subsystem for Decor {
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[BRACKET, bell::DING, cloth::CULL, bells::RINGING]
+        &[BRACKET, bell::DING, bells::RINGING]
     }
 
     fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
@@ -340,9 +340,9 @@ impl Subsystem for Decor {
         {
             crate::create_log!("[create] the desk bell's drawing part was refused: {e:?}");
         }
-        if let Some(kind) = super::kinetics::kind()
-            && let Err(e) = r.block_entity_part(&kind, cloth::ClothDraw)
-        {
+        // On the cloths' own block entity type (`stock::shop`), beside the shop's drawing.
+        let cloth_kind = r.block_entity_type_key(crate::glue::stock::shop::TYPE);
+        if let Err(e) = r.block_entity_part(&cloth_kind, cloth::ClothDraw) {
             crate::create_log!("[create] the table cloths' drawing part was refused: {e:?}");
         }
         if let Some(kind) = super::kinetics::kind()

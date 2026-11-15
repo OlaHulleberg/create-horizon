@@ -1273,8 +1273,13 @@ impl BlockEntityPart for ClothEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let data = event.entity.nbt.get(&DATA.into())?.clone();
-        Some(Compound::from([(DATA.into(), data)]))
+        // The shop and its items, and the sides its neighbours cull for the corners
+        // (`decor::cloth`, drawn by its part on this type).
+        let shown: Compound = [DATA, crate::glue::decor::cloth::CULL]
+            .into_iter()
+            .filter_map(|k| Some((k.into(), event.entity.nbt.get(&k.into())?.clone())))
+            .collect();
+        (!shown.is_empty()).then_some(shown)
     }
 
     /// `TableClothRenderer`: a shop's price tag (on top or down its side), and its items (the
