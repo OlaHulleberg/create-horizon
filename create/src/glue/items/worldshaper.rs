@@ -4,12 +4,12 @@
 //! (`worldshaper_screen`, `openHandgunGUI`), whose settings come back in
 //! `ConfigureWorldshaperPacket` and are kept in its custom data under Create's component names.
 //! While held, the client outlines the blocks a use would reach (`WorldshaperRenderHandler`).
-//!
-//! Left out: the outline's checkered face texture (`AllSpecialTextures.CHECKERED`): its faces
-//! are drawn in the outline's colour, faint, as world quads take no texture.
+//! Its faces are covered with `AllSpecialTextures.CHECKERED` through the glue's textured world
+//! pipeline (`pipelines`).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
+use crate::glue::pipelines::Textured;
 use super::worldshaper_screen::{self as screen, Configure};
 use super::{Item, action_bar, custom, held, is, set_custom, set_held, sneaking};
 use create_engine::kinetics::Dir;
@@ -18,7 +18,7 @@ use mod_api::{
     BlockFace, BlockState, ClientHost, ClipBlock, ClipFluid, Hand, Host, HostBlockStates, HostSide,
     InteractionResult, ItemPart, ItemStack, LevelRef, PlayerRef, RenderLevelStage,
     RenderLevelStageEvent, ServerHost, SoundSource, SupportType, Tag, UseItemEvent, UseOnEvent,
-    WorldDepth, WorldLine, WorldQuad,
+    PipelineQuad, WorldDepth, WorldLine, WorldQuad,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -495,7 +495,6 @@ fn outlined(host: &dyn ClientHost) -> Option<Vec<[i32; 3]>> {
 /// `Outliner.showCluster(..).colored(0xbfbfbf).lineWidth(1 / 32f)`: the outer edges of the
 /// blocks' union, and its outer faces.
 pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-    let _ = host;
     if event.stage != RenderLevelStage::AfterTranslucentBlocks {
         return;
     }
@@ -504,7 +503,26 @@ pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelS
             return;
         }
         let (lines, quads) = cluster(cells);
-        let _ = event.draw.quads(&quads);
+        // `withFaceTexture(AllSpecialTextures.CHECKERED)`: each face the checkerboard, in the
+        // outline's colour; without the pipeline, a faint plain face.
+        let checkered = crate::glue::pipelines::resolve(host, Textured::Checkered);
+        let drawn = checkered.is_some_and(|p| {
+            let faces: Vec<PipelineQuad> = quads
+                .iter()
+                .map(|q| {
+                    let c = q.corners;
+                    PipelineQuad::new(
+                        [c[0], c[1], c[2], c[3]],
+                        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                        OUTLINE,
+                    )
+                })
+                .collect();
+            event.draw.pipeline_quads(p, &faces).is_ok()
+        });
+        if !drawn {
+            let _ = event.draw.quads(&quads);
+        }
         let _ = event.draw.lines(&lines);
     });
 }
@@ -531,10 +549,10 @@ fn cluster(cells: &[[i32; 3]]) -> (Vec<WorldLine>, Vec<WorldQuad>) {
                 1 => (0, 2),
                 _ => (0, 1),
             };
-            // The face's plane, a hair outside the block.
+            // The face's plane, 1/128 outside the block (`bufferBlockFace`).
             let plane = f64::from(p[axis])
                 + if n[axis] > 0 { 1.0 } else { 0.0 }
-                + f64::from(n[axis]) * 0.002;
+                + f64::from(n[axis]) / 128.0;
             let corner = |a: i32, b: i32| {
                 let mut c = [0.0; 3];
                 c[axis] = plane;

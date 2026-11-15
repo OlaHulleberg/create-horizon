@@ -9,9 +9,10 @@
 //! tells a player holding the glue of their first corner and the glue areas near them
 //! (`create:glue`), and their client outlines them as Create's does: each area in Create's
 //! passive green, the one looked at highlighted, and the selection from the first corner to the
-//! block looked at. Create's glue face texture (`AllSpecialTextures.GLUE`) is not drawn: world
-//! quads take no texture (HORIZON_API.md).
+//! block looked at, their faces covered with `AllSpecialTextures.GLUE` (the glue's textured
+//! world pipeline, `pipelines`).
 
+use crate::glue::pipelines::Textured;
 use super::super::items::{action_bar, creative, held, sneaking};
 use super::super::persist::mark_unsaved;
 use super::super::server::ServerLevel;
@@ -151,10 +152,14 @@ pub(super) fn render(
         (0..3).all(|i| min[i] <= p[i] && p[i] <= max[i])
     };
     let mut lines = Vec::new();
+    // `withFaceTextures(GLUE, ..)`: the highlighted area's and the selection's faces.
+    let mut faces = Vec::new();
+    let camera = host.camera().map(|c| c.position);
     if first.is_none() {
         let lit = hovered.and_then(|h| areas.iter().position(|a| inside(a, h)));
         for (i, a) in areas.iter().enumerate() {
             let (colour, width) = if Some(i) == lit {
+                box_faces(&mut faces, *a, HIGHLIGHT, camera);
                 (HIGHLIGHT, 4.0)
             } else {
                 (PASSIVE, 1.5)
@@ -167,15 +172,54 @@ pub(super) fn render(
         let ok = d2 < 24 * 24 && !sneaking(host, player);
         let min = [0, 1, 2].map(|i| f[i].min(h[i]));
         let max = [0, 1, 2].map(|i| f[i].max(h[i]));
-        box_lines(
-            &mut lines,
-            (min, max),
-            if ok { HIGHLIGHT } else { FAIL },
-            4.0,
-        );
+        let colour = if ok { HIGHLIGHT } else { FAIL };
+        box_faces(&mut faces, (min, max), colour, camera);
+        box_lines(&mut lines, (min, max), colour, 4.0);
+    }
+    if !faces.is_empty()
+        && let Some(glue) = crate::glue::pipelines::resolve(host, Textured::Glue)
+    {
+        let _ = event.draw.pipeline_quads(glue, &faces);
     }
     if !lines.is_empty() {
         let _ = event.draw.lines(&lines);
+    }
+}
+
+/// `AABBOutline.renderBoxFaces` with no highlighted face: the six faces of the blocks `min`
+/// to `max`, 1/128 out (in, with the camera inside), the texture once a block, in `colour` at
+/// half its alpha.
+fn box_faces(
+    faces: &mut Vec<mod_api::PipelineQuad>,
+    (min, max): ([i32; 3], [i32; 3]),
+    colour: u32,
+    camera: Option<[f64; 3]>,
+) {
+    let mut lo = min.map(f64::from);
+    let mut hi = max.map(|v| f64::from(v) + 1.0);
+    let inside = camera.is_some_and(|c| (0..3).all(|i| lo[i] <= c[i] && c[i] <= hi[i]));
+    let inflate = if inside { -1.0 / 128.0 } else { 1.0 / 128.0 };
+    for i in 0..3 {
+        lo[i] -= inflate;
+        hi[i] += inflate;
+    }
+    let colour = (((colour >> 24) / 2) << 24) | (colour & 0xFF_FFFF);
+    let (sx, sy, sz) = ((hi[0] - lo[0]) as f32, (hi[1] - lo[1]) as f32, (hi[2] - lo[2]) as f32);
+    let [x0, y0, z0] = lo;
+    let [x1, y1, z1] = hi;
+    for (corners, u, v) in [
+        ([[x0, y0, z1], [x0, y0, z0], [x1, y0, z0], [x1, y0, z1]], sx, sz),
+        ([[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]], sx, sz),
+        ([[x1, y1, z0], [x1, y0, z0], [x0, y0, z0], [x0, y1, z0]], sx, sy),
+        ([[x0, y1, z1], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1]], sx, sy),
+        ([[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]], sz, sy),
+        ([[x1, y1, z1], [x1, y0, z1], [x1, y0, z0], [x1, y1, z0]], sz, sy),
+    ] {
+        faces.push(mod_api::PipelineQuad::new(
+            corners,
+            [[0.0, 0.0], [0.0, v], [u, v], [u, 0.0]],
+            colour,
+        ));
     }
 }
 

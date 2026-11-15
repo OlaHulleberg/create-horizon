@@ -199,6 +199,14 @@ impl Hooks for Create {
         }
     }
 
+    fn register_render_pipelines(
+        &self,
+        _context: &RegistrationContext,
+        event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
+    ) {
+        glue::pipelines::register(event);
+    }
+
     fn register_special_model_renderer(
         &self,
         _context: &RegistrationContext,

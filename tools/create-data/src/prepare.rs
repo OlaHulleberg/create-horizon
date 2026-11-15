@@ -574,6 +574,12 @@ fn particle_behaviour(path: &str) -> Option<Value> {
     }
 }
 
+/// The fragment stage of the glue's textured world pipelines.
+const TEXTURED_SHADER: &str = "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
+    return pipeline_texture(input.uv) * input.color;
+}
+";
+
 pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, String> {
     let files = read_sources(sources)?;
     if !files
@@ -701,6 +707,11 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             }
             // The coupling's entity models (`CouplingRenderer`) are drawn as part blocks: their
             // texture on the block atlas, the models beside the block models pointing at it.
+            // Create's special textures (`AllSpecialTextures`: the outliner's checkered and glue
+            // faces) on the block atlas too, where a world pipeline samples them.
+            if let Some(rest) = path.strip_prefix("assets/create/textures/special/") {
+                put(&format!("assets/create/textures/block/special/{rest}"), bytes)?;
+            }
             if path == "assets/create/textures/entity/coupling.png" {
                 put("assets/create/textures/block/entity/coupling.png", bytes)?;
             }
@@ -785,6 +796,12 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             &serde_json::to_vec_pretty(&doc).unwrap(),
         )?;
     }
+    // The glue's world pipelines' fragment shader (`create:textured`): the sampled sprite tinted
+    // by the quad's colour, as a `position_tex_color` render type draws it. The port's own code.
+    put(
+        "assets/create/shaders/pipeline/textured.wgsl",
+        TEXTURED_SHADER.as_bytes(),
+    )?;
     let _ = fs::remove_dir_all(out);
     fs::rename(&tmp, out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut report = Map::new();

@@ -18,6 +18,7 @@ pub mod logistics;
 pub mod net;
 pub mod packages;
 pub mod persist;
+pub mod pipelines;
 pub mod processing;
 pub mod redstone;
 pub mod schematics;
