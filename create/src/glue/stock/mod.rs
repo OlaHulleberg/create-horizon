@@ -10,9 +10,12 @@
 //! looked at on their interval only.
 //!
 //! Screens: the stock keeper's request screen (`keeper`: a mob seated beside a ticker, or a
-//! blaze burner beside it, is clicked) and the redstone requester's (`requester`). Factory gauges
-//! (`gauge`: four panels a block, their value boxes, joining and the production requests;
-//! `gauge_screen`, `gauge_client`). The ticker's category editor is not ported.
+//! blaze burner beside it, is clicked), the ticker's category editor (`categories`: the ticker
+//! itself is clicked while it has a keeper) and the redstone requester's (`requester`). Factory
+//! gauges (`gauge`: four panels a block, their value boxes, joining and the production requests;
+//! `gauge_screen`, `gauge_client`). A locked network (`LogisticsNetwork.locked`, set from the
+//! keeper's screen by its owner) is used by its owner only: keepers, tickers, requesters and
+//! linking items say so to anyone else.
 //!
 //! The overworld's saved networks are read at its first tick (an attachment is reached through
 //! a level's own host): a link whose column loaded before then is not counted as unloaded.
