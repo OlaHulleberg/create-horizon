@@ -31,6 +31,7 @@ pub const PARTIALS: &[&str] = &[
     "part_andesite_door_fold_right",
     "part_arm_base",
     "part_arm_claw_base",
+    "part_arm_claw_base_goggles",
     "part_arm_cog",
     "part_arm_lower_body",
     "part_arm_lower_claw_grip",

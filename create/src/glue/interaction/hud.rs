@@ -24,7 +24,16 @@ pub(super) fn value_tip(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
         .level(host.dimension())
         .and_then(|l| l.game_time(host))
         .unwrap_or(0);
-    let Some((pos, title)) = board::hovered_box(host) else {
+    // A factory gauge's panel shows its own label, stock and tips (`FactoryPanelBehaviour`).
+    let gauge = crate::glue::stock::gauge_client::hover_lines(host);
+    let hovered = match &gauge {
+        Some(_) => match host.crosshair_target() {
+            Some(CrosshairTarget::Block { pos, .. }) => Some(([pos.x, pos.y, pos.z], "")),
+            _ => None,
+        },
+        None => board::hovered_box(host),
+    };
+    let Some((pos, title)) = hovered else {
         TIP.set(None);
         return;
     };
@@ -45,7 +54,7 @@ pub(super) fn value_tip(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
     let hint = host
         .translate("create.gui.value_settings.hold_to_edit")
         .unwrap_or_else(|| "Click and hold to edit".into());
-    let lines = [(title.to_owned(), 0xFB_DC7D), (hint, 0xFF_FFFF)];
+    let lines = gauge.unwrap_or_else(|| vec![(title.to_owned(), 0xFB_DC7D), (hint, 0xFF_FFFF)]);
     let [width, height] = draw.size();
     let mut y = height - 75.0 - lines.len() as f32 * 12.0;
     for (text, rgb) in &lines {
@@ -317,6 +326,11 @@ pub(super) fn value_box_outline(
 ) {
     use mod_api::{RenderLevelStage, WorldDepth, WorldLine};
     if event.stage != RenderLevelStage::AfterTranslucentBlocks {
+        return;
+    }
+    let mut panel = Vec::new();
+    if crate::glue::stock::gauge_client::hover_outline(host, &mut panel) {
+        let _ = event.draw.lines(&panel);
         return;
     }
     let Some((pos, side, slot)) = super::board::hovered_slot(host) else {

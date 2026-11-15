@@ -10,13 +10,16 @@
 //! looked at on their interval only.
 //!
 //! Screens: the stock keeper's request screen (`keeper`: a mob seated beside a ticker, or a
-//! blaze burner beside it, is clicked) and the redstone requester's (`requester`). The ticker's
-//! category editor and the factory gauge's screens and connections are not ported: gauges are
-//! still set with `/create_debug gauge`, `gauge_connect` and `gauge_craft`.
+//! blaze burner beside it, is clicked) and the redstone requester's (`requester`). Factory gauges
+//! (`gauge`: four panels a block, their value boxes, joining and the production requests;
+//! `gauge_screen`, `gauge_client`). The ticker's category editor is not ported.
 //!
 //! The overworld's saved networks are read at its first tick (an attachment is reached through
 //! a level's own host): a link whose column loaded before then is not counted as unloaded.
 
+mod gauge;
+pub(crate) mod gauge_client;
+mod gauge_screen;
 pub(crate) mod keeper;
 mod requester;
 
@@ -31,7 +34,7 @@ use create_engine::Block;
 use create_engine::kinetics::Dir;
 use create_engine::steam::Face;
 use create_engine::stock::{
-    self as st, GaugeStep, LevelNetworks, Network, Order, OrderData, Ownership, Panel, Promises,
+    self as st, LevelNetworks, Network, Order, OrderData, Ownership, Panel, PanelPos, Promises,
     RequestType, Requester, SavedNetwork, Source, Summary, Trigger,
 };
 use mod_api::{
@@ -130,10 +133,16 @@ struct Net {
     links: HashMap<[i32; 3], Link>,
     tickers: HashMap<[i32; 3], Ticker>,
     requesters: HashMap<[i32; 3], Req>,
-    /// Factory gauges (one panel each; network 0: none set).
-    gauges: HashMap<[i32; 3], Panel<Key>>,
-    /// Gauges with an item, and the tick each is looked at next; the earliest of them.
-    due: HashMap<[i32; 3], u64>,
+    /// Factory gauges' active panels (network 0: none set).
+    gauges: HashMap<PanelPos, Panel<Key>>,
+    /// Panels with an item, and the tick each is looked at next; the earliest of them.
+    due: HashMap<PanelPos, u64>,
+    /// Gauges whose panels changed, sent to their clients in the level's tick.
+    redraw: Vec<[i32; 3]>,
+    /// Each panel's next request (`tickRequests`' timer).
+    timers: HashMap<PanelPos, u64>,
+    /// How often each panel's bulb lit up (`sendEffect`), for its clients.
+    flashes: HashMap<PanelPos, u32>,
     next: u64,
     /// `LogisticsNetwork.panelPromises`.
     promises: HashMap<Network, Promises<Key>>,
@@ -325,15 +334,25 @@ fn block_moved(
         Some(Block::RedstoneRequester) => with(dim, |n| {
             n.requesters.remove(&pos);
         }),
-        // `FactoryPanelBehaviour.disconnectAll`.
-        Some(Block::FactoryGauge) => with(dim, |n| {
-            n.gauges.remove(&pos);
-            n.due.remove(&pos);
-            for g in n.gauges.values_mut() {
-                g.inputs.retain(|i| i.0 != pos);
-                g.outputs.retain(|o| *o != pos);
+        // `FactoryPanelBlockEntity.destroy` (its other panels' gauges dropped) and each
+        // panel's `disconnectAll`.
+        Some(Block::FactoryGauge) => {
+            let extra = gauge::extra_drops(dim, pos);
+            if extra > 0
+                && let Some(stack) =
+                    body::new_stack(&*lv.host, "create:factory_gauge", extra as u32)
+            {
+                let at = pos.map(|v| f64::from(v) + 0.5);
+                let _ = lv
+                    .level
+                    .spawn_item(&mut *lv.host, at[0], at[1], at[2], stack, 10);
             }
-        }),
+            with(dim, |n| {
+                for slot in create_engine::factory::SLOTS {
+                    gauge::remove_panel(n, (pos, slot));
+                }
+            })
+        }
         _ => {}
     }
     match is {
@@ -349,8 +368,8 @@ fn block_moved(
         Some(Block::RedstoneRequester) => with(dim, |n| {
             n.requesters.insert(pos, Req::default());
         }),
+        // Its panels are added by the item that placed it (`setPlacedBy`).
         Some(Block::FactoryGauge) => with(dim, |n| {
-            n.gauges.insert(pos, Panel::new(0));
             n.neighbours.push(pos);
         }),
         _ => {}
@@ -434,6 +453,59 @@ impl Subsystem for Stock {
             let key = r.item_key(item);
             r.item_part(key, StockItem);
         }
+        if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, gauge_client::GaugeDraw)
+        {
+            crate::create_log!("[create] the factory gauge's drawing part was refused: {e:?}");
+        }
+    }
+
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[gauge::PANELS]
+    }
+
+    fn standalone_models(&self, models: &mut Vec<String>) {
+        models.extend(gauge_client::MODELS.iter().map(|m| (*m).to_owned()));
+        models.extend(gauge_client::SEGMENTS.iter().map(|m| (*m).to_owned()));
+    }
+
+    fn render_level_stage(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        gauge_client::render_level_stage(host, event);
+    }
+
+    /// `FactoryPanelBlock.onSneakWrenched`: one panel off.
+    fn wrench_used(
+        &self,
+        lv: &mut ServerLevel<'_>,
+        player: mod_api::PlayerRef,
+        pos: [i32; 3],
+        block: Block,
+        _clicked: Dir,
+        point: [f64; 3],
+        sneaking: bool,
+    ) -> bool {
+        block == Block::FactoryGauge && sneaking && gauge::sneak_wrenched(lv, player, pos, point)
+    }
+
+    /// `FactoryPanelBlock.onDestroyedByPlayer`: one panel of several broken.
+    fn break_block(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::BreakBlockEvent<'_>,
+    ) -> Flow {
+        if event.cancelled
+            || states::id(event.state).and_then(block_of) != Some(Block::FactoryGauge)
+        {
+            return Flow::Continue;
+        }
+        if gauge::break_sub_panel(host, event.pos) {
+            return Flow::Cancel;
+        }
+        Flow::Continue
     }
 
     fn client_message(
@@ -444,6 +516,7 @@ impl Subsystem for Stock {
         data: &[u8],
     ) -> bool {
         match channel {
+            gauge_screen::CHANNEL => gauge_screen::client_message(host, player, data),
             keeper::CHANNEL => keeper::client_message(host, player, data),
             requester::CHANNEL => requester::client_message(host, player, data),
             _ => return false,
@@ -459,16 +532,21 @@ impl Subsystem for Stock {
     ) -> bool {
         keeper::server_message(host, channel, data)
             || requester::server_message(host, channel, data)
+            || gauge_screen::server_message(host, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
         keeper::tick(host);
         requester::tick(host);
+        gauge_screen::tick(host);
+        gauge_client::tick(host);
     }
 
     fn client_reset(&self) {
         keeper::reset();
         requester::reset();
+        gauge_screen::reset();
+        gauge_client::reset();
     }
 
     fn screen_render_post(
@@ -478,6 +556,7 @@ impl Subsystem for Stock {
     ) {
         keeper::screen_render_post(host, event);
         requester::screen_render_post(host, event);
+        gauge_screen::screen_render_post(host, event);
     }
 
     fn screen_mouse_pressed(
@@ -485,7 +564,9 @@ impl Subsystem for Stock {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenMouseButtonPressedPreEvent<'_>,
     ) -> Flow {
-        if keeper::screen_mouse_pressed(host, event) == Flow::Cancel {
+        if keeper::screen_mouse_pressed(host, event) == Flow::Cancel
+            || gauge_screen::screen_mouse_pressed(host, event) == Flow::Cancel
+        {
             return Flow::Cancel;
         }
         requester::screen_mouse_pressed(host, event)
@@ -496,7 +577,9 @@ impl Subsystem for Stock {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenMouseScrolledPreEvent<'_>,
     ) -> Flow {
-        if keeper::screen_mouse_scrolled(host, event) == Flow::Cancel {
+        if keeper::screen_mouse_scrolled(host, event) == Flow::Cancel
+            || gauge_screen::screen_mouse_scrolled(host, event) == Flow::Cancel
+        {
             return Flow::Cancel;
         }
         requester::screen_mouse_scrolled(host, event)
@@ -507,7 +590,9 @@ impl Subsystem for Stock {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
-        if keeper::screen_key_pressed(host, event) == Flow::Cancel {
+        if keeper::screen_key_pressed(host, event) == Flow::Cancel
+            || gauge_screen::screen_key_pressed(host, event) == Flow::Cancel
+        {
             return Flow::Cancel;
         }
         requester::screen_key_pressed(host, event)
@@ -518,7 +603,9 @@ impl Subsystem for Stock {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::ScreenCharTypedPreEvent<'_>,
     ) -> Flow {
-        if keeper::screen_char_typed(host, event) == Flow::Cancel {
+        if keeper::screen_char_typed(host, event) == Flow::Cancel
+            || gauge_screen::screen_char_typed(host, event) == Flow::Cancel
+        {
             return Flow::Cancel;
         }
         requester::screen_char_typed(host, event)
@@ -531,6 +618,7 @@ impl Subsystem for Stock {
     ) {
         keeper::screen_closing(host, event);
         requester::screen_closing(host, event);
+        gauge_screen::screen_closing(host, event);
     }
 
     /// `StockTickerInteractionHandler.interactWithLogisticsManager`: a mob seated beside a
@@ -565,9 +653,27 @@ impl Subsystem for Stock {
         host: mod_api::HostSide,
         event: &mut mod_api::RightClickBlockEvent<'_>,
     ) -> Flow {
-        let mod_api::HostSide::Server(host) = host else {
-            return Flow::Continue;
+        let host = match host {
+            mod_api::HostSide::Server(host) => host,
+            mod_api::HostSide::Client(host) => {
+                // `FactoryPanelConnectionHandler.onRightClick`: a click off the panels.
+                let click = event.click;
+                let sneaking = host
+                    .player(click.player)
+                    .is_some_and(|p| super::items::sneaking(&*host, p));
+                if click.hand == mod_api::Hand::Main
+                    && gauge_client::hit(&*host, click.pos, click.hit.point).is_none()
+                    && gauge_client::right_click_off_panel(host, click.pos, sneaking)
+                {
+                    *event.cancellation_result = InteractionResult::Success;
+                    return Flow::Cancel;
+                }
+                return Flow::Continue;
+            }
         };
+        if gauge::right_click(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
         let click = event.click;
         if click.hand != mod_api::Hand::Main
             || click
@@ -718,9 +824,9 @@ impl Subsystem for Stock {
                     "stock" => Ok(describe(&mut lv, dim, pos)),
                     "order" => order(&mut lv, dim, pos, &args),
                     "requester" => set_requester(&lv, dim, pos, &args),
-                    "gauge" => set_gauge(&lv, dim, pos, &args),
-                    "gauge_connect" => connect(dim, pos, &args, here),
-                    _ => set_craft(&lv, dim, pos, &args),
+                    "gauge" => gauge::set_gauge(&lv, dim, pos, &args),
+                    "gauge_connect" => gauge::connect_command(dim, pos, &args, here),
+                    _ => gauge::set_craft(&lv, dim, pos, &args),
                 };
                 result.unwrap_or_else(|e| e)
             }
@@ -836,10 +942,23 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             }
             // `FactoryPanelBlockEntity.lazyTick`: a restocker while a packager is behind it.
             Some(Block::FactoryGauge) => {
+                if with(dim, |n| gauge::panels_at(n, pos).is_empty()) {
+                    lv.destroy_block(pos, false);
+                    continue;
+                }
                 let restocker = restocked(lv, pos).is_some();
                 with(dim, |n| {
-                    if let Some(g) = n.gauges.get_mut(&pos) {
-                        g.restocker = restocker;
+                    let mut changed = false;
+                    for slot in create_engine::factory::SLOTS {
+                        if let Some(g) = n.gauges.get_mut(&(pos, slot))
+                            && g.restocker != restocker
+                        {
+                            g.restocker = restocker;
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        n.redraw.push(pos);
                     }
                 });
             }
@@ -848,8 +967,8 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     }
     let now = now(lv);
     if with(dim, |n| !n.due.is_empty() && now >= n.next) {
-        let due: Vec<[i32; 3]> = with(dim, |n| {
-            let mut v: Vec<[i32; 3]> = n
+        let due: Vec<PanelPos> = with(dim, |n| {
+            let mut v: Vec<PanelPos> = n
                 .due
                 .iter()
                 .filter(|(_, t)| **t <= now)
@@ -858,11 +977,9 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             v.sort_unstable();
             v
         });
-        for pos in due {
-            with(dim, |n| {
-                n.due.insert(pos, now + u64::from(st::GAUGE_INTERVAL))
-            });
-            look_gauge(lv, dim, pos, now);
+        for pp in due {
+            with(dim, |n| n.due.insert(pp, now + st::SUMMARY_TICKS));
+            gauge::look(lv, dim, pp, now);
         }
         with(dim, |n| {
             n.next = n.due.values().copied().min().unwrap_or(u64::MAX)
@@ -879,6 +996,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             );
         }
     }
+    gauge::send_redraws(lv);
     let unsaved = with(dim, |n| {
         let mut u = std::mem::take(&mut n.unsaved);
         u.sort_unstable();
@@ -911,12 +1029,14 @@ fn packager_stock(
         let at = add(packager, d.offset());
         match connected(lv, at) {
             Some((Block::FactoryGauge, c)) if c == d => with(dim, |n| {
-                if let Some(g) = n.gauges.get_mut(&at)
-                    && g.restocker
-                    && g.filter.is_some()
-                {
-                    for (k, a) in &arrived {
-                        g.restocker_promises.arrived(k, *a);
+                for slot in create_engine::factory::SLOTS {
+                    if let Some(g) = n.gauges.get_mut(&(at, slot))
+                        && g.restocker
+                        && g.filter.is_some()
+                    {
+                        for (k, a) in &arrived {
+                            g.restocker_promises.arrived(k, *a);
+                        }
                     }
                 }
             }),
@@ -1113,161 +1233,6 @@ fn trigger_requester(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
     }
 }
 
-/// A gauge looked at (`tickStorageMonitor`, `tickRequests`).
-fn look_gauge(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3], now: u64) {
-    let Some(mut panel) = with(dim, |n| n.gauges.get(&pos).cloned()) else {
-        return;
-    };
-    let Some(item) = panel.filter.clone() else {
-        return;
-    };
-    let max = body::stack_limit(&*lv.host, &item.0);
-    let packager = if panel.restocker {
-        restocked(lv, pos)
-    } else {
-        None
-    };
-    let unloaded = if panel.restocker {
-        u32::from(packager.is_none())
-    } else {
-        with(dim, |n| n.unloaded.get(&panel.network).map_or(0, Vec::len)) as u32
-    };
-    let in_storage = if panel.restocker {
-        packager.map_or(0, |p| packager_stock(lv, dim, p).0.count_of(&item))
-    } else {
-        network_stock(lv, dim, panel.network, false).count_of(&item)
-    };
-    let expiry = panel.promise_expiry();
-    let promised = if panel.restocker {
-        panel.restocker_promises.total(&item, expiry, now)
-    } else {
-        with(dim, |n| {
-            n.promises.get_mut(&panel.network).map_or(0, |p| {
-                let before = p.list.len();
-                let total = p.total(&item, expiry, now);
-                if p.list.len() != before {
-                    mark_dirty();
-                }
-                total
-            })
-        })
-    };
-    let step = panel.look(max, in_storage, promised, unloaded);
-    let (net, address) = (panel.network, panel.recipe_address.clone());
-    with(dim, |n| {
-        if let Some(g) = n.gauges.get_mut(&pos) {
-            *g = panel.clone();
-        }
-    });
-    match step {
-        GaugeStep::Idle => {}
-        // `tryRestock`.
-        GaugeStep::Restock { item, demand } => {
-            let Some(p) = packager else { return };
-            let Some(inv) = packages::available(lv, dim, p).1 else {
-                return;
-            };
-            let available: i32 = sources(lv, dim, net, Some(inv))
-                .iter()
-                .filter(|s| s.packager.is_some())
-                .map(|s| s.stock.count_of(&item))
-                .sum();
-            if available == 0 {
-                return;
-            }
-            let amount = st::restock_amount(demand, promised, in_storage, max, available);
-            let order = Order::simple(vec![(item.clone(), amount)]);
-            if broadcast(
-                lv,
-                dim,
-                net,
-                RequestType::Restock,
-                &order,
-                Some(inv),
-                &address,
-            ) {
-                with(dim, |n| {
-                    if let Some(g) = n.gauges.get_mut(&pos) {
-                        g.restocker_promises.add(item, amount, now);
-                    }
-                });
-            }
-        }
-        GaugeStep::Request => request_inputs(lv, dim, &panel, now),
-    }
-}
-
-/// `tickRequests` of a gauge fed by others: what each asks for, from its network, all or none.
-fn request_inputs(lv: &mut ServerLevel<'_>, dim: usize, panel: &Panel<Key>, now: u64) {
-    let groups = with(dim, |n| {
-        st::consolidate(&panel.inputs, |p| {
-            n.gauges.get(&p).map(|g| (g.network, g.filter.clone()))
-        })
-    });
-    let Some(groups) = groups else { return };
-    let mut failed = false;
-    let mut wanted: Vec<(Network, Vec<(Key, u32)>)> = Vec::new();
-    for (net, items) in groups {
-        let stock = network_stock(lv, dim, net, true);
-        let mut list = Vec::new();
-        for (item, total) in items {
-            match item {
-                Some(k) if total > 0 && stock.count_of(&k) >= total as i32 => list.push((k, total)),
-                _ => failed = true,
-            }
-        }
-        wanted.push((net, list));
-    }
-    if failed {
-        return;
-    }
-    let crafts = if panel.craft.is_empty() {
-        Vec::new()
-    } else {
-        vec![(panel.craft.iter().map(|k| (k.clone(), 1)).collect(), 1)]
-    };
-    let mut all = Vec::new();
-    for (net, stacks) in wanted {
-        let order = Order {
-            stacks,
-            crafts: crafts.clone(),
-        };
-        let srcs = sources(lv, dim, net, None);
-        let time = lv.game_time();
-        let order_id = next_int(time);
-        let r = st::find_packagers(&srcs, &order, &panel.recipe_address, order_id, |n| {
-            (next_int(time) as u32 % n.max(1) as u32) as usize
-        });
-        all.push(st::by_packager(r));
-    }
-    if all
-        .iter()
-        .flatten()
-        .any(|(p, _)| packages::too_busy(dim, *p, RequestType::Restock))
-    {
-        return;
-    }
-    for g in all {
-        perform(lv, dim, g);
-    }
-    // The output promised to the gauge's network (`getQueuedPromises`: a network with links).
-    let Some(item) = panel.filter.clone() else {
-        return;
-    };
-    let known = with(dim, |n| {
-        n.links.values().any(|l| l.network == Some(panel.network))
-    });
-    if known {
-        with(dim, |n| {
-            n.promises
-                .entry(panel.network)
-                .or_default()
-                .add(item, panel.recipe_output, now)
-        });
-        mark_dirty();
-    }
-}
-
 /// `getAnalogOutputSignal` of a redstone requester: whether its last request went out. None
 /// for anything else.
 fn requester_succeeded(dim: usize, pos: [i32; 3]) -> Option<bool> {
@@ -1290,6 +1255,9 @@ impl BlockPart for StockBlock {
         host: &mut dyn ServerHost,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        if states::id(event.state).and_then(block_of) == Some(Block::FactoryGauge) {
+            return gauge::use_item_on(host, event.click);
+        }
         let linking = event.click.stack.is_some_and(|s| {
             matches!(
                 s.item().id(&*host).as_str(),
@@ -1509,6 +1477,17 @@ fn tune(
     Some(())
 }
 
+/// `LogisticallyLinkedBlockItem`s.
+fn linked_item(id: &str) -> bool {
+    matches!(
+        id,
+        "create:stock_link"
+            | "create:stock_ticker"
+            | "create:factory_gauge"
+            | "create:redstone_requester"
+    )
+}
+
 fn linked_block(b: Block) -> bool {
     matches!(
         b,
@@ -1529,6 +1508,14 @@ impl ItemPart for StockItem {
             return;
         };
         place_block(&mut lv, event.pos);
+        if block_at(&lv, event.pos) == Some(Block::FactoryGauge) {
+            gauge::placed(&mut lv, event.pos, event.click, tuned(event.stack));
+            let _ = player.action_bar(
+                &mut *lv.host,
+                mod_api::Text::translate("create.logistically_linked.connected", Vec::new()),
+            );
+            return;
+        }
         // `RedstoneRequesterBlock.setPlacedBy`.
         if let Some(r) = programmed(&*lv.host, event.stack) {
             PROGRAMMED.with_borrow_mut(|p| p.push((lv.dim, event.pos, r)));
@@ -1560,8 +1547,14 @@ impl ItemPart for StockItem {
                 let state = host
                     .level(host.dimension())?
                     .block_state(&*host, event.pos)?;
-                let b = states::id(state).and_then(block_of)?;
-                linked_block(b).then_some(InteractionResult::Success)
+                let b = states::id(state).and_then(block_of);
+                if b.is_some_and(linked_block) {
+                    return Some(InteractionResult::Success);
+                }
+                // `FactoryPanelBlockItem.place`: an untuned gauge is refused.
+                (event.stack.item().id(&*host) == "create:factory_gauge"
+                    && tuned(event.stack).is_none())
+                .then_some(InteractionResult::Fail)
             }
             mod_api::HostSide::Server(host) => {
                 let player = host.player(event.player)?;
@@ -1570,7 +1563,13 @@ impl ItemPart for StockItem {
                 }
                 let dimension = player.dimension(&*host)?.to_string();
                 let lv = ServerLevel::new(host, &dimension)?;
-                if !linked_block(block_at(&lv, event.pos)?) {
+                if !block_at(&lv, event.pos).is_some_and(linked_block) {
+                    if event.stack.item().id(&*lv.host) == "create:factory_gauge"
+                        && tuned(event.stack).is_none()
+                    {
+                        gauge::refuse_untuned(host, player, event.pos);
+                        return Some(InteractionResult::Fail);
+                    }
                     return None;
                 }
                 tune(host, player, event.hand, event.stack.clone(), event.pos);
@@ -1694,7 +1693,16 @@ fn set_network(
             Some(Block::RedstoneRequester) => {
                 n.requesters.get_mut(&pos).map(|r| r.network = Some(net))
             }
-            Some(Block::FactoryGauge) => n.gauges.get_mut(&pos).map(|g| g.network = net),
+            Some(Block::FactoryGauge) => {
+                let mut any = None;
+                for slot in create_engine::factory::SLOTS {
+                    if let Some(g) = n.gauges.get_mut(&(pos, slot)) {
+                        g.network = net;
+                        any = Some(());
+                    }
+                }
+                any
+            }
             _ => None,
         };
         n.unsaved.push((pos[0] >> 4, pos[2] >> 4));
@@ -1716,7 +1724,12 @@ fn network_at(dim: usize, pos: [i32; 3]) -> Option<Network> {
             .and_then(|l| l.network)
             .or_else(|| n.tickers.get(&pos).and_then(|t| t.network))
             .or_else(|| n.requesters.get(&pos).and_then(|r| r.network))
-            .or_else(|| n.gauges.get(&pos).map(|g| g.network).filter(|n| *n != 0))
+            .or_else(|| {
+                create_engine::factory::SLOTS
+                    .iter()
+                    .find_map(|s| n.gauges.get(&(pos, *s)).map(|g| g.network))
+                    .filter(|n| *n != 0)
+            })
     })
 }
 
@@ -1724,28 +1737,8 @@ fn network_at(dim: usize, pos: [i32; 3]) -> Option<Network> {
 fn describe(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) -> String {
     let host: &dyn mod_api::Host = &*lv.host;
     let id = |k: &Key| body::item_id(host, &k.0);
-    if let Some(g) = with(dim, |n| n.gauges.get(&pos).cloned()) {
-        let inputs: Vec<String> = g.inputs.iter().map(|(p, a)| format!("{p:?}x{a}")).collect();
-        return format!(
-            "gauge {} x{}{} address=\"{}\" network={} restocker={} satisfied={} promised_satisfied={} waiting={} level={} promised={} inputs=[{}] output={}",
-            g.filter.as_ref().map_or("-".to_owned(), id),
-            g.count,
-            if g.up_to { "" } else { " stacks" },
-            g.recipe_address,
-            if g.network == 0 {
-                "-".to_owned()
-            } else {
-                st::network_text(g.network)
-            },
-            g.restocker,
-            g.satisfied,
-            g.promised_satisfied,
-            g.waiting,
-            g.last_level,
-            g.last_promised,
-            inputs.join(", "),
-            g.recipe_output,
-        );
+    if let Some(line) = gauge::describe(host, dim, pos) {
+        return line;
     }
     if let Some(r) = with(dim, |n| n.requesters.get(&pos).cloned()) {
         return format!(
@@ -1840,116 +1833,6 @@ fn set_requester(
     .ok_or_else(|| "no redstone requester there".into())
 }
 
-/// The gauge's item, amount and address: `<item|-> <count> <items|stacks> [address]`.
-fn set_gauge(
-    lv: &ServerLevel<'_>,
-    dim: usize,
-    pos: [i32; 3],
-    args: &[&str],
-) -> Result<String, String> {
-    let usage = "usage: create_debug gauge <x y z> <item|-> <count> <items|stacks> [address]";
-    let [item, count, mode, address @ ..] = args else {
-        return Err(usage.into());
-    };
-    let filter = if *item == "-" {
-        None
-    } else {
-        Some(item_of(lv, item).ok_or_else(|| format!("no item {item}"))?)
-    };
-    let count: u32 = count.parse().map_err(|_| usage.to_owned())?;
-    let up_to = match *mode {
-        "items" => true,
-        "stacks" => false,
-        _ => return Err(usage.into()),
-    };
-    let address = address.join(" ");
-    let now = now(lv);
-    let restocker = restocked(lv, pos).is_some();
-    with(dim, |n| {
-        let g = n.gauges.get_mut(&pos)?;
-        g.filter = filter;
-        g.count = count;
-        g.up_to = up_to;
-        g.recipe_address = address.clone();
-        g.restocker = restocker;
-        if g.filter.is_some() {
-            // Its timer starts at 0: looked at the next tick.
-            n.due.insert(pos, now);
-            n.next = n.next.min(now);
-        } else {
-            n.due.remove(&pos);
-        }
-        n.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-        Some(format!("gauge {item} x{count} {mode} to \"{address}\""))
-    })
-    .ok_or_else(|| "no factory gauge there".into())
-}
-
-/// `FactoryPanelBehaviour.addConnection`: the gauge at `from` feeds the one at `to` (at most
-/// nine; never a restocker), asking `amount`.
-fn connect(dim: usize, from: [i32; 3], args: &[&str], here: [f64; 3]) -> Result<String, String> {
-    let usage = "usage: create_debug gauge_connect <from x y z> <to x y z> [amount]";
-    let to = coords(args, Some(here)).ok_or_else(|| usage.to_owned())?;
-    let amount = match args.get(3) {
-        Some(a) => a.parse::<u32>().map_err(|_| usage.to_owned())?,
-        None => 1,
-    };
-    with(dim, |n| {
-        if !n.gauges.contains_key(&from) || from == to {
-            return Err("no factory gauge to connect from".into());
-        }
-        let g = n
-            .gauges
-            .get_mut(&to)
-            .ok_or("no factory gauge to connect to")?;
-        if g.restocker {
-            return Err("a restocking gauge takes no inputs".into());
-        }
-        match g.inputs.iter().position(|i| i.0 == from) {
-            Some(i) => g.inputs[i].1 = amount,
-            None if g.inputs.len() >= st::MAX_INPUTS => return Err("nine inputs already".into()),
-            None => g.inputs.push((from, amount)),
-        }
-        if let Some(f) = n.gauges.get_mut(&from)
-            && !f.outputs.contains(&to)
-        {
-            f.outputs.push(to);
-        }
-        n.unsaved.push((to[0] >> 4, to[2] >> 4));
-        n.unsaved.push((from[0] >> 4, from[2] >> 4));
-        Ok(format!("gauge {from:?} feeds {to:?} x{amount}"))
-    })
-}
-
-/// The gauge's recipe: `<output count> [item...]` (`recipeOutput`, `activeCraftingArrangement`).
-fn set_craft(
-    lv: &ServerLevel<'_>,
-    dim: usize,
-    pos: [i32; 3],
-    args: &[&str],
-) -> Result<String, String> {
-    let usage = "usage: create_debug gauge_craft <x y z> <output count> [item...]";
-    let Some((count, items)) = args.split_first() else {
-        return Err(usage.into());
-    };
-    let output: u32 = count.parse().map_err(|_| usage.to_owned())?;
-    if items.len() > create_engine::package::SLOTS {
-        return Err("nine items at most".into());
-    }
-    let craft = items
-        .iter()
-        .map(|w| item_of(lv, w).ok_or_else(|| format!("no item {w}")))
-        .collect::<Result<Vec<_>, _>>()?;
-    with(dim, |n| {
-        let g = n.gauges.get_mut(&pos)?;
-        g.recipe_output = output.max(1);
-        g.craft = craft;
-        n.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-        Some(format!("gauge makes {output} from {} items", items.len()))
-    })
-    .ok_or_else(|| "no factory gauge there".into())
-}
-
 const KEY: &str = "create_stock";
 
 fn freq(net: Option<Network>) -> Tag {
@@ -2016,72 +1899,7 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                     ])
                 })
                 .collect();
-        let gauges: Vec<Tag> = sorted(n.gauges.keys().filter(|p| inside(p)).copied().collect())
-            .into_iter()
-            .map(|p| {
-                let g = &n.gauges[&p];
-                let mut c = vec![
-                    ("Pos", pos_tag(p)),
-                    ("Freq", freq((g.network != 0).then_some(g.network))),
-                    (
-                        "Settings",
-                        Tag::IntArray(vec![
-                            g.count as i32,
-                            i32::from(g.up_to),
-                            g.recipe_output as i32,
-                            g.promise_clearing,
-                            i32::from(g.restocker),
-                            i32::from(g.satisfied),
-                            i32::from(g.promised_satisfied),
-                            i32::from(g.waiting),
-                        ]),
-                    ),
-                    (
-                        "RecipeAddress",
-                        Tag::String(g.recipe_address.as_str().into()),
-                    ),
-                    (
-                        "TargetedBy",
-                        Tag::IntArray(
-                            g.inputs
-                                .iter()
-                                .flat_map(|(p, a)| [p[0], p[1], p[2], *a as i32])
-                                .collect(),
-                        ),
-                    ),
-                    (
-                        "Targeting",
-                        Tag::IntArray(g.outputs.iter().flatten().copied().collect()),
-                    ),
-                    (
-                        "Craft",
-                        Tag::List(g.craft.iter().map(|k| body::to_nbt(host, &k.0)).collect()),
-                    ),
-                ];
-                if let Some(f) = &g.filter {
-                    c.push(("Filter", body::to_nbt(host, &f.0)));
-                }
-                if !g.restocker_promises.is_empty() {
-                    // `RequestPromise`: the stack, its count and age.
-                    let list = g
-                        .restocker_promises
-                        .list
-                        .iter()
-                        .map(|(k, n, at)| {
-                            Tag::compound([
-                                ("Item", body::to_nbt(host, &k.0)),
-                                (
-                                    "Count",
-                                    Tag::IntArray(vec![*n as i32, now.saturating_sub(*at) as i32]),
-                                ),
-                            ])
-                        })
-                        .collect();
-                    c.push(("Promises", Tag::List(list)));
-                }
-                Tag::compound(c)
-            })
-            .collect();
+        let gauges = gauge::save(host, n, now, &inside);
         (links, tickers, requesters, gauges)
     });
     let (links, tickers, requesters, gauges) = lists;
@@ -2155,63 +1973,7 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
                 },
             );
         }
-        for c in list(data, "gauges") {
-            let Some(pos) = pos_of(&c) else { continue };
-            let mut g = Panel::new(net_of(&c).unwrap_or(0));
-            let s = ints(c.get(&"Settings".into()));
-            let at = |i: usize| s.get(i).copied().unwrap_or(0);
-            g.count = at(0).max(0) as u32;
-            g.up_to = at(1) != 0;
-            g.recipe_output = at(2).max(1) as u32;
-            g.promise_clearing = if s.len() > 3 { at(3) } else { -1 };
-            g.restocker = at(4) != 0;
-            g.satisfied = at(5) != 0;
-            g.promised_satisfied = at(6) != 0;
-            g.waiting = at(7) != 0;
-            g.recipe_address = text(c.get(&"RecipeAddress".into()));
-            g.inputs = ints(c.get(&"TargetedBy".into()))
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|v| ([v[0], v[1], v[2]], v[3].max(0) as u32))
-                .collect();
-            g.outputs = ints(c.get(&"Targeting".into()))
-                .as_chunks::<3>()
-                .0
-                .iter()
-                .map(|v| [v[0], v[1], v[2]])
-                .collect();
-            if let Some(Tag::List(l)) = c.get(&"Craft".into()) {
-                g.craft = l
-                    .iter()
-                    .filter_map(|t| body::from_nbt(host, t))
-                    .map(|s| Key::of(&s))
-                    .collect();
-            }
-            g.filter = c
-                .get(&"Filter".into())
-                .and_then(|t| body::from_nbt(host, t))
-                .map(|s| Key::of(&s));
-            if let Some(Tag::List(l)) = c.get(&"Promises".into()) {
-                for t in l {
-                    let Tag::Compound(e) = t else { continue };
-                    let Some(item) = e.get(&"Item".into()).and_then(|t| body::from_nbt(host, t))
-                    else {
-                        continue;
-                    };
-                    let v = ints(e.get(&"Count".into()));
-                    let count = v.first().copied().unwrap_or(0).max(0) as u32;
-                    let age = v.get(1).copied().unwrap_or(0).max(0) as u64;
-                    g.restocker_promises
-                        .add(Key::of(&item), count, now.saturating_sub(age));
-                }
-            }
-            if g.filter.is_some() {
-                n.due.insert(pos, now);
-                n.next = n.next.min(now);
-            }
-            n.gauges.insert(pos, g);
-        }
+        gauge::load(host, n, now, &list(data, "gauges"));
     });
 }
 
@@ -2237,8 +1999,8 @@ fn chunk_unload(dim: usize, chunk: [i32; 2]) {
         }
         n.tickers.retain(|p, _| !inside(p));
         n.requesters.retain(|p, _| !inside(p));
-        n.gauges.retain(|p, _| !inside(p));
-        n.due.retain(|p, _| !inside(p));
+        n.gauges.retain(|p, _| !inside(&p.0));
+        n.due.retain(|p, _| !inside(&p.0));
         n.last.retain(|p, _| !inside(p));
     });
 }

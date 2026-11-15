@@ -791,8 +791,34 @@ pub enum GaugeStep<K> {
     Request,
 }
 
-/// `FactoryPanelBehaviour` (one panel per gauge): an item kept at `count` (items, or stacks
-/// unless `up_to`) in its network.
+/// `FactoryPanelPosition`: a gauge's block and one of its four panels (`PanelSlot`'s ordinal,
+/// `factory::SLOTS`).
+pub type PanelPos = ([i32; 3], u8);
+
+/// `FactoryPanelConnection`: the panel feeding one, the amount it asks of it, and its arrow's
+/// bend (`arrowBendMode`, -1 for the first that fits).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Input {
+    pub from: PanelPos,
+    pub amount: u32,
+    pub bend: i32,
+    /// Whether its item was there at the last request (`FactoryPanelConnection.success`).
+    pub success: bool,
+}
+
+impl Input {
+    pub fn new(from: PanelPos, amount: u32) -> Self {
+        Input {
+            from,
+            amount,
+            bend: -1,
+            success: true,
+        }
+    }
+}
+
+/// `FactoryPanelBehaviour` (one of a gauge's four panels): an item kept at `count` (items, or
+/// stacks unless `up_to`) in its network.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Panel<K> {
     pub filter: Option<K>,
@@ -801,10 +827,12 @@ pub struct Panel<K> {
     pub network: Network,
     pub recipe_address: String,
     pub recipe_output: u32,
-    /// `targetedBy`: gauges feeding this one and the amount each asks for.
-    pub inputs: Vec<([i32; 3], u32)>,
+    /// `targetedBy`: panels feeding this one and the amount each asks for.
+    pub inputs: Vec<Input>,
     /// `targeting`.
-    pub outputs: Vec<[i32; 3]>,
+    pub outputs: Vec<PanelPos>,
+    /// `redstonePowered`: a redstone link into it is powered (paused).
+    pub redstone_powered: bool,
     /// `activeCraftingArrangement`.
     pub craft: Vec<K>,
     /// `promiseClearingInterval` (-1: never, 0: 30 s, else minutes).
@@ -831,6 +859,7 @@ impl<K> Panel<K> {
             recipe_output: 1,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            redstone_powered: false,
             craft: Vec::new(),
             promise_clearing: -1,
             restocker: false,
@@ -882,7 +911,7 @@ impl<K: Clone + PartialEq> Panel<K> {
         if self.inputs.is_empty() && !self.restocker {
             return GaugeStep::Idle;
         }
-        if self.satisfied || self.promised_satisfied || self.waiting {
+        if self.satisfied || self.promised_satisfied || self.waiting || self.redstone_powered {
             return GaugeStep::Idle;
         }
         if crate::package::is_blank(&self.recipe_address) {
@@ -917,12 +946,12 @@ pub fn restock_amount(
 /// `tickRequests`' consolidation: the inputs' items by network (in the order first seen) and the
 /// total each is asked for; None when any input is not loaded or not active (the gauge waits).
 pub fn consolidate<K: Clone + PartialEq>(
-    inputs: &[([i32; 3], u32)],
-    source: impl Fn([i32; 3]) -> Option<(Network, Option<K>)>,
+    inputs: &[Input],
+    source: impl Fn(PanelPos) -> Option<(Network, Option<K>)>,
 ) -> Option<Groups<K>> {
     let mut out: Groups<K> = Vec::new();
-    for (pos, amount) in inputs {
-        let (net, item) = source(*pos)?;
+    for Input { from, amount, .. } in inputs {
+        let (net, item) = source(*from)?;
         let group = match out.iter_mut().position(|g| g.0 == net) {
             Some(i) => &mut out[i].1,
             None => {
@@ -1382,12 +1411,12 @@ mod tests {
         q.up_to = true;
         q.recipe_address = "Press".into();
         assert_eq!(q.look(64, 0, 0, 0), GaugeStep::Idle, "nothing feeds it");
-        q.inputs.push(([1, 0, 0], 2));
-        q.inputs.push(([2, 0, 0], 3));
+        q.inputs.push(Input::new(([1, 0, 0], 0), 2));
+        q.inputs.push(Input::new(([2, 0, 0], 0), 3));
         assert_eq!(q.look(64, 0, 0, 0), GaugeStep::Request);
         let c = consolidate(&q.inputs, |_| Some((7, Some("iron")))).unwrap();
         assert_eq!(c, vec![(7, vec![(Some("iron"), 5)])]);
-        let c = consolidate(&q.inputs, |p| Some((p[0] as u128, Some("iron")))).unwrap();
+        let c = consolidate(&q.inputs, |p| Some((p.0[0] as u128, Some("iron")))).unwrap();
         assert_eq!(c.len(), 2, "by network");
         assert_eq!(consolidate::<&str>(&q.inputs, |_| None), None);
     }

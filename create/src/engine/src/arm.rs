@@ -365,6 +365,8 @@ pub struct Arm {
     pub from_base: f32,
     /// The last search found nothing to do: it sleeps until woken.
     pub idle: bool,
+    /// `goggles`: put on with goggles (`ArmBlock.useItemOn`).
+    pub goggles: bool,
 }
 
 impl Arm {
@@ -992,6 +994,7 @@ pub struct Shown {
     pub pos: [i32; 3],
     pub gone: bool,
     pub ceiling: bool,
+    pub goggles: bool,
     pub phase: Phase,
     pub progress: f32,
     pub from: Option<Angles>,
@@ -1010,6 +1013,7 @@ impl Shown {
             pos,
             gone: false,
             ceiling: arm.ceiling,
+            goggles: arm.goggles,
             phase: arm.phase,
             progress: arm.progress,
             from: arm.from,
@@ -1068,6 +1072,24 @@ fn put_angles(out: &mut Vec<u8>, a: Option<Angles>) {
     }
 }
 
+/// Catnip's `Color.rainbowColor`: a hue round the wheel by `step` (1536 to a turn), as 0xRRGGBB.
+pub fn rainbow_color(step: i32) -> u32 {
+    fn in_phase(phase: i32, progress: i32) -> i32 {
+        match phase % 6 {
+            0 | 1 => 0,
+            2 => progress,
+            3 | 4 => 255,
+            _ => 255 - progress,
+        }
+    }
+    let local = step.unsigned_abs() % 1536;
+    let (progress, blue_phase) = ((local % 256) as i32, (local / 256) as i32);
+    let r = in_phase(blue_phase + 4, progress);
+    let g = in_phase(blue_phase + 2, progress);
+    let b = in_phase(blue_phase, progress);
+    (r as u32) << 16 | (g as u32) << 8 | b as u32
+}
+
 /// Arms as messages (each well under the 30,000-byte limit).
 pub fn encode(all: &[Shown]) -> Vec<Vec<u8>> {
     all.chunks(16)
@@ -1077,7 +1099,7 @@ pub fn encode(all: &[Shown]) -> Vec<Vec<u8>> {
                 for c in s.pos {
                     out.extend_from_slice(&c.to_le_bytes());
                 }
-                out.push(u8::from(s.gone) | u8::from(s.ceiling) << 1);
+                out.push(u8::from(s.gone) | u8::from(s.ceiling) << 1 | u8::from(s.goggles) << 2);
                 out.push(s.phase.index());
                 out.extend_from_slice(&s.progress.to_le_bytes());
                 out.extend_from_slice(&s.from_base.to_le_bytes());
@@ -1136,6 +1158,7 @@ pub fn decode(mut d: &[u8]) -> Vec<Shown> {
             pos,
             gone: flags & 1 != 0,
             ceiling: flags & 2 != 0,
+            goggles: flags & 4 != 0,
             phase,
             progress,
             from,
@@ -1157,6 +1180,15 @@ pub fn decode(mut d: &[u8]) -> Vec<Shown> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_rainbow_goes_red_yellow_green() {
+        assert_eq!(rainbow_color(0), 0xFF0000);
+        assert_eq!(rainbow_color(256), 0xFFFF00);
+        assert_eq!(rainbow_color(512), 0x00FF00);
+        assert_eq!(rainbow_color(1536), 0xFF0000);
+        assert_eq!(rainbow_color(-256), 0xFFFF00);
+    }
 
     /// Depots as a world: their stack by position (a depot takes into its one held slot while
     /// it holds the same item, up to 64).
@@ -1415,6 +1447,7 @@ mod tests {
             pos: [1, -64, 3],
             gone: false,
             ceiling: true,
+            goggles: true,
             phase: Phase::MoveToOutput,
             progress: 0.25,
             from: None,

@@ -9,6 +9,12 @@
 //! The inventories a packager packs from and unpacks into, and a frogport's below it, are any
 //! block's `ITEMS` capability through the face toward it (`inv`).
 //!
+//! Conveyors draw their wheel, shaft, guards and chains (`ChainConveyorRenderer`; a chain's
+//! scrolling is left out: vanilla's chain model is drawn a block at a time) and are joined with
+//! chains (`ChainConveyorConnectionHandler`, the first conveyor kept on the server). A frogport is
+//! aimed at a chain point with its item (`frog_target`) and draws its body, head, tongue and
+//! catch (`frog_draw`).
+//!
 //! Left out, for want of API:
 //! - Other blocks' automation (hoppers, funnels, chutes) does not reach a packager's box or a
 //!   port's packages: their state lives here, not in storage a transaction journals, so an
@@ -22,6 +28,8 @@
 //!   legacy glue.
 
 pub mod body;
+mod frog_draw;
+mod frog_target;
 mod inv;
 pub(crate) mod port_screen;
 
@@ -167,17 +175,102 @@ impl Subsystem for Packages {
             r.block_part(states::key(b), PackageBlock);
         }
         if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, frog_draw::FrogDraw)
+        {
+            crate::create_log!("[create] the frogport's drawing part was refused: {e:?}");
+        }
+        let frogport = r.item_key("create:package_frogport");
+        r.item_part(frogport, FrogportItem);
+        if let Some(kind) = super::kinetics::kind()
             && let Err(e) = r.block_entity_part(&kind, ConveyorDraw)
         {
             crate::create_log!("[create] the chain conveyor's drawing part was refused: {e:?}");
         }
     }
 
+    fn standalone_models(&self, models: &mut Vec<String>) {
+        models.extend(CONVEYOR_MODELS.iter().map(|m| (*m).to_owned()));
+        models.extend(frog_draw::models());
+    }
+
+    /// `ChainConveyorConnectionHandler.onItemUsedOnBlock`: a chain conveyor clicked with chains
+    /// (taken on both sides; the server keeps the first conveyor chosen).
+    fn right_click_block(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::RightClickBlockEvent<'_>,
+    ) -> Flow {
+        let click = event.click;
+        let id = |h: &dyn mod_api::Host| click.stack.map(|s| s.item().id(h));
+        let chains = match &host {
+            mod_api::HostSide::Client(h) => id(&**h),
+            mod_api::HostSide::Server(h) => id(&**h),
+        };
+        if chains.as_deref() == Some("create:package_frogport") {
+            // `ChainConveyorInteractionHandler.onUse`: a chain point under the crosshair.
+            if let mod_api::HostSide::Client(h) = host
+                && click.hand == Hand::Main
+                && frog_target::use_on_chain(h)
+            {
+                *event.cancellation_result = InteractionResult::Success;
+                return Flow::Cancel;
+            }
+            return Flow::Continue;
+        }
+        if chains.as_deref() != Some("minecraft:iron_chain") {
+            return Flow::Continue;
+        }
+        match host {
+            mod_api::HostSide::Client(host) => {
+                let Some(level) = host.level(host.dimension()) else {
+                    return Flow::Continue;
+                };
+                let conveyor = level
+                    .block_state(&*host, click.pos)
+                    .and_then(states::id)
+                    .and_then(block_of)
+                    == Some(Block::ChainConveyor);
+                let may = host
+                    .player(click.player)
+                    .is_some_and(|p| p.may_build(&*host) == Some(true));
+                if !conveyor || !may {
+                    return Flow::Continue;
+                }
+            }
+            mod_api::HostSide::Server(host) => {
+                let Some(player) = host.player(click.player) else {
+                    return Flow::Continue;
+                };
+                let dimension = click.dimension.key().id().to_string();
+                let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+                    return Flow::Continue;
+                };
+                if block_of(lv.block(click.pos)) != Some(Block::ChainConveyor)
+                    || player.may_build(&*lv.host) != Some(true)
+                {
+                    return Flow::Continue;
+                }
+                if click.hand == Hand::Main {
+                    chain_clicked(&mut lv, player, click.pos);
+                }
+            }
+        }
+        *event.cancellation_result = InteractionResult::Consume;
+        Flow::Cancel
+    }
+
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[CHAINS, frog_draw::FROG]
+    }
+
     fn world_closed(&self) {
+        frog_target::reset_server();
+        frog_draw::reset();
         PACKAGES.with_borrow_mut(|p| *p = None);
         CHANGES.with_borrow_mut(Vec::clear);
         GONE.with_borrow_mut(Vec::clear);
         MAXES.with_borrow_mut(HashMap::clear);
+        CHAINS_SENT.with_borrow_mut(HashMap::clear);
     }
 
     /// Ours placed or gone are handled at the level's tick.
@@ -247,6 +340,10 @@ impl Subsystem for Packages {
             port_screen::client_message(host, player, data);
             return true;
         }
+        if channel == frog_target::CHANNEL {
+            frog_target::client_message(host, player, data);
+            return true;
+        }
         if channel != create_engine::client::CHANNEL || data != b"sync" || !present() {
             return false;
         }
@@ -269,7 +366,8 @@ impl Subsystem for Packages {
     }
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
-        if port_screen::server_message(host, channel, data) {
+        if port_screen::server_message(host, channel, data) || frog_target::server_message(channel)
+        {
             return true;
         }
         if channel != chain::CHANNEL {
@@ -291,6 +389,7 @@ impl Subsystem for Packages {
     /// Once in each world, the client asks for what it draws.
     fn client_tick(&self, host: &mut dyn ClientHost) {
         port_screen::tick(host);
+        frog_target::client_tick(host);
         if !SYNCED.get() && net::send_to_server(host, create_engine::client::CHANNEL, b"sync") {
             SYNCED.set(true);
         }
@@ -332,7 +431,39 @@ impl Subsystem for Packages {
         port_screen::screen_closing(host, event);
     }
 
+    fn render_level_stage(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        frog_target::render_level_stage(host, event);
+    }
+
+    /// `PackagePortPlacementPacket`: a frogport placed by a player takes the point chosen.
+    fn entity_place(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityPlaceEvent,
+    ) -> Flow {
+        let frog = states::id(event.state).and_then(block_of) == Some(Block::PackageFrogport);
+        if let (true, Some(placer)) = (frog, event.placer)
+            && let Some(player) = host
+                .players()
+                .server_players()
+                .into_iter()
+                .find(|p| p.entity() == placer)
+            && let Some(dim) = player
+                .dimension(&*host)
+                .and_then(|d| level_index(&d.to_string()))
+        {
+            let pos = [event.pos.x, event.pos.y, event.pos.z];
+            frog_target::placed(host, player, dim, pos);
+        }
+        Flow::Continue
+    }
+
     fn client_reset(&self) {
+        frog_target::reset_client();
         port_screen::reset();
         SHOWN.with_borrow_mut(HashMap::clear);
         SYNCED.set(false);
@@ -512,7 +643,11 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     if !changed.is_empty() {
         let players = lv.players();
         send_chains(lv.host, &players, dim, &changed);
+        sync_chains(lv, &changed);
     }
+    // Frogports placed with a chain point, now known; what clients draw of frogports.
+    frog_target::level_tick(lv);
+    frog_draw::sync(lv);
     touched.extend(with(dim, |pk| std::mem::take(&mut pk.changed)));
     analog_touched(lv, &touched);
     mark_unsaved(dim, &changed);
@@ -1533,8 +1668,166 @@ fn set_frogport(dim: usize, pos: [i32; 3], words: &[&str], here: [f64; 3]) -> St
     })
 }
 
-/// `ChainConveyorConnectionHandler`'s connection (no chains taken: the command stands in for
-/// the chain item) or its removal.
+/// `ChainConveyorConnectionHandler`: the first conveyor clicked with chains, by player.
+type FirstChain = HashMap<u128, (usize, [i32; 3])>;
+
+thread_local! {
+    static FIRST_CHAIN: RefCell<FirstChain> = RefCell::new(HashMap::new());
+}
+
+fn chain_status(lv: &mut ServerLevel<'_>, player: PlayerRef, key: &str, red: bool) {
+    let mut style = mod_api::text::TextStyle::default();
+    if red {
+        style.color = Some("red".to_owned());
+    }
+    let line = if key.is_empty() {
+        Text::literal("")
+    } else {
+        Text::translate(key, Vec::new()).with_style(style)
+    };
+    let _ = player.action_bar(lv.host, line);
+}
+
+/// The chains in a player's inventory (`getChainsFromInventory` counting).
+fn chains_held(lv: &ServerLevel<'_>, player: PlayerRef) -> u32 {
+    player
+        .inventory_slots(&*lv.host)
+        .unwrap_or_default()
+        .iter()
+        .filter(|(_, s)| s.item().id(&*lv.host) == "minecraft:iron_chain")
+        .map(|(_, s)| s.count())
+        .sum()
+}
+
+/// `getChainsFromInventory(.., false)`: `cost` chains out of the inventory, held stack first.
+fn take_chains(lv: &mut ServerLevel<'_>, player: PlayerRef, mut cost: u32) {
+    let slots = player.inventory_slots(&*lv.host).unwrap_or_default();
+    for (i, s) in slots {
+        if cost == 0 {
+            break;
+        }
+        if s.item().id(&*lv.host) != "minecraft:iron_chain" {
+            continue;
+        }
+        let n = s.count().min(cost);
+        cost -= n;
+        let rest = body::with_count(&s, s.count() - n);
+        let _ = player.set_inventory_slot(lv.host, i, rest);
+    }
+}
+
+/// A chain conveyor clicked with chains on the server: the first one is chosen, the second is
+/// joined to it (`validateAndConnect`, `ChainConveyorConnectionPacket`), its chains taken
+/// outside creative. Sneaking clears the choice.
+fn chain_clicked(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let uuid = player.uuid();
+    let count = with(dim, |pk| {
+        pk.chains
+            .conveyors
+            .get(&pos)
+            .map_or(0, |c| c.connections.len())
+    });
+    if count >= MAX_CHAIN_CONNECTIONS {
+        chain_status(
+            lv,
+            player,
+            "create.chain_conveyor.cannot_add_more_connections",
+            true,
+        );
+        return;
+    }
+    let first = FIRST_CHAIN.with_borrow(|f| f.get(&uuid).copied());
+    let Some((first_dim, first)) = first.filter(|f| f.0 == dim) else {
+        FIRST_CHAIN.with_borrow_mut(|f| f.insert(uuid, (dim, pos)));
+        chain_status(lv, player, "create.chain_conveyor.select_second", false);
+        return;
+    };
+    let _ = first_dim;
+    FIRST_CHAIN.with_borrow_mut(|f| f.remove(&uuid));
+    if super::items::sneaking(&*lv.host, player) {
+        chain_status(lv, player, "create.chain_conveyor.selection_cleared", false);
+        return;
+    }
+    if pos == first {
+        chain_status(lv, player, "create.chain_conveyor.selection_cleared", false);
+        return;
+    }
+    let diff = [0, 1, 2].map(|i| f64::from(pos[i] - first[i]));
+    let d2: f64 = diff.iter().map(|v| v * v).sum();
+    let fail = |lv: &mut ServerLevel<'_>, key: &str| {
+        chain_status(lv, player, key, true);
+        let at = pos.map(|v| f64::from(v) + 0.5);
+        let _ = lv.level.play_sound(
+            &mut *lv.host,
+            "create:deny",
+            at,
+            SoundSource::Blocks,
+            1.0,
+            1.0,
+        );
+    };
+    if d2 >= MAX_CHAIN_LENGTH * MAX_CHAIN_LENGTH {
+        return fail(lv, "create.chain_conveyor.too_far");
+    }
+    if d2 < 2.5 * 2.5 {
+        return fail(lv, "create.chain_conveyor.too_close");
+    }
+    let horizontal = (diff[0] * diff[0] + diff[2] * diff[2]).sqrt() - 1.5;
+    if horizontal <= 0.0 {
+        return fail(lv, "create.chain_conveyor.cannot_connect_vertically");
+    }
+    if diff[1].abs() / horizontal > 1.0 {
+        return fail(lv, "create.chain_conveyor.too_steep");
+    }
+    let (target, joined) = with(dim, |pk| {
+        let back = [first[0] - pos[0], first[1] - pos[1], first[2] - pos[2]];
+        let t = pk.chains.conveyors.get(&pos);
+        (
+            t.map_or(0, |c| c.connections.len()),
+            t.is_some_and(|c| c.connections.contains(&back)),
+        )
+    });
+    if target >= MAX_CHAIN_CONNECTIONS {
+        return fail(lv, "create.chain_conveyor.cannot_add_more_connections");
+    }
+    if joined {
+        return fail(lv, "create.chain_conveyor.already_connected");
+    }
+    if block_of(lv.block(first)) != Some(Block::ChainConveyor) {
+        return fail(lv, "create.chain_conveyor.blocks_invalid");
+    }
+    let creative = super::items::creative(&*lv.host, player);
+    let cost =
+        chain::chain_cost([pos[0] - first[0], pos[1] - first[1], pos[2] - first[2]]).max(0) as u32;
+    if !creative && chains_held(lv, player) < cost {
+        return fail(lv, "create.chain_conveyor.not_enough_chains");
+    }
+    let line = chain_command(lv, first, pos, true);
+    if !line.starts_with("chain ") {
+        return fail(lv, "create.chain_conveyor.blocks_invalid");
+    }
+    if !creative {
+        take_chains(lv, player, cost);
+    }
+    chain_status(lv, player, "", false);
+    let at = pos.map(|v| f64::from(v) + 0.5);
+    let _ = lv.level.play_sound(
+        &mut *lv.host,
+        "minecraft:block.chain.place",
+        at,
+        SoundSource::Blocks,
+        1.0,
+        0.8,
+    );
+}
+
+/// `maxChainConveyorLength` and `maxChainConveyorConnections` (Create's defaults).
+const MAX_CHAIN_LENGTH: f64 = 32.0;
+const MAX_CHAIN_CONNECTIONS: usize = 4;
+
+/// `ChainConveyorConnectionHandler`'s connection (the chain item's, after its checks; the
+/// command's, with none) or its removal.
 fn chain_command(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3], on: bool) -> String {
     let dim = lv.dim;
     let mut drops = Vec::new();
@@ -1662,6 +1955,173 @@ fn lift(item: &str) -> f32 {
     })
 }
 
+/// The key of a conveyor's chains in its block entity's data, for its clients: whether it runs
+/// backwards, then each connection's offset.
+pub const CHAINS: &str = "Chains";
+
+/// The conveyor's partial models (`AllPartialModels.CHAIN_CONVEYOR_*`).
+const CONVEYOR_MODELS: [&str; 4] = [
+    "create:block/chain_conveyor/wheel",
+    "create:block/chain_conveyor/guard",
+    "create:block/chain_conveyor/shaft",
+    "minecraft:block/iron_chain",
+];
+
+/// What each conveyor's block entity was last told of its chains, by level and position.
+type SentChains = HashMap<(usize, [i32; 3]), Vec<i32>>;
+
+thread_local! {
+    static CONVEYOR_MODEL_REFS: RefCell<HashMap<&'static str, mod_api::ModelRef>> =
+        RefCell::new(HashMap::new());
+    /// What each conveyor's block entity was last told of its chains.
+    static CHAINS_SENT: RefCell<SentChains> =
+        RefCell::new(HashMap::new());
+}
+
+fn conveyor_model(
+    draw: &mut dyn mod_api::BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    file: &'static str,
+) {
+    for fresh in [false, true] {
+        let cached = (!fresh)
+            .then(|| CONVEYOR_MODEL_REFS.with_borrow(|m| m.get(file).copied()))
+            .flatten();
+        let model = cached.or_else(|| {
+            let id = mod_api::Identifier::parse(file).ok()?;
+            let m = host.render_assets().model(&id).ok()?;
+            CONVEYOR_MODEL_REFS.with_borrow_mut(|c| c.insert(file, m));
+            Some(m)
+        });
+        let Some(m) = model else { return };
+        match draw.terrain_model(m, mod_api::TerrainModelOptions::default()) {
+            Ok(()) => return,
+            Err(mod_api::TerrainModelError::Model(_)) if !fresh => continue,
+            Err(_) => return,
+        }
+    }
+}
+
+/// The conveyor's chains in its block entity's data, written when they changed.
+fn sync_chains(lv: &mut ServerLevel<'_>, conveyors: &[[i32; 3]]) {
+    let dim = lv.dim;
+    for &pos in conveyors {
+        let data = with(dim, |pk| {
+            pk.chains.conveyors.get(&pos).map(|c| {
+                let mut v = vec![i32::from(c.reversed)];
+                v.extend(c.connections.iter().flatten());
+                v
+            })
+        });
+        let Some(data) = data else {
+            CHAINS_SENT.with_borrow_mut(|s| s.remove(&(dim, pos)));
+            continue;
+        };
+        if CHAINS_SENT.with_borrow(|s| s.get(&(dim, pos)) == Some(&data)) {
+            continue;
+        }
+        let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+            continue;
+        };
+        let tag = Compound::from([(CHAINS.into(), Tag::IntArray(data.clone()))]);
+        if entity.merge_data(&mut *lv.host, tag).is_ok() {
+            CHAINS_SENT.with_borrow_mut(|s| s.insert((dim, pos), data));
+        }
+    }
+}
+
+/// `ChainConveyorRenderer`/`ChainConveyorVisual`: the wheel, a guard toward each chain, the
+/// shaft turning at the conveyor's speed, and each chain running from the wheel to the next
+/// (`renderChain`: crossed quads of the chain's sprite, scrolling along at the speed).
+fn draw_conveyor(
+    draw: &mut dyn mod_api::BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    pos: [i32; 3],
+    nbt: &Compound,
+) {
+    let speed = super::kinetics::speeds_of(nbt)[0];
+    conveyor_model(draw, host, CONVEYOR_MODELS[0]);
+    draw.spin([0.0, 1.0, 0.0], [0.5; 3], speed * 0.3, 0.0);
+    conveyor_model(draw, host, CONVEYOR_MODELS[2]);
+    draw.still();
+    let ints = match nbt.get(&CHAINS.into()) {
+        Some(Tag::IntArray(v)) => v.clone(),
+        _ => return,
+    };
+    let Some((&rev, rest)) = ints.split_first() else {
+        return;
+    };
+    let reversed = rev != 0;
+    frog_target::seen(
+        pos,
+        reversed,
+        rest.as_chunks::<3>()
+            .0
+            .iter()
+            .map(|k| [k[0], k[1], k[2]])
+            .collect(),
+    );
+    for k in rest.as_chunks::<3>().0 {
+        let stats = chain::connection_stats([0, 0, 0], *k, reversed);
+        let d = [0, 1, 2].map(|i| stats.end[i] - stats.start[i]);
+        let yaw = d[0].atan2(d[2]).to_degrees() as f32;
+        let flat = (d[0] * d[0] + d[2] * d[2]).sqrt();
+        let pitch = d[1].atan2(flat).to_degrees() as f32;
+        draw.push();
+        draw.rotate_about([0.0, 1.0, 0.0], yaw, [0.5; 3]);
+        conveyor_model(draw, host, CONVEYOR_MODELS[1]);
+        draw.pop();
+        // The chain: from its start (the block's corner frame), turned along it.
+        let start = [0, 1, 2].map(|i| stats.start[i] as f32);
+        draw.push();
+        draw.translate(start);
+        draw.rotate_about([0.0, 1.0, 0.0], yaw, [0.0; 3]);
+        draw.rotate_about([1.0, 0.0, 0.0], 90.0 - pitch, [0.0; 3]);
+        draw.rotate_about([0.0, 1.0, 0.0], 45.0, [0.0; 3]);
+        draw_chain(draw, host, stats.length);
+        draw.pop();
+    }
+}
+
+/// `renderChain`: the chain's sprite in two crossed planes `length` long up the pose's y,
+/// each block of it vanilla's chain model (`renderPart`'s quads, the same columns of the
+/// sprite). Its scrolling with the conveyor's speed (`minV` from `animation`) is left out: a
+/// model's sprite can't wrap.
+fn draw_chain(draw: &mut dyn mod_api::BlockEntityDrawContext, host: &dyn ClientHost, length: f32) {
+    let mut y = 0.0f32;
+    while y < length {
+        let piece = (length - y).min(1.0);
+        draw.push();
+        draw.translate([-0.5, y, -0.5]);
+        if piece < 1.0 {
+            draw.scale([1.0, piece, 1.0]);
+        }
+        conveyor_model(draw, host, CONVEYOR_MODELS[3]);
+        draw.pop();
+        y += 1.0;
+    }
+}
+
+/// The frogport's item: used in the air on a chain point, it chooses it
+/// (`ChainConveyorInteractionHandler.onUse`).
+struct FrogportItem;
+
+#[mod_api::horizon_part]
+impl mod_api::ItemPart for FrogportItem {
+    fn use_item(
+        &self,
+        host: mod_api::HostSide,
+        event: &mut mod_api::UseItemEvent<'_>,
+    ) -> Option<InteractionResult> {
+        match host {
+            mod_api::HostSide::Client(h) if event.hand == Hand::Main => {
+                frog_target::use_on_chain(h).then_some(InteractionResult::Success)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Draws the chain conveyor's packages from the server's last message, every frame: round the
 /// wheel turning about the conveyor at its speed, along a chain gliding at the chain's.
 struct ConveyorDraw;
@@ -1678,6 +2138,7 @@ impl BlockEntityPart for ConveyorDraw {
         let pos = event.pos;
         let draw = &mut *event.draw;
         let now = draw.animation_time();
+        draw_conveyor(draw, host, pos, &event.entity.nbt);
         SHOWN.with_borrow_mut(|shown| {
             let Some(s) = shown.get_mut(&pos) else {
                 return;

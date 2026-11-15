@@ -11,9 +11,13 @@
 //! components through an arm or ejector (`items::key_of`), which belts still cannot carry.
 //! The weighted ejector's target outline and arc are drawn as `EjectorTargetHandler` draws them.
 //!
-//! Left out: the rainbow tint of a dancing arm (a partial block is drawn untinted), goggles on
-//! an arm (`ARM_CLAW_BASE_GOGGLES` is not among the partial blocks), and dropping a chosen point
-//! or ejector target with a left click (see HORIZON_API.md).
+//! An arm clicked with goggles wears them; a dancing arm's body takes Create's rainbow (tinted
+//! copies of its partials, made by `create-data prepare`). A charged ejector fires when a mob
+//! stands on it (looked at every other tick: the API has no landing hook for them) or a player
+//! does (their client asks, `create:ejector_trigger`), throwing them along its arc.
+//!
+//! Left out: dropping a chosen point or ejector target with a left click (see HORIZON_API.md),
+//! and the elytra a launched player deploys.
 
 use super::super::net;
 use super::super::server::ServerLevel;
@@ -51,6 +55,7 @@ impl Subsystem for Arms {
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         turn_placed_ejectors(lv);
         tick_arms(lv);
+        entities_on_ejectors(lv);
         tick_ejectors(lv);
     }
 
@@ -59,6 +64,9 @@ impl Subsystem for Arms {
         mut host: mod_api::HostSide,
         event: &mut mod_api::RightClickBlockEvent<'_>,
     ) -> mod_api::Flow {
+        if put_on_goggles(&mut host, event) {
+            return mod_api::Flow::Cancel;
+        }
         let again = match &mut host {
             mod_api::HostSide::Server(h) => mod_api::HostSide::Server(&mut **h),
             mod_api::HostSide::Client(h) => mod_api::HostSide::Client(&mut **h),
@@ -77,6 +85,43 @@ impl Subsystem for Arms {
         arm_placed(host, event);
         ejector_placed(host, event);
         mod_api::Flow::Continue
+    }
+
+    /// `EjectorTriggerPacket`: a player's client stands on a charged ejector.
+    fn client_message(
+        &self,
+        host: &mut dyn ServerHost,
+        player: PlayerRef,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        if channel != super::client::EJECTOR_TRIGGER {
+            return false;
+        }
+        let w: Vec<i32> = data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| i32::from_le_bytes(*b))
+            .collect();
+        let ([x, y, z], Some(at)) = (
+            [w.first(), w.get(1), w.get(2)].map(|v| v.copied().unwrap_or(i32::MIN)),
+            player.entity().position(&*host),
+        ) else {
+            return true;
+        };
+        let d2 = (at[0] - f64::from(x) - 0.5).powi(2)
+            + (at[1] - f64::from(y) - 1.0).powi(2)
+            + (at[2] - f64::from(z) - 0.5).powi(2);
+        let dim = player
+            .dimension(&*host)
+            .and_then(|d| super::super::world::level_index(&d.to_string()));
+        if let Some(dim) = dim
+            && d2 < 4.0
+        {
+            trigger_ejector(dim, [x, y, z]);
+        }
+        true
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
@@ -120,6 +165,7 @@ impl Subsystem for Arms {
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
         super::client::tick_client_arms(host);
         super::client::tick_ejector_arc(host);
+        super::client::trigger_from_local_player(host);
     }
 
     fn register(&self, r: &mut dyn mod_api::Registrar, _cx: &mod_api::RegistrationContext) {
@@ -968,6 +1014,7 @@ fn send_arms(lv: &mut ServerLevel<'_>, players: &[PlayerRef], list: &[[i32; 3]])
                 pos,
                 gone: true,
                 ceiling: false,
+                goggles: false,
                 phase: arm::Phase::SearchInputs,
                 progress: 1.0,
                 from: None,
@@ -1118,7 +1165,11 @@ fn tick_ejectors(lv: &mut ServerLevel<'_>) {
         };
         let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
         let flying = e.flying.len();
+        let before = e.state;
         let changed = e.tick(pos, facing, speed, &mut EjectorWorld { lv: &mut *lv, pos });
+        if before == ejector::State::Charged && e.state == ejector::State::Launching {
+            launch_entities(lv, pos, e.launcher.entity_motion(facing));
+        }
         let has_items = !depot_items(lv, pos).is_empty();
         let busy = e.busy(speed, has_items);
         with_world(|w| {
@@ -1150,6 +1201,104 @@ fn tick_ejectors(lv: &mut ServerLevel<'_>) {
     if !changes.is_empty() {
         let players = lv.players();
         send_ejectors(lv, &players, &changes);
+    }
+}
+
+/// `EjectorBlock.updateEntityAfterFallOn` for mobs and other entities (the API has no landing
+/// hook for them): a charged, unpowered ejector with a target ahead fires when something but
+/// an item or a player stands on its plate (a player's own client asks, `trigger_ejector`).
+/// Looked at every other tick.
+fn entities_on_ejectors(lv: &mut ServerLevel<'_>) {
+    if lv.game_time() % 2 != 0 {
+        return;
+    }
+    let dim = lv.dim;
+    let ready: Vec<[i32; 3]> = with_world(|w| {
+        w.dims[dim]
+            .ejectors
+            .iter()
+            .filter(|(_, e)| e.state == ejector::State::Charged && !e.powered && e.launcher.h != 0)
+            .map(|(p, _)| *p)
+            .collect()
+    })
+    .unwrap_or_default();
+    for pos in ready {
+        let lo = [
+            f64::from(pos[0]),
+            f64::from(pos[1]) + 0.5,
+            f64::from(pos[2]),
+        ];
+        let hi = [
+            f64::from(pos[0] + 1),
+            f64::from(pos[1]) + 1.25,
+            f64::from(pos[2] + 1),
+        ];
+        let standing = lv
+            .level
+            .entities_in(&*lv.host, lo, hi)
+            .unwrap_or_default()
+            .into_iter()
+            .any(|e| {
+                let kind = e.kind(&*lv.host).unwrap_or_default();
+                !matches!(
+                    kind.as_str(),
+                    "minecraft:item" | "minecraft:player" | "minecraft:experience_orb"
+                ) && e.on_ground(&*lv.host) == Some(true)
+            });
+        if standing {
+            trigger_ejector(dim, pos);
+        }
+    }
+}
+
+/// `EjectorBlockEntity.activate` (`EjectorTriggerPacket` from a player's client, or something
+/// landing on it).
+pub fn trigger_ejector(dim: usize, pos: [i32; 3]) {
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        let Some(e) = d.ejectors.get_mut(&pos) else {
+            return;
+        };
+        if e.state == ejector::State::Retracting || e.powered || e.launcher.h == 0 {
+            return;
+        }
+        e.activate();
+        if !d.ejecting.contains(&pos) {
+            d.ejecting.push(pos);
+        }
+    });
+}
+
+/// `activateDeferred`'s entities: what stands on the plate but items and players (whose own
+/// clients throw them) is thrown from its middle (`setPos`, `applyMotion`).
+fn launch_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3], motion: [f64; 3]) {
+    let inset = 1.0 / 16.0;
+    let lo = [
+        f64::from(pos[0]) + inset,
+        f64::from(pos[1]),
+        f64::from(pos[2]) + inset,
+    ];
+    let hi = [
+        f64::from(pos[0] + 1) - inset,
+        f64::from(pos[1] + 1),
+        f64::from(pos[2] + 1) - inset,
+    ];
+    let found = lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default();
+    for e in found {
+        let kind = e.kind(&*lv.host).unwrap_or_default();
+        if matches!(
+            kind.as_str(),
+            "minecraft:item" | "minecraft:player" | "minecraft:experience_orb"
+        ) {
+            continue;
+        }
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 1.0,
+            f64::from(pos[2]) + 0.5,
+        ];
+        e.teleport_to(&mut *lv.host, at, None);
+        e.set_velocity(&mut *lv.host, motion);
     }
 }
 
@@ -1257,6 +1406,9 @@ fn arms_to_nbt(dim: usize, chunk: [i32; 2], own: &mut Compound) {
                 c.insert("v".into(), Tag::IntArray(v));
                 let held = a.held.as_ref().map_or("", |h| h.0.as_str());
                 c.insert("held".into(), Tag::String(held.into()));
+                if a.goggles {
+                    c.insert("Goggles".into(), Tag::Byte(1));
+                }
                 Tag::Compound(c)
             })
             .collect();
@@ -1314,6 +1466,7 @@ fn arms_from_nbt(dim: usize, data: &Compound) {
             let pos = [v[0], v[1], v[2]];
             let mut a = arm::Arm::new(false);
             a.phase = arm::Phase::from_index(v[3].clamp(0, 4) as u8);
+            a.goggles = matches!(c.get(&"Goggles".into()), Some(Tag::Byte(1)));
             a.index = v[4];
             a.progress = f32::from_bits(v[5] as u32).clamp(0.0, 1.0);
             a.powered = v[6] != 0;
@@ -1444,6 +1597,68 @@ pub fn select_point(
     }
     *event.cancellation_result = mod_api::InteractionResult::Success;
     mod_api::Flow::Cancel
+}
+
+/// `ArmBlock.useItemOn` with goggles: an arm without them puts them on (the goggles stay in
+/// hand). Whether the click was taken.
+fn put_on_goggles(
+    host: &mut mod_api::HostSide,
+    event: &mut mod_api::RightClickBlockEvent<'_>,
+) -> bool {
+    let click = event.click;
+    if click.hand != mod_api::Hand::Main {
+        return false;
+    }
+    let taken = match host {
+        mod_api::HostSide::Client(h) => {
+            let goggles = click
+                .stack
+                .is_some_and(|s| s.item().id(&**h) == "create:goggles");
+            let arm = h
+                .level(h.dimension())
+                .and_then(|l| l.block_state(&**h, click.pos))
+                .and_then(super::super::states::id)
+                .and_then(|id| {
+                    super::super::client_table(&**h, |t| t.get(id).map(|(b, _)| b)).flatten()
+                })
+                == Some(Block::MechanicalArm);
+            goggles && arm && !super::client::arm_goggles(click.pos)
+        }
+        mod_api::HostSide::Server(h) => {
+            if !click
+                .stack
+                .is_some_and(|s| s.item().id(&**h) == "create:goggles")
+            {
+                return false;
+            }
+            let dimension = click.dimension.key().id().to_string();
+            let Some(mut lv) = ServerLevel::new(&mut **h, &dimension) else {
+                return false;
+            };
+            let dim = lv.dim;
+            let pos = click.pos;
+            let put = with_world(|w| {
+                let a = w.dims[dim].arms.arms.get_mut(&pos)?;
+                if a.goggles {
+                    return None;
+                }
+                a.goggles = true;
+                w.mark_unsaved(dim, pos);
+                Some(())
+            })
+            .flatten()
+            .is_some();
+            if put {
+                let players = lv.players();
+                send_arms(&mut lv, &players, &[pos]);
+            }
+            put
+        }
+    };
+    if taken {
+        *event.cancellation_result = mod_api::InteractionResult::Success;
+    }
+    taken
 }
 
 /// `select_point` on the server: true when the click selected a point.

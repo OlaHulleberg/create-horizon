@@ -37,6 +37,7 @@ pub mod dye;
 pub mod ejector;
 pub mod elevator;
 pub mod equipment;
+pub mod factory;
 pub mod fan;
 pub mod filter;
 pub mod fluids;
