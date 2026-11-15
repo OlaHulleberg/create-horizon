@@ -588,6 +588,42 @@ impl Kinetics {
         })
     }
 
+    /// Whether a generator other than the part at `pos` (`sub`) turns its network, through
+    /// shafts, cogs and couplings: what `KineticBlockEntity.hasSource` says of a generator that
+    /// another source drives. A search of the network: asked only when a generator's own
+    /// direction disagrees with its network's.
+    pub fn driven_elsewhere(&self, pos: [i32; 3], sub: u8) -> bool {
+        let Some(&start) = self.at.get(&pos).and_then(|p| p.get(sub as usize)) else {
+            return false;
+        };
+        if start == NONE {
+            return false;
+        }
+        let mut seen: HashSet<u32> = HashSet::from([start]);
+        let mut queue = vec![start];
+        let (mut edges, mut couplings, mut pull) = (Vec::new(), Vec::new(), Vec::new());
+        while let Some(id) = queue.pop() {
+            if id != start && self.nodes[id as usize].part.generated != 0.0 {
+                return true;
+            }
+            self.edges(id, &mut edges);
+            pull.clear();
+            couplings.clear();
+            self.couplings(id, &mut couplings, &mut pull);
+            let next = edges
+                .iter()
+                .map(|(m, _)| *m)
+                .chain(couplings.iter().flat_map(|c| [c.from, c.to]))
+                .chain(pull.iter().copied());
+            for m in next {
+                if seen.insert(m) {
+                    queue.push(m);
+                }
+            }
+        }
+        false
+    }
+
     /// The nodes connected to `id`, with the ratio from it to each.
     fn edges(&self, id: u32, out: &mut Vec<(u32, f32)>) {
         out.clear();

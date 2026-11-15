@@ -3915,9 +3915,25 @@ impl CreateWorld {
                 continue;
             }
             d.shaft_engine.insert(shaft, engine);
-            // The scroll option (`movementDirection`) is not ported: clockwise.
-            let direction =
-                crate::steam::conveyed_direction(efficiency, connected, facing, axis, false);
+            // `movementDirection` (its value box: 0 clockwise, 1 counter-clockwise).
+            let counter = d.scroll_options.get(&engine) == Some(&1);
+            let mut direction =
+                crate::steam::conveyed_direction(efficiency, connected, facing, axis, counter);
+            // A shaft another source turns the other way turns the engine round to it
+            // (`hasSource`, `setValue(1 - ordinal)`).
+            let shaft_speed = d.kinetics.theoretical(shaft, 0).map_or(0.0, |t| t.0);
+            if shaft_speed != 0.0
+                && (shaft_speed > 0.0) != (direction > 0)
+                && d.kinetics.driven_elsewhere(shaft, 0)
+            {
+                if counter {
+                    d.scroll_options.remove(&engine);
+                } else {
+                    d.scroll_options.insert(engine, 1);
+                }
+                d.unsaved.push((engine[0] >> 4, engine[2] >> 4));
+                direction = -direction;
+            }
             self.set_shaft_output(
                 dim,
                 shaft,
