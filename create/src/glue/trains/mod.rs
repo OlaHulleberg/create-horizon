@@ -28,6 +28,8 @@
 //!   (`CarriageCouplingRenderer`).
 //! - `station_draw`: a station's flag, its marker on the track and its assembly track
 //!   (`StationRenderer`).
+//! - `actors`: the drills, saws, harvesters, ploughs, rollers, deployers and contacts a
+//!   carriage carries, working where it is each tick and stalling their train.
 //! - `doors`: carriages' sliding doors opening at stations by their door control.
 //! - `cargo`: what carriages' storage blocks hold, and portable storage interfaces on slow
 //!   carriages connecting to the stationary ones at a station.
@@ -59,6 +61,7 @@ mod controls;
 mod coupling_draw;
 mod doors;
 pub(crate) mod gui;
+mod horn;
 mod railway;
 mod relocate;
 mod riding;

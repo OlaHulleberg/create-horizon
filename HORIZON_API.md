@@ -129,10 +129,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A native mod's damage types**: Create's `data/create/damage_type/*.json` (`crush`, `mechanical_saw`,
   `fan_fire`...) shipped with the mod are not registered (`EntityRef::hurt` with `create:crush` is refused; with
   the files shipped, `/damage` parses `create:crush` but the health code's damage table answers "invulnerable"),
-  so crushing wheels hurt with vanilla's `cramming`, which also goes through armour, saws and drills with
-  `generic`, and fans with `lava` (blasting) and `in_fire` (smoking).
+  so crushing wheels hurt with vanilla's `cramming`, which also goes through armour, saws and drills (standing
+  or moving, with moving rollers) and a train running a mob over (`run_over`) with `generic`, and fans with
+  `lava` (blasting) and `in_fire` (smoking).
 - **Moving colliders**: players cannot stand on, or be pushed by, bearings' and pistons' structures, trains or
-  minecart contraptions (`notes/moving-structures-note.md`).
+  minecart contraptions (`notes/moving-structures-note.md`). A train still hurts and throws a grounded entity its
+  blocks meet (`handleDamageFromTrain`, the glue's own overlap test, `glue/trains/actors.rs`), but the entity
+  is not stopped by the carriage. `LevelRef::set_moving_colliders` (the audit's E6 proposal) would close it.
 - **Mod entity types that are not template copies**, rideable by players: Create's seat entity and carriage seats
   are stood in by tagged item display entities; riding a moving structure's seats on bearings and pistons and
   clicking its blocks are out (contraption controls on a gliding structure are the exception: the client
@@ -270,8 +273,8 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Moving a playing sound** (a tickable `SoundInstance`'s `getX/Y/Z`, read each tick): turning machinery's
   ambient hum and cog clicks (`SoundScapes`, `ContinuousSound`) follow the mean of their blocks in Create; a
   `SoundRef` can change its volume (`fade`) but not its position, so they play at the listener with the volume
-  their distance gives them, from no side (`glue/sources/ambience.rs`). A `SoundRef::move_to(position)` would
-  close it.
+  their distance gives them, from no side (`glue/sources/ambience.rs`); a train's horn plays where the train was
+  when it started (`glue/trains/horn.rs`). A `SoundRef::move_to(position)` would close it.
 - **A particle drawn as its own quads** (`SteamJetParticle.render`'s four quads turned along the jet, or a
   `CustomRotationParticle`'s turn): steam engines' and whistles' steam jets are Create's sprites on a
   billboard, and so are the haunted bell's souls, where Create turns a soul only about the vertical and lays

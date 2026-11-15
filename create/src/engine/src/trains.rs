@@ -149,6 +149,11 @@ pub struct Train {
     /// tick), and the speed it had when it stalled (`speedBeforeStall`).
     pub stalled: bool,
     pub speed_before_stall: Option<f64>,
+    /// Crashed into another train (`derailed` with its `graph` gone): it stands where it is
+    /// until a wrench puts it back on the track (`TrainRelocator`).
+    pub derailed: bool,
+    /// Driven this tick against the way its controls face, not to brake (`backwardsDriver`).
+    pub backwards: bool,
 }
 
 /// What a tick did.
@@ -736,6 +741,8 @@ impl Train {
             bound: true,
             stalled: false,
             speed_before_stall: None,
+            derailed: false,
+            backwards: false,
         };
         t.remember(net);
         Some(t)
@@ -821,6 +828,8 @@ impl Train {
         self.at_station = None;
         self.manual = None;
         self.bound = true;
+        // Back on the track (`train.derailed = false`).
+        self.derailed = false;
         self.remember(net);
         true
     }
@@ -877,6 +886,8 @@ impl Train {
             bound: true,
             stalled: false,
             speed_before_stall: None,
+            derailed: false,
+            backwards: false,
         };
         t.remember(net);
         Some(t)
@@ -976,6 +987,27 @@ impl Train {
             )
         };
         (self.anchor(g, s.first), unit(sub(a, b)))
+    }
+
+    /// Carriage `c`'s leading and trailing wheel points where they are
+    /// (`getLeadingPoint`, `getTrailingPoint`).
+    pub fn carriage_ends(&self, g: &Graph, c: usize) -> (Vec3, Vec3) {
+        let s = self.carriages[c];
+        let last = s.first + usize::from(s.two);
+        (self.points[2 * s.first].at(g), self.points[2 * last + 1].at(g))
+    }
+
+    /// `Train.crash`: it stops navigating; not derailed yet, it bounces back at up to half a
+    /// block a tick and leaves the track.
+    pub fn crash(&mut self) {
+        self.nav = None;
+        self.manual = None;
+        self.reserved.clear();
+        if self.derailed {
+            return;
+        }
+        self.speed = -self.speed.clamp(-0.5, 0.5);
+        self.derailed = true;
     }
 
     /// Bogey `b`'s anchor and the way its wheels line up (front first).
@@ -1305,6 +1337,9 @@ impl Train {
         }
         let target = top.min(capped) * way;
         let countering = (way - self.speed.signum()).abs() > 1.5;
+        if (m.inverted ^ (way < 0.0)) && !countering {
+            self.backwards = true;
+        }
         self.at_station = None;
         let rate = if countering { 2.0 } else { 1.0 } * ACCELERATION;
         if (target - self.speed).abs() >= 1.0e-5 {
@@ -1320,7 +1355,7 @@ impl Train {
     /// toward the destination, else coasting to a stop; then the move. Arrived when its leading
     /// point passes the station.
     pub fn tick(&mut self, net: &Network, occ: &mut Occupancy, me: u32) -> Run {
-        if !self.bound {
+        if !self.bound || self.derailed {
             return Run::Still;
         }
         // `Train.tick`: a stalled carriage holds the train where it is, its speed kept for when
@@ -1499,6 +1534,72 @@ impl Train {
             ticks_waiting: 0,
         });
     }
+}
+
+/// `VecHelper.intersect` in the plane across `Axis.Y`: how far along `r` from `p1` and along
+/// `s` from `p2` the two lines meet; None when parallel.
+fn intersect_xz(p1: Vec3, p2: Vec3, r: Vec3, s: Vec3) -> Option<[f64; 2]> {
+    let q = sub(p2, p1);
+    let rcs = r[0] * s[2] - r[2] * s[0];
+    if rcs.abs() < 1.0e-5 {
+        return None;
+    }
+    let t = (q[0] * s[2] - q[2] * s[0]) / rcs;
+    let u = (q[0] * r[2] - q[2] * r[0]) / rcs;
+    Some([t, u])
+}
+
+/// `VecHelper.intersectSphere`: where the line from `origin` along unit `d` leaves the sphere.
+fn intersect_sphere(origin: Vec3, d: Vec3, centre: Vec3, radius: f64) -> Option<Vec3> {
+    let diff = sub(origin, centre);
+    let along = d[0] * diff[0] + d[1] * diff[1] + d[2] * diff[2];
+    let delta = along * along - (length(diff).powi(2) - radius * radius);
+    if delta < 0.0 {
+        return None;
+    }
+    let t = -along + delta.sqrt();
+    Some(std::array::from_fn(|i| origin[i] + d[i] * t))
+}
+
+/// `Train.findCollidingTrain`'s test of one stretch of another train (`start2` to `end2`)
+/// against the moving one's front (`start` to `end`): where they meet.
+fn stretch_hit(start: Vec3, end: Vec3, start2: Vec3, end2: Vec3) -> Option<Vec3> {
+    if (end[1] < end2[1] - 3.0 || end2[1] < end[1] - 3.0)
+        && (start[1] < start2[1] - 3.0 || start2[1] < start[1] - 3.0)
+    {
+        return None;
+    }
+    let diff = sub(end, start);
+    let diff2 = sub(end2, start2);
+    let (n, n2) = (unit(diff), unit(diff2));
+    let hit = match intersect_xz(start, start2, n, n2) {
+        Some(h) => h,
+        None => {
+            let sphere = intersect_sphere(start2, n2, start, 0.125)?;
+            let toward = unit(sub(sphere, start2));
+            if ((n2[0] * toward[0] + n2[1] * toward[1] + n2[2] * toward[2]) - 1.0).abs() > 1.0e-5 {
+                return None;
+            }
+            [
+                distance(sphere, start) - 0.125,
+                distance(sphere, start2) - 0.125,
+            ]
+        }
+    };
+    if hit[0] > length(diff) || hit[1] > length(diff2) || hit[0] < 0.0 || hit[1] < 0.0 {
+        return None;
+    }
+    Some(std::array::from_fn(|i| start[i] + n[i] * hit[0]))
+}
+
+/// Two trains met (`Train.collideWithOtherTrains`): both crashed; where, and how fast together.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Crash {
+    pub trains: [u32; 2],
+    pub at: Vec3,
+    pub combined_speed: f64,
+    /// Whether each was driven backwards this tick (`backwardsDriver`).
+    pub backwards: [bool; 2],
 }
 
 fn distance_between(a: Vec3, b: Vec3) -> f64 {
@@ -1948,6 +2049,8 @@ pub struct Railway {
     pub states: Vec<[SignalState; 2]>,
     pub lights: HashMap<[i32; 3], SignalState>,
     pub lights_changed: Vec<([i32; 3], Option<SignalState>)>,
+    /// Trains that met this tick (`collideWithOtherTrains`), for the glue's blast and awards.
+    pub crashes: Vec<Crash>,
     /// Track observers as the world has them, the observers each train stands over as of its
     /// last move (`occupiedObservers`), and the observers whose `powered` must change.
     pub observers: HashMap<[i32; 3], ObserverBlock>,
@@ -2271,7 +2374,7 @@ impl Railway {
     /// Train `i` finds its way to the nearest of `targets` and sets off (`findPathTo`,
     /// `startNavigation`); false when there is none.
     pub fn navigate(&mut self, i: usize, targets: &[usize]) -> bool {
-        if targets.is_empty() || !self.trains[i].train.bound {
+        if targets.is_empty() || !self.trains[i].train.bound || self.trains[i].train.derailed {
             return false;
         }
         let me = self.trains[i].id;
@@ -2364,6 +2467,70 @@ impl Railway {
         }
     }
 
+    /// `Train.collideWithOtherTrains` for each moving train on the track: the stretch of its
+    /// carriage at the front of its run (its leading wheel to its trailing one, or the other
+    /// way running backwards) against every other train's carriages and the gaps between them;
+    /// meeting one, both crash (`crash`). Each train's `backwards` is spent here
+    /// (`backwardsDriver = null`).
+    fn collide(&mut self) {
+        let g = &self.net.graph;
+        let mut crashes = Vec::new();
+        for i in 0..self.trains.len() {
+            let t = &self.trains[i].train;
+            if !t.bound || t.derailed || t.speed == 0.0 || t.carriages.is_empty() {
+                continue;
+            }
+            let c = if t.speed < 0.0 { t.carriages.len() - 1 } else { 0 };
+            let (lead, trail) = t.carriage_ends(g, c);
+            let (start, end) = if t.speed < 0.0 {
+                (trail, lead)
+            } else {
+                (lead, trail)
+            };
+            'trains: for j in 0..self.trains.len() {
+                let o = &self.trains[j].train;
+                if j == i || !o.bound || o.carriages.is_empty() {
+                    continue;
+                }
+                let mut last: Option<Vec3> = None;
+                for k in 0..o.carriages.len() {
+                    let (start2, end2) = o.carriage_ends(g, k);
+                    let near = distance(start2, start).min(distance(end2, start));
+                    if near > f64::from(MAX_ASSEMBLY_LENGTH) {
+                        continue 'trains;
+                    }
+                    // The gap from the carriage before, then the carriage itself.
+                    let gap = last.and_then(|l| stretch_hit(start, end, l, start2));
+                    last = Some(end2);
+                    if let Some(at) = gap.or_else(|| stretch_hit(start, end, start2, end2)) {
+                        crashes.push((i, j, at));
+                        break 'trains;
+                    }
+                }
+            }
+        }
+        for (i, j, at) in crashes {
+            if self.trains[i].train.derailed {
+                continue;
+            }
+            let combined = self.trains[i].train.speed.abs() + self.trains[j].train.speed.abs();
+            let backwards = [self.trains[i].train.backwards, self.trains[j].train.backwards];
+            self.trains[i].train.crash();
+            self.trains[j].train.crash();
+            self.trains[i].runtime.interrupted();
+            self.trains[j].runtime.interrupted();
+            self.crashes.push(Crash {
+                trains: [self.trains[i].id, self.trains[j].id],
+                at,
+                combined_speed: combined,
+                backwards,
+            });
+        }
+        for t in &mut self.trains {
+            t.train.backwards = false;
+        }
+    }
+
     /// Whether a tick has nothing to do: no trains, no signal changed, and nothing for clients;
     /// with signals, track or curves changed builds the graph (once) for their states.
     pub fn idle(&self, curves: &crate::track_curves::Curves) -> bool {
@@ -2389,9 +2556,13 @@ impl Railway {
 
     /// `CarriageContraptionEntity.startControlling`: a player takes train `id`'s controls; its
     /// schedule pauses (`manualControls`) and its navigation is cancelled. False when there is
-    /// no such train on the graph (Create's `carriage == null`; trains don't derail here).
+    /// no such train on the graph (Create's `carriage == null`) or it is derailed.
     pub fn start_controlling(&mut self, id: u32) -> bool {
-        let Some(t) = self.trains.iter_mut().find(|t| t.id == id && t.train.bound) else {
+        let Some(t) = self
+            .trains
+            .iter_mut()
+            .find(|t| t.id == id && t.train.bound && !t.train.derailed)
+        else {
             return false;
         };
         t.train.nav = None;
@@ -2426,7 +2597,7 @@ impl Railway {
         let i = self
             .trains
             .iter()
-            .position(|t| t.id == id && t.train.bound)?;
+            .position(|t| t.id == id && t.train.bound && !t.train.derailed)?;
         let has = |k: u8| held & (1 << k) != 0;
         let mut speed = i32::from(has(FORWARD)) - i32::from(has(BACK));
         let mut steer = i8::from(has(LEFT)) - i8::from(has(RIGHT));
@@ -2709,6 +2880,7 @@ impl Railway {
                 });
             }
         }
+        self.collide();
         if !self.observers.is_empty() {
             // The listeners as each moving train ran, then `tickPoints(false)`; the blocks
             // whose light changed are told (`TrackObserverBlockEntity.tick`).
@@ -3501,6 +3673,46 @@ mod tests {
         let (mut r, a) = signalled();
         let station = r.station_index([280, 64, 1]).unwrap();
         assert!(r.navigate(a, &[station]));
+    }
+
+    #[test]
+    fn trains_meeting_head_on_crash_and_stop() {
+        let mut r = straight(300);
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[100, 64, 0]], [1.0, 0.0, 0.0]);
+        let b = assemble(&mut r, &[[120, 64, 0]], [-1.0, 0.0, 0.0]);
+        r.trains[a].train.speed = 0.6;
+        r.trains[b].train.speed = 0.4;
+        let mut events = Vec::new();
+        for _ in 0..60 {
+            r.tick(&mut events);
+            if !r.crashes.is_empty() {
+                break;
+            }
+        }
+        let c = r.crashes[0];
+        assert_eq!(c.trains, [r.trains[a].id, r.trains[b].id]);
+        assert!(c.combined_speed > 0.2);
+        assert!(r.trains[a].train.derailed && r.trains[b].train.derailed);
+        // They bounce back at up to half a block a tick, then stand derailed.
+        let v = r.trains[a].train.speed;
+        assert!((-0.5..0.0).contains(&v), "{v}");
+        let at = r.trains[a].train.points[0].at(&r.net.graph);
+        for _ in 0..10 {
+            r.tick(&mut events);
+        }
+        assert_eq!(r.trains[a].train.points[0].at(&r.net.graph), at);
+        assert!(!r.start_controlling(r.trains[a].id));
+        // Trains apart on the track don't.
+        let mut r = straight(300);
+        r.ensure(&Curves::default());
+        let a = assemble(&mut r, &[[100, 64, 0]], [1.0, 0.0, 0.0]);
+        assemble(&mut r, &[[200, 64, 0]], [1.0, 0.0, 0.0]);
+        r.trains[a].train.speed = 0.5;
+        for _ in 0..20 {
+            r.tick(&mut events);
+        }
+        assert!(r.crashes.is_empty());
     }
 
     #[test]

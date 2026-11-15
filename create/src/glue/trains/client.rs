@@ -138,6 +138,37 @@ pub fn carriage_hit(
     })
 }
 
+/// Whether train `train`, as this client knows it, carries a steam whistle
+/// (`Train.determineHonk` finding one).
+pub fn has_whistle(host: &dyn ClientHost, train: u32) -> bool {
+    let whistle = host.block_key("create:steam_whistle");
+    TRAINS.with_borrow(|trains| {
+        trains.get(&train).is_some_and(|t| {
+            t.cars
+                .iter()
+                .flatten()
+                .any(|(_, s)| state_of(*s).is_some_and(|st| Some(st.block()) == whistle))
+        })
+    })
+}
+
+/// The point of train `train` nearest `to` (`CarriageSounds`' sound location: the nearest of
+/// its carriages' pivots, as each glides now).
+pub fn nearest_point(host: &dyn ClientHost, train: u32, to: [f64; 3]) -> Option<[f64; 3]> {
+    let now = now(host);
+    TRAINS.with_borrow(|trains| {
+        let t = trains.get(&train)?;
+        let dt = f64::from(now - t.since);
+        t.poses
+            .iter()
+            .map(|p| frame(p, t.heading, dt).pivot)
+            .min_by(|a, b| {
+                let d = |p: &[f64; 3]| (0..3).map(|i| (p[i] - to[i]).powi(2)).sum::<f64>();
+                d(a).total_cmp(&d(b))
+            })
+    })
+}
+
 /// For the train HUD's arrow, the carriage `at` points into as this client has it: its
 /// entity's `yaw` now (`Carriage.alignEntity`: the leading bogey's way, `atan2(dz, dx) + 180`),
 /// the way it faced when assembled, and the block state at the controls.

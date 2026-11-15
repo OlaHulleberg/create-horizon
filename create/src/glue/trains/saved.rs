@@ -79,6 +79,10 @@ pub fn trains_to_nbt(
                     throttle: t.train.throttle,
                 };
                 c.insert("motion".into(), Tag::IntArray(motion.encode()));
+                // `Derailed`.
+                if t.train.derailed {
+                    c.insert("derailed".into(), Tag::Byte(1));
+                }
                 if !t.name.is_empty() {
                     c.insert("name".into(), Tag::String(t.name.as_str().into()));
                 }
@@ -597,6 +601,8 @@ pub fn trains_from_nbt(host: &dyn Host, data: &Compound) -> Vec<TrainOnTrack> {
                     bound: false,
                     stalled: false,
                     speed_before_stall: None,
+                    derailed: matches!(c.get(&"derailed".into()), Some(Tag::Byte(1))),
+                    backwards: false,
                 },
                 cars,
                 heading: m.heading,
