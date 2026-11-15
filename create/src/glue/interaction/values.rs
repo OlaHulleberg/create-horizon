@@ -27,6 +27,20 @@ pub(crate) const VALUE: &str = "create:value";
 /// whether a wrench is in hand), from the client.
 pub(crate) const VALUE_SETTINGS: &str = "create:value_settings";
 
+/// The key in a kinetic block entity's client data counting the looks at its value box.
+pub(crate) const LOOKS: &str = "create:value_looks";
+
+thread_local! {
+    /// How often players asked for each value box's setting while looking at it.
+    static LOOKED: std::cell::RefCell<std::collections::HashMap<[i32; 3], i32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// How often players looked at the value box at `pos`, if ever.
+pub(crate) fn looks(pos: [i32; 3]) -> Option<i32> {
+    LOOKED.with_borrow(|m| m.get(&pos).copied())
+}
+
 /// `[i32]` as the channels carry them.
 pub(super) fn encode(words: &[i32]) -> Vec<u8> {
     words.iter().flat_map(|v| v.to_le_bytes()).collect()
@@ -289,6 +303,15 @@ pub(super) fn value_settings_from_client(
     let Some(value) = settings_at(&mut lv, player, pos, pick, short) else {
         return;
     };
+    // A question alone (no pick, no click) is the client looking at the block: its block entity
+    // is sent again, so the client draws it anew with the value (`value_text`).
+    if pick.is_none() && short.is_none() {
+        LOOKED.with_borrow_mut(|m| {
+            let n = m.entry(pos).or_insert(0);
+            *n = n.wrapping_add(1);
+        });
+        lv.host.block_entity_sync(pos);
+    }
     net::send_to_player(
         lv.host,
         player,

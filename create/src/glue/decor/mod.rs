@@ -40,6 +40,7 @@ mod items;
 mod placard;
 mod place;
 mod saved;
+mod scaffolding;
 mod tick;
 
 use super::server::ServerLevel;
@@ -88,6 +89,8 @@ struct Dim {
     /// Girders and encased shafts whose neighbour changed (`updateShape`), peculiar bells to
     /// look under.
     girder_checks: Vec<[i32; 3]>,
+    /// Metal scaffolding whose neighbour changed: whether it is a bottom one.
+    scaffold_checks: Vec<[i32; 3]>,
     bell_checks: Vec<[i32; 3]>,
     /// Blocks whose bracket or placard item clients must see again.
     shown: Vec<[i32; 3]>,
@@ -278,6 +281,7 @@ impl Subsystem for Decor {
         doors::register(r);
         crates::register(r);
         copper::register(r);
+        scaffolding::register(r);
     }
 
     fn world_closed(&self) {
@@ -301,13 +305,16 @@ impl Subsystem for Decor {
     }
 
     /// Girders and encased shafts shape themselves again (`updateShape`), a peculiar bell looks
-    /// at what is under it.
+    /// at what is under it, metal scaffolding at what holds it.
     fn neighbor_changed(&self, dim: usize, pos: [i32; 3], state: u32) {
         match block_of(state).map(|(b, _)| b) {
             Some(Block::MetalGirder | Block::MetalGirderEncasedShaft) => {
                 with(dim, |d| d.girder_checks.push(pos))
             }
             Some(Block::PeculiarBell) => with(dim, |d| d.bell_checks.push(pos)),
+            Some(b) if scaffolding::BLOCKS.contains(&b) => {
+                with(dim, |d| d.scaffold_checks.push(pos))
+            }
             _ => {}
         }
     }

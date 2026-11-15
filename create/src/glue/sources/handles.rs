@@ -335,6 +335,7 @@ impl BlockEntityPart for Handles {
             else {
                 return;
             };
+            super::super::interaction::value_text::draw(host, event.pos, event.draw);
             draw_valve(event, block, &own, facing, &d);
         }
     }
@@ -382,6 +383,8 @@ fn draw_valve(
     let positive = Dir::from_axis(facing.axis(), true) == facing;
     let now = event.draw.game_time();
     let used = use_of(&event.entity.nbt);
+    // Its value box's number is drawn while it is looked at.
+    let keep = !super::super::interaction::value_text::animated(event.pos);
     let draw = &mut *event.draw;
     match used {
         Some((start, ticks, target, back)) if now < start + i64::from(ticks) + SETTLE => {
@@ -396,7 +399,9 @@ fn draw_valve(
             draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
             draw.block(model, own);
             draw.still();
-            draw.keep();
+            if keep {
+                draw.keep();
+            }
         }
         _ => {
             let angle = used.map_or(0.0, |(_, ticks, target, back)| {
@@ -406,7 +411,9 @@ fn draw_valve(
             draw.rotate_about(axis_vector(d.axis), angle, [0.5; 3]);
             draw.block(model, own);
             draw.pop();
-            draw.keep();
+            if keep {
+                draw.keep();
+            }
         }
     }
 }

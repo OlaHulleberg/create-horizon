@@ -68,6 +68,12 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
     for pos in bells {
         haunt_bell(lv, pos);
     }
+    let mut scaffolds = with(dim, |d| std::mem::take(&mut d.scaffold_checks));
+    scaffolds.sort_unstable();
+    scaffolds.dedup();
+    for pos in scaffolds {
+        super::scaffolding::check(lv, pos);
+    }
     let mut shown = with(dim, |d| std::mem::take(&mut d.shown));
     shown.sort_unstable();
     shown.dedup();

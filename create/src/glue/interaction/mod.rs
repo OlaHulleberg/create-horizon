@@ -21,6 +21,7 @@ mod commands;
 mod crank;
 mod hud;
 /// The value channels and the value box rules, for the subsystems whose blocks have one.
+pub(crate) mod value_text;
 pub(crate) mod values;
 
 use super::subsystem::Subsystem;
@@ -76,6 +77,17 @@ impl Subsystem for Interaction {
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         board::tick(host);
+        value_text::tick(host);
+    }
+
+    /// The block looked at is drawn each frame while it shows its value box's number.
+    fn animated(
+        &self,
+        _block: create_engine::Block,
+        pos: [i32; 3],
+        _entity: &mod_api::ModBlockEntity,
+    ) -> bool {
+        value_text::animated(pos)
     }
 
     fn camera_pose(&self, _host: &dyn ClientHost, event: &mut mod_api::CameraPoseEvent<'_>) {

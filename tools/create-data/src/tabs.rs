@@ -1,5 +1,6 @@
 //! Create's two creative tabs (`AllCreativeModeTabs`): `base` (Create's machines and items) and
-//! `palettes` (building blocks), each in registration order, blocks before plain items, without
+//! `palettes` (building blocks), each in registration order, the 3D plain items, then the
+//! blocks, then the other plain items (`RegistrateDisplayItemsGenerator.accept`), without
 //! the items Create keeps out of them (`makeExclusionPredicate`) or shows only in search
 //! (`makeVisibilityFunc`: the dyed variants but one colour).
 //!
@@ -44,6 +45,24 @@ const LEFT_OUT: &[&str] = &[
     "mechanical_piston_head",
     "small_bogey",
     "large_bogey",
+];
+
+/// The plain items whose item model is 3D (`BakedModel.isGui3d`: no `gui_light: front` in their
+/// model's parents), which Create lists before the blocks (`IS_ITEM_3D_PREDICATE`); the other
+/// plain items follow the blocks.
+const ITEMS_3D: &[&str] = &[
+    "cardboard_package_10x12",
+    "cardboard_package_10x8",
+    "cardboard_package_12x10",
+    "cardboard_package_12x12",
+    "empty_blaze_burner",
+    "extendo_grip",
+    "handheld_worldshaper",
+    "linked_controller",
+    "potato_cannon",
+    "vertical_gearbox",
+    "wand_of_symmetry",
+    "wrench",
 ];
 
 /// `TagDependentIngredientItem.shouldHide`: crushed ores of metals no tag here holds.
@@ -144,8 +163,8 @@ fn position(src: &Sources, name: &str) -> Option<usize> {
 /// items) and `items` (the rest).
 pub fn tabs(java: &Path, blocks: &[String], items: &[String]) -> Vec<(&'static str, Value)> {
     let src = sources(java);
-    // (in palettes, is a plain item, position, name)
-    let mut entries: Vec<(bool, bool, usize, &str)> = Vec::new();
+    // (in palettes, 3D plain items, blocks then the other plain items, position, name)
+    let mut entries: Vec<(bool, u8, usize, &str)> = Vec::new();
     for (names, item) in [(blocks, false), (items, true)] {
         for name in names.iter().filter(|n| shown(n)) {
             let pos = position(&src, name);
@@ -153,7 +172,12 @@ pub fn tabs(java: &Path, blocks: &[String], items: &[String]) -> Vec<(&'static s
             let palettes = pos.map_or(!item, |p| {
                 (src.palettes_from..src.blocks_end).contains(&p) || p >= src.palette_blocks
             });
-            entries.push((palettes, item, pos.unwrap_or(usize::MAX), name));
+            let group = match (item, ITEMS_3D.contains(&name.as_str())) {
+                (true, true) => 0,
+                (false, _) => 1,
+                (true, false) => 2,
+            };
+            entries.push((palettes, group, pos.unwrap_or(usize::MAX), name));
         }
     }
     entries.sort_by(|a, b| (a.0, a.1, a.2, a.3).cmp(&(b.0, b.1, b.2, b.3)));

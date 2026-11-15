@@ -19,8 +19,6 @@
 //!   it is open (Create carries the real stack).
 //! - A slot's item tooltip is its name alone (`hover_name`): no host call gives an item's
 //!   tooltip lines.
-//! - `in_tag` attributes are not offered for a reference item: no host call lists an item's
-//!   tags (`ItemStack.getTags`).
 //! - The creative middle click on a ghost slot (a full stack of it on the cursor).
 
 use super::super::net;
