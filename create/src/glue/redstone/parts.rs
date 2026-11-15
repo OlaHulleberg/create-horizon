@@ -245,6 +245,15 @@ impl BlockPart for RedstoneBlock {
                     &[
                         ("shape", shape.name()),
                         ("backwards", if backwards { "true" } else { "false" }),
+                        // `BaseRailBlock.getStateForPlacement`'s water.
+                        (
+                            "waterlogged",
+                            if crate::glue::logistics::placement::in_water(level, event) {
+                                "true"
+                            } else {
+                                "false"
+                            },
+                        ),
                     ],
                 )?;
                 Some(Some(state))

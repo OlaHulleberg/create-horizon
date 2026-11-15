@@ -114,14 +114,17 @@ impl BlockPart for Placement {
             with_world(|w| w.has_shaft_towards(dim, offset(pos, d), d.opposite())).unwrap_or(false)
         };
         let state = event.state;
+        // `withWater` (pipes and pumps are `ProperWaterloggedBlock`s).
+        let water = crate::glue::logistics::placement::in_water(level, event);
         let placed = match block {
             // FluidPipeBlock.getStateForPlacement: `updateBlockState` preferring the view.
             Block::FluidPipe => {
                 let s = fluids::pipe_sides(0, |d| cell(level, offset(pos, d)), nearest);
-                let props: Vec<(&str, &str)> = Dir::ALL
+                let mut props: Vec<(&str, &str)> = Dir::ALL
                     .into_iter()
                     .map(|d| (dir_name(d), flag(s & d.bit() != 0)))
                     .collect();
+                props.push(("waterlogged", flag(water)));
                 set(level, state, &props)
             }
             // PumpBlock.getStateForPlacement: DirectionalKineticBlock's facing, turned to the
@@ -153,7 +156,11 @@ impl BlockPart for Placement {
                     Some((d, _)) if d.axis() != target.axis() && !c.sneaking => d,
                     _ => facing,
                 };
-                set(level, state, &[("facing", dir_name(facing))])
+                set(
+                    level,
+                    state,
+                    &[("facing", dir_name(facing)), ("waterlogged", flag(water))],
+                )
             }
             // FluidValveBlock (DirectionalAxisKineticBlock) placed among shafts and pipes.
             Block::FluidValve => {

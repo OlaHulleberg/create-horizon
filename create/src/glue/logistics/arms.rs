@@ -13,7 +13,7 @@
 //!
 //! An arm clicked with goggles wears them; a dancing arm's body takes Create's rainbow (tinted
 //! copies of its partials, made by `create-data prepare`). A charged ejector fires when a mob
-//! stands on it (looked at every other tick: the API has no landing hook for them) or a player
+//! stands on it (`block_step_on`, acted on at the level's tick) or a player
 //! does (their client asks, `create:ejector_trigger`), throwing them along its arc.
 //!
 //! Left out: dropping a chosen point or ejector target with a left click (see HORIZON_API.md),
@@ -1412,53 +1412,68 @@ fn tick_ejectors(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// `EjectorBlock.updateEntityAfterFallOn` for mobs and other entities (the API has no landing
-/// hook for them): a charged, unpowered ejector with a target ahead fires when something but
-/// an item or a player stands on its plate (a player's own client asks, `trigger_ejector`).
-/// Looked at every other tick.
+thread_local! {
+    /// Entities that stood on an ejector this tick (`block_step_on`): level, ejector, entity.
+    static STEPPED: std::cell::RefCell<Vec<(usize, [i32; 3], u32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `Block.stepOn` of an ejector by something but an item or a player (whose own client asks,
+/// `trigger_ejector`): noted for `entities_on_ejectors`.
+pub fn ejector_stepped_on(dim: usize, pos: [i32; 3], entity: u32) {
+    STEPPED.with_borrow_mut(|s| s.push((dim, pos, entity)));
+}
+
+/// `EjectorBlock.updateEntityAfterFallOn` for what stood on an ejector this tick: a charged,
+/// unpowered ejector with a target ahead fires; an entity more than 4 px from the plate's
+/// middle is first drawn halfway to it (moving down at 0.125) and fires it once there.
 fn entities_on_ejectors(lv: &mut ServerLevel<'_>) {
-    if lv.game_time() % 2 != 0 {
-        return;
-    }
     let dim = lv.dim;
-    let ready: Vec<[i32; 3]> = with_world(|w| {
-        w.dims[dim]
-            .ejectors
+    let mut stepped: Vec<([i32; 3], u32)> = STEPPED.with_borrow_mut(|s| {
+        let mine = s
             .iter()
-            .filter(|(_, e)| e.state == ejector::State::Charged && !e.powered && e.launcher.h != 0)
-            .map(|(p, _)| *p)
-            .collect()
-    })
-    .unwrap_or_default();
-    for pos in ready {
-        let lo = [
-            f64::from(pos[0]),
-            f64::from(pos[1]) + 0.5,
-            f64::from(pos[2]),
-        ];
-        let hi = [
-            f64::from(pos[0] + 1),
-            f64::from(pos[1]) + 1.25,
-            f64::from(pos[2] + 1),
-        ];
-        let standing = lv
-            .level
-            .entities_in(&*lv.host, lo, hi)
-            .unwrap_or_default()
-            .into_iter()
-            .any(|e| {
-                let kind = e
-                    .kind(&*lv.host)
-                    .map(|k| k.id(&*lv.host))
-                    .unwrap_or_default();
-                !matches!(
-                    kind.as_str(),
-                    "minecraft:item" | "minecraft:player" | "minecraft:experience_orb"
-                ) && e.on_ground(&*lv.host) == Some(true)
-            });
-        if standing {
-            trigger_ejector(dim, pos);
+            .filter(|e| e.0 == dim)
+            .map(|e| (e.1, e.2))
+            .collect();
+        s.retain(|e| e.0 != dim);
+        mine
+    });
+    stepped.sort();
+    stepped.dedup();
+    for (pos, id) in stepped {
+        let ready = with_world(|w| {
+            w.dims[dim].ejectors.get(&pos).is_some_and(|e| {
+                e.state != ejector::State::Retracting && !e.powered && e.launcher.h != 0
+            })
+        })
+        .unwrap_or(false);
+        let Some(e) = lv.host.entity(id) else {
+            continue;
+        };
+        if !ready {
+            continue;
         }
+        if e.on_ground(&*lv.host) == Some(true) {
+            let Some(at) = e.position(&*lv.host) else {
+                continue;
+            };
+            let centre = [
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]) + 0.5 + 7.0 / 16.0,
+                f64::from(pos[2]) + 0.5,
+            ];
+            let diff = (0..3)
+                .map(|a| (centre[a] - at[a]).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            e.set_velocity(&mut *lv.host, [0.0, -0.125, 0.0]);
+            if diff > 4.0 / 16.0 {
+                let mid = [0, 1, 2].map(|a| (centre[a] + at[a]) * 0.5);
+                e.teleport_to(&mut *lv.host, mid, None);
+                continue;
+            }
+        }
+        trigger_ejector(dim, pos);
     }
 }
 

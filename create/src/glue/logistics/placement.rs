@@ -55,6 +55,15 @@ fn dir_of(d: mod_api::Direction) -> Dir {
     Dir::ALL[d as usize]
 }
 
+/// `ProperWaterloggedBlock.withWater` at placement: a water source where the block goes
+/// (`getFluidState(pos).getType() == Fluids.WATER`).
+pub(crate) fn in_water(level: &dyn LevelHost, event: &StateForPlacementEvent<'_>) -> bool {
+    level
+        .block_state_id("minecraft:water")
+        .and_then(|w| level.state_fluid_state(w))
+        .is_some_and(|w| event.fluid.source && event.fluid.fluid == w.fluid)
+}
+
 struct Placement;
 
 #[mod_api::horizon_part]
@@ -82,10 +91,7 @@ impl BlockPart for Placement {
         let set = |s: BlockState, k: &str, v: &str| level.state_with_property(s, k, v).unwrap_or(s);
         // `SimpleWaterloggedBlock`: placed into water, it holds it (the template's own answer,
         // which this one replaces).
-        let water = level
-            .block_state_id("minecraft:water")
-            .and_then(|w| level.state_fluid_state(w))
-            .is_some_and(|w| event.fluid.source && event.fluid.fluid == w.fluid);
+        let water = in_water(level, event);
         let default = if water {
             set(event.state, "waterlogged", "true")
         } else {

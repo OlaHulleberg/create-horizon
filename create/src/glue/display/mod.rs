@@ -1814,11 +1814,13 @@ impl BlockPart for DisplayBlock {
             }
             _ => return None,
         };
-        let state = super::redstone::with_properties(
-            level,
-            event.state,
-            &[("facing", super::kinetics::dir_name(facing))],
-        )?;
+        let mut props = vec![("facing", super::kinetics::dir_name(facing))];
+        // FlapDisplayBlock: `WATERLOGGED` from the fluid where it goes.
+        if block == Block::DisplayBoard {
+            let water = super::logistics::placement::in_water(level, event);
+            props.push(("waterlogged", if water { "true" } else { "false" }));
+        }
+        let state = super::redstone::with_properties(level, event.state, &props)?;
         Some(Some(state))
     }
 }
