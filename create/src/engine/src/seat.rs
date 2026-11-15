@@ -48,6 +48,23 @@ pub fn dismount_at(pos: [i32; 3]) -> [f64; 3] {
 /// `SeatBlock.canBePickedUp` for an entity of `kind` that is living: not a shulker nor a player
 /// (`seatHostileMobs` is on by default, so hostile mobs sit too). Create's `IGNORE_SEAT` tag
 /// (`#c:capturing_not_supported`) has no reader here.
+/// `SeatBlock.fallOn`: `super.fallOn(.., fallDistance * 0.5F)`, the damage of a fall of half
+/// `distance` blocks, from `damage`, the game's for the whole of it
+/// (`LivingEntity.calculateFallDamage`: `ceil((distance - safeFallDistance) * multiplier)`).
+/// The safe distance is vanilla's 3 when `damage` is what that gives, else the one `damage`
+/// implies at a multiplier of 1 (jump boost raises it). No damage stays none (immune, creative).
+pub fn fall_damage(distance: f64, damage: f32) -> f32 {
+    if damage <= 0.0 {
+        return 0.0;
+    }
+    let safe = if (distance - 3.0).ceil() as f32 == damage {
+        3.0
+    } else {
+        distance - f64::from(damage)
+    };
+    (distance * 0.5 - safe).ceil().max(0.0) as f32
+}
+
 pub fn can_sit(kind: &str) -> bool {
     !matches!(kind, "minecraft:shulker" | "minecraft:player")
 }
@@ -69,6 +86,17 @@ pub fn sits_down(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_seat_counts_half_the_fall() {
+        // 10 blocks: 7 on the ground, 5 blocks' 2 on a seat; 5 blocks: 2, then none.
+        assert_eq!(fall_damage(10.0, 7.0), 2.0);
+        assert_eq!(fall_damage(5.0, 2.0), 0.0);
+        assert_eq!(fall_damage(20.5, 18.0), 8.0);
+        // Jump boost II (safe distance 5): 12 blocks give 7, 6 blocks give 1.
+        assert_eq!(fall_damage(12.0, 7.0), 1.0);
+        assert_eq!(fall_damage(30.0, 0.0), 0.0);
+    }
 
     #[test]
     fn riders_sit_where_create_s_seat_puts_them() {
