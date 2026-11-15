@@ -74,6 +74,12 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
     for pos in scaffolds {
         super::scaffolding::check(lv, pos);
     }
+    let mut ladders = with(dim, |d| std::mem::take(&mut d.ladder_checks));
+    ladders.sort_unstable();
+    ladders.dedup();
+    for pos in ladders {
+        super::ladders::check(lv, pos);
+    }
     let mut shown = with(dim, |d| std::mem::take(&mut d.shown));
     shown.sort_unstable();
     shown.dedup();

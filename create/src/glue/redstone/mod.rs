@@ -105,6 +105,24 @@ impl Subsystem for Redstone {
         analog::forget();
     }
 
+    /// `AnalogLeverBlockEntity.addToGoggleTooltip`: its signal strength.
+    fn goggle_tooltip(
+        &self,
+        _host: &dyn mod_api::ClientHost,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        lines: &mut Vec<Vec<(String, u32)>>,
+    ) {
+        if block == create_engine::Block::AnalogLever
+            && let Some(state) = client::lever_state(pos)
+        {
+            lines.push(create_engine::gauge::goggles(
+                0,
+                vec![(format!("Analog Strength: {state}/15"), 0xFFFFFF)],
+            ));
+        }
+    }
+
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         saved::load(lv, data);
     }

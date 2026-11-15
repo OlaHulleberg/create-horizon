@@ -37,6 +37,7 @@ mod crates;
 mod doors;
 mod girders;
 mod items;
+mod ladders;
 mod placard;
 mod place;
 mod saved;
@@ -91,6 +92,8 @@ struct Dim {
     girder_checks: Vec<[i32; 3]>,
     /// Metal scaffolding whose neighbour changed: whether it is a bottom one.
     scaffold_checks: Vec<[i32; 3]>,
+    /// Metal ladders whose neighbour changed: whether anything still holds them.
+    ladder_checks: Vec<[i32; 3]>,
     bell_checks: Vec<[i32; 3]>,
     /// Blocks whose bracket or placard item clients must see again.
     shown: Vec<[i32; 3]>,
@@ -282,6 +285,7 @@ impl Subsystem for Decor {
         crates::register(r);
         copper::register(r);
         scaffolding::register(r);
+        ladders::register(r);
     }
 
     fn world_closed(&self) {
@@ -315,6 +319,7 @@ impl Subsystem for Decor {
             Some(b) if scaffolding::BLOCKS.contains(&b) => {
                 with(dim, |d| d.scaffold_checks.push(pos))
             }
+            _ if ladders::is_ladder(state) => with(dim, |d| d.ladder_checks.push(pos)),
             _ => {}
         }
     }
