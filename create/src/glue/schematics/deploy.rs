@@ -1,24 +1,13 @@
-//! A written schematic in a player's hand (`SchematicHandler`, `DeployTool`,
-//! `SchematicEditScreen`): its bounds are outlined where it is deployed, or where a right click
-//! would deploy it (centred on the block looked at, on its face); a right click deploys it
-//! there (moving it when it already is), and sneaking, the right click opens Create's screen to
-//! type its anchor and choose its rotation and mirror. The server writes the held schematic
-//! (`super::deploy`).
-//!
-//! Left out: the ghost of the schematic's blocks (`SchematicRenderer`) and the other tools
-//! (move, rotate, flip, print), whose selection screen this port has not; the edit screen does
-//! what they do.
+//! The schematic's edit screen (`SchematicEditScreen`), opened by a right click with the
+//! written schematic while sneaking (`SchematicItem.use`): its anchor typed, its rotation and
+//! mirror chosen; closing it with valid coordinates deploys it there (`super::tools::edited`).
 
-use super::super::net;
-use super::body;
-use super::quill::CHANNEL;
-use create_engine::schematic::{Mirror, Rotation, SchematicData, transform};
+use create_engine::schematic::{Mirror, Rotation};
 use mod_api::{
-    ClientHost, DrawContext, Flow, Hand, Identifier, InteractionKey,
-    InteractionKeyMappingTriggeredEvent, ItemStack, PlayerRef, RenderLevelStage,
-    RenderLevelStageEvent, ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
-    ServerHost, SoundPlay, WorldDepth, WorldLine,
+    ClientHost, DrawContext, Flow, Hand, Identifier, InteractionAttempt, InteractionKey,
+    InteractionKeyMappingTriggeredEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
+    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent,
+    ScreenRenderPostEvent, SoundPlay,
 };
 use std::cell::{Cell, RefCell};
 
@@ -54,125 +43,7 @@ pub(super) fn reset() {
     LATER.with_borrow_mut(|l| *l = (None, false));
 }
 
-/// The written schematic in the local player's main hand, and its data.
-fn held(host: &dyn ClientHost) -> Option<(ItemStack, SchematicData)> {
-    let player = host.local_player()?;
-    let stack = host.living(player.entity())?.hand_item(host, Hand::Main)?;
-    if stack.item().id(host) != super::SCHEMATIC {
-        return None;
-    }
-    let data = body::schematic_data(&stack);
-    data.file.as_ref()?;
-    Some((stack, data))
-}
-
-/// The world box of the schematic deployed at `anchor` (`SchematicTransformation`'s bounds:
-/// the template's corners turned as the printer turns them).
-fn world_box(data: &SchematicData, anchor: [i32; 3]) -> Option<([f64; 3], [f64; 3])> {
-    let size = data.bounds?;
-    let far = [size[0] - 1, size[1] - 1, size[2] - 1];
-    let a = transform([0; 3], data.mirror, data.rotation, [0; 3]);
-    let b = transform(far, data.mirror, data.rotation, [0; 3]);
-    Some((
-        [0, 1, 2].map(|i| f64::from(anchor[i] + a[i].min(b[i]))),
-        [0, 1, 2].map(|i| f64::from(anchor[i] + a[i].max(b[i]) + 1)),
-    ))
-}
-
-/// `DeployTool`'s target: the block looked at (75 blocks), on its face unless replaceable,
-/// less the schematic's centre across.
-fn target(host: &dyn ClientHost, data: &SchematicData) -> Option<[i32; 3]> {
-    let hit = host.raycast(75.0)?;
-    let pos = [hit.block_x, hit.block_y, hit.block_z];
-    let replaceable = host
-        .level(host.dimension())
-        .and_then(|l| l.block_state(host, pos))
-        .and_then(|s| mod_api::HostBlockStates::block_states(host).replaceable(s))
-        .unwrap_or(false);
-    let at = if replaceable {
-        pos
-    } else {
-        let face = super::quill::face_of(pos, [hit.x, hit.y, hit.z]).offset();
-        [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]]
-    };
-    let (min, max) = world_box(data, [0; 3])?;
-    let center = [0, 2].map(|i| ((min[i] + max[i]) / 2.0) as i32);
-    Some([at[0] - center[0], at[1], at[2] - center[1]])
-}
-
-fn outline(event: &mut RenderLevelStageEvent<'_>, (min, max): ([f64; 3], [f64; 3]), color: u32) {
-    let (min, max) = (min.map(|v| v - 0.005), max.map(|v| v + 0.005));
-    let c = |x: usize, y: usize, z: usize| {
-        [
-            if x == 0 { min[0] } else { max[0] },
-            if y == 0 { min[1] } else { max[1] },
-            if z == 0 { min[2] } else { max[2] },
-        ]
-    };
-    let mut lines = Vec::with_capacity(12);
-    for i in 0..2 {
-        for j in 0..2 {
-            lines.push(WorldLine::new(
-                c(0, i, j),
-                c(1, i, j),
-                color,
-                3.0,
-                WorldDepth::Tested,
-            ));
-            lines.push(WorldLine::new(
-                c(i, 0, j),
-                c(i, 1, j),
-                color,
-                3.0,
-                WorldDepth::Tested,
-            ));
-            lines.push(WorldLine::new(
-                c(i, j, 0),
-                c(i, j, 1),
-                color,
-                3.0,
-                WorldDepth::Tested,
-            ));
-        }
-    }
-    let _ = event.draw.lines(&lines);
-}
-
-/// The deployed schematic's bounds, or where it would go.
-pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-    if event.stage != RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
-    let Some((_, data)) = held(host) else {
-        return;
-    };
-    let anchor = match (data.deployed, data.anchor) {
-        (Some(true), Some(a)) => a,
-        _ => match target(host, &data) {
-            Some(t) => t,
-            None => return,
-        },
-    };
-    if let Some(b) = world_box(&data, anchor) {
-        let color = if data.deployed == Some(true) {
-            0xFFFF_FFFF
-        } else {
-            0xFF68_86C5
-        };
-        outline(event, b, color);
-    }
-}
-
-/// `D`, the anchor, rotation and mirror: the held schematic deployed so.
-fn send(host: &mut dyn ClientHost, anchor: [i32; 3], rotation: usize, mirror: usize) {
-    let mut data = vec![b'D', rotation as u8, mirror as u8];
-    for v in anchor {
-        data.extend_from_slice(&v.to_le_bytes());
-    }
-    net::send_to_server(host, CHANNEL, &data);
-}
-
-/// A right click with the schematic: deployed where looked at, or, sneaking, its screen.
+/// A right click with the schematic while sneaking: its screen (`SchematicItem.use`).
 pub(super) fn interaction_key(
     host: &mut dyn ClientHost,
     event: &mut InteractionKeyMappingTriggeredEvent,
@@ -180,49 +51,41 @@ pub(super) fn interaction_key(
     if event.key != InteractionKey::Use || event.hand != Hand::Main || !host.playing() {
         return Flow::Continue;
     }
-    let Some((_, data)) = held(&*host) else {
-        return Flow::Continue;
-    };
-    event.swing_hand = false;
-    let rotation = Rotation::ALL
-        .iter()
-        .position(|r| *r == data.rotation)
-        .unwrap_or(0);
-    let mirror = Mirror::ALL
-        .iter()
-        .position(|m| *m == data.mirror)
-        .unwrap_or(0);
     let sneaking = host
         .local_player()
         .is_some_and(|p| p.entity().is_shift_key_down(&*host) == Some(true));
-    if sneaking {
-        // `SchematicEditScreen.init`: the anchor, else the player's own block.
-        let anchor = match (data.deployed, data.anchor) {
-            (Some(true), Some(a)) => Some(a),
-            _ => host
-                .local_player()
-                .and_then(|p| p.entity().position(&*host))
-                .map(|p| p.map(|v| v.floor() as i32)),
-        };
-        let Some(anchor) = anchor else {
-            return Flow::Cancel;
-        };
-        OPEN.with_borrow_mut(|o| {
-            *o = Some(Edit {
-                fields: anchor.map(|v| v.to_string()),
-                rotation,
-                mirror,
-                focus: None,
-                opened: std::time::Instant::now(),
-            })
-        });
-        if !host.mod_screen_open(MOD) {
-            OPEN.with_borrow_mut(|o| *o = None);
-        }
+    if !sneaking {
+        return Flow::Continue;
+    }
+    let Some((_, anchor, rotation, mirror)) = super::tools::edit_start() else {
+        return Flow::Continue;
+    };
+    event.swing_hand = false;
+    if event.attempt == InteractionAttempt::Held {
         return Flow::Cancel;
     }
-    if let Some(t) = target(&*host, &data) {
-        send(host, t, rotation, mirror);
+    // `SchematicEditScreen.init`: the anchor, else the player's own block.
+    let anchor = match anchor {
+        Some(a) => Some(a),
+        None => host
+            .local_player()
+            .and_then(|p| p.entity().position(&*host))
+            .map(|p| p.map(|v| v.floor() as i32)),
+    };
+    let Some(anchor) = anchor else {
+        return Flow::Cancel;
+    };
+    OPEN.with_borrow_mut(|o| {
+        *o = Some(Edit {
+            fields: anchor.map(|v| v.to_string()),
+            rotation: rotation as usize,
+            mirror: mirror as usize,
+            focus: None,
+            opened: std::time::Instant::now(),
+        })
+    });
+    if !host.mod_screen_open(MOD) {
+        OPEN.with_borrow_mut(|o| *o = None);
     }
     Flow::Cancel
 }
@@ -230,7 +93,7 @@ pub(super) fn interaction_key(
 pub(super) fn tick(host: &mut dyn ClientHost) {
     let (edit, close) = LATER.with_borrow_mut(std::mem::take);
     if let Some((anchor, r, m)) = edit {
-        send(host, anchor, r, m);
+        super::tools::edited(&*host, anchor, Rotation::ALL[r % 4], Mirror::ALL[m % 3]);
     }
     if close {
         host.mod_screen_close(MOD);
@@ -298,7 +161,7 @@ pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
     let (x, y) = corner(draw.size());
     draw.sprite(TEX, [10.0, 8.0, WIDTH, HEIGHT], [x, y, WIDTH, HEIGHT], None);
     // `getCurrentSchematicName`: the file.
-    let title = held(host).and_then(|(_, d)| d.file).unwrap_or_default();
+    let title = super::tools::current_name();
     let tw = draw.text_width(&title);
     draw.text(
         &title,
@@ -355,19 +218,23 @@ pub(super) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
     }
 }
 
-/// `onClose`: the edit sent (`SchematicSyncPacket`, `deployed` and the anchor typed).
+/// `removed`: with valid coordinates, the schematic deployed there, turned and mirrored as
+/// chosen; the screen closed.
 fn confirm() {
     let edit = OPEN.with_borrow_mut(Option::take);
     let Some(e) = edit else {
         return;
     };
-    let parse = |s: &str| s.parse::<i32>().unwrap_or(0);
-    let anchor = [
+    let parse = |s: &str| s.parse::<i32>().ok();
+    let anchor = match (
         parse(&e.fields[0]),
         parse(&e.fields[1]),
         parse(&e.fields[2]),
-    ];
-    LATER.with_borrow_mut(|l| *l = (Some((anchor, e.rotation, e.mirror)), true));
+    ) {
+        (Some(x), Some(y), Some(z)) => Some([x, y, z]),
+        _ => None,
+    };
+    LATER.with_borrow_mut(|l| *l = (anchor.map(|a| (a, e.rotation, e.mirror)), true));
 }
 
 pub(super) fn screen_mouse_pressed(
@@ -433,6 +300,24 @@ pub(super) fn screen_key_pressed(
     if !ours(host) {
         return Flow::Continue;
     }
+    // `keyPressed`'s paste: "x,y,z" from the clipboard into the three fields (Create's
+    // `replaceAll(" ", "")` is thrown away, so spaced numbers are not taken).
+    if event.key == "key.keyboard.v"
+        && mod_api::ClientModifiers::new(event.modifiers).control()
+        && let Some(text) = host.clipboard_text()
+    {
+        let split: Vec<&str> = text.split(',').collect();
+        if split.len() == 3 && split.iter().all(|s| s.parse::<i32>().is_ok()) {
+            OPEN.with_borrow_mut(|o| {
+                if let Some(e) = o.as_mut() {
+                    for (field, v) in e.fields.iter_mut().zip(&split) {
+                        *field = (*v).to_owned();
+                    }
+                }
+            });
+            return Flow::Cancel;
+        }
+    }
     match event.key {
         "key.keyboard.enter" | "key.keyboard.keypad.enter" => {
             confirm();
@@ -491,56 +376,4 @@ pub(super) fn screen_closing(host: &dyn ClientHost, event: &mut ScreenClosingEve
     }
     confirm();
     LATER.with_borrow_mut(|l| l.1 = false);
-}
-
-/// The server's half: the held schematic deployed as the client asked.
-pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8]) {
-    if rest.len() < 14 {
-        return;
-    }
-    let rotation = Rotation::ALL[usize::from(rest[0]) % 4];
-    let mirror = Mirror::ALL[usize::from(rest[1]) % 3];
-    let int = |i: usize| {
-        let at = 2 + i * 4;
-        i32::from_le_bytes([rest[at], rest[at + 1], rest[at + 2], rest[at + 3]])
-    };
-    let anchor = [int(0), int(1), int(2)];
-    let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
-        return;
-    };
-    let Some(mut lv) = super::ServerLevel::new(host, &dimension) else {
-        return;
-    };
-    let Some((_, stack)) = super::held(&lv, player) else {
-        return;
-    };
-    let Some(file) = body::schematic_data(&stack).file else {
-        return;
-    };
-    super::deploy(
-        &mut lv,
-        Some(player),
-        &file,
-        anchor,
-        Some(rotation.name()),
-        Some(mirror.name()),
-    );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_turned_schematic_keeps_its_box_at_the_anchor() {
-        let mut data = SchematicData::written("a.nbt", "me", [3, 2, 1]);
-        assert_eq!(
-            world_box(&data, [10, 64, 10]),
-            Some(([10.0, 64.0, 10.0], [13.0, 66.0, 11.0]))
-        );
-        // Clockwise a quarter: x runs to -z... z of 1 and x of 3 swap round the anchor.
-        data.rotation = Rotation::Clockwise90;
-        let (min, max) = world_box(&data, [0, 0, 0]).unwrap();
-        assert_eq!([max[0] - min[0], max[2] - min[2]], [1.0, 3.0]);
-    }
 }

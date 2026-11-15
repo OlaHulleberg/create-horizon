@@ -39,6 +39,15 @@ impl Hooks for Create {
         }
     }
 
+    /// The schematic outline's checkerboard (`glue::schematics`).
+    fn register_render_pipelines(
+        &self,
+        _cx: &RegistrationContext,
+        event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
+    ) {
+        glue::schematics::render_pipelines(event.pipelines);
+    }
+
     fn standalone_models(&self, _cx: &RegistrationContext, event: &mut StandaloneModelsEvent<'_>) {
         for s in SUBSYSTEMS {
             s.standalone_models(event.models);

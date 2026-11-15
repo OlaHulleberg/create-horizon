@@ -547,6 +547,61 @@ pub struct Loaded {
     pub air: Entry,
 }
 
+impl Loaded {
+    /// [`launch`] for this schematic.
+    pub fn launch(
+        &self,
+        rel: [i32; 3],
+        target: [i32; 3],
+        entry: &Entry,
+    ) -> (u32, Option<[i32; 3]>, Vec<u8>) {
+        launch(&self.printer, &self.entries, rel, target, entry)
+    }
+}
+
+/// `launchBlockOrBelt`: what is shot at `target` (`rel` from the anchor) for `entry`: a belt's
+/// end that doesn't lay the belt goes as a shaft; the one that does lays the whole belt
+/// (`beltLength` segments, found along the schematic's belt), to the other end, each segment's
+/// casing as the walk meets it.
+pub fn launch(
+    printer: &Printer,
+    entries: &[Entry],
+    rel: [i32; 3],
+    target: [i32; 3],
+    entry: &Entry,
+) -> (u32, Option<[i32; 3]>, Vec<u8>) {
+    match entry.belt {
+        Some(b) if !b.is_last() => (b.shaft, None, Vec::new()),
+        Some(b) => {
+            let forward = b.part != BeltPart::End;
+            let mut at = rel;
+            let mut piece = b;
+            let mut length = 1;
+            let mut casings = vec![printer.casings.get(&at).copied().unwrap_or(0)];
+            while let Some(next) = piece.next(at, forward) {
+                let Some(e) = printer.at(next).and_then(|i| entries[i as usize].belt) else {
+                    break;
+                };
+                at = next;
+                piece = e;
+                length += 1;
+                casings.push(printer.casings.get(&at).copied().unwrap_or(0));
+            }
+            let step = b.next([0; 3], b.part == BeltPart::Start).unwrap_or([0; 3]);
+            let n = length - 1;
+            (
+                entry.placed,
+                Some([0, 1, 2].map(|i| target[i] + step[i] * n)),
+                casings,
+            )
+        }
+        None => (entry.placed, None, Vec::new()),
+    }
+}
+
+/// Items and how many of each.
+pub type Counts = Vec<(String, u32)>;
+
 /// A template's entity as the printer launches it (`LaunchedItem.ForEntity`): its saved data,
 /// where it lands (the anchor added) and the template's turn and mirror.
 #[derive(Clone, Debug, PartialEq)]
@@ -687,7 +742,7 @@ impl Checklist {
 
     /// `createWrittenBook`'s order: the items still missing (with what is missing), then the
     /// completed ones (with what was required), each sorted by `name` lowercased.
-    pub fn entries(&self, name: impl Fn(&str) -> String) -> (Vec<(String, u32)>, Vec<(String, u32)>) {
+    pub fn entries(&self, name: impl Fn(&str) -> String) -> (Counts, Counts) {
         let mut keys: Vec<&(String, u32)> = self.required.iter().collect();
         keys.sort_by_key(|(i, _)| name(i).to_lowercase());
         let mut missing = Vec::new();
@@ -1095,37 +1150,7 @@ impl Cannon {
         if !entry.air {
             self.blocks_placed += 1;
         }
-        // `launchBlockOrBelt`: a belt's end that doesn't lay it goes as a shaft; the one that
-        // does lays the whole belt (`beltLength` segments, found along the schematic's belt).
-        let (state, belt_to, casings) = match entry.belt {
-            Some(b) if !b.is_last() => (b.shaft, None, Vec::new()),
-            Some(b) => {
-                // Each segment's casing as the walk meets it (`launchBlockOrBelt`).
-                let forward = b.part != BeltPart::End;
-                let mut at = rel;
-                let mut piece = b;
-                let mut length = 1;
-                let mut casings = vec![l.printer.casings.get(&at).copied().unwrap_or(0)];
-                while let Some(next) = piece.next(at, forward) {
-                    let Some(e) = l.printer.at(next).and_then(|i| l.entries[i as usize].belt)
-                    else {
-                        break;
-                    };
-                    at = next;
-                    piece = e;
-                    length += 1;
-                    casings.push(l.printer.casings.get(&at).copied().unwrap_or(0));
-                }
-                let step = b.next([0; 3], b.part == BeltPart::Start).unwrap_or([0; 3]);
-                let n = length - 1;
-                (
-                    entry.placed,
-                    Some([0, 1, 2].map(|i| target[i] + step[i] * n)),
-                    casings,
-                )
-            }
-            None => (entry.placed, None, Vec::new()),
-        };
+        let (state, belt_to, casings) = l.launch(rel, target, entry);
         let total = flight_ticks(self.pos, target);
         self.flying.push(Flying {
             target,
