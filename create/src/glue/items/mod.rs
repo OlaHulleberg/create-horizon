@@ -24,6 +24,7 @@
 //!   (`trains::schedule_screen`, `trains::conductor`).
 
 mod belt_connector;
+pub(crate) use belt_connector::create_belts;
 pub(crate) mod controller_screen;
 mod fertilizer;
 pub(crate) mod filter_screen;

@@ -191,6 +191,14 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   same tick's level tick (`GearshiftBlock.getStateForPlacement` reads it at once).
 - **A neighbour's light on the client**: a filter in a smart chute's slot is drawn fully lit, as the
   light inside the chute is dark.
+- **Hanging entities in a box** (`Level.getEntitiesOfClass` over an `AABB`): `LevelRef::entities_in` leaves
+  item frames and paintings out, so a schematic saved by the port (`StructureTemplate.fillEntityList`) holds
+  none; one that holds them prints them. Listing them in `entities_in` (or a lookup of its own) would close it.
+- **Calling a block's `setPlacedBy` from code**: the schematicannon writes a door's, tall plant's and bed's
+  other half itself as those blocks' `setPlacedBy` does (`glue/schematics`), where Create calls the block's own.
+- **A key's release from the control socket**: `screen_key_released_pre` is fired for the window's keys only,
+  so the toolbox menu closes on the tool belt key's release through the Alt modifier the window reports
+  (a rebinding to another key closes it on that key's release from the window).
 - **The local player's inventory slots on its client** (`player_inventory_slots` answers on the server only;
   `player_inventory` on a client lists stacks without their slots): the wand of symmetry's mirrors, drawn for
   every wand in the hotbar (`SymmetryHandler.onRenderWorld`), are sent to the client by the server.
@@ -264,9 +272,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - Decor: table cloths hold no items and run no shops (`TableClothBlockEntity`); copycats have no placement
   helpers and do not take their material's sound, friction or light; girders have no placement helper; an item
   hatch's filter compares item ids, not a filter item's list or attributes.
-- Equipment: the toolbox radial menu and picking a toolbox up with its contents, the linked controller's
-  frequency screen, the extendo grip's knockback and entity reach, the worldshaper's flatten tool, the
-  schematicannon's belts, entities and checklist books, and the second half of doors and beds it prints.
 
 ## Not to send
 
