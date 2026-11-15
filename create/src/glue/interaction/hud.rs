@@ -309,13 +309,8 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
     draw.fill([x - 4.0, y - 3.0, 1.0, h + 6.0], background);
     draw.fill([x + w + 3.0, y - 3.0, 1.0, h + 6.0], background);
     // The sides' borders fade from the top colour to the bottom one.
-    let rows = (h + 4.0) as u32;
-    for row in 0..rows {
-        let c = mix_argb(top, bottom, row as f32 / rows.max(1) as f32);
-        let at = y - 2.0 + row as f32;
-        draw.fill([x - 3.0, at, 1.0, 1.0], c);
-        draw.fill([x + w + 2.0, at, 1.0, 1.0], c);
-    }
+    draw.fill_gradient([x - 3.0, y - 2.0, 1.0, h + 4.0], top, bottom);
+    draw.fill_gradient([x + w + 2.0, y - 2.0, 1.0, h + 4.0], top, bottom);
     draw.fill([x - 3.0, y - 3.0, w + 6.0, 1.0], top);
     draw.fill([x - 3.0, y + h + 2.0, w + 6.0, 1.0], bottom);
     // The goggles over the box's corner (z 450 over the tooltip's 400).
@@ -474,15 +469,6 @@ fn assembly_exception(host: &dyn ClientHost, pos: [i32; 3]) -> Option<String> {
 std::thread_local! {
     /// The block the goggles' overlay shows, and the game time it was first shown.
     static HOVER: std::cell::Cell<Option<([i32; 3], i64)>> = const { std::cell::Cell::new(None) };
-}
-
-/// Each channel of `a` moved `t` of the way to `b`'s (`fillGradient`'s vertical blend).
-fn mix_argb(a: u32, b: u32, t: f32) -> u32 {
-    let ch = |s: u32| {
-        let (x, y) = (((a >> s) & 0xFF) as f32, ((b >> s) & 0xFF) as f32);
-        ((x + (y - x) * t).round() as u32 & 0xFF) << s
-    };
-    ch(24) | ch(16) | ch(8) | ch(0)
 }
 
 /// `TooltipHelper.cutTextComponent` with `GRAY_AND_WHITE`, as goggle lines: words wrapped at

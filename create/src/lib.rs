@@ -14,7 +14,7 @@ use mod_api::{
     EntityInteractEvent, EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks,
     HostSide, InputKeyEvent, InteractionKeyMappingTriggeredEvent, InteractionResult,
     KeyMappingPreEvent, LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent,
-    LevelTickPostEvent, LevelTicksHost, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent,
+    LevelTickPostEvent, LevelTicksHost, MenuClosedEvent, MouseButtonPreEvent, MouseScrollingEvent, MovementInputEvent,
     NeighborChangedEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerLoggedInEvent,
     PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
@@ -279,6 +279,12 @@ impl Hooks for Create {
         until_cancel(|s| s.key_mapping_pre(host, event))
     }
 
+    fn player_tick_pre(&self, mut host: HostSide, event: &mut mod_api::PlayerTickPreEvent) {
+        for s in SUBSYSTEMS {
+            s.player_tick_pre(reborrow(&mut host), event);
+        }
+    }
+
     fn player_tick_post(&self, mut host: HostSide, event: &mut PlayerTickPostEvent) {
         for s in SUBSYSTEMS {
             s.player_tick(reborrow(&mut host), event);
@@ -352,6 +358,10 @@ impl Hooks for Create {
 
     fn mouse_scrolling(&self, host: &mut dyn ClientHost, event: &mut MouseScrollingEvent) -> Flow {
         until_cancel(|s| s.mouse_scrolling(host, event))
+    }
+
+    fn mouse_button_pre(&self, host: &mut dyn ClientHost, event: &mut MouseButtonPreEvent) -> Flow {
+        until_cancel(|s| s.mouse_button_pre(host, event))
     }
 
     fn interaction_key_mapping_triggered(

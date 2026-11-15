@@ -196,6 +196,37 @@ pub(crate) fn option_names(block: B) -> Option<(&'static str, &'static [&'static
     })
 }
 
+/// The icons of a block's `ScrollOptionBehaviour` options (`INamedIconOptions.getIcon`), in
+/// the order of [`option_names`]: each icon's top left in `create:gui/icons` (`AllIcons`).
+pub(crate) fn option_icons(block: B) -> &'static [[f32; 2]] {
+    /// `AllIcons` column `c` of row `r`.
+    const fn at(c: u8, r: u8) -> [f32; 2] {
+        [c as f32 * 16.0, r as f32 * 16.0]
+    }
+    match block {
+        B::BrassTunnel => const { &[
+            at(4, 3),
+            at(5, 3),
+            at(6, 3),
+            at(7, 3),
+            at(8, 3),
+            at(9, 3),
+            at(10, 3),
+        ] },
+        B::MechanicalArm => const { &[at(4, 4), at(5, 4), at(6, 4)] },
+        B::MechanicalBearing => const { &[at(6, 1), at(7, 1), at(8, 1)] },
+        B::MechanicalPiston | B::StickyMechanicalPiston | B::RopePulley => {
+            const { &[at(9, 1), at(10, 1), at(11, 1)] }
+        }
+        // `I_REFRESH`, `I_ROTATE_CCW`.
+        B::WindmillBearing | B::SteamEngine => const { &[at(3, 1), at(4, 5)] },
+        B::ClockworkBearing => const { &[at(5, 5), at(6, 5), at(7, 5)] },
+        B::MechanicalRoller => const { &[at(9, 4), at(10, 4), at(11, 4)] },
+        B::CartAssembler => const { &[at(12, 1), at(13, 1), at(14, 1)] },
+        _ => &[],
+    }
+}
+
 /// `ValueSettingsInputHandler.onBlockActivated` on the server: a click on an active value box is
 /// taken (`setCanceled`, `SUCCESS`: the block does not use it) whatever the hand holds but a
 /// clipboard. The client holds it to open the board; a short click does no more

@@ -16,7 +16,7 @@ use mod_api::{
     AttackEntityEvent, BreakBlockEvent, CameraPoseEvent, ClientHost, Compound, EntityInteractEvent,
     EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
     InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
-    LeftClickBlockEvent, LevelSaveEvent, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent,
+    LeftClickBlockEvent, LevelSaveEvent, MenuClosedEvent, MouseButtonPreEvent, MouseScrollingEvent, MovementInputEvent,
     PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef, PlayerTickPostEvent,
     RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
@@ -272,6 +272,9 @@ pub trait Subsystem: Sync {
         Flow::Continue
     }
 
+    /// `Hooks::player_tick_pre`, on either side.
+    fn player_tick_pre(&self, _host: HostSide, _event: &mut mod_api::PlayerTickPreEvent) {}
+
     /// `Hooks::player_tick_post`, on either side.
     fn player_tick(&self, _host: HostSide, _event: &mut PlayerTickPostEvent) {}
 
@@ -337,6 +340,15 @@ pub trait Subsystem: Sync {
         &self,
         _host: &mut dyn ClientHost,
         _event: &mut MouseScrollingEvent,
+    ) -> Flow {
+        Flow::Continue
+    }
+
+    /// `Hooks::mouse_button_pre`: a mouse button on any screen, with a mutable client.
+    fn mouse_button_pre(
+        &self,
+        _host: &mut dyn ClientHost,
+        _event: &mut MouseButtonPreEvent,
     ) -> Flow {
         Flow::Continue
     }

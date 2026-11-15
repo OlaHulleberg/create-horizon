@@ -22,8 +22,8 @@
 //!   change (`contents_changed` reaches only a block's own parts), so a chute under one looks
 //!   again every `RETRY` ticks.
 //! - An arm's points and an ejector's target are chosen with their items as in Create
-//!   (`arms::select_point`, `arms::select_ejector_target`), and outlined on their chooser's client;
-//!   left-clicking a point to drop it is out: the mod API's `left_click_block` names no player.
+//!   (`arms::select_point`, `arms::select_ejector_target`), outlined on their chooser's client,
+//!   and dropped by left-clicking them (`arms::left_click`).
 //! - Belts outline and collide as Create's `BeltShapes` (declared by `tools/create-data`), but
 //!   every entity collides with the shape cut at 19 px, where Create gives its passengers the whole
 //!   outline (content shapes select by entity class, not by riding). A belt's casing is drawn by
@@ -387,6 +387,15 @@ impl Subsystem for Logistics {
     }
 
     /// The client's prediction of a click a belt takes (`client::predict_click`).
+    /// `ArmInteractionPointHandler` and `EjectorTargetHandler.leftClickingBlocksDeselectsThem`.
+    fn left_click_block(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::LeftClickBlockEvent,
+    ) -> mod_api::Flow {
+        arms::left_click(host, event.pos)
+    }
+
     fn right_click_block(
         &self,
         host: mod_api::HostSide,

@@ -9,12 +9,10 @@
 //! within reach, not in adventure or spectator), and the setting comes back on `create:value`,
 //! which the client's value box and board show.
 //!
-//! Left out (no API for it):
-//! - The goggles' tooltip is drawn as a plain box of fills and text: Create draws vanilla's
-//!   tooltip background (`RemovedGuiUtils.drawHoveringText`); `DrawContext::gui_tooltip` takes
-//!   one colour per line where Create's lines change colour along the way.
-//! - `ValueSettingsScreen`'s sprites (`AllGuiTextures.VALUE_SETTINGS_*`) are plain fills, as in
-//!   the legacy glue: the GUI sprites are the player's jar's, not the mod's assets.
+//! The goggles' tooltip is drawn as `RemovedGuiUtils.drawHoveringText` draws it (its gradient
+//! box in the overlay's colours, faded in, each line's parts in their own colours), and the
+//! board with `ValueSettingsScreen`'s sprites (`create:gui/value_settings`, its icons from
+//! `create:gui/icons`).
 
 mod board;
 mod commands;

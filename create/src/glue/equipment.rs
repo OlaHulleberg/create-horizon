@@ -14,10 +14,13 @@
 //! Free when unused: a player's tick reads their armour and hands and looks each item up once
 //! (the gear each item is, cached by key), and only backtanks with something to do tick.
 //!
-//! Left out, for want of the API: the diving boots' sinking (`DivingBootsItem
-//! .accelerateDescentUnderwater`), which moves the local player on its client from its movement
-//! input: a client can neither read the local player's input (`xxa`, `zza`) nor set its motion
-//! (`set_velocity` is the server's). The helmet keeps the wearer's air full on the server only: a client
+//! The diving boots sink the local player on its client (`DivingBootsItem
+//! .accelerateDescentUnderwater`, from its movement input and pushes to its velocity); their
+//! hold on swimming (`HeavyBootsOnPlayerMixin`: `isUnderWater` false, so no sprint-swimming)
+//! is left out, and the ground (`onGround || verticalCollision`, which a client can't read for
+//! its own player) is a block shape just under or over the player's box.
+//!
+//! Left out, for want of the API: the helmet keeps the wearer's air full on the server only: a client
 //! cannot set its own player's air (`set_air_supply` is the server's), and the server's value
 //! never changes, so the client's bubbles still run down (no damage is taken). Using a backtank's
 //! air rewrites the worn stack (`set_equipment`), which plays its equip sound each second: Create
@@ -84,6 +87,61 @@ thread_local! {
 }
 
 pub struct Equipment;
+
+thread_local! {
+    /// The local player's last movement input: forward, strafe, jump, sneak.
+    static INPUT: std::cell::Cell<(f32, f32, bool, bool)> =
+        const { std::cell::Cell::new((0.0, 0.0, false, false)) };
+}
+
+/// `DivingBootsItem.accelerateDescentUnderwater` for the local player, on its client (which
+/// moves it): in water, not swimming or flying, it sinks 0.05 a tick faster, jumps 0.5 off the
+/// ground, and walks 1.3 times as fast while slower than 0.145.
+fn diving_boots(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
+    if host.local_player() != Some(player) {
+        return;
+    }
+    let h: &dyn mod_api::Host = &*host;
+    let boots = h
+        .living(player.entity())
+        .and_then(|l| l.equipment(h, EquipmentSlot::Feet))
+        .is_some_and(|s| matches!(gear_of(h, &s), Gear::Boots(_)));
+    if !boots {
+        return;
+    }
+    let e = player.entity();
+    let in_water = e
+        .fluid_heights(h)
+        .is_some_and(|f| f.iter().any(|(id, _)| id == "minecraft:water"));
+    if !in_water
+        || e.pose(h) == Some("swimming")
+        || player.abilities(h).is_some_and(|a| a.flying)
+    {
+        return;
+    }
+    let Some(v) = e.velocity(h) else {
+        return;
+    };
+    // `onGround() || verticalCollision`: the client has no ground flag to read for its own
+    // player, so a block shape just under or over its box counts.
+    let on_ground = e.bounding_box(h).is_some_and(|[lo, hi]| {
+        let level = h.level(h.dimension());
+        let touches = |y0: f64, y1: f64| {
+            level.is_some_and(|l| {
+                l.has_collisions(h, [lo[0], y0, lo[2], hi[0], y1, hi[2]]) == Some(true)
+            })
+        };
+        touches(lo[1] - 1.0e-3, lo[1]) || touches(hi[1], hi[1] + 1.0e-3)
+    });
+    let (forward, strafe, jump, sneak) = INPUT.get();
+    let mut push = [0.0f32; 3];
+    push[1] = if jump && on_ground { 0.5 } else { -0.05 };
+    if v[0].hypot(v[2]) < 0.145 && (forward > 0.0 || strafe != 0.0) && !sneak {
+        push[0] = (v[0] * 0.3) as f32;
+        push[2] = (v[2] * 0.3) as f32;
+    }
+    host.push_player(push);
+}
 
 impl Subsystem for Equipment {
     /// `BacktankBlock.useItemOn`: a player not sneaking, with no block in the main hand and
@@ -283,6 +341,23 @@ impl Subsystem for Equipment {
                 );
             }
         }
+    }
+
+    /// The start of the local player's tick on its client (`EntityTickEvent.Pre`): the diving
+    /// boots' sinking.
+    fn player_tick_pre(&self, host: HostSide, event: &mut mod_api::PlayerTickPreEvent) {
+        if let HostSide::Client(host) = host {
+            diving_boots(host, event.player);
+        }
+    }
+
+    /// The local player's movement input, for the diving boots (`zza`, `xxa`, `jumping`).
+    fn movement_input(
+        &self,
+        _host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::MovementInputEvent,
+    ) {
+        INPUT.set((event.forward, event.strafe, event.jump, event.sneak));
     }
 
     /// The end of a player's server tick (`EntityTickEvent`, `LivingBreatheEvent`): the extendo

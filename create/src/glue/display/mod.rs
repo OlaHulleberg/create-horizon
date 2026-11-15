@@ -215,6 +215,14 @@ impl Subsystem for Display {
         clipboard::screen_mouse_pressed(host, event)
     }
 
+    fn mouse_button_pre(
+        &self,
+        host: &mut dyn ClientHost,
+        event: &mut mod_api::MouseButtonPreEvent,
+    ) -> Flow {
+        clipboard::mouse_button_pre(host, event)
+    }
+
     fn screen_mouse_released(
         &self,
         host: &dyn ClientHost,
