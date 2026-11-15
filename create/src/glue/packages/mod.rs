@@ -10,7 +10,9 @@
 //! block's `ITEMS` capability through the face toward it (`inv`).
 //!
 //! Conveyors draw their wheel, shaft, guards and chains (`ChainConveyorRenderer`; a turning
-//! conveyor's chains scroll a pixel at a time, through pre-shifted chain models) and are joined with
+//! conveyor's chains scroll a pixel at a time, through pre-shifted chain models; Create's plainer
+//! chain past `MIP_DISTANCE` is not drawn, as a kept block entity is not drawn again when only the
+//! camera moves) and are joined with
 //! chains (`ChainConveyorConnectionHandler`, the first conveyor kept on the server). A frogport is
 //! aimed at a chain point with its item (`frog_target`) and draws its body, head, tongue and
 //! catch (`frog_draw`).
