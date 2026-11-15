@@ -1,0 +1,22 @@
+{
+  "variants": {
+    "facing=south": {
+      "model": "create:block/horizon_table_cloth_red_south_west"
+    },
+    "facing=west": {
+      "model": "create:block/horizon_table_cloth_red_north_west"
+    },
+    "facing=north": {
+      "model": "create:block/horizon_table_cloth_red_north_east"
+    },
+    "facing=east": {
+      "model": "create:block/horizon_table_cloth_red_south_east"
+    },
+    "facing=up": {
+      "model": "create:block/horizon_table_cloth_red_south_west"
+    },
+    "facing=down": {
+      "model": "create:block/horizon_table_cloth_red_south_west"
+    }
+  }
+}

@@ -34,6 +34,7 @@ mod bell;
 mod brackets;
 mod carried;
 mod clicks;
+mod cloth;
 mod copper;
 mod crates;
 mod doors;
@@ -97,6 +98,8 @@ struct Dim {
     /// Metal ladders whose neighbour changed: whether anything still holds them.
     ladder_checks: Vec<[i32; 3]>,
     bell_checks: Vec<[i32; 3]>,
+    /// Table cloths placed or whose neighbour changed: which sides are culled.
+    cloth_checks: Vec<[i32; 3]>,
     /// Blocks whose bracket or placard item clients must see again.
     shown: Vec<[i32; 3]>,
 }
@@ -274,7 +277,7 @@ pub struct Decor;
 
 impl Subsystem for Decor {
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[BRACKET, bell::DING]
+        &[BRACKET, bell::DING, cloth::CULL]
     }
 
     fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
@@ -325,6 +328,11 @@ impl Subsystem for Decor {
         {
             crate::create_log!("[create] the desk bell's drawing part was refused: {e:?}");
         }
+        if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, cloth::ClothDraw)
+        {
+            crate::create_log!("[create] the table cloths' drawing part was refused: {e:?}");
+        }
     }
 
     fn world_closed(&self) {
@@ -346,6 +354,9 @@ impl Subsystem for Decor {
         if mine(o) || mine(n) || bracket {
             with(dim, |d| d.changes.push((pos, old, new)));
         }
+        if n.is_some_and(cloth::is_cloth) {
+            with(dim, |d| d.cloth_checks.push(pos));
+        }
     }
 
     /// Girders and encased shafts shape themselves again (`updateShape`), a peculiar bell looks
@@ -359,6 +370,7 @@ impl Subsystem for Decor {
             Some(b) if scaffolding::BLOCKS.contains(&b) => {
                 with(dim, |d| d.scaffold_checks.push(pos))
             }
+            Some(b) if cloth::is_cloth(b) => with(dim, |d| d.cloth_checks.push(pos)),
             _ if ladders::is_ladder(state) => with(dim, |d| d.ladder_checks.push(pos)),
             _ => {}
         }

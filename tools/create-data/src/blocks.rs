@@ -3499,6 +3499,57 @@ pub const WHEEL_WOODS: [(&str, &str, &str); 12] = [
 /// `WaterWheelRenderer`'s models in each wood (`generateModel`: the oak planks, log and log top
 /// sprites swapped for the wood's): partials named `part_<wheel>_<wood>`, each a model that takes
 /// Create's wheel and gives it the wood's textures. Each points up, as Create's wheel models do.
+/// The table cloths' kinds (`AllBlocks.TABLE_CLOTHS` and the three metal ones).
+pub const TABLE_CLOTHS: [&str; 19] = [
+    "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray",
+    "cyan", "purple", "blue", "brown", "green", "red", "black", "andesite", "brass", "copper",
+];
+
+/// `TableClothModel`'s corners (`AllPartialModels.TABLE_CLOTH_*`, drawn in the cloth's own
+/// sprite) as one hidden block per cloth, `part_table_cloth_<kind>`: the corner a side's
+/// quads carry by facing (south: south west, west: north west, north: north east, east: south
+/// east; up and down unused). Each corner model is Create's, by id, with the cloth's texture.
+/// Returns `(block, blockstate, [(model file under models/block, model)])`.
+pub fn cloth_partials() -> Vec<(String, Value, Vec<(String, Value)>)> {
+    let corners = [
+        ("south", "south_west"),
+        ("west", "north_west"),
+        ("north", "north_east"),
+        ("east", "south_east"),
+        ("up", "south_west"),
+        ("down", "south_west"),
+    ];
+    TABLE_CLOTHS
+        .iter()
+        .map(|kind| {
+            let texture = format!("create:block/table_cloth/{kind}");
+            let mut variants = Map::new();
+            let mut models = Vec::new();
+            for (facing, corner) in corners {
+                let file = format!("horizon_table_cloth_{kind}_{corner}");
+                variants.insert(
+                    format!("facing={facing}"),
+                    json!({ "model": format!("create:block/{file}") }),
+                );
+                if !models.iter().any(|(f, _)| *f == file) {
+                    models.push((
+                        file,
+                        json!({
+                            "parent": format!("create:block/table_cloth/{corner}"),
+                            "textures": { "0": texture, "particle": texture }
+                        }),
+                    ));
+                }
+            }
+            (
+                format!("part_table_cloth_{kind}"),
+                json!({ "variants": variants }),
+                models,
+            )
+        })
+        .collect()
+}
+
 pub fn wheel_partials() -> Vec<(String, String, Value)> {
     let wheels = [
         ("water_wheel", "create:block/water_wheel/wheel"),
