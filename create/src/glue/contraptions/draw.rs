@@ -268,6 +268,11 @@ pub(super) fn show_turn(
     c.insert("Angle".into(), float(turn.map_or(0.0, |t| t.angle_at(now))));
     if let Some(t) = turn {
         c.insert("Rpm".into(), float(t.rpm));
+        // What is left of a sequenced turn from now.
+        if let Some(l) = t.limit {
+            let left = (l - (t.angle_at(now) - t.angle).abs()).max(0.0);
+            c.insert("Limit".into(), float(left));
+        }
     }
     write(lv, anchor, Some(c));
 }
@@ -451,6 +456,8 @@ enum Shape {
         angle: f32,
         since: f64,
         rpm: Option<f32>,
+        /// The degrees a sequenced turn may still go from `since`.
+        limit: Option<f32>,
     },
     Glide {
         blocks: Vec<Drawn>,
@@ -500,6 +507,7 @@ fn parse(host: &dyn Host, c: &Compound) -> Option<Shape> {
             angle: get_float(c, "Angle").unwrap_or(0.0),
             since,
             rpm: get_float(c, "Rpm"),
+            limit: get_float(c, "Limit"),
         },
         GLIDE => Shape::Glide {
             blocks: drawn_blocks(host, c, ""),
@@ -753,6 +761,7 @@ fn submit(
                 angle,
                 since,
                 rpm,
+                limit,
             } => {
                 let (angle, since, rpm) = match rpm {
                     Some(r) => (*angle, *since, *r),
@@ -766,7 +775,17 @@ fn submit(
                     }
                 };
                 let rate = rpm * 0.3;
-                let here = angle + rate * (now - since) as f32;
+                let turned = rate * (now - since) as f32;
+                // A sequenced turn is drawn each frame, held where its limit runs out.
+                if let Some(l) = limit {
+                    let here = (angle + turned.clamp(-*l, *l)) % 360.0;
+                    draw.push();
+                    draw.rotate_about(*axis, here, [0.5; 3]);
+                    draw_blocks(draw, blocks);
+                    draw.pop();
+                    return;
+                }
+                let here = angle + turned;
                 let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
                 draw.spin(*axis, [0.5; 3], rate, phase as f32);
                 draw_blocks(draw, blocks);

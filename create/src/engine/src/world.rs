@@ -453,6 +453,21 @@ pub struct Moving {
     /// `waitingForSpeedChange`: stopped and kept together (its movement mode), until its speed
     /// changes.
     pub waiting: bool,
+    /// `sequencedOffsetLimit`: how far a sequenced gearshift's turn by distance still lets it
+    /// move (none for no limit), not saved.
+    pub limit: Option<f32>,
+}
+
+impl Moving {
+    /// `MechanicalPistonBlockEntity.getMovementSpeed`: [`crate::piston::movement`] held to
+    /// the limit left.
+    pub fn step(&self, rpm: f32, facing: crate::kinetics::Dir) -> f32 {
+        let v = crate::piston::movement(rpm, facing, self.offset, self.range);
+        match self.limit {
+            Some(l) => v.clamp(-l, l),
+            None => v,
+        }
+    }
 }
 
 /// A mechanical pump: the ends behind and in front of it, found when its pipes changed, and the
@@ -2211,7 +2226,22 @@ impl CreateWorld {
             1
         };
         let old = d.settings.get(&pos).copied().unwrap_or_default();
-        self.set_settings(dim, pos, state, Settings { crank, ..old });
+        // `SequenceContext.fromGearshift(TURN_ANGLE, rotationSpeed, target)`.
+        let context = Some(crate::kinetics::Context {
+            distance: false,
+            value: value.unsigned_abs() as f32,
+            run: 0,
+        });
+        self.set_settings(
+            dim,
+            pos,
+            state,
+            Settings {
+                crank,
+                context,
+                ..old
+            },
+        );
         true
     }
 
@@ -2247,7 +2277,17 @@ impl CreateWorld {
             let d = &mut self.dims[dim];
             d.cranks.remove(&pos);
             if let (Some(&state), Some(old)) = (d.states.get(&pos), d.settings.get(&pos).copied()) {
-                self.set_settings(dim, pos, state, Settings { crank: 0, ..old });
+                // `HandCrankBlockEntity.tick`: the context goes when it stops.
+                self.set_settings(
+                    dim,
+                    pos,
+                    state,
+                    Settings {
+                        crank: 0,
+                        context: None,
+                        ..old
+                    },
+                );
             }
         }
     }
@@ -2651,13 +2691,13 @@ impl CreateWorld {
         let Some(s) = d.sequencers.get(&pos) else {
             return;
         };
-        let (modifier, ticks) = (s.modifier() as i8, s.ticks());
+        let (modifier, ticks, context) = (s.modifier() as i8, s.ticks(), s.context());
         d.sequencing.retain(|p| *p != pos);
         if ticks {
             d.sequencing.push(pos);
         }
         let old = d.settings.get(&pos).copied().unwrap_or_default();
-        if old.sequence != modifier
+        if (old.sequence != modifier || old.context != context)
             && let Some(&state) = d.states.get(&pos)
         {
             self.set_settings(
@@ -2666,6 +2706,7 @@ impl CreateWorld {
                 state,
                 Settings {
                     sequence: modifier,
+                    context,
                     ..old
                 },
             );

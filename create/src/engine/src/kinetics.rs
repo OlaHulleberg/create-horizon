@@ -156,6 +156,20 @@ pub struct Part {
     /// A speed set across to another part instead of a ratio: a rotation speed controller's, or a
     /// sequenced gearshift's second half.
     pub couple: Option<Couple>,
+    /// The sequence context it hands the parts it turns (`KineticBlockEntity.sequenceContext`):
+    /// a valve handle's use, on its part; a sequenced gearshift's running instruction, on its
+    /// second half (for whichever half it turns).
+    pub context: Option<Context>,
+}
+
+/// `SequencedGearshiftBlockEntity.SequenceContext` as its holder sets it: turn so many degrees
+/// (`TURN_ANGLE`) or metres (`TURN_DISTANCE`). `run` tells one start of it from the next, as
+/// Create's holder detaches and attaches its network again for each.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Context {
+    pub distance: bool,
+    pub value: f32,
+    pub run: u32,
 }
 
 /// The chain of an encased chain drive or adjustable chain gearshift: the axis it runs along
@@ -198,6 +212,7 @@ impl Part {
             belt: None,
             chain: None,
             couple: None,
+            context: None,
         }
     }
     pub fn cog(axis: Axis, large: bool) -> Part {
@@ -374,6 +389,9 @@ struct Node {
     /// Set or replaced since the last solve: reported even when its speed is unchanged, so the
     /// game shows every part (a still one too).
     fresh: bool,
+    /// The sequence context it took from what turns it (`copySequenceContextFrom`): its
+    /// holder's, and the value per RPM of its own speed (`SequenceContext.relativeValue`).
+    seq: Option<(Context, f32)>,
 }
 
 /// The kinetic parts of one dimension.
@@ -455,6 +473,7 @@ impl Kinetics {
             capacity: 0.0,
             live: true,
             fresh: true,
+            seq: None,
         };
         let id = match self.free.pop() {
             Some(id) => {
@@ -518,6 +537,16 @@ impl Kinetics {
             .iter()
             .filter(|n| n.live)
             .map(|n| (n.pos, n.sub, n.speed, n.overstressed))
+    }
+
+    /// `SequenceContext.getEffectiveValue` of the context the part at `pos` took, when it is a
+    /// turn by distance (`distance`) or by angle: what it may turn before it stops
+    /// (`sequencedAngleLimit`, `sequencedOffsetLimit`), scaled by its speed against its holder's.
+    pub fn sequence_limit(&self, pos: [i32; 3], sub: u8, distance: bool) -> Option<f32> {
+        let id = *self.at.get(&pos)?.get(sub as usize)?;
+        let n = self.nodes.get(id as usize).filter(|_| id != NONE)?;
+        let (c, relative) = n.seq?;
+        (c.distance == distance).then(|| (relative * n.theoretical).abs())
     }
 
     /// A part's theoretical speed, its network's stress and capacity, and whether it is
@@ -869,6 +898,33 @@ impl Kinetics {
                 .map(|&id| self.nodes[id as usize].part.impact * theoretical(self, id).abs())
                 .sum();
             let overstressed = stress > capacity;
+            // `copySequenceContextFrom`: a side turned by a generator holding a context (a valve
+            // handle in use) takes it, and so does the side a sequenced gearshift turns; the value
+            // goes as one per RPM of the holder's turned speed (`SequenceContext.fromGearshift`).
+            let mut held: Vec<Option<(Context, f32)>> = vec![None; sides as usize];
+            for &id in &self.queue {
+                let p = &self.nodes[id as usize].part;
+                if p.generated != 0.0
+                    && let Some(c) = p.context
+                {
+                    held[self.side[&id] as usize] = Some((c, theoretical(self, id)));
+                }
+            }
+            for c in &couplings {
+                let Couple::Relay(_) = c.kind else { continue };
+                let Some(ctx) = self.nodes[c.to as usize].part.context else {
+                    continue;
+                };
+                let dst = match c.dir {
+                    1 => c.to,
+                    -1 => c.from,
+                    _ => continue,
+                };
+                let s = self.side[&dst] as usize;
+                if s != self.side[&(if c.dir > 0 { c.from } else { c.to })] as usize {
+                    held[s] = Some((ctx, theoretical(self, dst)));
+                }
+            }
             if !self.watched.is_empty() {
                 for &id in &self.queue {
                     let pos = self.nodes[id as usize].pos;
@@ -881,6 +937,9 @@ impl Kinetics {
                 let id = self.queue[i];
                 let turned = theoretical(self, id);
                 let shown = if overstressed { 0.0 } else { turned };
+                let seq = held[self.side[&id] as usize].map(|(c, base)| {
+                    (c, if base == 0.0 { 0.0 } else { c.value / base })
+                });
                 let n = &mut self.nodes[id as usize];
                 n.stress = stress;
                 n.capacity = capacity;
@@ -890,7 +949,9 @@ impl Kinetics {
                     || n.speed != shown
                     || n.theoretical != turned
                     || n.overstressed != overstressed
+                    || n.seq != seq
                 {
+                    n.seq = seq;
                     n.fresh = false;
                     n.speed = shown;
                     n.theoretical = turned;
@@ -1361,6 +1422,66 @@ mod tests {
         sequencer(&mut k, 2.0);
         let e = solve(&mut k);
         assert!(e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+    }
+
+    #[test]
+    fn a_sequence_context_reaches_what_the_relay_or_valve_turns_scaled_by_its_speed() {
+        let ctx = |distance, value| Context {
+            distance,
+            value,
+            run: 1,
+        };
+        // A gearshift turned from the west running "turn 90 degrees" at double speed: the far
+        // half's side takes it; a large cog geared down from it turns half as far.
+        let mut k = Kinetics::new();
+        k.set([-1, 0, 0], 0, motor(Dir::East, 12.0));
+        k.set([0, 0, 0], 0, Part::half(Dir::West));
+        k.set(
+            [0, 0, 0],
+            1,
+            Part {
+                couple: Some(Couple::Relay(2.0)),
+                context: Some(ctx(false, 90.0)),
+                ..Part::half(Dir::East)
+            },
+        );
+        k.set([1, 0, 0], 0, Part::cog(Axis::X, false));
+        k.set([1, 1, 1], 0, Part::cog(Axis::X, true));
+        solve(&mut k);
+        assert_eq!(k.speed([1, 1, 1], 0), Some(-12.0));
+        assert_eq!(k.sequence_limit([1, 0, 0], 0, false), Some(90.0));
+        assert_eq!(k.sequence_limit([1, 1, 1], 0, false), Some(45.0));
+        assert_eq!(k.sequence_limit([1, 0, 0], 0, true), None, "not a distance");
+        assert_eq!(k.sequence_limit([-1, 0, 0], 0, false), None, "the side turning it");
+        // A new run of the same turn tells the parts again, unchanged speeds and all.
+        k.set(
+            [0, 0, 0],
+            1,
+            Part {
+                couple: Some(Couple::Relay(2.0)),
+                context: Some(Context { run: 2, ..ctx(false, 90.0) }),
+                ..Part::half(Dir::East)
+            },
+        );
+        let e = solve(&mut k);
+        assert!(
+            e.iter()
+                .any(|x| matches!(x, Event::Speed { pos: [1, 1, 1], .. })),
+            "{e:?}"
+        );
+        // A valve handle in use: its whole side, by its own speed.
+        let mut k = Kinetics::new();
+        k.set(
+            [0, 0, 0],
+            0,
+            Part {
+                context: Some(ctx(false, 45.0)),
+                ..motor(Dir::East, 32.0)
+            },
+        );
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        assert_eq!(k.sequence_limit([1, 0, 0], 0, false), Some(45.0));
     }
 
     #[test]

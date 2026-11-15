@@ -270,6 +270,12 @@ fn speed(dim: usize, pos: [i32; 3]) -> f32 {
     with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0)
 }
 
+/// `sequenceContext.getEffectiveValue` of the turn (`distance`: by metres, else by degrees) a
+/// sequenced gearshift or valve handle hands the block at `pos`, as its speed changes.
+fn sequence_limit(dim: usize, pos: [i32; 3], distance: bool) -> Option<f32> {
+    with_world(|w| w.dims[dim].kinetics.sequence_limit(pos, 0, distance)).flatten()
+}
+
 /// Windmills: structures whose bearing broke go back; right-clicked bearings assemble their
 /// sails (`assemble`), the blocks leaving the world; clients see the changes. Nothing runs
 /// without either.
@@ -385,6 +391,7 @@ pub(super) fn tick_bearing_actors(lv: &mut ServerLevel<'_>) {
                 angle: 0.0,
                 since: now,
                 rpm: speed(dim, pos),
+                limit: None,
             });
             BEARING_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), (carried, own)));
             with_world(|w| w.dims[dim].windmill_changes.push(pos));
@@ -477,6 +484,8 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                 let stalled = BEARING_CARRIED
                     .with_borrow(|c| c.get(&(dim, pos)).is_some_and(|c| c.0.stalled));
                 turn.rebase(now, if stalled { 0.0 } else { rpm });
+                // `onSpeedChanged`: the limit starts again from the context it has now.
+                turn.limit = sequence_limit(dim, pos, false);
                 with_world(|w| {
                     if let Some(m) = w.dims[dim].windmills.get_mut(&pos) {
                         m.bearing = Some(turn);
@@ -500,6 +509,7 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                         angle: 0.0,
                         since: now,
                         rpm,
+                        limit: sequence_limit(dim, pos, false),
                     }),
                 };
                 with_world(|world| world.bearing_assembled(dim, pos, w));
@@ -829,8 +839,11 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
         let rpm = speed(dim, pos);
         // `onSpeedChanged`: a piston kept together by its mode moves again.
         let running = with_world(|w| {
+            let limit = w.dims[dim].kinetics.sequence_limit(pos, 0, true);
             let m = w.dims[dim].pistons.get_mut(&pos)?;
             m.waiting = false;
+            // The limit starts again from the context it has now.
+            m.limit = limit;
             Some(())
         })
         .flatten()
@@ -874,18 +887,27 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
         if !stalled && piston_collides(lv, pos, facing, rpm) {
             with_world(|w| {
                 if let Some(m) = w.dims[dim].pistons.get_mut(&pos) {
-                    use create_engine::piston::{grid_offset, movement};
-                    let v = movement(rpm, facing, m.offset, m.range);
+                    use create_engine::piston::grid_offset;
+                    let v = m.step(rpm, facing);
                     m.offset = grid_offset(grid_offset(m.offset, m.range) - v, m.range);
                 }
             });
             try_disassemble_piston(lv, pos);
             continue;
         }
+        let mut locked = false;
         let end = with_world(|w| {
             let m = w.dims[dim].pistons.get_mut(&pos)?;
+            let v = m.step(rpm, facing);
+            // `LinearActuatorBlockEntity.tick`: a sequenced limit is used up as it moves; at
+            // its end the structure is set where it is (`forceMove`).
+            if let Some(l) = m.limit.filter(|l| *l > 0.0) {
+                let left = (l - v.abs()).max(0.0);
+                m.limit = Some(left);
+                locked = left == 0.0;
+            }
             if !stalled {
-                m.offset += create_engine::piston::movement(rpm, facing, m.offset, m.range);
+                m.offset += v;
             }
             let end = m.offset <= 0.0 || m.offset >= m.range as f32;
             if end {
@@ -894,6 +916,9 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
             Some(end)
         })
         .flatten();
+        if locked {
+            show_piston(lv, pos);
+        }
         if end == Some(true) {
             try_disassemble_piston(lv, pos);
         } else if lv.game_time() % 10 == 0 {
@@ -907,12 +932,12 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
 /// (`ContraptionCollider.isCollidingWithWorld`): a cell its leading blocks enter holds a block
 /// with a collision shape that can't be replaced, and that no breaker there can break.
 fn piston_collides(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32) -> bool {
-    use create_engine::piston::{colliders, entered_cells, movement};
+    use create_engine::piston::{colliders, entered_cells};
     let dim = lv.dim;
     let Some(m) = with_world(|w| w.dims[dim].pistons.get(&pos).cloned()).flatten() else {
         return false;
     };
-    let v = movement(rpm, facing, m.offset, m.range);
+    let v = m.step(rpm, facing);
     if v == 0.0 {
         return false;
     }
@@ -1062,6 +1087,7 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     super::remove_cells(lv, &cells);
     lv.set_property(pos, "state", "moving", update_all());
     super::super::persist::mark_pos_unsaved(dim, pos);
+    let limit = sequence_limit(dim, pos, true);
     with_world(|w| {
         w.dims[dim].pistons.insert(
             pos,
@@ -1074,6 +1100,7 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
                 initial: c.progress,
                 facing: Some(facing),
                 waiting: false,
+                limit,
             },
         )
     });
@@ -1138,7 +1165,7 @@ fn show_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let per_tick = if m.carried.stalled || m.waiting {
         0.0
     } else {
-        create_engine::piston::movement(speed(dim, pos), facing, m.offset, m.range)
+        m.step(speed(dim, pos), facing)
     };
     let origin = [
         m.anchor[0] - pos[0],
@@ -1154,7 +1181,7 @@ fn show_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             dir: facing.offset(),
             offset: m.offset,
             per_tick,
-            clamp: None,
+            clamp: m.limit.map(|l| (m.offset - l, m.offset + l)),
             rope: false,
         },
     );
@@ -1414,6 +1441,7 @@ fn pistons_from_nbt(
                     initial,
                     facing: Dir::ALL.get(facing as usize).copied(),
                     waiting: waiting == 1,
+                    limit: None,
                 },
             ))
         })
@@ -1468,6 +1496,7 @@ fn windmills_from_nbt(
                         angle: f32::from_bits(sails.get(2).copied().unwrap_or(0) as u32),
                         since: now,
                         rpm: 0.0,
+                        limit: None,
                     }),
                 },
             ))
