@@ -31,6 +31,7 @@
 //!   item model's `gui3d`, so an item that places a block stands for it.
 
 mod bell;
+mod bells;
 mod brackets;
 mod carried;
 mod clicks;
@@ -277,11 +278,12 @@ pub struct Decor;
 
 impl Subsystem for Decor {
     fn synced_keys(&self) -> &'static [&'static str] {
-        &[BRACKET, bell::DING, cloth::CULL]
+        &[BRACKET, bell::DING, cloth::CULL, bells::RINGING]
     }
 
     fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
-        block == Block::DeskBell && bell::animated(pos, entity)
+        (block == Block::DeskBell && bell::animated(pos, entity))
+            || (bells::is_bell(block) && bells::animated(pos, entity))
     }
 
     fn carry_out(&self, lv: &mut ServerLevel<'_>, pos: [i32; 3], b: Block, out: &mut Compound) {
@@ -333,15 +335,23 @@ impl Subsystem for Decor {
         {
             crate::create_log!("[create] the table cloths' drawing part was refused: {e:?}");
         }
+        if let Some(kind) = super::kinetics::kind()
+            && let Err(e) = r.block_entity_part(&kind, bells::BellDraw)
+        {
+            crate::create_log!("[create] the bells' drawing part was refused: {e:?}");
+        }
+        bells::register(r);
     }
 
     fn world_closed(&self) {
         DECOR.with_borrow_mut(HashMap::clear);
+        bells::forget();
     }
 
     fn client_reset(&self) {
         doors::forget();
         bell::forget();
+        bells::client_forget();
     }
 
     /// A Create block changed: ours are looked at after the level's tick. Shafts, cogs and pipes
@@ -356,6 +366,14 @@ impl Subsystem for Decor {
         }
         if n.is_some_and(cloth::is_cloth) {
             with(dim, |d| d.cloth_checks.push(pos));
+        }
+        if let Some((b, info)) = block_of(new)
+            && bells::is_bell(b)
+        {
+            let was = block_of(old)
+                .filter(|(o, _)| *o == b)
+                .map(|(_, i)| i.powered);
+            bells::changed(dim, pos, was, info.powered);
         }
     }
 
@@ -398,6 +416,7 @@ impl Subsystem for Decor {
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         tick::tick(lv);
+        bells::tick(lv);
     }
 
     fn left_click_block(&self, host: &mut dyn ServerHost, event: &mut LeftClickBlockEvent) -> Flow {

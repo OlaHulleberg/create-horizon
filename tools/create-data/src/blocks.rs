@@ -2442,7 +2442,7 @@ pub fn blaze_burner_states() -> Value {
 /// Nobody can hold or place them (no item, invisible).
 /// The third value is the face the model points to as written (`shaft_half` points south, the
 /// crank handle north).
-pub const PARTIALS: [(&str, &str, &str); 199] = [
+pub const PARTIALS: [(&str, &str, &str); 201] = [
     // BlazeBurnerRenderer: the blaze's head by heat, its rods (`AllPartialModels.BLAZE_*`,
     // `BLAZE_BURNER_*RODS*`), unturned; the glue turns and lifts them.
     (
@@ -3312,6 +3312,10 @@ pub const PARTIALS: [(&str, &str, &str); 199] = [
     // ControlsRenderer's cover and levers (`TRAIN_CONTROLS_*`), as written facing north.
     ("part_train_controls_cover", "create:block/controls/train/cover", "up"),
     ("part_train_controls_lever", "create:block/controls/train/lever", "up"),
+    // BellRenderer's bodies (`PECULIAR_BELL`, `HAUNTED_BELL`), as written for a bell facing
+    // south on the floor.
+    ("part_peculiar_bell", "create:block/peculiar_bell", "up"),
+    ("part_haunted_bell", "create:block/haunted_bell", "up"),
     // StandardBogeyRenderer's shafts (`AllBlocks.SHAFT`, as written along y), drawn on
     // displays, which take no shaft's `axis`.
     ("part_shaft", "create:block/shaft", "up"),
