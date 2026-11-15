@@ -105,6 +105,8 @@ pub fn apply_in_world(host: &mut dyn ServerHost, event: &mut RightClickBlockEven
             }
         }
     }
+    let placed = first.filter(|_| new_state.is_some()).map(|o| &*o.item);
+    crate::glue::advancements::award_casing(lv.host, player, placed);
     true
 }
 

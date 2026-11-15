@@ -50,6 +50,14 @@ fn click_station(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<In
         if id == "create:wrench" || id == "minecraft:filled_map" {
             return None;
         }
+        // `PackagePortTargetSelectionHandler.onUse`: a postbox chooses the station (its client
+        // drew the choice), nothing opens.
+        if id.starts_with("create:") && id.ends_with("_postbox") {
+            let dimension = click.dimension.key().id().to_owned();
+            let dim = crate::glue::world::level_index(&dimension)?;
+            crate::glue::packages::choose_station(player, dim, click.pos);
+            return Some(InteractionResult::SuccessServer);
+        }
     }
     let dimension = click.dimension.key().id().to_owned();
     let mut lv = ServerLevel::new(host, &dimension)?;
@@ -549,6 +557,7 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
         return false;
     };
     clear_failure(dim, pos);
+    crate::glue::advancements::train_assembled(lv, pos, &cars);
     // A train assembled here: its comparators read `trainPresent` again.
     crate::glue::redstone::analog_touched(dim, pos);
     super::super::persist::mark_pos_unsaved(dim, pos);

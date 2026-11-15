@@ -246,6 +246,7 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
             })
             .collect();
         let score = create_engine::waterwheel::flow_score(axis, &samples);
+        super::advancements::water_wheel(lv, pos, samples.iter().map(|s| s.0), score != 0);
         with_world(|w| w.set_wheel_flow(dim, pos, score));
     }
     // Clutches and gearshifts follow redstone (`ClutchBlock.neighborChanged`): `powered` is set

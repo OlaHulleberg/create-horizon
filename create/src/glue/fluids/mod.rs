@@ -392,7 +392,7 @@ impl Subsystem for Fluids {
     fn wrench_used(
         &self,
         lv: &mut ServerLevel<'_>,
-        _player: mod_api::PlayerRef,
+        player: mod_api::PlayerRef,
         pos: [i32; 3],
         block: Block,
         clicked: create_engine::kinetics::Dir,
@@ -408,8 +408,13 @@ impl Subsystem for Fluids {
             with_world(|w| w.toggle_tank_windows(dim, pos));
             return true;
         }
-        plumbing::wrench_pipe(lv, pos, block, clicked, point)
-            || plumbing::wrench_whistle(lv, pos, block)
+        // `FluidPipeBlock.onWrenched`: a pipe made glass while something flows in it.
+        let flowing = block == Block::FluidPipe && flows::has_flow(lv.dim, pos);
+        let done = plumbing::wrench_pipe(lv, pos, block, clicked, point);
+        if flowing && lv.block_name(pos).as_deref() == Some("create:glass_fluid_pipe") {
+            crate::glue::advancements::award(lv.host, player, "glass_pipe");
+        }
+        done || plumbing::wrench_whistle(lv, pos, block)
     }
 
     /// A spout two above belt segment `segment` (`SpoutBlockEntity`'s

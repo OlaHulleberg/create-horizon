@@ -7,8 +7,8 @@
 
 use super::subsystem::Subsystem;
 use mod_api::{
-    ClientHost, IPayloadContext, IPayloadHandler, PayloadBytes, PayloadId, PayloadReader,
-    PayloadSendError, PayloadWriter, PlayerRef, Registrar, ServerHost,
+    ClientHost, IPayloadContext, IPayloadHandler, PayloadBytes, PayloadHandleError, PayloadId,
+    PayloadReader, PayloadSendError, PayloadWriter, PlayerRef, Registrar, ServerHost,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -47,12 +47,22 @@ fn decode(bytes: &[u8]) -> Option<(String, Vec<u8>)> {
 struct FromClient(&'static [&'static dyn Subsystem]);
 
 impl IPayloadHandler for FromClient {
-    fn handle(&self, payload: PayloadBytes, cx: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        payload: PayloadBytes,
+        cx: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
         let Some((channel, data)) = decode(&payload.0) else {
-            return Err("malformed create:net message".into());
+            return Err(PayloadHandleError::Failed(
+                "malformed create:net message".into(),
+            ));
         };
-        let player = cx.player().map_err(|e| format!("{e:?}"))?;
-        let host = cx.server_host().map_err(|e| format!("{e:?}"))?;
+        let player = cx
+            .player()
+            .map_err(|e| PayloadHandleError::Failed(format!("{e:?}")))?;
+        let host = cx
+            .server_host()
+            .map_err(|e| PayloadHandleError::Failed(format!("{e:?}")))?;
         if super::world::is_open() {
             for s in self.0 {
                 if s.client_message(host, player, &channel, &data) {
@@ -68,11 +78,19 @@ impl IPayloadHandler for FromClient {
 struct FromServer(&'static [&'static dyn Subsystem]);
 
 impl IPayloadHandler for FromServer {
-    fn handle(&self, payload: PayloadBytes, cx: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        payload: PayloadBytes,
+        cx: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
         let Some((channel, data)) = decode(&payload.0) else {
-            return Err("malformed create:net message".into());
+            return Err(PayloadHandleError::Failed(
+                "malformed create:net message".into(),
+            ));
         };
-        let host = cx.client_host().map_err(|e| format!("{e:?}"))?;
+        let host = cx
+            .client_host()
+            .map_err(|e| PayloadHandleError::Failed(format!("{e:?}")))?;
         for s in self.0 {
             if s.server_message(host, &channel, &data) {
                 break;

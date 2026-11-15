@@ -63,6 +63,8 @@ struct ClientEjector {
 struct Client {
     depots: HashMap<[i32; 3], ClientDepot>,
     sliding: Vec<[i32; 3]>,
+    /// Depots holding a stack that stands upright, facing the camera.
+    upright_depots: std::collections::HashSet<[i32; 3]>,
     belts: HashMap<[i32; 3], ClientBelt>,
     arms: HashMap<[i32; 3], ClientArm>,
     ejectors: HashMap<[i32; 3], ClientEjector>,
@@ -442,7 +444,9 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -
         | Block::BrassBeltFunnel
         | Block::AndesiteTunnel
         | Block::BrassTunnel => flapping(pos),
-        Block::Depot => CLIENT.with_borrow(|c| c.sliding.contains(&pos)),
+        Block::Depot => {
+            CLIENT.with_borrow(|c| c.sliding.contains(&pos) || c.upright_depots.contains(&pos))
+        }
         // A turning belt scrolls its texture every frame.
         Block::Belt => CLIENT.with_borrow(|c| {
             speeds_of(&entity.nbt)[0] != 0.0
@@ -860,6 +864,7 @@ fn launch_local_player(host: &mut dyn ClientHost, s: &ejector::Shown) {
     };
     let m = ejector::Launcher::new(s.h, s.v).entity_motion(facing);
     host.push_player([m[0] as f32, m[1] as f32, m[2] as f32]);
+    super::super::advancements::ejector_launched(host, s.pos, s.h, s.v);
 }
 
 fn depots_from_server(data: &[u8]) {
@@ -1173,6 +1178,10 @@ impl BlockEntityPart for LogisticsEntity {
         CLIENT.with_borrow_mut(|c| c.speeds.insert(pos, speeds[0]));
         let draw = &mut *event.draw;
         let partial_tick = draw.partial();
+        // The camera from the block entity, for the items standing upright to face.
+        let eye = host
+            .camera()
+            .map(|c| [0, 1, 2].map(|k| (c.position[k] - f64::from(pos[k])) as f32));
         match block {
             Block::Belt => {
                 let color = match event.entity.nbt.get(&BELT_COLOR.into()) {
@@ -1197,11 +1206,11 @@ impl BlockEntityPart for LogisticsEntity {
                 if cased && let Some(seg) = info.belt {
                     draw_casing(draw, host, &seg, &event.entity.nbt);
                 }
-                draw_belt_items(draw, host, pos, partial_tick);
+                draw_belt_items(draw, host, pos, partial_tick, eye);
             }
-            Block::Depot => draw_depot(draw, host, pos, partial_tick),
+            Block::Depot => draw_depot(draw, host, pos, partial_tick, eye),
             Block::WeightedEjector => {
-                draw_depot(draw, host, pos, partial_tick);
+                draw_depot(draw, host, pos, partial_tick, eye);
                 if let Some(facing) = info.facing {
                     draw_ejector(draw, host, pos, facing, partial_tick);
                 }
@@ -1380,7 +1389,13 @@ fn belt_model(host: &dyn ClientHost, file: &'static str, fresh: bool) -> Option<
 /// Draws a belt's items as `BeltRenderer.renderItem` does: each at its point on the belt
 /// (between where it was a tick ago and where it is), tilted on a slope, turned by its angle,
 /// its copies under it.
-fn draw_belt_items(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, c: [i32; 3], t: f32) {
+fn draw_belt_items(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    c: [i32; 3],
+    t: f32,
+    eye: Option<[f32; 3]>,
+) {
     let Some((contents, prev)) = CLIENT.with_borrow(|cl| {
         cl.belts
             .get(&c)
@@ -1388,7 +1403,7 @@ fn draw_belt_items(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, c: [i
     }) else {
         return;
     };
-    draw_belt_contents(draw, host, &contents, &prev, t);
+    draw_belt_contents(draw, host, &contents, &prev, t, eye);
 }
 
 /// `BeltRenderer.renderItems`: each item where it lies along the belt (from where it was a tick
@@ -1399,6 +1414,7 @@ fn draw_belt_contents(
     contents: &belt::Contents,
     prev: &[f32],
     t: f32,
+    eye: Option<[f32; 3]>,
 ) {
     let length = i32::from(contents.length);
     let same = prev.len() == contents.items.items.len();
@@ -1410,6 +1426,10 @@ fn draw_belt_contents(
         };
         let place = belt::item_place(&contents.segment, length, at, it.side_offset);
         let solid = block_item(host, &it.item);
+        if super::items::upright(host, &it.item) {
+            draw_upright_on_belt(draw, host, &place, it, solid, eye);
+            continue;
+        }
         let copies = belt::item_copies(u32::from(it.count), solid, it.angle, package(&it.item));
         draw.push();
         draw.translate([place.at.x, place.at.y, place.at.z]);
@@ -1427,15 +1447,103 @@ fn draw_belt_contents(
     }
 }
 
+/// The turn about the vertical (degrees) that faces an item at `at` toward the camera at `eye`
+/// (`atan2(diff.x, diff.z) + PI` of the item less the camera); none without a camera.
+fn facing_camera(at: [f32; 3], eye: Option<[f32; 3]>) -> f32 {
+    eye.map_or(0.0, |e| {
+        ((at[0] - e[0]).atan2(at[2] - e[2]) + std::f32::consts::PI).to_degrees()
+    })
+}
+
+/// `BeltRenderer.renderItem` for a stack standing upright (`BeltHelper.isItemUpright`): not
+/// tilted on a slope (only lifted, `slopeOffset`), turned to face the camera and set 3/32 up and
+/// 1/16 out, each copy at its own angle 1/16 further back, at half size.
+fn draw_upright_on_belt(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    place: &belt::Place,
+    it: &belt::Item,
+    solid: bool,
+    eye: Option<[f32; 3]>,
+) {
+    let mut at = [place.at.x, place.at.y, place.at.z];
+    if place.tilt != 0.0 {
+        // `item_place` lifts it up the tilted frame; upright, the lift is straight up.
+        let (s, c) = place.tilt.to_radians().sin_cos();
+        let (dx, dz) = match place.tilt_axis {
+            Axis::Z => (-s / 8.0, 0.0),
+            _ => (0.0, s / 8.0),
+        };
+        at = [at[0] - dx, at[1] - c / 8.0 + 1.0 / 8.0, at[2] - dz];
+    }
+    draw.push();
+    draw.translate(at);
+    draw.rotate_about(UP, facing_camera(at, eye), [0.0; 3]);
+    draw.translate([0.0, 3.0 / 32.0, 1.0 / 16.0]);
+    upright_copies(draw, host, &it.item, it.count, solid, it.angle as f32, None);
+    draw.pop();
+}
+
+/// The copies of an upright stack (`renderUpright`): copy `i` 1/16 further back, turned by
+/// `angle` (the belt's per copy; 0 where the depot turned it before), nudged by `nudge`'s random
+/// when a block item, at half size (a package lifted 4 px at one and a half).
+fn upright_copies(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    id: &str,
+    count: u8,
+    solid: bool,
+    angle: f32,
+    mut nudge: Option<&mut depot::JavaRandom>,
+) {
+    let boxed = package(id);
+    for i in 0..depot::copies(u32::from(count)) {
+        draw.push();
+        draw.translate([0.0, 0.0, -(i as f32) / 16.0]);
+        if angle != 0.0 {
+            draw.rotate_about(UP, angle, [0.0; 3]);
+        }
+        if solid
+            && !boxed
+            && let Some(r) = nudge.as_deref_mut()
+        {
+            let (dx, dz) = (r.next_float(), r.next_float());
+            draw.translate([dx * 0.0625 * i as f32, 0.0, dz * 0.0625 * i as f32]);
+        }
+        if boxed {
+            draw.translate([0.0, 0.25, 0.0]);
+            draw.scale([1.5; 3]);
+        } else {
+            draw.scale([0.5; 3]);
+        }
+        item(draw, host, id);
+        draw.pop();
+    }
+}
+
 /// Draws a depot's stacks as Create's `DepotRenderer` does: the held stack at its offset, turned
 /// by its angle; each output 0.35 out at 45° steps.
-fn draw_depot(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, pos: [i32; 3], t: f32) {
+fn draw_depot(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    pos: [i32; 3],
+    t: f32,
+    eye: Option<[f32; 3]>,
+) {
     let Some((contents, prev)) =
         CLIENT.with_borrow(|c| c.depots.get(&pos).map(|d| (d.contents.clone(), d.prev)))
     else {
         return;
     };
-    draw_depot_stacks(draw, host, &contents, prev, t);
+    let upright = draw_depot_stacks(draw, host, &contents, prev, t, eye);
+    // An upright stack faces the camera: drawn again each frame.
+    CLIENT.with_borrow_mut(|c| {
+        if upright {
+            c.upright_depots.insert(pos);
+        } else {
+            c.upright_depots.remove(&pos);
+        }
+    });
 }
 
 /// `DepotRenderer.renderItemsOf`: the held stack, from where it was a tick ago (`prev`) to where
@@ -1446,9 +1554,39 @@ fn draw_depot_stacks(
     contents: &depot::Contents,
     prev: depot::Held,
     t: f32,
-) {
+    eye: Option<[f32; 3]>,
+) -> bool {
+    let mut any_upright = false;
     for (slot, id, count) in &contents.stacks {
         let solid = block_item(host, id);
+        if super::items::upright(host, id) {
+            any_upright = true;
+            // `renderItem` with `renderUpright`: turned by its angle, then to face the camera
+            // from the depot's centre, 3/32 up and 1/16 back. An output is first carried out to
+            // its place and turned back (`rotateYDegrees(-(360 / 8f * i))`), at its angle + 90.
+            let yaw = facing_camera([0.5; 3], eye);
+            draw.push();
+            let (angle, mut rng) = if *slot == 0 {
+                let (from, to) = (prev.offset(), contents.held.offset());
+                let at = from + (to - from) * t;
+                draw.translate([at.x + 0.5, at.y + 15.0 / 16.0, at.z + 0.5]);
+                (contents.held.angle as f32, depot::JavaRandom::new(0))
+            } else {
+                let i = f32::from(*slot - 1);
+                let mut rng = depot::JavaRandom::new(i64::from(*slot));
+                let angle = (360.0 * rng.next_float()) as i32;
+                draw.translate([0.5, 15.0 / 16.0, 0.5]);
+                draw.rotate_about(UP, 45.0 * i, [0.0; 3]);
+                draw.translate([0.35, 0.0, 0.0]);
+                draw.rotate_about(UP, -45.0 * i, [0.0; 3]);
+                (angle as f32 + 90.0, rng)
+            };
+            draw.rotate_about(UP, angle + yaw, [0.0; 3]);
+            draw.translate([0.0, 3.0 / 32.0, -1.0 / 16.0]);
+            upright_copies(draw, host, id, *count, solid, 0.0, Some(&mut rng));
+            draw.pop();
+            continue;
+        }
         let (poses, phase, offset) = if *slot == 0 {
             let (from, to) = (prev.offset(), contents.held.offset());
             let at = from + (to - from) * t;
@@ -1479,6 +1617,7 @@ fn draw_depot_stacks(
         }
         draw.pop();
     }
+    any_upright
 }
 
 /// Draws an arm as `ArmRenderer` poses it at its progress: every part turned about the
@@ -1913,7 +2052,7 @@ pub(crate) fn draw_riding_items(
                 let prev: Vec<f32> = contents.items.items.iter().map(|i| i.position).collect();
                 draw.push();
                 draw.translate(o);
-                draw_belt_contents(draw, host, &contents, &prev, 1.0);
+                draw_belt_contents(draw, host, &contents, &prev, 1.0, None);
                 draw.pop();
             }
         }
@@ -1957,7 +2096,7 @@ fn depot_items(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, nbt: &Com
         held,
         stacks,
     };
-    draw_depot_stacks(draw, host, &contents, held, 1.0);
+    draw_depot_stacks(draw, host, &contents, held, 1.0, None);
 }
 
 /// A riding belt segment's halves and pulley as `BeltRenderer` poses them, standing still and in

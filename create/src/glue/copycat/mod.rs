@@ -22,17 +22,16 @@
 //!   legacy `behaviours().data(state).classes`): no API says which vanilla class a block is.
 //!   They are read from vanilla's tags (`minecraft:stairs`, `minecraft:trapdoors`) and, for bars,
 //!   a `_bars` id that is no pane; a block-class query would make them exact.
-//! - A copycat's own block model under its material: the block entity draws the material just
-//!   outside the copycat's box, over the model. `data/create/horizon/block/copycat_*.json`
-//!   declare `"dynamic_model": true`, which this fork's content schema doesn't know; a
-//!   `"render_shape": "ENTITYBLOCK_ANIMATED"` there (the data generator's) leaves the model out.
-//! - A sneaking wrench's pickup giving the material's item back to the player before the block
-//!   goes (legacy `wrench` then `native_give_items`): the wrench's sneaking pickup is the
-//!   wrench's owner's; the copycat's item drops where the block was, as `onRemove` drops it.
+//!
+//! A copycat's block model is not drawn (`render_shape` `ENTITYBLOCK_ANIMATED` in its
+//! declaration): its block entity draws the material cut to its box, or the copycat base when it
+//! holds none. The wrench takes the material off, the item it consumed going back to the player
+//! outside creative (`onWrenched`), and a sneaking wrench does so before it picks the copycat up.
 
 mod body;
 mod parts;
 mod sound;
+pub(crate) use parts::helper_target;
 
 use super::persist;
 use super::server::ServerLevel;

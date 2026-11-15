@@ -153,7 +153,9 @@ fn is_seat(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
 }
 
 fn kind_of(lv: &ServerLevel<'_>, e: EntityRef) -> String {
-    e.kind(&*lv.host).unwrap_or_default()
+    e.kind(&*lv.host)
+        .map(|k| k.id(&*lv.host))
+        .unwrap_or_default()
 }
 
 /// A stand-in at `at`: an empty item display tagged as Create's seat.

@@ -51,6 +51,7 @@ mod deployer;
 mod fan;
 pub(crate) use fan::flow_limit_from;
 mod filtering;
+mod fist;
 pub(crate) use filtering::filter_at as machine_filter;
 mod millstone;
 mod persist;
@@ -150,6 +151,7 @@ impl Subsystem for Processing {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let _ = deployer::ITEM_PARTICLE.set(r.particle_key("minecraft:item"));
         containers::register(r);
+        recipes::register(r);
         // The crafter's group inventory, ahead of the game's plain slot (it is the kinetic type's,
         // declared by `Kinetics`).
         let kind = r.block_entity_type_key(super::kinetics::TYPE);
@@ -185,6 +187,7 @@ impl Subsystem for Processing {
         spoutput::clear();
         crafter::clear();
         toolbelt::clear();
+        fist::clear();
     }
 
     fn tags_updated(&self, host: &mut dyn ServerHost) {
@@ -204,6 +207,16 @@ impl Subsystem for Processing {
 
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
         toolbelt::chunk_unload(dim, chunk);
+    }
+
+    /// A toolbox's block replaced by anything but a toolbox (`ToolboxBlock.onRemove` removing
+    /// its block entity): its compartment kinds and id go with it.
+    fn block_changed(&self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
+        let toolbox =
+            |s: u32| super::packages::block_of(s).is_some_and(create_engine::dye::is_toolbox);
+        if toolbox(old) && !toolbox(new) {
+            toolbelt::removed(dim, pos);
+        }
     }
 
     /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
@@ -320,6 +333,15 @@ impl Subsystem for Processing {
         event: &mut mod_api::LeftClickBlockEvent,
     ) -> mod_api::Flow {
         toolbelt::left_click(host, event.pos)
+    }
+
+    /// `ToolboxHandlerClient.onPickItem`: the picked item from a toolbox in reach.
+    fn player_pick_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerPickItemEvent<'_>,
+    ) -> mod_api::Flow {
+        toolbelt::pick_item(host, event)
     }
 
     /// A player breaking a toolbox: its contents go with its drop.

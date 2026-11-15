@@ -10,29 +10,29 @@
 //! block's `ITEMS` capability through the face toward it (`inv`).
 //!
 //! Conveyors draw their wheel, shaft, guards and chains (`ChainConveyorRenderer`; a chain's
-//! scrolling is left out: vanilla's chain model is drawn a block at a time) and are joined with
+//! scrolling is left out, HORIZON_API.md: vanilla's chain model is drawn a block at a time) and are joined with
 //! chains (`ChainConveyorConnectionHandler`, the first conveyor kept on the server). A frogport is
 //! aimed at a chain point with its item (`frog_target`) and draws its body, head, tongue and
 //! catch (`frog_draw`).
 //!
+//! Other blocks' automation (hoppers, funnels, chutes) reaches a packager's box and a port's
+//! packages through block entity slots mirroring them (`automation`).
+//!
 //! Left out, for want of API:
-//! - Other blocks' automation (hoppers, funnels, chutes) does not reach a packager's box or a
-//!   port's packages: their state lives here, not in storage a transaction journals, so an
-//!   `ITEMS` handler for them could not be rolled back (the legacy glue's
-//!   `automation_insert` / `automation_take` / `automation_room`).
 //! - A frogport is not told when the inventory below it changes (`contents_changed` is a Part
 //!   of the changed block only, with no hook for every container's `setChanged`): a frogport
 //!   with an inventory below looks at it on Create's own lazy tick, every 10 ticks, instead of
 //!   at once.
-//! - A dropped package is an item, not Create's package entity (`PackageEntity`), as in the
-//!   legacy glue.
+//! - A dropped package is an item, not Create's package entity (`PackageEntity`, HORIZON_API.md).
 
+mod automation;
 pub mod body;
 mod box_draw;
 mod frog_draw;
 mod frog_target;
 mod inv;
 pub(crate) mod port_screen;
+mod station_ports;
 
 use super::server::{ServerLevel, UPDATE_CLIENTS};
 use super::states;
@@ -71,6 +71,8 @@ struct Shown {
 }
 
 thread_local! {
+    /// Postboxes players placed, joined to their chosen station at the next tick.
+    static POSTBOX_PLACED: RefCell<Vec<(usize, [i32; 3], PlayerRef)>> = const { RefCell::new(Vec::new()) };
     /// Each level's package logistics, by level index, made when first needed.
     static PACKAGES: RefCell<Option<Vec<Pk>>> = const { RefCell::new(None) };
     /// Blocks of ours placed or removed, handled at the level's tick.
@@ -183,12 +185,39 @@ fn speed_of(dim: usize, pos: [i32; 3]) -> f32 {
     with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0)
 }
 
+/// `minecraft:happy_villager`, for a postbox trading with a train.
+static HAPPY: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
+
+/// A postbox used on the station at `station` by `player` (`onUse`): chosen for the next
+/// postbox placed.
+pub(crate) fn choose_station(player: PlayerRef, dim: usize, station: [i32; 3]) {
+    station_ports::choose(player, dim, station);
+}
+
+/// The stations a train's package instruction may go to (`station_ports::package_stations`).
+pub(crate) fn package_stations(
+    lv: &ServerLevel<'_>,
+    fetch: Option<&str>,
+    aboard: &[ItemStack],
+) -> Vec<[i32; 3]> {
+    station_ports::package_stations(lv, fetch, aboard)
+}
+
+/// `minecraft:block`, for the rope's dust as a frogport catches.
+static BLOCK_PARTICLE: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
+
+/// `minecraft:dust`, for a frogport's line to its point (`animateConnection`).
+static DUST_PARTICLE: std::sync::OnceLock<mod_api::ParticleKey> = std::sync::OnceLock::new();
+
 pub struct Packages;
 
 impl Subsystem for Packages {
     /// A chain conveyor carrying packages is drawn every frame, as they move along it (its
     /// drawing is otherwise kept, and drawn anew only when its data changes).
     fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+        if block == Block::PackageFrogport {
+            return frog_draw::animated(&entity.nbt);
+        }
         if block != Block::ChainConveyor {
             return box_draw::animated(block, pos, entity);
         }
@@ -206,6 +235,10 @@ impl Subsystem for Packages {
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        let _ = BLOCK_PARTICLE.set(r.particle_key("minecraft:block"));
+        let _ = DUST_PARTICLE.set(r.particle_key("minecraft:dust"));
+        let _ = HAPPY.set(r.particle_key("minecraft:happy_villager"));
+        automation::register(r);
         for &b in Block::ALL.iter().filter(|&&b| is_packager(b) || is_port(b)) {
             r.block_part(states::key(b), PackageBlock);
         }
@@ -247,6 +280,20 @@ impl Subsystem for Packages {
             mod_api::HostSide::Client(h) => id(&**h),
             mod_api::HostSide::Server(h) => id(&**h),
         };
+        // `PackagePortTargetSelectionHandler.onUse`: a postbox used on a station chooses it.
+        if chains
+            .as_deref()
+            .is_some_and(|i| i.starts_with("create:") && i.ends_with("_postbox"))
+        {
+            if let mod_api::HostSide::Client(h) = host
+                && click.hand == Hand::Main
+                && frog_target::choose_station(h, click.pos)
+            {
+                *event.cancellation_result = InteractionResult::Success;
+                return Flow::Cancel;
+            }
+            return Flow::Continue;
+        }
         if chains.as_deref() == Some("create:package_frogport") {
             // `ChainConveyorInteractionHandler.onUse`: a chain point under the crosshair.
             if let mod_api::HostSide::Client(h) = host
@@ -312,6 +359,8 @@ impl Subsystem for Packages {
 
     fn world_closed(&self) {
         frog_target::reset_server();
+        automation::reset();
+        station_ports::reset();
         frog_draw::reset();
         box_draw::reset();
         PACKAGES.with_borrow_mut(|p| *p = None);
@@ -359,6 +408,24 @@ impl Subsystem for Packages {
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         level_tick(lv);
+        let dim = lv.dim;
+        let placed: Vec<([i32; 3], PlayerRef)> = POSTBOX_PLACED.with_borrow_mut(|p| {
+            let (mine, rest): (Vec<_>, Vec<_>) =
+                std::mem::take(p).into_iter().partition(|x| x.0 == dim);
+            *p = rest;
+            mine.into_iter().map(|x| (x.1, x.2)).collect()
+        });
+        for (pos, player) in placed {
+            // The client's choice ends (as a frogport's).
+            net::send_to_player(lv.host, player, frog_target::CHANNEL, &[]);
+            if !station_ports::placed(lv, player, pos) {
+                let _ = player.action_bar(
+                    lv.host,
+                    Text::translate("create.gui.package_port.not_targeting_anything", Vec::new()),
+                );
+            }
+        }
+        station_ports::level_tick(lv);
     }
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
@@ -441,6 +508,7 @@ impl Subsystem for Packages {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         port_screen::tick(host);
         frog_target::client_tick(host);
+        frog_draw::client_tick(host);
         if !SYNCED.get() && net::send_to_server(host, create_engine::client::CHANNEL, b"sync") {
             SYNCED.set(true);
         }
@@ -496,7 +564,25 @@ impl Subsystem for Packages {
         host: &mut dyn ServerHost,
         event: &mut mod_api::EntityPlaceEvent,
     ) -> Flow {
-        let frog = states::id(event.state).and_then(block_of) == Some(Block::PackageFrogport);
+        let block = states::id(event.state).and_then(block_of);
+        // `flushSettings` for a postbox: the station chosen, or nothing chosen.
+        if block.is_some_and(create_engine::dye::is_postbox)
+            && let Some(placer) = event.placer
+            && let Some(player) = host
+                .players()
+                .server_players()
+                .into_iter()
+                .find(|p| p.entity() == placer)
+            && let Some(dimension) = player.dimension(&*host).map(|d| d.to_string())
+            && let Some(mut lv) = ServerLevel::new(host, &dimension)
+        {
+            let pos = [event.pos.x, event.pos.y, event.pos.z];
+            // The port is known at the level's next tick (`block_moved`): joined then.
+            POSTBOX_PLACED.with_borrow_mut(|p| p.push((lv.dim, pos, player)));
+            let _ = &mut lv;
+            return Flow::Continue;
+        }
+        let frog = block == Some(Block::PackageFrogport);
         if let (true, Some(placer)) = (frog, event.placer)
             && let Some(player) = host
                 .players()
@@ -582,6 +668,18 @@ impl Subsystem for Packages {
     }
 }
 
+/// The `ITEMS` handler of the packager `side` asks, if it is one (`automation`).
+pub(crate) fn packager_items(
+    host: &mut dyn ServerHost,
+    side: mod_api::BlockSide,
+    dim: usize,
+) -> Option<Box<dyn mod_api::ResourceHandler<mod_api::ItemResource>>> {
+    if !present() {
+        return None;
+    }
+    automation::provide(host, side, dim)
+}
+
 /// The verb of a `create_debug` command when it is one of `verbs`.
 pub fn debug_verb(event: &RunModCommandEvent<'_>, verbs: &[&'static str]) -> Option<&'static str> {
     let l = &event.command.literals;
@@ -633,6 +731,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     for (_, pos, was, is) in changes {
         block_moved(lv, dim, pos, was, is);
     }
+    automation::reconcile(lv);
     // What comparators read of packagers and ports that changed (since the last tick too: a
     // menu took or gave a package) is looked at after this tick.
     let mut touched = with(dim, |pk| std::mem::take(&mut pk.changed));
@@ -640,6 +739,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     if with(dim, |pk| pk.is_idle()) && GONE.with_borrow(Vec::is_empty) {
         frog_draw::sync(lv);
         box_draw::sync(lv);
+        automation::sync(lv);
         analog_touched(lv, &touched);
         mark_unsaved(dim, &[]);
         return;
@@ -683,6 +783,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             }
             Out::PackagerDone(_) => {}
             Out::Drop(at, p) => drop_stack(lv, at, p.stack),
+            Out::Caught(pos) => crate::glue::advancements::award_placer(lv, pos, "frogport"),
         }
     }
     for pos in with(dim, |pk| pk.due(now)) {
@@ -704,6 +805,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     frog_target::level_tick(lv);
     frog_draw::sync(lv);
     box_draw::sync(lv);
+    automation::sync(lv);
     touched.extend(with(dim, |pk| std::mem::take(&mut pk.changed)));
     analog_touched(lv, &touched);
     mark_unsaved(dim, &changed);
@@ -796,7 +898,10 @@ fn block_moved(
         // `PackagerBlockEntity.destroy`: its box and queued boxes drop.
         Some(Block::Packager | Block::Repackager) => with(dim, |pk| {
             if let Some(p) = pk.packagers.remove(&pos) {
-                for b in p.held.into_iter().chain(p.sliding) {
+                // A box in its slot drops with the block (`automation`).
+                let held = p.held.filter(|_| !automation::mirrored(dim, pos));
+                automation::forget(dim, pos);
+                for b in held.into_iter().chain(p.sliding) {
                     drops.push((center(pos), b.stack));
                 }
                 for (b, n) in p.queue {
@@ -833,11 +938,17 @@ fn block_moved(
             GONE.with_borrow_mut(|g| g.push((dim, pos)));
         }
         // `PackagePortBlockEntity.destroy`: its packages drop.
-        Some(_) => with(dim, |pk| {
-            for p in pk.remove_port(pos) {
-                drops.push((center(pos), p.stack));
+        // Those in its slots drop with the block (`automation`); one joined to a station leaves
+        // it (`removePackagePort`).
+        Some(_) => {
+            station_ports::detach(dim, pos);
+            let removed: Vec<ItemStack> = with(dim, |pk| {
+                pk.remove_port(pos).into_iter().map(|p| p.stack).collect()
+            });
+            for s in automation::port_unmirrored(dim, pos, removed) {
+                drops.push((center(pos), s));
             }
-        }),
+        }
         None => {}
     }
     match is {
@@ -1010,6 +1121,7 @@ fn attempt_send(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
         });
         pk.activate(pos);
     });
+    crate::glue::advancements::award_placer(lv, pos, "packager");
     let _ = at;
 }
 
@@ -1377,6 +1489,9 @@ pub fn perform_requests(
         };
         body::set_address(&mut stack, Some(&r.address));
         body::set_order(&*lv.host, &mut stack, &stock::order_data_stack(&r.order));
+        if with(dim, |pk| pk.packager(pos).sends_now()) {
+            crate::glue::advancements::award_placer(lv, pos, "packager");
+        }
         with(dim, |pk| {
             pk.packager(pos).send_or_queue(Parcel {
                 stack,
@@ -1526,6 +1641,7 @@ fn use_packager(
             return Some(InteractionResult::Success);
         }
         unwrap(&mut lv, dim, pos, &stack, false);
+        automation::sync(&mut lv);
         stock::stock_check(&mut lv, dim, pos);
         if let Some(slot) = player.selected_slot(&*lv.host) {
             let _ = player.set_inventory_slot(&mut *lv.host, slot as u32, stack.shrink(1));
@@ -1546,6 +1662,7 @@ fn use_packager(
     // `placeItemBackInInventory`: into the inventory, else dropped.
     let _ = player.give_stack(&mut *lv.host, b.stack);
     with(dim, |pk| pk.wake([pos[0], pos[1] + 1, pos[2]]));
+    automation::sync(&mut lv);
     Some(InteractionResult::Success)
 }
 
@@ -1678,6 +1795,32 @@ struct PackageBlock;
 
 #[mod_api::horizon_part]
 impl BlockPart for PackageBlock {
+    /// A packager's slots changed: automation took its box or put a package in (`automation`).
+    fn contents_changed(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ContentsChangedEvent,
+    ) {
+        let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
+            return;
+        };
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return;
+        };
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        let (packager, port) = with(lv.dim, |pk| {
+            (pk.packagers.contains_key(&pos), pk.ports.contains_key(&pos))
+        });
+        if packager {
+            automation::contents_changed(&mut lv, pos);
+        } else if port {
+            automation::port_contents_changed(&mut lv, pos);
+        }
+        if packager || port {
+            automation::sync(&mut lv);
+        }
+    }
+
     fn use_item_on(
         &self,
         host: &mut dyn ServerHost,
@@ -1727,7 +1870,7 @@ impl BlockPart for PackageBlock {
 
 /// A packager's address (its sign's) or a port's filter (`addressFilter`, `filterChanged`).
 fn set_address(dim: usize, pos: [i32; 3], text: &str) -> String {
-    with(dim, |pk| {
+    let line = with(dim, |pk| {
         if let Some(p) = pk.packagers.get_mut(&pos) {
             p.address = text.to_owned();
             pk.touch(pos);
@@ -1741,7 +1884,9 @@ fn set_address(dim: usize, pos: [i32; 3], text: &str) -> String {
             return format!("port filter \"{text}\"");
         }
         "no packager or port there".to_owned()
-    })
+    });
+    station_ports::filter_changed(dim, pos);
+    line
 }
 
 /// A frogport's target: a chain conveyor, round its wheel at an angle or along one of its
@@ -2021,10 +2166,11 @@ fn describe(lv: &ServerLevel<'_>, dim: usize, pos: [i32; 3]) -> String {
                 .map(|b| format!("{} to \"{}\"", id(&b.stack), b.address))
                 .collect();
             return format!(
-                "{} filter=\"{}\" target={:?} animating={} items=[{}]",
+                "{} filter=\"{}\" target={:?} station={:?} animating={} items=[{}]",
                 if p.frog { "frogport" } else { "postbox" },
                 p.filter,
                 p.target.map(|t| (t.conveyor, t.chain_pos, t.connection)),
+                p.station,
                 p.is_animating(),
                 items.join(", ")
             );
@@ -2452,6 +2598,9 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                 ("AddressFilter", Tag::String(port.filter.as_str().into())),
                 ("Inventory", Tag::List(items)),
             ];
+            if let Some(s) = port.station {
+                c.push(("Station", Tag::IntArray(s.to_vec())));
+            }
             if let Some(t) = port.target {
                 let k = t.connection.unwrap_or([0; 3]);
                 c.push((
@@ -2678,6 +2827,10 @@ fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
                     }
                 }
             }
+            let s = ints(c.get(&"Station".into()));
+            if s.len() == 3 {
+                port.station = Some([s[0], s[1], s[2]]);
+            }
             let t = ints(c.get(&"Target".into()));
             if t.len() == 8 {
                 port.target = Some(Target {
@@ -2700,6 +2853,7 @@ fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
     });
     for pos in ports_loaded {
         note_maxes(lv, pos);
+        station_ports::attach(dim, pos);
     }
     for pos in conveyors {
         sync_far(dim, pos);
@@ -2718,6 +2872,15 @@ fn chunk_unload(dim: usize, chunk: [i32; 2]) {
         pk.active.retain(|p| !inside(p));
         let ports: Vec<[i32; 3]> = pk.ports.keys().filter(|p| inside(p)).copied().collect();
         for p in ports {
+            // `saveOfflineBuffer`: a postbox joined to a station leaves its packages there.
+            if let Some(port) = pk.ports.get(&p) {
+                let items: Vec<Option<ItemStack>> = port
+                    .items
+                    .iter()
+                    .map(|s| s.as_ref().map(|b| b.stack.clone()))
+                    .collect();
+                station_ports::save_buffer(dim, p, &items);
+            }
             pk.remove_port(p);
         }
         let conveyors: Vec<[i32; 3]> = pk

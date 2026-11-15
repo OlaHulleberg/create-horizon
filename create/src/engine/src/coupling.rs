@@ -624,13 +624,26 @@ pub fn dir_from_y_rot(yaw: f64) -> crate::kinetics::Dir {
     }
 }
 
-/// `CouplingRenderer.getSuitableCartEndpoint` (its 0.004-block jitter left out): where a
-/// coupling meets the cart at `pos` (the rail under it, 3/8 + 1/8 up, 13/16 toward the
-/// coupling's `centre`) and the cart's yaw there (`180 - yaw`, degrees, plus a half turn when
-/// its back faces the centre: the attachment's turn).
+/// `getSuitableCartEndpoint`'s jitter of the cart with entity id `id` (as vanilla's
+/// `MinecartRenderer` shifts a cart): up to 0.002 blocks each way, from a hash of the id.
+pub fn jitter(id: i32) -> [f64; 3] {
+    let mut i = i64::from(id).wrapping_mul(493_286_711);
+    i = i
+        .wrapping_mul(i)
+        .wrapping_mul(4_392_167_121)
+        .wrapping_add(i.wrapping_mul(98_761));
+    let at = |shift: u32| f64::from(((((i >> shift) & 7) as f32 + 0.5) / 8.0 - 0.5) * 0.004);
+    [at(16), at(20), at(24)]
+}
+
+/// `CouplingRenderer.getSuitableCartEndpoint`: where a coupling meets the cart at `pos` (the
+/// rail under it, 3/8 + 1/8 up, 13/16 toward the coupling's `centre`, shifted by the cart's
+/// `jitter`) and the cart's yaw there (`180 - yaw`, degrees, plus a half turn when its back faces
+/// the centre: the attachment's turn).
 pub fn endpoint(
     pos: [f64; 3],
     centre: [f64; 3],
+    jitter: [f64; 3],
     rail: &impl Fn([i32; 3]) -> Option<RailShape>,
 ) -> ([f64; 3], f32) {
     let on = rail_pos(pos, rail);
@@ -646,6 +659,7 @@ pub fn endpoint(
             yaw = d[2].atan2(d[0]).to_degrees() as f32;
         }
     }
+    let at = [0, 1, 2].map(|k| at[k] + jitter[k]);
     let toward = if on.is_some() {
         normalize(sub(front, back))
     } else {
@@ -827,8 +841,8 @@ mod tests {
         assert!((yaw - 45.0).abs() < 1e-4, "{yaw}");
         // The coupling's ends 13/16 in front of each cart, toward each other.
         let flat = |p: [i32; 3]| (p[1] == 64).then_some(RailShape::EastWest);
-        let (a, _) = endpoint([0.5, 64.0625, 0.5], [2.0, 64.0, 0.5], &flat);
-        let (b, _) = endpoint([3.5, 64.0625, 0.5], [2.0, 64.0, 0.5], &flat);
+        let (a, _) = endpoint([0.5, 64.0625, 0.5], [2.0, 64.0, 0.5], [0.0; 3], &flat);
+        let (b, _) = endpoint([3.5, 64.0625, 0.5], [2.0, 64.0, 0.5], [0.0; 3], &flat);
         assert!(
             (a[0] - 1.3125).abs() < 1e-9 && (b[0] - 2.6875).abs() < 1e-9,
             "{a:?} {b:?}"

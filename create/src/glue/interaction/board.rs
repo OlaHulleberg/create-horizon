@@ -599,8 +599,39 @@ fn opaque(rgb: u32) -> u32 {
     0xFF00_0000 | rgb
 }
 
-/// `ValueSettingsScreen.renderWindow`, with plain fills where Create draws its GUI sprites
-/// (`AllGuiTextures.VALUE_SETTINGS_*`). Whether a board is open.
+/// `AllGuiTextures`' sheet for the board (`VALUE_SETTINGS_*`, `BRASS_FRAME_*`).
+const SHEET: &str = "create:gui/value_settings";
+
+/// `UIRenderHelper.drawStretched`: the region `src` stretched over `dst`.
+fn stretched(draw: &mut dyn DrawContext, src: [f32; 4], dst: [i32; 4]) {
+    let d = dst.map(|v| v as f32);
+    draw.sprite(SHEET, src, d, None);
+}
+
+/// `UIRenderHelper.drawCropped` and `AllGuiTextures.render`: as much of the region `src` as
+/// `dst` holds, from its corner.
+fn cropped(draw: &mut dyn DrawContext, src: [f32; 2], dst: [i32; 4]) {
+    let d = dst.map(|v| v as f32);
+    draw.sprite(SHEET, [src[0], src[1], d[2], d[3]], d, None);
+}
+
+/// `ValueSettingsScreen.renderBrassFrame`.
+fn brass_frame(draw: &mut dyn DrawContext, x: i32, y: i32, w: i32, h: i32) {
+    cropped(draw, [65.0, 9.0], [x, y, 4, 4]);
+    cropped(draw, [70.0, 9.0], [x + w - 4, y, 4, 4]);
+    cropped(draw, [65.0, 19.0], [x, y + h - 4, 4, 4]);
+    cropped(draw, [70.0, 19.0], [x + w - 4, y + h - 4, 4, 4]);
+    if h > 8 {
+        stretched(draw, [65.0, 14.0, 3.0, 4.0], [x, y + 4, 3, h - 8]);
+        stretched(draw, [71.0, 14.0, 3.0, 4.0], [x + w - 3, y + 4, 3, h - 8]);
+    }
+    if w > 8 {
+        cropped(draw, [0.0, 24.0], [x + 4, y, w - 8, 3]);
+        cropped(draw, [0.0, 27.0], [x + 4, y + h - 3, w - 8, 3]);
+    }
+}
+
+/// `ValueSettingsScreen.renderWindow`, drawn with Create's sprites. Whether a board is open.
 pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
     let Some((b, names, ticks)) =
         BOARD.with_borrow(|b| b.as_ref().map(|o| (o.board, o.names, o.ticks)))
@@ -680,33 +711,71 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
     let open = ticks as f32;
     draw.fill([0.0, 0.0, width, height], board::shade(open));
     let fr = l.frame(fattest, open);
-    draw.fill([f(fr.x), f(fr.y), f(fr.width), f(fr.height)], 0xE02A_1E14);
+    // `VALUE_SETTINGS_OUTER_BG`, with a pixel more above and below but at the corners.
+    let outer = [80.0, 9.0, 1.0, 1.0];
+    stretched(draw, outer, [fr.x, fr.y, fr.width, fr.height]);
+    stretched(draw, outer, [fr.x + 1, fr.y - 1, fr.width - 2, 1]);
+    stretched(draw, outer, [fr.x + 1, fr.y + fr.height, fr.width - 2, 1]);
     if fr.text {
         let at = [centred(draw, b.title, fr.text_x), f(fr.title_y)];
         draw.text(b.title, at, opaque(0xDD_DDDD), false);
         let at = [centred(draw, &tip, fr.text_x), f(fr.tip_y)];
         draw.text(&tip, at, opaque(0xDD_DDDD), false);
     }
+    let rows = b.rows.len() as i32;
+    let bar_width = b.bar_width();
+    brass_frame(
+        draw,
+        l.left + l.label + 14,
+        l.top - 3,
+        bar_width + 8,
+        rows * 11 + 5,
+    );
+    stretched(
+        draw,
+        [75.0, 9.0, 1.0, 1.0],
+        [l.left + l.label + 17, l.top, bar_width + 2, rows * 11 - 1],
+    );
     for (i, row) in b.rows.iter().enumerate() {
         let y = l.top + i as i32 * 11;
         if !b.icons {
-            draw.fill([f(l.left - 4), f(y), f(l.label + 8), 11.0], 0xFFC8_A864);
-            let bar = [f(l.bar_x()), f(y + 1), f(b.bar_width()), 8.0];
-            draw.fill(bar, 0xFF8A_6A3A);
+            cropped(draw, [0.0, 31.0], [l.left - 4, y, l.label + 8, 11]);
+            // `VALUE_SETTINGS_BAR` (249 wide) repeated along the bar.
+            let mut w = 0;
+            while w < bar_width {
+                cropped(
+                    draw,
+                    [7.0, 0.0],
+                    [l.bar_x() + w, y + 1, 248.min(bar_width - w), 8],
+                );
+                w += 248;
+            }
             draw.text(row, [f(l.left), f(y + 1)], opaque(0x44_2000), false);
         }
         for x in l.milestones() {
-            let mark = [f(x), f(y + 1), f(b.milestone_size()), 8.0];
-            draw.fill(mark, 0xFF44_2000);
+            if b.icons {
+                cropped(draw, [75.0, 14.0], [x, y + 1, 13, 8]);
+            } else {
+                cropped(draw, [0.0, 0.0], [x, y + 1, 7, 8]);
+            }
         }
+    }
+    if !b.icons {
+        brass_frame(draw, l.left - 7, l.top - 3, l.label + 14, rows * 11 + 5);
     }
     let label = text(pick);
     let width = if b.icons { 16 } else { tw(draw, &label) };
     let [x, y, w] = Layout::cursor(l.coordinate(pick.row, pick.value), width);
-    draw.fill([f(x - 3), f(y), f(w + 6), 14.0], 0xFFFB_DC7D);
     if !b.icons {
+        // `VALUE_SETTINGS_CURSOR_LEFT`, `_CURSOR`, `_CURSOR_RIGHT`.
+        cropped(draw, [0.0, 9.0], [x - 3, y, 3, 14]);
+        cropped(draw, [4.0, 9.0], [x, y, w, 14]);
+        cropped(draw, [61.0, 9.0], [x + w, y, 3, 14]);
         draw.text(&label, [f(x + 2), f(y + 3)], opaque(0x44_2000), false);
-    } else if fr.text {
+        return true;
+    }
+    cropped(draw, [0.0, 44.0], [x - 2, y - 3, 22, 20]);
+    if fr.text {
         let at = [centred(draw, &label, fr.text_x), f(fr.option_y)];
         draw.text(&label, at, opaque(0xFB_DC7D), false);
     }

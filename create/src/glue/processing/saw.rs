@@ -322,7 +322,7 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
                 let mut rng = Rng::new(lv.seed_at(pos));
                 let filter = super::filtering::filter_at(dim, pos);
                 let host = &*lv.host;
-                recipes::with(|r| {
+                let applied = recipes::with(|r| {
                     if let Some((a, _)) = sequenced::step_for(
                         &r.sequenced,
                         &item,
@@ -330,7 +330,7 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
                         "create:cutting",
                     ) {
                         saw.apply_assembly(a, &mut rng);
-                        return;
+                        return true;
                     }
                     let list: Vec<&Recipe> = r
                         .cutting
@@ -348,10 +348,51 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
                         &mut rng,
                         left.as_deref(),
                     );
+                    !list.is_empty()
                 });
+                if applied == Some(true) {
+                    crate::glue::advancements::award_placer(lv, pos, "saw_processing");
+                }
             }
             Step::Out => {
                 let m = saw::movement(along_first, speed);
+                // `tryExportingToBeltFunnel`: a pulling belt funnel on top facing against the
+                // items' way takes them first, a slot a tick; one that takes none of a slot
+                // holds the saw.
+                let moving = Dir::ALL.into_iter().find(|d| d.offset() == m);
+                if let Some(moving) = moving {
+                    for i in 0..saw.slots.len() {
+                        let (item, count) = saw.slots[i].clone();
+                        let Some(stack) = stacks::stack(&*lv.host, &item, u32::from(count)) else {
+                            continue;
+                        };
+                        let Some(left) =
+                            crate::glue::logistics::export_up(lv, pos, moving.opposite(), &stack)
+                        else {
+                            break;
+                        };
+                        if left == u32::from(count) {
+                            return Some(Step::Wait);
+                        }
+                        if left == 0 {
+                            saw.slots.remove(i);
+                        } else {
+                            saw.slots[i].1 = left.min(255) as u8;
+                        }
+                        if saw.slots.is_empty() {
+                            saw.clear();
+                            SAW_INDEX.with_borrow_mut(|m| m.insert((dim, pos), saw.index));
+                        }
+                        with_world(|w| {
+                            if saw.slots.is_empty() {
+                                w.dims[dim].saws.remove(&pos);
+                            } else {
+                                w.dims[dim].saws.insert(pos, saw);
+                            }
+                        });
+                        return Some(Step::Out);
+                    }
+                }
                 // A belt, depot or machine it turns toward takes the results
                 // (`DirectBeltInputBehaviour` from that side); what it doesn't take, or all of
                 // them while it takes nothing from that side, waits in the saw.

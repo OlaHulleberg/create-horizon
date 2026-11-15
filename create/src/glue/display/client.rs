@@ -472,7 +472,24 @@ fn draw_nixie_signal(
     true
 }
 
-/// `NixieTubeRenderer`: the tube's two characters, `left` and `right`, in its colour.
+thread_local! {
+    static FLICKER: std::cell::Cell<u64> = const { std::cell::Cell::new(0x9E37_79B9_7F4A_7C15) };
+}
+
+/// `random.nextFloat()` for a tube's flicker, drawn anew each frame.
+fn flicker() -> f32 {
+    FLICKER.with(|r| {
+        let mut x = r.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        r.set(x);
+        (x >> 40) as f32 / (1u64 << 24) as f32
+    })
+}
+
+/// `NixieTubeRenderer`: the tube's two characters, `left` and `right`, in its colour, each
+/// flickering toward its dark colour (`drawTube`).
 fn draw_nixie_text(
     host: &dyn ClientHost,
     draw: &mut dyn BlockEntityDrawContext,
@@ -500,7 +517,15 @@ fn draw_nixie_text(
     let colour = create_engine::dye::DyeColor::ALL[i];
     let texts = {
         let draw = &*draw;
-        display::nixie_texts(face, facing, colour, left, right, |s| width(draw, s))
+        let flicker = [flicker(), flicker()];
+        display::nixie_flickering(
+            face,
+            facing,
+            colour,
+            [left, right],
+            |s| width(draw, s),
+            flicker,
+        )
     };
     for t in texts {
         draw_text(draw, &t.pose, &t.text, t.color, true);

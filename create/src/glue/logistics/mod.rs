@@ -22,9 +22,8 @@
 //!   change (`contents_changed` reaches only a block's own parts), so a chute under one looks
 //!   again every `RETRY` ticks.
 //! - An arm's points and an ejector's target are chosen with their items as in Create
-//!   (`arms::select_point`, `arms::select_ejector_target`), but the outlines Create's client draws
-//!   around the chosen blocks are not, and left-clicking a point to drop it is out: the mod API's
-//!   `left_click_block` names no player.
+//!   (`arms::select_point`, `arms::select_ejector_target`), and outlined on their chooser's client;
+//!   left-clicking a point to drop it is out: the mod API's `left_click_block` names no player.
 //! - Belts outline and collide as Create's `BeltShapes` (declared by `tools/create-data`), but
 //!   every entity collides with the shape cut at 19 px, where Create gives its passengers the whole
 //!   outline (content shapes select by entity class, not by riding). A belt's casing is drawn by
@@ -70,8 +69,9 @@ pub use arms::Arms;
 // stack placed on one needs.
 pub(crate) use belt::{
     belt_segment, direct_input_accepts, direct_input_at, insert_into_from, put_on_from_above,
+    set_casing,
 };
-pub(crate) use funnel::{funnel_at, funnel_passes};
+pub(crate) use funnel::{export_up, funnel_at, funnel_passes};
 pub(crate) use items::{random_angle, upright};
 pub(crate) use tunnel::set_brass_mode;
 
@@ -340,6 +340,7 @@ impl Subsystem for Logistics {
                     _ => return true,
                 };
                 set(lv, "shape", next);
+                crate::glue::advancements::funnel_kiss(lv, player, pos);
             }
             // ChuteBlock.onWrenched: an encased chute loses its casing; a vertical one swaps
             // its window; an intersection passes.
@@ -694,7 +695,9 @@ impl BlockPart for LogisticsBlock {
         let Some(mut lv) = level_of(host, event.dimension) else {
             return Flow::Continue;
         };
+        let thrower = crate::glue::advancements::package_thrower(event.entity, event.stack);
         item_landed(&mut lv, event.block_pos, event.item_pos, event.stack);
+        crate::glue::advancements::package_landed(&mut lv, thrower, event.block_pos, event.stack);
         Flow::Continue
     }
 

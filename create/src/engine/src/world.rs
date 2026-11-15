@@ -585,6 +585,7 @@ fn has_state(block: Block) -> bool {
             | Block::CartAssembler
             | Block::Nozzle
             | Block::FactoryGauge
+            | Block::StockTicker
             | Block::PackageFrogport
             | Block::DeskBell
             | Block::Packager
@@ -1230,7 +1231,8 @@ impl CreateWorld {
                 crate::kinetics::Dir::East,
             ] {
                 let o = side.offset();
-                d.chute_shapes.push([pos[0] + o[0], pos[1] + 1, pos[2] + o[2]]);
+                d.chute_shapes
+                    .push([pos[0] + o[0], pos[1] + 1, pos[2] + o[2]]);
             }
         }
         // A still hose turning forwards waits for the block below its end (`lazyTick`).
@@ -3123,12 +3125,22 @@ impl CreateWorld {
         pos: [i32; 3],
         keys: &[crate::link::Key],
         pressed: bool,
-    ) {
+    ) -> bool {
         let d = &mut self.dims[dim];
+        // A newly pressed frequency heard by a receiver (`LINKED_CONTROLLER`).
+        let heard = pressed
+            && keys.iter().any(|k| {
+                !d.controllers
+                    .held
+                    .iter()
+                    .any(|h| h.player == player && h.key == *k)
+                    && d.links.listened(k)
+            });
         let changed = d
             .controllers
             .receive(&mut d.links, player, pos, keys, pressed);
         d.link_changes.extend(changed);
+        heard
     }
 
     /// `LinkedControllerServerHandler.tick` of a level; whether any frequency is still held.
@@ -3501,7 +3513,11 @@ impl CreateWorld {
     }
 
     /// The creative tank the block at `pos` is part of: its controller and tank.
-    pub fn creative_tank(&self, dim: usize, pos: [i32; 3]) -> Option<([i32; 3], crate::tank::Multi)> {
+    pub fn creative_tank(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+    ) -> Option<([i32; 3], crate::tank::Multi)> {
         self.dims[dim].creative_tanks.get(pos).map(|(c, m)| (c, *m))
     }
 
@@ -3523,8 +3539,8 @@ impl CreateWorld {
         m.tank.fluid = fluid;
         let (w, h) = (m.width, m.height);
         for p in crate::tank::blocks(c, w, h) {
-            if d.plumbing.creative.contains_key(&p) {
-                d.plumbing.creative.insert(p, fluid);
+            if let Some(f) = d.plumbing.creative.get_mut(&p) {
+                *f = fluid;
                 d.plumbing.creative_changes.push(p);
                 d.analog_checks.push(p);
             }
@@ -4798,7 +4814,10 @@ mod tests {
             assert!(!w.use_valve(0, [0, 0, 0], true, 45), "cooling down");
             w.tick_cranks(0);
         }
-        assert!(w.use_valve(0, [0, 0, 0], true, 45), "turns again, backwards");
+        assert!(
+            w.use_valve(0, [0, 0, 0], true, 45),
+            "turns again, backwards"
+        );
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(32.0));
         for _ in 0..7 {
@@ -5062,7 +5081,15 @@ mod tests {
         // A fluid tank beside it stays a tank of its own kind.
         w.block_changed(0, [2, 0, 0], 0, 11);
         assert_eq!(w.creative_tank(0, [2, 0, 0]), None);
-        for p in [[0, 0, 0], [0, 0, 1], [1, 0, 1], [0, 1, 0], [1, 1, 0], [0, 1, 1], [1, 1, 1]] {
+        for p in [
+            [0, 0, 0],
+            [0, 0, 1],
+            [1, 0, 1],
+            [0, 1, 0],
+            [1, 1, 0],
+            [0, 1, 1],
+            [1, 1, 1],
+        ] {
             w.block_changed(0, p, 0, 10);
         }
         let (c, m) = w.creative_tank(0, [1, 1, 1]).unwrap();

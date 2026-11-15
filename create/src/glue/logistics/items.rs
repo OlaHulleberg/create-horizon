@@ -199,10 +199,24 @@ fn in_tag(host: &dyn Host, id: &str, tag: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// `BeltHelper.isItemUpright`: items of `create:upright_on_belt` stand, unless also in
-/// `create:not_upright_on_belt`. (Fluid-holding items stand in Create too: not yet.)
+/// `BeltHelper.isItemUpright`: items of `create:upright_on_belt` and items holding fluid
+/// (`FluidHandler.ITEM`) stand, unless also in `create:not_upright_on_belt`.
 pub fn upright(host: &dyn Host, id: &str) -> bool {
-    in_tag(host, id, "create:upright_on_belt") && !in_tag(host, id, "create:not_upright_on_belt")
+    (holds_fluid(id) || in_tag(host, id, "create:upright_on_belt"))
+        && !in_tag(host, id, "create:not_upright_on_belt")
+}
+
+/// (removed)
+fn holds_fluid(id: &str) -> bool {
+    matches!(
+        base(id),
+        "minecraft:bucket"
+            | "minecraft:water_bucket"
+            | "minecraft:lava_bucket"
+            | "minecraft:milk_bucket"
+            | "create:honey_bucket"
+            | "create:chocolate_bucket"
+    )
 }
 
 /// A stack's limit (at most 64).
@@ -476,7 +490,7 @@ pub fn items_in(lv: &ServerLevel<'_>, min: [f64; 3], max: [f64; 3]) -> Vec<Entit
         .entities_in(&*lv.host, min, max)
         .unwrap_or_default()
         .into_iter()
-        .filter(|e| e.kind(&*lv.host).as_deref() == Some("minecraft:item"))
+        .filter(|e| e.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref() == Some("minecraft:item"))
         .collect()
 }
 

@@ -4,8 +4,9 @@
 //!
 //! A port keeps 18 packages and an address filter. A frogport sends packages that are not for
 //! it (its own, or from the inventory below) onto its chain conveyor, and catches those that
-//! match its filter, handing them down to the inventory below. Postboxes hold packages for
-//! trains, which are not ported: they keep what automation and the menu put in. Nothing here
+//! match its filter, handing them down to the inventory below. A postbox joined to a train
+//! station (`station`) hands packages to the trains there and takes theirs (the glue's
+//! `station_ports`). Nothing here
 //! ticks for an idle port: a frogport looks at its inventories when something changes (a
 //! package caught or put in, the inventory below or the packager below, its chain's speed) and
 //! again every 10 ticks only while something it could send is held back.
@@ -52,6 +53,11 @@ pub struct Port<P> {
     pub yaw: f32,
     /// `FrogportBlockEntity.goggles`: a frogport wearing goggles.
     pub goggles: bool,
+    /// How often it was told a package for it is coming (`sendAnticipate`), for its clients'
+    /// `anticipationProgress`.
+    pub anticipations: u32,
+    /// A postbox's train station (`TrainStationFrogportTarget`): where the station is.
+    pub station: Option<[i32; 3]>,
 }
 
 impl<P> Port<P> {
@@ -69,6 +75,16 @@ impl<P> Port<P> {
             failed_export: false,
             yaw: 0.0,
             goggles: false,
+            anticipations: 0,
+            station: None,
+        }
+    }
+
+    /// `sendAnticipate`: a package it will catch is a few ticks away; one not animating with a
+    /// free slot tells its clients.
+    pub fn send_anticipate(&mut self) {
+        if !self.animating && self.items.iter().any(Option::is_none) {
+            self.anticipations = self.anticipations.wrapping_add(1);
         }
     }
 
@@ -232,6 +248,8 @@ pub enum Out<P> {
     PackagerDone([i32; 3]),
     /// A package falls where it is.
     Drop([f64; 3], Parcel<P>),
+    /// A frogport caught a package off its chain (`startAnimation(box, false)`).
+    Caught([i32; 3]),
 }
 
 impl<P: Clone> Packaging<P> {
@@ -460,8 +478,15 @@ impl<P: Clone> Packaging<P> {
         );
         for e in events {
             match e {
-                ChainEvent::Catch(at, parcel) => self.start(at, parcel, false),
-                ChainEvent::Anticipate(_) => {}
+                ChainEvent::Catch(at, parcel) => {
+                    self.start(at, parcel, false);
+                    out.push(Out::Caught(at));
+                }
+                ChainEvent::Anticipate(at) => {
+                    if let Some(p) = self.ports.get_mut(&at) {
+                        p.send_anticipate();
+                    }
+                }
                 ChainEvent::Drop(v, parcel) => out.push(Out::Drop(v, parcel)),
             }
         }
@@ -602,7 +627,7 @@ mod tests {
         for _ in 0..400 {
             pk.tick(&mut out);
         }
-        assert!(out.is_empty(), "{out:?}");
+        assert!(out.iter().all(|o| matches!(o, Out::Caught(_))), "{out:?}");
         let mine = &pk.ports[&[4, 0, 2]];
         assert_eq!(mine.items.iter().flatten().count(), 1, "caught at the mine");
         assert!(pk.ports[&[0, 0, 2]].items.iter().all(Option::is_none));

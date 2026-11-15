@@ -257,7 +257,7 @@ pub(super) fn scroll_from_client(host: &mut dyn ServerHost, player: PlayerRef, d
     let Some(dimension) = checked(&*host, player, pos) else {
         return;
     };
-    let Some(lv) = ServerLevel::new(host, &dimension) else {
+    let Some(mut lv) = ServerLevel::new(host, &dimension) else {
         return;
     };
     let dim = lv.dim;
@@ -267,6 +267,7 @@ pub(super) fn scroll_from_client(host: &mut dyn ServerHost, player: PlayerRef, d
     let value = match block {
         Some(B::CreativeMotor | B::RotationSpeedController) => {
             with_world(|w| w.scroll_motor(dim, pos, steps));
+            crate::glue::advancements::speed_controller(&mut lv, pos);
             return;
         }
         // `ChassisScrollValueBehaviour`: the whole group of chassis takes the range, 1 to 16.
@@ -325,6 +326,9 @@ pub(super) fn value_settings_from_client(
     let Some(value) = settings_at(&mut lv, player, pos, pick, short) else {
         return;
     };
+    if pick.is_some() {
+        crate::glue::advancements::speed_controller(&mut lv, pos);
+    }
     // A question alone (no pick, no click) is the client looking at the block: its block entity
     // is sent again, so the client draws it anew with the value (`value_text`).
     if pick.is_none() && short.is_none() {

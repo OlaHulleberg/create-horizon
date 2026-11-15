@@ -39,6 +39,15 @@ impl Hooks for Create {
         }
     }
 
+    /// The schematic outline's checkerboard (`glue::schematics`).
+    fn register_render_pipelines(
+        &self,
+        _cx: &RegistrationContext,
+        event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
+    ) {
+        glue::schematics::render_pipelines(event.pipelines);
+    }
+
     fn standalone_models(&self, _cx: &RegistrationContext, event: &mut StandaloneModelsEvent<'_>) {
         for s in SUBSYSTEMS {
             s.standalone_models(event.models);
@@ -221,6 +230,14 @@ impl Hooks for Create {
         until_cancel(|s| s.left_click_block(host, event))
     }
 
+    fn player_pick_item(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerPickItemEvent<'_>,
+    ) -> Flow {
+        until_cancel(|s| s.player_pick_item(host, event))
+    }
+
     fn break_block(&self, host: &mut dyn ServerHost, event: &mut BreakBlockEvent<'_>) -> Flow {
         until_cancel(|s| s.break_block(host, event))
     }
@@ -368,6 +385,39 @@ impl Hooks for Create {
         }
     }
 
+    fn data_pack_files(
+        &self,
+        _host: &mut dyn ServerHost,
+        event: &mut mod_api::DataPackFilesEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.data_pack_files(event.files);
+        }
+    }
+
+    fn client_information_updated(
+        &self,
+        _host: &mut dyn ServerHost,
+        event: &mut mod_api::ClientInformationUpdatedEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.client_info(event.player, event.new);
+        }
+    }
+
+    fn living_entity_use_item_tick(
+        &self,
+        host: HostSide,
+        event: &mut mod_api::LivingEntityUseItemTickEvent<'_>,
+    ) -> Flow {
+        if let HostSide::Server(host) = host {
+            for s in SUBSYSTEMS {
+                s.use_item_tick(&mut *host, event);
+            }
+        }
+        Flow::Continue
+    }
+
     fn living_entity_use_item_finish(
         &self,
         host: HostSide,
@@ -446,6 +496,19 @@ impl Hooks for Create {
         if let Some(frame) = glue::items::spin(host, event.property) {
             event.value = frame;
         }
+    }
+
+    fn item_toss(&self, host: &mut dyn ServerHost, event: &mut mod_api::ItemTossEvent) -> Flow {
+        glue::advancements::item_tossed(host, event);
+        Flow::Continue
+    }
+
+    fn player_item_smithed(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::PlayerItemSmithedEvent<'_>,
+    ) {
+        glue::advancements::item_smithed(host, event);
     }
 
     fn item_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {

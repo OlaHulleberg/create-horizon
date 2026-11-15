@@ -9,8 +9,8 @@
 //! tells a player holding the glue of their first corner and the glue areas near them
 //! (`create:glue`), and their client outlines them as Create's does: each area in Create's
 //! passive green, the one looked at highlighted, and the selection from the first corner to the
-//! block looked at. Create's glue face texture (`AllSpecialTextures.GLUE`) is not drawn: the
-//! lines are plain.
+//! block looked at. Create's glue face texture (`AllSpecialTextures.GLUE`) is not drawn: world
+//! quads take no texture (HORIZON_API.md).
 
 use super::super::items::{action_bar, creative, held, sneaking};
 use super::super::persist::mark_unsaved;
@@ -284,6 +284,7 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         living.hurt_and_break(lv.host, EquipmentSlot::MainHand, 1);
     }
     FIRST.with_borrow_mut(|f| f.remove(&id));
+    crate::glue::advancements::award(lv.host, player, "super_glue");
     action_bar(lv.host, player, "create.super_glue.success");
     slime_sound(&mut lv, pos, 0.95);
     send_glue(&mut lv, player);

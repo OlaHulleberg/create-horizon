@@ -10,14 +10,15 @@
 //! cannon's barrel is drawn from where it aims, kept in its block entity's data (`Aim`).
 //!
 //! Players work them as in Create: the quill's corners, outline and prompt (`quill`), the held
-//! schematic's outline, deploying click and edit screen (`deploy`), and the table's and the
-//! cannon's screens (`screens`); the `create_debug` commands remain for scripted tests.
+//! schematic's tools, their selection overlay and its place kept in sync with the server
+//! (`tools`, `transform`), its edit screen (`deploy`), and the table's and the cannon's screens
+//! (`screens`); the `create_debug` commands remain for scripted tests.
 //!
 //! The engine numbers block states as `u32`s; the API's `BlockState` is a key and an ordinal, so
 //! the states a cannon meets are numbered here as it meets them (`intern`).
 //!
 //! The cannon prints as Create's does: belts with their connector from the end that lays them
-//! (`launchBelt`, without the casings, as the schematic's block entities are not read), the
+//! (`launchBelt`, each segment cased as the schematic's belt block entity's `Casing`), the
 //! second half of doors, tall plants and beds (`setPlacedBy`), and the schematic's entities
 //! last (`launchEntity`: item frames and armor stands with what they hold and wear); a book or a
 //! clipboard in its book slot becomes the print's material checklist (`tickPaperPrinter`).
@@ -39,7 +40,11 @@
 pub mod body;
 mod deploy;
 mod quill;
+pub(crate) use quill::face_of;
 mod screens;
+mod tools;
+pub(crate) use tools::render_pipelines;
+mod transform;
 
 use super::packages::{self, block_of, debug_verb, feedback, ints, text};
 use super::persist;
@@ -219,11 +224,13 @@ impl Subsystem for Schematics {
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {
         quill::tick(host);
         deploy::tick(host);
+        tools::tick(host);
     }
 
     fn client_reset(&self) {
         quill::reset();
         deploy::reset();
+        tools::reset();
         screens::reset();
     }
 
@@ -232,10 +239,28 @@ impl Subsystem for Schematics {
         host: &mut dyn mod_api::ClientHost,
         event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
     ) -> Flow {
-        if quill::interaction_key(host, event) == Flow::Cancel {
+        if quill::interaction_key(host, event) == Flow::Cancel
+            || deploy::interaction_key(host, event) == Flow::Cancel
+        {
             return Flow::Cancel;
         }
-        deploy::interaction_key(host, event)
+        tools::interaction_key(host, event)
+    }
+
+    fn input_key(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        event: &mut mod_api::InputKeyEvent<'_>,
+    ) {
+        tools::input_key(host, event);
+    }
+
+    fn render_gui_post(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::RenderGuiPostEvent<'_>,
+    ) {
+        tools::render_gui_post(host, event);
     }
 
     fn mouse_scrolling(
@@ -243,7 +268,10 @@ impl Subsystem for Schematics {
         host: &mut dyn mod_api::ClientHost,
         event: &mut mod_api::MouseScrollingEvent,
     ) -> Flow {
-        quill::mouse_scrolling(host, event)
+        if quill::mouse_scrolling(host, event) == Flow::Cancel {
+            return Flow::Cancel;
+        }
+        tools::mouse_scrolling(host, event)
     }
 
     fn render_level_stage(
@@ -252,7 +280,7 @@ impl Subsystem for Schematics {
         event: &mut mod_api::RenderLevelStageEvent<'_>,
     ) {
         quill::render_level_stage(host, event);
-        deploy::render_level_stage(host, event);
+        tools::render_level_stage(host, event);
     }
 
     fn screen_render_post(
@@ -320,6 +348,7 @@ impl Subsystem for Schematics {
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        tools::register(r);
         let cannon = r
             .block_entity_type("create:schematicannon")
             .blocks(&["create:schematicannon"])
@@ -733,8 +762,8 @@ impl CannonWorld for World<'_, '_> {
         success
     }
     /// `ForBelt.place`: a shaft where the belt's laying end is, then the belt to its other end
-    /// (`createBelts`; casings are not copied: the schematic's block entities are not read).
-    fn place_belt(&mut self, pos: [i32; 3], state: u32, to: [i32; 3]) {
+    /// (`createBelts`), and each segment cased as the schematic's was (`setCasingType`).
+    fn place_belt(&mut self, pos: [i32; 3], state: u32, to: [i32; 3], casings: &[u8]) {
         let Some(s) = interned(state) else { return };
         let host = &*self.lv.host;
         let facts = host.block_states();
@@ -750,6 +779,17 @@ impl CannonWorld for World<'_, '_> {
             self.lv.set_state(pos, shaft, super::server::update_all());
         }
         super::items::create_belts(self.lv, pos, to);
+        let n = casings.len().max(1) as i32 - 1;
+        let step = [0, 1, 2].map(|i| if n > 0 { (to[i] - pos[i]) / n } else { 0 });
+        for (i, c) in casings.iter().enumerate() {
+            let kind = match c {
+                1 => "andesite",
+                2 => "brass",
+                _ => continue,
+            };
+            let at = [0, 1, 2].map(|k| pos[k] + step[k] * i as i32);
+            super::logistics::set_casing(self.lv, at, Some(kind));
+        }
     }
 
     fn book_input(&mut self) -> bool {
@@ -1557,8 +1597,8 @@ fn nbt_file(name: &str) -> String {
 }
 
 /// `SchematicExport.saveSchematic` of the box between two corners: the blocks and the entities
-/// in it (`fillFromWorld` with entities; the blocks' block entity data is not read, and item
-/// frames and paintings are not found).
+/// in it (`fillFromWorld` with entities: each block entity's data with its `id`, as
+/// `saveWithId`; item frames and paintings are not found).
 fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
     let min = [0, 1, 2].map(|i| a[i].min(b[i]));
     let max = [0, 1, 2].map(|i| a[i].max(b[i]));
@@ -1599,6 +1639,19 @@ fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
         }
     }
     let mut structure = Structure::capture(size, cells);
+    for b in &mut structure.blocks {
+        let at = [0, 1, 2].map(|i| b.pos[i] + min[i]);
+        let host: &dyn Host = &*lv.host;
+        let Some(be) = host.block_entity(lv.level, at) else {
+            continue;
+        };
+        let (Some(data), Some(kind)) = (be.data(host), be.kind(host)) else {
+            continue;
+        };
+        let mut data = data;
+        data.insert("id".into(), Tag::String(kind.id(host).as_str().into()));
+        b.nbt = Some(body::to_engine(&Tag::Compound(data)));
+    }
     structure.entities = export_entities(lv, min, max);
     structure
 }
@@ -1613,7 +1666,9 @@ fn export_entities(lv: &mut ServerLevel<'_>, min: [i32; 3], max: [i32; 3]) -> Ve
     let mut out = Vec::new();
     for e in found {
         let host: &dyn Host = &*lv.host;
-        let Some(kind) = e.kind(host) else { continue };
+        let Some(kind) = e.kind(host).map(|k| k.id(host)) else {
+            continue;
+        };
         if kind == "minecraft:player" || e.is_passenger(host) == Some(true) {
             continue;
         }
@@ -2030,6 +2085,119 @@ fn deploy(
     )
 }
 
+/// The player's stack in inventory slot `slot`, if it is a schematic.
+fn schematic_in(lv: &ServerLevel<'_>, player: PlayerRef, slot: u32) -> Option<ItemStack> {
+    let stack = player
+        .inventory_slots(&*lv.host)?
+        .into_iter()
+        .find(|(s, _)| *s == slot)?
+        .1;
+    item_is(&*lv.host, &stack, SCHEMATIC).then_some(stack)
+}
+
+/// `SchematicSyncPacket.handle`: the schematic in the slot deployed (or not), anchored, turned
+/// and mirrored as the client has it. `rest`: slot, deployed, rotation, mirror, anchor.
+pub(super) fn synced(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8]) {
+    if rest.len() < 16 {
+        return;
+    }
+    let int = |i: usize| {
+        let at = 4 + i * 4;
+        i32::from_le_bytes([rest[at], rest[at + 1], rest[at + 2], rest[at + 3]])
+    };
+    let slot = u32::from(rest[0]);
+    let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+        return;
+    };
+    let Some(lv) = ServerLevel::new(host, &dimension) else {
+        return;
+    };
+    let Some(mut stack) = schematic_in(&lv, player, slot) else {
+        return;
+    };
+    let mut data = body::schematic_data(&stack);
+    data.deployed = Some(rest[1] != 0);
+    data.anchor = Some([int(0), int(1), int(2)]);
+    data.rotation = Rotation::ALL[usize::from(rest[2]) % 4];
+    data.mirror = Mirror::ALL[usize::from(rest[3]) % 3];
+    body::set_schematic_data(&mut stack, &data);
+    let _ = player.set_inventory_slot(&mut *lv.host, slot, Some(stack));
+}
+
+/// `SchematicPlacePacket.handle`: in creative, the schematic in the slot printed at once, each
+/// block the world doesn't have already (and isn't unbreakable there) placed as the cannon
+/// places it, air left out (`creativePrintIncludesAir`, false by default), then its entities.
+pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8]) {
+    let Some(&slot) = rest.first() else {
+        return;
+    };
+    if player.game_mode(&*host) != Some(mod_api::GameMode::Creative) {
+        return;
+    }
+    let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+        return;
+    };
+    let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+        return;
+    };
+    let Some(stack) = schematic_in(&lv, player, u32::from(slot)) else {
+        return;
+    };
+    let data = body::schematic_data(&stack);
+    if data.anchor.is_none() || data.deployed.is_none() {
+        return;
+    }
+    let Loaded {
+        mut printer,
+        entries,
+        entities,
+        air,
+    } = load(&lv, &data);
+    let include_air = false;
+    let mut w = World {
+        lv: &mut lv,
+        pos: [0; 3],
+        found: None,
+    };
+    while printer.advance(|i| entries[i as usize].defer) {
+        let target = printer.target();
+        if printer.stage == cn::Stage::Entities {
+            if let Some((_, e)) = entities.get(printer.entity_index as usize) {
+                w.place_entity(e);
+            }
+            continue;
+        }
+        // `shouldPlaceBlock` with every placement allowed.
+        if !w.loaded(target) {
+            continue;
+        }
+        let rel = [0, 1, 2].map(|i| target[i] - printer.anchor[i]);
+        let entry = printer.at(rel).map_or(&air, |i| &entries[i as usize]);
+        let here = w.spot(target);
+        if here.state == entry.state || here.unbreakable {
+            continue;
+        }
+        if let Some(o) = entry.other
+            && w.spot([0, 1, 2].map(|i| target[i] + o[i])).unbreakable
+        {
+            continue;
+        }
+        if entry.air && !include_air {
+            continue;
+        }
+        // What the port's cannon leaves to a block placed with another: a door's upper half, a
+        // bed's head, a piston's head, a belt's middle.
+        if entry.ignore {
+            continue;
+        }
+        let (state, belt_to, casings) = cn::launch(&printer, &entries, rel, target, entry);
+        match belt_to {
+            Some(to) => w.place_belt(target, state, to, &casings),
+            None => w.place(target, state),
+        }
+    }
+}
+
 /// A cannon's options (`ConfigureSchematicannonPacket`) and state.
 fn cannon_command(lv: &mut ServerLevel<'_>, pos: [i32; 3], option: &[&str]) -> String {
     let now = now(lv);
@@ -2146,6 +2314,10 @@ fn chunk_data_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
                             (
                                 "BeltTo",
                                 Tag::IntArray(f.belt_to.map_or(Vec::new(), |t| t.to_vec())),
+                            ),
+                            (
+                                "Casing",
+                                Tag::IntArray(f.casings.iter().map(|c| i32::from(*c)).collect()),
                             ),
                         ]))
                     })
@@ -2264,6 +2436,10 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
                         target: [t[0], t[1], t[2]],
                         state,
                         belt_to: (to.len() == 3).then(|| [to[0], to[1], to[2]]),
+                        casings: ints(f.get(&"Casing".into()))
+                            .iter()
+                            .map(|c| (*c).clamp(0, 2) as u8)
+                            .collect(),
                         entity,
                         total: t[4].max(0) as u32,
                         land_at: now + t[3].max(0) as u64 + 1,

@@ -149,6 +149,7 @@ impl Subsystem for Trains {
         }
         if lv.game_time() % 10 == 0 {
             super::station_draw::refresh(lv);
+            super::station_draw::refresh_marks(lv);
         }
         visuals::tick(lv);
         riding::tick(lv);
@@ -156,6 +157,7 @@ impl Subsystem for Trains {
         tracks::sync(lv);
         super::conductor::tick(lv);
         super::station_screen::tick(lv);
+        super::relocate::preview(lv);
     }
 
     fn entity_interact(
@@ -183,6 +185,7 @@ impl Subsystem for Trains {
             super::schedule_screen::CHANNEL => {
                 super::schedule_screen::client_message(host, player, data);
             }
+            super::relocate::CHANNEL => super::relocate::client_message(player, data),
             _ => return false,
         }
         true
@@ -195,6 +198,7 @@ impl Subsystem for Trains {
             STATES_CHANNEL => super::client::states_from_server(&*host, data),
             super::station_screen::CHANNEL => super::station_screen::server_message(host, data),
             super::schedule_screen::CHANNEL => super::schedule_screen::server_message(host, data),
+            super::relocate::CHANNEL => super::relocate::server_message(data),
             _ => return false,
         }
         true
@@ -203,6 +207,7 @@ impl Subsystem for Trains {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         super::station_screen::tick_client(host);
         super::schedule_screen::tick_client(host);
+        super::relocate::client_tick(host);
     }
 
     /// A station's flag, marker and assembly track, a track's curves, and a signal's light and
@@ -210,6 +215,7 @@ impl Subsystem for Trains {
     fn synced_keys(&self) -> &'static [&'static str] {
         &[
             super::station_draw::KEY,
+            super::station_draw::MARK,
             super::tracks::CURVES,
             super::tracks::LIGHT,
             super::tracks::SIGNAL_STATE,
@@ -231,6 +237,7 @@ impl Subsystem for Trains {
         event: &mut mod_api::RenderLevelStageEvent<'_>,
     ) {
         super::carriage_draw::render_level_stage(host, event);
+        super::relocate::render_level_stage(event);
     }
 
     /// A station's flag moving and an invalid signal's blink (`SignalRenderer`) are drawn every
@@ -248,6 +255,7 @@ impl Subsystem for Trains {
 
     fn client_reset(&self) {
         super::station_draw::client_reset();
+        super::relocate::client_reset();
         super::carriage_draw::reset();
         super::client::reset();
         super::station_screen::reset();
@@ -545,7 +553,7 @@ fn probe_schedules(lv: &mut ServerLevel<'_>) -> Vec<(u32, create_engine::schedul
         usize,
         Option<[i32; 3]>,
         Vec<((usize, usize), Condition)>,
-        bool,
+        Option<create_engine::schedule::Instruction>,
     );
     let wanted: Vec<Wanted> = with_world(|w| {
         w.dims[dim]
@@ -564,6 +572,7 @@ fn probe_schedules(lv: &mut ServerLevel<'_>) -> Vec<(u32, create_engine::schedul
                     .into_iter()
                     .filter_map(|(g, r)| Some(((g, r), entry.conditions.get(g)?.get(r)?.clone())))
                     .collect();
+                let packages = packages.then(|| entry.instruction.clone());
                 Some((t.id, t.cars.len(), t.train.at_station, conditions, packages))
             })
             .collect()
@@ -572,7 +581,7 @@ fn probe_schedules(lv: &mut ServerLevel<'_>) -> Vec<(u32, create_engine::schedul
     let mut out = Vec::new();
     for (id, cars, station, conditions, packages) in wanted {
         let mut p = Probes::default();
-        let needs_items = packages
+        let needs_items = packages.is_some()
             || conditions
                 .iter()
                 .any(|(_, c)| matches!(c, Condition::ItemThreshold { .. }));
@@ -622,15 +631,21 @@ fn probe_schedules(lv: &mut ServerLevel<'_>) -> Vec<(u32, create_engine::schedul
             };
             p.measures.push((at, v));
         }
-        if packages {
-            // No postbox here is linked to a station (`GlobalPackagePort`), so no station is
-            // found for either instruction; whether packages are aboard still decides what a
-            // delivery does.
+        if let Some(instruction) = packages {
+            // The stations whose postboxes (`GlobalPackagePort`) take the packages aboard, or
+            // hold packages to fetch; whether packages are aboard decides what a delivery with
+            // none does.
             let any = stacks.iter().any(|s| {
-                let id = s.item().id(&*lv.host);
-                id.starts_with("create:cardboard_package") || id.starts_with("create:rare_")
+                create_engine::package::is_package(&crate::glue::packages::body::item_id(
+                    &*lv.host, s,
+                ))
             });
-            p.packages = Some((Vec::new(), any));
+            let fetch = match &instruction {
+                create_engine::schedule::Instruction::FetchPackages(f) => Some(f.as_str()),
+                _ => None,
+            };
+            let stations = crate::glue::packages::package_stations(lv, fetch, &stacks);
+            p.packages = Some((stations, any));
         }
         out.push((id, p));
     }

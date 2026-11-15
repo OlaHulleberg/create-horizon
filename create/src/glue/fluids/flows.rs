@@ -110,6 +110,14 @@ pub(super) fn start(dim: usize, pos: [i32; 3], fluid: Fluid, flows: Vec<FlowAt>,
     }
 }
 
+/// Whether a flow passes through the pipe at `pos` (`PipeConnection.hasFlow` on a side).
+pub(super) fn has_flow(dim: usize, pos: [i32; 3]) -> bool {
+    RUNNING.with_borrow(|r| {
+        r.iter()
+            .any(|((d, _), run)| *d == dim && run.flows.iter().any(|f| f.pos == pos))
+    })
+}
+
 /// The pump at `pos` gets no more from its source: its flows recede from game time `now`.
 pub(super) fn stop(dim: usize, pos: [i32; 3], now: i64) {
     RUNNING.with_borrow_mut(|r| {

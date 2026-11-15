@@ -713,6 +713,32 @@ pub fn copper_waxed(block: crate::Block) -> Option<crate::Block> {
 }
 
 /// The unwaxed twin an axe takes the wax off to (the inverse of [`copper_waxed`]).
+/// Create's copper chains as NeoForge's block data maps, the JSON of
+/// `neoforge:oxidizables` (each age to the next, `CopperRegistries.addWeathering`) and
+/// `neoforge:waxables` (each to its waxed twin, `addWaxable`), for the game's own weathering
+/// copper code (lightning clearing it).
+pub fn copper_data_maps() -> (String, String) {
+    let id = |b: crate::Block| format!("\"create:{}\"", b.name());
+    let mut oxidizables = Vec::new();
+    let mut waxables = Vec::new();
+    for b in crate::Block::ALL {
+        if let Some(n) = copper_next(b) {
+            oxidizables.push(format!(
+                "{}: {{\"next_oxidation_stage\": {}}}",
+                id(b),
+                id(n)
+            ));
+        }
+        if let Some(w) = copper_waxed(b) {
+            waxables.push(format!("{}: {{\"waxed\": {}}}", id(b), id(w)));
+        }
+    }
+    (
+        format!("{{\"values\": {{{}}}}}", oxidizables.join(", ")),
+        format!("{{\"values\": {{{}}}}}", waxables.join(", ")),
+    )
+}
+
 pub fn copper_unwaxed(block: crate::Block) -> Option<crate::Block> {
     use crate::Block::*;
     Some(match block {
@@ -1136,5 +1162,18 @@ mod tests {
         assert_eq!(vertical_gearbox_axis(&[], Dir::East), Axis::Z);
         // A click on the east edge of a cloth's top: east first.
         assert_eq!(table_cloth_directions([0.45, 0.06, 0.1])[0], Dir::East);
+    }
+}
+
+#[cfg(test)]
+mod copper_map_tests {
+    #[test]
+    fn copper_chains_as_data_maps() {
+        let (o, w) = super::copper_data_maps();
+        assert!(o.contains(
+            "\"create:copper_tiles\": {\"next_oxidation_stage\": \"create:exposed_copper_tiles\"}"
+        ));
+        assert!(!o.contains("\"create:oxidized_copper_tiles\":"));
+        assert!(w.contains("\"create:oxidized_copper_shingle_slab\": {\"waxed\": \"create:waxed_oxidized_copper_shingle_slab\"}"));
     }
 }

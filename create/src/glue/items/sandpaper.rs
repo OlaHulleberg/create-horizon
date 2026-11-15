@@ -6,8 +6,11 @@
 //! axes). The item being polished is kept in the stack's custom data
 //! (`create:sand_paper_polishing`).
 //!
-//! Left out: picking the item to polish off the ground (`getEntitiesOfClass` round the block
-//! looked at), and the hand's polishing particles and sounds.
+//! With nothing polishable in the other hand, it takes one off a polishable item lying within a
+//! block of the point looked at and 3 of the player (`getEntitiesOfClass` round the
+//! `getPlayerPOVHitResult`). While it is used, a crumb of the item flies from the mouth each tick
+//! and the sanding sound plays every 7 ticks (`triggerUseEffects`), and a finished polish
+//! scatters 20 (`spawnParticles`).
 
 use super::{custom, held, set_custom, set_held};
 use mod_api::{
@@ -63,24 +66,20 @@ impl ItemPart for SandPaper {
     /// taken in and the use starts; else it fails.
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
         match host {
-            HostSide::Client(host) => {
-                let player = host.player(event.player)?;
-                let other = held(&*host, player, other(event.hand));
-                (polishing(&*host, event.stack).is_none() && other.is_none())
-                    .then_some(InteractionResult::Fail)
-            }
+            // The server decides: an item on the ground may be taken (the client can't read an
+            // item entity's stack).
+            HostSide::Client(_) => None,
             HostSide::Server(host) => {
                 if polishing(&*host, event.stack).is_some() {
                     return None;
                 }
                 let player = host.player(event.player)?;
                 let hand = other(event.hand);
-                let Some(item) = held(&*host, player, hand) else {
-                    return Some(InteractionResult::Fail);
+                let Some(item) =
+                    held(&*host, player, hand).filter(|i| polished(&*host, i).is_some())
+                else {
+                    return pick_up(host, player, event);
                 };
-                if polished(&*host, &item).is_none() {
-                    return Some(InteractionResult::Fail);
-                }
                 let one = crate::glue::packages::body::with_count(&item, 1)?;
                 let nbt = one.to_nbt(&*host)?;
                 let mut paper = event.stack.clone();
@@ -118,6 +117,137 @@ impl ItemPart for SandPaper {
         };
         give_back(host, player, false);
     }
+}
+
+/// `triggerUseEffects`, each tick of the use (`living_entity_use_item_tick`, as the item's own
+/// `onUseTick` is not asked of a templated item): a crumb of the item being polished
+/// (`spawnItemParticles(polishing, 1)`), and the sanding sound (`getEatingSound`) on the 6th tick
+/// and every 7th after.
+pub(super) fn use_tick(
+    host: &mut dyn ServerHost,
+    stack: &ItemStack,
+    entity: Option<i32>,
+    remaining: i32,
+) {
+    if !IDS.contains(&stack.item().id(&*host).as_str()) {
+        return;
+    }
+    let Some(item) = polishing(&*host, stack) else {
+        return;
+    };
+    // The server's event names no entity: the player holding this stack.
+    let Some(player) = user(&*host, entity).or_else(|| {
+        host.players().server_players().into_iter().find(|p| {
+            [Hand::Main, Hand::Off]
+                .into_iter()
+                .any(|h| held(&*host, *p, h).as_ref() == Some(stack))
+        })
+    }) else {
+        return;
+    };
+    let entity = player.entity();
+    let (Some(level), Some(at), Some(eye), Some([yaw, pitch])) = (
+        entity.level(&*host),
+        entity.position(&*host),
+        entity.eye_position(&*host),
+        entity.rotation(&*host),
+    ) else {
+        return;
+    };
+    use mod_api::RandomSource;
+    let r: [f32; 6] = level
+        .with_random(&mut *host, |r| std::array::from_fn(|_| r.next_float()))
+        .unwrap_or([0.5; 6]);
+    // `spawnItemParticles`: a velocity and a spot before the mouth, turned with the head.
+    let turn = |v: [f64; 3]| {
+        let (sx, cx) = (-f64::from(pitch)).to_radians().sin_cos();
+        let (sy, cy) = (-f64::from(yaw)).to_radians().sin_cos();
+        // `xRot`, then `yRot`.
+        let v = [v[0], v[1] * cx + v[2] * sx, v[2] * cx - v[1] * sx];
+        [v[0] * cy + v[2] * sy, v[1], v[2] * cy - v[0] * sy]
+    };
+    let velocity = turn([
+        (f64::from(r[0]) - 0.5) * 0.1,
+        f64::from(r[1]) * 0.1 + 0.1,
+        0.0,
+    ]);
+    let spot = turn([
+        (f64::from(r[2]) - 0.5) * 0.3,
+        -f64::from(r[3]) * 0.6 - 0.3,
+        0.6,
+    ]);
+    let from = [at[0] + spot[0], eye[1] + spot[1], at[2] + spot[2]];
+    if let Some(key) = ITEM_PARTICLE.get() {
+        let options = mod_api::ParticleOptions::item_stack(*key, item);
+        let v = [velocity[0], velocity[1] + 0.05, velocity[2]];
+        let _ = level.send_particles(&mut *host, &options, None, from, v, 1.0, 0);
+    }
+    let ticks = 32 - remaining;
+    if (ticks - 6) % 7 == 0 {
+        let _ = level.play_sound(
+            &mut *host,
+            "create:sanding_short",
+            at,
+            mod_api::SoundSource::Players,
+            0.9 + 0.2 * r[4],
+            r[5] * 0.2 + 0.9,
+        );
+    }
+}
+
+/// The `minecraft:item` particle type.
+pub(super) static ITEM_PARTICLE: std::sync::OnceLock<mod_api::ParticleKey> =
+    std::sync::OnceLock::new();
+
+/// `use` with nothing to polish in the other hand: the first living polishable item within a
+/// block of the point looked at (`getPlayerPOVHitResult`, as far as the player reaches blocks)
+/// and 3 of the player gives one of itself to the paper.
+fn pick_up(
+    host: &mut dyn ServerHost,
+    player: PlayerRef,
+    event: &mut UseItemEvent<'_>,
+) -> Option<InteractionResult> {
+    let entity = player.entity();
+    let level = entity.level(&*host)?;
+    let reach = host
+        .living(entity)
+        .and_then(|l| l.attribute_value(&*host, "minecraft:block_interaction_range"))
+        .unwrap_or(4.5);
+    let hit = entity.pick(&*host, reach)?.location;
+    let me = entity.position(&*host)?;
+    let found = level
+        .entities_in(&*host, hit.map(|v| v - 1.0), hit.map(|v| v + 1.0))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|e| {
+            let item = host.item_entity(e)?;
+            let at = e.position(&*host)?;
+            let d = [0, 1, 2].map(|i| at[i] - me[i]);
+            if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() > 3.0 {
+                return None;
+            }
+            let stack = item.stack(&*host)?;
+            polished(&*host, &stack)
+                .is_some()
+                .then_some((e, item, stack))
+        });
+    let Some((e, item, stack)) = found else {
+        return Some(InteractionResult::Fail);
+    };
+    let one = crate::glue::packages::body::with_count(&stack, 1)?;
+    let nbt = one.to_nbt(&*host)?;
+    let mut paper = event.stack.clone();
+    set_custom(&mut paper, &[(POLISHING, Some(Tag::Compound(nbt)))]);
+    set_held(host, player, event.hand, Some(paper));
+    match stack.shrink(1) {
+        Some(rest) => {
+            let _ = item.set_stack(host, rest);
+        }
+        None => {
+            e.discard(host);
+        }
+    }
+    None
 }
 
 /// The player using an item, by entity id.
@@ -181,6 +311,28 @@ pub(super) fn finished(
     let Some(player) = user(&*host, event.entity).or_else(|| host.players().acting_player()) else {
         return;
     };
+    // `spawnParticles`: 20 crumbs of the item half a block before the eyes, each thrown up to an
+    // eighth along each axis.
+    if let (Some(item), Some(key)) = (polishing(&*host, event.stack), ITEM_PARTICLE.get()) {
+        let entity = player.entity();
+        if let (Some(level), Some(eye), Some(look)) = (
+            entity.level(&*host),
+            entity.eye_position(&*host),
+            entity.view_vector(&*host),
+        ) {
+            use mod_api::RandomSource;
+            let at = [0, 1, 2].map(|i| eye[i] + look[i] * 0.5);
+            let options = mod_api::ParticleOptions::item_stack(*key, item);
+            for _ in 0..20 {
+                let v: [f64; 3] = level
+                    .with_random(&mut *host, |r| {
+                        std::array::from_fn(|_| (f64::from(r.next_float()) - 0.5) * 2.0 / 8.0)
+                    })
+                    .unwrap_or([0.0; 3]);
+                let _ = level.send_particles(&mut *host, &options, None, at, v, 1.0, 0);
+            }
+        }
+    }
     *event.result = give_back(host, player, true);
 }
 

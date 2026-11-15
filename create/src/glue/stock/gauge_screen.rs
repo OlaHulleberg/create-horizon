@@ -7,8 +7,9 @@
 //! item takes a ghost of one picked from the player's inventory.
 //!
 //! As the redstone requester's, the screens draw the player's inventory themselves (a click
-//! picks a ghost, nothing moves), and the relocate button is left out (relocating is not
-//! ported).
+//! picks a ghost, nothing moves). The move button starts relocating the panel
+//! (`FactoryPanelConnectionHandler.startRelocating`, `gauge_client`): the next click puts it
+//! where the crosshair is (`FactoryPanelBehaviour.moveTo`, the `R` message).
 
 use super::super::net;
 use super::super::server::ServerLevel;
@@ -160,22 +161,33 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
             };
             gauge::configure(&mut lv, player, pp, c);
         }
-        // `FactoryPanelConnectionHandler.startConnection`: the message while joining.
+        // `FactoryPanelConnectionHandler.clientTick`: the message while joining or relocating.
         b'S' => {
-            say(
-                lv.host,
-                player,
-                "create.factory_panel.click_second_panel",
-                Vec::new(),
-                "",
-            );
-        }
-        // Joining aborted: by clicking the same panel (an empty message), or elsewhere.
-        b'A' => {
+            let _ = read_pp(&mut r);
             let key = if r.u8() == Some(1) {
-                "create.factory_panel.connection_aborted"
+                "create.factory_panel.click_to_relocate"
             } else {
-                ""
+                "create.factory_panel.click_second_panel"
+            };
+            say(lv.host, player, key, Vec::new(), "");
+        }
+        // `FactoryPanelConnectionPacket` with `relocate`: the panel `from` moves to `to`.
+        b'R' => {
+            let (Some(to), Some(from)) = (read_pp(&mut r), read_pp(&mut r)) else {
+                return;
+            };
+            if !near(to.0) || !near(from.0) {
+                return;
+            }
+            gauge::relocate(&mut lv, player, from, to);
+        }
+        // Joining aborted: by clicking the same panel (an empty message), or elsewhere; or
+        // relocating given up.
+        b'A' => {
+            let key = match r.u8() {
+                Some(1) => "create.factory_panel.connection_aborted",
+                Some(2) => "create.factory_panel.relocation_aborted",
+                _ => "",
             };
             if key.is_empty() {
                 let _ = player.action_bar(lv.host, Text::literal(""));
@@ -418,10 +430,14 @@ struct Open {
     size: [f32; 2],
 }
 
+/// What the screen does at the next client tick: messages to send, whether it closes, and a
+/// panel to start joining or relocating from (`true`: relocating).
+type Later = (Vec<Vec<u8>>, bool, Option<(PanelPos, bool)>);
+
 thread_local! {
     static OPEN: RefCell<Option<Open>> = const { RefCell::new(None) };
     /// Messages to send and whether to close, at the next client tick.
-    static LATER: RefCell<(Vec<Vec<u8>>, bool, Option<PanelPos>)> =
+    static LATER: RefCell<Later> =
         const { RefCell::new((Vec::new(), false, None)) };
 }
 
@@ -491,7 +507,7 @@ fn find_recipe(
     distinct.sort();
     distinct.dedup();
     for kind in ["minecraft:crafting_shaped", "minecraft:crafting_shapeless"] {
-        for r in host.recipes_of_type(kind).iter() {
+        for r in crate::glue::processing::recipes::crafting_of(host, kind).iter() {
             let Some(result) = r.results.first() else {
                 continue;
             };
@@ -681,8 +697,8 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
     for m in send {
         net::send_to_server(host, CHANNEL, &m);
     }
-    if let Some(pp) = connect {
-        gauge_client::start_connection(host, pp);
+    if let Some((pp, relocate)) = connect {
+        gauge_client::start_connection(host, pp, relocate);
     }
     if host.mod_screen() != Some(MOD)
         && let Some(o) = OPEN.with_borrow_mut(Option::take)
@@ -749,6 +765,7 @@ struct Rects {
     delete: [f32; 4],
     promise: [f32; 4],
     connect: [f32; 4],
+    relocate: [f32; 4],
     craft: [f32; 4],
     output: [f32; 4],
     promises: [f32; 4],
@@ -762,6 +779,7 @@ fn rects(x: f32, y: f32, w: [f32; 2]) -> Rects {
         delete: [x + w[0] - 55.0, y + w[1] - 25.0, 18.0, 18.0],
         promise: [x + 97.0, y + w[1] - 24.0, 28.0, 16.0],
         connect: [x + 31.0, y + 47.0, 18.0, 18.0],
+        relocate: [x + 31.0, y + 67.0, 18.0, 18.0],
         craft: [x + 31.0, y + 27.0, 18.0, 18.0],
         output: [x + 160.0, y + 48.0, 16.0, 16.0],
         promises: [x + 68.0, y + w[1] - 24.0, 16.0, 16.0],
@@ -993,6 +1011,17 @@ fn render_config(
                 "create.gui.factory_panel.connect_input",
                 "Add new connection",
             )]);
+        }
+        // `I_MOVE_GAUGE`.
+        icon_button(
+            draw,
+            r.relocate,
+            [64.0, 192.0],
+            false,
+            inside(r.relocate, mouse),
+        );
+        if inside(r.relocate, mouse) {
+            tip = Some(vec![line("create.gui.factory_panel.relocate", "Relocate")]);
         }
         if c.recipe.is_some() {
             icon_button(
@@ -1451,7 +1480,13 @@ pub(super) fn screen_mouse_pressed(
                 }
                 if !c.restocker && inside(r.connect, mouse) {
                     click(host);
-                    LATER.with_borrow_mut(|l| l.2 = Some(c.pp));
+                    LATER.with_borrow_mut(|l| l.2 = Some((c.pp, false)));
+                    close();
+                    return;
+                }
+                if !c.restocker && inside(r.relocate, mouse) {
+                    click(host);
+                    LATER.with_borrow_mut(|l| l.2 = Some((c.pp, true)));
                     close();
                     return;
                 }

@@ -6,8 +6,7 @@
 //! prompt box, the direction arrow). The server half gives players a carriage's controls
 //! (`ControlsInteractionBehaviour`), keeps their keys alive (`ControlsServerHandler`) and
 //! drives the train by them. Nothing runs without a controlling player's word or a click
-//! waiting: each hook's miss is one emptiness check. Carriage seats are left out (see the
-//! parent module).
+//! waiting: each hook's miss is one emptiness check. Carriage seats are `riding`'s.
 
 use super::super::net;
 use super::super::server::ServerLevel;
@@ -56,6 +55,16 @@ thread_local! {
     static CLICKS: RefCell<Vec<(u128, usize, Target, bool)>> = const { RefCell::new(Vec::new()) };
     static INPUTS: RefCell<Vec<(usize, Inputs)>> = const { RefCell::new(Vec::new()) };
     static CONTROLLING: RefCell<Vec<Controlling>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The players holding train `train`'s controls in level `dim` (`getControllingPlayer`).
+pub(crate) fn drivers(dim: usize, train: u32) -> Vec<u128> {
+    CONTROLLING.with_borrow(|c| {
+        c.iter()
+            .filter(|c| c.dim == dim && c.at.train == train)
+            .map(|c| c.player)
+            .collect()
+    })
 }
 
 impl Subsystem for TrainControls {

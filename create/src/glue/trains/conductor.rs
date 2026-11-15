@@ -147,6 +147,7 @@ pub fn interact(
             return Some(InteractionResult::SuccessServer);
         }
         set_schedule(dim, seat.train, schedule, false);
+        crate::glue::advancements::award(host, player, "conductor");
         sound_at(host, player, "create:confirm", 1.0, 1.0);
         let mut style = mod_api::text::TextStyle::default();
         style.color = Some("green".to_owned());
@@ -257,6 +258,7 @@ pub fn apply_auto(dim: usize, pos: [i32; 3], now: bool) -> bool {
     .flatten();
     if let Some(c) = applied {
         super::super::persist::mark_unsaved(dim, [c.0, c.1]);
+        crate::glue::advancements::award_later(dim, pos, "conductor");
     }
     applied.is_some()
 }

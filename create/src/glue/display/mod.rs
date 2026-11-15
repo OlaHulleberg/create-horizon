@@ -20,8 +20,9 @@
 //! helper). Every source Create registers is here but the computer's (no computers) and the two
 //! below.
 //!
-//! Left out, not for want of API: the sources' colours (the boiler's bars, the gauges' marks):
-//! the engine's text is plain.
+//! The sources' colours (the boiler's bars, the gauges' marks) ride their text as coloured runs
+//! (`display::coloured`): signs and lecterns' books show them, boards and nixie tubes take the
+//! plain text, as Create's `getString()`.
 //!
 //! Left out, the API having no way to do it:
 //! - The scoreboard and death count sources: the API reads no scoreboard objectives.
@@ -912,6 +913,23 @@ fn quoted(s: &str) -> String {
     out
 }
 
+/// A line as a text component in SNBT: plain text as a string, a styled one (`display::spans`)
+/// as an empty text with each run in its colour.
+fn text_snbt(s: &str) -> String {
+    let spans = display::spans(s);
+    if spans.iter().all(|(_, c)| c.is_none()) {
+        return quoted(&display::plain(s));
+    }
+    let extra: Vec<String> = spans
+        .iter()
+        .map(|(t, c)| match c {
+            Some(rgb) => format!("{{text:{},color:\"#{rgb:06X}\"}}", quoted(t)),
+            None => format!("{{text:{}}}", quoted(t)),
+        })
+        .collect();
+    format!("{{text:\"\",extra:[{}]}}", extra.join(","))
+}
+
 /// `SignDisplayTarget.acceptText`: from `line` down both sides, each cut to the sign's line
 /// width (`getString(getMaxTextLineWidth)`: 90, a hanging sign's 60); only lines that differ
 /// are written, through `/data`, which redraws the sign.
@@ -950,16 +968,18 @@ fn write_sign(
         if reserved == Some(true) {
             break;
         }
-        let content: String = t.chars().take(width).collect();
+        let content = display::truncate(t, width);
+        let styled = display::spans(&content).iter().any(|(_, c)| c.is_some());
         let (front, back) = &current[at as usize];
         for (side, now) in [("front_text", front), ("back_text", back)] {
-            if *now != content {
+            // A styled line is written again: its colours may change under the same text.
+            if *now != display::plain(&content) || styled {
                 commands.push(format!(
                     "data modify block {} {} {} {side}.messages[{at}] set value {}",
                     target[0],
                     target[1],
                     target[2],
-                    quoted(&content)
+                    text_snbt(&content)
                 ));
             }
         }
@@ -1058,7 +1078,7 @@ fn write_lectern(
     }
     let list = pages
         .iter()
-        .map(|p| format!("{{raw:{}}}", quoted(p)))
+        .map(|p| format!("{{raw:{}}}", text_snbt(p)))
         .collect::<Vec<_>>()
         .join(",");
     let command = if written {
@@ -1113,6 +1133,14 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     let stats = stats_of(lv, target_pos, target);
     let reading = read_source(lv, pos, source);
+    // `StationSummaryDisplaySource.provideFlapDisplayText`: departures shown on a board.
+    if let Reading::Summary(a) = &reading
+        && !a.is_empty()
+        && target == Target::Board
+        && stats.rows > 0
+    {
+        crate::glue::advancements::award_placer(lv, pos, "display_board_0");
+    }
     let Some((line, config, started)) = with_world(|w| {
         let l = w.dims[dim].displays.links.get_mut(&pos)?;
         let had = l.config.start_time;
@@ -1127,10 +1155,12 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     }
     // `sendPulseNextSync` after the transfer.
     bulb::pulse(lv, pos);
+    crate::glue::advancements::award_placer(lv, pos, "display_link");
     match target {
         Target::Nixie => {
             let text = display::provide_text(source, &config, &line, target);
-            let first = text.into_iter().next().unwrap_or_default();
+            // A tube shows plain text (`getString()`).
+            let first = display::plain(&text.into_iter().next().unwrap_or_default());
             let row = display::walk_nixies(target_pos, |p| nixie_at(lv, p));
             let facings: HashMap<[i32; 3], Dir> = row
                 .iter()
@@ -1177,7 +1207,11 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             if speed.abs() < create_engine::gauge::MEDIUM_SPEED {
                 return;
             }
-            let text = display::provide_flap_text(source, &config, &line);
+            // A board shows plain text (`FlapDisplaySection.refresh`: `getString()`).
+            let text: Vec<Vec<String>> = display::provide_flap_text(source, &config, &line)
+                .into_iter()
+                .map(|l| l.iter().map(|t| display::plain(t)).collect())
+                .collect();
             // `flapDisplayContext`: a list's largest amount.
             let highest = line
                 .entries
@@ -1946,12 +1980,7 @@ fn place_board(
     if player.may_build(&*lv.host) != Some(true) {
         return InteractionResult::Pass;
     }
-    let hit = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]) - 0.5);
-    let free = create_engine::place::ordered_by_distance(hit, |d| d.axis() != facing.axis())
-        .into_iter()
-        .map(|d| super::redstone::offset(pos, d))
-        .find(|p| lv.free(*p));
-    let Some(at) = free else {
+    let Some(at) = board_target(lv, pos, click.hit.point, facing) else {
         return InteractionResult::Pass;
     };
     let water = lv
@@ -1979,6 +2008,35 @@ fn place_board(
         let _ = living.set_hand_item(&mut *lv.host, click.hand, stack.clone().shrink(1));
     }
     InteractionResult::Success
+}
+
+/// `FlapDisplayBlock.PlacementHelper.getOffset`: the free side nearest the hit `point` of the
+/// board at `pos` facing `facing`, across its facing.
+fn board_target(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    point: [f64; 3],
+    facing: Dir,
+) -> Option<[i32; 3]> {
+    let hit = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]) - 0.5);
+    create_engine::place::ordered_by_distance(hit, |d| d.axis() != facing.axis())
+        .into_iter()
+        .map(|d| super::redstone::offset(pos, d))
+        .find(|p| lv.free(*p))
+}
+
+/// The display board helper's target for the indicator: a display board item on a board.
+pub(crate) fn helper_target(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    point: [f64; 3],
+    item: &str,
+) -> Option<[i32; 3]> {
+    if item != "create:display_board" {
+        return None;
+    }
+    let facing = board_at(lv, pos)?.facing;
+    board_target(lv, pos, point, facing)
 }
 
 /// A change to the board controller at `pos`, shown to its clients.

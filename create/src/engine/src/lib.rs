@@ -85,6 +85,7 @@ pub mod schematicannon;
 pub mod seat;
 pub mod sequenced;
 pub mod sequencer;
+pub mod soul;
 pub mod spout;
 pub mod states;
 pub mod steam;

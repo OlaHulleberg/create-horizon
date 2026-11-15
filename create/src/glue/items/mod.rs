@@ -16,8 +16,6 @@
 //! - The wand of symmetry's mirrored placements take the placed state turned, not
 //!   `Block.updateFromNeighbourShapes` of it (the legacy's `update_from_neighbour_shapes`): no
 //!   host call asks a state's shape against its neighbours.
-//! - The items' 5-tick cooldowns (`getCooldowns().addCooldown`) and the belt connector's
-//!   advancement: as in the legacy glue.
 //! - Super glue's selection (`SuperGlueSelectionHandler`) is the contraptions' to port: what it
 //!   makes (`SuperGlueEntity` areas) is found and saved with contraptions (`contraption_found`,
 //!   `sticky_sides`, `create_glue`). The train schedule and its screen are the trains'
@@ -117,6 +115,33 @@ pub(crate) fn spin(host: &dyn ClientHost, property: &str) -> Option<f32> {
 /// Create's tooltips on its items (`ClientEvents.addToItemTooltip`).
 pub(crate) fn item_tooltip(host: &dyn ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {
     tooltip::item_tooltip(host, event);
+}
+
+/// `ItemStack.getTooltipLines(.., TooltipFlag.NORMAL)` on a client: the game's lines with
+/// Create's added, as `item_tooltip` adds them (other mods' callbacks are not run).
+pub(crate) fn tooltip_lines(host: &dyn ClientHost, stack: &ItemStack) -> Vec<mod_api::Text> {
+    let Some(game) = mod_api::ItemResource::of(stack).tooltip(host, false, false) else {
+        return Vec::new();
+    };
+    let mut lines: Vec<(mod_api::Text, u32)> = game
+        .into_iter()
+        .filter_map(|e| match e {
+            mod_api::TooltipElement::Text(t, c) => Some((t, c)),
+            _ => None,
+        })
+        .collect();
+    let display = mod_api::TooltipDisplay::for_stack(stack);
+    let mut event = mod_api::ItemTooltipEvent {
+        player: 0,
+        player_entity_id: -1,
+        stack,
+        display: &display,
+        advanced: false,
+        creative: false,
+        lines: &mut lines,
+    };
+    item_tooltip(host, &mut event);
+    lines.into_iter().map(|(t, _)| t).collect()
 }
 
 pub(crate) fn key(item: Item) -> Option<ItemKey> {
@@ -222,6 +247,7 @@ pub struct Items;
 impl Subsystem for Items {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         symmetry::register(r);
+        let _ = sandpaper::ITEM_PARTICLE.set(r.particle_key("minecraft:item"));
         let keys: Vec<ItemKey> = IDS.iter().map(|id| r.item_key(id)).collect();
         let _ = KEYS.set(keys);
         let Some(k) = KEYS.get() else {
@@ -438,6 +464,14 @@ impl Subsystem for Items {
         event: &mut mod_api::LivingEntityUseItemFinishEvent<'_>,
     ) {
         sandpaper::finished(host, event);
+    }
+
+    fn use_item_tick(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::LivingEntityUseItemTickEvent<'_>,
+    ) {
+        sandpaper::use_tick(host, event.stack, event.entity, event.duration);
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {

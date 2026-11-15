@@ -35,6 +35,10 @@ pub trait Space {
     /// become the same source again (`getNewLiquid`: water between two sources over a solid
     /// block or a source).
     fn take_source(&mut self);
+    /// A source of `fluid` was taken out of the world into the pipe (`WATER_SUPPLY`).
+    fn took(&mut self, fluid: Fluid) {
+        let _ = fluid;
+    }
     /// `FIRE_EXTINGUISH` at 0.5 and a random high pitch: water boiled away.
     fn fizz(&mut self);
     /// `OpenPipeEffectHandler.apply` of `fluid` on what is in front.
@@ -193,6 +197,7 @@ fn remove_from_space(s: &mut impl Space, simulate: bool) -> Option<(Fluid, u32)>
         return None;
     };
     if !simulate {
+        s.took(fluid);
         if waterlog {
             s.set_waterlogged(false);
         } else {

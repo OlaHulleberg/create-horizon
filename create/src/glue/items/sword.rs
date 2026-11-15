@@ -1,7 +1,8 @@
 //! The cardboard sword: it bonks instead of hurting (`CardboardSwordItem`), knocking the target
 //! back as a blow would, slowing creatures it hits (`MobCategory.CREATURE`/`MISC`, players not)
-//! and the attacker. Left out: knockback enchantments and resistance, and stopping the
-//! attacker's sprint (no API sets it). Its click on a block
+//! and the attacker, as hard as the attacker's `ATTACK_KNOCKBACK` + 2, the sword's Knockback
+//! level and a sprint make it, less the target's knockback resistance. Left out: stopping the
+//! attacker's sprint (no API sets it; `HORIZON_API.md`). Its click on a block
 //! (`cardboardSwordsMakeNoiseOnClick`, a sound only the clicking client plays) is heard here
 //! from the server, so the players near it hear it too: `left_click_block` is the server's.
 
@@ -99,8 +100,48 @@ fn knock_back(host: &mut dyn ServerHost, player: mod_api::PlayerRef, target: mod
     let attacker = player.entity();
     target.stop_riding(host);
     let yaw = attacker.rotation(&*host).map_or(0.0, |r| r[0]).to_radians();
-    let sprinting = attacker.is_sprinting(&*host).unwrap_or(false);
-    let strength = if sprinting { 3.0 } else { 2.0 } * 0.5;
+    // A sprinting blow, charged past 0.9 (`getAttackStrengthScale(0.5f)`).
+    let sprinting = attacker.is_sprinting(&*host).unwrap_or(false)
+        && player.attack_strength_scale(&*host, 0.5).unwrap_or(1.0) > 0.9;
+    // `ATTACK_KNOCKBACK + 2`, `EnchantmentHelper.modifyKnockback` (vanilla's Knockback: one per
+    // level), one more sprinting.
+    let base = host
+        .living(attacker)
+        .and_then(|l| l.attribute_value(&*host, "minecraft:attack_knockback"))
+        .unwrap_or(0.0)
+        + 2.0;
+    let enchanted = held(&*host, player, Hand::Main)
+        .and_then(|s| super::filters::component(&*host, &s, "minecraft:enchantments"))
+        .and_then(|t| match t {
+            mod_api::Tag::Compound(c) => {
+                let map = match c.get(&"levels".into()) {
+                    Some(mod_api::Tag::Compound(l)) => l.clone(),
+                    _ => c,
+                };
+                match map.get(&"minecraft:knockback".into()) {
+                    Some(mod_api::Tag::Int(i)) => Some(f64::from(*i)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .unwrap_or(0.0);
+    let knockback = base + enchanted + if sprinting { 1.0 } else { 0.0 };
+    if knockback <= 0.0 {
+        return;
+    }
+    // `LivingEntity.knockback`: less the target's resistance.
+    let resistance = host
+        .living(target)
+        .and_then(|l| l.attribute_value(&*host, "minecraft:knockback_resistance"))
+        .unwrap_or(0.0);
+    let strength = knockback * 0.5 * (1.0 - resistance);
+    if strength <= 0.0 {
+        if let Some(v) = attacker.velocity(&*host) {
+            attacker.set_velocity(host, [v[0] * 0.6, v[1], v[2] * 0.6]);
+        }
+        return;
+    }
     let (x, z) = (f64::from(yaw.sin()), f64::from(-yaw.cos()));
     let len = (x * x + z * z).sqrt().max(1e-9);
     let push = [x / len * strength, z / len * strength];

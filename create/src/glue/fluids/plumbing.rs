@@ -131,6 +131,13 @@ fn put_hose(dim: usize, pos: [i32; 3], hose: create_engine::hose::Hose) {
 struct HoseLevel<'l, 'a>(&'l mut ServerLevel<'a>);
 
 impl create_engine::hose::Level for HoseLevel<'_, '_> {
+    fn hose_worked(&mut self, hose: [i32; 3], lava: bool) {
+        crate::glue::advancements::award_placer(self.0, hose, "hose_pulley");
+        if lava {
+            crate::glue::advancements::award_placer(self.0, hose, "hose_pulley_lava");
+        }
+    }
+
     fn loaded(&self, p: [i32; 3]) -> bool {
         self.0.is_loaded(p)
     }
@@ -633,7 +640,7 @@ fn tick_whistles(lv: &mut ServerLevel<'_>) {
     // `updatePitch`.
     for pos in with_world(|w| w.take_whistle_checks(dim)).unwrap_or_default() {
         let pitch = whistle::pitch(|h| extension_above(lv, pos, h));
-        with_world(|w| {
+        let changed = with_world(|w| {
             let p = &mut w.dims[dim].plumbing;
             if let Some(wh) = p.whistles.get_mut(&pos)
                 && wh.pitch != pitch
@@ -642,8 +649,13 @@ fn tick_whistles(lv: &mut ServerLevel<'_>) {
                 // A sounding whistle changes its note at once.
                 wh.replay_in = 0;
                 p.sound_checks.push(pos);
+                return true;
             }
+            false
         });
+        if changed == Some(true) {
+            crate::glue::advancements::pipe_organ(lv, pos);
+        }
     }
     // Whose sound may have started or stopped, and those sounding (`tickAudio`).
     let mut look = with_world(|w| w.take_sound_checks(dim)).unwrap_or_default();
@@ -657,6 +669,9 @@ fn tick_whistles(lv: &mut ServerLevel<'_>) {
         }) else {
             continue;
         };
+        if powered {
+            crate::glue::advancements::award_placer(lv, pos, "steam_whistle");
+        }
         let Some((sounds, mut wh)) = with_world(|w| {
             let sounds = whistle::sounds(powered, w.whistle_boiler(dim, pos));
             Some((sounds, *w.dims[dim].plumbing.whistles.get(&pos)?))

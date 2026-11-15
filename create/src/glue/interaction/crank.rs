@@ -62,6 +62,10 @@ impl BlockPart for Crank {
         if !items::creative(&*lv.host, player) {
             player.add_exhaustion(lv.host, create_engine::parts::CRANK_RPM * 0.01);
         }
+        // `HandCrankBlock.useItemOn`: turned on an empty stomach.
+        if player.food(&*lv.host).is_some_and(|f| f.level == 0) {
+            crate::glue::advancements::award(lv.host, player, "hand_crank_000");
+        }
         Some(InteractionResult::Success)
     }
 }

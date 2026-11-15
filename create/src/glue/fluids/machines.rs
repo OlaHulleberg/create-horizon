@@ -96,6 +96,9 @@ pub(super) fn tick_spouts(lv: &mut ServerLevel<'_>) {
             }
         })
         .flatten();
+        if let (Some(out), Some(_)) = (&filled, &held) {
+            crate::glue::advancements::spouted(lv, pos, out);
+        }
         match (filled, &sequenced, held, entity) {
             (Some(_), Some((a, progress, _, _)), Some((_, count)), _) => {
                 let state =
@@ -175,6 +178,7 @@ pub(super) fn spout_on_belt(
         OnBelt::Pass => Process::Pass,
         OnBelt::Hold => Process::Hold,
         OnBelt::Fill(out) => {
+            crate::glue::advancements::spouted(lv, above, &out);
             let outputs = match &sequenced {
                 Some((a, _, _)) => {
                     let at = [above[0], above[1] - 2, above[2]];
@@ -286,6 +290,9 @@ pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
         .flatten() else {
             continue;
         };
+        if t == Tick::Emptied {
+            crate::glue::advancements::award_placer(lv, pos, "drain");
+        }
         let Tick::Out(side) = t else {
             continue;
         };
@@ -294,9 +301,33 @@ pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
         else {
             continue;
         };
+        // `tryExportingToBeltFunnel`: a pulling belt funnel on top facing against the item's way
+        // takes it first; one that takes none of it holds it.
+        if let Some(stack) = stack_of(&*lv.host, &held.item, u32::from(held.count))
+            && let Some(left) = crate::glue::logistics::export_up(lv, pos, side.opposite(), &stack)
+        {
+            let left = left.min(u32::from(held.count)) as u8;
+            if left != held.count {
+                with_world(|w| {
+                    if let Some(d) = w.dims[dim].drains.get_mut(&pos) {
+                        match d.held.as_mut() {
+                            Some(h) if left > 0 => h.count = left,
+                            _ => d.held = None,
+                        }
+                    }
+                    w.mark_unsaved(dim, pos);
+                });
+            }
+            continue;
+        }
         let next = super::offset(pos, side);
         let left = match insert_into_drain(lv, next, side, &held.item, held.count) {
-            Some(left) => Some(left),
+            Some(left) => {
+                if left == 0 {
+                    crate::glue::advancements::award_placer(lv, pos, "chained_drain");
+                }
+                Some(left)
+            }
             None => {
                 let item = create_engine::belt::Item::new(&held.item, held.count, 0, false);
                 crate::glue::logistics::insert_into_from(lv, next, side, &item, false)

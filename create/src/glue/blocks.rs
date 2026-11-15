@@ -568,14 +568,14 @@ impl BlockEntityPart for ToolboxMenu {
         );
         // `renderToolbox`: the toolbox, 50 px a block, right of the background's foot.
         if let Some(state) = host.block_state_id(event.block) {
-            draw.draw_scene(
+            let _ = draw.draw_scene(
                 [
                     bx + BACKGROUND[0],
                     oy + 116.0,
                     bx + BACKGROUND[0] + 72.0,
                     oy + 184.0,
                 ],
-                &[mod_api::SceneBlock::new([0, 0, 0], state, None)],
+                &mod_api::Scene::new(vec![mod_api::SceneBlock::new([0, 0, 0], state, None)]),
                 mod_api::SceneView::new([0.5, 0.5, 0.5], -202.0, 22.0, 50.0),
             );
         }

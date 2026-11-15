@@ -119,6 +119,7 @@ fn press_in_world(lv: &mut ServerLevel<'_>, at: [i32; 3]) {
     .flatten() else {
         return;
     };
+    crate::glue::advancements::pressed(lv, at, results.first().map(|(i, n)| (&**i, *n)));
     if d.stack.count() == 1 {
         let mut out = results.into_iter();
         let first = out
@@ -430,6 +431,7 @@ pub fn press_on_belt(
         o.locked = true;
         o.angle = random_angle(lv, at);
     }
+    crate::glue::advancements::pressed(lv, above, outputs.first().map(|o| (&*o.item, o.count)));
     Some(Process::Convert {
         held: belt_left(item),
         outputs,
@@ -546,6 +548,7 @@ pub fn sequenced_step_on_depot(
             progress,
             fraction,
         } => {
+            crate::glue::advancements::pressed_on_depot(lv, depot, Some((&item, 1)));
             let Some(mut stack) = stacks::stack(&*lv.host, &item, 1) else {
                 return held;
             };
@@ -601,6 +604,11 @@ pub fn results_on_depot(
     held: depot::Held,
     results: Vec<(String, u8)>,
 ) -> depot::Held {
+    crate::glue::advancements::pressed_on_depot(
+        lv,
+        depot,
+        results.first().map(|(i, n)| (&**i, *n)),
+    );
     let dim = lv.dim;
     let single = count == 1;
     let angle = random_angle(lv, depot);

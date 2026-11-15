@@ -18,18 +18,20 @@
 //! girder extends its line (`GirderPlacementHelper`). Table cloths' items and shops are the stock
 //! logistics' (`stock::shop`); their placement helper is here.
 //!
-//! The placement helpers' ghost of the block a click would place is left out for want of API
-//! (`HORIZON_API.md`, Client).
+//! The placement helpers' targets (cloths, sails, girders, metal ladders) are offered to the
+//! indicator round the crosshair (`interaction::placement`); their ghost of the block a click
+//! would place is left out for want of API (`HORIZON_API.md`, Client). A haunted bell's souls are
+//! `souls`'.
+//!
+//! Lightning clears Create's copper as vanilla's: the glue gives the server's data Create's
+//! chains as NeoForge's `neoforge:oxidizables` and `neoforge:waxables` block data maps
+//! (`data_pack_files`), which the game's own `clearCopperOnLightningStrike` reads.
 //!
 //! Left out, for want of API (each in `HORIZON_API.md`):
 //! - The weathering neighbours of Create's copper (`WeatheringCopper` and its age, legacy
 //!   `behaviours().data(state)`): no API says which blocks are weathering copper nor their age;
 //!   Create's own are known to the engine and vanilla's are read from their ids (`exposed_`,
 //!   `weathered_`, `oxidized_`, never `waxed_`). A state fact for it would make it exact.
-//! - Lightning clearing Create's copper (`LightningBolt.clearCopperOnLightningStrike`): the
-//!   `lightning_strike` hook names no level, and the game's own clearing steps copper by the
-//!   `neoforge:oxidizables` data map or `minecraft:` names. Create's `neoforge:oxidizables` and
-//!   `neoforge:waxables` maps in its data (the data generator's) would close it with no glue.
 //! - What follows a placement from an item (placards and clipboards turned, a clipboard's pages,
 //!   girders joining, a large water wheel's room, a peculiar bell) runs in the item's
 //!   `on_block_placed_by`, which names no level: a dispenser's placement, with no placer, is left
@@ -54,7 +56,22 @@ mod placard;
 mod place;
 mod saved;
 mod scaffolding;
+mod souls;
 mod tick;
+
+/// The decor helpers' target for the placement indicator (cloths, sails, girders, metal
+/// ladders): where `item` clicked at `point` on the block at `pos` would go.
+pub(crate) fn helper_target(
+    lv: &super::server::ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    pos: [i32; 3],
+    point: [f64; 3],
+    item: mod_api::ItemKey,
+) -> Option<[i32; 3]> {
+    let id = item.id(&*lv.host);
+    clicks::helper_target(lv, player, pos, point, &id)
+        .or_else(|| ladders::helper_target(lv, player, pos, item))
+}
 
 use super::server::ServerLevel;
 use super::states;
@@ -120,6 +137,23 @@ thread_local! {
 
 fn with<R>(dim: usize, f: impl FnOnce(&mut Dim) -> R) -> R {
     DECOR.with_borrow_mut(|d| f(d.entry(dim).or_default()))
+}
+
+/// The clipboards placed within `range` blocks of `at` in level `dim` (their centres), with
+/// their pages.
+pub(crate) fn clipboards_near(dim: usize, at: [f64; 3], range: f64) -> Vec<ItemStack> {
+    with(dim, |d| {
+        d.clipboards
+            .iter()
+            .filter(|(p, _)| {
+                (0..3)
+                    .map(|i| (f64::from(p[i]) + 0.5 - at[i]).powi(2))
+                    .sum::<f64>()
+                    <= range * range
+            })
+            .map(|(_, s)| s.clone())
+            .collect()
+    })
 }
 
 /// The block and state facts of engine state `id` (server side).
@@ -351,11 +385,41 @@ impl Subsystem for Decor {
             crate::create_log!("[create] the bells' drawing part was refused: {e:?}");
         }
         bells::register(r);
+        souls::register(r);
     }
 
     fn world_closed(&self) {
         DECOR.with_borrow_mut(HashMap::clear);
         bells::forget();
+        souls::forget();
+    }
+
+    /// Create's copper as NeoForge's block data maps (see the module's doc).
+    fn data_pack_files(&self, files: &mut Vec<(String, Vec<u8>)>) {
+        let (oxidizables, waxables) = create_engine::decor::copper_data_maps();
+        files.push((
+            "data_maps/neoforge:block/oxidizables".into(),
+            oxidizables.into_bytes(),
+        ));
+        files.push((
+            "data_maps/neoforge:block/waxables".into(),
+            waxables.into_bytes(),
+        ));
+    }
+
+    /// A held haunted bell's pulses (`HauntedBellPulser`).
+    fn player_tick(&self, host: mod_api::HostSide, event: &mut mod_api::PlayerTickPostEvent) {
+        if let mod_api::HostSide::Server(host) = host {
+            souls::player_tick(host, event.player);
+        }
+    }
+
+    fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
+        providers.register(souls::SOUL.to_owned(), std::sync::Arc::new(souls::Soul));
+        providers.register(
+            souls::SOUL_BASE.to_owned(),
+            std::sync::Arc::new(souls::SoulBase),
+        );
     }
 
     fn client_reset(&self) {
@@ -427,6 +491,7 @@ impl Subsystem for Decor {
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         tick::tick(lv);
         bells::tick(lv);
+        souls::tick(lv);
     }
 
     fn left_click_block(&self, host: &mut dyn ServerHost, event: &mut LeftClickBlockEvent) -> Flow {

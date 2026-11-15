@@ -19,7 +19,8 @@
 //!   it is open (Create carries the real stack).
 //! - A slot's item tooltip is its name alone (`hover_name`): no host call gives an item's
 //!   tooltip lines.
-//! - The creative middle click on a ghost slot (a full stack of it on the cursor).
+//! - The creative middle click on a ghost slot (a real full stack of it on the cursor): the
+//!   cursor here carries ghosts only, as above (`HORIZON_API.md`).
 
 use super::super::net;
 use mod_api::text::TextStyle;

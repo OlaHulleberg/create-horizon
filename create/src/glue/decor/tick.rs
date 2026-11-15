@@ -103,25 +103,34 @@ fn show(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
-    let data = if bracketed(block) {
+    if bracketed(block) {
         let b = with(lv.dim, |d| d.brackets.get(&pos).copied());
         let text = brackets::shown_text(b);
-        Compound::from([(super::BRACKET.into(), Tag::String(text.as_str().into()))])
-    } else if block == Block::ItemHatch {
+        let data = Compound::from([(super::BRACKET.into(), Tag::String(text.as_str().into()))]);
+        let _ = entity.merge_data(&mut *lv.host, data);
+        return;
+    }
+    // A stack is written whole: a merge would keep the components of the stack it replaces.
+    let (key, nbt) = if block == Block::ItemHatch {
         let filter = with(lv.dim, |d| d.hatch_filters.get(&pos).cloned());
         let nbt = filter
             .and_then(|f| crate::glue::items::filters::filter_stack(&*lv.host, &f))
             .and_then(|s| s.to_nbt(&*lv.host))
             .unwrap_or_default();
-        Compound::from([(super::hatch::FILTER.into(), Tag::Compound(nbt))])
+        (super::hatch::FILTER, nbt)
     } else if block == Block::Placard {
         let item = with(lv.dim, |d| d.placards.get(&pos).cloned());
         let nbt = item.and_then(|s| s.to_nbt(&*lv.host)).unwrap_or_default();
-        Compound::from([(placard::ITEM.into(), Tag::Compound(nbt))])
+        (placard::ITEM, nbt)
     } else {
         return;
     };
-    let _ = entity.merge_data(&mut *lv.host, data);
+    let mut data = entity.data(&*lv.host).unwrap_or_default();
+    if data.get(&key.into()) == Some(&Tag::Compound(nbt.clone())) {
+        return;
+    }
+    data.insert(key.into(), Tag::Compound(nbt));
+    let _ = entity.replace_data(&mut *lv.host, data);
 }
 
 /// Whether two states are the same block with the same properties but `waterlogged`.

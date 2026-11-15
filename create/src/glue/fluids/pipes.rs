@@ -159,6 +159,7 @@ pub(super) fn tick_pipes(lv: &mut ServerLevel<'_>) {
 fn collide(lv: &mut ServerLevel<'_>) {
     let now = lv.game_time();
     for (pos, a, b) in super::flows::collisions(lv.dim, now) {
+        crate::glue::advancements::award_placer(lv, pos, "cross_streams");
         lv.destroy_block(pos, true);
         if let Some(state) =
             create_engine::open_end::flow_collision(a, b).and_then(|n| state_with(lv, n, &[]))
@@ -388,6 +389,7 @@ fn with_open_end<R>(
             lv,
             pos: end.pos,
             down: end.face == Dir::Down,
+            pipe: owner,
         },
     );
     if open != before {
@@ -500,6 +502,7 @@ pub(super) fn tick_boilers(lv: &mut ServerLevel<'_>) {
         with_world(|w| w.set_boiler_heat(dim, tank, &heats));
     }
     with_world(|w| w.tick_boilers(dim));
+    crate::glue::advancements::boilers(lv);
 }
 
 /// `BoilerHeater.findHeat` under a boiler: a blaze burner by its heat (`BoilerHeaters

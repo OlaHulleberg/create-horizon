@@ -104,6 +104,15 @@ impl Graph {
         }
     }
 
+    /// `getNormal(t)`: a curve's up between its ends' normals; a straight edge's up (the port's
+    /// straight edges are flat or a plain slope, whose normals are up).
+    pub fn normal(&self, e: usize, t: f64) -> Vec3 {
+        match &self.edges[e].turn {
+            Some(c) => c.normal(t.clamp(0.0, 1.0)),
+            None => [0.0, 1.0, 0.0],
+        }
+    }
+
     /// `incrementT`: a curve's own stepping for short moves, straight otherwise.
     fn increment_t(&self, e: usize, t: f64, distance: f64) -> f64 {
         let too_far = distance.abs() > 5.0;

@@ -105,6 +105,9 @@ impl Subsystem for Gauges {
         let Some(kind) = create_engine::world::gauge_kind(block) else {
             return;
         };
+        if block == Block::Stressometer {
+            super::advancements::gauge_read(pos);
+        }
         let shown = host
             .level(host.dimension())
             .and_then(|l| host.block_entity(l, pos))
@@ -251,6 +254,9 @@ impl BlockEntityPart for Animated {
                     .unwrap_or(0) as u64;
                 if let Some((block, info)) = client_block(&*host, event.state) {
                     dust(host, block, &info, pos, &shown);
+                }
+                if block == Block::Stressometer {
+                    super::advancements::gauge_tick(host, pos, shown.dial);
                 }
                 CLIENT.with_borrow_mut(|c| {
                     let n = c.needles.entry(pos).or_default();

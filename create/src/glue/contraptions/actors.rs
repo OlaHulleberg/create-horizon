@@ -172,6 +172,23 @@ fn takes_any(stored: &Stored) -> bool {
     stored.len() != create_engine::toolbox::SLOTS
 }
 
+/// Lends a contraption's storage (each block's offset and slots) to its actors under `key`
+/// while they tick (a cart keeps its own: `lent_back` gives it back).
+pub(crate) fn lend_storage(
+    dim: usize,
+    key: [i32; 3],
+    storage: Vec<([i32; 3], Vec<Option<ItemStack>>)>,
+) {
+    STORAGE.with_borrow_mut(|m| m.insert((dim, key), storage));
+}
+
+/// The storage lent under `key`, as the actors left it.
+pub(crate) fn lent_back(dim: usize, key: [i32; 3]) -> Vec<([i32; 3], Vec<Option<ItemStack>>)> {
+    STORAGE
+        .with_borrow_mut(|m| m.remove(&(dim, key)))
+        .unwrap_or_default()
+}
+
 /// Whether `pos` holds a storage block a contraption carries.
 pub(crate) fn is_storage(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     lv.block_name(pos)
@@ -1704,7 +1721,7 @@ fn collect(lv: &mut ServerLevel<'_>, key: [i32; 3], actor: &Actor, stack: ItemSt
 /// The actors of a bearing's structure (its blocks' offsets from the bearing and states):
 /// breakers, harvesters, ploughs and rollers, each a breaker of its own. Its storage rides it
 /// apart (`carry_storage`); its glue and controls don't.
-pub(super) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
+pub(crate) fn bearing_actors(blocks: &[([i32; 3], u32)]) -> Carried {
     let mut carried = Carried::default();
     for (o, state) in blocks {
         let Some((block, info)) = create_info(*state) else {
@@ -1975,9 +1992,19 @@ fn deployer_should_use(lv: &ServerLevel<'_>, held: Option<&(String, u8)>, at: [i
 }
 
 /// `ItemHelper.extract(storage, filter, 1, false)` for a deployer's empty hand: one of the first
-/// stack in contraption `key`'s storage (its filter not ported: anything passes).
-fn take_one(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<ItemStack> {
+/// stack in contraption `key`'s storage that the deployer's filter (`getFilterFromBE`, carried
+/// with its block) passes.
+fn take_one(lv: &ServerLevel<'_>, key: [i32; 3], local: [i32; 3]) -> Option<ItemStack> {
     let dim = lv.dim;
+    let host = &*lv.host;
+    let filter = HELD.with_borrow(|m| {
+        let (_, d) = m.get(&(dim, key))?.iter().find(|(o, _)| *o == local)?;
+        let tag = d
+            .engine
+            .as_ref()?
+            .get(&crate::glue::logistics::carried::FILTER.into())?;
+        filters::filter_from_nbt(host, tag)
+    });
     STORAGE.with_borrow_mut(|m| {
         let list = m.get_mut(&(dim, key))?;
         for (_, s) in list.iter_mut() {
@@ -1985,6 +2012,9 @@ fn take_one(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<ItemStack> {
                 let Some(stack) = slot.as_ref() else {
                     continue;
                 };
+                if !filters::passes(host, filter.as_ref(), stack) {
+                    continue;
+                }
                 let mut one = stack.clone();
                 let _ = one.set_count(1);
                 *slot = slot.take().and_then(|s| s.shrink(1));
@@ -2020,7 +2050,7 @@ fn deploy(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, at: Option<[i32; 3
         return false;
     };
     if d.held.is_none()
-        && let Some(s) = take_one(lv, key)
+        && let Some(s) = take_one(lv, key, a.local)
     {
         crate::glue::processing::set_deployer_held(&*lv.host, &mut d, Some(&s));
     }
@@ -2441,6 +2471,7 @@ pub fn psi_room(lv: &ServerLevel<'_>, pos: [i32; 3], stack: &ItemStack) -> Optio
 
 /// `onContentTransferred`: the connection holds `getTransferTimeout` ticks more.
 fn psi_transferred(dim: usize, pos: [i32; 3]) {
+    crate::glue::advancements::award_later(dim, pos, "portable_storage_interface");
     with_world(|w| {
         let d = &mut w.dims[dim];
         if let Some(s) = d.psis.get_mut(&pos) {

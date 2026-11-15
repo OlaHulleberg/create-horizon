@@ -471,6 +471,10 @@ impl ArmWorld<'_, '_> {
 }
 
 impl arm::World for ArmWorld<'_, '_> {
+    fn deposited(&mut self, arm: [i32; 3], musical: bool) {
+        crate::glue::advancements::arm_deposited(self.lv, arm, musical);
+    }
+
     /// `isValid`: still a block of its type (`canCreatePoint`).
     fn valid(&mut self, p: &Point) -> bool {
         let Some(now) = arm_point(self.lv, p.pos) else {
@@ -1447,7 +1451,10 @@ fn entities_on_ejectors(lv: &mut ServerLevel<'_>) {
             .unwrap_or_default()
             .into_iter()
             .any(|e| {
-                let kind = e.kind(&*lv.host).unwrap_or_default();
+                let kind = e
+                    .kind(&*lv.host)
+                    .map(|k| k.id(&*lv.host))
+                    .unwrap_or_default();
                 !matches!(
                     kind.as_str(),
                     "minecraft:item" | "minecraft:player" | "minecraft:experience_orb"
@@ -1493,7 +1500,10 @@ fn launch_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3], motion: [f64; 3]) {
     ];
     let found = lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default();
     for e in found {
-        let kind = e.kind(&*lv.host).unwrap_or_default();
+        let kind = e
+            .kind(&*lv.host)
+            .map(|k| k.id(&*lv.host))
+            .unwrap_or_default();
         if matches!(
             kind.as_str(),
             "minecraft:item" | "minecraft:player" | "minecraft:experience_orb"

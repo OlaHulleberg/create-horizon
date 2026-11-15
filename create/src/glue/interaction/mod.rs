@@ -13,13 +13,14 @@
 //! - The goggles' tooltip is drawn as a plain box of fills and text: Create draws vanilla's
 //!   tooltip background (`RemovedGuiUtils.drawHoveringText`); `DrawContext::gui_tooltip` takes
 //!   one colour per line where Create's lines change colour along the way.
-//! - `ValueSettingsScreen`'s sprites (`AllGuiTextures.VALUE_SETTINGS_*`) are plain fills, as in
-//!   the legacy glue: the GUI sprites are the player's jar's, not the mod's assets.
+//! - An icon board's cursor shows the option's name below, not its icon (`AllIcons` tinted:
+//!   `DrawContext::sprite` takes a tint, but the port keeps no option's icon).
 
 mod board;
 mod commands;
 mod crank;
 mod hud;
+mod placement;
 /// The value channels and the value box rules, for the subsystems whose blocks have one.
 pub(crate) mod value_text;
 pub(crate) mod values;
@@ -40,6 +41,18 @@ impl Subsystem for Interaction {
 
     fn client_reset(&self) {
         board::reset();
+        placement::reset();
+    }
+
+    fn world_closed(&self) {
+        placement::world_closed();
+    }
+
+    /// The placement helpers' targets, for their indicator.
+    fn player_tick(&self, host: HostSide, event: &mut mod_api::PlayerTickPostEvent) {
+        if let HostSide::Server(host) = host {
+            placement::player_tick(host, event.player);
+        }
     }
 
     /// `ValueSettingsInputHandler.onBlockActivated` on both sides, and the client's prediction
@@ -68,16 +81,18 @@ impl Subsystem for Interaction {
     }
 
     fn server_message(&self, _host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
-        if channel != VALUE {
-            return false;
+        match channel {
+            VALUE => board::values_from_server(data),
+            placement::CHANNEL => placement::from_server(data),
+            _ => return false,
         }
-        board::values_from_server(data);
         true
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
         board::tick(host);
         value_text::tick(host);
+        placement::tick(&*host);
     }
 
     /// The block looked at is drawn each frame while it shows its value box's number.
@@ -103,6 +118,8 @@ impl Subsystem for Interaction {
         if board::draw(host, event.draw) {
             return;
         }
+        // `PlacementClient.onRenderCrosshairOverlay`, with the crosshair.
+        placement::draw(host, event.draw);
         hud::value_tip(host, event.draw);
         hud::goggle_overlay(host, event.draw);
     }

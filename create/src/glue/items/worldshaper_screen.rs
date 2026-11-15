@@ -432,9 +432,9 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
     }
     // `renderBlock`: the block it paints with, twenty pixels a block, turned 45° and tilted 25°.
     if let Some(state) = o.block.as_deref().and_then(|b| host.block_state_id(b)) {
-        draw.draw_scene(
+        let _ = draw.draw_scene(
             [x + 14.0, y + 21.0, x + 50.0, y + 57.0],
-            &[SceneBlock::new([0, 0, 0], state, None)],
+            &mod_api::Scene::new(vec![SceneBlock::new([0, 0, 0], state, None)]),
             SceneView::new([0.5, 0.5, 0.5], 45.0, 25.0, 20.0),
         );
     }

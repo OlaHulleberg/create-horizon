@@ -473,6 +473,10 @@ pub(super) fn tick_cuckoos(lv: &mut ServerLevel<'_>) {
             lv.cuckoo_surprise(pos);
             continue;
         }
+        let creeper = Some(create_engine::cuckoo::Animation::Creeper);
+        if create_engine::cuckoo::due(hours, minutes, false) == creeper {
+            crate::glue::advancements::award_placer_near(lv, pos, "cuckoo_clock", 32.0);
+        }
         let mut m = Vec::with_capacity(13);
         for v in pos {
             m.extend_from_slice(&v.to_le_bytes());

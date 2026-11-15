@@ -20,7 +20,8 @@ use mod_api::{
 };
 use std::cell::RefCell;
 
-/// Client to server: `S` and a selection to save, or `M` and a status message to show.
+/// Client to server: `S` and a selection to save, `M` and a status message to show, `Y` a held
+/// schematic's place (`SchematicSyncPacket`) and `P` its print (`SchematicPlacePacket`).
 pub(super) const CHANNEL: &str = "create:schematic_quill";
 const MOD: &str = "create";
 /// `AllGuiTextures.SCHEMATIC_PROMPT`: `schematics_2`, 213 × 79.
@@ -110,7 +111,7 @@ fn view(host: &dyn ClientHost) -> Option<([f64; 3], [f64; 3])> {
 }
 
 /// The face of block `pos` that `point` lies on.
-pub(super) fn face_of(pos: [i32; 3], point: [f64; 3]) -> Dir {
+pub(crate) fn face_of(pos: [i32; 3], point: [f64; 3]) -> Dir {
     let local = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]));
     let mut best = (Dir::Up, f64::MAX);
     for d in Dir::ALL {
@@ -652,7 +653,8 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
             let args: Vec<Text> = parts.map(|a| Text::literal(a.to_owned())).collect();
             let _ = player.action_bar(host, Text::translate(key, args));
         }
-        Some((b'D', rest)) => super::deploy::client_message(host, player, rest),
+        Some((b'Y', rest)) => super::synced(host, player, rest),
+        Some((b'P', rest)) => super::printed(host, player, rest),
         Some((b'S', rest)) if rest.len() >= 25 => {
             let convert = rest[0] != 0;
             let int = |i: usize| {

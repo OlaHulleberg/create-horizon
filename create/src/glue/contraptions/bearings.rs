@@ -388,6 +388,7 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
             }
         };
         set_exception(lv, pos, None);
+        crate::glue::advancements::windmill_assembled(lv, pos, &blocks, sails);
         actors::carry_storage(lv, pos, pos, &blocks);
         take_blocks(lv, pos, &blocks);
         // `RotationDirection` on its value box: clockwise unless set otherwise.
@@ -589,6 +590,7 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                     }
                 };
                 set_exception(lv, pos, None);
+                crate::glue::advancements::assembled(lv, pos, &blocks);
                 actors::carry_storage(lv, pos, pos, &blocks);
                 take_blocks(lv, pos, &blocks);
                 let w = create_engine::world::Windmill {
@@ -779,6 +781,7 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
+        crate::glue::advancements::assembled(lv, c, &blocks);
         take_blocks(lv, c, &blocks);
         let limit = sequence_limit(dim, shaft, true);
         with_world(|w| {
@@ -1209,6 +1212,7 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
         .filter(|(p, _)| *p != pos)
         .collect();
     super::remove_cells(lv, &cells);
+    crate::glue::advancements::assembled(lv, pos, &blocks);
     lv.set_property(pos, "state", "moving", update_all());
     super::super::persist::mark_pos_unsaved(dim, pos);
     let limit = sequence_limit(dim, pos, true);

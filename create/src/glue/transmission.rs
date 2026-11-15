@@ -211,10 +211,27 @@ fn cog_helper(
     large: bool,
     pos: [i32; 3],
 ) -> Option<InteractionResult> {
+    // `PlacementOffset.fail()`: the click goes on as usual.
+    let (at, new_axis) = cog_target(lv, large, pos, click.hit.point)?;
+    let block = if large {
+        Block::LargeCogwheel
+    } else {
+        Block::Cogwheel
+    };
+    Some(place_helped(lv, player, click, stack, block, at, new_axis))
+}
+
+/// Where a cog item (`large` or small) clicked at `point` on the cog at `pos` goes, and its axis.
+fn cog_target(
+    lv: &ServerLevel<'_>,
+    large: bool,
+    pos: [i32; 3],
+    point: [f64; 3],
+) -> Option<([i32; 3], Axis)> {
     let dim = lv.dim;
     let (cog_large, axis) = with_world(|w| w.cog_at(dim, pos)).flatten()?;
-    let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]));
-    let found = with_world(|w| {
+    let local = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]));
+    with_world(|w| {
         place::cog_helper(
             large,
             pos,
@@ -227,15 +244,62 @@ fn cog_helper(
             |p| lv.free(p),
         )
     })
-    .flatten();
-    // `PlacementOffset.fail()`: the click goes on as usual.
-    let (at, new_axis) = found?;
-    let block = if large {
-        Block::LargeCogwheel
-    } else {
-        Block::Cogwheel
+    .flatten()
+}
+
+/// Where a shaft or cog item clicked at `point` on the shaft along `axis` at `pos` goes.
+fn pole_target(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    point: [f64; 3],
+    axis: Axis,
+) -> Option<[i32; 3]> {
+    let dim = lv.dim;
+    let hit = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]) - 0.5);
+    with_world(|w| {
+        place::pole_helper(
+            pos,
+            axis,
+            hit,
+            |p| {
+                w.state_at(dim, p)
+                    .and_then(|s| w.table.get(s))
+                    .is_some_and(|(b, i)| {
+                        matches!(b, Block::Shaft | Block::PoweredShaft) && i.axis == Some(axis)
+                    })
+            },
+            |p| lv.free(p),
+        )
+    })
+    .flatten()
+}
+
+/// The shaft and cog helpers' target (`PlacementClient`'s indicator): where `item` clicked at
+/// `point` on the block at `pos` would go, as `use_item_on` places it.
+pub(crate) fn helper_target(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    point: [f64; 3],
+    item: &str,
+) -> Option<[i32; 3]> {
+    let state = lv.block_state(pos)?;
+    let (block, info) =
+        with_world(|w| w.table.get(states::id(state)?).map(|(b, i)| (b, *i))).flatten()?;
+    let large = match item {
+        "create:cogwheel" => Some(false),
+        "create:large_cogwheel" => Some(true),
+        "create:shaft" => None,
+        _ => return None,
     };
-    Some(place_helped(lv, player, click, stack, block, at, new_axis))
+    if let Some(large) = large
+        && let Some((at, _)) = cog_target(lv, large, pos, point)
+    {
+        return Some(at);
+    }
+    match block {
+        Block::Shaft | Block::PoweredShaft => pole_target(lv, pos, point, info.axis?),
+        _ => None,
+    }
 }
 
 /// `ShaftBlock.PlacementHelper`: a shaft or cog item on a shaft along `axis` goes at the free end
@@ -255,25 +319,7 @@ fn pole(
         "create:large_cogwheel" => Block::LargeCogwheel,
         _ => return None,
     };
-    let pos = click.pos;
-    let dim = lv.dim;
-    let hit = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]) - 0.5);
-    let at = with_world(|w| {
-        place::pole_helper(
-            pos,
-            axis,
-            hit,
-            |p| {
-                w.state_at(dim, p)
-                    .and_then(|s| w.table.get(s))
-                    .is_some_and(|(b, i)| {
-                        matches!(b, Block::Shaft | Block::PoweredShaft) && i.axis == Some(axis)
-                    })
-            },
-            |p| lv.free(p),
-        )
-    })
-    .flatten()?;
+    let at = pole_target(lv, click.pos, click.hit.point, axis)?;
     Some(place_helped(lv, player, click, stack, block, at, axis))
 }
 

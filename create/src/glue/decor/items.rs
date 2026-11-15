@@ -190,7 +190,7 @@ fn obstructed(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
         })
         .any(|e| {
             host.living(e).is_some()
-                || e.kind(host).is_some_and(|k| {
+                || e.kind(host).map(|k| k.id(host)).is_some_and(|k| {
                     k.ends_with("minecart")
                         || k.ends_with("boat")
                         || k.ends_with("raft")
