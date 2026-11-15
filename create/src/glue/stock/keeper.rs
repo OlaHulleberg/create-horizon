@@ -1347,8 +1347,10 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
     // block, the blaze in it lit and wearing the logistics hat.
     if let Some((state, mut nbt)) = blaze_keeper(host, o.pos) {
         nbt.insert(KEEPER_KEY.into(), Tag::Byte(1));
-        let mut fields = mod_api::item::containers::ModBlockEntityFields::default();
-        fields.nbt = nbt;
+        let fields = mod_api::item::containers::ModBlockEntityFields {
+            nbt,
+            ..Default::default()
+        };
         let entity = mod_api::Identifier::parse(super::super::kinetics::TYPE)
             .ok()
             .map(|id| mod_api::SceneBlockEntity::new(id, fields));

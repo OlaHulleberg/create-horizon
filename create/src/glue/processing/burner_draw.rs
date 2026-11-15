@@ -168,7 +168,11 @@ pub fn draw(
         .wrapping_mul(31)
         .wrapping_add(pos[2]);
     let heat = if keeper { heat.max(Heat::Fading) } else { heat };
-    shared(draw, heat, angle, animation, true, goggles, keeper, hash);
+    let wear = Wear {
+        goggles,
+        hat: keeper,
+    };
+    shared(draw, heat, angle, animation, true, wear, hash);
 }
 
 /// `renderInContraption`: a burner carried by a moving structure, its blaze at least fading,
@@ -179,16 +183,18 @@ pub fn draw_moving(draw: &mut dyn BlockEntityDrawContext, heat: Heat, facing: Di
         return;
     }
     let heat = heat.max(Heat::Fading);
-    shared(
-        draw,
-        heat,
-        front_angle(facing),
-        0.0,
-        false,
-        false,
-        false,
-        hash,
-    );
+    let wear = Wear {
+        goggles: false,
+        hat: false,
+    };
+    shared(draw, heat, front_angle(facing), 0.0, false, wear, hash);
+}
+
+/// What the blaze wears: goggles (`drawGoggles`) and the logistics hat (`drawHat`).
+#[derive(Clone, Copy)]
+struct Wear {
+    goggles: bool,
+    hat: bool,
 }
 
 /// `renderShared`: the head at `angle`, sunk by `animation`, its rods, and (when it may and
@@ -199,10 +205,10 @@ fn shared(
     angle: f32,
     animation: f32,
     can_draw_flame: bool,
-    goggles: bool,
-    hat: bool,
+    wear: Wear,
     hash: i32,
 ) {
+    let Wear { goggles, hat } = wear;
     let above = animation > 0.125;
     let time = draw.animation_time() as f32;
     let tick = time + (hash % 13) as f32 * 16.0;

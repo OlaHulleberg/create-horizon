@@ -16,7 +16,7 @@ use super::super::server::ServerLevel;
 use super::keeper::{Reader, put_i32, put_stack, put_str};
 use super::{may_interact_message, with};
 use mod_api::{
-    ClientHost, Compound, DrawContext, Flow, Host, ItemStack, PlayerRef, ScreenCharTypedPreEvent,
+    ClientHost, DrawContext, Flow, Host, ItemStack, PlayerRef, ScreenCharTypedPreEvent,
     ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, SoundPlay, Tag, Text,
 };
@@ -44,7 +44,7 @@ fn named(stack: &ItemStack, name: &str) -> ItemStack {
     let mut patch = out
         .components()
         .map(|c| c.as_nbt().clone())
-        .unwrap_or_else(Compound::new);
+        .unwrap_or_default();
     if name.trim().is_empty() {
         patch.remove(&NAME.into());
     } else {
@@ -63,10 +63,11 @@ fn has_name(stack: &ItemStack) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Server
 
+/// The card a player edits: level, ticker and index (`-1` a new one not yet given a filter).
+type Editing = (usize, [i32; 3], i32);
+
 thread_local! {
-    /// The card each player edits: level, ticker and index (`-1` a new one not yet given a
-    /// filter).
-    static EDITING: RefCell<HashMap<u128, (usize, [i32; 3], i32)>> = RefCell::new(HashMap::new());
+    static EDITING: RefCell<HashMap<u128, Editing>> = RefCell::new(HashMap::new());
 }
 
 /// `StockTickerBlock.useItemOn` with a keeper: the editor opens (`CategoryMenuProvider`).
