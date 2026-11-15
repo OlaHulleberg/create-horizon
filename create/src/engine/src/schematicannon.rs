@@ -271,6 +271,24 @@ pub struct Printer {
     /// (`getEntityList().get(i).blockPosition()`), and the one printing (`printingEntityIndex`).
     pub entities: Vec<[i32; 3]>,
     pub entity_index: i32,
+    /// The casing of each cased belt segment in the template (its block entity's `Casing`), by
+    /// where it is placed: `CasingType.ANDESITE` 1, `BRASS` 2.
+    pub casings: std::collections::HashMap<[i32; 3], u8>,
+}
+
+/// A belt block entity's `Casing` (`CasingType`'s name; the port's own block entity keeps it in
+/// lower case): `NONE` 0, `ANDESITE` 1, `BRASS` 2.
+pub fn casing_of(nbt: Option<&crate::schematic::Nbt>) -> u8 {
+    match nbt
+        .and_then(|n| n.get("Casing"))
+        .and_then(crate::schematic::Nbt::text)
+        .map(str::to_ascii_uppercase)
+        .as_deref()
+    {
+        Some("ANDESITE") => 1,
+        Some("BRASS") => 2,
+        _ => 0,
+    }
 }
 
 impl Printer {
@@ -291,6 +309,14 @@ impl Printer {
             .blocks
             .iter()
             .map(|b| (transform(b.pos, mirror, rotation, [0; 3]), b.state as u32))
+            .collect();
+        let casings = s
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                let c = casing_of(b.nbt.as_ref());
+                (c != 0).then(|| (transform(b.pos, mirror, rotation, [0; 3]), c))
+            })
             .collect();
         for (p, _) in &placed {
             grow(*p, &mut min, &mut max);
@@ -316,6 +342,7 @@ impl Printer {
                 })
                 .collect(),
             entity_index: -1,
+            casings,
         };
         for (pos, state) in placed {
             let i = p.index(pos).unwrap();
@@ -493,6 +520,8 @@ pub struct Flying {
     pub state: u32,
     /// A belt (`LaunchedItem.ForBelt`): the other end of the belt it lays from `target`.
     pub belt_to: Option<[i32; 3]>,
+    /// The belt's segments' casings from `target` (`ForBelt.casings`, `casing_of`'s numbers).
+    pub casings: Vec<u8>,
     /// An entity (`LaunchedItem.ForEntity`).
     pub entity: Option<Box<PlacedEntity>>,
     pub total: u32,
@@ -517,6 +546,61 @@ pub struct Loaded {
     /// What the level reads where nothing was placed (`Blocks.AIR`).
     pub air: Entry,
 }
+
+impl Loaded {
+    /// [`launch`] for this schematic.
+    pub fn launch(
+        &self,
+        rel: [i32; 3],
+        target: [i32; 3],
+        entry: &Entry,
+    ) -> (u32, Option<[i32; 3]>, Vec<u8>) {
+        launch(&self.printer, &self.entries, rel, target, entry)
+    }
+}
+
+/// `launchBlockOrBelt`: what is shot at `target` (`rel` from the anchor) for `entry`: a belt's
+/// end that doesn't lay the belt goes as a shaft; the one that does lays the whole belt
+/// (`beltLength` segments, found along the schematic's belt), to the other end, each segment's
+/// casing as the walk meets it.
+pub fn launch(
+    printer: &Printer,
+    entries: &[Entry],
+    rel: [i32; 3],
+    target: [i32; 3],
+    entry: &Entry,
+) -> (u32, Option<[i32; 3]>, Vec<u8>) {
+    match entry.belt {
+        Some(b) if !b.is_last() => (b.shaft, None, Vec::new()),
+        Some(b) => {
+            let forward = b.part != BeltPart::End;
+            let mut at = rel;
+            let mut piece = b;
+            let mut length = 1;
+            let mut casings = vec![printer.casings.get(&at).copied().unwrap_or(0)];
+            while let Some(next) = piece.next(at, forward) {
+                let Some(e) = printer.at(next).and_then(|i| entries[i as usize].belt) else {
+                    break;
+                };
+                at = next;
+                piece = e;
+                length += 1;
+                casings.push(printer.casings.get(&at).copied().unwrap_or(0));
+            }
+            let step = b.next([0; 3], b.part == BeltPart::Start).unwrap_or([0; 3]);
+            let n = length - 1;
+            (
+                entry.placed,
+                Some([0, 1, 2].map(|i| target[i] + step[i] * n)),
+                casings,
+            )
+        }
+        None => (entry.placed, None, Vec::new()),
+    }
+}
+
+/// Items and how many of each.
+pub type Counts = Vec<(String, u32)>;
 
 /// A template's entity as the printer launches it (`LaunchedItem.ForEntity`): its saved data,
 /// where it lands (the anchor added) and the template's turn and mirror.
@@ -553,9 +637,10 @@ pub trait CannonWorld {
     fn grab(&mut self, item: &str, count: u32, simulate: bool) -> bool;
     /// `LaunchedItem.place`.
     fn place(&mut self, pos: [i32; 3], state: u32);
-    /// `LaunchedItem.ForBelt.place`: a shaft at `pos`, then the belt from it to `to`.
-    fn place_belt(&mut self, pos: [i32; 3], state: u32, to: [i32; 3]) {
-        let _ = to;
+    /// `LaunchedItem.ForBelt.place`: a shaft at `pos`, then the belt from it to `to`, each
+    /// segment from `pos` then cased as `casings` says (`setCasingType`).
+    fn place_belt(&mut self, pos: [i32; 3], state: u32, to: [i32; 3], casings: &[u8]) {
+        let _ = (to, casings);
         self.place(pos, state);
     }
     /// Slot 2 (book input) holds something.
@@ -657,7 +742,7 @@ impl Checklist {
 
     /// `createWrittenBook`'s order: the items still missing (with what is missing), then the
     /// completed ones (with what was required), each sorted by `name` lowercased.
-    pub fn entries(&self, name: impl Fn(&str) -> String) -> (Vec<(String, u32)>, Vec<(String, u32)>) {
+    pub fn entries(&self, name: impl Fn(&str) -> String) -> (Counts, Counts) {
         let mut keys: Vec<&(String, u32)> = self.required.iter().collect();
         keys.sort_by_key(|(i, _)| name(i).to_lowercase());
         let mut missing = Vec::new();
@@ -719,7 +804,7 @@ impl Cannon {
                 let f = self.flying.remove(i);
                 match (&f.entity, f.belt_to) {
                     (Some(e), _) => w.place_entity(e),
-                    (None, Some(to)) => w.place_belt(f.target, f.state, to),
+                    (None, Some(to)) => w.place_belt(f.target, f.state, to, &f.casings),
                     (None, None) => w.place(f.target, f.state),
                 }
             } else {
@@ -1013,7 +1098,10 @@ impl Cannon {
             self.status = Status::Searching;
             return true;
         }
-        if let Requirement::Items(items) = requirement {
+        // `grabItemsFromAttachedInventories`: a creative crate supplies everything.
+        if let Requirement::Items(items) = requirement
+            && !self.creative
+        {
             for (item, count) in items {
                 if !w.grab(item, *count, true) {
                     if self.options.skip_missing {
@@ -1048,6 +1136,7 @@ impl Cannon {
                 target,
                 state: 0,
                 belt_to: None,
+                casings: Vec::new(),
                 entity: Some(Box::new(e.clone())),
                 total,
                 land_at: now + u64::from(total) + 1,
@@ -1061,38 +1150,13 @@ impl Cannon {
         if !entry.air {
             self.blocks_placed += 1;
         }
-        // `launchBlockOrBelt`: a belt's end that doesn't lay it goes as a shaft; the one that
-        // does lays the whole belt (`beltLength` segments, found along the schematic's belt).
-        let (state, belt_to) = match entry.belt {
-            Some(b) if !b.is_last() => (b.shaft, None),
-            Some(b) => {
-                let forward = b.part != BeltPart::End;
-                let mut at = rel;
-                let mut piece = b;
-                let mut length = 1;
-                while let Some(next) = piece.next(at, forward) {
-                    let Some(e) = l.printer.at(next).and_then(|i| l.entries[i as usize].belt)
-                    else {
-                        break;
-                    };
-                    at = next;
-                    piece = e;
-                    length += 1;
-                }
-                let step = b.next([0; 3], b.part == BeltPart::Start).unwrap_or([0; 3]);
-                let n = length - 1;
-                (
-                    entry.placed,
-                    Some([0, 1, 2].map(|i| target[i] + step[i] * n)),
-                )
-            }
-            None => (entry.placed, None),
-        };
+        let (state, belt_to, casings) = l.launch(rel, target, entry);
         let total = flight_ticks(self.pos, target);
         self.flying.push(Flying {
             target,
             state,
             belt_to,
+            casings,
             entity: None,
             total,
             land_at: now + u64::from(total) + 1,

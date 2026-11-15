@@ -8,8 +8,7 @@
 //!
 //! The server puts each ring's tick and side in the bell's block entity data (`Ringing`).
 //!
-//! Left out: a haunted bell's soul pulse showing where mobs may spawn (`HauntedBellPulser`,
-//! `SoulPulseEffect`) and its soul particles and sounds after a ring (`effectTicks`).
+//! A rung haunted bell's soul pulse and souls are `souls`'.
 
 use super::super::server::ServerLevel;
 use super::super::states;
@@ -142,6 +141,7 @@ fn ring(lv: &mut ServerLevel<'_>, pos: [i32; 3], side: Dir) -> bool {
     )]);
     let _ = entity.merge_data(&mut *lv.host, data);
     if haunted {
+        super::souls::rung(lv.dim, pos);
         lv.block_sound("create:haunted_bell_use", pos, 4.0, 1.0);
     } else {
         lv.block_sound("create:peculiar_bell_use", pos, 1.0, 1.0);
@@ -166,7 +166,13 @@ fn clicked(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<Interact
     if !can {
         return None;
     }
-    ring(&mut lv, click.pos, side);
+    // `HauntedBellBlock.ring`: the player who rang a haunted bell.
+    if ring(&mut lv, click.pos, side)
+        && lv.block_name(click.pos).as_deref() == Some("create:haunted_bell")
+        && let Some(player) = lv.host.player(click.player)
+    {
+        super::super::advancements::award(lv.host, player, "haunted_bell");
+    }
     Some(InteractionResult::Success)
 }
 

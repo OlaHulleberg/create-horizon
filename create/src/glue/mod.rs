@@ -1,6 +1,7 @@
 //! The game glue: Create's engine driven through the mod API. Each subsystem is one module;
 //! `lib.rs` hands every hook to all of them through `SUBSYSTEMS`.
 
+pub(crate) mod advancements;
 pub mod blocks;
 pub mod contraptions;
 pub mod copycat;

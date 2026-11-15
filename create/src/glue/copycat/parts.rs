@@ -63,34 +63,9 @@ fn helper(
     state: BlockState,
     shape: Shape,
 ) -> Option<InteractionResult> {
-    let pos = click.pos;
-    let hit = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]) - 0.5);
-    let step_axis = |f: Dir| match f {
-        Dir::North | Dir::South => create_engine::kinetics::Axis::X,
-        _ => create_engine::kinetics::Axis::Z,
-    };
-    let at = match shape {
-        Shape::Panel(facing) => {
-            let at = create_engine::place::ordered_by_distance(hit, |d| {
-                d.axis() != facing.axis() && lv.free(add(pos, d))
-            })
-            .first()
-            .map(|d| add(pos, *d));
-            let Some(at) = at else {
-                return Some(InteractionResult::Success);
-            };
-            at
-        }
-        Shape::Step { facing, .. } => {
-            let axis = step_axis(facing);
-            let pole = |p: [i32; 3]| {
-                lv.block_state(p).is_some_and(|s| {
-                    matches!(shape_of(&*lv.host, s), Some(Shape::Step { facing: f, .. })
-                        if step_axis(f) == axis)
-                })
-            };
-            create_engine::place::pole_helper(pos, axis, hit, pole, |p| lv.free(p))?
-        }
+    let Some(at) = target(lv, click.pos, click.hit.point, shape) else {
+        // A panel takes the click with no place; a step lets it go on.
+        return matches!(shape, Shape::Panel(_)).then_some(InteractionResult::Success);
     };
     let water = lv
         .block_state(at)
@@ -114,6 +89,50 @@ fn helper(
     lv.place_sound(at);
     use_one(&mut *lv.host, player, click.hand, stack);
     Some(InteractionResult::Success)
+}
+
+/// The copycat helpers' `getOffset`: where a copycat item clicked at `point` on the copycat at
+/// `pos` (`shape`) goes.
+fn target(lv: &ServerLevel<'_>, pos: [i32; 3], point: [f64; 3], shape: Shape) -> Option<[i32; 3]> {
+    let hit = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]) - 0.5);
+    let step_axis = |f: Dir| match f {
+        Dir::North | Dir::South => create_engine::kinetics::Axis::X,
+        _ => create_engine::kinetics::Axis::Z,
+    };
+    match shape {
+        Shape::Panel(facing) => create_engine::place::ordered_by_distance(hit, |d| {
+            d.axis() != facing.axis() && lv.free(add(pos, d))
+        })
+        .first()
+        .map(|d| add(pos, *d)),
+        Shape::Step { facing, .. } => {
+            let axis = step_axis(facing);
+            let pole = |p: [i32; 3]| {
+                lv.block_state(p).is_some_and(|s| {
+                    matches!(shape_of(&*lv.host, s), Some(Shape::Step { facing: f, .. })
+                        if step_axis(f) == axis)
+                })
+            };
+            create_engine::place::pole_helper(pos, axis, hit, pole, |p| lv.free(p))
+        }
+    }
+}
+
+/// The copycat helpers' target for the indicator: a panel item on a panel, a step on a step.
+pub(crate) fn helper_target(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    point: [f64; 3],
+    item: &str,
+) -> Option<[i32; 3]> {
+    let shape = shape_of(&*lv.host, lv.block_state(pos)?)?;
+    let own = match shape {
+        Shape::Panel(_) => "create:copycat_panel",
+        Shape::Step { .. } => "create:copycat_step",
+    };
+    (item == own)
+        .then(|| target(lv, pos, point, shape))
+        .flatten()
 }
 
 fn add(p: [i32; 3], d: Dir) -> [i32; 3] {

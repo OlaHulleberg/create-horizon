@@ -5,7 +5,8 @@
 //! knockback and its wear on any damage its holder deals, paid with backtank air when there is
 //! some. The grip's entity reach is the game's entity interaction range lent the distance
 //! Create picks to (the block reach, half a block less out of creative), so an entity nearer
-//! than a block behind it is picked, where Create picks entities only past a missed block.
+//! than a block behind it is picked, where Create picks entities only past a missed block (no
+//! client pick hook: `HORIZON_API.md`, Client).
 //! A whole netherite diving set makes its wearer immune to fire (`NetheriteDivingHandler`), and a
 //! diving helmet sees further under water, the netherite one in lava (`getFogDensity`). The
 //! extendo grip is drawn by a special item model (`GripModel`) at Create's resting pose: its cog
@@ -807,6 +808,13 @@ fn extendo_reach(host: &mut dyn ServerHost, player: PlayerRef) {
             continue;
         }
         if on {
+            // `AllAdvancements.EXTENDO_GRIP` / `EXTENDO_GRIP_DUAL` as the grip is taken up.
+            let name = if modifier.0 == SINGLE_RANGE.0 {
+                "extendo_grip"
+            } else {
+                "extendo_grip_dual"
+            };
+            super::advancements::award(host, player, name);
             let m = AttributeModifier::new(id, modifier.1, AttributeOperation::AddValue);
             living.add_attribute_modifier(host, BLOCK_RANGE, m, ModifierLifetime::Transient);
         } else {

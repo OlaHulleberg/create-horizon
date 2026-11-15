@@ -1946,12 +1946,7 @@ fn place_board(
     if player.may_build(&*lv.host) != Some(true) {
         return InteractionResult::Pass;
     }
-    let hit = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]) - 0.5);
-    let free = create_engine::place::ordered_by_distance(hit, |d| d.axis() != facing.axis())
-        .into_iter()
-        .map(|d| super::redstone::offset(pos, d))
-        .find(|p| lv.free(*p));
-    let Some(at) = free else {
+    let Some(at) = board_target(lv, pos, click.hit.point, facing) else {
         return InteractionResult::Pass;
     };
     let water = lv
@@ -1979,6 +1974,35 @@ fn place_board(
         let _ = living.set_hand_item(&mut *lv.host, click.hand, stack.clone().shrink(1));
     }
     InteractionResult::Success
+}
+
+/// `FlapDisplayBlock.PlacementHelper.getOffset`: the free side nearest the hit `point` of the
+/// board at `pos` facing `facing`, across its facing.
+fn board_target(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    point: [f64; 3],
+    facing: Dir,
+) -> Option<[i32; 3]> {
+    let hit = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]) - 0.5);
+    create_engine::place::ordered_by_distance(hit, |d| d.axis() != facing.axis())
+        .into_iter()
+        .map(|d| super::redstone::offset(pos, d))
+        .find(|p| lv.free(*p))
+}
+
+/// The display board helper's target for the indicator: a display board item on a board.
+pub(crate) fn helper_target(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    point: [f64; 3],
+    item: &str,
+) -> Option<[i32; 3]> {
+    if item != "create:display_board" {
+        return None;
+    }
+    let facing = board_at(lv, pos)?.facing;
+    board_target(lv, pos, point, facing)
 }
 
 /// A change to the board controller at `pos`, shown to its clients.

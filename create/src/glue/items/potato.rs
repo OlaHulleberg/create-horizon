@@ -17,9 +17,15 @@
 //!   is saved comes back as a plain snowball showing its item.
 //! - `CureZombieVillager`'s cure (the zombie villager's `mobInteract` with a golden apple from a
 //!   fake player): a golden apple gives its food effects to anything it hits.
-//! - A powered wither's immunity, knockback resistance, the main arm (the barrel is on the right
-//!   of a right-handed player), the swap between two cannons (`SHAPER_SWAP`), the recoil and
-//!   barrel particles (`PotatoCannonPacket`), the air-flow trail and the advancements.
+//! - The cannon's recoil in the hand (`PotatoCannonRenderHandler`: a special item model is
+//!   asked once per stack, `HORIZON_API.md`) and the `potato_cannon_collide` advancement (shots of two types meeting), not wired. A monster killed or another player hit gives `potato_cannon`.
+//!
+//! A powered wither (at half health or less) takes no hit, knockback is lessened by the
+//! target's resistance, the barrel is on the side of the hand that holds the cannon (the
+//! player's main arm, from their client's information), two cannons take turns
+//! (`SHAPER_SWAP`), and a shot throws two crumbs of its ammunition and two puffs of air
+//! (`create:air`) from the barrel. Create's air-flow trail (`getTrailParticle`) spawns with no
+//! motion and so removes itself at once: nothing to draw.
 //!
 //! The snowball is summoned with its item (`/summon`'s compound): a projectile spawned from a
 //! rotation carries its own type's item. During its hit on an entity the snowball can't be
@@ -29,7 +35,7 @@
 
 use super::super::server::ServerLevel;
 use super::super::subsystem::Subsystem;
-use super::{creative, held, set_held};
+use super::{creative, custom, held, set_custom, set_held};
 use create_engine::potato::{self, Type};
 use mod_api::{
     ActiveEffect, ClientHost, Compound, EntityRef, EquipmentSlot, Flow, Hand, Host, HostSide,
@@ -54,6 +60,9 @@ const SNOWBALL_GRAVITY: f64 = 0.03;
 const SNOWBALL_DRAG: f64 = 0.99;
 
 static ITEM_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
+static AIR_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
+/// `AllDataComponents.SHAPER_SWAP`: the main hand's cannon lets the off hand's fire next.
+const SWAP: &str = "create:shaper_swap";
 
 /// A shot in flight, by the snowball's entity id.
 struct Shot {
@@ -73,6 +82,86 @@ struct Shot {
 
 thread_local! {
     static SHOTS: RefCell<HashMap<u32, Shot>> = RefCell::new(HashMap::new());
+    /// The players whose main arm is the left (`Player.getMainArm`, from their client's
+    /// information).
+    static LEFT_HANDED: RefCell<std::collections::HashSet<u128>> =
+        RefCell::new(std::collections::HashSet::new());
+}
+
+/// `ShootableGadgetItemMethods.shouldSwap`: with a cannon in each hand they take turns; true
+/// when this hand's cannon passes the shot to the other.
+fn should_swap(host: &mut dyn ServerHost, player: PlayerRef, hand: Hand) -> bool {
+    let main = hand == Hand::Main;
+    let other = if main { Hand::Off } else { Hand::Main };
+    let Some(mut stack) = held(&*host, player, hand) else {
+        return false;
+    };
+    let gun_in_other_hand =
+        held(&*host, player, other).is_some_and(|s| s.item().id(&*host) == CANNON);
+    let swap = matches!(custom(&stack).get(&SWAP.into()), Some(Tag::Byte(b)) if *b != 0);
+    if main && swap && gun_in_other_hand {
+        return true;
+    }
+    if main && !swap && gun_in_other_hand {
+        set_custom(&mut stack, &[(SWAP, Some(Tag::Byte(1)))]);
+        set_held(host, player, hand, Some(stack));
+    } else if !main && swap {
+        set_custom(&mut stack, &[(SWAP, None)]);
+        set_held(host, player, hand, Some(stack));
+    }
+    if !main
+        && gun_in_other_hand
+        && let Some(mut m) = held(&*host, player, Hand::Main)
+        && custom(&m).contains_key(&SWAP.into())
+    {
+        set_custom(&mut m, &[(SWAP, None)]);
+        set_held(host, player, Hand::Main, Some(m));
+    }
+    false
+}
+
+/// The air particle (`AirParticle` with `AirParticleData(1, 1/4)`): from where it spawns to its
+/// velocity's end, twirling, 4 ticks a block (at most 60), a quarter visible.
+const AIR: &str = "create:air";
+
+struct Air;
+
+impl mod_api::ParticleProvider for Air {
+    fn tick(&self, p: &mut mod_api::ModParticle) {
+        let velocity = p.velocity;
+        let h = |salt: u64| {
+            let mut x = salt.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            for v in velocity {
+                x = (x ^ v.to_bits()).wrapping_mul(0x0100_0000_01B3);
+            }
+            ((x >> 11) % 10_000) as f64 / 10_000.0
+        };
+        if p.age <= 1 {
+            p.state[..3].copy_from_slice(&p.previous);
+            let len = p.velocity.iter().map(|v| v * v).sum::<f64>().sqrt();
+            p.lifetime = ((len / 0.25) as i32).min(60);
+            p.size *= 0.75;
+            p.rgba[3] = 0.25;
+            if len == 0.0 {
+                p.removed = true;
+                return;
+            }
+        }
+        let life = f64::from(p.lifetime.max(1));
+        let progress = (f64::from(p.age) / life).powf(1.0);
+        let radius = h(1) / 6.0;
+        let angle = ((progress * 2.0 * 360.0 + h(2) * 360.0) % 360.0).to_radians();
+        let (sin, cos) = angle.sin_cos();
+        // `VecHelper.rotate((0, r, 0), angle, X or Z)`.
+        let twirl = if h(3) < 0.5 {
+            [0.0, radius * cos, radius * sin]
+        } else {
+            [-radius * sin, radius * cos, 0.0]
+        };
+        p.position = std::array::from_fn(|i| p.state[i] + p.velocity[i] * progress + twirl[i]);
+        // `setSpriteFromAge` over its 8 sprites.
+        p.frame = (p.age * 7 / p.lifetime.max(1)).clamp(0, 7) as u32;
+    }
 }
 
 pub struct PotatoCannon;
@@ -80,12 +169,29 @@ pub struct PotatoCannon;
 impl Subsystem for PotatoCannon {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let _ = ITEM_PARTICLE.set(r.particle_key("minecraft:item"));
+        let _ = AIR_PARTICLE.set(r.particle_key(AIR));
         let key = r.item_key(CANNON);
         r.item_part(key, CannonPart);
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         fly(lv);
+    }
+
+    /// Each player's main arm, for the barrel's side.
+    fn client_info(&self, player: u128, info: &mod_api::ClientInfo) {
+        let left = matches!(info.main_hand, mod_api::MainHand::Left);
+        LEFT_HANDED.with_borrow_mut(|l| {
+            if left {
+                l.insert(player);
+            } else {
+                l.remove(&player);
+            }
+        });
+    }
+
+    fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
+        providers.register(AIR.to_owned(), std::sync::Arc::new(Air));
     }
 
     fn hears_projectile_impacts(&self) -> bool {
@@ -244,6 +350,9 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
     let Some(player) = host.player(event.player) else {
         return false;
     };
+    if should_swap(host, player, event.hand) {
+        return false;
+    }
     let Some((source, ammo_stack, t)) = ammo(&*host, player) else {
         return false;
     };
@@ -260,8 +369,10 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
         return false;
     };
     let main = event.hand == Hand::Main;
-    let barrel = potato::barrel(eye, yaw, pitch, main, [0.75, -0.15, 1.5]);
-    let side = potato::barrel(eye, yaw, pitch, main, [-0.05, 0.0, 0.0]);
+    // `mainHand == (getMainArm() == RIGHT)`: the barrel on the side of the hand holding it.
+    let right_side = main != LEFT_HANDED.with_borrow(|l| l.contains(&player.uuid()));
+    let barrel = potato::barrel(eye, yaw, pitch, right_side, [0.75, -0.15, 1.5]);
+    let side = potato::barrel(eye, yaw, pitch, right_side, [-0.05, 0.0, 0.0]);
     let correction = [side[0] - eye[0], side[1] - eye[1], side[2] - eye[2]];
     let motion = potato::motion(look, correction, t);
     let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -347,6 +458,32 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
     let cooldown = potato::cooldown(t, gun_in_other_hand);
     if cooldown > 0 {
         player.set_item_cooldown(lv.host, CANNON, cooldown);
+    }
+    // `PotatoCannonPacket` (`beforeShoot`): two crumbs of the ammunition and two puffs of air
+    // from the barrel along the look.
+    let look_n = {
+        let l = (look[0] * look[0] + look[1] * look[1] + look[2] * look[2])
+            .sqrt()
+            .max(1e-9);
+        look.map(|v| v / l)
+    };
+    for _ in 0..2 {
+        let r: [f32; 6] = std::array::from_fn(|_| random(&mut lv));
+        let off = |i: usize, radius: f64| (f64::from(r[i]) - 0.5) * 2.0 * radius;
+        if let Some(key) = ITEM_PARTICLE.get() {
+            let v = [0, 1, 2].map(|i| look_n[i] * 0.1 + off(i, 0.025));
+            let options = mod_api::ParticleOptions::item_stack(*key, shot_stack.clone());
+            let _ = lv
+                .level
+                .send_particles(&mut *lv.host, &options, None, barrel, v, 1.0, 0);
+        }
+        if let Some(key) = AIR_PARTICLE.get() {
+            let v = [0, 1, 2].map(|i| look_n[i] * 2.0 + off(i + 3, 0.5));
+            let options = mod_api::ParticleOptions::simple(*key);
+            let _ = lv
+                .level
+                .send_particles(&mut *lv.host, &options, None, barrel, v, 1.0, 0);
+        }
     }
     // `PotatoCannonPacket`: `FWOOMP` at the barrel for everyone.
     lv.level.play_sound(
@@ -484,6 +621,15 @@ fn impact(
         return Some(shot);
     }
     pop(&mut lv, &shot, event.at);
+    // A powered wither (at half its health or less) takes nothing.
+    if event.entity_kind == "minecraft:wither"
+        && let Some(l) = lv.host.living(target)
+        && let (Some(h), Some(max)) = (l.health(&*lv.host), l.max_health(&*lv.host))
+        && h <= max / 2.0
+    {
+        discard(&mut lv, projectile);
+        return None;
+    }
     // `preEntityHit`: set on fire.
     if let Some(ticks) = action_arg(shot.kind, "set_on_fire").and_then(|a| a.parse().ok()) {
         target.set_remaining_fire_ticks(lv.host, ticks);
@@ -509,8 +655,31 @@ fn impact(
     if let Some(ticks) = invulnerable {
         target.set_invulnerable_time(lv.host, ticks);
     }
+    // `AllAdvancements.POTATO_CANNON`: a monster killed, or another player hit.
+    let owner = shot.owner.and_then(|o| {
+        lv.host
+            .players()
+            .server_players()
+            .into_iter()
+            .find(|p| p.entity() == o)
+    });
+    if let Some(owner) = owner {
+        let monster = !alive(&*lv.host, target)
+            && target.classification(&*lv.host) == Some(mod_api::MobCategory::Monster);
+        let other_player = event.entity_kind == "minecraft:player" && Some(target) != shot.owner;
+        if monster || other_player {
+            super::super::advancements::award(lv.host, owner, "potato_cannon");
+        }
+    }
     let velocity = target.velocity(&*lv.host).unwrap_or([0.0; 3]);
     let ground = target.on_ground(&*lv.host) == Some(true);
+    // `LivingEntity.knockback`: less the target's resistance.
+    let resistance = lv
+        .host
+        .living(target)
+        .and_then(|l| l.attribute_value(&*lv.host, "minecraft:knockback_resistance"))
+        .unwrap_or(0.0) as f32;
+    let knockback = knockback * (1.0 - resistance);
     if let Some(v) = potato::knockback(velocity, shot.motion, knockback, ground) {
         target.set_velocity(lv.host, v);
     }

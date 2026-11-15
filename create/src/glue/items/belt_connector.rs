@@ -1,8 +1,8 @@
 //! `BeltConnectorItem.useOn`: sneaking forgets the first shaft; a click on a shaft remembers
 //! it, a click on a second shaft that connects lays the belt (one belt connector used up outside
 //! creative) and forgets it. Refusals say nothing, as in Create (its client draws the red
-//! particles of `BeltConnectorHandler`). Not here: the 5-tick item cooldown and the `belt`
-//! advancement, as in the legacy glue.
+//! particles of `BeltConnectorHandler`). Remembering a shaft, or laying a belt with connectors
+//! left, starts the item's 5-tick cooldown; a belt laid gives the `belt` advancement.
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
@@ -123,15 +123,20 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         }
         bc::Click::Remember => {
             set_first(&mut lv, Some(pos));
+            player.set_item_cooldown(lv.host, "create:belt_connector", 5);
             InteractionResult::Success
         }
         bc::Click::Refused => InteractionResult::Success,
         bc::Click::Connect(start) => {
             create_belts(&mut lv, start, pos);
+            super::super::advancements::award(lv.host, player, "belt");
             if !creative(&*lv.host, player) {
                 super::shrink_held(lv.host, player, hand, 1);
             }
             set_first(&mut lv, None);
+            if held(&*lv.host, player, hand).is_some() {
+                player.set_item_cooldown(lv.host, "create:belt_connector", 5);
+            }
             InteractionResult::Success
         }
     };

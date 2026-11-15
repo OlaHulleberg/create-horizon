@@ -559,9 +559,10 @@ const NOTICES: &[&str] = &["LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"];
 /// the player's jar, and only this behaviour, which is the port's own, is added to them here.
 fn particle_behaviour(path: &str) -> Option<Value> {
     match path {
-        "assets/create/particles/rotation_indicator.json" => {
-            Some(json!({ "velocity": [0.0, 0.0, 0.0] }))
-        }
+        "assets/create/particles/rotation_indicator.json"
+        | "assets/create/particles/soul.json"
+        | "assets/create/particles/soul_base.json"
+        | "assets/create/particles/air.json" => Some(json!({ "velocity": [0.0, 0.0, 0.0] })),
         "assets/create/particles/steam_jet.json" => Some(json!({
             "velocity": [0.0, 0.0, 0.0],
             "animation": "age",
@@ -802,6 +803,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
@@ -1014,8 +1016,8 @@ mod tests {
 }
 
 /// What the repository may hold under `create/assets`: the generator's own block states and
-/// block models (which name Create's models and textures, never copy them) and Catnip's MIT
-/// placement indicator. Everything under Create's `src/main/resources/assets/` is All Rights
+/// block models (which name Create's models and textures, never copy them), Catnip's MIT
+/// placement indicator and the port's own render pipeline shaders. Everything under Create's `src/main/resources/assets/` is All Rights
 /// Reserved: textures, models, particles, sounds and translations of Create's come from the
 /// player's jar in `prepare`, never from a committed file.
 #[cfg(test)]
@@ -1048,7 +1050,8 @@ mod committed_assets {
             .filter(|f| {
                 !(f.starts_with("create/blockstates/") && f.ends_with(".json")
                     || f.starts_with("create/models/block/") && f.ends_with(".json")
-                    || *f == "create/textures/gui/placement_indicator.png")
+                    || *f == "create/textures/gui/placement_indicator.png"
+                    || f.starts_with("create/shaders/pipeline/") && f.ends_with(".wgsl"))
             })
             .collect();
         assert!(
