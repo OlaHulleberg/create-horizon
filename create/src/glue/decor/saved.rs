@@ -1,6 +1,6 @@
 //! A column's decorative state, saved as `create_decor`: its brackets (seven ints each: x, y, z,
 //! wooden, facing, axis_along_first, type), placards' items and clipboards (`Pos` and `Item`
-//! compounds), crates' supplies and hatches' filters (`Pos` and the item's id).
+//! compounds), crates' supplies (`Pos` and the item's id) and hatches' filters (`Pos` and the filter's stack).
 
 use super::super::server::ServerLevel;
 use super::{DECOR, KEY, with};
@@ -74,7 +74,17 @@ pub(super) fn save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
             ("placards", stacks(&d.placards)),
             ("clipboards", stacks(&d.clipboards)),
             ("supplies", names(&d.supplies)),
-            ("hatches", names(&d.hatch_filters)),
+            ("hatches", {
+                // A hatch's filter: its stack's NBT (an item id when saved before filter items).
+                let mut v: Vec<_> = d.hatch_filters.iter().filter(|(p, _)| inside(p)).collect();
+                v.sort_by_key(|(p, _)| **p);
+                v.into_iter()
+                    .filter_map(|(p, f)| {
+                        let item = crate::glue::items::filters::filter_to_nbt(host, f)?;
+                        Some(compound([("Pos", pos_tag(*p)), ("Item", item)]))
+                    })
+                    .collect()
+            }),
         ])
     });
     match lists {
@@ -138,6 +148,15 @@ pub(super) fn load(lv: &mut ServerLevel<'_>, data: &Compound) {
             }
         }
     }
+    let hatches: Vec<_> = list(data, "hatches")
+        .into_iter()
+        .filter_map(|t| {
+            let Tag::Compound(c) = t else { return None };
+            let f =
+                crate::glue::items::filters::filter_from_nbt(&*lv.host, c.get(&"Item".into())?)?;
+            Some((pos_of(&c)?, f))
+        })
+        .collect();
     with(lv.dim, |d| {
         for (p, b) in placed {
             d.brackets.insert(p, b);
@@ -151,20 +170,18 @@ pub(super) fn load(lv: &mut ServerLevel<'_>, data: &Compound) {
                 d.clipboards.insert(p, s);
             }
         }
-        for (key, supplies) in [("supplies", true), ("hatches", false)] {
-            for t in list(data, key) {
-                let Tag::Compound(c) = t else { continue };
-                let item = match c.get(&"Item".into()) {
-                    Some(Tag::String(s)) => s.to_string_lossy(),
-                    _ => continue,
-                };
-                let Some(p) = pos_of(&c) else { continue };
-                if supplies {
-                    d.supplies.insert(p, item);
-                } else {
-                    d.hatch_filters.insert(p, item);
-                }
-            }
+        for t in list(data, "supplies") {
+            let Tag::Compound(c) = t else { continue };
+            let item = match c.get(&"Item".into()) {
+                Some(Tag::String(s)) => s.to_string_lossy(),
+                _ => continue,
+            };
+            let Some(p) = pos_of(&c) else { continue };
+            d.supplies.insert(p, item);
+        }
+        for (p, f) in hatches {
+            d.hatch_filters.insert(p, f);
+            d.shown.push(p);
         }
     });
 }

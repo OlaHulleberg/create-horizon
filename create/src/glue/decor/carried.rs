@@ -59,8 +59,8 @@ pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: 
     if let Some(s) = supply {
         out.insert(SUPPLY.into(), Tag::String(s.as_str().into()));
     }
-    if let Some(s) = hatch {
-        out.insert(HATCH.into(), Tag::String(s.as_str().into()));
+    if let Some(t) = hatch.and_then(|f| crate::glue::items::filters::filter_to_nbt(host, &f)) {
+        out.insert(HATCH.into(), t);
     }
 }
 
@@ -91,7 +91,10 @@ pub(super) fn carry_in(
         _ => None,
     };
     let (placard, clipboard) = (stack(PLACARD), stack(CLIPBOARD));
-    let (supply, hatch) = (text(SUPPLY), text(HATCH));
+    let supply = text(SUPPLY);
+    let hatch = data
+        .get(&HATCH.into())
+        .and_then(|t| crate::glue::items::filters::filter_from_nbt(host, t));
     with(lv.dim, |d| {
         if let Some(b) = bracket {
             d.brackets.insert(pos, b);
@@ -109,6 +112,7 @@ pub(super) fn carry_in(
         }
         if let Some(s) = hatch.filter(|_| block == Block::ItemHatch) {
             d.hatch_filters.insert(pos, s);
+            d.shown.push(pos);
         }
     });
 }

@@ -89,7 +89,7 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
 }
 
 /// What the block entity at `pos` shows of ours: a shaft's, cog's or pipe's bracket, a placard's
-/// item. Its clients see it with the block entity's data.
+/// item, a hatch's filter. Its clients see it with the block entity's data.
 fn show(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some((block, _)) = block_of(lv.block(pos)) else {
         return;
@@ -101,6 +101,13 @@ fn show(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         let b = with(lv.dim, |d| d.brackets.get(&pos).copied());
         let text = brackets::shown_text(b);
         Compound::from([(super::BRACKET.into(), Tag::String(text.as_str().into()))])
+    } else if block == Block::ItemHatch {
+        let filter = with(lv.dim, |d| d.hatch_filters.get(&pos).cloned());
+        let nbt = filter
+            .and_then(|f| crate::glue::items::filters::filter_stack(&*lv.host, &f))
+            .and_then(|s| s.to_nbt(&*lv.host))
+            .unwrap_or_default();
+        Compound::from([(super::hatch::FILTER.into(), Tag::Compound(nbt))])
     } else if block == Block::Placard {
         let item = with(lv.dim, |d| d.placards.get(&pos).cloned());
         let nbt = item.and_then(|s| s.to_nbt(&*lv.host)).unwrap_or_default();
@@ -165,18 +172,21 @@ fn changed(lv: &mut ServerLevel<'_>, pos: [i32; 3], old: u32, new: u32) {
                 persist::mark_pos_unsaved(dim, pos);
             }
         }
-        // A crate's supply, a hatch's filter.
-        Some(b @ (Block::CreativeCrate | Block::ItemHatch)) => {
-            let kept = with(dim, |d| {
-                let map = if b == Block::CreativeCrate {
-                    &mut d.supplies
-                } else {
-                    &mut d.hatch_filters
-                };
-                map.remove(&pos).is_some()
-            });
-            if kept {
+        // A crate's supply.
+        Some(Block::CreativeCrate) => {
+            if with(dim, |d| d.supplies.remove(&pos).is_some()) {
                 persist::mark_pos_unsaved(dim, pos);
+            }
+        }
+        // A hatch's filter: a filter item drops (`FilteringBehaviour.destroy`).
+        Some(Block::ItemHatch) => {
+            if let Some(f) = with(dim, |d| d.hatch_filters.remove(&pos)) {
+                persist::mark_pos_unsaved(dim, pos);
+                if f.is_filter_item()
+                    && let Some(s) = crate::glue::items::filters::filter_stack(&*lv.host, &f)
+                {
+                    lv.drop_at(pos, s);
+                }
             }
         }
         _ => {}
