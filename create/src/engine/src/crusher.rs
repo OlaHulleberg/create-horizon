@@ -120,12 +120,14 @@ pub fn tick_inventory(c: &mut Crusher, crushing_speed: f32) -> Step {
 }
 
 /// `applyRecipe`: each item of the input rolls the recipe's results, merged into stacks of at most
-/// `max`; no recipe and the input is gone.
+/// `max`, then the input's crafting remainder (`remainder`, once); no recipe and the input is
+/// gone.
 pub fn apply(
     c: &mut Crusher,
     recipe: Option<&crate::processing::Recipe>,
     max: impl Fn(&str) -> u8,
     rng: &mut Rng,
+    remainder: Option<&str>,
 ) {
     let Some((_, count)) = c.slots.first().cloned() else {
         return;
@@ -133,19 +135,12 @@ pub fn apply(
     let mut list: Vec<(String, u8)> = Vec::new();
     if let Some(r) = recipe {
         for _ in 0..count {
-            for (item, mut n) in roll(r, rng) {
-                // ItemHelper.addToList: onto stacks of the same item first.
-                for (have, m) in list.iter_mut() {
-                    if n > 0 && *have == item {
-                        let moved = n.min(max(have).saturating_sub(*m));
-                        *m += moved;
-                        n -= moved;
-                    }
-                }
-                if n > 0 {
-                    list.push((item, n));
-                }
+            for (item, n) in roll(r, rng) {
+                crate::processing::add_to_list(&mut list, item, n, &max);
             }
+        }
+        if let Some(r) = remainder {
+            crate::processing::add_to_list(&mut list, r.to_owned(), 1, &max);
         }
     }
     list.truncate(31);
@@ -297,7 +292,7 @@ mod tests {
             ticks += 1;
         }
         assert_eq!(ticks, 44, "250 - 45 × 5.12 < 20");
-        apply(&mut c, Some(&ore), |_| 64, &mut Rng::new(1));
+        apply(&mut c, Some(&ore), |_| 64, &mut Rng::new(1), None);
         assert_eq!(c.slots, vec![("create:crushed_raw_iron".to_owned(), 2)]);
         while tick_inventory(&mut c, crushing_speed(64.0)) != Step::Output {}
         // A single item divides by log2(1) = 0: the fastest, 20 a tick.

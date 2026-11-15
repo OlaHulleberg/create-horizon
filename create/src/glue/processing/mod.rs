@@ -36,9 +36,6 @@
 //!   of 1/64): the game's fake player attacks with its own, uncharged, attack strength, so a
 //!   punch deals about a fifth of its damage.
 //!
-//! Left out otherwise: a deployer's `overflowItems` (what its filter turns away, a crafting
-//! remainder) drop at the deployer instead of waiting in it for a funnel to take.
-//!
 //! A blaze burner carried by a moving structure is drawn by the structure's anchor
 //! (`burner_draw::draw_moving`): its blaze faces its front rather than the nearest player.
 
@@ -52,6 +49,7 @@ mod crafter;
 mod crusher;
 mod deployer;
 mod fan;
+pub(crate) use fan::flow_limit_from;
 mod filtering;
 pub(crate) use filtering::filter_at as machine_filter;
 mod millstone;
@@ -599,6 +597,7 @@ pub(crate) fn belt_input_sim(
 ) -> Option<u8> {
     let (block, info) = lv.info(next)?;
     if simulate {
+        belt_input_side(lv, next)?;
         return Some(belt_input_room(lv, next, block, info, side, item));
     }
     let count = item.count;

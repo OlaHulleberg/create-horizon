@@ -85,23 +85,24 @@ impl Saw {
 
     /// `applyRecipe` with the recipe in turn: each item rolls its results, merged into stacks of
     /// at most `max`. No recipe: the input stays as it is.
-    pub fn apply(&mut self, recipe: Option<&Recipe>, max: impl Fn(&str) -> u8, rng: &mut Rng) {
+    /// `remainder`: the input's crafting remainder (a bucket's), given back with each roll.
+    pub fn apply(
+        &mut self,
+        recipe: Option<&Recipe>,
+        max: impl Fn(&str) -> u8,
+        rng: &mut Rng,
+        remainder: Option<&str>,
+    ) {
         let (Some(recipe), Some((_, count))) = (recipe, self.slots.first().cloned()) else {
             return;
         };
         let mut list: Vec<(String, u8)> = Vec::new();
         for _ in 0..count {
-            for (item, mut n) in roll(recipe, rng) {
-                for (have, m) in list.iter_mut() {
-                    if n > 0 && *have == item {
-                        let moved = n.min(max(have).saturating_sub(*m));
-                        *m += moved;
-                        n -= moved;
-                    }
-                }
-                if n > 0 {
-                    list.push((item, n));
-                }
+            for (item, n) in roll(recipe, rng) {
+                crate::processing::add_to_list(&mut list, item, n, &max);
+            }
+            if let Some(r) = remainder {
+                crate::processing::add_to_list(&mut list, r.to_owned(), 1, &max);
             }
         }
         list.truncate(9);
@@ -179,7 +180,7 @@ mod tests {
         }
         // 32 rpm: 1.33 a tick, 50 → under 5 after 34 ticks.
         assert_eq!(ticks, 33);
-        s.apply(Some(&log), |_| 64, &mut Rng::new(1));
+        s.apply(Some(&log), |_| 64, &mut Rng::new(1), None);
         assert_eq!(s.slots, vec![("minecraft:stripped_oak_log".to_owned(), 2)]);
         let mut out = 0;
         while s.tick(32.0) != Step::Out {
@@ -187,6 +188,19 @@ mod tests {
         }
         assert_eq!(out, 15);
         assert_eq!(movement(false, -8.0), [-1, 0, 0]);
+        // An input with a crafting remainder gives it back with each roll.
+        let mut s = Saw {
+            slots: vec![("minecraft:oak_log".into(), 2)],
+            ..Saw::default()
+        };
+        s.apply(Some(&log), |_| 64, &mut Rng::new(1), Some("minecraft:bucket"));
+        assert_eq!(
+            s.slots,
+            vec![
+                ("minecraft:stripped_oak_log".to_owned(), 2),
+                ("minecraft:bucket".to_owned(), 2)
+            ]
+        );
     }
 
     #[test]

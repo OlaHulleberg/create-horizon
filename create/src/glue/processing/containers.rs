@@ -123,6 +123,19 @@ fn containers() -> Vec<(Block, ModContainer)> {
             menu: None,
         },
     ));
+    // DeployerItemHandler's overflow (`overflowItems`): taken out by hoppers and funnels through
+    // any face; nothing goes in this way (the held item is the engine's).
+    let overflow: Vec<usize> = (0..super::deployer::OVERFLOW_SLOTS).collect();
+    out.push((
+        Block::Deployer,
+        ModContainer {
+            slots: super::deployer::OVERFLOW_SLOTS,
+            faces: every(&overflow),
+            inputs: vec![],
+            outputs: overflow.clone(),
+            menu: None,
+        },
+    ));
     // The basin's inventories: hoppers put into the nine inputs and take from the nine outputs.
     let all: Vec<usize> = (0..basin::SLOTS).collect();
     out.push((

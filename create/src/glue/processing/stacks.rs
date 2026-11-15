@@ -23,6 +23,12 @@ pub fn stack(host: &dyn Host, id: &str, count: u32) -> Option<ItemStack> {
     ItemStack::new(key(host, id)?, count)
 }
 
+/// `getCraftingRemainingItem` of item `id` (a bucket's for a water bucket), by its id.
+pub fn remainder(host: &dyn Host, id: &str) -> Option<String> {
+    let r = host.item_crafting_remainder(&stack(host, id, 1)?)?;
+    Some(self::id(host, &r))
+}
+
 /// An item's stack limit, 1 to 64 (`getMaxStackSize`; 64 for an unknown one).
 pub fn limit(host: &dyn Host, id: &str) -> u8 {
     key(host, id)
