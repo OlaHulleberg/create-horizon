@@ -561,9 +561,8 @@ fn particle_behaviour(path: &str) -> Option<Value> {
     match path {
         "assets/create/particles/rotation_indicator.json"
         | "assets/create/particles/soul.json"
-        | "assets/create/particles/soul_base.json" => {
-            Some(json!({ "velocity": [0.0, 0.0, 0.0] }))
-        }
+        | "assets/create/particles/soul_base.json"
+        | "assets/create/particles/air.json" => Some(json!({ "velocity": [0.0, 0.0, 0.0] })),
         "assets/create/particles/steam_jet.json" => Some(json!({
             "velocity": [0.0, 0.0, 0.0],
             "animation": "age",
@@ -804,6 +803,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]

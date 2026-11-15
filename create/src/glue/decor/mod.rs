@@ -23,15 +23,15 @@
 //! would place is left out for want of API (`HORIZON_API.md`, Client). A haunted bell's souls are
 //! `souls`'.
 //!
+//! Lightning clears Create's copper as vanilla's: the glue gives the server's data Create's
+//! chains as NeoForge's `neoforge:oxidizables` and `neoforge:waxables` block data maps
+//! (`data_pack_files`), which the game's own `clearCopperOnLightningStrike` reads.
+//!
 //! Left out, for want of API (each in `HORIZON_API.md`):
 //! - The weathering neighbours of Create's copper (`WeatheringCopper` and its age, legacy
 //!   `behaviours().data(state)`): no API says which blocks are weathering copper nor their age;
 //!   Create's own are known to the engine and vanilla's are read from their ids (`exposed_`,
 //!   `weathered_`, `oxidized_`, never `waxed_`). A state fact for it would make it exact.
-//! - Lightning clearing Create's copper (`LightningBolt.clearCopperOnLightningStrike`): the
-//!   `lightning_strike` hook names no level, and the game's own clearing steps copper by the
-//!   `neoforge:oxidizables` data map or `minecraft:` names. Create's `neoforge:oxidizables` and
-//!   `neoforge:waxables` maps in its data (the data generator's) would close it with no glue.
 //! - What follows a placement from an item (placards and clipboards turned, a clipboard's pages,
 //!   girders joining, a large water wheel's room, a peculiar bell) runs in the item's
 //!   `on_block_placed_by`, which names no level: a dispenser's placement, with no placer, is left
@@ -375,6 +375,19 @@ impl Subsystem for Decor {
         DECOR.with_borrow_mut(HashMap::clear);
         bells::forget();
         souls::forget();
+    }
+
+    /// Create's copper as NeoForge's block data maps (see the module's doc).
+    fn data_pack_files(&self, files: &mut Vec<(String, Vec<u8>)>) {
+        let (oxidizables, waxables) = create_engine::decor::copper_data_maps();
+        files.push((
+            "data_maps/neoforge:block/oxidizables".into(),
+            oxidizables.into_bytes(),
+        ));
+        files.push((
+            "data_maps/neoforge:block/waxables".into(),
+            waxables.into_bytes(),
+        ));
     }
 
     /// A held haunted bell's pulses (`HauntedBellPulser`).

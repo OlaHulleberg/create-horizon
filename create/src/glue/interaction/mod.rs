@@ -13,8 +13,8 @@
 //! - The goggles' tooltip is drawn as a plain box of fills and text: Create draws vanilla's
 //!   tooltip background (`RemovedGuiUtils.drawHoveringText`); `DrawContext::gui_tooltip` takes
 //!   one colour per line where Create's lines change colour along the way.
-//! - `ValueSettingsScreen`'s sprites (`AllGuiTextures.VALUE_SETTINGS_*`) are plain fills, as in
-//!   the legacy glue: the GUI sprites are the player's jar's, not the mod's assets.
+//! - An icon board's cursor shows the option's name below, not its icon (`AllIcons` tinted:
+//!   `DrawContext::sprite` takes a tint, but the port keeps no option's icon).
 
 mod board;
 mod commands;

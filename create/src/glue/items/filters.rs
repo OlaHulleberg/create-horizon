@@ -14,6 +14,11 @@
 //! The item tags `in_tag` offers for a reference item (`ItemStack.getTags`) are the tags it is in
 //! among those the server's data defines (`tags/item`, listed by a data reload listener).
 //!
+//! `fluid_container` and `has_fluid` know the buckets (the items the game gives a fluid
+//! handler), `has_color` dyes, (removed), fireworks and colour-named items, and
+//! `shulker_fill_level` a shulker box's `container`. Left out: `in_item_group`, as no API reads
+//! the creative tabs (`HORIZON_API.md`).
+//!
 //! `max_enchanted` reads each enchantment's maximum level from the server's data
 //! (`enchantment/*.json`'s `max_level`, listed by a data reload listener), as the host answers
 //! `Enchantment.getMaxLevel` on the client only.
@@ -190,6 +195,144 @@ pub(crate) fn component(host: &dyn Host, stack: &ItemStack, id: &str) -> Option<
 }
 
 /// The enchantment ids of an `ItemEnchantments` component (`{levels: {..}}` or the map).
+/// `FLUID_CONTAINER`: the item has a fluid handler (`Capabilities.FluidHandler.ITEM`): the
+/// buckets, empty or of a fluid (vanilla's, milk and Create's honey and chocolate).
+fn fluid_container(id: &str) -> bool {
+    id == "minecraft:bucket" || create_engine::tank::Fluid::of_bucket(id).is_some()
+}
+
+/// `FluidContentsAttribute.extractFluids`: the fluid an item's handler holds, by id.
+fn held_fluid(id: &str) -> Option<String> {
+    create_engine::tank::Fluid::of_bucket(id).map(|f| f.id().to_owned())
+}
+
+/// `DyeColor.byFireworkColor`'s colours.
+const FIREWORK_COLORS: [(&str, i32); 16] = [
+    ("white", 0xF0F0F0),
+    ("orange", 0xEB8844),
+    ("magenta", 0xC354CD),
+    ("light_blue", 0x6689D3),
+    ("yellow", 0xDECF2A),
+    ("lime", 0x41CD34),
+    ("pink", 0xD88198),
+    ("gray", 0x434343),
+    ("light_gray", 0xABABAB),
+    ("cyan", 0x287697),
+    ("purple", 0x7B2FBE),
+    ("blue", 0x253192),
+    ("brown", 0x51301A),
+    ("green", 0x3B511A),
+    ("red", 0xB3312C),
+    ("black", 0x1E1B1B),
+];
+
+/// `ColorAttribute.findMatchingDyeColors`: a dye's colour (`DyeColor.getColor`: a dye item; (removed)); else a firework's explosions' colours and fade colours, and the
+/// colours the item's id starts with (`red_wool`).
+fn colors_of(host: &dyn Host, stack: &ItemStack, id: &str) -> Vec<String> {
+    let path = id.split_once(':').map_or(id, |s| s.1);
+    for (c, _) in FIREWORK_COLORS {
+        let dye = id == format!("minecraft:{c}_dye");
+        let tagged = || {
+            Identifier::parse(&format!("(removed)"))
+                .ok()
+                .and_then(|t| host.tags().key(&t))
+                .and_then(|k| host.tags().is_in_tag(stack.item(), k))
+                .unwrap_or(false)
+        };
+        if dye || tagged() {
+            return vec![c.to_owned()];
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |c: &str| {
+        if !out.iter().any(|o| o == c) {
+            out.push(c.to_owned());
+        }
+    };
+    if (id == "minecraft:firework_rocket" || id == "minecraft:firework_star")
+        && let Some(Tag::Compound(f)) = component(host, stack, "minecraft:fireworks")
+        && let Some(Tag::List(explosions)) = f.get(&"explosions".into())
+    {
+        for e in explosions {
+            let Tag::Compound(e) = e else { continue };
+            for key in ["colors", "fade_colors"] {
+                let rgbs: Vec<i32> = match e.get(&key.into()) {
+                    Some(Tag::IntArray(v)) => v.clone(),
+                    Some(Tag::List(l)) => l
+                        .iter()
+                        .filter_map(|t| match t {
+                            Tag::Int(i) => Some(*i),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                for rgb in rgbs {
+                    if let Some((c, _)) = FIREWORK_COLORS.iter().find(|(_, f)| *f == rgb) {
+                        add(c);
+                    }
+                }
+            }
+        }
+    }
+    for (c, _) in FIREWORK_COLORS {
+        if path.starts_with(&format!("{c}_")) {
+            add(c);
+        }
+    }
+    out
+}
+
+/// `ShulkerLevels.canApply`'s count for a shulker box: none for another item or one with a loot
+/// table, else its container's slots (`getSlots`, to its last stack), `i32::MAX` for 27 full
+/// stacks.
+fn shulker_level(host: &dyn Host, stack: &ItemStack, id: &str) -> Option<i32> {
+    if !id.ends_with("shulker_box") {
+        return None;
+    }
+    if component(host, stack, "minecraft:container_loot").is_some() {
+        return None;
+    }
+    let Some(Tag::List(slots)) = component(host, stack, "minecraft:container") else {
+        return Some(0);
+    };
+    let mut filled: Vec<(i32, Option<ItemStack>)> = Vec::new();
+    for t in slots {
+        let Tag::Compound(c) = t else { continue };
+        let slot = match c.get(&"slot".into()) {
+            Some(Tag::Int(i)) => *i,
+            Some(Tag::Byte(b)) => i32::from(*b),
+            _ => continue,
+        };
+        let item = match c.get(&"item".into()) {
+            Some(Tag::Compound(i)) => ItemStack::from_nbt(host, i),
+            _ => None,
+        };
+        filled.push((slot, item));
+    }
+    let size = filled.iter().map(|(s, _)| s + 1).max().unwrap_or(0);
+    if size < 27 {
+        return Some(size);
+    }
+    let full = (0..27).all(|i| {
+        filled.iter().any(|(s, st)| {
+            *s == i
+                && st
+                    .as_ref()
+                    .is_some_and(|st| st.count() == host.max_stack_size(st.item()).unwrap_or(64))
+        })
+    });
+    Some(if full { i32::MAX } else { size })
+}
+
+fn shulker_level_holds(level: &str, size: i32) -> bool {
+    match level {
+        "empty" => size == 0,
+        "partial" => size > 0 && size < i32::MAX,
+        _ => size == i32::MAX,
+    }
+}
+
 /// The enchantments and their levels in an `enchantments` component.
 fn enchantment_levels(tag: Option<Tag>) -> Vec<(String, i32)> {
     let Some(Tag::Compound(c)) = tag else {
@@ -336,6 +479,11 @@ impl Probe for Looked<'_> {
             Attribute::Smeltable => recipe(&self.id, |r| &r.smelting),
             Attribute::Smokable => recipe(&self.id, |r| &r.smoking),
             Attribute::Blastable => recipe(&self.id, |r| &r.blasting),
+            Attribute::FluidContainer => fluid_container(&self.id),
+            Attribute::HasFluid(f) => held_fluid(&self.id).is_some_and(|h| h == *f),
+            Attribute::HasColor(c) => colors_of(host, stack, &self.id).contains(c),
+            Attribute::ShulkerFillLevel(l) => shulker_level(host, stack, &self.id)
+                .is_some_and(|size| shulker_level_holds(l, size)),
             // `maxEnchanted`: an enchantment (`getTagEnchantments`) at its maximum level or past it.
             Attribute::MaxEnchanted => {
                 let max = ENCHANTMENT_MAX
@@ -806,6 +954,29 @@ fn attr_line(kind: &str, value: Option<String>) -> filter_screen::AttrLine {
             }),
             true,
         ),
+        "shulker_fill_level" => (
+            "shulker_level".to_owned(),
+            value
+                .as_deref()
+                .map(|v| format!("create.item_attributes.shulker_level.{v}")),
+            true,
+        ),
+        "has_color" => (
+            "color".to_owned(),
+            value.as_deref().map(|c| format!("color.minecraft.{c}")),
+            true,
+        ),
+        // `FluidType.getDescription`.
+        "has_fluid" => (
+            name.to_owned(),
+            value.as_deref().map(|f| {
+                create_engine::tank::Fluid::ALL
+                    .into_iter()
+                    .find(|x| x.id() == f)
+                    .map_or_else(|| f.to_owned(), |x| x.name())
+            }),
+            false,
+        ),
         "book_copy" => (
             match value.as_deref().and_then(|v| v.parse::<i32>().ok()) {
                 Some(0) => "book_copy_original",
@@ -949,9 +1120,10 @@ pub(crate) fn add_reload_listeners(listeners: &mut dyn mod_api::ServerReloadList
 /// `ItemAttribute.getAllAttributes` of each type, in Create's registration order (the types
 /// this port reads).
 fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrLine> {
-    const SINGLETONS: [&str; 17] = [
+    const SINGLETONS: [&str; 18] = [
         "placeable",
         "consumable",
+        "fluid_container",
         "enchanted",
         "max_enchanted",
         "renamed",
@@ -998,6 +1170,19 @@ fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrL
     };
     for e in enchantment_ids(component(host, stack, which)) {
         out.push(attr_line("create:has_enchant", Some(e)));
+    }
+    if let Some(size) = shulker_level(host, stack, &id) {
+        for l in ["empty", "partial", "full"] {
+            if shulker_level_holds(l, size) {
+                out.push(attr_line("create:shulker_fill_level", Some(l.to_owned())));
+            }
+        }
+    }
+    for c in colors_of(host, stack, &id) {
+        out.push(attr_line("create:has_color", Some(c)));
+    }
+    if let Some(f) = held_fluid(&id) {
+        out.push(attr_line("create:has_fluid", Some(f)));
     }
     let renamed = stack
         .components()

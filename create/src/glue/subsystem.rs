@@ -383,6 +383,12 @@ pub trait Subsystem: Sync {
     /// `Hooks::render_gui_post`: draw on the HUD.
     fn render_gui_post(&self, _host: &dyn ClientHost, _event: &mut RenderGuiPostEvent<'_>) {}
 
+    /// `Hooks::data_pack_files`: pack files (`<kind>/<namespace>:<path>`, JSON) for this load.
+    fn data_pack_files(&self, _files: &mut Vec<(String, Vec<u8>)>) {}
+
+    /// `Hooks::client_information_updated`: a player's client settings (language, main hand).
+    fn client_info(&self, _player: u128, _info: &mod_api::ClientInfo) {}
+
     /// `Hooks::living_entity_use_item_tick`, on the server: each tick of an item's use.
     fn use_item_tick(
         &self,

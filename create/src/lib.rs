@@ -376,6 +376,26 @@ impl Hooks for Create {
         }
     }
 
+    fn data_pack_files(
+        &self,
+        _host: &mut dyn ServerHost,
+        event: &mut mod_api::DataPackFilesEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.data_pack_files(event.files);
+        }
+    }
+
+    fn client_information_updated(
+        &self,
+        _host: &mut dyn ServerHost,
+        event: &mut mod_api::ClientInformationUpdatedEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.client_info(event.player, event.new);
+        }
+    }
+
     fn living_entity_use_item_tick(
         &self,
         host: HostSide,

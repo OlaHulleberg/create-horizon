@@ -70,13 +70,13 @@ impl Mode {
 }
 
 /// The item attributes of `AllItemAttributeTypes` the port can evaluate. Left out:
-/// `fluid_container` (an item fluid handler capability, gap 4), `in_item_group` (creative tabs),
-/// `shulker_fill_level`, `has_color` and `has_fluid` (their readers of dyes, banners and fluid
-/// handlers).
+/// `in_item_group` (no API lists the creative tabs or their contents).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Attribute {
     Placeable,
     Consumable,
+    /// `FLUID_CONTAINER`: the item has a fluid handler.
+    FluidContainer,
     Enchanted,
     MaxEnchanted,
     Renamed,
@@ -104,11 +104,18 @@ pub enum Attribute {
     BookAuthor(String),
     /// `BookCopyAttribute`: the generation (0 original ... 3 tattered).
     BookCopy(i32),
+    /// `ShulkerFillLevelAttribute`: `empty`, `partial` or `full`.
+    ShulkerFillLevel(String),
+    /// `ColorAttribute`: a dye colour's name.
+    HasColor(String),
+    /// `FluidContentsAttribute`: a fluid id.
+    HasFluid(String),
 }
 
-const SINGLETONS: [(&str, Attribute); 17] = [
+const SINGLETONS: [(&str, Attribute); 18] = [
     ("placeable", Attribute::Placeable),
     ("consumable", Attribute::Consumable),
+    ("fluid_container", Attribute::FluidContainer),
     ("enchanted", Attribute::Enchanted),
     ("max_enchanted", Attribute::MaxEnchanted),
     ("renamed", Attribute::Renamed),
@@ -145,6 +152,9 @@ impl Attribute {
             Attribute::HasName(_) => "has_name",
             Attribute::BookAuthor(_) => "book_author",
             Attribute::BookCopy(_) => "book_copy",
+            Attribute::ShulkerFillLevel(_) => "shulker_fill_level",
+            Attribute::HasColor(_) => "has_color",
+            Attribute::HasFluid(_) => "has_fluid",
             s => SINGLETONS
                 .iter()
                 .find(|(_, a)| a == s)
@@ -160,7 +170,10 @@ impl Attribute {
             | Attribute::AddedBy(v)
             | Attribute::HasEnchant(v)
             | Attribute::HasName(v)
-            | Attribute::BookAuthor(v) => Some(v.clone()),
+            | Attribute::BookAuthor(v)
+            | Attribute::ShulkerFillLevel(v)
+            | Attribute::HasColor(v)
+            | Attribute::HasFluid(v) => Some(v.clone()),
             Attribute::BookCopy(g) => Some(g.to_string()),
             _ => None,
         }
@@ -187,8 +200,13 @@ impl Attribute {
                 Ok(g) if g >= 0 => Attribute::BookCopy(g),
                 _ => return Err(Refused::Unknown("book_copy needs a generation".into())),
             },
-            "fluid_container" | "in_item_group" | "shulker_fill_level" | "has_color"
-            | "has_fluid" => return Err(Refused::NotPorted(name.to_owned())),
+            "shulker_fill_level" => match text()?.as_str() {
+                v @ ("empty" | "partial" | "full") => Attribute::ShulkerFillLevel(v.to_owned()),
+                v => return Err(Refused::Unknown(format!("shulker_fill_level {v}"))),
+            },
+            "has_color" => Attribute::HasColor(text()?),
+            "has_fluid" => Attribute::HasFluid(text()?),
+            "in_item_group" => return Err(Refused::NotPorted(name.to_owned())),
             _ => return Err(Refused::Unknown(name.to_owned())),
         })
     }
@@ -748,13 +766,21 @@ mod tests {
             &[
                 ("in_tag", Some("#minecraft:logs"), false),
                 ("has_color", Some("red"), false),
+                (
+                    "in_item_group",
+                    Some("minecraft:tools_and_utilities"),
+                    false,
+                ),
             ],
         );
         assert_eq!(
             tag.kind,
             Kind::Attributes {
                 mode: Mode::WhitelistDisj,
-                tests: vec![(Attribute::InTag("minecraft:logs".into()), false)]
+                tests: vec![
+                    (Attribute::InTag("minecraft:logs".into()), false),
+                    (Attribute::HasColor("red".into()), false),
+                ]
             }
         );
         // Fluids never pass an attribute filter.

@@ -50,9 +50,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Waterlogging in `state_for_placement`**: the event carries no fluid at the position, so rails and display
   boards are not waterlogged when placed in water.
 - **`OnBlockPlacedByEvent` without a level**: decor's fix-ups after a dispenser places a block are skipped.
-- **`lightning_strike` names no level**, so lightning cannot clear Create's copper from the glue. Emitting
-  `neoforge:oxidizables` / `neoforge:waxables` data maps for Create's copper (`tools/create-data`) would let the
-  fork's own weathering, waxing and lightning handle it.
 - **Scaffolding's collision for a templated block**: Horizon gives `ScaffoldingBlock.getCollisionShape` (solid
   only from above, unless descending) and its dynamic shape only to `minecraft:scaffolding` by name; a copy
   without declared shapes has none (placing it fails, and an entity touching it stops the game). Create's metal
@@ -223,6 +220,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   every wand in the hotbar (`SymmetryHandler.onRenderWorld`), are sent to the client by the server.
 - **A turned item in a screen** (`GuiGameElement.of(stack).rotate(..)`): the wand of symmetry's screen draws the
   wand flat.
+- **Setting an entity's sprinting** (`Entity.setSprinting`, server side): the cardboard sword's blow doesn't stop
+  the attacker's sprint (`CardboardSwordItem` replicating `Player.attack`); `is_sprinting` reads it only.
+- **The creative tabs and their contents** (`CreativeModeTabs.tabs()`, `CreativeModeTab.contains`): the
+  `in_item_group` filter attribute is refused; `build_creative_mode_tab_contents` lets a mod add to a tab but
+  nothing reads one. A query of the category tabs and whether a stack is in one would close it.
 - **Marking an entity immune to fire** (`Entity.fireImmune`, Create's `CreateFireImmune`): a player in a whole
   netherite diving set takes no fire damage (`living_incoming_damage`) and stops burning each tick, and their
   own view shows no flames, but lava still sets them alight for a tick, so others see flames on them.
@@ -252,8 +254,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   A tint on `ParticleOptions::item` (`rCol/gCol/bCol`) would close it.
 - **A screen layout for a mod menu opened without a block** (`player_open_mod_menu` with no `pos`: the
   client's `open_native_screen` returns without a `Screen`): the filters' and the schedule's screens are the mod's own screen,
-  and clicking an inventory slot carries a ghost copy, not the stack (Create's menus carry the real one). A
-  `Screen` for a menu type (not only a block entity's), or a `screen` part hook keyed by menu, would close it.
+  and clicking an inventory slot carries a ghost copy, not the stack (Create's menus carry the real one), so the
+  creative middle click on a ghost slot (a real full stack of it on the cursor, `GhostItemMenu.clicked` with
+  `CLONE`) has no cursor to put it on. A `Screen` for a menu type (not only a block entity's), or a `screen`
+  part hook keyed by menu, would close it.
 - **An item's tooltip lines**: the filters' screens show a slot's name, not its tooltip. (An item's tags are
   found by testing the tags a data reload listener lists under `tags/item`.)
 - **A block state's model drawn in the world without a block entity** (`SchematicRenderer`'s ghost blocks):

@@ -35,6 +35,9 @@ impl ItemPart for Shaper {
                 Some(InteractionResult::Success)
             }
             HostSide::Server(host) if server_sneaking(&*host, event.player) => {
+                if let Some(p) = host.player(event.player) {
+                    p.set_item_cooldown(host, SHAPER, 10);
+                }
                 Some(InteractionResult::Success)
             }
             _ => None,
@@ -56,6 +59,8 @@ impl ItemPart for Shaper {
         Some(InteractionResult::Success)
     }
 }
+
+const SHAPER: &str = "create:handheld_worldshaper";
 
 fn client_sneaking(host: &dyn ClientHost) -> bool {
     host.local_player()
@@ -235,6 +240,8 @@ fn select(host: &mut dyn ServerHost) -> Option<()> {
 fn use_shaper(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> Option<()> {
     let player = host.player(event.player)?;
     if sneaking(&*host, player) {
+        // The screen opens on the client, with a 10-tick cooldown.
+        player.set_item_cooldown(host, SHAPER, 10);
         return None;
     }
     let (settings, block) = shaper(event.stack);

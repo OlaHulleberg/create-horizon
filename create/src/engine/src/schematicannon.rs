@@ -1043,7 +1043,10 @@ impl Cannon {
             self.status = Status::Searching;
             return true;
         }
-        if let Requirement::Items(items) = requirement {
+        // `grabItemsFromAttachedInventories`: a creative crate supplies everything.
+        if let Requirement::Items(items) = requirement
+            && !self.creative
+        {
             for (item, count) in items {
                 if !w.grab(item, *count, true) {
                     if self.options.skip_missing {
