@@ -247,7 +247,9 @@ fn fluid_overflow(data: &Compound) -> Vec<(Fluid, u32)> {
         return Vec::new();
     };
     let keys = crate::glue::fluids::fluid_keys(data, FLUID_OVERFLOW_KEY);
-    v.chunks_exact(2)
+    v.as_chunks::<2>()
+        .0
+        .iter()
         .filter_map(|c| Some((Codes::fluid(&keys, c[0])?, c[1].max(0) as u32)))
         .collect()
 }
