@@ -2480,33 +2480,7 @@ fn displays_chunk_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
                     continue;
                 };
                 nums.extend(p);
-                nums.extend([b.x_size, b.y_size]);
-                let colour = b.colour.clone();
-                let glowing = b.glowing.clone();
-                let manual = b.manual.clone();
-                let lines = b.lines();
-                nums.push(lines.len() as i32);
-                for (i, l) in lines.iter().enumerate() {
-                    nums.extend([
-                        colour.get(i).copied().flatten().map_or(-1, i32::from),
-                        i32::from(glowing.get(i).copied().unwrap_or(false)),
-                        i32::from(manual.get(i).copied().unwrap_or(false)),
-                        l.sections.len() as i32,
-                    ]);
-                    texts.push(s(&l.key));
-                    for sec in &l.sections {
-                        nums.extend([
-                            sec.size.to_bits() as i32,
-                            sec.cycle as i32,
-                            i32::from(sec.single_flap)
-                                | i32::from(sec.has_gap) << 1
-                                | i32::from(sec.right_aligned) << 2
-                                | i32::from(sec.wide) << 3
-                                | i32::from(sec.text.is_some()) << 5,
-                        ]);
-                        texts.push(s(sec.text.as_deref().unwrap_or("")));
-                    }
-                }
+                board_to_nums(b, &mut nums, &mut texts);
             }
             let mut c = Compound::new();
             c.insert("nums".into(), Tag::IntArray(nums));
@@ -2531,6 +2505,89 @@ fn displays_chunk_save(dim: usize, chunk: [i32; 2], data: &mut Compound) {
     if !own.is_empty() {
         data.insert("create_display".into(), Tag::Compound(own));
     }
+}
+
+/// A controlling board as a column saves it: size, line count, then per line its dye (-1 none),
+/// glow, manual and section count, per section its width's bits, cycle and flags; the texts:
+/// each line's key and each section's text.
+pub(super) fn board_to_nums(b: &mut Board, nums: &mut Vec<i32>, texts: &mut Vec<Tag>) {
+    let s = |v: &str| Tag::String(v.into());
+    nums.extend([b.x_size, b.y_size]);
+    let colour = b.colour.clone();
+    let glowing = b.glowing.clone();
+    let manual = b.manual.clone();
+    let lines = b.lines();
+    nums.push(lines.len() as i32);
+    for (i, l) in lines.iter().enumerate() {
+        nums.extend([
+            colour.get(i).copied().flatten().map_or(-1, i32::from),
+            i32::from(glowing.get(i).copied().unwrap_or(false)),
+            i32::from(manual.get(i).copied().unwrap_or(false)),
+            l.sections.len() as i32,
+        ]);
+        texts.push(s(&l.key));
+        for sec in &l.sections {
+            nums.extend([
+                sec.size.to_bits() as i32,
+                sec.cycle as i32,
+                i32::from(sec.single_flap)
+                    | i32::from(sec.has_gap) << 1
+                    | i32::from(sec.right_aligned) << 2
+                    | i32::from(sec.wide) << 3
+                    | i32::from(sec.text.is_some()) << 5,
+            ]);
+            texts.push(s(sec.text.as_deref().unwrap_or("")));
+        }
+    }
+}
+
+/// What [`board_to_nums`] wrote: a controlling board, its lines kept when they fit its size.
+pub(super) fn board_from_nums(
+    next: &mut dyn FnMut() -> Option<i32>,
+    texts: &mut dyn FnMut() -> Option<String>,
+) -> Option<Board> {
+    let (xs, ys, n) = (next()?, next()?, next()?);
+    let mut b = Board::default();
+    b.set_status(true, xs.clamp(1, 32), ys.clamp(1, 32));
+    let mut lines = Vec::new();
+    for i in 0..n.max(0) as usize {
+        let (Some(colour), Some(glow), Some(manual), Some(m)) = (next(), next(), next(), next())
+        else {
+            break;
+        };
+        if let Some(c) = b.colour.get_mut(i) {
+            *c = u8::try_from(colour).ok();
+        }
+        if let Some(g) = b.glowing.get_mut(i) {
+            *g = glow != 0;
+        }
+        if let Some(g) = b.manual.get_mut(i) {
+            *g = manual != 0;
+        }
+        let key = texts().unwrap_or_default();
+        let mut sections = Vec::new();
+        for _ in 0..m.max(0) {
+            let (Some(size), Some(cycle), Some(f)) = (next(), next(), next()) else {
+                break;
+            };
+            let text = texts().unwrap_or_default();
+            let cycle = display::Cycle::ALL
+                .get(cycle.clamp(0, display::Cycle::ALL.len() as i32 - 1) as usize)
+                .copied()
+                .unwrap_or(display::Cycle::Alphabet);
+            let mut sec =
+                display::Section::new(f32::from_bits(size as u32), cycle, f & 1 != 0, f & 2 != 0);
+            sec.right_aligned = f & 4 != 0;
+            sec.wide = f & 8 != 0;
+            sec.text = (f & 32 != 0).then_some(text);
+            sections.push(sec);
+        }
+        lines.push(display::Layout { key, sections });
+    }
+    if lines.len() == (b.y_size * 2) as usize {
+        b.lines = Some(lines);
+    }
+    Some(b)
 }
 
 /// Reads what `displays_chunk_save` wrote, before the column's blocks are found.
@@ -2630,54 +2687,10 @@ fn displays_from_nbt(dim: usize, data: &Compound) {
             let mut nums = nums.into_iter();
             let mut texts = texts.into_iter();
             let mut next = || nums.next();
-            while let (Some(x), Some(y), Some(z), Some(xs), Some(ys), Some(n)) =
-                (next(), next(), next(), next(), next(), next())
-            {
-                let mut b = Board::default();
-                b.set_status(true, xs.clamp(1, 32), ys.clamp(1, 32));
-                let mut lines = Vec::new();
-                for i in 0..n.max(0) as usize {
-                    let (Some(colour), Some(glow), Some(manual), Some(m)) =
-                        (next(), next(), next(), next())
-                    else {
-                        break;
-                    };
-                    if let Some(c) = b.colour.get_mut(i) {
-                        *c = u8::try_from(colour).ok();
-                    }
-                    if let Some(g) = b.glowing.get_mut(i) {
-                        *g = glow != 0;
-                    }
-                    if let Some(g) = b.manual.get_mut(i) {
-                        *g = manual != 0;
-                    }
-                    let key = texts.next().unwrap_or_default();
-                    let mut sections = Vec::new();
-                    for _ in 0..m.max(0) {
-                        let (Some(size), Some(cycle), Some(f)) = (next(), next(), next()) else {
-                            break;
-                        };
-                        let text = texts.next().unwrap_or_default();
-                        let cycle = display::Cycle::ALL
-                            .get(cycle.clamp(0, display::Cycle::ALL.len() as i32 - 1) as usize)
-                            .copied()
-                            .unwrap_or(display::Cycle::Alphabet);
-                        let mut sec = display::Section::new(
-                            f32::from_bits(size as u32),
-                            cycle,
-                            f & 1 != 0,
-                            f & 2 != 0,
-                        );
-                        sec.right_aligned = f & 4 != 0;
-                        sec.wide = f & 8 != 0;
-                        sec.text = (f & 32 != 0).then_some(text);
-                        sections.push(sec);
-                    }
-                    lines.push(display::Layout { key, sections });
-                }
-                if lines.len() == (b.y_size * 2) as usize {
-                    b.lines = Some(lines);
-                }
+            while let (Some(x), Some(y), Some(z)) = (next(), next(), next()) {
+                let Some(b) = board_from_nums(&mut next, &mut || texts.next()) else {
+                    break;
+                };
                 d.boards.insert([x, y, z], b);
             }
         }

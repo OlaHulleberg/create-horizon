@@ -751,15 +751,25 @@ pub(crate) fn carry_storage(
 /// What the block entities of contraption `key` show its clients (`Contraption.updateTags`,
 /// the update tag of each block entity as it was taken): each block's offset and its block
 /// entity's data, its item slots (`Items`) and what the engine kept for it (`Carried`).
-pub(super) fn shown_entities(lv: &ServerLevel<'_>, key: [i32; 3]) -> HashMap<[i32; 3], Compound> {
+pub(crate) fn shown_entities(lv: &ServerLevel<'_>, key: [i32; 3]) -> HashMap<[i32; 3], Compound> {
     let host = &*lv.host;
     HELD.with_borrow(|m| {
         let Some(list) = m.get(&(lv.dim, key)) else {
             return HashMap::new();
         };
         list.iter()
-            .filter(|(_, d)| d.block.is_some())
+            .filter(|(_, d)| d.block.is_some() || d.data.is_some())
             .map(|(o, d)| {
+                if d.block.is_none() {
+                    // A vanilla block entity: what its renderer reads (a sign's text, a
+                    // banner's patterns), where it has any.
+                    let data = d.data.as_ref();
+                    let c: Compound = super::vanilla_draw::SHOWN_KEYS
+                        .iter()
+                        .filter_map(|k| Some(((*k).into(), data?.get(&(*k).into())?.clone())))
+                        .collect();
+                    return (*o, c);
+                }
                 let mut c = d.own.clone().unwrap_or_default();
                 let items: Vec<Tag> = d
                     .slots
@@ -781,6 +791,24 @@ pub(super) fn shown_entities(lv: &ServerLevel<'_>, key: [i32; 3]) -> HashMap<[i3
             })
             .collect()
     })
+}
+
+/// [`shown_entities`] of what a contraption saved ([`storage_to_nbt`]): a cart's, kept as a tag
+/// while it rides.
+pub(crate) fn shown_entities_of(
+    lv: &ServerLevel<'_>,
+    tag: Option<&Tag>,
+) -> HashMap<[i32; 3], Compound> {
+    if tag.is_none() {
+        return HashMap::new();
+    }
+    // Read under a key no contraption has, and dropped again.
+    let key = [i32::MIN, i32::MIN, i32::MIN];
+    storage_from_nbt(lv, key, tag);
+    let shown = shown_entities(lv, key);
+    STORAGE.with_borrow_mut(|m| m.remove(&(lv.dim, key)));
+    HELD.with_borrow_mut(|m| m.remove(&(lv.dim, key)));
+    shown
 }
 
 /// The key of what the engine kept for a block in its moving block entity's data

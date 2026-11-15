@@ -428,13 +428,17 @@ pub(super) fn draw_carried(
     block: Block,
     event: &mut BlockEntitySubmitEvent<'_>,
 ) {
-    if !display::is_nixie(block) {
-        return;
-    }
     let carried = crate::glue::contraptions::actors::SHOWN_CARRIED;
     let Some(Tag::Compound(c)) = event.entity.nbt.get(&carried.into()) else {
         return;
     };
+    if block == Block::DisplayBoard {
+        draw_carried_board(host, event, c);
+        return;
+    }
+    if !display::is_nixie(block) {
+        return;
+    }
     let Some(Tag::List(shown)) = c.get(&super::carried::SHOWN.into()) else {
         return;
     };
@@ -458,4 +462,61 @@ pub(super) fn draw_carried(
         &text(0),
         &text(1),
     );
+}
+
+/// A controlling display board riding a moving structure: its lines as it showed them when the
+/// structure took it, settled (`FlapDisplayRenderer` in `renderBlockEntities`; a board on a
+/// structure has no speed, so its flaps stand still).
+fn draw_carried_board(
+    host: &dyn ClientHost,
+    event: &mut BlockEntitySubmitEvent<'_>,
+    c: &mod_api::Compound,
+) {
+    let Some(b) = super::carried::board_of(c) else {
+        return;
+    };
+    let Some(id) = states::id(event.state) else {
+        return;
+    };
+    let Some(facing) = client_table(host, |t| t.get(id).and_then(|(_, i)| i.facing)).flatten()
+    else {
+        return;
+    };
+    let options = options(host);
+    let lines: Vec<(String, Vec<display::ShownSection>)> = b
+        .lines
+        .unwrap_or_default()
+        .into_iter()
+        .map(|l| {
+            let sections = l
+                .sections
+                .into_iter()
+                .map(|mut s| {
+                    s.transition = false;
+                    let n = options.get(s.cycle as usize).map_or(1, Vec::len);
+                    display::ShownSection::new(s, n)
+                })
+                .collect();
+            (l.key, sections)
+        })
+        .collect();
+    let draw = &mut *event.draw;
+    let ticks = draw.game_time();
+    let texts = {
+        let draw = &*draw;
+        display::board_texts(
+            facing,
+            b.x_size,
+            &lines,
+            &b.colour,
+            &b.glowing,
+            &options,
+            false,
+            ticks,
+            |s| width(draw, s),
+        )
+    };
+    for t in texts {
+        draw_text(draw, &t.pose, &t.text, t.color, t.full_bright);
+    }
 }

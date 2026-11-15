@@ -43,7 +43,7 @@ mod application;
 pub(crate) mod basin;
 pub(crate) mod burner_draw;
 mod carried;
-mod client;
+pub(crate) mod client;
 mod containers;
 mod crafter;
 mod crusher;

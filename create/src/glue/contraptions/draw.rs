@@ -86,8 +86,8 @@ impl Subsystem for Drawing {
         actor_draw::forget();
     }
 
-    /// Anchors that came back with a structure in their data that is not running (a piston or
-    /// gantry is not saved moving): they draw nothing.
+    /// Anchors that came back with a structure in their data that is not running (one that
+    /// stopped after its column was last written): they draw nothing.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         let dim = lv.dim;
         let loaded: Vec<[i32; 3]> = LOADED.with_borrow_mut(|l| {
@@ -111,6 +111,10 @@ impl Subsystem for Drawing {
 
     fn client_reset(&self) {
         client_reset();
+    }
+
+    fn models_baked(&self, host: &mut dyn ClientHost) {
+        super::vanilla_draw::models_baked(host);
     }
 }
 
@@ -709,6 +713,12 @@ fn draw_blocks(
             }
         } else {
             draw_entity_block(host, draw, b.block, &props);
+            if let Some(entity) = &b.entity {
+                let id = b.block.id(host);
+                if super::vanilla_draw::draws(&id) {
+                    super::vanilla_draw::draw(host, draw, &id, &props, &entity.nbt);
+                }
+            }
         }
         // `BlazeBurnerMovementBehaviour.renderInContraption`: a carried burner's blaze.
         if b.block == states::key(create_engine::Block::BlazeBurner) {
@@ -825,7 +835,7 @@ fn draw_carried(
         anchor[2] + b.at[2] as i32,
     ];
     let name = format!("create:{}", block.name());
-    let mut inner = Unkept(draw);
+    let mut inner = Unkept(draw, false);
     let mut event = mod_api::BlockEntitySubmitEvent {
         pos,
         block: &name,
@@ -841,8 +851,19 @@ fn draw_carried(
 /// How far up a riding block entity's stand-in position is ([`draw_carried`]): above any level.
 const CARRIED_UP: i32 = 1 << 20;
 
-/// A draw context whose `keep` does nothing: the structure keeps what is drawn, or not.
-struct Unkept<'a>(&'a mut dyn BlockEntityDrawContext);
+/// A draw context whose `keep` does nothing: the structure keeps what is drawn, or not. A
+/// part a block entity turns (`spin`) is drawn at its phase, still: the structure's own turn is
+/// the draw's spin, which a spin inside it would replace (and a riding block entity's kinetic
+/// parts stand still, as its speed is not carried).
+struct Unkept<'a>(&'a mut dyn BlockEntityDrawContext, bool);
+
+impl Drop for Unkept<'_> {
+    fn drop(&mut self) {
+        if self.1 {
+            self.0.pop();
+        }
+    }
+}
 
 impl BlockEntityDrawContext for Unkept<'_> {
     fn push(&mut self) {
@@ -900,11 +921,19 @@ impl BlockEntityDrawContext for Unkept<'_> {
     ) -> bool {
         self.0.item(stack, display, owner_yaw, seed)
     }
-    fn spin(&mut self, axis: [f32; 3], pivot: [f32; 3], degrees_per_tick: f32, phase: f32) {
-        self.0.spin(axis, pivot, degrees_per_tick, phase);
+    fn spin(&mut self, axis: [f32; 3], pivot: [f32; 3], _degrees_per_tick: f32, phase: f32) {
+        if self.1 {
+            self.0.pop();
+        }
+        self.0.push();
+        self.0.rotate_about(axis, phase, pivot);
+        self.1 = true;
     }
     fn still(&mut self) {
-        self.0.still();
+        if self.1 {
+            self.0.pop();
+            self.1 = false;
+        }
     }
     fn model(&mut self, model: mod_api::ModelRef, tint: u32) -> Result<(), mod_api::ModelError> {
         self.0.model(model, tint)

@@ -460,7 +460,7 @@ pub struct Moving {
     /// changes.
     pub waiting: bool,
     /// `sequencedOffsetLimit`: how far a sequenced gearshift's turn by distance still lets it
-    /// move (none for no limit), not saved.
+    /// move (none for no limit), saved with it.
     pub limit: Option<f32>,
 }
 
@@ -1955,6 +1955,7 @@ impl CreateWorld {
     #[inline]
     pub fn tick(&mut self, dim: usize, events: &mut Vec<Event>) -> SolveStats {
         let d = &mut self.dims[dim];
+        d.kinetics.advance();
         if !d.kinetics.has_dirty() {
             return SolveStats::default();
         }

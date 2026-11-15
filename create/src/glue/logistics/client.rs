@@ -1050,7 +1050,7 @@ pub fn tick_client_arms(_host: &mut dyn ClientHost) {
 /// those three: the move, the turn's axis and angle in degrees (None for none), the scale.
 /// None for a pose that flattens everything.
 #[allow(clippy::type_complexity)]
-fn decompose(m: Mat4) -> Option<([f32; 3], Option<([f32; 3], f32)>, [f32; 3])> {
+pub(crate) fn decompose(m: Mat4) -> Option<([f32; 3], Option<([f32; 3], f32)>, [f32; 3])> {
     let a = m.to_cols_array();
     let col = |i: usize| Vec3::new(a[4 * i], a[4 * i + 1], a[4 * i + 2]);
     let (c0, c1, c2) = (col(0), col(1), col(2));
@@ -1388,6 +1388,18 @@ fn draw_belt_items(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, c: [i
     }) else {
         return;
     };
+    draw_belt_contents(draw, host, &contents, &prev, t);
+}
+
+/// `BeltRenderer.renderItems`: each item where it lies along the belt (from where it was a tick
+/// ago, `prev`), turned and stacked as Create lays it.
+fn draw_belt_contents(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    contents: &belt::Contents,
+    prev: &[f32],
+    t: f32,
+) {
     let length = i32::from(contents.length);
     let same = prev.len() == contents.items.items.len();
     for (i, it) in contents.items.items.iter().enumerate() {
@@ -1788,49 +1800,46 @@ pub(crate) fn draw_carried(
 ) {
     match block {
         Block::Depot | Block::WeightedEjector => {
-            let nbt = &event.entity.nbt;
-            let Some(Tag::List(items)) = nbt.get(&"Items".into()) else {
-                return;
-            };
-            let stacks = items
-                .iter()
-                .filter_map(|t| {
-                    let Tag::Compound(c) = t else { return None };
-                    let slot = match c.get(&"Slot".into()) {
-                        Some(Tag::Byte(b)) => *b as u8,
-                        _ => 0,
-                    };
-                    let id = match c.get(&"id".into()) {
-                        Some(Tag::String(s)) => s.to_string_lossy(),
-                        _ => return None,
-                    };
-                    let count = match c.get(&"count".into()) {
-                        Some(Tag::Int(n)) => (*n).clamp(1, 255) as u8,
-                        _ => 1,
-                    };
-                    Some((slot, id, count))
-                })
-                .collect();
-            let angle = match nbt.get(&crate::glue::contraptions::actors::SHOWN_CARRIED.into()) {
-                Some(Tag::Compound(c)) => match c.get(&super::carried::DEPOT_ANGLE.into()) {
-                    Some(Tag::Int(a)) => *a,
-                    _ => 0,
-                },
-                _ => 0,
-            };
-            let held = depot::Held::new(angle, false);
-            let contents = depot::Contents {
-                pos: event.pos,
-                held,
-                stacks,
-            };
-            draw_depot_stacks(&mut *event.draw, host, &contents, held, 1.0);
+            draw_riding_items(&mut *event.draw, host, block, &event.entity.nbt);
         }
         Block::Chute
         | Block::SmartChute
         | Block::BrassFunnel
         | Block::BrassBeltFunnel
         | Block::BrassTunnel => LogisticsEntity.block_entity_submit(host, event),
+        // `BeltRenderer` riding: the segment and its casing, still, and the belt's items from
+        // the segment that keeps them, laid out from where its controller is.
+        Block::Belt => {
+            let Some((_, info)) = table_info(host, event.state) else {
+                return;
+            };
+            let nbt = &event.entity.nbt;
+            let color = match nbt.get(&BELT_COLOR.into()) {
+                Some(Tag::String(c)) => Some(c.to_string_lossy().to_string()),
+                _ => None,
+            }
+            .filter(|c| !c.is_empty());
+            let draw = &mut *event.draw;
+            draw_segment(
+                draw,
+                host,
+                block,
+                &info,
+                event.pos,
+                [0.0; 2],
+                color.as_deref(),
+            );
+            let cased = event
+                .state
+                .property(&mod_api::HostBlockStates::block_states(host), "casing")
+                .ok()
+                .flatten()
+                == Some("true");
+            if cased && let Some(seg) = info.belt {
+                draw_casing(draw, host, &seg, nbt);
+            }
+            draw_riding_items(draw, host, block, nbt);
+        }
         // An arm as it stood when the structure took it (its block entity doesn't tick
         // riding: no turning, no dance).
         Block::MechanicalArm => {
@@ -1849,6 +1858,137 @@ pub(crate) fn draw_carried(
             draw_arm_shown(&mut *event.draw, host, event.pos, &s, s.progress, 0.0, t);
         }
         _ => {}
+    }
+}
+
+/// The items a riding logistics block's renderer draws, from its block entity data `nbt` as the
+/// structure took it: a depot's or ejector's stacks (`DepotRenderer`), a chute's stack
+/// (`ChuteRenderer`) and the items of the belt a segment keeps them for (`BeltRenderer`), laid out
+/// from where its controller is. Needs no client: the trains' riding displays are posed by it.
+pub(crate) fn draw_riding_items(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    block: Block,
+    nbt: &Compound,
+) {
+    match block {
+        Block::Depot | Block::WeightedEjector => {
+            depot_items(draw, host, nbt);
+        }
+        Block::Chute | Block::SmartChute => {
+            if nbt.contains_key(&super::chute::CHUTE_ITEM.into()) {
+                draw_chute_item(draw, host, nbt);
+                return;
+            }
+            // Not shown since it settled: its slot's stack, resting in the middle as the chute
+            // shows a still item.
+            let Some(Tag::List(items)) = nbt.get(&"Items".into()) else {
+                return;
+            };
+            let Some(Tag::Compound(first)) = items.first() else {
+                return;
+            };
+            let Some(Tag::String(id)) = first.get(&"id".into()) else {
+                return;
+            };
+            let shown = Compound::from([
+                (super::chute::CHUTE_ITEM.into(), Tag::String(id.clone())),
+                (
+                    super::chute::CHUTE_POSITION.into(),
+                    Tag::Float(0.5f32.to_bits()),
+                ),
+            ]);
+            draw_chute_item(draw, host, &shown);
+        }
+        Block::Belt => {
+            let carried = crate::glue::contraptions::actors::SHOWN_CARRIED;
+            let Some(Tag::Compound(c)) = nbt.get(&carried.into()) else {
+                return;
+            };
+            let Some(Tag::ByteArray(bytes)) = c.get(&super::carried::BELT_SHOWN.into()) else {
+                return;
+            };
+            if let Some(contents) = belt::decode(bytes).into_iter().next() {
+                let o = contents.controller.map(|v| v as f32);
+                let prev: Vec<f32> = contents.items.items.iter().map(|i| i.position).collect();
+                draw.push();
+                draw.translate(o);
+                draw_belt_contents(draw, host, &contents, &prev, 1.0);
+                draw.pop();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn depot_items(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, nbt: &Compound) {
+    let Some(Tag::List(items)) = nbt.get(&"Items".into()) else {
+        return;
+    };
+    let stacks = items
+        .iter()
+        .filter_map(|t| {
+            let Tag::Compound(c) = t else { return None };
+            let slot = match c.get(&"Slot".into()) {
+                Some(Tag::Byte(b)) => *b as u8,
+                _ => 0,
+            };
+            let id = match c.get(&"id".into()) {
+                Some(Tag::String(s)) => s.to_string_lossy(),
+                _ => return None,
+            };
+            let count = match c.get(&"count".into()) {
+                Some(Tag::Int(n)) => (*n).clamp(1, 255) as u8,
+                _ => 1,
+            };
+            Some((slot, id, count))
+        })
+        .collect();
+    let angle = match nbt.get(&crate::glue::contraptions::actors::SHOWN_CARRIED.into()) {
+        Some(Tag::Compound(c)) => match c.get(&super::carried::DEPOT_ANGLE.into()) {
+            Some(Tag::Int(a)) => *a,
+            _ => 0,
+        },
+        _ => 0,
+    };
+    let held = depot::Held::new(angle, false);
+    let contents = depot::Contents {
+        pos: [0; 3],
+        held,
+        stacks,
+    };
+    draw_depot_stacks(draw, host, &contents, held, 1.0);
+}
+
+/// A riding belt segment's halves and pulley as `BeltRenderer` poses them, standing still and in
+/// their own colours (the dyed sprites are swapped by the terrain draw, which a block display
+/// does not have): the partials as blocks, for the trains' riding displays.
+pub(crate) fn draw_riding_segment(
+    draw: &mut dyn BlockEntityDrawContext,
+    block: Block,
+    info: &create_engine::parts::StateInfo,
+    pos: [i32; 3],
+) {
+    for d in parts::draws(block, info, pos, [0.0; 2]) {
+        match d.model {
+            Model::Belt(seg, bottom) => {
+                let Some(name) = belt::partial(&seg, bottom) else {
+                    continue;
+                };
+                draw.push();
+                pose(draw, belt::segment_pose(&seg));
+                partial(draw, name);
+                draw.pop();
+            }
+            Model::BeltPulley(seg) => {
+                draw.push();
+                draw.rotate_about(axis_vector(d.axis), d.phase, CENTRE);
+                pose(draw, belt::pulley_pose(&seg));
+                partial(draw, "part_belt_pulley");
+                draw.pop();
+            }
+            _ => {}
+        }
     }
 }
 

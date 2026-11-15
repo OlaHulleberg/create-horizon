@@ -26,12 +26,21 @@ pub struct Found {
     /// The faces that push nothing in front of them (`BlockMovementChecks.isNotSupportive`: a
     /// drill's head, a sail's flat sides, anything brittle), a `Dir::bit` each.
     pub unsupportive: u8,
+    /// A belt segment (`BeltBlock`): the whole belt moves with it (`moveBelt`).
+    pub belt: Option<crate::belt::Segment>,
 }
 
 /// `Contraption.moveBlock`'s extended sticker: the block it faces joins the frontier (an
 /// unmovable one there then refuses the structure).
 pub(crate) fn sticker_target(pos: [i32; 3], f: &Found) -> Option<[i32; 3]> {
     f.sticker.map(|d| add(pos, d.offset()))
+}
+
+/// `Contraption.moveBelt`: a belt segment takes the segments before and after it.
+pub(crate) fn belt_neighbours(pos: [i32; 3], f: &Found) -> impl Iterator<Item = [i32; 3]> + '_ {
+    [true, false]
+        .into_iter()
+        .filter_map(move |forward| f.belt.as_ref()?.next(pos, forward))
 }
 
 /// `faceHasGlue`: glue on this face of the block takes its neighbour.
@@ -315,6 +324,11 @@ pub fn gather_from(
         if let Some(p) = sticker_target(pos, &found).filter(|p| !visited.contains(p) && !skip(*p)) {
             frontier.push_back(p);
         }
+        for p in belt_neighbours(pos, &found) {
+            if !visited.contains(&p) && !skip(p) {
+                frontier.push_back(p);
+            }
+        }
         for d in Dir::ALL {
             let next = add(pos, d.offset());
             if visited.contains(&next) || skip(next) {
@@ -380,6 +394,11 @@ pub fn gather_gantry(
         if let Some(p) = sticker_target(pos, &found).filter(|p| !visited.contains(p) && *p != shaft)
         {
             frontier.push_back(p);
+        }
+        for p in belt_neighbours(pos, &found) {
+            if !visited.contains(&p) && p != shaft {
+                frontier.push_back(p);
+            }
         }
         for d in Dir::ALL {
             let next = add(pos, d.offset());

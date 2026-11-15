@@ -135,6 +135,16 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   (gravity, drag, stuck to a target) is the glue's and is not saved: a shot in the air when the
   world is saved comes back as a plain snowball. A way to read or keep a projectile's state
   across a save (persistent data on `EntityRef`) would close it.
+- **A fluid, or a model with a sprite swapped, drawn by a display entity; or an entity renderer with the
+  client's host**: on trains and cart contraptions (block displays the server moves) what block entities hold
+  is drawn by item, text and block displays riding with them (`glue/trains/contents.rs`), but a tank's,
+  basin's, spout's or drain's fluid has no display to be (block displays draw block models, fluids have
+  none), a dyed belt's halves and a cased belt's casing are their models with a sprite swapped
+  (`TerrainModelOptions`), which a block display cannot ask, and a wall banner's model has no item for an item
+  display (it is drawn as the standing one, its pole included). `EntityRenderer::submit` (which could draw
+  them with `fluid_box` and `terrain_model`) is offered only for thrown and living types and has no
+  `ClientHost` to read what the entity carries. A fluid display (a fluid stack and a box), or a display type a
+  mod draws with `BlockEntityDrawContext` and its host, would close it.
 - **A zombie villager's cure from code** (`ZombieVillager.mobInteract` with a golden apple, or
   `startConverting`): a golden apple from the potato cannon gives its food effects instead.
 
@@ -252,15 +262,6 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - Display and redstone: the clipboard copies no steam engine's `RotationDirection` and no table cloth's price,
   neither setting being ported; redstone links feeding factory gauges (`RedstoneLinkBlockEntity`'s
   `FactoryPanelSupportBehaviour`) are not joined (display links are).
-- Kinetics: Create breaks a block whose speed starts, stops or turns round too often (`flickerTally`,
-  `RotationPropagator.MAX_FLICKER_SCORE`: a clutch on a fast redstone clock); the port does not count it. The
-  limit a sequenced gearshift's or valve handle's turn sets on a bearing, piston, pulley or gantry
-  (`sequencedAngleLimit`, `sequencedOffsetLimit`) is not saved: one reloaded mid-turn starts the turn's limit again.
-- Contraptions: a display board's text, a belt's items and a crafter's grid mid-craft are neither carried
-  nor drawn on a moving structure; signs', banners' and beds' block entities and a deployer's held item are not
-  drawn on one (the rest of what the engine keeps per block rides with it, `Subsystem::carry_out`, and is drawn
-  while it moves, `Subsystem::draw_carried`), but trains and cart contraptions, drawn as block displays, show
-  none of it while they ride (item and text displays riding with them would).
 - Redstone: a nixie tube on a train signal shows its text, not the signal's lights (`NixieTubeRenderer`); a
   redstone contact on an elevator column is not turned into an elevator contact by the wrench; dyed items
   (`DYED_COLOR`) make one link frequency with their undyed item.

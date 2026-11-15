@@ -73,7 +73,7 @@ pub struct Pulley {
     /// changes.
     pub waiting: bool,
     /// `sequencedOffsetLimit`: how far a sequenced gearshift's turn by distance still lets it
-    /// move (none for no limit), not saved.
+    /// move (none for no limit), saved with it.
     pub limit: Option<f32>,
 }
 

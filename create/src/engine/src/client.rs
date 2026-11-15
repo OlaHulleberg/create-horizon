@@ -450,8 +450,10 @@ pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Ve
                 }
             })
             .unwrap_or_default(),
-        // DeployerVisual: a shaft on its rotation axis (its pole and hand are the glue's).
-        Block::Deployer => s
+        // DeployerVisual: a shaft on its rotation axis (its pole and hand are the glue's), and
+        // GantryCarriageRenderer's (`getRenderedBlockState`: a shaft on its rotation axis; its
+        // cogs are the glue's).
+        Block::Deployer | Block::GantryCarriage => s
             .facing
             .map(|f| {
                 let a = crate::parts::directional_axis(f, s.along_first);

@@ -403,8 +403,14 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
         with_world(|w| std::mem::take(&mut w.dims[dim].lifts.pulley_checks)).unwrap_or_default();
     checks.sort();
     checks.dedup();
+    let mut later = Vec::new();
     for &pos in &checks {
         if !matches!(create_info(lv.block(pos)), Some((Block::RopePulley, _))) {
+            continue;
+        }
+        // Loaded moving, it goes on once its network has a speed.
+        if super::unsolved(dim, pos) {
+            later.push(pos);
             continue;
         }
         let rpm = speed(dim, pos);
@@ -414,7 +420,9 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
             // `onSpeedChanged`: one kept together by its mode moves again, and its limit
             // starts again from the context it has now.
             p.waiting = false;
-            p.limit = limit;
+            if !super::keeps_loaded_limit(dim, pos) {
+                p.limit = limit;
+            }
             if rpm != 0.0 {
                 p.speed_changed(rpm);
             }
@@ -428,11 +436,14 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
             None => {}
         }
     }
+    if !later.is_empty() {
+        with_world(|w| w.dims[dim].lifts.pulley_checks.extend(later));
+    }
     let moving: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].lifts.pulleys.keys().copied().collect()).unwrap_or_default();
     for pos in moving {
         // A pulley told of its speed this tick only answers it (`sendData`).
-        if checks.contains(&pos) {
+        if checks.contains(&pos) || super::unsolved(dim, pos) {
             continue;
         }
         let Some(mut p) = with_world(|w| w.dims[dim].lifts.pulleys.remove(&pos)).flatten() else {
@@ -476,6 +487,8 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
         };
         with_world(|w| w.dims[dim].lifts.pulleys.insert(pos, p));
         match step {
+            // Its offset is saved now and then while it moves, as a piston's is.
+            Step::Move(_) if lv.game_time() % 10 == 0 => mark_unsaved(lv, pos),
             Step::Move(_) => {}
             Step::Stop(grid) => try_stop_pulley(lv, pos, grid),
             Step::Grab(grid) => {
@@ -1475,6 +1488,7 @@ pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compo
                 }
                 Held::Pulley(p) => {
                     blocks_tags(&mut c, "", &p.blocks);
+                    super::limit_to_nbt(&mut c, p.limit);
                     (
                         1,
                         vec![
@@ -1600,6 +1614,7 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
                     x.offset = f(at(4)?);
                     x.rpm = f(at(6)?);
                     x.waiting = at(7) == Some(1);
+                    x.limit = super::limit_from_nbt(lv.dim, pos, c);
                     Held::Pulley(x)
                 }
                 2 => {
