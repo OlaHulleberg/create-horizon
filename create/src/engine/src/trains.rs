@@ -91,6 +91,8 @@ pub struct CarriageShape {
 pub struct Nav {
     pub station: [i32; 3],
     pub distance: f64,
+    /// `distanceStartedAt`: the distance it set off with.
+    pub started_at: f64,
     pub path: Vec<usize>,
     pub behind: bool,
     pub signal: Option<f64>,
@@ -1443,6 +1445,7 @@ impl Train {
         self.nav = Some(Nav {
             station: net.stations[found.station].0,
             distance: found.distance.abs(),
+            started_at: found.distance.abs(),
             path: found.path,
             behind: found.behind,
             signal: None,

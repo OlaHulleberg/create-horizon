@@ -1,9 +1,10 @@
 //! What the displays keep for a block that rides a moving structure (`Subsystem::carry_out`,
 //! Create's block entity NBT): a nixie tube's custom text (`NixieTubeBlockEntity.write`:
 //! `CustomText`, `CustomTextIndex`), and a display link's target, line, source and its
-//! configuration (`DisplayLinkBlockEntity.write`), the target's offset turned with the
-//! structure (`DisplayLinkBlockEntity.transform`). Each waits where it goes back as a saved
-//! one does (`displays_from_nbt`), and is kept as it is placed there.
+//! configuration (`DisplayLinkBlockEntity.write`: a station summary's settings and the gauges
+//! joined to it too), the target's offset turned with the structure
+//! (`DisplayLinkBlockEntity.transform`). Each waits where it goes back as a saved one does
+//! (`displays_from_nbt`), and is kept as it is placed there.
 
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
@@ -18,6 +19,9 @@ const NIXIE_INDEX: &str = "NixieIndex";
 pub(crate) const SHOWN: &str = "NixieShown";
 const LINK: &str = "DisplayLink";
 const LINK_TEXTS: &str = "DisplayLinkTexts";
+/// A link's station summary settings and its joined gauges (`LinkedGauges`, as Create keeps
+/// them: not turned), when it has any.
+const LINK_MORE: &str = "DisplayLinkMore";
 
 pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: &mut Compound) {
     let dim = lv.dim;
@@ -67,6 +71,24 @@ pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: 
                     Tag::String(c.label.as_str().into()),
                 ]),
             );
+            let mut more = Compound::new();
+            if let Some(f) = &c.filter {
+                more.insert("Filter".into(), Tag::String(f.as_str().into()));
+            }
+            if let Some(n) = c.name_column {
+                more.insert("NameColumn".into(), Tag::Int(n));
+            }
+            if let Some(n) = c.platform_column {
+                more.insert("PlatformColumn".into(), Tag::Int(n));
+            }
+            if !l.panels.is_empty() {
+                let gauges = l.panels.iter();
+                let gauges = gauges.flat_map(|(q, slot)| [q[0], q[1], q[2], i32::from(*slot)]);
+                more.insert("LinkedGauges".into(), Tag::IntArray(gauges.collect()));
+            }
+            if !more.is_empty() {
+                out.insert(LINK_MORE.into(), Tag::Compound(more));
+            }
         }
     });
 }
@@ -127,6 +149,23 @@ pub(super) fn carry_in(
         _ => String::new(),
     };
     let start = (i64::from(hi) << 32) | i64::from(lo as u32);
+    let more = match data.get(&LINK_MORE.into()) {
+        Some(Tag::Compound(c)) => c.clone(),
+        _ => Compound::new(),
+    };
+    let int = |k: &str| match more.get(&k.into()) {
+        Some(Tag::Int(n)) => Some(*n),
+        _ => None,
+    };
+    let panels = match more.get(&"LinkedGauges".into()) {
+        Some(Tag::IntArray(g)) => g
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| ([v[0], v[1], v[2]], v[3].clamp(0, 3) as u8))
+            .collect(),
+        _ => Vec::new(),
+    };
     let link = Link {
         target_offset: turn.vec([ox, oy, oz]),
         target_line: line,
@@ -140,10 +179,17 @@ pub(super) fn carry_in(
             format,
             collected,
             interval,
+            filter: match more.get(&"Filter".into()) {
+                Some(Tag::String(f)) => Some(f.to_string_lossy()),
+                _ => None,
+            },
+            name_column: int("NameColumn"),
+            platform_column: int("PlatformColumn"),
             ..Config::default()
         },
         due: None,
         last: None,
+        panels,
     };
     with_world(|w| w.dims[dim].displays.links.insert(pos, link));
 }

@@ -831,6 +831,9 @@ pub struct Panel<K> {
     pub inputs: Vec<Input>,
     /// `targeting`.
     pub outputs: Vec<PanelPos>,
+    /// `targetedByLinks`: the display links joined to it (each the link's position and the
+    /// slot its arrow points from, `amount` unused), one a link.
+    pub links: Vec<Input>,
     /// `redstonePowered`: a redstone link into it is powered (paused).
     pub redstone_powered: bool,
     /// `activeCraftingArrangement`.
@@ -859,6 +862,7 @@ impl<K> Panel<K> {
             recipe_output: 1,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            links: Vec::new(),
             redstone_powered: false,
             craft: Vec::new(),
             promise_clearing: -1,

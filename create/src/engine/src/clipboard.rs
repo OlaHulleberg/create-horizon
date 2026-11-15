@@ -84,6 +84,33 @@ pub struct Content {
     pub previously_opened_page: i32,
 }
 
+/// `ClipboardValueSettingsHandler.interact` on a placed clipboard: each of its entries whose
+/// text `to` lacks is added (checked as it was, without its item) to `to`'s first page of 11
+/// entries or fewer, else to a new page; `to` is written on once anything is added. Whether
+/// anything was.
+pub fn copy_entries(to: &mut Content, from: &Content) -> bool {
+    let mut add: Vec<Entry> = Vec::new();
+    for e in from.pages.iter().flatten() {
+        if to.pages.iter().flatten().any(|x| x.text == e.text) {
+            continue;
+        }
+        add.push(Entry {
+            checked: e.checked,
+            text: e.text.clone(),
+            icon: None,
+        });
+    }
+    let any = !add.is_empty();
+    for e in add {
+        match to.pages.iter_mut().find(|p| p.len() <= 11) {
+            Some(page) => page.push(e),
+            None => to.pages.push(vec![e]),
+        }
+        to.kind = Kind::Written;
+    }
+    any
+}
+
 /// `StringSplitter.splitLines(text, width, Style.EMPTY, ..)` by character widths: each line's
 /// start and end (a line ends at a `\n`, or once a character overflows at the last space so far,
 /// or before that character; the `\n` or space at the end belongs to no line).
@@ -1013,5 +1040,31 @@ mod tests {
         };
         assert_eq!(Edit::decode(&edit.encode()), Some(edit.clone()));
         assert_eq!(Open::decode(&edit.encode()), None);
+    }
+
+    #[test]
+    fn entries_copy_from_a_placed_clipboard() {
+        let e = |t: &str, c: bool| Entry {
+            checked: c,
+            text: t.into(),
+            icon: Some(("minecraft:stone".into(), 1)),
+        };
+        let mut to = Content {
+            pages: vec![(0..11).map(|i| e(&format!("n{i}"), false)).collect()],
+            ..Content::default()
+        };
+        let from = Content {
+            pages: vec![vec![e("n3", true), e("new", true)], vec![e("other", false)]],
+            ..Content::default()
+        };
+        assert!(copy_entries(&mut to, &from));
+        assert_eq!(to.kind, Kind::Written);
+        // The first page takes one more (12), then a new page.
+        assert_eq!(to.pages[0].len(), 12);
+        assert_eq!(to.pages[0][11].text, "new");
+        assert!(to.pages[0][11].checked);
+        assert_eq!(to.pages[0][11].icon, None);
+        assert_eq!(to.pages[1][0].text, "other");
+        assert!(!copy_entries(&mut to, &from), "nothing new");
     }
 }

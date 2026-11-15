@@ -156,6 +156,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
                 remove,
                 clear_promises: flags & 2 != 0,
                 reset: flags & 4 != 0,
+                links_reset: flags & 8 != 0,
             };
             gauge::configure(&mut lv, player, pp, c);
         }
@@ -191,6 +192,52 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
                 return;
             }
             connect(&mut lv, player, from, to);
+        }
+        // `FactoryPanelConnectionHandler.onRightClick` on a display link: `checkForIssues`, then
+        // `FactoryPanelConnectionPacket` with the link's nearest slot.
+        b'D' => {
+            let Some(pp) = read_pp(&mut r) else { return };
+            let (Some(x), Some(y), Some(z)) = (r.i32(), r.i32(), r.i32()) else {
+                return;
+            };
+            let link = [x, y, z];
+            if !near(link) {
+                return;
+            }
+            let Some(link_facing) = crate::glue::display::display_link_facing(&lv, link) else {
+                return;
+            };
+            match gauge::connect_link(&mut lv, pp, link, link_facing) {
+                Err(key) => {
+                    say(lv.host, player, &format!("create.{key}"), Vec::new(), "red");
+                    let at = player.entity().position(&*lv.host).unwrap_or([0.0; 3]);
+                    let _ = lv.level.play_sound(
+                        &mut *lv.host,
+                        "create:deny",
+                        at,
+                        mod_api::SoundSource::Blocks,
+                        1.0,
+                        1.0,
+                    );
+                }
+                Ok(()) => {
+                    let name = Text::translate("block.create.display_link", Vec::new());
+                    say(
+                        lv.host,
+                        player,
+                        "create.factory_panel.link_connected",
+                        vec![name],
+                        "green",
+                    );
+                    let _ = player.play_sound(
+                        lv.host,
+                        "minecraft:block.amethyst_block.place",
+                        mod_api::SoundSource::Blocks,
+                        0.5,
+                        0.5,
+                    );
+                }
+            }
         }
         // A short click on a panel with an item.
         b'H' => {
@@ -348,6 +395,8 @@ struct ConfigScreen {
     remove: Option<PanelPos>,
     clear_promises: bool,
     reset: bool,
+    /// `sendRedstoneReset`: the links joined to it let go.
+    links_reset: bool,
     sent: bool,
 }
 
@@ -553,6 +602,7 @@ pub(super) fn open_config(host: &mut dyn ClientHost, pp: PanelPos) {
         remove: None,
         clear_promises: false,
         reset: false,
+        links_reset: false,
         sent: false,
         panel,
     };
@@ -597,8 +647,10 @@ fn settings(host: &dyn ClientHost, c: &ConfigScreen) -> Vec<u8> {
     }
     put_i32(&mut m, c.output as i32);
     put_i32(&mut m, c.clearing);
-    let flags =
-        u8::from(c.remove.is_some()) | (u8::from(c.clear_promises) << 1) | (u8::from(c.reset) << 2);
+    let flags = u8::from(c.remove.is_some())
+        | (u8::from(c.clear_promises) << 1)
+        | (u8::from(c.reset) << 2)
+        | (u8::from(c.links_reset) << 3);
     m.push(flags);
     if let Some(r) = c.remove {
         put_pp(&mut m, r);
@@ -687,6 +739,7 @@ struct Rects {
     craft: [f32; 4],
     output: [f32; 4],
     promises: [f32; 4],
+    links: [f32; 4],
 }
 
 fn rects(x: f32, y: f32, w: [f32; 2]) -> Rects {
@@ -699,6 +752,7 @@ fn rects(x: f32, y: f32, w: [f32; 2]) -> Rects {
         craft: [x + 31.0, y + 27.0, 18.0, 18.0],
         output: [x + 160.0, y + 48.0, 16.0, 16.0],
         promises: [x + 68.0, y + w[1] - 24.0, 16.0, 16.0],
+        links: [x + 9.0, y + w[1] - 24.0, 16.0, 16.0],
     }
 }
 
@@ -1031,6 +1085,41 @@ fn render_config(
     if let Some(f) = &c.panel.filter {
         draw.item_stack(f, [x + 214.0, y + 68.0 + preview - 26.0 + 13.0], 26.0);
     }
+    // Links joined to it (`REDSTONE LINKS`: the redstone link's item in a frogport slot).
+    if !c.panel.links.is_empty() {
+        let l = r.links;
+        draw.sprite(
+            "create:gui/frogport_and_mailbox",
+            [26.0, 55.0, 18.0, 18.0],
+            [l[0] - 1.0, l[1] - 1.0, 18.0, 18.0],
+            None,
+        );
+        if let Some(k) = item_key(host, "create:redstone_link") {
+            draw.item(k, [l[0], l[1]], 16.0);
+        }
+        if inside(l, mouse) {
+            tip = Some(vec![
+                styled(
+                    tr(
+                        host,
+                        "create.gui.factory_panel.has_link_connections",
+                        "Gauge has connected links",
+                    ),
+                    HEADER,
+                    false,
+                ),
+                styled(
+                    tr(
+                        host,
+                        "create.gui.factory_panel.left_click_disconnect",
+                        "Left-Click to disconnect",
+                    ),
+                    "dark_gray",
+                    true,
+                ),
+            ]);
+        }
+    }
     // Promises expire after.
     let state = c.clearing;
     let label = match state {
@@ -1315,6 +1404,16 @@ pub(super) fn screen_mouse_pressed(
                             return;
                         }
                     }
+                }
+                // Remove the links' connections (`sendRedstoneReset`).
+                if inside(r.links, mouse) {
+                    c.links_reset = true;
+                    click(host);
+                    let m = settings(host, c);
+                    c.links_reset = false;
+                    c.panel.links.clear();
+                    LATER.with_borrow_mut(|l| l.0.push(m));
+                    return;
                 }
                 // Clear promises.
                 if inside(r.promises, mouse) {

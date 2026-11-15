@@ -51,6 +51,8 @@ pub(super) struct Shown {
     /// Whether it feeds another panel (`targeting`).
     pub feeds: bool,
     pub inputs: Vec<ShownInput>,
+    /// `targetedByLinks`: the display links joined to it (their slot and arrow's bend).
+    pub links: Vec<ShownInput>,
     pub craft: Vec<ItemStack>,
 }
 
@@ -92,6 +94,23 @@ pub(super) fn shown_of(host: &dyn Host, nbt: &Compound) -> Vec<Shown> {
     list.iter()
         .filter_map(|t| {
             let Tag::Compound(c) = t else { return None };
+            let list = |key: &str| match c.get(&key.into()) {
+                Some(Tag::List(l)) => l
+                    .iter()
+                    .filter_map(|t| {
+                        let Tag::Compound(i) = t else { return None };
+                        let p = super::ints(i.get(&"Pos".into()));
+                        (p.len() == 3).then(|| ShownInput {
+                            from: ([p[0], p[1], p[2]], int(i, "Slot").clamp(0, 3) as u8),
+                            amount: int(i, "Amount").max(0) as u32,
+                            bend: int(i, "Bend"),
+                            success: flag(i, "Success"),
+                        })
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let links = list("Links");
             let inputs = match c.get(&"Inputs".into()) {
                 Some(Tag::List(l)) => l
                     .iter()
@@ -135,6 +154,7 @@ pub(super) fn shown_of(host: &dyn Host, nbt: &Compound) -> Vec<Shown> {
                 flash: int(c, "Flash"),
                 feeds: flag(c, "Feeds"),
                 inputs,
+                links,
                 craft,
             })
         })
@@ -269,6 +289,38 @@ pub(crate) fn short_click(host: &mut dyn ClientHost, pos: [i32; 3], slot: u8, wr
         return;
     }
     gauge_screen::open_config(host, pp);
+}
+
+/// `FactoryPanelConnectionHandler.onRightClick` on a display link (one with a
+/// `FactoryPanelSupportBehaviour`) while joining: the use key is taken (the link's screen does
+/// not open) and the server checks and joins them.
+pub(super) fn interaction_key(
+    host: &mut dyn ClientHost,
+    event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
+) -> mod_api::Flow {
+    if event.key != mod_api::InteractionKey::Use || event.hand != mod_api::Hand::Main {
+        return mod_api::Flow::Continue;
+    }
+    let Some((from, _)) = CLIENT.with_borrow(|c| c.connecting) else {
+        return mod_api::Flow::Continue;
+    };
+    let Some(mod_api::CrosshairTarget::Block { pos, .. }) = host.crosshair_target() else {
+        return mod_api::Flow::Continue;
+    };
+    let pos = [pos.x, pos.y, pos.z];
+    if crate::glue::redstone::client_block_of(host, pos) != Some(Block::DisplayLink) {
+        return mod_api::Flow::Continue;
+    }
+    CLIENT.with_borrow_mut(|c| c.connecting = None);
+    if event.attempt == mod_api::InteractionAttempt::Press {
+        let mut m = vec![b'D'];
+        put_pp(&mut m, from);
+        for v in pos {
+            put_i32(&mut m, v);
+        }
+        net::send_to_server(host, CHANNEL, &m);
+    }
+    mod_api::Flow::Cancel
 }
 
 /// `FactoryPanelConnectionHandler.onRightClick` for clicks off a panel: a click on any block
@@ -573,6 +625,63 @@ fn draw_path(
     }
 }
 
+/// `renderPath` for a display link joined to panel `to` (`displayLinkMode`): green dots, from
+/// the panel toward the link (`pathReversed`, the link not being an output).
+fn draw_link_path(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    face: Face,
+    facing: Dir,
+    to: PanelPos,
+    link: &ShownInput,
+) {
+    let diff = fx::path_diff(face, facing, link.from, to);
+    let start = fx::slot_center(face, facing, to.1);
+    let origin = [0, 1, 2].map(|i| f64::from(to.0[i]) + start[i]);
+    let path = fx::path(diff, link.bend, |t| {
+        let o = fx::path_point(face, facing, t);
+        blocked(host, [0, 1, 2].map(|i| origin[i] + o[i]))
+    });
+    let (sx, sy) = fx::slot_offset(to.1);
+    let (mut x, mut z) = (0.0f32, 0.0f32);
+    for d in &path {
+        let o = d.offset();
+        let data2d = match d {
+            Dir::South => 0.0,
+            Dir::West => 1.0,
+            Dir::North => 2.0,
+            _ => 3.0,
+        };
+        let y = ((data2d % 2.0) * 0.125) / 512.0;
+        draw.push();
+        panel_frame(draw, face, facing);
+        draw.translate([sx as f32 * 0.5 + 0.25 + x, y, sy as f32 * 0.5 + 0.25 + z]);
+        let options = TerrainModelOptions::default().with_tint(0x3C9852);
+        draw_model_with(draw, host, dotted_model(*d), options);
+        draw.pop();
+        x += o[0] as f32 * 0.5;
+        z += o[2] as f32 * 0.5;
+    }
+}
+
+/// The tinted copy of `AllPartialModels.FACTORY_PANEL_DOTTED` pointing `d`.
+fn dotted_model(d: Dir) -> &'static str {
+    match d {
+        Dir::North => DOTS[0],
+        Dir::South => DOTS[1],
+        Dir::West => DOTS[2],
+        _ => DOTS[3],
+    }
+}
+
+/// The dotted connection partials, tinted.
+pub(super) const DOTS: [&str; 4] = [
+    "create:block/factory_gauge/connections/dotted_north_tinted",
+    "create:block/factory_gauge/connections/dotted_south_tinted",
+    "create:block/factory_gauge/connections/dotted_west_tinted",
+    "create:block/factory_gauge/connections/dotted_east_tinted",
+];
+
 /// The filter's item on its panel (`FilteringRenderer`, `ValueBoxRenderer.renderItemIntoValueBox`).
 fn draw_item(
     draw: &mut dyn BlockEntityDrawContext,
@@ -651,6 +760,9 @@ impl BlockEntityPart for GaugeDraw {
             }
             for input in &p.inputs {
                 draw_path(draw, host, face, facing, pp, p, input, g);
+            }
+            for link in &p.links {
+                draw_link_path(draw, host, face, facing, pp, link);
             }
             if let Some(f) = &p.filter {
                 draw_item(draw, host, face, facing, p.slot, f);

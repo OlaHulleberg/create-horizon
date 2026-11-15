@@ -80,6 +80,16 @@ pub(crate) fn shown(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<i32> {
     (max > 1).then_some(max)
 }
 
+/// `FilteringBehaviour.getValueSettings` of the filter slot at `pos` while its count shows
+/// (`acceptsValueSettings`).
+pub(crate) fn settings(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<create_engine::board::Settings> {
+    let max = shown(lv, pos)?;
+    Some(amount_at(lv.dim, pos).settings(max))
+}
+
 /// `FunnelBlockEntity.getAmountToExtract` and `getModeToExtract` for the funnel `f` at `pos`:
 /// a stack when it supports no amount, one item at a time for an andesite funnel (its filter
 /// is never active), else the board's count, exactly on its second row.

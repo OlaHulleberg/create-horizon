@@ -2523,6 +2523,52 @@ fn roller_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(u32, Dir)> {
 
 /// `shareValuesToAdjacent`: the rollers in line across its facing, of the same state, up to 99
 /// each way, take its filter and mode.
+/// The item in the filter slot of the contraption controls or roller at `pos`.
+pub(crate) fn mounted_filter(dim: usize, pos: [i32; 3], roller: bool) -> Option<String> {
+    with_world(|w| {
+        let d = &w.dims[dim];
+        if roller {
+            d.rollers.get(&pos).and_then(|r| r.0.clone())
+        } else {
+            d.controls.get(&pos).and_then(|c| c.filter.clone())
+        }
+    })
+    .flatten()
+}
+
+/// `FilteringBehaviour.setFilter` on the contraption controls or roller at `pos`: refused when
+/// the item fails its predicate (`CONTRAPTION_CONTROLLED`, `isValidMaterial`); a roller's is
+/// shared with the rollers in line. Whether it was set.
+pub(crate) fn set_mounted_filter(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    roller: bool,
+    item: Option<String>,
+) -> bool {
+    let fits = match item.as_deref() {
+        None => true,
+        Some(i) if roller => valid_pave_material(lv, i),
+        Some(i) => actors::CONTRAPTION_CONTROLLED.contains(&i),
+    };
+    if !fits {
+        return false;
+    }
+    let dim = lv.dim;
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        if roller {
+            d.rollers.entry(pos).or_default().0 = item;
+        } else {
+            d.controls.entry(pos).or_default().filter = item;
+        }
+    });
+    if roller {
+        share_roller(lv, pos);
+    }
+    mark_pos_unsaved(dim, pos);
+    true
+}
+
 fn share_roller(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
     let Some((state, facing)) = roller_at(lv, pos) else {

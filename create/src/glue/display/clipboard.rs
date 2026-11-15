@@ -268,9 +268,35 @@ pub(super) fn client_message(
     let Some(edit) = cb::Edit::decode(data) else {
         return true;
     };
-    // A placed clipboard's pages are its block's port's.
-    if edit.pos.is_some() {
-        return false;
+    // A placed clipboard's (`targetedBlock`): written onto the block, from within reach.
+    if let Some(pos) = edit.pos {
+        let near = player.entity().position(&*host).is_some_and(|at| {
+            (0..3)
+                .map(|i| (at[i] - (f64::from(pos[i]) + 0.5)).powi(2))
+                .sum::<f64>()
+                < 24.0 * 24.0
+        });
+        let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
+            return true;
+        };
+        let Some(mut lv) = crate::glue::server::ServerLevel::new(host, &dimension) else {
+            return true;
+        };
+        if !near || !lv.is_loaded(pos) {
+            return true;
+        }
+        let Some(stack) = crate::glue::decor::placed_clipboard(lv.dim, pos)
+            .or_else(|| crate::glue::decor::clipboard_stack(&*lv.host))
+        else {
+            return true;
+        };
+        let name = lv.block_state(pos).and_then(|s| lv.state_name(s));
+        if name.as_deref() != Some("create:clipboard") {
+            return true;
+        }
+        let edited = with_content(&stack, edit.content.as_ref());
+        crate::glue::decor::set_placed_clipboard(&mut lv, pos, edited, edit.content.is_some());
+        return true;
     }
     let slot = u32::from(edit.slot);
     if slot >= 9 {
