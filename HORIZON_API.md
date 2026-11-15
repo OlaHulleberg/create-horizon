@@ -17,8 +17,13 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   a pre-save hook would let it write only when the game saves.
 - **The server's tick freeze** (`TickRateManager.runsNormally`): under `/tick freeze` Create's block
   entities stop, but a mod's level tick still runs, so the glue's machines go on (`glue/redstone`).
-- **Reading the scoreboard** (objectives and their scores): Create's scoreboard and death count display
-  sources (`ScoreboardDisplaySource`, `DeathCounterDisplaySource`) are left out (`glue/display`).
+- **Reading and writing the scoreboard** (`Scoreboard.getObjective`, `listPlayerScores`, `addObjective`,
+  `getOrCreatePlayerScore(..).set`): Create's scoreboard and death count display sources
+  (`ScoreboardDisplaySource`, `DeathCounterDisplaySource`) are left out (`glue/display`). A player's deaths
+  are readable (`player_stat`), but the death counter keeps them in its own objective (`create_auto_deaths`),
+  whose scores outlive a player going offline and show in `/scoreboard`; a host call listing an objective's
+  scores (owner and value) by its name, and one adding a dummy objective and setting a holder's score, would
+  close both.
 - **A world-open phase.** `world_lifecycle` reports only failures and closing; Create's world opens at the
   first `level_load`.
 - **Block-state facts:** `isRedstoneConductor` and `isSolidRender` (cart assemblers, stock links, schematic
@@ -196,10 +201,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 ## Left out of the port, not for want of API
 
-- Display and redstone: the station summary display source (Create's `GlobalTrainDisplayData`, every train's
-  arrival predictions, is not in the trains port), the factory gauge status source (gauges are not connected
-  to display links); the clipboard copies no value box `interaction::values` does not serve (a funnel's filter count, a
-  chassis' range, tunnels' side filters, deployers' filters), nor from a placed clipboard.
+- Display and redstone: the clipboard copies no steam engine's `RotationDirection` and no table cloth's price,
+  neither setting being ported; redstone links feeding factory gauges (`RedstoneLinkBlockEntity`'s
+  `FactoryPanelSupportBehaviour`) are not joined (display links are).
 - Logistics: a sloped belt collides as a flat one; Create's `BeltShapes` (by facing, slope and part) are
   not declared yet, though content shapes can select by several properties (as the steam engine's do).
 - Contraptions: moving block entities carry their item slots, a deployer's state and a tank's fluid, and other

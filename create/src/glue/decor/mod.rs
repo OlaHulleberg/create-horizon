@@ -4,6 +4,9 @@
 //! vertical gearbox and empty blaze burner items, and Create's copper shingles and tiles
 //! weathering, scraped and waxed. The rules are `create_engine::decor`'s.
 //!
+//! A placed clipboard opens its pages' screen (the clipboard port's, `display::clipboard`), which
+//! writes them back onto it and its `written` state; sneaking or a left click picks it up.
+//!
 //! What blocks hold (brackets, placards' items, crates' supplies, hatches' filters, clipboards)
 //! is kept per level and saved with its column as `create_decor`, in the legacy layout. Only
 //! placards, bells and hatches with a timer running, and blocks that changed, are looked at each
@@ -12,9 +15,6 @@
 //! (`create:placard`), each drawn by its renderer.
 //!
 //! Left out, for want of API (each in `HORIZON_API.md`):
-//! - The clipboard's pages screen on a placed clipboard (legacy `create_clipboard::open`, and
-//!   `set_clipboard_stack` after an edit): the clipboard's screen is the clipboard port's; the
-//!   click here is taken so the lever template does not flip.
 //! - The weathering neighbours of Create's copper (`WeatheringCopper` and its age, legacy
 //!   `behaviours().data(state)`): no API says which blocks are weathering copper nor their age;
 //!   Create's own are known to the engine and vanilla's are read from their ids (`exposed_`,
