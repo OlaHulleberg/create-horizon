@@ -1,6 +1,6 @@
 //! A value box's value on the face of the block looked at (`ScrollValueRenderer` with
 //! `ValueBox.TextValueBox.renderContents`): the number a creative motor, a rotation speed
-//! controller or a valve handle is set to, drawn by the block's own block entity (the kinetic
+//! controller, a valve handle or a brass diode is set to, drawn by the block's own block entity (the kinetic
 //! one) on the box of the face looked at, whether the box itself is hovered or not. The client
 //! asks the server for the setting while it looks at such a block (the question a board asks,
 //! `create:value_settings` with the position alone), every half second; the server sends the
@@ -8,9 +8,8 @@
 //! anew only when its data changes, and once more when the client looks away.
 //!
 //! Left out: the icon boxes (`IconValueBox`: bearings', pistons', arms', tunnels' modes: the
-//! icons are GUI sprites, which a block entity's draw has no atlas for), the brass diodes' and
-//! the ejector's numbers (their block entities are drawn by other parts; the same call would
-//! serve them) and the filter slots' items and counts (`FilteringRenderer`).
+//! icons are GUI sprites, which a block entity's draw has no atlas for), the ejector's number
+//! (its block entity is the logistics one, drawn by another part; the same call would serve it) and the filter slots' items and counts (`FilteringRenderer`).
 
 use super::super::net;
 use super::board::block_at;
@@ -37,6 +36,14 @@ fn text_of(block: B, value: i32, degrees: &str) -> Option<String> {
         B::CreativeMotor | B::RotationSpeedController => Some(value.abs().to_string()),
         // `ValveHandleScrollValueBehaviour`: the angle in degrees.
         b if create_engine::dye::is_valve_handle(b) => Some(format!("{}{degrees}", value.abs())),
+        // `BrassDiodeBlockEntity.format`: ticks, seconds or minutes.
+        B::PulseRepeater | B::PulseExtender | B::PulseTimer => Some(if value < 60 {
+            format!("{value}t")
+        } else if value < 20 * 60 {
+            format!("{}s", value / 20)
+        } else {
+            format!("{}m", value / 20 / 60)
+        }),
         _ => None,
     }
 }
@@ -105,6 +112,11 @@ pub(crate) fn draw(host: &dyn ClientHost, pos: [i32; 3], draw: &mut dyn BlockEnt
     let Some(block) = shown_block(host, at) else {
         return;
     };
+    let facing = super::super::client_table(host, |t| {
+        t.get(block_at(host, pos)).and_then(|(_, i)| i.facing)
+    })
+    .flatten();
+    let diode = matches!(block, B::PulseRepeater | B::PulseExtender | B::PulseTimer);
     let Some(value) = super::board::seen(pos) else {
         return;
     };
@@ -131,18 +143,26 @@ pub(crate) fn draw(host: &dyn ClientHost, pos: [i32; 3], draw: &mut dyn BlockEnt
     let Ok(width) = draw.text_width(&text) else {
         return;
     };
-    // `AngleHelper.horizontalAngle(side) + 180` about y, then 90 (up) or 270 (down) about x.
-    let horizontal: f32 = match side {
-        Dir::South => 0.0,
-        Dir::East => 90.0,
-        Dir::North => 180.0,
-        Dir::West => 270.0,
-        Dir::Up | Dir::Down => 0.0,
+    // `AngleHelper.horizontalAngle(side) + 180` about y, then 90 (up) or 270 (down) about x; a
+    // diode's box (`BrassDiodeScrollSlot`) lies on it, turned by its facing.
+    let horizontal = |d: Dir| -> f32 {
+        match d {
+            Dir::South => 0.0,
+            Dir::East => 90.0,
+            Dir::North => 180.0,
+            Dir::West => 270.0,
+            Dir::Up | Dir::Down => 0.0,
+        }
     };
-    let pitch: f32 = match side {
-        Dir::Up => 90.0,
-        Dir::Down => 270.0,
-        _ => 0.0,
+    let (horizontal, pitch) = if diode {
+        (horizontal(facing.unwrap_or(Dir::North)), 90.0)
+    } else {
+        let pitch: f32 = match side {
+            Dir::Up => 90.0,
+            Dir::Down => 270.0,
+            _ => 0.0,
+        };
+        (horizontal(side), pitch)
     };
     draw.push();
     draw.translate([slot[0] as f32, slot[1] as f32, slot[2] as f32]);
@@ -167,6 +187,11 @@ pub(crate) fn draw(host: &dyn ClientHost, pos: [i32; 3], draw: &mut dyn BlockEnt
         if single { -margin } else { margin },
         0.0,
     ]);
-    let _ = draw.text(&text, [0.0, 0.0], 0xEDEDED, true, Some(0x333333));
+    // A diode's box draws plain text in its own colour (`getOverrideColor`).
+    if diode {
+        let _ = draw.text(&text, [0.0, 0.0], 0x592424, true, None);
+    } else {
+        let _ = draw.text(&text, [0.0, 0.0], 0xEDEDED, true, Some(0x333333));
+    }
     draw.pop();
 }
