@@ -342,6 +342,25 @@ pub(super) fn tick_drains(lv: &mut ServerLevel<'_>) {
     }
 }
 
+/// `insert_into_drain`, or (`simulate`) what it would leave without taking any.
+pub(crate) fn insert_into_drain_sim(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    side: create_engine::kinetics::Dir,
+    item: &str,
+    count: u8,
+    simulate: bool,
+) -> Option<u8> {
+    if !simulate {
+        return insert_into_drain(lv, pos, side, item, count);
+    }
+    let dim = lv.dim;
+    let emptying = recipes::with(|r| r.emptying.clone()).unwrap_or_default();
+    let mut d = with_world(|w| w.dims[dim].drains.get(&pos).cloned()).flatten()?;
+    let took = create_engine::drain::insert(&mut d, item, count, side, &emptying);
+    Some(count - took)
+}
+
 /// `count` of `item` coming into the drain at `pos` travelling toward `side`
 /// (`tryInsertingFromSide`): how many are left over. None when no drain is there.
 pub(crate) fn insert_into_drain(

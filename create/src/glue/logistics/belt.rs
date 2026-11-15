@@ -379,21 +379,35 @@ pub fn insert_into_from(
     item: &belt::Item,
     from_belt: bool,
 ) -> Option<u8> {
+    handle_insertion(lv, next, side, item, from_belt, false)
+}
+
+/// `DirectBeltInputBehaviour.handleInsertion(stack, side, simulate)` at `next`: what is left of
+/// `item` (moving toward `side`) after what takes items there takes it, or (`simulate`) would;
+/// None when nothing there takes items.
+pub fn handle_insertion(
+    lv: &mut ServerLevel<'_>,
+    next: [i32; 3],
+    side: Dir,
+    item: &belt::Item,
+    from_belt: bool,
+    simulate: bool,
+) -> Option<u8> {
     // An item drain takes it as a depot would (the fluids subsystem's).
-    if let Some(left) =
-        super::super::fluids::insert_into_drain(lv, next, side, &item.item, item.count)
-    {
+    if let Some(left) = super::super::fluids::insert_into_drain_sim(
+        lv, next, side, &item.item, item.count, simulate,
+    ) {
         return Some(left);
     }
     // So do upward saws, basins, millstones and crushing wheels (processing's).
-    if let Some(left) = super::super::processing::belt_input(lv, next, side, item) {
+    if let Some(left) = super::super::processing::belt_input_sim(lv, next, side, item, simulate) {
         return Some(left);
     }
     if let Some(f) = funnel_at(lv, next) {
-        return Some(funnel_direct_input(lv, next, f, item));
+        return Some(funnel_direct_input(lv, next, f, item, simulate));
     }
     if let Some((block, powered)) = super::chute::chute_at(lv, next) {
-        return Some(chute_direct_input(lv, next, block, powered, item));
+        return Some(chute_direct_input(lv, next, block, powered, item, simulate));
     }
     let dim = lv.dim;
     let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
@@ -403,8 +417,8 @@ pub fn insert_into_from(
         let mut rest = 0;
         if super::arms::is_ejector(dim, next) {
             let left = super::arms::depot_insert(lv, next, &item.item, item.count, true);
-            if left == item.count {
-                return Some(item.count);
+            if left == item.count || simulate {
+                return Some(left);
             }
             if !depot_items(lv, next).is_empty() {
                 return Some(super::arms::depot_insert(
@@ -420,12 +434,16 @@ pub fn insert_into_from(
         if !depot_items(lv, next).is_empty() || !ejector_accepts(dim, next) {
             return Some(item.count);
         }
+        let limit = items::stack_limit(&*lv.host, &item.item);
+        if simulate {
+            return Some(item.count.saturating_sub(limit));
+        }
         let put = belt_stack(lv, item)?;
         if !items::set_slot(lv, next, 0, Some(put)) {
             return None;
         }
         let held = create_engine::depot::Held {
-            position: 0.0,
+            position: if side.axis() == Axis::Y { 0.5 } else { 0.0 },
             from: create_engine::depot::Side::from_dir(side),
             angle: item.angle,
             side_offset: item.side_offset,
@@ -438,7 +456,23 @@ pub fn insert_into_from(
     // BeltBlockEntity.tryInsertingFromSide on the next belt.
     let (c2, index, seg2) = belt_segment(lv, next)?;
     if !seg2.transports() {
-        return None;
+        return Some(item.count);
+    }
+    // A brass tunnel over it that distributes takes the whole stack while it holds none and
+    // its flap filter on that side passes it.
+    let above = [next[0], next[1] + 1, next[2]];
+    if super::tunnel::has_distribution(lv, above) {
+        let from = side.opposite();
+        if !super::tunnel::can_take(lv, above)
+            || !super::tunnel::flap_filter_passes(lv, above, from, &item.item)
+        {
+            return Some(item.count);
+        }
+        if !simulate {
+            super::flaps::tunnel(lv, next, from, true);
+            super::tunnel::set_stack(lv, above, item, Some(from));
+        }
+        return Some(0);
     }
     let rpm2 = with_world(|w| w.speed(dim, c2)).flatten().unwrap_or(0.0);
     let speed2 = belt::direction_aware_speed(rpm2, seg2.facing);
@@ -450,6 +484,9 @@ pub fn insert_into_from(
             || !b.items.can_insert_at_from_side(index, side, movement2)
         {
             return Some(item.count);
+        }
+        if simulate {
+            return Some(0);
         }
         let mut moved = item.clone();
         moved.locked = false;
@@ -532,6 +569,7 @@ fn funnel_direct_input(
     pos: [i32; 3],
     f: super::funnel::FunnelState,
     item: &belt::Item,
+    simulate: bool,
 ) -> u8 {
     if f.belt.is_some() || f.extracting || f.facing != Dir::Up || f.powered {
         return item.count;
@@ -543,8 +581,18 @@ fn funnel_direct_input(
         return item.count;
     }
     let behind = create_engine::funnel::behind(pos, f.facing);
+    if simulate {
+        let room = items::insert_room(lv, behind, face(f.facing), &stack).unwrap_or(0);
+        return item.count.saturating_sub(room.min(255) as u8);
+    }
+    let moved = stack.clone();
     let left = items::insert_item(lv, behind, face(f.facing), stack);
-    left.map_or(0, |l| l.count().min(255) as u8)
+    let left = left.map_or(0, |l| l.count().min(255) as u8);
+    if left != item.count {
+        super::flaps::funnel(lv, pos, true);
+        crate::glue::redstone::detectors::funnel_transfer(lv, pos, &moved);
+    }
+    left
 }
 
 /// `ChuteBlockEntity`'s `DirectBeltInputBehaviour`: while it may take items
@@ -557,6 +605,7 @@ fn chute_direct_input(
     block: create_engine::Block,
     powered: bool,
     item: &belt::Item,
+    simulate: bool,
 ) -> u8 {
     let above = [pos[0], pos[1] + 1, pos[2]];
     let below = [pos[0], pos[1] - 1, pos[2]];
@@ -571,6 +620,13 @@ fn chute_direct_input(
     };
     if !super::chute::chute_accepts(lv, pos, block, powered, &stack) {
         return item.count;
+    }
+    if simulate {
+        return if super::chute::chute_stack(lv, pos).is_none() {
+            0
+        } else {
+            item.count
+        };
     }
     if super::chute::chute_take(lv, pos, &stack) {
         0
@@ -962,36 +1018,20 @@ impl BeltSide<'_, '_> {
         // axis, or a brass tunnel beside it) takes the whole stack while it holds none, and
         // holds back the next.
         if with_world(|w| w.dims[dim].brass.contains_key(&t)) == Some(true) {
-            // `stuckAtTunnel`: its filter on the side the item comes in by must pass it.
-            if !super::tunnel::flap_filter_passes(self.lv, t, movement.opposite(), &item.item) {
+            // `stuckAtTunnel` (`canInsert`): its own filter on the side the item comes in by
+            // must pass it.
+            let from = movement.opposite();
+            if !super::tunnel::own_filter_passes(self.lv, t, from, &item.item) {
                 return true;
             }
-            if !shape.junction() && !super::tunnel::brass_connected(self.lv, t) {
+            if !super::tunnel::has_distribution(self.lv, t) {
                 return false;
             }
-            let took = with_world(|w| {
-                let d = &mut w.dims[dim];
-                let b = d.brass.get_mut(&t)?;
-                // `canTakeItems`: none held, and not handing out with its synchronized group.
-                if b.stack.is_some() || b.synced {
-                    return Some(false);
-                }
-                // `setStackToDistribute`.
-                b.stack = Some((item.item.clone(), item.count));
-                b.stack_progress = item.progress.clone();
-                b.entered_from = Some(movement.opposite());
-                b.progress = -1;
-                b.new_item = true;
-                if !d.brass_running.contains(&t) {
-                    d.brass_running.push(t);
-                }
-                w.mark_unsaved(dim, t);
-                Some(true)
-            })
-            .flatten();
-            if took == Some(true) {
-                item.count = 0;
+            if !super::tunnel::can_take(self.lv, t) {
+                return true;
             }
+            super::tunnel::set_stack(self.lv, t, item, Some(from));
+            item.count = 0;
             return true;
         }
         if !create_engine::tunnel::splits(axis, shape, movement, item.count) {

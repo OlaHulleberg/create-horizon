@@ -62,7 +62,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 pub use client::animated;
-pub(crate) use machines::insert_into_drain;
+pub(crate) use machines::insert_into_drain_sim;
 
 /// Whether emptying `item` gives water (`GenericItemEmptying.emptyItem(..).getFluid()`): a
 /// water bucket, a water bottle.

@@ -255,7 +255,9 @@ pub const BRASS_TIMER: i32 = 10;
 /// `BrassTunnelBlockEntity.distribute`: hands `count` items out to `targets` outputs from
 /// `previous_output` (a randomizing tunnel from `random`, any number), as the mode says;
 /// `insert(target, count, simulate)` is `insertIntoTunnel` (None: that output takes nothing of
-/// it, else what it leaves). The items left over.
+/// it, else what it leaves). The items left over; None when a forced mode found an output that
+/// takes none of it, so nothing was handed out (`distribute` returns early, its
+/// `previousOutputIndex` kept).
 pub fn distribute(
     count: u8,
     targets: usize,
@@ -263,9 +265,9 @@ pub fn distribute(
     mode: Mode,
     random: usize,
     mut insert: impl FnMut(usize, u8, bool) -> Option<u8>,
-) -> u8 {
+) -> Option<u8> {
     if targets == 0 {
-        return count;
+        return Some(count);
     }
     let start = match mode {
         Mode::PreferNearest | Mode::Synchronize => 0,
@@ -318,7 +320,7 @@ pub fn distribute(
                 let whole = if before.is_some() { n + 1 } else { n };
                 if left.is_none() || left == Some(whole) {
                     if force {
-                        return count;
+                        return None;
                     }
                     if split && simulate {
                         remaining -= 1;
@@ -362,7 +364,7 @@ pub fn distribute(
         .iter()
         .map(|&(t, n)| insert(t, n, false).unwrap_or(n))
         .sum();
-    to_distribute + failed
+    Some(to_distribute + failed)
 }
 
 #[cfg(test)]
@@ -380,7 +382,7 @@ mod tests {
             }
             Some(0)
         });
-        assert_eq!((left, got), (0, vec![(1, 5)]));
+        assert_eq!((left, got), (Some(0), vec![(1, 5)]));
         let mut got = Vec::new();
         distribute(5, 3, 2, Mode::Synchronize, 7, |t, n, sim| {
             if !sim {
@@ -401,7 +403,7 @@ mod tests {
             }
             Some(0)
         });
-        assert_eq!((left, got), (0, [4, 3, 3]));
+        assert_eq!((left, got), (Some(0), [4, 3, 3]));
         // One output refusing: the other two share it.
         let mut got = [0u8; 3];
         let left = distribute(9, 3, 0, Mode::Split, 0, |t, n, sim| {
@@ -413,10 +415,56 @@ mod tests {
             }
             Some(0)
         });
-        assert_eq!((left, got), (0, [5, 0, 4]));
+        assert_eq!((left, got), (Some(0), [5, 0, 4]));
         // Outputs taking at most 2: what is left stays in the tunnel.
         let left = distribute(9, 3, 0, Mode::Split, 0, |_, n, _| Some(n.saturating_sub(2)));
-        assert_eq!(left, 3);
+        assert_eq!(left, Some(3));
+    }
+
+    #[test]
+    fn forced_modes_hand_out_nothing_while_an_output_refuses() {
+        // Forced split: one output full, nothing moves (Create returns before inserting).
+        let mut got = Vec::new();
+        let left = distribute(6, 3, 0, Mode::ForcedSplit, 0, |t, n, sim| {
+            if t == 2 {
+                return Some(n);
+            }
+            if !sim {
+                got.push((t, n));
+            }
+            Some(0)
+        });
+        assert_eq!((left, got.len()), (None, 0));
+        // Plain split hands it to the other two.
+        let mut got = [0u8; 3];
+        let left = distribute(6, 3, 0, Mode::Split, 0, |t, n, sim| {
+            if t == 2 {
+                return Some(n);
+            }
+            if !sim {
+                got[t] += n;
+            }
+            Some(0)
+        });
+        assert_eq!((left, got), (Some(0), [3, 3, 0]));
+        // Forced round robin: the output in turn refusing holds the stack.
+        let left = distribute(4, 2, 1, Mode::ForcedRoundRobin, 0, |t, n, _| {
+            if t == 1 { Some(n) } else { Some(0) }
+        });
+        assert_eq!(left, None);
+        // Round robin waits for the output in turn too, but the next turn moves on
+        // (`if (robin) break`, then `previousOutputIndex++`).
+        let mut got = Vec::new();
+        let left = distribute(4, 2, 1, Mode::RoundRobin, 0, |t, n, sim| {
+            if t == 1 {
+                return Some(n);
+            }
+            if !sim {
+                got.push((t, n));
+            }
+            Some(0)
+        });
+        assert_eq!((left, got), (Some(4), vec![]));
     }
 
     #[test]

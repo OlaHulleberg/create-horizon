@@ -89,13 +89,15 @@ use mod_api::{
 
 pub struct Logistics;
 
-/// The blocks whose stacks are their block entity's slots, with the slot count.
-const CONTAINERS: [(Block, usize); 5] = [
+/// The blocks whose stacks are their block entity's slots, with the slot count (a brass
+/// tunnel's: the stack it hands out).
+const CONTAINERS: [(Block, usize); 6] = [
     (Block::Depot, create_engine::depot::SLOTS),
     (Block::WeightedEjector, create_engine::depot::SLOTS),
     (Block::ItemVault, create_engine::vault::SLOTS),
     (Block::Chute, 1),
     (Block::SmartChute, 1),
+    (Block::BrassTunnel, 1),
 ];
 
 /// The blocks a player uses, items land on, or whose contents a hopper changes.
@@ -152,6 +154,9 @@ impl Subsystem for Logistics {
             // `handlers`', asked first.
             let inputs = if matches!(block, Block::Depot | Block::WeightedEjector) {
                 vec![0]
+            } else if block == Block::BrassTunnel {
+                // Only through its handler (`BrassTunnelItemHandler`, `handlers`).
+                Vec::new()
             } else {
                 all.clone()
             };
@@ -161,7 +166,11 @@ impl Subsystem for Logistics {
                     slots,
                     faces: std::array::from_fn(|_| all.clone()),
                     inputs,
-                    outputs: all,
+                    outputs: if block == Block::BrassTunnel {
+                        Vec::new()
+                    } else {
+                        all
+                    },
                     menu: None,
                 },
             );
@@ -617,7 +626,12 @@ fn use_block(
         Block::BrassFunnel | Block::BrassBeltFunnel => {
             funnel::use_funnel_filter(&mut lv, pos, click)
         }
-        Block::BrassTunnel => tunnel::use_tunnel_filter(&mut lv, pos, click),
+        // A filter slot first (`ValueSettingsInputHandler`), then `useWithoutItem`: an empty
+        // hand takes the stacks of the tunnel's group.
+        Block::BrassTunnel => {
+            tunnel::use_tunnel_filter(&mut lv, pos, click)
+                || click.stack.is_none() && main && tunnel::grab_stacks(&mut lv, pos, click.player)
+        }
         Block::Belt => {
             // A potion named with its contents: a water bottle washes the belt as water does.
             let potion = click
@@ -763,6 +777,7 @@ fn contents_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
             }
         }
         Block::Depot | Block::WeightedEjector => depot::depot_contents_changed(lv, pos),
+        Block::BrassTunnel => tunnel::slot_changed(lv, pos),
         _ => {}
     }
 }
