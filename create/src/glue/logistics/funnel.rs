@@ -205,9 +205,11 @@ fn belt_facing_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Dir> {
     seg.transports().then_some(seg.facing)
 }
 
-/// Whether a depot is below `pos` (`DepotBehaviour`'s input takes belt funnels).
+/// Whether a depot or a weighted ejector is below `pos` (`DepotBehaviour`'s input takes belt
+/// funnels, `allowingBeltFunnels`).
 fn depot_below(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
-    info_at(lv, [pos[0], pos[1] - 1, pos[2]]).is_some_and(|(b, _)| b == Block::Depot)
+    info_at(lv, [pos[0], pos[1] - 1, pos[2]])
+        .is_some_and(|(b, _)| matches!(b, Block::Depot | Block::WeightedEjector))
 }
 
 /// `activateExtractingBeltFunnel` over a depot: up to `max` of the inventory behind onto the
@@ -222,6 +224,32 @@ fn push_onto_depot(
     max: (u32, bool),
 ) -> Option<Option<bool>> {
     let below = [pos[0], pos[1] - 1, pos[2]];
+    if super::arms::is_ejector(lv.dim, below) {
+        // An ejector: its own insertion (charged only, merging up to its stack size).
+        let Some(stack) = take_filtered(lv, pos, behind, side, max) else {
+            return Some(None);
+        };
+        let moved = stack.clone();
+        let (id, progress) = super::belt::belt_name(&*lv.host, &stack);
+        let count = stack.count().min(64) as u8;
+        let mut item = create_engine::belt::Item::new(&id, count, random_angle(lv, below), false);
+        item.progress = progress;
+        let left =
+            super::belt::handle_insertion(lv, below, facing, &item, false, false).unwrap_or(count);
+        if left > 0
+            && let Some(back) = items::with_count(&stack, u32::from(left))
+            && let Some(rest) = items::insert_item(lv, behind, side, back)
+        {
+            let at = pos.map(|v| f64::from(v) + 0.5);
+            items::drop_stack(lv, at, [0.0; 3], rest, 0);
+        }
+        if left == count {
+            return Some(Some(false));
+        }
+        super::flaps::funnel(lv, pos, false);
+        crate::glue::redstone::detectors::funnel_transfer(lv, pos, &moved);
+        return Some(Some(true));
+    }
     if !super::depot::depot_items(lv, below).is_empty() {
         return Some(Some(false));
     }
@@ -258,6 +286,13 @@ fn pull_from_depot(
 ) -> Option<Option<bool>> {
     let below = [pos[0], pos[1] - 1, pos[2]];
     let dim = lv.dim;
+    // An ejector keeps the funnel facing its back for its launches (`canFunnelsPullFrom`).
+    if let Some((Block::WeightedEjector, info)) = info_at(lv, below)
+        && let Some(f) = funnel_at(lv, pos)
+        && info.facing == Some(f.facing.opposite())
+    {
+        return Some(None);
+    }
     let resting = with_world(|w| {
         w.dims[dim]
             .depots
@@ -490,11 +525,17 @@ fn extract_in_front(
     max: (u32, bool),
 ) -> Option<Option<bool>> {
     let (at, v) = create_engine::funnel::output(pos, facing);
-    // Something still in front: wait (`lastObserved`, the overflow area).
+    // An item still in the way: wait (`lastObserved`, `getEntityOverflowScanningArea`: the
+    // funnel's own block, and the block below for any but a floor funnel).
+    let low = if facing == Dir::Up { 0.0 } else { 1.0 };
     let near = items::items_in(
         lv,
-        [at[0] - 0.5, at[1] - 0.5, at[2] - 0.5],
-        [at[0] + 0.5, at[1] + 0.5, at[2] + 0.5],
+        [
+            f64::from(pos[0]),
+            f64::from(pos[1]) - low,
+            f64::from(pos[2]),
+        ],
+        pos.map(|v| f64::from(v) + 1.0),
     );
     if !near.is_empty() {
         return Some(Some(false));
@@ -559,4 +600,74 @@ fn push_onto_belt(
     super::flaps::funnel(lv, pos, false);
     crate::glue::redstone::detectors::funnel_transfer(lv, pos, &moved);
     Some(Some(true))
+}
+
+thread_local! {
+    /// Item entities inside a funnel this tick (`FunnelBlock.entityInside`): level, funnel and
+    /// entity, taken at the level's tick, where the entity can be changed.
+    static INSIDE: std::cell::RefCell<Vec<(usize, [i32; 3], u32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// An item entity `entity` is inside the funnel at `pos` of level `dim`.
+pub fn item_inside(dim: usize, pos: [i32; 3], entity: u32) {
+    INSIDE.with_borrow_mut(|v| {
+        if !v.contains(&(dim, pos, entity)) {
+            v.push((dim, pos, entity));
+        }
+    });
+}
+
+/// `FunnelBlock.entityInside` for the items inside funnels this tick: an inserting, unpowered
+/// funnel takes an item past its opening (a quarter block in from its centre, toward its back)
+/// into the inventory behind it, as much as fits and its filter passes.
+pub fn collect_inside(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let mine: Vec<([i32; 3], u32)> = INSIDE.with_borrow_mut(|v| {
+        let mine = v
+            .iter()
+            .filter(|e| e.0 == dim)
+            .map(|e| (e.1, e.2))
+            .collect();
+        v.retain(|e| e.0 != dim);
+        mine
+    });
+    for (pos, id) in mine {
+        let Some(f) = funnel_at(lv, pos) else {
+            continue;
+        };
+        if f.belt.is_some() || f.powered || f.extracting {
+            continue;
+        }
+        let Some(e) = lv.host.entity(id) else {
+            continue;
+        };
+        let Some(item) = lv.host.item_entity(e) else {
+            continue;
+        };
+        let (Some(stack), Some(at)) = (item.stack(&*lv.host), e.position(&*lv.host)) else {
+            continue;
+        };
+        if !create_engine::funnel::past_opening(pos, f.facing, at) {
+            continue;
+        }
+        if !funnel_passes(lv, pos, &stack) {
+            continue;
+        }
+        let behind = create_engine::funnel::behind(pos, f.facing);
+        let count = stack.count();
+        let moved = stack.clone();
+        let left = items::insert_item(lv, behind, face(f.facing), stack);
+        match left {
+            None => {
+                let _ = e.discard(&mut *lv.host);
+            }
+            Some(l) if l.count() < count => {
+                let _ = item.set_stack(&mut *lv.host, l);
+            }
+            _ => continue,
+        }
+        super::flaps::funnel(lv, pos, true);
+        crate::glue::redstone::detectors::funnel_transfer(lv, pos, &moved);
+    }
 }

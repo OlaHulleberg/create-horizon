@@ -958,9 +958,29 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         if !super::funnel::funnel_passes(self.lv, pos, &stack) {
             return Some(item.count);
         }
+        // A brass funnel set to exactly N: only a stack of at least N, and only when all N
+        // fit; then N of it (`getAmountToExtract`, `getModeToExtract`).
+        let (amount, exact) = super::amount::funnel_extraction(self.lv, pos, &f);
+        let mut stack = stack;
+        let mut kept = 0;
+        if exact {
+            let n = amount.min(255) as u8;
+            if n > item.count {
+                return Some(item.count);
+            }
+            let Some(part) = items::with_count(&stack, u32::from(n)) else {
+                return Some(item.count);
+            };
+            let room = items::insert_room(self.lv, behind, face(f.facing), &part).unwrap_or(0);
+            if room < u32::from(n) {
+                return Some(item.count);
+            }
+            kept = item.count - n;
+            stack = part;
+        }
         let moved = stack.clone();
         let left = items::insert_item(self.lv, behind, face(f.facing), stack);
-        let left = left.map_or(0, |l| l.count().min(255) as u8);
+        let left = left.map_or(0, |l| l.count().min(255) as u8) + kept;
         if left != item.count {
             super::flaps::funnel(self.lv, pos, true);
             crate::glue::redstone::detectors::funnel_transfer(self.lv, pos, &moved);

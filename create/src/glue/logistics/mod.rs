@@ -41,6 +41,9 @@
 //!   fans' real pull), and a portable storage interface gives up to the amount, never exactly.
 //! - A brass tunnel's mode value box and the comparators beside a vault's other blocks are the
 //!   interaction and redstone subsystems'.
+//! - Belts offer no `ITEMS` handler (their items are the engine's, and a handler can't learn its
+//!   transaction aborted: HORIZON_API.md), so tunnels pass none of their belt's on: a brass
+//!   tunnel's handler (`handlers::TunnelItems`) only takes a stack to hand out.
 //!
 //! The kinetic block entity type is declared by `Kinetics`; `Entities`, after it, adds the
 //! handlers and the renderer to it. Belts' segments and pulleys are posed partials that
@@ -282,6 +285,7 @@ impl Subsystem for Logistics {
         belt::tick_covers(lv);
         belt::tick_belts(lv);
         belt::transport_passengers(lv);
+        funnel::collect_inside(lv);
         flaps::send(lv);
     }
 
@@ -725,12 +729,25 @@ impl BlockPart for LogisticsBlock {
         _level: &mut dyn mod_api::LevelRandomHost,
         event: &mut mod_api::EntityInsideEvent<'_>,
     ) {
-        if event.kind == "minecraft:item" {
-            return;
-        }
         let Some(id) = states::id(event.state) else {
             return;
         };
+        if event.kind == "minecraft:item" {
+            // `FunnelBlock.entityInside`: an item inside a funnel, taken at the level's tick.
+            let funnel = with_world(|w| {
+                w.table
+                    .get(id)
+                    .map(|(b, _)| matches!(b, Block::AndesiteFunnel | Block::BrassFunnel))
+            })
+            .flatten();
+            if funnel == Some(true)
+                && let Some(dim) = super::world::level_index(event.dimension)
+            {
+                let pos = [event.pos.x, event.pos.y, event.pos.z];
+                funnel::item_inside(dim, pos, event.entity as u32);
+            }
+            return;
+        }
         let belt = with_world(|w| w.table.get(id).map(|(b, _)| b == Block::Belt)).flatten();
         if belt != Some(true) {
             return;

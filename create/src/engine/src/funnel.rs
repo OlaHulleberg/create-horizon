@@ -248,8 +248,36 @@ pub fn filter_slot(facing: Dir, shape: Option<BeltShape>, side: Dir) -> Option<[
     })
 }
 
+/// `FunnelBlock.entityInside`'s test for an item at `at` in the funnel at `pos` facing `facing`:
+/// on the open side of its opening (the centre moved a quarter block toward its back), seen
+/// along its facing.
+pub fn past_opening(pos: [i32; 3], facing: Dir, at: [f64; 3]) -> bool {
+    let o = facing.offset();
+    let open = [0, 1, 2].map(|i| f64::from(pos[i]) + 0.5 - f64::from(o[i]) * 0.25);
+    let i = match facing.axis() {
+        crate::kinetics::Axis::X => 0,
+        crate::kinetics::Axis::Y => 1,
+        crate::kinetics::Axis::Z => 2,
+    };
+    let diff = at[i] - open[i];
+    // `if (projectedDiff < 0 == positive) return`.
+    (diff < 0.0) != facing.positive()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn funnels_take_items_on_their_open_side() {
+        use super::past_opening;
+        use crate::kinetics::Dir;
+        // A floor funnel: its opening a quarter block up from the centre.
+        assert!(past_opening([0, 0, 0], Dir::Up, [0.5, 0.3, 0.5]));
+        assert!(!past_opening([0, 0, 0], Dir::Up, [0.5, 0.2, 0.5]));
+        // A wall funnel facing north takes what lies north of z 0.75.
+        assert!(past_opening([0, 0, 0], Dir::North, [0.5, 0.5, 0.6]));
+        assert!(!past_opening([0, 0, 0], Dir::North, [0.5, 0.5, 0.9]));
+    }
+
     use super::*;
 
     #[test]

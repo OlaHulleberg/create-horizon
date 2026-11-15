@@ -60,7 +60,9 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 
 - **Rolling back mod-owned state with a transaction.** A handler cannot learn that its transaction aborted,
   so Create's tanks (whose contents live in the engine) offer no `FLUIDS` capability, packagers and
-  frogports offer no `ITEMS` handlers to hoppers, funnels and chutes, and a portable storage interface
+  frogports offer no `ITEMS` handlers to hoppers, funnels and chutes, nor do belts (`ItemHandlerBeltSegment`;
+  so a tunnel offers none of its belt's: an andesite tunnel none at all, a brass tunnel only its own stack to
+  insert into, nothing to take out), and a portable storage interface
   offers its contraption's storage to Create's chutes and funnels only, not to hoppers. A close/abort callback
   on `Transaction` (or a journal for mod state) would close them.
 - **A notice for any container's contents changing.** `contents_changed` reaches only the changed block's own
@@ -261,8 +263,7 @@ Each line: what Create does, what the legacy glue called, and the API addition t
   redstone contact on an elevator column is not turned into an elevator contact by the wrench; dyed items
   (`DYED_COLOR`) make one link frequency with their undyed item.
 - Processing: a deployer does not feed food or drinks to a player in front of it (`finishUsingItem` on another
-  player), and its overflow (`overflowItems`) drops at it rather than staying for funnels and hoppers; crafting
-  remainders of saw, crushing and millstone inputs are not given back.
+  player).
 - Decor: table cloths hold no items and run no shops (`TableClothBlockEntity`); copycats have no placement
   helpers and do not take their material's sound, friction or light; girders have no placement helper; an item
   hatch's filter compares item ids, not a filter item's list or attributes.

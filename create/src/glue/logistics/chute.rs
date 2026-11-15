@@ -622,6 +622,11 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
         } else {
             ([pos[0], pos[1] + 1, pos[2]], Direction::Down, 1.0)
         };
+        // `findEntities` and `extractFromBelt`: a chute the fans lift picks up what lies in
+        // the air current under it.
+        if rising && lift_from_below(lv, pos, block, powered) {
+            continue;
+        }
         // `grabCapability`: a chute there hands its items on itself.
         if chute_at(lv, above).is_some() {
             continue;
@@ -631,6 +636,11 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
         let psi = actors::is_item_interface(lv, above);
         let from = items::items_at(lv, above, Some(from_side));
         if from.is_none() && !psi {
+            // A chute in a fan's column looks again later: something may drift into the
+            // current, or the fan may start pulling it up.
+            if rising || fan_on_column(lv, pos) {
+                with_world(|w| w.dims[dim].chute_pulls.retry(pos, time));
+            }
             continue;
         }
         // Create's own containers say when they change; others are looked at again later.
@@ -691,6 +701,121 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
             }
         }
     }
+}
+
+/// Whether an encased fan sits at either end of the column of chutes through `pos`.
+fn fan_on_column(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    [1, -1].into_iter().any(|step| {
+        let mut p = [pos[0], pos[1] + step, pos[2]];
+        while chute_at(lv, p).is_some() {
+            p[1] += step;
+        }
+        info_at(lv, p).is_some_and(|(b, _)| b == Block::EncasedFan)
+    })
+}
+
+/// `updateAirFlow`'s `bottomPullDistance` for the chute at `pos`: how far below it the current
+/// of fans pulling it up (`pull - push`) reaches, up to 3 blocks by speed, none over a chute.
+fn bottom_pull(lv: &ServerLevel<'_>, pos: [i32; 3]) -> f32 {
+    let speed = chute_pull(lv, pos, 0) - chute_push(lv, pos, 0);
+    let max = if speed >= 128.0 {
+        3.0
+    } else if speed >= 64.0 {
+        2.0
+    } else if speed >= 32.0 {
+        1.0
+    } else {
+        (speed / 32.0).clamp(0.0, 1.0) * 1.0
+    };
+    if max <= 0.0 || chute_at(lv, [pos[0], pos[1] - 1, pos[2]]).is_some() {
+        return 0.0;
+    }
+    crate::glue::processing::flow_limit_from(lv, pos, Dir::Down, max).max(0.0)
+}
+
+/// `findEntities` then `extractFromBelt` for the empty, rising chute at `pos`: the first item
+/// entity it may take in the current under it, else the first item at the middle of a belt
+/// segment within reach below. True when it took one.
+fn lift_from_below(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, powered: bool) -> bool {
+    let dim = lv.dim;
+    let reach = bottom_pull(lv, pos);
+    if reach > 0.0 {
+        let c = pos.map(|v| f64::from(v) + 0.5);
+        let d = f64::from(reach);
+        let lo = [c[0] - 0.45, c[1] - d - 0.5 - 0.45, c[2] - 0.45];
+        let hi = [c[0] + 0.45, c[1] - 0.5 + 0.45, c[2] + 0.45];
+        for e in items::items_in(lv, lo, hi) {
+            let Some(item) = lv.host.item_entity(e) else {
+                continue;
+            };
+            let Some(stack) = item.stack(&*lv.host) else {
+                continue;
+            };
+            if !chute_accepts(lv, pos, block, powered, &stack) {
+                continue;
+            }
+            // Where the entity is, in the chute's own blocks (below it: negative).
+            let y = e
+                .position(&*lv.host)
+                .map_or(-1.0, |p| (p[1] - f64::from(pos[1])) as f32);
+            set_chute_stack(lv, pos, Some(stack));
+            with_world(|w| w.dims[dim].chutes.insert(pos, y));
+            let _ = e.discard(&mut *lv.host);
+            return true;
+        }
+    }
+    // The belt (or depot) up to one block past the current's reach.
+    let flow = if reach > 0.0 { reach } else { 0.0 };
+    let mut i = 1;
+    while i as f32 <= flow + 1.0 {
+        let below = [pos[0], pos[1] - i, pos[2]];
+        if let Some((c, index, _)) = super::belt::belt_segment(lv, below) {
+            let middle = index as f32 + 0.5;
+            let found = with_world(|w| {
+                let b = w.dims[dim].belts.get(&c)?;
+                Some(
+                    b.items
+                        .items
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, it)| (it.position - middle).abs() < 0.5)
+                        .map(|(n, it)| (n, it.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .flatten()
+            .unwrap_or_default();
+            for (n, it) in found {
+                let Some(stack) = super::belt::belt_stack(lv, &it) else {
+                    continue;
+                };
+                if !chute_accepts(lv, pos, block, powered, &stack) {
+                    continue;
+                }
+                let removed = with_world(|w| {
+                    let d = &mut w.dims[dim];
+                    let b = d.belts.get_mut(&c)?;
+                    if b.items.items.get(n) != Some(&it) {
+                        return None;
+                    }
+                    b.items.items.remove(n);
+                    d.belt_changes.push(c);
+                    Some(())
+                })
+                .flatten();
+                if removed.is_none() {
+                    continue;
+                }
+                set_chute_stack(lv, pos, Some(stack));
+                let start = -((i - 1) as f32);
+                with_world(|w| w.dims[dim].chutes.insert(pos, start));
+                return true;
+            }
+            return false;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// A player's click on a smart chute's filter slot (`FilteringBehaviour.onShortInteract` through
