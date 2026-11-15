@@ -1518,8 +1518,14 @@ fn own_states(b: &CreateBlock) -> Option<Decision> {
                     "west" => [14. / 16., 0., 0., 1., 1., 1.],
                     _ => [0., 0., 0., 2. / 16., 1., 1.],
                 };
-                values.insert(format!("floor,{facing}"), json!([[0., 0., 0., 1., 2. / 16., 1.]]));
-                values.insert(format!("ceiling,{facing}"), json!([[0., 14. / 16., 0., 1., 1., 1.]]));
+                values.insert(
+                    format!("floor,{facing}"),
+                    json!([[0., 0., 0., 1., 2. / 16., 1.]]),
+                );
+                values.insert(
+                    format!("ceiling,{facing}"),
+                    json!([[0., 14. / 16., 0., 1., 1., 1.]]),
+                );
                 values.insert(format!("wall,{facing}"), json!([wall]));
             }
             json!({ "properties": ["face", "facing"], "values": values })
