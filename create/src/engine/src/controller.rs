@@ -400,8 +400,8 @@ impl Server {
 
 /// `LecternControllerBlockEntity.playerInRange`: the eyes within 0.4 of the block interaction
 /// range (4.5) of the block's centre.
-pub fn in_lectern_range(eyes: [f64; 3], pos: [i32; 3]) -> bool {
-    let reach = 0.4 * 4.5;
+pub fn in_lectern_range(eyes: [f64; 3], pos: [i32; 3], interaction_range: f64) -> bool {
+    let reach = 0.4 * interaction_range;
     let d: f64 = (0..3)
         .map(|i| (eyes[i] - (f64::from(pos[i]) + 0.5)).powi(2))
         .sum();
@@ -642,7 +642,7 @@ mod tests {
         assert_eq!(l.stop(5), Some(1));
         assert!(!l.try_start(2, false, true, 5), "not the tick it was left");
         assert!(l.try_start(2, false, true, 6));
-        assert!(in_lectern_range([0.5, 1.6, 0.5], [0, 0, 0]));
-        assert!(!in_lectern_range([0.5, 1.6, 3.0], [0, 0, 0]));
+        assert!(in_lectern_range([0.5, 1.6, 0.5], [0, 0, 0], 4.5));
+        assert!(!in_lectern_range([0.5, 1.6, 3.0], [0, 0, 0], 4.5));
     }
 }

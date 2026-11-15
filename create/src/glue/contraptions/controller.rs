@@ -35,9 +35,17 @@ pub const ITEM: &str = "create:linked_controller";
 /// The linked controller's item, for drawing it on lecterns.
 static CONTROLLER_KEY: std::sync::OnceLock<mod_api::ItemKey> = std::sync::OnceLock::new();
 
+/// The key of whether a lectern controller has a user (`hasUser`), in its block entity's data.
+const LECTERN_USER: &str = "LecternUser";
+
+/// `LinkedControllerItemRenderer`'s partials: the powered controller and a button.
+const POWERED_MODEL: &str = "create:item/linked_controller/powered";
+const BUTTON_MODEL: &str = "create:item/linked_controller/button";
+
 /// `LecternControllerRenderer`: the linked controller lying on the lectern's top, turned to its
-/// facing and tilted 22° (`renderInLectern`, its model as authored). Its buttons' presses
-/// (`renderDepression`, the powered model while used) are not drawn.
+/// facing and tilted 22° (`renderInLectern`). While someone uses it, it is the powered model
+/// with its six buttons; for the local player using it, each button sinks as its key is held
+/// (`renderDepression`, `buttons` chasing 0 or 1 at 0.4 a tick).
 struct LecternDraw;
 
 #[mod_api::horizon_part]
@@ -63,21 +71,96 @@ impl mod_api::BlockEntityPart for LecternDraw {
         };
         let facing = info.facing.unwrap_or(create_engine::kinetics::Dir::North);
         let yaw = create_engine::decor::horizontal_angle(facing) - 90.0;
+        let active = matches!(
+            event.entity.nbt.get(&LECTERN_USER.into()),
+            Some(Tag::Byte(1))
+        );
+        let mine = ACTIVE.get() && CLIENT.with_borrow(|c| c.lectern == Some(event.pos));
         let draw = &mut *event.draw;
+        let t = draw.partial();
         draw.push();
         draw.translate([0.5, 1.45, 0.5]);
         draw.rotate_about([0.0, 1.0, 0.0], yaw, [0.0; 3]);
         draw.translate([0.28, 0.0, 0.0]);
         draw.rotate_about([0.0, 0.0, 1.0], -22.0, [0.0; 3]);
-        draw.item(
-            &ItemStack::of(*key),
-            mod_api::ItemDisplayContext::None,
-            None,
-            0,
-        );
+        if !(active && draw_powered(draw, host, mine.then_some(t))) {
+            draw.item(
+                &ItemStack::of(*key),
+                mod_api::ItemDisplayContext::None,
+                None,
+                0,
+            );
+        }
         draw.pop();
-        draw.keep();
+        if !mine {
+            draw.keep();
+        }
     }
+}
+
+/// `LinkedControllerItemRenderer.render` for a lectern in use: the powered model and the six
+/// buttons where Create puts them, each sunk by up to 3/4 px as it is pressed when `depression`
+/// (the frame's partial tick) is given. False when the models are missing.
+fn draw_powered(
+    draw: &mut dyn mod_api::BlockEntityDrawContext,
+    host: &dyn ClientHost,
+    depression: Option<f32>,
+) -> bool {
+    let (Some(powered), Some(button)) = (model(host, POWERED_MODEL), model(host, BUTTON_MODEL))
+    else {
+        return false;
+    };
+    let options = mod_api::TerrainModelOptions::default;
+    // A model is drawn about its centre, as the item renderer does.
+    draw.push();
+    draw.translate([-0.5; 3]);
+    let drawn = draw.terrain_model(powered, options()).is_ok();
+    draw.pop();
+    if !drawn {
+        return false;
+    }
+    let s = 1.0 / 16.0;
+    let b = s * -0.75;
+    let presses = BUTTONS.with_borrow(|v| *v);
+    // The buttons' places, each from the last (`msr.translate` between `renderButton`s).
+    let steps: [[f32; 3]; 6] = [
+        [2.0 * s, 0.0, 8.0 * s],
+        [4.0 * s, 0.0, 0.0],
+        [-2.0 * s, 0.0, 2.0 * s],
+        [0.0, 0.0, -4.0 * s],
+        [3.0 * s, 0.0, 3.0 * s],
+        [2.0 * s, 0.0, 0.0],
+    ];
+    let mut at = [0.0f32; 3];
+    for (i, step) in steps.iter().enumerate() {
+        // The first four are drawn in a pushed pose, the last two from where it was.
+        if i == 4 {
+            at = [0.0; 3];
+        }
+        at = [at[0] + step[0], at[1] + step[1], at[2] + step[2]];
+        let sink = depression.map_or(0.0, |t| {
+            let (prev, now) = presses[i];
+            b * (prev + (now - prev) * t)
+        });
+        draw.push();
+        draw.translate([at[0] - 0.5, at[1] + sink - 0.5, at[2] - 0.5]);
+        let _ = draw.terrain_model(button, options());
+        draw.pop();
+    }
+    true
+}
+
+/// The standalone model `id`, resolved once.
+fn model(host: &dyn ClientHost, id: &'static str) -> Option<mod_api::ModelRef> {
+    if let Some(m) = MODELS.with_borrow(|m| m.get(id).copied()) {
+        return Some(m);
+    }
+    let m = host
+        .render_assets()
+        .model(&mod_api::Identifier::parse(id).ok()?)
+        .ok()?;
+    MODELS.with_borrow_mut(|c| c.insert(id, m));
+    Some(m)
 }
 const KEY: &str = "create_controller";
 const CUSTOM_DATA: &str = "minecraft:custom_data";
@@ -100,6 +183,15 @@ thread_local! {
     /// and the client tick's one test.
     static CLIENT: RefCell<Client> = RefCell::new(Client::default());
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    /// The buttons' presses (`LinkedControllerItemRenderer.buttons`): a tick ago and now.
+    static BUTTONS: RefCell<[(f32, f32); 6]> = const { RefCell::new([(0.0, 0.0); 6]) };
+    /// The lecterns' partial models, resolved.
+    static MODELS: RefCell<std::collections::HashMap<&'static str, mod_api::ModelRef>> =
+        RefCell::new(std::collections::HashMap::new());
+    /// What each lectern controller's block entity was last told of its user (none yet after
+    /// it loads: told once).
+    static SHOWN_USERS: RefCell<std::collections::HashMap<(usize, [i32; 3]), bool>> =
+        RefCell::new(std::collections::HashMap::new());
     /// The server's: the hand packets waiting for their player's tick (player, packet, game
     /// time), and lecterns placed or removed (dimension, position, placed, old state).
     static INPUTS: RefCell<Vec<(u128, ToServer, i64)>> = const { RefCell::new(Vec::new()) };
@@ -126,7 +218,27 @@ impl Subsystem for Controller {
         }
     }
 
+    fn synced_keys(&self) -> &'static [&'static str] {
+        &[LECTERN_USER]
+    }
+
+    fn standalone_models(&self, models: &mut Vec<String>) {
+        models.extend([POWERED_MODEL, BUTTON_MODEL].map(str::to_owned));
+    }
+
+    fn models_baked(&self, _host: &mut dyn ClientHost) {
+        MODELS.with_borrow_mut(std::collections::HashMap::clear);
+    }
+
+    /// A lectern the local player uses is drawn each frame (its buttons move).
+    fn animated(&self, block: Block, pos: [i32; 3], _entity: &mod_api::ModBlockEntity) -> bool {
+        block == Block::LecternController
+            && ACTIVE.get()
+            && CLIENT.with_borrow(|c| c.lectern == Some(pos))
+    }
+
     fn world_closed(&self) {
+        SHOWN_USERS.with_borrow_mut(std::collections::HashMap::clear);
         INPUTS.with_borrow_mut(Vec::clear);
         CHANGES.with_borrow_mut(Vec::clear);
         BUSY.set(false);
@@ -134,6 +246,7 @@ impl Subsystem for Controller {
 
     fn client_reset(&self) {
         CLIENT.with_borrow_mut(|c| *c = Client::default());
+        BUTTONS.with_borrow_mut(|b| *b = [(0.0, 0.0); 6]);
         ACTIVE.set(false);
     }
 
@@ -149,6 +262,10 @@ impl Subsystem for Controller {
 
     fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
         chunk_load(lv.dim, data);
+        // Its lecterns' block entities are told again that nobody uses them (`show_users`).
+        if data.get(&KEY.into()).is_some() {
+            BUSY.set(true);
+        }
     }
 
     fn chunk_data_save(&self, lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compound) {
@@ -157,6 +274,9 @@ impl Subsystem for Controller {
 
     /// A column left a level: its lecterns are forgotten (kept in its save).
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
+        SHOWN_USERS.with_borrow_mut(|s| {
+            s.retain(|(d, p), _| *d != dim || (p[0] >> 4, p[2] >> 4) != (chunk[0], chunk[1]))
+        });
         with_world(|w| {
             w.dims[dim]
                 .lecterns
@@ -357,6 +477,20 @@ fn client_tick(host: &mut dyn ClientHost) {
         let _ = host.play_local_sound(&sound, 0);
     }
     ACTIVE.set(CLIENT.with_borrow(Client::active));
+    // `LinkedControllerItemRenderer.tick`: each button chases its key, while active.
+    let pressed = CLIENT.with_borrow(|c| c.pressed);
+    let active = ACTIVE.get();
+    BUTTONS.with_borrow_mut(|v| {
+        for (i, b) in v.iter_mut().enumerate() {
+            let target = if active && pressed & (1 << i) != 0 {
+                1.0
+            } else {
+                0.0
+            };
+            b.0 = b.1;
+            b.1 += (target - b.1) * 0.4;
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -752,7 +886,7 @@ fn use_lectern(
     }
     let feet = me.entity().position(&*lv.host)?;
     let eyes = [feet[0], feet[1] + 1.62, feet[2]];
-    if !ct::in_lectern_range(eyes, pos) {
+    if !ct::in_lectern_range(eyes, pos, interaction_range(&*lv.host, me)) {
         return None;
     }
     let uuid = me.uuid();
@@ -771,6 +905,13 @@ fn use_lectern(
         send_client(lv.host, me, ToClient::LecternOn(pos));
     }
     Some(InteractionResult::Success)
+}
+
+/// `Attributes.BLOCK_INTERACTION_RANGE` of `player` (4.5, 5 in creative).
+fn interaction_range(host: &dyn Host, player: PlayerRef) -> f64 {
+    host.living(player.entity())
+        .and_then(|l| l.attribute_value(host, "minecraft:block_interaction_range"))
+        .unwrap_or(4.5)
 }
 
 /// `replaceWithLectern`: back to a lectern (facing and power kept), the controller dropped
@@ -875,7 +1016,10 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             let stays = player.is_some_and(|p| {
                 p.entity()
                     .position(&*lv.host)
-                    .is_some_and(|f| ct::in_lectern_range([f[0], f[1] + 1.62, f[2]], pos))
+                    .is_some_and(|f| {
+                        let range = interaction_range(&*lv.host, p);
+                        ct::in_lectern_range([f[0], f[1] + 1.62, f[2]], pos, range)
+                    })
             });
             if !stays {
                 with_world(|w| w.dims[dim].lecterns.get_mut(&pos).map(|l| l.stop(now)));
@@ -885,6 +1029,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             }
         }
     }
+    show_users(lv);
     with_world(|w| w.tick_controllers(dim));
     let busy = with_world(|w| {
         w.dims
@@ -893,6 +1038,33 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     })
     .unwrap_or(false);
     BUSY.set(busy || CHANGES.with_borrow(|c| !c.is_empty()));
+}
+
+/// Each lectern controller's block entity told whether it has a user, when that changed (its
+/// client draws the powered controller then).
+fn show_users(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let used: Vec<([i32; 3], bool)> = with_world(|w| {
+        w.dims[dim]
+            .lecterns
+            .iter()
+            .map(|(p, l)| (*p, l.user.is_some()))
+            .collect()
+    })
+    .unwrap_or_default();
+    for (pos, user) in used {
+        let shown = SHOWN_USERS.with_borrow(|s| s.get(&(dim, pos)).copied());
+        if shown == Some(user) {
+            continue;
+        }
+        let Some(entity) = lv.host.block_entity(lv.level, pos) else {
+            continue;
+        };
+        let data = Compound::from([(LECTERN_USER.into(), Tag::Byte(i8::from(user)))]);
+        if entity.merge_data(&mut *lv.host, data).is_ok() {
+            SHOWN_USERS.with_borrow_mut(|s| s.insert((dim, pos), user));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
