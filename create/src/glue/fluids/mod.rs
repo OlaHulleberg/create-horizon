@@ -13,11 +13,15 @@
 //!
 //! Creative fluid tanks join into tanks as fluid tanks do (`creative_tanks` in the engine's
 //! world), each block giving the tank's fluid (`plumbing.creative`). Steam engines hiss and puff
-//! at each stroke (`engine`'s client tick), boiler gauges swing to their level (`client`), and
-//! open pipe ends pour what passes them (`pipes::pour`).
+//! at each stroke (`engine`'s client tick), and boiler gauges swing to their level (`client`).
+//!
+//! A pump's flows grow through its pipes connection by connection and recede from the source
+//! (`flows`): glass pipes draw them, pipes splash, drip and pour them on their clients. Open ends
+//! let out every fluid: a bucket's worth of one with a block becomes a source, one without (milk,
+//! tea, potions) is taken a drop at a time, and each gives what is in front its effect
+//! (`open_end`).
 //!
 //! Left out:
-//! - A portable fluid interface's transfers: moving structures carry no tank's fluid.
 //! - The `FLUIDS` capability on Create's tanks, so other mods' handlers and Create's pumps reach
 //!   each other: the tanks' contents live in the engine's world, outside the game's transaction
 //!   journal, and a handler cannot learn that a transaction it wrote in was aborted to roll the

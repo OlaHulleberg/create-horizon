@@ -166,7 +166,7 @@ fn sound(lv: &mut ServerLevel<'_>, name: &str, pos: [i32; 3], volume: f32, pitch
 fn turned(lv: &ServerLevel<'_>, pos: [i32; 3], clicked: Dir) -> Option<mod_api::BlockState> {
     let state = lv.block_state(pos)?;
     let text = lv.host.block_state_string(state)?;
-    let (_, own) = states::split(&text);
+    let (name, own) = states::split(&text);
     let props: BTreeMap<String, String> = own
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -174,7 +174,12 @@ fn turned(lv: &ServerLevel<'_>, pos: [i32; 3], clicked: Dir) -> Option<mod_api::
     let facts = lv.host.block_states();
     // A `facing` that never points up is a horizontal one (HORIZONTAL_FACING).
     let horizontal = props.contains_key("facing") && state.with(&facts, "facing", "up").is_err();
-    let turned = create_engine::wrench::rotated(&props, horizontal, clicked);
+    let turned = if name == "create:mechanical_pump" {
+        // `PumpBlock.getRotatedBlockState`: a pump turns around, whichever face is clicked.
+        create_engine::wrench::reversed(&props)
+    } else {
+        create_engine::wrench::rotated(&props, horizontal, clicked)
+    };
     if turned == props {
         return None;
     }

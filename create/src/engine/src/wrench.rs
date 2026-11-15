@@ -135,6 +135,15 @@ pub fn rotated(
     out
 }
 
+/// `PumpBlock.getRotatedBlockState`: the state's `facing` turned around.
+pub fn reversed(props: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut out = props.clone();
+    if let Some(f) = props.get("facing").and_then(|v| dir_of(v)) {
+        out.insert("facing".into(), dir_name(f.opposite()).into());
+    }
+    out
+}
+
 const ALONG_FIRST: &str = "axis_along_first";
 
 /// The palette's stone types (`AllPaletteStoneTypes`), whose cut, polished, brick, layered and
@@ -222,6 +231,12 @@ pub fn wrenchable(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pump_turns_around() {
+        let p = props(&[("facing", "east"), ("waterlogged", "false")]);
+        assert_eq!(reversed(&p), props(&[("facing", "west"), ("waterlogged", "false")]));
+    }
 
     fn props(kv: &[(&str, &str)]) -> BTreeMap<String, String> {
         kv.iter()
