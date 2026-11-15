@@ -398,6 +398,23 @@ pub fn insert_into_from(
     let dim = lv.dim;
     let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&next)) == Some(true);
     if is_depot {
+        // An ejector merges onto what it holds, up to its stack size (`enableMerging`).
+        let mut item = item.clone();
+        let mut rest = 0;
+        if super::arms::is_ejector(dim, next) {
+            let left = super::arms::depot_insert(lv, next, &item.item, item.count, true);
+            if left == item.count {
+                return Some(item.count);
+            }
+            if !depot_items(lv, next).is_empty() {
+                return Some(super::arms::depot_insert(
+                    lv, next, &item.item, item.count, false,
+                ));
+            }
+            item.count -= left;
+            rest = left;
+        }
+        let item = &item;
         // DepotBehaviour.tryInsertingFromSide: only into an empty depot (an ejector's only
         // while charged, `canAcceptItems`).
         if !depot_items(lv, next).is_empty() || !ejector_accepts(dim, next) {
@@ -416,7 +433,7 @@ pub fn insert_into_from(
             fan: item.fan,
         };
         with_world(|w| w.depot_put(dim, next, Some(held)));
-        return Some(0);
+        return Some(rest);
     }
     // BeltBlockEntity.tryInsertingFromSide on the next belt.
     let (c2, index, seg2) = belt_segment(lv, next)?;

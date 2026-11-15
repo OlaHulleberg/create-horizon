@@ -64,6 +64,7 @@ mod stacks;
 pub use containers::TOOLBOX_TYPE;
 // A deployer riding a contraption (`DeployerMovementBehaviour`) acts and is carried as one in
 // the world does.
+pub(crate) use crafter::crafter_handler_insert;
 pub(crate) use deployer::activate as activate_deployer;
 pub(crate) use persist::{deployers_from_nbt, deployers_to_nbt};
 pub use press::transitional_of;

@@ -307,6 +307,11 @@ pub fn ejector_accepts(dim: usize, pos: [i32; 3]) -> bool {
     .unwrap_or(true)
 }
 
+/// Whether a weighted ejector is at `pos`.
+pub fn is_ejector(dim: usize, pos: [i32; 3]) -> bool {
+    with_world(|w| w.dims[dim].ejectors.contains_key(&pos)) == Some(true)
+}
+
 /// A block entity's slot, as (item, count).
 fn slot_at(lv: &ServerLevel<'_>, pos: [i32; 3], slot: usize) -> Option<Stack> {
     let s = items::slot(lv, pos, slot as u32)?;
@@ -476,9 +481,10 @@ impl arm::World for ArmWorld<'_, '_> {
                 }
                 Some(out)
             }
-            // Only the outputs give (`MillstoneInventoryHandler`, `BasinInventory`).
+            // Only a millstone's outputs give (`MillstoneInventoryHandler`); a basin gives from
+            // its inputs and outputs both (`CombinedInvWrapper` of two `BasinInventory`s).
             Kind::Millstone if slot >= 1 => take_slot(lv, pos, slot, amount, simulate),
-            Kind::Basin if create_engine::basin::OUTPUTS.contains(&slot) => {
+            Kind::Basin if slot < create_engine::basin::SLOTS => {
                 let out = take_slot(lv, pos, slot, amount, simulate)?;
                 if !simulate {
                     with_world(|w| w.dims[dim].mixer_checks.push([pos[0], pos[1] + 2, pos[2]]));
@@ -564,7 +570,8 @@ impl arm::World for ArmWorld<'_, '_> {
                 }
                 count - n
             }
-            // FunnelPoint: not while powered; into the inventory behind it.
+            // FunnelPoint: not while powered, only what its filter lets through; into the
+            // inventory behind it.
             Kind::Funnel => {
                 let Some(f) = funnel_at(lv, pos) else {
                     return count;
@@ -576,6 +583,9 @@ impl arm::World for ArmWorld<'_, '_> {
                 let Some(stack) = items::stack_of(&*lv.host, item, u32::from(count)) else {
                     return count;
                 };
+                if !super::funnel_passes(lv, pos, &stack) {
+                    return count;
+                }
                 if simulate {
                     let room = items::insert_room(lv, behind, face(f.facing), &stack).unwrap_or(0);
                     return count - room.min(u32::from(count)) as u8;
@@ -583,7 +593,16 @@ impl arm::World for ArmWorld<'_, '_> {
                 items::insert_item(lv, behind, face(f.facing), stack)
                     .map_or(0, |l| l.count().min(255) as u8)
             }
-            Kind::Millstone => put_slots(lv, pos, 0..1, item, count, simulate),
+            // MillstoneInventoryHandler.isItemValid: only what it can mill (`canProcess`).
+            Kind::Millstone => {
+                let mills = crate::glue::processing::recipes::with(|r| {
+                    r.milling.find_single(item).is_some()
+                }) == Some(true);
+                if !mills {
+                    return count;
+                }
+                put_slots(lv, pos, 0..1, item, count, simulate)
+            }
             // BlazeBurnerPoint: one at a time (`tryInsert` uses one up); a container left over
             // (a lava bucket's) comes back to the arm while it held only one, else drops.
             Kind::BlazeBurner => {
@@ -744,23 +763,34 @@ impl arm::World for ArmWorld<'_, '_> {
                 }
                 count - 1
             }
+            // BasinInventory.insertItem: one stack of a kind, in the slot that holds it, else in
+            // the first empty one.
             Kind::Basin => {
-                let left = put_slots(lv, pos, create_engine::basin::INPUTS, item, count, simulate);
+                let inputs = create_engine::basin::INPUTS;
+                let held: Vec<create_engine::processing::Slot> =
+                    inputs.clone().map(|i| slot_at(lv, pos, i)).collect();
+                let at = held
+                    .iter()
+                    .position(|s| s.as_ref().is_some_and(|(id, _)| id == item))
+                    .or_else(|| held.iter().position(Option::is_none));
+                let Some(at) = at else {
+                    return count;
+                };
+                let slot = inputs.start + at;
+                let left = put_slots(lv, pos, slot..slot + 1, item, count, simulate);
                 if !simulate && left != count {
                     with_world(|w| w.dims[dim].mixer_checks.push([pos[0], pos[1] + 2, pos[2]]));
                 }
                 left
             }
-            // A crafter takes one item while its slot is empty.
+            // The crafter's handler (`ConnectedInputHandler`): one item into each empty, idle,
+            // uncovered crafter of its group.
             Kind::Crafter => {
-                if slot_at(lv, pos, 0).is_some() {
+                let Some(stack) = items::stack_of(&*lv.host, item, u32::from(count)) else {
                     return count;
-                }
-                if !simulate {
-                    items::set_slot(lv, pos, 0, items::stack_of(&*lv.host, item, 1));
-                    with_world(|w| w.dims[dim].crafter_checks.push(pos));
-                }
-                count - 1
+                };
+                crate::glue::processing::crafter_handler_insert(lv, pos, stack, simulate)
+                    .map_or(0, |l| l.count().min(255) as u8)
             }
             // DeployerItemHandler.insertItem: into an empty hand, or onto the same item.
             Kind::Deployer => {
@@ -829,7 +859,7 @@ impl arm::World for ArmWorld<'_, '_> {
 /// `DepotItemHandler.insertItem` (slot 0) for the depot or ejector at `pos`: a depot takes a
 /// stack while it holds nothing (`canMergeItems` false); an ejector only while charged, and
 /// merges onto what it holds up to its stack size (`enableMerging`, `getRemainingSpace`).
-fn depot_insert(
+pub(super) fn depot_insert(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     item: &str,
@@ -1085,6 +1115,10 @@ fn land(
     simulate: bool,
 ) -> Option<u8> {
     let dim = lv.dim;
+    // An ejector merges what lands onto what it holds (`enableMerging`).
+    if is_ejector(dim, target) {
+        return Some(depot_insert(lv, target, item, count, simulate));
+    }
     let is_depot = with_world(|w| w.dims[dim].depots.contains_key(&target)) == Some(true);
     if is_depot {
         if !depot_items(lv, target).is_empty() || !ejector_accepts(dim, target) {

@@ -788,6 +788,16 @@ fn item_landed(
             // DirectBeltInputBehaviour from above: only into an empty depot (an ejector's while
             // charged).
             let dim = lv.dim;
+            // An ejector merges it onto what it holds, up to its stack size (`enableMerging`).
+            if arms::is_ejector(dim, spot) {
+                let key = items::key_of(&*lv.host, &s);
+                let count = s.count().min(255) as u8;
+                let left = arms::depot_insert(lv, spot, &key, count, false);
+                if left < count {
+                    *stack = s.shrink(u32::from(count - left));
+                }
+                return;
+            }
             if !depot::depot_items(lv, spot).is_empty() || !arms::ejector_accepts(dim, spot) {
                 return;
             }
