@@ -158,8 +158,7 @@ pub struct Drawn {
 /// `TrainHUD.renderOverlay`'s layout on a `gui` sized screen (GUI pixels), `partial` ticks
 /// into the frame, the prompt `text_width` wide (if any): the frame, the speed bar filled to
 /// the speed, the prompt box grown to its size, the direction plate, the throttle bar filled
-/// from its right and its pointer. Not drawn: the direction arrow over the plate (Catnip's
-/// `PlacementClient.textured`, whose texture is not Create's).
+/// from its right and its pointer. The direction arrow over the plate is `arrow`'s.
 pub fn layout(hud: &Hud, gui: [f32; 2], partial: f32, text_width: Option<f32>) -> Drawn {
     let ox = (gui[0] as i32 / 2 - 91) as f32;
     let oy = gui[1] - 29.0;

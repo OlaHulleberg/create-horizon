@@ -10,7 +10,7 @@
 //! block's `ITEMS` capability through the face toward it (`inv`).
 //!
 //! Conveyors draw their wheel, shaft, guards and chains (`ChainConveyorRenderer`; a chain's
-//! scrolling is left out: vanilla's chain model is drawn a block at a time) and are joined with
+//! scrolling is left out, HORIZON_API.md: vanilla's chain model is drawn a block at a time) and are joined with
 //! chains (`ChainConveyorConnectionHandler`, the first conveyor kept on the server). A frogport is
 //! aimed at a chain point with its item (`frog_target`) and draws its body, head, tongue and
 //! catch (`frog_draw`).
@@ -23,8 +23,7 @@
 //!   of the changed block only, with no hook for every container's `setChanged`): a frogport
 //!   with an inventory below looks at it on Create's own lazy tick, every 10 ticks, instead of
 //!   at once.
-//! - A dropped package is an item, not Create's package entity (`PackageEntity`), as in the
-//!   legacy glue.
+//! - A dropped package is an item, not Create's package entity (`PackageEntity`, HORIZON_API.md).
 
 mod automation;
 pub mod body;

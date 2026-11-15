@@ -14,10 +14,9 @@
 //! (`isSchematicListMode`). Holding a table cloth, it programs the cloth as a shop of what is
 //! ordered (`shop`). The screen closes when its keeper is gone.
 //!
-//! Left out: the keeper drawn beside the window (no entity or blaze head drawn in a screen, see
-//! `HORIZON_API.md`); crafting recipes and the search sync button, which come from JEI
-//! (`StockKeeperTransferHandler`, `SearchSyncMode`), a mod the game does not have; addresses from
-//! clipboards placed nearby.
+//! Left out: the keeper drawn beside the window (no entity drawn in a screen, `HORIZON_API.md`);
+//! addresses from clipboards placed nearby (`AddressEditBoxHelper.advertiseClipboard`: a placed
+//! clipboard's pages are not on its clients).
 
 use super::super::net;
 use super::super::server::ServerLevel;

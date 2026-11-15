@@ -6,8 +6,7 @@
 //! prompt box, the direction arrow). The server half gives players a carriage's controls
 //! (`ControlsInteractionBehaviour`), keeps their keys alive (`ControlsServerHandler`) and
 //! drives the train by them. Nothing runs without a controlling player's word or a click
-//! waiting: each hook's miss is one emptiness check. Carriage seats are left out (see the
-//! parent module).
+//! waiting: each hook's miss is one emptiness check. Carriage seats are `riding`'s.
 
 use super::super::net;
 use super::super::server::ServerLevel;

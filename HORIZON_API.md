@@ -15,6 +15,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **A moment before a chunk is saved** ((removed)). The glue writes each changed
   column's data into its chunk attachment at the end of the tick that changed it (`glue/persist.rs`);
   a pre-save hook would let it write only when the game saves.
+- **A block's shape from its block entity** (`FactoryPanelBlock.getShape`, built from the gauge's active panels):
+  shapes are declared per state, so a factory gauge's outline and collision are Create's
+  `FACTORY_PANEL_FALLBACK`, the whole face, however few panels it has (`glue/stock/gauge.rs`). A shape hook
+  for a block part (outline and collision, with the position) would close it.
 - **The server's tick freeze** (`TickRateManager.runsNormally`): under `/tick freeze` Create's block
   entities stop, but a mod's level tick still runs, so the glue's machines go on (`glue/redstone`).
 - **Reading and writing the scoreboard** (`Scoreboard.getObjective`, `listPlayerScores`, `addObjective`,
@@ -114,7 +118,11 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Mod entity types that are not template copies**, rideable by players: Create's seat entity and carriage seats
   are stood in by tagged item display entities; riding a moving structure's seats on bearings and pistons and
   clicking its blocks are out (contraption controls on a gliding structure are the exception: the client
-  raycasts the structures it draws, as `ContraptionHandlerClient` does, and sends the click).
+  raycasts the structures it draws, as `ContraptionHandlerClient` does, and sends the click). Create's package
+  entity (`PackageEntity`: a dropped package with its own model, physics and unpacking on a hit) is the same want:
+  a dropped package is a plain item entity (`glue/packages`). A client can't ask an entity's vehicle
+  (`EntityRef::vehicle` answers on the server only) nor find a seat's stand-in (`LevelRef::entities_in` leaves
+  displays out), so a shop's checkout overlay takes a keeper as seated by where it is (`glue/stock/shop.rs`).
 - **A block entity type for a block by its name**: the game gives `create:mechanical_piston_head` a
   `minecraft:skull` block entity (its path ends in `_head`), and one is left behind on the block that takes the
   head's place when a piston retracts. A declaration field naming a block's entity type (or none) would close it.
@@ -175,6 +183,10 @@ Each line: what Create does, what the legacy glue called, and the API addition t
 - **Keeping only some of a block entity's drawing**: `keep()` keeps everything drawn for it, so a block with
   one animated part is drawn every frame (the glue decides through `Subsystem::animated`). A way to hide
   another part's model would let the clockwork bearing's hour hand replace its top.
+- **A sprite scrolled within itself** (a UV offset that wraps inside the sprite): a chain conveyor's chains
+  (`ChainConveyorRenderer.renderChain`, `minV` moving with the conveyor's speed) are drawn still, as vanilla's
+  chain model a block at a time (`glue/packages`); `TerrainModelOptions` moves a sprite's UVs onto another sprite,
+  which a texture that tiles on itself has none of.
 - **A colour over a block model a block entity draws** (`SuperByteBuffer.color`): an overstressed
   network's turning parts flash red, and a recovered one's green (`KineticEffectHandler.overStressedEffect`);
   `BlockEntityDrawContext::block` draws a model in its own tints, and `terrain_model`'s tint reaches only

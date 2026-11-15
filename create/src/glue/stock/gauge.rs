@@ -26,7 +26,7 @@
 //!
 //! A panel is relocated from its screen's move button (`relocate`, `moveTo`). Left out: the
 //! block's per-panel shape (the declared shape is Create's `FACTORY_PANEL_FALLBACK`, the whole
-//! face).
+//! face; HORIZON_API.md).
 
 use super::super::items;
 use super::super::server::ServerLevel;
