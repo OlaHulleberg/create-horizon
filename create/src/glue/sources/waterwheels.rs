@@ -18,16 +18,14 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::waterwheel::{DEFAULT_WOOD, wood_of_planks};
 use mod_api::{
     BlockEntityPart, BlockEntitySubmitEvent, BlockPart, BlockState, CanSurviveEvent, ClientHost,
-    Compound, Flow, Hand, HostBlockStates, InteractionResult, LevelHost, ParticleKey,
-    ParticleOptions, Registrar, RightClickBlockEvent, ServerHost, SoundSource, Tag, UseItemOnEvent,
+    Compound, Flow, Hand, HostBlockStates, InteractionResult, LevelHost, ParticleOptions,
+    Registrar, RightClickBlockEvent, ServerHost, SoundSource, Tag, UseItemOnEvent,
 };
-use std::sync::OnceLock;
 
 /// The key of a wheel's material in its block entity data (`WaterWheelBlockEntity.write`).
 pub const MATERIAL: &str = "Material";
 
-/// `minecraft:block`, for the material's break particles.
-static BLOCK_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
+use crate::glue::server::BLOCK_PARTICLE;
 
 /// The wheels' parts: their clicks and their drawing on the kinetic block entity type.
 pub(super) fn register(r: &mut dyn Registrar) {
