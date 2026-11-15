@@ -532,6 +532,45 @@ pub struct Request {
     pub preview: bool,
 }
 
+/// `TrackPaver.paveStraight`'s `toPlaceOn`: `extent` steps of `direction` from the centre of
+/// `start`, the blocks a step out either side (`direction × up`, not normalised) and, unless
+/// `wall_like`, the step's own and its diagonal fillers 0.45 out and along (toward the next
+/// step but at the last, back toward the previous but at the first). In the order first met.
+pub fn pave_straight(start: BlockPos, direction: Vec3, extent: i32, wall_like: bool) -> Vec<BlockPos> {
+    let centre = [0, 1, 2].map(|k| f64::from(start[k]) + 0.5);
+    let main_normal = cross(direction, [0.0, 1.0, 0.0]);
+    let normal = normalize(main_normal);
+    let along = normalize(direction);
+    let filler = f64::from(0.45f32);
+    let mut out: Vec<BlockPos> = Vec::new();
+    let mut put = |v: Vec3| {
+        let p = v.map(|c| c.floor() as i32);
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    };
+    for i in 0..extent {
+        let main = add(centre, scale(direction, f64::from(i)));
+        put(add(main, main_normal));
+        put(sub(main, main_normal));
+        if wall_like {
+            continue;
+        }
+        put(main);
+        if i < extent - 1 {
+            for x in [1.0, -1.0] {
+                put(add(add(main, scale(normal, x * filler)), scale(along, filler)));
+            }
+        }
+        if i > 0 {
+            for x in [1.0, -1.0] {
+                put(add(add(main, scale(normal, x * filler)), scale(along, -filler)));
+            }
+        }
+    }
+    out
+}
+
 /// `PlacementInfo`: the ends as `tryConnect` leaves them (axes pointing at each other), how
 /// many straight tracks each end lays before the curve (`end*Extent`), and the curve between
 /// the blocks those reach (`targets`), none for straight track.
@@ -565,6 +604,15 @@ impl Placement {
     pub fn straight(&self, i: usize) -> impl Iterator<Item = BlockPos> + '_ {
         let count = self.extents[i] + i32::from(self.curve.is_some());
         (0..count.max(0)).map(move |n| offset(self.positions[i], scale(self.axes[i], f64::from(n))))
+    }
+
+    /// `TrackPaver.paveStraight` under end `i`'s straight run (`placeTracks`' extent, from the
+    /// block below its track): the blocks to pave, under either rail and, for a block that is not
+    /// wall-like, the middle and the diagonal fillers between.
+    pub fn pave_straight(&self, i: usize, wall_like: bool) -> Vec<BlockPos> {
+        let extent = self.extents[i] + i32::from(self.curve.is_some());
+        let p = self.positions[i];
+        pave_straight([p[0], p[1] - 1, p[2]], self.axes[i], extent, wall_like)
     }
 
     /// `placeTracks`: the tracks a curve costs on top of its straight ones (one per two

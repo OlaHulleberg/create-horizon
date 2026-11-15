@@ -4,7 +4,8 @@
 //! a girder curve's beams, `renderGirder`) and each signal's light (`SignalRenderer`), carried
 //! in the block entity's data. Metal girders in the off hand lay a girder curve, paving girders
 //! under its straight runs (`TrackPaver`); a curve taken up drops its tracks and girders
-//! (`BezierConnection.spawnItems`). Paving with other blocks is left out.
+//! (`BezierConnection.spawnItems`). Any other block in the off hand paves too: slabs, full
+//! blocks and walls (under the rails only), each placed where the block is free.
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
@@ -267,24 +268,13 @@ fn lay_track(
     if !info.valid {
         return Err(info.message);
     }
-    // `TrackBlockItem.useOn`: metal girders in the off hand lay a girder curve, paving under
-    // the straight runs with girders (`TrackPaver`, wall-like: under both rails) and costing
-    // two girders per two sleeper segments of the curve.
+    // `TrackBlockItem.useOn`: metal girders in the off hand lay a girder curve. A block in the
+    // off hand paves under the run (`paveTracks`), costing what it lays.
     let girder = items::held(&*lv.host, player, mod_api::Hand::Off)
         .is_some_and(|s| s.item().id(&*lv.host) == "create:metal_girder");
-    let paving = if girder {
-        girder_paving(lv, &info)
-    } else {
-        Vec::new()
-    };
-    let pavement = if girder {
-        paving.len() as i32
-            + info
-                .curve
-                .as_ref()
-                .map_or(0, |c| (c.segments as i32 + 1) / 2 * 2)
-    } else {
-        0
+    let (paving, pavement) = match paver(lv, player, info.positions[0]) {
+        Some(p) => pave(lv, &info, &p),
+        None => (Vec::new(), 0),
     };
     // `tryConnect` outside creative: the player pays a track for each one laid where the block
     // is replaceable, and half a track per sleeper segment of the curve, from their stacks of
@@ -365,52 +355,165 @@ fn lay_track(
     Ok(info.message)
 }
 
-/// `TrackPaver.paveStraight` with a metal girder: under each straight run (and the curve's own
-/// end block) a girder under either rail where the block is free, along the run (`AXIS`, its
-/// `x` or `z` side, neither top nor bottom) when the run is not diagonal.
-fn girder_paving(lv: &ServerLevel<'_>, info: &track::Placement) -> Vec<([i32; 3], BlockState)> {
+/// The block the off hand paves with (`paveTracks`): its default state (a slab's double), and
+/// whether it is a slab (`SlabBlock.TYPE`), wall-like (a wall or a metal girder) and a girder.
+struct Paver {
+    state: BlockState,
+    slab: bool,
+    wall: bool,
+    girder: bool,
+}
+
+/// `tryConnect`'s `shouldPave` and `paveTracks`' refusals: a block item in the off hand but the
+/// brackets (`INVALID_FOR_TRACK_PAVING`), whose block has no block entity and collides (at `at`).
+fn paver(lv: &ServerLevel<'_>, player: mod_api::PlayerRef, at: [i32; 3]) -> Option<Paver> {
+    let host = &*lv.host;
+    let stack = items::held(host, player, mod_api::Hand::Off)?;
+    let id = stack.item().id(host);
+    if matches!(id.as_str(), "create:wooden_bracket" | "create:metal_bracket") {
+        return None;
+    }
+    let block = host.item_block(stack.item())?;
+    let mut state = host.block_state_default(block)?;
+    let facts = host.block_states();
+    if facts.has_block_entity(state) == Some(true)
+        || block
+            .id(host)
+            .strip_prefix("create:")
+            .and_then(Block::from_name)
+            .is_some_and(Block::has_block_entity)
+    {
+        return None;
+    }
+    let collides = lv
+        .level
+        .block_shape(host, state, at, mod_api::BlockShapeKind::Collision)
+        .is_some_and(|s| !s.is_empty());
+    if !collides {
+        return None;
+    }
+    let girder = block.id(host) == "create:metal_girder";
+    let slab = super::with_props(host, state, &[("type", "double")]);
+    if let Some(double) = slab {
+        state = double;
+    }
+    Some(Paver {
+        state,
+        slab: slab.is_some(),
+        wall: girder || host.block_in_tag(block, "minecraft:walls") == Some(true),
+        girder,
+    })
+}
+
+/// `TrackPaver.placeBlockIfFree`: another block that can be replaced is at `p`; what goes
+/// there holds the water source it replaces (`ProperWaterloggedBlock.withWater`).
+fn free_for(lv: &ServerLevel<'_>, p: [i32; 3], state: BlockState) -> Option<BlockState> {
+    let host = &*lv.host;
+    let at = lv.block_state(p)?;
+    if at.block() == state.block() || host.block_states().replaceable(at) != Some(true) {
+        return None;
+    }
+    let water = host
+        .block_state_id("minecraft:water")
+        .and_then(|w| host.state_fluid_state(w));
+    let source = host
+        .state_fluid_state(at)
+        .is_some_and(|f| f.source && water.is_some_and(|w| w.fluid == f.fluid));
+    let has = state
+        .property(&host.block_states(), "waterlogged")
+        .ok()
+        .flatten()
+        .is_some();
+    Some(if has {
+        super::with_props(host, state, &[("waterlogged", if source { "true" } else { "false" })])
+            .unwrap_or(state)
+    } else {
+        state
+    })
+}
+
+/// `paveTracks`: under each end's straight run (`paveStraight`) and the curve (`paveCurve`),
+/// the blocks to place and the items they cost (a slab's double two, its half one). A girder
+/// run along an axis lies along it (`AXIS`, its `x` or `z` side, neither top nor bottom); a
+/// wall-like curve paves nothing but costs a girder curve two girders per two sleeper segments.
+fn pave(
+    lv: &ServerLevel<'_>,
+    info: &track::Placement,
+    paver: &Paver,
+) -> (Vec<([i32; 3], BlockState)>, i32) {
+    let host = &*lv.host;
     let mut out: Vec<([i32; 3], BlockState)> = Vec::new();
-    let Some(base) = super::default_state(&*lv.host, "create:metal_girder") else {
-        return out;
-    };
-    let facts = lv.host.block_states();
+    let mut visited: Vec<[i32; 3]> = Vec::new();
+    let mut needed = 0;
     for i in 0..2 {
         let a = info.axes[i];
-        // `direction.cross(UP)`, not normalised.
-        let normal = [-a[2], 0.0, a[0]];
-        let side = if a[0] != 0.0 && a[2] == 0.0 {
-            Some("x")
-        } else if a[2] != 0.0 && a[0] == 0.0 {
-            Some("z")
-        } else {
-            None
-        };
-        let state = match side {
-            Some(s) => super::with_props(&*lv.host, base, &[(s, "true")]).unwrap_or(base),
-            None => base,
-        };
-        for p in info.straight(i).collect::<Vec<_>>() {
-            let centre = [
-                f64::from(p[0]) + 0.5,
-                f64::from(p[1]) - 0.5,
-                f64::from(p[2]) + 0.5,
-            ];
-            for s in [1.0, -1.0] {
-                let q = [0, 1, 2].map(|k| (centre[k] + normal[k] * s).floor() as i32);
-                if out.iter().any(|(o, _)| *o == q) {
-                    continue;
-                }
-                // `placeBlockIfFree`: another block that can be replaced.
-                let free = lv.block_state(q).is_some_and(|at| {
-                    at.block() != base.block() && facts.replaceable(at) == Some(true)
-                });
-                if free {
-                    out.push((q, state));
-                }
+        let mut state = paver.state;
+        if paver.girder {
+            let side = match a {
+                [x, y, z] if y == 0.0 && z == 0.0 && x.abs() == 1.0 => Some(("x", "x")),
+                [x, y, z] if y == 0.0 && x == 0.0 && z.abs() == 1.0 => Some(("z", "z")),
+                _ => None,
+            };
+            if let Some((axis, flag)) = side {
+                state = super::with_props(
+                    host,
+                    state,
+                    &[("top", "false"), ("bottom", "false"), ("axis", axis), (flag, "true")],
+                )
+                .unwrap_or(state);
+            }
+        }
+        for p in info.pave_straight(i, paver.wall) {
+            if visited.contains(&p) {
+                continue;
+            }
+            visited.push(p);
+            if let Some(s) = free_for(lv, p, state) {
+                out.push((p, s));
+                needed += if paver.slab { 2 } else { 1 };
             }
         }
     }
-    out
+    let Some(curve) = info.curve.as_ref() else {
+        return (out, needed);
+    };
+    if paver.wall {
+        if paver.girder {
+            needed += (curve.segments as i32 + 1) / 2 * 2;
+        }
+        return (out, needed);
+    }
+    let half = |t: &str| super::with_props(host, paver.state, &[("type", t)]);
+    for (key, y) in curve.pave_levels() {
+        let floor = y.floor() as i32;
+        let slab = paver.slab && y - f64::from(floor) >= 0.5;
+        let target = [key[0], floor + i32::from(slab), key[1]];
+        let state = if slab {
+            half("bottom").unwrap_or(paver.state)
+        } else {
+            paver.state
+        };
+        if visited.contains(&target) {
+            continue;
+        }
+        visited.push(target);
+        if let Some(s) = free_for(lv, target, state) {
+            out.push((target, s));
+            needed += if slab { 1 } else { 2 };
+        }
+        if slab {
+            let below = [target[0], target[1] - 1, target[2]];
+            if visited.contains(&below) {
+                continue;
+            }
+            visited.push(below);
+            if let Some(s) = half("top").and_then(|top| free_for(lv, below, top)) {
+                out.push((below, s));
+                needed += 1;
+            }
+        }
+    }
+    (out, needed)
 }
 
 /// How many of the off hand's item `player` has (its stacks anywhere and the off hand's).
