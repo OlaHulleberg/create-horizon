@@ -304,3 +304,81 @@ pub(super) fn unencase(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, pos
         crate::glue::items::give_back(lv.host, player, shaft);
     }
 }
+
+/// `GirderPlacementHelper.canExtendToward`: a line of girders goes on toward `side` through a
+/// girder along that way (both ways for a cross, up and down for a post) and a girder encased
+/// shaft across its shaft, never up or down.
+fn can_extend_toward(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> bool {
+    let Some((block, info)) = block_of(lv.block(pos)) else {
+        return false;
+    };
+    let axis = side.axis();
+    match block {
+        Block::MetalGirder => {
+            let Some(state) = lv.block_state(pos) else {
+                return false;
+            };
+            let host = &*lv.host;
+            let x = prop(host, state, "x").as_deref() == Some("true");
+            let z = prop(host, state, "z").as_deref() == Some("true");
+            match (x, z) {
+                (false, false) => axis == Axis::Y,
+                (true, true) => true,
+                _ => axis == if x { Axis::X } else { Axis::Z },
+            }
+        }
+        Block::MetalGirderEncasedShaft => axis != Axis::Y && Some(axis) != info.axis,
+        _ => false,
+    }
+}
+
+/// `GirderPlacementHelper.getOffset` and `PlacementOffset.placeInWorld`: a girder item on a
+/// girder goes past the girders in line with it on the side nearest the hit (within
+/// `placementAssistRange`, 4 more with an extendo grip), along that way, shaped by its
+/// neighbours (`updateFromNeighbourShapes`). None: no place (the click goes on as usual).
+pub(super) fn helper(
+    lv: &mut ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    click: &mod_api::BlockClick<'_>,
+    stack: &mod_api::ItemStack,
+) -> Option<mod_api::InteractionResult> {
+    let pos = click.pos;
+    let hit = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(pos[i]) - 0.5);
+    let mut range = create_engine::place::PLACEMENT_ASSIST_RANGE;
+    if super::ladders::gripping(lv, player) {
+        range += 4;
+    }
+    let dirs = create_engine::place::ordered_by_distance(hit, |d| can_extend_toward(lv, pos, d));
+    for d in dirs {
+        let mut poles = 0;
+        let mut at = add(pos, d);
+        while can_extend_toward(lv, at, d) {
+            poles += 1;
+            at = add(at, d);
+        }
+        if poles >= range || !lv.free(at) {
+            continue;
+        }
+        let water = lv
+            .block_state(at)
+            .and_then(|s| lv.state_name(s))
+            .is_some_and(|n| n == "minecraft:water");
+        let axis = d.axis();
+        let state = super::state_with(
+            &*lv.host,
+            Block::MetalGirder,
+            &[
+                ("axis", axis_name(axis)),
+                ("x", flag(axis == Axis::X)),
+                ("z", flag(axis == Axis::Z)),
+                ("waterlogged", flag(water)),
+            ],
+        )?;
+        lv.set_state(at, state, super::super::server::update_all());
+        reshape(lv, at);
+        lv.place_sound(at);
+        super::use_one(&mut *lv.host, player, click.hand, stack);
+        return Some(mod_api::InteractionResult::Success);
+    }
+    None
+}

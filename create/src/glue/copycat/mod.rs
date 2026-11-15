@@ -7,7 +7,13 @@
 //! box (`CopycatModel`), the copycat base when it holds none. Nothing runs per tick: the level's
 //! tick looks only when a copycat was placed, changed or broken, or its material changed.
 //!
+//! A copycat item clicked on its kind places the next one beside it (`CopycatPanelBlock` and
+//! `CopycatStepBlock`'s placement helpers). A copycat sounds as its material (`sound.rs`).
+//!
 //! Left out, for want of API:
+//! - The material's light and friction (`CopycatBlock.getLightEmission`, `getFriction`): the
+//!   `light_emission` and `friction` parts could answer per copycat, but no API reads a state's
+//!   light emission or friction (`HORIZON_API.md`).
 //! - The wrench's break particles (`LevelEvent.PARTICLES_DESTROY_BLOCK` of the copycat's own
 //!   state, legacy `level_event_at(2001, pos, state)`): `LevelRef::level_event` takes the game's
 //!   numeric state id for 2001 and a `BlockState` has no way to give it. A `BlockState` to
@@ -26,6 +32,7 @@
 
 mod body;
 mod parts;
+mod sound;
 
 use super::persist;
 use super::server::ServerLevel;
@@ -217,6 +224,7 @@ impl Subsystem for Copycats {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         for block in [Block::CopycatPanel, Block::CopycatStep] {
             r.block_part(states::key(block), parts::CopycatBlock);
+            r.block_part(states::key(block), sound::CopycatSound);
             let item = r.item_key(&format!("create:{}", block.name()));
             r.item_part(item, parts::CopycatItem);
         }
@@ -232,6 +240,11 @@ impl Subsystem for Copycats {
 
     fn world_closed(&self) {
         COPYCATS.with_borrow_mut(HashMap::clear);
+        sound::reset_server();
+    }
+
+    fn client_reset(&self) {
+        sound::reset_client();
     }
 
     /// One state lookup for each Create block changed.
@@ -347,6 +360,7 @@ fn tick(lv: &mut ServerLevel<'_>) {
     for (pos, old, new) in changes {
         let (was, is) = (block(old), block(new));
         if was.is_some() && was != is {
+            sound::set_server(dim, pos, None);
             let item = with(dim, |d| d.copycats.remove(&pos)).and_then(|c| c.item);
             if let Some(item) = item {
                 let [x, y, z] = center(pos);
@@ -376,6 +390,9 @@ fn show(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         return;
     };
     let material = with(lv.dim, |d| d.copycats.get(&pos).and_then(|c| c.material));
+    // `getSoundType`: the material's.
+    let sound = material.and_then(|m| lv.host.block_states().sound(m));
+    sound::set_server(lv.dim, pos, sound);
     let (text, special) = match material {
         Some(m) => {
             let c = body::candidate(lv, m, pos);

@@ -94,7 +94,7 @@ fn holds(lv: &ServerLevel<'_>, pos: [i32; 3], state: BlockState, facing: Dir) ->
 }
 
 /// Whether the player holds an extendo grip (`singleRangeAttributeModifier`).
-fn gripping(lv: &ServerLevel<'_>, player: PlayerRef) -> bool {
+pub(super) fn gripping(lv: &ServerLevel<'_>, player: PlayerRef) -> bool {
     let host = &*lv.host;
     host.living(player.entity()).is_some_and(|l| {
         [Hand::Main, Hand::Off].into_iter().any(|h| {
