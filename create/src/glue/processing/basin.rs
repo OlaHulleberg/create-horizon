@@ -162,17 +162,9 @@ pub fn show_basins(lv: &mut ServerLevel<'_>) {
                 ]))
             })
             .collect();
-        // Empty ones are sent empty: a key taken away stays with the clients
-        // (`merge_update_tag`).
-        let fluids = fluids.unwrap_or(Tag::IntArray(Vec::new()));
-        set_shown(
-            lv,
-            pos,
-            &[
-                (FLUIDS_KEY, Some(fluids)),
-                (ITEMS_KEY, Some(Tag::List(items))),
-            ],
-        );
+        // Empty ones are taken away (their clients see them absent: `kinetics::synced`).
+        let items = (!items.is_empty()).then_some(Tag::List(items));
+        set_shown(lv, pos, &[(FLUIDS_KEY, fluids), (ITEMS_KEY, items)]);
     }
 }
 
@@ -193,8 +185,8 @@ fn show_mixer(lv: &mut ServerLevel<'_>, pos: [i32; 3], m: &basin::Mixer) {
             return;
         }
         MIXER_SHOWN.with_borrow_mut(|s| s.remove(&(dim, pos)));
-        // At rest: empty (a key taken away stays with the clients).
-        Some(Tag::Compound(Compound::new()))
+        // At rest: none.
+        None
     } else {
         if told.is_some_and(|(t, at)| basin::shown_ticks(t, now - at) == m.running_ticks) {
             return;
@@ -711,8 +703,8 @@ pub fn use_burner(
         if wearing == held_goggles {
             return false;
         }
-        let value = Tag::Byte(i8::from(held_goggles));
-        set_shown(lv, pos, &[(GOGGLES_KEY, Some(value))]);
+        let value = held_goggles.then_some(Tag::Byte(1));
+        set_shown(lv, pos, &[(GOGGLES_KEY, value)]);
         return true;
     }
     let Some(stack) = stack else {

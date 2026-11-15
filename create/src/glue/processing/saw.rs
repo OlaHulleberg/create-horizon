@@ -462,7 +462,6 @@ fn show_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             ("S".into(), Tag::Long(lv.game_time())),
         ]))
     });
-    // An empty saw's is an empty compound: a key taken away is not taken from its clients.
-    let value = value.unwrap_or_else(|| Tag::Compound(Compound::new()));
-    super::basin::set_shown(lv, pos, &[(SAW_KEY, Some(value))]);
+    // An empty saw's is taken away (its clients see it absent: `kinetics::synced`).
+    super::basin::set_shown(lv, pos, &[(SAW_KEY, value)]);
 }

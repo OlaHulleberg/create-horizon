@@ -31,9 +31,6 @@ const TURN: i32 = 0;
 const GLIDE: i32 = 1;
 const CLOCK: i32 = 2;
 const ELEVATOR: i32 = 3;
-/// A structure that is gone: clients merge the data they are sent into their copy, so a key
-/// taken away would stay with them; this one says the anchor draws nothing.
-const GONE: i32 = -1;
 
 /// How far from the camera anchors draw their structures, in blocks: the legacy parts were
 /// drawn at any distance.
@@ -136,12 +133,13 @@ pub fn moving(data: &Compound) -> bool {
     }
 }
 
-/// Whether `data` holds a structure (not none, nor one that is gone).
+/// Whether `data` holds a structure (a key taken away reaches clients as absent:
+/// `kinetics::synced`).
 fn holds_structure(data: &Compound) -> bool {
-    match data.get(&KEY.into()) {
-        Some(Tag::Compound(c)) => int(c, "Kind") != Some(GONE),
-        _ => false,
-    }
+    matches!(
+        super::super::kinetics::synced(data, KEY),
+        Some(Tag::Compound(_))
+    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -239,17 +237,9 @@ fn write(lv: &mut ServerLevel<'_>, anchor: [i32; 3], c: Option<Compound>) {
             data.insert(KEY.into(), Tag::Compound(c));
         }
         None => {
-            if !holds_structure(&data) {
+            if data.remove(&KEY.into()).is_none() {
                 return;
             }
-            let gone = Compound::from([
-                ("Kind".into(), Tag::Int(GONE)),
-                (
-                    "Rev".into(),
-                    Tag::Int(REVISION.fetch_add(1, Ordering::Relaxed)),
-                ),
-            ]);
-            data.insert(KEY.into(), Tag::Compound(gone));
         }
     }
     let _ = entity.replace_data(&mut *lv.host, data);
@@ -1016,8 +1006,7 @@ impl BlockEntityPart for StructurePart {
     }
 
     fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
-        if !event.entity.nbt.contains_key(&KEY.into())
-            && SHOWN.with_borrow(|s| !s.contains_key(&event.pos))
+        if !holds_structure(&event.entity.nbt) && SHOWN.with_borrow(|s| !s.contains_key(&event.pos))
         {
             return;
         }
@@ -1030,7 +1019,7 @@ impl BlockEntityPart for StructurePart {
         _host: &dyn ClientHost,
         event: &mut BlockEntityRenderBoundingBoxEvent<'_>,
     ) {
-        if event.entity.nbt.contains_key(&KEY.into()) {
+        if holds_structure(&event.entity.nbt) {
             *event.bounds = [
                 f32::NEG_INFINITY,
                 f32::NEG_INFINITY,

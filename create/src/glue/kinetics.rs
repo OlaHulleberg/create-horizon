@@ -477,7 +477,8 @@ impl BlockEntityPart for KineticEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        // The speeds, and what other subsystems keep in the same block entity for its clients.
+        // The speeds, and what other subsystems keep in the same block entity for its clients:
+        // every synced key, `absent()` for one the block entity doesn't hold (`synced`).
         let mut shown: Compound = [SPEEDS, THEORY, OVER, BRACKET]
             .into_iter()
             .chain(
@@ -485,7 +486,10 @@ impl BlockEntityPart for KineticEntity {
                     .iter()
                     .flat_map(|s| s.synced_keys().iter().copied()),
             )
-            .filter_map(|k| Some((k.into(), event.entity.nbt.get(&k.into())?.clone())))
+            .map(|k| {
+                let value = event.entity.nbt.get(&k.into()).cloned();
+                (k.into(), value.unwrap_or_else(absent))
+            })
             .collect();
         // How often a player looked at its value box: a new number makes clients draw it again
         // (`interaction::value_text`).
@@ -538,6 +542,20 @@ impl BlockEntityPart for KineticEntity {
             event.draw.keep();
         }
     }
+}
+
+/// What an update tag carries for a synced key (`Subsystem::synced_keys`) the block entity
+/// doesn't hold: a client merges each update tag into its copy (`block_entity_update_tag`), so a
+/// key left out would keep its last value there. No synced key holds an empty long array.
+pub fn absent() -> Tag {
+    Tag::LongArray(Vec::new())
+}
+
+/// Synced key `key` of a block entity's data as its clients should read it: None when the server
+/// took it away (`absent`).
+pub fn synced<'a>(nbt: &'a Compound, key: &str) -> Option<&'a Tag> {
+    nbt.get(&key.into())
+        .filter(|t| !matches!(t, Tag::LongArray(v) if v.is_empty()))
 }
 
 /// The unit vector of `axis`.
