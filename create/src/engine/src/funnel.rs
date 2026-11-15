@@ -1,8 +1,8 @@
 //! Create's funnels (`FunnelBlock`, `FunnelBlockEntity`) on an inventory: extracting, a stack
-//! leaves the inventory behind every 8 ticks while nothing lies in front; inserting, items that
-//! land on it go into the inventory. Belt funnels (`BeltFunnelBlock`,
-//! `BeltFunnelInteractionHandler`): a funnel over a belt takes the items passing it into the
-//! inventory behind it, or puts that inventory's items onto the belt.
+//! leaves the inventory behind every 9 ticks (`startCooldown`'s 8, counted down) while nothing
+//! lies in front; inserting, items that land on it go into the inventory. Belt funnels
+//! (`BeltFunnelBlock`, `BeltFunnelInteractionHandler`): a funnel over a belt takes the items
+//! passing it into the inventory behind it, or puts that inventory's items onto the belt.
 
 use crate::kinetics::Dir;
 

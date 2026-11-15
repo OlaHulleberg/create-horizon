@@ -495,7 +495,11 @@ pub fn direct_input_accepts(lv: &ServerLevel<'_>, pos: [i32; 3], side: Dir) -> b
     if let Some((c, _, seg)) = belt_segment(lv, pos) {
         let dim = lv.dim;
         let rpm = with_world(|w| w.speed(dim, c)).flatten().unwrap_or(0.0);
-        return rpm != 0.0 && belt::movement_facing(rpm, seg.facing) != side.opposite();
+        // BeltBlockEntity.canInsertFrom: a running belt, not sideways or vertical, not moving
+        // toward the side.
+        return rpm != 0.0
+            && !matches!(seg.slope, belt::Slope::Sideways | belt::Slope::Vertical)
+            && belt::movement_facing(rpm, seg.facing) != side.opposite();
     }
     if let Some(only) = super::super::processing::belt_input_side(lv, pos) {
         return only.is_none_or(|d| d == side);
@@ -984,6 +988,10 @@ impl BeltSide<'_, '_> {
                 continue;
             }
             let out = [at[0] + o[0], at[1], at[2] + o[2]];
+            // `canInsertFromSide`: a stopped belt, or one running into the tunnel, is passed by.
+            if !direct_input_accepts(self.lv, out, d) {
+                continue;
+            }
             let one = belt::Item {
                 count: 1,
                 ..item.clone()

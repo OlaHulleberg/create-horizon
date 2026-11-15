@@ -449,15 +449,26 @@ pub fn tick_funnels(lv: &mut ServerLevel<'_>) {
                 push_onto_depot(lv, pos, f.facing, side, behind, max)
             }
             Mode::PushingToBelt => push_onto_belt(lv, pos, f.facing, side, behind, max),
-            Mode::TakingFromBelt if depot_below(lv, pos) => pull_from_depot(lv, pos, side, behind),
+            Mode::TakingFromBelt if depot_below(lv, pos) => {
+                // The depot hands its stack over each tick it holds one
+                // (`DepotBehaviour.tick`, `handleBeltFunnelOutput`).
+                pull_from_depot(lv, pos, side, behind);
+                Some(Some(false))
+            }
             // Inserting, pulling from a belt (the belt does it), paused or invalid: dormant.
             _ => None,
         };
+        // `startCooldown` after a stack left: counted down over 8 ticks, the funnel acts on the
+        // 9th. Blocked, or the inventory empty (`awaitNewVersion`, a check each tick), it tries
+        // again the next tick.
         schedule(
             pos,
             match next {
-                Some(Some(false)) => now + 1,
-                Some(_) => now + u64::from(EXTRACTION_COOLDOWN),
+                Some(Some(true)) => now + u64::from(EXTRACTION_COOLDOWN) + 1,
+                Some(_) => now + 1,
+                // A belt funnel looks at the belt's way each tick (Create's mode is read each
+                // tick): the belt reversed or started, it may push.
+                None if f.belt.is_some() => now + 1,
                 None => u64::MAX,
             },
         );

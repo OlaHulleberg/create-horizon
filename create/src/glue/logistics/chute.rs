@@ -416,8 +416,12 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
         let below = [pos[0], pos[1] - 1, pos[2]];
         let target = create_engine::chute::target(pos, facing);
         let target_chute = chute_at(lv, target);
+        // A belt below takes it through its segment's handler (`ItemHandlerBeltSegment`).
+        let belt_below = chute_at(lv, below).is_none()
+            && super::belt::belt_segment(lv, below).is_some_and(|(_, _, s)| s.transports());
         let container = chute_at(lv, below).is_none()
-            && (items::items_at(lv, below, Some(Direction::Up)).is_some()
+            && (belt_below
+                || items::items_at(lv, below, Some(Direction::Up)).is_some()
                 || actors::is_item_interface(lv, below));
         let target_takes = |lv: &ServerLevel<'_>| {
             target_chute.is_some_and(|(b, powered)| {
@@ -448,7 +452,21 @@ pub fn tick_chutes(lv: &mut ServerLevel<'_>) {
             Fall::At(p) => Some(p),
             Fall::Out if container => {
                 let count = stack.count();
-                let left = items::insert_item(lv, below, Direction::Up, stack.clone());
+                let left = if belt_below {
+                    // The whole stack (to its largest size) as one belt item, at the segment's
+                    // middle, if the segment has room.
+                    let (id, progress) = super::belt::belt_name(&*lv.host, &stack);
+                    let n = count.min(u32::from(u8::MAX)) as u8;
+                    let left = super::belt::put_on_from_above(lv, below, &id, n, progress, false)
+                        .map_or(count, |l| count - u32::from(n - l));
+                    if left == 0 {
+                        None
+                    } else {
+                        items::with_count(&stack, left)
+                    }
+                } else {
+                    items::insert_item(lv, below, Direction::Up, stack.clone())
+                };
                 if left.as_ref().is_some_and(|l| l.count() == count) {
                     if diagonal && target_takes(lv) {
                         into_target(lv, stack);
