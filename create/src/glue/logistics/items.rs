@@ -23,13 +23,18 @@ pub fn id_of(host: &dyn Host, stack: &ItemStack) -> String {
     stack.item().id(host)
 }
 
-/// `stack` as the engine's arms and ejectors name it (`create_engine::arm::item_id`): its item
-/// id, followed for a stack with components (a package's address and contents, a name) by `#`
-/// and the hex of its item NBT, so that moving it keeps them.
+/// `stack` as the engine's belts, arms and ejectors name it (`create_engine::arm::item_id`):
+/// its item id; a potion whose only component is a registered potion named with it
+/// (`tank::potion_item`, as spouts and drains name it); any other stack with components (a
+/// package's address and contents, a name) followed by `#` and the hex of its item NBT, so that
+/// moving it keeps them.
 pub fn key_of(host: &dyn Host, stack: &ItemStack) -> String {
     let id = id_of(host, stack);
     if !has_components(stack) {
         return id;
+    }
+    if let Some(potion) = plain_potion(&id, stack) {
+        return create_engine::tank::potion_item(&id, &potion);
     }
     let Some(mut nbt) = with_count(stack, 1).and_then(|s| s.to_nbt(host)) else {
         return id;
@@ -123,6 +128,27 @@ pub fn is_block_item(host: &dyn Host, id: &str) -> bool {
         .ok()
         .and_then(|i| host.item_key(&i))
         .is_some_and(|k| host.item_block(k).is_some())
+}
+
+/// The potion of a potion item `id` whose only component is a registered potion's contents
+/// (no custom effects or colour, undamaged); None for any other stack.
+fn plain_potion(id: &str, stack: &ItemStack) -> Option<String> {
+    create_engine::tank::Bottle::of_item(id)?;
+    if stack.is_damaged() {
+        return None;
+    }
+    let nbt = stack.components()?.as_nbt();
+    if nbt.len() != 1 {
+        return None;
+    }
+    match nbt.get(&"minecraft:potion_contents".into())? {
+        mod_api::Tag::String(s) => Some(s.to_string_lossy()),
+        mod_api::Tag::Compound(c) if c.len() == 1 => match c.get(&"potion".into())? {
+            mod_api::Tag::String(s) => Some(s.to_string_lossy()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Whether a stack carries components (or damage), which the engine's belts and arms do not keep.
@@ -278,13 +304,15 @@ pub fn insert_room(
     Some(room.err().unwrap_or(0))
 }
 
-/// Up to `amount` of the first item `test` passes from `from` (`ItemHelper.extract`, up to):
-/// gathered from its indices in order, in its own transaction.
+/// Up to `amount` of the first item `test` passes from `from` (`ItemHelper.extract`), or with
+/// `exact` exactly `amount` of one item or nothing (`ExtractionCountMode.EXACTLY`): gathered
+/// from its indices in order, in its own transaction.
 pub fn extract_matching(
     lv: &mut ServerLevel<'_>,
     from: &Items,
     test: impl Fn(&mut dyn ServerHost, &ItemResource) -> bool,
     amount: u32,
+    exact: bool,
 ) -> Option<ItemStack> {
     let host = &mut *lv.host;
     let size = from.size(host);
@@ -301,7 +329,7 @@ pub fn extract_matching(
         });
         keys.push(key);
     }
-    let plan = create_engine::chute::extract(&keys, |_| true, false, amount);
+    let plan = create_engine::chute::extract(&keys, |_| true, exact, amount);
     let &(first, _) = plan.first()?;
     let resource = keys[first].as_ref()?.0.clone();
     let taken = host
@@ -316,21 +344,23 @@ pub fn extract_matching(
     resource.to_stack(taken)
 }
 
-/// Up to `max` of the first item `test` passes the container at `pos` gives through `side`;
-/// None when there is no container or nothing to take. A connected portable storage interface
-/// gives from its contraption's storage (contraptions' `psi_extract`).
+/// Up to `max` of the first item `test` passes the container at `pos` gives through `side`
+/// (exactly `max` or nothing with `exact`); None when there is no container or nothing to
+/// take. A connected portable storage interface gives from its contraption's storage
+/// (contraptions' `psi_extract`, up to `max`).
 pub fn take_from(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     side: Direction,
     test: impl Fn(&ItemStack) -> bool,
     max: u32,
+    exact: bool,
 ) -> Option<ItemStack> {
     if let Ok(taken) = actors::psi_extract(lv, pos, &test, max) {
         return taken;
     }
     let from = items_at(lv, pos, Some(side))?;
-    extract_matching(lv, &from, |_, r| test(r.as_stack()), max)
+    extract_matching(lv, &from, |_, r| test(r.as_stack()), max, exact)
 }
 
 /// An item entity of `stack` at `at`, moving `motion` blocks a tick, picked up after

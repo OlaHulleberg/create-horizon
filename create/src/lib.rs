@@ -9,14 +9,14 @@ mod glue;
 use glue::server::ServerLevel;
 use glue::{SUBSYSTEMS, persist, states, world};
 use mod_api::{
-    AttackEntityEvent, BlockChangedEvent, BlockPart, BreakBlockEvent, ChunkLoadEvent,
-    ChunkUnloadEvent, ClientHost, ClientLevelUnloadEvent, ClientTickPostEvent, EntityInteractEvent,
-    EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent,
-    InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
-    LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent, LevelTickPostEvent,
-    LevelTicksHost, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent, NeighborChangedEvent,
-    PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerLoggedInEvent, PlayerTickPostEvent,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
+    AttackEntityEvent, BlockChangedEvent, BlockPart, BreakBlockEvent, CameraPoseEvent,
+    ChunkLoadEvent, ChunkUnloadEvent, ClientHost, ClientLevelUnloadEvent, ClientTickPostEvent,
+    EntityInteractEvent, EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks,
+    HostSide, InputKeyEvent, InteractionKeyMappingTriggeredEvent, InteractionResult,
+    KeyMappingPreEvent, LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent,
+    LevelTickPostEvent, LevelTicksHost, MenuClosedEvent, MouseScrollingEvent, MovementInputEvent,
+    NeighborChangedEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerLoggedInEvent,
+    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
     ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
     ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
@@ -280,6 +280,12 @@ impl Hooks for Create {
     fn input_key(&self, host: &mut dyn ClientHost, event: &mut InputKeyEvent<'_>) {
         for s in SUBSYSTEMS {
             s.input_key(host, event);
+        }
+    }
+
+    fn camera_pose(&self, host: &dyn ClientHost, event: &mut CameraPoseEvent<'_>) {
+        for s in SUBSYSTEMS {
+            s.camera_pose(host, event);
         }
     }
 

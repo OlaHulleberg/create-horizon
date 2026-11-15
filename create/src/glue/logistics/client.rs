@@ -397,13 +397,22 @@ fn speed(pos: [i32; 3]) -> f32 {
     CLIENT.with_borrow(|c| c.speeds.get(&pos).copied().unwrap_or(0.0))
 }
 
+/// Whether `id` (named with its components or not) draws as a block (`isGui3d`): a block's
+/// item, or a package's box.
 fn block_item(host: &dyn Host, id: &str) -> bool {
+    let id = create_engine::arm::item_id(id);
+    let id = create_engine::tank::split_potion_item(id).map_or(id, |(item, _)| item);
     if let Some(b) = CLIENT.with_borrow(|c| c.block_items.get(id).copied()) {
         return b;
     }
-    let b = is_block_item(host, id);
+    let b = is_block_item(host, id) || create_engine::package::is_package(id);
     CLIENT.with_borrow_mut(|c| c.block_items.insert(id.to_owned(), b));
     b
+}
+
+/// `PackageItem.isPackage` of an item named with its components or not.
+fn package(id: &str) -> bool {
+    create_engine::package::is_package(create_engine::arm::item_id(id))
 }
 
 /// The facts of the Create state `state` on this client.
@@ -484,8 +493,12 @@ pub fn predict_click(
     if block != Block::Belt {
         return mod_api::Flow::Continue;
     }
-    let id = click.stack.map(|s| s.item().id(&*host));
-    let water = id.as_deref() == Some("minecraft:water_bucket");
+    // A water bucket or a water bottle (a potion named with its contents).
+    let id = click.stack.map(|s| super::items::key_of(&*host, s));
+    let water = matches!(
+        id.as_deref(),
+        Some("minecraft:water_bucket" | "minecraft:potion|minecraft:water")
+    );
     let dyed = CLIENT.with_borrow(|c| c.dyed.contains(&click.pos));
     if water && dyed {
         *event.cancellation_result = mod_api::InteractionResult::Success;
@@ -504,7 +517,18 @@ fn filter_slot_hit(
     let Some(side) = Dir::from_offset(click.hit.face) else {
         return false;
     };
-    let slot = match block {
+    let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(click.pos[i]));
+    filter_slot(block, info, side).is_some_and(|s| create_engine::board::hits_box(s, local))
+}
+
+/// The centre of the filter slot on side `side` of the logistics block `block` (a brass
+/// funnel's, a smart chute's, a brass tunnel side's), if it has one there.
+pub(crate) fn filter_slot(
+    block: Block,
+    info: &create_engine::parts::StateInfo,
+    side: Dir,
+) -> Option<[f64; 3]> {
+    match block {
         Block::BrassFunnel | Block::BrassBeltFunnel => info
             .facing
             .and_then(|f| create_engine::funnel::filter_slot(f, info.belt_funnel, side)),
@@ -514,9 +538,7 @@ fn filter_slot_hit(
             _ => None,
         },
         _ => None,
-    };
-    let local = [0, 1, 2].map(|i| click.hit.point[i] - f64::from(click.pos[i]));
-    slot.is_some_and(|s| create_engine::board::hits_box(s, local))
+    }
 }
 
 /// Depots' and belts' contents from the server.
@@ -1376,7 +1398,7 @@ fn draw_belt_items(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, c: [i
         };
         let place = belt::item_place(&contents.segment, length, at, it.side_offset);
         let solid = block_item(host, &it.item);
-        let copies = belt::item_copies(u32::from(it.count), solid, it.angle);
+        let copies = belt::item_copies(u32::from(it.count), solid, it.angle, package(&it.item));
         draw.push();
         draw.translate([place.at.x, place.at.y, place.at.z]);
         if place.tilt != 0.0 {
@@ -1406,12 +1428,20 @@ fn draw_depot(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, pos: [i32;
         let (poses, phase, offset) = if *slot == 0 {
             let (from, to) = (prev.offset(), contents.held.offset());
             let at = from + (to - from) * t;
-            let poses =
-                depot::stack_poses(u32::from(*count), solid, &mut depot::JavaRandom::new(0));
+            let poses = depot::stack_poses(
+                u32::from(*count),
+                solid,
+                package(id),
+                &mut depot::JavaRandom::new(0),
+            );
             (poses, contents.held.angle as f32, at)
         } else {
-            let (poses, phase) =
-                depot::output_place(usize::from(*slot) - 1, u32::from(*count), solid);
+            let (poses, phase) = depot::output_place(
+                usize::from(*slot) - 1,
+                u32::from(*count),
+                solid,
+                package(id),
+            );
             (poses, phase, Vec3::new(0.0, 0.0, 0.0))
         };
         draw.push();

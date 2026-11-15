@@ -10,7 +10,8 @@ use super::items::{self, random_angle, upright};
 use create_engine::depot;
 use mod_api::PlayerRef;
 
-/// The stacks of the depot at `pos`, by slot: (slot, item, count).
+/// The stacks of the depot at `pos`, by slot: (slot, item named with its components
+/// (`items::key_of`, so clients draw a potion's colour and a package's box), count).
 pub fn depot_items(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<(u8, String, u8)> {
     let Some(slots) = items::slots(lv, pos, depot::SLOTS as u32) else {
         return Vec::new();
@@ -22,7 +23,7 @@ pub fn depot_items(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<(u8, String, u8)>
             let s = s?;
             Some((
                 i as u8,
-                items::id_of(&*lv.host, &s),
+                items::key_of(&*lv.host, &s),
                 s.count().min(255) as u8,
             ))
         })

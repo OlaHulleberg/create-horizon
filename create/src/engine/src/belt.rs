@@ -744,8 +744,9 @@ pub fn item_place(c: &Segment, length: i32, position: f32, side_offset: f32) -> 
 
 /// `BeltRenderer.renderItem`'s copies of a stack under its point, without the item's own turn:
 /// each copy turned 10° (flat items) and lifted, laid flat (flat items) or nudged by
-/// `new Random(angle)` (block items), at half size.
-pub fn item_copies(count: u32, block_item: bool, angle: i32) -> Vec<crate::math::Mat4> {
+/// `new Random(angle)` (block items), at half size; a package (`PackageItem.isPackage`, a block
+/// item) lifted 4 px at one and a half times its size, never nudged.
+pub fn item_copies(count: u32, block_item: bool, angle: i32, package: bool) -> Vec<crate::math::Mat4> {
     use crate::math::{Mat4, Vec3};
     let copies = crate::depot::copies(count);
     let mut rng = crate::depot::JavaRandom::new(i64::from(angle));
@@ -756,7 +757,7 @@ pub fn item_copies(count: u32, block_item: bool, angle: i32) -> Vec<crate::math:
         if !block_item {
             m *= Mat4::from_translation(Vec3::new(0.0, -0.09375, 0.0))
                 * Mat4::from_rotation_x(90f32.to_radians());
-        } else {
+        } else if !package {
             let (dx, dz) = (rng.next_float(), rng.next_float());
             m *= Mat4::from_translation(Vec3::new(
                 dx * 0.0625 * i as f32,
@@ -764,7 +765,12 @@ pub fn item_copies(count: u32, block_item: bool, angle: i32) -> Vec<crate::math:
                 dz * 0.0625 * i as f32,
             ));
         }
-        out.push(m * Mat4::from_scale(Vec3::splat(0.5)));
+        if package {
+            m *= Mat4::from_translation(Vec3::new(0.0, 0.25, 0.0));
+            out.push(m * Mat4::from_scale(Vec3::splat(1.5)));
+        } else {
+            out.push(m * Mat4::from_scale(Vec3::splat(0.5)));
+        }
         if !block_item {
             acc *= Mat4::from_rotation_y(10f32.to_radians());
         }
@@ -1342,6 +1348,10 @@ fn dir_of(i: u8) -> Dir {
     Dir::ALL[usize::from(i.min(5))]
 }
 
+/// The longest item name the belt and depot messages carry (a package named with its
+/// contents is a few thousand bytes).
+pub const NAME_MAX: usize = 8192;
+
 fn encode_one(c: &Contents, out: &mut Vec<u8>) {
     for v in c.controller {
         out.extend_from_slice(&v.to_le_bytes());
@@ -1360,10 +1370,17 @@ fn encode_one(c: &Contents, out: &mut Vec<u8>) {
         out.extend_from_slice(&i.position.to_le_bytes());
         out.extend_from_slice(&i.side_offset.to_le_bytes());
         out.extend_from_slice(&(i.angle as i16).to_le_bytes());
-        let name = &i.item.as_bytes()[..i.item.len().min(255)];
+        // An item named with its components (a package's contents) runs long: two bytes of
+        // length; one too long to send whole is left nameless.
+        let name = if i.item.len() <= NAME_MAX {
+            i.item.as_bytes()
+        } else {
+            &[]
+        };
         // Standing still, by why: bit 0 locked, 1 held at a funnel, 2 stalled.
         let still = u8::from(i.locked) | u8::from(i.at_funnel) << 1 | u8::from(i.stalled) << 2;
-        out.extend_from_slice(&[i.count, still, name.len() as u8]);
+        out.extend_from_slice(&[i.count, still]);
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
         out.extend_from_slice(name);
     }
 }
@@ -1416,10 +1433,10 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
             length: u16::from_le_bytes([h[17], h[18]]),
         };
         for _ in 0..u16::from_le_bytes([h[19], h[20]]) {
-            let Some(r) = take(&mut d, 4 + 4 + 2 + 3) else {
+            let Some(r) = take(&mut d, 4 + 4 + 2 + 4) else {
                 return out;
             };
-            let Some(name) = take(&mut d, usize::from(r[12])) else {
+            let Some(name) = take(&mut d, usize::from(u16::from_le_bytes([r[12], r[13]]))) else {
                 return out;
             };
             c.items.items.push(Item {
@@ -1527,7 +1544,7 @@ mod tests {
             item_velocity(&up, 3, 0.2, 0.1),
             crate::math::Vec3::new(2.0, 0.0, 0.0)
         );
-        assert_eq!(item_copies(16, false, 0).len(), 3);
+        assert_eq!(item_copies(16, false, 0, false).len(), 3);
     }
 
     /// A belt with funnels over some of its segments, each taking up to `room` items.

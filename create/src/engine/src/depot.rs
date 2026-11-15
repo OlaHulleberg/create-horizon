@@ -163,8 +163,9 @@ pub fn copies(count: u32) -> u32 {
 /// `DepotRenderer.renderItem` without its turn (`rotateYDegrees(angle)`, drawn on the GPU as
 /// the part's phase): the poses of a stack's copies under the depot's top centre
 /// (`translate(.5, 15/16, .5)`), in block units. `block_item` is `isGui3d`; `rng` is the
-/// renderer's `Random` (`new Random(0)` for the held stack, `i + 1` for output `i`).
-pub fn stack_poses(count: u32, block_item: bool, rng: &mut JavaRandom) -> Vec<Mat4> {
+/// renderer's `Random` (`new Random(0)` for the held stack, `i + 1` for output `i`). A package
+/// (`PackageItem.isPackage`, a block item) is lifted 4 px at one and a half times its size.
+pub fn stack_poses(count: u32, block_item: bool, package: bool, rng: &mut JavaRandom) -> Vec<Mat4> {
     let mut out = Vec::new();
     let mut m = Mat4::IDENTITY;
     for i in 0..copies(count) {
@@ -177,7 +178,12 @@ pub fn stack_poses(count: u32, block_item: bool, rng: &mut JavaRandom) -> Vec<Ma
                 dz * 0.0625 * i as f32,
             ));
         }
-        c *= Mat4::from_scale(Vec3::splat(0.5));
+        if package {
+            c *= Mat4::from_translation(Vec3::new(0.0, 0.25, 0.0));
+            c *= Mat4::from_scale(Vec3::splat(1.5));
+        } else {
+            c *= Mat4::from_scale(Vec3::splat(0.5));
+        }
         if !block_item {
             c *= Mat4::from_translation(Vec3::new(0.0, -3.0 / 16.0, 0.0));
             c *= Mat4::from_rotation_x(90f32.to_radians());
@@ -202,12 +208,12 @@ pub fn top_centre() -> Mat4 {
 
 /// Output `i`'s (0 to 7) place: turned by 45° × i about the centre, 0.35 out, at its own seeded
 /// angle. Returns the pose under the turn and the turn (the part's phase).
-pub fn output_place(i: usize, count: u32, block_item: bool) -> (Vec<Mat4>, f32) {
+pub fn output_place(i: usize, count: u32, block_item: bool, package: bool) -> (Vec<Mat4>, f32) {
     let mut rng = JavaRandom::new(i as i64 + 1);
     let angle = (360.0 * rng.next_float()) as i32;
     let out = Mat4::from_translation(Vec3::new(0.35, 0.0, 0.0))
         * Mat4::from_rotation_y((angle as f32).to_radians());
-    let poses = stack_poses(count, block_item, &mut rng)
+    let poses = stack_poses(count, block_item, package, &mut rng)
         .into_iter()
         .map(|p| out * p)
         .collect();
@@ -256,8 +262,15 @@ fn encode_one(c: &Contents, out: &mut Vec<u8>) {
     out.extend_from_slice(&c.held.side_offset.to_le_bytes());
     out.push(c.stacks.len() as u8);
     for (slot, item, count) in &c.stacks {
-        let name = &item.as_bytes()[..item.len().min(255)];
-        out.extend_from_slice(&[*slot, *count, name.len() as u8]);
+        // A stack named with its components (a package's contents) runs long: two bytes of
+        // length; one too long to send whole is left nameless.
+        let name = if item.len() <= crate::belt::NAME_MAX {
+            item.as_bytes()
+        } else {
+            &[]
+        };
+        out.extend_from_slice(&[*slot, *count]);
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
         out.extend_from_slice(name);
     }
 }
@@ -308,10 +321,10 @@ pub fn decode(mut d: &[u8]) -> Vec<Contents> {
             stacks: Vec::new(),
         };
         for _ in 0..head[26] {
-            let Some(s) = take(&mut d, 3) else {
+            let Some(s) = take(&mut d, 4) else {
                 return out;
             };
-            let Some(name) = take(&mut d, usize::from(s[2])) else {
+            let Some(name) = take(&mut d, usize::from(u16::from_le_bytes([s[2], s[3]]))) else {
                 return out;
             };
             c.stacks
@@ -379,13 +392,13 @@ mod tests {
 
     #[test]
     fn flat_items_lie_down_and_block_items_stand() {
-        let flat = stack_poses(1, false, &mut JavaRandom::new(0));
+        let flat = stack_poses(1, false, false, &mut JavaRandom::new(0));
         // Scaled by half, laid on its back: +y of the item points to -z... its up is now z.
         let up = flat[0].transform_vector3(Vec3::Y);
         assert!((up - Vec3::new(0.0, 0.0, 0.5)).length() < 1e-6, "{up}");
-        let block = stack_poses(1, true, &mut JavaRandom::new(0));
+        let block = stack_poses(1, true, false, &mut JavaRandom::new(0));
         assert!((block[0].transform_vector3(Vec3::Y) - Vec3::new(0.0, 0.5, 0.0)).length() < 1e-6);
-        assert_eq!(stack_poses(64, true, &mut JavaRandom::new(0)).len(), 4);
+        assert_eq!(stack_poses(64, true, false, &mut JavaRandom::new(0)).len(), 4);
     }
 
     #[test]

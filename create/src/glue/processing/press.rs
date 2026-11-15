@@ -230,13 +230,22 @@ pub fn press_on_belt(
     if lv.speed(above) == 0.0 {
         return Some(Process::Pass);
     }
-    let sequenced = sequenced_for(&item.item, item.progress.as_ref(), "create:pressing", None);
+    let sequenced = sequenced_for(
+        create_engine::arm::item_id(&item.item),
+        item.progress.as_ref(),
+        "create:pressing",
+        None,
+    );
     if !locked {
         if p.running {
             return Some(Process::Hold);
         }
         let fits = sequenced.is_some()
-            || recipes::with(|r| r.pressing.find_single(&item.item).is_some()) == Some(true);
+            || recipes::with(|r| {
+                r.pressing
+                    .find_single(create_engine::arm::item_id(&item.item))
+                    .is_some()
+            }) == Some(true);
         if !fits {
             return Some(Process::Pass);
         }
@@ -258,7 +267,9 @@ pub fn press_on_belt(
         None => {
             let seed = lv.game_time() as u64 ^ (at[0] as u64).wrapping_mul(0x9E37_79B9);
             let results = recipes::with(|r| {
-                let id = r.pressing.find_single(&item.item)?;
+                let id = r
+                    .pressing
+                    .find_single(create_engine::arm::item_id(&item.item))?;
                 Some(processing::roll(
                     r.pressing.get(id),
                     &mut processing::Rng::new(seed),

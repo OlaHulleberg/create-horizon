@@ -519,7 +519,7 @@ fn show_chute_item(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let stack = chute_stack(lv, pos);
     let id = stack
         .as_ref()
-        .map(|s| items::id_of(&*lv.host, s))
+        .map(|s| items::key_of(&*lv.host, s))
         .unwrap_or_default();
     let moving = with_world(|w| w.dims[dim].chutes.get(&pos).copied()).flatten();
     let position = moving.unwrap_or(0.5);
@@ -596,10 +596,12 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
         let filter = smart
             .then(|| with_world(|w| w.dims[dim].chute_filters.get(&pos).cloned()).flatten())
             .flatten();
-        let amount = if smart {
-            create_engine::chute::SMART_AMOUNT
+        // `getExtractionAmount`, `getExtractionMode`: a smart chute's amount board while it
+        // shows (extracting, a filter that stacks).
+        let (amount, exact) = if smart {
+            super::amount::chute_extraction(lv, pos)
         } else {
-            create_engine::chute::CHUTE_AMOUNT
+            (create_engine::chute::CHUTE_AMOUNT, false)
         };
         let taken = match from {
             _ if psi => {
@@ -618,6 +620,7 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
                 &from,
                 |host, r| filters::passes(&*host, filter.as_ref(), r.as_stack()),
                 amount,
+                exact,
             ),
             None => None,
         };
@@ -643,7 +646,7 @@ fn tick_chute_pulls(lv: &mut ServerLevel<'_>) {
 /// A player's click on a smart chute's filter slot (`FilteringBehaviour.onShortInteract` through
 /// `ValueSettingsInputHandler`): on a side, not sneaking, at the slot 11 px up; the held item
 /// becomes its filter (a filter item taken from the hand, the one it held given back), an empty
-/// hand clears it (no counts yet). True when the click was the slot's.
+/// hand clears it. True when the click was the slot's.
 pub fn use_smart_chute(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &BlockClick<'_>) -> bool {
     let Some(p) = lv.host.player(click.player) else {
         return false;
@@ -674,15 +677,37 @@ pub fn use_smart_chute(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &BlockCli
     {
         return false;
     }
-    // `FilteringBehaviour.onShortInteract`: the hand's stack becomes the filter (a filter item
-    // taken from it outside creative); the one it held goes back, with the frame sound.
-    let filter = filters::take_filter(lv.host, p, click.hand);
+    // With its amount board (`acceptsValueSettings`), the client holds the press: its release
+    // (a short click) or the board comes on `create:value_settings` (`amount`).
+    if super::amount::shown(lv, pos).is_some() {
+        return true;
+    }
+    set_smart_chute_filter(lv, pos, p, click.hand);
+    true
+}
+
+/// `FilteringBehaviour.onShortInteract` on the smart chute at `pos`: the stack in `hand` becomes
+/// the filter (a filter item taken from it outside creative); the one it held goes back, with
+/// the frame sound; an exact amount fits the new filter's stack size.
+pub(crate) fn set_smart_chute_filter(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    p: mod_api::PlayerRef,
+    hand: mod_api::Hand,
+) {
+    let filter = filters::take_filter(lv.host, p, hand);
+    let max = super::amount::filter_max(&*lv.host, filter.as_ref());
     let dim = lv.dim;
     let shown = filter.clone();
-    let old = with_world(|w| w.set_chute_filter(dim, pos, filter)).flatten();
+    let old = with_world(|w| {
+        if let Some(a) = w.dims[dim].filter_amounts.get_mut(&pos) {
+            *a = a.fitted(max);
+        }
+        w.set_chute_filter(dim, pos, filter)
+    })
+    .flatten();
     super::show_filter(lv, pos, shown.as_ref());
     filters::return_filter(lv, p, pos, old);
-    true
 }
 
 /// Item vaults whose blocks changed form or split (`updateConnectivity`), and their blocks

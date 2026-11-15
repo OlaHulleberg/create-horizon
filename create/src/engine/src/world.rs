@@ -318,6 +318,10 @@ pub struct Dimension {
     pub chute_pulls: crate::chute::Pulls,
     /// Smart chutes' filters, saved with their column.
     pub chute_filters: HashMap<[i32; 3], crate::filter::Filter>,
+    /// The amount boards of brass funnels' and smart chutes' filter slots that were set (the
+    /// others take up to a stack), saved with their column and kept by the same blocks as
+    /// `chute_filters`.
+    pub filter_amounts: HashMap<[i32; 3], crate::board::FilterAmount>,
     /// Chutes whose shape or facing is looked at again after the tick
     /// (`AbstractChuteBlock.updateDiagonalNeighbour` and `onRemove` schedule them a tick).
     pub chute_shapes: Vec<[i32; 3]>,
@@ -1131,8 +1135,18 @@ impl CreateWorld {
                 .filter(|(b, _)| matches!(b, Block::Chute | Block::SmartChute))
                 .map(|(_, i)| i.facing.unwrap_or(crate::kinetics::Dir::Down))
         };
-        if let Some(f) = chute(new).or(chute(old))
-            && chute(old).is_none() != chute(new).is_none()
+        // `onPlace` runs for any new state of a chute (a diagonal chute turned toward another
+        // leads into it now); `onRemove` only when the block changes.
+        if let Some(f) = chute(new)
+            && old != new
+        {
+            self.dims[dim]
+                .chute_shapes
+                .push(crate::chute::target(pos, f));
+        }
+        let kind_of = |s: u32| self.table.get(s).map(|(b, _)| b);
+        if let Some(f) = chute(old)
+            && kind_of(old) != kind_of(new)
         {
             let d = &mut self.dims[dim];
             d.chute_shapes.push(crate::chute::target(pos, f));
@@ -1182,6 +1196,11 @@ impl CreateWorld {
             let had = match gone {
                 Block::AnalogLever => d.levers.removed(pos),
                 Block::ContentObserver | Block::StockpileSwitch => d.detectors.removed(pos),
+                // Replaced by another of Create's blocks (which keeps the kinetic block entity
+                // type): the drain, spout or saw that was there is gone, as on its removal.
+                Block::ItemDrain => d.drains.remove(&pos).is_some(),
+                Block::Spout => d.spouts.remove(&pos).is_some(),
+                Block::MechanicalSaw => d.saws.remove(&pos).is_some(),
                 _ => false,
             };
             if had {
@@ -1240,6 +1259,9 @@ impl CreateWorld {
         if family(kind(old)).is_some() && family(kind(new)) != family(kind(old)) {
             let d = &mut self.dims[dim];
             d.chute_pulls.forget(pos);
+            if d.filter_amounts.remove(&pos).is_some() {
+                d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+            }
             if let Some(f) = d.chute_filters.remove(&pos) {
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
                 if f.is_filter_item() {
@@ -1679,6 +1701,8 @@ impl CreateWorld {
             d.ejecting.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.chute_pulls.column_unloaded(cx, cz);
             d.chute_filters
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.filter_amounts
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             let out = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) != (cx, cz);
             d.psis.retain(|p, _| out(p));
@@ -4068,6 +4092,25 @@ mod tests {
         states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         CreateWorld::new(table)
+    }
+
+    #[test]
+    fn a_drain_replaced_by_another_block_of_create_s_is_gone() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:item_drain", vec![]),
+            ("create:andesite_funnel", vec![("facing", "up")]),
+        ];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let (drain, funnel) = (2, 3);
+        let pos = [0, 64, 0];
+        w.block_changed(0, pos, 0, drain);
+        assert!(w.dims[0].drains.contains_key(&pos));
+        w.block_changed(0, pos, drain, funnel);
+        assert!(!w.dims[0].drains.contains_key(&pos));
+        states::clear_range();
     }
 
     #[test]

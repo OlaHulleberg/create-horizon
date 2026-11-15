@@ -24,16 +24,23 @@ pub(super) fn value_tip(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
         .level(host.dimension())
         .and_then(|l| l.game_time(host))
         .unwrap_or(0);
-    // A factory gauge's panel shows its own label, stock and tips (`FactoryPanelBehaviour`).
-    let gauge = crate::glue::stock::gauge_client::hover_lines(host);
-    let hovered = match &gauge {
-        Some(_) => match host.crosshair_target() {
-            Some(CrosshairTarget::Block { pos, .. }) => Some(([pos.x, pos.y, pos.z], "")),
+    // A factory gauge's panel shows its own label, stock and tips (`FactoryPanelBehaviour`);
+    // another value box its title in Create's yellow and the rest white.
+    let hovered = match crate::glue::stock::gauge_client::hover_lines(host) {
+        Some(lines) => match host.crosshair_target() {
+            Some(CrosshairTarget::Block { pos, .. }) => Some(([pos.x, pos.y, pos.z], lines)),
             _ => None,
         },
-        None => board::hovered_box(host),
+        None => board::hovered_box(host).map(|(pos, tip)| {
+            let lines = tip
+                .into_iter()
+                .enumerate()
+                .map(|(i, t)| (t, if i == 0 { 0xFB_DC7D } else { 0xFF_FFFF }))
+                .collect::<Vec<(String, u32)>>();
+            (pos, lines)
+        }),
     };
-    let Some((pos, title)) = hovered else {
+    let Some((pos, lines)) = hovered else {
         TIP.set(None);
         return;
     };
@@ -51,10 +58,6 @@ pub(super) fn value_tip(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
     }
     let alpha = ((shown as f32 + 1.0) / 5.0).min(1.0);
     let a = ((alpha * 255.0) as u32).max(5) << 24;
-    let hint = host
-        .translate("create.gui.value_settings.hold_to_edit")
-        .unwrap_or_else(|| "Click and hold to edit".into());
-    let lines = gauge.unwrap_or_else(|| vec![(title.to_owned(), 0xFB_DC7D), (hint, 0xFF_FFFF)]);
     let [width, height] = draw.size();
     let mut y = height - 75.0 - lines.len() as f32 * 12.0;
     for (text, rgb) in &lines {
