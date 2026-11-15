@@ -311,6 +311,9 @@ fn use_postbox(
         return None;
     }
     let _ = block;
+    if super::packages::port_clipboard(lv, player, pos) {
+        return Some(InteractionResult::Success);
+    }
     super::packages::port_screen::open(lv, player, pos, false);
     set_postbox_open(lv, pos, true);
     Some(InteractionResult::Success)
