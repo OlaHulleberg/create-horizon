@@ -52,10 +52,20 @@
 //! What their block entities hold is drawn while they move (`renderBlockEntities` with the
 //! contraption's update tags: `draw::draw_carried`, `Subsystem::draw_carried`): a depot's or
 //! ejector's stacks, a basin's items and fluids, a tank's, spout's or drain's fluid, a crafter's
-//! item, a nixie tube's text, filter slots' items, a chute's stack, an arm at rest, copycats'
-//! materials, placards' items, brackets, and vanilla chests, ender chests and shulker boxes (their
-//! item's special model). Blocks whose movement draws them (`disableBlockEntityRendering`:
-//! deployers, drills, saws, harvesters, rollers, interfaces, burners) are left to it.
+//! item, a nixie tube's text, a display board's lines, a belt (its segments, casing and items:
+//! a belt moves whole, `moveBelt`), filter slots' items, a chute's stack, an arm at rest,
+//! copycats' materials, placards' items, brackets, vanilla chests, ender chests and shulker boxes
+//! (their item's special model), signs' text and banners (`vanilla_draw`; a bed and a sign's
+//! board are their block models). Blocks whose movement draws them (`disableBlockEntityRendering`:
+//! deployers, whose held item Create does not draw riding either, drills, saws, harvesters,
+//! rollers, interfaces, burners) are left to it. A part a riding block entity turns stands at its
+//! phase. A crafter's grid mid-craft rides with it and goes on where it goes back.
+//!
+//! A sequenced gearshift's or valve handle's limit on a bearing, piston, pulley or gantry
+//! (`sequencedAngleLimit`, `sequencedOffsetLimit`) is saved with the structure, a turning
+//! bearing's turn as it follows from its last change; a moving gantry is saved with the column
+//! its carriage started from. A structure loaded moving waits for its network's first solve
+//! rather than stopping at the speed 0 it loads with.
 //!
 //! Deployers work while moving (`DeployerMovementBehaviour`), redstone contacts power the
 //! contacts they pass (`ContactMovementBehaviour`), elevators open their sliding doors at floors
@@ -70,10 +80,8 @@
 //! (`StabilizedBearingMovementBehaviour`).
 //!
 //! Left out, not for want of API:
-//! - A display board's text, a belt's items and a crafter's grid mid-craft are not carried, nor
-//!   drawn while moving; signs', banners' and beds' block entities and a deployer's held item
-//!   are not drawn while moving; trains and cart contraptions (block displays) draw none of what
-//!   their block entities hold.
+//! - Trains and cart contraptions (block displays) show only depots' and ejectors' stacks and
+//!   nixie tubes' and signs' text of what their block entities hold (`trains::contents`).
 //! - A bearing's glue stays in the world while it turns and goes back turned with it; its
 //!   contraption controls are not carried.
 
@@ -93,6 +101,7 @@ pub mod draw;
 mod lifts;
 pub mod seats;
 mod superglue;
+mod vanilla_draw;
 
 use super::server::ServerLevel;
 use super::states;
@@ -129,6 +138,7 @@ impl Subsystem for Contraptions {
     }
 
     fn world_closed(&self) {
+        LOADED_LIMITS.with_borrow_mut(std::collections::HashSet::clear);
         bearings::forget();
         lifts::forget();
         actors::forget();
@@ -317,6 +327,56 @@ pub fn scroll_option(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block) -> i32 {
 }
 
 /// The option kept for the block at `pos` (0, the first, when none is).
+/// The key a saved structure keeps what is left of its sequenced turn's limit under
+/// (`SequencedAngleLimit`, `SequencedOffsetLimit`), when it has one.
+const SEQUENCED_LIMIT: &str = "SequencedLimit";
+
+thread_local! {
+    /// Structures loaded with a sequenced limit: the first speed check after the load keeps it
+    /// (Create's block entity reads its speed with it, so no `onSpeedChanged` starts it again).
+    static LOADED_LIMITS: std::cell::RefCell<std::collections::HashSet<(usize, [i32; 3])>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// What is left of a sequenced limit, into a saved structure's compound.
+fn limit_to_nbt(c: &mut Compound, limit: Option<f32>) {
+    if let Some(l) = limit {
+        c.insert(
+            SEQUENCED_LIMIT.into(),
+            mod_api::Tag::Float(l.max(0.0).to_bits()),
+        );
+    }
+}
+
+/// A saved structure's sequenced limit at `pos`; one there is kept by its next speed check
+/// ([`keeps_loaded_limit`]).
+fn limit_from_nbt(dim: usize, pos: [i32; 3], c: &Compound) -> Option<f32> {
+    let limit = saved_limit(c)?;
+    LOADED_LIMITS.with_borrow_mut(|l| l.insert((dim, pos)));
+    Some(limit)
+}
+
+/// A saved structure's sequenced limit, as [`limit_to_nbt`] wrote it.
+fn saved_limit(c: &Compound) -> Option<f32> {
+    match c.get(&SEQUENCED_LIMIT.into()) {
+        Some(mod_api::Tag::Float(bits)) => Some(f32::from_bits(*bits)),
+        _ => None,
+    }
+}
+
+/// Whether the structure at `pos` was just loaded with a sequenced limit, which its speed
+/// check keeps instead of starting the limit again (once).
+fn keeps_loaded_limit(dim: usize, pos: [i32; 3]) -> bool {
+    LOADED_LIMITS.with_borrow_mut(|l| l.remove(&(dim, pos)))
+}
+
+/// Whether the kinetic part at `pos` (a bearing, piston, pulley or gantry shaft) was just placed
+/// or loaded and has no speed until its network's first solve: a structure it holds waits for
+/// it (Create's block entity loads with its speed, and goes on).
+fn unsolved(dim: usize, pos: [i32; 3]) -> bool {
+    with_world(|w| w.dims[dim].kinetics.unsolved(pos)).unwrap_or(false)
+}
+
 pub(super) fn option_at(dim: usize, pos: [i32; 3]) -> i32 {
     with_world(|w| w.dims[dim].scroll_options.get(&pos).copied())
         .flatten()
@@ -720,6 +780,9 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
         chassis,
         attached: attached_sides(&name, &props) | joined_sides(lv.dim, p, &name),
         unsupportive: unsupportive_faces(&name, &props),
+        belt: (name == "create:belt")
+            .then(|| create_info(id).and_then(|(_, i)| i.belt))
+            .flatten(),
     })
 }
 

@@ -49,7 +49,7 @@
 pub(crate) mod amount;
 pub mod arms;
 mod belt;
-mod carried;
+pub(crate) mod carried;
 pub(crate) mod chute;
 pub(crate) mod client;
 mod depot;
@@ -140,9 +140,9 @@ impl Subsystem for Logistics {
         pos: [i32; 3],
         block: create_engine::Block,
         data: &Compound,
-        _turn: create_engine::contraption::Transform,
+        turn: create_engine::contraption::Transform,
     ) {
-        carried::carry_in(lv, pos, block, data);
+        carried::carry_in(lv, pos, block, data, turn);
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
@@ -1009,7 +1009,7 @@ fn vaults_from_nbt(
 
 /// Belts' items as saved (`BeltInventory.write`): for each belt its controller (`pos`), each
 /// item's numbers (position and side offset as float bits, angle, count, locked) and its id.
-fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)]) -> Tag {
+pub(super) fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)]) -> Tag {
     Tag::List(
         belts
             .iter()
@@ -1066,7 +1066,7 @@ fn belts_to_nbt(belts: &[([i32; 3], create_engine::belt::Inventory)]) -> Tag {
 }
 
 /// What `belts_to_nbt` wrote.
-fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::belt::Inventory)> {
+pub(super) fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::belt::Inventory)> {
     let Some(Tag::List(list)) = data.get(&"belts".into()) else {
         return Vec::new();
     };

@@ -2,14 +2,16 @@
 //! Create's block entity NBT in `StructureBlockInfo.nbt`): a blaze burner's fuel and burn time
 //! or creative heat (`BlazeBurnerBlockEntity.write`), a basin's tanks, a saw's inventory, a
 //! crafter's slot cover and its joined inputs (`ConnectedInput`, turned with the structure as
-//! `MechanicalCrafterBlockEntity.transform` turns them). The keys are this module's.
+//! `MechanicalCrafterBlockEntity.transform` turns them), and its phase, countdown and the grid
+//! it holds mid-craft (`Phase`, `CountDown`, `GroupedItems`: they ride and go back rather than
+//! drop). The keys are this module's.
 
 use super::persist::{CREATIVE_BURNER, heat_of};
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::Block;
 use create_engine::contraption::Transform;
-use create_engine::{basin, burner, crafter_input, saw, tank};
+use create_engine::{basin, burner, crafter, crafter_input, saw, tank};
 use mod_api::{Compound, Tag};
 
 const BURNER: &str = "Burner";
@@ -18,6 +20,8 @@ const SAW: &str = "SawItems";
 const SAW_STATE: &str = "SawState";
 const COVER: &str = "CrafterCovered";
 const INPUT: &str = "CrafterInput";
+const CRAFTING: &str = "CrafterPhase";
+const GRID: &str = "CrafterGrid";
 
 pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: &mut Compound) {
     let dim = lv.dim;
@@ -80,6 +84,24 @@ pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: 
                     let mut v = vec![i32::from(i.controller)];
                     v.extend(i.data.iter().flatten());
                     out.insert(INPUT.into(), Tag::IntArray(v));
+                }
+                // Taken before its block goes, so its grid rides rather than drops.
+                if let Some(c) = d.crafters.remove(&pos) {
+                    d.crafting.retain(|p| *p != pos);
+                    if c != crafter::Crafter::default() {
+                        out.insert(
+                            CRAFTING.into(),
+                            Tag::IntArray(vec![c.phase as i32, c.count_down]),
+                        );
+                        let grid = c.grid.iter().map(|((x, y), item)| {
+                            Tag::Compound(Compound::from([
+                                ("x".into(), Tag::Int(*x)),
+                                ("y".into(), Tag::Int(*y)),
+                                ("id".into(), Tag::String(item.as_str().into())),
+                            ]))
+                        });
+                        out.insert(GRID.into(), Tag::List(grid.collect()));
+                    }
                 }
             }
             _ => {}
@@ -177,6 +199,40 @@ pub(super) fn carry_in(
                         .collect(),
                 })
             });
+            let crafting = ints(CRAFTING).and_then(|v| {
+                use crafter::Phase as P;
+                let phase = [
+                    P::Idle,
+                    P::Accepting,
+                    P::Assembling,
+                    P::Exporting,
+                    P::Waiting,
+                    P::Crafting,
+                    P::Inserting,
+                ]
+                .get(usize::try_from(*v.first()?).ok()?)
+                .copied()?;
+                let grid = match data.get(&GRID.into()) {
+                    Some(Tag::List(l)) => l
+                        .iter()
+                        .filter_map(|t| {
+                            let Tag::Compound(c) = t else { return None };
+                            let (Some(Tag::Int(x)), Some(Tag::Int(y)), Some(Tag::String(id))) =
+                                (c.get(&"x".into()), c.get(&"y".into()), c.get(&"id".into()))
+                            else {
+                                return None;
+                            };
+                            Some(((*x, *y), id.to_string_lossy()))
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                Some(crafter::Crafter {
+                    phase,
+                    count_down: v.get(1).copied().unwrap_or(0),
+                    grid,
+                })
+            });
             with_world(|w| {
                 let d = &mut w.dims[dim];
                 if covered {
@@ -184,6 +240,14 @@ pub(super) fn carry_in(
                 }
                 if let Some(i) = input {
                     d.crafter_inputs.insert(pos, i);
+                }
+                if let Some(c) = crafting {
+                    // At work again where it went back (`tick` runs on from its phase).
+                    if c.phase != crafter::Phase::Idle {
+                        d.crafting.push(pos);
+                    }
+                    d.crafters.insert(pos, c);
+                    d.crafter_checks.push(pos);
                 }
             });
         }

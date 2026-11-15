@@ -123,6 +123,12 @@ fn found_with(lv: &ServerLevel<'_>, p: [i32; 3], storage: bool) -> Option<Found>
         chassis,
         attached: crate::glue::contraptions::attached_sides(&name, &props),
         unsupportive: crate::glue::contraptions::unsupportive_faces(&name, &props),
+        belt: (name == "create:belt")
+            .then(|| {
+                let id = super::car_id(state);
+                crate::glue::contraptions::create_info(id).and_then(|(_, i)| i.belt)
+            })
+            .flatten(),
     })
 }
 

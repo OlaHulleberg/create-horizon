@@ -3,8 +3,9 @@
 //! `CustomText`, `CustomTextIndex`), and a display link's target, line, source and its
 //! configuration (`DisplayLinkBlockEntity.write`: a station summary's settings and the gauges
 //! joined to it too), the target's offset turned with the structure
-//! (`DisplayLinkBlockEntity.transform`). Each waits where it goes back as a saved one does
-//! (`displays_from_nbt`), and is kept as it is placed there.
+//! (`DisplayLinkBlockEntity.transform`), and a display board's lines (`FlapDisplayBlockEntity
+//! .write`: a controller's size, lines, colours and glow). Each waits where it goes back as a
+//! saved one does (`displays_from_nbt`), and is kept as it is placed there.
 
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
@@ -22,6 +23,9 @@ const LINK_TEXTS: &str = "DisplayLinkTexts";
 /// A link's station summary settings and its joined gauges (`LinkedGauges`, as Create keeps
 /// them: not turned), when it has any.
 const LINK_MORE: &str = "DisplayLinkMore";
+/// A controlling display board's lines, as a column saves them (`board_to_nums`).
+pub(crate) const BOARD: &str = "DisplayBoard";
+pub(crate) const BOARD_TEXTS: &str = "DisplayBoardTexts";
 
 pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: &mut Compound) {
     let dim = lv.dim;
@@ -43,6 +47,16 @@ pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: 
                 if let Some(text) = n.custom {
                     out.insert(NIXIE.into(), Tag::String(text.as_str().into()));
                     out.insert(NIXIE_INDEX.into(), Tag::Int(n.index));
+                }
+            }
+        } else if block == Block::DisplayBoard {
+            if let Some(mut b) = d.boards.remove(&pos) {
+                d.forgotten.push(pos);
+                if b.controller {
+                    let (mut nums, mut texts) = (Vec::new(), Vec::new());
+                    super::board_to_nums(&mut b, &mut nums, &mut texts);
+                    out.insert(BOARD.into(), Tag::IntArray(nums));
+                    out.insert(BOARD_TEXTS.into(), Tag::List(texts));
                 }
             }
         } else if block == Block::DisplayLink
@@ -116,6 +130,18 @@ pub(super) fn carry_in(
             n.index = index;
             d.shown.push(pos);
         });
+        return;
+    }
+    if block == Block::DisplayBoard {
+        if let Some(b) = board_of(data) {
+            with_world(|w| {
+                let d = &mut w.dims[dim].displays;
+                d.boards.insert(pos, b);
+                // Joined again with the boards beside it where it went back (`updateColumn`).
+                d.board_checks.push(pos);
+                d.shown.push(pos);
+            });
+        }
         return;
     }
     if block != Block::DisplayLink {
@@ -192,4 +218,19 @@ pub(super) fn carry_in(
         panels,
     };
     with_world(|w| w.dims[dim].displays.links.insert(pos, link));
+}
+
+/// The controlling board [`carry_out`] wrote into `data`, if it was one.
+pub(crate) fn board_of(data: &Compound) -> Option<create_engine::display::Board> {
+    let (Some(Tag::IntArray(nums)), Some(Tag::List(texts))) =
+        (data.get(&BOARD.into()), data.get(&BOARD_TEXTS.into()))
+    else {
+        return None;
+    };
+    let mut nums = nums.iter().copied();
+    let mut texts = texts.iter().map(|t| match t {
+        Tag::String(s) => s.to_string_lossy(),
+        _ => String::new(),
+    });
+    super::board_from_nums(&mut || nums.next(), &mut || texts.next())
 }

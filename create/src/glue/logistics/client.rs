@@ -1050,7 +1050,7 @@ pub fn tick_client_arms(_host: &mut dyn ClientHost) {
 /// those three: the move, the turn's axis and angle in degrees (None for none), the scale.
 /// None for a pose that flattens everything.
 #[allow(clippy::type_complexity)]
-fn decompose(m: Mat4) -> Option<([f32; 3], Option<([f32; 3], f32)>, [f32; 3])> {
+pub(crate) fn decompose(m: Mat4) -> Option<([f32; 3], Option<([f32; 3], f32)>, [f32; 3])> {
     let a = m.to_cols_array();
     let col = |i: usize| Vec3::new(a[4 * i], a[4 * i + 1], a[4 * i + 2]);
     let (c0, c1, c2) = (col(0), col(1), col(2));
@@ -1388,6 +1388,18 @@ fn draw_belt_items(draw: &mut dyn BlockEntityDrawContext, host: &dyn Host, c: [i
     }) else {
         return;
     };
+    draw_belt_contents(draw, host, &contents, &prev, t);
+}
+
+/// `BeltRenderer.renderItems`: each item where it lies along the belt (from where it was a tick
+/// ago, `prev`), turned and stacked as Create lays it.
+fn draw_belt_contents(
+    draw: &mut dyn BlockEntityDrawContext,
+    host: &dyn Host,
+    contents: &belt::Contents,
+    prev: &[f32],
+    t: f32,
+) {
     let length = i32::from(contents.length);
     let same = prev.len() == contents.items.items.len();
     for (i, it) in contents.items.items.iter().enumerate() {
@@ -1831,6 +1843,53 @@ pub(crate) fn draw_carried(
         | Block::BrassFunnel
         | Block::BrassBeltFunnel
         | Block::BrassTunnel => LogisticsEntity.block_entity_submit(host, event),
+        // `BeltRenderer` riding: the segment and its casing, still, and the belt's items from
+        // the segment that keeps them, laid out from where its controller is.
+        Block::Belt => {
+            let Some((_, info)) = table_info(host, event.state) else {
+                return;
+            };
+            let nbt = &event.entity.nbt;
+            let color = match nbt.get(&BELT_COLOR.into()) {
+                Some(Tag::String(c)) => Some(c.to_string_lossy().to_string()),
+                _ => None,
+            }
+            .filter(|c| !c.is_empty());
+            let draw = &mut *event.draw;
+            draw_segment(
+                draw,
+                host,
+                block,
+                &info,
+                event.pos,
+                [0.0; 2],
+                color.as_deref(),
+            );
+            let cased = event
+                .state
+                .property(&mod_api::HostBlockStates::block_states(host), "casing")
+                .ok()
+                .flatten()
+                == Some("true");
+            if cased && let Some(seg) = info.belt {
+                draw_casing(draw, host, &seg, nbt);
+            }
+            let carried = crate::glue::contraptions::actors::SHOWN_CARRIED;
+            let Some(Tag::Compound(c)) = nbt.get(&carried.into()) else {
+                return;
+            };
+            let Some(Tag::ByteArray(bytes)) = c.get(&super::carried::BELT_SHOWN.into()) else {
+                return;
+            };
+            if let Some(contents) = belt::decode(bytes).into_iter().next() {
+                let o = contents.controller.map(|v| v as f32);
+                let prev: Vec<f32> = contents.items.items.iter().map(|i| i.position).collect();
+                draw.push();
+                draw.translate(o);
+                draw_belt_contents(draw, host, &contents, &prev, 1.0);
+                draw.pop();
+            }
+        }
         // An arm as it stood when the structure took it (its block entity doesn't tick
         // riding: no turning, no dance).
         Block::MechanicalArm => {
