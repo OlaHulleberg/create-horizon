@@ -56,6 +56,7 @@ pub(super) fn register(r: &mut dyn Registrar) {
         r.block_part(key(b), ChassisPart);
     }
     r.block_part(key(Block::WindmillBearing), WindmillPart);
+    r.block_part(key(Block::MechanicalBearing), MechanicalBearingPart);
 }
 
 /// `MechanicalBearingBlockEntity.onSpeedChanged`: looked at on the next tick.
@@ -227,6 +228,59 @@ impl BlockPart for WindmillPart {
                         w.dims[dim].windmill_assemble.push(pos);
                     }
                 });
+            }
+        });
+        Some(InteractionResult::Success)
+    }
+}
+
+struct MechanicalBearingPart;
+
+#[mod_api::horizon_part]
+impl BlockPart for MechanicalBearingPart {
+    /// `MechanicalBearingBlock.useItemOn` with an empty hand, not sneaking, for a player who
+    /// may build: a turning structure comes apart now (`disassemble`, turned to the nearest
+    /// quarter), otherwise it assembles on the next tick when the bearing turns
+    /// (`assembleNextTick`).
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut UseItemOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let c = clicker(&*host, event.click);
+        if c.player.is_none_or(|p| p.may_build(&*host) != Some(true)) || c.sneaking {
+            return Some(InteractionResult::Fail);
+        }
+        if c.held.is_some() || c.after_empty_main {
+            return None;
+        }
+        let pos = event.click.pos;
+        in_click_level(host, event.click, |lv| {
+            let dim = lv.dim;
+            let now = lv.game_time();
+            let turn = with_world(|w| w.dims[dim].windmills.get(&pos).map(|m| m.bearing)).flatten();
+            match turn {
+                Some(Some(turn)) => {
+                    let Some(facing) = facing_of(lv, pos, Block::MechanicalBearing) else {
+                        return;
+                    };
+                    if let Some((mut c, _)) =
+                        BEARING_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos)))
+                    {
+                        actors::cancel_actors(lv, pos, &mut c);
+                    }
+                    let quarter = contraption::quarter(turn.angle_at(now));
+                    let state = lv.block(pos);
+                    if let Some(w) =
+                        with_world(|w| w.windmill_disassembled(dim, pos, state)).flatten()
+                    {
+                        put_back_turned(lv, pos, facing, quarter, &w);
+                    }
+                }
+                Some(None) => {}
+                None => {
+                    with_world(|w| w.dims[dim].bearing_checks.push(pos));
+                }
             }
         });
         Some(InteractionResult::Success)
