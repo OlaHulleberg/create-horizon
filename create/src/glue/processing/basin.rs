@@ -467,6 +467,8 @@ pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
                     })
                     .unwrap_or_default();
                     if done {
+                        let fluids_before = basin_tanks(dim, basin_pos);
+                        super::spoutput::route_fluids(lv, basin_pos, &fluids_before, &mut tanks);
                         with_world(|w| w.set_basin_fluids(dim, basin_pos, tanks));
                         super::spoutput::route(lv, basin_pos, &before, &mut slots);
                         write_basin(lv, basin_pos, &before, &slots);
@@ -688,6 +690,8 @@ pub fn compact_in_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         .unwrap_or(false),
     };
     if done {
+        let fluids_before = basin_tanks(dim, basin_pos);
+        super::spoutput::route_fluids(lv, basin_pos, &fluids_before, &mut tanks);
         with_world(|w| w.set_basin_fluids(dim, basin_pos, tanks));
         super::spoutput::route(lv, basin_pos, &before, &mut slots);
         write_basin(lv, basin_pos, &before, &slots);

@@ -1014,12 +1014,10 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
         for (pos, user) in users {
             let player = here.iter().copied().find(|p| p.uuid() == user);
             let stays = player.is_some_and(|p| {
-                p.entity()
-                    .position(&*lv.host)
-                    .is_some_and(|f| {
-                        let range = interaction_range(&*lv.host, p);
-                        ct::in_lectern_range([f[0], f[1] + 1.62, f[2]], pos, range)
-                    })
+                p.entity().position(&*lv.host).is_some_and(|f| {
+                    let range = interaction_range(&*lv.host, p);
+                    ct::in_lectern_range([f[0], f[1] + 1.62, f[2]], pos, range)
+                })
             });
             if !stays {
                 with_world(|w| w.dims[dim].lecterns.get_mut(&pos).map(|l| l.stop(now)));
