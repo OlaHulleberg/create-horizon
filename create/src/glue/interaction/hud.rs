@@ -310,7 +310,7 @@ fn cut_hint(draw: &dyn DrawContext, text: &str) -> Vec<Vec<(String, u32)>> {
 
 /// `ValueBox.render` of the highlighted box (`passive(false)`): Create's white
 /// `VALUE_BOX_HOVER` frame round the box, half a block across on the face it is on, a hair out
-/// from it. Its value's text and icon on the face are left out: world drawing takes no text.
+/// from it. Its value's number is the block entity's to draw (`value_text`).
 pub(super) fn value_box_outline(
     host: &dyn ClientHost,
     event: &mut mod_api::RenderLevelStageEvent<'_>,

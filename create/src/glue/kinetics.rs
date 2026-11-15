@@ -478,7 +478,7 @@ impl BlockEntityPart for KineticEntity {
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
         // The speeds, and what other subsystems keep in the same block entity for its clients.
-        let shown: Compound = [SPEEDS, THEORY, OVER, BRACKET]
+        let mut shown: Compound = [SPEEDS, THEORY, OVER, BRACKET]
             .into_iter()
             .chain(
                 super::SUBSYSTEMS
@@ -487,6 +487,11 @@ impl BlockEntityPart for KineticEntity {
             )
             .filter_map(|k| Some((k.into(), event.entity.nbt.get(&k.into())?.clone())))
             .collect();
+        // How often a player looked at its value box: a new number makes clients draw it again
+        // (`interaction::value_text`).
+        if let Some(n) = super::interaction::values::looks(event.pos) {
+            shown.insert(super::interaction::values::LOOKS.into(), Tag::Int(n));
+        }
         (!shown.is_empty()).then_some(shown)
     }
 
@@ -525,6 +530,7 @@ impl BlockEntityPart for KineticEntity {
             draw.block(part, &[("facing", "up")]);
             draw.pop();
         }
+        super::interaction::value_text::draw(host, event.pos, event.draw);
         if !systems
             .iter()
             .any(|s| s.animated(block, event.pos, event.entity))
