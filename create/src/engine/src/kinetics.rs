@@ -846,13 +846,15 @@ impl Kinetics {
         let mut pull: Vec<u32> = Vec::new();
         let mut root: Vec<f32> = Vec::new();
         let mut driver: Vec<u32> = Vec::new();
+        let mut loops: Vec<(u32, u32)> = Vec::new();
         while let Some(start) = self.dirty.pop() {
             if !self.nodes[start as usize].live || done.contains_key(&start) {
                 continue;
             }
             // Factors relative to each side's first part, by breadth-first search; a loop that
-            // disagrees breaks the newest part on it.
+            // disagrees breaks the newest part on it, once its side turns.
             self.factor.clear();
+            loops.clear();
             self.side.clear();
             self.queue.clear();
             couplings.clear();
@@ -884,8 +886,7 @@ impl Kinetics {
                             Some(&have)
                                 if (have - want).abs() > have.abs().max(want.abs()) * 1e-4 =>
                             {
-                                let newer = self.newer(m, id);
-                                conflict = Some(conflict.map_or(newer, |c| self.newer(c, newer)));
+                                loops.push((self.newer(m, id), sides));
                             }
                             _ => {}
                         }
@@ -972,6 +973,15 @@ impl Kinetics {
                     break;
                 }
             }
+            // `RotationPropagator.propagateNewSource` meets a loop's disagreement only as speed
+            // goes round it: a loop on a side nothing turns breaks nothing
+            // (`newSpeed == 0 && oppositeSpeed == 0`).
+            let turning = loops
+                .iter()
+                .filter(|&&(_, s)| root[s as usize] != 0.0)
+                .map(|&(v, _)| v)
+                .reduce(|a, b| self.newer(a, b));
+            conflict = turning.or(conflict);
             // A coupling whose ends a loop already joins: Create does not overpower its own
             // network (`RotationPropagator.propagateNewSource`), it breaks the block when the
             // speed conveyed is faster than, or opposed to, what the other end turns at.
@@ -1327,6 +1337,24 @@ mod tests {
         let e = solve(&mut k);
         assert!(e.contains(&Event::Break { pos: [2, 2, 1] }), "{e:?}");
         assert_eq!(k.speed([1, 1, 1], 0), Some(-256.0));
+    }
+
+    #[test]
+    fn a_loop_that_disagrees_breaks_only_once_it_turns() {
+        // Two small and two large cogs, each small on a large one's shaft and meshing with the
+        // other large one: round the loop the speed doubles twice. In Create nothing breaks
+        // while nothing turns (`propagateNewSource` skips a pair conveying no speed).
+        let mut k = Kinetics::new();
+        k.set([0, 7, 0], 0, Part::cog(Axis::Y, false));
+        k.set([0, 6, 0], 0, Part::cog(Axis::Y, true));
+        k.set([-1, 7, 1], 0, Part::cog(Axis::Y, true));
+        k.set([-1, 6, 1], 0, Part::cog(Axis::Y, false));
+        let e = solve(&mut k);
+        assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+        // A motor under it: now the loop turns, and a part on it breaks.
+        k.set([0, 5, 0], 0, motor(Dir::Up, 16.0));
+        let e = solve(&mut k);
+        assert!(e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
     }
 
     #[test]
