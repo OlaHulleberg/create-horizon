@@ -118,21 +118,30 @@ fn target(lv: &ServerLevel<'_>, pos: [i32; 3], point: [f64; 3], shape: Shape) ->
     }
 }
 
-/// The copycat helpers' target for the indicator: a panel item on a panel, a step on a step.
+/// The copycat helpers' target for the indicator: a panel item on a panel, a step on a step,
+/// and what it takes of the clicked one (its facing, a step's half too), for its ghost.
 pub(crate) fn helper_target(
     lv: &ServerLevel<'_>,
     pos: [i32; 3],
     point: [f64; 3],
     item: &str,
-) -> Option<[i32; 3]> {
+) -> Option<crate::glue::interaction::HelperTarget> {
     let shape = shape_of(&*lv.host, lv.block_state(pos)?)?;
-    let own = match shape {
-        Shape::Panel(_) => "create:copycat_panel",
-        Shape::Step { .. } => "create:copycat_step",
+    let (own, props) = match shape {
+        Shape::Panel(f) => ("create:copycat_panel", vec![("facing", cc::dir_name(f))]),
+        Shape::Step { facing, top } => (
+            "create:copycat_step",
+            vec![
+                ("facing", cc::dir_name(facing)),
+                ("half", if top { "top" } else { "bottom" }),
+            ],
+        ),
     };
+    let props = props.into_iter().map(|(k, v)| (k, v.to_owned())).collect();
     (item == own)
         .then(|| target(lv, pos, point, shape))
         .flatten()
+        .map(|at| (at, props))
 }
 
 fn add(p: [i32; 3], d: Dir) -> [i32; 3] {

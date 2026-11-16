@@ -210,14 +210,15 @@ impl Hooks for Create {
         }
     }
 
-    /// The glue's textured world pipelines (`glue::pipelines`) and the schematic outline's
-    /// checkerboard (`glue::schematics`).
+    /// The glue's textured world pipelines (`glue::pipelines`, the placement ghosts') and the
+    /// schematic outline's checkerboard (`glue::schematics`).
     fn register_render_pipelines(
         &self,
         _context: &RegistrationContext,
         event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
     ) {
         glue::pipelines::register(event);
+        glue::interaction::register_pipelines(event);
         glue::schematics::render_pipelines(event.pipelines);
     }
 

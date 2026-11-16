@@ -583,7 +583,7 @@ pub(crate) fn helper_target(
     pos: [i32; 3],
     point: [f64; 3],
     item: &str,
-) -> Option<[i32; 3]> {
+) -> Option<crate::glue::interaction::HelperTarget> {
     let (block, info) = lv
         .block_state(pos)
         .and_then(states::id)
@@ -592,10 +592,20 @@ pub(crate) fn helper_target(
         && item.ends_with("_table_cloth")
         && super::cloth::is_cloth(block)
     {
-        return cloth_target(lv, pos, point);
+        // `s -> s`: the cloth's own state.
+        return cloth_target(lv, pos, point).map(|at| (at, Vec::new()));
     }
     if is_sail(block) && (item == "create:white_sail" || item == "create:sail_frame") {
-        return sail_target(lv, pos, point, info.facing?);
+        let facing = info.facing?;
+        return sail_target(lv, pos, point, facing).map(|at| {
+            (
+                at,
+                vec![(
+                    "facing",
+                    create_engine::copycat::dir_name(facing).to_owned(),
+                )],
+            )
+        });
     }
     girders::helper_target(lv, player, pos, point, item)
 }

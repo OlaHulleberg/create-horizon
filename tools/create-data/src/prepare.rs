@@ -1023,6 +1023,9 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         "assets/create/shaders/pipeline/textured.wgsl",
         TEXTURED_SHADER.as_bytes(),
     )?;
+    // The placement helpers' ghosts, baked from the jar's models (`ghosts.rs`).
+    let (ghost_models, ghosts) = crate::ghosts::source_file(&files)?;
+    put(crate::ghosts::RS, ghost_models.as_bytes())?;
     // The jar layer (`[[jar]]` in horizon-mod.toml) also holds the data left out above (recipes for
     // other mods, the worldgen 26.3 cannot place, recipe advancements...): the mod's own file at
     // the same path keeps each out, as it was when the mod carried copies of what it kept.
@@ -1057,6 +1060,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     report.insert("common_tags_added".into(), json!(common));
     report.insert("connected_texture_files".into(), json!(ct_files.len()));
     report.insert("connected_textures_left_out".into(), json!(ct_left_out));
+    report.insert("placement_ghosts".into(), json!(ghosts));
     Ok(serde_json::to_string_pretty(&Value::Object(report)).unwrap())
 }
 
