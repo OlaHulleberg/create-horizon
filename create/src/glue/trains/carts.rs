@@ -11,7 +11,8 @@
 //!
 //! A contraption's chests, barrels, vaults and toolboxes ride with their items (the
 //! contraptions subsystem's mounted storage), which a furnace cart burns coal from, and its glue
-//! goes back with it. Couplings are drawn by clients (`coupling_draw`). The assembler's movement
+//! goes back with it, turned as its blocks are. Its contraption controls ride it: set off, they
+//! turn their kind of actor off (`/create_debug controls` clicks them, at the cart's block). Couplings are drawn by clients (`coupling_draw`). The assembler's movement
 //! mode is set on its value box (`interaction::values`), or `/create_debug carts mode`.
 //!
 //! Left out, as the mod API can't do it (beyond drawing, see the parent module):
@@ -31,7 +32,6 @@
 //! minecart's own inventory (`addExtraInventories`).
 
 use super::super::net;
-use super::super::persist::mark_unsaved;
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::super::subsystem::Subsystem;
@@ -227,6 +227,41 @@ fn tick_cart_actors(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) {
         }
         CARTS.with_borrow_mut(|c| c.mounted.insert(uuid, on));
     }
+}
+
+/// What the contraption on the cart in block `key` of level `dim` carries (its actors, controls
+/// and the kinds turned off), for a click on its contraption controls, with the cart and where
+/// each block is (by the cart's block: a cart's contraption turns with it); None for no such
+/// cart.
+pub(crate) fn take_cart_carried(
+    dim: usize,
+    key: [i32; 3],
+) -> Option<(
+    u128,
+    create_engine::actors::Carried,
+    crate::glue::contraptions::actors::Place,
+)> {
+    CARTS.with_borrow(|c| {
+        let (uuid, on) = c.mounted.iter().find(|(u, on)| {
+            on.dim == dim
+                && c.known
+                    .get(u)
+                    .is_some_and(|k| k.pos.map(|v| v.floor() as i32) == key)
+        })?;
+        let place = move |o: [i32; 3]| [key[0] + o[0], key[1] + o[1], key[2] + o[2]];
+        let place: crate::glue::contraptions::actors::Place = Box::new(place);
+        Some((*uuid, on.carried.clone(), place))
+    })
+}
+
+/// What [`take_cart_carried`] took, changed by its controls, goes back to the cart.
+pub(crate) fn put_cart_carried(uuid: u128, carried: create_engine::actors::Carried) {
+    CARTS.with_borrow_mut(|c| {
+        if let Some(on) = c.mounted.get_mut(&uuid) {
+            on.carried = carried;
+            c.dirty = true;
+        }
+    });
 }
 
 /// The key a cart's contraption's block data is carried under while it is put back.
@@ -1121,25 +1156,11 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             Some((*o, take_storage_at(lv, p)?))
         })
         .collect();
-    // `Contraption.superglue`: the glue holding its blocks leaves the world with them.
-    let world: Vec<[i32; 3]> = blocks
-        .iter()
-        .map(|(o, _)| [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]])
-        .collect();
-    let dim = lv.dim;
-    let glue = with_world(|w| {
-        let areas = &mut w.dims[dim].glue;
-        let (used, shrunk) = create_engine::glue::carried(areas, &world, |p| p == pos);
-        for i in used.into_iter().rev() {
-            let (cx, cz) = areas.remove(i).column();
-            mark_unsaved(dim, [cx, cz]);
-        }
-        shrunk
-            .iter()
-            .map(|g| g.moved([-pos[0], -pos[1], -pos[2]]))
-            .collect::<Vec<_>>()
-    })
-    .unwrap_or_default();
+    // `Contraption.superglue`: the glue holding its blocks leaves the world with them, and its
+    // contraption controls' settings with their blocks (turning their kinds off).
+    let mut extras =
+        crate::glue::contraptions::actors::carry_extras(lv, pos, &blocks, |p| p == pos);
+    let glue = std::mem::take(&mut extras.glue);
     // What their block entities and the engine keep for its other blocks rides too.
     let held = crate::glue::contraptions::actors::carry_held(lv, held_key(nc.uuid), pos, &blocks);
     // `removeBlocksFromWorld`: anchors stay.
@@ -1160,7 +1181,10 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             .map(|s| s.mode)
             .unwrap_or_default()
     });
-    let carried = crate::glue::contraptions::actors::bearing_actors(&blocks);
+    let carried = crate::glue::contraptions::actors::with_extras(
+        crate::glue::contraptions::actors::bearing_actors(&blocks),
+        &extras,
+    );
     crate::glue::advancements::assembled(lv, pos, &blocks);
     let m = Mounted::new(blocks, mode, initial);
     // A furnace cart's push is zeroed (`PushX`, `PushZ` saved as 0 and loaded back).
@@ -1308,18 +1332,10 @@ fn put_back(lv: &mut ServerLevel<'_>, at: [f64; 3], on: OnCart) {
             slots,
         );
     }
-    // Its glue back with it, turned as its blocks are.
-    let dim = lv.dim;
-    for g in on.glue {
-        let [a, b] = [g.min, g.max].map(|c| {
-            let c = create_engine::contraption::rotate(c, quarter, Axis::Y);
-            [origin[0] + c[0], origin[1] + c[1], origin[2] + c[2]]
-        });
-        let placed = Glue::span(a, b);
-        let (cx, cz) = placed.column();
-        mark_unsaved(dim, [cx, cz]);
-        with_world(|w| w.dims[dim].glue.push(placed));
-    }
+    // Its glue and controls back with it, turned as its blocks are.
+    let mut carried = on.carried;
+    carried.glue = on.glue;
+    crate::glue::contraptions::actors::release_extras(lv, &mut carried, place);
     CARTS.with_borrow_mut(|c| c.dirty = true);
 }
 
@@ -1389,6 +1405,8 @@ fn contraption_tag(host: &dyn Host, on: &OnCart, with_turn: bool) -> Compound {
     if !glue.is_empty() {
         c.insert("Glue".into(), Tag::List(glue));
     }
+    // Its contraption controls and the kinds they turned off (its glue is `Glue` above).
+    crate::glue::contraptions::actors::extras_to_nbt(&mut c, &on.carried);
     if with_turn {
         c.insert("Yaw".into(), Tag::Double(f64::from(m.turn.yaw).to_bits()));
         c.insert("Placed".into(), Tag::IntArray(vec![i32::from(m.placed)]));
@@ -1495,7 +1513,12 @@ fn contraption_of(host: &dyn Host, c: &Compound, dim: usize) -> Option<OnCart> {
             .collect(),
         _ => Vec::new(),
     };
-    let carried = crate::glue::contraptions::actors::bearing_actors(&m.blocks);
+    let mut extras = crate::glue::contraptions::actors::extras_from_nbt(c);
+    extras.glue.clear();
+    let carried = crate::glue::contraptions::actors::with_extras(
+        crate::glue::contraptions::actors::bearing_actors(&m.blocks),
+        &extras,
+    );
     Some(OnCart {
         dim,
         m,

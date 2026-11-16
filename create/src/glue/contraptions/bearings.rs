@@ -298,6 +298,7 @@ fn put_back(lv: &mut ServerLevel<'_>, bearing: [i32; 3], w: &create_engine::worl
     actors::expect_back(lv, bearing, |o| add(bearing, o));
     put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
     actors::release_storage(lv, bearing, |o| add(bearing, o));
+    actors::release_extras(lv, &mut w.extras.clone(), |o| add(bearing, o));
 }
 
 /// The facing of the Create block `block` at `pos`.
@@ -444,6 +445,7 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
         set_exception(lv, pos, None);
         crate::glue::advancements::windmill_assembled(lv, pos, &blocks, sails);
         actors::carry_storage(lv, pos, pos, &blocks);
+        let extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
         take_blocks(lv, pos, &blocks);
         // `RotationDirection` on its value box: clockwise unless set otherwise.
         let w = create_engine::world::Windmill {
@@ -451,6 +453,7 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
             sails,
             clockwise: super::option_at(dim, pos) == 0,
             bearing: None,
+            extras,
         };
         with_world(|world| world.windmill_assembled(dim, pos, state, w));
     }
@@ -498,7 +501,7 @@ pub(super) fn tick_bearing_actors(lv: &mut ServerLevel<'_>) {
     let now = lv.game_time();
     let structures = with_world(|w| w.dims[dim].windmills.len()).unwrap_or(0);
     if structures > 0 || BEARINGS_LOOKED.with_borrow(|l| !l.is_empty()) {
-        let fresh: Vec<([i32; 3], Blocks, bool)> = with_world(|w| {
+        let fresh: Vec<([i32; 3], Blocks, bool, Carried)> = with_world(|w| {
             let mut fresh = Vec::new();
             BEARINGS_LOOKED.with_borrow_mut(|l| {
                 let d = &w.dims[dim];
@@ -506,16 +509,16 @@ pub(super) fn tick_bearing_actors(lv: &mut ServerLevel<'_>) {
                 l.retain(|k| k.0 != dim || d.windmills.contains_key(&k.1));
                 for (p, m) in &d.windmills {
                     if l.insert((dim, *p)) {
-                        fresh.push((*p, m.blocks.clone(), m.bearing.is_none()));
+                        fresh.push((*p, m.blocks.clone(), m.bearing.is_none(), m.extras.clone()));
                     }
                 }
             });
             fresh
         })
         .unwrap_or_default();
-        for (pos, blocks, windmill) in fresh {
-            let carried = actors::bearing_actors(&blocks);
-            if carried.actors.is_empty() {
+        for (pos, blocks, windmill, extras) in fresh {
+            let carried = actors::with_extras(actors::bearing_actors(&blocks), &extras);
+            if carried.actors.is_empty() && carried.controls.is_empty() {
                 continue;
             }
             let own = windmill.then(|| Turn {
@@ -575,6 +578,50 @@ pub(super) fn tick_bearing_actors(lv: &mut ServerLevel<'_>) {
         }
         BEARING_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), (carried, own.map(|_| turn))));
     }
+}
+
+/// What the turning structure of the bearing or windmill at `pos` carries (its actors, controls,
+/// the kinds turned off), for a click on its contraption controls, and where each of its blocks
+/// is in the world now (`toGlobalVector` of its centre); None for no turning structure.
+pub(super) fn take_turning(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+) -> Option<(Carried, actors::Place)> {
+    let dim = lv.dim;
+    let now = lv.game_time();
+    let w = with_world(|w| w.dims[dim].windmills.get(&pos).cloned()).flatten()?;
+    let facing = super::create_info(lv.block(pos)).and_then(|(_, i)| i.facing)?;
+    let carried = BEARING_CARRIED
+        .with_borrow(|c| c.get(&(dim, pos)).map(|c| c.0.clone()))
+        .unwrap_or_else(|| actors::with_extras(actors::bearing_actors(&w.blocks), &w.extras));
+    let angle = w
+        .bearing
+        .or_else(|| windmill_turn(dim, pos))
+        .map_or(0.0, |t| f64::from(t.angle_at(now)));
+    let axis = facing.axis();
+    let place = move |o: [i32; 3]| {
+        let v = create_engine::actors::turn_vec(o.map(f64::from), axis, angle);
+        [0, 1, 2].map(|i| (f64::from(pos[i]) + 0.5 + v[i]).floor() as i32)
+    };
+    Some((carried, Box::new(place)))
+}
+
+/// What [`take_turning`] took, changed by its controls, goes back: to its actors while it
+/// turns, and to the structure, which saves it and puts it back with its blocks.
+pub(super) fn put_turning(lv: &mut ServerLevel<'_>, pos: [i32; 3], carried: Carried) {
+    let dim = lv.dim;
+    with_world(|w| {
+        if let Some(m) = w.dims[dim].windmills.get_mut(&pos) {
+            m.extras.controls.clone_from(&carried.controls);
+            m.extras.disabled.clone_from(&carried.disabled);
+            w.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+    });
+    BEARING_CARRIED.with_borrow_mut(|c| {
+        if let Some(e) = c.get_mut(&(dim, pos)) {
+            e.0 = carried;
+        }
+    });
 }
 
 /// Mechanical bearings whose speed changed (`tick` after `onSpeedChanged`): a still one starts
@@ -646,8 +693,10 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                 set_exception(lv, pos, None);
                 crate::glue::advancements::assembled(lv, pos, &blocks);
                 actors::carry_storage(lv, pos, pos, &blocks);
+                let extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
                 take_blocks(lv, pos, &blocks);
                 let w = create_engine::world::Windmill {
+                    extras,
                     blocks,
                     sails,
                     clockwise: true,
@@ -697,48 +746,7 @@ fn put_back_turned(
     actors::expect_back(lv, bearing, turn);
     put_back_blocks(lv, &turned, |lv, p| lv.is_free(p));
     actors::release_storage(lv, bearing, turn);
-    turn_glue(lv, bearing, &w.blocks, anchor, quarter, axis);
-}
-
-/// The glue a turning structure carries (`Contraption.superglue`) turns with it: the areas that
-/// held its blocks, which stay in the world while it turns, go back turned with the blocks
-/// (each shrunk to the blocks it holds, as `removeBlocksFromWorld` keeps them).
-fn turn_glue(
-    lv: &mut ServerLevel<'_>,
-    bearing: [i32; 3],
-    blocks: &[([i32; 3], u32)],
-    anchor: [i32; 3],
-    quarter: i32,
-    axis: Axis,
-) {
-    if contraption::clockwise_turns(quarter) == 0 {
-        return;
-    }
-    let dim = lv.dim;
-    let world: Vec<[i32; 3]> = blocks.iter().map(|(o, _)| add(bearing, *o)).collect();
-    let turn = |p: [i32; 3]| {
-        let local = [0, 1, 2].map(|i| p[i] - anchor[i]);
-        add(anchor, contraption::rotate(local, quarter, axis))
-    };
-    with_world(|w| {
-        let areas = &mut w.dims[dim].glue;
-        let (used, shrunk) = create_engine::glue::carried(areas, &world, |p| p == bearing);
-        if used.is_empty() {
-            return;
-        }
-        let mut columns: Vec<(i32, i32)> = used.iter().map(|&i| areas[i].column()).collect();
-        for i in used.into_iter().rev() {
-            areas.remove(i);
-        }
-        for g in shrunk {
-            let t = create_engine::glue::Glue::span(turn(g.min), turn(g.max));
-            columns.push(t.column());
-            areas.push(t);
-        }
-        for (cx, cz) in columns {
-            super::super::persist::mark_unsaved(dim, [cx, cz]);
-        }
-    });
+    actors::release_extras(lv, &mut w.extras.clone(), turn);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1499,6 +1507,7 @@ fn windmills_to_nbt(
                 if let Some(t) = actors::storage_to_nbt(lv, *p) {
                     c.insert("storage".into(), t);
                 }
+                actors::extras_to_nbt(&mut c, &w.extras);
                 c.insert(
                     "blocks".into(),
                     Tag::IntArray(w.blocks.iter().flat_map(|(o, _)| *o).collect()),
@@ -1596,8 +1605,8 @@ fn structure_from_nbt(lv: &ServerLevel<'_>, c: &Compound) -> Option<Vec<([i32; 3
 
 /// Moving and waiting pistons (`pistons`), as `LinearActuatorBlockEntity` and its contraption
 /// entity save them: anchor, offset, range, starting offset, waiting, facing, and the blocks.
-/// What they carried is found again from the blocks (their actors); mounted storage's items
-/// are not kept.
+/// Their actors are found again from the blocks; their storage, controls, the kinds turned off
+/// and glue are saved with them.
 fn pistons_to_nbt(lv: &ServerLevel<'_>, all: &[([i32; 3], create_engine::world::Moving)]) -> Tag {
     Tag::List(
         all.iter()
@@ -1609,6 +1618,7 @@ fn pistons_to_nbt(lv: &ServerLevel<'_>, all: &[([i32; 3], create_engine::world::
                     c.insert("storage".into(), t);
                 }
                 structure_to_nbt(lv, &mut c, &m.blocks);
+                actors::extras_to_nbt(&mut c, &m.carried);
                 super::limit_to_nbt(&mut c, m.limit);
                 c.insert(
                     "piston".into(),
@@ -1649,7 +1659,8 @@ fn pistons_from_nbt(
                 return None;
             };
             let blocks = structure_from_nbt(lv, c)?;
-            let carried = actors::bearing_actors(&blocks);
+            let carried =
+                actors::with_extras(actors::bearing_actors(&blocks), &actors::extras_from_nbt(c));
             let pos = [*p.first()?, *p.get(1)?, *p.get(2)?];
             actors::storage_from_nbt(lv, pos, c.get(&"storage".into()));
             let limit = super::limit_from_nbt(lv.dim, pos, c);
@@ -1674,7 +1685,7 @@ fn pistons_from_nbt(
 /// Moving gantries (`gantries`, in the column their carriage started from), as
 /// `GantryContraptionEntity` saves itself: where it started, its carriage's and shaft line's
 /// facings, how far it went, what is left of its sequenced limit, and the blocks. What they
-/// carried is found again from the blocks (their actors), as a piston's is.
+/// carry is saved and found again as a piston's is.
 fn gantries_to_nbt(lv: &ServerLevel<'_>, all: &[create_engine::gantry::Moving]) -> Tag {
     let index = |d: Dir| Dir::ALL.iter().position(|x| *x == d).unwrap_or(0) as i32;
     Tag::List(
@@ -1686,6 +1697,7 @@ fn gantries_to_nbt(lv: &ServerLevel<'_>, all: &[create_engine::gantry::Moving]) 
                     c.insert("storage".into(), t);
                 }
                 structure_to_nbt(lv, &mut c, &g.blocks);
+                actors::extras_to_nbt(&mut c, &g.carried);
                 super::limit_to_nbt(&mut c, g.limit);
                 c.insert(
                     "gantry".into(),
@@ -1727,7 +1739,10 @@ fn gantries_from_nbt(lv: &ServerLevel<'_>, data: &Compound) -> Vec<create_engine
                 offset: f32::from_bits(offset as u32),
                 // Shown again at the speed of its first tick.
                 per_tick: 0.0,
-                carried: actors::bearing_actors(&blocks),
+                carried: actors::with_extras(
+                    actors::bearing_actors(&blocks),
+                    &actors::extras_from_nbt(c),
+                ),
                 // Its limit is set as it starts only (`limitMovement`), so no speed check resets it.
                 limit: super::saved_limit(c),
                 blocks,
@@ -1806,6 +1821,7 @@ fn windmills_from_nbt(
                     sails: (*sails.first()?).max(0) as u32,
                     clockwise: sails.get(1) != Some(&0),
                     bearing,
+                    extras: actors::extras_from_nbt(c),
                 },
             ))
         })

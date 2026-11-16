@@ -82,6 +82,7 @@ mod visuals;
 pub(crate) use cargo::key as cargo_key;
 
 pub use carts::{Carts, assembler_mode, set_assembler_mode};
+pub(crate) use carts::{put_cart_carried, take_cart_carried};
 pub use controls::TrainControls;
 pub(crate) use controls::drivers;
 pub use railway::Trains;

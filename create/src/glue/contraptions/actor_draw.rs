@@ -19,6 +19,7 @@ use super::super::server::ServerLevel;
 use super::super::states;
 use create_engine::Block;
 use create_engine::actors::{self, Carried, Kind};
+use create_engine::elevator::ControlsAnim;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
 use create_engine::psi::{self, ANIMATION, TIMEOUT};
@@ -478,7 +479,7 @@ pub(super) fn forget() {
 }
 
 /// Puts `tag` (none: takes it away) under `key` in the data of the block entity at `pos`.
-fn write_key(lv: &mut ServerLevel<'_>, pos: [i32; 3], key: &str, tag: Option<Tag>) {
+pub(super) fn write_key(lv: &mut ServerLevel<'_>, pos: [i32; 3], key: &str, tag: Option<Tag>) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
@@ -740,7 +741,7 @@ pub(super) fn show_actors(
             carried
                 .controls
                 .iter()
-                .filter(|c| c.1.disabled)
+                .filter(|c| actors::stays_disabled(&carried.disabled, &c.1.filter))
                 .flat_map(|c| c.0)
                 .collect(),
         ),
@@ -885,22 +886,80 @@ pub struct Frame<'a> {
     pub motion: Motion,
     /// The game time with the partial tick.
     pub now: f64,
+    /// The frame's partial tick.
+    pub partial: f32,
+    /// The camera, in the world.
+    pub camera: Option<[f64; 3]>,
+    /// On an elevator, what its contraption controls show.
+    pub elevator: Option<ElevatorView<'a>>,
+}
+
+/// What an elevator's client knows for its contraption controls: its column's floors
+/// (`namesList`), the floor it is called to (`clientYTarget`) and the contacts it reaches.
+#[derive(Clone, Copy, Debug)]
+pub struct ElevatorView<'a> {
+    pub floors: &'a [create_engine::elevator::Floor],
+    pub target: i32,
+    pub min_contact: i32,
+    pub max_contact: i32,
+}
+
+impl ElevatorView<'_> {
+    /// `tickFloorSelection` for the controls showing floor `index`.
+    pub fn select(&self, index: &mut i32) -> create_engine::elevator::Selection {
+        create_engine::elevator::select_floor(
+            index,
+            self.floors,
+            self.target,
+            self.min_contact,
+            self.max_contact,
+        )
+    }
 }
 
 thread_local! {
     /// Each turning or rolling actor's angle at a time and its rate since, by anchor and block.
     static ROLLS: RefCell<HashMap<RollKey, Roll>> =
         RefCell::new(HashMap::new());
+    /// Moving contraption controls' animations and shown floor, by anchor and block.
+    static CONTROLS: RefCell<HashMap<RollKey, ControlsAnim>> =
+        RefCell::new(HashMap::new());
+    /// `renderWorld.random` for the floor names' flicker.
+    static FLICKER: std::cell::Cell<u64> = const { std::cell::Cell::new(0x9E37_79B9_7F4A_7C15) };
 }
 
 /// The client left its world.
 pub fn client_reset() {
     ROLLS.with_borrow_mut(HashMap::clear);
+    CONTROLS.with_borrow_mut(HashMap::clear);
 }
 
 /// The structure of `anchor` is no longer drawn.
 pub fn client_forget(anchor: [i32; 3]) {
     ROLLS.with_borrow_mut(|r| r.retain(|k, _| k.0 != anchor));
+    CONTROLS.with_borrow_mut(|r| r.retain(|k, _| k.0 != anchor));
+}
+
+/// Runs `f` on the animations of the contraption controls at block `local` of the structure
+/// drawn by `anchor`.
+pub fn with_controls<R>(
+    anchor: [i32; 3],
+    local: [i32; 3],
+    f: impl FnOnce(&mut ControlsAnim) -> R,
+) -> R {
+    CONTROLS.with_borrow_mut(|c| f(c.entry((anchor, local)).or_default()))
+}
+
+/// `random.nextFloat()`.
+fn next_float() -> f32 {
+    FLICKER.with(|r| {
+        let mut x = r.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        r.set(x);
+        (x >> 40) as f32 / (1u64 << 24) as f32
+    })
 }
 
 /// An actor's angle now, at `rate` degrees a tick from where it was (`rotation += ...` each tick,
@@ -949,6 +1008,118 @@ pub fn draws(block: Block) -> bool {
     )
 }
 
+/// Contraption controls riding a structure (`ContraptionControlsRenderer.renderSafe` for its
+/// block entity, and `renderInContraption`): the button, pressed in by a click and coming back
+/// out, and the indicator, its half turn while the contraption has the controls' kind turned
+/// off; on an elevator the indicator turns toward the floor called, and the floor picked is
+/// written over the button (its short name in nixie colours, its long name under it, within 10
+/// and about 4.5 blocks of the camera), white while it is the floor called, orange otherwise.
+fn draw_moving_controls(
+    draw: &mut dyn BlockEntityDrawContext,
+    frame: &Frame<'_>,
+    info: &StateInfo,
+    local: [i32; 3],
+) {
+    let Some(facing) = info.facing else {
+        return;
+    };
+    let partial = frame.partial;
+    let (button, part, shown) = with_controls(frame.anchor, local, |a| {
+        let shown = frame.elevator.map(|e| e.select(&mut a.index));
+        let part = if frame.elevator.is_some() {
+            a.indicator_part(partial)
+        } else if frame.view.controls_off.contains(&local) {
+            4
+        } else {
+            0
+        };
+        (a.button.at(partial), part, shown)
+    });
+    let back = dir_name(facing.opposite());
+    // `buttonMovementAxis`: (0, 1, -.325) turned to the controls' back, by `-1/24` of the press.
+    let yaw = horizontal_angle(facing.opposite()).to_radians();
+    let (s, c) = yaw.sin_cos();
+    let axis = [-0.325 * s, 1.0, -0.325 * c];
+    let depth = -button / 24.0;
+    draw.push();
+    draw.translate(axis.map(|v| v * depth));
+    Drawing(draw).part("part_contraption_controls_button", back);
+    draw.pop();
+    let indicator = format!("part_contraption_controls_indicator_{part}");
+    Drawing(draw).part(&indicator, back);
+    let Some(sel) = shown else {
+        return;
+    };
+    // `renderInContraption`: the button again, pressed straight down, then the names.
+    draw.push();
+    draw.translate([0.0, depth, 0.0]);
+    Drawing(draw).part("part_contraption_controls_button", back);
+    draw.pop();
+    let world = match frame.motion {
+        Motion::Glide { shift, .. } => [0, 1, 2]
+            .map(|i| f64::from(frame.anchor[i]) + f64::from(shift[i]) + f64::from(local[i]) + 0.5),
+        Motion::Turn { .. } => [0, 1, 2].map(|i| f64::from(frame.anchor[i] + local[i]) + 0.5),
+    };
+    let distance = frame.camera.map_or(0.0, |c| {
+        (0..3).map(|i| (world[i] - c[i]).powi(2)).sum::<f64>()
+    });
+    let colour = if sel.matches_target {
+        create_engine::dye::DyeColor::White
+    } else {
+        create_engine::dye::DyeColor::Orange
+    };
+    let (bright, dark) = create_engine::display::dye_colors(colour);
+    let flicker = next_float();
+    let flickering = mix(bright, dark, flicker / 4.0);
+    let short = mod_api::Text::literal(&sel.short);
+    let long = if sel.unreachable {
+        mod_api::Text::translate("create.contraption.controls.floor_unreachable", Vec::new())
+    } else {
+        mod_api::Text::literal(&sel.long)
+    };
+    draw.push();
+    draw.rotate_about(UP, horizontal_angle(facing), CENTRE);
+    draw.translate([0.275 + 0.125, 1.0 + 2.0 / 16.0, 0.5]);
+    draw.rotate_about(EAST, -67.5, [0.0; 3]);
+    if !sel.short.trim().is_empty() && distance < 100.0 {
+        let actual = draw.text_width(&short).unwrap_or(0.0);
+        let width = actual.max(12.0);
+        let scale = 1.0 / (5.0 * (width - 0.5));
+        let centring = (width - 8.0) / 2.0;
+        draw.push();
+        draw.translate([0.0, 0.15, depth - 0.25]);
+        draw.scale([scale, -scale, scale]);
+        draw.translate([(width - actual).max(0.0) / 2.0, centring, 0.0]);
+        let _ = draw.text(&short, [0.0, 0.0], flickering, true, None);
+        draw.translate([0.5, 0.5, -1.0 / 16.0]);
+        let _ = draw.text(&short, [0.0, 0.0], mix(dark, 0, 0.35), true, None);
+        draw.pop();
+    }
+    let long_blank = !sel.unreachable && sel.long.trim().is_empty();
+    if !long_blank && distance < 20.0 {
+        let actual = draw.text_width(&long).unwrap_or(0.0);
+        let width = actual.max(55.0);
+        let scale = 1.0 / (3.0 * (width - 0.5));
+        let centring = (width - 8.0) / 2.0;
+        draw.push();
+        draw.translate([-0.0635, 0.06, depth - 0.25]);
+        draw.scale([scale, -scale, scale]);
+        draw.translate([(width - actual).max(0.0) / 2.0, centring, 0.0]);
+        let _ = draw.text(&long, [0.0, 0.0], flickering, true, None);
+        draw.pop();
+    }
+    draw.pop();
+}
+
+/// Catnip's `Color.mixColors`.
+fn mix(a: u32, b: u32, w: f32) -> u32 {
+    let ch = |c: u32, s: u32| ((c >> s) & 255) as f32;
+    [16, 8, 0].into_iter().fold(0, |out, s| {
+        let v = ch(a, s) + (ch(b, s) - ch(a, s)) * w;
+        out | ((v as i32).clamp(0, 255) as u32) << s
+    })
+}
+
 /// Draws actor `block` (state facts `info`) at block `local` of the structure, under the pose of
 /// its block: its moving parts as Create's actor visuals draw them this frame.
 pub fn draw_moving(
@@ -959,11 +1130,7 @@ pub fn draw_moving(
     local: [i32; 3],
 ) {
     if block == Block::ContraptionControls {
-        let d = Doing {
-            off: frame.view.controls_off.contains(&local),
-            ..Doing::default()
-        };
-        actor_parts(&mut Drawing(draw), block, info, &d);
+        draw_moving_controls(draw, frame, info, local);
         return;
     }
     let Some(kind) = Kind::of(block) else {
