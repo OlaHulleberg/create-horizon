@@ -247,7 +247,8 @@ pub(crate) fn not_supportive(f: &Found, facing: Dir) -> bool {
     f.unsupportive & facing.bit() != 0 || f.sail_facing.is_some_and(|d| facing.axis() == d.axis())
 }
 
-/// `canStickTo` both ways (removed).
+/// `canStickTo` both ways, as vanilla pistons treat sticky blocks: slime and honey blocks stick
+/// to any block but each other.
 pub(crate) fn sticks(a: &Found, b: &Found) -> bool {
     let either = a.sticky.is_some() || b.sticky.is_some();
     let clash = matches!(

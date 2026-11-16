@@ -169,8 +169,9 @@ pub fn publish(host: &dyn Host) {
 }
 
 /// An ingredient's items in its order, from recipe-file JSON: an item, a `#tag` or a list of
-/// them (the game's reading), or NeoForge's `neoforge:block_tag` (the items of the tag's
-/// blocks, in registry order), which the game reads only in its own recipe types.
+/// them (the game's reading), or a `neoforge:block_tag` as Create's data writes it (the items
+/// of the tag's blocks, in the host's block order), which the game reads only in its own recipe
+/// types.
 fn ingredient(host: &dyn Host, json: &Value) -> Option<Vec<String>> {
     if json["type"].as_str() == Some("neoforge:block_tag") {
         let tag = json["tag"].as_str()?;

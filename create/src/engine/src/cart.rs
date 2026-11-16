@@ -101,7 +101,8 @@ pub fn action(rail: RailType, powered: bool, riders: bool) -> Action {
 /// `assemblyCooldown`: ticks between two carts it handles.
 pub const COOLDOWN: u8 = 8;
 
-/// (removed)
+/// A rail's top speed (`getRailMaxSpeed`, which Create asks of the rail): vanilla's minecart top
+/// speed on rails, 8 blocks a second, 0.4 a tick.
 pub const RAIL_MAX_SPEED: f64 = 0.4;
 
 /// The assembler's block entity: ticks since it last handled a cart.

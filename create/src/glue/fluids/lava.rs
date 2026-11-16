@@ -1,4 +1,5 @@
-//! Honey and chocolate meeting lava (`AllFluids.registerFluidInteractions`, (removed)): lava with honey or chocolate above it or beside it becomes
+//! Honey and chocolate meeting lava (`AllFluids.registerFluidInteractions`): lava with honey or
+//! chocolate as its neighbour, above or beside it as vanilla lava meets water, becomes
 //! obsidian where it is a source, else limestone (honey) or scoria (chocolate), with the fizz
 //! (`LiquidBlock.fizz`). Create's lava does it at once (`shouldSpreadLiquid` on a neighbour's
 //! change); here it is found when the lava, or the honey or chocolate beside it, next ticks

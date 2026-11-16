@@ -206,17 +206,13 @@ pub fn upright(host: &dyn Host, id: &str) -> bool {
         && !in_tag(host, id, "create:not_upright_on_belt")
 }
 
-/// (removed)
+/// Whether an item carries a fluid of its own (`Capabilities.FluidHandler.ITEM` in Create): the
+/// empty bucket and the bucket of each fluid the port's tanks know (`tank::Fluid::of_bucket`),
+/// as the item filter's `fluid_container` reads it. Bottles and potions are Create's
+/// `PotionFluidHandler`'s, not an item's own fluid; they stand by `create:upright_on_belt`.
 fn holds_fluid(id: &str) -> bool {
-    matches!(
-        base(id),
-        "minecraft:bucket"
-            | "minecraft:water_bucket"
-            | "minecraft:lava_bucket"
-            | "minecraft:milk_bucket"
-            | "create:honey_bucket"
-            | "create:chocolate_bucket"
-    )
+    let id = base(id);
+    id == "minecraft:bucket" || create_engine::tank::Fluid::of_bucket(id).is_some()
 }
 
 /// A stack's limit (at most 64).

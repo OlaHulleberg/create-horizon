@@ -66,8 +66,7 @@ impl DyeColor {
         Self::NAMES[self as usize]
     }
 
-    /// `DyeColor.getColor(stack)` for a vanilla dye (`DyeItem`): `minecraft:<colour>_dye`.
-    /// (removed)
+    /// `DyeColor.getColor(stack)`: a vanilla dye (`minecraft:<colour>_dye`).
     pub fn of_item(item: &str) -> Option<DyeColor> {
         let colour = item.strip_prefix("minecraft:")?.strip_suffix("_dye")?;
         Self::NAMES

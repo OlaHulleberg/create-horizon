@@ -15,7 +15,7 @@
 //! among those the server's data defines (`tags/item`, listed by a data reload listener).
 //!
 //! `fluid_container` and `has_fluid` know the buckets (the items the game gives a fluid
-//! handler), `has_color` dyes, (removed), fireworks and colour-named items, and
+//! handler), `has_color` dyes, `c:dyes/*`, fireworks and colour-named items, and
 //! `shulker_fill_level` a shulker box's `container`. Left out: `in_item_group`, as no API reads
 //! the creative tabs (`API_GAPS.md`).
 //!
@@ -206,7 +206,8 @@ fn held_fluid(id: &str) -> Option<String> {
     create_engine::tank::Fluid::of_bucket(id).map(|f| f.id().to_owned())
 }
 
-/// `DyeColor.byFireworkColor`'s colours.
+/// `DyeColor.byFireworkColor`'s colours: the colour each dye gives a firework star, a vanilla fact
+/// the game shows; as arismoko/horizon (MIT) has them (`THIRD_PARTY_NOTICES.md`).
 const FIREWORK_COLORS: [(&str, i32); 16] = [
     ("white", 0xF0F0F0),
     ("orange", 0xEB8844),
@@ -226,20 +227,13 @@ const FIREWORK_COLORS: [(&str, i32); 16] = [
     ("black", 0x1E1B1B),
 ];
 
-/// `ColorAttribute.findMatchingDyeColors`: a dye's colour (`DyeColor.getColor`: a dye item; (removed)); else a firework's explosions' colours and fade colours, and the
+/// `ColorAttribute.findMatchingDyeColors`: a dye's colour (`DyeColor.getColor`: a vanilla dye,
+/// `minecraft:<colour>_dye`); else a firework's explosions' colours and fade colours, and the
 /// colours the item's id starts with (`red_wool`).
 fn colors_of(host: &dyn Host, stack: &ItemStack, id: &str) -> Vec<String> {
     let path = id.split_once(':').map_or(id, |s| s.1);
     for (c, _) in FIREWORK_COLORS {
-        let dye = id == format!("minecraft:{c}_dye");
-        let tagged = || {
-            Identifier::parse(&format!("(removed)"))
-                .ok()
-                .and_then(|t| host.tags().key(&t))
-                .and_then(|k| host.tags().is_in_tag(stack.item(), k))
-                .unwrap_or(false)
-        };
-        if dye || tagged() {
+        if id == format!("minecraft:{c}_dye") {
             return vec![c.to_owned()];
         }
     }

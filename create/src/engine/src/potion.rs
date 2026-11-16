@@ -1,7 +1,10 @@
 //! A potion's contents (`PotionContents`: its potion, custom colour, custom name and custom
 //! effects), as Create's potion fluid carries them (`DataComponents.POTION_CONTENTS` on the
 //! `FluidStack`, `PotionFluid.of`), with the game's effect and potion tables they are coloured
-//! and named by (`MobEffects`, `Potions`, `PotionContents.getColor`, `Potion.getName`).
+//! and named by (`MobEffects`, `Potions`, `PotionContents.getColor`, `Potion.getName`): vanilla
+//! facts the game shows (an effect's particle colour, a potion's effects and durations in its
+//! tooltip), which the mod API does not give; tabulated as arismoko/horizon (MIT) has them
+//! (`THIRD_PARTY_NOTICES.md`).
 //!
 //! Contents are interned: a potion fluid holds a `&'static Contents`, so `tank::Fluid` stays a
 //! plain value; equal contents are one entry. They are saved and sent whole ([`Contents::encode`]).
