@@ -84,8 +84,6 @@ Each entry: what Create does → what's missing → the API that would close it.
   as plain snowballs over a save → a projectile class of its own, or persistent data on `EntityRef`.
 - **Damage types.** Create's damage types aren't registered, so crushing wheels use `cramming`, saws, drills, rollers
   and run-over trains `generic`, fans `lava` and `in_fire` → register a native mod's `damage_type` files.
-- **Enchantments.** `/enchant` applies `create:capacity`; tables and anvils offering Capacity and Potato Recovery is
-  unverified.
 - **Fake player attack strength.** A deployer's punch deals about a fifth of Create's damage → a
   `PlayerActionSetup` field for full charge.
 - **`Block.fallOn` distance.** Seats halve a fall by recomputing the damage → a writable `distance` on `FallOnEvent`.
@@ -110,6 +108,10 @@ Each entry: what Create does → what's missing → the API that would close it.
   a hook replacing `GameRenderer.pick`'s result.
 - **Consuming a key in `input_key`** (train driving).
 - **Whether an item model is 3D.** Belts, depots, placards and link slots approximate `isGui3d`.
+- **Frozen while stepping.** Under `/tick freeze` turning parts stand at their rest angle (`KineticBlockEntity.getSpeed`
+  is 0 while `isFrozen`), but during a `/tick step` they turn for the ticks stepped, where Create keeps them at rest →
+  `ServerTickStart` gives only `world_running`, false while frozen and true while stepping → a frozen flag
+  (`TickRateManager.isFrozen`) on the event or the host.
 - **Keeping only part of a block entity's drawing.** A block with one animated part redraws every frame; the clockwork
   bearing can't hide its top for the hour hand.
 - **Colour over a block-entity model.** The overstress red/green flash is left out → `terrain_model` tint only reaches
@@ -144,8 +146,3 @@ Each entry: what Create does → what's missing → the API that would close it.
   recipes that fail conversion.
 - **`_head` blocks get a skull block entity.** `create:mechanical_piston_head` gets `minecraft:skull` because
   `BlockEntity::for_block` matches any `_head`/`_skull`. Fix: check the `minecraft:` namespace.
-
-## Not done, API not needed
-
-- Contraption controls on a bearing's structure don't turn its actors off; a bearing's glue stays in the world while
-  it turns; elevator contraption controls choose no floor.
