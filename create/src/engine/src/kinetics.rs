@@ -961,6 +961,36 @@ impl Kinetics {
                     (root[s], driver[s]) = (r, id);
                 }
             }
+            // A side nothing drove that gains several generators at once (a column loaded, or
+            // blocks placed together) takes as its source the first that every other one could
+            // turn with as a member, as Create's saved networks hold (each member passes
+            // `initialize` as it is): its own speed no faster its way, or no faster at all
+            // the same way.
+            let member =
+                |g: f32, t: f32| g <= t || (t.abs() >= g.abs() && t.signum() == g.signum());
+            for s in 0..sides as usize {
+                if root[s] != 0.0 {
+                    continue;
+                }
+                let new: Vec<u32> = gens
+                    .iter()
+                    .copied()
+                    .filter(|&id| self.side[&id] as usize == s && self.nodes[id as usize].new_part)
+                    .collect();
+                if new.len() < 2 {
+                    continue;
+                }
+                let source = new.iter().copied().find(|&d| {
+                    let r = self.nodes[d as usize].part.generated / self.factor[&d];
+                    new.iter().all(|&m| {
+                        m == d || member(self.nodes[m as usize].part.generated, r * self.factor[&m])
+                    })
+                });
+                if let Some(d) = source {
+                    (root[s], driver[s]) =
+                        (self.nodes[d as usize].part.generated / self.factor[&d], d);
+                }
+            }
             // Then those that changed, in that order, against what the rest turns them at
             // (`GeneratingKineticBlockEntity.applyNewSpeed` with a source): no faster breaks one
             // the other way and leaves one the same way a member; faster takes over the network,
@@ -1690,6 +1720,34 @@ mod tests {
             .collect();
         assert_eq!(broken, [&Event::Break { pos: [0, 0, -1] }]);
         assert_eq!(k.speed([0, 0, 0], 0), Some(-256.0));
+    }
+
+    #[test]
+    fn motors_loaded_together_keep_the_source_they_saved() {
+        // A motor and one turning with it the other way, loaded in either order: the one whose
+        // members all fit (`initialize` leaves a member as it is) drives, and nothing breaks.
+        for flip in [false, true] {
+            let mut k = Kinetics::new();
+            let parts = [
+                ([0, 0, 0], motor(Dir::East, 16.0)),
+                ([1, 0, 0], Part::shaft(Axis::X)),
+                ([2, 0, 0], motor(Dir::West, 16.0)),
+            ];
+            let order: Vec<_> = if flip {
+                parts.iter().rev().collect()
+            } else {
+                parts.iter().collect()
+            };
+            for (p, part) in order {
+                k.set(*p, 0, *part);
+            }
+            let e = solve(&mut k);
+            assert!(
+                !e.iter().any(|x| matches!(x, Event::Break { .. })),
+                "{flip}: {e:?}"
+            );
+            assert_eq!(k.speed([1, 0, 0], 0), Some(16.0), "{flip}");
+        }
     }
 
     #[test]
