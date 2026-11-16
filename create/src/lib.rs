@@ -210,15 +210,13 @@ impl Hooks for Create {
         }
     }
 
-    /// The glue's textured world pipelines (`glue::pipelines`) and the schematic outline's
-    /// checkerboard (`glue::schematics`).
+    /// The glue's textured world pipelines (`glue::pipelines`).
     fn register_render_pipelines(
         &self,
         _context: &RegistrationContext,
         event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
     ) {
         glue::pipelines::register(event);
-        glue::schematics::render_pipelines(event.pipelines);
     }
 
     fn register_item_models(
@@ -630,6 +628,15 @@ impl Hooks for Create {
         _event: &mut ClientLevelUnloadEvent<'_>,
     ) {
         glue::client_reset(host);
+    }
+
+    /// Create's models the glue reads (`glue::models`) are read again from the new resources.
+    fn client_resources_reloaded(
+        &self,
+        _host: &mut dyn ClientHost,
+        _event: &mut mod_api::ClientResourcesReloadedEvent,
+    ) {
+        glue::models::forget();
     }
 }
 

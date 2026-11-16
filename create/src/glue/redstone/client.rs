@@ -6,15 +6,14 @@
 
 use super::pose;
 use super::ticks::CUCKOO_CHANNEL;
-use crate::glue::{client_table, kinetics, states};
+use crate::glue::{client_table, kinetics, models, states};
 use create_engine::Block;
 use create_engine::cuckoo::{self, Animation};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::steam::Face;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost,
-    Compound, CubeFace, ItemDisplayContext, ParticleKey, ParticleOptions, Registrar, SoundPlay,
-    Tag,
+    Compound, ItemDisplayContext, ParticleKey, ParticleOptions, Registrar, SoundPlay, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -339,9 +338,9 @@ impl BlockEntityPart for RedstoneEntity {
         let pos = event.pos;
         match block {
             Block::RedstoneLink => draw_link(host, event.draw, pos),
-            Block::AnalogLever => draw_lever(event.draw, pos),
+            Block::AnalogLever => draw_lever(host, event.draw, pos),
             Block::PulseRepeater | Block::PulseExtender | Block::PulseTimer => {
-                draw_diode_indicator(event.draw, block, &event.entity.nbt);
+                draw_diode_indicator(host, event.draw, block, &event.entity.nbt);
             }
             Block::CuckooClock | Block::MysteriousCuckooClock => {
                 let Some(facing) = facing else {
@@ -403,10 +402,15 @@ fn draw_link(host: &dyn ClientHost, draw: &mut dyn BlockEntityDrawContext, pos: 
     }
 }
 
-/// `BrassDiodeRenderer`: the indicator (`AllPartialModels.FLEXPEATER_INDICATOR`, the model
-/// `diodes/indicator`) over the diode, from dark to bright red as its count nears its delay. The
-/// count goes on from what the server last put in the block entity (`ticks::DIODE_SHOWN`).
-fn draw_diode_indicator(draw: &mut dyn BlockEntityDrawContext, block: Block, nbt: &Compound) {
+/// `BrassDiodeRenderer`: the indicator (`AllPartialModels.FLEXPEATER_INDICATOR`) over the
+/// diode, from dark to bright red as its count nears its delay. The count goes on from what the
+/// server last put in the block entity (`ticks::DIODE_SHOWN`).
+fn draw_diode_indicator(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    block: Block,
+    nbt: &Compound,
+) {
     use create_engine::diode::{self, Kind};
     let kind = match block {
         Block::PulseExtender => Kind::Extender,
@@ -423,29 +427,14 @@ fn draw_diode_indicator(draw: &mut dyn BlockEntityDrawContext, block: Block, nbt
         ),
         _ => 0.0,
     };
-    const SPRITE: &str = "create:block/diodes/pulse_repeater/idle";
-    let face = |uv: [f32; 4]| Some(CubeFace::new(SPRITE).with_uv(uv));
-    // (removed)
-    let lo = 0.0;
-    let hi = 0.0;
-    draw.cube(
-        [lo, 0.0, lo],
-        [hi, 0.0, hi],
-        [
-            None,
-            face([0.0, 0.0, 0.0, 0.0]),
-            face([0.0, 0.0, 0.0, 0.0]),
-            face([0.0, 0.0, 0.0, 0.0]),
-            face([0.0, 0.0, 0.0, 0.0]),
-            face([0.0, 0.0, 0.0, 0.0]),
-        ],
-        diode::indicator_color(progress),
-    );
+    if let Some(m) = models::get(host, models::DIODE_INDICATOR) {
+        models::cubes(draw, &m, diode::indicator_color(progress));
+    }
 }
 
 /// `AnalogLeverRenderer`: the handle turned by the lever's (chased) state, and the indicator
 /// (`AllPartialModels.ANALOG_LEVER_INDICATOR`) from dark to bright red with it.
-fn draw_lever(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3]) {
+fn draw_lever(host: &dyn ClientHost, draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3]) {
     let partial = draw.partial();
     let Some((state, face, facing)) = CLIENT.with_borrow(|c| {
         let (_, face, facing) = c.levers.get(&pos).copied()?;
@@ -461,22 +450,15 @@ fn draw_lever(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3]) {
     );
     draw_part(draw, "part_analog_lever_handle");
     draw.pop();
-    // The indicator: (removed)
-    const SPRITE: &str = "create:block/analog_lever";
-    let face_uv = |uv: [f32; 4]| Some(CubeFace::new(SPRITE).with_uv(uv));
+    // The indicator (`AllPartialModels.ANALOG_LEVER_INDICATOR`).
+    let Some(m) = models::get(host, models::ANALOG_LEVER_INDICATOR) else {
+        return;
+    };
     draw.push();
     pose::apply(draw, &create_engine::lever::handle_pose(face, facing, 0.0));
-    draw.cube(
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [
-            None,
-            None,
-            face_uv([0.0, 0.0, 0.0, 0.0]),
-            face_uv([0.0, 0.0, 0.0, 0.0]),
-            face_uv([0.0, 0.0, 0.0, 0.0]),
-            face_uv([0.0, 0.0, 0.0, 0.0]),
-        ],
+    models::cubes(
+        draw,
+        &m,
         create_engine::diode::indicator_color(state / 15.0),
     );
     draw.pop();

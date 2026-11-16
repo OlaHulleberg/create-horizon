@@ -3,7 +3,7 @@
 //! sprites it puts on the block atlas). Each pipeline samples one sprite, tinted by the quad's
 //! colour and repeating past a UV of 1, as catnip's `outlineTranslucent(texture)` draws an
 //! outline's faces; the glows' add to the frame (`RenderTypes.additive()`). [`Pose`] places a
-//! model's cuboids as a `PoseStack` would, for what a block entity's renderer draws in its pose. Optional: without the prepared shader they resolve to nothing and the
+//! model's faces as a `PoseStack` would, for what a block entity's renderer draws in its pose. Optional: without the prepared shader they resolve to nothing and the
 //! callers draw untextured quads.
 
 use mod_api::{
@@ -169,42 +169,102 @@ impl Pose {
         [0, 1, 2].map(|r| m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2] + m[r][3])
     }
 
-    /// A model element's six faces (`from` and `to` in sixteenths, each face's `uv` in the
-    /// sprite's sixteenths), placed by this pose, in `color`.
-    pub fn cuboid(
+    /// Face `side` (`Direction` order: down, up, north, south, west, east) of the box
+    /// `from`..`to` (sixteenths), placed by this pose, in `color`, with the sprite's `uv`
+    /// (sixteenths) turned by `rotation` degrees as a baked model face's are.
+    #[allow(clippy::too_many_arguments)]
+    pub fn face(
         &self,
         from: [f64; 3],
         to: [f64; 3],
-        uv: [[f32; 4]; 6],
+        side: usize,
+        uv: [f32; 4],
+        rotation: u32,
         color: u32,
         out: &mut Vec<mod_api::PipelineQuad>,
     ) {
-        let [x0, y0, z0] = from.map(|v| v / 16.0);
-        let [x1, y1, z1] = to.map(|v| v / 16.0);
-        // North, south, west, east, up, down: top left, bottom left, bottom right, top right
-        // seen from outside.
-        let faces = [
-            [[x1, y1, z0], [x1, y0, z0], [x0, y0, z0], [x0, y1, z0]],
-            [[x0, y1, z1], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1]],
-            [[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],
-            [[x1, y1, z1], [x1, y0, z1], [x1, y0, z0], [x1, y1, z0]],
-            [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
-            [[x0, y0, z1], [x0, y0, z0], [x1, y0, z0], [x1, y0, z1]],
-        ];
-        for (corners, [u0, v0, u1, v1]) in faces.into_iter().zip(uv) {
-            let (u0, v0, u1, v1) = (u0 / 16.0, v0 / 16.0, u1 / 16.0, v1 / 16.0);
-            out.push(mod_api::PipelineQuad::new(
-                corners.map(|c| self.apply(c)),
-                [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
-                color,
-            ));
-        }
+        let corners = face_corners(from.map(|v| v / 16.0), to.map(|v| v / 16.0), side);
+        let uvs = face_uvs(uv, rotation);
+        out.push(mod_api::PipelineQuad::new(
+            corners.map(|c| self.apply(c)),
+            uvs,
+            color,
+        ));
     }
+}
+
+/// The corners of face `side` (`Direction` order) of the box `from`..`to`: top left, bottom
+/// left, bottom right, top right seen from outside, the order a baked model face's are in.
+pub fn face_corners<T: Copy>(from: [T; 3], to: [T; 3], side: usize) -> [[T; 3]; 4] {
+    // Per corner, whether each axis takes `to` (else `from`).
+    let pick: [[bool; 3]; 4] = match side {
+        0 => [
+            [false, false, true],
+            [false, false, false],
+            [true, false, false],
+            [true, false, true],
+        ],
+        1 => [
+            [false, true, false],
+            [false, true, true],
+            [true, true, true],
+            [true, true, false],
+        ],
+        2 => [
+            [true, true, false],
+            [true, false, false],
+            [false, false, false],
+            [false, true, false],
+        ],
+        3 => [
+            [false, true, true],
+            [false, false, true],
+            [true, false, true],
+            [true, true, true],
+        ],
+        4 => [
+            [false, true, false],
+            [false, false, false],
+            [false, false, true],
+            [false, true, true],
+        ],
+        _ => [
+            [true, true, true],
+            [true, false, true],
+            [true, false, false],
+            [true, true, false],
+        ],
+    };
+    pick.map(|c| std::array::from_fn(|i| if c[i] { to[i] } else { from[i] }))
+}
+
+/// A face's `uv` rectangle (sixteenths) at its corners (in units of the sprite), turned by
+/// `rotation` degrees: corner `i` takes the rectangle's corner `i` plus a quarter turn per 90.
+pub fn face_uvs(uv: [f32; 4], rotation: u32) -> [[f32; 2]; 4] {
+    let [u0, v0, u1, v1] = uv.map(|v| v / 16.0);
+    let rect = [[u0, v0], [u0, v1], [u1, v1], [u1, v0]];
+    let turn = (rotation / 90) as usize;
+    std::array::from_fn(|i| rect[(i + turn) % 4])
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Pose;
+    use super::{Pose, face_corners, face_uvs};
+
+    #[test]
+    fn a_turned_face_starts_its_uv_a_corner_on() {
+        let uv = [0.0, 0.0, 16.0, 8.0];
+        assert_eq!(
+            face_uvs(uv, 0),
+            [[0.0, 0.0], [0.0, 0.5], [1.0, 0.5], [1.0, 0.0]]
+        );
+        assert_eq!(
+            face_uvs(uv, 90),
+            [[0.0, 0.5], [1.0, 0.5], [1.0, 0.0], [0.0, 0.0]]
+        );
+        // The up face's top left corner is its north-west one.
+        assert_eq!(face_corners([0, 0, 0], [1, 1, 1], 1)[0], [0, 1, 0]);
+    }
 
     #[test]
     fn a_pose_turns_about_its_pivot_then_moves() {

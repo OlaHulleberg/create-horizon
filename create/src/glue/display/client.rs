@@ -5,7 +5,7 @@
 
 use crate::glue::pipelines::{Pose, Textured};
 use crate::glue::redstone::pose;
-use crate::glue::{client_table, kinetics, states};
+use crate::glue::{client_table, kinetics, models, states};
 use create_engine::Block;
 use create_engine::display::{self, Board, Face, Lang, Shown};
 use create_engine::kinetics::Dir;
@@ -499,7 +499,8 @@ const GLOW_VIEW_DISTANCE: f64 = 96.0;
 /// `renderAsSignal`'s lights, each frame (the red one blinks): for each lit light, within 96
 /// blocks the white cube (`SIGNAL_WHITE_CUBE`, translucent) and the glow (`SIGNAL_*_GLOW`,
 /// additive) stretched along it, and the tube (`SIGNAL_*`, additive, scaled by 17/16), full
-/// bright and without diffuse shading.
+/// bright and without diffuse shading: Create's models (read by `models`) as quads of the
+/// glue's pipelines.
 pub(super) fn render_signal_glows(
     host: &dyn ClientHost,
     event: &mut mod_api::RenderLevelStageEvent<'_>,
@@ -510,6 +511,22 @@ pub(super) fn render_signal_glows(
     let time = event.view.game_time as f64 + f64::from(event.view.partial_tick);
     let eye = event.view.camera;
     let Some(level) = host.level(host.dimension()) else {
+        return;
+    };
+    let model = |id| crate::glue::models::get(host, id);
+    let (Some(white_cube), Some(red_glow), Some(yellow_glow), Some(white_glow)) = (
+        model(models::SIGNAL_WHITE_CUBE),
+        model(models::SIGNAL_RED_GLOW),
+        model(models::SIGNAL_YELLOW_GLOW),
+        model(models::SIGNAL_WHITE_GLOW),
+    ) else {
+        return;
+    };
+    let (Some(red), Some(yellow_tube), Some(white)) = (
+        model(models::SIGNAL_RED),
+        model(models::SIGNAL_YELLOW),
+        model(models::SIGNAL_WHITE),
+    ) else {
         return;
     };
     let (mut cubes, mut glows, mut glows2) = (Vec::new(), Vec::new(), Vec::new());
@@ -526,7 +543,7 @@ pub(super) fn render_signal_glows(
                 .map(|i| (f64::from(pos[i]) + 0.5 - eye[i]).powi(2))
                 .sum();
             let near = d2 < GLOW_VIEW_DISTANCE * GLOW_VIEW_DISTANCE;
-            let white = 0xFFFF_FFFFu32;
+            let white_color = 0xFFFF_FFFFu32;
             for first in [true, false] {
                 use create_engine::trains::SignalState;
                 let yellow = l.signal == SignalState::Yellow;
@@ -542,6 +559,13 @@ pub(super) fn render_signal_glows(
                 let at = l
                     .pose
                     .translate([if flip { 4.0 / 16.0 } else { -4.0 / 16.0 }, 0.0, 0.0]);
+                // The yellow light's glow and tube sample `signal_glow_2`, the others
+                // `signal_glow`.
+                let out = if !first && yellow {
+                    &mut glows2
+                } else {
+                    &mut glows
+                };
                 if near {
                     let vert = first ^ l.horizontal;
                     let (long, long_glow) = if yellow { (1.0, 2.0) } else { (4.0, 5.125) };
@@ -550,49 +574,30 @@ pub(super) fn render_signal_glows(
                     } else {
                         [1.0, long, 1.0]
                     });
-                    cube.cuboid(
-                        [-0.5; 3],
-                        [0.5; 3],
-                        [[0.0, 0.0, 0.0, 0.0]; 6],
-                        white,
-                        &mut cubes,
-                    );
+                    models::quads(&cube, &white_cube, white_color, &mut cubes);
                     let glow = at.scale(if vert {
                         [long_glow, 2.0, 2.0]
                     } else {
                         [2.0, long_glow, 2.0]
                     });
-                    // (removed)
-                    let uv = if first || yellow {
-                        [0.0, 0.0, 0.0, 0.0]
+                    let glow_model = if first {
+                        &red_glow
+                    } else if yellow {
+                        &yellow_glow
                     } else {
-                        [0.0, 0.0, 0.0, 0.0]
+                        &white_glow
                     };
-                    let out = if !first && yellow {
-                        &mut glows2
-                    } else {
-                        &mut glows
-                    };
-                    glow.cuboid([-0.5; 3], [0.5; 3], [uv; 6], white, out);
+                    models::quads(&glow, glow_model, white_color, out);
                 }
                 let tube = at.scale([1.0 + 1.0 / 16.0; 3]);
-                let (side, end) = if first || yellow {
-                    ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0])
+                let tube_model = if first {
+                    &red
+                } else if yellow {
+                    &yellow_tube
                 } else {
-                    ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0])
+                    &white
                 };
-                let out = if !first && yellow {
-                    &mut glows2
-                } else {
-                    &mut glows
-                };
-                tube.cuboid(
-                    [0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0],
-                    [side, side, side, side, end, end],
-                    white,
-                    out,
-                );
+                models::quads(&tube, tube_model, white_color, out);
             }
             true
         });

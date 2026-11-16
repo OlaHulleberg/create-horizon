@@ -16,6 +16,7 @@ pub mod kinetics;
 #[macro_use]
 pub mod log;
 pub mod logistics;
+pub mod models;
 pub mod net;
 pub mod packages;
 pub mod persist;
@@ -157,6 +158,7 @@ pub fn client_table<R>(host: &dyn Host, f: impl FnOnce(&StateTable) -> R) -> Opt
 /// The client left its world.
 pub fn client_reset(_host: &mut dyn ClientHost) {
     CLIENT_TABLE.with_borrow_mut(|t| *t = None);
+    models::forget();
     for s in SUBSYSTEMS {
         s.client_reset();
     }

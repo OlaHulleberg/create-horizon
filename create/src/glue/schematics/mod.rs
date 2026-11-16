@@ -46,7 +46,6 @@ mod quill;
 pub(crate) use quill::face_of;
 mod screens;
 mod tools;
-pub(crate) use tools::render_pipelines;
 mod transform;
 
 use super::packages::{self, block_of, debug_verb, feedback, ints, text};

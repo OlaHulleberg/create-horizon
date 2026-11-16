@@ -12,21 +12,22 @@
 //! The deployed schematic's blocks are not drawn (`SchematicRenderer`): no world draw takes a
 //! block state's model outside a block entity (`API_GAPS.md`). Its outline, checkered faces,
 //! the face looked at, the rotation axis and the mirror plane are drawn as Create's
-//! (`AABBOutline`, `LineOutline`); the checkerboard is the pipeline `create:checkerboard`.
+//! (`AABBOutline`, `LineOutline`); the checkered faces sample Create's checkerboard
+//! (`AllSpecialTextures.CHECKERED`) through the glue's `Checkered` pipeline (`pipelines`).
 
 use super::super::net;
+use super::super::pipelines::Textured;
 use super::body;
 use super::quill::CHANNEL;
 use super::transform::{Placing, trace_until};
 use create_engine::kinetics::Dir;
 use create_engine::schematic::{Mirror, Rotation, SchematicData};
 use mod_api::{
-    ClientHost, DrawContext, Flow, GameMode, Hand, Identifier, InputKeyEvent, InteractionAttempt,
+    ClientHost, DrawContext, Flow, GameMode, Hand, InputKeyEvent, InteractionAttempt,
     InteractionKey, InteractionKeyMappingTriggeredEvent, ItemStack, KeyAction, MouseScrollingEvent,
-    PipelineBlend, PipelineQuad, RenderLevelStage, RenderLevelStageEvent, RenderPipeline,
-    RenderPipelineRef, WorldDepth, WorldQuad,
+    PipelineQuad, RenderLevelStage, RenderLevelStageEvent, WorldDepth, WorldQuad,
 };
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 const MOD: &str = "create";
 /// `AllKeys.TOOL_MENU`'s id.
@@ -43,8 +44,6 @@ const BLUE: u32 = 0x6886C5;
 const GREY: u32 = 0xDDDDDD;
 /// `lineWidth(1 / 16f)`.
 const LINE: f64 = 1.0 / 16.0;
-/// The checkerboard pipeline (`AllSpecialTextures.CHECKERED`).
-const CHECKERBOARD: &str = "create:checkerboard";
 
 /// `ToolType`, in its declared order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,29 +246,11 @@ thread_local! {
     static HANDLER: RefCell<Handler> = RefCell::new(Handler::new());
     /// Messages for the server, from hooks without a mutable client.
     static OUT: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
-    /// The checkerboard pipeline, once resolved.
-    static PIPELINE: Cell<Option<RenderPipelineRef>> = const { Cell::new(None) };
 }
 
 pub(super) fn reset() {
     HANDLER.with_borrow_mut(|h| *h = Handler::new());
     OUT.with_borrow_mut(Vec::clear);
-    PIPELINE.set(None);
-}
-
-/// The checkerboard's pipeline: `assets/create/shaders/pipeline/checkerboard.wgsl`.
-pub(crate) fn render_pipelines(pipelines: &mut Vec<RenderPipeline>) {
-    if let Ok(id) = Identifier::parse(CHECKERBOARD) {
-        pipelines.push(
-            RenderPipeline::new(
-                id.clone(),
-                id,
-                PipelineBlend::Translucent,
-                WorldDepth::Tested,
-            )
-            .optional(),
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -985,38 +966,16 @@ pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelS
     if g.checkered.is_empty() {
         return;
     }
-    let pipeline = PIPELINE.get().or_else(|| {
-        let id = Identifier::parse(CHECKERBOARD).ok()?;
-        let p = host.render_assets().render_pipeline(&id).ok()?;
-        PIPELINE.set(Some(p));
-        Some(p)
-    });
-    let drawn = pipeline.is_some_and(|p| {
+    // `AllSpecialTextures.CHECKERED` from the block atlas; without the pipeline the edges alone.
+    if let Some(p) = super::super::pipelines::resolve(host, Textured::Checkered) {
         let quads: Vec<PipelineQuad> = g
             .checkered
             .iter()
             .map(|(c, uv, color)| PipelineQuad::new(*c, *uv, *color))
             .collect();
-        match event.draw.pipeline_quads(p, &quads) {
-            Ok(()) => true,
-            Err(e) => {
-                crate::create_log!("[create] the schematic's checkered faces were refused: {e:?}");
-                PIPELINE.set(None);
-                false
-            }
+        if let Err(e) = event.draw.pipeline_quads(p, &quads) {
+            crate::create_log!("[create] the schematic's checkered faces were refused: {e:?}");
         }
-    });
-    if !drawn {
-        // Without the pipeline: (removed).
-        let quads: Vec<WorldQuad> = g
-            .checkered
-            .iter()
-            .map(|(c, _, color)| {
-                let a = ((color >> 24) as f32 / 255.0) * (0.0 / 255.0);
-                WorldQuad::new(*c, argb(*color, a), WorldDepth::Tested)
-            })
-            .collect();
-        let _ = event.draw.quads(&quads);
     }
 }
 

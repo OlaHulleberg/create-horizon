@@ -1,9 +1,9 @@
 //! The display link's bulb flashing (`LinkBulbRenderer`): each time a link sends its source's
 //! data (`sendPulseNextSync`), its glow starts at 2 and halves each tick (`Chaser.EXP` at 0.5),
 //! and while it is at least 1/8 the link draws its tube full bright over the bulb, and the glow
-//! model (`DISPLAY_LINK_GLOW`) added over it in a fading grey: a world quad of the glue's
-//! additive pipeline (`pipelines`), placed as the block entity's pose would place it, as a
-//! block entity's own drawing has no additive layer. The server puts the tick of each pulse in
+//! model (`DISPLAY_LINK_GLOW`, read by `models`) added over it in a fading grey: world quads of
+//! the glue's additive pipeline (`pipelines`), placed as the block entity's pose would place
+//! them, as a block entity's own drawing has no additive layer. The server puts the tick of each pulse in
 //! the link's block entity data (`Pulse`).
 
 use super::super::pipelines::{Pose, Textured};
@@ -49,6 +49,10 @@ pub(super) fn render_level_stage(
     }
     let now = event.view.game_time;
     let partial = event.view.partial_tick;
+    let Some(glow_model) = super::super::models::get(host, super::super::models::DISPLAY_LINK_GLOW)
+    else {
+        return;
+    };
     let mut quads = Vec::new();
     GLOWING.with_borrow_mut(|g| {
         g.retain(|pos, (t0, pose)| {
@@ -67,21 +71,7 @@ pub(super) fn render_level_stage(
             let g = (1.0 - 2.0 * (glow - 0.75).powi(2)).clamp(-1.0, 1.0);
             let c = (200.0 * g).max(0.0) as u32;
             let color = 0xFF00_0000 | c << 16 | c << 8 | c;
-            // (removed)
-            pose.cuboid(
-                [0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0],
-                [
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                ],
-                color,
-                &mut quads,
-            );
+            super::super::models::quads(pose, &glow_model, color, &mut quads);
             true
         });
     });
