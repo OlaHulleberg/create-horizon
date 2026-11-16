@@ -60,6 +60,7 @@ pub fn open(host: &dyn Host) -> bool {
 /// The world closed (or failed to open): forget all of it.
 pub fn close() {
     RUNNING.set(true);
+    super::kinetics::forget_freeze();
     WORLD.with_borrow_mut(|w| *w = None);
     LEVELS.with_borrow_mut(Vec::clear);
 }

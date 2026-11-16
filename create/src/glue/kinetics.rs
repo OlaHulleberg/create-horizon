@@ -32,8 +32,20 @@ pub const OVER: &str = "Over";
 pub(crate) const BRACKET: &str = "Bracket";
 /// A speed setting a moving structure carries (`Subsystem::carry_out`).
 const CARRIED_SPEED: &str = "Speed";
+/// In an update tag: the server is frozen (`/tick freeze`), so the block's parts are drawn at
+/// rest (`KineticBlockEntity.getSpeed` is 0 while `tickRateManager().isFrozen()`). Sent from the
+/// server's state as each tag is made, never saved.
+const FROZEN: &str = "Frozen";
+/// A count a freeze or thaw writes into each turning block entity, so its clients get a new
+/// update tag (with or without [`FROZEN`]) and draw it again.
+const FREEZES: &str = "Freezes";
 
 thread_local! {
+    /// The freeze each level's turning parts were last drawn for (`/tick freeze`), by level.
+    static FROZEN_SHOWN: std::cell::RefCell<Vec<bool>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// How many freezes and thaws were shown ([`FREEZES`]).
+    static FREEZE_COUNT: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
     /// Speed controllers to look at again: one, or the large cog over one, came or went.
     static BRACKETS: std::cell::RefCell<Vec<(usize, [i32; 3])>> =
         const { std::cell::RefCell::new(Vec::new()) };
@@ -417,7 +429,12 @@ fn current_speeds(lv: &ServerLevel<'_>, pos: [i32; 3]) -> [f32; 2] {
         .map_or([0.0; 2], |d| speeds_of(&d))
 }
 
+/// The speeds in a block entity's data; on a client, 0 while the server is frozen
+/// (`KineticBlockEntity.getSpeed`), so its parts stand at their resting angle.
 pub fn speeds_of(data: &Compound) -> [f32; 2] {
+    if synced(data, FROZEN).is_some() {
+        return [0.0; 2];
+    }
     match data.get(&SPEEDS.into()) {
         Some(Tag::List(l)) => {
             let at = |i: usize| match l.get(i) {
@@ -451,6 +468,47 @@ fn set_speeds(
         data.insert(OVER.into(), Tag::Byte(i8::from(over)));
     }
     let _ = entity.merge_data(&mut *lv.host, data);
+}
+
+/// `/tick freeze` and its end in level `lv`: every block entity with a turning part gets a new
+/// update tag, so its clients draw its parts at rest while frozen (`getSpeed` 0) and turning
+/// again after. Runs each level tick, frozen or not; nothing happens without a change.
+pub fn show_freeze(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let frozen = !super::world::running();
+    let changed = FROZEN_SHOWN.with_borrow_mut(|f| {
+        if f.len() <= dim {
+            f.resize(dim + 1, false);
+        }
+        std::mem::replace(&mut f[dim], frozen) != frozen
+    });
+    if !changed {
+        return;
+    }
+    let mut turning: Vec<[i32; 3]> = with_world(|w| {
+        w.dims[dim]
+            .kinetics
+            .parts()
+            .filter(|p| p.2 != 0.0)
+            .map(|p| p.0)
+            .collect()
+    })
+    .unwrap_or_default();
+    turning.sort_unstable();
+    turning.dedup();
+    let count = FREEZE_COUNT.get().wrapping_add(1);
+    FREEZE_COUNT.set(count);
+    for pos in turning {
+        if let Some(entity) = lv.host.block_entity(lv.level, pos) {
+            let data = Compound::from([(FREEZES.into(), Tag::Int(count))]);
+            let _ = entity.merge_data(&mut *lv.host, data);
+        }
+    }
+}
+
+/// The world closed: the next one starts unfrozen.
+pub fn forget_freeze() {
+    FROZEN_SHOWN.with_borrow_mut(Vec::clear);
 }
 
 /// The theoretical speed of the first part of the block entity at `pos` of `level`, and whether
@@ -529,6 +587,13 @@ impl BlockEntityPart for KineticEntity {
                 (k.into(), value.unwrap_or_else(absent))
             })
             .collect();
+        // `/tick freeze`: drawn at rest while the server is frozen.
+        let frozen = if super::world::running() {
+            absent()
+        } else {
+            Tag::Byte(1)
+        };
+        shown.insert(FROZEN.into(), frozen);
         // How often a player looked at its value box: a new number makes clients draw it again
         // (`interaction::value_text`).
         if let Some(n) = super::interaction::values::looks(event.pos) {

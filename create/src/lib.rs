@@ -160,6 +160,7 @@ impl Hooks for Create {
         // A frozen server ticks no block entity, so only what Create runs from its own level
         // tick goes on (`CommonEvents.onServerWorldTick`: the railways).
         let running = world::running();
+        glue::kinetics::show_freeze(&mut lv);
         for s in SUBSYSTEMS {
             if running || s.runs_frozen() {
                 s.level_tick(&mut lv);
