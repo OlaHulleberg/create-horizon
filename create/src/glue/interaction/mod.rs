@@ -118,6 +118,15 @@ impl Subsystem for Interaction {
         board::camera_pose(event);
     }
 
+    /// The use key is taken while a value box's press or board is held.
+    fn interaction_key(
+        &self,
+        _host: &mut dyn ClientHost,
+        event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
+    ) -> Flow {
+        board::interaction_key(event)
+    }
+
     fn mouse_scrolling(&self, host: &mut dyn ClientHost, event: &mut MouseScrollingEvent) -> Flow {
         board::wheel(host, event.accumulated[1])
     }

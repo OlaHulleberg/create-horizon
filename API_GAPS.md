@@ -100,7 +100,9 @@ Each entry: what Create does → what's missing → the API that would close it.
 - **Client light.** Moving structures and steam jets use the server's light, and a filter in a smart chute is drawn
   full bright → `LevelRef::brightness` is server-only.
 - **Local player state.** Air (diving helmet bubbles still drop), ground flag and swimming (diving boots), inventory
-  slots (symmetry mirrors come from the server) → client-side reads or writes for each.
+  slots (symmetry mirrors come from the server), flight (`player_abilities` on the client reads the server's last
+  abilities packet, so the server tells the fans' client push whether its player flies) → client-side reads or
+  writes for each.
 - **Worn stack data in place.** A backtank's air update replays the equip sound → `ItemStack` change without
   `setItemSlot`.
 - **The local player's swing.** The extendo grip's arms move only on a raw mouse click.
