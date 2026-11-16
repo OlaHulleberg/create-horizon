@@ -12,7 +12,7 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `create/` | `cargo +1.99.1 test` | Pass (81 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (659 engine tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (665 engine tests) |
 | `create/` | `cargo horizon-mod check` | Pass ("Create uses 3570 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
@@ -95,6 +95,18 @@ commands, screenshots read back, `/data get` and the mod's `create_debug` readou
 | Decor, stone, copycats | casings, 14 stones × cuts, ladders, bars, scaffolds, windows, doors, cloths, toolboxes, seats | Pass | Drawn; doors open; seats, toolboxes dye; copycats take blocks |
 | Equipment | goggles, wrench, grip, potato cannon, wands, backtanks, diving gear, cardboard armour, foods | Pass | Drawn; goggles overlay on a motor |
 | Schematics | table, cannon, schematic items | Pass | Screens open |
+
+### Kinetics against Create's Java
+
+The [create-fuzz](https://github.com/OlaHulleberg/create-fuzz) differential fuzzer runs random kinetic networks in
+Create 6.0.11 (NeoForge 1.21.1) and in the engine and compares where they settle; 1275 of seeds 0-1299 match. Its
+fixes, each tried in game on the build above:
+
+| Change | Result | Evidence |
+|---|---|---|
+| A cog loop whose ratios disagree, nothing turning | Pass | Two small and two large cogs placed with `/setblock`: none breaks (one did before) |
+| A motor placed facing a turning motor | Pass | Placed by the player and with `/setblock`: both stay; the second shows `Gen: -16`, turning at 16 with the first; the shaft turns between frames; same after reload |
+| Three large cogs at right angles, then a motor | Pass | The x and z cogs break and drop, the y cog stays still, as in Create |
 
 Known differences left: the category editor's inventory shows the inventory as it was at the last change made in
 it, so items picked up while it is open appear after the next change (Create's menu syncs them at once). The game
