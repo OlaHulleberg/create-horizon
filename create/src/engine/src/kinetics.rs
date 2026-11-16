@@ -453,6 +453,9 @@ struct Node {
     /// starts, stops or turns round (`onSpeedChanged`), one less each tick (`tick`).
     flicker: i32,
     flicker_at: u64,
+    /// What drove its network at the last solve, standing in for Create's network id
+    /// (`KineticBlockEntity.network`, its source generator's position): NONE when it stood still.
+    net: u32,
 }
 
 impl Node {
@@ -491,6 +494,9 @@ pub struct Kinetics {
 }
 
 const NONE: u32 = u32::MAX;
+
+/// A step of `propagation_victim`'s walk: a part, its neighbours with their ratios, the next one.
+type Frame = (u32, Vec<(u32, f32)>, usize);
 
 /// The networks a solve looked at, for tests and benchmarks.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -568,6 +574,7 @@ impl Kinetics {
             seq: None,
             flicker: 0,
             flicker_at: 0,
+            net: NONE,
         };
         let id = match self.free.pop() {
             Some(id) => {
@@ -1021,7 +1028,14 @@ impl Kinetics {
                 }
                 conflict = fastest;
             }
-            if let Some(victim) = conflict {
+            if let Some(found) = conflict {
+                // Create breaks whichever block its propagation from the change stands on when
+                // it meets the conflict; the solve's own pick when that walk meets none.
+                let origin = self.queue.iter().copied().reduce(|a, b| self.newer(a, b));
+                let victim = origin
+                    .and_then(|o| self.propagation_victim(o))
+                    .filter(|v| self.side.contains_key(v))
+                    .unwrap_or(found);
                 let pos = self.nodes[victim as usize].pos;
                 events.push(Event::Break { pos });
                 // The rest re-solves without it.
@@ -1101,9 +1115,15 @@ impl Kinetics {
                 let shown = if overstressed { 0.0 } else { turned };
                 let seq = held[self.side[&id] as usize]
                     .map(|(c, base)| (c, if base == 0.0 { 0.0 } else { c.value / base }));
+                let side = self.side[&id];
+                let net = match driver[side as usize] {
+                    NONE if root[side as usize] != 0.0 => NONE - 1 - side,
+                    d => d,
+                };
                 let n = &mut self.nodes[id as usize];
                 n.stress = stress;
                 n.capacity = capacity;
+                n.net = if turned == 0.0 { NONE } else { net };
                 // Create calls `onSpeedChanged` when the theoretical speed changes too, shown or
                 // not (`RotationPropagator` sets it on overstressed networks as well).
                 if n.fresh
@@ -1136,6 +1156,121 @@ impl Kinetics {
     }
 
     /// The newer of two parts (set later): the one Create breaks in a conflict.
+    /// The block `RotationPropagator.propagateNewSource` destroys first, run from `origin` (the
+    /// part whose change starts it) over the speeds of the last solve, in Create's neighbour order
+    /// (`getPotentialNeighbourLocations`: the six faces, then the diagonals, x fastest): a speed
+    /// conveyed or received too fast, or the other way to a turning neighbour's, breaks the part
+    /// it is conveyed from; a faster speed into its own network (a loop) does too. None when the
+    /// walk meets no conflict, or runs too long.
+    fn propagation_victim(&self, origin: u32) -> Option<u32> {
+        let o = &self.nodes[origin as usize];
+        let mut speed: HashMap<u32, f32> = HashMap::new();
+        let mut net: HashMap<u32, u32> = HashMap::new();
+        // A generator starts from its own speed and network (`applyNewSpeed`); another part from
+        // what it turned at.
+        let start = if o.part.generated != 0.0 {
+            o.part.generated
+        } else {
+            o.theoretical
+        };
+        speed.insert(origin, start);
+        net.insert(
+            origin,
+            if o.part.generated != 0.0 {
+                origin
+            } else {
+                o.net
+            },
+        );
+        let speed_of = |m: &HashMap<u32, f32>, id: u32| {
+            m.get(&id)
+                .copied()
+                .unwrap_or(self.nodes[id as usize].theoretical)
+        };
+        let net_of = |m: &HashMap<u32, u32>, id: u32| {
+            m.get(&id).copied().unwrap_or(self.nodes[id as usize].net)
+        };
+        // Each frame: a part, its neighbours in Create's order, the next to look at.
+        let mut stack: Vec<Frame> = vec![(origin, self.java_order(origin), 0)];
+        let mut steps = 0;
+        while let Some((cur, edges, i)) = stack.last_mut() {
+            steps += 1;
+            if steps > 100_000 {
+                return None;
+            }
+            let cur = *cur;
+            let Some(&(n, r)) = edges.get(*i) else {
+                stack.pop();
+                continue;
+            };
+            *i += 1;
+            let (sc, sn) = (speed_of(&speed, cur), speed_of(&speed, n));
+            let new = sc * r;
+            let opposite = sn / r;
+            if new == 0.0 && opposite == 0.0 {
+                continue;
+            }
+            if new.abs() > MAX_SPEED || opposite.abs() > MAX_SPEED {
+                return Some(cur);
+            }
+            if new.signum() != sn.signum() && new != 0.0 && sn != 0.0 {
+                return Some(cur);
+            }
+            // The neighbour is faster: it overpowers this part, which propagates again.
+            if opposite.abs() > sc.abs() {
+                speed.insert(cur, opposite);
+                net.insert(cur, net_of(&net, n));
+                stack.pop();
+                stack.push((cur, self.java_order(cur), 0));
+                continue;
+            }
+            if new.abs() >= sn.abs() {
+                let own = net_of(&net, cur);
+                // Not over its own network: a loop that comes back faster breaks.
+                if own == NONE || own == net_of(&net, n) {
+                    if new.abs() > sn.abs() + sn.abs() / 256.0 / 256.0 {
+                        return Some(cur);
+                    }
+                    continue;
+                }
+                speed.insert(n, new);
+                net.insert(n, own);
+                stack.push((n, self.java_order(n), 0));
+                continue;
+            }
+            if (sn - new).abs() <= 1e-4 {
+                continue;
+            }
+            speed.insert(n, new);
+            net.insert(n, net_of(&net, cur));
+            stack.push((n, self.java_order(n), 0));
+        }
+        None
+    }
+
+    /// `edges`, in the order Create visits neighbours: a split shaft's other half (the same
+    /// block entity in Create), the six faces, the diagonals with x fastest, then far parts.
+    fn java_order(&self, id: u32) -> Vec<(u32, f32)> {
+        let mut out = Vec::new();
+        self.edges(id, &mut out);
+        let pos = self.nodes[id as usize].pos;
+        let key = |m: u32| {
+            let o = sub(self.nodes[m as usize].pos, pos);
+            match o {
+                [0, 0, 0] => -1,
+                _ => match Dir::from_offset(o) {
+                    Some(d) => d as i32,
+                    None if o.iter().all(|c| c.abs() <= 1) => {
+                        6 + (o[2] + 1) * 9 + (o[1] + 1) * 3 + (o[0] + 1)
+                    }
+                    None => 100,
+                },
+            }
+        };
+        out.sort_by_key(|&(m, _)| key(m));
+        out
+    }
+
     fn newer(&self, a: u32, b: u32) -> u32 {
         if self.nodes[a as usize].stamp > self.nodes[b as usize].stamp {
             a
@@ -1355,6 +1490,37 @@ mod tests {
         k.set([0, 5, 0], 0, motor(Dir::Up, 16.0));
         let e = solve(&mut k);
         assert!(e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+    }
+
+    #[test]
+    fn too_fast_breaks_the_part_that_conveys_it() {
+        // A small cog, a large cog meshing with it, then a motor on the large cog: the small one
+        // would turn at 366. Create's propagation runs from the motor and breaks the large cog,
+        // which conveys the speed (`propagateNewSource` destroys its current block).
+        let mut k = Kinetics::new();
+        k.set([0, 6, -1], 0, Part::cog(Axis::Y, false));
+        solve(&mut k);
+        k.set([1, 6, -2], 0, Part::cog(Axis::Y, true));
+        solve(&mut k);
+        k.set([1, 7, -2], 0, motor(Dir::Down, 183.0));
+        let e = solve(&mut k);
+        let broken: Vec<_> = e
+            .iter()
+            .filter(|x| matches!(x, Event::Break { .. }))
+            .collect();
+        assert_eq!(broken, [&Event::Break { pos: [1, 6, -2] }]);
+        // Placed onto a large cog that already turns, the small cog breaks itself.
+        let mut k = Kinetics::new();
+        k.set([1, 7, -2], 0, motor(Dir::Down, 183.0));
+        k.set([1, 6, -2], 0, Part::cog(Axis::Y, true));
+        solve(&mut k);
+        k.set([0, 6, -1], 0, Part::cog(Axis::Y, false));
+        let e = solve(&mut k);
+        let broken: Vec<_> = e
+            .iter()
+            .filter(|x| matches!(x, Event::Break { .. }))
+            .collect();
+        assert_eq!(broken, [&Event::Break { pos: [0, 6, -1] }]);
     }
 
     #[test]
