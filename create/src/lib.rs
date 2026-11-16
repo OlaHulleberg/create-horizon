@@ -210,13 +210,14 @@ impl Hooks for Create {
         }
     }
 
-    /// The glue's textured world pipelines (`glue::pipelines`).
+    /// The glue's textured world pipelines (`glue::pipelines`, the placement ghosts').
     fn register_render_pipelines(
         &self,
         _context: &RegistrationContext,
         event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
     ) {
         glue::pipelines::register(event);
+        glue::interaction::register_pipelines(event);
     }
 
     fn register_item_models(

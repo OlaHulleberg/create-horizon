@@ -2051,12 +2051,19 @@ pub(crate) fn helper_target(
     pos: [i32; 3],
     point: [f64; 3],
     item: &str,
-) -> Option<[i32; 3]> {
+) -> Option<crate::glue::interaction::HelperTarget> {
     if item != "create:display_board" {
         return None;
     }
     let facing = board_at(lv, pos)?.facing;
-    board_target(lv, pos, point, facing)
+    let name = lv.block_state(pos).and_then(|s| {
+        let facts = mod_api::HostBlockStates::block_states(&*lv.host);
+        s.property(&facts, "facing")
+            .ok()
+            .flatten()
+            .map(str::to_owned)
+    })?;
+    board_target(lv, pos, point, facing).map(|at| (at, vec![("facing", name)]))
 }
 
 /// A change to the board controller at `pos`, shown to its clients.

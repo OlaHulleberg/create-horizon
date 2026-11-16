@@ -17,6 +17,8 @@
 mod board;
 mod commands;
 mod crank;
+mod ghost;
+mod ghost_models;
 mod hud;
 mod placement;
 /// The value channels and the value box rules, for the subsystems whose blocks have one.
@@ -31,6 +33,15 @@ use mod_api::{
 use values::VALUE;
 
 pub struct Interaction;
+
+/// A placement helper's target and the properties its transform sets on the held block's
+/// default state (`PlacementOffset.withTransform`), for the ghost.
+pub(crate) type HelperTarget = ([i32; 3], Vec<(&'static str, String)>);
+
+/// The placement ghosts' world pipelines, one a sprite (`ghost.rs`).
+pub(crate) fn register_pipelines(event: &mut mod_api::RegisterRenderPipelinesEvent<'_>) {
+    ghost::register(event);
+}
 
 impl Subsystem for Interaction {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
@@ -90,7 +101,7 @@ impl Subsystem for Interaction {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         board::tick(host);
         value_text::tick(host);
-        placement::tick(&*host);
+        placement::tick();
     }
 
     /// The block looked at is drawn each frame while it shows its value box's number.
@@ -122,13 +133,14 @@ impl Subsystem for Interaction {
         hud::goggle_overlay(host, event.draw);
     }
 
-    /// The highlighted value box's outline.
+    /// The highlighted value box's outline and the placement helper's ghost.
     fn render_level_stage(
         &self,
         host: &dyn ClientHost,
         event: &mut mod_api::RenderLevelStageEvent<'_>,
     ) {
         hud::value_box_outline(host, event);
+        placement::draw_ghost(host, event);
     }
 
     fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {

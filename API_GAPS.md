@@ -125,8 +125,11 @@ Each entry: what Create does → what's missing → the API that would close it.
   neighbour states and block entity data.
 - **Menus without a block.** Filter and schedule screens are the mod's own and carry ghost copies → a `Screen` for a
   menu type.
-- **A block state drawn without a block entity.** Schematic ghost blocks are outlined only; placement-helper ghosts are
-  left out → a `WorldDrawContext` call drawing a `BlockState` with alpha.
+- **A block state drawn without a block entity.** Schematic ghost blocks are outlined only → a `WorldDrawContext` call
+  drawing a `BlockState` with alpha.
+- **Translucent block models.** Placement-helper ghosts are drawn from quads `create-data prepare` bakes out of the
+  jar's models, one textured pipeline per sprite (`glue/interaction/ghost.rs`) → an overall alpha (a translucent
+  route) for `draw_model_instances`, so the mod draws the block model itself and drops the bake.
 - **Items and text in world draws.** Filter slot items and counts (`FilteringRenderer`) are left out.
 - **A turned item in a screen.** The wand of symmetry's screen draws it flat.
 

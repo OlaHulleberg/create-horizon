@@ -12,6 +12,7 @@ mod blocks;
 mod c_tags;
 mod ct;
 mod equipment;
+mod ghosts;
 mod jar;
 mod java;
 mod prepare;

@@ -174,14 +174,17 @@ pub(crate) fn helper_target(
     player: PlayerRef,
     pos: [i32; 3],
     item: mod_api::ItemKey,
-) -> Option<[i32; 3]> {
+) -> Option<crate::glue::interaction::HelperTarget> {
     let held = lv.host.item_block(item)?;
     let base = lv.host.block_state_default(held)?;
     if !states::id(base).is_some_and(is_ladder) || !is_ladder(lv.block(pos)) {
         return None;
     }
     let state = lv.block_state(pos)?;
-    target(lv, player, pos, state).map(|t| t.0)
+    target(lv, player, pos, state).map(|(at, facing)| {
+        let facing = create_engine::copycat::dir_name(facing).to_owned();
+        (at, vec![("facing", facing)])
+    })
 }
 
 /// A ladder whose neighbour changed drops when nothing holds it (`updateShape`).

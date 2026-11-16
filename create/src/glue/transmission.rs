@@ -276,13 +276,14 @@ fn pole_target(
 }
 
 /// The shaft and cog helpers' target (`PlacementClient`'s indicator): where `item` clicked at
-/// `point` on the block at `pos` would go, as `use_item_on` places it.
+/// `point` on the block at `pos` would go, as `use_item_on` places it, and the axis it takes
+/// (the offset's transform, for its ghost).
 pub(crate) fn helper_target(
     lv: &ServerLevel<'_>,
     pos: [i32; 3],
     point: [f64; 3],
     item: &str,
-) -> Option<[i32; 3]> {
+) -> Option<crate::glue::interaction::HelperTarget> {
     let state = lv.block_state(pos)?;
     let (block, info) =
         with_world(|w| w.table.get(states::id(state)?).map(|(b, i)| (b, *i))).flatten()?;
@@ -292,13 +293,17 @@ pub(crate) fn helper_target(
         "create:shaft" => None,
         _ => return None,
     };
+    let axis = |a: Axis| vec![("axis", axis_name(a).to_owned())];
     if let Some(large) = large
-        && let Some((at, _)) = cog_target(lv, large, pos, point)
+        && let Some((at, new_axis)) = cog_target(lv, large, pos, point)
     {
-        return Some(at);
+        return Some((at, axis(new_axis)));
     }
     match block {
-        Block::Shaft | Block::PoweredShaft => pole_target(lv, pos, point, info.axis?),
+        Block::Shaft | Block::PoweredShaft => {
+            let along = info.axis?;
+            pole_target(lv, pos, point, along).map(|at| (at, axis(along)))
+        }
         _ => None,
     }
 }

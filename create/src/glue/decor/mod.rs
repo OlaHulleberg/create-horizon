@@ -67,7 +67,7 @@ pub(crate) fn helper_target(
     pos: [i32; 3],
     point: [f64; 3],
     item: mod_api::ItemKey,
-) -> Option<[i32; 3]> {
+) -> Option<crate::glue::interaction::HelperTarget> {
     let id = item.id(&*lv.host);
     clicks::helper_target(lv, player, pos, point, &id)
         .or_else(|| ladders::helper_target(lv, player, pos, item))
