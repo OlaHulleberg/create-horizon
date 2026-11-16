@@ -1029,20 +1029,30 @@ impl Kinetics {
                 conflict = fastest;
             }
             if let Some(found) = conflict {
-                // Create breaks whichever block its propagation from the change stands on when
+                // Create breaks whichever blocks its propagation from the change stands on when
                 // it meets the conflict; the solve's own pick when that walk meets none.
                 let origin = self.queue.iter().copied().reduce(|a, b| self.newer(a, b));
-                let victim = origin
-                    .and_then(|o| self.propagation_victim(o))
-                    .filter(|v| self.side.contains_key(v))
-                    .unwrap_or(found);
-                let pos = self.nodes[victim as usize].pos;
-                events.push(Event::Break { pos });
-                // The rest re-solves without it.
+                let mut victims: Vec<u32> = origin
+                    .map(|o| self.propagation_victims(o))
+                    .unwrap_or_default();
+                victims.retain(|v| self.side.contains_key(v));
+                if victims.is_empty() {
+                    victims.push(found);
+                }
+                let positions: Vec<[i32; 3]> = victims
+                    .iter()
+                    .map(|&v| self.nodes[v as usize].pos)
+                    .collect();
+                // The rest re-solves without them.
                 for &id in &self.queue {
                     done.remove(&id);
                 }
-                self.remove(pos);
+                for pos in positions {
+                    if !events.contains(&Event::Break { pos }) {
+                        events.push(Event::Break { pos });
+                    }
+                    self.remove(pos);
+                }
                 continue;
             }
             let theoretical = |k: &Self, id: u32| root[k.side[&id] as usize] * k.factor[&id];
@@ -1156,16 +1166,22 @@ impl Kinetics {
     }
 
     /// The newer of two parts (set later): the one Create breaks in a conflict.
-    /// The block `RotationPropagator.propagateNewSource` destroys first, run from `origin` (the
+    /// The blocks `RotationPropagator.propagateNewSource` destroys, in order, run from `origin` (the
     /// part whose change starts it) over the speeds of the last solve, in Create's neighbour order
-    /// (`getPotentialNeighbourLocations`: the six faces, then the diagonals, x fastest): a speed
+    /// (`getPotentialNeighbourLocations`: the six faces, then the diagonals, x fastest). A speed
     /// conveyed or received too fast, or the other way to a turning neighbour's, breaks the part
-    /// it is conveyed from; a faster speed into its own network (a loop) does too. None when the
-    /// walk meets no conflict, or runs too long.
-    fn propagation_victim(&self, origin: u32) -> Option<u32> {
+    /// it is conveyed from; a faster speed into its own network (a loop) does too. Create carries
+    /// on after a break: each caller still holds the neighbours it listed before, a broken one
+    /// with its last speed, so one conflict can break more; what a broken part drove stops
+    /// (`propagateMissingSource`). Empty when the walk meets no conflict, or runs too long.
+    fn propagation_victims(&self, origin: u32) -> Vec<u32> {
+        const MAX_VICTIMS: usize = 8;
         let o = &self.nodes[origin as usize];
         let mut speed: HashMap<u32, f32> = HashMap::new();
         let mut net: HashMap<u32, u32> = HashMap::new();
+        // What set each part's speed in this walk (`KineticBlockEntity.source`).
+        let mut source: HashMap<u32, u32> = HashMap::new();
+        let mut broken: Vec<u32> = Vec::new();
         // A generator starts from its own speed and network (`applyNewSpeed`); another part from
         // what it turned at.
         let start = if o.part.generated != 0.0 {
@@ -1190,13 +1206,40 @@ impl Kinetics {
         let net_of = |m: &HashMap<u32, u32>, id: u32| {
             m.get(&id).copied().unwrap_or(self.nodes[id as usize].net)
         };
-        // Each frame: a part, its neighbours in Create's order, the next to look at.
-        let mut stack: Vec<Frame> = vec![(origin, self.java_order(origin), 0)];
+        // A part breaks: it is listed, and every part it drove in this walk stops.
+        let destroy = |id: u32,
+                       broken: &mut Vec<u32>,
+                       speed: &mut HashMap<u32, f32>,
+                       net: &mut HashMap<u32, u32>,
+                       source: &mut HashMap<u32, u32>| {
+            broken.push(id);
+            let mut gone = vec![id];
+            while let Some(g) = gone.pop() {
+                let driven: Vec<u32> = source
+                    .iter()
+                    .filter(|&(_, &s)| s == g)
+                    .map(|(&d, _)| d)
+                    .collect();
+                for d in driven {
+                    source.remove(&d);
+                    speed.insert(d, 0.0);
+                    net.insert(d, NONE);
+                    gone.push(d);
+                }
+            }
+        };
+        let fresh = |id: u32, broken: &[u32]| {
+            let mut e = self.java_order(id);
+            e.retain(|(m, _)| !broken.contains(m));
+            e
+        };
+        // Each frame: a part, its neighbours as listed when it started, the next to look at.
+        let mut stack: Vec<Frame> = vec![(origin, fresh(origin, &broken), 0)];
         let mut steps = 0;
         while let Some((cur, edges, i)) = stack.last_mut() {
             steps += 1;
-            if steps > 100_000 {
-                return None;
+            if steps > 100_000 || broken.len() >= MAX_VICTIMS {
+                break;
             }
             let cur = *cur;
             let Some(&(n, r)) = edges.get(*i) else {
@@ -1210,42 +1253,49 @@ impl Kinetics {
             if new == 0.0 && opposite == 0.0 {
                 continue;
             }
-            if new.abs() > MAX_SPEED || opposite.abs() > MAX_SPEED {
-                return Some(cur);
-            }
-            if new.signum() != sn.signum() && new != 0.0 && sn != 0.0 {
-                return Some(cur);
+            // Too fast, or the other way: this part breaks and its call returns.
+            if new.abs() > MAX_SPEED
+                || opposite.abs() > MAX_SPEED
+                || (new.signum() != sn.signum() && new != 0.0 && sn != 0.0)
+            {
+                if !broken.contains(&cur) {
+                    destroy(cur, &mut broken, &mut speed, &mut net, &mut source);
+                }
+                stack.pop();
+                continue;
             }
             // The neighbour is faster: it overpowers this part, which propagates again.
             if opposite.abs() > sc.abs() {
                 speed.insert(cur, opposite);
                 net.insert(cur, net_of(&net, n));
+                source.insert(cur, n);
                 stack.pop();
-                stack.push((cur, self.java_order(cur), 0));
+                if !broken.contains(&cur) {
+                    stack.push((cur, fresh(cur, &broken), 0));
+                }
                 continue;
             }
             if new.abs() >= sn.abs() {
                 let own = net_of(&net, cur);
-                // Not over its own network: a loop that comes back faster breaks.
+                // Not over its own network: a loop that comes back faster breaks it, and the
+                // call goes on.
                 if own == NONE || own == net_of(&net, n) {
-                    if new.abs() > sn.abs() + sn.abs() / 256.0 / 256.0 {
-                        return Some(cur);
+                    if new.abs() > sn.abs() + sn.abs() / 256.0 / 256.0 && !broken.contains(&cur) {
+                        destroy(cur, &mut broken, &mut speed, &mut net, &mut source);
                     }
                     continue;
                 }
-                speed.insert(n, new);
-                net.insert(n, own);
-                stack.push((n, self.java_order(n), 0));
-                continue;
-            }
-            if (sn - new).abs() <= 1e-4 {
+            } else if (sn - new).abs() <= 1e-4 {
                 continue;
             }
             speed.insert(n, new);
             net.insert(n, net_of(&net, cur));
-            stack.push((n, self.java_order(n), 0));
+            source.insert(n, cur);
+            if !broken.contains(&n) {
+                stack.push((n, fresh(n, &broken), 0));
+            }
         }
-        None
+        broken
     }
 
     /// `edges`, in the order Create visits neighbours: a split shaft's other half (the same
@@ -1521,6 +1571,35 @@ mod tests {
             .filter(|x| matches!(x, Event::Break { .. }))
             .collect();
         assert_eq!(broken, [&Event::Break { pos: [0, 6, -1] }]);
+    }
+
+    #[test]
+    fn a_break_in_a_loop_can_break_the_part_that_reached_it_too() {
+        // Three large cogs meshing at right angles, a loop that reverses once. Create's
+        // propagation from the motor goes z -> y -> x, where the loop disagrees, and breaks x;
+        // z's call still lists x, at its last speed, disagrees with it again and breaks z too;
+        // y is left with nothing turning it.
+        let mut k = Kinetics::new();
+        k.set([1, 8, -1], 0, Part::cog(Axis::Z, true));
+        solve(&mut k);
+        k.set([1, 7, 0], 0, Part::cog(Axis::Y, true));
+        solve(&mut k);
+        k.set([2, 8, 0], 0, Part::cog(Axis::X, true));
+        solve(&mut k);
+        k.set([1, 8, -2], 0, motor(Dir::South, -47.0));
+        let e = solve(&mut k);
+        let broken: Vec<_> = e
+            .iter()
+            .filter(|x| matches!(x, Event::Break { .. }))
+            .collect();
+        assert_eq!(
+            broken,
+            [
+                &Event::Break { pos: [2, 8, 0] },
+                &Event::Break { pos: [1, 8, -1] }
+            ]
+        );
+        assert_eq!(k.speed([1, 7, 0], 0), Some(0.0));
     }
 
     #[test]
