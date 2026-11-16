@@ -396,18 +396,47 @@ fn target(
     None
 }
 
-/// The girder helper's target for the indicator: a girder item on a girder.
+/// The girder helper's target for the indicator: a girder item on a girder, and the state it
+/// takes there (`withAxis`, then `updateFromNeighbourShapes`), for its ghost.
 pub(crate) fn helper_target(
     lv: &ServerLevel<'_>,
     player: mod_api::PlayerRef,
     pos: [i32; 3],
     point: [f64; 3],
     item: &str,
-) -> Option<[i32; 3]> {
+) -> Option<crate::glue::interaction::HelperTarget> {
     if item != "create:metal_girder"
         || block_of(lv.block(pos)).map(|b| b.0) != Some(Block::MetalGirder)
     {
         return None;
     }
-    target(lv, player, pos, point).map(|t| t.0)
+    let (at, d) = target(lv, player, pos, point)?;
+    let axis = d.axis();
+    let mut g = decor::Girder {
+        axis,
+        x: axis == Axis::X,
+        z: axis == Axis::Z,
+        top: false,
+        bottom: false,
+    };
+    for d in Dir::ALL {
+        g = decor::update_shape(
+            g,
+            d,
+            |d| side(lv, at, d),
+            |d| {
+                let x = side(lv, at, d);
+                x.air || x.empty
+            },
+            |d| track_beside(lv, at, d),
+        );
+    }
+    let props = [
+        ("axis", axis_name(g.axis)),
+        ("x", flag(g.x)),
+        ("z", flag(g.z)),
+        ("top", flag(g.top)),
+        ("bottom", flag(g.bottom)),
+    ];
+    Some((at, props.map(|(k, v)| (k, v.to_owned())).to_vec()))
 }

@@ -305,6 +305,19 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
     Flow::Continue
 }
 
+/// The use key while a press on a value box is held or its board is open: taken, with no
+/// swing, so the held item is not used and nothing else is clicked (Create's board is a screen,
+/// which takes the input while open, and `onBlockActivated` cancels the clicks on the box before
+/// it opens).
+pub(super) fn interaction_key(event: &mut mod_api::InteractionKeyMappingTriggeredEvent) -> Flow {
+    let busy = HOLD.with_borrow(Option::is_some) || BOARD.with_borrow(Option::is_some);
+    if event.key != mod_api::InteractionKey::Use || !busy {
+        return Flow::Continue;
+    }
+    event.swing_hand = false;
+    Flow::Cancel
+}
+
 /// A board's pick for the block's setting `v` (`getValueSettings`): a motor's speed, an option.
 fn board_pick(b: Board, v: i32) -> Settings {
     if b.icons || b == board::EJECTOR || b == board::TABLE_CLOTH {

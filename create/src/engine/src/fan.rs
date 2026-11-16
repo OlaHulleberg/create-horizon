@@ -414,9 +414,207 @@ pub fn propeller_rpm(speed: f32) -> f32 {
     }
 }
 
+/// A turning fan's current as its clients know it: `AirCurrent` with its source's position,
+/// facing (`getAirflowOriginSide`) and speed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Seen {
+    pub pos: [i32; 3],
+    pub facing: Dir,
+    pub speed: f32,
+    pub current: Current,
+}
+
+impl Seen {
+    /// `AirCurrent.bounds`.
+    pub fn bounds(&self) -> Option<([f64; 3], [f64; 3])> {
+        bounds(self.pos, self.facing, self.current.max)
+    }
+
+    /// The way the air goes (`pushing ? direction : direction.getOpposite()`).
+    pub fn flow(&self) -> Dir {
+        if self.current.pushing {
+            self.facing
+        } else {
+            self.facing.opposite()
+        }
+    }
+
+    /// The distance from the fan's centre `push` scales by (`entityDistanceOld`).
+    pub fn distance(&self, at: [f64; 3]) -> f64 {
+        (0..3)
+            .map(|a| (at[a] - (f64::from(self.pos[a]) + 0.5)).powi(2))
+            .sum::<f64>()
+            .sqrt()
+    }
+
+    /// `tickAffectedEntities` for an entity at `at` moving at `motion`: its new motion.
+    pub fn push(&self, at: [f64; 3], motion: [f64; 3], sneaking: bool) -> [f64; 3] {
+        let (flow, max) = (self.flow(), self.current.max);
+        push(flow, self.speed, max, self.distance(at), motion, sneaking)
+    }
+
+    /// `AirCurrent.tick` on the client: where its air flow particle spawns, before the
+    /// particle's own random offset (`pushing ? .5 : maxDistance + .5` from the fan's centre).
+    pub fn particle_origin(&self) -> [f64; 3] {
+        let o = self.facing.offset();
+        let offset = if self.current.pushing {
+            0.5
+        } else {
+            f64::from(self.current.max) + 0.5
+        };
+        [0, 1, 2].map(|a| f64::from(self.pos[a]) + 0.5 + f64::from(o[a]) * offset)
+    }
+
+    /// `AirFlowParticle.tick` past its age check, for a particle at `at`: its motion and the
+    /// processing type there, or None when it leaves the current (`remove`).
+    pub fn particle_step(&self, at: [f64; 3]) -> Option<([f64; 3], Option<Kind>)> {
+        let (lo, hi) = self.bounds()?;
+        if (0..3).any(|a| at[a] < lo[a] - 0.25 || at[a] >= hi[a] + 0.25) {
+            return None;
+        }
+        let o = self.facing.offset();
+        let max = f64::from(self.current.max);
+        // `subtract(centre).multiply(directionVec).length() - .5f`.
+        let distance = (0..3)
+            .map(|a| ((at[a] - (f64::from(self.pos[a]) + 0.5)) * f64::from(o[a])).powi(2))
+            .sum::<f64>()
+            .sqrt()
+            - 0.5;
+        if distance > max + 1.0 || distance < -0.25 {
+            return None;
+        }
+        let sign = if self.current.pushing { 1.0 } else { -1.0 };
+        let scale = sign / 8.0 * (max - (distance - 1.0)) * 0.5;
+        let motion = o.map(|v| f64::from(v) * scale);
+        Some((motion, self.current.type_at(distance as f32)))
+    }
+}
+
+/// The turning fans' currents of a level, as the server tells its clients.
+pub fn encode_seen(fans: &[Seen]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(fans.len() * 32);
+    out.extend_from_slice(&(fans.len() as u32).to_le_bytes());
+    for f in fans {
+        for v in f.pos {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.push(Dir::ALL.iter().position(|d| *d == f.facing).unwrap_or(0) as u8);
+        out.extend_from_slice(&f.speed.to_le_bytes());
+        out.extend_from_slice(&f.current.max.to_le_bytes());
+        out.push(u8::from(f.current.pushing));
+        out.extend_from_slice(&(f.current.segments.len() as u16).to_le_bytes());
+        for &(start, end, kind) in &f.current.segments {
+            out.extend_from_slice(&start.to_le_bytes());
+            out.extend_from_slice(&end.to_le_bytes());
+            out.push(match kind {
+                None => 0,
+                Some(Kind::Splashing) => 1,
+                Some(Kind::Haunting) => 2,
+                Some(Kind::Smoking) => 3,
+                Some(Kind::Blasting) => 4,
+            });
+        }
+    }
+    out
+}
+
+/// What `encode_seen` wrote; None for a message that is not one.
+pub fn decode_seen(data: &[u8]) -> Option<Vec<Seen>> {
+    let mut at = 0usize;
+    let mut take = |n: usize| -> Option<&[u8]> {
+        let s = data.get(at..at + n)?;
+        at += n;
+        Some(s)
+    };
+    let int = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap_or_default());
+    let float = |b: &[u8]| f32::from_le_bytes(b.try_into().unwrap_or_default());
+    let count = u32::from_le_bytes(take(4)?.try_into().ok()?);
+    let mut fans = Vec::new();
+    for _ in 0..count {
+        let pos = [int(take(4)?), int(take(4)?), int(take(4)?)];
+        let facing = *Dir::ALL.get(usize::from(take(1)?[0]))?;
+        let speed = float(take(4)?);
+        let max = float(take(4)?);
+        let pushing = take(1)?[0] != 0;
+        let n = u16::from_le_bytes(take(2)?.try_into().ok()?);
+        let mut segments = Vec::new();
+        for _ in 0..n {
+            let (start, end) = (int(take(4)?), int(take(4)?));
+            let kind = match take(1)?[0] {
+                0 => None,
+                1 => Some(Kind::Splashing),
+                2 => Some(Kind::Haunting),
+                3 => Some(Kind::Smoking),
+                4 => Some(Kind::Blasting),
+                _ => return None,
+            };
+            segments.push((start, end, kind));
+        }
+        fans.push(Seen {
+            pos,
+            facing,
+            speed,
+            current: Current {
+                max,
+                pushing,
+                segments,
+            },
+        });
+    }
+    (at == data.len()).then_some(fans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seen_currents_survive_the_wire() {
+        let fans = vec![
+            Seen {
+                pos: [1, -64, 300],
+                facing: Dir::West,
+                speed: -128.0,
+                current: Current::build(7.5, false, |i| (i == 3).then_some(Kind::Splashing)),
+            },
+            Seen {
+                pos: [0, 100, 0],
+                facing: Dir::Up,
+                speed: 16.0,
+                current: Current::build(4.0, true, |_| None),
+            },
+        ];
+        assert_eq!(decode_seen(&encode_seen(&fans)), Some(fans));
+        assert_eq!(decode_seen(&[1, 0, 0, 0]), None);
+    }
+
+    #[test]
+    fn air_flow_particles_ride_the_current_and_leave_it() {
+        let fan = Seen {
+            pos: [0, 0, 0],
+            facing: Dir::East,
+            speed: 64.0,
+            current: Current::build(6.0, true, |i| (i >= 3).then_some(Kind::Smoking)),
+        };
+        assert_eq!(fan.particle_origin(), [1.0, 0.5, 0.5]);
+        // A block from the fan's face (distance 1): `(6 - (1 - 1)) * .5 / 8` east, in plain air.
+        let (motion, kind) = fan.particle_step([2.0, 0.5, 0.5]).unwrap();
+        assert!((motion[0] - 6.0 * 0.5 / 8.0).abs() < 1e-9 && motion[1] == 0.0);
+        assert_eq!(kind, None);
+        assert_eq!(
+            fan.particle_step([4.5, 0.5, 0.5]).unwrap().1,
+            Some(Kind::Smoking)
+        );
+        // Past the current's box, or behind the fan's face.
+        assert!(fan.particle_step([8.0, 0.5, 0.5]).is_none());
+        assert!(fan.particle_step([0.2, 0.5, 0.5]).is_none());
+        let pulling = Seen {
+            current: Current::build(6.0, false, |_| None),
+            ..fan
+        };
+        assert!(pulling.particle_step([2.0, 0.5, 0.5]).unwrap().0[0] < 0.0);
+        assert_eq!(pulling.particle_origin(), [7.0, 0.5, 0.5]);
+    }
 
     fn book(recipes: &[(&str, &str, &str, u8, f32)]) -> Book {
         Book::new(

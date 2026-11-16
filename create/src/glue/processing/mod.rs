@@ -37,6 +37,7 @@
 //! A blaze burner carried by a moving structure is drawn by the structure's anchor
 //! (`burner_draw::draw_moving`): its blaze faces its front rather than the nearest player.
 
+mod air;
 mod application;
 pub(crate) mod basin;
 pub(crate) mod burner_draw;
@@ -156,6 +157,7 @@ impl Subsystem for Processing {
         let kind = r.block_entity_type_key(super::kinetics::TYPE);
         r.block_entity_capability_before_game(&mod_api::ITEMS, &kind, crafter::provide_items);
         client::register(r);
+        air::register(r);
         // Entity Part state is offered to native mods only.
         #[cfg(not(target_arch = "wasm32"))]
         if let Err(e) = r.entity_part_with_state("minecraft:horse", fan::Haunted) {
@@ -295,9 +297,18 @@ impl Subsystem for Processing {
         press::player_joined(host, player);
         deployer::player_joined(host, player);
         toolbelt::player_joined(host, player);
+        fan::player_joined(player);
     }
 
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
+        if channel == air::CHANNEL {
+            air::from_server(data);
+            return true;
+        }
+        if channel == air::FLYING_CHANNEL {
+            air::flying_from_server(data);
+            return true;
+        }
         toolbelt::server_message(host, channel, data) || client::server_message(host, channel, data)
     }
 
@@ -318,9 +329,22 @@ impl Subsystem for Processing {
     fn client_tick(&self, host: &mut dyn ClientHost) {
         client::tick(host);
         toolbelt::client_tick(host);
+        air::tick(host);
+    }
+
+    /// The fans' push on the local player, at the start of its tick (its client moves it).
+    fn player_tick_pre(&self, host: HostSide, event: &mut mod_api::PlayerTickPreEvent) {
+        if let HostSide::Client(host) = host {
+            air::push_player(host, event.player);
+        }
+    }
+
+    fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
+        providers.register(air::AIR_FLOW.to_owned(), std::sync::Arc::new(air::AirFlow));
     }
 
     fn client_reset(&self) {
+        air::reset();
         client::reset();
         toolbelt::client_reset();
     }
@@ -328,6 +352,7 @@ impl Subsystem for Processing {
     fn player_tick(&self, host: HostSide, event: &mut mod_api::PlayerTickPostEvent) {
         if let HostSide::Server(host) = host {
             toolbelt::player_tick(host, event.player);
+            fan::player_tick(host, event.player);
         }
     }
 
