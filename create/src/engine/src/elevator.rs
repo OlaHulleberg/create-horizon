@@ -256,6 +256,234 @@ impl Elevator {
     }
 }
 
+/// One floor of an elevator's column as its contraption controls list it
+/// (`ElevatorColumn.compileNamesList`): its contact's height and names.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Floor {
+    pub y: i32,
+    pub short: String,
+    pub long: String,
+}
+
+/// What an elevator's contraption controls show (`ElevatorFloorSelection` after
+/// `tickFloorSelection`): the floor picked, its names, and whether it is the floor the elevator
+/// is called to. `unreachable`: the long name is `contraption.controls.floor_unreachable`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Selection {
+    pub target_y: i32,
+    pub short: String,
+    pub long: String,
+    pub unreachable: bool,
+    pub matches_target: bool,
+}
+
+/// `ContraptionControlsMovement.tickFloorSelection`: the picked `index` kept within the floors
+/// (`X`, `No Floors` without any), read against the floor the elevator is called to
+/// (`clientYTarget`) and the contacts it can reach (`isTargetUnreachable`).
+pub fn select_floor(
+    index: &mut i32,
+    floors: &[Floor],
+    client_target: i32,
+    min_contact: i32,
+    max_contact: i32,
+) -> Selection {
+    if floors.is_empty() {
+        *index = 0;
+        return Selection {
+            target_y: 0,
+            short: "X".into(),
+            long: "No Floors".into(),
+            unreachable: false,
+            matches_target: true,
+        };
+    }
+    *index = (*index).clamp(0, floors.len() as i32 - 1);
+    let f = &floors[*index as usize];
+    Selection {
+        target_y: f.y,
+        short: f.short.clone(),
+        long: f.long.clone(),
+        unreachable: f.y < min_contact || f.y > max_contact,
+        matches_target: f.y == client_target,
+    }
+}
+
+/// `syncControlDisplays`: the index of the floor the elevator is called to, which every one of
+/// its controls shows when the floors or the call change.
+pub fn floor_index(floors: &[Floor], client_target: i32) -> Option<i32> {
+    floors
+        .iter()
+        .rposition(|f| f.y == client_target)
+        .map(|i| i as i32)
+}
+
+/// Catnip's `LerpedFloat`, as contraption controls' animations use it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Lerped {
+    pub previous: f32,
+    pub value: f32,
+    pub target: f32,
+    pub speed: f32,
+    /// The chaser: none (`null`), `LINEAR` or `EXP`.
+    pub chaser: Option<bool>,
+    pub angular: bool,
+}
+
+/// `AngleHelper.getShortestAngleDiff`.
+fn shortest_angle_diff(current: f64, target: f64) -> f32 {
+    let (c, t) = (current % 360.0, target % 360.0);
+    (((((t - c) % 360.0) + 540.0) % 360.0) - 180.0) as f32
+}
+
+/// `Mth.equal`.
+fn equal(a: f64, b: f64) -> bool {
+    (b - a).abs() < 1.0e-5
+}
+
+impl Lerped {
+    /// `setValue`.
+    pub fn set(&mut self, v: f32) {
+        self.previous = self.value;
+        self.value = v;
+    }
+
+    /// `updateChaseTarget`: an angular one takes the shortest way.
+    pub fn update_target(&mut self, target: f32) {
+        self.target = if self.angular {
+            self.value + shortest_angle_diff(f64::from(self.value), f64::from(target))
+        } else {
+            target
+        };
+    }
+
+    /// `chase(value, speed, LINEAR or EXP)`.
+    pub fn chase(&mut self, target: f32, speed: f32, linear: bool) {
+        self.update_target(target);
+        self.speed = speed;
+        self.chaser = Some(linear);
+    }
+
+    /// `tickChaser`.
+    pub fn tick(&mut self) {
+        self.previous = self.value;
+        let Some(linear) = self.chaser else {
+            return;
+        };
+        if equal(f64::from(self.value), f64::from(self.target)) {
+            self.value = self.target;
+            return;
+        }
+        let (c, s, t) = (
+            f64::from(self.value),
+            f64::from(self.speed),
+            f64::from(self.target),
+        );
+        self.value = if linear {
+            (c + (t - c).clamp(-s, s)) as f32
+        } else {
+            (c + (t - c) * s) as f32
+        };
+    }
+
+    /// `getValue(partialTicks)`: linear, or `AngleHelper.angleLerp` for an angular one.
+    pub fn at(&self, partial: f32) -> f32 {
+        let (p, c, t) = (
+            f64::from(partial),
+            f64::from(self.previous),
+            f64::from(self.value),
+        );
+        if self.angular {
+            (c + f64::from(shortest_angle_diff(c, t)) * p) as f32
+        } else {
+            (c + (t - c) * p) as f32
+        }
+    }
+}
+
+/// A contraption controls block's animations on a moving contraption as its client runs them
+/// (`ContraptionControlsBlockEntity.button` and `indicator`), and on an elevator the floor it
+/// shows (`ElevatorFloorSelection.currentIndex`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ControlsAnim {
+    pub button: Lerped,
+    pub indicator: Lerped,
+    pub index: i32,
+}
+
+impl Default for ControlsAnim {
+    fn default() -> Self {
+        ControlsAnim {
+            // `LerpedFloat.linear().startWithValue(0).chase(0, 0.125f, Chaser.EXP)`.
+            button: Lerped {
+                speed: 0.125,
+                chaser: Some(false),
+                ..Lerped::default()
+            },
+            // `LerpedFloat.angular().startWithValue(0)`.
+            indicator: Lerped {
+                angular: true,
+                ..Lerped::default()
+            },
+            index: 0,
+        }
+    }
+}
+
+impl ControlsAnim {
+    /// `pressButton`.
+    pub fn press(&mut self) {
+        self.button.set(1.0);
+    }
+
+    /// `tickAnimations`.
+    pub fn tick(&mut self) {
+        self.button.tick();
+        self.indicator.tick();
+    }
+
+    /// `ContraptionControlsMovement.tick` on an elevator after `tickFloorSelection`: the
+    /// animations, then the indicator turning in eighths toward the floor the elevator is called
+    /// to (`clientYTarget`) from the height its contact is at (`currentY`), settling at 0 there.
+    pub fn tick_elevator(&mut self, client_target: i32, current_y: i32) {
+        self.tick();
+        let at_target = client_target == current_y;
+        let indicator = &mut self.indicator;
+        let current = indicator.target;
+        let below = if at_target {
+            current > 0.0
+        } else {
+            client_target <= current_y
+        };
+        if current == 0.0 && !at_target {
+            let start = if below { 181.0 } else { -181.0 };
+            indicator.set(start);
+            indicator.update_target(start);
+            self.tick();
+            return;
+        }
+        let stage = (((current % 360.0) + 360.0) % 360.0).floor() as i32;
+        if !at_target || stage / 45 != 0 {
+            let increment = if stage / 45 == if below { 4 } else { 3 } {
+                2.25
+            } else {
+                33.75
+            };
+            let step = if below { increment } else { -increment };
+            indicator.chase(current + step, 45.0, true);
+            return;
+        }
+        indicator.set(0.0);
+        indicator.update_target(0.0);
+    }
+
+    /// `ContraptionControlsRenderer`: the indicator's partial (`CONTRAPTION_CONTROLS_INDICATOR`
+    /// 0 to 7) this frame.
+    pub fn indicator_part(&self, partial: f32) -> usize {
+        let v = self.indicator.at(partial) as i32;
+        (((v / 45) % 8 + 8) % 8) as usize
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,5 +584,64 @@ mod tests {
                 side: Dir::West
             }
         );
+    }
+
+    #[test]
+    fn floor_selection_follows_tick_floor_selection() {
+        let floors = vec![
+            Floor {
+                y: 10,
+                short: "0".into(),
+                long: "Ground".into(),
+            },
+            Floor {
+                y: 20,
+                short: "1".into(),
+                long: String::new(),
+            },
+        ];
+        let mut i = 5;
+        let s = select_floor(&mut i, &floors, 20, 10, 15);
+        assert_eq!(i, 1, "clamped to the last floor");
+        assert_eq!(s.short, "1");
+        assert!(s.matches_target);
+        assert!(s.unreachable, "above the highest contact it can reach");
+        let mut i = -1;
+        let s = select_floor(&mut i, &floors, 20, 10, 20);
+        assert_eq!((i, s.target_y, s.matches_target), (0, 10, false));
+        let mut i = 3;
+        let s = select_floor(&mut i, &[], 0, 0, 0);
+        assert_eq!(
+            (i, s.short.as_str(), s.long.as_str()),
+            (0, "X", "No Floors")
+        );
+        assert_eq!(floor_index(&floors, 20), Some(1));
+        assert_eq!(floor_index(&floors, 30), None);
+    }
+
+    #[test]
+    fn indicator_turns_toward_the_called_floor_and_settles() {
+        let mut a = ControlsAnim::default();
+        // Called up from y 0 to y 10: it starts at -181 and steps back, slowly through the
+        // eighth it starts in (stage 3), then an eighth a step.
+        a.tick_elevator(10, 0);
+        assert_eq!(a.indicator.value, -181.0);
+        a.tick_elevator(10, 0);
+        assert_eq!(a.indicator.target, -181.0 - 2.25);
+        for _ in 0..20 {
+            a.tick_elevator(10, 0);
+        }
+        assert_eq!(a.indicator.target, -181.0 - 2.25 * 20.0 - 33.75);
+        // Arrived: it runs on until it is back at a whole turn, then rests at 0.
+        for _ in 0..40 {
+            a.tick_elevator(10, 10);
+        }
+        assert_eq!(a.indicator.target, 0.0);
+        assert_eq!(a.indicator_part(1.0), 0);
+        // The button pressed comes back out (EXP at 1/8 a tick).
+        a.press();
+        assert_eq!(a.button.at(1.0), 1.0);
+        a.tick();
+        assert_eq!(a.button.value, 0.875);
     }
 }

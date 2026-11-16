@@ -54,6 +54,7 @@ impl Subsystem for Drawing {
             actor_draw::ACTORS,
             actor_draw::PSI,
             actor_draw::CONTROLS_OFF,
+            super::lifts::FLOORS,
         ]
     }
 
@@ -644,6 +645,13 @@ struct Shown {
     /// A windmill's turn as the client runs it: its angle at a time and the speed since, so a
     /// speed change turns on from where it is (`turn_contraption`).
     base: Option<(f32, f64, f32)>,
+    /// The axis and angle a turning structure with actors or controls was last drawn at (for
+    /// clicks).
+    turned: Option<(Axis, f32)>,
+    /// An elevator's column's floors (`namesList`), and the call and floors its controls were
+    /// last set to show (`syncControlDisplays`).
+    floors: Vec<create_engine::elevator::Floor>,
+    synced: Option<(i32, Vec<create_engine::elevator::Floor>)>,
 }
 
 thread_local! {
@@ -656,7 +664,10 @@ fn client_reset() {
     actor_draw::client_reset();
 }
 
-/// Each client tick: elevators run on as the server runs them.
+/// Each client tick: elevators run on as the server runs them, and the contraption controls on
+/// moving structures run their animations (`ContraptionControlsMovement.tick`): on an elevator
+/// the floor they show (`tickFloorSelection`, set to the floor called when the floors or the
+/// call change, `syncControlDisplays`) and the indicator toward the floor called.
 fn client_tick(_host: &mut dyn ClientHost) {
     SHOWN.with_borrow_mut(|s| {
         for (pos, shown) in s.iter_mut() {
@@ -673,8 +684,62 @@ fn client_tick(_host: &mut dyn ClientHost) {
                     e.tick(pos[1], *rpm, *target);
                 }
             }
+            let controls: Vec<[i32; 3]> = shape_blocks(&shown.shape)
+                .iter()
+                .filter(|b| is_controls(b))
+                .map(|b| b.at.map(|v| v.round() as i32))
+                .collect();
+            if controls.is_empty() {
+                continue;
+            }
+            let Shape::Elevator { e, target, .. } = &shown.shape else {
+                for local in controls {
+                    actor_draw::with_controls(*pos, local, |a| a.tick());
+                }
+                continue;
+            };
+            let current = (e.y + f64::from(e.contact_y)).round() as i32;
+            let client_target = target.unwrap_or(current);
+            let sync = (client_target, shown.floors.clone());
+            let resync = shown.synced.as_ref() != Some(&sync);
+            let index = create_engine::elevator::floor_index(&shown.floors, client_target);
+            let view = actor_draw::ElevatorView {
+                floors: &shown.floors,
+                target: client_target,
+                min_contact: e.min_contact,
+                max_contact: e.max_contact,
+            };
+            for local in controls {
+                actor_draw::with_controls(*pos, local, |a| {
+                    if resync && let Some(i) = index {
+                        a.index = i;
+                    }
+                    view.select(&mut a.index);
+                    a.tick_elevator(client_target, current);
+                });
+            }
+            if resync {
+                shown.synced = Some(sync);
+            }
         }
     });
+}
+
+/// The blocks a structure draws (a clock's hour hand's and minute hand's).
+fn shape_blocks(shape: &Shape) -> Vec<&Drawn> {
+    match shape {
+        Shape::Turn { blocks, .. }
+        | Shape::Glide { blocks, .. }
+        | Shape::Elevator { blocks, .. } => blocks.iter().collect(),
+        Shape::Clock { hour, minute, .. } => hour.iter().chain(minute).collect(),
+    }
+}
+
+fn is_controls(b: &Drawn) -> bool {
+    matches!(
+        b.create,
+        Some((create_engine::Block::ContraptionControls, _))
+    )
 }
 
 /// Draws a structure's blocks; `actors`: its actors' moving parts this frame (none: at rest).
@@ -1082,11 +1147,16 @@ fn submit(
                     shape,
                     drawn_at: None,
                     base: None,
+                    turned: None,
+                    floors: Vec::new(),
+                    synced: None,
                 },
             )
         });
     }
     let now = draw.game_time() as f64 + f64::from(draw.partial());
+    let partial = draw.partial();
+    let camera = host.camera().map(|c| c.position);
     let anim = draw.animation_time();
     let speed = own_speed(data);
     let view = actor_draw::view(data);
@@ -1133,7 +1203,11 @@ fn submit(
                                 rate: if stopped { 0.0 } else { rate },
                             },
                             now,
+                            partial,
+                            camera,
+                            elevator: None,
                         };
+                        shown.turned = Some((axis_enum(*axis), here % 360.0));
                         draw.push();
                         draw.rotate_about(*axis, here % 360.0, [0.5; 3]);
                         draw_blocks(host, draw, pos, blocks, Some(&frame));
@@ -1201,6 +1275,9 @@ fn submit(
                         velocity: dir.map(|d| d * step),
                     },
                     now,
+                    partial,
+                    camera,
+                    elevator: None,
                 });
                 draw.push();
                 draw.translate(shift);
@@ -1212,7 +1289,11 @@ fn submit(
                 }
             }
             Shape::Elevator {
-                blocks, e, prev_y, ..
+                blocks,
+                e,
+                prev_y,
+                target,
+                ..
             } => {
                 let y = prev_y + (e.y - prev_y) * f64::from(draw.partial());
                 let origin = [
@@ -1220,6 +1301,18 @@ fn submit(
                     (y - f64::from(pos[1])) as f32,
                     (e.anchor[2] - pos[2]) as f32,
                 ];
+                shown.drawn_at = Some([0, 1, 2].map(|i| f64::from(pos[i]) + f64::from(origin[i])));
+                let floors = super::lifts::floors_of(data);
+                if floors != shown.floors {
+                    shown.floors = floors;
+                }
+                let current = (e.y + f64::from(e.contact_y)).round() as i32;
+                let elevator = actor_draw::ElevatorView {
+                    floors: &shown.floors,
+                    target: target.unwrap_or(current),
+                    min_contact: e.min_contact,
+                    max_contact: e.max_contact,
+                };
                 let frame = view.as_ref().map(|view| Frame {
                     anchor: pos,
                     view,
@@ -1228,6 +1321,9 @@ fn submit(
                         velocity: [0.0, (e.y - prev_y) as f32, 0.0],
                     },
                     now,
+                    partial,
+                    camera,
+                    elevator: Some(elevator),
                 });
                 draw.push();
                 draw.translate(origin);
@@ -1241,22 +1337,25 @@ fn submit(
     });
 }
 
-/// The channel a client's click on contraption controls riding a gliding structure goes to
-/// the server on: the structure's anchor and the block's offset in it, six ints.
+/// The channel a client's click on contraption controls riding a moving structure goes to
+/// the server on: the structure's anchor and the block's offset in it, six ints, and on an
+/// elevator the height of the floor its controls show when it is not the one called
+/// (`ElevatorTargetFloorPacket`).
 pub const CONTROLS_CHANNEL: &str = "create:contraption_controls";
 
 /// Reads a click sent on [`CONTROLS_CHANNEL`].
-pub fn decode_click(data: &[u8]) -> Option<([i32; 3], [i32; 3])> {
+pub fn decode_click(data: &[u8]) -> Option<([i32; 3], [i32; 3], Option<i32>)> {
     let v: Vec<i32> = data
         .as_chunks::<4>()
         .0
         .iter()
         .map(|b| i32::from_le_bytes(*b))
         .collect();
-    let [a, b, c, x, y, z] = v[..] else {
-        return None;
-    };
-    Some(([a, b, c], [x, y, z]))
+    match v[..] {
+        [a, b, c, x, y, z] => Some(([a, b, c], [x, y, z], None)),
+        [a, b, c, x, y, z, t] => Some(([a, b, c], [x, y, z], Some(t))),
+        _ => None,
+    }
 }
 
 /// Where a ray from `eye` to `target` enters the unit box at `min`, as a fraction of the ray.
@@ -1281,34 +1380,28 @@ fn ray_box(eye: [f64; 3], target: [f64; 3], min: [f64; 3]) -> Option<f64> {
     Some(lo)
 }
 
-/// `ContraptionHandlerClient.rightClickingOnContraptionsGetsHandledLocally` for contraption
-/// controls: a use click whose ray (as far as the player reaches, or the block the crosshair is
-/// on) meets a contraption controls block of a gliding structure this client draws goes to the
-/// server as a click on it, and nothing else happens. Turning structures carry no controls.
-pub fn use_key(
-    host: &mut dyn ClientHost,
-    event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
-) -> mod_api::Flow {
-    use mod_api::{CrosshairTarget, Flow, Hand, InteractionKey};
-    if event.key != InteractionKey::Use
-        || event.hand != Hand::Main
-        || event.cancelled
-        || SHOWN.with_borrow(HashMap::is_empty)
-    {
-        return Flow::Continue;
+/// A contraption controls block a client's ray meets on a structure it draws.
+struct Picked {
+    anchor: [i32; 3],
+    local: [i32; 3],
+    /// Where the ray meets it, from the block's corner in the structure's own frame.
+    hit: [f64; 3],
+}
+
+/// `ContraptionHandlerClient.getRayInputs` and `rayTraceContraption` for contraption controls:
+/// the nearest contraption controls block on a structure this client draws (gliding, turning
+/// or an elevator) that the player's ray (as far as they reach, or to the block the crosshair is
+/// on) meets, its ray turned back into the structure's own frame. None while the crosshair is on
+/// an entity.
+fn pick_controls(host: &dyn ClientHost) -> Option<Picked> {
+    use mod_api::CrosshairTarget;
+    if SHOWN.with_borrow(HashMap::is_empty) {
+        return None;
     }
-    let (Some(player), Some(camera)) = (host.local_player(), host.camera()) else {
-        return Flow::Continue;
-    };
-    if player.is_spectator(&*host) == Some(true) {
-        return Flow::Continue;
+    let (player, camera) = (host.local_player()?, host.camera()?);
+    if player.is_spectator(host) == Some(true) {
+        return None;
     }
-    let Some(controls) = host
-        .block_state_id("create:contraption_controls")
-        .map(|s| s.block())
-    else {
-        return Flow::Continue;
-    };
     let eye = camera.position;
     let (yaw, pitch) = (camera.yaw.to_radians(), camera.pitch.to_radians());
     let look = [
@@ -1316,7 +1409,7 @@ pub fn use_key(
         f64::from(-pitch.sin()),
         f64::from(yaw.cos() * pitch.cos()),
     ];
-    let mut reach: f64 = if player.is_creative(&*host) == Some(true) {
+    let mut reach: f64 = if player.is_creative(host) == Some(true) {
         5.0
     } else {
         4.5
@@ -1326,39 +1419,171 @@ pub fn use_key(
             let d: f64 = (0..3).map(|i| (hit.point[i] - eye[i]).powi(2)).sum();
             reach = d.sqrt().min(reach);
         }
-        Some(CrosshairTarget::Entity { .. }) => return Flow::Continue,
+        Some(CrosshairTarget::Entity { .. }) => return None,
         _ => {}
     }
     let target: [f64; 3] = std::array::from_fn(|i| eye[i] + look[i] * reach);
-    let hit = SHOWN.with_borrow(|s| {
-        let mut best: Option<(f64, [i32; 3], [i32; 3])> = None;
+    SHOWN.with_borrow(|s| {
+        let mut best: Option<(f64, Picked)> = None;
         for (anchor, shown) in s {
-            let (Shape::Glide { blocks, .. }, Some(at)) = (&shown.shape, shown.drawn_at) else {
-                continue;
+            // Offset 0 of the structure in the world, and the ray in its own frame.
+            let (blocks, at, ray) = match (&shown.shape, shown.drawn_at, shown.turned) {
+                (Shape::Glide { blocks, .. } | Shape::Elevator { blocks, .. }, Some(at), _) => {
+                    (blocks, at, (eye, target))
+                }
+                (Shape::Turn { blocks, .. }, _, Some((axis, angle))) => {
+                    let c = anchor.map(|v| f64::from(v) + 0.5);
+                    let back = |p: [f64; 3]| {
+                        let r = [0, 1, 2].map(|i| p[i] - c[i]);
+                        let t = create_engine::actors::turn_vec(r, axis, -f64::from(angle));
+                        [0, 1, 2].map(|i| t[i] + c[i])
+                    };
+                    (blocks, anchor.map(f64::from), (back(eye), back(target)))
+                }
+                _ => continue,
             };
-            for b in blocks.iter().filter(|b| b.block == controls) {
+            for b in blocks.iter().filter(|b| is_controls(b)) {
                 let min = [0, 1, 2].map(|i| at[i] + f64::from(b.at[i]));
-                if let Some(t) = ray_box(eye, target, min)
-                    && best.is_none_or(|x| t < x.0)
+                if let Some(t) = ray_box(ray.0, ray.1, min)
+                    && best.as_ref().is_none_or(|x| t < x.0)
                 {
-                    best = Some((t, *anchor, b.at.map(|v| v.round() as i32)));
+                    let hit = [0, 1, 2].map(|i| ray.0[i] + (ray.1[i] - ray.0[i]) * t - min[i]);
+                    let local = b.at.map(|v| v.round() as i32);
+                    best = Some((
+                        t,
+                        Picked {
+                            anchor: *anchor,
+                            local,
+                            hit,
+                        },
+                    ));
                 }
             }
         }
-        best
-    });
-    let Some((_, anchor, local)) = hit else {
+        best.map(|b| b.1)
+    })
+}
+
+/// The elevator drawn by `anchor`: its floors, the floor it is called to and the contacts it
+/// reaches, and where its contact is now; None for any other structure.
+fn elevator_of<R>(
+    anchor: [i32; 3],
+    f: impl FnOnce(actor_draw::ElevatorView<'_>, i32) -> R,
+) -> Option<R> {
+    SHOWN.with_borrow(|s| {
+        let shown = s.get(&anchor)?;
+        let Shape::Elevator { e, target, .. } = &shown.shape else {
+            return None;
+        };
+        let current = (e.y + f64::from(e.contact_y)).round() as i32;
+        let view = actor_draw::ElevatorView {
+            floors: &shown.floors,
+            target: target.unwrap_or(current),
+            min_contact: e.min_contact,
+            max_contact: e.max_contact,
+        };
+        Some(f(view, current))
+    })
+}
+
+/// `ContraptionHandlerClient.rightClickingOnContraptionsGetsHandledLocally` for contraption
+/// controls: a use click whose ray meets a contraption controls block of a structure this
+/// client draws presses its button and goes to the server as a click on it, and nothing else
+/// happens (`ContraptionControlsMovingInteraction`). On an elevator it asks for the floor the
+/// controls show when that is not the one called (`elevatorInteraction`: the button pressed only
+/// then).
+pub fn use_key(
+    host: &mut dyn ClientHost,
+    event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
+) -> mod_api::Flow {
+    use mod_api::{Flow, Hand, InteractionKey};
+    if event.key != InteractionKey::Use || event.hand != Hand::Main || event.cancelled {
+        return Flow::Continue;
+    }
+    let Some(p) = pick_controls(&*host) else {
         return Flow::Continue;
     };
-    let data: Vec<u8> = anchor
-        .iter()
-        .chain(&local)
-        .flat_map(|v| v.to_le_bytes())
-        .collect();
+    let mut ints: Vec<i32> = p.anchor.iter().chain(&p.local).copied().collect();
+    let elevator = elevator_of(p.anchor, |view, _| {
+        actor_draw::with_controls(p.anchor, p.local, |a| {
+            let sel = view.select(&mut a.index);
+            (sel.target_y != view.target).then(|| {
+                a.press();
+                sel.target_y
+            })
+        })
+    });
+    match elevator {
+        Some(Some(y)) => ints.push(y),
+        Some(None) => {}
+        None => actor_draw::with_controls(p.anchor, p.local, |a| a.press()),
+    }
+    let data: Vec<u8> = ints.iter().flat_map(|v| v.to_le_bytes()).collect();
     super::super::net::send_to_server(host, CONTROLS_CHANNEL, &data);
     event.cancelled = true;
     event.swing_hand = true;
     Flow::Cancel
+}
+
+/// `ElevatorControlsHandler.onScroll`: scrolling while the player's ray meets the button of an
+/// elevator's contraption controls (`ElevatorControlsSlot.testHit`: within .85 of the slot's
+/// scale of the button's middle) picks the floor above or below for them to show (a click
+/// calls it), with the value scroll's click, higher toward the top floor.
+pub fn scroll(host: &mut dyn ClientHost, delta: f64) -> bool {
+    if delta == 0.0 {
+        return false;
+    }
+    let Some(p) = pick_controls(&*host) else {
+        return false;
+    };
+    let Some(facing) = SHOWN.with_borrow(|s| {
+        let shown = s.get(&p.anchor)?;
+        let Shape::Elevator { blocks, .. } = &shown.shape else {
+            return None;
+        };
+        blocks
+            .iter()
+            .find(|b| is_controls(b) && b.at.map(|v| v.round() as i32) == p.local)
+            .and_then(|b| b.create.and_then(|(_, i)| i.facing))
+    }) else {
+        return false;
+    };
+    // `ControlsSlot.getLocalOffset`: (8, 14, 5.5) px turned to the controls' facing.
+    let yaw = f64::from(create_engine::display::horizontal_angle(facing));
+    let v =
+        create_engine::actors::turn_vec([0.0, 14.0 / 16.0 - 0.5, 5.5 / 16.0 - 0.5], Axis::Y, yaw);
+    let offset = [v[0] + 0.5, v[1] + 0.5, v[2] + 0.5];
+    let d: f64 = (0..3).map(|i| (p.hit[i] - offset[i]).powi(2)).sum();
+    if d.sqrt() >= 0.508 * 0.85 {
+        return false;
+    }
+    let step = if delta > 0.0 {
+        delta.ceil()
+    } else {
+        delta.floor()
+    } as i32;
+    let moved = elevator_of(p.anchor, |view, _| {
+        actor_draw::with_controls(p.anchor, p.local, |a| {
+            let prev = a.index;
+            a.index += step;
+            view.select(&mut a.index);
+            (prev != a.index && !view.floors.is_empty())
+                .then(|| a.index as f32 / view.floors.len() as f32)
+        })
+    })
+    .flatten();
+    if let Some(f) = moved {
+        let pitch = 1.0 + (1.5 - 1.0) * f;
+        let at = SHOWN.with_borrow(|s| s.get(&p.anchor).and_then(|x| x.drawn_at));
+        if let Some(at) = at {
+            let point = [0, 1, 2].map(|i| (at[i] + f64::from(p.local[i]) + p.hit[i]).floor() + 0.5);
+            let sound =
+                mod_api::SoundPlay::at("create:scroll_value", mod_api::SoundSource::Players, point)
+                    .with_pitch(pitch);
+            host.play_local_sound(&sound, 0);
+        }
+    }
+    true
 }
 
 thread_local! {

@@ -24,8 +24,10 @@
 //!   type to be one.
 //! - A moving block cannot be clicked, and riders cannot sit on a moving structure's seats
 //!   (`Contraption.seats`): there is no moving entity to pick or ride. Contraption controls on a
-//!   gliding structure (piston, gantry) are clicked through the client's own raycast of what it
-//!   draws (`draw::use_key`); elsewhere with `/create_debug controls`.
+//!   structure an anchor draws (piston, gantry, pulley, bearing, windmill, elevator) are clicked
+//!   and scrolled through the client's own raycast of what it draws, turned back into the
+//!   structure's frame (`draw::use_key`, `draw::scroll`); on a minecart's contraption (drawn by
+//!   display entities) with `/create_debug controls`.
 //! - Each moving block is lit with the world's light where the structure was last sent from
 //!   (the server reads it: `LevelRef::brightness` is the server's only), not where it is each
 //!   frame.
@@ -79,9 +81,14 @@
 //! at rest on the structure, as Create's does when nothing is stabilized on it
 //! (`StabilizedBearingMovementBehaviour`).
 //!
-//! Left out, not for want of API:
-//! - A bearing's glue stays in the world while it turns and goes back turned with it; its
-//!   contraption controls are not carried.
+//! Every structure takes the glue that holds it out of the world (`Contraption.superglue`) and
+//! puts it back where its blocks land, turned with them, and carries its contraption controls'
+//! settings: controls set off turn their kind of actor off as it starts (`disableActorOnStart`),
+//! a click turns kinds off and on (`ContraptionControlsMovingInteraction`), and each block put
+//! back is off as the contraption has its kind (`stopMoving`); all of it saved with the
+//! structure (`actors::extras_to_nbt`). An elevator's controls instead show its column's floors
+//! (`ElevatorFloorListPacket`): scrolling on their button picks one, a click calls it, and the
+//! indicator turns toward the floor called (`ContraptionControlsMovement` elevator mode).
 
 pub mod actor_draw;
 pub mod actors;
@@ -241,14 +248,14 @@ impl Subsystem for Contraptions {
         if channel != draw::CONTROLS_CHANNEL {
             return false;
         }
-        let Some((anchor, local)) = draw::decode_click(data) else {
+        let Some((anchor, local, target)) = draw::decode_click(data) else {
             return true;
         };
         let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
             return true;
         };
         if let Some(mut lv) = ServerLevel::new(host, &dimension) {
-            actors::click_moving_controls(&mut lv, player, anchor, local);
+            actors::click_moving_controls(&mut lv, player, anchor, local, target);
         }
         true
     }
@@ -261,6 +268,20 @@ impl Subsystem for Contraptions {
         event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
     ) -> Flow {
         draw::use_key(host, event)
+    }
+
+    /// `ElevatorControlsHandler.onScroll`: scrolling on an elevator's contraption controls picks
+    /// a floor.
+    fn mouse_scrolling(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        event: &mut mod_api::MouseScrollingEvent,
+    ) -> Flow {
+        if draw::scroll(host, event.scroll[1]) {
+            Flow::Cancel
+        } else {
+            Flow::Continue
+        }
     }
 
     fn server_message(

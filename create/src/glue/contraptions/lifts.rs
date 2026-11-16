@@ -14,8 +14,9 @@
 //! contact, and an elevator contact wrenched away from it (or up or down) a redstone contact
 //! again (`RedstoneContactItem.getPlacementState`, `onWrenched`).
 //!
-//! Left out of the port, not for want of API: the elevator's contraption controls choose no
-//! floor (`ElevatorControlsHandler`).
+//! An elevator's contraption controls show its column's floors (`FLOORS`, sent as
+//! `ElevatorContraption.tickStorage` sends them) and call the floor a click picks
+//! (`elevator_controls_clicked`).
 
 use super::super::persist;
 use super::super::server::{ServerLevel, UPDATE_CLIENTS, update_all};
@@ -36,6 +37,9 @@ use mod_api::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+/// An elevator column's floors.
+type Floors = Vec<create_engine::elevator::Floor>;
+
 /// A clock's hands' degrees a tick.
 type HandSpeeds = (f32, f32);
 
@@ -50,8 +54,9 @@ thread_local! {
     /// Elevators that moved since they were put together (`firstMovement` is over).
     static ELEVATOR_MOVED: RefCell<std::collections::HashSet<(usize, [i32; 3])>> =
         RefCell::new(std::collections::HashSet::new());
-    /// What running rope pulleys and elevators carry besides their blocks (`Contraption.actors`,
-    /// storage, glue, controls), by dimension and pulley; only those whose structure has any.
+    /// What running rope pulleys, elevators and clocks carry besides their blocks
+    /// (`Contraption.actors`, glue, controls; storage is kept apart), by dimension and pulley or
+    /// bearing; only those whose structure has any.
     static PULLEY_CARRIED: RefCell<HashMap<(usize, [i32; 3]), Carried>> =
         RefCell::new(HashMap::new());
     /// The degrees a tick each running clock's hands were last shown turning at.
@@ -60,13 +65,22 @@ thread_local! {
     /// The height in its column each running elevator's contact last passed
     /// (`ContactMovementBehaviour.visitNewPosition`).
     static VISITED: RefCell<HashMap<(usize, [i32; 3]), i32>> = RefCell::new(HashMap::new());
+    /// The floors each running elevator's clients were last told of (`ElevatorFloorListPacket`).
+    static FLOORS_SENT: RefCell<HashMap<(usize, [i32; 3]), Floors>> =
+        RefCell::new(HashMap::new());
 }
+
+/// The key in an elevator pulley's data under which its column's floors are, for its
+/// contraption controls (`ElevatorContraption.namesList`): each floor's height, short and long
+/// name.
+pub const FLOORS: &str = "Floors";
 
 pub(super) fn forget() {
     ELEVATOR_MOVED.with_borrow_mut(std::collections::HashSet::clear);
     PULLEY_CARRIED.with_borrow_mut(HashMap::clear);
     CLOCK_SHOWN.with_borrow_mut(HashMap::clear);
     VISITED.with_borrow_mut(HashMap::clear);
+    FLOORS_SENT.with_borrow_mut(HashMap::clear);
 }
 
 pub(super) fn register(r: &mut dyn Registrar) {
@@ -122,6 +136,16 @@ impl ServerLevel<'_> {
 /// runs while none of them has anything to do.
 pub(super) fn tick_lifts(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    // `ElevatorContraption.tickStorage`: every 10 ticks each elevator's clients hear of its
+    // column's floors when they changed.
+    if lv.game_time() % 10 == 0 {
+        let elevators: Vec<[i32; 3]> =
+            with_world(|w| w.dims[dim].lifts.elevators.keys().copied().collect())
+                .unwrap_or_default();
+        for pos in elevators {
+            send_floors(lv, pos);
+        }
+    }
     let busy = with_world(|w| {
         let l = &w.dims[dim].lifts;
         !(l.orphans.is_empty()
@@ -159,6 +183,7 @@ pub(super) fn tick_lifts(lv: &mut ServerLevel<'_>) {
                 .unwrap_or_default();
             actors::release(lv, pos, origin, &mut carried);
         }
+        FLOORS_SENT.with_borrow_mut(|m| m.remove(&(dim, pos)));
         draw::hide(lv, pos);
         mark_unsaved(lv, pos);
     }
@@ -326,6 +351,10 @@ fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32
         all.extend(m.iter().copied());
     }
     actors::carry_storage(lv, pos, pos, &all);
+    let extras = actors::carry_extras(lv, pos, &all, |p| p == pos);
+    if !extras.controls.is_empty() || !extras.glue.is_empty() {
+        PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), extras));
+    }
     crate::glue::advancements::clock_assembled(
         lv,
         pos,
@@ -364,6 +393,10 @@ fn disassemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let held = Held::Clock(c);
     lift_put_back(lv, pos, pos, &held.put_back(pos));
     actors::release_storage(lv, pos, |o| add(pos, o));
+    // The hands turned back to 0: their glue and controls go back where they were.
+    if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
+        actors::release_extras(lv, &mut carried, |o| add(pos, o));
+    }
     draw::hide(lv, pos);
     mark_unsaved(lv, pos);
 }
@@ -684,6 +717,193 @@ fn show_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         return;
     };
     draw::show_elevator(lv, pos, &e, rpm, target);
+}
+
+/// `ElevatorColumn.compileNamesList`: the floors of `column`, bottom up, each an elevator
+/// contact's height and names.
+fn column_floors(
+    lv: &ServerLevel<'_>,
+    column: create_engine::elevator::ColumnKey,
+) -> Vec<create_engine::elevator::Floor> {
+    let dim = lv.dim;
+    let (ys, names) = with_world(|w| {
+        let l = &w.dims[dim].lifts;
+        let ys = l
+            .columns
+            .get(&column)
+            .map(|c| c.contacts.clone())
+            .unwrap_or_default();
+        let names: Vec<Option<(String, String)>> = ys
+            .iter()
+            .map(|y| {
+                l.contacts
+                    .get(&[column.x, *y, column.z])
+                    .map(|n| (n.short.clone(), n.long.clone()))
+            })
+            .collect();
+        (ys, names)
+    })
+    .unwrap_or_default();
+    ys.into_iter()
+        .zip(names)
+        .filter(|(y, _)| {
+            matches!(
+                create_info(lv.block([column.x, *y, column.z])),
+                Some((Block::ElevatorContact, _))
+            )
+        })
+        .map(|(y, n)| {
+            let (short, long) = n.unwrap_or_default();
+            create_engine::elevator::Floor { y, short, long }
+        })
+        .collect()
+}
+
+/// The running elevator at `pos` tells its clients its column's floors when they changed
+/// (`ElevatorFloorListPacket`).
+fn send_floors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let Some(column) =
+        with_world(|w| w.dims[dim].lifts.elevators.get(&pos).map(|e| e.column)).flatten()
+    else {
+        return;
+    };
+    let floors = column_floors(lv, column);
+    let same = FLOORS_SENT.with_borrow(|m| m.get(&(dim, pos)) == Some(&floors));
+    if same {
+        return;
+    }
+    let list = floors
+        .iter()
+        .map(|f| {
+            let mut c = Compound::new();
+            c.insert("Y".into(), Tag::Int(f.y));
+            c.insert("Short".into(), Tag::String(f.short.as_str().into()));
+            c.insert("Long".into(), Tag::String(f.long.as_str().into()));
+            Tag::Compound(c)
+        })
+        .collect();
+    super::actor_draw::write_key(lv, pos, FLOORS, Some(Tag::List(list)));
+    FLOORS_SENT.with_borrow_mut(|m| m.insert((dim, pos), floors));
+}
+
+/// The floors in an elevator pulley's data ([`FLOORS`]), on its clients.
+pub fn floors_of(nbt: &Compound) -> Vec<create_engine::elevator::Floor> {
+    let Some(Tag::List(list)) = super::super::kinetics::synced(nbt, FLOORS) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|t| {
+            let Tag::Compound(c) = t else { return None };
+            let text = |k: &str| match c.get(&k.into()) {
+                Some(Tag::String(s)) => s.to_string_lossy(),
+                _ => String::new(),
+            };
+            let Some(Tag::Int(y)) = c.get(&"Y".into()) else {
+                return None;
+            };
+            Some(create_engine::elevator::Floor {
+                y: *y,
+                short: text("Short"),
+                long: text("Long"),
+            })
+        })
+        .collect()
+}
+
+/// What the running rope pulley or clockwork bearing at `pos` carries (its actors, controls and
+/// the kinds turned off), for a click on its contraption controls, and where each of its blocks
+/// is now; None for anything else (an elevator's controls pick floors).
+pub(super) fn take_lift(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Carried, actors::Place)> {
+    let dim = lv.dim;
+    let origin = with_world(|w| {
+        let l = &w.dims[dim].lifts;
+        if let Some(p) = l.pulleys.get(&pos) {
+            return Some(pulley_origin(p, p.offset).map(|v| v.floor() as i32));
+        }
+        l.clocks.contains_key(&pos).then_some(pos)
+    })
+    .flatten()?;
+    let carried = PULLEY_CARRIED
+        .with_borrow(|c| c.get(&(dim, pos)).cloned())
+        .unwrap_or_default();
+    Some((carried, Box::new(move |o| add(origin, o))))
+}
+
+/// What [`take_lift`] took, changed by its controls, goes back.
+pub(super) fn put_lift(lv: &mut ServerLevel<'_>, pos: [i32; 3], carried: Carried) {
+    let dim = lv.dim;
+    let empty = carried.actors.is_empty() && carried.controls.is_empty() && carried.glue.is_empty();
+    if !empty {
+        PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
+    }
+    mark_unsaved(lv, pos);
+}
+
+/// `ContraptionControlsMovingInteraction.elevatorInteraction` on the server: a click on the
+/// contraption controls at offset `local` of the elevator whose pulley is at `key` clicks
+/// (`CONTROLLER_CLICK`, `CONTRAPTION_ASSEMBLE`), and the floor its client picked, `target`, is
+/// called (`ElevatorTargetFloorPacket`: within 50 blocks, a contact of its column it can
+/// reach, `callToContactAndUpdate` unpowered). False when `key` is no running elevator.
+pub(super) fn elevator_controls_clicked(
+    lv: &mut ServerLevel<'_>,
+    player: mod_api::PlayerRef,
+    key: [i32; 3],
+    local: [i32; 3],
+    target: Option<i32>,
+) -> bool {
+    let dim = lv.dim;
+    let Some(e) = with_world(|w| w.dims[dim].lifts.elevators.get(&key).cloned()).flatten() else {
+        return false;
+    };
+    let at = [
+        f64::from(e.anchor[0] + local[0]) + 0.5,
+        e.y + f64::from(local[1]) + 0.5,
+        f64::from(e.anchor[2] + local[2]) + 0.5,
+    ];
+    let pos = at.map(|v| v.floor() + 0.5);
+    let blocks = mod_api::SoundSource::Blocks;
+    lv.level.play_sound(
+        &mut *lv.host,
+        "create:controller_click",
+        pos,
+        blocks,
+        1.0,
+        1.5,
+    );
+    lv.level.play_sound(
+        &mut *lv.host,
+        "create:contraption_assemble",
+        pos,
+        blocks,
+        0.75,
+        0.8,
+    );
+    let Some(y) = target else {
+        return true;
+    };
+    let near = player
+        .entity()
+        .position(&*lv.host)
+        .is_some_and(|p| (0..3).map(|i| (p[i] - at[i]).powi(2)).sum::<f64>() <= 50.0 * 50.0);
+    let column = e.column;
+    let listed = with_world(|w| {
+        w.dims[dim]
+            .lifts
+            .columns
+            .get(&column)
+            .is_some_and(|c| c.contacts.contains(&y))
+    }) == Some(true);
+    if !near || !listed || y < e.min_contact || y > e.max_contact {
+        return true;
+    }
+    let contact = [column.x, y, column.z];
+    if let Some((Block::ElevatorContact, info)) = create_info(lv.block(contact))
+        && let Some(f) = info.facing
+    {
+        call_contact(lv, contact, f, false);
+    }
+    true
 }
 
 /// Elevators: clicked pulleys assemble or come apart (`clicked`); travelling ones move toward
@@ -1059,7 +1279,17 @@ fn assemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if conflict != Some(false) {
         return;
     }
-    let carried = actors::carry(lv, pos, anchor, &blocks, |_| false);
+    let mut carried = actors::carry(lv, pos, anchor, &blocks, |_| false);
+    // An elevator's controls choose floors: none turns its kind off as it starts
+    // (`ElevatorContraption.disableActorOnStart` does nothing), and they forget their filters
+    // (`ContraptionControlsMovement.startMoving`).
+    carried.disabled.clear();
+    for a in &mut carried.actors {
+        a.disabled = false;
+    }
+    for c in &mut carried.controls {
+        c.1.filter = None;
+    }
     if !carried.actors.is_empty() || !carried.controls.is_empty() || !carried.glue.is_empty() {
         PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
     }
@@ -1144,6 +1374,13 @@ fn disassemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     }
     draw::hide(lv, pos);
     draw::set_pulley_rest(lv, pos, -1);
+    // Its floors go with the contraption (a new one is told them again).
+    if FLOORS_SENT
+        .with_borrow_mut(|m| m.remove(&(dim, pos)))
+        .is_some()
+    {
+        super::actor_draw::write_key(lv, pos, FLOORS, None);
+    }
     mark_unsaved(lv, pos);
 }
 
@@ -1201,7 +1438,7 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
                 if info.powered != signal {
                     lv.set_flags(pos, &[("powered", signal)], UPDATE_CLIENTS);
                     if signal && !info.calling {
-                        call_contact(lv, pos, facing);
+                        call_contact(lv, pos, facing, true);
                     }
                 }
                 // `updateShape` (the block it faces changed): a contact an elevator lit keeps
@@ -1251,9 +1488,13 @@ fn tick_contacts(lv: &mut ServerLevel<'_>) {
 
 /// `ElevatorContactBlock.callToContactAndUpdate`: this contact calls, the others of its column
 /// stop calling and go dark on their next tick, and the column's elevator sets off to it.
-fn call_contact(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir) {
+fn call_contact(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, powered: bool) {
     let dim = lv.dim;
-    lv.set_flags(pos, &[("calling", true), ("powered", true)], UPDATE_CLIENTS);
+    if powered {
+        lv.set_flags(pos, &[("calling", true), ("powered", true)], UPDATE_CLIENTS);
+    } else {
+        lv.set_flags(pos, &[("calling", true)], UPDATE_CLIENTS);
+    }
     lv.update_signal_neighbors(pos);
     let column = create_engine::elevator::column_of(pos, facing);
     let others: Vec<i32> = with_world(|w| {
@@ -1528,10 +1769,16 @@ pub(super) fn chunk_save(lv: &ServerLevel<'_>, chunk: [i32; 2], data: &mut Compo
             if ELEVATOR_MOVED.with_borrow(|m| m.contains(&(dim, *pos))) {
                 c.insert("moved".into(), Tag::Byte(1));
             }
-            // What its storage blocks hold (`MountedStorageManager`).
+            // What its storage blocks hold (`MountedStorageManager`), and its glue, controls
+            // and the kinds they turned off.
             if let Some(t) = actors::storage_to_nbt(lv, *pos) {
                 c.insert("storage".into(), t);
             }
+            PULLEY_CARRIED.with_borrow(|m| {
+                if let Some(k) = m.get(&(dim, *pos)) {
+                    actors::extras_to_nbt(&mut c, k);
+                }
+            });
             let (kind, nums) = match held {
                 Held::Clock(k) => {
                     blocks_tags(&mut c, "", &k.hour);
@@ -1707,6 +1954,24 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
                 }
                 _ => return None,
             };
+            // Its actors found again from its blocks, with what it carried besides.
+            let extras = actors::extras_from_nbt(c);
+            let carried = match &held {
+                Held::Pulley(x) => actors::with_extras(actors::bearing_actors(&x.blocks), &extras),
+                Held::Elevator(e) => {
+                    actors::with_extras(actors::bearing_actors(&e.blocks), &extras)
+                }
+                Held::Clock(_) => extras,
+            };
+            let empty =
+                carried.actors.is_empty() && carried.controls.is_empty() && carried.glue.is_empty();
+            PULLEY_CARRIED.with_borrow_mut(|m| {
+                if empty {
+                    m.remove(&(lv.dim, pos));
+                } else {
+                    m.insert((lv.dim, pos), carried);
+                }
+            });
             Some((pos, held, call))
         })
         .collect();

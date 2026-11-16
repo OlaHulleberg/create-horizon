@@ -499,6 +499,9 @@ pub struct Windmill {
     pub clockwise: bool,
     /// A mechanical bearing's turning; None for a windmill (which generates instead).
     pub bearing: Option<crate::contraption::Turn>,
+    /// What it carries besides its blocks, storage and actors (its actors are found again from
+    /// its blocks): its contraption controls, the kinds they turned off and its glue.
+    pub extras: crate::actors::Carried,
 }
 
 /// An encased fan (`EncasedFanBlockEntity`): its facing, speed and air current, and the depots

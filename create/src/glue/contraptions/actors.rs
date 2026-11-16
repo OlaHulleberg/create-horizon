@@ -661,19 +661,11 @@ pub(super) fn carry(
 ) -> Carried {
     let dim = lv.dim;
     let at = |o: [i32; 3]| add(origin, o);
-    let mut carried = Carried::default();
+    let mut carried = carry_extras(lv, origin, blocks, skip);
     for (o, state) in blocks {
         let Some((block, info)) = create_info(*state) else {
             continue;
         };
-        // What its block entity held rides with it (`blockEntityData`), out of the world's
-        // tables before the block leaves.
-        if block == Block::ContraptionControls {
-            let c = with_world(|w| w.dims[dim].controls.remove(&at(*o)))
-                .flatten()
-                .unwrap_or_default();
-            carried.controls.push((*o, c));
-        }
         if let (Some(kind), Some(facing)) = (Kind::of(block), info.facing) {
             let mut a = Actor::new(*o, kind, facing, -next_breaker());
             if kind == Kind::Roller
@@ -682,17 +674,43 @@ pub(super) fn carry(
             {
                 a.filter = filter;
                 a.mode = mode;
+                mark_pos_unsaved(dim, at(*o));
             }
             carried.actors.push(a);
         }
     }
-    // `startMoving`: controls set off turn their kind off.
+    apply_disabled(&mut carried);
+    carry_storage(lv, key, origin, blocks);
+    carried
+}
+
+/// What any moving structure takes besides its blocks, actors and storage as it assembles: its
+/// contraption controls' settings (`blockEntityData`, out of the world's table), the kinds
+/// they had turned off (`startMoving`, `disableActorOnStart`), and the glue that held it
+/// (`Contraption.superglue`: the glue entities touching it leave the world, each shrunk to the
+/// blocks it holds, `removeBlocksFromWorld`). Offsets as `blocks`, from `origin`; `skip` names
+/// the blocks anchoring it. Called before its blocks leave the world.
+pub(crate) fn carry_extras(
+    lv: &mut ServerLevel<'_>,
+    origin: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+    skip: impl Fn([i32; 3]) -> bool,
+) -> Carried {
+    let dim = lv.dim;
+    let at = |o: [i32; 3]| add(origin, o);
+    let mut carried = Carried::default();
+    for (o, state) in blocks {
+        if create_info(*state).map(|(b, _)| b) != Some(Block::ContraptionControls) {
+            continue;
+        }
+        let c = with_world(|w| w.dims[dim].controls.remove(&at(*o)))
+            .flatten()
+            .unwrap_or_default();
+        mark_pos_unsaved(dim, at(*o));
+        carried.controls.push((*o, c));
+    }
     let controls: Vec<actors::Controls> = carried.controls.iter().map(|c| c.1.clone()).collect();
     actors::start_moving(&mut carried, &controls);
-    if !carried.controls.is_empty() || carried.actors.iter().any(|a| a.kind == Kind::Roller) {
-        mark_pos_unsaved(dim, origin);
-    }
-    carry_storage(lv, key, origin, blocks);
     let world: Vec<[i32; 3]> = blocks.iter().map(|(o, _)| at(*o)).collect();
     let taken = with_world(|w| {
         let areas = &mut w.dims[dim].glue;
@@ -709,6 +727,151 @@ pub(super) fn carry(
         for (cx, cz) in columns {
             mark_unsaved(dim, [cx, cz]);
         }
+    }
+    carried
+}
+
+/// The kinds a contraption has turned off are off on its actors (`startMoving`'s
+/// `setActorsActive(stack, false)`), as its actors are found again.
+pub(crate) fn apply_disabled(carried: &mut Carried) {
+    let mut effects = Vec::new();
+    for f in carried.disabled.clone() {
+        actors::set_active(&mut carried.actors, &f, false, &mut effects);
+    }
+}
+
+/// A structure's actors found again from its blocks (`bearing_actors`) with what it carried
+/// besides them (`extras`: its controls, the kinds turned off and its glue).
+pub(crate) fn with_extras(mut carried: Carried, extras: &Carried) -> Carried {
+    carried.controls.clone_from(&extras.controls);
+    carried.disabled.clone_from(&extras.disabled);
+    carried.glue.clone_from(&extras.glue);
+    apply_disabled(&mut carried);
+    carried
+}
+
+/// What a structure carried besides its blocks goes back where its blocks go, each offset `o`
+/// at `place(o)` (`addBlocksToWorld`): its contraption controls, off as the contraption has
+/// their kind (`ContraptionControlsMovement.stopMoving`), and its glue, its corners placed as
+/// its blocks are (turned with a turning structure).
+pub(crate) fn release_extras(
+    lv: &mut ServerLevel<'_>,
+    carried: &mut Carried,
+    place: impl Fn([i32; 3]) -> [i32; 3],
+) {
+    let dim = lv.dim;
+    for (o, mut c) in std::mem::take(&mut carried.controls) {
+        let p = place(o);
+        if lv.create_block(p) == Some(Block::ContraptionControls) {
+            c.disabled = actors::stays_disabled(&carried.disabled, &c.filter);
+            with_world(|w| w.dims[dim].controls.insert(p, c));
+            super::actor_draw::sync_controls(lv, p);
+            mark_pos_unsaved(dim, p);
+        }
+    }
+    let placed: Vec<Glue> = carried
+        .glue
+        .drain(..)
+        .map(|g| Glue::span(place(g.min), place(g.max)))
+        .collect();
+    for g in &placed {
+        let (cx, cz) = g.column();
+        mark_unsaved(dim, [cx, cz]);
+    }
+    if !placed.is_empty() {
+        with_world(|w| w.dims[dim].glue.extend(placed));
+    }
+}
+
+/// What a moving structure carries besides its blocks and actors, as its save keeps it
+/// (`Contraption.writeNBT`'s `Superglue`, `DisabledActors`, and the controls' `Filter`,
+/// `Disabled` and `Powered`): `Glue` corners, `Controls` (x, y, z and the flags, with `Filters`)
+/// and `Off` (the kinds turned off, "*" for all).
+pub(crate) fn extras_to_nbt(c: &mut Compound, carried: &Carried) {
+    let text = |s: &Option<String>| Tag::String(s.as_deref().unwrap_or("").into());
+    if !carried.glue.is_empty() {
+        let v = carried
+            .glue
+            .iter()
+            .flat_map(|g| g.min.into_iter().chain(g.max))
+            .collect();
+        c.insert("Glue".into(), Tag::IntArray(v));
+    }
+    if !carried.controls.is_empty() {
+        let nums = carried
+            .controls
+            .iter()
+            .flat_map(|(p, x)| {
+                [
+                    p[0],
+                    p[1],
+                    p[2],
+                    i32::from(x.disabled) | i32::from(x.powered) << 1,
+                ]
+            })
+            .collect();
+        c.insert("Controls".into(), Tag::IntArray(nums));
+        let items = carried
+            .controls
+            .iter()
+            .map(|(_, x)| text(&x.filter))
+            .collect();
+        c.insert("Filters".into(), Tag::List(items));
+    }
+    if !carried.disabled.is_empty() {
+        let off = carried
+            .disabled
+            .iter()
+            .map(|f| Tag::String(f.as_deref().unwrap_or("*").into()))
+            .collect();
+        c.insert("Off".into(), Tag::List(off));
+    }
+}
+
+/// What [`extras_to_nbt`] wrote.
+pub(crate) fn extras_from_nbt(c: &Compound) -> Carried {
+    let mut carried = Carried::default();
+    if let Some(Tag::IntArray(v)) = c.get(&"Glue".into()) {
+        carried.glue = v
+            .as_chunks::<6>()
+            .0
+            .iter()
+            .map(|g| Glue::span([g[0], g[1], g[2]], [g[3], g[4], g[5]]))
+            .collect();
+    }
+    if let (Some(Tag::IntArray(nums)), Some(Tag::List(filters))) =
+        (c.get(&"Controls".into()), c.get(&"Filters".into()))
+    {
+        carried.controls = nums
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(filters)
+            .map(|(n, f)| {
+                let filter = match f {
+                    Tag::String(s) if !s.to_string_lossy().is_empty() => Some(s.to_string_lossy()),
+                    _ => None,
+                };
+                let c = actors::Controls {
+                    filter,
+                    disabled: n[3] & 1 != 0,
+                    powered: n[3] & 2 != 0,
+                };
+                ([n[0], n[1], n[2]], c)
+            })
+            .collect();
+    }
+    if let Some(Tag::List(off)) = c.get(&"Off".into()) {
+        carried.disabled = off
+            .iter()
+            .filter_map(|t| match t {
+                Tag::String(s) => {
+                    let s = s.to_string_lossy();
+                    Some((s != "*").then_some(s))
+                }
+                _ => None,
+            })
+            .collect();
     }
     carried
 }
@@ -1281,7 +1444,7 @@ pub(crate) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<
 
 /// What a contraption carried goes back with its blocks (`addBlocksToWorld`, `stop`): its
 /// storage blocks' items into the storage blocks now at `origin` + their offset (dropped where
-/// one couldn't be put back), its glue there, and its breakers' cracks gone.
+/// one couldn't be put back), its controls and glue there, and its breakers' cracks gone.
 pub(super) fn release(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
@@ -1292,39 +1455,17 @@ pub(super) fn release(
     stop_actors(lv, &mut carried.actors);
     cancel_deployers(lv, key, carried);
     let at = |o: [i32; 3]| add(origin, o);
-    // Block entity data back with the blocks put back: rollers' settings, and contraption
-    // controls off as the contraption has their kind (`ContraptionControlsMovement.stopMoving`).
-    let mut settled = false;
+    // Rollers' settings back with the blocks put back.
     for a in carried.actors.iter().filter(|a| a.kind == Kind::Roller) {
         let p = at(a.local);
         if lv.create_block(p) == Some(Block::MechanicalRoller) {
             let v = (a.filter.clone(), a.mode);
             with_world(|w| w.dims[dim].rollers.insert(p, v));
-            settled = true;
+            mark_pos_unsaved(dim, p);
         }
-    }
-    for (o, mut c) in std::mem::take(&mut carried.controls) {
-        let p = at(o);
-        if lv.create_block(p) == Some(Block::ContraptionControls) {
-            c.disabled = actors::stays_disabled(&carried.disabled, &c.filter);
-            with_world(|w| w.dims[dim].controls.insert(p, c));
-            super::actor_draw::sync_controls(lv, p);
-            settled = true;
-        }
-    }
-    if settled {
-        mark_pos_unsaved(dim, origin);
     }
     release_storage(lv, key, at);
-    if carried.glue.is_empty() {
-        return;
-    }
-    let placed: Vec<Glue> = carried.glue.drain(..).map(|g| g.moved(origin)).collect();
-    for g in &placed {
-        let (cx, cz) = g.column();
-        mark_unsaved(dim, [cx, cz]);
-    }
-    with_world(|w| w.dims[dim].glue.extend(placed));
+    release_extras(lv, carried, at);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3176,10 +3317,11 @@ fn debug_roller(lv: &mut ServerLevel<'_>, pos: [i32; 3], mode: &str) -> String {
 }
 
 /// `/create_debug controls <contraption> <filter|all|block>`: a click on contraption controls
-/// carried by the moving contraption at a piston or gantry carriage's start
-/// (`ContraptionControlsMovingInteraction.handlePlayerInteraction`; clicking a moving
-/// contraption needs a moving entity). `block` clicks the first contraption controls block it
-/// carries, with that block's filter, its status and click sound; a filter names the kind
+/// carried by the moving contraption keyed at the position (a piston, a gantry carriage's start,
+/// a rope pulley, a bearing or windmill, a clockwork bearing, or the block a minecart with a
+/// contraption is in) (`ContraptionControlsMovingInteraction.handlePlayerInteraction`; clicking
+/// a cart's blocks needs a moving entity). `block` clicks the first contraption controls block
+/// it carries, with that block's filter, its status and click sound; a filter names the kind
 /// directly.
 fn debug_controls(
     lv: &mut ServerLevel<'_>,
@@ -3191,34 +3333,105 @@ fn debug_controls(
 }
 
 /// A player's click on the contraption controls block at offset `local` of the structure the
-/// client drew at `anchor` (a piston, or the shaft a gantry carriage started on): as
-/// `/create_debug controls .. block` on that block (`ContraptionControlsMovingInteraction`).
+/// client drew at `anchor` (a piston, rope pulley, bearing or windmill, or the shaft a gantry
+/// carriage started on): as `/create_debug controls .. block` on that block
+/// (`ContraptionControlsMovingInteraction`); on an elevator it picks the floor its client chose.
 pub(super) fn click_moving_controls(
     lv: &mut ServerLevel<'_>,
     player: mod_api::PlayerRef,
     anchor: [i32; 3],
     local: [i32; 3],
+    target: Option<i32>,
 ) {
+    if super::lifts::elevator_controls_clicked(lv, player, anchor, local, target) {
+        return;
+    }
     let dim = lv.dim;
-    let key = with_world(|w| {
-        let d = &w.dims[dim];
-        if d.pistons.contains_key(&anchor) {
-            return Some(anchor);
-        }
-        d.gantries
+    let gantry = with_world(|w| {
+        w.dims[dim]
+            .gantries
             .iter()
             .find(|g| add(g.start, g.carriage_facing.opposite().offset()) == anchor)
             .map(|g| g.start)
     })
     .flatten();
-    if let Some(key) = key {
-        toggle_controls(lv, Some(player), key, None, Some(local));
+    toggle_controls(
+        lv,
+        Some(player),
+        gantry.unwrap_or(anchor),
+        None,
+        Some(local),
+    );
+}
+
+/// Where the moving contraption keyed at `key` keeps what it carries.
+enum Holder {
+    Piston,
+    Gantry,
+    Bearing,
+    Lift,
+    Cart(u128),
+}
+
+/// Where a block of a moving contraption is in the world now, by its offset.
+pub(crate) type Place = Box<dyn Fn([i32; 3]) -> [i32; 3]>;
+
+/// What the moving contraption keyed at `key` carries, taken out to be changed, and where each
+/// of its blocks is now; put back with [`put_carried`].
+fn take_carried(lv: &mut ServerLevel<'_>, key: [i32; 3]) -> Option<(Holder, Carried, Place)> {
+    let dim = lv.dim;
+    let world = with_world(|w| {
+        let d = &mut w.dims[dim];
+        if let Some(m) = d.pistons.get_mut(&key) {
+            let origin = m.anchor;
+            return Some((Holder::Piston, std::mem::take(&mut m.carried), origin));
+        }
+        let g = d.gantries.iter_mut().find(|g| g.start == key)?;
+        Some((Holder::Gantry, std::mem::take(&mut g.carried), g.start))
+    })
+    .flatten();
+    if let Some((holder, carried, origin)) = world {
+        return Some((holder, carried, Box::new(move |o| add(origin, o))));
+    }
+    if let Some((carried, place)) = super::bearings::take_turning(lv, key) {
+        return Some((Holder::Bearing, carried, place));
+    }
+    if let Some((carried, place)) = super::lifts::take_lift(lv, key) {
+        return Some((Holder::Lift, carried, place));
+    }
+    let (uuid, carried, place) = crate::glue::trains::take_cart_carried(dim, key)?;
+    Some((Holder::Cart(uuid), carried, place))
+}
+
+/// What [`take_carried`] took goes back.
+fn put_carried(lv: &mut ServerLevel<'_>, key: [i32; 3], holder: Holder, carried: Carried) {
+    let dim = lv.dim;
+    match holder {
+        Holder::Piston => {
+            with_world(|w| {
+                if let Some(m) = w.dims[dim].pistons.get_mut(&key) {
+                    m.carried = carried;
+                }
+            });
+            mark_pos_unsaved(dim, key);
+        }
+        Holder::Gantry => {
+            with_world(|w| {
+                if let Some(g) = w.dims[dim].gantries.iter_mut().find(|g| g.start == key) {
+                    g.carried = carried;
+                }
+            });
+            mark_pos_unsaved(dim, key);
+        }
+        Holder::Bearing => super::bearings::put_turning(lv, key, carried),
+        Holder::Lift => super::lifts::put_lift(lv, key, carried),
+        Holder::Cart(uuid) => crate::glue::trains::put_cart_carried(uuid, carried),
     }
 }
 
 /// Turns the actors of the moving contraption `key` off or on as contraption controls do:
 /// `filter` names the kind (None: the filter of the controls block at offset `which`, or of
-/// the first it carries).
+/// the first it carries). On an elevator a click on its controls picks a floor instead.
 fn toggle_controls(
     lv: &mut ServerLevel<'_>,
     player: Option<mod_api::PlayerRef>,
@@ -3226,52 +3439,38 @@ fn toggle_controls(
     filter: Option<Option<String>>,
     which: Option<[i32; 3]>,
 ) -> String {
-    let dim = lv.dim;
-    let mut effects = Vec::new();
-    let done = with_world(|w| {
-        let d = &mut w.dims[dim];
-        let (carried, origin) = match d.pistons.get_mut(&key) {
-            Some(m) => (&mut m.carried, m.anchor),
-            None => {
-                let g = d.gantries.iter_mut().find(|g| g.start == key)?;
-                (&mut g.carried, g.start)
-            }
-        };
-        let (filter, at) = match filter {
-            Some(f) => (f, None),
-            None => {
-                let found = match which {
-                    Some(w) => carried.controls.iter().find(|(o, _)| *o == w),
-                    None => carried.controls.first(),
-                };
-                let Some((o, c)) = found else {
-                    return Some(None);
-                };
-                (c.filter.clone(), Some(add(origin, *o)))
-            }
-        };
-        let kinds: Vec<&str> = carried.actors.iter().map(|a| a.kind.item()).collect();
-        let disable = actors::toggle(&mut carried.disabled, &filter, &kinds);
-        actors::set_active(&mut carried.actors, &filter, !disable, &mut effects);
-        Some(Some((disable, carried.actors.clone(), filter, at)))
-    })
-    .flatten();
-    let (disable, list, filter, at) = match done {
-        Some(Some(done)) => done,
-        Some(None) => {
-            return format!(
-                "no contraption controls on the contraption at {} {} {}",
-                key[0], key[1], key[2]
-            );
-        }
-        None => return format!("no moving contraption at {} {} {}", key[0], key[1], key[2]),
+    let Some((holder, mut carried, place)) = take_carried(lv, key) else {
+        return format!("no moving contraption at {} {} {}", key[0], key[1], key[2]);
     };
+    let (filter, at) = match filter {
+        Some(f) => (f, None),
+        None => {
+            let found = match which {
+                Some(w) => carried.controls.iter().find(|(o, _)| *o == w),
+                None => carried.controls.first(),
+            };
+            let Some((o, c)) = found else {
+                put_carried(lv, key, holder, carried);
+                return format!(
+                    "no contraption controls on the contraption at {} {} {}",
+                    key[0], key[1], key[2]
+                );
+            };
+            (c.filter.clone(), Some(place(*o)))
+        }
+    };
+    let mut effects = Vec::new();
+    let kinds: Vec<&str> = carried.actors.iter().map(|a| a.kind.item()).collect();
+    let disable = actors::toggle(&mut carried.disabled, &filter, &kinds);
+    actors::set_active(&mut carried.actors, &filter, !disable, &mut effects);
+    let breaker = carried.actors.first().map_or(0, |a| a.breaker_id);
+    put_carried(lv, key, holder, carried);
     // The actors turned off stop (`cancelStall`): cracks go, contacts look again.
     for e in effects {
         match e {
             Effect::Crack(p, stage) => {
-                let id = list.first().map_or(0, |a| a.breaker_id);
-                lv.level.set_break_progress(&mut *lv.host, id, p, stage);
+                lv.level
+                    .set_break_progress(&mut *lv.host, breaker, p, stage);
             }
             Effect::ContactLeft(p) => contact_left(lv, p),
             _ => {}
