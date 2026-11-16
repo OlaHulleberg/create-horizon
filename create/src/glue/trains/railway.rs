@@ -54,6 +54,7 @@ impl Subsystem for Trains {
 
     fn world_closed(&self) {
         tracks::forget();
+        super::cargo::forget();
         assembly::forget();
         super::conductor::forget();
         super::relocate::forget();
