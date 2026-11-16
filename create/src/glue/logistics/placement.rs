@@ -229,95 +229,117 @@ impl BlockPart for Placement {
             }
             _ => {}
         }
-        let mut state = default;
-        let mut changed = water;
-        let facing = with_world(|w| {
-            create_engine::place::facing(block, ctx, |side| {
+        placed_state(block, default, water, (dim, pos), ctx, &set, &|p| {
+            level.block_state(p).and_then(states::id).and_then(table)
+        })
+    }
+}
+
+/// The rest of `getStateForPlacement` for Create's kinetic blocks (their facing, axis and the
+/// properties that follow them) placed at `pos` in level `dim` in `ctx`, from `default` (in
+/// water when `water`): None leaves the template's state, `Some(None)` refuses the spot.
+/// `info_at` reads the blocks around. Also what `processing::operator` places an assembly
+/// operator with, two above what it works on.
+pub(crate) fn placed_state(
+    block: Block,
+    default: BlockState,
+    water: bool,
+    (dim, pos): (usize, [i32; 3]),
+    ctx: create_engine::place::Context,
+    set: &dyn Fn(BlockState, &str, &str) -> BlockState,
+    info_at: &dyn Fn([i32; 3]) -> Option<(Block, StateInfo)>,
+) -> Option<Option<BlockState>> {
+    let clicked_face = ctx.clicked_face;
+    let flag = |b: bool| if b { "true" } else { "false" };
+    let beside = |side: Dir| {
+        let o = side.offset();
+        [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]
+    };
+    let mut state = default;
+    let mut changed = water;
+    let facing = with_world(|w| {
+        create_engine::place::facing(block, ctx, |side| {
+            w.has_shaft_towards(dim, beside(side), side.opposite())
+        })
+    })
+    .flatten();
+    // Set even when it is the default state's: a template's own placement (the basin's
+    // barrel) would otherwise turn it.
+    if let Some(f) = facing {
+        state = set(state, "facing", super::super::kinetics::dir_name(f));
+        changed = true;
+    }
+    if let Some(f) = facing
+        && matches!(block, Block::Deployer | Block::MechanicalSaw)
+    {
+        let along = with_world(|w| {
+            create_engine::place::along_first(f, ctx, |side| {
                 w.has_shaft_towards(dim, beside(side), side.opposite())
             })
         })
-        .flatten();
-        // Set even when it is the default state's: a template's own placement (the basin's
-        // barrel) would otherwise turn it.
-        if let Some(f) = facing {
-            state = set(state, "facing", super::super::kinetics::dir_name(f));
-            changed = true;
+        .unwrap_or(false);
+        state = set(state, "axis_along_first", flag(along));
+        if block == Block::MechanicalSaw {
+            state = set(
+                state,
+                "flipped",
+                flag(create_engine::place::saw_flipped(f, ctx)),
+            );
         }
-        if let Some(f) = facing
-            && matches!(block, Block::Deployer | Block::MechanicalSaw)
-        {
-            let along = with_world(|w| {
-                create_engine::place::along_first(f, ctx, |side| {
-                    w.has_shaft_towards(dim, beside(side), side.opposite())
-                })
-            })
-            .unwrap_or(false);
-            state = set(state, "axis_along_first", flag(along));
-            if block == Block::MechanicalSaw {
-                state = set(
-                    state,
-                    "flipped",
-                    flag(create_engine::place::saw_flipped(f, ctx)),
-                );
-            }
-            changed = true;
-        }
-        if block == Block::MechanicalCrafter {
-            // Placed against another crafter, it takes that one's facing.
-            let against = level
-                .block_state(beside(clicked_face.opposite()))
-                .and_then(states::id)
-                .and_then(table)
-                .filter(|(b, _)| *b == Block::MechanicalCrafter)
-                .and_then(|(_, i)| i.facing);
-            let (f, pointing) = create_engine::place::crafter(ctx, against);
-            state = set(state, "facing", super::super::kinetics::dir_name(f));
-            state = set(state, "pointing", pointing);
-            changed = true;
-        }
-        // Create's axis blocks: shafts, cogs, casings, gearboxes, chain drives, the speed
-        // controller, the sequenced gearshift.
-        let axis = with_world(|w| {
-            let below = [pos[0], pos[1] - 1, pos[2]];
-            let near = create_engine::place::Nearby {
-                large_cog_above: w.large_cog_axis(dim, [pos[0], pos[1] + 1, pos[2]]),
-                small_cog_clicked: w
-                    .cog_at(dim, beside(clicked_face.opposite()))
-                    .filter(|(large, _)| !large)
-                    .map(|(_, a)| a),
-                controller_below: w
-                    .state_at(dim, below)
-                    .and_then(|s| w.table.get(s))
-                    .filter(|(b, _)| *b == Block::RotationSpeedController)
-                    .and_then(|(_, i)| i.axis),
-            };
-            create_engine::place::axis(
-                block,
-                ctx,
-                |side| w.has_shaft_towards(dim, beside(side), side.opposite()),
-                near,
-            )
-        })
-        .flatten();
-        // CogWheelBlock.canSurvive (`isValidCogwheelPosition`): no large cog beside it in its
-        // plane, nor a small one beside a large one.
-        if let (Block::Cogwheel | Block::LargeCogwheel, Some((a, _))) = (block, axis) {
-            let large = block == Block::LargeCogwheel;
-            if with_world(|w| w.valid_cog_position(dim, pos, large, a)) == Some(false) {
-                return Some(None);
-            }
-        }
-        // Set even when it is the default state's: a template's own placement (a pillar's, from
-        // the clicked face) would otherwise turn an upright gearbox or shaft.
-        if let Some((a, vertical)) = axis {
-            state = set(state, "axis", axis_name(a));
-            if block == Block::SequencedGearshift {
-                state = set(state, "vertical", if vertical { "true" } else { "false" });
-            }
-            changed = true;
-        }
-        changed.then_some(Some(state))
+        changed = true;
     }
+    if block == Block::MechanicalCrafter {
+        // Placed against another crafter, it takes that one's facing.
+        let against = info_at(beside(clicked_face.opposite()))
+            .filter(|(b, _)| *b == Block::MechanicalCrafter)
+            .and_then(|(_, i)| i.facing);
+        let (f, pointing) = create_engine::place::crafter(ctx, against);
+        state = set(state, "facing", super::super::kinetics::dir_name(f));
+        state = set(state, "pointing", pointing);
+        changed = true;
+    }
+    // Create's axis blocks: shafts, cogs, casings, gearboxes, chain drives, the speed
+    // controller, the sequenced gearshift.
+    let axis = with_world(|w| {
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        let near = create_engine::place::Nearby {
+            large_cog_above: w.large_cog_axis(dim, [pos[0], pos[1] + 1, pos[2]]),
+            small_cog_clicked: w
+                .cog_at(dim, beside(clicked_face.opposite()))
+                .filter(|(large, _)| !large)
+                .map(|(_, a)| a),
+            controller_below: w
+                .state_at(dim, below)
+                .and_then(|s| w.table.get(s))
+                .filter(|(b, _)| *b == Block::RotationSpeedController)
+                .and_then(|(_, i)| i.axis),
+        };
+        create_engine::place::axis(
+            block,
+            ctx,
+            |side| w.has_shaft_towards(dim, beside(side), side.opposite()),
+            near,
+        )
+    })
+    .flatten();
+    // CogWheelBlock.canSurvive (`isValidCogwheelPosition`): no large cog beside it in its
+    // plane, nor a small one beside a large one.
+    if let (Block::Cogwheel | Block::LargeCogwheel, Some((a, _))) = (block, axis) {
+        let large = block == Block::LargeCogwheel;
+        if with_world(|w| w.valid_cog_position(dim, pos, large, a)) == Some(false) {
+            return Some(None);
+        }
+    }
+    // Set even when it is the default state's: a template's own placement (a pillar's, from
+    // the clicked face) would otherwise turn an upright gearbox or shaft.
+    if let Some((a, vertical)) = axis {
+        state = set(state, "axis", axis_name(a));
+        if block == Block::SequencedGearshift {
+            state = set(state, "vertical", if vertical { "true" } else { "false" });
+        }
+        changed = true;
+    }
+    changed.then_some(Some(state))
 }
 
 /// `ItemVaultItem.tryMultiPlace`: a vault placed by a player (not sneaking) on the end face of a
