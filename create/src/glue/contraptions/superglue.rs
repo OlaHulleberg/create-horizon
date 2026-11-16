@@ -20,8 +20,8 @@ use super::{center, found};
 use crate::glue::pipelines::Textured;
 use create_engine::glue;
 use mod_api::{
-    EquipmentSlot, Hand, HostSide, InteractionResult, ItemPart, LeftClickBlockEvent, PlayerRef,
-    Registrar, ServerHost, SoundSource, UseOnEvent,
+    EquipmentSlot, Flow, Hand, HostSide, InteractionResult, ItemPart, LeftClickBlockEvent,
+    PlayerRef, Registrar, RightClickBlockEvent, ServerHost, SoundSource, TriState, UseOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -302,16 +302,76 @@ impl ItemPart for GlueItem {
     }
 }
 
+/// `SuperGlueSelectionHandler.onMouseInput` takes a right click with the glue in the main hand
+/// before the block hit is used (a deployer would take the glue, a depot would hold it), unless
+/// the block is a chassis (its glueable sides take the glue as a slime ball) or the player
+/// sneaks (which only forgets the first corner).
+pub(super) fn right_click_block(host: &mut HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
+    let click = event.click;
+    let Some(stack) = click.stack else {
+        return Flow::Continue;
+    };
+    if click.hand != Hand::Main {
+        return Flow::Continue;
+    }
+    let (id, state, player) = match host {
+        HostSide::Server(h) => (
+            stack.item().id(&**h),
+            h.level(click.dimension.key().id())
+                .and_then(|l| l.block_state(&**h, click.pos)),
+            h.player(click.player)
+                .map(|p| (p.may_build(&**h) == Some(true), sneaking(&**h, p))),
+        ),
+        HostSide::Client(h) => (
+            stack.item().id(&**h),
+            h.level(h.dimension())
+                .and_then(|l| l.block_state(&**h, click.pos)),
+            h.local_player()
+                .map(|p| (p.may_build(&**h) == Some(true), sneaking(&**h, p))),
+        ),
+    };
+    if id != ITEM || player != Some((true, false)) {
+        return Flow::Continue;
+    }
+    let chassis = [
+        create_engine::Block::LinearChassis,
+        create_engine::Block::SecondaryLinearChassis,
+        create_engine::Block::RadialChassis,
+    ];
+    if state.is_some_and(|s| {
+        chassis
+            .iter()
+            .any(|b| s.block() == crate::glue::states::key(*b))
+    }) {
+        return Flow::Continue;
+    }
+    *event.use_block = TriState::False;
+    // The server takes the click here, ahead of the block's value boxes and filter slots.
+    let HostSide::Server(h) = host else {
+        return Flow::Continue;
+    };
+    match click_at(&mut **h, click.player, click.pos) {
+        Some(answer) => {
+            *event.cancellation_result = answer;
+            Flow::Cancel
+        }
+        None => Flow::Continue,
+    }
+}
+
 fn is_glue(host: &dyn ServerHost, player: PlayerRef) -> bool {
     held(host, player, Hand::Main).is_some_and(|s| s.item().id(host) == ITEM)
 }
 
 fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<InteractionResult> {
-    let player = host.player(event.player)?;
+    click_at(host, event.player, event.pos)
+}
+
+fn click_at(host: &mut dyn ServerHost, id: u128, pos: [i32; 3]) -> Option<InteractionResult> {
+    let player = host.player(id)?;
     if player.may_build(&*host) != Some(true) {
         return None;
     }
-    let id = event.player;
     let first = FIRST.with_borrow(|f| f.get(&id).copied());
     if sneaking(&*host, player) {
         // `discard`: sneaking forgets the first corner.
@@ -324,7 +384,6 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         }
         return Some(InteractionResult::Success);
     }
-    let pos = event.pos;
     let dimension = player.dimension(&*host)?.to_string();
     let mut lv = ServerLevel::new(host, &dimension)?;
     let Some(from) = first else {
