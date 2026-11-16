@@ -10,7 +10,7 @@ Each entry: what Create does → what's missing → the API that would close it.
 ## World and blocks
 
 - **Chunk save moment.** Column data is written into its chunk attachment at the end of the tick that changed it
-  (`glue/persist.rs`) → no hook before a chunk saves → a pre-save hook ((removed)).
+  (`glue/persist.rs`) → no hook before a chunk saves → a hook at the moment before a chunk is saved.
 - **Shape from a block entity.** A factory gauge's outline follows its panels (`FactoryPanelBlock.getShape`); here it
   is always the whole face → shapes are per state only → a block-part shape hook (outline and collision, with position).
 - **Scoreboard.** Scoreboard and death-counter display sources are left out → no typed scoreboard access → host calls

@@ -11,14 +11,15 @@ Sunrise at the pin with an SDK built from the same checkout, signed with a throw
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (77 glue tests) |
+| `create/` | `cargo +1.99.1 test` | Pass (79 glue tests) |
 | `create/` | `cargo +1.99.1 test -p create-engine` | Pass (655 engine tests) |
-| `create/` | `cargo horizon-mod check` | Pass ("Create uses 3565 items of the API … Made for b77574e.") |
+| `create/` | `cargo horizon-mod check` | Pass ("Create uses 3569 items of the API … Made for b77574e.") |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
-| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (37 tests, `committed_assets` included) |
+| `tools/create-data/` | `cargo +1.99.1 run --release -- compile --create <Create 6.0.11 sources> --out ../..` | Pass (no change to the committed files) |
+| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (42 tests, `committed_assets` included, with Create's jar in the `prepare` cache) |
 
 ## In game
 
@@ -40,6 +41,14 @@ A local developer base built from Sunrise at the pin, the mod built by the launc
   and reload. A signal with no pick (a command, an older save) binds as before.
 - Advancement toasts show (Train Signal, Shifting Gears).
 - The schematic and quill draws its selection box.
+- Create's partial models read from the jar by id draw as the literals they replace did: screenshots of the
+  diode and analog lever indicators (levers at three strengths), the display link's glow and the worldshaper's and
+  a deployed schematic's checkered outlines are pixel for pixel the same as on the build before (taken under the
+  same conditions, ticks frozen). The nixie tubes on a red and a green signal draw the same, but their lights are
+  hidden behind the tube's glass on both builds.
+- Recipes: 3114 unlock (`/recipe give @s *`), as before; each of Create's 314 recipes that names a `c:` tag loads
+  as before (268; the other 46 are for other mods). A crushing wheel crushes raw iron (`c:raw_materials/iron`), a
+  press makes an iron sheet (`c:ingots/iron`), a mixer at 32 rpm makes mushroom stew.
 - The game log has no errors, panics or refused content. Warnings: vanilla damage-type tags with unresolved
   entries (Create's damage types aren't registered, see [API_GAPS.md](API_GAPS.md)) and the jar's copies of
   files the mod also ships.
@@ -48,5 +57,3 @@ A local developer base built from Sunrise at the pin, the mod built by the launc
 
 - **A player's build.** Without a published SDK for the pin, the launcher builds the mod only on a developer base
   built from Sunrise at the pin, and CI's `cargo horizon-mod check` fails at the SDK fetch.
-- **`create-data compile` against Create's sources.** The committed declarations were not regenerated from a
-  Create checkout this cycle.

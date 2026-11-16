@@ -1,12 +1,15 @@
 # Third-party notices
 
 This repository is MIT licensed ([LICENSE](LICENSE)). Create's All Rights Reserved assets are excluded (see below).
+No NeoForge (LGPL) source or data, no horizon-rust/horizon code at or after `fb1135c6` (LGPL), and no code or tables
+of Sunrise's own are used.
 
 ## Create (MIT code and data)
 
-This port translates Create 6.0.11's Java code and compiles its data (everything outside
-`src/main/resources/assets/`, `src/generated/` included) into Rust. Source:
-<https://github.com/Creators-of-Create/Create>, branch `mc1.21.1/dev`, file `LICENSE.md`.
+This port translates Create's Java code (the 6.0.11 source, branch `mc1.21.1/dev`) and compiles its data
+(everything outside `src/main/resources/assets/`, `src/generated/` included) into Rust; the jar the player's game
+reads Create's assets from is the 6.0.10 release. Source: <https://github.com/Creators-of-Create/Create>, file
+`LICENSE.md`.
 
     MIT License
 
@@ -49,9 +52,8 @@ machine downloads Create's official jar from Modrinth (checked by its pinned SHA
 ## arismoko/horizon (MIT)
 
 The mod is written against the native mod API that began in the MIT-licensed arismoko/horizon fork
-(<https://github.com/arismoko/horizon>), which Sunrise carries on. Thanks to its contributors.
-
-## Horizon Veinminer (MIT)
-
-This repository started from the MIT-licensed Horizon Veinminer port's scaffold; its contributors' copyright line is
-kept in `LICENSE`.
+(<https://github.com/arismoko/horizon>), which Sunrise carries on. Vanilla facts the port tabulates were looked up in
+it: the effects' colours and the potions' effects (`create/src/engine/src/potion.rs`, from its
+`crates/horizon-client-core/src/potions.rs`), the dye colours of fireworks (`create/src/glue/items/filters.rs`, from
+`crates/horizon-items/src/firework.rs`) and the instant effects' amounts (`create/src/engine/src/open_end.rs`).
+"MIT License, Copyright (c) 2026 Ludovic Marie and the Horizon contributors", with the permission notice above.

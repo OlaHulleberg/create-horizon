@@ -9,5 +9,10 @@ Read [README.md](README.md) and [docs/architecture.md](docs/architecture.md) fir
 - Never edit generated files by hand (`create/src/engine/src/generated.rs`, `create/data/`, `create/assets/`); they
   come from `tools/create-data compile`.
 - Never commit Create's assets (All Rights Reserved), its jar or anything extracted from it, binaries, or
-  `create/.horizon/`. Details: [CONTRIBUTING.md](CONTRIBUTING.md).
+  `create/.horizon/`; draw Create's models by id and sample its textures, never transcribe their numbers. The
+  `committed_assets` test allows only generated block states and models and Catnip's placement indicator in
+  `create/assets`, and refuses copies of the jar's assets when the jar is at hand. Details:
+  [CONTRIBUTING.md](CONTRIBUTING.md).
+- Keep the repository MIT: never read or copy NeoForge source or data (LGPL), horizon-rust/horizon at or after
+  `fb1135c6` (LGPL), or Sunrise's own code and tables.
 - Run the checks in [VALIDATION.md](VALIDATION.md) and report honestly what was run and what was tried in game.
