@@ -1,5 +1,7 @@
 # Third-party notices
 
+This repository is MIT licensed ([LICENSE](LICENSE)). Create's All Rights Reserved assets are excluded (see below).
+
 ## Create (MIT code and data)
 
 This port translates Create 6.0.11's Java code and compiles its data (everything outside
@@ -43,6 +45,11 @@ unchanged as `create/assets/create/textures/gui/placement_indicator.png` (from
 The Create Team / The Creators of Create". None of it is in this repository or shipped from it: the player's
 machine downloads Create's official jar from Modrinth (checked by its pinned SHA-512), and the launcher and
 `tools/create-data prepare` read it there.
+
+## arismoko/horizon (MIT)
+
+The mod is written against the native mod API that began in the MIT-licensed arismoko/horizon fork
+(<https://github.com/arismoko/horizon>), which Sunrise carries on. Thanks to its contributors.
 
 ## Horizon Veinminer (MIT)
 
