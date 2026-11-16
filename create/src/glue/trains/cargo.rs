@@ -5,14 +5,34 @@
 //! moving slower than a quarter block a tick connects to a stationary one facing it
 //! (`PortableStorageInterfaceMovement` on a carriage: it never stalls the train), so funnels,
 //! chutes and hoppers at a station reach the carriage's storage; every transfer counts as cargo
-//! moving (`IdleCargoCondition`).
+//! moving (`IdleCargoCondition`). A carriage also carries the super glue that held it and its
+//! contraption controls' settings (`Contraption.superglue`, `blockEntityData`), saved with the
+//! train and put back with its blocks.
 
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use crate::glue::contraptions::actors;
 use create_engine::Block;
+use create_engine::actors::Carried;
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{Compound, ItemStack, Tag};
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+thread_local! {
+    /// Each carriage's glue and contraption controls, by level and mounted storage key.
+    static EXTRAS: RefCell<HashMap<(usize, [i32; 3]), Carried>> = RefCell::new(HashMap::new());
+}
+
+pub fn forget() {
+    EXTRAS.with_borrow_mut(HashMap::clear);
+}
+
+fn keep_extras(dim: usize, key: [i32; 3], c: Carried) {
+    if !c.glue.is_empty() || !c.controls.is_empty() {
+        EXTRAS.with_borrow_mut(|m| m.insert((dim, key), c));
+    }
+}
 
 /// The mounted storage key of carriage `car` of train `train` (no piston, bearing or gantry
 /// keys its contraption at x = `i32::MIN`).
@@ -34,6 +54,8 @@ pub fn carry(
     blocks: &[([i32; 3], u32)],
 ) {
     actors::carry_storage(lv, key(train, car), origin, blocks);
+    let extras = actors::carry_extras(lv, origin, blocks, |_| false);
+    keep_extras(lv.dim, key(train, car), extras);
 }
 
 /// A carriage about to be taken apart: what its other block entities and the engine kept for
@@ -55,7 +77,10 @@ pub fn release(
     car: usize,
     place: impl Fn([i32; 3]) -> [i32; 3],
 ) {
-    actors::release_storage(lv, key(train, car), place);
+    actors::release_storage(lv, key(train, car), &place);
+    if let Some(mut c) = EXTRAS.with_borrow_mut(|m| m.remove(&(lv.dim, key(train, car)))) {
+        actors::release_extras(lv, &mut c, place);
+    }
 }
 
 /// Every stack the train's carriages hold.
@@ -65,14 +90,29 @@ pub fn stacks(dim: usize, train: u32, cars: usize) -> Vec<ItemStack> {
         .collect()
 }
 
-/// The train's cargo as its save keeps it: each carriage's (`Car`) storage (`Storage`).
+/// The train's cargo as its save keeps it: each carriage's (`Car`) storage (`Storage`), and
+/// the glue and contraption controls it carries (`Extras`).
 pub fn to_nbt(lv: &ServerLevel<'_>, train: u32, cars: usize) -> Option<Tag> {
     let list: Vec<Tag> = (0..cars)
         .filter_map(|c| {
-            let s = actors::storage_to_nbt(lv, key(train, c))?;
+            let storage = actors::storage_to_nbt(lv, key(train, c));
+            let mut extras = Compound::new();
+            EXTRAS.with_borrow(|m| {
+                if let Some(e) = m.get(&(lv.dim, key(train, c))) {
+                    actors::extras_to_nbt(&mut extras, e);
+                }
+            });
+            if storage.is_none() && extras.is_empty() {
+                return None;
+            }
             let mut k = Compound::new();
             k.insert("Car".into(), Tag::Int(c as i32));
-            k.insert("Storage".into(), s);
+            if let Some(s) = storage {
+                k.insert("Storage".into(), s);
+            }
+            if !extras.is_empty() {
+                k.insert("Extras".into(), Tag::Compound(extras));
+            }
             Some(Tag::Compound(k))
         })
         .collect();
@@ -89,11 +129,11 @@ pub fn from_nbt(lv: &ServerLevel<'_>, train: u32, tag: Option<&Tag>) {
         let Some(Tag::Int(c)) = k.get(&"Car".into()) else {
             continue;
         };
-        actors::storage_from_nbt(
-            lv,
-            key(train, (*c).max(0) as usize),
-            k.get(&"Storage".into()),
-        );
+        let car = key(train, (*c).max(0) as usize);
+        actors::storage_from_nbt(lv, car, k.get(&"Storage".into()));
+        if let Some(Tag::Compound(e)) = k.get(&"Extras".into()) {
+            keep_extras(lv.dim, car, actors::extras_from_nbt(e));
+        }
     }
 }
 
@@ -103,6 +143,9 @@ pub fn prune(lv: &ServerLevel<'_>) {
     let alive: Vec<u32> = with_world(|w| w.dims[dim].railway.trains.iter().map(|t| t.id).collect())
         .unwrap_or_default();
     actors::retain_storage(dim, |k| train_of(k).is_none_or(|t| alive.contains(&t)));
+    EXTRAS.with_borrow_mut(|m| {
+        m.retain(|(d, k), _| *d != dim || train_of(*k).is_none_or(|t| alive.contains(&t)));
+    });
 }
 
 /// Cargo moved in or out of train `train` (through an interface): its idle time starts again.

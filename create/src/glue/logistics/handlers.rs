@@ -320,7 +320,11 @@ impl ResourceHandler<ItemResource> for ChuteItems {
             return 0;
         }
         let room = limit(&*host, resource);
-        put(host, tx, e, 0, resource, amount, room)
+        let n = put(host, tx, e, 0, resource, amount, room);
+        if n > 0 {
+            chute_given(host, self.0);
+        }
+        n
     }
     fn extract(
         &self,
@@ -333,6 +337,27 @@ impl ResourceHandler<ItemResource> for ChuteItems {
         let e = self.0.entity(&*host, self.0.pos);
         take(host, tx, e, index, resource, amount)
     }
+}
+
+/// `ChuteItemHandler.insertItem` → `ChuteBlockEntity.setItem`: the stack starts moving from the
+/// top, or from the bottom while the fans blow up the chute. A vanilla hopper's insert reaches
+/// the chute at no commit it hears of (no `contents_changed`), so it is told here; should the
+/// transaction abort, the chute's next tick finds it empty and lets it go again.
+fn chute_given(host: &mut dyn ServerHost, at: At) {
+    let Some(dimension) = at.level.dimension().id(&*host) else {
+        return;
+    };
+    let Some(lv) = super::super::server::ServerLevel::new(host, &dimension) else {
+        return;
+    };
+    let start = if super::chute::chute_motion(&lv, at.pos) > 0.0 {
+        0.0
+    } else {
+        1.0
+    };
+    with_world(|w| {
+        w.dims[at.dim].chutes.entry(at.pos).or_insert(start);
+    });
 }
 
 /// `ChuteBlockEntity.canAcceptItem` / `SmartChuteBlockEntity.canAcceptItem`.

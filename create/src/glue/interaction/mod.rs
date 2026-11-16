@@ -82,7 +82,6 @@ impl Subsystem for Interaction {
         data: &[u8],
     ) -> bool {
         match channel {
-            values::SCROLL => values::scroll_from_client(host, player, data),
             values::VALUE_SETTINGS => values::value_settings_from_client(host, player, data),
             _ => return false,
         }

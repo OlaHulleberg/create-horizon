@@ -15,10 +15,7 @@ use mod_api::{
     RightClickBlockEvent, ServerHost, SoundSource,
 };
 
-/// A player scrolled on a block: position and steps, four little-endian `i32`s.
-pub(crate) const SCROLL: &str = "create:scroll";
-
-/// Values set by the wheel or a board, and the value a board asked for, from the server to the
+/// Values set by a board, and the value a board asked for, from the server to the
 /// player: position and value.
 pub(crate) const VALUE: &str = "create:value";
 
@@ -129,6 +126,11 @@ pub(crate) fn value_box_slot(
             (Some(face), Some(facing)) => create_engine::steam::value_box_slot(face, facing, side),
             _ => None,
         },
+        // `ChassisBlockEntity.range` (`CenteredSideValueBoxTransform`): the middle of every side,
+        // shown and used with the wrench only (`requiresWrench`, `requires_wrench`).
+        (B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis, ..) => {
+            Some(board::centred_slot(side))
+        }
         // `PulleyBlockEntity.getMovementModeSlot`: on top.
         (B::RopePulley, ..) => (side == Dir::Up).then(|| board::centred_slot(side)),
         // `RollerBlockEntity.RollerValueBox(-3)`: the mode, beside its filter, from any side.
@@ -170,6 +172,22 @@ pub(crate) fn value_box_slot(
         }
         _ => None,
     }
+}
+
+/// `ValueSettingsBehaviour.onlyVisibleWithWrench`: a chassis' range box is seen and used only
+/// with the wrench in the main hand (`ValueSettingsInputHandler`, `ValueBox` outlines).
+pub(crate) fn requires_wrench(block: B) -> bool {
+    matches!(
+        block,
+        B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis
+    )
+}
+
+/// Whether the box of the block in `state` may be used with or without the wrench in hand.
+pub(crate) fn wrench_fits(table: &StateTable, state: u32, wrench: bool) -> bool {
+    table
+        .get(state)
+        .is_none_or(|(b, _)| !requires_wrench(b) || wrench)
 }
 
 /// The title and option names of a block's `ScrollOptionBehaviour` (an icons board).
@@ -261,7 +279,14 @@ pub(super) fn right_click(host: &mut dyn ServerHost, event: &mut RightClickBlock
     })
     .unwrap_or(true);
     let charged = |_: [i32; 3]| charged_here;
-    let hit = with_world(|w| value_box_hit(&w.table, |p| lv.block(p), charged, pos, side, local));
+    let wrench = items::is(
+        items::held(&*lv.host, player, Hand::Main).as_ref(),
+        Item::Wrench,
+    );
+    let hit = with_world(|w| {
+        wrench_fits(&w.table, lv.block(pos), wrench)
+            && value_box_hit(&w.table, |p| lv.block(p), charged, pos, side, local)
+    });
     if hit != Some(true) {
         return Flow::Continue;
     }
@@ -279,52 +304,6 @@ fn checked(host: &dyn Host, player: PlayerRef, pos: [i32; 3]) -> Option<String> 
     let center = pos.map(|v| f64::from(v) + 0.5);
     let d2: f64 = (0..3).map(|i| (at[i] - center[i]).powi(2)).sum();
     (d2 <= 8.0 * 8.0).then_some(dimension)
-}
-
-/// A player scrolled on a block: a creative motor's or speed controller's speed, a chassis'
-/// range (with the wrench, `requiresWrench`), a brass tunnel's mode. The value goes back to
-/// the player (its value box shows it).
-pub(super) fn scroll_from_client(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
-    let [x, y, z, steps] = words(data)[..] else {
-        return;
-    };
-    let pos = [x, y, z];
-    let Some(dimension) = checked(&*host, player, pos) else {
-        return;
-    };
-    let Some(mut lv) = ServerLevel::new(host, &dimension) else {
-        return;
-    };
-    let dim = lv.dim;
-    let steps = steps.clamp(-64, 64);
-    let state = lv.block(pos);
-    let block = with_world(|w| w.table.get(state).map(|(b, _)| b)).flatten();
-    let value = match block {
-        Some(B::CreativeMotor | B::RotationSpeedController) => {
-            with_world(|w| w.scroll_motor(dim, pos, steps));
-            crate::glue::advancements::speed_controller(&mut lv, pos);
-            return;
-        }
-        // `ChassisScrollValueBehaviour`: the whole group of chassis takes the range, 1 to 16.
-        Some(B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis) => {
-            let group = crate::glue::contraptions::chassis_group(&lv, pos);
-            let now = with_world(|w| w.dims[dim].chassis_range.get(&pos).copied())
-                .flatten()
-                .unwrap_or(create_engine::contraption::CHASSIS_RANGE);
-            let range = (now + steps).clamp(1, 16);
-            with_world(|w| w.set_chassis_range(dim, &group, range));
-            range
-        }
-        Some(B::BrassTunnel) => {
-            let mode = with_world(|w| w.dims[dim].brass.get(&pos).map(|b| b.mode.scrolled(steps)))
-                .flatten()
-                .unwrap_or_default();
-            crate::glue::logistics::set_brass_mode(&lv, pos, mode);
-            mode.index() as i32
-        }
-        _ => return,
-    };
-    net::send_to_player(lv.host, player, VALUE, &encode(&[x, y, z, value]));
 }
 
 /// `ValueSettingsPacket.applySettings` (`BlockEntityConfigurationPacket.handle`: no spectator or
@@ -447,6 +426,20 @@ pub(crate) fn settings_at(
             }
             w.dims[dim].arms.arms.get(&pos).map(|a| a.selection.index())
         }),
+        // `ChassisScrollValueBehaviour`: the whole group takes the range picked (1 to 16).
+        B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis => {
+            let now = with_world(|w| w.dims[dim].chassis_range.get(&pos).copied())
+                .flatten()
+                .unwrap_or(create_engine::contraption::CHASSIS_RANGE);
+            match pick.and_then(|s| board::chassis_value(s, now, 16)) {
+                Some(range) => {
+                    let group = crate::glue::contraptions::chassis_group(lv, pos);
+                    with_world(|w| w.set_chassis_range(dim, &group, range));
+                    Some(Some(range))
+                }
+                None => Some(Some(now)),
+            }
+        }
         // `EjectorBlockEntity.maxStackSize` (`between(0, 64)`, row 0).
         B::WeightedEjector => with_world(|w| {
             let e = w.dims[dim].ejectors.get_mut(&pos)?;

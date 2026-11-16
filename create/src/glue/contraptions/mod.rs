@@ -313,6 +313,15 @@ impl Subsystem for Contraptions {
         superglue::render(host, event);
     }
 
+    /// A right click with super glue in hand picks a corner, not the block hit.
+    fn right_click_block(
+        &self,
+        mut host: mod_api::HostSide,
+        event: &mut mod_api::RightClickBlockEvent<'_>,
+    ) -> Flow {
+        superglue::right_click_block(&mut host, event)
+    }
+
     /// A left click with super glue in hand takes the glue off the block hit.
     fn left_click_block(&self, host: &mut dyn ServerHost, event: &mut LeftClickBlockEvent) -> Flow {
         if superglue::left_click(host, event) {

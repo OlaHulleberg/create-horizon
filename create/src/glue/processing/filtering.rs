@@ -80,12 +80,7 @@ pub fn drawn(block: Block, info: &StateInfo, flipped: bool) -> Vec<(Dir, [f64; 3
             continue;
         };
         // `Sided.rotate`: the side's horizontal angle and a half turn; up and down tipped.
-        let y = match side {
-            Dir::South | Dir::Up | Dir::Down => 0.0,
-            Dir::West => 90.0,
-            Dir::North => 180.0,
-            Dir::East => 270.0,
-        } + 180.0;
+        let y = create_engine::decor::horizontal_angle(side) + 180.0;
         let x = match side {
             Dir::Up => 90.0,
             Dir::Down => 270.0,
