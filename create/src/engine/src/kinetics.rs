@@ -1275,6 +1275,16 @@ impl Kinetics {
         // What set each part's speed in this walk (`KineticBlockEntity.source`).
         let mut source: HashMap<u32, u32> = HashMap::new();
         let mut broken: Vec<u32> = Vec::new();
+        // applyNewSpeed detaches an existing source before propagating its new speed.
+        // Its former members lose their source and network in propagateMissingSource.
+        if o.fresh && !o.new_part && o.drove {
+            for (id, node) in self.nodes.iter().enumerate() {
+                if id as u32 != origin && node.net == o.net && o.net != NONE {
+                    speed.insert(id as u32, 0.0);
+                    net.insert(id as u32, NONE);
+                }
+            }
+        }
         // A generator starts from its own speed and network (`applyNewSpeed`); another part from
         // what it turned at.
         let start = if o.part.generated != 0.0 {
@@ -1467,6 +1477,24 @@ mod tests {
         let mut e = Vec::new();
         k.solve(&mut e);
         e
+    }
+
+    #[test]
+    fn scrolling_motor_overspeed_breaks_conveying_cog() {
+        let mut k = Kinetics::new();
+        k.set([0, 6, -1], 0, Part::cog(Axis::Y, false));
+        solve(&mut k);
+        k.set([1, 6, -2], 0, Part::cog(Axis::Y, true));
+        solve(&mut k);
+        k.set([1, 7, -2], 0, motor(Dir::Down, 16.0));
+        solve(&mut k);
+        k.set([1, 7, -2], 0, motor(Dir::Down, 183.0));
+        let events = solve(&mut k);
+        let breaks: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, Event::Break { .. }))
+            .collect();
+        assert_eq!(breaks, [&Event::Break { pos: [1, 6, -2] }]);
     }
 
     #[test]
