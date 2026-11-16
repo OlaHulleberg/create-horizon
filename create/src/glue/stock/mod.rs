@@ -983,7 +983,8 @@ impl Subsystem for Stock {
                     "order" => order(&mut lv, dim, pos, &args),
                     "requester" => set_requester(&lv, dim, pos, &args),
                     "gauge" => gauge::set_gauge(&lv, dim, pos, &args),
-                    "gauge_connect" => gauge::connect_command(dim, pos, &args, here),
+                    "gauge_connect" => gauge::connect_link_command(&mut lv, pos, &args, here)
+                        .unwrap_or_else(|| gauge::connect_command(dim, pos, &args, here)),
                     _ => gauge::set_craft(&lv, dim, pos, &args),
                 };
                 result.unwrap_or_else(|e| e)

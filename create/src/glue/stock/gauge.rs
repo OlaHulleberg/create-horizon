@@ -1540,6 +1540,33 @@ pub(super) fn set_gauge(
     .ok_or_else(|| "no factory gauge there".into())
 }
 
+/// `<to x y z> [#from slot]` on a display or redstone link: the panel at `from` joins it, as
+/// `FactoryPanelConnectionHandler.onRightClick` on the link does. None when `to` is no link.
+pub(super) fn connect_link_command(
+    lv: &mut ServerLevel<'_>,
+    from: [i32; 3],
+    args: &[&str],
+    here: [f64; 3],
+) -> Option<Result<String, String>> {
+    let to = super::coords(args, Some(here))?;
+    let (facing, redstone) = match crate::glue::display::display_link_facing(lv, to) {
+        Some(f) => (f, false),
+        None => (crate::glue::redstone::link_facing(lv, to)?, true),
+    };
+    let slot = args
+        .iter()
+        .find_map(|w| w.strip_prefix('#')?.parse().ok())
+        .or_else(|| with(lv.dim, |n| panels_at(n, from).first().copied()));
+    let Some(slot) = slot else {
+        return Some(Err("no factory gauge to connect from".into()));
+    };
+    Some(
+        connect_link(lv, (from, slot), to, facing, redstone)
+            .map(|()| format!("gauge {from:?} #{slot} joins the link at {to:?}"))
+            .map_err(|key| format!("create.{key}")),
+    )
+}
+
 /// `<to x y z> [amount] [#from slot] [#to slot]`: the panel at `from` feeds the one at `to`.
 pub(super) fn connect_command(
     dim: usize,
