@@ -1,5 +1,5 @@
 //! The client's side of value boxes: the use press held on one (`ValueSettingsClient`), the
-//! board it opens (`ValueSettingsScreen`), the mouse wheel over a block or a board, and the
+//! board it opens (`ValueSettingsScreen`), the mouse wheel over a board, and the
 //! values the server told.
 
 use super::super::items::{self, Item};
@@ -342,7 +342,7 @@ fn board_pick(b: Board, v: i32) -> Settings {
 
 /// The board of the value box at `pos` (`createBoard`), starting on the block's setting when the
 /// server told it (`known`), else on what this client sees: the creative motor's speed and a
-/// brass tunnel's mode (the chassis' board needs the wrench, whose use turns the block here).
+/// brass tunnel's mode (a chassis' range board opens with the wrench only).
 fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoard> {
     let state = block_at(host, pos);
     let (block, facing) =
@@ -580,9 +580,7 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
 }
 
 /// The mouse wheel on the client: an open board takes it (`ValueSettingsScreen.mouseScrolled`:
-/// a column a step, a milestone with sneak held), else the value under the crosshair: a
-/// creative motor's or speed controller's speed, a brass tunnel's mode, and (with the wrench,
-/// `requiresWrench`) a chassis' range.
+/// a column a step, a milestone with sneak held); over a block it scrolls the hotbar.
 pub(super) fn wheel(host: &mut dyn ClientHost, steps: i32) -> Flow {
     if BOARD.with_borrow(Option::is_some) {
         if steps != 0 {
