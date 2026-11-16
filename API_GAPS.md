@@ -118,6 +118,8 @@ Each entry: what Create does → what's missing → the API that would close it.
 - **Sound for everyone but one player.** The cardboard sword's bonk also plays from the server to the clicker.
 - **Moving a playing sound.** Machine hum and cog clicks play at the listener; a train horn stays where it started →
   `SoundRef::move_to(position)`.
+- **Changing a playing sound's pitch.** An air current's wind keeps the pitch it started with; Create's follows the
+  player's speed each tick (`AirCurrentSound.setPitch`) → `SoundRef::set_pitch(pitch)`.
 - **Particle rotation and level access.** Haunted-bell souls are billboards (Create turns them about the vertical)
   and don't vanish in light → a rotation mode on `ModParticle` and a host in `ParticleProvider::tick`.
 - **Tinted fluid particles.** Pipes spray water and potions scattered, not at Create's velocity → a tint on

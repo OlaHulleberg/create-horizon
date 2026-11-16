@@ -500,12 +500,14 @@ const GLOW_VIEW_DISTANCE: f64 = 96.0;
 /// blocks the white cube (`SIGNAL_WHITE_CUBE`, translucent) and the glow (`SIGNAL_*_GLOW`,
 /// additive) stretched along it, and the tube (`SIGNAL_*`, additive, scaled by 17/16), full
 /// bright and without diffuse shading: Create's models (read by `models`) as quads of the
-/// glue's pipelines.
+/// glue's pipelines. Drawn after opaque terrain and before translucent terrain, as Create's
+/// block entity buffers are: the tube's glass (translucent terrain, which writes depth) then
+/// blends over the lights inside it instead of hiding them.
 pub(super) fn render_signal_glows(
     host: &dyn ClientHost,
     event: &mut mod_api::RenderLevelStageEvent<'_>,
 ) {
-    if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
+    if event.stage != mod_api::RenderLevelStage::AfterOpaqueBlocks {
         return;
     }
     let time = event.view.game_time as f64 + f64::from(event.view.partial_tick);

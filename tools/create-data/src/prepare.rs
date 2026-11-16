@@ -1355,6 +1355,127 @@ mod tests {
     }
 }
 
+/// Every `c:` item tag a recipe the port loads names (Create's processing, sequenced assembly,
+/// mechanical crafting, crafting, cooking and stonecutting recipes alike) holds at least one
+/// item: a recipe whose ingredient names an empty or missing tag finds nothing, so a machine or
+/// crafting table never takes its items. Runs where Create's jar is at hand (`$CREATE_JAR`, else
+/// the `prepare` download cache).
+#[cfg(test)]
+mod c_tags_resolve {
+    use super::*;
+    use std::collections::{BTreeSet, HashSet};
+
+    /// The `c:` item tags `v` names: `#c:` strings and `{"tag": "c:.."}` objects, not fluid
+    /// ingredients (those with an `amount`).
+    fn item_tags(v: &Value, out: &mut BTreeSet<String>) {
+        match v {
+            Value::String(s) => {
+                if let Some(t) = s.strip_prefix("#c:") {
+                    out.insert(t.to_owned());
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|x| item_tags(x, out)),
+            Value::Object(o) => {
+                if o.get("amount").is_none()
+                    && let Some(t) = o.get("tag").and_then(Value::as_str)
+                    && let Some(t) = t.strip_prefix("c:")
+                {
+                    out.insert(t.to_owned());
+                }
+                o.values().for_each(|x| item_tags(x, out));
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn every_c_tag_a_loaded_recipe_names_holds_an_item() {
+        let jar = std::env::var_os("CREATE_JAR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                crate::jar::cache_dir()
+                    .ok()
+                    .map(|d| d.join(crate::jar::CREATE.file))
+            })
+            .filter(|p| p.is_file());
+        let Some(jar) = jar else {
+            eprintln!("no Create jar at hand ($CREATE_JAR or the prepare cache): skipped");
+            return;
+        };
+        let files = read_sources(&[jar]).unwrap();
+        // The port's file stands over the jar's at the same path.
+        let written: BTreeMap<String, Value> = c_tag_files(&files).into_iter().collect();
+        let values = |path: &str| -> Option<Vec<Value>> {
+            let rel = format!("data/c/tags/item/{path}.json");
+            let doc = written
+                .get(&rel)
+                .cloned()
+                .or_else(|| serde_json::from_slice(files.get(&rel)?).ok())?;
+            doc["values"].as_array().cloned()
+        };
+        let decl = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/data/create/horizon");
+        let mut items = HashSet::new();
+        for kind in ["item", "block"] {
+            for e in fs::read_dir(decl.join(kind)).unwrap() {
+                let name = e.unwrap().file_name().to_string_lossy().into_owned();
+                if let Some(n) = name.strip_suffix(".json")
+                    && !n.starts_with("part_")
+                {
+                    items.insert(format!("create:{n}"));
+                }
+            }
+        }
+        fn holds(
+            path: &str,
+            values: &dyn Fn(&str) -> Option<Vec<Value>>,
+            items: &HashSet<String>,
+            seen: &mut Vec<String>,
+        ) -> bool {
+            if seen.iter().any(|s| s == path) {
+                return false;
+            }
+            seen.push(path.to_owned());
+            values(path).unwrap_or_default().iter().any(|v| {
+                let id = v.as_str().or_else(|| v["id"].as_str()).unwrap_or("");
+                match id.strip_prefix('#') {
+                    Some(t) => match t.strip_prefix("c:") {
+                        Some(c) => holds(c, values, items, seen),
+                        // Vanilla's own item tags.
+                        None => t.starts_with("minecraft:"),
+                    },
+                    None => id.starts_with("minecraft:") || items.contains(id),
+                }
+            })
+        }
+        let (mut recipes, mut named) = (0, BTreeSet::new());
+        let mut empty = Vec::new();
+        for (path, bytes) in &files {
+            if !path.starts_with("data/create/recipe/") || !kept(path) {
+                continue;
+            }
+            let doc: Value = serde_json::from_slice(bytes).unwrap();
+            if convert_recipe(doc.clone()).is_none() {
+                continue;
+            }
+            recipes += 1;
+            let mut tags = BTreeSet::new();
+            item_tags(&doc, &mut tags);
+            for t in tags {
+                if !holds(&t, &values, &items, &mut Vec::new()) {
+                    empty.push(format!("{path}: c:{t}"));
+                }
+                named.insert(t);
+            }
+        }
+        assert!(recipes > 1000, "{recipes} recipes read from the jar");
+        assert!(named.contains("nuggets/iron") && named.contains("nuggets/zinc"));
+        assert!(
+            empty.is_empty(),
+            "recipes naming a c: tag that holds no item: {empty:?}"
+        );
+    }
+}
+
 /// What the repository may hold under `create/assets`: the generator's own block states and
 /// block models (which name Create's models and textures, never copy them) and Catnip's MIT
 /// placement indicator. Everything under Create's `src/main/resources/assets/` is All Rights

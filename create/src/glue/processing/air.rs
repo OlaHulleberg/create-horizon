@@ -3,13 +3,17 @@
 //! and the client
 //! - pushes its own player along them (`tickAffectedEntities`): a player's client moves it, so
 //!   the server's push of a player does nothing, as in Create;
+//! - plays the wind while its player is in a current (`AirCurrent.Client`, `AirCurrentSound`);
 //! - spawns their air flow particles (`AirFlowParticle`, `create:air_flow`), drifting along the
 //!   current and coloured, with their extra flame, lava, smoke, soul flame and bubble particles
 //!   (`morphAirFlow`), by the processing type of the segment they cross.
 
 use create_engine::fan::{self, Kind, Seen};
 use create_engine::processing::Rng;
-use mod_api::{ClientHost, ModParticle, ParticleKey, ParticleOptions, ParticleProvider, Registrar};
+use mod_api::{
+    ClientHost, ModParticle, ParticleKey, ParticleOptions, ParticleProvider, Registrar, SoundPlay,
+    SoundRef, SoundSource, SoundState,
+};
 use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock};
 
@@ -102,6 +106,61 @@ thread_local! {
     /// `isPlayerCreativeFlying` for the local player, as the server told it: the client's own
     /// abilities read back the server's last abilities packet, not its own flight (`API_GAPS.md`).
     static FLYING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `AirCurrent.Client`: whether a fan pushed the player since the last sound tick
+    /// (`isClientPlayerInAirCurrent`), and the wind (`flyingSound`) with its volume.
+    static IN_CURRENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static WIND: std::cell::Cell<Option<(SoundRef, f32)>> = const { std::cell::Cell::new(None) };
+}
+
+/// `AirCurrentSound`'s volume steps (`fadeIn`, `fadeOut`) and its starting volume.
+const WIND_STEP: f32 = 0.05;
+const WIND_START: f32 = 0.01;
+
+/// `AirCurrent.Client.enableClientPlayerSound`: a fan pushed the player (to `motion`); the wind,
+/// the elytra's (`SoundEvents.ELYTRA_FLYING`, looping, at the listener, on the block source),
+/// starts if it isn't playing, at a pitch of half the player's speed (0.5 to 2), and grows a
+/// step toward `max_volume`. A playing sound's pitch can't be changed (`API_GAPS.md`): it keeps
+/// the pitch it started with.
+fn enable_wind(host: &dyn ClientHost, motion: [f64; 3], max_volume: f32) {
+    IN_CURRENT.set(true);
+    let mut wind = WIND
+        .get()
+        .filter(|(s, _)| s.state(host) != Some(SoundState::Stopped));
+    if wind.is_none() {
+        let speed = motion.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let pitch = (speed * 0.5).clamp(0.5, 2.0) as f32;
+        let mut play = SoundPlay::ui("minecraft:item.elytra.flying")
+            .with_volume(WIND_START)
+            .with_pitch(pitch)
+            .looping(0);
+        play.source = SoundSource::Blocks;
+        wind = host.play_local_sound(&play, 0).map(|s| (s, WIND_START));
+    }
+    if let Some((sound, volume)) = wind {
+        let next = max_volume.min(volume + WIND_STEP);
+        if next != volume {
+            sound.fade(host, next, 1);
+        }
+        WIND.set(Some((sound, next)));
+    }
+}
+
+/// `AirCurrent.Client.tickClientPlayerSounds`, each client tick: out of every current, the wind
+/// fades a step, and stops once silent.
+fn tick_wind(host: &dyn ClientHost) {
+    if !IN_CURRENT.replace(false)
+        && let Some((sound, volume)) = WIND.get()
+    {
+        if volume <= 0.0 {
+            sound.stop(host);
+            WIND.set(None);
+        } else {
+            let next = (volume - WIND_STEP).max(0.0);
+            // A fade to 0 stops the sound when it ends.
+            sound.fade(host, next, 1);
+            WIND.set(Some((sound, next)));
+        }
+    }
 }
 
 fn random() -> f32 {
@@ -111,6 +170,8 @@ fn random() -> f32 {
 /// The client left its world.
 pub(super) fn reset() {
     shared(|s| *s = Shared::default());
+    IN_CURRENT.set(false);
+    WIND.set(None);
     CAUGHT.with_borrow_mut(Vec::clear);
     FLYING.set(false);
 }
@@ -150,6 +211,7 @@ pub(super) fn push_player(host: &mut dyn ClientHost, player: mod_api::PlayerRef)
     let sneaking = e.is_shift_key_down(h).unwrap_or(false);
     let creative_flying = FLYING.get();
     let start = motion;
+    let mut winds = Vec::new();
     CAUGHT.with_borrow_mut(|caught| {
         caught.retain(|(p, _, _)| fans.iter().any(|f| f.pos == *p));
         for f in &fans {
@@ -176,8 +238,12 @@ pub(super) fn push_player(host: &mut dyn ClientHost, player: mod_api::PlayerRef)
                 continue;
             }
             motion = f.push(at, motion, sneaking);
+            winds.push((motion, (f.speed.abs() / 128.0 * 0.4).clamp(0.01, 0.4)));
         }
     });
+    for (motion, max_volume) in winds {
+        enable_wind(&*host, motion, max_volume);
+    }
     if motion != start {
         let kick = [0, 1, 2].map(|a| (motion[a] - start[a]) as f32);
         host.push_player(kick);
@@ -187,6 +253,7 @@ pub(super) fn push_player(host: &mut dyn ClientHost, player: mod_api::PlayerRef)
 /// The client's tick: each turning fan's air flow particle (`AirCurrent.tick`, half the ticks at
 /// the default density), and the extra particles the air flow particles asked for.
 pub(super) fn tick(host: &mut dyn ClientHost) {
+    tick_wind(&*host);
     let Some(keys) = KEYS.get() else {
         return;
     };
