@@ -36,6 +36,7 @@ mod sandpaper;
 mod sequenced;
 mod sword;
 mod symmetry;
+pub(crate) use symmetry::obstructed;
 mod symmetry_screen;
 mod tooltip;
 mod worldshaper;

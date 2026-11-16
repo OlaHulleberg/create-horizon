@@ -52,6 +52,7 @@ mod filtering;
 mod fist;
 pub(crate) use filtering::filter_at as machine_filter;
 mod millstone;
+mod operator;
 mod persist;
 mod press;
 pub mod recipes;
@@ -168,6 +169,7 @@ impl Subsystem for Processing {
         }
         r.block_part(super::states::key(Block::BlazeBurner), BurnerPlacement);
         toolbelt::register(r);
+        operator::register(r);
         let mut items = Vec::new();
         for b in Block::ALL
             .iter()

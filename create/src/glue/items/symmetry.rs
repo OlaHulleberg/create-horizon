@@ -273,7 +273,7 @@ pub(super) fn placed(host: &mut dyn ServerHost, event: &EntityPlaceEvent) -> Opt
 
 /// `Level.isUnobstructed`: an entity but an item, an experience orb or a spectator meets the
 /// collision shape `state` would have at `pos`.
-fn obstructed(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) -> bool {
+pub(crate) fn obstructed(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) -> bool {
     let host = &*lv.host;
     let Some(shape) = lv
         .level
