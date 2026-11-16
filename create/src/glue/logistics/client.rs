@@ -1908,12 +1908,7 @@ fn draw_filter_stack(
     }
     {
         // `Sided.rotate`: the side's horizontal angle plus 180°, then 90° up for the top.
-        let y_rot = match side {
-            Dir::South | Dir::Up | Dir::Down => 0.0,
-            Dir::West => 90.0,
-            Dir::North => 180.0,
-            Dir::East => 270.0,
-        } + 180.0;
+        let y_rot = create_engine::decor::horizontal_angle(side) + 180.0;
         let x_rot = if side == Dir::Up { 90.0 } else { 0.0 };
         draw.push();
         draw.translate(slot.map(|v| v as f32));
