@@ -7,7 +7,7 @@ use super::super::kinetics;
 use super::super::net;
 use super::super::states;
 use super::crank;
-use super::values::{self, SCROLL, VALUE_SETTINGS, may_use_value_box, value_box_hit};
+use super::values::{self, VALUE_SETTINGS, may_use_value_box, value_box_hit};
 use crate::glue::stock::gauge_client as gauge;
 use create_engine::Block as B;
 use create_engine::board::{self, Board, Hold, Layout, Settings, Step};
@@ -228,8 +228,12 @@ fn hits_value_box(host: &dyn ClientHost, pos: [i32; 3], face: [i32; 3], point: [
         return false;
     };
     let local = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]));
+    let wrench = host
+        .local_player()
+        .is_some_and(|p| holds_wrench(host, p));
     super::super::client_table(host, |t| {
-        value_box_hit(
+        super::values::wrench_fits(t, block_at(host, pos), wrench)
+            && value_box_hit(
             t,
             |p| block_at(host, p),
             crate::glue::logistics::client::ejector_charged,
@@ -318,9 +322,16 @@ pub(super) fn interaction_key(event: &mut mod_api::InteractionKeyMappingTriggere
     Flow::Cancel
 }
 
+/// The linear chassis' range board.
+const CHASSIS: Board = board::chassis("Range of Sticky Sides", 16);
+/// The radial chassis' radius board.
+const RADIAL_CHASSIS: Board = board::chassis("Radius when Sticky", 16);
+
 /// A board's pick for the block's setting `v` (`getValueSettings`): a motor's speed, an option.
 fn board_pick(b: Board, v: i32) -> Settings {
-    if b.icons || b == board::EJECTOR || b == board::TABLE_CLOTH {
+    if b == CHASSIS || b == RADIAL_CHASSIS {
+        board::chassis_settings(v)
+    } else if b.icons || b == board::EJECTOR || b == board::TABLE_CLOTH {
         Settings { row: 0, value: v }
     } else if b.title == board::FILTER_TITLE {
         board::filter_settings(v)
@@ -345,6 +356,10 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
         B::PulseRepeater | B::PulseExtender | B::PulseTimer => (board::DIODE, &[][..]),
         b if create_engine::dye::is_valve_handle(b) => (board::VALVE_HANDLE, &[][..]),
         B::WeightedEjector => (board::EJECTOR, &[][..]),
+        // `ChassisScrollValueBehaviour.createBoard` (`contraptions.chassis.range`, a radial
+        // chassis' `radius`), ranges 1 to `maxChassisRange`.
+        B::LinearChassis | B::SecondaryLinearChassis => (CHASSIS, &[][..]),
+        B::RadialChassis => (RADIAL_CHASSIS, &[][..]),
         b if crate::glue::stock::shop::is_cloth(b) => (board::TABLE_CLOTH, &[][..]),
         // `FilteringBehaviour.createBoard`, up to the filter's stack size.
         B::BrassFunnel | B::BrassBeltFunnel | B::SmartChute => {
@@ -587,27 +602,8 @@ pub(super) fn wheel(host: &mut dyn ClientHost, steps: i32) -> Flow {
         }
         return Flow::Cancel;
     }
-    // Create 6 edits values on the board only: the wheel over a block scrolls the hotbar. The
-    // chassis' range, whose board (with the wrench) is not ported, keeps the wheel.
-    let Some(CrosshairTarget::Block { pos, .. }) = host.crosshair_target() else {
-        return Flow::Continue;
-    };
-    let pos = [pos.x, pos.y, pos.z];
-    let wrench = host.local_player().is_some_and(|p| holds_wrench(&*host, p));
-    let chassis = block_of(&*host, pos).is_some_and(|b| {
-        matches!(
-            b,
-            B::LinearChassis | B::SecondaryLinearChassis | B::RadialChassis
-        )
-    });
-    if !(wrench && chassis) {
-        return Flow::Continue;
-    }
-    if steps != 0 {
-        let data = values::encode(&[pos[0], pos[1], pos[2], steps]);
-        net::send_to_server(host, SCROLL, &data);
-    }
-    Flow::Cancel
+    // Create 6 edits values on the board only: the wheel over a block scrolls the hotbar.
+    Flow::Continue
 }
 
 /// An opaque colour of `rgb`.
@@ -706,6 +702,8 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
                 .to_owned()
         } else if b == board::EJECTOR {
             board::ejector_text(s)
+        } else if b == CHASSIS || b == RADIAL_CHASSIS {
+            board::chassis_text(s)
         } else if b == board::FACTORY {
             board::factory_text(s)
         } else if b.title == board::FILTER_TITLE {
