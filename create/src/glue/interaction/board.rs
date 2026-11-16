@@ -228,19 +228,17 @@ fn hits_value_box(host: &dyn ClientHost, pos: [i32; 3], face: [i32; 3], point: [
         return false;
     };
     let local = [0, 1, 2].map(|i| point[i] - f64::from(pos[i]));
-    let wrench = host
-        .local_player()
-        .is_some_and(|p| holds_wrench(host, p));
+    let wrench = host.local_player().is_some_and(|p| holds_wrench(host, p));
     super::super::client_table(host, |t| {
         super::values::wrench_fits(t, block_at(host, pos), wrench)
             && value_box_hit(
-            t,
-            |p| block_at(host, p),
-            crate::glue::logistics::client::ejector_charged,
-            pos,
-            side,
-            local,
-        )
+                t,
+                |p| block_at(host, p),
+                crate::glue::logistics::client::ejector_charged,
+                pos,
+                side,
+                local,
+            )
     }) == Some(true)
 }
 
