@@ -456,6 +456,12 @@ struct Node {
     /// What drove its network at the last solve, standing in for Create's network id
     /// (`KineticBlockEntity.network`, its source generator's position): NONE when it stood still.
     net: u32,
+    /// Added since the last solve (not a replaced part): a block entity that has not ticked yet.
+    new_part: bool,
+    /// A generator that drove its side at the last solve: Create's network source, the one
+    /// generator of a network with no source of its own (`hasSource`). Every other generator on a
+    /// turning network is a member, turned by it.
+    drove: bool,
 }
 
 impl Node {
@@ -575,6 +581,8 @@ impl Kinetics {
             flicker: 0,
             flicker_at: 0,
             net: NONE,
+            new_part: true,
+            drove: false,
         };
         let id = match self.free.pop() {
             Some(id) => {
@@ -588,6 +596,11 @@ impl Kinetics {
         };
         slot[sub as usize] = id;
         self.dirty.push(id);
+    }
+
+    /// Whether a part is at `pos` (`sub` 1: a split shaft's second half).
+    pub fn has_part(&self, pos: [i32; 3], sub: u8) -> bool {
+        self.at.get(&pos).is_some_and(|p| p[sub as usize] != NONE)
     }
 
     /// Removes every part at `pos`; its neighbours re-solve.
@@ -854,6 +867,7 @@ impl Kinetics {
         let mut root: Vec<f32> = Vec::new();
         let mut driver: Vec<u32> = Vec::new();
         let mut loops: Vec<(u32, u32)> = Vec::new();
+        let mut gens: Vec<u32> = Vec::new();
         while let Some(start) = self.dirty.pop() {
             if !self.nodes[start as usize].live || done.contains_key(&start) {
                 continue;
@@ -907,29 +921,76 @@ impl Kinetics {
             for &id in &self.queue {
                 done.insert(id, ());
             }
-            // Generators: the one reaching its side fastest drives it (Create's overpowering);
-            // one turning the other way breaks the newest of the two.
+            // Generators. A network has one source, which drives it; every other generator on it
+            // turns with it (`KineticBlockEntity.source`) and only adds its capacity. Those that
+            // drove before keep driving: the fastest of them where a new part joined two (Create's
+            // overpowering), and one the other way breaks the newest part, which joined them.
             root.clear();
             root.resize(sides as usize, 0.0);
             driver.clear();
             driver.resize(sides as usize, NONE);
             let mut capacity = 0.0f32;
+            gens.clear();
             for &id in &self.queue {
                 let g = self.nodes[id as usize].part.generated;
                 if g == 0.0 {
                     continue;
                 }
                 capacity += self.nodes[id as usize].part.capacity * g.abs();
+                gens.push(id);
+            }
+            // A setting changed acts at once (a motor's scroll value calls
+            // `updateGeneratedRotation`); a new part at its first tick, after them.
+            gens.sort_by_key(|&id| {
+                let n = &self.nodes[id as usize];
+                (n.new_part, n.stamp)
+            });
+            for &id in &gens {
+                let n = &self.nodes[id as usize];
+                if n.fresh || !n.drove {
+                    continue;
+                }
                 let s = self.side[&id] as usize;
-                let r = g / self.factor[&id];
+                let r = n.part.generated / self.factor[&id];
                 if driver[s] == NONE {
                     (root[s], driver[s]) = (r, id);
                 } else if r.signum() != root[s].signum() {
-                    // `propagateNewSource` destroys the block whose arrival (or new speed) met
-                    // the other way's: the network's newest part, which joined the two.
                     let newest = self.queue.iter().copied().reduce(|a, b| self.newer(a, b));
                     conflict = conflict.or(newest);
                 } else if r.abs() > root[s].abs() {
+                    (root[s], driver[s]) = (r, id);
+                }
+            }
+            // Then those that changed, in that order, against what the rest turns them at
+            // (`GeneratingKineticBlockEntity.applyNewSpeed` with a source): no faster breaks one
+            // the other way and leaves one the same way a member; faster takes over the network,
+            // or breaks one the other way. A new creative motor attaches before it starts, and
+            // starts only when faster in its own direction (`CreativeMotorBlockEntity.initialize`:
+            // `getGeneratedSpeed() > getTheoreticalSpeed()`). A member whose side nothing else
+            // drives takes over (`reActivateSource`).
+            for &id in &gens {
+                let n = &self.nodes[id as usize];
+                if !n.fresh && n.drove {
+                    continue;
+                }
+                let s = self.side[&id] as usize;
+                let g = n.part.generated;
+                let r = g / self.factor[&id];
+                let t = root[s] * self.factor[&id];
+                if t == 0.0 {
+                    (root[s], driver[s]) = (r, id);
+                    continue;
+                }
+                if !n.fresh || (n.new_part && g <= t) {
+                    continue;
+                }
+                if t.abs() >= g.abs() {
+                    if t.signum() != g.signum() {
+                        conflict = conflict.or(Some(id));
+                    }
+                } else if t.signum() != g.signum() {
+                    conflict = conflict.or(Some(id));
+                } else {
                     (root[s], driver[s]) = (r, id);
                 }
             }
@@ -1134,6 +1195,8 @@ impl Kinetics {
                 n.stress = stress;
                 n.capacity = capacity;
                 n.net = if turned == 0.0 { NONE } else { net };
+                n.new_part = false;
+                n.drove = driver[side as usize] == id;
                 // Create calls `onSpeedChanged` when the theoretical speed changes too, shown or
                 // not (`RotationPropagator` sets it on overstressed networks as well).
                 if n.fresh
@@ -1478,13 +1541,21 @@ mod tests {
 
     #[test]
     fn opposing_motors_break_the_newest() {
+        // A motor placed on a network turning the other way attaches before it starts
+        // (`attachKinetics` runs before `initialize`), so it turns with the network and adds
+        // its capacity: Create keeps both (create-fuzz `cases/opposing-motors.json`: both at 16,
+        // the network's capacity both motors' at 16 rpm).
         let mut k = Kinetics::new();
         k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
         k.set([1, 0, 0], 0, Part::shaft(Axis::X));
         k.set([2, 0, 0], 0, motor(Dir::West, 16.0));
         let e = solve(&mut k);
-        assert!(e.contains(&Event::Break { pos: [2, 0, 0] }), "{e:?}");
-        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+        assert_eq!(k.speed([2, 0, 0], 0), Some(16.0));
+        assert_eq!(
+            k.network([1, 0, 0], 0).map(|n| n.2),
+            Some(2.0 * 16.0 * (16384.0 / 256.0))
+        );
         // Two running the other way apart, joined by a shaft placed between them: the shaft
         // breaks and both motors go on.
         let mut k = Kinetics::new();
@@ -1600,6 +1671,25 @@ mod tests {
             ]
         );
         assert_eq!(k.speed([1, 7, 0], 0), Some(0.0));
+    }
+
+    #[test]
+    fn a_new_motor_against_a_network_sped_up_the_other_way_breaks() {
+        // A motor sped up to 256 (its scroll acts at once) while a second is placed facing it:
+        // the new one attaches at -256 and, starting its own way (16 > -256), meets a network
+        // no slower the other way and breaks (`applyNewSpeed` with a source). The first runs on.
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::North, 16.0));
+        solve(&mut k);
+        k.set([0, 0, -1], 0, motor(Dir::South, 16.0));
+        k.set([0, 0, 0], 0, motor(Dir::North, 256.0));
+        let e = solve(&mut k);
+        let broken: Vec<_> = e
+            .iter()
+            .filter(|x| matches!(x, Event::Break { .. }))
+            .collect();
+        assert_eq!(broken, [&Event::Break { pos: [0, 0, -1] }]);
+        assert_eq!(k.speed([0, 0, 0], 0), Some(-256.0));
     }
 
     #[test]
