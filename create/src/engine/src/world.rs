@@ -1958,9 +1958,29 @@ impl CreateWorld {
     pub fn set_settings(&mut self, dim: usize, pos: [i32; 3], state: u32, settings: Settings) {
         self.dims[dim].settings.insert(pos, settings);
         self.dims[dim].generator_changes.push(pos);
-        if self.table.is_kinetic(state) {
-            self.place(dim, pos, state);
+        if !self.table.is_kinetic(state) {
+            return;
         }
+        // A block entity's setting (a motor's speed, a crank turned) changes its parts in place:
+        // Create's block entity keeps its speed, source and network (`updateGeneratedRotation`),
+        // where a new block state starts them again (`KineticBlock.updateIndirectNeighbourShapes`).
+        let d = &mut self.dims[dim];
+        if d.states.get(&pos) == Some(&state)
+            && let Some((block, info)) = self.table.get(state)
+        {
+            let [a, b] = parts(block, info, &settings);
+            if a.is_some() == d.kinetics.has_part(pos, 0)
+                && b.is_some() == d.kinetics.has_part(pos, 1)
+            {
+                for (sub, part) in [(0, a), (1, b)] {
+                    if let Some(part) = part {
+                        d.kinetics.set(pos, sub, part);
+                    }
+                }
+                return;
+            }
+        }
+        self.place(dim, pos, state);
     }
 
     /// Re-solves what changed in a dimension: nothing at all when nothing did.
@@ -4525,6 +4545,41 @@ mod tests {
         w.block_changed(0, pos, 0, 10);
         w.block_changed(0, pos, 10, 0);
         assert!(w.dims[0].deployer_cracks.is_empty());
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_motor_s_new_speed_keeps_its_place_on_the_network() {
+        // A motor, a gearbox, and a second motor placed facing the first: through the gearbox
+        // it turns its own way, so it joins as a member (create-fuzz seed 1294). Scrolled to 156,
+        // faster, it takes the network over (`applyNewSpeed`), which needs it to stay the block
+        // entity it was, a member, not a block just placed: then the first turns at 156 too.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:gearbox", vec![("axis", "y")]),
+            ("create:creative_motor", vec![("facing", "west")]),
+        ];
+        states::set_range(10, 3);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let mut e = Vec::new();
+        for (x, state) in [(0, 10), (1, 11), (2, 12)] {
+            w.block_changed(0, [x, 0, 0], 0, state);
+            w.tick(0, &mut e);
+        }
+        assert_eq!(w.speed(0, [0, 0, 0]), Some(16.0));
+        let fast = Settings {
+            motor_rpm: 156.0,
+            ..Settings::default()
+        };
+        w.set_settings(0, [2, 0, 0], 12, fast);
+        e.clear();
+        w.tick(0, &mut e);
+        assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+        assert_eq!(w.speed(0, [0, 0, 0]), Some(156.0));
         states::clear_range();
     }
 
