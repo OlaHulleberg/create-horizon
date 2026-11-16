@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 /// `AllArmorMaterials.COPPER`'s equip sound (`COPPER_ARMOR_EQUIP` plays `ARMOR_EQUIP_GOLD`).
 const COPPER_EQUIP: &str = "minecraft:item.armor.equip_gold";
 
-/// The armour's attribute modifiers as `ArmorMaterial.createAttributes` gives them.
+/// The armour's attribute modifiers, in the form of the game's own armour items'
+/// `minecraft:attribute_modifiers`.
 fn armor(slot: &str, kind: &str, defense: f64, toughness: f64, knockback: f64) -> Value {
     let id = format!("minecraft:armor.{kind}");
     let mut v = vec![
@@ -36,8 +37,10 @@ pub fn backtank_item(name: &str) -> Option<Value> {
             "minecraft:attribute_modifiers": armor("chest", "chestplate", 4.0, 0.0, 0.0),
             "minecraft:enchantable": { "value": 7 }
         }),
-        // ArmorMaterials.NETHERITE: 8, toughness 3, knockback resistance 0.1, enchantability 15;
-        // `fireResistant()`.
+        // Netherite armour on the chest: the numbers of the game's own `minecraft:netherite_chestplate`
+        // (its 26.3 default components: armour 8, toughness 3, knockback resistance 0.1,
+        // enchantable 15, damage resistant to `#minecraft:is_fire`), which a block's item can't
+        // take as a template.
         "netherite_backtank" => json!({
             "minecraft:max_stack_size": 1,
             "minecraft:equippable": { "slot": "chest",
@@ -57,7 +60,8 @@ pub fn item(name: &str) -> Option<Value> {
     // DivingHelmetItem.getEnchantmentLevel/getAllEnchantments: Aqua Affinity always.
     let aqua = json!({ "minecraft:aqua_affinity": 1 });
     Some(match name {
-        // COPPER_DIVING_HELMET: copper armour, `Type.HELMET.getDurability(7)` = 11 × 7.
+        // COPPER_DIVING_HELMET: Create's `Type.HELMET.getDurability(7)`, 77 (a helmet lasts 11
+        // per point of its material's durability, as the game's own helmets do).
         "copper_diving_helmet" => json!({
             "template": "minecraft:copper_helmet",
             "components": {
@@ -69,13 +73,13 @@ pub fn item(name: &str) -> Option<Value> {
                 "minecraft:enchantments": aqua
             }
         }),
-        // NETHERITE_DIVING_HELMET: netherite armour, `getDurability(37)` = 407, fire resistant:
-        // the netherite helmet's numbers.
+        // NETHERITE_DIVING_HELMET: netherite armour, `getDurability(37)`, fire resistant: the
+        // game's netherite helmet, as its template.
         "netherite_diving_helmet" => json!({
             "template": "minecraft:netherite_helmet",
             "components": { "minecraft:enchantments": aqua }
         }),
-        // COPPER_DIVING_BOOTS: `Type.BOOTS.getDurability(7)` = 13 × 7.
+        // COPPER_DIVING_BOOTS: `Type.BOOTS.getDurability(7)`, 91 (13 per point for boots).
         "copper_diving_boots" => json!({
             "template": "minecraft:copper_boots",
             "components": {
@@ -86,7 +90,7 @@ pub fn item(name: &str) -> Option<Value> {
                 "minecraft:attribute_modifiers": armor("feet", "boots", 1.0, 0.0, 0.0)
             }
         }),
-        // NETHERITE_DIVING_BOOTS: `getDurability(37)` = 481, the netherite boots' numbers.
+        // NETHERITE_DIVING_BOOTS: `getDurability(37)`: the game's netherite boots, as template.
         "netherite_diving_boots" => json!({ "template": "minecraft:netherite_boots" }),
         // ExtendoGripItem: `durability(MAX_DAMAGE)` (200), uncommon.
         "extendo_grip" => json!({

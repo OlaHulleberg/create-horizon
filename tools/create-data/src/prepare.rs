@@ -65,7 +65,8 @@ fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Result<
 /// `"#t"`, lists of strings). Anything else is left as it is.
 pub fn ingredient(v: &Value) -> Value {
     match v {
-        // NeoForge's block-tag ingredient keeps its shape; only the tag's 26.3 name changes.
+        // A `neoforge:block_tag` ingredient (Create's data) keeps its shape; only the tag's 26.3
+        // name changes.
         Value::Object(o) if o.get("type").and_then(Value::as_str) == Some("neoforge:block_tag") => {
             let mut o = o.clone();
             if let Some(t) = o.get("tag").and_then(Value::as_str) {
@@ -109,7 +110,7 @@ fn renamed_item(item: &str) -> &str {
     }
 }
 
-/// A recipe in 26.3's syntax, or `None` when its NeoForge conditions name another mod.
+/// A recipe in 26.3's syntax, or `None` when its `neoforge:conditions` name another mod.
 pub fn convert_recipe(mut doc: Value) -> Option<Value> {
     let o = doc.as_object_mut()?;
     if let Some(Value::Array(conds)) = o.remove("neoforge:conditions") {
@@ -309,9 +310,10 @@ fn custom_rendered(name: &str) -> Option<Value> {
     )
 }
 
-/// NeoForge's `neoforge:composite` model loader (the nixie tube, display and stock links): its
-/// children's elements, in order, become the model's own, their textures joined under the
-/// model's, which vanilla's baker reads. A child's `render_type` has no vanilla form and goes.
+/// A `neoforge:composite` model as Create's files write it (the nixie tube, display and stock
+/// links): a model of named `children`, each with its own textures and elements. Its children's
+/// elements, in the file's order, become the model's own, their textures joined under the
+/// model's, which vanilla's baker reads; anything else a child holds is left out.
 pub fn flatten_composite(doc: &mut Value) {
     let Some(obj) = doc.as_object_mut() else {
         return;
@@ -327,17 +329,9 @@ pub fn flatten_composite(doc: &mut Value) {
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let order: Option<Vec<String>> = obj.remove("(removed)").and_then(|o| {
-        o.as_array().map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-    });
     if let Some(Value::Object(children)) = children {
-        let names: Vec<String> = order.unwrap_or_else(|| children.keys().cloned().collect());
-        for name in names {
-            let Some(child) = children.get(&name).and_then(Value::as_object) else {
+        for child in children.values() {
+            let Some(child) = child.as_object() else {
                 continue;
             };
             if let Some(Value::Object(t)) = child.get("textures") {
@@ -591,15 +585,49 @@ fn kept(path: &str) -> bool {
     }
 }
 
-/// The `c:` item tag files of `common_tags::ITEM_TAGS`: (tag path, file, contents).
-fn common_tag_files() -> impl Iterator<Item = (&'static str, String, Value)> {
-    crate::common_tags::ITEM_TAGS.iter().map(|(path, values)| {
-        (
-            *path,
-            format!("data/c/tags/item/{path}.json"),
-            json!({ "values": values }),
-        )
-    })
+/// The `c:` item tag files the port writes (`c_tags`): for each `c:` tag Create's recipes and
+/// item tags name (and the `c:` tags those name in turn), the vanilla members the port gives it
+/// after the members of Create's own file at that path, if there is one; (file, contents).
+fn c_tag_files(files: &BTreeMap<String, Vec<u8>>) -> Vec<(String, Value)> {
+    let mut named = std::collections::BTreeSet::new();
+    for (path, bytes) in files {
+        let item_data = path.starts_with("data/create/recipe/") || path.contains("/tags/item/");
+        if item_data
+            && kept(path)
+            && let Ok(doc) = serde_json::from_slice::<Value>(bytes)
+        {
+            crate::c_tags::named(&doc, &mut named);
+        }
+    }
+    let mut out = Vec::new();
+    let mut done = std::collections::BTreeSet::new();
+    while let Some(path) = named.pop_first() {
+        if !done.insert(path.clone()) {
+            continue;
+        }
+        let members = crate::c_tags::members(&path);
+        if members.is_empty() {
+            continue;
+        }
+        for m in &members {
+            if let Some(t) = m.strip_prefix("#c:") {
+                named.insert(t.to_owned());
+            }
+        }
+        let rel = format!("data/c/tags/item/{path}.json");
+        let mut values: Vec<Value> = files
+            .get(&rel)
+            .and_then(|b| serde_json::from_slice::<Value>(b).ok())
+            .and_then(|d| d["values"].as_array().cloned())
+            .unwrap_or_default();
+        for m in members {
+            if !values.iter().any(|v| v.as_str() == Some(m.as_str())) {
+                values.push(Value::String(m));
+            }
+        }
+        out.push((rel, json!({ "values": values })));
+    }
+    out
 }
 
 /// The mod folder's (`create/`) files that make up its crate, besides `src/`, `data/` and
@@ -652,8 +680,9 @@ fn layered(sources: &[PathBuf]) -> Result<bool, String> {
 }
 
 /// The mod's own file that keeps a data file of the jar layer from loading: a data map removes
-/// the jar's entries (layers of data maps merge), any other file fails a load condition (the top
-/// layer's file is the one read). `None` where the mod cannot: tags merge and have no removal in
+/// the jar's entries (layers of data maps merge, and the host reads a data map's `remove` list),
+/// any other file fails a load condition (the top layer's file is the one read): Create's own
+/// condition form, `neoforge:mod_loaded`, naming a mod id no mod has. `None` where the mod cannot: tags merge and have no removal in
 /// 26.3, and a mod's files stay in its own namespace (the jar's `data/neoforge/data_maps` load).
 fn left_out(path: &str, bytes: &[u8]) -> Option<Value> {
     if !path.starts_with("data/create/") || path.contains("/tags/") {
@@ -673,8 +702,13 @@ fn left_out(path: &str, bytes: &[u8]) -> Option<Value> {
             "placement": [{ "type": "minecraft:count", "count": 0 }]
         }));
     }
-    Some(json!({ "neoforge:conditions": [{ "type": "(removed)" }] }))
+    Some(json!({ "neoforge:conditions": [
+        { "type": "neoforge:mod_loaded", "modid": NO_MOD }
+    ] }))
 }
+
+/// A mod id no mod has (ids are lower case, and this one is the port's own).
+const NO_MOD: &str = "create_horizon_left_out";
 
 /// Vanilla's `template_chain` with `minecraft:block/iron_chain`, its texture scrolled `k` pixels
 /// down: the plane's top part shows the texture from `k` on, the bottom part its first `k` rows.
@@ -866,7 +900,9 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         } else {
             put(path, bytes)?;
             copied += 1;
-            // Fluid textures go on the block atlas too ((removed); vanilla's atlas reads `textures/block/`): the tanks' fluid parts use them.
+            // Fluid textures go on the block atlas too (Create's `FluidRenderer` reads fluid
+            // sprites from the block atlas; vanilla's atlas reads `textures/block/`): the
+            // tanks' fluid parts use them.
             if let Some(rest) = path.strip_prefix("assets/create/textures/fluid/") {
                 put(&format!("assets/create/textures/block/fluid/{rest}"), bytes)?;
             }
@@ -921,13 +957,10 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     for (rel, bytes) in &ct_files {
         put(rel, bytes)?;
     }
-    // NeoForge's common tags Create's recipes name and nobody else defines here.
-    let mut common = 0;
-    for (_, rel, doc) in common_tag_files() {
-        if !files.contains_key(&rel) {
-            put(&rel, &serde_json::to_vec_pretty(&doc).unwrap())?;
-            common += 1;
-        }
+    // The `c:` item tags Create's data names, with the vanilla members the port gives them.
+    let c_tags = c_tag_files(&files);
+    for (rel, doc) in &c_tags {
+        put(rel, &serde_json::to_vec_pretty(doc).unwrap())?;
     }
     // The frames of the partial models Create's item renderers turn.
     for (item, part, _, axis, pivot) in SPINNERS {
@@ -1054,7 +1087,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     );
     report.insert("files_left_to_the_jar_layer".into(), json!(from_jar));
     report.insert("jar_files_kept_out".into(), json!(kept_out));
-    report.insert("common_tags_added".into(), json!(common));
+    report.insert("c_tags_written".into(), json!(c_tags.len()));
     report.insert("connected_texture_files".into(), json!(ct_files.len()));
     report.insert("connected_textures_left_out".into(), json!(ct_left_out));
     Ok(serde_json::to_string_pretty(&Value::Object(report)).unwrap())
@@ -1068,7 +1101,10 @@ mod tests {
     #[test]
     fn keeps_left_out_jar_data_out() {
         let recipe = left_out("data/create/recipe/crushing/tin_ore.json", b"{}").unwrap();
-        assert_eq!(recipe["neoforge:conditions"][0]["type"], "(removed)");
+        assert_eq!(
+            recipe["neoforge:conditions"][0],
+            json!({ "type": "neoforge:mod_loaded", "modid": NO_MOD })
+        );
         let placed = left_out(
             "data/create/worldgen/placed_feature/striated_ores_overworld.json",
             b"{}",
@@ -1121,19 +1157,34 @@ mod tests {
     }
 
     #[test]
-    fn common_tags_cover_create_s_iron_and_nest_their_parts() {
-        let all: Vec<_> = common_tag_files().collect();
-        let (_, rel, doc) = all.iter().find(|(p, ..)| *p == "ingots/iron").unwrap();
-        assert_eq!(rel, "data/c/tags/item/ingots/iron.json");
-        assert_eq!(doc["values"], json!(["minecraft:iron_ingot"]));
-        // A tag naming another `c:` tag finds it in the table too.
-        for (_, _, doc) in &all {
-            for v in doc["values"].as_array().unwrap() {
-                if let Some(t) = v.as_str().unwrap().strip_prefix("#c:") {
-                    assert!(all.iter().any(|(p, ..)| *p == t), "{t}");
-                }
-            }
-        }
+    fn writes_the_c_tags_create_s_data_names() {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "data/create/recipe/a.json".to_owned(),
+            br##"{"key": {"A": {"tag": "c:ingots/iron"}, "B": {"tag": "c:glass_blocks"},
+                 "C": {"tag": "c:ingots/tin"}}}"##
+                .to_vec(),
+        );
+        files.insert(
+            "data/c/tags/item/glass_blocks/colorless.json".to_owned(),
+            br#"{"values": ["create:framed_glass"]}"#.to_vec(),
+        );
+        let tags = c_tag_files(&files);
+        let get = |p: &str| {
+            let rel = format!("data/c/tags/item/{p}.json");
+            tags.iter().find(|(r, _)| *r == rel).map(|(_, d)| d.clone())
+        };
+        assert_eq!(
+            get("ingots/iron").unwrap()["values"],
+            json!(["minecraft:iron_ingot"])
+        );
+        // A tag a member names is written too, after Create's own members.
+        assert_eq!(
+            get("glass_blocks/colorless").unwrap()["values"],
+            json!(["create:framed_glass", "minecraft:glass"])
+        );
+        assert!(get("glass_blocks").is_some());
+        assert!(get("ingots/tin").is_none());
     }
 
     #[test]
@@ -1301,13 +1352,19 @@ mod tests {
 }
 
 /// What the repository may hold under `create/assets`: the generator's own block states and
-/// block models (which name Create's models and textures, never copy them), Catnip's MIT
-/// placement indicator and the port's own render pipeline shaders. Everything under Create's `src/main/resources/assets/` is All Rights
+/// block models (which name Create's models and textures, never copy them) and Catnip's MIT
+/// placement indicator. Everything under Create's `src/main/resources/assets/` is All Rights
 /// Reserved: textures, models, particles, sounds and translations of Create's come from the
-/// player's jar in `prepare`, never from a committed file.
+/// player's jar in `prepare`, never from a committed file. Where Create's jar is at hand
+/// (`$CREATE_JAR`, else the `prepare` download cache), no committed file under `create/assets`
+/// or `create/data` may be one of the jar's assets, byte for byte or as JSON (a file that holds
+/// all of a jar asset's JSON at its own path, with keys added, counts as a copy).
 #[cfg(test)]
 mod committed_assets {
-    use std::path::Path;
+    use serde_json::Value;
+    use std::collections::{BTreeMap, HashSet};
+    use std::io::Read;
+    use std::path::{Path, PathBuf};
 
     fn files(dir: &Path, root: &Path, out: &mut Vec<String>) {
         for e in std::fs::read_dir(dir).unwrap() {
@@ -1325,9 +1382,13 @@ mod committed_assets {
         }
     }
 
+    fn repo() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
     #[test]
     fn only_generated_states_and_models_and_catnip_s_indicator() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/assets");
+        let root = repo().join("create/assets");
         let mut all = Vec::new();
         files(&root, &root, &mut all);
         let refused: Vec<&String> = all
@@ -1335,8 +1396,7 @@ mod committed_assets {
             .filter(|f| {
                 !(f.starts_with("create/blockstates/") && f.ends_with(".json")
                     || f.starts_with("create/models/block/") && f.ends_with(".json")
-                    || *f == "create/textures/gui/placement_indicator.png"
-                    || f.starts_with("create/shaders/pipeline/") && f.ends_with(".wgsl"))
+                    || *f == "create/textures/gui/placement_indicator.png")
             })
             .collect();
         assert!(
@@ -1344,5 +1404,84 @@ mod committed_assets {
             "only generated block states and models belong in create/assets; Create's own assets \
              are All Rights Reserved and come from the player's jar in `prepare`: {refused:?}"
         );
+    }
+
+    /// Whether `a` holds all of `b`: the same, or an object with each of `b`'s keys holding
+    /// all of `b`'s value there.
+    fn holds(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Object(a), Value::Object(b)) => {
+                b.iter().all(|(k, v)| a.get(k).is_some_and(|w| holds(w, v)))
+            }
+            (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+            _ => a == b,
+        }
+    }
+
+    #[test]
+    fn no_committed_file_is_one_of_create_s_assets() {
+        let jar = std::env::var_os("CREATE_JAR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                crate::jar::cache_dir()
+                    .ok()
+                    .map(|d| d.join(crate::jar::CREATE.file))
+            })
+            .filter(|p| p.is_file());
+        let Some(jar) = jar else {
+            eprintln!("no Create jar at hand ($CREATE_JAR or the prepare cache): skipped");
+            return;
+        };
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&jar).unwrap()).unwrap();
+        let mut bytes_seen: HashSet<Vec<u8>> = HashSet::new();
+        let mut json_seen: HashSet<String> = HashSet::new();
+        let mut json_at: BTreeMap<String, Value> = BTreeMap::new();
+        for i in 0..zip.len() {
+            let mut e = zip.by_index(i).unwrap();
+            let name = e.name().to_owned();
+            if e.is_dir() || !name.starts_with("assets/") {
+                continue;
+            }
+            let mut b = Vec::new();
+            e.read_to_end(&mut b).unwrap();
+            if name.ends_with(".json")
+                && let Ok(v) = serde_json::from_slice::<Value>(&b)
+            {
+                json_seen.insert(v.to_string());
+                json_at.insert(name, v);
+            }
+            bytes_seen.insert(b);
+        }
+        let mut copies = Vec::new();
+        for top in ["create/assets", "create/data"] {
+            let root = repo().join(top);
+            let mut all = Vec::new();
+            files(&root, &root, &mut all);
+            for f in all {
+                let b = std::fs::read(root.join(&f)).unwrap();
+                let at = format!("{}/{f}", top.trim_start_matches("create/"));
+                let json = serde_json::from_slice::<Value>(&b).ok();
+                let copy = bytes_seen.contains(&b)
+                    || json.as_ref().is_some_and(|v| {
+                        json_seen.contains(&v.to_string())
+                            || json_at.get(&at).is_some_and(|j| holds(v, j))
+                    });
+                if copy {
+                    copies.push(format!("{top}/{f}"));
+                }
+            }
+        }
+        assert!(
+            copies.is_empty(),
+            "committed files that are Create's All Rights Reserved assets: {copies:?}"
+        );
+    }
+
+    #[test]
+    fn a_file_with_keys_added_still_holds_the_original() {
+        let jar = serde_json::json!({"textures": ["a", "b"], "n": 1});
+        let ours = serde_json::json!({"textures": ["a", "b"], "n": 1.0, "horizon:x": {}});
+        assert!(holds(&ours, &jar));
+        assert!(!holds(&serde_json::json!({"textures": ["a"]}), &jar));
     }
 }

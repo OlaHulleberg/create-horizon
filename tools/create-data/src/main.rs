@@ -9,7 +9,7 @@
 //! See `prepare.rs`.
 
 mod blocks;
-mod common_tags;
+mod c_tags;
 mod ct;
 mod equipment;
 mod jar;

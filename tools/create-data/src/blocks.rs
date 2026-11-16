@@ -3500,7 +3500,7 @@ pub fn fluid_models() -> [(&'static str, Value); 5] {
         ),
         ("part_fluid_lava", cube("minecraft:block/lava_still", false)),
         // Create's own still textures (`AllFluids`), not tinted; `prepare` puts them under
-        // `textures/block/fluid/`, on the block atlas ((removed)).
+        // `textures/block/fluid/`, on the block atlas (where Create's `FluidRenderer` reads them).
         (
             "part_fluid_honey",
             cube("create:block/fluid/honey_still", false),
