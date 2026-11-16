@@ -15,7 +15,7 @@
 //! among those the server's data defines (`tags/item`, listed by a data reload listener).
 //!
 //! `fluid_container` and `has_fluid` know the buckets (the items the game gives a fluid
-//! handler), `has_color` dyes, `c:dyes/*`, fireworks and colour-named items, and
+//! handler), `has_color` dyes, fireworks and colour-named items, and
 //! `shulker_fill_level` a shulker box's `container`. Left out: `in_item_group`, as no API reads
 //! the creative tabs (`API_GAPS.md`).
 //!
