@@ -7,9 +7,12 @@
 //! `fan_fire`) are stood in for by vanilla's `lava` and `in_fire` (`API_GAPS.md`: a native
 //! mod's damage types). A horse haunted for 100 ticks turns into a skeleton horse made from its
 //! saved data (`Haunted`, its progress kept on the horse as Create's `CreateHaunting`).
+//! The processing particles of the items in a current (`spawnProcessingParticles`) are sent from
+//! here; the clients get the currents to push their own players and draw the air (`super::air`).
 
 use super::{recipes, stacks};
 use crate::glue::logistics::{random_angle, upright};
+use crate::glue::net;
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::fan::{self, Catalyst, Current, Heat, Kind, Way};
@@ -17,9 +20,169 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::{Block, belt, depot, nozzle, processing};
 use mod_api::{
     AttachmentCodec, AttachmentError, AttachmentType, BlockShapeKind, Compound, EntityPart,
-    EntityPartState, EntityRef, ItemStack, SoundSource, Tag,
+    EntityPartState, EntityRef, ItemStack, ParticleOptions, PlayerRef, SoundSource, Tag,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
+
+/// What a level's clients were last told of its fans: the message, and the players told.
+type Told = (Vec<u8>, Vec<u128>);
+
+thread_local! {
+    /// Per level: the turning fans' currents last told its clients, and to whom.
+    static TOLD: RefCell<HashMap<usize, Told>> = RefCell::new(HashMap::new());
+    /// The players last told they fly in creative.
+    static FLYING: RefCell<Vec<u128>> = const { RefCell::new(Vec::new()) };
+    static PARTICLE_RNG: RefCell<processing::Rng> = RefCell::new(processing::Rng::new(0xFA2));
+}
+
+/// A player (back) in the world: their client knows no fans yet.
+pub(super) fn player_joined(player: PlayerRef) {
+    let uuid = player.uuid();
+    TOLD.with_borrow_mut(|t| t.values_mut().for_each(|(_, to)| to.retain(|u| *u != uuid)));
+    FLYING.with_borrow_mut(|f| f.retain(|u| *u != uuid));
+}
+
+/// The end of a player's server tick: their client is told when they start or stop flying in
+/// creative (`isPlayerCreativeFlying`), which lets go of them in a current.
+pub(super) fn player_tick(host: &mut dyn mod_api::ServerHost, player: PlayerRef) {
+    let flying = player
+        .abilities(&*host)
+        .is_some_and(|a| a.flying && a.instabuild);
+    let uuid = player.uuid();
+    let told = FLYING.with_borrow(|f| f.contains(&uuid));
+    if flying == told {
+        return;
+    }
+    FLYING.with_borrow_mut(|f| {
+        if flying {
+            f.push(uuid);
+        } else {
+            f.retain(|u| *u != uuid);
+        }
+    });
+    net::send_to_player(
+        host,
+        player,
+        super::air::FLYING_CHANNEL,
+        &[u8::from(flying)],
+    );
+}
+
+/// The level's turning fans and their currents (`AirCurrent`, which Create keeps on both sides
+/// in its block entity), told to its players when they change and to a player new to the
+/// level: their clients push their own players and draw the air flow (`super::air`).
+fn tell_currents(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let seen = with_world(|w| {
+        let mut fans: Vec<fan::Seen> = w.dims[dim]
+            .fans
+            .iter()
+            .filter(|(_, f)| f.speed != 0.0 && f.current.max > 0.0)
+            .filter_map(|(&pos, f)| {
+                Some(fan::Seen {
+                    pos,
+                    facing: f.facing?,
+                    speed: f.speed,
+                    current: f.current.clone(),
+                })
+            })
+            .collect();
+        fans.sort_by_key(|f| f.pos);
+        fans
+    })
+    .unwrap_or_default();
+    let data = fan::encode_seen(&seen);
+    let players = lv.players();
+    let to: Vec<PlayerRef> = TOLD.with_borrow_mut(|t| {
+        let (told, had) = t.entry(dim).or_default();
+        let changed = *told != data;
+        let to = players
+            .iter()
+            .filter(|p| changed || !had.contains(&p.uuid()))
+            .copied()
+            .collect();
+        *told = data.clone();
+        *had = players.iter().map(|p| p.uuid()).collect();
+        to
+    });
+    if !to.is_empty() {
+        net::send_to_players(&mut *lv.host, &to, super::air::CHANNEL, &data);
+    }
+}
+
+fn particle_random() -> f32 {
+    PARTICLE_RNG.with_borrow_mut(processing::Rng::next_float)
+}
+
+/// `FanProcessingType.spawnProcessingParticles` for an item at `at` being processed by `kind`
+/// (Create spawns them on the client, which sees the same items; here the server sends them).
+fn processing_particles(lv: &mut ServerLevel<'_>, kind: Kind, at: [f64; 3]) {
+    let Some(keys) = super::air::KEYS.get() else {
+        return;
+    };
+    if particle_random() * 8.0 >= 1.0 {
+        return;
+    }
+    let send = |lv: &mut ServerLevel<'_>, options: ParticleOptions, at: [f64; 3], v| {
+        let _ = lv
+            .level
+            .send_particles(&mut *lv.host, &options, None, at, v, 1.0, 0);
+    };
+    let [x, y, z] = at;
+    match kind {
+        Kind::Blasting => send(
+            lv,
+            ParticleOptions::simple(keys.large_smoke),
+            [x, y + 0.25, z],
+            [0.0, 1.0 / 16.0, 0.0],
+        ),
+        Kind::Haunting => {
+            // `offsetRandomly(ZERO, random, 1).multiply(1, .05, 1).normalize().scale(.15)`.
+            let o = [1.0, 0.05, 1.0].map(|m| f64::from((particle_random() - 0.5) * 2.0) * m);
+            let len = o.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let o = if len < 1e-4 {
+                [0.0; 3]
+            } else {
+                o.map(|v| v / len * 0.15)
+            };
+            let [x, y, z] = [x + o[0], y + o[1], z + o[2]];
+            send(
+                lv,
+                ParticleOptions::simple(keys.soul_fire_flame),
+                [x, y + 0.45, z],
+                [0.0; 3],
+            );
+            if particle_random() < 0.5 {
+                send(
+                    lv,
+                    ParticleOptions::simple(keys.smoke),
+                    [x, y + 0.25, z],
+                    [0.0; 3],
+                );
+            }
+        }
+        Kind::Smoking => send(
+            lv,
+            ParticleOptions::simple(keys.poof),
+            [x, y + 0.25, z],
+            [0.0, 1.0 / 16.0, 0.0],
+        ),
+        Kind::Splashing => {
+            let spread = || f64::from((particle_random() - 0.5) * 0.5);
+            let dust = ParticleOptions::dust(keys.dust, [0.0, 0x55 as f32 / 255.0, 1.0], 1.0);
+            let p = [x + spread(), y + 0.5, z + spread()];
+            send(lv, dust, p, [0.0, 1.0 / 8.0, 0.0]);
+            let p = [x + spread(), y + 0.5, z + spread()];
+            send(
+                lv,
+                ParticleOptions::simple(keys.spit),
+                p,
+                [0.0, 1.0 / 8.0, 0.0],
+            );
+        }
+    }
+}
 
 /// Encased fans that turn (`EncasedFanBlockEntity.tick`): the current looked at again when due
 /// (`AirCurrent.rebuild`), then the depots and belts in it processed (`tickAffectedHandlers`).
@@ -29,6 +192,7 @@ pub fn tick_fans(lv: &mut ServerLevel<'_>) {
     check_nozzles(lv);
     let fans = with_world(|w| w.fans_to_tick(dim)).unwrap_or_default();
     if fans.is_empty() {
+        tell_currents(lv);
         return;
     }
     let recipes = recipes::ready();
@@ -95,6 +259,7 @@ pub fn tick_fans(lv: &mut ServerLevel<'_>) {
         }
     }
     with_world(|w| w.dims[dim].item_fan = kept);
+    tell_currents(lv);
 }
 
 /// Nozzles whose neighbour changed break, with their drops, when the block behind them is no
@@ -149,7 +314,7 @@ fn others_in(lv: &mut ServerLevel<'_>, lo: [f64; 3], hi: [f64; 3]) -> Vec<Pushed
                 .uuid(&mut *lv.host)
                 .and_then(|u| lv.host.player(u))
                 .and_then(|p| p.abilities(&*lv.host))
-                .is_some_and(|a| a.flying)
+                .is_some_and(|a| a.flying && a.instabuild)
         } else {
             false
         };
@@ -348,6 +513,7 @@ fn fan_on_items(
         let motion = fan::push(flow, speed, current.max, distance, d.velocity, false);
         let mut next = Some(d.stack.clone());
         if let Some(kind) = current.type_at(fan::aligned_distance(d.at, pos, facing) as f32) {
+            processing_particles(lv, kind, d.at);
             let id = d.id();
             let mut p = kept
                 .remove(&id)
@@ -399,8 +565,9 @@ fn fire_resistant(lv: &ServerLevel<'_>, stack: &ItemStack) -> bool {
 /// boats, armor stands): those its search caught (`search`, every 6th tick) and still in its box
 /// are pushed along the current as items are (`setDeltaMovement`) and forget their fall
 /// (`fallDistance = 0`). A rider moves with its vehicle (`rideTick` zeroes its motion), so it is
-/// left alone. A sneaking player is pushed an eighth as hard (4096 in place of 512); a flying
-/// one is let go (`isPlayerCreativeFlying`).
+/// left alone. A player's motion is its client's (`super::air` pushes it there, as Create's
+/// client does); here a player only forgets its fall. A flying creative player is let go
+/// (`isPlayerCreativeFlying`).
 fn fan_on_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3], search: bool) {
     let dim = lv.dim;
     let Some((facing, speed, current, none)) = with_world(|w| {
@@ -778,6 +945,8 @@ fn fan_on_depot(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) -> bool {
     let Some(stack) = slots[0].clone() else {
         return false;
     };
+    // `getWorldPositionOf`: the depot's centre.
+    processing_particles(lv, kind, at.map(|v| f64::from(v) + 0.5));
     let host = &*lv.host;
     let item = stacks::id(host, &stack);
     let count = stack.count().min(255) as u8;
@@ -859,6 +1028,19 @@ fn fan_on_belt(lv: &mut ServerLevel<'_>, at: [i32; 3], kind: Kind) -> bool {
     .flatten() else {
         return false;
     };
+    // `getWorldPositionOf` for each item over the segment: here its middle.
+    let over = with_world(|w| {
+        w.dims[dim].belts[&c]
+            .items
+            .items
+            .iter()
+            .filter(|i| (index + 0.5 - i.position).abs() < 0.51)
+            .count()
+    })
+    .unwrap_or(0);
+    for _ in 0..over {
+        processing_particles(lv, kind, at.map(|v| f64::from(v) + 0.5));
+    }
     let Some(mut inv) = with_world(|w| {
         w.dims[dim]
             .belts
