@@ -10,7 +10,9 @@ use super::subsystem::Subsystem;
 use super::world::{level_index, with_world};
 use create_engine::Block;
 use create_engine::client::{self, Draw, Model};
-use create_engine::kinetics::{Axis, Dir, Event};
+use create_engine::kinetics::{
+    Axis, Context, Dir, Event, PartLocation, SavedKineticState, SavedNetwork,
+};
 use create_engine::world::keeps_state;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart, BlockEntitySubmitEvent,
@@ -32,6 +34,8 @@ pub const OVER: &str = "Over";
 pub(crate) const BRACKET: &str = "Bracket";
 /// A speed setting a moving structure carries (`Subsystem::carry_out`).
 const CARRIED_SPEED: &str = "Speed";
+/// Server-only KineticBlockEntity.write data, one compound per engine port.
+const SAVED_KINETICS: &str = "KineticState";
 /// In an update tag: the server is frozen (`/tick freeze`), so the block's parts are drawn at
 /// rest (`KineticBlockEntity.getSpeed` is 0 while `tickRateManager().isFrozen()`). Sent from the
 /// server's state as each tag is made, never saved.
@@ -236,6 +240,112 @@ fn settings_from_nbt(data: &Compound) -> Vec<([i32; 3], i32)> {
     }
 }
 
+/// KineticBlockEntity.write's server fields. Nested replacement removes stale Source/Network.
+fn saved_to_nbt(saved: SavedKineticState) -> Compound {
+    let mut out = Compound::from([
+        ("Speed".into(), Tag::Float(saved.speed.to_bits())),
+        (
+            "NeedsSpeedUpdate".into(),
+            Tag::Byte(i8::from(saved.needs_speed_update)),
+        ),
+    ]);
+    if let Some(source) = saved.source {
+        out.insert("Source".into(), Tag::IntArray(source.pos.to_vec()));
+        out.insert("SourcePort".into(), Tag::Byte(source.sub as i8));
+    }
+    if let Some(n) = saved.network {
+        out.insert(
+            "Network".into(),
+            Tag::Compound(Compound::from([
+                ("Id".into(), Tag::Long(n.id)),
+                ("Stress".into(), Tag::Float(n.stress.to_bits())),
+                ("Capacity".into(), Tag::Float(n.capacity.to_bits())),
+                ("Size".into(), Tag::Int(n.size as i32)),
+                ("AddedStress".into(), Tag::Float(n.added_stress.to_bits())),
+                (
+                    "AddedCapacity".into(),
+                    Tag::Float(n.added_capacity.to_bits()),
+                ),
+            ])),
+        );
+    }
+    if let Some((context, relative)) = saved.sequence {
+        out.insert(
+            "Sequence".into(),
+            Tag::Compound(Compound::from([
+                ("Distance".into(), Tag::Byte(i8::from(context.distance))),
+                ("Value".into(), Tag::Float(context.value.to_bits())),
+                ("Run".into(), Tag::Long(context.run as i64)),
+                ("RelativeValue".into(), Tag::Float(relative.to_bits())),
+            ])),
+        );
+    }
+    out
+}
+/// KineticBlockEntity.read; no saved data means a freshly placed entity or an older save.
+fn saved_from_nbt(data: &Compound) -> Option<SavedKineticState> {
+    fn float(c: &Compound, k: &str) -> f32 {
+        match c.get(&k.into()) {
+            Some(Tag::Float(v)) => f32::from_bits(*v),
+            _ => 0.0,
+        }
+    }
+    fn int(c: &Compound, k: &str) -> i32 {
+        match c.get(&k.into()) {
+            Some(Tag::Int(v)) => *v,
+            _ => 0,
+        }
+    }
+    let Some(Tag::Float(speed)) = data.get(&"Speed".into()) else {
+        return None;
+    };
+    let source = match data.get(&"Source".into()) {
+        Some(Tag::IntArray(p)) if p.len() == 3 => Some(PartLocation {
+            pos: [p[0], p[1], p[2]],
+            sub: match data.get(&"SourcePort".into()) {
+                Some(Tag::Byte(1)) => 1,
+                _ => 0,
+            },
+        }),
+        _ => None,
+    };
+    let network = match data.get(&"Network".into()) {
+        Some(Tag::Compound(n)) => match n.get(&"Id".into()) {
+            Some(Tag::Long(id)) => Some(SavedNetwork {
+                id: *id,
+                stress: float(n, "Stress"),
+                capacity: float(n, "Capacity"),
+                size: int(n, "Size").max(0) as u32,
+                added_stress: float(n, "AddedStress"),
+                added_capacity: float(n, "AddedCapacity"),
+            }),
+            _ => None,
+        },
+        _ => None,
+    };
+    let sequence = match data.get(&"Sequence".into()) {
+        Some(Tag::Compound(c)) => Some((
+            Context {
+                distance: matches!(c.get(&"Distance".into()), Some(Tag::Byte(1))),
+                value: float(c, "Value"),
+                run: match c.get(&"Run".into()) {
+                    Some(Tag::Long(v)) => *v as u32,
+                    _ => 0,
+                },
+            },
+            float(c, "RelativeValue"),
+        )),
+        _ => None,
+    };
+    Some(SavedKineticState {
+        speed: f32::from_bits(*speed),
+        source,
+        network,
+        sequence,
+        needs_speed_update: matches!(data.get(&"NeedsSpeedUpdate".into()), Some(Tag::Byte(1))),
+    })
+}
+
 /// What feeds a level's solve: cranks and valves turning down, water wheels' flow, split shafts
 /// following redstone (set before solving, so the change turns the network in this tick's
 /// solve), chain drives' places and sequenced gearshifts.
@@ -364,6 +474,29 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
                     s.speed_changed(lv, pos, speed);
                 }
             }
+        }
+    }
+    let changed = with_world(|w| w.dims[dim].kinetics.take_saved_changes()).unwrap_or_default();
+    for pos in changed {
+        let states = with_world(|w| {
+            [
+                w.dims[dim].kinetics.saved_state(pos, 0),
+                w.dims[dim].kinetics.saved_state(pos, 1),
+            ]
+        })
+        .unwrap_or_default();
+        if let Some(entity) = lv.host.block_entity(lv.level, pos) {
+            let ports: Compound = states
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, state)| {
+                    state.map(|s| (["0", "1"][i].into(), Tag::Compound(saved_to_nbt(s))))
+                })
+                .collect();
+            let _ = entity.merge_data(
+                &mut *lv.host,
+                Compound::from([(SAVED_KINETICS.into(), Tag::Compound(ports))]),
+            );
         }
     }
 }
@@ -563,7 +696,24 @@ impl BlockEntityPart for KineticEntity {
             return;
         };
         super::ensure_column(host, &dimension, [pos[0] >> 4, pos[2] >> 4]);
-        with_world(|w| w.block_loaded(dim, pos, state));
+        let saved = entity
+            .data(&*host)
+            .and_then(|d| match d.get(&SAVED_KINETICS.into()) {
+                Some(Tag::Compound(c)) => Some(c.clone()),
+                _ => None,
+            });
+        with_world(|w| {
+            w.block_loaded(dim, pos, state);
+            if let Some(ports) = saved {
+                for sub in 0..2 {
+                    if let Some(Tag::Compound(data)) = ports.get(&["0", "1"][sub as usize].into())
+                        && let Some(saved) = saved_from_nbt(data)
+                    {
+                        w.dims[dim].kinetics.restore_state(pos, sub, saved);
+                    }
+                }
+            }
+        });
         if with_world(|w| w.block_at(dim, pos)).flatten() == Some(Block::SequencedGearshift) {
             super::sequencer::loaded(&*host, dim, pos, entity);
         }
@@ -777,4 +927,46 @@ pub fn draw_turning(
         None => draw.block(model, own),
     };
     draw.still();
+}
+
+#[cfg(test)]
+mod saved_state_tests {
+    use super::*;
+    #[test]
+    fn kinetic_block_entity_data_round_trips_all_server_fields() {
+        let saved = SavedKineticState {
+            speed: -32.0,
+            sequence: Some((
+                Context {
+                    distance: true,
+                    value: 90.0,
+                    run: 7,
+                },
+                2.5,
+            )),
+            source: Some(PartLocation {
+                pos: [-17, 64, 18],
+                sub: 1,
+            }),
+            network: Some(SavedNetwork {
+                id: create_engine::kinetics::network_id([-17, 64, 18]),
+                stress: 256.0,
+                capacity: 2048.0,
+                size: 3,
+                added_stress: 8.0,
+                added_capacity: 64.0,
+            }),
+            needs_speed_update: false,
+        };
+        assert_eq!(saved_from_nbt(&saved_to_nbt(saved)), Some(saved));
+        let stopped = SavedKineticState {
+            source: None,
+            network: None,
+            sequence: None,
+            speed: 0.0,
+            needs_speed_update: true,
+        };
+        assert_eq!(saved_from_nbt(&saved_to_nbt(stopped)), Some(stopped));
+        assert_eq!(saved_from_nbt(&Compound::new()), None);
+    }
 }
